@@ -52,6 +52,11 @@ interface CodeGraphProps {
   project: string;
   limit?: number;
   onClose?: () => void;
+  /** inline=true → embed in a parent pane (`relative h-full w-full`) instead of the
+   *  default fullscreen overlay (`fixed inset-0 z-50`). ADDITIVE: omitting it keeps
+   *  the byte-identical fullscreen shape the shared callers (BottomBar, legacy
+   *  "View code graph") depend on. The Brain-Hub detail pane passes inline. */
+  inline?: boolean;
 }
 
 interface ForceGraphNode extends GraphNode {
@@ -68,7 +73,13 @@ interface ForceGraphLink {
   type: string;
 }
 
-export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
+export function CodeGraph({ project, limit = 300, onClose, inline = false }: CodeGraphProps) {
+  // Outer container: fullscreen overlay by default; parent-filling when embedded.
+  // The `bg-[#0d1117]` is shared; only the positioning differs (Gate-1 B1: the
+  // inline parent — BrainHub's flex-1 content pane — has a definite height, so
+  // h-full + the ResizeObserver measure non-zero).
+  const outerCls = inline ? 'relative h-full w-full bg-[#0d1117]' : 'fixed inset-0 z-50 bg-[#0d1117]';
+  const centerCls = `${outerCls} flex items-center justify-center`;
   const [graphData, setGraphData] = useState<{ nodes: ForceGraphNode[]; links: ForceGraphLink[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +185,7 @@ export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 z-50 bg-[#0d1117] flex items-center justify-center">
+      <div className={centerCls}>
         <div className="text-[var(--color-text-muted)] text-sm">Loading code graph...</div>
       </div>
     );
@@ -182,7 +193,7 @@ export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
 
   if (error) {
     return (
-      <div className="fixed inset-0 z-50 bg-[#0d1117] flex items-center justify-center">
+      <div className={centerCls}>
         <div className="text-red-400 text-sm">{error}</div>
         {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">Close</button>}
       </div>
@@ -191,7 +202,7 @@ export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
 
   if (!graphData || graphData.nodes.length === 0) {
     return (
-      <div className="fixed inset-0 z-50 bg-[#0d1117] flex items-center justify-center">
+      <div className={centerCls}>
         <div className="text-gray-400 text-sm">No code symbols indexed yet. Run a re-index first.</div>
         {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white text-sm">Close</button>}
       </div>
@@ -199,7 +210,7 @@ export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#0d1117]" ref={containerRef}>
+    <div className={outerCls} ref={containerRef}>
       {/* Header */}
       <div className="absolute top-0 left-0 right-0 h-10 flex items-center justify-between px-4 bg-[#0d1117]/80 backdrop-blur-sm border-b border-gray-800 z-10">
         <div className="flex items-center gap-3">

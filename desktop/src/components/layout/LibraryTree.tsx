@@ -36,6 +36,25 @@ import TreeNodeRow from '../workspace-explorer/TreeNodeRow';
 const ROW_HEIGHT = 32;
 const KNOWLEDGE_ROOT = 'Knowledge';
 
+/**
+ * Noise filter (run_a75197d9) — hides infra/build junk so a rooted tree shows only
+ * REAL browsable content (docs / code / specs), never a 74MB code_intel.db, WAL
+ * sidecars, .lock files, .artifacts run dirs, or multi-MB *-archive.md dumps.
+ * Applied in flatten() so BOTH rendered rows AND any derived counts exclude noise
+ * (non-vacuous — rows are the sole flatten output). By-NAME so it's tree-position
+ * independent. Library's Knowledge/ root has none of these, so it's inert there —
+ * but keeping the filter in the shared component means every rooted tree benefits.
+ */
+function isNoiseNode(name: string): boolean {
+  if (name.startsWith('.')) return true;               // .artifacts, .git, .project.json, .ddd-usage.json, dotfiles
+  if (name === '__pycache__' || name === 'node_modules') return true;
+  // suffix junk: *.lock (incl *.md.lock), sqlite db + WAL/SHM sidecars, big generated blobs
+  if (/\.(lock|db|db-shm|db-wal)$/.test(name)) return true;
+  if (name === 'code-intel.json') return true;         // 3.3MB generated graph dump
+  if (/-archive\.md$/.test(name)) return true;         // IMPROVEMENT-archive.md etc. (multi-MB, not browsable)
+  return false;
+}
+
 /** A visible, flattened tree row (only expanded subtrees are included). */
 interface FlatRow {
   node: TreeNode;
@@ -68,6 +87,7 @@ function sortChildren(children: TreeNode[]): TreeNode[] {
  */
 function flatten(nodes: TreeNode[], expandedPaths: Set<string>, depth = 0, out: FlatRow[] = []): FlatRow[] {
   for (const node of sortChildren(nodes)) {
+    if (isNoiseNode(node.name)) continue;   // hide infra/build junk (run_a75197d9)
     const isDir = node.type === 'directory';
     const isExpanded = isDir && expandedPaths.has(node.path);
     out.push({ node, depth, isExpanded });
@@ -135,11 +155,29 @@ function LibraryRow(props: {
   );
 }
 
+interface LibraryTreeProps {
+  /** Root directory to browse (run_a75197d9). Default 'Knowledge' → the Library
+   *  bookshelf (unchanged). A slashed path (e.g. 'Projects/SwarmAI') roots the tree
+   *  at that subtree — loaded via expandDirectory (the backend tree endpoint has no
+   *  per-subtree root, so a single-segment root is found in getTree while a nested
+   *  root is fetched directly). */
+  rootPath?: string;
+  /** Optional file-open handler (run_a75197d9). DEFAULT (omitted) = dispatch the
+   *  `swarm:open-file` document event directly (the Library bookshelf behavior,
+   *  unchanged). A caller that must run side-effects first — e.g. Brain Hub closes
+   *  its host overlay BEFORE the file opens in Canvas so the FileViewer isn't
+   *  rendered UNDER the overlay — passes this and takes over the dispatch. */
+  onFileOpen?: (path: string) => void;
+}
+
 /**
- * LibraryTree — expandable Knowledge/ file tree. Self-contained state (no
- * ExplorerContext): own tree roots + expanded-path set + per-dir lazy load.
+ * LibraryTree — expandable file tree rooted at `rootPath` (default 'Knowledge').
+ * Self-contained state (no ExplorerContext): own tree roots + expanded-path set +
+ * per-dir lazy load. Reused by both the Library bookshelf (Knowledge root) and the
+ * Brain-Hub DDD detail (Projects/<name> root), with the noise filter (isNoiseNode)
+ * hiding infra junk so a project root shows only real browsable content.
  */
-export function LibraryTree() {
+export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen }: LibraryTreeProps = {}) {
   const [roots, setRoots] = useState<TreeNode[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -149,15 +187,25 @@ export function LibraryTree() {
   // Measured height for react-window (overlay is fullscreen; height must be real).
   const containerRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(400);
+  // Display leaf of the root, for the copy strings (e.g. 'Knowledge' / 'SwarmAI').
+  const rootLeaf = rootPath.split('/').filter(Boolean).pop() ?? rootPath;
+  const isNested = rootPath.includes('/');
 
   const loadRoots = useCallback(async () => {
     setLoading(true);
     setError(false);
     try {
-      // depth 2 → Knowledge + its immediate children (deeper dirs arrive truncated).
-      const tree = await workspaceService.getTree(2);
-      const knowledge = tree.find((n) => n.path === KNOWLEDGE_ROOT || n.name === KNOWLEDGE_ROOT);
-      const children = knowledge && Array.isArray(knowledge.children) ? knowledge.children : [];
+      let children: TreeNode[];
+      if (isNested) {
+        // Nested root (e.g. Projects/<name>): no top-level node in getTree — fetch
+        // its children directly. depth 2 → root's dirs + their immediate children.
+        children = await workspaceService.expandDirectory(rootPath, 2);
+      } else {
+        // Single-segment root (Knowledge): find the top-level node in the full tree.
+        const tree = await workspaceService.getTree(2);
+        const rootNode = tree.find((n) => n.path === rootPath || n.name === rootPath);
+        children = rootNode && Array.isArray(rootNode.children) ? rootNode.children : [];
+      }
       setRoots(children);
     } catch {
       setError(true);
@@ -165,7 +213,7 @@ export function LibraryTree() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [rootPath, isNested]);
 
   useEffect(() => { void loadRoots(); }, [loadRoots]);
 
@@ -207,8 +255,9 @@ export function LibraryTree() {
     // File-only: the swarm:open-file handler resolves + opens in Canvas. A
     // directory path would render an empty Canvas, so directories never dispatch.
     if (node.type !== 'file') return;
+    if (onFileOpen) { onFileOpen(node.path); return; }   // caller takes over (e.g. close-overlay-first)
     document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: node.path } }));
-  }, []);
+  }, [onFileOpen]);
 
   const rows = useMemo(() => (roots ? flatten(roots, expanded) : []), [roots, expanded]);
 
@@ -221,7 +270,7 @@ export function LibraryTree() {
           data-testid="library-tree-error"
           className="rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
         >
-          <div className="text-sm text-[var(--color-text)]">Couldn't load the Knowledge tree.</div>
+          <div className="text-sm text-[var(--color-text)]">Couldn't load the {rootLeaf} tree.</div>
           <button
             data-testid="library-tree-retry"
             onClick={() => { void loadRoots(); }}
@@ -235,7 +284,12 @@ export function LibraryTree() {
         <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">Loading tree…</div>
       ) : rows.length === 0 ? (
         <div data-testid="library-tree-empty" className="py-6 text-center text-sm text-[var(--color-text-faint)]">
-          Knowledge/ is empty.
+          {/* Distinguish genuinely-empty from all-noise-filtered (meta-review LOW):
+              a dir that HAS entries but all were infra-filtered isn't "empty" — say so,
+              else the user reads "is empty" as a data-loss bug. */}
+          {roots && roots.length > 0
+            ? `Only build/infra files here — nothing to browse in ${rootLeaf}/.`
+            : `${rootLeaf}/ is empty.`}
         </div>
       ) : (
         <List
@@ -245,7 +299,7 @@ export function LibraryTree() {
           rowComponent={LibraryRow}
           rowProps={rowProps}
           role="tree"
-          aria-label="Knowledge library tree"
+          aria-label={`${rootLeaf} file tree`}
         />
       )}
     </div>

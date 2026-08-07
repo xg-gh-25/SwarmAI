@@ -24,51 +24,12 @@ import {
   approveProposal, rejectProposal, getDistribution, aggregateTypeCounts,
 } from '../../services/ddd';
 import type {
-  BrainSummary, BrainDetail, BrainSection, KnowledgeEntry, EntryType, DecayState, SectionKey,
+  BrainSummary, BrainDetail,
   ReviewData, ReviewHunk, PendingProposal, DistributionState,
 } from '../../services/ddd';
 import { DddCard } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
-import { getCodeIntelSummary, type CodeIntelSummary } from '../../services/codeIntel';
-
-// ── Visual constants ──────────────────────────────────────────────────────────
-
-const SECTION_NUM: Record<string, string> = {
-  identity: '①', knowledge: '②', gates: '③',
-  capabilities: '④', delivery: '⑤', refresher: '⑥',
-};
-
-const DECAY_STYLE: Record<DecayState, string> = {
-  active: 'text-[var(--color-text)]',
-  dormant: 'text-[var(--color-text-muted)] opacity-70',
-  archived: 'text-[var(--color-text-faint)] line-through opacity-50',
-};
-
-const TYPE_COLOR: Record<EntryType, string> = {
-  guideline: '#3b82f6', pitfall: '#ef4444', decision: '#a855f7',
-  model: '#14b8a6', process: '#f59e0b', principle: '#eab308',
-  correction: '#ec4899',
-};
-
-// Project-relative dir where spec-details/*.spec.md live (mirrors the backend
-// SPEC_DETAILS_DIR constant); used to build the file-preview open path.
-const SPEC_DETAILS_REL = 'spec-details';
-
-// ── Asset nav keys ──────────────────────────────────────────────────────────
-// Specs + Code-Intelligence are ASSET PROJECTIONS, NOT the six canonical DDD
-// sections (R31: the SectionKey union + backend _SECTIONS stay untouched). They
-// live in the left nav under a divided "Assets" group, selected exactly like a
-// section, but keyed on a SEPARATE channel so they can NEVER collide with a real
-// SectionKey (the `asset:` prefix guarantees disjointness) and so widening never
-// breaks the section-derived currentKey fall-through (Gate-1 F4).
-type AssetKey = 'asset:specs' | 'asset:codeintel';
-const isAssetKey = (k: string | null): k is AssetKey =>
-  k === 'asset:specs' || k === 'asset:codeintel';
-
-const GIT_DOT: Record<string, string> = {
-  clean: 'transparent', modified: '#f0a500', added: '#3fb950',
-  untracked: 'var(--color-text-muted)', deleted: '#ef4444', renamed: '#a855f7', conflicting: '#ef4444',
-};
+import { LibraryTree } from './LibraryTree';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -197,15 +158,13 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
           </div>
         )}
         {!error && tab === 'gallery' && <Gallery brains={brains} pinned={pinned} primaryDetail={primaryDetail} onOpen={openBrain} />}
-        {/* key={selected} ties BrainView's identity to the brain — DEFENSIVE (Gate-2
-            MED, verified NOT-currently-reachable): today every `selected` change is a
-            gallery-card click, and the gallery tab only renders when tab==='gallery',
-            so a brain switch is always brain→gallery→brain and THIS conditional already
-            unmounts BrainView on the gallery step (fresh mount on return). The key
-            guards a FUTURE in-place brain switch (e.g. a "jump to brain" affordance in
-            the brain view) from surviving a stale activeKey='asset:codeintel' and
-            transiently firing CodeIntelPanel's O(n) fetch for the new brain. Cheap +
-            intent-clear; no test asserts it because the transient isn't reachable yet. */}
+        {/* key={selected} ties BrainView's identity to the brain — DEFENSIVE: today
+            every `selected` change is a gallery-card click and the gallery tab only
+            renders when tab==='gallery', so a brain switch is always brain→gallery→brain
+            and this conditional already unmounts BrainView on the gallery step (fresh
+            mount on return). The key guards a FUTURE in-place brain switch (e.g. a
+            "jump to brain" affordance) from surviving a stale view='graph' or a stale
+            Projects/<name> tree root into the new brain. Cheap + intent-clear. */}
         {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} onRequestClose={onRequestClose} />}
         {!error && tab === 'review' && selected && <ReviewView name={selected} onRequestClose={onRequestClose} />}
         {!error && tab === 'distribute' && selected && <DistributeView name={selected} onRequestClose={onRequestClose} />}
@@ -351,19 +310,19 @@ function ZonedGrid({ brains, onOpen }: { brains: BrainSummary[]; onOpen: (n: str
 function BrainView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
   const [detail, setDetail] = useState<BrainDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // #8 2-pane: which nav item is shown in the right content pane — a section
-  // OR an asset projection (Specs / Code Intelligence). Asset keys ride a
-  // separate channel from SectionKey (see AssetKey) so they never collide.
-  const [activeKey, setActiveKey] = useState<SectionKey | AssetKey | null>(null);
-  // #10: mount the existing full-screen CodeGraph overlay on demand.
-  const [showGraph, setShowGraph] = useState(false);
+  // Content view: the real Projects/<name> FILE TREE (default) or the code GRAPH
+  // (run_a75197d9, XG directive: "就是真实的 Projects 文件树", "CodeGraph 应该是
+  //  visualized graph"). This replaces the old six-section nav + SectionCard/asset
+  // panels — the tree's own folders (2-understanding/ 3-gates/ 4-capabilities/
+  //  spec-details/) ARE the sections, browsable to any file. The graph is the one
+  // non-file affordance, so it rides a [Files | Code Graph] toggle, not a nav item.
+  const [view, setView] = useState<'files' | 'graph'>('files');
 
   useEffect(() => {
     let alive = true;
     setDetail(null);
     setError(null);
-    setActiveKey(null);   // reset selection when switching brains
-    setShowGraph(false);
+    setView('files');   // reset to the tree when switching brains
     getBrainDetail(name).then(
       (d) => alive && setDetail(d),
       (e) => alive && setError(String(e?.message ?? e)),
@@ -371,88 +330,54 @@ function BrainView({ name, onRequestClose }: { name: string; onRequestClose?: ()
     return () => { alive = false; };
   }, [name]);
 
-  // ESC-routing guard (Gate-2 meta-review MED): the Brain Hub lives inside a shared
-  // Modal that installs a document-level ESC→onClose listener; the full-screen
-  // CodeGraph overlay (shared with BottomBar, not ours to edit) has NO ESC handler.
-  // Without this, pressing ESC with the graph open would close the ENTIRE Brain Hub
-  // instead of the graph. We intercept ESC in the CAPTURE phase while the graph is
-  // open, close only the graph, and stop it reaching the Modal's handler.
-  useEffect(() => {
-    if (!showGraph) return;
-    const onKeyDownCapture = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        setShowGraph(false);
-      }
-    };
-    document.addEventListener('keydown', onKeyDownCapture, true);  // capture: runs before Modal's bubble listener
-    return () => document.removeEventListener('keydown', onKeyDownCapture, true);
-  }, [showGraph]);
-
-  const openFile = useCallback((sectionMemberPath: string, gitStatus?: string) => {
-    // Approach A (run_a607f2b0): open a DDD doc in the app-level CANVAS, not an
-    // in-hub modal — the SwarmWS-explorer precedent. useCanvasHost's swarm:open-file
-    // resolver takes `path` against the cached SwarmWS root, so we pass a
-    // WORKSPACE-RELATIVE path (Projects/<name>/<member>); a bare/absolute path 404s.
-    // Z-index (Gate-1, swarmws precedent): close THIS overlay BEFORE the dispatch so
-    // the Canvas/FileViewer is never rendered under the host.
-    const workspaceRelPath = `Projects/${name}/${sectionMemberPath}`;
+  // Open a tree file in the app-level CANVAS. LibraryTree gives a WORKSPACE-RELATIVE
+  // path (Projects/<name>/…) already — the useCanvasHost resolver takes it directly.
+  // Z-index (Gate-1, swarmws precedent): close THIS overlay BEFORE the dispatch so
+  // the Canvas/FileViewer is never rendered UNDER the host.
+  const openFile = useCallback((workspaceRelPath: string) => {
     onRequestClose?.();
     document.dispatchEvent(new CustomEvent('swarm:open-file', {
-      detail: { path: workspaceRelPath, gitStatus },
+      detail: { path: workspaceRelPath },
     }));
-  }, [name, onRequestClose]);
+  }, [onRequestClose]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]">Failed to load brain: {error}</div>;
   if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading {name}…</div>;
 
-  // Gate-1 CRITICAL: nav AND content both derive from the RUNTIME detail.sections
-  // (never a hardcoded SECTION_ORDER) — so a backend that drops/reorders a section
-  // can't strand the nav against a missing card. Default active = the first section
-  // the backend returned; the `.find()` is guarded (active may be undefined).
-  // Gate-1 F4: currentKey MUST accept an asset key too — else selecting Specs/CodeIntel
-  // (not in sections) would fall through to sections[0] and the section-0 card would
-  // render instead of the asset panel.
-  const sections = detail.sections;
-  const specs = detail.specs ?? [];
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
-  const hasSpecs = specs.length > 0;
-  const hasAssets = hasSpecs || hasCodeIntel;
-  const currentKey: SectionKey | AssetKey | null =
-    activeKey && (isAssetKey(activeKey) || sections.some((s) => s.key === activeKey))
-      ? activeKey
-      : (sections[0]?.key ?? null);
-  const active = isAssetKey(currentKey)
-    ? null
-    : (sections.find((s) => s.key === currentKey) ?? null);
+  // A brain with no code graph can't show the graph view — force files.
+  const activeView: 'files' | 'graph' = view === 'graph' && hasCodeIntel ? 'graph' : 'files';
 
   return (
     <div className="flex flex-col h-full" data-testid="brainhub-brain">
       <div className="flex items-center gap-2 px-4 pt-4 pb-3 flex-shrink-0">
         <span className="text-[14px] font-semibold">{detail.name}</span>
         <span className="text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-card)]">{detail.kind}</span>
-        {/* #10 — open the EXISTING CodeGraph overlay for THIS brain (project={name},
-            never a hardcoded literal). Gated on hasCodeIntel (a live code_intel.db
-            presence check), NOT on kind: every DDD resolves to kind='knowledge'
-            (aim.json carries brain_kind, never kind), so a kind gate NEVER fires —
-            SwarmAI + IVTHub have a real graph but the button was unreachable. */}
+        {/* [Files | Code Graph] segmented toggle — Files = the Projects tree (always),
+            Code Graph = the inline force-graph (only when a code_intel.db exists). */}
         {hasCodeIntel && (
-          <button
-            onClick={() => setShowGraph(true)}
-            data-testid="open-codegraph"
-            className="ml-auto flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-0.5 hover:bg-[#12233a]"
-            title="Open the code intelligence graph for this brain"
-          >
-            <span className="material-symbols-outlined text-[14px]">hub</span>
-            View code graph
-          </button>
+          <div className="ml-auto flex items-center rounded-md border border-[var(--color-border)] overflow-hidden text-[11px]" data-testid="brainhub-view-toggle">
+            <button
+              data-testid="view-toggle-files"
+              onClick={() => setView('files')}
+              className={`flex items-center gap-1 px-2 py-0.5 ${activeView === 'files' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+            >
+              <span className="material-symbols-outlined text-[14px]">folder</span>Files
+            </button>
+            <button
+              data-testid="view-toggle-graph"
+              onClick={() => setView('graph')}
+              className={`flex items-center gap-1 px-2 py-0.5 border-l border-[var(--color-border)] ${activeView === 'graph' ? 'bg-[#12233a] text-[#58a6ff]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+            >
+              <span className="material-symbols-outlined text-[14px]">hub</span>Code Graph
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Detail-view health metrics (design 2026-08-04) — unified DddCard in full
-          density, metrics-only (BrainView keeps its own header+nav above/below).
-          Renders nothing on an old daemon that omits health OR noise (density-scoped
-          daemon-skew guard inside DddCard/MetricTiles, O023). */}
+      {/* Detail-view health metrics (design 2026-08-04) — the ontology / needs-you
+          verdict strip. KEPT: it carries the 7-type composition signal a raw file
+          tree can't convey. Renders nothing on an old daemon (daemon-skew guard). */}
       {detail.health?.noise && (
         <div className="px-4 pb-3 flex-shrink-0" data-testid="brainhub-healthstrip">
           <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
@@ -460,326 +385,22 @@ function BrainView({ name, onRequestClose }: { name: string; onRequestClose?: ()
         </div>
       )}
 
-      {/* #8 — 2-pane: left section-nav + right content pane (one section at a time) */}
-      <div className="flex-1 flex min-h-0">
-        <nav
-          data-testid="brainhub-brain-nav"
-          className="w-44 flex-shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-2"
-        >
-          {sections.map((s) => {
-            const isActive = s.key === currentKey;
-            return (
-              <button
-                key={s.key}
-                data-testid={`nav-item-${s.key}`}
-                onClick={() => setActiveKey(s.key)}
-                className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-[12px] transition-colors ${
-                  isActive ? 'bg-[var(--color-hover)] text-[var(--color-text)] border-l-2 border-[#f0a500]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-l-2 border-transparent'
-                }`}
-              >
-                <span className="font-mono text-[#f0a500]">{SECTION_NUM[s.key] ?? s.num}</span>
-                <span className="truncate">{s.label}</span>
-                {s.members.length > 0 && (
-                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{s.members.length}</span>
-                )}
-              </button>
-            );
-          })}
-
-          {/* Assets group — Specs + Code Intelligence are ASSET PROJECTIONS, not
-              the six canonical sections (R31). Rendered as a visually-divided
-              sub-group BELOW the sections; each is a nav item selected exactly like
-              a section (right pane swaps). AC4: the whole group is hidden when the
-              brain has neither — no empty-group noise. */}
-          {hasAssets && (
-            <>
-              <div
-                data-testid="assets-group-header"
-                className="mt-2 pt-2 px-3 border-t border-[var(--color-border)] text-[9px] uppercase tracking-wider text-[var(--color-text-faint)] font-semibold"
-              >
-                Assets
-              </div>
-              {hasSpecs && (
-                <AssetNavItem
-                  assetKey="asset:specs"
-                  icon="description"
-                  label="Specs"
-                  count={specs.length}
-                  active={currentKey === 'asset:specs'}
-                  onSelect={setActiveKey}
-                />
-              )}
-              {hasCodeIntel && (
-                <AssetNavItem
-                  assetKey="asset:codeintel"
-                  icon="hub"
-                  label="Code Intelligence"
-                  active={currentKey === 'asset:codeintel'}
-                  onSelect={setActiveKey}
-                />
-              )}
-            </>
-          )}
-        </nav>
-
-        {/* Gate-1 F4: EXACTLY ONE of {asset panel, section card, empty} renders —
-            an if/else short-circuit, never asset-panel ALONGSIDE a section card. */}
-        <div data-testid="brainhub-brain-content" className="flex-1 overflow-y-auto p-4">
-          {currentKey === 'asset:specs' ? (
-            // key={name} → clean remount on brain switch (avoid stale-across-brains).
-            <SpecsPanel key={`specs-${name}`} specs={specs} onOpenFile={openFile} />
-          ) : currentKey === 'asset:codeintel' ? (
-            <CodeIntelPanel key={`ci-${name}`} project={name} />
-          ) : active ? (
-            <SectionCard key={active.key} section={active} onOpenFile={openFile} />
-          ) : (
-            <div className="text-[12px] text-[var(--color-text-faint)] italic">No sections to display.</div>
-          )}
-        </div>
-      </div>
-
-      {/* #10 — sibling-mount the existing full-screen CodeGraph overlay (BottomBar
-          pattern). Rendered as a sibling inside the host overlay; it owns its own
-          ESC handling via the capture-phase guard above. project={name} — NEVER a
-          hardcoded literal (Gate-1 flag). */}
-      {showGraph && (
-        <CodeGraph project={name} onClose={() => setShowGraph(false)} />
-      )}
-    </div>
-  );
-}
-
-// One left-nav item for an asset projection (Specs / Code Intelligence). Mirrors
-// the section nav button's shape so the two groups read as one consistent list.
-function AssetNavItem({
-  assetKey, icon, label, count, active, onSelect,
-}: {
-  assetKey: AssetKey; icon: string; label: string; count?: number;
-  active: boolean; onSelect: (k: AssetKey) => void;
-}) {
-  return (
-    <button
-      data-testid={`nav-item-${assetKey}`}
-      onClick={() => onSelect(assetKey)}
-      className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-[12px] transition-colors ${
-        active ? 'bg-[var(--color-hover)] text-[var(--color-text)] border-l-2 border-[#58a6ff]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-l-2 border-transparent'
-      }`}
-    >
-      <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">{icon}</span>
-      <span className="truncate">{label}</span>
-      {count != null && count > 0 && (
-        <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{count}</span>
-      )}
-    </button>
-  );
-}
-
-// Specs panel — spec-details/*.spec.md filenames (AC1/AC2). Now rendered in the
-// right content pane when the "Specs" nav item is selected (no self-toggle — the
-// nav selection IS the show/hide). Clicking a spec opens it in the Canvas via the
-// same onOpenFile path the section members use (close-overlay → swarm:open-file).
-function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: string) => void }) {
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid="specs-panel">
-      <div className="flex items-center gap-2 mb-1.5 text-[12px] font-semibold">
-        <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">description</span>
-        <span>Specs</span>
-        <span className="text-[9px] text-[var(--color-text-faint)] font-normal">{specs.length}</span>
-      </div>
-      <div className="flex flex-col gap-0.5">
-        {specs.map((f) => (
-          <button
-            key={f}
-            onClick={() => onOpenFile(`${SPEC_DETAILS_REL}/${f}`)}
-            data-testid={`spec-${f}`}
-            className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
-          >
-            <span className="font-mono truncate">{f}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Code-intel panel — reuses the EXISTING GET /api/code-intel/{project}/summary
-// (getCodeIntelSummary). Still ON-DEMAND: this component only MOUNTS when its
-// "Code Intelligence" nav item is selected (Gate-1 F5), so the fetch — which
-// triggers find_dead_code (O(n) full scan) — never runs on brain load, only when
-// the user opens the asset. Fetches on mount (not a redundant inner toggle click).
-// null (no db / 404 — the service maps 404→null) or a 0-symbol/stale db renders a
-// graceful line (a bare .exists() can surface an empty/foreign db — Gate-1 F6).
-function CodeIntelPanel({ project }: { project: string }) {
-  const [summary, setSummary] = useState<CodeIntelSummary | null>(null);
-  const [state, setState] = useState<'loading' | 'loaded' | 'error'>('loading');
-
-  useEffect(() => {
-    let alive = true;
-    setState('loading');
-    getCodeIntelSummary(project).then(
-      (s) => { if (alive) { setSummary(s); setState('loaded'); } },
-      () => { if (alive) setState('error'); },
-    );
-    return () => { alive = false; };
-  }, [project]);
-
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid="code-intel-panel">
-      <div className="flex items-center gap-2 mb-1.5 text-[12px] font-semibold">
-        <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">hub</span>
-        <span>Code Intelligence</span>
-      </div>
-      <div className="text-[11px] text-[var(--color-text-muted)]" data-testid="code-intel-body">
-        {state === 'loading' && <div className="italic text-[var(--color-text-faint)]">Loading code map…</div>}
-        {state === 'error' && <div className="italic text-[var(--color-text-faint)]">Code intel unavailable.</div>}
-        {state === 'loaded' && summary === null && (
-          <div className="italic text-[var(--color-text-faint)]">No code intelligence indexed for this brain.</div>
-        )}
-        {state === 'loaded' && summary && (
-          <>
-            <div className="mb-1">{summary.symbolCount} symbols indexed</div>
-            <div className="flex flex-col gap-0.5">
-              {summary.modulesTop5.map((mod) => (
-                <div key={mod.name} className="flex items-center gap-2" data-testid={`ci-module-${mod.name}`}>
-                  <span className="font-mono truncate">{mod.name}</span>
-                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">
-                    {mod.function_count}fn / {mod.class_count}cls / {mod.file_count}f
-                  </span>
-                </div>
-              ))}
-            </div>
-          </>
+      {/* Content: the REAL Projects/<name> file tree, or the inline code graph. */}
+      <div className="flex-1 min-h-0" data-testid="brainhub-brain-content">
+        {activeView === 'graph' ? (
+          // Inline (not fullscreen) — fills this definite-height flex-1 pane. No
+          // onClose (the [Files] toggle is the way back), no ESC-guard needed.
+          <CodeGraph key={`graph-${name}`} project={name} inline />
+        ) : (
+          // The tree owns its own scroll + measured height (flex-1 min-h-0). File
+          // click → close overlay → open in Canvas (openFile). Noise filtered.
+          <LibraryTree key={`tree-${name}`} rootPath={`Projects/${name}`} onFileOpen={openFile} />
         )}
       </div>
     </div>
   );
 }
 
-function SectionCard({ section, onOpenFile }: { section: BrainSection; onOpenFile: (p: string, gitStatus?: string) => void }) {
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid={`section-${section.key}`}>
-      <div className="flex items-center gap-2 mb-1.5 text-[12px]">
-        <span className="text-[#f0a500] font-mono">{SECTION_NUM[section.key] ?? section.num}</span>
-        <span className="font-semibold">{section.label}</span>
-        <span className={`text-[9px] px-1 py-0.5 rounded font-mono ${
-          section.ownGovern === 'OWN' ? 'bg-[#1f3a2e] text-[#3fb950]' : 'bg-[#3a2e1f] text-[#f0a500]'
-        }`}>{section.ownGovern}</span>
-        <span className="ml-auto text-[10px] text-[var(--color-text-faint)]">{section.curator}</span>
-      </div>
-
-      {section.members.length === 0 ? (
-        <div className="text-[11px] text-[var(--color-text-faint)] italic" data-testid={`empty-${section.key}`}>
-          {section.completeNotBroken ? 'empty — complete, not broken' : 'empty'}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {section.members.map((m) => (
-            <button
-              key={m.path}
-              onClick={() => onOpenFile(m.path, m.gitStatus)}
-              data-testid={`member-${m.path}`}
-              className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
-            >
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: GIT_DOT[m.gitStatus] ?? 'transparent' }} title={m.gitStatus} />
-              <span className="font-mono truncate">{m.path.split('/').pop()}</span>
-              {/* ② knowledge members carry live mtime + entryCount (run_a607f2b0);
-                  other sections omit them (undefined → nothing rendered, daemon-skew
-                  safe). "Is this doc active, and how big" without opening it. */}
-              {(m.mtime || m.entryCount != null) && (
-                <span className="ml-auto flex items-center gap-1.5 text-[9px] text-[var(--color-text-faint)] flex-shrink-0">
-                  {m.entryCount != null && <span data-testid={`member-entrycount-${m.path}`}>{m.entryCount} entries</span>}
-                  {m.mtime && <span data-testid={`member-mtime-${m.path}`}>{m.mtime}</span>}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {section.entries.length > 0 && <KnowledgeEntries entries={section.entries} />}
-    </div>
-  );
-}
-
-function KnowledgeEntries({ entries }: { entries: KnowledgeEntry[] }) {
-  // 7-type composition bar
-  const counts: Record<string, number> = {};
-  for (const e of entries) counts[e.entryType] = (counts[e.entryType] ?? 0) + 1;
-
-  return (
-    <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
-      <div className="flex gap-0.5 mb-1.5 h-1.5 rounded-sm overflow-hidden" title="7-type composition">
-        {/* F5: STABLE order — canonical TYPE_COLOR order first (deterministic across
-            brains, vs Object.keys(counts) insertion order). Gate-2: also append any
-            UNKNOWN type (not in TYPE_COLOR) with the fallback color so the bar stays
-            exhaustive + consistent with the per-entry dot (:below), never silently
-            dropping a segment. (Backend clamps to VALID_TYPES, so unknowns are rare,
-            but the bar must not disagree with the entry list if one slips through.) */}
-        {[
-          ...(Object.keys(TYPE_COLOR) as EntryType[]).filter((t) => counts[t] > 0),
-          ...Object.keys(counts).filter((t) => !(t in TYPE_COLOR) && counts[t] > 0),
-        ].map((t) => (
-          <span
-            key={t}
-            data-testid={`typebar-${t}`}
-            style={{ background: TYPE_COLOR[t as EntryType] ?? 'var(--color-text-faint)', flex: counts[t] }}
-          />
-        ))}
-      </div>
-      <div className="text-[10px] text-[var(--color-text-faint)] mb-1">{entries.length} entries</div>
-      {/* AC3: entries GROUPED BY 7-type (collapsible), not a flat list — structure
-          is visible without scrolling 700 uniform titles. Group order = canonical
-          TYPE_COLOR order + any unknown type appended (matches the composition bar).
-          `entry-line` + `typebar-*` testids preserved (Gate-1 F5 regression guard). */}
-      <div className="flex flex-col gap-1 max-h-64 overflow-auto">
-        {[
-          ...(Object.keys(TYPE_COLOR) as EntryType[]).filter((t) => counts[t] > 0),
-          ...Object.keys(counts).filter((t) => !(t in TYPE_COLOR) && counts[t] > 0),
-        ].map((t) => (
-          <EntryGroup
-            key={t}
-            type={t}
-            entries={entries.filter((e) => e.entryType === t)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// One collapsible type-group in the grouped Knowledge list (AC3). Collapsed by
-// default so the 7 group headers ARE the structure the owner reads first; expand
-// to see that type's entries. Caps rendered rows per group (a type can have
-// hundreds) with a "+N more" line, mirroring the old flat-list cap.
-function EntryGroup({ type, entries }: { type: string; entries: KnowledgeEntry[] }) {
-  const [open, setOpen] = useState(false);
-  const CAP = 40;
-  return (
-    <div data-testid={`entry-group-${type}`}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        data-testid={`entry-group-toggle-${type}`}
-        className="w-full flex items-center gap-1.5 text-[10px] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
-      >
-        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[type as EntryType] ?? 'var(--color-text-faint)' }} />
-        <span className="font-mono text-[var(--color-text-muted)]">{type}</span>
-        <span className="text-[9px] text-[var(--color-text-faint)]">{entries.length}</span>
-        <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div className="flex flex-col gap-0.5 pl-3">
-          {entries.slice(0, CAP).map((e, i) => (
-            <div key={`${e.file}-${i}`} className="flex items-center gap-1.5 text-[10px]" data-testid="entry-line">
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[e.entryType] ?? 'var(--color-text-faint)' }} title={e.entryType} />
-              <span className={`truncate font-mono ${DECAY_STYLE[e.decayState] ?? DECAY_STYLE.active}`}>{e.title}</span>
-            </div>
-          ))}
-          {entries.length > CAP && <div className="text-[10px] text-[var(--color-text-faint)] italic">+{entries.length - CAP} more…</div>}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Review view (Run 2) ──────────────────────────────────────────────────────
 
@@ -861,9 +482,9 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
   // WORKSPACE-relative (backend runs `git diff` at the workspace root with a
   // `Projects/<name>` pathspec → cur_file = "Projects/<name>/…", ddd_brain.py:162/964;
   // verified test fixture:150 + reject call:564). So dispatch it DIRECTLY — do NOT
-  // re-wrap in `Projects/${name}/` (that would double-prefix → 404). This DIFFERS
-  // from BrainView.openFile, whose SectionMember.path is bare project-relative and
-  // DOES need the prefix. Same close→Canvas z-index precedent (close BEFORE dispatch).
+  // re-wrap in `Projects/${name}/` (that would double-prefix → 404). Same as
+  // BrainView.openFile now (the Projects tree also yields workspace-relative paths).
+  // Same close→Canvas z-index precedent (close BEFORE dispatch).
   const openHunkFile = useCallback((workspaceRelFile: string, gitStatus?: string) => {
     onRequestClose?.();
     document.dispatchEvent(new CustomEvent('swarm:open-file', {

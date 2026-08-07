@@ -78,11 +78,29 @@ vi.mock('../code-intel/CodeGraph', () => ({
   },
 }));
 
-// CodeIntelPanel now fetches the summary on mount (Gate-1 F5) — mock the service
-// boundary so a Code-Intelligence nav click doesn't hit the real API.
-const mockGetCodeIntelSummary = vi.fn();
+// codeIntel service — CodeGraph (mocked above) is the only consumer now; keep both
+// exports mocked so nothing hits the real API.
 vi.mock('../../services/codeIntel', () => ({
-  getCodeIntelSummary: (...a: unknown[]) => mockGetCodeIntelSummary(...a),
+  getCodeIntelSummary: vi.fn(),
+  getCodeIntelGraph: vi.fn(),
+}));
+
+// The Brain detail content is now the real Projects/<name> file tree (run_a75197d9).
+// Mock LibraryTree at the boundary — assert it's rooted at Projects/<name> and that
+// its onFileOpen is wired; the tree's own render is tested in LibraryTree.test.tsx.
+const mockLibraryTree = vi.fn();
+vi.mock('./LibraryTree', () => ({
+  LibraryTree: (props: { rootPath?: string; onFileOpen?: (p: string) => void }) => {
+    mockLibraryTree(props);
+    return (
+      <div data-testid="library-tree-mock" data-rootpath={props.rootPath}>
+        <button data-testid="tree-file-click"
+          onClick={() => props.onFileOpen?.(`${props.rootPath}/2-understanding/TECH.md`)}>
+          open a file
+        </button>
+      </div>
+    );
+  },
 }));
 
 // The six canonical section keys, in order (mirrors backend _SECTIONS / SECTION_ORDER).
@@ -172,10 +190,6 @@ beforeEach(() => {
     has_output: false, output_path: null, last_distribute_time: null,
     source_changed_since: false,
   });
-  mockGetCodeIntelSummary.mockResolvedValue({
-    symbolCount: 42,
-    modulesTop5: [{ name: 'core', function_count: 10, class_count: 2, file_count: 3 }],
-  });
 });
 
 describe('BrainHub — Gallery (AC3)', () => {
@@ -238,121 +252,65 @@ describe('BrainHub — Gallery (AC3)', () => {
   });
 });
 
-describe('BrainHub — Brain view (AC4)', () => {
-  // Run 4 (#8): the Brain view is now 2-pane — only the ACTIVE section's card is
-  // mounted at a time, revealed by clicking its left-nav item. These helpers
-  // open the brain then click the section's nav item so the content pane shows it
-  // (default active section = the FIRST section returned by the backend).
+
+describe('BrainHub — Brain detail = Projects tree + Code Graph toggle (run_a75197d9)', () => {
   async function openBrain() {
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
-  async function openSection(key: string) {
+
+  it('detail content is the real Projects/<name> file tree (NOT the old section nav)', async () => {
     await openBrain();
-    fireEvent.click(screen.getByTestId(`nav-item-${key}`));
-    await waitFor(() => expect(screen.getByTestId(`section-${key}`)).toBeTruthy());
-  }
+    const tree = await screen.findByTestId('library-tree-mock');
+    expect(tree.getAttribute('data-rootpath')).toBe('Projects/SwarmAI');
+    expect(screen.queryByTestId('brainhub-brain-nav')).toBeNull();
+    expect(screen.queryByTestId('nav-item-identity')).toBeNull();
+    expect(screen.queryByTestId('code-intel-panel')).toBeNull();
+  });
 
-  it('renders all six section NAV items (2-pane left nav)', async () => {
-    // Spec change (#8, Gate-1 HIGH, directed by user): content is now
-    // one-section-at-a-time behind a nav click, NOT all six rendered at once.
-    // Six-section COMPLETENESS is asserted on the nav; each card is reachable by
-    // clicking its nav item (covered in the tests below + the Run-4 block).
+  it('clicking a tree file closes the overlay THEN opens it in Canvas (workspace-relative, z-index precedent)', async () => {
+    const onClose = vi.fn();
+    const openFile = vi.fn();
+    document.addEventListener('swarm:open-file', openFile as EventListener);
+    render(<BrainHub onRequestClose={onClose} />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await screen.findByTestId('library-tree-mock');
+    fireEvent.click(screen.getByTestId('tree-file-click'));
+    expect(onClose).toHaveBeenCalled();
+    await waitFor(() => expect(openFile).toHaveBeenCalled());
+    const evt = openFile.mock.calls[0][0] as CustomEvent<{ path: string }>;
+    expect(evt.detail.path).toBe('Projects/SwarmAI/2-understanding/TECH.md');
+    document.removeEventListener('swarm:open-file', openFile as EventListener);
+  });
+
+  it('hasCodeIntel → [Files|Code Graph] toggle; Code Graph shows inline CodeGraph, Files shows the tree', async () => {
     await openBrain();
-    for (const key of ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher']) {
-      expect(screen.getByTestId(`nav-item-${key}`)).toBeTruthy();
-    }
-    // default active section = the first section → its card is in the content pane.
-    expect(screen.getByTestId('section-identity')).toBeTruthy();
-    // a non-active section's card is NOT mounted (one-at-a-time).
-    expect(screen.queryByTestId('section-refresher')).toBeNull();
+    expect(screen.getByTestId('brainhub-view-toggle')).toBeTruthy();
+    expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
+    expect(screen.queryByTestId('code-graph-mock')).toBeNull();
+    fireEvent.click(screen.getByTestId('view-toggle-graph'));
+    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
+    expect(mockCodeGraph).toHaveBeenCalledWith(expect.objectContaining({ project: 'SwarmAI', inline: true }));
+    expect(screen.queryByTestId('library-tree-mock')).toBeNull();
+    fireEvent.click(screen.getByTestId('view-toggle-files'));
+    await waitFor(() => expect(screen.getByTestId('library-tree-mock')).toBeTruthy());
+    expect(screen.queryByTestId('code-graph-mock')).toBeNull();
   });
 
-  it('marks an empty ③Gates section as complete-not-broken (R31)', async () => {
-    await openSection('gates');
-    const empty = screen.getByTestId('empty-gates');
-    expect(empty.textContent).toContain('complete, not broken');
+  it('a brain with NO code_intel shows the tree only — no toggle, no graph', async () => {
+    mockGetBrainDetail.mockResolvedValue({ ...DETAIL, hasCodeIntel: false });
+    await openBrain();
+    expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
+    expect(screen.queryByTestId('brainhub-view-toggle')).toBeNull();
+    expect(screen.queryByTestId('code-graph-mock')).toBeNull();
   });
 
-  it('renders decay-colored 7-type entries GROUPED by type for ② knowledge', async () => {
-    await openSection('knowledge');
-    // AC3: entries are grouped by type (collapsed by default), NOT a flat list.
-    // The 2 fixture entries are 1 guideline + 1 pitfall → 2 type-groups.
-    expect(screen.getByTestId('entry-group-guideline')).toBeTruthy();
-    expect(screen.getByTestId('entry-group-pitfall')).toBeTruthy();
-    // collapsed → no entry-line rendered until a group is expanded
-    expect(screen.queryAllByTestId('entry-line').length).toBe(0);
-    // expand the pitfall group → its (dormant) entry appears with decay styling
-    fireEvent.click(screen.getByTestId('entry-group-toggle-pitfall'));
-    const lines = screen.getAllByTestId('entry-line');
-    expect(lines.length).toBe(1);
-    const dormant = lines.find((l) => l.textContent?.includes('Old dormant note'));
-    expect(dormant?.querySelector('.opacity-70, [class*="opacity-70"]') || dormant?.innerHTML).toBeTruthy();
-    // the 7-type composition bar is still rendered (F5 regression guard preserved)
-    expect(screen.getByTestId('typebar-guideline')).toBeTruthy();
-    expect(screen.getByTestId('typebar-pitfall')).toBeTruthy();
-  });
-
-  it('opens a member in the CANVAS via swarm:open-file with a workspace-relative path (Approach A, run_a607f2b0)', async () => {
-    // A-delta: clicking a member no longer opens the in-hub FilePreviewModal — it
-    // opens the file in the app-level Canvas (the SwarmWS-explorer precedent), so a
-    // DDD doc reads in the same surface as any workspace file. The dispatched path
-    // MUST be workspace-relative (Projects/<name>/<member>) — useCanvasHost's
-    // resolver takes it against the cached SwarmWS root; a bare/absolute path 404s.
-    const openEvents: CustomEvent[] = [];
-    const onOpen = (e: Event) => openEvents.push(e as CustomEvent);
-    document.addEventListener('swarm:open-file', onOpen);
-    try {
-      await openSection('identity');   // AGENTS.md lives under ① identity (the default active)
-      fireEvent.click(screen.getByTestId('member-AGENTS.md'));
-      await waitFor(() => expect(openEvents.length).toBe(1));
-      expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/AGENTS.md');
-      expect(openEvents[0].detail.gitStatus).toBe('clean');  // member's git dot carried through
-    } finally {
-      document.removeEventListener('swarm:open-file', onOpen);
-    }
-  });
-
-  it('closes the overlay BEFORE dispatching open-file so Canvas is not rendered under the host (z-index precedent)', async () => {
-    // Gate-1 z-index (swarmws precedent): onRequestClose() MUST run before the
-    // swarm:open-file dispatch. Order is observable: capture the sequence.
-    const seq: string[] = [];
-    const onRequestClose = vi.fn(() => seq.push('close'));
-    const onOpen = () => seq.push('open');
-    document.addEventListener('swarm:open-file', onOpen);
-    try {
-      render(<BrainHub onRequestClose={onRequestClose} />);
-      await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('nav-item-identity'));
-      fireEvent.click(screen.getByTestId('member-AGENTS.md'));
-      await waitFor(() => expect(seq).toEqual(['close', 'open']));
-    } finally {
-      document.removeEventListener('swarm:open-file', onOpen);
-    }
-  });
-
-  it('AC5: ② knowledge members show live mtime + entryCount; other sections do not', async () => {
-    // Backend enriches ONLY ② knowledge members with mtime (fs "N ago") + entryCount.
-    mockGetBrainDetail.mockResolvedValue({
-      ...DETAIL,
-      sections: DETAIL.sections.map((s) =>
-        s.key === 'knowledge'
-          ? { ...s, members: [{ path: '2-understanding/TECH.md', gitStatus: 'modified', mtime: '2h ago', entryCount: 47 }] }
-          : s,
-      ),
-    });
-    await openSection('knowledge');
-    const row = screen.getByTestId('member-2-understanding/TECH.md');
-    expect(row.textContent).toContain('2h ago');
-    expect(row.textContent).toContain('47');
-    // identity members carry no mtime/entryCount → no such meta rendered
-    fireEvent.click(screen.getByTestId('nav-item-identity'));
-    await waitFor(() => expect(screen.getByTestId('member-AGENTS.md')).toBeTruthy());
-    expect(screen.getByTestId('member-AGENTS.md').textContent).not.toContain('ago');
+  it('the ontology/needs-you health strip is KEPT above the tree', async () => {
+    await openBrain();
+    expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy();
   });
 });
 
@@ -368,166 +326,6 @@ describe('BrainHub — Gallery primary hero is clickable (AC6, run_a607f2b0)', (
   });
 });
 
-describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robustness)', () => {
-  async function openBrain() {
-    render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-  }
-
-  it('AC1: renders 2-pane (nav + content); clicking a nav item switches the content pane', async () => {
-    await openBrain();
-    expect(screen.getByTestId('brainhub-brain-nav')).toBeTruthy();
-    expect(screen.getByTestId('brainhub-brain-content')).toBeTruthy();
-    // default active = first section (identity) shown, knowledge card not yet mounted.
-    expect(screen.getByTestId('section-identity')).toBeTruthy();
-    expect(screen.queryByTestId('section-knowledge')).toBeNull();
-    // click knowledge nav → knowledge card mounts, identity card unmounts.
-    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
-    await waitFor(() => expect(screen.getByTestId('section-knowledge')).toBeTruthy());
-    expect(screen.queryByTestId('section-identity')).toBeNull();
-  });
-
-  it('AC3 (#10): "View code graph" mounts CodeGraph with project === brain name (no hardcoded literal)', async () => {
-    await openBrain();
-    expect(screen.queryByTestId('code-graph-mock')).toBeNull();  // not mounted until clicked
-    fireEvent.click(screen.getByTestId('open-codegraph'));
-    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
-    // CodeGraph MUST receive the CURRENT brain name, never a hardcoded "SwarmAI" literal.
-    const call = mockCodeGraph.mock.calls[mockCodeGraph.mock.calls.length - 1][0];
-    expect(call.project).toBe('SwarmAI');   // === the opened brain's name (DETAIL.name)
-    expect(typeof call.onClose).toBe('function');
-  });
-
-  it('AC4: a knowledge-only bare DDD (no code_intel / aim.json / gates) renders every section with NO crash', async () => {
-    // A DDD from another user's workspace: gates + capabilities + delivery + refresher
-    // empty, knowledge-only, kind="knowledge". Must render all six nav items + honest
-    // empty states, never throw. project passed to CodeGraph = this DDD's name.
-    const BARE: BrainDetail = {
-      name: 'SomeoneElsesProject', kind: 'knowledge',
-      sections: SECTION_KEYS.map((key, i) => ({
-        key, num: ['①', '②', '③', '④', '⑤', '⑥'][i], label: key, ownGovern: 'OWN' as const, curator: '—',
-        members: key === 'knowledge' ? [{ path: '2-understanding/PRODUCT.md', gitStatus: 'clean' }] : [],
-        entries: [], completeNotBroken: key !== 'knowledge',
-      })),
-      specs: [],
-      hasCodeIntel: false,
-    };
-    mockGetBrains.mockResolvedValue([{
-      name: 'SomeoneElsesProject', kind: 'knowledge',
-      sectionsPresent: { identity: false, knowledge: true, gates: false, capabilities: false, delivery: false, refresher: false },
-      lifecycleStage: 'GROW',
-      health: { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '1d ago' },
-    }]);
-    mockGetBrainDetail.mockResolvedValue(BARE);
-    render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('dddcard-SomeoneElsesProject')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dddcard-SomeoneElsesProject'));
-    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-    // all six nav items present even though 5 sections are empty
-    for (const key of SECTION_KEYS) {
-      expect(screen.getByTestId(`nav-item-${key}`)).toBeTruthy();
-    }
-    // click an empty section → renders "complete, not broken", no throw
-    fireEvent.click(screen.getByTestId('nav-item-gates'));
-    await waitFor(() => expect(screen.getByTestId('empty-gates')).toBeTruthy());
-    // A DDD with no code_intel.db (hasCodeIntel=false) → the "View code graph"
-    // button must NOT be offered (presence-gated, not kind-gated).
-    expect(screen.queryByTestId('open-codegraph')).toBeNull();
-    // AC4: no specs AND no code_intel → NO Assets group at all (no empty-group noise).
-    expect(screen.queryByTestId('assets-group-header')).toBeNull();
-    expect(screen.queryByTestId('nav-item-asset:specs')).toBeNull();
-    expect(screen.queryByTestId('nav-item-asset:codeintel')).toBeNull();
-  });
-
-  it('AC3+meta: ESC with the code graph open closes ONLY the graph, not the whole Brain Hub', async () => {
-    // Gate-2 meta-review MED: the Brain Hub lives in a shared Modal with a
-    // document-level ESC→close listener; CodeGraph has no ESC handler. BrainView
-    // must intercept ESC (capture phase) while the graph is open so ESC dismisses
-    // the graph, not the hub.
-    await openBrain();  // DETAIL.hasCodeIntel === true → button present
-    fireEvent.click(screen.getByTestId('open-codegraph'));
-    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
-    fireEvent.keyDown(document, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByTestId('code-graph-mock')).toBeNull());
-    // the Brain Hub itself is still mounted (ESC did NOT close the hub)
-    expect(screen.getByTestId('brainhub-brain')).toBeTruthy();
-  });
-
-  it('AC4: an empty gallery (no DDDs at all) renders the honest empty state, no crash', async () => {
-    mockGetBrains.mockResolvedValue([]);
-    render(<BrainHub />);
-    await waitFor(() => expect(screen.getByText('No DDD brains found.')).toBeTruthy());
-  });
-});
-
-describe('BrainHub — Assets group in left nav (Specs + Code Intelligence)', () => {
-  async function openBrain() {
-    render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-  }
-
-  it('AC2: Specs + Code Intelligence appear as left-nav items under an Assets group', async () => {
-    await openBrain();
-    expect(screen.getByTestId('assets-group-header')).toBeTruthy();
-    expect(screen.getByTestId('nav-item-asset:specs')).toBeTruthy();
-    expect(screen.getByTestId('nav-item-asset:codeintel')).toBeTruthy();
-    // NOT persistent panels in the content pane on load — the default view is the
-    // first SECTION's card, not an asset panel.
-    expect(screen.getByTestId('section-identity')).toBeTruthy();
-    expect(screen.queryByTestId('specs-panel')).toBeNull();
-    expect(screen.queryByTestId('code-intel-panel')).toBeNull();
-  });
-
-  it('AC2: clicking Specs shows the spec list in the right pane; the section card unmounts', async () => {
-    await openBrain();
-    fireEvent.click(screen.getByTestId('nav-item-asset:specs'));
-    await waitFor(() => expect(screen.getByTestId('specs-panel')).toBeTruthy());
-    // the spec files (from DETAIL.specs) are listed + clickable
-    expect(screen.getByTestId('spec-channels.spec.md')).toBeTruthy();
-    expect(screen.getByTestId('spec-pipeline.spec.md')).toBeTruthy();
-    // Gate-1 F4: exactly one pane — the section card is NOT also rendered
-    expect(screen.queryByTestId('section-identity')).toBeNull();
-  });
-
-  it('AC2/F5: clicking Code Intelligence mounts the panel and fetches on mount (not on load)', async () => {
-    await openBrain();
-    // F5: the O(n) summary fetch must NOT run on brain load — only when selected.
-    expect(mockGetCodeIntelSummary).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('nav-item-asset:codeintel'));
-    await waitFor(() => expect(screen.getByTestId('code-intel-panel')).toBeTruthy());
-    // fetched on mount (no redundant inner toggle click needed)
-    await waitFor(() => expect(mockGetCodeIntelSummary).toHaveBeenCalledWith('SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('code-intel-body').textContent).toContain('42 symbols'));
-    expect(screen.queryByTestId('section-identity')).toBeNull();
-  });
-
-  it('AC3: section → asset → section round-trip keeps the 6-section logic intact', async () => {
-    await openBrain();
-    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
-    await waitFor(() => expect(screen.getByTestId('section-knowledge')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('nav-item-asset:specs'));
-    await waitFor(() => expect(screen.getByTestId('specs-panel')).toBeTruthy());
-    expect(screen.queryByTestId('section-knowledge')).toBeNull();
-    // back to a section — the asset panel unmounts, the section card returns
-    fireEvent.click(screen.getByTestId('nav-item-refresher'));
-    await waitFor(() => expect(screen.getByTestId('section-refresher')).toBeTruthy());
-    expect(screen.queryByTestId('specs-panel')).toBeNull();
-  });
-
-  it('AC4: a brain with specs but NO code_intel shows only the Specs asset item', async () => {
-    mockGetBrainDetail.mockResolvedValue({ ...DETAIL, specs: ['x.spec.md'], hasCodeIntel: false });
-    await openBrain();
-    expect(screen.getByTestId('assets-group-header')).toBeTruthy();
-    expect(screen.getByTestId('nav-item-asset:specs')).toBeTruthy();
-    expect(screen.queryByTestId('nav-item-asset:codeintel')).toBeNull();
-    // and the View-code-graph button is absent (no code_intel)
-    expect(screen.queryByTestId('open-codegraph')).toBeNull();
-  });
-});
 
 // BrainHubDemoOverlay (AC5) describe removed 2026-08-04 (M5): the legacy overlay
 // wrapper was deleted — brain-hub renders through the OverlayHost registry now
@@ -632,45 +430,6 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     const conf = screen.getByTestId('proposal-confidence');
     expect(conf.textContent).toContain('—');
     expect(conf.textContent).not.toContain('null');
-  });
-
-  it('F5: 7-type composition bar segment order is STABLE (canonical, not insertion order)', async () => {
-    // Two brains whose entries arrive in DIFFERENT type order must yield the SAME
-    // left-to-right segment order (canonical TYPE_COLOR order: guideline before pitfall).
-    const mkDetail = (order: Array<'guideline' | 'pitfall'>) => ({
-      ...DETAIL,
-      sections: DETAIL.sections.map((s) =>
-        s.key === 'knowledge'
-          ? { ...s, entries: order.map((t, i) => ({ title: `${t}${i}`, entryType: t, decayState: 'active' as const, section: 'A', source: '', file: 'f' })) }
-          : s,
-      ),
-    });
-    const orderOf = () => {
-      const bar = screen.getByTestId('typebar-guideline').parentElement!;
-      return Array.from(bar.querySelectorAll('[data-testid^="typebar-"]')).map((n) => n.getAttribute('data-testid'));
-    };
-    // pitfall-first arrival
-    mockGetBrainDetail.mockResolvedValue(mkDetail(['pitfall', 'guideline']));
-    const { unmount } = render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('nav-item-knowledge')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
-    await waitFor(() => expect(screen.getByTestId('typebar-guideline')).toBeTruthy());
-    const orderA = orderOf();
-    unmount();
-    // guideline-first arrival → must produce the SAME segment order
-    mockGetBrainDetail.mockResolvedValue(mkDetail(['guideline', 'pitfall']));
-    render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('nav-item-knowledge')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
-    await waitFor(() => expect(screen.getByTestId('typebar-guideline')).toBeTruthy());
-    const orderB = orderOf();
-    expect(orderA).toEqual(orderB);
-    // canonical: guideline segment precedes pitfall segment
-    expect(orderA.indexOf('typebar-guideline')).toBeLessThan(orderA.indexOf('typebar-pitfall'));
   });
 
   it('F8: diff_incomplete DISABLES "Mark all seen" + shows a warning with a Retry', async () => {
