@@ -253,30 +253,58 @@ describe('BrainHub — Gallery (AC3)', () => {
 });
 
 
-describe('BrainHub — Brain detail = Projects tree + Code Graph toggle (run_a75197d9)', () => {
+describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c68088f)', () => {
   async function openBrain() {
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
-
-  it('detail content is the real Projects/<name> file tree (NOT the old section nav)', async () => {
+  // Browse is the SECOND sub-tab now — the tree lives there, not in the default view.
+  async function openBrowse() {
     await openBrain();
-    const tree = await screen.findByTestId('library-tree-mock');
-    expect(tree.getAttribute('data-rootpath')).toBe('Projects/SwarmAI');
-    expect(screen.queryByTestId('brainhub-brain-nav')).toBeNull();
-    expect(screen.queryByTestId('nav-item-identity')).toBeNull();
-    expect(screen.queryByTestId('code-intel-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('detail-tab-browse'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-browse')).toBeTruthy());
+  }
+
+  // ── AC1: fixed layout — Overview is the default, both sub-tabs always present ──
+  it('opens on Overview by default; both [Overview|Browse] sub-tabs are present for every brain', async () => {
+    await openBrain();
+    expect(screen.getByTestId('brainhub-detail-tabs')).toBeTruthy();
+    expect(screen.getByTestId('brainhub-overview')).toBeTruthy();      // default
+    expect(screen.queryByTestId('brainhub-browse')).toBeNull();        // browse not shown yet
+    // the tree is NOT in the default view — it's behind Browse
+    expect(screen.queryByTestId('library-tree-mock')).toBeNull();
   });
 
-  it('clicking a tree file closes the overlay THEN opens it in Canvas (workspace-relative, z-index precedent)', async () => {
+  it('AC1 fixed order in Overview: ① healthstrip → ② need-you → ③ core-docs, same for any brain', async () => {
+    await openBrain();
+    const ov = screen.getByTestId('brainhub-overview');
+    const order = ['brainhub-healthstrip', 'brainhub-needyou', 'brainhub-coredocs']
+      .map((id) => Array.from(ov.querySelectorAll('[data-testid]')).findIndex((el) => el.getAttribute('data-testid') === id));
+    // strictly ascending → the three sections appear in the fixed order
+    expect(order[0]).toBeGreaterThanOrEqual(0);
+    expect(order[1]).toBeGreaterThan(order[0]);
+    expect(order[2]).toBeGreaterThan(order[1]);
+  });
+
+  // ── AC6: Browse tab — tree + toggle moved verbatim (one extra click to reach) ──
+  it('Browse tab content is the real Projects/<name> file tree (NOT the old section nav)', async () => {
+    await openBrowse();
+    const tree = await screen.findByTestId('library-tree-mock');
+    expect(tree.getAttribute('data-rootpath')).toBe('Projects/SwarmAI');
+    expect(screen.queryByTestId('nav-item-identity')).toBeNull();
+  });
+
+  it('AC4: clicking a tree file closes the overlay THEN opens it in Canvas (workspace-relative)', async () => {
     const onClose = vi.fn();
     const openFile = vi.fn();
     document.addEventListener('swarm:open-file', openFile as EventListener);
     render(<BrainHub onRequestClose={onClose} />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('detail-tab-browse'));
     await screen.findByTestId('library-tree-mock');
     fireEvent.click(screen.getByTestId('tree-file-click'));
     expect(onClose).toHaveBeenCalled();
@@ -286,8 +314,8 @@ describe('BrainHub — Brain detail = Projects tree + Code Graph toggle (run_a75
     document.removeEventListener('swarm:open-file', openFile as EventListener);
   });
 
-  it('hasCodeIntel → [Files|Code Graph] toggle; Code Graph shows inline CodeGraph, Files shows the tree', async () => {
-    await openBrain();
+  it('AC6: hasCodeIntel → [Files|Code Graph] toggle inside Browse; toggling swaps tree/graph', async () => {
+    await openBrowse();
     expect(screen.getByTestId('brainhub-view-toggle')).toBeTruthy();
     expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
     expect(screen.queryByTestId('code-graph-mock')).toBeNull();
@@ -300,17 +328,102 @@ describe('BrainHub — Brain detail = Projects tree + Code Graph toggle (run_a75
     expect(screen.queryByTestId('code-graph-mock')).toBeNull();
   });
 
-  it('a brain with NO code_intel shows the tree only — no toggle, no graph', async () => {
+  it('a brain with NO code_intel shows the tree only in Browse — no toggle, no graph', async () => {
     mockGetBrainDetail.mockResolvedValue({ ...DETAIL, hasCodeIntel: false });
-    await openBrain();
+    await openBrowse();
     expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
     expect(screen.queryByTestId('brainhub-view-toggle')).toBeNull();
     expect(screen.queryByTestId('code-graph-mock')).toBeNull();
   });
 
-  it('the ontology/needs-you health strip is KEPT above the tree', async () => {
+  // ── AC2: § Ontology RELOCATED into Overview (not rebuilt) ──
+  it('AC2: the ontology/needs-you health strip is KEPT — relocated into Overview (default)', async () => {
     await openBrain();
     expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy();
+  });
+});
+
+describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (run_6c68088f)', () => {
+  async function openOverview(detailOverride?: Partial<BrainDetail>, galleryOverride?: BrainSummary[]) {
+    if (galleryOverride) mockGetBrains.mockResolvedValue(galleryOverride);
+    if (detailOverride) mockGetBrainDetail.mockResolvedValue({ ...DETAIL, ...detailOverride });
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-overview')).toBeTruthy());
+  }
+
+  // AC3 — three Need-You states, block ALWAYS present
+  it('AC3: pending>0 → "Go to Review" action switches to the Review tab', async () => {
+    // DETAIL.health.escalationPending = 2
+    await openOverview();
+    const btn = screen.getByTestId('needyou-review');
+    expect(btn.textContent).toContain('2');
+    fireEvent.click(btn);
+    // parent switches to Review tab for the same brain
+    await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
+  });
+
+  it('AC3: uncommitted (from gallery summary, NOT detail.health) surfaces in Need-You', async () => {
+    // SwarmAI gallery summary has uncommitted:true; detail.health has NO uncommitted (F3)
+    await openOverview();
+    expect(screen.getByTestId('needyou-uncommitted')).toBeTruthy();
+  });
+
+  it('AC3: no work → Need-You block still present with a muted "Nothing queued" line', async () => {
+    await openOverview(
+      { health: { ...DETAIL.health!, escalationPending: 0 } },
+      [{ ...GALLERY[0], health: { ...GALLERY[0].health, pending: 0, uncommitted: false } }, GALLERY[1]],
+    );
+    expect(screen.getByTestId('brainhub-needyou')).toBeTruthy();       // always present
+    expect(screen.getByTestId('needyou-empty')).toBeTruthy();
+    expect(screen.queryByTestId('needyou-review')).toBeNull();
+  });
+
+  // AC4/AC5 — 4 core-doc cards + signal marking
+  it('AC4: renders one card per canonical doc; clicking opens it in Canvas', async () => {
+    const openFile = vi.fn();
+    document.addEventListener('swarm:open-file', openFile as EventListener);
+    // DETAIL knowledge section has only TECH.md member by default — give it all 4
+    const members = [
+      { path: '2-understanding/PRODUCT.md', gitStatus: 'clean', mtime: '5d ago', entryCount: 10 },
+      { path: '2-understanding/TECH.md', gitStatus: 'modified', mtime: '2h ago', entryCount: 40 },
+      { path: '2-understanding/IMPROVEMENT.md', gitStatus: 'clean', mtime: '1d ago', entryCount: 25 },
+      { path: '2-understanding/PROJECT.md', gitStatus: 'clean', mtime: '3h ago', entryCount: 8 },
+    ];
+    const sections = DETAIL.sections.map((s) => s.key === 'knowledge' ? { ...s, members } : s);
+    await openOverview({ sections });
+    expect(screen.getByTestId('coredoc-PRODUCT.md')).toBeTruthy();
+    expect(screen.getByTestId('coredoc-TECH.md')).toBeTruthy();
+    expect(screen.getByTestId('coredoc-IMPROVEMENT.md')).toBeTruthy();
+    expect(screen.getByTestId('coredoc-PROJECT.md')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('coredoc-TECH.md'));
+    await waitFor(() => expect(openFile).toHaveBeenCalled());
+    const evt = openFile.mock.calls[0][0] as CustomEvent<{ path: string }>;
+    expect(evt.detail.path).toBe('Projects/SwarmAI/2-understanding/TECH.md');
+    document.removeEventListener('swarm:open-file', openFile as EventListener);
+  });
+
+  it('AC5: a doc with a review signal is visually marked (TECH.md has an auto-applied hunk)', async () => {
+    // REVIEW has a TECH.md hunk → TECH.md card marked; PROJECT.md has no signal → not marked
+    await openOverview();
+    // DETAIL default knowledge members = only TECH.md
+    expect(screen.getByTestId('coredoc-mark-TECH.md')).toBeTruthy();
+  });
+
+  // AC7 — Weekly Report, current-DDD-only, in-overlay (no file)
+  it('AC7: [Weekly Report] toggles a current-DDD panel; no file (no swarm:open-file)', async () => {
+    const openFile = vi.fn();
+    document.addEventListener('swarm:open-file', openFile as EventListener);
+    await openOverview();
+    expect(screen.queryByTestId('brainhub-weekly-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('coredocs-weekly'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-weekly-panel')).toBeTruthy());
+    // it's the current DDD only + a trust distribution (F4), NOT a file open
+    expect(screen.getByTestId('brainhub-weekly-panel').textContent).toContain('SwarmAI');
+    expect(screen.getByTestId('weekly-trust-dist')).toBeTruthy();
+    expect(openFile).not.toHaveBeenCalled();
+    document.removeEventListener('swarm:open-file', openFile as EventListener);
   });
 });
 

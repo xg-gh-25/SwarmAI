@@ -30,6 +30,7 @@ import type {
 import { DddCard } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
+import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -165,7 +166,19 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
             mount on return). The key guards a FUTURE in-place brain switch (e.g. a
             "jump to brain" affordance) from surviving a stale view='graph' or a stale
             Projects/<name> tree root into the new brain. Cheap + intent-clear. */}
-        {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} onRequestClose={onRequestClose} />}
+        {!error && tab === 'brain' && selected && (
+          <BrainView
+            key={selected}
+            name={selected}
+            onRequestClose={onRequestClose}
+            onGoToReview={() => setTab('review')}
+            /* F3: `uncommitted` lives on the cheap gallery BrainHealth, NOT on the
+               detail DetailHealth (which has escalationPending but no uncommitted).
+               Thread it down from the already-loaded summary so §② Need-You can show
+               it without reading a field that doesn't exist on detail.health. */
+            uncommitted={brains?.find((b) => b.name === selected)?.health.uncommitted ?? false}
+          />
+        )}
         {!error && tab === 'review' && selected && <ReviewView name={selected} onRequestClose={onRequestClose} />}
         {!error && tab === 'distribute' && selected && <DistributeView name={selected} onRequestClose={onRequestClose} />}
       </div>
@@ -305,35 +318,70 @@ function ZonedGrid({ brains, onOpen }: { brains: BrainSummary[]; onOpen: (n: str
 }
 
 
-// ── Brain view ─────────────────────────────────────────────────────────────────
+// ── Brain view — FIXED [Overview | Browse] sub-tabs (run_6c68088f) ──────────────
+//
+// XG directive (this session): the Brain-detail view has TWO fixed sub-tabs that
+// separate two mental modes — NEVER a dynamic per-brain layout ("dynamic makes
+// users lost"). Same tab set + same section order for EVERY brain.
+//   • OVERVIEW (default) — "what state is this brain in / what should I do":
+//       §① Ontology (3-layer×7-type) — RELOCATED from the old health-strip (Gate-0
+//          C046: do NOT rebuild — the existing DddCard density=full IS the ontology
+//          + needs-you verdict), fixed FIRST, overall-summary.
+//       §② Need-You — a FIXED-POSITION action block (never removed): pending
+//          proposals → [Go to Review]; uncommitted changes; both zero → a muted
+//          "Nothing queued" line still rendered (its position is a stable anchor).
+//       §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) — the judgment-core
+//          the user periodically reviews; each shows its new-since-review signal +
+//          click→Canvas; a group header sums the signals + hosts [Weekly Report].
+//   • BROWSE — "explore the whole picture": the real Projects/<name> file tree +
+//     [Files | Code Graph] toggle (MOVED verbatim from the old default content —
+//     zero logic change; the tree is the "了解全貌" surface, now second-class).
+//
+// The tree/graph is the "browse detail" mode; Overview is "check state" — the split
+// stops the two from crowding each other vertically (the whole reason for tabs).
 
-function BrainView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
+type DetailTab = 'overview' | 'browse';
+
+function BrainView(
+  { name, onRequestClose, onGoToReview, uncommitted }:
+  { name: string; onRequestClose?: () => void; onGoToReview?: () => void; uncommitted?: boolean },
+) {
   const [detail, setDetail] = useState<BrainDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Content view: the real Projects/<name> FILE TREE (default) or the code GRAPH
-  // (run_a75197d9, XG directive: "就是真实的 Projects 文件树", "CodeGraph 应该是
-  //  visualized graph"). This replaces the old six-section nav + SectionCard/asset
-  // panels — the tree's own folders (2-understanding/ 3-gates/ 4-capabilities/
-  //  spec-details/) ARE the sections, browsable to any file. The graph is the one
-  // non-file affordance, so it rides a [Files | Code Graph] toggle, not a nav item.
+  const [detailTab, setDetailTab] = useState<DetailTab>('overview');  // fixed default
+  // Browse-tab content: file tree (default) or code graph. Unchanged from before —
+  // just now lives inside the Browse sub-tab.
   const [view, setView] = useState<'files' | 'graph'>('files');
+  const [review, setReview] = useState<ReviewData | null>(null);
+  const [showWeekly, setShowWeekly] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setDetail(null);
     setError(null);
-    setView('files');   // reset to the tree when switching brains
+    setReview(null);
+    setDetailTab('overview');   // reset to Overview when switching brains (fixed default)
+    setView('files');
+    setShowWeekly(false);
     getBrainDetail(name).then(
       (d) => alive && setDetail(d),
       (e) => alive && setError(String(e?.message ?? e)),
     );
+    // Review data powers §③ per-doc signals + the Weekly Report. Best-effort: a
+    // review failure must NOT blank the Overview (the ontology/cards still render);
+    // a null review → all-zero signals (docSignalMap is null-safe).
+    getReview(name).then(
+      (r) => alive && setReview(r),
+      () => alive && setReview(null),
+    );
     return () => { alive = false; };
   }, [name]);
 
-  // Open a tree file in the app-level CANVAS. LibraryTree gives a WORKSPACE-RELATIVE
-  // path (Projects/<name>/…) already — the useCanvasHost resolver takes it directly.
-  // Z-index (Gate-1, swarmws precedent): close THIS overlay BEFORE the dispatch so
-  // the Canvas/FileViewer is never rendered UNDER the host.
+  // Open a doc/tree file in the app-level CANVAS. Paths are WORKSPACE-RELATIVE
+  // (Projects/<name>/… — the LibraryTree + the ③ card both produce this shape) so
+  // the useCanvasHost resolver takes them directly. Z-index (Gate-1, swarmws
+  // precedent): close THIS overlay BEFORE the dispatch so the Canvas/FileViewer is
+  // never rendered UNDER the host.
   const openFile = useCallback((workspaceRelPath: string) => {
     onRequestClose?.();
     document.dispatchEvent(new CustomEvent('swarm:open-file', {
@@ -345,56 +393,291 @@ function BrainView({ name, onRequestClose }: { name: string; onRequestClose?: ()
   if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading {name}…</div>;
 
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
-  // A brain with no code graph can't show the graph view — force files.
   const activeView: 'files' | 'graph' = view === 'graph' && hasCodeIntel ? 'graph' : 'files';
 
   return (
     <div className="flex flex-col h-full" data-testid="brainhub-brain">
-      <div className="flex items-center gap-2 px-4 pt-4 pb-3 flex-shrink-0">
+      {/* header: brain name + kind, then the fixed [Overview | Browse] sub-tabs */}
+      <div className="flex items-center gap-2 px-4 pt-4 pb-2 flex-shrink-0">
         <span className="text-[14px] font-semibold">{detail.name}</span>
         <span className="text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-card)]">{detail.kind}</span>
-        {/* [Files | Code Graph] segmented toggle — Files = the Projects tree (always),
-            Code Graph = the inline force-graph (only when a code_intel.db exists). */}
-        {hasCodeIntel && (
+        <div className="ml-auto flex items-center rounded-md border border-[var(--color-border)] overflow-hidden text-[11px]" data-testid="brainhub-detail-tabs">
+          <button
+            data-testid="detail-tab-overview"
+            onClick={() => setDetailTab('overview')}
+            className={`flex items-center gap-1 px-2.5 py-0.5 ${detailTab === 'overview' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+          >
+            <span className="material-symbols-outlined text-[14px]">insights</span>Overview
+          </button>
+          <button
+            data-testid="detail-tab-browse"
+            onClick={() => setDetailTab('browse')}
+            className={`flex items-center gap-1 px-2.5 py-0.5 border-l border-[var(--color-border)] ${detailTab === 'browse' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+          >
+            <span className="material-symbols-outlined text-[14px]">account_tree</span>Browse
+          </button>
+        </div>
+      </div>
+
+      {detailTab === 'overview' ? (
+        <BrainOverview
+          detail={detail}
+          review={review}
+          uncommitted={uncommitted}
+          onGoToReview={onGoToReview}
+          onOpenFile={openFile}
+          showWeekly={showWeekly}
+          onToggleWeekly={() => setShowWeekly((v) => !v)}
+        />
+      ) : (
+        <BrainBrowse
+          name={name}
+          hasCodeIntel={hasCodeIntel}
+          activeView={activeView}
+          onSetView={setView}
+          onOpenFile={openFile}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── §Overview — fixed order: ① Ontology → ② Need-You → ③ 4 core-doc cards ───────
+
+function BrainOverview(
+  { detail, review, uncommitted, onGoToReview, onOpenFile, showWeekly, onToggleWeekly }:
+  {
+    detail: BrainDetail; review: ReviewData | null; uncommitted?: boolean;
+    onGoToReview?: () => void; onOpenFile: (p: string) => void;
+    showWeekly: boolean; onToggleWeekly: () => void;
+  },
+) {
+  const knowledge = detail.sections.find((s) => s.key === 'knowledge');
+  const members = knowledge?.members ?? [];
+  const signals = docSignalMap(members, review);
+  const pending = detail.health?.escalationPending ?? 0;
+
+  return (
+    <div className="flex-1 overflow-auto px-4 pb-4 flex flex-col gap-3" data-testid="brainhub-overview">
+      {/* §① Ontology — RELOCATED, not rebuilt (Gate-0 C046): the existing
+          DddCard density=full IS the 3-layer×7-type ontology + needs-you verdict.
+          Same daemon-skew guard as before (detail.health?.noise). */}
+      {detail.health?.noise && (
+        <div data-testid="brainhub-healthstrip">
+          <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
+            typeCounts={aggregateTypeCounts(detail.sections)} />
+        </div>
+      )}
+
+      {/* §② Need-You — FIXED-position block, never removed. Content varies; the
+          block (and its slot) is always present so its position is a stable anchor. */}
+      <NeedYouBlock pending={pending} uncommitted={uncommitted} onGoToReview={onGoToReview} />
+
+      {/* §③ 4 core-doc cards + group header with [Weekly Report]. */}
+      <CoreDocCards
+        members={members}
+        signals={signals}
+        projectName={detail.name}
+        onOpenFile={onOpenFile}
+        showWeekly={showWeekly}
+        onToggleWeekly={onToggleWeekly}
+        weekly={weeklyReportModel(detail, review)}
+      />
+    </div>
+  );
+}
+
+/** §② the fixed-position Need-You block. */
+function NeedYouBlock(
+  { pending, uncommitted, onGoToReview }:
+  { pending: number; uncommitted?: boolean; onGoToReview?: () => void },
+) {
+  const hasWork = pending > 0 || !!uncommitted;
+  return (
+    <div
+      data-testid="brainhub-needyou"
+      className={`rounded-lg border px-3 py-2.5 ${hasWork ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[var(--color-card)] border-[var(--color-border)]'}`}
+    >
+      <div className={`text-[9px] uppercase tracking-wide font-semibold mb-1.5 ${hasWork ? 'text-[#f0a500]' : 'text-[var(--color-text-faint)]'}`}>
+        {hasWork ? '▲ Needs you' : 'Need you'}
+      </div>
+      {!hasWork ? (
+        <div data-testid="needyou-empty" className="text-[11px] text-[var(--color-text-faint)]">Nothing queued.</div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {pending > 0 && (
+            <button
+              data-testid="needyou-review"
+              onClick={onGoToReview}
+              className="flex items-center gap-2 text-[11px] text-left rounded-md px-2 py-1 border border-[#5a4a20] hover:bg-[#241f10]"
+            >
+              <span className="font-semibold text-[#f0a500] min-w-[22px]">{pending}</span>
+              <span className="text-[var(--color-text-muted)]">proposal{pending === 1 ? '' : 's'} awaiting review</span>
+              <span className="ml-auto flex items-center gap-0.5 text-[#f0a500]">
+                Go to Review <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
+              </span>
+            </button>
+          )}
+          {uncommitted && (
+            <div data-testid="needyou-uncommitted" className="flex items-center gap-2 text-[11px] px-2 py-1">
+              <span className="material-symbols-outlined text-[14px] text-[#db8c3a]">pending_actions</span>
+              <span className="text-[var(--color-text-muted)]">uncommitted changes in this brain's subtree</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** §③ the 4 core-doc cards + group header (+ Weekly Report panel). */
+function CoreDocCards(
+  { members, signals, projectName, onOpenFile, showWeekly, onToggleWeekly, weekly }:
+  {
+    members: BrainDetail['sections'][number]['members'];
+    signals: Map<string, { newCount: number; pendingCount: number }>;
+    projectName: string; onOpenFile: (p: string) => void;
+    showWeekly: boolean; onToggleWeekly: () => void; weekly: WeeklyReportModel;
+  },
+) {
+  const totalNew = weekly.autoApplied;
+  const totalPending = weekly.pending;
+  const hasSignal = totalNew > 0 || totalPending > 0;
+  return (
+    <div data-testid="brainhub-coredocs">
+      {/* group header — the aggregate "what moved this week" + Weekly Report entry */}
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--color-text-faint)]">
+          Judgment core · review periodically
+        </span>
+        <span className="text-[10px] text-[var(--color-text-muted)]" data-testid="coredocs-agg">
+          {hasSignal ? `since last review · ${totalNew} new · ${totalPending} pending` : 'up to date since last review'}
+        </span>
+        <button
+          data-testid="coredocs-weekly"
+          onClick={onToggleWeekly}
+          className="ml-auto flex items-center gap-1 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
+        >
+          <span className="material-symbols-outlined text-[12px]">summarize</span>
+          {showWeekly ? 'Hide report' : 'Weekly Report'}
+        </button>
+      </div>
+
+      {showWeekly && <WeeklyReportPanel weekly={weekly} projectName={projectName} />}
+
+      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+        {members.map((m) => {
+          const sig = signals.get(m.path) ?? { newCount: 0, pendingCount: 0 };
+          const marked = sig.newCount > 0 || sig.pendingCount > 0;
+          const docName = m.path.split('/').pop() ?? m.path;
+          return (
+            <button
+              key={m.path}
+              data-testid={`coredoc-${docName}`}
+              onClick={() => onOpenFile(`Projects/${projectName}/${m.path}`)}
+              className={`text-left rounded-lg bg-[var(--color-card)] p-2.5 transition-colors hover:border-[#3b4552] ${
+                marked ? 'border-l-[3px] border-l-[#f0a500] border-y border-r border-[#4a3a12]' : 'border border-[var(--color-border)]'
+              }`}
+            >
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">description</span>
+                <span className="text-[12px] font-semibold font-mono">{docName}</span>
+                {marked && <span data-testid={`coredoc-mark-${docName}`} className="ml-auto w-1.5 h-1.5 rounded-full bg-[#f0a500]" />}
+              </div>
+              <div className="text-[10px] text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
+              <div className="flex items-center gap-2 text-[9px] text-[var(--color-text-faint)]">
+                {sig.newCount > 0 && <span className="text-[#7ee787]">{sig.newCount} new</span>}
+                {sig.pendingCount > 0 && <span className="text-[#f0a500]">{sig.pendingCount} pending</span>}
+                {!marked && <span>up to date</span>}
+                {m.mtime && <span className="ml-auto">{m.mtime}</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** One-line role of each canonical doc (what the user reviews it FOR). */
+const DOC_ROLE: Record<string, string> = {
+  'PRODUCT.md': 'Priorities & non-goals',
+  'TECH.md': 'Architecture & constraints',
+  'IMPROVEMENT.md': 'Failures & lessons',
+  'PROJECT.md': 'Current status & decisions',
+};
+
+/** Current-DDD-only Weekly Report — an in-overlay panel (NOT Canvas: the Canvas
+ *  open-file path resolves a real file, useCanvasHost.ts:328, so inline HTML can't
+ *  ride it). Live-rendered from data already loaded — no global one-pot, no file. */
+function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel; projectName: string }) {
+  const t = weekly.trustDistribution;
+  const scored = t.full + t.high + t.moderate + t.low;
+  return (
+    <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[#1f3a5a] bg-[#0e1723] p-3 mb-2 text-[11px]">
+      <div className="flex items-center gap-1.5 mb-2 font-semibold text-[#58a6ff]">
+        <span className="material-symbols-outlined text-[15px]">summarize</span>
+        {projectName} · weekly review {weekly.sinceSha && <span className="text-[9px] font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
+      </div>
+      <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
+        <div><span className="text-[#7ee787] font-semibold">{weekly.autoApplied}</span> auto-cultivated change{weekly.autoApplied === 1 ? '' : 's'} since last review</div>
+        <div><span className="text-[#f0a500] font-semibold">{weekly.pending}</span> proposal{weekly.pending === 1 ? '' : 's'} awaiting your decision</div>
+        <div>
+          docs touched: {weekly.changedDocs.length > 0
+            ? <span className="font-mono text-[var(--color-text)]">{weekly.changedDocs.join(', ')}</span>
+            : <span className="text-[var(--color-text-faint)]">none</span>}
+        </div>
+        {/* F4: trust DISTRIBUTION, never a collapsed percentage. */}
+        <div data-testid="weekly-trust-dist">
+          section trust: {scored === 0
+            ? <span className="text-[var(--color-text-faint)]">not scored yet</span>
+            : <span>{t.full} full · {t.high} high · {t.moderate} moderate · {t.low} low{t.unscored ? ` · ${t.unscored} unscored` : ''}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── §Browse — the file tree + Code Graph toggle (MOVED verbatim from old default) ─
+
+function BrainBrowse(
+  { name, hasCodeIntel, activeView, onSetView, onOpenFile }:
+  {
+    name: string; hasCodeIntel: boolean; activeView: 'files' | 'graph';
+    onSetView: (v: 'files' | 'graph') => void; onOpenFile: (p: string) => void;
+  },
+) {
+  return (
+    <div className="flex flex-col flex-1 min-h-0" data-testid="brainhub-browse">
+      {/* [Files | Code Graph] segmented toggle — Files = the Projects tree (always),
+          Code Graph = the inline force-graph (only when a code_intel.db exists). */}
+      {hasCodeIntel && (
+        <div className="flex items-center px-4 pb-2 flex-shrink-0">
           <div className="ml-auto flex items-center rounded-md border border-[var(--color-border)] overflow-hidden text-[11px]" data-testid="brainhub-view-toggle">
             <button
               data-testid="view-toggle-files"
-              onClick={() => setView('files')}
+              onClick={() => onSetView('files')}
               className={`flex items-center gap-1 px-2 py-0.5 ${activeView === 'files' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
             >
               <span className="material-symbols-outlined text-[14px]">folder</span>Files
             </button>
             <button
               data-testid="view-toggle-graph"
-              onClick={() => setView('graph')}
+              onClick={() => onSetView('graph')}
               className={`flex items-center gap-1 px-2 py-0.5 border-l border-[var(--color-border)] ${activeView === 'graph' ? 'bg-[#12233a] text-[#58a6ff]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
             >
               <span className="material-symbols-outlined text-[14px]">hub</span>Code Graph
             </button>
           </div>
-        )}
-      </div>
-
-      {/* Detail-view health metrics (design 2026-08-04) — the ontology / needs-you
-          verdict strip. KEPT: it carries the 7-type composition signal a raw file
-          tree can't convey. Renders nothing on an old daemon (daemon-skew guard). */}
-      {detail.health?.noise && (
-        <div className="px-4 pb-3 flex-shrink-0" data-testid="brainhub-healthstrip">
-          <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
-            typeCounts={aggregateTypeCounts(detail.sections)} />
         </div>
       )}
 
       {/* Content: the REAL Projects/<name> file tree, or the inline code graph. */}
       <div className="flex-1 min-h-0" data-testid="brainhub-brain-content">
         {activeView === 'graph' ? (
-          // Inline (not fullscreen) — fills this definite-height flex-1 pane. No
-          // onClose (the [Files] toggle is the way back), no ESC-guard needed.
           <CodeGraph key={`graph-${name}`} project={name} inline />
         ) : (
-          // The tree owns its own scroll + measured height (flex-1 min-h-0). File
-          // click → close overlay → open in Canvas (openFile). Noise filtered.
-          <LibraryTree key={`tree-${name}`} rootPath={`Projects/${name}`} onFileOpen={openFile} />
+          <LibraryTree key={`tree-${name}`} rootPath={`Projects/${name}`} onFileOpen={onOpenFile} />
         )}
       </div>
     </div>
