@@ -454,11 +454,15 @@ function BrainOverview(
 ) {
   const knowledge = detail.sections.find((s) => s.key === 'knowledge');
   const members = knowledge?.members ?? [];
-  const signals = docSignalMap(members, review);
   const pending = detail.health?.escalationPending ?? 0;
+  // Memoize the O(hunks) signal map + weekly model so an unrelated re-render (weekly
+  // toggle, hover) doesn't re-scan the whole review (meta-review LOW; matches the
+  // useMemo discipline the Gallery already uses for aggregateTypeCounts).
+  const signals = useMemo(() => docSignalMap(members, review), [members, review]);
+  const weekly = useMemo(() => weeklyReportModel(detail, review), [detail, review]);
   // §① ontology counts — used for the no-health fallback tier (renders the 3×7
   // ontology from typeCounts alone). undefined when there are no entries at all.
-  const ontologyCounts = aggregateTypeCounts(detail.sections);
+  const ontologyCounts = useMemo(() => aggregateTypeCounts(detail.sections), [detail.sections]);
 
   return (
     <div className="flex-1 overflow-auto px-4 pb-4 flex flex-col gap-3" data-testid="brainhub-overview">
@@ -506,7 +510,7 @@ function BrainOverview(
         onOpenFile={onOpenFile}
         showWeekly={showWeekly}
         onToggleWeekly={onToggleWeekly}
-        weekly={weeklyReportModel(detail, review)}
+        weekly={weekly}
       />
     </div>
   );
