@@ -98,7 +98,7 @@ def build_health_map(
     skill_names: list[str],
     staleness_days: int = STALENESS_DAYS,
 ) -> dict[str, dict]:
-    """Build a ``{folder_name: {status, success_rate, last_used}}`` map.
+    """Build a ``{folder_name: {status, success_rate, last_used, invocation_count}}`` map.
 
     Keys are strictly the ``skill_names`` list (the caller-VISIBLE skill folder names) —
     NOT the metrics keys. This is load-bearing security (Gate-1 BLOCK-3): folding over the
@@ -108,7 +108,9 @@ def build_health_map(
     with no metrics row becomes ``never_used``.
 
     ``success_rate``/``last_used`` are carried for the DETAIL drawer; the row uses only
-    ``status`` (no raw counts on the scannable surface — R30#4).
+    ``status`` (no raw counts on the scannable surface — R30#4). ``invocation_count`` is
+    the RAW frequency — it drives the Most-Used strip + within-group sort ORDER on the
+    frontend, and is NOT rendered as a number on any card (R30#4); ``None`` when never used.
 
     NAME CANONICALIZATION + MERGE (Gate-2 HIGH + meta-review cross-fix HIGH, run_a85e6641):
     the metrics store records ``skill_name`` in BOTH formats — bare (``pdf``, from the SDK
@@ -161,5 +163,9 @@ def build_health_map(
             "status": fold_status(stats, staleness_days),
             "success_rate": stats.success_rate if stats else None,
             "last_used": (stats.last_used or None) if stats else None,
+            # RAW frequency — drives the frontend Most-Used strip + within-group sort ORDER
+            # (never shown as a count on a card — R30#4). None for a never-used skill so it
+            # sinks below used skills instead of tying at 0 (run_ff4adc88).
+            "invocation_count": stats.invocation_count if stats else None,
         }
     return result

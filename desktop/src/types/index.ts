@@ -90,6 +90,9 @@ export interface SkillHealth {
   status: SkillHealthStatus;
   success_rate: number | null;
   last_used: string | null;
+  // Raw frequency — drives the Most-Used strip + within-group sort ORDER only; never
+  // rendered as a count on a card (R30#4). null when the skill has never been used.
+  invocation_count: number | null;
 }
 export type SkillHealthMap = Record<string, SkillHealth>;  // keyed by folderName
 

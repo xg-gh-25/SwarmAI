@@ -226,10 +226,12 @@ async def rescan_skills():
 async def skills_health() -> dict[str, dict]:
     """Per-skill qualitative health status for the Capabilities panel (run_a85e6641).
 
-    Returns ``{folder_name: {status, success_rate, last_used}}`` where status is one of
-    healthy / low_success / never_used / stale. The panel LAZY-fetches this after the
-    fast /api/skills list and renders a status dot per row (raw counts stay off the row —
-    R30#4; success_rate/last_used are for the detail drawer).
+    Returns ``{folder_name: {status, success_rate, last_used, invocation_count}}`` where
+    status is one of healthy / low_success / never_used / stale. The panel LAZY-fetches this
+    after the fast /api/skills list and renders a status dot per row (raw counts stay off the
+    row — R30#4; success_rate/last_used are for the detail drawer). ``invocation_count`` is
+    the raw frequency the panel uses to ORDER cards (Most-Used strip + within-group sort),
+    never shown as a number (R30#4).
 
     Three load-bearing properties:
     - FAIL-SAFE (AC7 / Gate-1): any error reading the metrics DB → an EMPTY map + 200,

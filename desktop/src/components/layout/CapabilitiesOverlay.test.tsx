@@ -10,8 +10,13 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
-import { groupSkills, orderedCategories, CapabilitiesContent } from './CapabilitiesOverlay';
+import { groupSkills, orderedCategories, mostUsed, byFrequencyThenName, CapabilitiesContent } from './CapabilitiesOverlay';
 import type { Skill, SkillHealthMap } from '../../types';
+
+// Health fixture builder — invocation_count is now required (run_ff4adc88).
+function h(status: SkillHealthMap[string]['status'], invocation_count: number | null, success_rate: number | null = null, last_used: string | null = null): SkillHealthMap[string] {
+  return { status, success_rate, last_used, invocation_count };
+}
 
 // jsdom lacks ResizeObserver.
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
@@ -130,8 +135,8 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     // Health map is keyed by the exact folderName the backend returns (canonicalized
     // server-side); the frontend just looks up by folderName. No underscore/hyphen dual key.
     const health: SkillHealthMap = {
-      's_deep-research': { status: 'healthy', success_rate: 0.9, last_used: '2026-08-06' },
-      's_narrative-writing': { status: 'never_used', success_rate: null, last_used: null },
+      's_deep-research': h('healthy', 12, 0.9, '2026-08-06'),
+      's_narrative-writing': h('never_used', null),
     };
     getHealth.mockResolvedValue(health);
 
@@ -186,8 +191,8 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
   it('shows a full health LINE on each card by default: status · X% success · last used DATE', async () => {
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockResolvedValue({
-      's_deep-research': { status: 'healthy', success_rate: 0.92, last_used: '2026-08-06' },
-      's_narrative-writing': { status: 'never_used', success_rate: null, last_used: null },
+      's_deep-research': h('healthy', 12, 0.92, '2026-08-06'),
+      's_narrative-writing': h('never_used', null),
     } as SkillHealthMap);
     render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     // The health line is ON the card (not a drawer) and carries success% + last-used.
@@ -212,7 +217,105 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     // Health line not yet populated (lazy) — placeholder present, no % yet.
     expect(screen.queryByText(/92% success/)).toBeNull();
     // Resolve health → line populates ON the card.
-    resolveHealth({ 's_deep-research': { status: 'healthy', success_rate: 0.92, last_used: '2026-08-06' } } as SkillHealthMap);
+    resolveHealth({ 's_deep-research': h('healthy', 12, 0.92, '2026-08-06') } as SkillHealthMap);
     await waitFor(() => expect(screen.getByTestId('cap-healthline-s_deep-research').textContent).toContain('92% success'));
+  });
+});
+
+describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5 render)', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+  const threeSkills: Skill[] = [
+    skill({ folderName: 's_deep-research', category: 'Research' }),
+    skill({ folderName: 's_narrative-writing', category: 'Writing' }),
+    skill({ folderName: 's_summarize', category: 'Research' }),
+  ];
+
+  it('renders the Most-Used strip once health has data (AC2)', async () => {
+    listSkills.mockResolvedValue(threeSkills);
+    getHealth.mockResolvedValue({
+      's_deep-research': h('healthy', 50, 0.9, '2026-08-06'),
+      's_summarize': h('healthy', 20, 0.8, '2026-08-05'),
+      's_narrative-writing': h('never_used', null),
+    } as SkillHealthMap);
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('cap-most-used')).toBeTruthy());
+    // Most-used strip contains the high-frequency skills (never_used excluded).
+    const strip = screen.getByTestId('cap-most-used');
+    expect(strip.textContent).toContain('deep-research');
+  });
+
+  it('AC5 fail-safe: strip ABSENT before health settles + when health empty', async () => {
+    listSkills.mockResolvedValue(threeSkills);
+    getHealth.mockResolvedValue({} as SkillHealthMap);
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
+    await waitFor(() => expect(getHealth).toHaveBeenCalled());
+    // Empty health → no strip (no flash of mis-ranked/dead skills), list still renders.
+    expect(screen.queryByTestId('cap-most-used')).toBeNull();
+    expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy();
+  });
+
+  it('AC4: per-group count header removed (no bare number beside the category name)', async () => {
+    listSkills.mockResolvedValue(threeSkills);
+    getHealth.mockResolvedValue({} as SkillHealthMap);
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('cap-group-Research')).toBeTruthy());
+    // The group header is just the category name — no count span. The old markup put a
+    // bare "{list.length}" beside it; assert no lone digit text node in the header.
+    const header = screen.getByTestId('cap-group-Research').querySelector('h2');
+    expect(header?.textContent?.trim()).toBe('Research');
+  });
+});
+
+describe('byFrequencyThenName — within-group sort (AC3, Gate-1 #4 tiebreak)', () => {
+  const sk = (folderName: string) => skill({ folderName });
+  it('sorts by invocation_count DESC, breaking ties by name ASC', () => {
+    const health: SkillHealthMap = {
+      s_a: h('healthy', 10), s_b: h('healthy', 50), s_c: h('healthy', 10),
+    };
+    const sorted = [sk('s_a'), sk('s_b'), sk('s_c')].sort(byFrequencyThenName(health));
+    // s_b (50) first; s_a & s_c tie at 10 → name asc → a before c
+    expect(sorted.map((s) => s.folderName)).toEqual(['s_b', 's_a', 's_c']);
+  });
+  it('sinks never_used / no-data (null count) BELOW any used skill', () => {
+    const health: SkillHealthMap = {
+      s_used: h('healthy', 1), s_never: h('never_used', null),
+    };
+    const sorted = [sk('s_never'), sk('s_used')].sort(byFrequencyThenName(health));
+    expect(sorted.map((s) => s.folderName)).toEqual(['s_used', 's_never']);
+  });
+  it('EMPTY health ({}) falls back to pure name ASC (fail-safe before health settles)', () => {
+    // Every freq is absent → all tie → name asc. This is the SAME order as the old
+    // alphabetical sort, so before health loads the list is deterministic, no jitter.
+    const sorted = [sk('s_c'), sk('s_a'), sk('s_b')].sort(byFrequencyThenName({}));
+    expect(sorted.map((s) => s.folderName)).toEqual(['s_a', 's_b', 's_c']);
+  });
+});
+
+describe('mostUsed — Most-Used strip membership (AC2)', () => {
+  const sk = (folderName: string) => skill({ folderName });
+  it('returns Top-N by invocation_count, excluding heroes and never_used/no-data', () => {
+    const skills = [
+      sk('s_autonomous-pipeline'), // hero — excluded even if high
+      sk('s_a'), sk('s_b'), sk('s_c'), sk('s_never'),
+    ];
+    const health: SkillHealthMap = {
+      's_autonomous-pipeline': h('healthy', 999),
+      s_a: h('healthy', 30), s_b: h('healthy', 50), s_c: h('healthy', 10),
+      s_never: h('never_used', null),
+    };
+    const top = mostUsed(skills, health, 8);
+    // heroes + never_used excluded; sorted desc by count
+    expect(top.map((s) => s.folderName)).toEqual(['s_b', 's_a', 's_c']);
+  });
+  it('caps at N', () => {
+    const skills = Array.from({ length: 12 }, (_, i) => sk(`s_${i}`));
+    const health: SkillHealthMap = Object.fromEntries(skills.map((s, i) => [s.folderName, h('healthy', i + 1)]));
+    expect(mostUsed(skills, health, 8)).toHaveLength(8);
+  });
+  it('EMPTY health → empty strip (no flash of dead/mis-ranked skills before health settles)', () => {
+    const skills = [sk('s_a'), sk('s_b')];
+    expect(mostUsed(skills, {}, 8)).toEqual([]);
   });
 });

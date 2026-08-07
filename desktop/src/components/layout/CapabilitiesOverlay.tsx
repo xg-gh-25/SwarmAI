@@ -106,9 +106,41 @@ export function orderedCategories(cats: string[]): string[] {
   return [...known, ...rest, ...internal];
 }
 
+/** Raw frequency of a skill, or -1 when absent/never-used/no-data (so it sorts BELOW any
+ *  used skill and, when health is empty, ALL skills tie at -1 → the tiebreak = pure name asc,
+ *  identical to the old alphabetical order = zero jitter before health settles). run_ff4adc88. */
+function freqOf(folderName: string, health: SkillHealthMap): number {
+  const c = health[folderName]?.invocation_count;
+  return typeof c === 'number' ? c : -1;
+}
+
+/** Within-group / strip comparator: invocation_count DESC, ties broken by name ASC
+ *  (Gate-1 #4 — a deterministic tiebreak so equal-frequency cards never jitter between
+ *  renders; never_used/no-data → freq -1 → sinks last). Curried so `.sort(byFrequencyThenName(h))`. */
+export function byFrequencyThenName(health: SkillHealthMap) {
+  return (a: Skill, b: Skill): number => {
+    const d = freqOf(b.folderName, health) - freqOf(a.folderName, health);
+    return d !== 0 ? d : a.name.localeCompare(b.name);
+  };
+}
+
+/** The Most-Used strip membership (AC2): Top-`cap` skills by invocation_count across ALL
+ *  categories, EXCLUDING heroes (shown above) and never_used/no-data (freq < 0). Pure.
+ *  Returns [] when health is empty → the strip simply doesn't render until health settles
+ *  (no flash of dead/mis-ranked skills). run_ff4adc88. */
+export function mostUsed(skills: Skill[], health: SkillHealthMap, cap: number): Skill[] {
+  return skills
+    .filter((s) => !(s.folderName in SIGNATURE) && freqOf(s.folderName, health) >= 0)
+    .sort(byFrequencyThenName(health))
+    .slice(0, cap);
+}
+
 /** Group visible skills by category. Signature skills are pulled OUT into heroes so
- *  they don't also appear as a plain row. Pure — safe on [] (renders no groups). */
-export function groupSkills(skills: Skill[]): { heroes: Skill[]; groups: [string, Skill[]][] } {
+ *  they don't also appear as a plain row. Within-group sort is by FREQUENCY (health), with
+ *  a name tiebreak — falls back to pure alphabetical when health is empty. Pure — safe on
+ *  [] (renders no groups). `health` defaults to {} so callers/tests without health still get
+ *  the deterministic alphabetical order. */
+export function groupSkills(skills: Skill[], health: SkillHealthMap = {}): { heroes: Skill[]; groups: [string, Skill[]][] } {
   const heroes = skills.filter((s) => s.folderName in SIGNATURE);
   const rest = skills.filter((s) => !(s.folderName in SIGNATURE));
   const byCat = new Map<string, Skill[]>();
@@ -118,7 +150,7 @@ export function groupSkills(skills: Skill[]): { heroes: Skill[]; groups: [string
     byCat.get(cat)!.push(s);
   }
   const groups = orderedCategories([...byCat.keys()])
-    .map((c) => [c, byCat.get(c)!.sort((a, b) => a.name.localeCompare(b.name))] as [string, Skill[]])
+    .map((c) => [c, byCat.get(c)!.sort(byFrequencyThenName(health))] as [string, Skill[]])
     .filter(([, list]) => list.length > 0); // never emit an empty group (§5 fail-safe)
   return { heroes, groups };
 }
@@ -177,7 +209,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
   //   ● healthy · 92% success · last used 2026-08-06
   // Qualitative status + the two detail facts the user asked to see up-front — never in a
   // drawer. never_used / no-data shows only the status word (no fabricated %/date, R30#4).
-  const healthLineFor = useCallback((s: Skill) => {
+  const healthLineFor = useCallback((s: Skill, idSuffix: string = s.folderName) => {
     const h = health[s.folderName];
     if (!h || !(h.status in HEALTH_DOT)) {
       // Not-yet-fetched → a loading placeholder (keeps card height stable, lazy).
@@ -188,7 +220,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
       if (healthSettled) return null;
       return (
         <div
-          data-testid={`cap-healthline-${s.folderName}`}
+          data-testid={`cap-healthline-${idSuffix}`}
           className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] opacity-60"
         >
           <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-border-strong)] shrink-0" />
@@ -203,7 +235,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
     if (h.last_used) parts.push(`last used ${h.last_used}`);
     return (
       <div
-        data-testid={`cap-healthline-${s.folderName}`}
+        data-testid={`cap-healthline-${idSuffix}`}
         data-status={h.status}
         className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"
       >
@@ -220,6 +252,41 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
     );
   }, [health, healthSettled]);
 
+  // Shared ordinary-skill card — rendered by BOTH the Most-Used strip and the category
+  // groups (one renderer, no duplication — R25). A skill in the strip ALSO appears in its
+  // category group (intentional dual-show: strip=shortcut, groups=full taxonomy — same
+  // rationale as heroes). `scope` namespaces the testid so the two instances stay
+  // individually addressable (no ambiguous duplicate testid). Heroes use their own card.
+  const skillCard = useCallback((s: Skill, scope: 'strip' | 'group' = 'group') => {
+    const idSuffix = scope === 'strip' ? `strip-${s.folderName}` : s.folderName;
+    return (
+      <button
+        key={idSuffix}
+        data-testid={`cap-skill-${idSuffix}`}
+        onClick={() => setSelected(s)}
+        className="text-left rounded-xl border border-[var(--color-border)] p-3 hover:bg-[var(--color-hover)] hover:border-[var(--color-border-strong)] min-w-0 flex flex-col"
+      >
+        {/* Title row: name + faint tier marker (muted, top-right) */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[var(--color-text)] text-sm font-semibold truncate">{s.name}</span>
+          <span
+            data-testid={`cap-tier-${idSuffix}`}
+            data-tier={s.tier}
+            title={TIER_MARK[s.tier]?.label ?? s.tier}
+            aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
+            className="ml-auto shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
+          >
+            {TIER_MARK[s.tier]?.icon ?? ''}
+          </span>
+        </div>
+        {/* One-line plain description */}
+        <div className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{s.description}</div>
+        {/* Health line — DEFAULT on every card (lazy: placeholder until health resolves) */}
+        {healthLineFor(s, idSuffix)}
+      </button>
+    );
+  }, [healthLineFor]);
+
   // Search filters the visible skill set; grouping + hero extraction happen after.
   const visibleSkills = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -229,7 +296,12 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
     );
   }, [skills, query]);
 
-  const { heroes, groups } = useMemo(() => groupSkills(visibleSkills), [visibleSkills]);
+  // Group + sort by frequency (health). Before health settles, health={} → freq ties →
+  // name-asc fallback (no jitter). Recomputes when health lands so cards re-sort by usage.
+  const { heroes, groups } = useMemo(() => groupSkills(visibleSkills, health), [visibleSkills, health]);
+  // Most-Used strip: Top 8 by frequency across all categories (excl. heroes + never_used).
+  // Empty until health settles → the strip simply doesn't render (no flash). AC2.
+  const topUsed = useMemo(() => mostUsed(visibleSkills, health, 8), [visibleSkills, health]);
 
   const connected = useMemo(() => mcps.filter((m) => m.enabled), [mcps]);
   const available = useMemo(() => mcps.filter((m) => !m.enabled && m.layer === 'catalog'), [mcps]);
@@ -335,40 +407,32 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
               </div>
             )}
 
-            {/* Category groups — no empty group ever renders (§5) */}
-            {groups.map(([cat, list]) => (
-              <div key={cat} className="mb-6" data-testid={`cap-group-${cat}`}>
-                <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1 flex items-baseline gap-2">
-                  {cat}
-                  <span className="text-[11px] font-mono text-[var(--color-text-faint)]">{list.length}</span>
+            {/* Most-Used strip — Top skills by frequency, across all categories. Lighter than
+                heroes (no gradient, muted header) so heroes stay the single dominant element
+                (design-judgment check 4). Renders only when health has settled with data
+                (empty until then → no flash). AC2. */}
+            {topUsed.length > 0 && (
+              <div className="mb-8" data-testid="cap-most-used">
+                <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
+                  Most used
                 </h2>
                 <div className="grid grid-cols-2 gap-3">
-                  {list.map((s) => (
-                    <button
-                      key={s.folderName}
-                      data-testid={`cap-skill-${s.folderName}`}
-                      onClick={() => setSelected(s)}
-                      className="text-left rounded-xl border border-[var(--color-border)] p-3 hover:bg-[var(--color-hover)] hover:border-[var(--color-border-strong)] min-w-0 flex flex-col"
-                    >
-                      {/* Title row: name + faint tier marker (muted, top-right) */}
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-[var(--color-text)] text-sm font-semibold truncate">{s.name}</span>
-                        <span
-                          data-testid={`cap-tier-${s.folderName}`}
-                          data-tier={s.tier}
-                          title={TIER_MARK[s.tier]?.label ?? s.tier}
-                          aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
-                          className="ml-auto shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
-                        >
-                          {TIER_MARK[s.tier]?.icon ?? ''}
-                        </span>
-                      </div>
-                      {/* One-line plain description */}
-                      <div className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{s.description}</div>
-                      {/* Health line — DEFAULT on every card (lazy: placeholder until health resolves) */}
-                      {healthLineFor(s)}
-                    </button>
-                  ))}
+                  {topUsed.map((s) => skillCard(s, 'strip'))}
+                </div>
+              </div>
+            )}
+
+            {/* Category groups — no empty group ever renders (§5). Between-group spacing
+                (mb-8) intentionally exceeds within-group (gap-3) so grouping reads correctly
+                (design-judgment: space within < space between). No per-group count header —
+                the card grid already shows N (redundant data-ink removed, Tufte / check 2). */}
+            {groups.map(([cat, list]) => (
+              <div key={cat} className="mb-8" data-testid={`cap-group-${cat}`}>
+                <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
+                  {cat}
+                </h2>
+                <div className="grid grid-cols-2 gap-3">
+                  {list.map((s) => skillCard(s))}
                 </div>
               </div>
             ))}

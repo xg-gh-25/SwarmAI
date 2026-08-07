@@ -124,6 +124,19 @@ class TestBuildHealthMap:
         assert m["s_never"]["success_rate"] is None
         assert m["s_never"]["last_used"] is None
 
+    def test_invocation_count_present_for_frequency_sort(self):
+        # run_ff4adc88: the frontend Most-Used strip + within-group frequency sort need the
+        # RAW invocation_count (drives ORDER + strip membership, NOT a visible count — R30#4).
+        # It exists in the merged SkillStats but was omitted from the returned map.
+        stats = [_stats(name="s_used", invocation_count=42, success_rate=0.9, last_used="2026-08-01")]
+        m = build_health_map(stats, ["s_used"])
+        assert m["s_used"]["invocation_count"] == 42
+
+    def test_never_used_invocation_count_is_null(self):
+        # A skill absent from metrics has no frequency → null (sorts to the bottom, not 0-vs-0 tie).
+        m = build_health_map([], ["s_never"])
+        assert m["s_never"]["invocation_count"] is None
+
     def test_bare_metrics_name_matches_prefixed_folder(self):
         # Gate-2 HIGH (run_a85e6641): the metrics store records skill_name in BOTH formats
         # — bare ("pdf", from the SDK tool_use input path) and s_-prefixed ("s_pdf", from the
