@@ -89,7 +89,7 @@ vi.mock('../../services/codeIntel', () => ({
 const SECTION_KEYS: Array<BrainDetail['sections'][number]['key']> =
   ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
 
-import { BrainHub } from './BrainHub';
+import { BrainHub, hunkSummary } from './BrainHub';
 
 const GALLERY: BrainSummary[] = [
   {
@@ -684,6 +684,77 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     fireEvent.click(retry);
     await waitFor(() => expect(screen.queryByTestId('review-diff-incomplete')).toBeNull());
     expect((screen.getByTestId('review-approve-all') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // ── Run 2 enrichment (run_32cd6a60) ──────────────────────────────────────────
+  it('AC1: a hunk shows a plain-language summary line (file + add/del counts)', async () => {
+    // fixture diff_text = 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new' → 1 add, 1 del.
+    await openReview();
+    const summary = screen.getByTestId('hunk-summary-sigA1');
+    // the DDD-doc filename (not the raw a/x b/x header) + the counted change
+    expect(summary.textContent).toContain('TECH.md');
+    expect(summary.textContent).toContain('+1');
+    expect(summary.textContent).toContain('1');   // -1 deletion (the +++/--- headers excluded)
+  });
+
+  it('AC2: the raw @@ diff is COLLAPSED by default, revealed by [View diff]', async () => {
+    await openReview();
+    // collapsed by default → the raw diff <pre> is not shown
+    expect(screen.queryByTestId('hunk-diff-sigA1')).toBeNull();
+    fireEvent.click(screen.getByTestId('hunk-toggle-diff-sigA1'));
+    await waitFor(() => expect(screen.getByTestId('hunk-diff-sigA1')).toBeTruthy());
+    // the diff body content is now visible
+    expect(screen.getByTestId('hunk-diff-sigA1').textContent).toContain('+new');
+  });
+
+  it('AC3/AC4: [Open file] on a hunk closes the overlay THEN opens hunk.file DIRECTLY in Canvas (no double-prefix)', async () => {
+    const seq: string[] = [];
+    const onRequestClose = vi.fn(() => seq.push('close'));
+    const openEvents: CustomEvent[] = [];
+    const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
+    document.addEventListener('swarm:open-file', onOpen);
+    try {
+      render(<BrainHub onRequestClose={onRequestClose} />);
+      await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-tab-review')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-tab-review'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('hunk-open-file-sigA1'));
+      await waitFor(() => expect(openEvents.length).toBe(1));
+      // hunk.file is ALREADY workspace-relative → dispatched DIRECTLY, never re-wrapped.
+      expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/2-understanding/TECH.md');
+      // close BEFORE open (z-index precedent, Gate-1)
+      expect(seq).toEqual(['close', 'open']);
+    } finally {
+      document.removeEventListener('swarm:open-file', onOpen);
+    }
+  });
+
+  it('AC4-neg: proposals have NO Open-file button (target_doc is a bare filename, no resolvable path — Gate-1)', async () => {
+    await openReview();
+    const zoneC = screen.getByTestId('review-zone-c');
+    // Zone C proposal has Approve/Reject but NOT an Open-file affordance
+    expect(zoneC.querySelector('[data-testid^="proposal-open-file"]')).toBeNull();
+  });
+});
+
+describe('hunkSummary — pure helper (run_32cd6a60)', () => {
+  it('counts +/- body lines, EXCLUDES +++/--- file headers, parses the @@ line-range', () => {
+    const diff = 'diff --git a/x b/x\n--- a/2-understanding/TECH.md\n+++ b/2-understanding/TECH.md\n@@ -10,3 +10,4 @@ Some heading\n context\n-removed\n+added one\n+added two';
+    const s = hunkSummary(diff);
+    expect(s.adds).toBe(2);      // "+added one", "+added two" — NOT the "+++ b/..." header
+    expect(s.dels).toBe(1);      // "-removed" — NOT the "--- a/..." header
+    expect(s.startLine).toBe(10);
+    expect(s.section).toBe('Some heading');
+  });
+
+  it('handles the no-comma single-line header form (@@ -1 +1 @@) without NaN/crash', () => {
+    const s = hunkSummary('diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new');
+    expect(s.adds).toBe(1);
+    expect(s.dels).toBe(1);
+    expect(s.startLine).toBe(1);
+    expect(s.section).toBeUndefined();  // empty trailing heading → undefined, never '' or garbage
   });
 });
 

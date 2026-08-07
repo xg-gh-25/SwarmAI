@@ -70,6 +70,41 @@ const GIT_DOT: Record<string, string> = {
   untracked: 'var(--color-text-muted)', deleted: '#ef4444', renamed: '#a855f7', conflicting: '#ef4444',
 };
 
+/** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
+ *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
+ *  (GUI30 extract-intent-to-pure-helper). Frontend-only: the backend `ReviewHunk`
+ *  carries only {file,signature,tag,diff_text}, so we parse the diff text.
+ *
+ *  - adds/dels: body lines starting with `+`/`-`, EXCLUDING the `+++`/`---` file
+ *    headers (mirrors backend `_hunk_signature`, ddd_brain.py:924) — a naive count
+ *    would miscount the two file-header lines.
+ *  - startLine: the NEW-side start `C` from `@@ -A(,B)? +C(,D)? @@`. The count part
+ *    is OPTIONAL — git emits `@@ -1 +1 @@` (no comma) for single-line changes; a
+ *    regex assuming `+C,D` would NaN on that (Gate-1 caught this against the fixture).
+ *  - section: the trailing @@ heading, ONLY when non-empty. For markdown DDD docs git
+ *    has no funcname driver, so this is usually empty → undefined (never '' / garbage). */
+export function hunkSummary(diffText: string): {
+  adds: number; dels: number; startLine: number | null; section?: string;
+} {
+  let adds = 0, dels = 0, startLine: number | null = null, section: string | undefined;
+  for (const ln of diffText.split('\n')) {
+    if (ln.startsWith('@@')) {
+      // @@ -A(,B)? +C(,D)? @@ optional-heading
+      const m = ln.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
+      if (m) {
+        startLine = parseInt(m[1], 10);
+        const heading = m[2].trim();
+        if (heading) section = heading;
+      }
+      continue;
+    }
+    if (ln.startsWith('+++') || ln.startsWith('---')) continue;  // file headers, not changes
+    if (ln.startsWith('+')) adds += 1;
+    else if (ln.startsWith('-')) dels += 1;
+  }
+  return { adds, dels, startLine, section };
+}
+
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
@@ -172,7 +207,7 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
             transiently firing CodeIntelPanel's O(n) fetch for the new brain. Cheap +
             intent-clear; no test asserts it because the transient isn't reachable yet. */}
         {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} onRequestClose={onRequestClose} />}
-        {!error && tab === 'review' && selected && <ReviewView name={selected} />}
+        {!error && tab === 'review' && selected && <ReviewView name={selected} onRequestClose={onRequestClose} />}
         {!error && tab === 'distribute' && selected && <DistributeView name={selected} />}
       </div>
     </div>
@@ -752,7 +787,7 @@ function shortSha(sha: string): string {
   return sha ? sha.slice(0, 8) : '—';
 }
 
-function ReviewView({ name }: { name: string }) {
+function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Per-ACTION errors (reject/proposal 409s etc.) are TRANSIENT + inline — they must
@@ -821,6 +856,20 @@ function ReviewView({ name }: { name: string }) {
       setActionError(String((e as { message?: string })?.message ?? e));
     } finally { setBusy(false); }
   }, [name, load]);
+
+  // Open a hunk's file in the Canvas (Run 2). ⚠️ Gate-1: hunk.file is ALREADY
+  // WORKSPACE-relative (backend runs `git diff` at the workspace root with a
+  // `Projects/<name>` pathspec → cur_file = "Projects/<name>/…", ddd_brain.py:162/964;
+  // verified test fixture:150 + reject call:564). So dispatch it DIRECTLY — do NOT
+  // re-wrap in `Projects/${name}/` (that would double-prefix → 404). This DIFFERS
+  // from BrainView.openFile, whose SectionMember.path is bare project-relative and
+  // DOES need the prefix. Same close→Canvas z-index precedent (close BEFORE dispatch).
+  const openHunkFile = useCallback((workspaceRelFile: string, gitStatus?: string) => {
+    onRequestClose?.();
+    document.dispatchEvent(new CustomEvent('swarm:open-file', {
+      detail: { path: workspaceRelFile, gitStatus },
+    }));
+  }, [onRequestClose]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="review-error">Failed to load review: {error}</div>;
   if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading review…</div>;
@@ -892,7 +941,8 @@ function ReviewView({ name }: { name: string }) {
         {zoneA.length === 0 ? <ZoneEmpty text="no auto-applied changes since last review" />
           : zoneA.map((h) => (
             <HunkCard key={h.signature} hunk={h} busy={busy}
-              onReject={() => onRejectHunk(h)} />
+              onReject={() => onRejectHunk(h)}
+              onOpenFile={() => openHunkFile(h.file)} />
           ))}
       </ReviewZone>
 
@@ -947,29 +997,73 @@ function ZoneEmpty({ text }: { text: string }) {
   return <div className="text-[11px] text-[var(--color-text-faint)] italic px-1 py-1">{text}</div>;
 }
 
-function HunkCard({ hunk, busy, onReject }: { hunk: ReviewHunk; busy: boolean; onReject: () => void }) {
+function HunkCard({ hunk, busy, onReject, onOpenFile }: {
+  hunk: ReviewHunk; busy: boolean; onReject: () => void; onOpenFile: () => void;
+}) {
+  // Run 2: raw @@ diff COLLAPSED by default — the plain-language summary is the
+  // primary read; the diff is opt-in behind [View diff]. Keyed by signature so each
+  // card toggles independently.
+  const [showDiff, setShowDiff] = useState(false);
+  const s = hunkSummary(hunk.diff_text);
+  const fileName = hunk.file.split('/').pop() ?? hunk.file;
+  const sig = hunk.signature;
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[#12161c] mb-1.5 overflow-hidden" data-testid="review-hunk">
-      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]">
-        <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{hunk.file}</span>
-        <button
-          onClick={onReject}
-          disabled={busy}
-          data-testid="review-reject-hunk"
-          className="ml-auto flex items-center gap-1 text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
-        >
-          <span className="material-symbols-outlined text-[13px]">undo</span>
-          Revert hunk
-        </button>
+      {/* Plain-language summary line (AC1) — always visible. Primary derivation is
+          file + counted +/- + line-range (always reliable); section is best-effort
+          (empty for .md — Gate-1), shown only when git gave a non-empty heading. */}
+      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]" data-testid={`hunk-summary-${sig}`}>
+        <span className="font-mono text-[11px] text-[var(--color-text)]">{fileName}</span>
+        <span className="text-[10px] font-mono">
+          <span className="text-[#7ee787]">+{s.adds}</span>
+          <span className="text-[var(--color-text-faint)]"> / </span>
+          <span className="text-[#ff9a94]">-{s.dels}</span>
+        </span>
+        {s.startLine != null && (
+          <span className="text-[9px] text-[var(--color-text-faint)]">around line {s.startLine}</span>
+        )}
+        {s.section && (
+          <span className="text-[9px] text-[var(--color-text-faint)] truncate italic">· {s.section}</span>
+        )}
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => setShowDiff((v) => !v)}
+            data-testid={`hunk-toggle-diff-${sig}`}
+            className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1.5 py-0.5 hover:bg-[var(--color-hover)]"
+          >
+            <span className="material-symbols-outlined text-[12px]">{showDiff ? 'expand_less' : 'code'}</span>
+            {showDiff ? 'Hide diff' : 'View diff'}
+          </button>
+          <button
+            onClick={onOpenFile}
+            data-testid={`hunk-open-file-${sig}`}
+            className="flex items-center gap-1 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded px-1.5 py-0.5 hover:bg-[#12233a]"
+            title="Open this file in the Canvas"
+          >
+            <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+            Open file
+          </button>
+          <button
+            onClick={onReject}
+            disabled={busy}
+            data-testid="review-reject-hunk"
+            className="flex items-center gap-1 text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
+          >
+            <span className="material-symbols-outlined text-[13px]">undo</span>
+            Revert hunk
+          </button>
+        </div>
       </div>
-      <pre className="text-[10px] font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40">
-        {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
-          const c = ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
-            : ln.startsWith('-') && !ln.startsWith('---') ? '#ff9a94'
-            : 'var(--color-text-faint)';
-          return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
-        })}
-      </pre>
+      {showDiff && (
+        <pre className="text-[10px] font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40" data-testid={`hunk-diff-${sig}`}>
+          {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
+            const c = ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
+              : ln.startsWith('-') && !ln.startsWith('---') ? '#ff9a94'
+              : 'var(--color-text-faint)';
+            return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
+          })}
+        </pre>
+      )}
     </div>
   );
 }
