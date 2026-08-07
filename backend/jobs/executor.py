@@ -343,6 +343,25 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "library_health":
+            from .handlers.library_health import run_library_health
+            health_result = run_library_health()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            h_status = health_result.get("status", "unknown")
+            summary = (
+                health_result.get("error")
+                if h_status == "error"
+                else (f"Knowledge/ healthy — nothing to clean"
+                      if health_result.get("clean")
+                      else f"{health_result.get('findings', 0)} cleanup finding(s)")
+            )
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status=_monitor_result_status(h_status, ok={"success"}, benign=set()),
+                summary=summary,
+                duration_seconds=duration,
+            )
+
         elif job.type == "session_health_probe":
             from .handlers.session_health_probe import run_session_health_probe
             probe_result = run_session_health_probe(

@@ -17,12 +17,13 @@ Endpoints (Run 5):
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from core.initialization_manager import initialization_manager
 
@@ -246,6 +247,64 @@ async def drop_to_inbox(source_path: str = Query(...)) -> dict:
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"status": "landed", "path": f"Knowledge/{landed.relative_to(kdir).as_posix()}"}
+
+
+from core.library_health import REPORT_FILENAME as _HEALTH_REPORT  # single source of the report filename
+
+
+@router.get("/health")
+async def library_health() -> dict:
+    """Library health report — cleanup candidates for the Native store.
+
+    Serves the weekly `library-health` job's cached report
+    (`Knowledge/.library-health.json`). If the report is missing (job hasn't run
+    yet), scan LIVE on demand so the overlay is never blank. Read-only: proposes
+    cleanup, never mutates (actions run via POST /health/action on user click)."""
+    kdir = _knowledge_dir()
+    report_path = kdir / _HEALTH_REPORT
+    if report_path.is_file():
+        try:
+            return json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("library health report unreadable (%s) — rescanning live", exc)
+    # No cached report (or corrupt) → live scan so the section always has data.
+    from core.library_health import scan_library_health
+    return scan_library_health(kdir)
+
+
+@router.post("/health/action")
+async def library_health_action(
+    kind: str = Body(..., embed=True),
+    paths: list[str] = Body(..., embed=True),
+    confirm: bool = Body(default=False, embed=True),
+) -> dict:
+    """Execute a cleanup action from the health report.
+
+    - archive_old_logs → MOVE files to Archives/ (reversible; one-click).
+    - delete_empty → DELETE files, ONLY when confirm=True (destructive → the
+      frontend must send confirm after a user OK). Without confirm →
+      {status: 'confirm_required'} and nothing is touched.
+    - oversized_category → no-op (informational).
+
+    Every path is re-validated to live under Knowledge/ (traversal guard) and to
+    still exist (a stale report skips already-moved files). After applying, the
+    report is refreshed so the overlay reflects the new state immediately."""
+    from core.library_health import apply_action, scan_library_health, write_report_atomic
+    valid_kinds = {"archive_old_logs", "delete_empty", "oversized_category"}
+    if kind not in valid_kinds:
+        raise HTTPException(status_code=400, detail=f"unknown action kind: {kind}")
+    kdir = _knowledge_dir()
+    result = apply_action(kdir, kind, paths, confirm=confirm)  # type: ignore[arg-type]
+    # Refresh the cached report so the next GET (and other open overlays) are
+    # current. Atomic (same helper as the job) — a concurrent GET never sees a torn file.
+    if result.get("status") in ("success", "partial"):
+        try:
+            fresh = scan_library_health(kdir)
+            write_report_atomic(kdir, fresh)
+            result["report"] = fresh
+        except OSError as exc:
+            logger.warning("library health report refresh failed: %s", exc)
+    return result
 
 
 def _safe_size(p: Path) -> int:

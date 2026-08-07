@@ -30,6 +30,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { LibraryTree } from './LibraryTree';
+import { LibraryHealth } from './LibraryHealth';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
 interface NativeCategory { name: string; file_count: number; total_bytes: number; }
@@ -119,6 +120,10 @@ export function LibraryContent() {
               </span>
             </div>
             <div className="mt-0.5 text-[10px] text-[var(--color-text-faint)]">Knowledge/ — already in recall</div>
+            {/* Health + cleanup actions — sits directly under the NATIVE numbers */}
+            <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+              <LibraryHealth />
+            </div>
           </div>
 
           <div>

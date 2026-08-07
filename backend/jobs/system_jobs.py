@@ -169,6 +169,22 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Library Health (keep the Native store from rotting into a graveyard) ---
+    # Weekly heuristic scan of Knowledge/ for cleanup candidates (old raw-logs,
+    # empty files, oversized categories) → writes .library-health.json for the
+    # overlay's health section + one-click actions. No LLM, zero token, read-only
+    # (the job never mutates knowledge; actions run on explicit user click).
+    Job(
+        id="library-health",
+        name="Library Health — scan Knowledge/ for cleanup candidates",
+        type="library_health",
+        schedule="0 7 * * 1",           # Monday UTC 07:00 = ICT 15:00 (weekly, weekday)
+        enabled=True,
+        category="system",
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+        config={},
+    ),
+
     # --- Session Quality (layer②③: score real sessions → harvest golden drafts) ---
     # Weekly low-frequency batch (N=10/week): samples real desktop sessions
     # (with-correction OR turn-anomalous), scores each on goal+tool axes via the
