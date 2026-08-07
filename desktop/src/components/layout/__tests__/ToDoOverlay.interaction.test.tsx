@@ -13,6 +13,7 @@
  *
  * Data source: ToDoContent fetches list() + history() and merges. Both mocked.
  */
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { ToDoContent } from '../ToDoOverlay';
@@ -132,21 +133,63 @@ describe('ToDoOverlay (flat table)', () => {
     await waitFor(() => expect(screen.getAllByTestId('todo-row').length).toBe(1));
   });
 
-  it('clicking a column header toggles sort direction', async () => {
+  it('clicking a column header toggles sort direction (+ shows arrow)', async () => {
     mockList([
       mkTodo({ id: 'a', title: 'Apple', createdAt: RECENT }),
       mkTodo({ id: 'z', title: 'Zebra', createdAt: RECENT }),
     ]);
-    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    // Render inside StrictMode (as main.tsx does) — a nested-setState updater is
+    // double-invoked here, which is exactly how the Gate-2 HIGH toggle-no-op bug
+    // manifests. Rendering without StrictMode would make this test vacuous.
+    render(<StrictMode><ToDoContent onDispatch={() => true} close={() => {}} /></StrictMode>);
     await screen.findByTestId('todo-overlay');
     await waitFor(() => expect(screen.getAllByTestId('todo-row').length).toBe(2));
     const titleTh = screen.getByTestId('todo-th-title');
     fireEvent.click(titleTh); // title asc
     let rows = screen.getAllByTestId('todo-row');
     expect(within(rows[0]).getByText('Apple')).toBeTruthy();
-    fireEvent.click(titleTh); // title desc
+    expect(titleTh.textContent).toContain('▲'); // asc arrow on active header
+    fireEvent.click(titleTh); // title desc — the toggle MUST fire (Gate-2 HIGH: nested-setState bug)
     rows = screen.getAllByTestId('todo-row');
     expect(within(rows[0]).getByText('Zebra')).toBeTruthy();
+    expect(titleTh.textContent).toContain('▼'); // desc arrow after toggle
+  });
+
+  it('changing the time range refetches history with the new window + re-filters', async () => {
+    // A todo created 60 days ago: in the 90d window, out of the 7d window.
+    const old = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    mockList([mkTodo({ id: 'old', title: 'Old todo', createdAt: old, updatedAt: old })]);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    // default 30d → the 60d-old todo is filtered OUT of the table
+    await waitFor(() => expect(screen.queryByTestId('todo-row')).toBeNull());
+    // switch to 90d → history refetched with window=90, todo now in range
+    fireEvent.click(screen.getByTestId('todo-range-90d'));
+    await waitFor(() => expect(todosService.history).toHaveBeenCalledWith(1000, 90));
+    await waitFor(() => expect(screen.getAllByTestId('todo-row').length).toBe(1));
+    // switch to 7d → filtered out again
+    fireEvent.click(screen.getByTestId('todo-range-7d'));
+    await waitFor(() => expect(screen.queryByTestId('todo-row')).toBeNull());
+  });
+
+  it('Withdraw failure undoes the optimistic removal (row restored via refresh)', async () => {
+    mockList([mkTodo({ id: 'keep', title: 'Keep me' })]);
+    (todosService.delete as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network'));
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    const row = await screen.findByTestId('todo-row');
+    fireEvent.click(within(row).getByTestId('todo-action-withdraw'));
+    // delete rejects → error surfaces + refresh() re-fetches (list still returns the row) → row restored
+    expect(await screen.findByTestId('todo-action-error')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('todo-row')).toBeTruthy());
+  });
+
+  it('renders all 7 sortable column headers', async () => {
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    for (const k of ['priority', 'title', 'source', 'status', 'created', 'updated', 'completed']) {
+      expect(screen.getByTestId(`todo-th-${k}`)).toBeTruthy();
+    }
   });
 
   it('KPI row + analytics strip are always rendered', async () => {

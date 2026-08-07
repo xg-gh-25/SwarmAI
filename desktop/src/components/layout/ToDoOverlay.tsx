@@ -103,7 +103,7 @@ function mergeRows(list: ToDo[], history: ToDo[]): ToDo[] {
   for (const t of [...list, ...history]) {
     if (t.status === 'deleted') continue;
     const prev = byId.get(t.id);
-    if (!prev || (t.updatedAt || '') > (prev.updatedAt || '')) byId.set(t.id, t);
+    if (!prev || (t.updatedAt ?? '') > (prev.updatedAt ?? '')) byId.set(t.id, t);
   }
   return [...byId.values()];
 }
@@ -156,11 +156,13 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
   );
 
   const onSort = useCallback((key: SortKey) => {
-    setSortKey((prevKey) => {
-      setSortDir((prevDir) => (prevKey === key ? (prevDir === 'asc' ? 'desc' : 'asc') : (key === 'created' ? 'desc' : 'asc')));
-      return key;
-    });
-  }, []);
+    // Compute the next direction from current state, then set BOTH at top level.
+    // (A nested setSortDir inside the setSortKey updater is an impure updater —
+    // StrictMode double-invokes it → the toggle fires twice → net no-op. Gate-2 HIGH.)
+    const nextDir: SortDir = sortKey === key ? (sortDir === 'asc' ? 'desc' : 'asc') : (key === 'created' ? 'desc' : 'asc');
+    setSortKey(key);
+    setSortDir(nextDir);
+  }, [sortKey, sortDir]);
 
   const handleDispatch = useCallback((todo: ToDo) => {
     const landed = onDispatch(todo);
@@ -437,7 +439,7 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
       <td className="px-3 py-2.5">
         <span className="inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: PRIORITY_COLOR[todo.priority] }} />
-          <span className="text-[11px] text-[var(--color-text-muted)] capitalize">{todo.priority}</span>
+          <span className="text-[11px] text-[var(--color-text-muted)] capitalize">{todo.priority === 'none' ? '—' : todo.priority}</span>
         </span>
       </td>
       <td className="px-3 py-2.5 max-w-[300px] truncate">{todo.title}</td>
