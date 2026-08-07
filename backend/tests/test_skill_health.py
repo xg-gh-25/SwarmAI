@@ -270,3 +270,32 @@ class TestCrossBoundaryContractBinding:
             f"  backend-only (no frontend dot): {sorted(backend - frontend)}\n"
             f"  frontend-only (no backend status): {sorted(frontend - backend)}"
         )
+
+    def test_invocation_count_field_name_binds_backend_to_frontend(self):
+        # Layer-4 (run_ff4adc88): the Most-Used strip + within-group sort read the RAW
+        # frequency by field name. The backend build_health_map EMITS the key
+        # `invocation_count`; the frontend helper `freqOf` must READ that exact key. A
+        # rename on EITHER side (backend emits `invocations`, frontend reads `.count`)
+        # silently breaks sort/strip and no single-side unit test catches it — this binds
+        # them. Mutation-verified: change the key on either side → this goes RED.
+        import re
+        from pathlib import Path
+
+        # Backend: the exact key build_health_map writes into the returned dict.
+        health_py = (
+            Path(__file__).resolve().parents[1] / "core/skill_health.py"
+        ).read_text(encoding="utf-8")
+        assert '"invocation_count":' in health_py, (
+            "build_health_map no longer emits the 'invocation_count' key — the frontend "
+            "freqOf() reads it; a rename breaks the Most-Used strip + frequency sort."
+        )
+
+        # Frontend: freqOf must read that SAME key off the health entry.
+        tsx = (
+            Path(__file__).resolve().parents[2]
+            / "desktop/src/components/layout/CapabilitiesOverlay.tsx"
+        ).read_text(encoding="utf-8")
+        assert re.search(r"health\[[^\]]+\]\?\.invocation_count", tsx), (
+            "Frontend freqOf() no longer reads `.invocation_count` off the health map — "
+            "the field name DIVERGED from the backend build_health_map emit (contract break)."
+        )
