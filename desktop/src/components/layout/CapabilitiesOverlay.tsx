@@ -136,11 +136,12 @@ export function mostUsed(skills: Skill[], health: SkillHealthMap, cap: number): 
 }
 
 /** Group visible skills by category. Signature skills are pulled OUT into heroes so
- *  they don't also appear as a plain row. Within-group sort is by FREQUENCY (health), with
- *  a name tiebreak — falls back to pure alphabetical when health is empty. Pure — safe on
- *  [] (renders no groups). `health` defaults to {} so callers/tests without health still get
- *  the deterministic alphabetical order. */
-export function groupSkills(skills: Skill[], health: SkillHealthMap = {}): { heroes: Skill[]; groups: [string, Skill[]][] } {
+ *  they don't also appear as a plain row. Within-group sort is ALPHABETICAL by name — a
+ *  category group's job is FINDABILITY ("where do I find X"), which needs a PREDICTABLE
+ *  position that doesn't shift with usage. Frequency ranking lives ONLY in the Most-Used
+ *  strip ("what do I use") — the two surfaces do one job each and don't overlap
+ *  (run_54491b88). Pure — safe on [] (renders no groups). */
+export function groupSkills(skills: Skill[]): { heroes: Skill[]; groups: [string, Skill[]][] } {
   const heroes = skills.filter((s) => s.folderName in SIGNATURE);
   const rest = skills.filter((s) => !(s.folderName in SIGNATURE));
   const byCat = new Map<string, Skill[]>();
@@ -150,7 +151,7 @@ export function groupSkills(skills: Skill[], health: SkillHealthMap = {}): { her
     byCat.get(cat)!.push(s);
   }
   const groups = orderedCategories([...byCat.keys()])
-    .map((c) => [c, byCat.get(c)!.sort(byFrequencyThenName(health))] as [string, Skill[]])
+    .map((c) => [c, byCat.get(c)!.sort((a, b) => a.name.localeCompare(b.name))] as [string, Skill[]])
     .filter(([, list]) => list.length > 0); // never emit an empty group (§5 fail-safe)
   return { heroes, groups };
 }
@@ -296,9 +297,9 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
     );
   }, [skills, query]);
 
-  // Group + sort by frequency (health). Before health settles, health={} → freq ties →
-  // name-asc fallback (no jitter). Recomputes when health lands so cards re-sort by usage.
-  const { heroes, groups } = useMemo(() => groupSkills(visibleSkills, health), [visibleSkills, health]);
+  // Groups are alphabetical (findability) — independent of health, so this memo does NOT
+  // depend on `health` and never re-sorts when usage data lands. Frequency lives in the strip.
+  const { heroes, groups } = useMemo(() => groupSkills(visibleSkills), [visibleSkills]);
   // Most-Used strip: Top 8 by frequency across all categories (excl. heroes + never_used).
   // Empty until health settles → the strip simply doesn't render (no flash). AC2.
   const topUsed = useMemo(() => mostUsed(visibleSkills, health, 8), [visibleSkills, health]);

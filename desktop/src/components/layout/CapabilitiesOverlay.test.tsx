@@ -117,6 +117,20 @@ describe('groupSkills — fail-safe (§5)', () => {
     expect(heroes).toEqual([]);
     expect(groups).toEqual([]);
   });
+
+  it('sorts WITHIN a group ALPHABETICALLY, NOT by frequency (findability > usage)', () => {
+    // run_54491b88: groups answer "where do I find X" → predictable alphabetical position
+    // that does NOT shift with usage. Frequency ranking lives ONLY in the Most-Used strip
+    // ("what do I use"). groupSkills is health-agnostic by design — it takes no health arg,
+    // so a heavily-used skill can NEVER jump its alphabetical slot in the group.
+    const skills = [
+      skill({ folderName: 's_zebra', category: 'Research' }),
+      skill({ folderName: 's_alpha', category: 'Research' }),
+    ];
+    const { groups } = groupSkills(skills);
+    const research = groups.find(([c]) => c === 'Research')![1];
+    expect(research.map((s) => s.name)).toEqual(['alpha', 'zebra']);
+  });
 });
 
 describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (run_a85e6641)', () => {
