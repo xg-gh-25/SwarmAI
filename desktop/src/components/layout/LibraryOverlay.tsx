@@ -29,6 +29,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
+import { LibraryTree } from './LibraryTree';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
 interface NativeCategory { name: string; file_count: number; total_bytes: number; }
@@ -75,9 +76,10 @@ function fmtWhen(mtime: number): string {
 export function LibraryContent() {
   const [tab, setTab] = useState<TabKey>('browse');
 
-  const {
-    data: native, isLoading: nativeLoading, isError: nativeError, refetch: refetchNative,
-  } = useQuery<NativeStore>({
+  // Native store stats (rail totals + Browse tab badge). The Browse body itself is
+  // now a live file tree (LibraryTree) off /workspace/tree — it owns its own
+  // loading/error state, so this query no longer drives the browse panel.
+  const { data: native } = useQuery<NativeStore>({
     queryKey: ['library-native'],
     queryFn: async () => (await api.get<NativeStore>('/library/native')).data,
     staleTime: 30_000, enabled: true,
@@ -145,13 +147,7 @@ export function LibraryContent() {
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-4">
-            {tab === 'browse' && (
-              <BrowseTab
-                native={native} mounts={mounts}
-                nativeLoading={nativeLoading} nativeError={nativeError}
-                onRetryNative={() => { void refetchNative(); }}
-              />
-            )}
+            {tab === 'browse' && <BrowseTab mounts={mounts} />}
             {tab === 'recent' && (
               <RecentTab
                 recent={recent} loading={recentLoading} error={recentError}
@@ -189,14 +185,10 @@ function FetchError({ testid, retryTestid, message, onRetry }: { testid: string;
   );
 }
 
-// ── Browse: Native categories (green) + Mounted sources (blue), never merged ──
-function BrowseTab({
-  native, mounts, nativeLoading, nativeError, onRetryNative,
-}: {
-  native: NativeStore | undefined; mounts: MountsList | undefined;
-  nativeLoading: boolean; nativeError: boolean; onRetryNative: () => void;
-}) {
-  const cats = native?.categories ?? [];
+// ── Browse: a live Knowledge/ file tree (Native) + Mounted sources (blue) ──
+// The tree (LibraryTree) is the browse body — expand to any file, click to open
+// it in Canvas. Search still runs the recall path. Mounted stays visually distinct.
+function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
   const mountRows = mounts?.mounts ?? [];
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
@@ -210,11 +202,11 @@ function BrowseTab({
   });
 
   return (
-    <div data-testid="library-panel-browse" className="flex flex-col gap-5 max-w-4xl">
+    <div data-testid="library-panel-browse" className="flex flex-col gap-5 h-full min-h-0">
       {/* Search box — searching Library = seeing what recall would retrieve. */}
       <form
         onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
-        className="flex items-center gap-2"
+        className="flex items-center gap-2 max-w-4xl shrink-0"
       >
         <input
           data-testid="library-search-input"
@@ -263,52 +255,16 @@ function BrowseTab({
         </section>
       ) : (
       <>
-      <div className="text-sm text-[var(--color-text-muted)]">
-        Everything on the shelf — click a category to open it in the workspace explorer.
-        Native (ours) and Mounted (pointers to your disk) stay visually distinct.
-      </div>
-
-      {/* NATIVE — cognition green */}
-      <section data-testid="library-native-section">
-        <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider" style={{ color: '#5fc99a' }}>
+      {/* NATIVE — cognition green. Live Knowledge/ tree: expand to any file, click to open in Canvas. */}
+      <section data-testid="library-native-section" className="flex flex-col min-h-0 flex-1">
+        <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider shrink-0" style={{ color: '#5fc99a' }}>
           📗 Native · Knowledge/
         </div>
-        {nativeError ? (
-          <FetchError
-            testid="library-native-error"
-            retryTestid="library-native-retry"
-            message="Couldn't load categories — the workspace or Knowledge/ may be unavailable."
-            onRetry={onRetryNative}
-          />
-        ) : nativeLoading ? (
-          <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">Loading categories…</div>
-        ) : cats.length === 0 ? (
-          <div data-testid="library-native-empty" className="py-6 text-center text-sm text-[var(--color-text-faint)]">
-            No categories yet — Knowledge/ is empty.
-          </div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {cats.map((c) => (
-              <button
-                key={c.name}
-                data-testid={`library-cat-${c.name}`}
-                onClick={() =>
-                  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `Knowledge/${c.name === '(root)' ? '' : c.name}` } }))
-                }
-                className="flex items-center gap-3 rounded-md px-3 py-2 max-w-2xl text-left hover:bg-[var(--color-hover)]"
-              >
-                <span className="w-1.5 h-4 shrink-0 rounded-full" style={{ background: '#5fc99a' }} aria-hidden />
-                <span className="flex-1 min-w-0 truncate text-sm font-medium text-[var(--color-text)]">{c.name}</span>
-                <span className="shrink-0 font-mono text-xs text-[var(--color-text-muted)]">{c.file_count} files</span>
-                <span className="w-14 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{fmtBytes(c.total_bytes)}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <LibraryTree />
       </section>
 
       {/* MOUNTED — cooler tint + link icon; empty-state is compact, not a void (§4) */}
-      <section data-testid="library-mounted-section">
+      <section data-testid="library-mounted-section" className="shrink-0">
         <div className="mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider" style={{ color: '#4a8fb0' }}>
             🔗 Mounted · external sources

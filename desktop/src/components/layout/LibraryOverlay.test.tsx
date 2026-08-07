@@ -1,14 +1,16 @@
 /**
  * Tests for LibraryOverlay — the agent's bookshelf (Native store + Mounts).
  *
- * Focus of THIS suite: the loading / error / empty three-state discipline of the
- * Browse (native) + Recent tabs. Before the fix, native/recent useQuery discarded
- * isLoading/isError, so BrowseTab rendered `cats.length===0 → "Loading categories…"`
- * — meaning a FAILED or genuinely-empty fetch spun "Loading…" forever with no error
- * signal + no recovery. These tests pin the three distinct states:
- *   pending → Loading · error → message + working Retry(refetch) · empty → No categories.
+ * TWO focuses:
+ *  1. Browse tab is now a LIVE Knowledge/ file tree (LibraryTree, off
+ *     /workspace/tree): it expands to any file and a FILE click dispatches
+ *     swarm:open-file (→ Canvas), while a DIRECTORY click toggles expand and
+ *     NEVER dispatches (a dir path renders an empty Canvas). These tests pin the
+ *     tree render + the file-only open contract + lazy-expand.
+ *  2. The Recent tab's loading / error / empty three-state discipline (unchanged)
+ *     and the no-double-/api path convention (regression guard, run_b41d0c2a).
  *
- * The api client is mocked at the boundary (services/api); the component is
+ * The api client + workspaceService are mocked at the boundary; the component is
  * backend-primary and invents no data (R30).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,11 +18,18 @@ import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import type { TreeNode } from '../../types';
 
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
 }));
+// LibraryTree browses via workspaceService.getTree/expandDirectory — mock the
+// service boundary so the tree renders deterministic Knowledge/ nodes.
+vi.mock('../../services/workspace', () => ({
+  workspaceService: { getTree: vi.fn(), expandDirectory: vi.fn() },
+}));
 import api from '../../services/api';
+import { workspaceService } from '../../services/workspace';
 import { LibraryContent } from './LibraryOverlay';
 
 const NATIVE_OK = {
@@ -30,13 +39,31 @@ const NATIVE_OK = {
     { name: 'Notes', file_count: 5, total_bytes: 8000 },
   ],
 };
-const NATIVE_EMPTY = { source: 'native', root: 'Knowledge/', category_count: 0, categories: [] };
 const RECENT_OK = {
   window_days: 7, count: 1,
   items: [{ path: 'Knowledge/Notes/x.md', category: 'Notes', mtime: 1785600000, size: 100, source: 'session' }],
 };
 const RECENT_EMPTY = { window_days: 7, count: 0, items: [] };
 const MOUNTS_OK = { count: 0, mounts: [], registry_ready: true };
+
+// Workspace tree fixture: root → Knowledge → {Designs(dir, truncated), readme.md(file)}
+const TREE_OK: TreeNode[] = [
+  {
+    name: 'Knowledge', path: 'Knowledge', type: 'directory',
+    children: [
+      { name: 'Designs', path: 'Knowledge/Designs', type: 'directory', children: null }, // truncated → lazy
+      { name: 'readme.md', path: 'Knowledge/readme.md', type: 'file' },
+    ],
+  },
+];
+const DESIGNS_CHILDREN: TreeNode[] = [
+  { name: 'plan.md', path: 'Knowledge/Designs/plan.md', type: 'file' },
+];
+
+function mockTree() {
+  (workspaceService.getTree as ReturnType<typeof vi.fn>).mockResolvedValue(TREE_OK);
+  (workspaceService.expandDirectory as ReturnType<typeof vi.fn>).mockResolvedValue(DESIGNS_CHILDREN);
+}
 
 type Handler = (url: string) => Promise<{ data: unknown }>;
 function mockApi(h: Handler) {
@@ -66,80 +93,82 @@ function openOverlay() { /* no-op: LibraryContent renders immediately (host-owne
 
 beforeEach(() => {
   mockAllOk();
+  mockTree();
 });
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
-describe('LibraryOverlay — Browse native three-state', () => {
-  it('renders categories when the native fetch succeeds (not "Loading…")', async () => {
+describe('LibraryOverlay — Browse is a live Knowledge/ tree', () => {
+  it('renders the Knowledge/ tree roots (dir + file) from /workspace/tree', async () => {
     renderOverlay();
     openOverlay();
     await screen.findByTestId('library-overlay');
-    expect(await screen.findByTestId('library-cat-Designs')).toBeInTheDocument();
-    expect(screen.getByTestId('library-cat-Notes')).toBeInTheDocument();
-    // the old permanent-loading text must NOT be showing once data arrived
-    expect(screen.queryByText(/Loading categories/i)).toBeNull();
+    await screen.findByTestId('library-tree');
+    // both top-level Knowledge children render as tree rows
+    expect(await screen.findByText('Designs')).toBeInTheDocument();
+    expect(screen.getByText('readme.md')).toBeInTheDocument();
+    // getTree was called scoped shallow (depth arg passed)
+    expect(workspaceService.getTree as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
 
-  it('shows an ERROR state with a working Retry when the native fetch fails (no infinite Loading)', async () => {
-    mockApi((url: string) => {
-      if (url.includes('/native')) return Promise.reject(new Error('503 workspace not init'));
-      if (url.includes('/recent')) return Promise.resolve({ data: RECENT_OK });
-      return Promise.resolve({ data: MOUNTS_OK });
-    });
+  it('clicking a FILE dispatches swarm:open-file with its path (→ Canvas)', async () => {
+    const onOpen = vi.fn();
+    document.addEventListener('swarm:open-file', onOpen as EventListener);
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('library-tree');
+    const fileRow = await screen.findByText('readme.md');
+    act(() => { fileRow.click(); });
+    await waitFor(() => expect(onOpen).toHaveBeenCalled());
+    const evt = onOpen.mock.calls[0][0] as CustomEvent<{ path: string }>;
+    expect(evt.detail.path).toBe('Knowledge/readme.md');
+    document.removeEventListener('swarm:open-file', onOpen as EventListener);
+  });
+
+  it('clicking a DIRECTORY toggles expand + lazy-loads children; it NEVER dispatches open-file', async () => {
+    const onOpen = vi.fn();
+    document.addEventListener('swarm:open-file', onOpen as EventListener);
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('library-tree');
+    const dirRow = await screen.findByText('Designs');
+    act(() => { dirRow.click(); });
+    // lazy-load fired for the truncated dir, and its child appears
+    await waitFor(() =>
+      expect(workspaceService.expandDirectory as ReturnType<typeof vi.fn>).toHaveBeenCalledWith('Knowledge/Designs', expect.any(Number)),
+    );
+    expect(await screen.findByText('plan.md')).toBeInTheDocument();
+    // a directory click must NOT open anything in Canvas
+    expect(onOpen).not.toHaveBeenCalled();
+    document.removeEventListener('swarm:open-file', onOpen as EventListener);
+  });
+
+  it('shows an ERROR state with a working Retry when the tree fetch fails (no infinite Loading)', async () => {
+    (workspaceService.getTree as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('503 workspace not init'));
     renderOverlay();
     openOverlay();
     await screen.findByTestId('library-overlay');
-    // error surface appears — NOT the "Loading categories…" spinner
-    const err = await screen.findByTestId('library-native-error');
+    const err = await screen.findByTestId('library-tree-error');
     expect(err).toBeInTheDocument();
-    expect(screen.queryByText(/Loading categories/i)).toBeNull();
-
-    // Retry re-issues the native fetch (recovers transient 503 without reopening)
-    const before = (api.get as ReturnType<typeof vi.fn>).mock.calls
-      .filter((c) => String(c[0]).includes('/native')).length;
-    const retry = screen.getByTestId('library-native-retry');
-    act(() => { retry.click(); });
+    expect(screen.queryByText(/Loading tree/i)).toBeNull();
+    // Retry re-issues getTree (recovers transient failure without reopening)
+    const before = (workspaceService.getTree as ReturnType<typeof vi.fn>).mock.calls.length;
+    act(() => { screen.getByTestId('library-tree-retry').click(); });
     await waitFor(() => {
-      const after = (api.get as ReturnType<typeof vi.fn>).mock.calls
-        .filter((c) => String(c[0]).includes('/native')).length;
-      expect(after).toBeGreaterThan(before);
+      expect((workspaceService.getTree as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
     });
   });
 
-  it('shows the pending "Loading categories…" state mid-flight (before native resolves)', async () => {
-    // Never-resolving native fetch → the query stays pending → the Loading branch renders.
-    let release: (v: { data: unknown }) => void = () => {};
-    mockApi((url: string) => {
-      if (url.includes('/native')) return new Promise((res) => { release = res; });
-      if (url.includes('/recent')) return Promise.resolve({ data: RECENT_OK });
-      return Promise.resolve({ data: MOUNTS_OK });
-    });
+  it('shows an EMPTY state when Knowledge/ has no children', async () => {
+    (workspaceService.getTree as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: 'Knowledge', path: 'Knowledge', type: 'directory', children: [] },
+    ]);
     renderOverlay();
     openOverlay();
     await screen.findByTestId('library-overlay');
-    expect(await screen.findByText(/Loading categories/i)).toBeInTheDocument();
-    // neither settled surface should be present while pending
-    expect(screen.queryByTestId('library-native-error')).toBeNull();
-    expect(screen.queryByTestId('library-native-empty')).toBeNull();
-    // resolve so the test doesn't leak a dangling promise
-    act(() => { release({ data: NATIVE_OK }); });
-  });
-
-  it('shows an EMPTY state (not "Loading…") when native succeeds with zero categories', async () => {
-    mockApi((url: string) => {
-      if (url.includes('/native')) return Promise.resolve({ data: NATIVE_EMPTY });
-      if (url.includes('/recent')) return Promise.resolve({ data: RECENT_EMPTY });
-      return Promise.resolve({ data: MOUNTS_OK });
-    });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('library-overlay');
-    expect(await screen.findByTestId('library-native-empty')).toBeInTheDocument();
-    // empty is settled, not pending — the old spinner text must be gone
-    expect(screen.queryByText(/Loading categories/i)).toBeNull();
+    expect(await screen.findByTestId('library-tree-empty')).toBeInTheDocument();
   });
 });
 
