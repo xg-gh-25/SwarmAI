@@ -31,7 +31,7 @@ import { List } from 'react-window';
 import type { TreeNode } from '../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import type { FileTreeItem } from './FileTreeNode';
-import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
+import { useTreeData, useSelection, CHANGED_GIT_STATUSES } from '../../contexts/ExplorerContext';
 import type { SortMode } from '../../contexts/ExplorerContext';
 import { toFileTreeItem } from './toFileTreeItem';
 import { folderService } from '../../services/workspace';
@@ -130,9 +130,6 @@ export interface ContextMenuState {
 /** Date prefix pattern: YYYY-MM-DD at the start of a name. */
 const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}/;
 
-/** Git statuses that count as a "live change" for git-first sort ordering. */
-const CHANGED_STATUSES = new Set(['modified', 'added', 'untracked', 'conflicting', 'renamed']);
-
 /**
  * Order a single level of siblings by an explicit SortMode.
  *
@@ -154,7 +151,7 @@ export function sortSiblings(children: TreeNode[], sortMode: SortMode): TreeNode
     a.type !== b.type ? (a.type === 'directory' ? -1 : 1) : 0;
   const byName = (a: TreeNode, b: TreeNode): number =>
     sortMode === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name);
-  const isChanged = (n: TreeNode): boolean => !!n.gitStatus && CHANGED_STATUSES.has(n.gitStatus);
+  const isChanged = (n: TreeNode): boolean => !!n.gitStatus && CHANGED_GIT_STATUSES.has(n.gitStatus);
 
   return [...children].sort((a, b) => {
     const d = dirFirst(a, b);

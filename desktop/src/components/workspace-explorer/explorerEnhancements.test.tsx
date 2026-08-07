@@ -131,7 +131,7 @@ describe('computeChangedAncestors', () => {
     expect(computeChangedAncestors(tree).size).toBe(0);
   });
 
-  it('ignores deleted/ignored status (only surfaces live edits: modified/added/untracked)', () => {
+  it('ignores deleted/ignored status (nothing to reveal by expanding)', () => {
     const tree: TreeNode[] = [
       dir('Knowledge', 'Knowledge', [
         file('gone.md', 'Knowledge/gone.md', 'deleted'),
@@ -139,6 +139,18 @@ describe('computeChangedAncestors', () => {
       ]),
     ];
     expect(computeChangedAncestors(tree).size).toBe(0);
+  });
+
+  it('surfaces conflicting/renamed too (shared CHANGED_GIT_STATUSES — aligns with git-first sort)', () => {
+    const tree: TreeNode[] = [
+      dir('Projects', 'Projects', [
+        dir('A', 'Projects/A', [file('c.md', 'Projects/A/c.md', 'conflicting')]),
+        dir('B', 'Projects/B', [file('r.md', 'Projects/B/r.md', 'renamed')]),
+      ]),
+    ];
+    const anc = computeChangedAncestors(tree);
+    expect(anc.has('Projects/A')).toBe(true);
+    expect(anc.has('Projects/B')).toBe(true);
   });
 
   it('handles null (lazy-truncated) children without crashing', () => {

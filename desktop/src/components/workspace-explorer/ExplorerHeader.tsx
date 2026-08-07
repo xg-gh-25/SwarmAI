@@ -132,7 +132,7 @@ export default function ExplorerHeader() {
             placeholder="Search files…"
             aria-label="Search workspace files"
             data-testid="explorer-search-input"
-            className="w-full pl-7 pr-7 py-1 text-[12px] rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors"
+            className="w-full pl-7 pr-7 py-1 text-[12px] rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors [&::-webkit-search-cancel-button]:hidden"
           />
           {searchQuery && (
             <button

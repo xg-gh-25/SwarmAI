@@ -170,11 +170,19 @@ const SearchContext = createContext<SearchContextValue | undefined>(undefined);
 // Tree helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Git statuses that represent a live, uncommitted edit worth surfacing.
- *  Mirrors SectionedExplorer's Working Files filter (modified/added/untracked) —
- *  deleted/renamed/ignored/conflicting are intentionally excluded from
- *  default-expand-changed (a deleted file has nothing to reveal by expanding). */
-const CHANGED_STATUSES = new Set(['modified', 'added', 'untracked']);
+/** Git statuses that count as a live change worth surfacing/floating.
+ *  SINGLE SOURCE shared by computeChangedAncestors (default-expand) AND
+ *  VirtualizedTree's git-first sort — so the two can never drift (a file that
+ *  sorts to the top under git-first is the same file whose dir auto-expands on
+ *  load). `conflicting` is included deliberately — a merge conflict is exactly
+ *  what should be revealed first. `deleted`/`ignored` are excluded: a deleted
+ *  file has nothing to reveal by expanding, and ignored is not "work".
+ *  (Note: SectionedExplorer's Working Files card keeps its own narrower
+ *  modified/added/untracked display filter — that is a card-display choice,
+ *  independent of this expand/sort signal.) */
+export const CHANGED_GIT_STATUSES = new Set<string>([
+  'modified', 'added', 'untracked', 'conflicting', 'renamed',
+]);
 
 /** Collect the ancestor DIRECTORY paths of every git-changed file in the tree.
  *
@@ -194,7 +202,7 @@ export function computeChangedAncestors(nodes: TreeNode[]): Set<string> {
     for (const node of list) {
       if (node.type === 'directory') {
         if (node.children) walk(node.children, [...ancestorPaths, node.path]);
-      } else if (node.gitStatus && CHANGED_STATUSES.has(node.gitStatus)) {
+      } else if (node.gitStatus && CHANGED_GIT_STATUSES.has(node.gitStatus)) {
         for (const ap of ancestorPaths) ancestors.add(ap);
       }
     }
@@ -484,8 +492,11 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       .map((n) => n.path);
     // Also expand the ancestors of any git-changed file so uncommitted work is
     // visible on first load without manual drilling (default-expand-changed).
-    // Seeded HERE, in the same effect + same setExpandedPaths call, so it lands
-    // BEFORE any search snapshot is taken (Gate-1 R4 — no snapshot/restore race).
+    // Seeded into the SAME initial setExpandedPaths as the Knowledge default.
+    // The search snapshot (separate effect below) captures whatever expandedPaths
+    // holds at the first keystroke — and a keystroke cannot precede treeData load
+    // (the input renders under the tree), so this seed always commits before any
+    // snapshot. No snapshot/restore race in practice (Gate-1 R4).
     const changedAncestors = computeChangedAncestors(treeData);
     const seed = new Set<string>([...defaults, ...changedAncestors]);
     if (seed.size > 0) {
