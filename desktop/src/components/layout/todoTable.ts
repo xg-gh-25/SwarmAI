@@ -111,7 +111,11 @@ export interface TodoKpis {
   completionRate: number; // completed / (all non-cancelled); 0 on empty
 }
 
-/** KPI counts over the given (already range/status-filtered) rows. */
+/** KPI counts over the given (already range/status-filtered) rows.
+ *  ⚠️ Coupled to deriveStatus precedence: Cancelled (incl. reviewState=rejected) is
+ *  excluded from the completionRate denominator, so a rejected todo inflates neither
+ *  numerator nor denominator. If deriveStatus's rejected→Cancelled precedence changes,
+ *  this rate silently shifts — the deriveStatus + computeKpis tests lock them together. */
 export function computeKpis(rows: ToDo[]): TodoKpis {
   let open = 0, inProgress = 0, completed = 0, nonCancelled = 0;
   for (const t of rows) {

@@ -119,8 +119,12 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
   const [creating, setCreating] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  // A fetch that hits the 1000-row cap is truncated — surface it so the count is
+  // never silently wrong (meta-review scaling finding). Honest > silent drop.
+  const [truncated, setTruncated] = useState(false);
 
   const windowDays = RANGES[rangeIdx].days;
+  const FETCH_CAP = 1000;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -129,9 +133,11 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       // hint; the authoritative range filter is client-side on createdAt (below), so
       // table/KPI/charts share one口径. 'All' → no window (broad fetch).
       const [list, hist] = await Promise.all([
-        todosService.list('swarmws', undefined, 1000),
-        todosService.history(1000, windowDays ?? undefined),
+        todosService.list('swarmws', undefined, FETCH_CAP),
+        todosService.history(FETCH_CAP, windowDays ?? undefined),
       ]);
+      // Either leg hitting the cap means the view may be missing older rows.
+      setTruncated(list.length >= FETCH_CAP || hist.todos.length >= FETCH_CAP);
       setRows(mergeRows(list, hist.todos));
       setLoadErr(null);
     } catch (e) {
@@ -245,6 +251,17 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
 
       {/* Analytics strip — always visible */}
       <AnalyticsStrip weekly={weekly} sources={sources} />
+
+      {/* Truncation hint — never silently drop rows (meta-review scaling finding) */}
+      {truncated && (
+        <div
+          data-testid="todo-truncated"
+          className="shrink-0 mx-4 mt-2 text-[11px] text-[var(--color-text-faint)] flex items-center gap-1.5"
+        >
+          <span className="material-symbols-outlined text-[13px]">info</span>
+          Showing the most recent {FETCH_CAP} ToDos — narrow the time range to see a focused set.
+        </div>
+      )}
 
       {/* Fetch failure (distinct from empty) */}
       {loadErr && (

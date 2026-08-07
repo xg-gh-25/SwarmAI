@@ -184,6 +184,22 @@ describe('ToDoOverlay (flat table)', () => {
     await waitFor(() => expect(screen.getByTestId('todo-row')).toBeTruthy());
   });
 
+  it('shows a truncation hint when a fetch hits the 1000-row cap', async () => {
+    const many = Array.from({ length: 1000 }, (_, i) => mkTodo({ id: `t${i}` }));
+    mockList(many);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    expect(await screen.findByTestId('todo-truncated')).toBeTruthy();
+  });
+
+  it('does NOT show truncation hint under the cap', async () => {
+    mockList([mkTodo()]);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    await screen.findByTestId('todo-row');
+    expect(screen.queryByTestId('todo-truncated')).toBeNull();
+  });
+
   it('renders all 7 sortable column headers', async () => {
     render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
