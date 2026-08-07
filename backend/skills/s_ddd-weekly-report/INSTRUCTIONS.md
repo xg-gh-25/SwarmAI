@@ -50,8 +50,33 @@ print(f'Output: {result[\"output_path\"]}')
 
 - `Projects/*/.artifacts/ddd-changelog.jsonl` — applied entries (per project)
 - `Projects/*/.artifacts/proposals/*.json` — pending escalations
+- `Projects/*/.artifacts/protected-zone-candidates.jsonl` — lessons auto-dropped from
+  a protected zone (TECH>Architecture / SELF / PRODUCT>Vision,Non-Goals,Strategic) that
+  a human should hand-distill (NEW — run_97519f7c). NOT auto-writable (human-only zone),
+  so cultivation diverts them here instead of silently dropping.
 - `Projects/*/PRODUCT.md|TECH.md|IMPROVEMENT.md|PROJECT.md` — health stats (line count, mtime)
 - `.context/.auto_refresh_log.jsonl` — Layer 1/2 auto-refresh activity (NEW)
+
+## Human-Distill Candidates Section (NEW — run_97519f7c)
+
+The weekly report MUST surface the protected-zone candidates so the sink sediments UP
+into a human decision instead of becoming a write-only landfill (Principle 1). Read
+`Projects/<project>/.artifacts/protected-zone-candidates.jsonl` (one JSON object per
+line: `target_doc`, `target_section`, `content`, `source_run_id`, `confidence`), group
+by `target_doc § target_section`, dedup by content, and render:
+
+```markdown
+## 🖐 Lessons For You To Hand-Distill (protected zones)
+
+Auto-detected but land in human-only zones — cultivation can't write them. Review and
+hand-write the ones worth keeping into the named doc/section.
+
+| Target | Lesson (excerpt) | Runs |
+|--------|------------------|------|
+| TECH.md § Architecture | <content excerpt> | run_xxx (+N) |
+```
+
+If the file is absent or empty → omit this section (nothing to distill).
 
 ## Auto-Refresh Audit Section (NEW — 2026-06-17)
 

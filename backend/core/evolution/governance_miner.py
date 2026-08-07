@@ -248,12 +248,20 @@ def generate_governance_proposals(
         if not is_cognitive_class(ckey):
             continue
 
+        # Admission root-fix (run_97519f7c): a class with NO real rule text (empty
+        # pattern) must NOT surface a contentless "Address recurring X pattern"
+        # meta-instruction — that is not an approvable rule, just queue noise a human
+        # can't action. Skip it; it re-surfaces only once a real structural_fix/pattern
+        # is extracted. (The escalation ladder handles bare recurrence separately.)
+        if not (cls.pattern or "").strip():
+            continue
+
         proposals.append(
             GovernanceProposal(
                 target="governance",
                 source_class=ckey,
                 occurrence_count=cls.occurrence_count,
-                proposed_rule=cls.pattern or f"Address recurring {cls.name} pattern",
+                proposed_rule=cls.pattern,
                 evidence=cls.evidence_chain[:5],  # Cap at 5
                 confidence=confidence,
             )

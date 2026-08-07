@@ -204,6 +204,34 @@ class TestGovernanceProposalGeneration:
         assert "OPERATIONAL" not in classes  # guard fired
         assert any("CLASS_B" == c or "CLASS B" in (c or "") for c in classes)  # cognitive kept
 
+    def test_skips_class_with_empty_pattern(self, evolution_md, steering_md, monkeypatch):
+        """Admission root-fix (run_97519f7c): a correction class with NO real rule
+        text (empty pattern) must NOT emit a contentless 'Address recurring X'
+        meta-instruction proposal — it is not approvable, pure queue noise."""
+        import core.evolution.governance_miner as gm
+        from core.evolution.governance_miner import (
+            CorrectionClass,
+            generate_governance_proposals,
+        )
+
+        with_text = CorrectionClass(
+            name="CLASS B: real", occurrence_count=5,
+            pattern="Any runtime claim must cite an observation", structural_fix="",
+            evidence_chain=["e1"],
+        )
+        empty_pattern = CorrectionClass(
+            name="CLASS C: no rule text", occurrence_count=9,
+            pattern="", structural_fix="", evidence_chain=["e2"],
+        )
+        monkeypatch.setattr(gm, "mine_correction_classes", lambda _p: [with_text, empty_pattern])
+        monkeypatch.setattr(gm, "mine_gc_candidates", lambda _p: [])
+
+        proposals = generate_governance_proposals(evolution_md, steering_md, threshold=3)
+        rules = [p.proposed_rule for p in proposals]
+        # the empty-pattern class produced NO proposal (no Address-recurring placeholder)
+        assert not any("Address recurring" in (r or "") for r in rules)
+        assert any("must cite an observation" in (r or "") for r in rules)  # real one kept
+
     def test_empty_evolution_md_returns_empty(self, tmp_path: Path):
         from core.evolution.governance_miner import generate_governance_proposals
 

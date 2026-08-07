@@ -801,20 +801,23 @@ class TestCultivateFromReflect:
 
             # M4 fix: exact assertions
             assert result["applied"] == 1  # IMPROVEMENT.md lesson auto-applied
-            assert result["escalated"] == 1  # PRODUCT.md target escalated
+            # Admission root-fix (run_97519f7c): the 2nd lesson routes to
+            # PRODUCT.md>Non-Goals — a PROTECTED zone (human-distill-only). apply_to_ddd
+            # would return "not_safe" for it, so the OLD behavior (escalate → a
+            # dead-on-approve queue entry) was the bug this run fixes. It is now SKIPPED,
+            # not escalated: 0 escalated, 1 skipped_protected, 0 proposal files written.
+            assert result["escalated"] == 0
+            assert result["skipped_protected"] == 1
 
             # Verify DDD doc was actually modified
             content = doc.read_text()
             assert "SMOKE caught 2 runtime crashes" in content
             assert "auto-cultivated" in content  # reflect source_stage = default label
 
-            # Verify escalation file exists
+            # Verify NO dead-on-approve proposal was written for the protected-zone lesson
             proposals_dir = project_dir / ".artifacts" / "proposals"
             proposal_files = list(proposals_dir.glob("*.json"))
-            assert len(proposal_files) == 1
-            escalated_data = json.loads(proposal_files[0].read_text())
-            assert escalated_data["target_doc"] == "PRODUCT.md"
-            assert escalated_data["status"] == "escalated"
+            assert len(proposal_files) == 0
 
             # Verify changelog was written
             changelog = project_dir / ".artifacts" / "ddd-changelog.jsonl"
@@ -890,7 +893,7 @@ class TestCultivateFromCorrections:
             result = cultivate_from_corrections(
                 [], "session_empty", "SwarmAI", project_dir
             )
-            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "drift_errors": []}
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "skipped_protected": 0, "drift_errors": []}
 
 
 class TestCultivateFromDecisions:
@@ -950,7 +953,7 @@ class TestCultivateFromDecisions:
             result = cultivate_from_decisions(
                 [], "session_empty", "SwarmAI", project_dir
             )
-            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "drift_errors": []}
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "skipped_protected": 0, "drift_errors": []}
 
     def test_real_corrections_without_keywords_still_classify(self):
         """PE-1: Real production corrections lack keywords but should still classify."""

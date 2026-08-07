@@ -117,11 +117,14 @@ class TestDetectArchChanges:
 
 
 class TestGenerateProposals:
-    """Test CultivationProposal generation."""
+    """Admission root-fix (run_97519f7c): _generate_proposals no longer writes a
+    CultivationProposal for an arch change. 'A new module `foo.py` exists' is a GIT
+    FACT, not knowledge, and never needed a human decision (R30#4). The arch signal
+    is captured in the code_intel graph via _reindex_changed_files, NOT the review
+    queue. These tests pin the NEW contract: 0 proposals written."""
 
-    def test_generates_proposal_for_new_module(self, tmp_path):
-        """AC1: new module → proposal in .proposals/"""
-        # Setup project directory
+    def test_new_module_writes_NO_proposal(self, tmp_path):
+        """A new module produces 0 review-queue proposal (was the #1 noise source)."""
         project_dir = tmp_path / "Projects" / "SwarmAI"
         project_dir.mkdir(parents=True)
 
@@ -139,49 +142,23 @@ class TestGenerateProposals:
             arch_changes, "e3700b09", "feat: Entity Index", str(tmp_path)
         )
 
-        # Verify proposal was written
         proposals_dir = project_dir / ".artifacts" / "proposals"
-        assert proposals_dir.exists()
-        proposal_files = list(proposals_dir.glob("*.json"))
-        assert len(proposal_files) >= 1
+        # either the dir was never created, or it holds zero proposals
+        assert not proposals_dir.exists() or list(proposals_dir.glob("*.json")) == []
 
-    def test_evidence_includes_commit_hash(self, tmp_path):
-        """AC3: source_run_id contains commit SHA."""
+    def test_multiple_arch_changes_write_NO_proposal(self, tmp_path):
+        """Even several high-confidence arch changes write nothing to the queue."""
         project_dir = tmp_path / "Projects" / "SwarmAI"
         project_dir.mkdir(parents=True)
 
         feed = CodeChangeFeed()
         arch_changes = [
-            ArchChange("new_module", "backend/core/new.py", 0.9, "Key Subsystems")
+            ArchChange("new_module", "backend/core/new.py", 0.9, "Key Subsystems"),
+            ArchChange("api_endpoint", "backend/routers/new.py", 0.8, "Key Subsystems"),
+            ArchChange("rename", "backend/core/old.py", 0.8, "Architecture"),
         ]
-
         feed._generate_proposals(
             arch_changes, "abcdef12", "feat: new thing", str(tmp_path)
         )
-
-        # Read the proposal
         proposals_dir = project_dir / ".artifacts" / "proposals"
-        proposal_files = list(proposals_dir.glob("*.json"))
-        assert len(proposal_files) >= 1
-
-        import json
-        data = json.loads(proposal_files[0].read_text())
-        assert "commit:abcdef12" in data.get("source_run_id", "")
-
-    def test_low_confidence_changes_filtered(self, tmp_path):
-        """AC4: confidence < 0.6 → no proposal."""
-        project_dir = tmp_path / "Projects" / "SwarmAI"
-        project_dir.mkdir(parents=True)
-
-        feed = CodeChangeFeed()
-        arch_changes = [
-            ArchChange("minor", "backend/util.py", 0.5, "Architecture")
-        ]
-
-        feed._generate_proposals(
-            arch_changes, "abc123", "chore: minor", str(tmp_path)
-        )
-
-        proposals_dir = project_dir / ".artifacts" / "proposals"
-        if proposals_dir.exists():
-            assert list(proposals_dir.glob("*.json")) == []
+        assert not proposals_dir.exists() or list(proposals_dir.glob("*.json")) == []

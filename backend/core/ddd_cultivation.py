@@ -1537,6 +1537,33 @@ def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
     proposals_dir = project_dir / ".artifacts" / "proposals"
     proposals_dir.mkdir(parents=True, exist_ok=True)
 
+    # Generation-side dedup (run_97519f7c, Gate-1 root-fix): the churn ROOT was that
+    # write_proposal wrote a fresh timestamped JSON unconditionally, so a re-scan of the
+    # same reflect input re-emitted the same-content lesson under a NEW id every run —
+    # read_pending_proposals only dedups at DISPLAY, the on-disk pending set kept silting.
+    # Skip the write if an AWAITING-human proposal with the same content_signature already
+    # exists. Only vs live (pending/escalated) proposals — a terminal (rejected/applied)
+    # one is not a live dup, so a genuinely-recurring lesson can re-surface after triage.
+    # Scope the content-dedup to APPEND proposals ONLY (Gate-2 correctness MED,
+    # run_97519f7c): retire/rewrite proposals carry a TEMPLATE content string
+    # (e.g. "Superseded by a newer polarity-flipped lesson (flip=[...])") whose
+    # distinguishing target lives in target_title/section, NOT the content — so two
+    # DISTINCT retire targets flipped by the same polarity pair would collide on a
+    # content-only signature and silently drop the second human-review item. The churn
+    # this dedup targets is append-lesson re-emission; retire/rewrite are exempt.
+    _ct = getattr(proposal, "change_type", "append") or "append"
+    new_sig = content_signature("- " + (proposal.content or "").strip()) if _ct == "append" else ""
+    if new_sig:
+        for existing in proposals_dir.glob("*.json"):
+            try:
+                data = json.loads(existing.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if data.get("status") not in AWAITING_HUMAN_STATUSES:
+                continue
+            if content_signature("- " + str(data.get("content", "")).strip()) == new_sig:
+                return existing  # idempotent — the live pending proposal already carries it
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"{proposal.id}_{ts}.json"
     filepath = proposals_dir / filename
@@ -1786,7 +1813,11 @@ def _cultivate_proposals(
 
     Returns:
         {"applied": N, "escalated": M, "rejected": K, "write_failed": W,
-         "retired": R, "drift_errors": [...]}
+         "retired": R, "skipped_protected": S, "drift_errors": [...]}
+
+    skipped_protected (run_97519f7c): proposals dropped because their target is a
+    protected zone (human-distill-only) — NOT escalated (that would be a
+    dead-on-approve queue entry), NOT a failure. A healthy admission decision.
 
     write_failed (run_abf49550 M0): apply_to_ddd returned "locked"/"doc_missing" —
     a genuine WRITE FAILURE (learning organ could not write), kept DISTINCT from
@@ -1808,9 +1839,45 @@ def _cultivate_proposals(
     rejected = 0
     write_failed = 0
     retired = 0
+    skipped_protected = 0
     drift_errors: List[str] = []
 
     for proposal in proposals:
+        # Admission root-fix (run_97519f7c): a protected-zone target (SELF / PRODUCT>
+        # Vision,Non-Goals,Strategic / TECH>Architecture) is human-distill-only —
+        # apply_to_ddd returns "not_safe" for it, so escalating it into the review
+        # queue creates a DEAD-ON-APPROVE entry a human can never action (37 such
+        # entries were the #1 standing-queue contributor). SKIP it (drop) instead of
+        # escalating. NARROW by design (Gate-1): only is_protected_zone — a
+        # non-protected but not-safe-append target (e.g. PROJECT.md) STILL escalates
+        # below, so legitimate human-gated escalations are not dropped.
+        if is_protected_zone(proposal.target_doc, proposal.target_section):
+            # Sediment UP, not to a landfill (Principle 1 + Gate-2 red-team MED): a
+            # protected-zone lesson is human-distill-only, but dropping it to a DEBUG
+            # log is a graveyard — a human never sees the architecture/SELF lessons
+            # they should hand-write. Append it to a durable candidates sink the DDD
+            # weekly report surfaces ("lessons for you to hand-distill into TECH.md>
+            # Architecture / SELF / PRODUCT>Vision"). Best-effort — never break cultivation.
+            try:
+                cand_dir = project_dir / ".artifacts"
+                cand_dir.mkdir(parents=True, exist_ok=True)
+                with (cand_dir / "protected-zone-candidates.jsonl").open("a", encoding="utf-8") as _cf:
+                    _cf.write(json.dumps({
+                        "target_doc": proposal.target_doc,
+                        "target_section": proposal.target_section,
+                        "content": (proposal.content or "")[:500],
+                        "source_run_id": proposal.source_run_id,
+                        "confidence": proposal.confidence,
+                    }, ensure_ascii=False) + "\n")
+            except OSError as _e:
+                logger.warning("cultivation: protected-zone candidate sink write failed: %s", _e)
+            logger.debug(
+                "cultivation: protected-zone lesson → human-distill sink (not escalated): %s § %s",
+                proposal.target_doc, proposal.target_section,
+            )
+            skipped_protected += 1
+            continue
+
         # 宁缺毋滥 — conversation-derived knowledge is NEVER auto-written
         # (capability C, run_e346b8ed). The "settled decision vs chatter?"
         # judgment is an LLM call UPSTREAM (conversation_extract); the
@@ -1972,12 +2039,16 @@ def _cultivate_proposals(
         "rejected": rejected,
         "write_failed": write_failed,
         "retired": retired,
+        "skipped_protected": skipped_protected,
         "drift_errors": drift_errors,
     }
     # M0 (run_abf49550): persist this batch's outcome to the durable per-project
     # sink so learning-fidelity is observable (AC2). Best-effort — never breaks
     # cultivation. Skip a fully-empty batch (nothing to observe).
-    if applied or escalated or rejected or write_failed or retired:
+    # skipped_protected included (Gate-2 red-team MED, run_97519f7c): an all-skipped
+    # batch (only protected-zone lessons) must still record — else the volume of
+    # auto-dropped architecture/SELF lessons is invisible to the weekly learning report.
+    if applied or escalated or rejected or write_failed or retired or skipped_protected:
         record_cultivation_outcome(project_dir, result)
     return result
 

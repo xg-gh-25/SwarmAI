@@ -141,6 +141,26 @@ async def approve_proposal(
             # (created_section = the whitelisted heading was absent and auto-created).
             status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
             success_states = ("applied", "created_section")
+        # Admission root-fix backstop (run_97519f7c): a "duplicate" means the content
+        # is ALREADY curated in the doc — the proposal is not a server error, it is a
+        # settled no-op that must LEAVE the pending queue (the primary fix is
+        # generation-side dedup in write_proposal; this clears any pre-existing dup a
+        # human clicks). Terminate it as rejected + return 200 cleared, do NOT 500 and
+        # leave it pending (the old behavior → unclearable churn).
+        if status == "duplicate":
+            _update_proposal_status(
+                project_dir, proposal_id, "rejected",
+                reason="duplicate — content already present in the doc",
+            )
+            logger.info(
+                "Cultivation proposal %s cleared as duplicate (already in %s#%s)",
+                proposal_id, proposal.target_doc, proposal.target_section,
+            )
+            return {
+                "status": "cleared",
+                "proposal_id": proposal_id,
+                "reason": "duplicate — already present, removed from queue",
+            }
         if status not in success_states:
             # Rich diagnostic goes to the SERVER log (includes doc/section names);
             # the client gets a generic message so the API does not disclose the

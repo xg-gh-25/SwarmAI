@@ -342,49 +342,29 @@ class CodeChangeFeed:
         commit_subject: str,
         ws_path: str,
     ) -> None:
-        """Generate CultivationProposal for detected changes."""
-        from core.ddd_cultivation import CultivationProposal, write_proposal
+        """Observe detected arch changes — does NOT write a review-queue proposal.
 
-        # Determine active project (default to SwarmAI for workspace commits)
-        project_dir = Path(ws_path) / "Projects" / "SwarmAI"
-        if not project_dir.exists():
+        Admission root-fix (run_97519f7c): "a new module `foo.py` exists" is a GIT
+        FACT, not knowledge, and it is NOT a decision that needs a human (R30#4 —
+        drift-bait, zero decision value). Emitting a CultivationProposal per new
+        code file was the single biggest source of review-queue noise (56 such
+        proposals in one cleanup). The architecture signal is ALREADY captured
+        structurally: `_reindex_changed_files` (called on every commit) writes the
+        new/changed modules into the code_intel graph. So this method now only
+        LOGS the observation for telemetry — it never writes to the pending queue.
+        """
+        if not arch_changes:
             return
-
-        # Group by target section for a single consolidated proposal
-        by_section: dict[str, list[ArchChange]] = {}
-        for change in arch_changes:
-            if change.confidence >= 0.6:
-                by_section.setdefault(change.target_section, []).append(change)
-
-        for section, section_changes in by_section.items():
-            # Build content summary
-            summaries = []
-            for c in section_changes[:5]:  # Cap at 5 per proposal
-                summaries.append(f"- {c.change_type}: `{c.path}`")
-            content = "\n".join(summaries)
-
-            # Use highest confidence from the group
-            max_confidence = max(c.confidence for c in section_changes)
-
-            # Build evidence string for source_run_id field
-            evidence_str = f"commit:{commit_hash[:8]} | {commit_subject[:80]}"
-
-            proposal = CultivationProposal(
-                target_doc="TECH.md",
-                target_section=section,
-                content=f"Architecture change detected:\n{content}",
-                source_run_id=evidence_str,
-                confidence=max_confidence,
-                source_stage="code_change_feed",
-            )
-
-            write_proposal(proposal, project_dir)
+        # Log only (telemetry) — the module-existence signal lives in the code_intel
+        # graph via _reindex_changed_files, not in the human review queue.
+        significant = [c for c in arch_changes if c.confidence >= 0.6]
+        if significant:
             logger.info(
-                "code_change_feed: proposal generated for TECH.md#%s "
-                "(confidence=%.1f, commit=%s)",
-                section,
-                max_confidence,
+                "code_change_feed: %d arch change(s) observed at commit %s "
+                "(captured in code_intel graph, NOT queued for human review): %s",
+                len(significant),
                 commit_hash[:8],
+                ", ".join(f"{c.change_type}:{c.path}" for c in significant[:5]),
             )
 
 
