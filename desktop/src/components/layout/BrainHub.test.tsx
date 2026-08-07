@@ -810,6 +810,76 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('distribute this ddd: SwarmAI'));
     // No server-side distribute call exists — the button only surfaces the command.
   });
+
+  // ── Run 3 enrichment (run_037ecbfb) — guided steps + Open-aim.json ────────────
+  it('AC2: a distributable brain shows Step 2 (confirm) + Step 3 (run) guided headers', async () => {
+    await openDistribute();  // default fixture: distributable, open-plugin
+    // distribute-step is a shared get-ALL marker (3 headers reuse it) → getAllByTestId;
+    // data-step disambiguates a specific header (avoids the singular-getByTestId trap).
+    const steps = screen.getAllByTestId('distribute-step');
+    expect(steps.map((s) => s.getAttribute('data-step'))).toEqual(['2', '3']);
+    expect(steps.some((s) => (s.textContent ?? '').includes('Step 2'))).toBe(true);
+    expect(steps.some((s) => (s.textContent ?? '').includes('Step 3'))).toBe(true);
+  });
+
+  it('AC1: a NEVER-declared brain shows Step 1 (declare reach), not a re-declare label', async () => {
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: [], visibility: 'internal', distributable: false, declared: false,
+      warnings: [], has_output: false, output_path: null, last_distribute_time: null, source_changed_since: false,
+    });
+    await openDistribute();
+    const step = screen.getByTestId('distribute-step');
+    expect(step.textContent).toContain('Step 1');
+    expect(screen.queryByTestId('distribute-redeclare')).toBeNull();  // not the orphaned label
+  });
+
+  it('AC5/Gate-1: an ORPHANED brain (has_output && !distributable) is labeled re-declare, NOT "Step 1"', async () => {
+    // reach was declared + distributed once, then the block removed → the step header
+    // must NOT lie "Step 1 · declare reach" above the orphaned-output warning.
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: [], visibility: 'internal', distributable: false, declared: false,
+      warnings: [], has_output: true, output_path: 'distribute', last_distribute_time: '2026-07-30T00:00:00+00:00',
+      source_changed_since: null,
+    });
+    await openDistribute();
+    expect(screen.getByTestId('distribute-redeclare')).toBeTruthy();
+    // the honest orphaned warning is still shown, and NO plain "Step 1" header
+    expect(screen.getByTestId('distribute-stale-output')).toBeTruthy();
+    const step = screen.queryByTestId('distribute-step');
+    expect(step?.textContent ?? '').not.toContain('Step 1');
+  });
+
+  it('AC3/AC4: [Open aim.json] on the not-declared branch closes overlay THEN opens Projects/<name>/aim.json in Canvas', async () => {
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: [], visibility: 'internal', distributable: false, declared: false,
+      warnings: [], has_output: false, output_path: null, last_distribute_time: null, source_changed_since: false,
+    });
+    const seq: string[] = [];
+    const onRequestClose = vi.fn(() => seq.push('close'));
+    const openEvents: CustomEvent[] = [];
+    const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
+    document.addEventListener('swarm:open-file', onOpen);
+    try {
+      render(<BrainHub onRequestClose={onRequestClose} />);
+      await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('distribute-open-aim'));
+      await waitFor(() => expect(openEvents.length).toBe(1));
+      // aim.json is PROJECT-relative → needs the Projects/<name>/ prefix (BrainView shape, NOT hunk.file)
+      expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/aim.json');
+      expect(seq).toEqual(['close', 'open']);
+    } finally {
+      document.removeEventListener('swarm:open-file', onOpen);
+    }
+  });
+
+  it('AC5-simplicity: the DISTRIBUTABLE branch has NO [Open aim.json] button (Gate-1: block already valid, next action is run)', async () => {
+    await openDistribute();  // distributable fixture
+    expect(screen.queryByTestId('distribute-open-aim')).toBeNull();
+  });
 });
 
 describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {

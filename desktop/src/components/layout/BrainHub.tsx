@@ -208,7 +208,7 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
             intent-clear; no test asserts it because the transient isn't reachable yet. */}
         {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} onRequestClose={onRequestClose} />}
         {!error && tab === 'review' && selected && <ReviewView name={selected} onRequestClose={onRequestClose} />}
-        {!error && tab === 'distribute' && selected && <DistributeView name={selected} />}
+        {!error && tab === 'distribute' && selected && <DistributeView name={selected} onRequestClose={onRequestClose} />}
       </div>
     </div>
   );
@@ -1070,7 +1070,7 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
 
 // ── Distribute view (Run 3) ──────────────────────────────────────────────────
 
-function DistributeView({ name }: { name: string }) {
+function DistributeView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
   const [data, setData] = useState<DistributionState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1084,6 +1084,17 @@ function DistributeView({ name }: { name: string }) {
     );
     return () => { alive = false; };
   }, [name]);
+
+  // Open aim.json in the Canvas so the owner can edit the distribution block (Run 3,
+  // Step 1). aim.json is PROJECT-relative (lives at Projects/<name>/aim.json) → needs
+  // the Projects/<name>/ prefix (BrainView.openFile shape), NOT the already-workspace-
+  // relative hunk.file shape from ReviewView. Close-before-dispatch z-index precedent.
+  const openAimJson = useCallback(() => {
+    onRequestClose?.();
+    document.dispatchEvent(new CustomEvent('swarm:open-file', {
+      detail: { path: `Projects/${name}/aim.json` },
+    }));
+  }, [name, onRequestClose]);
 
   // [Distribute a brain] does NOT auto-run — s_ddd-distribute is human-in-the-loop
   // (confirms targets + content-safety scan + emit≠publish). We surface the exact
@@ -1106,9 +1117,12 @@ function DistributeView({ name }: { name: string }) {
 
   return (
     <div className="p-4" data-testid="brainhub-distribute">
-      {/* declared reach */}
+      {/* declared reach — guided Step 2 (confirm targets & freshness) */}
       {data.distributable ? (
         <>
+          <div className="flex items-center gap-2 mb-1.5 text-[10px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="2">
+            Step 2 · confirm targets &amp; freshness
+          </div>
           <div className="flex items-center gap-2 mb-3 text-[12px]">
             <span className="material-symbols-outlined text-[16px] text-[#3fb950]">outbound</span>
             <span className="font-semibold text-[var(--color-text)]">Distributable</span>
@@ -1144,6 +1158,19 @@ function DistributeView({ name }: { name: string }) {
         </>
       ) : (
         <div className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-3 mb-4" data-testid="distribute-not-distributable">
+          {/* Guided header — Gate-1: an ORPHANED brain (has_output && !distributable)
+              already completed the flow once; labeling it "Step 1 · declare reach"
+              would contradict the orphaned warning below. So split on has_output:
+              orphaned → re-declare (a regression state); else → honest Step 1. */}
+          {data.has_output ? (
+            <div className="flex items-center gap-2 mb-1.5 text-[10px] uppercase tracking-wider font-semibold text-[#db8c3a]" data-testid="distribute-redeclare">
+              Reach removed · re-declare to resume distribution
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 mb-1.5 text-[10px] uppercase tracking-wider font-semibold text-[#f0a500]" data-testid="distribute-step" data-step="1">
+              Step 1 · declare a reach
+            </div>
+          )}
           <div className="flex items-center gap-2 text-[12px] text-[#f0a500] mb-1">
             <span className="material-symbols-outlined text-[16px]">block</span>
             Not distributable
@@ -1160,24 +1187,45 @@ function DistributeView({ name }: { name: string }) {
               </span>
             )}
           </div>
+          {/* [Open aim.json] — Gate-1: ONLY on the not-distributable branch, where
+              editing aim.json IS the next action. Opens it in the Canvas so the owner
+              can add/fix the distribution block. (On the distributable branch the block
+              is already valid → no edit affordance, avoids noise.) */}
+          <button
+            onClick={openAimJson}
+            data-testid="distribute-open-aim"
+            className="mt-2.5 flex items-center gap-1.5 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
+            title="Open aim.json in the Canvas to declare the distribution block"
+          >
+            <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+            Open aim.json
+          </button>
         </div>
       )}
 
-      {/* [Distribute a brain] — guidance, not auto-run (HITL) */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onDistribute}
-          disabled={!data.distributable}
-          data-testid="distribute-button"
-          className="flex items-center gap-1.5 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2.5 py-1 hover:bg-[#132918] disabled:opacity-40 disabled:cursor-not-allowed"
-          title={data.distributable ? 'Copy the chat command to run s_ddd-distribute' : 'Declare a distribution block first'}
-        >
-          <span className="material-symbols-outlined text-[14px]">content_copy</span>
-          {copied ? 'Copied — paste into a chat tab' : 'Distribute a brain'}
-        </button>
+      {/* Step 3 · run — [Distribute a brain] is guidance, NOT auto-run (HITL):
+          s_ddd-distribute confirms targets + content-safety scan + emit≠publish. */}
+      <div className="flex flex-col gap-1.5">
         {data.distributable && (
-          <span className="text-[10px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="3">
+            Step 3 · run
+          </div>
         )}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onDistribute}
+            disabled={!data.distributable}
+            data-testid="distribute-button"
+            className="flex items-center gap-1.5 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2.5 py-1 hover:bg-[#132918] disabled:opacity-40 disabled:cursor-not-allowed"
+            title={data.distributable ? 'Copy the chat command to run s_ddd-distribute' : 'Declare a distribution block first'}
+          >
+            <span className="material-symbols-outlined text-[14px]">content_copy</span>
+            {copied ? 'Copied — paste into a chat tab' : 'Distribute a brain'}
+          </button>
+          {data.distributable && (
+            <span className="text-[10px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
+          )}
+        </div>
       </div>
     </div>
   );
