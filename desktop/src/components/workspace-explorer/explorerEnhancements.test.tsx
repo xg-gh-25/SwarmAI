@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { flattenTree, sortSiblings } from './VirtualizedTree';
 import type { SortMode } from '../../contexts/ExplorerContext';
-import { computeChangedAncestors } from '../../contexts/ExplorerContext';
+import { computeChangedAncestors, MAX_AUTO_EXPAND_CHANGED_DIRS } from '../../contexts/ExplorerContext';
 import type { TreeNode } from '../../types';
 
 const dir = (name: string, path: string, children: TreeNode[] | null = []): TreeNode => ({
@@ -156,5 +156,19 @@ describe('computeChangedAncestors', () => {
   it('handles null (lazy-truncated) children without crashing', () => {
     const tree: TreeNode[] = [dir('Projects', 'Projects', null)];
     expect(computeChangedAncestors(tree).size).toBe(0);
+  });
+
+  it('MAX_AUTO_EXPAND_CHANGED_DIRS is a positive cap (guards the tree-burst on big refactors)', () => {
+    expect(MAX_AUTO_EXPAND_CHANGED_DIRS).toBeGreaterThan(0);
+    // A workspace with more changed dirs than the cap: computeChangedAncestors
+    // still returns them all (it's the seed logic that caps) — verify the count
+    // can exceed the cap so the fallback branch is reachable.
+    const kids: TreeNode[] = [];
+    for (let i = 0; i < MAX_AUTO_EXPAND_CHANGED_DIRS + 5; i++) {
+      kids.push(dir(`d${i}`, `Projects/d${i}`, [file(`f${i}.md`, `Projects/d${i}/f${i}.md`, 'modified')]));
+    }
+    const tree: TreeNode[] = [dir('Projects', 'Projects', kids)];
+    // ancestors = Projects + each Projects/dN → well over the cap
+    expect(computeChangedAncestors(tree).size).toBeGreaterThan(MAX_AUTO_EXPAND_CHANGED_DIRS);
   });
 });

@@ -184,6 +184,11 @@ export const CHANGED_GIT_STATUSES = new Set<string>([
   'modified', 'added', 'untracked', 'conflicting', 'renamed',
 ]);
 
+/** Cap on how many changed-file ancestor dirs default-expand-changed will open
+ *  on first load. Above this, the tree would burst fully open on a big refactor;
+ *  fall back to zone defaults (the Working Files card still surfaces changes). */
+export const MAX_AUTO_EXPAND_CHANGED_DIRS = 25;
+
 /** Collect the ancestor DIRECTORY paths of every git-changed file in the tree.
  *
  *  Used by default-expand-on-first-load: expanding these paths makes uncommitted
@@ -497,8 +502,15 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     // holds at the first keystroke — and a keystroke cannot precede treeData load
     // (the input renders under the tree), so this seed always commits before any
     // snapshot. No snapshot/restore race in practice (Gate-1 R4).
+    // Cap the auto-expand: on a big mid-refactor workspace (dozens of changed
+    // dirs) expanding every changed ancestor would burst the tree fully open on
+    // first load (meta-review MED). Above the cap, fall back to zone defaults
+    // only — the Working Files card still surfaces the changes, and the user can
+    // drill in. Below it, auto-expand for the convenience it's meant to provide.
     const changedAncestors = computeChangedAncestors(treeData);
-    const seed = new Set<string>([...defaults, ...changedAncestors]);
+    const seed = changedAncestors.size <= MAX_AUTO_EXPAND_CHANGED_DIRS
+      ? new Set<string>([...defaults, ...changedAncestors])
+      : new Set<string>(defaults);
     if (seed.size > 0) {
       setExpandedPaths(seed);
     }
