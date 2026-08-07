@@ -137,30 +137,41 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
 
     render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
 
-    // List renders first (from list()), independent of health.
+    // Card renders first (from list()), independent of health.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
-    // Dots light up after the lazy health fetch resolves.
+    // Health line's status resolves after the lazy fetch (the line's dot carries data-status).
     await waitFor(() => {
-      expect(screen.getByTestId('cap-health-s_deep-research')).toBeTruthy();
-      expect(screen.getByTestId('cap-health-s_narrative-writing')).toBeTruthy();
+      expect(screen.getByTestId('cap-healthline-s_deep-research').getAttribute('data-status')).toBe('healthy');
+      expect(screen.getByTestId('cap-healthline-s_narrative-writing').getAttribute('data-status')).toBe('never_used');
     });
-    expect(screen.getByTestId('cap-health-s_narrative-writing').getAttribute('data-status')).toBe('never_used');
   });
 
-  it('FAIL-SAFE: health fetch REJECTS → rows still render, NO dot, no crash', async () => {
+  it('FAIL-SAFE: health fetch REJECTS → cards still render, NO perpetual "loading" line, no crash', async () => {
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockRejectedValue(new Error('network down'));
 
     render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
 
-    // The skill list is fully usable even though health failed.
+    // The skill cards are fully usable even though health failed.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
-    // Give the rejected health promise a tick to settle.
     await waitFor(() => expect(getHealth).toHaveBeenCalled());
-    // No dot rendered for a row when health is absent (fail-safe).
-    expect(screen.queryByTestId('cap-health-s_deep-research')).toBeNull();
-    // Row is still present + clickable.
+    // Once SETTLED with no data, the health line renders NOTHING — never a perpetual
+    // "loading health…" (adversarial HIGH: reject/empty must not leave cards stuck loading).
+    await waitFor(() => expect(screen.queryByText(/loading health/i)).toBeNull());
+    expect(screen.queryByTestId('cap-healthline-s_deep-research')).toBeNull();
+    // Card still present + clickable.
     expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy();
+  });
+
+  it('first-run: empty health map ({}) → cards render, NO grey wall of "loading" lines', async () => {
+    listSkills.mockResolvedValue(twoSkills);
+    getHealth.mockResolvedValue({} as SkillHealthMap); // backend empty-table guard returns {}
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
+    await waitFor(() => expect(getHealth).toHaveBeenCalled());
+    // Settled-empty → no health lines at all (not a wall of perpetual loaders).
+    await waitFor(() => expect(screen.queryByText(/loading health/i)).toBeNull());
+    expect(screen.queryByTestId('cap-healthline-s_deep-research')).toBeNull();
   });
 
   it('renders a faint tier marker per row (always/lazy)', async () => {
@@ -170,5 +181,38 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     await waitFor(() => expect(screen.getByTestId('cap-tier-s_deep-research')).toBeTruthy());
     expect(screen.getByTestId('cap-tier-s_deep-research').getAttribute('data-tier')).toBe('always');
     expect(screen.getByTestId('cap-tier-s_narrative-writing').getAttribute('data-tier')).toBe('lazy');
+  });
+
+  it('shows a full health LINE on each card by default: status · X% success · last used DATE', async () => {
+    listSkills.mockResolvedValue(twoSkills);
+    getHealth.mockResolvedValue({
+      's_deep-research': { status: 'healthy', success_rate: 0.92, last_used: '2026-08-06' },
+      's_narrative-writing': { status: 'never_used', success_rate: null, last_used: null },
+    } as SkillHealthMap);
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    // The health line is ON the card (not a drawer) and carries success% + last-used.
+    await waitFor(() => {
+      const line = screen.getByTestId('cap-healthline-s_deep-research');
+      expect(line.textContent).toContain('92% success');
+      expect(line.textContent).toContain('2026-08-06');
+    });
+    // never_used card shows the status but no fabricated %/date.
+    const nu = screen.getByTestId('cap-healthline-s_narrative-writing');
+    expect(nu.textContent?.toLowerCase()).toContain('never used');
+    expect(nu.textContent).not.toContain('% success');
+  });
+
+  it('health line is LAZY but the CARD renders immediately (line appears after health resolves)', async () => {
+    listSkills.mockResolvedValue(twoSkills);
+    let resolveHealth: (v: SkillHealthMap) => void = () => {};
+    getHealth.mockReturnValue(new Promise<SkillHealthMap>((r) => { resolveHealth = r; }));
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    // Card is present before health resolves.
+    await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
+    // Health line not yet populated (lazy) — placeholder present, no % yet.
+    expect(screen.queryByText(/92% success/)).toBeNull();
+    // Resolve health → line populates ON the card.
+    resolveHealth({ 's_deep-research': { status: 'healthy', success_rate: 0.92, last_used: '2026-08-06' } } as SkillHealthMap);
+    await waitFor(() => expect(screen.getByTestId('cap-healthline-s_deep-research').textContent).toContain('92% success'));
   });
 });

@@ -59,6 +59,14 @@ const HEALTH_DOT: Record<SkillHealthStatus, { color: string; label: string }> = 
   never_used: { color: 'var(--color-border-strong)', label: 'Never used — candidate to retire' },
 };
 
+/** Human-readable status word for the on-card health line. */
+const STATUS_LABEL: Record<SkillHealthStatus, string> = {
+  healthy: 'healthy',
+  low_success: 'low success',
+  stale: 'stale',
+  never_used: 'never used',
+};
+
 /** Faint tier marker — deliberately muted so it does NOT compete with the health dot. */
 const TIER_MARK: Record<'always' | 'lazy', { icon: string; label: string }> = {
   always: { icon: '⚡', label: 'Always loaded' },
@@ -124,8 +132,12 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Skill | null>(null);
   // Health is LAZY + independent of the skill list: it loads in its own effect and its
-  // failure NEVER blocks/crashes the list (fail-safe). Absent key → no dot for that row.
+  // failure NEVER blocks/crashes the list (fail-safe). `healthSettled` distinguishes
+  // "not fetched yet" (show a loading placeholder) from "fetched — empty or failed" (show
+  // NOTHING, never a perpetual 'loading…'). A skill absent from a SETTLED map genuinely
+  // has no health data (never_used skills carry an explicit entry, so absence = no-data).
   const [health, setHealth] = useState<SkillHealthMap>({});
+  const [healthSettled, setHealthSettled] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -155,25 +167,58 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
     skillsService
       .getHealth()
       .then((h) => { if (alive) setHealth(h); })
-      .catch(() => { if (alive) setHealth({}); });
+      .catch(() => { if (alive) setHealth({}); })
+      .finally(() => { if (alive) setHealthSettled(true); });
     return () => { alive = false; };
   }, []);
 
-  const dotFor = useCallback((s: Skill) => {
-    const st = health[s.folderName]?.status;
-    if (!st || !(st in HEALTH_DOT)) return null; // fail-safe: absent → no dot
-    const d = HEALTH_DOT[st];
+  // The full health LINE shown ON each card by default (lazy: renders once health resolves;
+  // absent health → a muted placeholder so the card layout never jumps). Format:
+  //   ● healthy · 92% success · last used 2026-08-06
+  // Qualitative status + the two detail facts the user asked to see up-front — never in a
+  // drawer. never_used / no-data shows only the status word (no fabricated %/date, R30#4).
+  const healthLineFor = useCallback((s: Skill) => {
+    const h = health[s.folderName];
+    if (!h || !(h.status in HEALTH_DOT)) {
+      // Not-yet-fetched → a loading placeholder (keeps card height stable, lazy).
+      // SETTLED-but-absent (empty/failed fetch, or a skill with genuinely no data) →
+      // render NOTHING, never a perpetual 'loading…' (adversarial HIGH: {} on reject or
+      // empty-table must not leave every card stuck loading). mt-auto bottom-aligns the
+      // line across a row so cards with 1- vs 2-line descriptions stay aligned.
+      if (healthSettled) return null;
+      return (
+        <div
+          data-testid={`cap-healthline-${s.folderName}`}
+          className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)] opacity-60"
+        >
+          <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-border-strong)] shrink-0" />
+          <span>loading health…</span>
+        </div>
+      );
+    }
+    const dot = HEALTH_DOT[h.status];
+    const label = STATUS_LABEL[h.status];
+    const parts: string[] = [];
+    if (typeof h.success_rate === 'number') parts.push(`${Math.round(h.success_rate * 100)}% success`);
+    if (h.last_used) parts.push(`last used ${h.last_used}`);
     return (
-      <span
-        data-testid={`cap-health-${s.folderName}`}
-        data-status={st}
-        title={d.label}
-        aria-label={d.label}
-        className="inline-block w-2 h-2 rounded-full shrink-0 mt-1.5"
-        style={{ background: d.color }}
-      />
+      <div
+        data-testid={`cap-healthline-${s.folderName}`}
+        data-status={h.status}
+        className="mt-auto pt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]"
+      >
+        <span
+          className="inline-block w-2 h-2 rounded-full shrink-0"
+          style={{ background: dot.color }}
+          title={dot.label}
+        />
+        <span className="truncate">
+          <span className="font-medium">{label}</span>
+          {parts.length > 0 && <span className="text-[var(--color-text-faint)]"> · {parts.join(' · ')}</span>}
+        </span>
+      </div>
     );
-  }, [health]);
+  }, [health, healthSettled]);
 
   // Search filters the visible skill set; grouping + hero extraction happen after.
   const visibleSkills = useMemo(() => {
@@ -269,11 +314,12 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                   <button
                     key={h.folderName}
                     onClick={() => setSelected(h)}
-                    className="text-left rounded-xl border border-[var(--color-border-strong)] p-4 hover:bg-[var(--color-hover)]"
+                    className="text-left rounded-xl border border-[var(--color-border-strong)] p-4 hover:bg-[var(--color-hover)] flex flex-col"
                     // Token-driven tint: the host sets --panel-accent to this overlay's
                     // zone color (Work/teal); color-mix keeps it theme-consistent (no
                     // hardcoded hex — navcard/overlay standard §1). Fallback to primary.
                     style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--panel-accent, var(--color-primary)) 12%, transparent), transparent)' }}
+                    data-testid={`cap-skill-${h.folderName}`}
                   >
                     <div className="text-[10px] font-mono tracking-wider text-[var(--color-primary)]">⭐ SIGNATURE</div>
                     <div className="text-base font-semibold mt-2 flex items-center gap-2">
@@ -282,6 +328,8 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                     <div className="text-[13px] text-[var(--color-text-muted)] mt-1">
                       {SIGNATURE[h.folderName]?.blurb ?? h.description}
                     </div>
+                    {/* Health line ON heroes too — the user asked for it on EVERY card */}
+                    {healthLineFor(h)}
                   </button>
                 ))}
               </div>
@@ -294,28 +342,31 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                   {cat}
                   <span className="text-[11px] font-mono text-[var(--color-text-faint)]">{list.length}</span>
                 </h2>
-                <div className="grid grid-cols-2 gap-x-6">
+                <div className="grid grid-cols-2 gap-3">
                   {list.map((s) => (
                     <button
                       key={s.folderName}
                       data-testid={`cap-skill-${s.folderName}`}
                       onClick={() => setSelected(s)}
-                      className="text-left flex items-start gap-2 px-2 py-2 rounded-md hover:bg-[var(--color-hover)] min-w-0"
+                      className="text-left rounded-xl border border-[var(--color-border)] p-3 hover:bg-[var(--color-hover)] hover:border-[var(--color-border-strong)] min-w-0 flex flex-col"
                     >
-                      {/* Health dot — the ONE standout (lazy, fail-safe: absent → nothing) */}
-                      {dotFor(s)}
-                      <span className="text-[var(--color-text)] text-sm font-medium truncate">{s.name}</span>
-                      <span className="text-xs text-[var(--color-text-faint)] truncate min-w-0">{s.description}</span>
-                      {/* Faint tier marker — muted, does NOT compete with the health dot */}
-                      <span
-                        data-testid={`cap-tier-${s.folderName}`}
-                        data-tier={s.tier}
-                        title={TIER_MARK[s.tier]?.label ?? s.tier}
-                        aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
-                        className="ml-auto shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
-                      >
-                        {TIER_MARK[s.tier]?.icon ?? ''}
-                      </span>
+                      {/* Title row: name + faint tier marker (muted, top-right) */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[var(--color-text)] text-sm font-semibold truncate">{s.name}</span>
+                        <span
+                          data-testid={`cap-tier-${s.folderName}`}
+                          data-tier={s.tier}
+                          title={TIER_MARK[s.tier]?.label ?? s.tier}
+                          aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
+                          className="ml-auto shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
+                        >
+                          {TIER_MARK[s.tier]?.icon ?? ''}
+                        </span>
+                      </div>
+                      {/* One-line plain description */}
+                      <div className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2 min-w-0">{s.description}</div>
+                      {/* Health line — DEFAULT on every card (lazy: placeholder until health resolves) */}
+                      {healthLineFor(s)}
                     </button>
                   ))}
                 </div>
