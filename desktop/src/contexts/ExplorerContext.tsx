@@ -43,6 +43,13 @@ import type { TreeNode } from '../types';
 // Public interface
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Tree sibling sort order. 'default' preserves the built-in ordering
+ *  (dirs-first + date-desc for Knowledge/Attachments). The explicit modes
+ *  REPLACE that ordering when chosen (a user's explicit sort wins over the
+ *  date-desc heuristic — Gate-1 R2). No mtime/size sort: TreeNode carries no
+ *  timestamp field, so those would require a backend tree-API change. */
+export type SortMode = 'default' | 'name-asc' | 'name-desc' | 'git-first';
+
 /** Full explorer state — returned by the convenience useExplorerContext hook. */
 export interface ExplorerState {
   // Tree data
@@ -59,6 +66,10 @@ export interface ExplorerState {
   // Selection
   selectedPath: string | null;
   setSelectedPath: (path: string | null) => void;
+
+  // Sort
+  sortMode: SortMode;
+  setSortMode: (mode: SortMode) => void;
 
   // Search
   searchQuery: string;
@@ -136,6 +147,8 @@ interface SelectionContextValue {
   collapseAll: () => void;
   selectedPath: string | null;
   setSelectedPath: (path: string | null) => void;
+  sortMode: SortMode;
+  setSortMode: (mode: SortMode) => void;
   matchedPaths: Set<string>;
   highlightedPaths: Set<string>;
 }
@@ -156,6 +169,39 @@ const SearchContext = createContext<SearchContextValue | undefined>(undefined);
 // ─────────────────────────────────────────────────────────────────────────────
 // Tree helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Git statuses that represent a live, uncommitted edit worth surfacing.
+ *  Mirrors SectionedExplorer's Working Files filter (modified/added/untracked) —
+ *  deleted/renamed/ignored/conflicting are intentionally excluded from
+ *  default-expand-changed (a deleted file has nothing to reveal by expanding). */
+const CHANGED_STATUSES = new Set(['modified', 'added', 'untracked']);
+
+/** Collect the ancestor DIRECTORY paths of every git-changed file in the tree.
+ *
+ *  Used by default-expand-on-first-load: expanding these paths makes uncommitted
+ *  changes visible without manual drilling. Returns directory paths only — never
+ *  the changed file's own path (you expand its container, not the file).
+ *
+ *  Scope note (Gate-1 R3): only sees changes within the fetched tree depth
+ *  (server default = 3). This is the SAME visibility the Working Files card has
+ *  (both walk the same loaded treeData) — changes deeper than the initial fetch
+ *  are surfaced when the user expands into them, consistent with lazy loading.
+ *
+ *  Pure — no side effects. */
+export function computeChangedAncestors(nodes: TreeNode[]): Set<string> {
+  const ancestors = new Set<string>();
+  const walk = (list: TreeNode[], ancestorPaths: string[]): void => {
+    for (const node of list) {
+      if (node.type === 'directory') {
+        if (node.children) walk(node.children, [...ancestorPaths, node.path]);
+      } else if (node.gitStatus && CHANGED_STATUSES.has(node.gitStatus)) {
+        for (const ap of ancestorPaths) ancestors.add(ap);
+      }
+    }
+  };
+  walk(nodes, []);
+  return ancestors;
+}
 
 /** Collect all directory paths in a tree (for expandAll). */
 function collectAllDirectoryPaths(nodes: TreeNode[]): string[] {
@@ -322,6 +368,9 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
+  // ── Sort state (session-ephemeral — resets to default per session) ───────
+  const [sortMode, setSortMode] = useState<SortMode>('default');
+
   // ── Search state ────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
   // Deferred copy of the query: React lets this lag behind during rapid typing so
@@ -433,8 +482,14 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     const defaults = treeData
       .filter((n) => n.type === 'directory' && defaultExpanded.includes(n.name))
       .map((n) => n.path);
-    if (defaults.length > 0) {
-      setExpandedPaths(new Set(defaults));
+    // Also expand the ancestors of any git-changed file so uncommitted work is
+    // visible on first load without manual drilling (default-expand-changed).
+    // Seeded HERE, in the same effect + same setExpandedPaths call, so it lands
+    // BEFORE any search snapshot is taken (Gate-1 R4 — no snapshot/restore race).
+    const changedAncestors = computeChangedAncestors(treeData);
+    const seed = new Set<string>([...defaults, ...changedAncestors]);
+    if (seed.size > 0) {
+      setExpandedPaths(seed);
     }
   // Only run once when treeData first populates
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -590,6 +645,8 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       collapseAll,
       selectedPath,
       setSelectedPath,
+      sortMode,
+      setSortMode,
       matchedPaths,
       highlightedPaths,
     }),
@@ -599,6 +656,7 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       expandAll,
       collapseAll,
       selectedPath,
+      sortMode,
       matchedPaths,
       highlightedPaths,
     ]

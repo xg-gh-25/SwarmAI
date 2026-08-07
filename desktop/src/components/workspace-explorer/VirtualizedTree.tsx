@@ -32,6 +32,7 @@ import type { TreeNode } from '../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import type { FileTreeItem } from './FileTreeNode';
 import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
+import type { SortMode } from '../../contexts/ExplorerContext';
 import { toFileTreeItem } from './toFileTreeItem';
 import { folderService } from '../../services/workspace';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../../constants/explorerEvents';
@@ -129,6 +130,44 @@ export interface ContextMenuState {
 /** Date prefix pattern: YYYY-MM-DD at the start of a name. */
 const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}/;
 
+/** Git statuses that count as a "live change" for git-first sort ordering. */
+const CHANGED_STATUSES = new Set(['modified', 'added', 'untracked', 'conflicting', 'renamed']);
+
+/**
+ * Order a single level of siblings by an explicit SortMode.
+ *
+ * Invariants held for EVERY non-default mode (Gate-1 R2):
+ *  - directories always sort before files (preserves the tree's dir-grouping)
+ *  - the sort is stable within-level and never mutates the input array
+ *  - path identity is untouched (only ordering changes), so lazy-load + expand
+ *    state keep working after a sort
+ *
+ * 'default' returns the input untouched — the caller keeps its built-in ordering
+ * (dirs-first + date-desc for Knowledge/Attachments). An explicit mode REPLACES
+ * that built-in ordering (a user's chosen sort wins over the date-desc heuristic).
+ *
+ * Pure — returns a new array; 'default' returns the same reference.
+ */
+export function sortSiblings(children: TreeNode[], sortMode: SortMode): TreeNode[] {
+  if (sortMode === 'default') return children;
+  const dirFirst = (a: TreeNode, b: TreeNode): number =>
+    a.type !== b.type ? (a.type === 'directory' ? -1 : 1) : 0;
+  const byName = (a: TreeNode, b: TreeNode): number =>
+    sortMode === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name);
+  const isChanged = (n: TreeNode): boolean => !!n.gitStatus && CHANGED_STATUSES.has(n.gitStatus);
+
+  return [...children].sort((a, b) => {
+    const d = dirFirst(a, b);
+    if (d !== 0) return d;
+    if (sortMode === 'git-first') {
+      const ca = isChanged(a), cb = isChanged(b);
+      if (ca !== cb) return ca ? -1 : 1; // changed files float up within their group
+      return a.name.localeCompare(b.name); // then alphabetical
+    }
+    return byName(a, b);
+  });
+}
+
 /** Folders whose children with date-prefixed names should be sorted newest-first. */
 const DATE_DESC_ROOTS = new Set(['Knowledge', 'Attachments']);
 
@@ -152,10 +191,15 @@ function flattenChildren(
   matchedPaths: Set<string>,
   rows: FlattenedRow[],
   sectionConfig?: SectionConfig,
+  sortMode: SortMode = 'default',
 ): void {
-  // Apply date-descending sort for Knowledge/Attachments subdirectories
+  // An explicit sort mode REPLACES the built-in date-desc heuristic (Gate-1 R2:
+  // a user's chosen order wins over the Knowledge/Attachments date-desc default).
   let sorted = children;
-  if (children.length > 0 && isUnderDateDescRoot(children[0].path)) {
+  if (sortMode !== 'default') {
+    sorted = sortSiblings(children, sortMode);
+  } else if (children.length > 0 && isUnderDateDescRoot(children[0].path)) {
+    // Default mode: apply date-descending sort for Knowledge/Attachments subdirectories
     const hasDateItems = children.some((c) => DATE_PREFIX_RE.test(c.name));
     if (hasDateItems) {
       sorted = [...children].sort((a, b) => {
@@ -184,7 +228,7 @@ function flattenChildren(
       sectionConfig,
     });
     if (isExpanded && child.children) {
-      flattenChildren(child.children, depth + 1, expandedPaths, matchedPaths, rows, sectionConfig);
+      flattenChildren(child.children, depth + 1, expandedPaths, matchedPaths, rows, sectionConfig, sortMode);
     }
   }
 }
@@ -216,6 +260,7 @@ export function flattenTree(
   expandedPaths: Set<string>,
   matchedPaths: Set<string> = new Set(),
   sectionCollapsed: Record<string, boolean> = {},
+  sortMode: SortMode = 'default',
 ): FlattenedRow[] {
   const rows: FlattenedRow[] = [];
 
@@ -285,7 +330,7 @@ export function flattenTree(
         isExpanded,
       });
       if (isExpanded && node.children) {
-        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows, undefined, sortMode);
       }
     }
   }
@@ -314,7 +359,7 @@ export function flattenTree(
     // (indented under the section header to show hierarchy)
     // Pass sectionConfig so child rows can inherit accent background
     if (!isCollapsed && rootNode && rootNode.children) {
-      flattenChildren(rootNode.children, 1, expandedPaths, matchedPaths, rows, section);
+      flattenChildren(rootNode.children, 1, expandedPaths, matchedPaths, rows, section, sortMode);
     }
   }
 
@@ -344,7 +389,7 @@ export function flattenTree(
         isExpanded,
       });
       if (isExpanded && node.children) {
-        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows, undefined, sortMode);
       }
     }
   }
@@ -383,7 +428,7 @@ export function flattenTree(
           isExpanded,
         });
         if (isExpanded && node.children) {
-          flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+          flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows, undefined, sortMode);
         }
       }
     }
@@ -645,7 +690,7 @@ function NodeRow({ row, selectedPath, renamingPath, dragOverPath, toggleExpand, 
 
 const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFileDoubleClick, onAttachToChat }) => {
   const { treeData, refreshTree } = useTreeData();
-  const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath } =
+  const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath, sortMode } =
     useSelection();
   // Safe: useContext returns undefined when ToastProvider is missing (no throw in tests)
   const toastCtx = useContext(ToastContext);
@@ -914,7 +959,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
   // Flatten tree into rows — recomputed when tree data, expand, or section collapse state changes.
   // If we're creating a new item, inject a phantom row after the parent directory.
   const rows = useMemo(() => {
-    const base = flattenTree(treeData, expandedPaths, matchedPaths, sectionCollapsed);
+    const base = flattenTree(treeData, expandedPaths, matchedPaths, sectionCollapsed, sortMode);
     if (!creatingItem) return base;
 
     // Find the parent directory row and inject phantom after it
@@ -936,7 +981,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     const result = [...base];
     result.splice(parentIdx + 1, 0, phantomRow);
     return result;
-  }, [treeData, expandedPaths, matchedPaths, creatingItem, sectionCollapsed]);
+  }, [treeData, expandedPaths, matchedPaths, creatingItem, sectionCollapsed, sortMode]);
 
   // Stable rowProps object for the row renderer
   const rowProps = useMemo<RowCustomProps>(
