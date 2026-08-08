@@ -17,6 +17,15 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BrainSummary, BrainDetail } from '../../services/ddd';
 
+// BrainHub uses the real useQueryClient (react-query) to invalidate sibling caches
+// after a review mutation. The test doesn't mount a QueryClientProvider (the ddd
+// hooks are mocked), so mock useQueryClient to a spy — lets us ALSO assert the
+// cross-query invalidation fix (run_cfb460ac Gate-2 finding).
+const mockInvalidate = vi.fn();
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
+}));
+
 const mockGetBrains = vi.fn();
 const mockGetPinned = vi.fn<[], string[]>(() => []);  // default: no pins → flat-grid fallback
 const mockGetBrainDetail = vi.fn();
@@ -537,6 +546,22 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     fireEvent.click(screen.getByTestId('review-reject-hunk'));
     await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
     expect(mockRejectHunk).toHaveBeenCalledWith('SwarmAI', 'Projects/SwarmAI/2-understanding/TECH.md', 'sigA1');
+  });
+
+  it('Gate-2: a review mutation invalidates the sibling pending caches (gallery + detail), not just the review query', async () => {
+    // run_cfb460ac Gate-2 (multi-specialist confirmed): approving/rejecting changes
+    // the pending count that ALSO lives in ['brains-with-pinned'] (gallery badge) and
+    // ['brain-detail', name] (Overview §② Need-You). Without invalidation those show a
+    // stale count for up to staleTime. load() (every action's chokepoint) must invalidate both.
+    mockInvalidate.mockClear();
+    await openReview();
+    fireEvent.click(screen.getByTestId('review-reject-hunk'));
+    await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
+    await waitFor(() => {
+      const keys = mockInvalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+      expect(keys).toContain(JSON.stringify(['brain-detail', 'SwarmAI']));
+      expect(keys).toContain(JSON.stringify(['brains-with-pinned']));
+    });
   });
 
   it('mark-all-seen (H2) ARMS on first click — does NOT advance the watermark', async () => {

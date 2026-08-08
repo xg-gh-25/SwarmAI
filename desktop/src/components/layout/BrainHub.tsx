@@ -19,6 +19,7 @@
  * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
   approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
@@ -715,11 +716,21 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
 
   // reload = refetch the cached query + reset the transient per-action UI state.
   // Replaces the old raw-fetch load(); every post-action call site is unchanged.
+  // Gate-2 (run_cfb460ac, multi-specialist confirmed): a mutation (approve/reject)
+  // ALSO changes the pending count that lives in TWO OTHER cached queries — the
+  // gallery badge (['brains-with-pinned']) and the Overview §② Need-You count
+  // (['brain-detail', name].health.escalationPending). Before caching, every mount
+  // refetched fresh; with useQuery those siblings would show a stale non-zero pending
+  // for up to staleTime (30s) after the user clears the queue. Invalidate them here
+  // (the single post-action chokepoint) so the cross-query count stays truthful.
+  const qc = useQueryClient();
   const load = useCallback(() => {
     setActionError(null);   // clear any transient action error on (re)load
     setArmed(false);        // disarm on every (re)load: brain switch, or after any action
     void refetch();
-  }, [refetch]);
+    void qc.invalidateQueries({ queryKey: ['brain-detail', name] });
+    void qc.invalidateQueries({ queryKey: ['brains-with-pinned'] });
+  }, [refetch, qc, name]);
 
   // Disarm + clear the transient action error when switching brains (the query
   // itself re-keys on name via useReview). The cached data does NOT blank on switch.
