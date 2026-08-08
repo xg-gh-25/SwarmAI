@@ -79,6 +79,10 @@ export interface PipelineRunSummary {
   updatedAt: string;
   pauseKind: 'crash_residue' | 'decision' | null;
   checkpointReason: string | null;
+  /** Workspace-relative REPORT.md path if the run has a report, else null. The row's
+   *  report button dispatches swarm:open-file{path} to render it in Canvas. Presence
+   *  IS "has a report" — no separate bool (run_929024a8). */
+  reportPath: string | null;
 }
 
 export interface PipelineProjectGroup {
@@ -136,6 +140,9 @@ export interface PipelineRunDetail {
   profile: string;
   cycleTimeMin: number | null;
   reportMd: string;
+  /** Workspace-relative REPORT.md path if present, else null. The detail drawer's
+   *  "View report in Canvas" button dispatches swarm:open-file{path} (run_929024a8). */
+  reportPath: string | null;
   reflectLessons: string[];
   stageTokens: PipelineStageTokens[];
   commits: PipelineCommit[];
@@ -158,6 +165,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     updatedAt: (r.updated_at as string) ?? '',
     pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
+    reportPath: (r.report_path as string | null) ?? null,
   };
 }
 
@@ -257,6 +265,7 @@ export const pipelinesService = {
         profile: (data.profile as string) ?? '',
         cycleTimeMin: (data.cycle_time_min as number | null) ?? null,
         reportMd: (data.report_md as string) ?? '',
+        reportPath: (data.report_path as string | null) ?? null,
         reflectLessons: (data.reflect_lessons as string[]) ?? [],
         stageTokens: ((data.stage_tokens as Record<string, unknown>[]) ?? []).map((s) => ({
           stage: (s.stage as string) ?? '',

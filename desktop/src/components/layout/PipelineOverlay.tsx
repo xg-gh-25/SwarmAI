@@ -61,15 +61,6 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-/** Status → dot color. Aborted/paused-decision draw attention (work-teal accent). */
-function statusDot(s: string, pauseKind: string | null): string {
-  if (s === 'completed') return 'bg-emerald-500';
-  if (s === 'running') return 'bg-sky-500';
-  if (s === 'abandoned' || pauseKind === 'decision') return 'bg-rose-500';
-  if (s === 'paused') return 'bg-amber-500';
-  return 'bg-[var(--color-text-faint)]';
-}
-
 function isResumable(s: string, pauseKind: string | null): boolean {
   return s === 'abandoned' || (s === 'paused' && pauseKind !== 'crash_residue');
 }
@@ -84,6 +75,17 @@ function detailPauseKind(status: string, checkpointReason: string | null): strin
   return checkpointReason === CRASH_ZOMBIE_REASON ? 'crash_residue' : 'decision';
 }
 
+/** Open a run's REPORT.md in Canvas. Mirrors the swarmws overlay precedent
+ *  (overlaySurfaces.tsx): close the overlay FIRST (so Canvas isn't rendered under
+ *  the host, z-index), THEN dispatch swarm:open-file with the workspace-relative
+ *  path — useCanvasHost resolves it via /workspace/file/resolve and renders it.
+ *  NOTE: no double-rAF here (that's only for chat-inject, which must wait for a tab
+ *  to activate); open-file is a synchronous document event. */
+function openReportInCanvas(reportPath: string, close: () => void) {
+  close();
+  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: reportPath } }));
+}
+
 export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
   const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
@@ -93,6 +95,15 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // "Running now" = live active runs (NOT window-filtered analytics — a long run
+  // created before the window would be missed, and analytics doesn't strip zombies).
+  // fetchActivePipelines hits /pipelines?active=true, which excludes terminal
+  // zombies stage-based (Gate-1 #2). null until loaded.
+  const [runningNow, setRunningNow] = useState<number | null>(null);
+  // A (needs-you focus): clicking the "Needs you" stat收窄 the whole view to just
+  // needs-you runs. When true, the常驻 top Needs-you区 hides (it would double-show)
+  // and the by-project groups are filtered to needs-you rows only.
+  const [needsYouFocus, setNeedsYouFocus] = useState(false);
 
   // Fetch-once-on-mount (host mounts fresh per open) + on window toggle/retry. NO
   // polling — retro surface. The former reset-on-close effect is gone: the host
@@ -108,6 +119,16 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
       .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
     return () => { cancelled = true; };
   }, [window, reloadTick]);
+
+  // "Running now" — live, window-independent. Fetch-once (retro surface); a running
+  // count is a light read and doesn't need to track the window toggle.
+  useEffect(() => {
+    let cancelled = false;
+    pipelinesService.fetchActivePipelines()
+      .then((runs) => { if (!cancelled) setRunningNow(runs.filter((r) => r.status === 'running').length); })
+      .catch(() => { if (!cancelled) setRunningNow(null); }); // read fail → show — (never crash the overlay)
+    return () => { cancelled = true; };
+  }, [reloadTick]);
 
   // Open the detail drawer → fetch that run's retrospective.
   const openRun = useCallback((runId: string) => {
@@ -158,7 +179,12 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
         {/* Sub-header: label + window toggle (shared WorkbenchToolbar). */}
         <WorkbenchToolbar
           loading={loading}
-          left={<span className="text-xs font-medium text-[var(--color-text-muted)]">Retro Analytics</span>}
+          left={
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">
+              {/* AC1: make the window explicit — the toggle IS a time filter. */}
+              Showing runs from {window === '30d' ? 'the last 30 days' : 'Jan 1 (year to date)'}
+            </span>
+          }
           right={(['30d', 'ytd'] as Window[]).map((w) => (
             <button
               key={w}
@@ -168,7 +194,7 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
                 window === w ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
               }`}
             >
-              {w === '30d' ? '30 days' : 'YTD'}
+              {w === '30d' ? 'Last 30 days' : 'Year to date'}
             </button>
           ))}
         />
@@ -182,9 +208,17 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
               <Stat label="Completion" value={o.totalRuns ? `${Math.round(o.completionRate * 100)}%` : '—'} />
               <Stat label="Avg cycle" value={fmtCycle(o.avgCycleMin)} />
               <Stat label="Tokens (act)" value={fmtTokens(o.tokensActual)} sub={`est ${fmtTokens(o.tokensEst)}`} />
+              {/* AC5(A): Needs you is a clickable FILTER — click → focus the view to
+                  just needs-you runs; click again to clear. */}
               <Stat label="Needs you" value={o.abortedCount > 0 ? String(o.abortedCount) : '0'}
-                    accent={o.abortedCount > 0} />
-              <Stat label="Profiles" value={Object.entries(o.profileMix).map(([k, v]) => `${k[0]}${v}`).join(' ') || '—'} />
+                    accent={o.abortedCount > 0}
+                    onClick={o.abortedCount > 0 ? () => setNeedsYouFocus((f) => !f) : undefined}
+                    active={needsYouFocus}
+                    testid="pipeline-needsyou-stat" />
+              {/* AC4: replaced the unreadable "Profiles g69 f109…" ciphertext with a
+                  useful live metric — how many pipelines are running RIGHT NOW
+                  (window-independent, zombie-excluded). */}
+              <Stat label="Running now" value={runningNow == null ? '—' : String(runningNow)} />
             </div>
           )}
 
@@ -222,6 +256,32 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
               </button>
             </div>
           )}
+          {/* AC6(B): pinned cross-project "Needs you" region — the most-painful runs
+              (paused-decision + abandoned) surfaced at the TOP so the user never hunts
+              through project groups for them. Hidden while A-focus is active (the whole
+              list is already needs-you then — would double-show). */}
+          {analytics && !needsYouFocus && (() => {
+            const needy = analytics.byProject.flatMap((g) =>
+              g.runs
+                .filter((r) => r.status === 'abandoned' || r.pauseKind === 'decision')
+                .map((r) => ({ run: r, project: g.project })));
+            if (needy.length === 0) return null;
+            return (
+              <div className="rounded-md border border-rose-500/40 bg-rose-500/5" data-testid="pipeline-needsyou-region">
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-rose-500/30">
+                  <span className="material-symbols-outlined text-[16px] text-rose-500">priority_high</span>
+                  <span className="text-sm font-medium text-[var(--color-text)]">Needs you</span>
+                  <span className="text-[11px] font-mono text-rose-500">{o?.abortedCount ?? needy.length}</span>
+                </div>
+                <div>
+                  {needy.map(({ run, project }) => (
+                    <RunRow key={run.id} r={run} onOpenRun={openRun} close={close} showProject={project} />
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* By-project groups */}
           {analytics && analytics.byProject.length === 0 && !loading && !loadErr && (
             <div className="text-center py-10 text-sm text-[var(--color-text-faint)]">
@@ -229,7 +289,8 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
             </div>
           )}
           {analytics?.byProject.map((g, idx) => (
-            <ProjectGroup key={g.project} group={g} onOpenRun={openRun} defaultExpanded={idx === 0} />
+            <ProjectGroup key={g.project} group={g} onOpenRun={openRun} close={close}
+                          defaultExpanded={idx === 0} needsYouOnly={needsYouFocus} />
           ))}
         </div>
 
@@ -242,35 +303,123 @@ export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
             onClose={() => { setSelectedRunId(null); setDetail(null); }}
             onResume={handleResume}
             onCancel={handleCancel}
+            hostClose={close}
           />
         )}
     </div>
   );
 }
 
-function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div className={`rounded-md border px-2.5 py-1.5 ${accent ? 'border-rose-500/50 bg-rose-500/10' : 'border-[var(--color-border)] bg-[var(--color-card)]'}`}>
-      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</div>
+function Stat({ label, value, sub, accent, onClick, active, testid }: {
+  label: string; value: string; sub?: string; accent?: boolean;
+  onClick?: () => void; active?: boolean; testid?: string;
+}) {
+  const base = `rounded-md border px-2.5 py-1.5 text-left w-full ${
+    accent ? 'border-rose-500/50 bg-rose-500/10' : 'border-[var(--color-border)] bg-[var(--color-card)]'
+  } ${active ? 'ring-2 ring-rose-500/60' : ''} ${onClick ? 'cursor-pointer hover:brightness-110 transition' : ''}`;
+  const inner = (
+    <>
+      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] flex items-center gap-1">
+        {label}
+        {onClick && <span className="material-symbols-outlined text-[12px]">{active ? 'filter_alt_off' : 'filter_alt'}</span>}
+      </div>
       <div className={`text-sm font-mono ${accent ? 'text-rose-500' : 'text-[var(--color-text)]'}`}>{value}</div>
       {sub && <div className="text-[10px] text-[var(--color-text-faint)] font-mono">{sub}</div>}
+    </>
+  );
+  return onClick
+    ? <button type="button" onClick={onClick} className={base} data-testid={testid} aria-pressed={active}>{inner}</button>
+    : <div className={base} data-testid={testid}>{inner}</div>;
+}
+
+/** Status → pill {label, dot color, text color}. "Needs you" is DERIVED, not a raw
+ *  status: abandoned OR paused-decision → needs you (rose); paused-crash-residue is a
+ *  finished zombie → shows "paused" faint; else the raw status. Kept consistent with
+ *  statusDot's colors so the pill and any dot never disagree (Gate-1 #5 label table). */
+function statusPill(s: string, pauseKind: string | null): { label: string; dot: string; text: string } {
+  if (s === 'abandoned' || pauseKind === 'decision') return { label: 'needs you', dot: 'bg-rose-500', text: 'text-rose-500' };
+  if (s === 'completed') return { label: 'completed', dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' };
+  if (s === 'running') return { label: 'running', dot: 'bg-sky-500', text: 'text-sky-600 dark:text-sky-400' };
+  if (s === 'paused') return { label: 'paused', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
+  return { label: s || 'unknown', dot: 'bg-[var(--color-text-faint)]', text: 'text-[var(--color-text-faint)]' };
+}
+
+/** One run row — shared by the ProjectGroup roster AND the pinned Needs-you region.
+ *  Status pill + requirement (hover title) + optional project tag + profile/cycle/token
+ *  + a report button (only when reportPath exists) that opens REPORT.md in Canvas. */
+function RunRow({ r, onOpenRun, close, showProject }: {
+  r: PipelineRunSummary; onOpenRun: (id: string) => void; close: () => void; showProject?: string;
+}) {
+  const pill = statusPill(r.status, r.pauseKind);
+  return (
+    <div
+      data-testid={`pipeline-run-${r.id}`}
+      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-hover)] transition-colors border-b border-[var(--color-border)] last:border-b-0"
+    >
+      {/* Status pill (dot + label) — replaces the bare color dot (AC2) */}
+      <span className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${pill.text}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
+      </span>
+      {/* Requirement — click opens the detail drawer; title shows the full text (AC7/D) */}
+      <button
+        type="button"
+        onClick={() => onOpenRun(r.id)}
+        title={r.requirement || r.id}
+        className="text-xs text-[var(--color-text)] truncate flex-1 min-w-0 text-left"
+      >
+        {showProject && <span className="text-[var(--color-text-faint)]">{showProject} · </span>}
+        {r.requirement || r.id}
+      </button>
+      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
+      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
+      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-16 text-right">
+        {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
+      </span>
+      {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
+      {r.reportPath ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); openReportInCanvas(r.reportPath as string, close); }}
+          data-testid={`pipeline-run-report-${r.id}`}
+          title="Open report in Canvas"
+          className="material-symbols-outlined text-[15px] text-primary hover:text-primary/80 shrink-0"
+        >
+          description
+        </button>
+      ) : (
+        <span className="w-[15px] shrink-0" aria-hidden />
+      )}
+      {isResumable(r.status, r.pauseKind) && (
+        <span className="material-symbols-outlined text-[14px] text-rose-500 shrink-0" title="resumable">play_circle</span>
+      )}
     </div>
   );
 }
 
-function ProjectGroup({ group, onOpenRun, defaultExpanded = false }: { group: PipelineProjectGroup; onOpenRun: (id: string) => void; defaultExpanded?: boolean }) {
+function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsYouOnly = false }: {
+  group: PipelineProjectGroup; onOpenRun: (id: string) => void; close: () => void;
+  defaultExpanded?: boolean; needsYouOnly?: boolean;
+}) {
   // Only the first (most-active) group opens by default — with 750 runs in one
   // project, all-expanded was a wall of buttons on open. The header shows the
-  // rollup; click to drill in.
+  // rollup; click to drill in. In needs-you focus, filter rows to needs-you only.
+  const rows = needsYouOnly
+    ? group.runs.filter((r) => r.status === 'abandoned' || r.pauseKind === 'decision')
+    : group.runs;
+  // In focus mode, force-expand (the point is to SEE the needy runs) and drop
+  // groups that have none.
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const isOpen = needsYouOnly ? true : expanded;
+  if (needsYouOnly && rows.length === 0) return null;
   return (
     <div className="rounded-md border border-[var(--color-border)]" data-testid={`pipeline-project-${group.project}`}>
       <button
         onClick={() => setExpanded((e) => !e)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors"
+        disabled={needsYouOnly}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default"
       >
         <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)]">
-          {expanded ? 'expand_more' : 'chevron_right'}
+          {isOpen ? 'expand_more' : 'chevron_right'}
         </span>
         <span className="text-sm font-medium text-[var(--color-text)]">{group.project}</span>
         <span className="text-[11px] text-[var(--color-text-faint)] font-mono">
@@ -280,26 +429,10 @@ function ProjectGroup({ group, onOpenRun, defaultExpanded = false }: { group: Pi
           <span className="text-[11px] font-mono text-rose-500">· {group.abortedCount} need you</span>
         )}
       </button>
-      {expanded && (
+      {isOpen && (
         <div className="border-t border-[var(--color-border)]">
-          {group.runs.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => onOpenRun(r.id)}
-              data-testid={`pipeline-run-${r.id}`}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-hover)] transition-colors border-b border-[var(--color-border)] last:border-b-0"
-            >
-              <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot(r.status, r.pauseKind)}`} />
-              <span className="text-xs text-[var(--color-text)] truncate flex-1 min-w-0">{r.requirement || r.id}</span>
-              <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
-              <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
-              <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-16 text-right">
-                {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
-              </span>
-              {isResumable(r.status, r.pauseKind) && (
-                <span className="material-symbols-outlined text-[14px] text-rose-500 shrink-0" title="resumable">play_circle</span>
-              )}
-            </button>
+          {rows.map((r) => (
+            <RunRow key={r.id} r={r} onOpenRun={onOpenRun} close={close} />
           ))}
         </div>
       )}
@@ -308,7 +441,7 @@ function ProjectGroup({ group, onOpenRun, defaultExpanded = false }: { group: Pi
 }
 
 function RunDetailDrawer({
-  runId, detail, loading, onClose, onResume, onCancel,
+  runId, detail, loading, onClose, onResume, onCancel, hostClose,
 }: {
   runId: string;
   detail: PipelineRunDetail | null;
@@ -316,6 +449,9 @@ function RunDetailDrawer({
   onClose: () => void;
   onResume: (run: PipelineRunDetail, project: string) => void;
   onCancel: (runId: string) => Promise<boolean>;
+  /** Host-owned overlay close — the report button closes the WHOLE overlay (not just
+   *  the drawer) before dispatching swarm:open-file, so Canvas isn't under the host. */
+  hostClose: () => void;
 }) {
   const [cancelErr, setCancelErr] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -426,12 +562,18 @@ function RunDetailDrawer({
               </div>
             )}
 
-            {/* REPORT.md retro */}
-            {detail.reportMd && (
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Report</div>
-                <pre className="text-[10px] text-[var(--color-text-muted)] whitespace-pre-wrap leading-snug bg-[var(--color-bg)] rounded p-2 max-h-64 overflow-y-auto">{detail.reportMd}</pre>
-              </div>
+            {/* REPORT.md → Canvas (AC3): the full retro is big markdown that read as
+                a wall of grey text inline. Open it in Canvas (rendered markdown, full
+                screen) instead of dumping it here. Button only when a report exists. */}
+            {detail.reportPath && (
+              <button
+                type="button"
+                onClick={() => openReportInCanvas(detail.reportPath as string, hostClose)}
+                data-testid="pipeline-detail-report-btn"
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[15px]">description</span>View report in Canvas
+              </button>
             )}
           </>
         )}

@@ -519,17 +519,36 @@ async def pipeline_analytics(
         aborted = sum(1 for s in summaries if s.status == "abandoned" or s.pause_kind == "decision")
         # newest-first roster
         summaries.sort(key=lambda s: s.updated_at or s.created_at, reverse=True)
+        # Cap the DETAIL list to the newest 20 (XG: 再多我们不用显示 — >20 has no
+        # value, and SwarmAI has 750 runs → an unbounded list was a 750-button wall
+        # + a 4.9s open). run_count below keeps the real total for the header.
+        #
+        # BUT: NEEDS-YOU runs (abandoned / paused-decision) are NEVER capped away
+        # (Gate-2 MEDIUM, run_929024a8). The overlay's pinned "Needs you" region +
+        # focus filter must surface EVERY needy run — else the count says "5 need
+        # you" while the busiest projects (the ones that HAVE >20 runs, the exact
+        # motivating case) hide the older needy ones the user cannot then see/click.
+        # So visible = newest-20 ∪ all needy runs (order-preserved, deduped).
+        def _is_needy(s: PipelineRunSummary) -> bool:
+            return s.status == "abandoned" or s.pause_kind == "decision"
+        _newest = summaries[:20]
+        _newest_ids = {s.id for s in _newest}
+        _extra_needy = [s for s in summaries[20:] if _is_needy(s) and s.id not in _newest_ids]
+        visible = _newest + _extra_needy
+        # report_path: stat REPORT.md ONLY for the VISIBLE runs (Gate-1 #6 — never
+        # stat all 750; needy tail is tiny). Workspace-relative → resolve Stage 1.
+        _runs_root = _get_swarmws() / "Projects" / project / ".artifacts" / "runs"
+        for s in visible:
+            rpt = _runs_root / s.id / "REPORT.md"
+            if rpt.exists():
+                s.report_path = f"Projects/{project}/.artifacts/runs/{s.id}/REPORT.md"
         groups.append(PipelineProjectGroup(
             project=project,
             run_count=len(summaries),  # TRUE total (health rollup), never the capped len
             completion_rate=round(completed / len(summaries), 3) if summaries else 0.0,
             avg_cycle_min=_avg([float(c) for c in cycles]),
             aborted_count=aborted,
-            # Cap the DETAIL list to the newest 20 (XG: 再多我们不用显示 — >20 has no
-            # value, and SwarmAI has 750 runs → an unbounded list was a 750-button
-            # wall + a 4.9s open). run_count above keeps the real total for the
-            # header. No show-more: 20 is the hard ceiling.
-            runs=summaries[:20],
+            runs=visible,
         ))
     groups.sort(key=lambda g: g.run_count, reverse=True)
 
@@ -599,14 +618,25 @@ async def pipeline_run_detail(run_id: str):
         project = raw.get("_project", raw.get("project", project_dir.name))
         m = _run_metrics_cached(project, run_id, raw)
 
-        # REPORT.md body (retro), if present.
+        # REPORT.md body (retro), if present + its workspace-relative path so the
+        # overlay can open it in Canvas via swarm:open-file (run_929024a8).
         report_md = ""
+        report_path: Optional[str] = None
         rpt = run_dir / "REPORT.md"
         if rpt.exists():
             try:
                 report_md = rpt.read_text(encoding="utf-8")
             except OSError:
                 report_md = ""
+            # Workspace-relative (e.g. Projects/<p>/.artifacts/runs/<id>/REPORT.md) —
+            # hits resolve Stage 1 in /workspace/file/resolve. Guard relative_to in
+            # case the run dir ever sits outside the workspace (defensive; it never
+            # does today) — a report we can't express relative to the ws is unopenable
+            # via the workspace resolver, so leave path None (button hidden).
+            try:
+                report_path = str(rpt.relative_to(_get_swarmws()))
+            except ValueError:
+                report_path = None
 
         # reflect lessons live in the reflect stage record.
         reflect_lessons: list[str] = []
@@ -644,6 +674,7 @@ async def pipeline_run_detail(run_id: str):
             profile=raw.get("profile") or "",
             cycle_time_min=m.get("duration_minutes"),
             report_md=report_md,
+            report_path=report_path,
             reflect_lessons=reflect_lessons,
             stage_tokens=stage_tokens,
             commits=commits,

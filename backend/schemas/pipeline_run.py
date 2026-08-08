@@ -116,6 +116,14 @@ class PipelineRunSummary(BaseModel):
     updated_at: str = ""
     pause_kind: Optional[str] = None
     checkpoint_reason: Optional[str] = None
+    report_path: Optional[str] = Field(
+        None,
+        description=(
+            "Workspace-relative path to this run's REPORT.md if it exists, else None. "
+            "The overlay dispatches swarm:open-file{path} to render it in Canvas. "
+            "Presence == 'has a report' (frontend derives hasReport = reportPath != null)."
+        ),
+    )
 
 
 class PipelineProjectGroup(BaseModel):
@@ -180,6 +188,13 @@ class PipelineRunDetail(BaseModel):
     profile: str = ""
     cycle_time_min: Optional[float] = None
     report_md: str = Field("", description="REPORT.md body if present, else empty")
+    report_path: Optional[str] = Field(
+        None,
+        description=(
+            "Workspace-relative path to REPORT.md if present, else None. The detail "
+            "drawer's 'View report in Canvas' button dispatches swarm:open-file{path}."
+        ),
+    )
     reflect_lessons: list[str] = Field(default_factory=list)
     stage_tokens: list[PipelineStageTokens] = Field(default_factory=list)
     commits: list[PipelineCommit] = Field(default_factory=list)

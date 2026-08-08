@@ -50,6 +50,7 @@ vi.mock('../../services/jobs', () => ({
 vi.mock('../../services/pipelines', () => ({
   pipelinesService: {
     fetchAnalytics: vi.fn().mockResolvedValue({ overall: null, trend: [], byProject: [] }),
+    fetchActivePipelines: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock('../../services/pollinate', () => ({

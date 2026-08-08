@@ -11,7 +11,7 @@ import { pipelinesService } from '../../../services/pipelines';
 import { ApiError } from '../../../services/api';
 
 vi.mock('../../../services/pipelines', () => ({
-  pipelinesService: { fetchAnalytics: vi.fn(), fetchRunDetail: vi.fn() },
+  pipelinesService: { fetchAnalytics: vi.fn(), fetchRunDetail: vi.fn(), fetchActivePipelines: vi.fn().mockResolvedValue([]) },
 }));
 
 function openOverlay() {

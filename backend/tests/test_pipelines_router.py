@@ -554,6 +554,31 @@ class TestPipelineRunDetail:
         assert st["evaluate"]["est"] == 6000 and st["evaluate"]["actual"] == 4000
         assert st["build"]["est"] == 40000 and st["build"]["actual"] == 38000
 
+    def test_detail_report_path_present_when_report_exists(self, client, workspace):
+        """run_929024a8: detail exposes a workspace-relative report_path so the overlay
+        can open REPORT.md in Canvas via swarm:open-file. Present iff REPORT.md exists."""
+        _create_run_dir(
+            workspace, "ProjRP", "run_rp1", status="completed",
+            completed_at="2026-08-01T10:20:00+00:00",
+            metrics={"total_tokens": 100, "duration_minutes": 5.0, "stage_tokens": {},
+                     "stages_completed": 7, "stages_total": 7, "status": "completed"},
+            report_md="# Report\nbody",
+        )
+        d = client.get("/api/pipelines/run_rp1").json()
+        assert d["report_path"] == "Projects/ProjRP/.artifacts/runs/run_rp1/REPORT.md", \
+            "report_path must be the workspace-relative REPORT.md path (resolve Stage 1)"
+
+    def test_detail_report_path_none_when_no_report(self, client, workspace):
+        """No REPORT.md on disk → report_path is None (the Canvas button hides)."""
+        _create_run_dir(
+            workspace, "ProjRP", "run_rp2", status="paused",
+            created_at="2026-08-01T10:00:00+00:00",
+            stages=[{"stage": "evaluate", "status": "completed", "token_cost": 4000}],
+            # report_md omitted → no REPORT.md written
+        )
+        d = client.get("/api/pipelines/run_rp2").json()
+        assert d["report_path"] is None, "no REPORT.md → report_path None"
+
     def test_detail_404_for_missing_run(self, client, workspace):
         assert client.get("/api/pipelines/run_nope").status_code == 404
 
@@ -597,6 +622,54 @@ class TestAnalyticsCapAndCache:
         g = next(x for x in d["by_project"] if x["project"] == "BigProj")
         assert g["run_count"] == 25, "run_count must be the TRUE total"
         assert len(g["runs"]) == 20, "detail list capped at 20"
+
+    def test_needy_runs_are_never_capped_away(self, client, workspace):
+        """Gate-2 MEDIUM (run_929024a8): the overlay's pinned Needs-you region +
+        focus filter must surface EVERY needy (abandoned/paused-decision) run — so a
+        needy run OLDER than the newest-20 must still appear in the payload, else the
+        'N need you' count and the visible needy rows disagree in busy projects (the
+        exact motivating case). Completed runs stay capped at 20; needy runs don't."""
+        # 22 completed (newest) + 1 abandoned that is the OLDEST (sorts past the cap).
+        for i in range(22):
+            _create_run_dir(
+                workspace, "BusyProj", f"run_ok{i:02d}", status="completed",
+                created_at=f"2026-08-02T{i:02d}:00:00+00:00",
+                completed_at=f"2026-08-02T{i:02d}:30:00+00:00",
+                metrics={"total_tokens": 1, "duration_minutes": 1.0, "stage_tokens": {},
+                         "stages_completed": 7, "stages_total": 7, "status": "completed"},
+            )
+        _create_run_dir(
+            workspace, "BusyProj", "run_needy_old", status="abandoned",
+            created_at="2026-01-01T00:00:00+00:00",  # oldest (no completed_at → updated_at=created_at)
+        )
+        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        g = next(x for x in d["by_project"] if x["project"] == "BusyProj")
+        assert g["run_count"] == 23, "run_count = true total"
+        ids = {r["id"] for r in g["runs"]}
+        assert "run_needy_old" in ids, "an abandoned run must NEVER be capped away (Gate-2 MEDIUM)"
+        # completed runs still bounded (20 newest completed + the 1 needy = 21)
+        assert len(g["runs"]) == 21, "newest-20 completed + all needy (1) = 21"
+        assert g["aborted_count"] == 1, "count matches the surfaced needy row"
+
+    def test_summary_report_path_present_only_for_runs_with_report(self, client, workspace):
+        """run_929024a8: the by-project summary rows carry report_path so the LIST's
+        row report-button can open Canvas without a detail fetch. Present iff REPORT.md
+        exists; None otherwise. (Gate-1 #6: only the visible ≤20 are stat'd.)"""
+        now = datetime.now(timezone.utc).isoformat()
+        _create_run_dir(workspace, "RPProj", "run_has", status="completed",
+                        created_at=now, completed_at=now,
+                        metrics={"total_tokens": 1, "duration_minutes": 1.0, "stage_tokens": {},
+                                 "stages_completed": 7, "stages_total": 7, "status": "completed"},
+                        report_md="# has a report")
+        _create_run_dir(workspace, "RPProj", "run_none", status="completed",
+                        created_at=now, completed_at=now,
+                        metrics={"total_tokens": 1, "duration_minutes": 1.0, "stage_tokens": {},
+                                 "stages_completed": 7, "stages_total": 7, "status": "completed"})
+        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        g = next(x for x in d["by_project"] if x["project"] == "RPProj")
+        by_id = {r["id"]: r for r in g["runs"]}
+        assert by_id["run_has"]["report_path"] == "Projects/RPProj/.artifacts/runs/run_has/REPORT.md"
+        assert by_id["run_none"]["report_path"] is None
 
     def test_persists_metrics_for_terminal_run(self, client, workspace):
         now = datetime.now(timezone.utc).isoformat()
