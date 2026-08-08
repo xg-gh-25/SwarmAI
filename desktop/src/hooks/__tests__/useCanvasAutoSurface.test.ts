@@ -66,6 +66,44 @@ describe('useCanvasAutoSurface', () => {
     expect(opened).toEqual([]);
   });
 
+  // ── REGRESSION (run_1e39d21e): a content/knowledge write with the bridge's
+  //    fail-closed relevance='incidental' default (backend write-emit sends NO
+  //    relevance — kind is the authority) MUST still auto-pop. The legacy relevance
+  //    gate was ANDed unconditionally and killed these kind-whitelisted writes, so
+  //    session HTML/DDD/Knowledge/context writes stopped opening Canvas. ──
+  it('REGRESSION AC1: kind=content + relevance=incidental (real backend shape) AUTO-POPS', () => {
+    // This is the EXACT production event: _build_file_write_events sends kind only,
+    // the SSE bridge defaults relevance→'incidental'. Mutation-provable: revert the
+    // fix (make the relevance gate unconditional again) → this goes RED.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/Designs/x.md', 'written', undefined, 'incidental', 'content');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/Designs/x.md']);
+  });
+
+  it('REGRESSION AC1b: kind=knowledge + relevance=incidental AUTO-POPS', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('Projects/SwarmAI/2-understanding/TECH.md', 'written', undefined, 'incidental', 'knowledge');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Projects/SwarmAI/2-understanding/TECH.md']);
+  });
+
+  it('AC3 legacy fallback: kind=undefined + relevance=deliverable POPS (old backend preserved)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/old.md', 'written', undefined, 'deliverable', undefined);
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/old.md']);
+  });
+
+  it('AC3 legacy fallback: kind=undefined + relevance=incidental does NOT pop (old backend gate still applies)', () => {
+    // When kind is undefined (older backend), the relevance gate is the ONLY signal
+    // and MUST still suppress incidental — the fix must not open this legacy hole.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/old.md', 'written', undefined, 'incidental', undefined);
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]);
+  });
+
   it('coalesces a write-burst to the LAST file', () => {
     renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
     writeFile('a.md');

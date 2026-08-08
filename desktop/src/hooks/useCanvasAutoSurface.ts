@@ -141,10 +141,18 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
       // `process` is machine noise. Undefined kind (older backend) → fall through to
       // the legacy `relevance` gate below (no regression).
       if (kind !== undefined && kind !== 'content' && kind !== 'knowledge' && kind !== 'source-final') return;
-      // WHITELIST gate (run_e626e121, legacy/migration): only a backend-classified
-      // `deliverable` auto-surfaces. Fail OPEN for an older backend that doesn't send
-      // `relevance` (undefined → treat a write as deliverable, no regression).
-      if (relevance !== undefined && relevance !== 'deliverable') return;
+      // WHITELIST gate (run_e626e121) — LEGACY FALLBACK ONLY, gated on `kind===undefined`
+      // (run_1e39d21e regression fix). When `kind` is present (the CURRENT backend —
+      // _build_file_write_events sends kind, never relevance), the kind gate above is
+      // the SOLE authority; this relevance gate MUST NOT run, or it kills every
+      // kind-whitelisted write: the SSE bridge defaults a relevance-less event to
+      // 'incidental' (fail-closed), so `relevance !== 'deliverable'` was true for ALL
+      // live content/knowledge writes → Canvas stopped auto-opening session outputs
+      // (HTML/DDD/Knowledge/context). Only surface_run_outputs, which HARD-CODES
+      // relevance='deliverable', survived. The gate is now scoped to an OLD backend
+      // that sends `relevance` but no `kind` (migration only), matching the original
+      // intent the comment always claimed but the code did not enforce.
+      if (kind === undefined && relevance !== undefined && relevance !== 'deliverable') return;
       // Streaming gate (bug1) — the isStreaming half is checked at WRITE-ARRIVAL,
       // because a historical MergedToolBlock re-dispatch arrives while the tab is
       // idle (isStreaming===false) and must be suppressed at the source. Active
