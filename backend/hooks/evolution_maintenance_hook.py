@@ -217,6 +217,11 @@ class EvolutionMaintenanceHook:
         # Quality gate: remove garbage entries BEFORE deprecation checks
         content = self._quality_gate(evo_path, content, changelog_path)
 
+        # Data-point family folding: self-prune the NARRATIVE `## Corrections
+        # Captured` region (the append-only landfill the E/K lifecycle below is
+        # structurally blind to). Type-aware + fail-safe; re-reads content after.
+        content = self._fold_corrections(evo_path, content, changelog_path)
+
         deprecated_count = 0
         pruned_count = 0
 
@@ -462,6 +467,110 @@ class EvolutionMaintenanceHook:
                 fd.close()
 
         return content
+
+    # Cap: how many foldable data-points to KEEP per family before archiving
+    # the rest. cap=2 = anchor + capstone (leanest); recent-2 fills remaining
+    # slots when no capstone. Set by the goal design (user chose cap=2 for the
+    # leanest live file — folded points remain fully traceable in the archive).
+    _FOLD_CAP = 2
+
+    def _fold_corrections(
+        self, evo_path: Path, content: str, changelog_path: Path
+    ) -> str:
+        """Self-prune the `## Corrections Captured` narrative region.
+
+        Folds only RECURRENCE/CONTAINMENT DATA-POINT sub-bullets that exceed the
+        per-family cap; protects METHOD FIX / capstone / etc. Fail-safe: on ANY
+        error the ORIGINAL content is preserved (never eats correction history).
+        Returns the (possibly-updated) content; re-reads from disk after a write.
+        """
+        try:
+            from hooks.data_point_folding import fold_corrections_section
+            from scripts.locked_write import (
+                locked_read_modify_write, LockedWriteError, _find_section_range,
+            )
+        except ImportError as exc:
+            logger.debug("data-point folding unavailable: %s", exc)
+            return content
+
+        try:
+            result = fold_corrections_section(content, cap=self._FOLD_CAP)
+        except Exception as exc:
+            # Fail-safe (Gate-1 F4): a folding bug must NEVER corrupt EVOLUTION.md.
+            logger.warning("Corrections folding skipped (compute error): %s", exc)
+            return content
+
+        if not result.changed:
+            return content
+
+        # Extract the NEW Corrections body from the folded content so we can
+        # write it back via the same section-range contract locked_write uses.
+        rng = _find_section_range(result.new_content, "Corrections Captured")
+        if rng is None:
+            logger.warning("Corrections folding skipped: section vanished post-fold")
+            return content
+        body_start, body_end = rng
+        new_body = result.new_content[body_start:body_end]
+
+        try:
+            # ORDER MATTERS (Gate-2 HIGH #2): replace the EVOLUTION.md body
+            # FIRST — it carries the `<!-- folded archived=... -->` idempotency
+            # marker. Only AFTER that succeeds do we append to the archive. If
+            # the archive append then fails, we have a marker (so the next run
+            # is still a no-op — no re-fold, no duplicate archive) and the
+            # folded text is recoverable from EVOLUTION's own history. The old
+            # order (archive-first) duplicated archive content on every
+            # failed-replace cycle because the marker was never written.
+            # 1) Replace the Corrections body in EVOLUTION.md (atomic, locked).
+            locked_read_modify_write(
+                evo_path, "Corrections Captured", new_body, mode="replace",
+            )
+            # 2) Append folded blocks to the archive (forward-append recovery
+            #    path — NOT a backup copy; STEERING #2 bans backup-copy reflex).
+            archive_path = evo_path.parent / "EVOLUTION-archive.md"
+            if result.archived_blocks:
+                header = (
+                    f"\n<!-- folded {len(result.archived_blocks)} data-point(s) "
+                    f"from Corrections Captured -->\n"
+                )
+                block_text = header + "\n\n".join(result.archived_blocks) + "\n"
+                if not archive_path.exists():
+                    archive_path.write_text(
+                        "# EVOLUTION Archive — folded data-points\n\n"
+                        "Full text of RECURRENCE/CONTAINMENT DATA-POINTs folded out "
+                        "of EVOLUTION.md's Corrections Captured section to keep the "
+                        "live cognitive file lean. Traceable by run-id.\n",
+                        encoding="utf-8",
+                    )
+                try:
+                    locked_read_modify_write(
+                        archive_path, "EVOLUTION Archive — folded data-points",
+                        block_text, mode="append",
+                    )
+                except (OSError, LockedWriteError) as arch_exc:
+                    # Body already folded+marked; a failed archive append is NOT
+                    # data loss (folded text lives in EVOLUTION history) and will
+                    # NOT re-fold (marker present). Log and continue.
+                    logger.warning(
+                        "Corrections folded but archive append failed "
+                        "(recoverable, no re-fold): %s", arch_exc,
+                    )
+            _append_changelog(
+                changelog_path, "fold_corrections",
+                f"{result.families_folded} families",
+                f"Folded {result.bullets_archived} data-point(s) to archive "
+                f"across {result.families_folded} families (cap={self._FOLD_CAP})",
+                source="data_point_folding",
+            )
+            logger.info(
+                "Corrections folded: %d data-point(s) archived across %d families",
+                result.bullets_archived, result.families_folded,
+            )
+            return evo_path.read_text(encoding="utf-8")
+        except (OSError, LockedWriteError) as exc:
+            # Fail-safe on write error: keep original in-memory content.
+            logger.warning("Corrections folding write failed: %s", exc)
+            return content
 
     def _deprecate_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
