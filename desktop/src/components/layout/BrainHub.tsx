@@ -20,12 +20,12 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  getBrainsWithPinned, getBrainDetail, getReview, approveReview, rejectReviewHunk,
-  approveProposal, rejectProposal, getDistribution, aggregateTypeCounts,
+  useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
+  approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail,
-  ReviewData, ReviewHunk, PendingProposal, DistributionState,
+  ReviewData, ReviewHunk, PendingProposal,
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
@@ -78,38 +78,21 @@ type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
  *  mount omit it — file-open then just dispatches without a close (still correct). */
 export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {}) {
   const [tab, setTab] = useState<Tab>('gallery');
-  const [brains, setBrains] = useState<BrainSummary[] | null>(null);
-  const [pinned, setPinned] = useState<string[]>([]);
-  // The pinned primary (SwarmAI) renders as a FULL card in the gallery top row →
-  // one lazy detail fetch (mirrors the Welcome hero pattern; the only detail the
-  // gallery pays for — the rest stay cheap compact cards).
-  const [primaryDetail, setPrimaryDetail] = useState<BrainDetail | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadTick, setReloadTick] = useState(0); // B10: retry trigger for getBrains
   const [selected, setSelected] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    setError(null);
-    setPrimaryDetail(undefined);  // reset so a retry never shows the prior primary's detail (stale-render)
-    getBrainsWithPinned().then(
-      ({ brains: b, pinned: p }) => {
-        if (!alive) return;
-        setBrains(b);
-        setPinned(p);
-        // lazily fetch the primary (first pinned) as a full card
-        const primary = p[0];
-        if (primary) {
-          getBrainDetail(primary).then(
-            (d) => alive && setPrimaryDetail(d),
-            () => alive && setPrimaryDetail(undefined),  // degrade to cheap card
-          );
-        }
-      },
-      (e) => alive && setError(String(e?.message ?? e)),
-    );
-    return () => { alive = false; };
-  }, [reloadTick]);
+  // Cached gallery list (run_cfb460ac): re-opening the overlay within the 30s window
+  // is instant instead of paying the ~4s aggregate scan again. `refetch` powers Retry.
+  const { data: bp, error: bpErr, refetch } = useBrainsWithPinned();
+  const brains = bp?.brains ?? null;
+  const pinned = useMemo(() => bp?.pinned ?? [], [bp]);
+  const error = bpErr ? String((bpErr as { message?: string })?.message ?? bpErr) : null;
+
+  // The pinned primary (SwarmAI) renders as a FULL card → its detail rides the SAME
+  // cached hook the Brain tab uses, so opening that brain later is a 0-network cache
+  // hit (was an eager uncached getBrainDetail on every overlay open). undefined until
+  // loaded → the card degrades to its cheap summary (DddCard guards on metrics).
+  const primaryName = pinned[0] ?? null;
+  const { data: primaryDetail } = useBrainDetail(primaryName);
 
   const openBrain = useCallback((name: string) => {
     setSelected(name);
@@ -150,7 +133,7 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
             <div className="text-[var(--color-error,#ef4444)]">Failed to load brains: {error}</div>
             <button
               data-testid="brainhub-retry"
-              onClick={() => setReloadTick((t) => t + 1)}
+              onClick={() => void refetch()}
               className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
               style={{ background: 'var(--color-error,#ef4444)' }}
             >
@@ -346,35 +329,23 @@ function BrainView(
   { name, onRequestClose, onGoToReview, uncommitted }:
   { name: string; onRequestClose?: () => void; onGoToReview?: () => void; uncommitted?: boolean },
 ) {
-  const [detail, setDetail] = useState<BrainDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>('overview');  // fixed default
-  // Browse-tab content: file tree (default) or code graph. Unchanged from before —
-  // just now lives inside the Browse sub-tab.
-  const [view, setView] = useState<'files' | 'graph'>('files');
-  const [review, setReview] = useState<ReviewData | null>(null);
   const [showWeekly, setShowWeekly] = useState(false);
 
+  // Cached fetches (run_cfb460ac): re-opening the same brain or flipping
+  // Overview↔Browse no longer refetches within the 30s staleTime — the old
+  // useEffect+then refetched on every mount. detail drives the view; review is
+  // best-effort (§③ signals + Weekly): a review error must NOT blank the Overview,
+  // so we read only its data (null on error → docSignalMap is null-safe).
+  const { data: detail = null, error: detailErr } = useBrainDetail(name);
+  const { data: review = null } = useReview(name);
+  const error = detailErr ? String((detailErr as { message?: string })?.message ?? detailErr) : null;
+
+  // Reset view-local UI state when switching brains (keyed remount already does this
+  // for a gallery→brain switch; this guards a future in-place name change).
   useEffect(() => {
-    let alive = true;
-    setDetail(null);
-    setError(null);
-    setReview(null);
-    setDetailTab('overview');   // reset to Overview when switching brains (fixed default)
-    setView('files');
+    setDetailTab('overview');
     setShowWeekly(false);
-    getBrainDetail(name).then(
-      (d) => alive && setDetail(d),
-      (e) => alive && setError(String(e?.message ?? e)),
-    );
-    // Review data powers §③ per-doc signals + the Weekly Report. Best-effort: a
-    // review failure must NOT blank the Overview (the ontology/cards still render);
-    // a null review → all-zero signals (docSignalMap is null-safe).
-    getReview(name).then(
-      (r) => alive && setReview(r),
-      () => alive && setReview(null),
-    );
-    return () => { alive = false; };
   }, [name]);
 
   // Open a doc/tree file in the app-level CANVAS. Paths are WORKSPACE-RELATIVE
@@ -393,7 +364,6 @@ function BrainView(
   if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading {name}…</div>;
 
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
-  const activeView: 'files' | 'graph' = view === 'graph' && hasCodeIntel ? 'graph' : 'files';
 
   return (
     <div className="flex flex-col h-full" data-testid="brainhub-brain">
@@ -433,8 +403,6 @@ function BrainView(
         <BrainBrowse
           name={name}
           hasCodeIntel={hasCodeIntel}
-          activeView={activeView}
-          onSetView={setView}
           onOpenFile={openFile}
         />
       )}
@@ -670,45 +638,53 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
 // ── §Browse — the file tree + Code Graph toggle (MOVED verbatim from old default) ─
 
 function BrainBrowse(
-  { name, hasCodeIntel, activeView, onSetView, onOpenFile }:
-  {
-    name: string; hasCodeIntel: boolean; activeView: 'files' | 'graph';
-    onSetView: (v: 'files' | 'graph') => void; onOpenFile: (p: string) => void;
-  },
+  { name, hasCodeIntel, onOpenFile }:
+  { name: string; hasCodeIntel: boolean; onOpenFile: (p: string) => void },
 ) {
+  // Code Graph is a SECOND-CLASS, opt-in surface (run_cfb460ac): NOT a peer tab of
+  // the tree. It lives in a collapsed disclosure BELOW the tree and only MOUNTS
+  // CodeGraph when expanded — so getCodeIntelGraph (an expensive force-graph fetch)
+  // never runs unless the user asks. Default collapsed; no 3rd-level tab toggle.
+  const [graphOpen, setGraphOpen] = useState(false);
+
   return (
-    <div className="flex flex-col flex-1 min-h-0" data-testid="brainhub-browse">
-      {/* [Files | Code Graph] segmented toggle — Files = the Projects tree (always),
-          Code Graph = the inline force-graph (only when a code_intel.db exists). */}
+    <div className="flex flex-col flex-1 min-h-0 overflow-auto px-4 pb-4" data-testid="brainhub-browse">
+      {/* The REAL, complete Projects/<name> tree (showAllFiles = nothing hidden,
+          infra dimmed) in a BOUNDED left column so it doesn't span the overlay. */}
+      <div className="flex-1 min-h-0" data-testid="brainhub-brain-content">
+        <LibraryTree
+          key={`tree-${name}`}
+          rootPath={`Projects/${name}`}
+          onFileOpen={onOpenFile}
+          showAllFiles
+          maxWidth="420px"
+        />
+      </div>
+
+      {/* Code Graph — collapsed disclosure BELOW the tree. Only rendered when a
+          code_intel.db exists for this brain; only MOUNTED (→ fetched) on expand. */}
       {hasCodeIntel && (
-        <div className="flex items-center px-4 pb-2 flex-shrink-0">
-          <div className="ml-auto flex items-center rounded-md border border-[var(--color-border)] overflow-hidden text-[11px]" data-testid="brainhub-view-toggle">
-            <button
-              data-testid="view-toggle-files"
-              onClick={() => onSetView('files')}
-              className={`flex items-center gap-1 px-2 py-0.5 ${activeView === 'files' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-            >
-              <span className="material-symbols-outlined text-[14px]">folder</span>Files
-            </button>
-            <button
-              data-testid="view-toggle-graph"
-              onClick={() => onSetView('graph')}
-              className={`flex items-center gap-1 px-2 py-0.5 border-l border-[var(--color-border)] ${activeView === 'graph' ? 'bg-[#12233a] text-[#58a6ff]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-            >
-              <span className="material-symbols-outlined text-[14px]">hub</span>Code Graph
-            </button>
-          </div>
+        <div className="mt-3 flex-shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden" style={{ maxWidth: 640 }} data-testid="brainhub-codegraph-disclosure">
+          <button
+            data-testid="codegraph-toggle"
+            aria-expanded={graphOpen}
+            onClick={() => setGraphOpen((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 py-2 text-[12px] hover:bg-[var(--color-hover)]"
+          >
+            <span className="material-symbols-outlined text-[15px] text-[#58a6ff]">hub</span>
+            <span className="font-medium">Code Graph</span>
+            {!graphOpen && <span className="text-[10px] text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
+            <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)] ml-auto">
+              {graphOpen ? 'expand_less' : 'expand_more'}
+            </span>
+          </button>
+          {graphOpen && (
+            <div className="border-t border-[var(--color-border)] h-[360px]" data-testid="codegraph-panel">
+              <CodeGraph key={`graph-${name}`} project={name} inline />
+            </div>
+          )}
         </div>
       )}
-
-      {/* Content: the REAL Projects/<name> file tree, or the inline code graph. */}
-      <div className="flex-1 min-h-0" data-testid="brainhub-brain-content">
-        {activeView === 'graph' ? (
-          <CodeGraph key={`graph-${name}`} project={name} inline />
-        ) : (
-          <LibraryTree key={`tree-${name}`} rootPath={`Projects/${name}`} onFileOpen={onOpenFile} />
-        )}
-      </div>
     </div>
   );
 }
@@ -721,8 +697,11 @@ function shortSha(sha: string): string {
 }
 
 function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
-  const [data, setData] = useState<ReviewData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Cached query (run_cfb460ac) — re-opening Review inside the 30s window is served
+  // from cache. A mutating action (approve/reject) calls `reload()` = refetch, which
+  // re-hits the network to reflect the write (the write invalidated the queue).
+  const { data = null, error: qErr, refetch } = useReview(name);
+  const error = qErr ? String((qErr as { message?: string })?.message ?? qErr) : null;
   // Per-ACTION errors (reject/proposal 409s etc.) are TRANSIENT + inline — they must
   // NOT blank the whole queue via the top-level `if (error)` return (Gate-2: a routine
   // retryable 409 shouldn't wipe the review view). Separate channel from the load error.
@@ -734,20 +713,17 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
   // any action, brain switch) so it never persists stale — reset in load() below.
   const [armed, setArmed] = useState(false);
 
+  // reload = refetch the cached query + reset the transient per-action UI state.
+  // Replaces the old raw-fetch load(); every post-action call site is unchanged.
   const load = useCallback(() => {
-    let alive = true;
-    setData(null);
-    setError(null);
     setActionError(null);   // clear any transient action error on (re)load
-    setArmed(false);   // disarm on every (re)load: brain switch, or after any action
-    getReview(name).then(
-      (d) => alive && setData(d),
-      (e) => alive && setError(String(e?.message ?? e)),
-    );
-    return () => { alive = false; };
-  }, [name]);
+    setArmed(false);        // disarm on every (re)load: brain switch, or after any action
+    void refetch();
+  }, [refetch]);
 
-  useEffect(() => load(), [load]);  // load() returns its own alive-cleanup, invoked on unmount/re-run
+  // Disarm + clear the transient action error when switching brains (the query
+  // itself re-keys on name via useReview). The cached data does NOT blank on switch.
+  useEffect(() => { setActionError(null); setArmed(false); }, [name]);
 
   const onApproveAll = useCallback(async () => {
     if (!armed) { setArmed(true); return; }   // first click arms; no API call yet
@@ -1004,19 +980,10 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
 // ── Distribute view (Run 3) ──────────────────────────────────────────────────
 
 function DistributeView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
-  const [data, setData] = useState<DistributionState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    setData(null);
-    setError(null);
-    getDistribution(name).then(
-      (d) => alive && setData(d),
-      (e) => alive && setError(String(e?.message ?? e)),
-    );
-    return () => { alive = false; };
-  }, [name]);
+  // Cached query (run_cfb460ac): re-opening Distribute inside the 30s window is
+  // served from cache — the old useEffect+then refetched on every mount.
+  const { data = null, error: qErr } = useDistribution(name);
+  const error = qErr ? String((qErr as { message?: string })?.message ?? qErr) : null;
 
   // Open aim.json in the Canvas so the owner can edit the distribution block (Run 3,
   // Step 1). aim.json is PROJECT-relative (lives at Projects/<name>/aim.json) → needs

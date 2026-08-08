@@ -60,6 +60,9 @@ interface FlatRow {
   node: TreeNode;
   depth: number;
   isExpanded: boolean;
+  /** true when this row is an infra/noise node kept visible (showAllFiles) but
+   *  rendered dimmed. false = a normal row. */
+  dimmed: boolean;
 }
 
 /** Date prefix pattern: YYYY-MM-DD at the start of a name (newest-first sort). */
@@ -85,14 +88,24 @@ function sortChildren(children: TreeNode[]): TreeNode[] {
  * Flatten the visible tree: only descend into directories whose path is in
  * `expandedPaths`. Depth starts at 0 for the Knowledge roots.
  */
-function flatten(nodes: TreeNode[], expandedPaths: Set<string>, depth = 0, out: FlatRow[] = []): FlatRow[] {
+function flatten(
+  nodes: TreeNode[],
+  expandedPaths: Set<string>,
+  showAllFiles: boolean,
+  depth = 0,
+  out: FlatRow[] = [],
+): FlatRow[] {
   for (const node of sortChildren(nodes)) {
-    if (isNoiseNode(node.name)) continue;   // hide infra/build junk (run_a75197d9)
+    const noise = isNoiseNode(node.name);
+    // Default (Library bookshelf): hide infra/build junk (run_a75197d9).
+    // showAllFiles (Brain Hub full-tree browse, run_cfb460ac): KEEP the node but
+    // render it dimmed — the user asked for the real complete tree, nothing hidden.
+    if (noise && !showAllFiles) continue;
     const isDir = node.type === 'directory';
     const isExpanded = isDir && expandedPaths.has(node.path);
-    out.push({ node, depth, isExpanded });
+    out.push({ node, depth, isExpanded, dimmed: noise });
     if (isExpanded && Array.isArray(node.children) && node.children.length > 0) {
-      flatten(node.children, expandedPaths, depth + 1, out);
+      flatten(node.children, expandedPaths, showAllFiles, depth + 1, out);
     }
   }
   return out;
@@ -131,7 +144,7 @@ function LibraryRow(props: {
   const { index, style, rows, onToggle, onOpen } = props;
   const row = rows[index];
   if (!row) return null;
-  const { node, depth, isExpanded } = row;
+  const { node, depth, isExpanded, dimmed } = row;
   const activate = () => {
     if (node.type === 'directory') onToggle(node);
     else onOpen(node);
@@ -151,6 +164,7 @@ function LibraryRow(props: {
       onContextMenu={() => { /* no context menu in Library browse */ }}
       onDoubleClick={activate}
       style={style}
+      forceDim={dimmed}
     />
   );
 }
@@ -168,6 +182,16 @@ interface LibraryTreeProps {
    *  its host overlay BEFORE the file opens in Canvas so the FileViewer isn't
    *  rendered UNDER the overlay — passes this and takes over the dispatch. */
   onFileOpen?: (path: string) => void;
+  /** Show ALL files including infra/noise (run_cfb460ac). DEFAULT false = the
+   *  Library bookshelf behavior (isNoiseNode hides .db/.lock/dotfiles/-archive.md).
+   *  true = Brain Hub full-tree browse: the REAL complete tree, infra files kept
+   *  but rendered DIMMED (never hidden). Per-instance so Library stays filtered. */
+  showAllFiles?: boolean;
+  /** Constrain the tree to a bounded left column instead of spanning full width
+   *  (run_cfb460ac). A CSS max-width value (e.g. '420px'). DEFAULT undefined =
+   *  full width (Library bookshelf, unchanged). Brain Hub passes a bound so the
+   *  tree doesn't stretch across the whole overlay. */
+  maxWidth?: string;
 }
 
 /**
@@ -177,7 +201,7 @@ interface LibraryTreeProps {
  * Brain-Hub DDD detail (Projects/<name> root), with the noise filter (isNoiseNode)
  * hiding infra junk so a project root shows only real browsable content.
  */
-export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen }: LibraryTreeProps = {}) {
+export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFiles = false, maxWidth }: LibraryTreeProps = {}) {
   const [roots, setRoots] = useState<TreeNode[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -259,12 +283,12 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen }: LibraryTr
     document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: node.path } }));
   }, [onFileOpen]);
 
-  const rows = useMemo(() => (roots ? flatten(roots, expanded) : []), [roots, expanded]);
+  const rows = useMemo(() => (roots ? flatten(roots, expanded, showAllFiles) : []), [roots, expanded, showAllFiles]);
 
   const rowProps = useMemo<RowProps>(() => ({ rows, onToggle, onOpen }), [rows, onToggle, onOpen]);
 
   return (
-    <div ref={containerRef} data-testid="library-tree" className="flex-1 min-h-0">
+    <div ref={containerRef} data-testid="library-tree" className="flex-1 min-h-0" style={maxWidth ? { maxWidth } : undefined}>
       {error ? (
         <div
           data-testid="library-tree-error"

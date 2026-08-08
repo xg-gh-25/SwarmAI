@@ -26,32 +26,56 @@ const mockRejectHunk = vi.fn();
 const mockApproveProposal = vi.fn();
 const mockRejectProposal = vi.fn();
 const mockGetDistribution = vi.fn();
-vi.mock('../../services/ddd', () => ({
-  getBrains: (...a: unknown[]) => mockGetBrains(...a),
-  // getBrainsWithPinned derives from the same mockGetBrains fixture + a pinned list
-  // (mockGetPinned lets a test override; default = SwarmAI first, no others resolvable
-  // in the small fixtures → flat-grid fallback, preserving the existing assertions).
-  getBrainsWithPinned: async (...a: unknown[]) => ({
-    brains: await mockGetBrains(...a),
-    pinned: mockGetPinned(),
-  }),
-  getBrainDetail: (...a: unknown[]) => mockGetBrainDetail(...a),
-  getReview: (...a: unknown[]) => mockGetReview(...a),
-  approveReview: (...a: unknown[]) => mockApproveReview(...a),
-  rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
-  approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
-  rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
-  getDistribution: (...a: unknown[]) => mockGetDistribution(...a),
-  // pure aggregation helper — real impl (no spy needed; contract-new export, R27)
-  aggregateTypeCounts: (sections: { entries: { entryType: string }[] }[]) => {
-    const c: Record<string, number> = {
-      guideline: 0, pitfall: 0, decision: 0, model: 0, process: 0, principle: 0, correction: 0,
-    };
-    let total = 0;
-    for (const s of sections) for (const e of s.entries) { c[e.entryType] = (c[e.entryType] ?? 0) + 1; total += 1; }
-    return total > 0 ? c : undefined;
-  },
-}));
+// BrainHub now consumes React Query HOOKS (run_cfb460ac), not raw fetchers. We mock
+// the hooks at the boundary with a tiny useState+useEffect wrapper over the same
+// mock fns — this keeps every existing fixture/assertion working AND exercises the
+// real component's caching-shaped consumption (data/error/refetch). A hook returns
+// {data, error, refetch}; error is an Error (component stringifies .message).
+vi.mock('../../services/ddd', async () => {
+  const React = await import('react');
+  // Generic: run an async producer, expose {data, error, refetch}. Re-runs when `key`
+  // changes (mirrors useQuery re-keying on name) and on refetch().
+  function useAsync<T>(producer: () => Promise<T>, key: unknown) {
+    const [data, setData] = React.useState<T | undefined>(undefined);
+    const [error, setError] = React.useState<Error | undefined>(undefined);
+    const [tick, setTick] = React.useState(0);
+    React.useEffect(() => {
+      let alive = true;
+      setData(undefined); setError(undefined);
+      Promise.resolve(producer()).then(
+        (d) => { if (alive) setData(d); },
+        (e) => { if (alive) setError(e instanceof Error ? e : new Error(String(e))); },
+      );
+      return () => { alive = false; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [key, tick]);
+    return { data, error, refetch: () => setTick((t) => t + 1) };
+  }
+  return {
+    getBrains: (...a: unknown[]) => mockGetBrains(...a),
+    useBrainsWithPinned: () =>
+      useAsync(async () => ({ brains: await mockGetBrains(), pinned: mockGetPinned() }), 'brains'),
+    useBrainDetail: (name: string | null) =>
+      useAsync(() => (name ? mockGetBrainDetail(name) : Promise.resolve(undefined)), name),
+    useReview: (name: string | null) =>
+      useAsync(() => (name ? mockGetReview(name) : Promise.resolve(undefined)), name),
+    useDistribution: (name: string | null) =>
+      useAsync(() => (name ? mockGetDistribution(name) : Promise.resolve(undefined)), name),
+    approveReview: (...a: unknown[]) => mockApproveReview(...a),
+    rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
+    approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
+    rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
+    // pure aggregation helper — real impl (no spy needed; contract-new export, R27)
+    aggregateTypeCounts: (sections: { entries: { entryType: string }[] }[]) => {
+      const c: Record<string, number> = {
+        guideline: 0, pitfall: 0, decision: 0, model: 0, process: 0, principle: 0, correction: 0,
+      };
+      let total = 0;
+      for (const s of sections) for (const e of s.entries) { c[e.entryType] = (c[e.entryType] ?? 0) + 1; total += 1; }
+      return total > 0 ? c : undefined;
+    },
+  };
+});
 
 vi.mock('../../services/agents', () => ({
   agentsService: { getDefault: () => Promise.resolve({ id: 'agent-1' }) },
@@ -72,7 +96,7 @@ vi.mock('../workspace/FilePreviewModal', () => ({
 // (esp. project === current brain name, NOT a hardcoded literal), don't render the canvas.
 const mockCodeGraph = vi.fn();
 vi.mock('../code-intel/CodeGraph', () => ({
-  CodeGraph: (props: { project: string; onClose?: () => void }) => {
+  CodeGraph: (props: { project: string; inline?: boolean; onClose?: () => void }) => {
     mockCodeGraph(props);
     return <div data-testid="code-graph-mock">{props.project}</div>;
   },
@@ -90,7 +114,7 @@ vi.mock('../../services/codeIntel', () => ({
 // its onFileOpen is wired; the tree's own render is tested in LibraryTree.test.tsx.
 const mockLibraryTree = vi.fn();
 vi.mock('./LibraryTree', () => ({
-  LibraryTree: (props: { rootPath?: string; onFileOpen?: (p: string) => void }) => {
+  LibraryTree: (props: { rootPath?: string; onFileOpen?: (p: string) => void; showAllFiles?: boolean; maxWidth?: string }) => {
     mockLibraryTree(props);
     return (
       <div data-testid="library-tree-mock" data-rootpath={props.rootPath}>
@@ -342,25 +366,37 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     document.removeEventListener('swarm:open-file', openFile as EventListener);
   });
 
-  it('AC6: hasCodeIntel → [Files|Code Graph] toggle inside Browse; toggling swaps tree/graph', async () => {
+  it('AC3: Browse tree is the FULL tree (showAllFiles) in a bounded column', async () => {
     await openBrowse();
-    expect(screen.getByTestId('brainhub-view-toggle')).toBeTruthy();
-    expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
-    expect(screen.queryByTestId('code-graph-mock')).toBeNull();
-    fireEvent.click(screen.getByTestId('view-toggle-graph'));
-    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
-    expect(mockCodeGraph).toHaveBeenCalledWith(expect.objectContaining({ project: 'SwarmAI', inline: true }));
-    expect(screen.queryByTestId('library-tree-mock')).toBeNull();
-    fireEvent.click(screen.getByTestId('view-toggle-files'));
-    await waitFor(() => expect(screen.getByTestId('library-tree-mock')).toBeTruthy());
-    expect(screen.queryByTestId('code-graph-mock')).toBeNull();
+    await screen.findByTestId('library-tree-mock');
+    // The tree is always shown (no Files|Code Graph toggle any more) and receives
+    // showAllFiles (real complete tree, infra dimmed not hidden) + a bounded maxWidth.
+    const props = mockLibraryTree.mock.calls.at(-1)![0];
+    expect(props.showAllFiles).toBe(true);
+    expect(props.maxWidth).toBeTruthy();   // bounded left column, not full-width
+    expect(screen.queryByTestId('brainhub-view-toggle')).toBeNull();  // 3rd-level toggle removed
   });
 
-  it('a brain with NO code_intel shows the tree only in Browse — no toggle, no graph', async () => {
+  it('AC4: hasCodeIntel → Code Graph is a COLLAPSED disclosure below the tree; CodeGraph mounts ONLY on expand', async () => {
+    await openBrowse();
+    await screen.findByTestId('library-tree-mock');
+    // Disclosure present but collapsed → CodeGraph NOT mounted (no getCodeIntelGraph fetch).
+    expect(screen.getByTestId('brainhub-codegraph-disclosure')).toBeTruthy();
+    expect(screen.queryByTestId('code-graph-mock')).toBeNull();
+    expect(mockCodeGraph).not.toHaveBeenCalled();
+    // Expand → NOW it mounts (lazy fetch), inline.
+    fireEvent.click(screen.getByTestId('codegraph-toggle'));
+    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
+    expect(mockCodeGraph).toHaveBeenCalledWith(expect.objectContaining({ project: 'SwarmAI', inline: true }));
+    // Tree stays visible alongside the graph (not swapped out).
+    expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
+  });
+
+  it('a brain with NO code_intel shows the tree only in Browse — no disclosure, no graph', async () => {
     mockGetBrainDetail.mockResolvedValue({ ...DETAIL, hasCodeIntel: false });
     await openBrowse();
     expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
-    expect(screen.queryByTestId('brainhub-view-toggle')).toBeNull();
+    expect(screen.queryByTestId('brainhub-codegraph-disclosure')).toBeNull();
     expect(screen.queryByTestId('code-graph-mock')).toBeNull();
   });
 

@@ -7,6 +7,7 @@
  *
  * Everything here is a live read projection: no writes, no external actions.
  */
+import { useQuery } from '@tanstack/react-query';
 import api from './api';
 
 // ── Types (mirror routers/ddd_brain.py response shapes) ──────────────────────
@@ -289,4 +290,54 @@ export async function getDistribution(name: string): Promise<DistributionState> 
     `/ddd/brains/${encodeURIComponent(name)}/distribution`,
   );
   return resp.data;
+}
+
+// ── React Query hooks (run_cfb460ac) ───────────────────────────────────────────
+// Brain Hub used raw api.get().then() in useEffect, so switching Overview↔Browse↔
+// Review or re-opening the same brain refetched every time (the slow-reopen). These
+// useQuery hooks cache per brain name (staleTime 30s) so a re-open inside the window
+// is served from cache — 0 network calls. Mirrors LibraryOverlay's useQuery pattern.
+// `enabled: !!name` so a null/empty name never fires. All three share the same
+// caching contract; the underlying fetchers above stay usable for non-React callers.
+
+const BRAIN_STALE_MS = 30_000;
+
+/** Cached GET /ddd/brains — the Gallery summaries + pinned order. Re-opening the
+ *  overlay within the window is instant (the aggregate scan is the ~4s cold cost). */
+export function useBrainsWithPinned() {
+  return useQuery<{ brains: BrainSummary[]; pinned: string[] }>({
+    queryKey: ['brains-with-pinned'],
+    queryFn: getBrainsWithPinned,
+    staleTime: BRAIN_STALE_MS,
+  });
+}
+
+/** Cached GET /ddd/brains/{name} — the six-section detail. */
+export function useBrainDetail(name: string | null) {
+  return useQuery<BrainDetail>({
+    queryKey: ['brain-detail', name],
+    queryFn: () => getBrainDetail(name as string),
+    enabled: !!name,
+    staleTime: BRAIN_STALE_MS,
+  });
+}
+
+/** Cached GET /ddd/brains/{name}/review — the tagged review queue. */
+export function useReview(name: string | null) {
+  return useQuery<ReviewData>({
+    queryKey: ['brain-review', name],
+    queryFn: () => getReview(name as string),
+    enabled: !!name,
+    staleTime: BRAIN_STALE_MS,
+  });
+}
+
+/** Cached GET /ddd/brains/{name}/distribution — declared reach + output state. */
+export function useDistribution(name: string | null) {
+  return useQuery<DistributionState>({
+    queryKey: ['brain-distribution', name],
+    queryFn: () => getDistribution(name as string),
+    enabled: !!name,
+    staleTime: BRAIN_STALE_MS,
+  });
 }

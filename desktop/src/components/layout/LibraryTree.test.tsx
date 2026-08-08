@@ -82,6 +82,40 @@ describe('LibraryTree — rootPath + noise filter', () => {
     expect(screen.queryByText('TECH.md.lock')).toBeNull();
   });
 
+  it('AC2: DEFAULT (no showAllFiles) still filters noise — Library bookshelf unchanged (no regression)', async () => {
+    render(<LibraryTree rootPath="Projects/SwarmAI" />);
+    await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
+    // The infra files stay HIDDEN by default (Library must not regress).
+    expect(screen.queryByText('code_intel.db')).toBeNull();
+    expect(screen.queryByText('.artifacts')).toBeNull();
+    expect(screen.queryByText('TECH.md.lock')).toBeNull();
+  });
+
+  it('AC1: showAllFiles=true SHOWS infra files (real complete tree) rendered DIMMED, not hidden', async () => {
+    render(<LibraryTree rootPath="Projects/SwarmAI" showAllFiles />);
+    await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
+    // Every previously-hidden infra file is now VISIBLE (nothing hidden — user's ask).
+    expect(screen.getByText('code_intel.db')).toBeInTheDocument();
+    expect(screen.getByText('code_intel.db-wal')).toBeInTheDocument();
+    expect(screen.getByText('code-intel.json')).toBeInTheDocument();
+    expect(screen.getByText('IMPROVEMENT-archive.md')).toBeInTheDocument();
+    expect(screen.getByText('.project.json')).toBeInTheDocument();
+    expect(screen.getByText('TECH.md.lock')).toBeInTheDocument();
+    // …and dimmed: TreeNodeRow applies the hidden text color to a forceDim'd row.
+    // The infra file's row text uses --color-hidden-text (dim), the normal file does not.
+    const infraRow = screen.getByText('code_intel.db').closest('.tree-node-row') as HTMLElement;
+    const normalRow = screen.getByText('AGENTS.md').closest('.tree-node-row') as HTMLElement;
+    // dim rows carry reduced opacity (0.7) vs 1 for a normal row (TreeNodeRow rowOpacity).
+    expect(infraRow.style.opacity).toBe('0.7');
+    expect(normalRow.style.opacity).toBe('1');
+  });
+
+  it('AC3: maxWidth bounds the tree column (not full-width)', async () => {
+    render(<LibraryTree rootPath="Projects/SwarmAI" maxWidth="420px" />);
+    await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
+    expect((screen.getByTestId('library-tree') as HTMLElement).style.maxWidth).toBe('420px');
+  });
+
   it('empty/aria copy derives from the root leaf (not hardcoded "Knowledge")', async () => {
     expandDirectory.mockResolvedValue([]);   // genuinely empty project root
     render(<LibraryTree rootPath="Projects/SwarmAI" />);

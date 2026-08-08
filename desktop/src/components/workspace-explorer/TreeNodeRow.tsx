@@ -61,6 +61,11 @@ export interface TreeNodeRowProps {
   style: React.CSSProperties;
   /** Accent background from parent section (Knowledge=yellow, Projects=blue). */
   sectionAccentBg?: string;
+  /** Force this row into the dimmed (hidden/infra) visual style regardless of its
+   *  name. Lets a caller (e.g. Brain Hub's full-tree browse) SHOW infra files
+   *  (.db/.lock/-archive.md) but muted, WITHOUT widening the shared HIDDEN_PATTERNS
+   *  set that the Workspace Explorer also consumes. Default undefined = unchanged. */
+  forceDim?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -199,6 +204,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   onDrop,
   style,
   sectionAccentBg,
+  forceDim,
 }) {
   const isDirectory = node.type === 'directory';
 
@@ -313,7 +319,10 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
 
   // Git status drives text color; fall back to default
   const statusColor = gitStatusColor(node.gitStatus);
-  const isHidden = !statusColor && isHiddenNode(node.name);
+  // forceDim: caller explicitly requests the dimmed style (Brain Hub full-tree
+  // browse showing infra files muted). Git status still wins — a modified .db
+  // should show its status color, not be flattened to hidden-grey.
+  const isHidden = !statusColor && (isHiddenNode(node.name) || !!forceDim);
   const textColor = statusColor
     ?? (isHidden ? 'var(--color-hidden-text)' : 'var(--color-text)');
   const badge = gitStatusBadge(node.gitStatus);
