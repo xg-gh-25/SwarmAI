@@ -18,11 +18,17 @@ import { CommunityContent } from './CommunityOverlay';
 const fetchFeed = vi.fn();
 const fetchSources = vi.fn();
 const fetchEngagement = vi.fn();
+const addSource = vi.fn();
+const updateSource = vi.fn();
+const deleteSource = vi.fn();
 vi.mock('../../services/community', () => ({
   communityService: {
     fetchFeed: () => fetchFeed(),
     fetchSources: () => fetchSources(),
     fetchEngagement: () => fetchEngagement(),
+    addSource: (f: unknown) => addSource(f),
+    updateSource: (id: string, p: unknown) => updateSource(id, p),
+    deleteSource: (id: string) => deleteSource(id),
   },
 }));
 
@@ -118,12 +124,14 @@ describe('CommunityOverlay — Sources tab', () => {
     expect(row.textContent).toContain('manual'); // managed_by rendered
   });
 
-  it('shows empty state when no sources', async () => {
+  it('on empty sources, still offers the add-source affordance (fresh user can add their first)', async () => {
+    // Phase-2 behavior change: empty no longer dead-ends on a banner — it renders
+    // the add form so a fresh user can add their first source.
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue([]);
     setup();
     fireEvent.click(screen.getByTestId('community-tab-sources'));
-    await waitFor(() => expect(screen.getByText(/No subscribed sources/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('source-add-open')).toBeTruthy());
   });
 
   it('shows error state when sources fetch rejects', async () => {
@@ -132,6 +140,75 @@ describe('CommunityOverlay — Sources tab', () => {
     setup();
     fireEvent.click(screen.getByTestId('community-tab-sources'));
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
+  });
+});
+
+describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
+  const oneSource = [
+    { id: 'ai-eng', name: 'AI Engineering', type: 'rss', tier: 'engineering', enabled: true, managedBy: 'manual', sourceCount: 4, tags: [] },
+  ];
+
+  it('toggle fires updateSource with flipped enabled, then refetches', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    updateSource.mockResolvedValue(undefined);
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    const toggle = await screen.findByTestId('source-toggle');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(updateSource).toHaveBeenCalledWith('ai-eng', { enabled: false }));
+    // refetch happened (fetchSources called again after mutation)
+    await waitFor(() => expect(fetchSources.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('changing tier fires updateSource with the new tier', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    updateSource.mockResolvedValue(undefined);
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    const tier = await screen.findByTestId('source-tier');
+    fireEvent.change(tier, { target: { value: 'frontier' } });
+    await waitFor(() => expect(updateSource).toHaveBeenCalledWith('ai-eng', { tier: 'frontier' }));
+  });
+
+  it('delete requires a SECOND confirm click before deleteSource fires', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    deleteSource.mockResolvedValue(undefined);
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    const del = await screen.findByTestId('source-delete');
+    fireEvent.click(del); // first click → arms confirm, does NOT delete
+    expect(deleteSource).not.toHaveBeenCalled();
+    const confirm = await screen.findByTestId('source-delete-confirm');
+    fireEvent.click(confirm); // second click → deletes
+    await waitFor(() => expect(deleteSource).toHaveBeenCalledWith('ai-eng'));
+  });
+
+  it('add form submits addSource and refetches', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    addSource.mockResolvedValue(undefined);
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(await screen.findByTestId('source-add-open'));
+    fireEvent.change(screen.getByTestId('add-id'), { target: { value: 'new-feed' } });
+    fireEvent.change(screen.getByTestId('add-name'), { target: { value: 'New Feed' } });
+    fireEvent.click(screen.getByTestId('add-submit'));
+    await waitFor(() => expect(addSource).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'new-feed', name: 'New Feed', type: 'rss', tier: 'engineering' }),
+    ));
+  });
+
+  it('surfaces an error when a mutation rejects (does not silently swallow)', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    updateSource.mockRejectedValue(new Error('409'));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(await screen.findByTestId('source-toggle'));
+    await waitFor(() => expect(screen.getByText(/Couldn't update/i)).toBeTruthy());
   });
 });
 

@@ -85,4 +85,18 @@ export const communityService = {
       stars: d.stars ?? null,
     };
   },
+
+  // ── Phase-2 writes (Sources editable) — all serialize with self_tune on one lock ──
+
+  async addSource(feed: { id: string; name: string; type: string; tier?: string }): Promise<void> {
+    await api.post('/api/community/feeds', feed);
+  },
+
+  async updateSource(id: string, patch: { enabled?: boolean; tier?: string }): Promise<void> {
+    await api.put(`/api/community/feeds/${encodeURIComponent(id)}`, patch);
+  },
+
+  async deleteSource(id: string): Promise<void> {
+    await api.delete(`/api/community/feeds/${encodeURIComponent(id)}`);
+  },
 };

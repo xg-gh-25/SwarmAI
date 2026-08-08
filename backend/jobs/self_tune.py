@@ -35,6 +35,7 @@ import yaml
 from .paths import (
     CONFIG_FILE, STATE_FILE, LOG_DIR, CONTEXT_DIR, DAILY_DIR, SIGNALS_DIR, PROJECTS_DIR, SIGNAL_DIGEST_FILE,
 )
+from .config_io import mutate_config, read_config
 
 LOG_DIR.mkdir(exist_ok=True)
 logging.basicConfig(
@@ -425,10 +426,8 @@ def run_self_tune(dry_run: bool = False) -> dict:
         logger.error(f"Config not found: {CONFIG_FILE}")
         return {"error": "config_not_found"}
 
-    with open(CONFIG_FILE) as f:
-        config = yaml.safe_load(f) or {}
-
-    # Extract context
+    # Extract context — filesystem reads (MEMORY/PROJECTS/DailyActivity/usage), NOT
+    # config.yaml. Computed OUTSIDE the config lock; no double-read hazard.
     projects = extract_projects()
     topics = extract_recent_topics(days=7)
     interests = extract_interests_from_memory()
@@ -441,38 +440,36 @@ def run_self_tune(dry_run: bool = False) -> dict:
     )
     logger.info(f"Signal usage (14d): {usage}")
 
-    all_changes = []
+    all_changes: list[str] = []
 
-    # 1. Update user_context
-    changes = update_user_context(config, projects, topics, interests, tech_stack, dry_run)
-    all_changes.extend(changes)
+    def _tune(config: dict) -> None:
+        """Run the 3 tuning passes on the (locked, when writing) config in place."""
+        all_changes.extend(update_user_context(config, projects, topics, interests, tech_stack, dry_run))
+        all_changes.extend(prune_unused_feeds(config, usage, min_days=14, dry_run=dry_run))
+        all_changes.extend(suggest_new_feeds(config, topics, dry_run=dry_run))
 
-    # 2. Prune unused feeds
-    changes = prune_unused_feeds(config, usage, min_days=14, dry_run=dry_run)
-    all_changes.extend(changes)
-
-    # 3. Suggest new feeds
-    changes = suggest_new_feeds(config, topics, dry_run=dry_run)
-    all_changes.extend(changes)
-
-    # Write config if changes were made
-    if all_changes and not dry_run:
-        header = (
-            "# Swarm Signal Pipeline — Feed Configuration\n"
-            "# Auto-tuned by self_tune.py based on MEMORY.md + PROJECTS.md + DailyActivity.\n"
-            "# Manual edits are preserved; self-tune only modifies user_context and\n"
-            "# auto-managed feeds.\n\n"
-        )
-        with open(CONFIG_FILE, "w") as f:
-            f.write(header)
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        logger.info(f"Config updated with {len(all_changes)} changes")
-    elif all_changes:
-        logger.info(f"[DRY RUN] Would make {len(all_changes)} changes:")
-        for c in all_changes:
-            logger.info(f"  {c}")
+    if dry_run:
+        # Report-only: run the passes on a lock-free read; the passes self-guard on
+        # dry_run and mutate nothing. No write, no lock needed.
+        _tune(read_config())
+        if all_changes:
+            logger.info(f"[DRY RUN] Would make {len(all_changes)} changes:")
+            for c in all_changes:
+                logger.info(f"  {c}")
+        else:
+            logger.info("No changes needed")
     else:
-        logger.info("No changes needed")
+        # Real run: the ENTIRE read-modify-write happens inside mutate_config's
+        # sidecar flock (R27) — so a concurrent /api/community/feeds UI write can
+        # never clobber self_tune's changes and vice versa. Header + atomic write
+        # are owned by config_io. write_if gates the WRITE on there being real
+        # changes: a zero-change tune must NOT re-dump the file (that would churn
+        # mtime + reorder keys every scheduled run for nothing — Gate-2 finding).
+        mutate_config(_tune, write_if=lambda _cfg, _res: bool(all_changes))
+        if all_changes:
+            logger.info(f"Config updated with {len(all_changes)} changes")
+        else:
+            logger.info("No changes needed")
 
     summary = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

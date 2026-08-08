@@ -106,7 +106,9 @@ class Feed(BaseModel):
     config: dict[str, Any] = {}
     tags: list[str] = []
     enabled: bool = True
-    managed_by: Literal["manual", "self-tune"] = "manual"
+    # "user" = created/edited via the Community overlay (Phase-2); protected from
+    # self_tune auto-disable exactly like "manual" (prune only disables "self-tune").
+    managed_by: Literal["manual", "self-tune", "user"] = "manual"
     tier: TierType = TierType.ENGINEERING
 
 

@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from core.community_data import (
     parse_sources,
@@ -294,6 +295,141 @@ def test_read_jsonl_skips_oversized_file(tmp_path: Path) -> None:
     # write just over the cap, cheaply (one line padded)
     big.write_text('{"x":"' + ("a" * (_MAX_JSONL_BYTES + 10)) + '"}\n')
     assert _read_jsonl(big) == []  # oversized → skipped, not OOM
+
+
+# ── Phase-2: Sources CRUD write endpoints ────────────────────────────────────
+
+
+import asyncio
+
+import jobs.config_io as config_io
+from routers.community_api import (
+    NewFeed, FeedPatch, add_feed, update_feed, delete_feed,
+)
+from fastapi import HTTPException
+
+
+@pytest.fixture
+def tmp_config(tmp_path: Path, monkeypatch) -> Path:
+    """A tmp config.yaml that the write endpoints target (monkeypatch the module
+    default CONFIG_FILE that mutate_config uses when no path is passed)."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        config_io.CONFIG_HEADER
+        + yaml.dump({"feeds": [
+            {"id": "existing", "name": "Existing", "type": "rss", "tier": "engineering", "enabled": True},
+        ], "defaults": {}}, sort_keys=False)
+    )
+    monkeypatch.setattr(config_io, "CONFIG_FILE", cfg)
+    return cfg
+
+
+def _run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        # Clear the stale closed loop so a later test's asyncio.get_event_loop()
+        # doesn't inherit it (the Run-1 pollution class — Gate-2 red-team).
+        asyncio.set_event_loop(None)
+
+
+def test_add_feed_writes_managed_by_user(tmp_config: Path) -> None:
+    _run(add_feed(NewFeed(id="new1", name="New", type="rss", tier="leaders")))
+    data = yaml.safe_load(tmp_config.read_text())
+    new = next(f for f in data["feeds"] if f["id"] == "new1")
+    assert new["managed_by"] == "user"  # protected from self_tune auto-disable
+    assert new["enabled"] is True
+    assert new["tier"] == "leaders"
+
+
+def test_add_feed_rejects_invalid_type(tmp_config: Path) -> None:
+    with pytest.raises(HTTPException) as ei:
+        _run(add_feed(NewFeed(id="x", name="X", type="not-a-real-type")))
+    assert ei.value.status_code == 422
+
+
+def test_add_feed_rejects_invalid_tier(tmp_config: Path) -> None:
+    with pytest.raises(HTTPException) as ei:
+        _run(add_feed(NewFeed(id="x", name="X", type="rss", tier="platinum")))
+    assert ei.value.status_code == 422
+
+
+def test_add_feed_rejects_duplicate_id(tmp_config: Path) -> None:
+    with pytest.raises(HTTPException) as ei:
+        _run(add_feed(NewFeed(id="existing", name="Dup", type="rss")))
+    assert ei.value.status_code == 409  # feeds is a list — no silent dup
+
+
+def test_update_feed_toggle_and_tier(tmp_config: Path) -> None:
+    _run(update_feed("existing", FeedPatch(enabled=False, tier="frontier")))
+    data = yaml.safe_load(tmp_config.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "existing")
+    assert f["enabled"] is False
+    assert f["tier"] == "frontier"
+    assert f["managed_by"] == "user"  # edit takes ownership
+
+
+def test_update_feed_404_missing(tmp_config: Path) -> None:
+    with pytest.raises(HTTPException) as ei:
+        _run(update_feed("ghost", FeedPatch(enabled=False)))
+    assert ei.value.status_code == 404
+
+
+def test_update_feed_422_invalid_tier(tmp_config: Path) -> None:
+    with pytest.raises(HTTPException) as ei:
+        _run(update_feed("existing", FeedPatch(tier="platinum")))
+    assert ei.value.status_code == 422
+
+
+def test_delete_feed_removes(tmp_config: Path) -> None:
+    res = _run(delete_feed("existing"))
+    assert res["removed"] is True
+    data = yaml.safe_load(tmp_config.read_text())
+    assert all(f["id"] != "existing" for f in data["feeds"])
+
+
+def test_delete_feed_idempotent_missing(tmp_config: Path) -> None:
+    # deleting a missing id is a 200 no-op, NOT a 500 — safe double-click/retry
+    res = _run(delete_feed("ghost"))
+    assert res["ok"] is True
+    assert res["removed"] is False
+
+
+def test_add_feed_yaml_special_chars_roundtrip(tmp_config: Path) -> None:
+    # A feed id/name with YAML-special chars (colon, braces) must round-trip through
+    # yaml.dump→safe_load without corrupting the file or the id (Gate-2 chaos).
+    _run(add_feed(NewFeed(id="my:feed{1}", name="A: B [c]", type="rss")))
+    data = yaml.safe_load(tmp_config.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "my:feed{1}")
+    assert f["name"] == "A: B [c]"  # exact round-trip, not truncated at the colon
+
+
+def test_config_io_write_if_skips_noop(tmp_path: Path) -> None:
+    # write_if=False must SKIP the write (no mtime churn on a no-op tune).
+    from jobs.config_io import mutate_config, CONFIG_HEADER
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(CONFIG_HEADER + yaml.dump({"feeds": [{"id": "a"}]}, sort_keys=False))
+    import os
+    mtime_before = os.stat(cfg).st_mtime_ns
+    # a no-op mutator gated to NOT write
+    mutate_config(lambda c: None, config_path=cfg, write_if=lambda _c, _r: False)
+    assert os.stat(cfg).st_mtime_ns == mtime_before  # file untouched
+
+
+def test_user_feed_survives_self_tune_prune(tmp_config: Path) -> None:
+    # A user-added feed round-trips a self_tune prune UNCHANGED (managed_by:user
+    # is never auto-disabled — the coexistence contract).
+    from jobs.self_tune import prune_unused_feeds
+
+    _run(add_feed(NewFeed(id="mine", name="Mine", type="rss", tier="engineering")))
+    config = yaml.safe_load(tmp_config.read_text())
+    # prune with zero usage for every feed → only self-tune-managed feeds disable
+    prune_unused_feeds(config, usage={}, min_days=0, dry_run=False)
+    mine = next(f for f in config["feeds"] if f["id"] == "mine")
+    assert mine["enabled"] is True  # user feed protected, not auto-disabled
 
 
 # ── Router wiring (AC5 — endpoints reachable through the real ASGI app) ──────
