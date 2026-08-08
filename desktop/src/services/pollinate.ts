@@ -25,6 +25,10 @@ export interface PollinateAsset {
   fileName: string;
   isImage: boolean;
   publishStatus: 'ready' | 'ready-to-publish' | 'published';
+  /** Stable logical id (sha1 of platform/format/fileName) — the key for POST /publish. */
+  assetId: string;
+  /** Public URL where the asset was posted (set once marked published). */
+  postedUrl: string | null;
 }
 
 export interface PollinateContentCard {
@@ -78,6 +82,8 @@ function assetToCamel(a: Record<string, unknown>): PollinateAsset {
     fileName: (a.file_name as string) ?? '',
     isImage: Boolean(a.is_image),
     publishStatus: (a.publish_status as PollinateAsset['publishStatus']) ?? 'ready',
+    assetId: (a.asset_id as string) ?? '',
+    postedUrl: (a.posted_url as string | null) ?? null,
   };
 }
 
@@ -154,6 +160,28 @@ export const pollinateService = {
         createdAt: (d.created_at as string | null) ?? null,
         contentPackage: (d.content_package as string | null) ?? null,
         assets: Array.isArray(d.assets) ? (d.assets as Record<string, unknown>[]).map(assetToCamel) : [],
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  /** Mark ONE asset published/unpublished (P1 write path). Persists to the run's
+   *  publish-state.json sidecar. Returns the new publish_status, or null on failure
+   *  (caller keeps the old UI state). */
+  async markPublished(
+    run: string, assetId: string, published: boolean, postedUrl?: string | null,
+  ): Promise<{ publishStatus: PollinateAsset['publishStatus']; postedUrl: string | null } | null> {
+    try {
+      const { data } = await api.post(`/pollinate/${encodeURIComponent(run)}/publish`, {
+        asset_id: assetId,
+        published,
+        posted_url: postedUrl || null,
+      });
+      const d = data as Record<string, unknown>;
+      return {
+        publishStatus: (d.publish_status as PollinateAsset['publishStatus']) ?? 'ready',
+        postedUrl: (d.posted_url as string | null) ?? null,
       };
     } catch {
       return null;

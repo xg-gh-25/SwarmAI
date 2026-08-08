@@ -12,8 +12,9 @@ Knowledge/Designs/2026-08-02-pollinate-content-asset-gallery-navcard-design.md
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PollinateAsset(BaseModel):
@@ -28,6 +29,53 @@ class PollinateAsset(BaseModel):
         default="ready",
         description="ready (default/unknown) | ready-to-publish (kit present) | published",
     )
+    asset_id: str = Field(
+        default="",
+        description="Stable LOGICAL id = sha1(platform/format/file_name). The key the "
+        "publish-state sidecar uses + the frontend passes to POST /publish. Stable across "
+        "the deliver↔tracks root-flip (a physical-path key would orphan the mark).",
+    )
+    posted_url: Optional[str] = Field(
+        default=None, description="The public URL where this asset was posted (set when published)."
+    )
+
+
+class PublishRequest(BaseModel):
+    """`POST /api/pollinate/{run_name}/publish` body — mark one asset published/unpublished."""
+
+    asset_id: str = Field(description="The asset's stable logical id (40-hex sha1).")
+    published: bool = Field(description="True = mark published; False = revert to ready.")
+    posted_url: Optional[str] = Field(
+        default=None, max_length=2048, description="Optional public URL of the post (http/https only)."
+    )
+
+    @field_validator("posted_url")
+    @classmethod
+    def _validate_posted_url(cls, v: Optional[str]) -> Optional[str]:
+        """Reject a non-http(s) URL. posted_url is stored verbatim and later rendered as an
+        <a href> in the overlay — an un-scheme-checked value permits a stored javascript:/data:
+        XSS (there is no CSP). Allow only http/https; empty → None. (Security-gate, 422 on fail.)"""
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        parts = urlsplit(v)
+        # Require BOTH an http(s) scheme AND a network location (netloc) — i.e. the full
+        # `http(s)://host` form. Checking scheme alone would accept `https:x` / `http:foo`
+        # (no `//`), which the frontend render guard (/^https?:\/\//) rejects → a stored value
+        # the UI silently won't render. Requiring netloc makes backend + frontend agree.
+        if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+            raise ValueError("posted_url must be a full http:// or https:// URL")
+        return v
+
+
+class PublishResponse(BaseModel):
+    """`POST /api/pollinate/{run_name}/publish` result — the asset's new publish state."""
+
+    asset_id: str
+    publish_status: str = Field(description="'published' or 'ready' after the write.")
+    posted_url: Optional[str] = None
 
 
 class PollinateContentCard(BaseModel):

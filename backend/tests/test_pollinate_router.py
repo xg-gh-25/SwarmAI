@@ -548,6 +548,160 @@ def test_podcast_shorts_layout_is_a_real_card_not_scratch(client, workspace):
     assert card["status"] == "completed"
 
 
+# ================= run_b290eb6f: P1 publish-state write-back =================
+
+def _find_asset(cards, run, file_name):
+    card = next(c for c in cards if c["run"] == run)
+    return next(a for a in card["assets"] if a["file_name"] == file_name)
+
+
+# ---------- stable logical id ----------
+
+def test_asset_id_is_logical_and_stable_across_root_flip():
+    """The stable id = sha1(platform/format/file_name), NOT the physical path — so the SAME
+    logical asset yields the SAME id whether walked from deliver/{platform}/ or tracks/{format}/
+    (the deliver<->tracks root-flip must not orphan a published mark)."""
+    from routers.pollinate import _asset_id
+    # deliver/xiaohongshu/poster.png → platform=xiaohongshu, format=poster
+    # a DIFFERENT logical asset (tracks/poster/poster.png → platform='', format=poster) is
+    # intentionally a different id; the STABILITY guarantee is: same (platform,format,name)
+    # → same id regardless of how many times/where we walk it.
+    a = _asset_id("xiaohongshu", "poster", "slide.png")
+    b = _asset_id("xiaohongshu", "poster", "slide.png")
+    assert a == b and len(a) == 40 and all(c in "0123456789abcdef" for c in a)
+
+
+def test_assets_carry_asset_id(client, workspace):
+    _mk_run(workspace, "2026-05-03-ids", deliver={"xiaohongshu": ["poster_3x4.png"]})
+    r = client.get("/api/pollinate/assets")
+    a = _find_asset(r.json()["cards"], "2026-05-03-ids", "poster_3x4.png")
+    assert len(a["asset_id"]) == 40
+    assert a["publish_status"] == "ready"
+    assert a["posted_url"] is None
+
+
+# ---------- write->read loop (Layer 4 core) ----------
+
+def test_mark_published_write_then_read_both_endpoints(client, workspace):
+    """POST /publish marks an asset; a subsequent GET shows it published in BOTH the
+    /assets rollup AND the /{run} detail — the real write->read loop, no mock."""
+    _mk_run(workspace, "2026-05-03-pub",
+            run_json={"topic": "t", "status": "completed", "created_at": "2026-05-03T00:00:00"},
+            deliver={"xiaohongshu": ["poster_3x4.png"]})
+    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-pub", "poster_3x4.png")
+    aid = a["asset_id"]
+    # write
+    resp = client.post("/api/pollinate/2026-05-03-pub/publish",
+                       json={"asset_id": aid, "published": True, "posted_url": "https://xhs.com/p/1"})
+    assert resp.status_code == 200
+    assert resp.json()["publish_status"] == "published"
+    # read: /assets rollup
+    j = client.get("/api/pollinate/assets").json()
+    a2 = _find_asset(j["cards"], "2026-05-03-pub", "poster_3x4.png")
+    assert a2["publish_status"] == "published"
+    assert a2["posted_url"] == "https://xhs.com/p/1"
+    assert j["overall"]["published"] == 1
+    # read: /{run} detail
+    d = client.get("/api/pollinate/2026-05-03-pub").json()
+    da = next(x for x in d["assets"] if x["file_name"] == "poster_3x4.png")
+    assert da["publish_status"] == "published"
+
+
+def test_unpublish_reverts_to_ready(client, workspace):
+    _mk_run(workspace, "2026-05-03-unpub", deliver={"xiaohongshu": ["poster_3x4.png"]})
+    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-unpub", "poster_3x4.png")["asset_id"]
+    client.post("/api/pollinate/2026-05-03-unpub/publish", json={"asset_id": aid, "published": True})
+    client.post("/api/pollinate/2026-05-03-unpub/publish", json={"asset_id": aid, "published": False})
+    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-unpub", "poster_3x4.png")
+    assert a["publish_status"] == "ready"
+    assert a["posted_url"] is None
+
+
+def test_sidecar_published_overrides_kit_ready_to_publish(client, workspace):
+    """Precedence: sidecar 'published' (authority) beats a kit 'ready-to-publish'."""
+    _mk_run(workspace, "2026-05-03-prec",
+            deliver={"xiaohongshu": ["poster_3x4.png"]},
+            publish_kits={"xiaohongshu": "ready-to-publish"})
+    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-prec", "poster_3x4.png")
+    assert a["publish_status"] == "ready-to-publish"  # kit fallback before publish
+    client.post("/api/pollinate/2026-05-03-prec/publish", json={"asset_id": a["asset_id"], "published": True})
+    a2 = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-prec", "poster_3x4.png")
+    assert a2["publish_status"] == "published"  # sidecar wins
+
+
+# ---------- traversal + validation on the write endpoint ----------
+
+def test_publish_endpoint_rejects_traversal_run_name(client, workspace):
+    aid = "a" * 40
+    # '..' matches _RUN_NAME_RE but must fail the containment check → 404
+    assert client.post("/api/pollinate/..%2f..%2fetc/publish", json={"asset_id": aid, "published": True}).status_code == 404
+    assert client.post("/api/pollinate/2026-99-99-nope/publish", json={"asset_id": aid, "published": True}).status_code == 404
+
+
+def test_publish_endpoint_rejects_bad_asset_id(client, workspace):
+    _mk_run(workspace, "2026-05-03-badid", deliver={"xiaohongshu": ["poster_3x4.png"]})
+    # non-40-hex asset_id (a path-shaped id) → 422, never written
+    for bad in ["../../etc/passwd", "nothex", "A" * 40, "abc"]:
+        r = client.post("/api/pollinate/2026-05-03-badid/publish", json={"asset_id": bad, "published": True})
+        assert r.status_code == 422, bad
+
+
+# ---------- guarded loader: malformed sidecar never 500s ----------
+
+def test_malformed_sidecar_degrades_to_ready(client, workspace):
+    d = _mk_run(workspace, "2026-05-03-bad", deliver={"xiaohongshu": ["poster_3x4.png"]})
+    (d / "publish-state.json").write_text("{ this is not valid json", encoding="utf-8")
+    # both endpoints must 200, asset falls back to 'ready'
+    r = client.get("/api/pollinate/assets")
+    assert r.status_code == 200
+    a = _find_asset(r.json()["cards"], "2026-05-03-bad", "poster_3x4.png")
+    assert a["publish_status"] == "ready"
+    assert client.get("/api/pollinate/2026-05-03-bad").status_code == 200
+
+
+def test_publish_rejects_non_http_posted_url(client, workspace):
+    """Security: posted_url is rendered as an <a href> — a javascript:/data: URL is stored-XSS.
+    The backend must reject any non-http(s) scheme with 422."""
+    _mk_run(workspace, "2026-05-03-xss", deliver={"xiaohongshu": ["poster_3x4.png"]})
+    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-xss", "poster_3x4.png")["asset_id"]
+    for bad in ["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "file:///etc/passwd",
+                "vbscript:x", "  javascript:alert(1)", "JavaScript:alert(1)",
+                "https:x", "http:foo", "//evil.com"]:  # incl no-netloc forms the frontend won't render
+        r = client.post("/api/pollinate/2026-05-03-xss/publish",
+                       json={"asset_id": aid, "published": True, "posted_url": bad})
+        # Pydantic body-validation failure → 400 in this app (middleware maps it); the point
+        # is it is REJECTED (never persisted), not the exact 4xx code.
+        assert r.status_code == 400, bad
+    # http/https accepted
+    for ok in ["https://xhs.com/p/1", "http://example.com"]:
+        r = client.post("/api/pollinate/2026-05-03-xss/publish",
+                       json={"asset_id": aid, "published": True, "posted_url": ok})
+        assert r.status_code == 200, ok
+
+
+def test_unpublish_recomputes_kit_fallback(client, workspace):
+    """After un-publish, an asset WITH a kit 'ready-to-publish' must read back as
+    'ready-to-publish' (not a hardcoded 'ready') on the next GET — the read path recomputes."""
+    _mk_run(workspace, "2026-05-03-kitrevert",
+            deliver={"xiaohongshu": ["poster_3x4.png"]},
+            publish_kits={"xiaohongshu": "ready-to-publish"})
+    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-kitrevert", "poster_3x4.png")["asset_id"]
+    client.post("/api/pollinate/2026-05-03-kitrevert/publish", json={"asset_id": aid, "published": True})
+    client.post("/api/pollinate/2026-05-03-kitrevert/publish", json={"asset_id": aid, "published": False})
+    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-kitrevert", "poster_3x4.png")
+    assert a["publish_status"] == "ready-to-publish"  # kit fallback restored, not 'ready'
+
+
+def test_write_is_atomic_no_temp_left(client, workspace):
+    """After a publish write, no leftover temp file (mkstemp+os.replace+finally-unlink)."""
+    d = _mk_run(workspace, "2026-05-03-atomic", deliver={"xiaohongshu": ["poster_3x4.png"]})
+    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-atomic", "poster_3x4.png")["asset_id"]
+    client.post("/api/pollinate/2026-05-03-atomic/publish", json={"asset_id": aid, "published": True})
+    assert (d / "publish-state.json").is_file()
+    leftover = [p.name for p in d.iterdir() if p.name.startswith(".publish-state.")]
+    assert leftover == [], f"temp file left behind: {leftover}"
+
+
 def test_is_scratch_dir_spares_topic_markers(workspace):
     """_is_scratch_dir must NOT flag a dir carrying content_package.md/REPORT.md or a media
     subdir, even with no run.json/deliver/tracks."""

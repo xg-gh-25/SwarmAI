@@ -1,8 +1,9 @@
-"""Pollinate Content-Asset Gallery — read-only router (sibling of routers/pipelines.py).
+"""Pollinate Content-Asset Gallery — router (sibling of routers/pipelines.py).
 
-Two endpoints, both retrospective (fetch-once, no live state — chat is the live surface):
-  GET /api/pollinate/assets        — newest-first content cards + overall rollup
-  GET /api/pollinate/{run_name}    — one content topic's full detail
+Mostly-read gallery + ONE write path (mark-published, P1 run_b290eb6f):
+  GET  /api/pollinate/assets              — newest-first content cards + overall rollup
+  GET  /api/pollinate/{run_name}          — one content topic's full detail
+  POST /api/pollinate/{run_name}/publish  — mark an asset published/unpublished (sidecar write)
 
 ASSET-CENTRIC (Gate-1 BLOCKs baked in):
   * The `deliver/` DIR WALK is the source of truth for what was produced — NOT
@@ -16,9 +17,10 @@ ASSET-CENTRIC (Gate-1 BLOCKs baked in):
     stage='...'/status='completed', but pollinate stages use name='REFLECT'(UPPERCASE)/
     status in {done,completed}, so the pipeline helper's stage branch never fires. Reusing
     it would mis-gate the metadata cache on review/running-but-done runs.
-  * publish_status defaults to 'ready' (unknown); 'ready-to-publish' only when a
-    publish-kit.md frontmatter says so; 'published' is never fabricated (only 1/3 kits
-    even have frontmatter — verified).
+  * publish_status precedence: sidecar 'published' (the P1 publish-state.json, user-marked
+    via POST /publish — the AUTHORITY) > 'ready-to-publish' (a publish-kit.md frontmatter
+    says so) > 'ready' (default/unknown). Before P1 'published' was never reachable; it is
+    now set ONLY by an explicit user mark-published write, never fabricated from content.
 
 Thumbnails are served by the EXISTING GET /api/workspace/file/raw (FileResponse,
 workspace-sandboxed) — no new media endpoint. The frontend points <img> at it.
@@ -26,8 +28,12 @@ workspace-sandboxed) — no new media endpoint. The frontend points <img> at it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re as _re
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +46,8 @@ from schemas.pollinate import (
     PollinateContentCard,
     PollinateOverall,
     PollinateTopicDetail,
+    PublishRequest,
+    PublishResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +67,10 @@ _ASSET_MATERIALIZE_CAP = 60
 # is admitted for safety but no real dir uses one. Looser than pipelines' `run_...`
 # regex because pollinate dirs are date-name slugs, not run_<hex> ids.
 _RUN_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]+$")
+
+# The publish endpoint's asset_id is a sha1 hexdigest. Constraining it to 40-hex means a
+# crafted asset_id can NEVER encode a path — it is a pure sidecar-JSON key, never a filename.
+_ASSET_ID_RE = _re.compile(r"^[0-9a-f]{40}$")
 
 # Image extensions that <img src=/api/workspace/file/raw> can render inline.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
@@ -243,6 +255,72 @@ def _publish_status_for(deliver_dir: Path, platform: str) -> str:
     return "ready"
 
 
+# --- P1 publish-state sidecar (run_b290eb6f) -------------------------------------------
+# A per-run publish-state.json is the AUTHORITY for user-marked 'published' state. It is
+# keyed on the asset's STABLE LOGICAL id (below), NOT its physical path — a path key would
+# orphan the mark when the deliver↔tracks root-flip changes an asset's parent dir.
+_PUBLISH_STATE_FILE = "publish-state.json"
+
+
+def _asset_id(platform: str, fmt: str, file_name: str) -> str:
+    """Stable logical id for an asset = sha1(platform/format/file_name).
+
+    ⚠️ CONTRACT: this id is a function of the CLASSIFIER output (platform + _classify_format
+    /_TRACKS_CONTENT_FORMATS), NOT the physical path — that is deliberate (it survives the
+    deliver↔tracks root-flip). The flip side: editing _classify_format or the platform/format
+    labelling will re-hash existing assets and ORPHAN their stored publish-state entries.
+    Treat the (platform, format, file_name) → id mapping as a stable contract.
+    """
+    return hashlib.sha1(f"{platform}/{fmt}/{file_name}".encode("utf-8")).hexdigest()
+
+
+def _publish_state_path(run_dir: Path) -> Path:
+    return run_dir / _PUBLISH_STATE_FILE
+
+
+def _load_publish_state(run_dir: Path) -> dict:
+    """Read the per-run publish-state sidecar. GUARDED (mirrors _read_run_json): a missing,
+    malformed, or half-written file degrades to {} — the gallery/detail must NEVER 500 on a
+    bad sidecar (the detail endpoint has no per-card try/except, so the loader itself is safe).
+    Returns {asset_id: {"published": bool, "posted_url": str|None}}."""
+    p = _publish_state_path(run_dir)
+    try:
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, ValueError):
+        return {}
+    return {}
+
+
+def _write_publish_state(run_dir: Path, state: dict) -> None:
+    """Atomically write the sidecar (tempfile + os.replace — the codebase idiom, ddd_brain
+    _write_watermark). CONCURRENCY POSTURE: single-user, low-frequency (the overlay is a
+    manual mark-as-posted toggle) → last-write-wins is ACCEPTED; no flock. The atomic replace
+    guarantees a reader never sees a half-written file, only never-lost-update across a rare
+    concurrent double-POST — an accepted trade-off at this scale, documented deliberately."""
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(run_dir), prefix=".publish-state.", suffix=".tmp")
+    try:
+        # Guard the raw fd: mkstemp returns an OPEN descriptor; os.fdopen ADOPTS it (and its
+        # context-manager closes it). But if fdopen itself raises before adopting, the raw fd
+        # would leak — close it explicitly on that narrow path (textbook mkstemp+fdopen pitfall).
+        try:
+            fh = os.fdopen(tmp_fd, "w", encoding="utf-8")
+        except BaseException:
+            os.close(tmp_fd)
+            raise
+        with fh:
+            json.dump(state, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp_name, str(_publish_state_path(run_dir)))
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
 def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
     """Enumerate produced assets from the deliver/ tree — the SOURCE OF TRUTH.
 
@@ -255,6 +333,8 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
     assets: list[PollinateAsset] = []
     swarmws = _get_swarmws()
     deliver = run_dir / "deliver"
+    # Load the publish-state sidecar ONCE per run (not per-asset) — closed over in _add.
+    publish_state = _load_publish_state(run_dir)
 
     def _rel(p: Path) -> str:
         try:
@@ -274,6 +354,15 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
         # but a deck's outline.md / speaker_notes.md read honestly as 'deck', not 'other').
         if fmt == "other" and format_hint in _TRACKS_CONTENT_FORMATS:
             fmt = format_hint
+        aid = _asset_id(platform, fmt, f.name)
+        # Precedence: sidecar 'published' (AUTHORITY) > kit 'ready-to-publish' > 'ready'.
+        status = _publish_status_for(deliver, platform) if deliver.is_dir() else "ready"
+        posted_url = None
+        entry = publish_state.get(aid)
+        if isinstance(entry, dict) and entry.get("published"):
+            status = "published"
+            pu = entry.get("posted_url")
+            posted_url = pu if isinstance(pu, str) and pu else None
         assets.append(
             PollinateAsset(
                 platform=platform,
@@ -281,7 +370,9 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
                 file_path=_rel(f),
                 file_name=f.name,
                 is_image=ext in _IMAGE_EXTS,
-                publish_status=_publish_status_for(deliver, platform) if deliver.is_dir() else "ready",
+                publish_status=status,
+                asset_id=aid,
+                posted_url=posted_url,
             )
         )
 
@@ -538,23 +629,33 @@ async def pollinate_assets() -> PollinateAssetsResponse:
     return PollinateAssetsResponse(overall=overall, cards=cards)
 
 
+def _resolve_run_dir(run_name: str) -> Optional[Path]:
+    """Validate a user-supplied run_name and resolve it to a contained run dir, or None.
+
+    ⚠️ _RUN_NAME_RE ALONE IS NOT A TRAVERSAL GUARD — it admits '.'/'..'. The real guard is
+    the resolve() + relative_to(root) containment check below. Both the read (detail) and the
+    write (publish) endpoints route through here so the guard can't drift between them."""
+    if not run_name or not _RUN_NAME_RE.match(run_name):
+        return None
+    root = _get_swarmws() / _POLLINATE_ROOT
+    run_dir = (root / run_name).resolve()
+    try:
+        run_dir.relative_to(root.resolve())
+    except ValueError:
+        return None
+    if not run_dir.is_dir():
+        return None
+    return run_dir
+
+
 @router.get("/{run_name}", response_model=PollinateTopicDetail)
 async def pollinate_topic_detail(run_name: str):
     """One content topic's full detail. run_name validated + containment-checked
     against the Pollinate root before any FS read (traversal guard)."""
     from fastapi.responses import JSONResponse
 
-    if not _RUN_NAME_RE.match(run_name):
-        return JSONResponse(status_code=404, content={"detail": "not found"})
-
-    root = _get_swarmws() / _POLLINATE_ROOT
-    run_dir = (root / run_name).resolve()
-    # Containment: the resolved path MUST stay under the Pollinate root.
-    try:
-        run_dir.relative_to(root.resolve())
-    except ValueError:
-        return JSONResponse(status_code=404, content={"detail": "not found"})
-    if not run_dir.is_dir():
+    run_dir = _resolve_run_dir(run_name)
+    if run_dir is None:
         return JSONResponse(status_code=404, content={"detail": "not found"})
 
     run = _read_run_json(run_dir)
@@ -586,3 +687,33 @@ async def pollinate_topic_detail(run_name: str):
         content_package=content_package,
         assets=assets,
     )
+
+
+@router.post("/{run_name}/publish", response_model=PublishResponse)
+async def pollinate_mark_published(run_name: str, req: PublishRequest):
+    """Mark ONE asset published/unpublished — the sole write path (P1). Persists to the
+    per-run publish-state.json sidecar (atomic), keyed on the asset's stable logical id.
+    Traversal-guarded: run_name via _resolve_run_dir containment, asset_id via 40-hex."""
+    from fastapi.responses import JSONResponse
+
+    run_dir = _resolve_run_dir(run_name)
+    if run_dir is None:
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    if not _ASSET_ID_RE.match(req.asset_id or ""):
+        return JSONResponse(status_code=422, content={"detail": "invalid asset_id (expect 40-hex sha1)"})
+
+    state = _load_publish_state(run_dir)
+    if req.published:
+        state[req.asset_id] = {"published": True, "posted_url": req.posted_url or None}
+        new_status, posted = "published", (req.posted_url or None)
+    else:
+        # Un-publish → drop the entry so the asset falls back to its kit/default status.
+        state.pop(req.asset_id, None)
+        new_status, posted = "ready", None
+    try:
+        _write_publish_state(run_dir, state)
+    except OSError as e:
+        logger.warning("pollinate: publish-state write failed for %s: %s", run_dir.name, e)
+        return JSONResponse(status_code=500, content={"detail": "failed to persist publish state"})
+
+    return PublishResponse(asset_id=req.asset_id, publish_status=new_status, posted_url=posted)

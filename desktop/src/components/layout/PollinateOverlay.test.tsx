@@ -12,6 +12,7 @@ import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-libra
 const fetchAssets = vi.fn();
 const fetchTopicDetail = vi.fn();
 const fetchAssetBody = vi.fn();
+const markPublished = vi.fn();
 vi.mock('../../services/pollinate', async () => {
   const actual = await vi.importActual<typeof import('../../services/pollinate')>('../../services/pollinate');
   return {
@@ -20,6 +21,7 @@ vi.mock('../../services/pollinate', async () => {
       fetchAssets: () => fetchAssets(),
       fetchTopicDetail: (r: string) => fetchTopicDetail(r),
       fetchAssetBody: (p: string) => fetchAssetBody(p),
+      markPublished: (...a: unknown[]) => markPublished(...a),
     },
     assetThumbUrl: (p: string) => `http://x/api/workspace/file/raw?path=${p}`,
   };
@@ -43,7 +45,8 @@ const ASSETS = {
       publishedCount: 1, readyCount: 2,
       assets: [
         { platform: 'xiaohongshu', format: 'poster', filePath: 'Knowledge/Pollinate/m/poster.png',
-          fileName: 'poster.png', isImage: true, publishStatus: 'ready-to-publish' },
+          fileName: 'poster.png', isImage: true, publishStatus: 'ready-to-publish',
+          assetId: 'a'.repeat(40), postedUrl: null },
         // sibling caption for the xhs poster — the drawer should lazily fetch THIS body
         { platform: 'xiaohongshu', format: 'caption', filePath: 'Knowledge/Pollinate/m/caption.txt',
           fileName: 'caption.txt', isImage: false, publishStatus: 'ready-to-publish' },
@@ -83,6 +86,7 @@ beforeEach(() => {
   fetchAssets.mockResolvedValue(ASSETS);
   fetchTopicDetail.mockResolvedValue(null);
   fetchAssetBody.mockResolvedValue('小红书文案正文 — 复制我去发布 #AI');
+  markPublished.mockResolvedValue({ publishStatus: 'published', postedUrl: 'https://xhs.com/p/1' });
 });
 
 function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true)) {
@@ -232,5 +236,36 @@ describe('PollinateOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pollinate-insights')).toBeInTheDocument());
     // youtube has 0 assets in the fixture but IS a known channel → must appear
     expect(screen.getByTestId('pollinate-insights').textContent).toContain('youtube');
+  });
+
+  // ── P1: Mark-published write path (run_b290eb6f) ──
+  it('Mark published calls the service with the asset id + posted URL, then reflects it in the OPEN drawer', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')); // the xhs poster (ready-to-publish)
+    await waitFor(() => expect(screen.getByTestId('pollinate-mark-published-btn')).toBeInTheDocument());
+    // enter a posted URL, then mark published
+    fireEvent.change(screen.getByTestId('pollinate-posted-url-input'), { target: { value: 'https://xhs.com/p/1' } });
+    await act(async () => { fireEvent.click(screen.getByTestId('pollinate-mark-published-btn')); });
+    // service called with (run, assetId, true, url)
+    expect(markPublished).toHaveBeenCalledWith('2026-05-03-memory-is-the-moat', 'a'.repeat(40), true, 'https://xhs.com/p/1');
+    // GUI101 write→read: the OPEN drawer must now show published (optimistic patch of `selected`),
+    // NOT stay stale on 'ready-to-publish' — this is the exact gap Gate-1 flagged.
+    await waitFor(() => expect(screen.getByTestId('pollinate-unpublish-btn')).toBeInTheDocument());
+    expect(screen.getByTestId('pollinate-posted-url')).toHaveAttribute('href', 'https://xhs.com/p/1');
+    // gallery re-fetch fired too (rollup counts refresh)
+    expect(fetchAssets).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed markPublished leaves the drawer on its prior state + shows retry', async () => {
+    markPublished.mockResolvedValueOnce(null); // service failure
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
+    await waitFor(() => expect(screen.getByTestId('pollinate-mark-published-btn')).toBeInTheDocument());
+    await act(async () => { fireEvent.click(screen.getByTestId('pollinate-mark-published-btn')); });
+    // still shows the mark-published button (not flipped to published) + a failure hint
+    await waitFor(() => expect(screen.getByTestId('pollinate-mark-published-btn').textContent).toContain('Failed'));
+    expect(screen.queryByTestId('pollinate-unpublish-btn')).toBeNull();
   });
 });

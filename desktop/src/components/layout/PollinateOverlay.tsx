@@ -138,6 +138,22 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
     return () => { cancelled = true; };
   }, [reloadTick]);
 
+  // Keep the OPEN drawer in sync with the authoritative re-fetched data (GUI101 write→read).
+  // After a mark/unpublish → reloadTick → fetchAssets → setData, re-derive `selected.asset`
+  // from the fresh list by assetId. This is what makes UNPUBLISH correct: the POST response
+  // says 'ready', but the backend may recompute a kit 'ready-to-publish' — trusting the
+  // re-fetched value (not the response) keeps the drawer and gallery card consistent.
+  useEffect(() => {
+    if (!data) return;
+    setSelected((prev) => {
+      if (!prev) return prev;
+      const card = data.cards.find((c) => c.run === prev.card.run);
+      const asset = card?.assets.find((a) => a.assetId === prev.asset.assetId);
+      if (!card || !asset) return prev; // asset vanished (e.g. filtered) → keep last known
+      return { card, asset };
+    });
+  }, [data]);
+
   const dispatchToChat = useCallback((prompt: string) => {
     const landed = onDispatch(prompt);
     if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
@@ -327,6 +343,21 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               dispatchToChat(`Open my ${platform} account so I can publish "${selected.card.topic}".`)}
             onProduce={(platform) =>
               dispatchToChat(`Resume pollinate for "${selected.card.topic}" and produce the ${platform} asset (run dir ${selected.card.run}).`)}
+            onMarkPublished={async (published, postedUrl) => {
+              const res = await pollinateService.markPublished(
+                selected.card.run, selected.asset.assetId, published, postedUrl,
+              );
+              if (!res) return false;
+              // Close the write→read loop on the OPEN drawer (GUI101): re-fetch alone won't
+              // update `selected` (a by-value snapshot), so optimistically patch it from the
+              // response, THEN bump reloadTick so the gallery rollup/counts refresh too.
+              setSelected((prev) => prev && {
+                ...prev,
+                asset: { ...prev.asset, publishStatus: res.publishStatus, postedUrl: res.postedUrl },
+              });
+              setReloadTick((t) => t + 1);
+              return true;
+            }}
           />
         )}
     </div>
@@ -460,7 +491,7 @@ function resolveCaptionAsset(card: PollinateContentCard, asset: PollinateAsset):
   return siblings.find((a) => !isPublishKit(a)) ?? siblings[0] ?? null;
 }
 
-function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpenAccount, onProduce }: {
+function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpenAccount, onProduce, onMarkPublished }: {
   card: PollinateContentCard;
   asset: PollinateAsset;
   knownChannels: string[];
@@ -468,11 +499,15 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   onClose: () => void;
   onOpenAccount: (platform: string) => void;
   onProduce: (platform: string) => void;
+  onMarkPublished: (published: boolean, postedUrl?: string | null) => Promise<boolean>;
 }) {
   const [copied, setCopied] = useState(false);
   const [copyErr, setCopyErr] = useState(false); // B7: clipboard-blocked was silent
   const [body, setBody] = useState<string | null>(null);
   const [bodyLoading, setBodyLoading] = useState(false);
+  const [urlInput, setUrlInput] = useState('');
+  const [marking, setMarking] = useState(false);
+  const [markErr, setMarkErr] = useState(false);
 
   const captionAsset = resolveCaptionAsset(card, asset);
   const captionPath = captionAsset?.filePath ?? null;
@@ -570,7 +605,48 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               : asset.publishStatus === 'ready-to-publish' ? 'ready to publish'
               : 'ready'}
           </span>
+          {asset.publishStatus === 'published' && asset.postedUrl && /^https?:\/\//i.test(asset.postedUrl) && (
+            // Defense-in-depth: only render an http(s) href (the backend already rejects
+            // non-http(s) posted_url, but React does NOT sanitize href — a javascript:/data:
+            // value would execute on click. Guard here too so a legacy sidecar value is inert).
+            <a
+              href={asset.postedUrl} target="_blank" rel="noreferrer"
+              data-testid="pollinate-posted-url"
+              className="text-[11px] text-primary hover:underline truncate max-w-[180px]"
+            >{asset.postedUrl}</a>
+          )}
         </div>
+
+        {/* Mark-published affordance (P1 write path). The system learns it was posted. */}
+        {asset.publishStatus === 'published' ? (
+          <button
+            onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(false); setMarking(false); if (!ok) setMarkErr(true); }}
+            disabled={marking}
+            data-testid="pollinate-unpublish-btn"
+            className="self-start flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50"
+          >
+            <span className="material-symbols-outlined text-[14px]">undo</span>
+            {markErr ? 'Failed — retry' : 'Mark unpublished'}
+          </button>
+        ) : (
+          <div className="flex gap-2 items-center flex-wrap">
+            <input
+              type="url" value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
+              placeholder="posted URL (optional)"
+              data-testid="pollinate-posted-url-input"
+              className="flex-1 min-w-[140px] px-2 py-1 text-[11px] rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)]"
+            />
+            <button
+              onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(true, urlInput.trim() || null); setMarking(false); if (ok) setUrlInput(''); else setMarkErr(true); }}
+              disabled={marking}
+              data-testid="pollinate-mark-published-btn"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[15px]">{markErr ? 'error' : 'check_circle'}</span>
+              {marking ? 'Marking…' : markErr ? 'Failed — retry' : 'Mark published'}
+            </button>
+          </div>
+        )}
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={doCopy}
