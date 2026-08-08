@@ -28,6 +28,7 @@ from .session_healing import get_process_rss_mb
 from .ui_actions import (
     build_ui_command_event,
     build_surface_events,
+    ensure_report_for_run,
     UI_ACTION_FULL_TOOL_NAME,
     SURFACE_OUTPUTS_FULL_TOOL_NAME,
 )
@@ -1051,7 +1052,17 @@ class StreamingOrchestrator:
                         # appear at once. The SDK still delivers the tool's ack. This is
                         # the ONLY way N rows reach the rail (run-commit CLI can't emit).
                         if block.name == SURFACE_OUTPUTS_FULL_TOOL_NAME and isinstance(block.input, dict):
-                            for _sf_ev in build_surface_events(block.input.get("run_id")):
+                            # ORDERING ROOT-FIX (run_f1fbf37d): guarantee the run's
+                            # REPORT.md exists BEFORE we build the batch. The report
+                            # is produced by a SEPARATE agent step (run-report); if
+                            # surface_run_outputs is called before it, the report row
+                            # is silently dropped. The consumer now ensures its own
+                            # input — regenerate a missing/stub report in-process
+                            # (off-loop, fail-safe: never raises) so build_surface_events
+                            # (still PURE) finds it and emits the report row.
+                            _sf_run_id = block.input.get("run_id")
+                            await ensure_report_for_run(_sf_run_id)
+                            for _sf_ev in build_surface_events(_sf_run_id):
                                 yield _sf_ev
                             # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":

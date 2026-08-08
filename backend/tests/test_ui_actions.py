@@ -492,3 +492,133 @@ class TestReportSurfaceCrossBoundaryContract:
         assert not any(
             "REPORT.md" in r.message for r in caplog.records if r.levelno >= logging.WARNING
         ), "no source rows → no ordering hazard → must NOT warn"
+
+
+class TestEnsureReportForRun:
+    """ensure_report_for_run — the root-fix for the surface-vs-run-report ordering
+    coupling (run_f1fbf37d, method A). The CONSUMER (surface) guarantees its own
+    input (REPORT.md) exists before the orchestrator emits, so the agent can no
+    longer call surface_run_outputs 'too early' and lose the report row.
+
+    Design decisions this pins:
+      - report-gen lives HERE, not in build_surface_events (which stays pure — AC3).
+      - it reuses run-report via DIRECT IMPORT of cmd_run_report (NOT a subprocess —
+        Gate-1 found bare `python <relpath>` silently no-ops in the frozen daemon).
+      - it regenerates on missing OR stub (<500 bytes) — matches the run-update gate.
+      - it is fail-safe: any error → return False, never raise (hot SSE path).
+
+    Mock boundary: cmd_run_report (the CLI leaf) is patched — these tests verify
+    ensure's DECISION logic (glob, project derive, guard, fail-safe), not the CLI's
+    report rendering (that has its own coverage).
+    """
+
+    def _make_run(self, tmp_path, run_id, commits, report_bytes=None):
+        import json
+        run_dir = tmp_path / "Projects" / "MyProj" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({"commits": commits}))
+        if report_bytes is not None:
+            (run_dir / "REPORT.md").write_text("x" * report_bytes)
+        return run_dir
+
+    async def _run_ensure(self, run_id, tmp_path, monkeypatch, report_size_written=600):
+        """Call ensure_report_for_run with cmd_run_report mocked to WRITE a report
+        of `report_size_written` bytes (simulating a successful run-report). Returns
+        (result, call_count)."""
+        import core.ui_actions as ui
+        calls = {"n": 0}
+
+        def fake_cmd_run_report(args, reg):
+            calls["n"] += 1
+            # simulate run-report writing REPORT.md under the run dir
+            run_dir = tmp_path / "Projects" / "MyProj" / ".artifacts" / "runs" / args.run_id
+            (run_dir / "REPORT.md").write_text("R" * report_size_written)
+
+        monkeypatch.setattr(ui, "get_swarmws", lambda: str(tmp_path))
+        monkeypatch.setattr(ui, "_ensure_report_via_cli", None, raising=False)
+        monkeypatch.setattr("scripts.artifact_cli.cmd_run_report", fake_cmd_run_report)
+        monkeypatch.setattr("scripts.artifact_cli.ArtifactRegistry", lambda *a, **k: object())
+        monkeypatch.setattr("scripts.artifact_cli._get_workspace", lambda: tmp_path)
+        result = await ui.ensure_report_for_run(run_id)
+        return result, calls["n"]
+
+    async def test_ac1_missing_report_is_generated(self, tmp_path, monkeypatch):
+        """AC1: committed run, REPORT.md absent → ensure generates it (cmd_run_report
+        called once), report now exists on disk."""
+        self._make_run(tmp_path, "run_a1", [{"repo": "/r", "sha": "abc1234", "files": ["b.py"]}])
+        result, n = await self._run_ensure("run_a1", tmp_path, monkeypatch)
+        assert n == 1, "cmd_run_report MUST be called when REPORT.md is absent"
+        assert (tmp_path / "Projects" / "MyProj" / ".artifacts" / "runs" / "run_a1" / "REPORT.md").exists()
+        assert result is True
+
+    async def test_ac1_report_row_now_emitted_after_ensure(self, tmp_path, monkeypatch):
+        """AC1 end-to-end: after ensure generates the report, build_surface_events
+        appends the REPORT.md row (kind=knowledge/deliverable) it would have skipped."""
+        from core.ui_actions import build_surface_events
+        self._make_run(tmp_path, "run_a1b", [{"repo": "/r", "sha": "abc1234", "files": ["b.py"]}])
+        await self._run_ensure("run_a1b", tmp_path, monkeypatch)
+        events = build_surface_events("run_a1b", workspace_root=str(tmp_path))
+        report_rows = [e for e in events if str(e.get("path", "")).endswith("REPORT.md")]
+        assert len(report_rows) == 1, "REPORT.md row must be present after ensure"
+        assert report_rows[0]["kind"] == "knowledge"
+        assert report_rows[0]["relevance"] == "deliverable"
+
+    async def test_ac2_present_report_is_noop(self, tmp_path, monkeypatch):
+        """AC2: committed run with a healthy (>=500 byte) REPORT.md → no-op, run-report
+        NOT called (no wasted regen, no overwrite of a good report)."""
+        self._make_run(tmp_path, "run_a2", [{"repo": "/r", "sha": "abc1234", "files": ["b.py"]}],
+                       report_bytes=600)
+        result, n = await self._run_ensure("run_a2", tmp_path, monkeypatch)
+        assert n == 0, "healthy REPORT.md present → cmd_run_report MUST NOT be called"
+        assert result is True
+
+    async def test_ac2_stub_report_is_regenerated(self, tmp_path, monkeypatch):
+        """AC2/R3 (Gate-1): a present-but-STUB report (<500 bytes) is the documented
+        failure mode (IMPROVEMENT.md: 5/6 runs froze empty) — ensure MUST regenerate
+        it, not treat .exists() as good enough."""
+        self._make_run(tmp_path, "run_a2s", [{"repo": "/r", "sha": "abc1234", "files": ["b.py"]}],
+                       report_bytes=40)  # stub
+        result, n = await self._run_ensure("run_a2s", tmp_path, monkeypatch)
+        assert n == 1, "stub REPORT.md (<500B) MUST trigger regeneration"
+        assert result is True
+
+    async def test_no_commits_is_noop(self, tmp_path, monkeypatch):
+        """A run with no committed source (docs/knowledge-only) has no source rows to
+        pair a report with → ensure no-ops (no spurious report gen)."""
+        self._make_run(tmp_path, "run_nc", [])
+        result, n = await self._run_ensure("run_nc", tmp_path, monkeypatch)
+        assert n == 0, "no commits → no report-gen"
+        assert result is False
+
+    async def test_ac4_failsafe_never_raises(self, tmp_path, monkeypatch):
+        """AC4: cmd_run_report raising (subprocess/import/render failure) MUST be
+        swallowed — ensure returns False, never propagates into the hot SSE turn."""
+        import core.ui_actions as ui
+        self._make_run(tmp_path, "run_a4", [{"repo": "/r", "sha": "abc1234", "files": ["b.py"]}])
+
+        def boom(args, reg):
+            raise RuntimeError("run-report exploded")
+
+        monkeypatch.setattr(ui, "get_swarmws", lambda: str(tmp_path))
+        monkeypatch.setattr("scripts.artifact_cli.cmd_run_report", boom)
+        monkeypatch.setattr("scripts.artifact_cli.ArtifactRegistry", lambda *a, **k: object())
+        monkeypatch.setattr("scripts.artifact_cli._get_workspace", lambda: tmp_path)
+        # must NOT raise
+        result = await ui.ensure_report_for_run("run_a4")
+        assert result is False
+
+    async def test_unknown_run_id_is_noop(self, tmp_path, monkeypatch):
+        """A run_id that globs to nothing → fail-safe False, no raise."""
+        import core.ui_actions as ui
+        monkeypatch.setattr(ui, "get_swarmws", lambda: str(tmp_path))
+        result = await ui.ensure_report_for_run("run_does_not_exist")
+        assert result is False
+
+    def test_build_surface_events_stays_pure(self):
+        """AC3: build_surface_events must NOT contain report-generation — the source
+        (not just behavior) proves the generation logic lives only in the ensure path."""
+        import inspect
+        from core.ui_actions import build_surface_events
+        src = inspect.getsource(build_surface_events)
+        assert "cmd_run_report" not in src, "build_surface_events must stay pure (no report-gen)"
+        assert "to_thread" not in src, "build_surface_events must not spawn work"

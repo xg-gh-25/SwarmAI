@@ -37,9 +37,12 @@ SENSE snapshot → the agent verifies the effect took hold.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Optional, TypedDict
+
+from core.project_registry import get_swarmws
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +302,7 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
         if workspace_root is not None:
             ws = Path(str(workspace_root))
         else:
-            from core.project_registry import get_swarmws
-            ws = Path(get_swarmws())
+            ws = Path(get_swarmws())  # module-level import
         ws = ws.resolve()
         # Validate run_id BEFORE putting it in a glob pattern (a `*`/`..` run_id would
         # glob-match an arbitrary run or escape the runs dir). Same shape as the CLI's
@@ -353,9 +355,12 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
         # is last-write-wins, so REPORT.md becomes the auto-SELECTED file at finish,
         # while the source rows above stay as rows the user clicks. kind=knowledge
         # (rail-kept + auto-pop eligible) + NO baseRef → renders CONTENT, not a diff.
-        # exists-guarded: surface_run_outputs may be called before run-report writes
-        # the file in some orderings — skip cleanly if absent (fail-safe, req2 degrades
-        # to source-only auto-open, never a broken row).
+        # exists-guarded (defense-in-depth). The ORDERING is now enforced by the
+        # CONSUMER: the orchestrator awaits ensure_report_for_run() BEFORE calling
+        # this (run_f1fbf37d), so on the live COMPLETE path the report is present.
+        # This guard stays because build_surface_events is PURE + may be called
+        # standalone (tests, future callers) without that pre-step — absent report →
+        # skip cleanly (source-only auto-open, never a broken row).
         report_path = run_json.parent / "REPORT.md"
         if report_path.exists():
             try:
@@ -371,22 +376,135 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
                 "kind": "knowledge",
             })
         elif events:
-            # LOUD-on-degradation (run_14e560ed): we emitted source rows (this IS a
-            # committed pipeline run) but REPORT.md is absent → surface_run_outputs was
-            # called BEFORE run-report generated it (the complete.md-vs-INSTRUCTIONS
-            # ordering hazard). Fail-safe still holds (source rows auto-open), but the
-            # report row is silently lost — make that observable instead of invisible,
-            # so an ordering regression shows up in logs, not just as a missing report.
+            # LOUD-on-degradation (run_14e560ed + run_f1fbf37d): we emitted source rows
+            # (this IS a committed pipeline run) but REPORT.md is absent. Since the
+            # ordering is now consumer-enforced (ensure_report_for_run awaited before
+            # this on the live path), a fired WARN no longer means "caller surfaced too
+            # early" — it means report GENERATION FAILED (run-report errored, produced a
+            # <500-byte stub, or the report was hand-written and skipped), OR this is a
+            # standalone call that skipped the ensure pre-step. Fail-safe still holds
+            # (source rows auto-open); the report row is lost — make that observable.
             logger.warning(
                 "build_surface_events: run %r emitted %d source row(s) but REPORT.md "
-                "is absent at %s — surface ran BEFORE run-report; the report row was "
-                "skipped (fix ordering: run-report must precede surface_run_outputs)",
+                "is absent at %s — report generation did not produce a healthy report "
+                "(check ensure_report_for_run / run-report), so the report row was skipped",
                 run_id, len(events), report_path,
             )
         return events
     except Exception as e:  # noqa: BLE001 — hot-path fail-safe
         logger.warning("build_surface_events failed for run %r: %s", run_id, e)
         return []
+
+
+# Minimum bytes for a REPORT.md to count as "real" (a present-but-stub report is
+# the documented failure mode — IMPROVEMENT.md: 5/6 runs once froze empty). Mirrors
+# the run-update completion gate (artifact_cli.py `report_size < 500`).
+_MIN_REPORT_BYTES = 500
+
+
+def _run_report_sync(project: str, run_id: str, ws_root: str) -> None:
+    """Blocking: generate REPORT.md for (project, run_id) by DIRECT-IMPORTING the
+    run-report CLI logic — NOT a subprocess.
+
+    Why direct-import (Gate-1, run_f1fbf37d): the orchestrator runs inside the
+    frozen PyInstaller daemon, where ``sys.executable`` is ``python-backend`` (not a
+    Python interpreter) and the source tree's relative script path need not exist on
+    disk. A ``python backend/scripts/artifact_cli.py`` subprocess would therefore
+    silently no-op in prod (pass in dev pytest, do nothing in the daemon). The
+    sanctioned pattern is a direct import (memory_extractor.py does the same for
+    exactly this reason). cmd_run_report only reads ``args.project`` / ``args.run_id``
+    (+ ``getattr(args, "force", False)`` → default False, so a human-edited REPORT.md
+    is never overwritten — the ``report_autogenerated`` flag protects it).
+
+    ``ws_root`` is the SAME workspace root ``ensure_report_for_run`` used to LOCATE the
+    run (via ``get_swarmws``). We pin ``SWARM_WORKSPACE`` to it for the call so the CLI's
+    OWN resolver (``_get_workspace`` → env ``SWARM_WORKSPACE``, a DIFFERENT env var than
+    ``get_swarmws``'s ``SWARMWS``) writes REPORT.md to the exact dir ensure will re-check
+    (Gate-2 #2: unify the two resolvers so "generate to A, read back B" can't happen even
+    if the two env vars ever diverge). Restored in a finally.
+
+    Runs OFF the event loop via asyncio.to_thread (caller). Raising is fine — the
+    async caller catches everything (fail-safe).
+    """
+    from types import SimpleNamespace
+    from scripts.artifact_cli import cmd_run_report, ArtifactRegistry, _get_workspace
+
+    prev = os.environ.get("SWARM_WORKSPACE")
+    os.environ["SWARM_WORKSPACE"] = ws_root
+    try:
+        reg = ArtifactRegistry(_get_workspace())
+        args = SimpleNamespace(project=project, run_id=run_id)
+        cmd_run_report(args, reg)
+    finally:
+        if prev is None:
+            os.environ.pop("SWARM_WORKSPACE", None)
+        else:
+            os.environ["SWARM_WORKSPACE"] = prev
+
+
+async def ensure_report_for_run(run_id: object) -> bool:
+    """CONSUMER-SIDE precondition guard for the finish-time surface (run_f1fbf37d).
+
+    Root-fix for the surface-vs-run-report ORDERING COUPLING: the Canvas finish
+    batch (build_surface_events) appends the run's REPORT.md as the auto-selected
+    row, but ONLY if REPORT.md already exists on disk. REPORT.md is produced by a
+    SEPARATE agent step (run-report). Relying on the agent to call run-report
+    BEFORE surface_run_outputs is a "caller must remember the order" invariant — it
+    can (and did) slip, silently dropping the report row.
+
+    This moves the invariant to the consumer: BEFORE the orchestrator emits the
+    surface batch, it awaits this. If the run committed source (commits[] non-empty)
+    but REPORT.md is missing OR a <500-byte stub, we generate it in-process
+    (off-loop). Then build_surface_events — still PURE — finds the report and emits
+    its row. The agent can no longer surface "too early": surface makes itself
+    not-early.
+
+    Returns True if a healthy REPORT.md is present (pre-existing or freshly
+    generated), False otherwise. The orchestrator ignores the return — it is
+    fail-safe by construction: ANY failure degrades to the prior behavior (source
+    rows still auto-open; the existing loud-WARN branch in build_surface_events
+    still fires). NEVER raises — this runs on the hot streaming turn.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    try:
+        import json
+        import re
+        from pathlib import Path
+
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
+            return False
+        ws = Path(str(get_swarmws())).resolve()
+        run_json = None
+        for hit in (ws / "Projects").glob("*/.artifacts/runs/" + run_id + "/run.json"):
+            run_json = hit
+            break
+        if run_json is None or not run_json.exists():
+            return False
+
+        # Only a committed SOURCE run pairs a report with rows — a docs/knowledge-only
+        # run (commits[] empty) has no source batch, so no report row to guard.
+        data = json.loads(run_json.read_text())
+        if not (data.get("commits") or []):
+            return False
+
+        # parents: [0]=<run_id>dir [1]=runs [2]=.artifacts [3]=<PROJECT> [4]=Projects
+        project = run_json.parents[3].name
+
+        report_path = run_json.parent / "REPORT.md"
+        healthy = report_path.exists() and report_path.stat().st_size >= _MIN_REPORT_BYTES
+        if healthy:
+            return True  # no-op: a real report is already there
+
+        # Missing or stub → regenerate off the event loop (blocking CLI logic).
+        # Pass the SAME ws root we located the run under, so the CLI writes REPORT.md
+        # to the dir we re-check below (Gate-2 #2: unify the dual resolver).
+        await asyncio.to_thread(_run_report_sync, project, run_id, str(ws))
+
+        return report_path.exists() and report_path.stat().st_size >= _MIN_REPORT_BYTES
+    except Exception as e:  # noqa: BLE001 — hot-path fail-safe, never break the turn
+        logger.warning("ensure_report_for_run failed for run %r: %s", run_id, e)
+        return False
 
 
 # ── The SDK-MCP tool the agent calls ─────────────────────────────────────────

@@ -189,3 +189,76 @@ def test_live_git_sweep_symbols_removed():
     assert not hasattr(rsc, "porcelain_snapshot"), "porcelain_snapshot must be deleted from run_surface_changes"
     # the finish-time fallback must still be importable (AC4)
     from core.run_surface_changes import sweep_run_changes  # noqa: F401
+
+
+# ── (f) surface_run_outputs tool_use AWAITS ensure_report_for_run BEFORE the batch ─
+#    (run_f1fbf37d — the ordering root-fix wiring). The orchestrator must guarantee
+#    REPORT.md exists (consumer-side) before build_surface_events emits, so the
+#    report row can never be dropped by a too-early surface call.
+
+def _surface_tool_use(run_id: str = "run_abc123", tool_use_id: str = "tu-s1"):
+    """An AssistantMessage carrying the surface_run_outputs ToolUseBlock — the block
+    the orchestrator observes BY NAME at the SURFACE_OUTPUTS branch."""
+    from claude_agent_sdk import AssistantMessage, ToolUseBlock
+    from core.ui_actions import SURFACE_OUTPUTS_FULL_TOOL_NAME
+
+    return AssistantMessage(
+        content=[ToolUseBlock(id=tool_use_id, name=SURFACE_OUTPUTS_FULL_TOOL_NAME,
+                              input={"run_id": run_id})],
+        model="test-model",
+    )
+
+
+def test_surface_tool_awaits_ensure_report_before_batch(monkeypatch):
+    """The orchestrator MUST await ensure_report_for_run(run_id) BEFORE calling
+    build_surface_events — proving the consumer guarantees its own input (REPORT.md)
+    before emitting. Spy on both; assert ensure ran, with the run_id, first."""
+    order: list[str] = []
+
+    async def _spy_ensure(run_id):
+        order.append(f"ensure:{run_id}")
+        return True
+
+    def _spy_build(run_id, workspace_root=None):
+        order.append(f"build:{run_id}")
+        return [{"type": "file_changed", "path": "b.py", "operation": "written",
+                 "relevance": "deliverable", "kind": "source-final"}]
+
+    # patch at the orchestrator's import site (it imported the names into its module)
+    monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _spy_ensure)
+    monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _spy_build)
+
+    orch = _make_orchestrator()
+    events, raised = asyncio.get_event_loop().run_until_complete(
+        _drive(orch, [_surface_tool_use(run_id="run_xyz"), _make_result_message()])
+    )
+    assert raised is None
+    # ensure ran, with the right run_id, and BEFORE build (consumer-guarantees-input).
+    assert order == ["ensure:run_xyz", "build:run_xyz"], f"wrong order/args: {order}"
+    # the surface batch still emits (fall-through preserved).
+    fc = [e for e in events if e.get("type") == "file_changed"]
+    assert len(fc) == 1 and fc[0]["kind"] == "source-final"
+
+
+def test_surface_tool_survives_ensure_failure(monkeypatch):
+    """AC4 wiring: if ensure_report_for_run itself raised (it shouldn't — it's
+    fail-safe — but belt-and-suspenders), the orchestrator turn must not die. Here we
+    assert the normal fail-safe contract: ensure returns False, batch still emits."""
+    async def _ensure_false(run_id):
+        return False  # e.g. report-gen failed; degrade to source-only
+
+    monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure_false)
+
+    def _build(run_id, workspace_root=None):
+        return [{"type": "file_changed", "path": "b.py", "operation": "written",
+                 "relevance": "deliverable", "kind": "source-final"}]
+
+    monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _build)
+
+    orch = _make_orchestrator()
+    events, raised = asyncio.get_event_loop().run_until_complete(
+        _drive(orch, [_surface_tool_use(), _make_result_message()])
+    )
+    assert raised is None, "ensure returning False must not break the turn"
+    assert [e for e in events if e.get("type") == "file_changed"], \
+        "source rows must still emit even when ensure could not produce a report"
