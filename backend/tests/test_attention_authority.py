@@ -149,3 +149,92 @@ def test_item_to_dict_shape(patched_sources):
 
 def test_circuit_breaker_threshold_is_three():
     assert _JOB_CIRCUIT_BREAKER_THRESHOLD == 3
+
+
+# ── FLOW 4: agent SENSE — format_attention_for_agent (the read-the-queue tool) ──
+
+
+def _patch_collect(monkeypatch, result):
+    """Patch attention_authority.collect (which format_attention_for_agent calls)."""
+    import core.ui_actions as ui
+    from core.attention_authority import AttentionResult
+    monkeypatch.setattr(
+        "core.attention_authority.collect",
+        lambda ws, brain=None: result,
+    )
+    # also ensure SWARMWS import inside the helper doesn't explode
+    return ui
+
+
+def test_sense_format_empty_queue(monkeypatch):
+    from core.attention_authority import AttentionResult
+    _patch_collect(monkeypatch, AttentionResult(items=[], counts={"blocking": 0, "review": 0}))
+    from core.ui_actions import format_attention_for_agent
+    out = format_attention_for_agent()
+    assert "nothing needs you" in out.lower()
+    assert "0 items" in out
+
+
+def test_sense_format_groups_by_tier_then_brain(monkeypatch):
+    from core.attention_authority import AttentionResult
+    items = [
+        _item("escalation", TIER_BLOCKING, "SwarmAI", "e1"),
+        _item("job", TIER_BLOCKING, None, "j1"),
+        _item("cultivation", TIER_REVIEW, "SwarmAI", "c1"),
+        _item("governance", TIER_REVIEW, None, "g1"),
+    ]
+    # give the dispatch message so the "to handle" line renders
+    for it in items:
+        it.dispatch = {"message": f"handle {it.id}"}
+    _patch_collect(monkeypatch, AttentionResult(
+        items=items, counts={"blocking": 2, "review": 2}))
+    from core.ui_actions import format_attention_for_agent
+    out = format_attention_for_agent()
+    # tier headers present, BLOCKING before REVIEW
+    assert out.index("BLOCKING") < out.index("REVIEW")
+    # brain grouping: SwarmAI + OS-level both appear
+    assert "SwarmAI" in out and "OS-level" in out
+    # governance (brain=None) rendered under OS-level, not a real brain
+    assert "handle governance:g1" in out
+    # counts in header
+    assert "2 blocking" in out and "2 review" in out
+
+
+def test_sense_format_per_brain_scope_label(monkeypatch):
+    from core.attention_authority import AttentionResult
+    _patch_collect(monkeypatch, AttentionResult(
+        items=[_item("escalation", TIER_BLOCKING, "SwarmAI", "e1")],
+        counts={"blocking": 1, "review": 0}))
+    from core.ui_actions import format_attention_for_agent
+    out = format_attention_for_agent(brain="SwarmAI")
+    assert "SwarmAI" in out
+
+
+def test_sense_tool_registered_in_ui_server():
+    """The sense_attention tool must be part of the swarm_ui MCP server (FLOW 4
+    dead-seam fix — the ACT tool existed, the SENSE tool did not). Assert BOTH the
+    name constants AND that the tool is actually wired into the built server — so a
+    regression that drops it from the tools=[...] list goes RED (adversarial note)."""
+    from core.ui_actions import (
+        SENSE_ATTENTION_TOOL_NAME, SENSE_ATTENTION_FULL_TOOL_NAME, get_ui_mcp_server,
+    )
+    assert SENSE_ATTENTION_TOOL_NAME == "sense_attention"
+    assert SENSE_ATTENTION_FULL_TOOL_NAME == "mcp__swarm_ui__sense_attention"
+    server = get_ui_mcp_server()
+    assert server is not None, "swarm_ui MCP server must build"
+    # Assert the tool is actually wired into the built server (not just that the
+    # name constant exists) — so a regression dropping it from tools=[...] goes RED.
+    # The mcp lowlevel Server populates its _tool_cache lazily on the first
+    # list_tools request; drive that request through the registered ListTools
+    # handler (the public, version-stable path) and read the tool names.
+    import asyncio
+    from mcp.types import ListToolsRequest
+    inst = server["instance"] if isinstance(server, dict) else getattr(server, "instance")
+    handler = inst.request_handlers[ListToolsRequest]
+    result = asyncio.new_event_loop().run_until_complete(handler(ListToolsRequest(method="tools/list")))
+    names = {t.name for t in result.root.tools}
+    assert "sense_attention" in names, (
+        f"sense_attention must be registered in the swarm_ui server — got {names}"
+    )
+    # sibling tools still present (didn't clobber the list)
+    assert {"ui_action", "surface_run_outputs"} <= names

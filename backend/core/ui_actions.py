@@ -370,6 +370,19 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
                 "relevance": "deliverable",
                 "kind": "knowledge",
             })
+        elif events:
+            # LOUD-on-degradation (run_14e560ed): we emitted source rows (this IS a
+            # committed pipeline run) but REPORT.md is absent → surface_run_outputs was
+            # called BEFORE run-report generated it (the complete.md-vs-INSTRUCTIONS
+            # ordering hazard). Fail-safe still holds (source rows auto-open), but the
+            # report row is silently lost — make that observable instead of invisible,
+            # so an ordering regression shows up in logs, not just as a missing report.
+            logger.warning(
+                "build_surface_events: run %r emitted %d source row(s) but REPORT.md "
+                "is absent at %s — surface ran BEFORE run-report; the report row was "
+                "skipped (fix ordering: run-report must precede surface_run_outputs)",
+                run_id, len(events), report_path,
+            )
         return events
     except Exception as e:  # noqa: BLE001 — hot-path fail-safe
         logger.warning("build_surface_events failed for run %r: %s", run_id, e)
@@ -384,6 +397,56 @@ UI_ACTION_TOOL_NAME = "ui_action"
 UI_ACTION_FULL_TOOL_NAME = f"mcp__{UI_MCP_SERVER_NAME}__{UI_ACTION_TOOL_NAME}"
 SURFACE_OUTPUTS_TOOL_NAME = "surface_run_outputs"
 SURFACE_OUTPUTS_FULL_TOOL_NAME = f"mcp__{UI_MCP_SERVER_NAME}__{SURFACE_OUTPUTS_TOOL_NAME}"
+SENSE_ATTENTION_TOOL_NAME = "sense_attention"
+SENSE_ATTENTION_FULL_TOOL_NAME = f"mcp__{UI_MCP_SERVER_NAME}__{SENSE_ATTENTION_TOOL_NAME}"
+
+
+def format_attention_for_agent(brain: Optional[str] = None) -> str:
+    """Render the unified Need You queue as agent-readable text (the SENSE half of
+    the Need You channel — the afferent complement to the `show-needs-you` ACT).
+
+    Reads the SAME backend authority the frontend overlay + brain-card use
+    (core.attention_authority.collect), so the agent sees EXACTLY what the user
+    sees — one source of truth. Read-only; never mutates. Grouped by tier
+    (BLOCKING first) then brain, mirroring the overlay's double-axis layout so the
+    agent can relay it faithfully and then dispatch each item (resume run / review
+    proposal / triage job) via a normal chat action.
+    """
+    try:
+        from .attention_authority import collect
+        from jobs.paths import SWARMWS
+    except Exception as e:  # pragma: no cover - import guard
+        return f"(Could not load the attention authority: {e})"
+
+    result = collect(SWARMWS, brain=brain)
+    if not result.items:
+        scope = f" for brain '{brain}'" if brain else ""
+        return f"Need You{scope}: nothing needs you right now (0 items)."
+
+    lines: list[str] = [
+        f"Need You — {result.counts['blocking']} blocking, "
+        f"{result.counts['review']} review"
+        + (f" (brain '{brain}' only)" if brain else "") + ":",
+    ]
+    for tier, label in (("blocking", "🔴 BLOCKING (stopped — needs you now)"),
+                        ("review", "🟡 REVIEW (self-advancing — confirm/override)")):
+        tier_items = [it for it in result.items if it.tier == tier]
+        if not tier_items:
+            continue
+        lines.append(f"\n{label}:")
+        # group by brain (None → OS-level), preserving order
+        seen_brains: list[Optional[str]] = []
+        for it in tier_items:
+            if it.brain not in seen_brains:
+                seen_brains.append(it.brain)
+        for b in seen_brains:
+            lines.append(f"  [{b or 'OS-level'}]")
+            for it in (x for x in tier_items if x.brain == b):
+                lines.append(f"    • ({it.source}) {it.title}")
+                msg = (it.dispatch or {}).get("message")
+                if msg:
+                    lines.append(f"        → to handle: {msg}")
+    return "\n".join(lines)
 
 
 def get_ui_mcp_server():
@@ -467,6 +530,35 @@ def get_ui_mcp_server():
             "outputs count reflects them; click a row to review that file's changes."
         )}]}
 
+    @tool(
+        SENSE_ATTENTION_TOOL_NAME,
+        (
+            "SENSE your unified 'Need You' queue — everything across the whole OS "
+            "that structurally needs the user: paused pipeline decisions, blocked "
+            "escalations, pending knowledge/governance proposals, circuit-broken "
+            "jobs. Use when the user asks to see, review, or handle 'Need You' / "
+            "attention items, or when you want to check what is waiting before "
+            "acting. Returns the SAME queue the user's Need You overlay shows "
+            "(grouped by tier: BLOCKING first, then REVIEW; then by brain). "
+            "Optionally pass `brain` = a project name to scope to one brain "
+            "(OS-level governance is excluded from a per-brain query). Read-only — "
+            "this reads state, it changes nothing; to act on an item, follow its "
+            "'to handle' message as a normal chat step."
+        ),
+        {"brain": str},
+    )
+    async def sense_attention(args: dict) -> dict:
+        # Read-only SENSE: return the live queue as text. Unlike ui_action /
+        # surface_run_outputs (which ack + defer to a next-turn SSE effect), this
+        # tool's RESULT IS the data — the agent reads it THIS turn and acts.
+        brain = args.get("brain") or None
+        try:
+            text = format_attention_for_agent(brain if isinstance(brain, str) else None)
+        except Exception as e:  # noqa: BLE001 — never break the turn on a read
+            text = f"(Could not read the Need You queue: {e})"
+        return {"content": [{"type": "text", "text": text}]}
+
     return create_sdk_mcp_server(
-        name=UI_MCP_SERVER_NAME, tools=[ui_action, surface_run_outputs]
+        name=UI_MCP_SERVER_NAME,
+        tools=[ui_action, surface_run_outputs, sense_attention],
     )
