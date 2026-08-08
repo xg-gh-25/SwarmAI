@@ -67,6 +67,46 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 # normalize a bare file's platform to '' (the design's honest "unknown platform").
 _KNOWN_PLATFORMS = {"xiaohongshu", "bilibili", "github", "gongzhonghao", "youtube", "twitter", "linkedin"}
 
+# Build-toolchain / metadata files that get written INTO a content tree (esp. tracks/deck/:
+# build_deck.js, render_visuals.js, build_deck.py, package.json, package-lock.json, notes.json)
+# but are NOT content assets. A file is NOISE if its extension is here (a script/manifest/lock)
+# OR it is a QR image (an attachment, not a content deliverable). This is a NEGATIVE filter —
+# it never drops a genuine content deliverable: every real Pollinate asset is an image/av/doc
+# (png/jpg/webp/svg/mp4/mov/webm/wav/mp3/srt/pdf/pptx/md/html/txt), none of which are below.
+# NOTE: this deliberately does NOT filter by _classify_format 'other' — content_package.md /
+# platform_matrix.md classify as 'other' but are real (.md), so an extension filter spares them.
+_NOISE_EXTS = {".js", ".ts", ".py", ".pyc", ".json", ".lock", ".lockb", ".sh", ".mjs", ".cjs"}
+
+# Tracks-subdir names that are genuine CONTENT formats (the tracks/{format}/ layout). Used to
+# label a tracks/ card's format honestly (the subdir is a FORMAT, never a platform — do NOT
+# fabricate a platform from it).
+_TRACKS_CONTENT_FORMATS = {"poster", "pdf", "deck", "video", "narrative", "readme", "caption", "shorts"}
+
+# Content-root subdirs for the podcast/shorts layout (2026-04-26-aidlc-one-sentence-to-pr):
+# a produced topic whose media lives in video/ (flat: podcast .wav/.mp3 + thumbnails) and
+# shorts/<name>/ (nested: short audio) rather than deliver/ or tracks/. These are REAL
+# deliverables — a dir carrying them is a topic, NOT a scratch bucket. The subdir name is
+# the FORMAT (both are in _TRACKS_CONTENT_FORMATS above).
+_MEDIA_SUBDIRS = {"video", "shorts"}
+
+# A non-terminal run whose newest timestamp is older than this is treated as abandoned:
+# it still renders as a card (with its real status), but is NOT counted in overall.in_progress.
+_STALE_DAYS = 30
+
+
+def _is_noise_asset(file_name: str) -> bool:
+    """True if a file under a content tree is build-toolchain / metadata / a QR attachment
+    rather than a content deliverable. Extension-based (spares .md/.html metadata) + a QR-image
+    special case. NEVER matches a genuine content asset (image/av/doc)."""
+    n = file_name.lower()
+    ext = Path(n).suffix
+    if ext in _NOISE_EXTS:
+        return True
+    # QR codes are attachments (a scan target), not a content deliverable to browse.
+    if ext in _IMAGE_EXTS and "qr" in n:
+        return True
+    return False
+
 
 def _get_swarmws() -> Path:
     """Indirection so tests can monkeypatch the corpus root (mirrors pipelines)."""
@@ -98,6 +138,61 @@ def _is_terminal_pollinate(run: dict) -> bool:
         if name in ("REFLECT", "DELIVER") and st in ("done", "completed"):
             return True
     return False
+
+
+def _parse_iso_epoch(ts: str) -> Optional[float]:
+    """Best-effort ISO-8601 → epoch seconds. Returns None on anything unparseable
+    (a date-only 'YYYY-MM-DD' is accepted). Never raises."""
+    if not ts or not isinstance(ts, str):
+        return None
+    from datetime import datetime, timezone
+
+    def _epoch(dt: datetime) -> float:
+        # A naive timestamp (no offset) or the date-only fallback would otherwise be
+        # interpreted in the SERVER's local tz by .timestamp() — an up-to-N-hour skew vs a
+        # UTC-intended value, material only for a run within hours of the 30d boundary.
+        # Normalize naive → UTC so staleness is tz-stable regardless of who wrote the run.json.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
+    s = ts.strip().replace("Z", "+00:00")
+    try:
+        return _epoch(datetime.fromisoformat(s))
+    except (ValueError, TypeError):
+        pass
+    # date-only fallback
+    try:
+        return _epoch(datetime.strptime(s[:10], "%Y-%m-%d"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _run_is_stale(run: dict, run_dir: Path, now: Optional[float] = None) -> bool:
+    """True if a non-terminal run is old enough to be treated as abandoned (not counted
+    in overall.in_progress). PRIMARY signal = run.json created_at/updated_at (Gate-1 must-fix:
+    dir mtime alone would flip EVERY run to stale after a bulk FS touch — git checkout / rsync /
+    restore — the run_a16d61ad data-loss class). dir mtime is a LAST-RESORT fallback only when
+    the run.json carries no timestamp. A run with a fresh updated_at is NEVER stale regardless
+    of dir mtime."""
+    import time as _time
+
+    if now is None:
+        now = _time.time()
+    cutoff = now - _STALE_DAYS * 86400
+    newest = None
+    if isinstance(run, dict):
+        for key in ("updated_at", "created_at"):
+            e = _parse_iso_epoch(run.get(key) or "")
+            if e is not None and (newest is None or e > newest):
+                newest = e
+    if newest is None:
+        # No usable run.json timestamp → fall back to dir mtime (last resort).
+        try:
+            newest = run_dir.stat().st_mtime
+        except OSError:
+            return False  # can't tell → do NOT hide it from in_progress
+    return newest < cutoff
 
 
 def _classify_format(file_name: str) -> str:
@@ -167,14 +262,22 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
         except ValueError:
             return str(p)
 
-    def _add(f: Path, platform: str) -> None:
+    def _add(f: Path, platform: str, format_hint: str = "") -> None:
         if not f.is_file() or f.name.startswith("."):
             return
+        if _is_noise_asset(f.name):  # build script / manifest / lock / QR attachment — not content
+            return
         ext = f.suffix.lower()
+        fmt = _classify_format(f.name)
+        # tracks/{format}/ layout: the subdir names the FORMAT. Use it only when the
+        # filename classifier fell through to 'other' (so a poster.png stays 'poster',
+        # but a deck's outline.md / speaker_notes.md read honestly as 'deck', not 'other').
+        if fmt == "other" and format_hint in _TRACKS_CONTENT_FORMATS:
+            fmt = format_hint
         assets.append(
             PollinateAsset(
                 platform=platform,
-                format=_classify_format(f.name),
+                format=fmt,
                 file_path=_rel(f),
                 file_name=f.name,
                 is_image=ext in _IMAGE_EXTS,
@@ -192,26 +295,43 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
         except OSError:
             return False
 
+    media_subdirs = [run_dir / d for d in sorted(_MEDIA_SUBDIRS) if _non_empty_dir(run_dir / d)]
     if _non_empty_dir(deliver):
         asset_root = deliver
     elif _non_empty_dir(run_dir / "tracks"):
         asset_root = run_dir / "tracks"
     else:
-        asset_root = deliver  # (empty/absent) → falls to the bare-file branch below
+        asset_root = deliver  # (empty/absent) → falls to the media/bare-file branches below
     if asset_root.is_dir():
         for child in sorted(asset_root.iterdir()):
             if child.name.startswith("."):
                 continue
             if child.is_dir():  # nested {platform-or-format}/{file}
-                # In deliver/ the subdir is a platform; in tracks/ it's a format —
-                # keep the subdir name as the label either way (honest, no guessing).
+                # In deliver/ the subdir is a platform; in tracks/ it's a format.
+                # A known platform → platform label; otherwise pass it as a format hint
+                # (honest: tracks subdirs are formats, never fabricated platforms).
                 label = child.name
+                is_platform = label in _KNOWN_PLATFORMS
                 for f in sorted(child.iterdir()):
-                    _add(f, label if label in _KNOWN_PLATFORMS else "")
+                    _add(f, label if is_platform else "", format_hint="" if is_platform else label.lower())
             else:  # bare {root}/{file}
                 _add(child, "")
+    elif media_subdirs:
+        # No deliver/ or tracks/ — the podcast/shorts layout: media lives in video/ (flat)
+        # and shorts/<name>/ (one nesting level deeper). The subdir name is the FORMAT.
+        # Recurse ONE extra level so shorts/<name>/<file> surfaces (video/ is flat).
+        for sub in media_subdirs:
+            fmt = sub.name.lower()
+            for child in sorted(sub.iterdir()):
+                if child.name.startswith("."):
+                    continue
+                if child.is_file():
+                    _add(child, "", format_hint=fmt)
+                elif child.is_dir():  # shorts/<name>/<file>
+                    for f in sorted(child.iterdir()):
+                        _add(f, "", format_hint=fmt)
     else:
-        # No deliver/ or tracks/ — pick up bare media assets in the run dir root.
+        # No deliver/tracks/media subdirs — pick up bare media assets in the run dir root.
         for f in sorted(run_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
                 _add(f, "")
@@ -249,10 +369,41 @@ def _dir_has_content(run_dir: Path, assets: list, materialize: bool) -> bool:
         return False
 
 
+def _is_scratch_dir(run_dir: Path) -> bool:
+    """A scratch dir is a loose bucket of images with NO run.json, NO structured content
+    subdir (deliver/ tracks/ video/ shorts/), and NO topic marker file — an ad-hoc collection
+    (posters/, 2026-04-26-pollinate-poster/), not a produced pollinate topic. A real topic
+    always carries EITHER a run.json, OR a structured content subdir, OR a topic marker
+    (content_package.md / REPORT.md). Excluding only true scratch de-noises the gallery
+    without hiding a genuine run (e.g. the podcast/shorts topic aidlc-one-sentence-to-pr,
+    whose media is in video/ + shorts/ and which carries content_package.md + REPORT.md).
+    """
+    if (run_dir / "run.json").is_file():
+        return False
+    for marker in ("content_package.md", "REPORT.md"):
+        if (run_dir / marker).is_file():
+            return False
+    for sub in ("deliver", "tracks", *_MEDIA_SUBDIRS):
+        p = run_dir / sub
+        try:
+            if p.is_dir() and any(c for c in p.iterdir() if not c.name.startswith(".")):
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def _build_card(run_dir: Path, materialize: bool) -> Optional[PollinateContentCard]:
     """Build one content card. run.json is optional metadata; deliver/ walk is truth."""
     run_name = run_dir.name
     run = _read_run_json(run_dir)
+
+    # Scratch dirs (loose images, no run.json/deliver/tracks) are ad-hoc buckets, not
+    # produced topics — never a content card (P3). Checked before the walk so a 23-image
+    # scratch pile never becomes the largest card.
+    if run is None and _is_scratch_dir(run_dir):
+        return None
+
     assets = _walk_assets(run_dir) if materialize else []
 
     # A dir with neither run.json NOR any produced asset is not a content card
@@ -269,6 +420,11 @@ def _build_card(run_dir: Path, materialize: bool) -> Optional[PollinateContentCa
         domain = run.get("domain")
         status = run.get("status") or "unknown"
         created_at = run.get("created_at") or run.get("updated_at")
+    elif materialize and assets:
+        # No run.json but real assets were produced → the topic is DONE, not 'unknown'
+        # (its deliverables exist). Honest status so the frontend's running/review-keyed
+        # "Produce more" affordance doesn't offer to re-run a finished topic.
+        status = "completed"
 
     if not created_at:
         # Fall back to the date prefix in the dir name (YYYY-MM-DD-...).
@@ -360,7 +516,11 @@ async def pollinate_assets() -> PollinateAssetsResponse:
         # DONE (the assets exist), NOT in-progress — an unknown status is not a
         # running one, so we only count runs that explicitly report non-terminal.
         run_meta = _read_run_json(run_dir)
-        if run_meta is not None and not _is_terminal_pollinate(run_meta):
+        if (
+            run_meta is not None
+            and not _is_terminal_pollinate(run_meta)
+            and not _run_is_stale(run_meta, run_dir)
+        ):
             overall.in_progress += 1
         if card.domain:
             overall.domain_dist[card.domain] = overall.domain_dist.get(card.domain, 0) + 1

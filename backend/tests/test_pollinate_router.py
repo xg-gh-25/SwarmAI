@@ -105,19 +105,32 @@ def test_none_formats_but_real_deliver_tree_surfaces_assets(client, workspace):
 def test_bare_deliver_layout_no_platform_subdir(client, workspace):
     """deliver/{file} (bare, no platform subdir) is handled (2026-07-04-pollinate-xhs)."""
     _mk_run(workspace, "2026-07-04-bare",
-            deliver={"": ["qr-github.png", "platform_matrix.md"]})
+            deliver={"": ["poster_3x4.png", "platform_matrix.md"]})
     r = client.get("/api/pollinate/assets")
     card = next(c for c in r.json()["cards"] if c["run"] == "2026-07-04-bare")
-    assert card["asset_count"] == 2
+    assert card["asset_count"] == 2  # both content (a QR file here would be noise-filtered)
     assert card["platforms"] == []  # honest: no platform known for bare files
 
 
-def test_flat_run_dir_with_bare_images_no_deliver(client, workspace):
-    """A run dir with bare image files and no deliver/ (2026-04-26-pollinate-poster)."""
+def test_flat_run_dir_with_bare_images_no_deliver_is_scratch_excluded(client, workspace):
+    """SPEC CHANGE (P3, run_a712b0be): a dir of loose images with NO run.json AND NO
+    deliver/ AND NO tracks/ is a SCRATCH bucket (posters/, 2026-04-26-pollinate-poster/),
+    NOT a produced topic — it must NOT render as a content card (previously it did, which
+    made a 23-image scratch pile the largest card and diluted the gallery)."""
     _mk_run(workspace, "2026-04-26-poster", bare_assets=["poster_3x4.png"])
     r = client.get("/api/pollinate/assets")
     runs = [c["run"] for c in r.json()["cards"]]
-    assert "2026-04-26-poster" in runs
+    assert "2026-04-26-poster" not in runs
+
+
+def test_bare_images_WITH_run_json_still_a_card(client, workspace):
+    """Guard the scratch rule's boundary: loose images are excluded ONLY when there is no
+    run.json — a run.json makes it a real (if unusual) topic, so it is KEPT."""
+    _mk_run(workspace, "2026-04-27-hasjson", bare_assets=["poster_3x4.png"],
+            run_json={"topic": "legit", "status": "completed", "created_at": "2026-04-27T00:00:00"})
+    r = client.get("/api/pollinate/assets")
+    runs = [c["run"] for c in r.json()["cards"]]
+    assert "2026-04-27-hasjson" in runs
 
 
 def test_tracks_layout_surfaces_assets(client, workspace):
@@ -135,14 +148,15 @@ def test_tracks_layout_surfaces_assets(client, workspace):
 
 
 def test_dateless_dir_sorts_last(client, workspace):
-    """A dateless content dir (e.g. `posters/`) must NOT bury dated newest content."""
-    _mk_run(workspace, "posters", bare_assets=["a.png", "b.png"])
+    """A dateless content dir must NOT bury dated newest content. (Uses a deliver-backed
+    dateless dir — a bare-image dateless dir is now a scratch bucket, excluded entirely.)"""
+    _mk_run(workspace, "dateless-topic", deliver={"": ["a.png", "b.png"]})
     _mk_run(workspace, "2026-08-01-recent",
             run_json={"topic": "recent", "status": "completed", "created_at": "2026-08-01T00:00:00"},
             deliver={"xiaohongshu": ["p.png"]})
     r = client.get("/api/pollinate/assets")
     runs = [c["run"] for c in r.json()["cards"]]
-    assert runs.index("2026-08-01-recent") < runs.index("posters")
+    assert runs.index("2026-08-01-recent") < runs.index("dateless-topic")
 
 
 def test_empty_deliver_no_runjson_dropped(client, workspace):
@@ -244,12 +258,14 @@ def test_no_runjson_dir_not_counted_in_progress(client, workspace):
 
 
 def test_in_progress_counts_genuinely_running(client, workspace):
+    import time
+    recent = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 2 * 86400))
     _mk_run(workspace, "2026-06-02-running",
-            run_json={"topic": "t", "status": "running", "created_at": "2026-06-02T00:00:00",
+            run_json={"topic": "t", "status": "running", "created_at": recent,
                       "stages": [{"name": "BUILD", "status": "running"}]},
             deliver={"xiaohongshu": ["p.png"]})
     r = client.get("/api/pollinate/assets")
-    assert r.json()["overall"]["in_progress"] == 1
+    assert r.json()["overall"]["in_progress"] == 1  # recent + running → counted
 
 
 # ---------- overall rollup ----------
@@ -314,3 +330,237 @@ def test_traversal_via_encoded_path_denied(client, workspace):
 def test_unknown_run_name_404(client, workspace):
     r = client.get("/api/pollinate/2026-99-99-does-not-exist")
     assert r.status_code == 404
+
+
+# ================= run_a712b0be: P2-P5 read-layer normalization =================
+
+# ---------- P5: noise filter (build toolchain + QR attachments) ----------
+
+def test_is_noise_asset_unit():
+    from routers.pollinate import _is_noise_asset
+    # build toolchain / manifests / locks → noise
+    for junk in ("build_deck.py", "build_deck.js", "render_visuals.js", "package.json",
+                 "package-lock.json", "notes.json", "discovery.json", "setup.sh", "app.mjs"):
+        assert _is_noise_asset(junk) is True, junk
+    # QR images → noise (attachment, not content)
+    for qr in ("qr-github.png", "xhs_qr.png", "QR-Github-Light.PNG"):
+        assert _is_noise_asset(qr) is True, qr
+    # genuine content deliverables → NOT noise (spares .md/.html metadata too)
+    for real in ("poster_3x4.png", "slide-01-cover.html", "content_package.md",
+                 "platform_matrix.md", "narrative.txt", "clip.mp4", "audio.wav",
+                 "series.pdf", "deck.pptx", "captions.srt"):
+        assert _is_noise_asset(real) is False, real
+
+
+def test_deck_build_junk_excluded_from_assets(client, workspace):
+    """A tracks/deck/ card carrying build scripts + manifests alongside real content:
+    only the content survives; build_deck.py/.js/package.json/lockfile are dropped, and
+    'other' in format_dist no longer counts toolchain."""
+    d = workspace / "Knowledge" / "Pollinate" / "2026-05-26-three-layer-governance"
+    deck = d / "tracks" / "deck"
+    deck.mkdir(parents=True)
+    for real in ("three-layer-governance.pptx", "outline.md"):
+        (deck / real).write_bytes(b"content")
+    (deck / "slide_01.png").write_bytes(b"\x89PNG\r\n")
+    for junk in ("build_deck.py", "build_deck_v2.py", "build_deck.js", "render_visuals.js",
+                 "package.json", "package-lock.json", "notes.json"):
+        (deck / junk).write_text("x")
+    r = client.get("/api/pollinate/assets")
+    card = next(c for c in r.json()["cards"] if c["run"] == "2026-05-26-three-layer-governance")
+    names = {a["file_name"] for a in card["assets"]}
+    assert names == {"three-layer-governance.pptx", "outline.md", "slide_01.png"}
+    assert card["asset_count"] == 3
+    assert "package.json" not in names and "build_deck.py" not in names
+
+
+def test_qr_not_a_content_format_in_grid(client, workspace):
+    """QR images are excluded → 'qr' never appears as a content format in the rollup."""
+    _mk_run(workspace, "2026-05-01-qr",
+            deliver={"xiaohongshu": ["poster_3x4.png", "qr-github.png", "xhs_qr.png"]})
+    r = client.get("/api/pollinate/assets")
+    card = next(c for c in r.json()["cards"] if c["run"] == "2026-05-01-qr")
+    assert card["asset_count"] == 1  # only the poster
+    assert "qr" not in r.json()["overall"]["format_dist"]
+
+
+def test_node_modules_never_ingested_regression(client, workspace):
+    """Gate-1 must-fix: a node_modules/ under a walked format dir must contribute 0 assets.
+    Today _walk_assets is depth-2 so node_modules (3+ deep) is unreached; this pins it so a
+    future depth change can't silently ingest the npm tree (~250 .js). Belt: even IF reached,
+    every .js/.json inside is _is_noise_asset → dropped."""
+    d = workspace / "Knowledge" / "Pollinate" / "2026-05-26-nm"
+    nm = d / "tracks" / "deck" / "node_modules" / "left-pad"
+    nm.mkdir(parents=True)
+    (nm / "index.js").write_text("module.exports=1")
+    (nm / "package.json").write_text("{}")
+    (d / "tracks" / "deck" / "real.png").write_bytes(b"\x89PNG\r\n")
+    r = client.get("/api/pollinate/assets")
+    card = next(c for c in r.json()["cards"] if c["run"] == "2026-05-26-nm")
+    names = {a["file_name"] for a in card["assets"]}
+    assert names == {"real.png"}  # zero node_modules files
+    assert "index.js" not in names
+
+
+# ---------- P3: scratch-dir exclusion ----------
+
+def test_is_scratch_dir_unit(workspace):
+    from routers.pollinate import _is_scratch_dir
+    P = workspace / "Knowledge" / "Pollinate"
+    # loose images, no run.json/deliver/tracks → scratch
+    scratch = P / "posters"
+    scratch.mkdir(parents=True)
+    (scratch / "a.png").write_bytes(b"\x89PNG\r\n")
+    assert _is_scratch_dir(scratch) is True
+    # has run.json → not scratch
+    hasjson = P / "with-json"
+    hasjson.mkdir()
+    (hasjson / "run.json").write_text("{}")
+    (hasjson / "a.png").write_bytes(b"\x89PNG\r\n")
+    assert _is_scratch_dir(hasjson) is False
+    # has deliver/ → not scratch
+    hasdeliver = P / "with-deliver"
+    (hasdeliver / "deliver").mkdir(parents=True)
+    (hasdeliver / "deliver" / "a.png").write_bytes(b"\x89PNG\r\n")
+    assert _is_scratch_dir(hasdeliver) is False
+    # has tracks/ → not scratch
+    hastracks = P / "with-tracks"
+    (hastracks / "tracks" / "poster").mkdir(parents=True)
+    (hastracks / "tracks" / "poster" / "a.png").write_bytes(b"\x89PNG\r\n")
+    assert _is_scratch_dir(hastracks) is False
+
+
+def test_scratch_dir_not_the_largest_card(client, workspace):
+    """A big loose-image scratch pile (posters) must not appear as (the largest) card,
+    while a real deliver-backed topic does."""
+    posters = workspace / "Knowledge" / "Pollinate" / "posters"
+    posters.mkdir(parents=True)
+    for i in range(23):
+        (posters / f"iter-{i}.png").write_bytes(b"\x89PNG\r\n")
+    _mk_run(workspace, "2026-08-01-real",
+            run_json={"topic": "real", "status": "completed", "created_at": "2026-08-01T00:00:00"},
+            deliver={"xiaohongshu": ["p.png"]})
+    r = client.get("/api/pollinate/assets")
+    runs = [c["run"] for c in r.json()["cards"]]
+    assert "posters" not in runs
+    assert "2026-08-01-real" in runs
+
+
+# ---------- P4: staleness gate on in_progress ----------
+
+def test_run_is_stale_unit(workspace):
+    from routers.pollinate import _run_is_stale
+    import time
+    now = time.time()
+    old = "2026-01-01T00:00:00"     # >30d before any 2026-08 now
+    recent_ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now - 5 * 86400))
+    d = workspace / "Knowledge" / "Pollinate" / "x"
+    d.mkdir(parents=True)
+    # old timestamp → stale
+    assert _run_is_stale({"status": "running", "created_at": old}, d, now=now) is True
+    # fresh updated_at → NOT stale (even if created long ago)
+    assert _run_is_stale({"status": "running", "created_at": old, "updated_at": recent_ts}, d, now=now) is False
+
+
+def test_fresh_updated_at_beats_old_dir_mtime(client, workspace):
+    """Gate-1 must-fix (run_a16d61ad class): a run.json with a FRESH updated_at must count
+    as in_progress even if the dir mtime is old — run.json ts is PRIMARY, dir mtime fallback
+    only. (Prevents in_progress silently collapsing to 0 after a bulk FS touch.)"""
+    import time, os
+    recent = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 3 * 86400))
+    d = _mk_run(workspace, "2026-01-01-old-dir-fresh-run",
+                run_json={"topic": "t", "status": "running", "created_at": "2026-01-01T00:00:00",
+                          "updated_at": recent, "stages": [{"name": "BUILD", "status": "running"}]},
+                deliver={"xiaohongshu": ["p.png"]})
+    old_epoch = time.time() - 200 * 86400
+    os.utime(d, (old_epoch, old_epoch))  # force ancient dir mtime
+    r = client.get("/api/pollinate/assets")
+    assert r.json()["overall"]["in_progress"] == 1  # fresh updated_at wins
+
+
+def test_stale_running_run_not_counted_in_progress(client, workspace):
+    """A non-terminal run whose only timestamp is months old is NOT counted in_progress
+    (still renders as a card with its real status — just not in the rollup)."""
+    _mk_run(workspace, "2026-04-26-stale-running",
+            run_json={"topic": "t", "status": "running", "created_at": "2026-04-26T00:00:00",
+                      "stages": [{"name": "BUILD", "status": "running"}]},
+            deliver={"xiaohongshu": ["p.png"]})
+    r = client.get("/api/pollinate/assets")
+    assert r.json()["overall"]["in_progress"] == 0
+    # but the card still renders
+    assert any(c["run"] == "2026-04-26-stale-running" for c in r.json()["cards"])
+
+
+# ---------- P5b: tracks format label + honest status ----------
+
+def test_tracks_subdir_names_the_format(client, workspace):
+    """tracks/deck/ files that the filename classifier can't type (outline.md, speaker_notes.md)
+    read as 'deck' (the subdir format), not 'other'."""
+    d = workspace / "Knowledge" / "Pollinate" / "2026-05-26-deck"
+    deck = d / "tracks" / "deck"
+    deck.mkdir(parents=True)
+    (deck / "outline.md").write_text("x")
+    (deck / "speaker_notes.md").write_text("x")
+    r = client.get("/api/pollinate/assets")
+    card = next(c for c in r.json()["cards"] if c["run"] == "2026-05-26-deck")
+    assert all(a["format"] == "deck" for a in card["assets"])
+
+
+def test_no_runjson_but_assets_status_completed(client, workspace):
+    """A produced topic with no run.json reads status='completed' (its deliverables exist),
+    not 'unknown' — so the frontend's running/review-keyed 'Produce more' won't offer a rerun."""
+    _mk_run(workspace, "2026-05-17-nojson-done",
+            deliver={"xiaohongshu": ["poster_3x4.png"]})
+    r = client.get("/api/pollinate/assets")
+    card = next(c for c in r.json()["cards"] if c["run"] == "2026-05-17-nojson-done")
+    assert card["status"] == "completed"
+
+
+# ---------- Gate-2 HIGH: podcast/shorts layout (video/ + shorts/) is a REAL topic ----------
+
+def test_podcast_shorts_layout_is_a_real_card_not_scratch(client, workspace):
+    """The aidlc-one-sentence-to-pr layout: NO run.json, NO deliver/, NO tracks/ — media lives
+    in video/ (flat) + shorts/<name>/ (nested), plus content_package.md/REPORT.md markers.
+    This is a produced topic and MUST render (Gate-2 meta-review HIGH: it was being false-excluded
+    as scratch). The subdir names video/shorts are the formats."""
+    d = workspace / "Knowledge" / "Pollinate" / "2026-04-26-aidlc-one-sentence-to-pr"
+    (d / "video").mkdir(parents=True)
+    (d / "video" / "podcast_audio.wav").write_bytes(b"RIFF")
+    (d / "video" / "thumbnail_16x9.png").write_bytes(b"\x89PNG\r\n")
+    (d / "video" / "podcast_audio.srt").write_text("1\n")
+    (d / "video" / "bgm.mp3").write_bytes(b"ID3")
+    (d / "shorts" / "short_crash_story").mkdir(parents=True)
+    (d / "shorts" / "short_crash_story" / "short_audio.wav").write_bytes(b"RIFF")
+    (d / "content_package.md").write_text("the message")
+    (d / "REPORT.md").write_text("report")
+    r = client.get("/api/pollinate/assets")
+    cards = r.json()["cards"]
+    card = next((c for c in cards if c["run"] == "2026-04-26-aidlc-one-sentence-to-pr"), None)
+    assert card is not None, "podcast/shorts topic must NOT be excluded as scratch"
+    names = {a["file_name"] for a in card["assets"]}
+    assert "podcast_audio.wav" in names       # flat video/ file surfaced
+    assert "short_audio.wav" in names          # nested shorts/<name>/ file surfaced
+    # audio/srt files (classifier returns 'other') take the subdir format hint; an image
+    # thumbnail correctly stays 'poster' (a real content format), not overridden by the hint.
+    fmt_by_name = {a["file_name"]: a["format"] for a in card["assets"]}
+    assert fmt_by_name["podcast_audio.wav"] == "video"
+    assert fmt_by_name["short_audio.wav"] == "shorts"
+    assert fmt_by_name["thumbnail_16x9.png"] == "poster"
+    assert card["status"] == "completed"
+
+
+def test_is_scratch_dir_spares_topic_markers(workspace):
+    """_is_scratch_dir must NOT flag a dir carrying content_package.md/REPORT.md or a media
+    subdir, even with no run.json/deliver/tracks."""
+    from routers.pollinate import _is_scratch_dir
+    P = workspace / "Knowledge" / "Pollinate"
+    # content_package.md marker → not scratch
+    m = P / "marker-topic"; m.mkdir(parents=True)
+    (m / "content_package.md").write_text("x"); (m / "loose.png").write_bytes(b"\x89PNG\r\n")
+    assert _is_scratch_dir(m) is False
+    # video/ media subdir → not scratch
+    v = P / "video-topic"; (v / "video").mkdir(parents=True)
+    (v / "video" / "a.wav").write_bytes(b"RIFF")
+    assert _is_scratch_dir(v) is False
+    # truly loose images, no marker/subdir → still scratch
+    s = P / "posters2"; s.mkdir(parents=True); (s / "x.png").write_bytes(b"\x89PNG\r\n")
+    assert _is_scratch_dir(s) is True
