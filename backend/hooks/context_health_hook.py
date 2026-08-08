@@ -1474,15 +1474,20 @@ class ContextHealthHook:
     # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)
     _COMPACT_INDEX_DIRS = {"DailyActivity", "JobResults", "Signals"}
     _HOT_COLD_THRESHOLD = 10  # Dirs with >10 files use Hot/Cold format
-    _HOT_ENTRIES = 10  # Number of most-recent entries to show in Hot tier
-    _INDEX_LINE_CAP = 120  # Structural cap on Knowledge Index section lines
+    _HOT_ENTRIES = 5  # Number of most-recent entries to show in Hot tier
+    # (10→5, run_5f040023: the Knowledge Index is auto-regenerated every startup;
+    # halving the Hot tier permanently trims ~4K tokens off KNOWLEDGE.md's
+    # injected size — the nav is a lead-to-Glob, not the content, so 5 recent
+    # per dir + a cold-count pointer is sufficient. Older files stay reachable
+    # via workspace-finder/Glob as the summary line states.)
+    _INDEX_LINE_CAP = 90  # Structural cap on Knowledge Index section lines (120→90)
 
     def _refresh_knowledge_sync(self, root: Path) -> None:
         """Synchronous KNOWLEDGE.md index refresh — filesystem scan only.
 
         Three-tier format:
         - COMPACT (DailyActivity, JobResults, Signals): count + pattern only
-        - HOT/COLD (dirs with >10 files): most recent 10 + "N older files" summary
+        - HOT/COLD (dirs with >10 files): most recent _HOT_ENTRIES (=5) + "N older files" summary
         - FULL (dirs with ≤10 files): complete listing
         """
         knowledge_dir = root / "Knowledge"
@@ -1516,7 +1521,7 @@ class ContextHealthHook:
                 )
                 continue
 
-            # Tier 2: HOT/COLD — recent 10 + cold summary (large dirs)
+            # Tier 2: HOT/COLD — recent _HOT_ENTRIES (=5) + cold summary (large dirs)
             if len(files) > self._HOT_COLD_THRESHOLD:
                 hot_files = files[-self._HOT_ENTRIES:]  # Most recent by sort order
                 cold_count = len(files) - self._HOT_ENTRIES
@@ -1584,8 +1589,19 @@ class ContextHealthHook:
                         "Truncating to cap. Consider archiving old knowledge files.",
                         len(non_empty_lines), self._INDEX_LINE_CAP,
                     )
-                    # Truncate: keep the structure but cut excess entries
-                    index_lines = index_lines[:self._INDEX_LINE_CAP * 2]  # rough cut on raw lines
+                    # Truncate on a SECTION boundary, not a raw line (Gate-2 LOW-2):
+                    # a raw slice can cut a `### header`+table-header away from its
+                    # rows, leaving broken markdown. Walk to the cap, then back up to
+                    # the last `### ` header so every kept section is whole.
+                    cut = self._INDEX_LINE_CAP * 2
+                    if cut < len(index_lines):
+                        boundary = cut
+                        while boundary > 0 and not index_lines[boundary].startswith("### "):
+                            boundary -= 1
+                        # boundary now sits ON a `### ` header → drop it + everything
+                        # after, keeping only whole preceding sections. Fallback to
+                        # the raw cut if no header found (shouldn't happen).
+                        index_lines = index_lines[:boundary] if boundary > 0 else index_lines[:cut]
 
                 new_content = before + marker + "\n" + "\n".join(index_lines) + "\n" + after
                 context_file.write_text(new_content, encoding="utf-8")

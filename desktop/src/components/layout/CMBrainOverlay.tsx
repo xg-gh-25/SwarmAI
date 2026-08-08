@@ -26,12 +26,17 @@ import api, { classifyLoadError } from '../../services/api';
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
 interface TokenFileRow {
   name: string;
-  tokens: number;
-  pct: number;
+  tokens: number;          // DISK size (conservative headline)
+  pct: number;             // share of DISK total
   owner: 'system' | 'user' | 'agent' | 'auto';
   priority: number;
   locked: boolean;
   health?: HealthTag;
+  // Selective-injection honesty (run_5f040023): a file ≥30K runs selective, so
+  // its DISK size is NOT what reaches the prompt. injected_floor = the honest
+  // guaranteed-minimum injected tokens; has_selective=false → injected==disk.
+  has_selective?: boolean;
+  injected_floor?: number | null;
 }
 
 // Health tag → tint (backend decides the tag; UI only colors it). fresh=calm,
@@ -43,7 +48,8 @@ const HEALTH_TINT: Record<HealthTag, string> = {
   oversized: '#d0524a',
 };
 interface TokenBlock {
-  total_tokens: number;
+  total_tokens: number;         // DISK total (conservative headline)
+  injected_estimate?: number;   // honest lower-bound of actual prompt load
   budget: number;
   warning_threshold: number;
   emergency_threshold: number;
@@ -220,6 +226,14 @@ export function CMBrainContent() {
                 / {block ? fmtTokens(block.budget) : '—'} budget
               </span>
             </div>
+            {/* Honest actual-injection line (run_5f040023): total_tokens is the DISK
+                headline; selective injection makes the REAL prompt load smaller. Show
+                it so the number reflects reality (the whole point of this fix). */}
+            {block && typeof block.injected_estimate === 'number' && block.injected_estimate < block.total_tokens && (
+              <div data-testid="cm-injected" className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+                ≈ {fmtTokens(block.injected_estimate)} actually injected (selective) · {fmtTokens(block.total_tokens)} on disk
+              </div>
+            )}
             {healthErr && !block && (
               <div className="mt-1 text-[11px] text-[#d08a4a]">couldn’t load — not “0”</div>
             )}
@@ -501,20 +515,44 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
       </div>
       <div className="mb-3 text-[11px] text-[var(--color-text-faint)]">
         🔒 P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
-        token-cell tint = share of the budget · Health: fresh / idle / growing / oversized
+        bar = share of the on-disk context · ✂ = selective-injected (real prompt load is smaller) ·
+        Health: fresh / idle / growing / oversized
       </div>
+      {/* Column header — fixed widths so every row's cells line up (AC4 alignment).
+          Grid columns match the row grid below exactly. */}
+      {rows.length > 0 && (
+        <div
+          data-testid="cm-file-header"
+          className="grid items-center gap-3 px-3 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] max-w-3xl"
+          style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
+        >
+          <span>Pri</span>
+          <span aria-hidden />
+          <span>File</span>
+          <span className="text-right">Owner</span>
+          <span className="text-right">Tokens</span>
+          <span>Share</span>
+          <span className="text-center">Health</span>
+          <span aria-hidden />
+        </div>
+      )}
       {rows.length === 0 && (
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">
           Context budget not available yet.
         </div>
       )}
-      {rows.map((f) => (
-        // AC2: the WHOLE row opens the file in Canvas (locked files open read-only —
-        // that is server-driven by /workspace/file, NOT decided here; the 🔒 badge is
-        // truncation-priority, not an editability gate). AC7: slimmed — the redundant
-        // composition bar + % columns are gone (the token count is the one fact);
-        // hierarchy is name → tokens → health. Name keeps flex-1 min-w-0 truncate (the
-        // truncation bound). Row is a button so the whole thing is the affordance.
+      {rows.map((f) => {
+        // Honest injected cue (run_5f040023): a selective file's DISK tokens are
+        // NOT its prompt load. Show disk as the number; when selective, append a
+        // "✂ ≥floor" so the user sees the real (smaller) injected floor, not a lie.
+        const selective = f.has_selective && typeof f.injected_floor === 'number';
+        const tokenTitle = selective
+          ? `${fmtTokens(f.tokens)} on disk · selective injection → ≥${fmtTokens(f.injected_floor as number)} actually injected`
+          : `${fmtTokens(f.tokens)} tokens (full-injected — disk == prompt load)`;
+        return (
+        // The WHOLE row opens the file in Canvas. Layout is a fixed-column GRID
+        // (AC4): every cell aligns across rows — Pri | owner-dot | name(flex) |
+        // owner | tokens | share-bar+% | health | lock.
         <button
           key={f.name}
           type="button"
@@ -524,51 +562,59 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           onClick={() =>
             document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
           }
-          className="flex w-full items-center gap-3 rounded-md px-3 py-2 max-w-3xl text-left hover:bg-[var(--color-hover)]"
+          className="grid w-full items-center gap-3 rounded-md px-3 py-2 max-w-3xl text-left hover:bg-[var(--color-hover)]"
+          style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
         >
-          <span className="w-8 shrink-0 font-mono text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
+          <span className="font-mono text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
           <span
-            className="w-1.5 h-4 shrink-0 rounded-full"
+            className="w-1.5 h-4 rounded-full"
             style={{ background: OWNER_TINT[f.owner] }}
             aria-hidden
           />
-          <span className="flex-1 min-w-0 truncate text-sm font-medium text-[var(--color-text)]">{f.name}</span>
-          <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
-          {/* AC4: composition tint — the served pct as a thin owner-tinted underlay behind
-              the EXISTING token cell (answers "compared to what?"). NOT a new column: no
-              width added, no cm-file-pct element (AC7's redundant-%-column stays deleted).
-              Gate-2 UX: LEFT-anchored + 13% opacity (matches the health-pill wash) so it
-              reads as a subtle share cue, not a right-hugging progress bar behind the
-              right-aligned number; min 4% width so a tiny pct is a wash, never a sub-glyph
-              sliver. Title decodes the cue (the tint is otherwise unlabeled). */}
-          <span
-            className="relative w-14 shrink-0 overflow-hidden rounded-sm text-right font-mono text-xs text-[var(--color-text-muted)]"
-            title={typeof f.pct === 'number' ? `${f.pct}% of the context budget` : undefined}
-          >
-            {typeof f.pct === 'number' && f.pct > 0 && (
-              <span
-                data-testid="cm-pct-tint"
-                aria-hidden
-                className="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
-                style={{ width: `${Math.max(4, Math.min(100, f.pct))}%`, background: `color-mix(in srgb, ${OWNER_TINT[f.owner]} 13%, transparent)` }}
-              />
+          <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text)]">
+            {f.name}
+            {selective && (
+              <span data-testid="cm-selective" className="ml-1 text-[10px] text-[var(--color-text-faint)]" title={tokenTitle}>✂</span>
             )}
-            <span className="relative">{fmtTokens(f.tokens)}</span>
           </span>
-          {f.health && (
+          <span className="text-right text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
+          {/* Tokens — DISK size, right-aligned, fixed col */}
+          <span className="text-right font-mono text-xs text-[var(--color-text-muted)]" title={tokenTitle}>
+            {fmtTokens(f.tokens)}
+          </span>
+          {/* AC4: SHARE — an explicit visible bar + % number (user-requested; this
+              intentionally overrides the prior subtle-tint approach). Bar width =
+              pct of on-disk total, owner-tinted; the % number is shown to its right. */}
+          <span className="flex items-center gap-1.5" title={`${f.pct}% of the on-disk context`}>
+            <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-border)]">
+              {typeof f.pct === 'number' && f.pct > 0 && (
+                <span
+                  data-testid="cm-pct-bar"
+                  aria-hidden
+                  className="absolute inset-y-0 left-0 rounded-full"
+                  style={{ width: `${Math.max(2, Math.min(100, f.pct))}%`, background: OWNER_TINT[f.owner] }}
+                />
+              )}
+            </span>
+            <span data-testid="cm-pct-num" className="w-8 shrink-0 text-right font-mono text-[10px] text-[var(--color-text-faint)]">
+              {typeof f.pct === 'number' ? `${f.pct}%` : '—'}
+            </span>
+          </span>
+          {f.health ? (
             <span
               data-testid="cm-health"
-              className="w-16 shrink-0 text-center text-[10px] font-medium rounded px-1 py-[1px]"
+              className="text-center text-[10px] font-medium rounded px-1 py-[1px]"
               style={{ color: HEALTH_TINT[f.health], background: `color-mix(in srgb, ${HEALTH_TINT[f.health]} 12%, transparent)` }}
             >
               {f.health}
             </span>
-          )}
-          {f.locked && (
-            <span data-testid="cm-lock" className="w-6 shrink-0 text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated · opens read-only">🔒</span>
-          )}
+          ) : <span aria-hidden />}
+          {f.locked ? (
+            <span data-testid="cm-lock" className="text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated · opens read-only">🔒</span>
+          ) : <span aria-hidden />}
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }

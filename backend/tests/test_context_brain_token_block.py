@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from core.context_brain import build_context_token_block
+from core.context_directory_loader import ContextDirectoryLoader
 
 
 @pytest.fixture
@@ -99,3 +100,82 @@ def test_calibrated_tokens_not_bytes(fake_context_dir: Path):
     raw_bytes = (fake_context_dir / "SWARMAI.md").stat().st_size
     # token estimate is materially smaller than byte count (≈ chars/3.5 for ASCII)
     assert swarmai["tokens"] < raw_bytes
+
+
+# --------------------------------------------------------------------------
+# Selective-injection honesty (run_5f040023) — disk vs injected
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def big_memory_context_dir(tmp_path: Path) -> Path:
+    """A .context dir whose MEMORY.md EXCEEDS the 30K selective threshold, so
+    selective injection genuinely triggers (the only case with a real floor)."""
+    from core.memory_index import FULL_INJECTION_THRESHOLD
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    (ctx / "SWARMAI.md").write_text("core identity " * 50, encoding="utf-8")
+    # Build a MEMORY.md well above threshold with real ## sections + Open Threads
+    # (an always-load section) so selective has both a floor AND removable body.
+    big = ["## Memory Index\n\nindex line\n", "## Open Threads\n\nalways-load thread\n"]
+    # pad with many removable sections to blow WELL past FULL_INJECTION_THRESHOLD.
+    # Build until the estimator confirms we're over — no guessing at char ratios.
+    i = 0
+    while ContextDirectoryLoader.estimate_tokens("\n".join(big)) < FULL_INJECTION_THRESHOLD * 1.3:
+        big.append(f"## Section{i}\n\n" + ("removable body content here " * 40) + "\n")
+        i += 1
+    (ctx / "MEMORY.md").write_text("\n".join(big), encoding="utf-8")
+    return ctx
+
+
+def test_per_file_has_selective_fields(fake_context_dir: Path):
+    """Every row carries has_selective + injected_floor (AC3 honesty fields)."""
+    block = build_context_token_block(fake_context_dir)
+    for row in block["per_file"]:
+        assert "has_selective" in row
+        assert "injected_floor" in row
+        # non-selective files: injected == disk → floor is None
+        if not row["has_selective"]:
+            assert row["injected_floor"] is None
+
+
+def test_small_memory_below_threshold_is_not_selective(fake_context_dir: Path):
+    """A MEMORY.md BELOW the 30K threshold is full-injected (not selective) → its
+    reported injected size == disk (has_selective=False, floor=None). This is the
+    honesty fix: don't imply a selective saving that doesn't happen."""
+    block = build_context_token_block(fake_context_dir)
+    mem = next(r for r in block["per_file"] if r["name"] == "MEMORY.md")
+    assert mem["has_selective"] is False  # 1760 tok << 30K threshold
+    assert mem["injected_floor"] is None
+
+
+def test_big_memory_is_selective_with_floor_below_disk(big_memory_context_dir: Path):
+    """MEMORY.md ABOVE the threshold runs selective → has_selective=True and its
+    injected FLOOR is a real number ≤ disk (honest lower-bound, never fabricated,
+    never above disk)."""
+    block = build_context_token_block(big_memory_context_dir)
+    mem = next(r for r in block["per_file"] if r["name"] == "MEMORY.md")
+    assert mem["has_selective"] is True
+    assert mem["injected_floor"] is not None
+    assert mem["injected_floor"] <= mem["tokens"]  # floor never exceeds disk
+
+
+def test_injected_estimate_is_honest_lower_bound(big_memory_context_dir: Path):
+    """block.injected_estimate ≤ total_tokens (disk), and equals total minus what
+    selective files shave off. It is a REAL floor, never above disk total."""
+    block = build_context_token_block(big_memory_context_dir)
+    assert block["injected_estimate"] <= block["total_tokens"]
+    # reconstruct: total - sum(disk-floor for selective files)
+    shaved = sum(
+        r["tokens"] - r["injected_floor"]
+        for r in block["per_file"]
+        if r["has_selective"] and r["injected_floor"] is not None
+    )
+    assert block["injected_estimate"] == block["total_tokens"] - shaved
+
+
+def test_total_tokens_stays_disk_conservative(fake_context_dir: Path):
+    """total_tokens must remain the DISK sum (conservative headline) — NOT silently
+    replaced by injected (Gate-1 #4: don't hide real disk size behind a selective
+    estimate). Composition pct still sums over disk."""
+    block = build_context_token_block(fake_context_dir)
+    assert block["total_tokens"] == sum(f["tokens"] for f in block["per_file"])

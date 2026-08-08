@@ -31,9 +31,10 @@ const TOKEN_BLOCK = {
   per_file: [
     { name: 'SWARMAI.md', tokens: 2000, pct: 2.0, owner: 'system', priority: 0, locked: true, health: 'fresh' },
     { name: 'USER.md', tokens: 3000, pct: 3.0, owner: 'user', priority: 4, locked: false, health: 'idle' },
-    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false, health: 'oversized' },
+    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false, health: 'oversized', has_selective: true, injected_floor: 17000 },
     { name: 'KNOWLEDGE.md', tokens: 47000, pct: 47.0, owner: 'auto', priority: 9, locked: false, health: 'growing' },
   ],
+  injected_estimate: 69000,
 };
 
 // Real-shaped Review proposals (DDD cultivation) — the fields the card renders.
@@ -279,13 +280,14 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     // the name instead of a screen away on a wide window.
     expect(row.className).toMatch(/max-w-/);
     // Gate-1 constraint: the name span MUST keep `flex-1 min-w-0 truncate` — that
-    // pairing IS the truncation bound; removing flex-1 breaks truncation for long
-    // filenames. The void is fixed by capping the ROW, not by dropping flex-1.
+    // run_5f040023: the row is now a fixed-column GRID (AC4 alignment) with the
+    // name in the `1fr` column, so `min-w-0 truncate` (NOT flex-1) is the
+    // truncation bound — the grid `1fr` provides the flex the old flex-1 did.
+    expect(row.className).toContain('grid');
     const nameSpan = Array.from(row.querySelectorAll('span')).find(
-      (s) => s.textContent === 'SWARMAI.md',
+      (s) => s.textContent?.startsWith('SWARMAI.md'),
     ) as HTMLElement;
     expect(nameSpan).toBeTruthy();
-    expect(nameSpan.className).toContain('flex-1');
     expect(nameSpan.className).toContain('min-w-0');
     expect(nameSpan.className).toContain('truncate');
   });
@@ -669,19 +671,40 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     expect(card.querySelector('[data-testid="cm-demoted"]')).toBeNull();
   });
 
-  // AC4: a thin pct-derived composition tint on the EXISTING token cell — NOT a new column.
-  it('renders a pct composition tint on the token cell without adding a percent column', async () => {
+  // AC4 (run_5f040023, user override of the prior subtle-tint): explicit visible
+  // SHARE bar + % number per file. The user asked for "占比数字或条形" — both.
+  it('renders an explicit pct SHARE bar + percent number per file', async () => {
     mockHealth();
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-panel-context');
     const row = await screen.findByTestId('cm-file-row-MEMORY.md');
-    const tint = row.querySelector('[data-testid="cm-pct-tint"]');
-    expect(tint).not.toBeNull();
-    // width encodes pct (48%) — sourced from payload, not invented
-    expect((tint as HTMLElement).style.width).toMatch(/48/);
-    // AC7 guard still holds: no redundant percent COLUMN element
-    expect(row.querySelector('[data-testid="cm-file-pct"]')).toBeNull();
+    // visible bar whose width encodes pct (48%) — sourced from payload, not invented
+    const bar = row.querySelector('[data-testid="cm-pct-bar"]') as HTMLElement;
+    expect(bar).not.toBeNull();
+    expect(bar.style.width).toMatch(/48/);
+    // explicit % number is shown (the user asked for the number, not just a cue)
+    const num = row.querySelector('[data-testid="cm-pct-num"]') as HTMLElement;
+    expect(num).not.toBeNull();
+    expect(num.textContent).toContain('48');
+  });
+
+  // AC3 honesty (run_5f040023): a selective file shows the ✂ cue; the rail shows
+  // the honest "actually injected" estimate, not just the on-disk headline.
+  it('marks a selective file (✂) and shows the honest injected estimate on the rail', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    // MEMORY.md has_selective=true → the ✂ cue is present
+    const memRow = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(memRow.querySelector('[data-testid="cm-selective"]')).not.toBeNull();
+    // KNOWLEDGE.md is not selective → no ✂
+    const knowRow = await screen.findByTestId('cm-file-row-KNOWLEDGE.md');
+    expect(knowRow.querySelector('[data-testid="cm-selective"]')).toBeNull();
+    // the rail's honest injected line shows the smaller real load (69K < 100K disk)
+    const injected = await screen.findByTestId('cm-injected');
+    expect(injected.textContent).toMatch(/69/);
   });
 });
 

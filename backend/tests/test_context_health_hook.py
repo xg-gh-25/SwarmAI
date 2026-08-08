@@ -129,8 +129,8 @@ class TestLightRefresh:
 class TestHotColdKnowledgeIndex:
     """AC1-AC4: Hot/Cold dual-layer index format."""
 
-    def test_large_dir_shows_hot_10_plus_cold_summary(self, hook, workspace):
-        """AC1: Directories with >10 files show only Hot 10 + summary."""
+    def test_large_dir_shows_hot_5_plus_cold_summary(self, hook, workspace):
+        """AC1: Directories with >10 files show only Hot _HOT_ENTRIES (=5) + summary."""
         # Create 15 design files
         designs = workspace / "Knowledge" / "Designs"
         for i in range(15):
@@ -145,9 +145,11 @@ class TestHotColdKnowledgeIndex:
             hook._light_refresh(workspace, str(workspace))
 
         content = km.read_text()
-        # Should have Hot 10 entries (most recent dates)
+        # Should have Hot _HOT_ENTRIES (=5) most recent dates (run_5f040023: 10→5)
         assert "2026-05-15" in content  # Most recent
-        assert "2026-05-06" in content  # 10th most recent
+        assert "2026-05-11" in content  # 5th most recent (Hot tier boundary)
+        # The 6th-most-recent (05-10) and older must NOT be in the Hot table
+        assert "2026-05-10" not in content
         # Should NOT have the oldest entries
         assert "design-0.md" not in content or "older files" in content.lower() or "+ " in content
         # Should have a cold summary line
