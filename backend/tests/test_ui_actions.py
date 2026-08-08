@@ -373,3 +373,122 @@ def test_frontend_table_derives_show_star_from_ssot():
         f"{hand_listed} — these must be DERIVED from ALL_SHOW_EVENTS, or they "
         "silently drift from the LeftNav SSOT (the exact bug this change removed)"
     )
+
+
+# ── Layer 4 Cross-Boundary E2E (run_14e560ed) ─────────────────────────────────
+# The seam: build_surface_events (backend) → file_changed SSE → the frontend
+# useCanvasAutoSurface gate. The REPORT.md finish-append is only useful if the
+# event it emits ACTUALLY PASSES the frontend auto-pop gate. This test drives the
+# REAL backend emit against the REAL frontend gate CONTRACT (parsed from the TS
+# source, not a hand-copied constant) so a divergence is impossible/RED. It is the
+# cross-language equivalent of "run the real reader against the real writer".
+class TestReportSurfaceCrossBoundaryContract:
+    def _frontend_gate(self):
+        """Parse the auto-pop admission contract straight from the TS source, so the
+        assertion binds to the REAL gate, not a copy that could drift."""
+        import re as _re
+        from pathlib import Path as _P
+        ts = (
+            _P(__file__).resolve().parents[2]
+            / "desktop" / "src" / "hooks" / "useCanvasAutoSurface.ts"
+        ).read_text()
+        # Line 143: kind gate — the accepted kinds.
+        kind_line = next(l for l in ts.splitlines()
+                         if "kind !== undefined" in l and "return" in l)
+        accepted_kinds = set(_re.findall(r"kind !== '([a-z-]+)'", kind_line))
+        # Line 147: relevance gate — the accepted relevance.
+        rel_line = next(l for l in ts.splitlines()
+                        if "relevance !== undefined" in l and "return" in l)
+        accepted_rel = set(_re.findall(r"relevance !== '([a-z-]+)'", rel_line))
+        return accepted_kinds, accepted_rel
+
+    def test_report_event_passes_frontend_autopop_gate(self, tmp_path):
+        """The REPORT.md event build_surface_events emits MUST satisfy the frontend
+        auto-pop gate (kind in accepted set, relevance == deliverable) — else the
+        Canvas would silently never open on the report."""
+        import json
+        from core.ui_actions import build_surface_events
+        accepted_kinds, accepted_rel = self._frontend_gate()
+        # Sanity: we parsed a real contract.
+        assert "knowledge" in accepted_kinds and "source-final" in accepted_kinds, accepted_kinds
+        assert "deliverable" in accepted_rel, accepted_rel
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_cb"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps(
+            {"commits": [{"repo": "/repo", "sha": "abc1234", "files": ["backend/b.py"]}]}))
+        (run_dir / "REPORT.md").write_text("# Report\n")
+        events = build_surface_events("run_cb", workspace_root=str(tmp_path))
+
+        report = events[-1]
+        assert str(report["path"]).endswith("REPORT.md")
+        # THE CONTRACT: the emitted event clears BOTH frontend gates.
+        assert report["kind"] in accepted_kinds, (
+            f"REPORT kind={report['kind']!r} not in the frontend auto-pop accepted "
+            f"kinds {accepted_kinds} — Canvas would never open on it")
+        assert report["relevance"] in accepted_rel, (
+            f"REPORT relevance={report['relevance']!r} fails the frontend deliverable "
+            f"gate {accepted_rel}")
+        # And source rows ALSO clear the gate (they were the working case).
+        src = events[0]
+        assert src["kind"] in accepted_kinds and src["relevance"] in accepted_rel
+
+    def test_mutation_wrong_kind_would_fail_the_gate(self, tmp_path):
+        """Mutation-verify non-vacuous: if the REPORT event were emitted with a
+        gate-REJECTED kind (e.g. 'source' or 'process'), the contract assertion
+        above WOULD fail — proving the test actually binds behavior to the gate."""
+        accepted_kinds, _ = self._frontend_gate()
+        # These are the kinds the gate DROPS (mid-run source + machine noise).
+        assert "source" not in accepted_kinds, (
+            "'source' must NOT be auto-pop-accepted — if the REPORT append used "
+            "kind='source' it would silently never open (this is the mutation the "
+            "real test guards against)")
+        assert "process" not in accepted_kinds
+
+    def test_report_absent_after_commits_logs_loud_warning(self, tmp_path, caplog):
+        """LOUD-on-degradation (run_14e560ed): a committed pipeline run (commits[]
+        populated → source rows emitted) whose REPORT.md is NOT yet on disk means
+        surface_run_outputs ran BEFORE run-report (the complete.md-vs-INSTRUCTIONS
+        ordering hazard). The report row is fail-safe-skipped, but the skip MUST be
+        observable via a logged warning — not silent."""
+        import json
+        import logging
+        from core.ui_actions import build_surface_events
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_ord"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps(
+            {"commits": [{"repo": "/repo", "sha": "abc1234", "files": ["backend/b.py"]}]}))
+        # NOTE: deliberately NO REPORT.md written — the ordering-hazard case.
+
+        with caplog.at_level(logging.WARNING, logger="core.ui_actions"):
+            events = build_surface_events("run_ord", workspace_root=str(tmp_path))
+
+        # Fail-safe: source rows still auto-open; no report row appended.
+        assert events, "source rows must still emit (fail-safe)"
+        assert not any(str(e.get("path", "")).endswith("REPORT.md") for e in events)
+        # The skip is LOUD, not silent.
+        assert any(
+            "REPORT.md" in r.message and "run-report" in r.message
+            for r in caplog.records if r.levelno >= logging.WARNING
+        ), f"expected a loud REPORT-absent ordering warning; got {[r.message for r in caplog.records]}"
+
+    def test_no_warning_when_no_commits(self, tmp_path, caplog):
+        """Mutation-guard: the warning is bound to 'committed run but report missing',
+        NOT to 'report missing'. An empty-commits run (no source rows) must NOT warn —
+        else every non-pipeline surface call would spam the log."""
+        import json
+        import logging
+        from core.ui_actions import build_surface_events
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_empty"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({"commits": []}))
+
+        with caplog.at_level(logging.WARNING, logger="core.ui_actions"):
+            events = build_surface_events("run_empty", workspace_root=str(tmp_path))
+
+        assert events == []
+        assert not any(
+            "REPORT.md" in r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ), "no source rows → no ordering hazard → must NOT warn"

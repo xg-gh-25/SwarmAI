@@ -319,4 +319,184 @@ class TestNoLocalPR:
         run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_none"
         run_dir.mkdir(parents=True)
         (run_dir / "run.json").write_text(json.dumps({"commits": []}))
+        # No commits AND no REPORT.md on disk → still empty (the REPORT append is
+        # exists-guarded).
         assert build_surface_events("run_none", workspace_root=str(tmp_path)) == []
+
+
+# ── Run-commit ghost-path robustness (run_14e560ed PART 1 — root fix) ──────────
+class TestRunCommitGhostPathRobustness:
+    """A hallucinated files_touched path (recorded by BUILD but not on disk) must
+    NOT poison the whole batch. `git add -- <real> <ghost>` fails with exit 128 and
+    stages NOTHING — the root cause of empty commits[] on source-changing runs. The
+    fix stages ONLY git-resolvable paths, so the real files still commit and
+    commits[] populates (which is what the Canvas finish-surface reads)."""
+
+    def _git(self, repo, *a):
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, timeout=15)
+
+    def _setup_repo(self, tmp_path, name):
+        repo = tmp_path / name
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "real.py").write_text("v1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        (repo / "real.py").write_text("v2 — this run\n")
+        return repo
+
+    def test_mixed_real_and_ghost_commits_the_real_one(self, workspace, tmp_path, capsys):
+        # files_touched has a REAL dirty file + a HALLUCINATED path that doesn't exist.
+        # Pre-fix: `git add -- real.py ghost.py` → exit 128 → nothing staged → no
+        # commit → commits[] empty. Post-fix: real.py commits, ghost dropped.
+        repo = self._setup_repo(tmp_path, "ghostrepo")
+        rf = _write_run(workspace, "run_ghost",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "real.py"), str(repo / "ghost.py")])
+        _run_commit(workspace, "run_ghost")
+        result = json.loads(capsys.readouterr().out)
+        assert len(result["committed"]) == 1, \
+            f"real.py must commit despite the ghost path: {result}"
+        data = json.loads(rf.read_text())
+        assert data.get("commits"), "commits[] must be populated (the Canvas surface source)"
+        assert data["commits"][0]["files"] == ["real.py"], \
+            f"only the real file committed, ghost dropped: {data['commits']}"
+        # real.py is now clean (committed); the repo has no dangling ghost
+        status = self._git(repo, "status", "--porcelain").stdout
+        assert "real.py" not in status, "real.py must be committed (clean)"
+
+    def test_exists_in_repo_is_cwd_safe_for_relative_paths(self, tmp_path, monkeypatch):
+        # Gate-2 HIGH regression guard (mutation-sensitive): _path_exists_in_repo must
+        # anchor a REPO-RELATIVE path to the resolved repo `root`, NOT the process cwd.
+        # In a multi-repo run cwd equals only ONE root; a cwd-relative check
+        # (the reverted `Path(f).exists()`) mis-drops a real file in another repo as a
+        # ghost → empty commit → the exact regression this change fixes.
+        from scripts.artifact_cli import _path_exists_in_repo
+        repo = tmp_path / "somerepo"
+        (repo / "sub").mkdir(parents=True)
+        (repo / "sub" / "real.py").write_text("x\n")
+        # Process cwd is deliberately ELSEWHERE (mimics a multi-repo run where cwd is
+        # a DIFFERENT repo than this file's root).
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        monkeypatch.chdir(other)
+        # MUTATION PIN: a bare cwd-relative check would be False here (real.py is NOT
+        # under cwd) — reverting _path_exists_in_repo to `Path(f).exists()` makes this
+        # assertion RED. Anchored to root, it is correctly True.
+        assert _path_exists_in_repo("sub/real.py", str(repo)) is True, \
+            "repo-relative real file must be found via root, not cwd"
+        assert (other / "sub" / "real.py").exists() is False, \
+            "sanity: it is NOT under the process cwd (proves the cwd trap is real)"
+        # A genuinely hallucinated relative path is still correctly a ghost.
+        assert _path_exists_in_repo("sub/ghost.py", str(repo)) is False
+        # Absolute paths are checked directly (unchanged behavior).
+        assert _path_exists_in_repo(str(repo / "sub" / "real.py"), str(repo)) is True
+        assert _path_exists_in_repo(str(repo / "nope.py"), str(repo)) is False
+
+    def test_all_ghost_paths_commits_nothing_cleanly(self, workspace, tmp_path, capsys):
+        # Every files_touched path is hallucinated → nothing to stage → no commit,
+        # commits[] stays empty (honest), a WARN fires, and it does NOT crash.
+        repo = self._setup_repo(tmp_path, "allghostrepo")
+        rf = _write_run(workspace, "run_allghost",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "nope1.py"), str(repo / "nope2.py")])
+        cap = _run_commit(workspace, "run_allghost")
+        assert cap.get("exit") in (None, 0), "must exit cleanly, not crash"
+        result = json.loads(capsys.readouterr().out)
+        assert result["committed"] == [], "all-ghost → nothing committed"
+        data = json.loads(rf.read_text())
+        assert not data.get("commits"), "commits[] stays empty honestly (never a wrong file)"
+
+
+# ── REPORT.md finish-surface append (run_14e560ed PART 2) ──────────────────────
+class TestBuildSurfaceEventsReportAppend:
+    """build_surface_events appends the run's REPORT.md LAST as a kind=knowledge
+    event so the Canvas auto-opens ON the report (last-write-wins) and renders it as
+    CONTENT (no baseRef → not a diff). Source files stay as rows before it."""
+
+    def test_report_appended_last_when_present(self, tmp_path):
+        import json
+        import sys
+        sys.path.insert(0, "backend")
+        from core.ui_actions import build_surface_events
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_rep"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "commits": [{"repo": "/repo", "files": ["backend/b.py", "desktop/a.tsx"]}],
+        }))
+        (run_dir / "REPORT.md").write_text("# Pipeline Report\n")
+        events = build_surface_events("run_rep", workspace_root=str(tmp_path))
+        # Source events + exactly one REPORT.md event, and it is LAST.
+        report_events = [e for e in events if str(e.get("path", "")).endswith("REPORT.md")]
+        assert len(report_events) == 1, f"exactly one REPORT.md event: {events}"
+        last = events[-1]
+        assert str(last["path"]).endswith("REPORT.md"), \
+            f"REPORT.md must be the LAST event (last-write-wins auto-select): {events}"
+        assert last["kind"] == "knowledge", "REPORT renders as knowledge (CONTENT, rail-kept)"
+        assert last["relevance"] == "deliverable", "must pass the deliverable auto-pop gate"
+        assert "baseRef" not in last, "no baseRef → renders CONTENT not diff"
+        assert last["operation"] == "written"
+        # Source events precede it, unchanged.
+        assert events[0]["kind"] == "source-final"
+
+    def test_no_report_event_when_absent(self, tmp_path, caplog):
+        import json
+        import logging
+        import sys
+        sys.path.insert(0, "backend")
+        from core.ui_actions import build_surface_events
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_norep"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "commits": [{"repo": "/repo", "files": ["backend/b.py"]}],
+        }))
+        # No REPORT.md written.
+        with caplog.at_level(logging.WARNING, logger="core.ui_actions"):
+            events = build_surface_events("run_norep", workspace_root=str(tmp_path))
+        assert not any(str(e.get("path", "")).endswith("REPORT.md") for e in events), \
+            "no REPORT event when the file is absent (exists-guard)"
+        assert len(events) == 1 and events[0]["kind"] == "source-final", \
+            "source events still returned"
+        # LOUD-on-degradation: source rows present + REPORT absent → a WARNING fires
+        # (surface ran before run-report) so the ordering hazard is observable, not silent.
+        assert any("REPORT.md is absent" in r.message for r in caplog.records), \
+            "must WARN when source rows exist but REPORT.md is missing (ordering hazard)"
+
+    def test_no_warning_when_no_events_and_no_report(self, tmp_path, caplog):
+        # A truly-empty run (no commits, no REPORT) must NOT warn — the loud signal is
+        # ONLY for the degradation case (source emitted but report lost to ordering).
+        import json
+        import logging
+        import sys
+        sys.path.insert(0, "backend")
+        from core.ui_actions import build_surface_events
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_empty2"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({"commits": []}))
+        with caplog.at_level(logging.WARNING, logger="core.ui_actions"):
+            events = build_surface_events("run_empty2", workspace_root=str(tmp_path))
+        assert events == []
+        assert not any("REPORT.md is absent" in r.message for r in caplog.records), \
+            "no warning for a genuinely empty run (no source rows to lose a report against)"
+
+    def test_report_appended_even_when_no_commits(self, tmp_path):
+        # A knowledge/docs-only run (empty commits[]) still surfaces its REPORT.md.
+        import json
+        import sys
+        sys.path.insert(0, "backend")
+        from core.ui_actions import build_surface_events
+
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_reponly"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({"commits": []}))
+        (run_dir / "REPORT.md").write_text("# Report\n")
+        events = build_surface_events("run_reponly", workspace_root=str(tmp_path))
+        assert len(events) == 1, f"just the REPORT event: {events}"
+        assert str(events[0]["path"]).endswith("REPORT.md")
+        assert events[0]["kind"] == "knowledge"

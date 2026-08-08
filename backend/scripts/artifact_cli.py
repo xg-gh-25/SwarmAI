@@ -1822,6 +1822,21 @@ def cmd_run_surface_changes(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(buckets.as_dict()))
 
 
+def _path_exists_in_repo(f: str, root: str) -> bool:
+    """True if the run-recorded path ``f`` exists on disk, anchored to the resolved
+    repo ``root`` (run_14e560ed, Gate-2 HIGH).
+
+    An ABSOLUTE path is checked directly. A REPO-RELATIVE path (a supported
+    files_touched form — build.md) is resolved against ``root``, NEVER the process
+    cwd: in a multi-repo run cwd equals only one root at a time, so a bare
+    ``Path(f).exists()`` would resolve a relative path against the wrong dir and
+    mis-drop a REAL file in another repo as a ghost — the exact cwd trap the
+    dirty-set block already avoids via ``git ls-files``.
+    """
+    p = Path(f)
+    return p.exists() if p.is_absolute() else (Path(root) / f).exists()
+
+
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
 
@@ -1933,8 +1948,31 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         except (subprocess.TimeoutExpired, OSError):
             pass
 
-        # Stage ONLY this run's files (pathspec — never -A)
-        add = subprocess.run(["git", "-C", root, "add", "--", *files],
+        # Stage ONLY this run's files (pathspec — never -A). Filter to paths that
+        # ACTUALLY EXIST on disk first (run_14e560ed): BUILD sometimes records a
+        # HALLUCINATED path in files_touched (a path the agent believed it wrote but
+        # didn't — e.g. desktop/src/lib/x.ts when the real file is components/x.ts).
+        # `git add -- <real> <ghost>` fails ENTIRELY with exit 128 ("pathspec did not
+        # match any files") and stages NOTHING → no commit → commits[] empty → the
+        # Canvas finish-surface (build_surface_events reads commits[]) shows nothing.
+        # Existence covers BOTH a tracked-modified file AND a brand-new untracked
+        # file (git ls-files would miss the new one); a ghost path fails → drop.
+        #
+        # Existence is anchored to the already-resolved repo `root`, NOT the process
+        # cwd (Gate-2 HIGH) — see _path_exists_in_repo. files_touched may be
+        # REPO-RELATIVE (a supported input); a cwd-relative check would mis-drop a
+        # real file in another repo as a ghost in a multi-repo run.
+        real_files = [f for f in files if _path_exists_in_repo(f, root)]
+        ghosts = [f for f in files if f not in real_files]
+        if ghosts:
+            warnings.append(
+                f"[{root}] {len(ghosts)} recorded path(s) do not exist on disk, "
+                f"dropped (BUILD recorded a wrong path): {ghosts[:10]}"
+            )
+        if not real_files:
+            warnings.append(f"[{root}] no recorded files exist on disk — nothing to stage")
+            continue
+        add = subprocess.run(["git", "-C", root, "add", "--", *real_files],
                              capture_output=True, text=True, timeout=15)
         if add.returncode != 0:
             warnings.append(f"[{root}] git add failed: {add.stderr.strip()[:200]}")

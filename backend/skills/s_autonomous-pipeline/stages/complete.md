@@ -20,6 +20,17 @@ INSTRUCTIONS.md Step 6 — read both.
 
 ## Step 0: Surface this run's changes to Canvas (MANDATORY — before the summary)
 
+> **⛔ ORDER PREREQUISITE (run_14e560ed): `run-report` MUST run BEFORE `surface_run_outputs`.**
+> `surface_run_outputs` appends the run's `REPORT.md` as the LAST OUTPUTS row (kind=knowledge)
+> so the Canvas auto-SELECTS + renders the report — but ONLY if `REPORT.md` already exists on
+> disk at surface time (`build_surface_events` is exists-guarded: no file → the report row is
+> silently skipped, and the finish batch auto-opens on a source file instead of the report).
+> Step 0 sits at the TOP of this doc but `run-report` lives in INSTRUCTIONS.md Step 6 sub-step 1
+> — so a top-to-bottom reader would surface FIRST and lose the report row. **Therefore: run
+> `run-report` (INSTRUCTIONS Step 6.1) to generate REPORT.md BEFORE calling `surface_run_outputs`
+> here.** The `deliver.md` "Pipeline Report" section already generates it pre-surface on the main
+> path; this note makes the dependency explicit so the complete.md ordering can't silently drop it.
+
 Stand on GIT — surface WHAT THIS RUN CHANGED to the Canvas review panel. Do this
 BEFORE the completion summary box (the summary references it). Full behavior +
 rationale in `stages/deliver.md` § "COMPLETE-stage Canvas review"; the sequence:
