@@ -62,7 +62,7 @@ from core.pipeline_profiles import get_profile_stages
 # gate reads (the completion/advance artifact-link check). `status` is excluded
 # on purpose (finalize upgrades recorded→completed); `auto_recorded` is provenance
 # no gate reads. Widen this ONLY when a new publish-set, gate-read field is proven.
-_CARRY_FORWARD_FIELDS = frozenset({"artifact_id"})
+_CARRY_FORWARD_FIELDS = frozenset({"artifact_id", "adversarial_review"})
 
 
 def _get_workspace() -> Path:
@@ -1666,13 +1666,19 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         if existing_idx is not None:
             # Carry-forward safelist: run-update REPLACES the whole record, but the
             # documented finalize workflow (INSTRUCTIONS.md:1372-1379) omits fields
-            # that `publish --stage` auto-recorded — chiefly artifact_id (the stub at
-            # cmd_publish sets stage/status/artifact_id/auto_recorded). Without this,
-            # finalizing wipes the artifact link → the completion gate's artifact
-            # check silently skips (run_dc86c466 hit this 2x). Preserve ONLY fields
-            # in this safelist when the incoming finalize omits them; an explicit
-            # value always wins. Deliberately EXCLUDES `status` (it must upgrade
-            # recorded→completed) and `auto_recorded` (provenance, no gate reads it).
+            # that a prior publish/record auto-set. Two are gate-load-bearing:
+            #   - artifact_id — the stub at cmd_publish sets it; without carry-forward
+            #     finalizing wipes the artifact link → completion's artifact check
+            #     silently skips (run_dc86c466 hit this 2x).
+            #   - adversarial_review — the deliver-stage auto-aggregation reads it to
+            #     BUILD the delivery artifact; a finalize that omits it wiped it →
+            #     auto-aggregation saw an empty adv → NO delivery artifact → the gate
+            #     rejected with a MISLEADING "Stage completed without artifact_id"
+            #     (run_f1fbf37d cost 4 manual re-records).
+            # Preserve ONLY fields in this safelist when the incoming finalize omits
+            # them; an explicit value always wins. Deliberately EXCLUDES `status` (it
+            # must upgrade recorded→completed) and `auto_recorded` (provenance, no
+            # gate reads it).
             existing_rec = run_state["stages"][existing_idx]
             if isinstance(existing_rec, dict):
                 for _cf in _CARRY_FORWARD_FIELDS:

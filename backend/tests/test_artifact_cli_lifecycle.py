@@ -423,6 +423,56 @@ class TestRunUpdateCarryForward:
         assert build["artifact_id"] == "art_x", "artifact_id carries"
         assert build.get("status") != "completed", "status must NOT carry forward from the old record"
 
+    def test_finalize_omitting_adversarial_review_preserves_it(self, workspace, monkeypatch):
+        """run_f1fbf37d: the deliver stage record carries `adversarial_review` (the
+        gate-load-bearing field the completion auto-aggregation reads to build the
+        delivery artifact). A finalize `run-update --stage-json` that omits it wiped
+        it → auto-aggregation saw an empty adv → NO delivery artifact created → the
+        completion gate rejected with a MISLEADING 'Stage completed without
+        artifact_id' (cost 4 manual re-records this session). Like artifact_id, it
+        must carry forward from the existing record when the finalize omits it."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        # Prior state: publish/record set the deliver stage's adversarial_review.
+        _create_run(workspace, "TestProject", "run_cf5", "running",
+                    stages=[{"stage": "deliver", "status": "recorded",
+                             "artifact_id": "art_del1",
+                             "adversarial_review": {"profile_tier": "bugfix",
+                                                    "verdict": "no-critical-high",
+                                                    "findings": []}}])
+        # Finalize WITHOUT adversarial_review (the shape that bit this session).
+        args = self._update_args(workspace, "run_cf5",
+                                 json.dumps({"stage": "deliver", "status": "completed",
+                                             "stage_doc_consumed": True, "token_cost": 100}))
+        cli.cmd_run_update(args, reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_cf5" / "run.json"
+        deliver = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "deliver")
+        assert isinstance(deliver.get("adversarial_review"), dict), \
+            "adversarial_review must survive the finalize replace (gate reads it)"
+        assert deliver["adversarial_review"]["profile_tier"] == "bugfix"
+        assert deliver["artifact_id"] == "art_del1", "artifact_id still carries too"
+
+    def test_explicit_adversarial_review_wins_over_carried(self, workspace, monkeypatch):
+        """An explicitly-passed adversarial_review overrides the carried one (a
+        re-finalize that DOES record fresh review data must not be shadowed)."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_cf6", "running",
+                    stages=[{"stage": "deliver", "status": "recorded",
+                             "adversarial_review": {"profile_tier": "old"}}])
+        args = self._update_args(workspace, "run_cf6",
+                                 json.dumps({"stage": "deliver", "status": "completed",
+                                             "stage_doc_consumed": True,
+                                             "adversarial_review": {"profile_tier": "new"}}))
+        cli.cmd_run_update(args, reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_cf6" / "run.json"
+        deliver = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "deliver")
+        assert deliver["adversarial_review"]["profile_tier"] == "new", "explicit adv must win"
+
 
 class TestCompletionGateBoolAdversarialReview:
     """run_ca0190fb: the deliver-stage auto-aggregation (cmd_run_update, status=
