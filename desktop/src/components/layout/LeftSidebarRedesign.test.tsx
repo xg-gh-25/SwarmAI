@@ -79,12 +79,12 @@ const DOMAIN_ORDER = [
   // / agent command), not a nav card (run_990b0a03).
   'nav-pipeline',
   'nav-pollinate',
-  'nav-capabilities',  // Work: ability front-door, moved from System (run_b5d98151)
+  'nav-community',  // Work: resident main entry, last in Work (run_5165013e)
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
-  'nav-hive',      // System: Hive Fleet, directly below Jobs & Runs (run_b450108e)
+  'nav-capabilities',  // System: ability reference, after Jobs (moved from Work, run_5165013e)
+  'nav-hive',      // System: Hive Fleet (run_b450108e)
   'nav-eval',
   'nav-settings',
-  'nav-community',
 ];
 
 describe('LeftSidebar A10 — chat hero + history', () => {
@@ -188,7 +188,8 @@ describe('LeftSidebar A10 — highlight tiers (run_edb48c31)', () => {
 
   it('keeps the other System cards NON-highlighted (dim stays the default there)', () => {
     renderSidebar();
-    for (const id of ['nav-capabilities', 'nav-settings', 'nav-community']) {
+    // Community moved to Work (run_5165013e); Capabilities moved INTO System.
+    for (const id of ['nav-capabilities', 'nav-eval', 'nav-settings']) {
       expect(screen.getByTestId(id).className).not.toContain('a10-card--hilite');
     }
   });

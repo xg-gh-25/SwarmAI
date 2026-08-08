@@ -19,6 +19,7 @@ import { NewBrainContent } from './NewBrainOverlay';
 import { HistoryContent } from './HistoryOverlay';
 import { ToDoContent } from './ToDoOverlay';
 import { NeedYouContent } from './NeedYouOverlay';
+import { CommunityContent } from './CommunityOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
 import { CapabilitiesContent } from './CapabilitiesOverlay';
 import { PipelineContent } from './PipelineOverlay';
@@ -197,6 +198,20 @@ registerOverlay({
       close={close}
     />
   ),
+});
+
+// ── community (run_5165013e) — SwarmAI's two-way membrane with the outside
+// world: inbound signals (Feed + Sources) + outbound engagement. Work-zone
+// card (spouts teal). width 'l' — a 3-tab list/roster surface (like todo),
+// wider than a single-column list but not the full dashboard 'xl'.
+registerOverlay({
+  id: 'community',
+  title: 'Community',
+  mode: 'COMMUNITY',
+  width: 'l',
+  sourceCardTestId: 'nav-community',
+  tint: TINT_WORK,
+  render: ({ close }) => <CommunityContent close={close} />,
 });
 
 registerOverlay({

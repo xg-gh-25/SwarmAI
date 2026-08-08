@@ -41,6 +41,7 @@ export const OVERLAY_IDS = [
   'pipeline',
   'pollinate',
   'capabilities',
+  'community',
   'needs-you',
   // SYSTEM region
   'hive',

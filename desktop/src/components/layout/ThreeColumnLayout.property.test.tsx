@@ -1096,12 +1096,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       // NOTE: no nav-canvas — Canvas is output-triggered, not a nav card (run_990b0a03).
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
-      { testId: 'nav-capabilities', label: 'Capabilities' },
+      { testId: 'nav-community', label: 'Community' },  // Work: last (run_5165013e)
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
+      { testId: 'nav-capabilities', label: 'Capabilities' },  // System: after Jobs (run_5165013e)
       { testId: 'nav-hive', label: 'Hive' },
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },
-      { testId: 'nav-community', label: 'Community' },
     ] as const;
 
     const validWindowWidthArb = fc.integer({ min: 320, max: 2000 });

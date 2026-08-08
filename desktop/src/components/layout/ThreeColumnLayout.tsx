@@ -16,14 +16,12 @@ import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // DomainStubOverlays retired (M3): STUBS array empty, file deleted in M5.
 // CMBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // LibraryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
-import { closeOpenOverlays } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import api from '../../services/api';
-import { useToast } from '../../contexts/ToastContext';
 import { isDesktop } from '../../services/tauri';
 import { hiveService, TRANSITIONAL_STATUSES } from '../../services/hive';
 
@@ -175,20 +173,9 @@ function TopBar() {
  *  Given the /workspace/tree/expand children of Knowledge/Signals, return the
  *  path of the newest digest — names are YYYY-MM-DD-digest.md so the lexical max
  *  IS the chronological latest. *-weekly.md (same dir) is excluded. null if none. */
-export function pickLatestDigest(children: Array<{ name?: string; path?: string }>): string | null {
-  let best: { name: string; path: string } | null = null;
-  for (const c of children) {
-    if (!c?.name || !c?.path) continue;
-    if (!c.name.endsWith('-digest.md')) continue;
-    if (best === null || c.name > best.name) best = { name: c.name, path: c.path };
-  }
-  return best?.path ?? null;
-}
-
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
   const { activeModal, closeModal, settingsTab, setSettingsTab } = useLayout();
-  const { addToast } = useToast();
   // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
   // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
   // legacy + new mutually exclusive until M5 retires the legacy path.
@@ -207,39 +194,6 @@ function LeftSidebar() {
   const hiveEnabled = isDesktop();
 
   // Open the LATEST signal digest. The digest is written by a scheduled job, so
-  // today's file often doesn't exist yet (esp. early in the day / weekends) —
-  // hardcoding `<today>-digest.md` produced a file-not-found (run_a73566c4). We
-  // list Knowledge/Signals via the existing tree/expand endpoint and open the
-  // newest *-digest.md. Graceful toast on empty/failure — never a dead click.
-  const handleSignalsClick = async () => {
-    // Opens a file PANEL / toast, not a fullscreen surface — close any open overlay so
-    // the panel isn't stacked under it. (navSource clear removed M5 — no singleton.)
-    closeOpenOverlays();
-    try {
-      const resp = await api.get<Array<{ name?: string; path?: string }>>(
-        '/workspace/tree/expand',
-        { params: { path: 'Knowledge/Signals', depth: 1 } },
-      );
-      const latest = pickLatestDigest(resp.data ?? []);
-      if (latest) {
-        document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: latest } }));
-      } else {
-        addToast({ severity: 'info', message: 'No signal digest available yet.', autoDismiss: true });
-      }
-    } catch {
-      addToast({ severity: 'warning', message: 'Could not load signals.', autoDismiss: true });
-    }
-  };
-
-  // Open a window-event domain overlay. Also closes any activeModal (Settings/Eval):
-  // since the redesigned overlay no longer covers the leftNav, the nav stays
-  // clickable while a modal is open, so without this a window overlay would stack
-  // on top of a still-open Settings/Eval modal (mirror of the Settings-clears-
-  // window-highlight fix; run_ad7b32f6 Gate-1 Finding 2).
-  // Community folds Signals (choice A): the domain card opens the latest signal
-  // digest (the community/GitHub surface is external — the card is a soft entry).
-  const openCommunity = () => { void handleSignalsClick(); };
-
   return (
     <aside
       className="bg-[var(--color-bg-chrome)] border-r-2 border-[var(--color-border-strong,var(--color-border))] flex flex-col flex-shrink-0"
@@ -336,20 +290,28 @@ function LeftSidebar() {
               header unmute toggle (FileViewerPanel), not a global nav button. */}
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pipeline'} onClick={() => { if (activeModal) closeModal(); openOverlay('pipeline'); }} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pollinate'} onClick={() => { if (activeModal) closeModal(); openOverlay('pollinate'); }} data-testid="nav-pollinate" />
-          {/* Capabilities — "what your AI can do" (skills + connections). In the Work
-              zone (run_b5d98151): it is the ability front-door, not a low-attention
-              setting, and sits alongside Pipeline/Pollinate which ARE capabilities. */}
-          <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.work} isActive={newActiveOverlay === 'capabilities'} onClick={() => { if (activeModal) closeModal(); openOverlay('capabilities'); }} data-testid="nav-capabilities" />
+          {/* Community — SwarmAI's two-way membrane with the outside world (inbound
+              signals + outbound engagement). Moved to the Work zone as a resident
+              main entry (run_5165013e): it's an active daily surface, not a
+              low-attention System tool — and upgraded from the old soft signal-file
+              opener to a real OverlayHost surface (3 tabs). Last in Work. */}
+          <A10Card icon="public" label="Community" tint={A10_GROUP.work} isActive={newActiveOverlay === 'community'} onClick={() => { if (activeModal) closeModal(); openOverlay('community'); }} data-testid="nav-community" />
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
           <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={newActiveOverlay === 'jobs'} onClick={() => { if (activeModal) closeModal(); openOverlay('jobs'); }} data-testid="nav-jobs" />
+          {/* Capabilities — "what your AI can do" (skills + connections). Moved to the
+              System zone after Jobs & Runs (run_5165013e): it's the ability
+              reference/config surface, grouped with the other low-frequency System
+              tools; the Work zone is reserved for active produce/engage surfaces
+              (ToDo/Workspace/Pipeline/Pollinate/Community). Supersedes the earlier
+              Work-zone placement (run_b5d98151). */}
+          <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} isActive={newActiveOverlay === 'capabilities'} onClick={() => { if (activeModal) closeModal(); openOverlay('capabilities'); }} data-testid="nav-capabilities" />
           {hiveEnabled && (
             <A10Card icon="cloud" label="Hive" tint={A10_GROUP.system} statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => { if (activeModal) closeModal(); openOverlay('hive'); }} data-testid="nav-hive" />
           )}
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={newActiveOverlay === 'eval'} onClick={() => { if (newActiveOverlay === 'eval') { closeOverlay(); } else { openOverlay('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={newActiveOverlay === 'settings' && !settingsTab} onClick={() => { if (newActiveOverlay === 'settings') { closeOverlay(); } else { setSettingsTab(undefined); openOverlay('settings'); } }} data-testid="nav-settings" />
-          <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
         </A10Group>
       </nav>
 

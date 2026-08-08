@@ -53,6 +53,7 @@ def test_allowlist_covers_expected_nav_commands():
         "open-canvas", "back-to-chat",
         "show-swarmws", "show-brain-hub", "show-context", "show-pipeline",
         "show-pollinate", "show-history", "show-todo", "show-jobs",
+        "show-community",
     ):
         assert cmd in UI_COMMAND_ALLOWLIST, f"{cmd} should be allowlisted"
 
