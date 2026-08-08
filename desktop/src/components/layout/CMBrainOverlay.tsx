@@ -37,6 +37,16 @@ interface TokenFileRow {
   // guaranteed-minimum injected tokens; has_selective=false → injected==disk.
   has_selective?: boolean;
   injected_floor?: number | null;
+  // Knowledge-health counts (run_2816ab1c): null for prose files; the 3
+  // lifecycle-governed brain files carry per-entry decay/dedup counts. Surfaced
+  // so the user SEES what the auto decay+dedup sweep is cleaning.
+  health_counts?: {
+    active: number;
+    dormant: number;
+    archived: number;
+    reclaimable: number;
+    duplicate: number;
+  } | null;
 }
 
 // Health tag → tint (backend decides the tag; UI only colors it). fresh=calm,
@@ -571,10 +581,27 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             style={{ background: OWNER_TINT[f.owner] }}
             aria-hidden
           />
-          <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text)]">
-            {f.name}
-            {selective && (
-              <span data-testid="cm-selective" className="ml-1 text-[10px] text-[var(--color-text-faint)]" title={tokenTitle}>✂</span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-medium text-[var(--color-text)]">
+              {f.name}
+              {selective && (
+                <span data-testid="cm-selective" className="ml-1 text-[10px] text-[var(--color-text-faint)]" title={tokenTitle}>✂</span>
+              )}
+            </span>
+            {/* AC4: knowledge-health counts for the 3 lifecycle-governed files.
+                Shows what the auto decay+dedup sweep is cleaning — only the
+                actionable counts (dormant / reclaimable / duplicate), and only
+                when non-zero (a healthy file shows nothing = no noise). */}
+            {f.health_counts && (f.health_counts.dormant > 0 || f.health_counts.reclaimable > 0 || f.health_counts.duplicate > 0) && (
+              <span
+                data-testid={`cm-health-counts-${f.name}`}
+                className="mt-0.5 flex gap-2 text-[10px] font-mono text-[var(--color-text-faint)]"
+                title="Knowledge health — auto decay+dedup sweep targets these (dormant = no longer injected · reclaimable = archivable noise · duplicate = exact-dup a sweep removes)"
+              >
+                {f.health_counts.dormant > 0 && <span>{f.health_counts.dormant} dormant</span>}
+                {f.health_counts.reclaimable > 0 && <span>{f.health_counts.reclaimable} reclaimable</span>}
+                {f.health_counts.duplicate > 0 && <span className="text-[var(--color-warning,#c47)]">{f.health_counts.duplicate} dup</span>}
+              </span>
             )}
           </span>
           <span className="text-right text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>

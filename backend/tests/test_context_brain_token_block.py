@@ -179,3 +179,27 @@ def test_total_tokens_stays_disk_conservative(fake_context_dir: Path):
     estimate). Composition pct still sums over disk."""
     block = build_context_token_block(fake_context_dir)
     assert block["total_tokens"] == sum(f["tokens"] for f in block["per_file"])
+
+
+def test_health_counts_present_for_lifecycle_files_none_for_prose(tmp_path: Path):
+    """run_2816ab1c: per_file carries health_counts for the 3 lifecycle-governed
+    files (real decay entries), None for prose files."""
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    (ctx / "SWARMAI.md").write_text("core identity " * 50, encoding="utf-8")
+    # MEMORY.md with a REAL entry carrying decay metadata → counts populated.
+    (ctx / "MEMORY.md").write_text(
+        "## Guidelines\n"
+        "- [guideline] **A real entry** — a lesson (2026-01-01)\n"
+        "  <!-- ref:2 | last:2026-01-01 | decay:active -->\n",
+        encoding="utf-8",
+    )
+    block = build_context_token_block(ctx)
+    rows = {r["name"]: r for r in block["per_file"]}
+    assert "health_counts" in rows["MEMORY.md"]
+    hc = rows["MEMORY.md"]["health_counts"]
+    assert hc is not None
+    assert set(hc) == {"active", "dormant", "archived", "reclaimable", "duplicate"}
+    assert hc["active"] == 1
+    # Prose file → no decay entries → None (not a fake zero).
+    assert rows["SWARMAI.md"]["health_counts"] is None

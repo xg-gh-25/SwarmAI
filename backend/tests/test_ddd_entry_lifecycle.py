@@ -643,14 +643,15 @@ class TestRetireEntry:
 
 
 class TestDecayThresholdsTightened:
-    """run_186a5f15: dormant 90->60, archived total 180->150 (user directive —
-    knowledge goes stale faster to cut always-injected noise). MEMORY path
+    """run_186a5f15: dormant 90->60, archived total 180->150. run_2816ab1c:
+    archived 150->90 (user directive — let archive actually trigger; dormant
+    stays 60 so dormant→archived still keeps a 30d buffer). MEMORY path
     (explicit dormant_days=45) is below 60 so it is unaffected."""
 
     def test_threshold_constants(self):
         from core.ddd_entry_lifecycle import DORMANT_THRESHOLD_DAYS, ARCHIVED_THRESHOLD_DAYS
         assert DORMANT_THRESHOLD_DAYS == 60
-        assert ARCHIVED_THRESHOLD_DAYS == 150
+        assert ARCHIVED_THRESHOLD_DAYS == 90
 
     def test_entry_dormant_at_60_not_before(self):
         from core.ddd_entry_lifecycle import EntryMetadata, assess_decay
@@ -662,14 +663,25 @@ class TestDecayThresholdsTightened:
         t = assess_decay([e], today)
         assert len(t) == 1 and t[0].new_state == "dormant"
 
-    def test_entry_archived_at_150_total(self):
+    def test_entry_archived_at_90_total(self):
         from core.ddd_entry_lifecycle import EntryMetadata, assess_decay
         today = date(2026, 7, 3)
-        e = EntryMetadata(title="idle 151d", entry_type="guideline", ref_count=0,
-                          last_referenced=today - timedelta(days=151), decay_state="dormant",
+        # 91d idle dormant → archived under new 90 (30d buffer past the 60d dormant line)
+        e = EntryMetadata(title="idle 91d", entry_type="guideline", ref_count=0,
+                          last_referenced=today - timedelta(days=91), decay_state="dormant",
                           created_date=today - timedelta(days=300), section="Guidelines")
         t = assess_decay([e], today)
         assert len(t) == 1 and t[0].new_state == "archived"
+
+    def test_entry_dormant_not_archived_at_89(self):
+        from core.ddd_entry_lifecycle import EntryMetadata, assess_decay
+        today = date(2026, 7, 3)
+        # 89d idle dormant → stays dormant (just under the new 90 archived line)
+        e = EntryMetadata(title="idle 89d", entry_type="guideline", ref_count=0,
+                          last_referenced=today - timedelta(days=89), decay_state="dormant",
+                          created_date=today - timedelta(days=300), section="Guidelines")
+        t = assess_decay([e], today)
+        assert len(t) == 0  # no transition — still dormant, not yet archived
 
 
 # ── M0: compute_entry_noise — honest per-entry noise metric ──────────────────
@@ -1673,3 +1685,120 @@ class TestSupersessionGate2Fixes:
             mark_superseded(content, "Old", "A | B", date(2026, 7, 30))
         with pytest.raises(ValueError):
             mark_superseded(content, "Old", "bad--> anchor", date(2026, 7, 30))
+
+
+# ── AC2: reclaim_duplicate_entries — exact-dup sweep (run_2816ab1c) ───────────
+#
+# Sweeps ALREADY-ACCUMULATED exact duplicates (content_signature collision) out of
+# a doc — distinct from reclaim_noise_entries (age/decay) and from cultivation's
+# intake-time dedup (which only blocks NEW writes, never cleans the backlog).
+# Survivor = highest ref_count, tie → newest created_date. is_keep_class entries
+# NEVER enter candidates (Principle 1: never delete a principle/correction on a
+# similarity signal). Reuses _archive_and_strip (archive-before-strip; the ONLY
+# recovery for the non-git-tracked .context/*.md files).
+class TestReclaimDuplicateEntries:
+    def _meta(self, ref=0, last="2026-01-01", decay="active"):
+        return f"  <!-- ref:{ref} | last:{last} | decay:{decay} -->"
+
+    def test_exact_dup_stripped_survivor_kept(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
+        today = date(2026, 8, 8)
+        # Two plain guidelines with the SAME content_signature (identical text,
+        # different attribution date). Survivor = higher ref.
+        content = (
+            "## Guidelines\n"
+            "- [guideline] **Cache warmup** — preload the index at boot (2026-01-01, run_aaa)\n"
+            + self._meta(ref=5) + "\n"
+            "- [guideline] **Cache warmup** — preload the index at boot (2026-06-01, run_bbb)\n"
+            + self._meta(ref=0) + "\n"
+        )
+        report = reclaim_duplicate_entries(
+            content, today, tmp_path, archive_name="T-archive.md",
+            source_path=None, dry_run=True,
+        )
+        # exactly ONE non-survivor selected for reclaim (the ref=0 dup)
+        assert report.archived == 0  # dry_run
+        assert len(report.candidates) == 1
+
+    def test_keep_class_dup_never_selected(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
+        today = date(2026, 8, 8)
+        # Two IDENTICAL-signature principles → keep-class (type=principle) → immune.
+        content = (
+            "## Principles\n"
+            "- [principle] **Verify dont infer** — read the source, not memory (2026-01-01)\n"
+            + self._meta(ref=0) + "\n"
+            "- [principle] **Verify dont infer** — read the source, not memory (2026-06-01)\n"
+            + self._meta(ref=0) + "\n"
+        )
+        report = reclaim_duplicate_entries(
+            content, today, tmp_path, archive_name="T-archive.md",
+            source_path=None, dry_run=True,
+        )
+        assert report.candidates == []       # keep-class never a dedup candidate
+        assert report.kept_protected >= 1
+
+    def test_no_dup_is_noop(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
+        today = date(2026, 8, 8)
+        content = (
+            "## Guidelines\n"
+            "- [guideline] **Alpha** — first distinct lesson (2026-01-01)\n"
+            + self._meta(ref=0) + "\n"
+            "- [guideline] **Beta** — second distinct lesson (2026-01-01)\n"
+            + self._meta(ref=0) + "\n"
+        )
+        report = reclaim_duplicate_entries(
+            content, today, tmp_path, archive_name="T-archive.md",
+            source_path=None, dry_run=True,
+        )
+        assert report.candidates == []
+
+    def test_dup_at_line_zero_is_stripped(self, tmp_path):
+        # Gate-2 (run_2816ab1c): a dup whose non-survivor sits at line_number==0
+        # (first line, no leading section header) must still be stripped. The old
+        # `if e.line_number > 0` filter silently skipped it, leaving both copies.
+        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
+        today = date(2026, 8, 8)
+        src = tmp_path / "DOC.md"
+        # Entry bullet as the VERY FIRST line (line_number=0), then its dup.
+        content = (
+            "- [guideline] **Line0 dup** — text at file start (2026-01-01, run_a)\n"
+            + self._meta(ref=0) + "\n"
+            "- [guideline] **Line0 dup** — text at file start (2026-06-01, run_b)\n"
+            + self._meta(ref=5) + "\n"
+        )
+        src.write_text(content, encoding="utf-8")
+        r = reclaim_duplicate_entries(
+            content, today, tmp_path, archive_name="T-archive.md",
+            source_path=src, dry_run=False,
+        )
+        # survivor = ref=5 (2nd); the line-0 non-survivor IS stripped
+        assert r.archived == 1
+        assert src.read_text(encoding="utf-8").count("text at file start") == 1
+
+    def test_apply_strips_and_is_idempotent(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
+        today = date(2026, 8, 8)
+        src = tmp_path / "DOC.md"
+        content = (
+            "## Guidelines\n"
+            "- [guideline] **Dup lesson** — same text here (2026-01-01, run_a)\n"
+            + self._meta(ref=3) + "\n"
+            "- [guideline] **Dup lesson** — same text here (2026-06-01, run_b)\n"
+            + self._meta(ref=0) + "\n"
+        )
+        src.write_text(content, encoding="utf-8")
+        r1 = reclaim_duplicate_entries(
+            content, today, tmp_path, archive_name="T-archive.md",
+            source_path=src, dry_run=False,
+        )
+        assert r1.archived == 1
+        # archive written BEFORE strip (only recovery for non-git .context files)
+        assert (tmp_path / "T-archive.md").exists()
+        # second sweep on the now-clean content = no-op (idempotent)
+        r2 = reclaim_duplicate_entries(
+            src.read_text(encoding="utf-8"), today, tmp_path,
+            archive_name="T-archive.md", source_path=src, dry_run=False,
+        )
+        assert r2.archived == 0

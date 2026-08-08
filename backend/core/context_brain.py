@@ -129,6 +129,69 @@ def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:
     return "fresh"
 
 
+# Which files carry per-entry decay metadata (the lifecycle-governed brain files).
+# Others (SOUL/AGENT/USER/…) are prose docs with no `<!-- ref | decay -->` entries,
+# so their noise counts are meaninglessly zero — we skip them (health = null).
+_LIFECYCLE_FILES = frozenset({"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md"})
+
+
+def _entry_health_counts(filename: str, content: str) -> "dict | None":
+    """Per-file knowledge-health counts for the diagnostic panel (run_2816ab1c).
+
+    Returns {active, dormant, archived, reclaimable, duplicate} for the three
+    lifecycle-governed files, else None (prose files have no decay entries). This
+    is the READ side of the reduce loop the UI surfaces — it uses the SAME
+    predicates the write side (assess_decay / compute_entry_noise /
+    reclaim_duplicate_entries) uses, so the numbers match what a sweep would act on.
+    Never raises (O030: telemetry, not a gate)."""
+    if filename not in _LIFECYCLE_FILES:
+        return None
+    try:
+        from datetime import date
+        from core.ddd_entry_lifecycle import (
+            parse_entries, reclaim_noise_entries, reclaim_duplicate_entries,
+            MEMORY_EVERGREEN_SECTIONS, KNOWLEDGE_EVERGREEN_SECTIONS,
+            EVOLUTION_EVERGREEN_SECTIONS,
+        )
+        entries = parse_entries(content)
+        if not entries:
+            return None
+        today = date.today()
+        counts = {"active": 0, "dormant": 0, "archived": 0}
+        for e in entries:
+            counts[e.decay_state] = counts.get(e.decay_state, 0) + 1
+        evergreen = {
+            "MEMORY.md": MEMORY_EVERGREEN_SECTIONS,
+            "KNOWLEDGE.md": KNOWLEDGE_EVERGREEN_SECTIONS,
+            "EVOLUTION.md": EVOLUTION_EVERGREEN_SECTIONS,
+        }.get(filename)
+        # reclaimable + duplicate = what a sweep would ACTUALLY archive (dry_run, no
+        # write). Both use the ACTION's own predicate (keep-class + evergreen
+        # filtered), NOT the wider compute_entry_noise gauge — so the panel number
+        # equals what the sweep removes (gate==action). A raw noise count would show
+        # "5 reclaimable" while the sweep strips 0 (all keep-class) — a misleading
+        # number, the exact honesty bug this project exists to fix. project_dir is
+        # unused on the dry_run path, so any Path is fine.
+        noise_r = reclaim_noise_entries(
+            content, today, Path("/tmp"),
+            evergreen_sections=evergreen, dry_run=True,
+        )
+        dup = reclaim_duplicate_entries(
+            content, today, Path("/tmp"),
+            evergreen_sections=evergreen, dry_run=True,
+        )
+        return {
+            "active": counts.get("active", 0),
+            "dormant": counts.get("dormant", 0),
+            "archived": counts.get("archived", 0),
+            "reclaimable": len(noise_r.candidates),
+            "duplicate": len(dup.candidates),
+        }
+    except Exception as exc:  # never crash telemetry (O030)
+        logger.debug("context_brain: entry-health calc failed for %s: %s", filename, exc)
+        return None
+
+
 def build_context_token_block(context_dir: Path) -> dict:
     """Build the read-only token block for the C&M overlay.
 
@@ -196,6 +259,10 @@ def build_context_token_block(context_dir: Path) -> dict:
                 # Selective-injection honesty fields (run_5f040023):
                 "has_selective": floor is not None,
                 "injected_floor": floor,  # None = injected==disk (tokens)
+                # Knowledge-health counts (run_2816ab1c): None for prose files;
+                # {active,dormant,archived,reclaimable,duplicate} for the 3
+                # lifecycle-governed brain files (MEMORY/EVOLUTION/KNOWLEDGE).
+                "health_counts": _entry_health_counts(spec.filename, content),
             }
         )
 

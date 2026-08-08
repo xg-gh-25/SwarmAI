@@ -968,6 +968,57 @@ class TestExtractLessonsNoOrphan:
         assert "last:none" not in content, "must drop the orphan default"
 
 
+class TestEvolutionLifecycle:
+    """run_2816ab1c: EVOLUTION.md wired into the lifecycle as DEDUP-ONLY. It is
+    FULLY evergreen for age-decay (all 7 sections listed) — the O-entries are
+    distilled wisdom, not age-churn (Principle 1: value, not age). So age-decay
+    strips NOTHING; only exact-dup dedup acts. The Corrections narrative is
+    fold_corrections' domain and must be untouched."""
+
+    def test_optimizations_never_age_decayed(self, hook, tmp_path):
+        from datetime import timedelta
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        old = (date.today() - timedelta(days=300)).isoformat()  # ancient + ref:0
+        corrections_marker = "### CLASS A: a permanent judgment narrative"
+        (ctx / "EVOLUTION.md").write_text(
+            "## Optimizations Learned\n"
+            f"- [guideline] **O999 old but load-bearing** — a distilled lesson ({old})\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n\n"
+            "## Corrections Captured\n"
+            f"{corrections_marker}\n"
+            "- **correction** — this is prose narrative, not a - **Title** bullet\n"
+        )
+        hook._run_evolution_lifecycle(ws)
+        content = (ctx / "EVOLUTION.md").read_text()
+        # O-entry SURVIVES despite ancient+ref:0 — fully evergreen, age-decay is inert
+        assert "O999 old but load-bearing" in content, "EVOLUTION age-decay wrongly stripped an O-entry (must be dedup-only)"
+        # Corrections narrative untouched
+        assert corrections_marker in content
+        assert "this is prose narrative" in content
+
+    def test_exact_dup_still_deduped(self, hook, tmp_path):
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        # Two exact-dup plain guidelines in Optimizations Learned → dedup DOES act
+        # (dedup is the one live sweep on EVOLUTION), keeping the higher-ref survivor.
+        (ctx / "EVOLUTION.md").write_text(
+            "## Optimizations Learned\n"
+            "- [guideline] **Dup opt** — identical distilled text (2026-01-01, run_a)\n"
+            "  <!-- ref:4 | last:2026-01-01 | decay:active -->\n"
+            "- [guideline] **Dup opt** — identical distilled text (2026-06-01, run_b)\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+        )
+        hook._run_evolution_lifecycle(ws)
+        content = (ctx / "EVOLUTION.md").read_text()
+        # exactly ONE survives (the exact-dup was archived+stripped)
+        assert content.count("identical distilled text") == 1
+        archive = ctx / "EVOLUTION-archive.md"
+        assert archive.exists() and "identical distilled text" in archive.read_text()
+
+
 class TestNoProseBump:
     """R2-prime: the toxic prose-substring ref bump is removed. An entry whose
     title coincidentally appears in DailyActivity prose must NOT get its

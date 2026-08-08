@@ -272,6 +272,15 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: KNOWLEDGE.md lifecycle skipped: %s", exc)
 
+        # ── EVOLUTION.md lifecycle: decay + reclaim + dedup (run_2816ab1c) ──
+        # Same engine as MEMORY/KNOWLEDGE — closes the last un-governed context
+        # file. Only "Optimizations Learned" decays; fold_corrections (a separate
+        # hook) still owns the Corrections narrative.
+        try:
+            self._run_evolution_lifecycle(root)
+        except Exception as exc:
+            logger.debug("context_health: EVOLUTION.md lifecycle skipped: %s", exc)
+
         # ── TTL proposals: archive stale queued proposals (Gap #22) ──
         try:
             self._expire_stale_proposals(root)
@@ -2021,6 +2030,7 @@ class ContextHealthHook:
 
         from core.ddd_entry_lifecycle import (
             MEMORY_EVERGREEN_SECTIONS,
+            reclaim_duplicate_entries,
             reclaim_noise_entries,
         )
         evergreen = MEMORY_EVERGREEN_SECTIONS
@@ -2174,6 +2184,27 @@ class ContextHealthHook:
                     "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
                     reclaim_report.archived, reclaim_report.kept_protected,
                 )
+
+            # ── DEDUP (run_2816ab1c): archive+strip EXACT duplicates the age-based
+            # reclaim above can't see (a fresh dup is still `active`). Same lock,
+            # same evergreen/keep-class protection. Runs on the latest content.
+            content = memory_path.read_text(encoding="utf-8")
+            dup_report = reclaim_duplicate_entries(
+                content, today, memory_path.parent,
+                evergreen_sections=evergreen,
+                archive_name="MEMORY-archive.md",
+                source_path=memory_path,
+                dry_run=False,
+            )
+            if dup_report.new_content is not None:
+                from core.memory_index import inject_index_into_memory
+                reindexed = inject_index_into_memory(dup_report.new_content)
+                if reindexed != dup_report.new_content:
+                    memory_path.write_text(reindexed, encoding="utf-8")
+                logger.info(
+                    "context_health: MEMORY.md dedup — %d exact-dup archived+stripped",
+                    dup_report.archived,
+                )
         finally:
             flock_unlock(lock_fd)
             lock_fd.close()
@@ -2204,6 +2235,7 @@ class ContextHealthHook:
             assess_decay,
             inject_entry_metadata,
             parse_entries,
+            reclaim_duplicate_entries,
             reclaim_noise_entries,
         )
         from utils.file_lock import md_lock
@@ -2266,6 +2298,129 @@ class ContextHealthHook:
                     "context_health: KNOWLEDGE.md reclaim — %d archived+stripped, %d protected",
                     reclaim_report.archived, reclaim_report.kept_protected,
                 )
+
+            # DEDUP (run_2816ab1c): exact-dup sweep, same lock + evergreen guard.
+            content = knowledge_path.read_text(encoding="utf-8")
+            dup_report = reclaim_duplicate_entries(
+                content, today, knowledge_path.parent,
+                evergreen_sections=evergreen,
+                archive_name="KNOWLEDGE-archive.md",
+                source_path=knowledge_path,
+                dry_run=False,
+            )
+            if dup_report.new_content is not None:
+                logger.info(
+                    "context_health: KNOWLEDGE.md dedup — %d exact-dup archived+stripped",
+                    dup_report.archived,
+                )
+
+    def _run_evolution_lifecycle(self, root: Path) -> None:
+        """Run DDD lifecycle engine on EVOLUTION.md: DEDUP ONLY (no age-decay).
+
+        EVOLUTION.md had ZERO lifecycle before run_2816ab1c — it accreted forever
+        (its Corrections Captured section is folded SEPARATELY by
+        evolution_maintenance_hook.fold_corrections; that hook does NOT age-decay).
+
+        DESIGN DECISION (user directive, run_2816ab1c): EVOLUTION is FULLY evergreen
+        for age-decay — EVOLUTION_EVERGREEN_SECTIONS lists ALL 7 sections, so
+        assess_decay + reclaim_noise_entries transition/strip NOTHING here. The O-
+        entries are distilled operational wisdom (value, not age-churn — Principle
+        1); size control is fold_corrections + dedup, never age-death. So this method
+        runs ONLY the exact-dup DEDUP sweep. (assess_decay/reclaim are still invoked
+        with the all-evergreen set — they are cheap no-ops that keep the code path
+        identical to MEMORY/KNOWLEDGE, and self-document that decay is intentionally
+        inert here rather than silently absent.)
+
+        Concurrency (Gate-1 Axis E): EVOLUTION.md is also written by
+        evolution_maintenance_hook (fold_corrections, via locked_write). The whole
+        read-modify-write MUST hold EVOLUTION.md.lock so the dedup strip never races
+        that fold. Non-blocking skip-if-busy mirrors MEMORY (a strip must not wait on
+        a held lock inside the <30s hook).
+        """
+        from core.ddd_entry_lifecycle import (
+            EVOLUTION_EVERGREEN_SECTIONS,
+            assess_decay,
+            inject_entry_metadata,
+            parse_entries,
+            reclaim_duplicate_entries,
+            reclaim_noise_entries,
+        )
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+
+        evolution_path = root / ".context" / "EVOLUTION.md"
+        if not evolution_path.exists():
+            return
+
+        evergreen = EVOLUTION_EVERGREEN_SECTIONS
+        lock_path = evolution_path.with_suffix(".md.lock")
+        lock_fd = None
+        try:
+            lock_fd = open(lock_path, "w")  # noqa: SIM115
+            flock_exclusive_nb(lock_fd)
+        except OSError:
+            if lock_fd:
+                lock_fd.close()
+            logger.debug("context_health: EVOLUTION.md lock busy, skipping lifecycle")
+            return
+
+        try:
+            content = evolution_path.read_text(encoding="utf-8")
+            entries = parse_entries(content)
+            if not entries:
+                return
+
+            today = date.today()
+
+            # Decay: only "Optimizations Learned" (plain operational) is eligible;
+            # every other section is evergreen. dormant_days defaults to the global
+            # 60 (EVOLUTION is not fast-churn like MEMORY's 45).
+            transitions = assess_decay(
+                entries, today, evergreen_sections=evergreen
+            )
+            for t in transitions:
+                t.entry.decay_state = t.new_state
+
+            if transitions:
+                updated = inject_entry_metadata(content, entries)
+                evolution_path.write_text(updated, encoding="utf-8")
+                content = updated
+                logger.info(
+                    "context_health: EVOLUTION.md lifecycle — %d transitions",
+                    len(transitions),
+                )
+
+            # CLEAN: archive+strip dormant NON-evergreen (Optimizations Learned only).
+            reclaim_report = reclaim_noise_entries(
+                content, today, evolution_path.parent,
+                evergreen_sections=evergreen,
+                archive_name="EVOLUTION-archive.md",
+                source_path=evolution_path,
+                dry_run=False,
+            )
+            if reclaim_report.new_content is not None:
+                content = reclaim_report.new_content
+                logger.info(
+                    "context_health: EVOLUTION.md reclaim — %d archived+stripped, %d protected",
+                    reclaim_report.archived, reclaim_report.kept_protected,
+                )
+
+            # DEDUP: exact-dup sweep, same lock + evergreen guard.
+            content = evolution_path.read_text(encoding="utf-8")
+            dup_report = reclaim_duplicate_entries(
+                content, today, evolution_path.parent,
+                evergreen_sections=evergreen,
+                archive_name="EVOLUTION-archive.md",
+                source_path=evolution_path,
+                dry_run=False,
+            )
+            if dup_report.new_content is not None:
+                logger.info(
+                    "context_health: EVOLUTION.md dedup — %d exact-dup archived+stripped",
+                    dup_report.archived,
+                )
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
 
     @staticmethod
     def _proposal_age_seconds(proposal_file: Path, data: dict, now: float) -> float:

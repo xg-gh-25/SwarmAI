@@ -279,17 +279,21 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     // §4 group+cap: the row content is bounded (max-w-*), so metadata sits next to
     // the name instead of a screen away on a wide window.
     expect(row.className).toMatch(/max-w-/);
-    // Gate-1 constraint: the name span MUST keep `flex-1 min-w-0 truncate` — that
     // run_5f040023: the row is now a fixed-column GRID (AC4 alignment) with the
     // name in the `1fr` column, so `min-w-0 truncate` (NOT flex-1) is the
     // truncation bound — the grid `1fr` provides the flex the old flex-1 did.
+    // run_2816ab1c: the name cell is now a flex-col wrapper (name + optional
+    // health-counts line); `min-w-0` moved to the wrapper, `truncate` stays on the
+    // inner name span. The truncation contract is unchanged — just re-nested.
     expect(row.className).toContain('grid');
+    // The inner name span carries `truncate`; its wrapper (grid 1fr cell) carries
+    // `min-w-0`. Select the inner one explicitly (the wrapper also contains the text).
     const nameSpan = Array.from(row.querySelectorAll('span')).find(
-      (s) => s.textContent?.startsWith('SWARMAI.md'),
+      (s) => s.textContent?.startsWith('SWARMAI.md') && s.className.includes('truncate'),
     ) as HTMLElement;
     expect(nameSpan).toBeTruthy();
-    expect(nameSpan.className).toContain('min-w-0');
     expect(nameSpan.className).toContain('truncate');
+    expect((nameSpan.parentElement as HTMLElement).className).toContain('min-w-0');
   });
 
   it('shows ownership + lock from the payload', async () => {

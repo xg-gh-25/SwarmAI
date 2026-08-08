@@ -9,7 +9,7 @@ Each bullet entry can have:
 
 Decay rules (see DORMANT_THRESHOLD_DAYS / ARCHIVED_THRESHOLD_DAYS below — the SoT):
 - active → dormant: 60 days without reference (tunable per-doc, e.g. 45 for MEMORY.md)
-- dormant → archived: 150 days TOTAL since last reference (NOT additional-after-dormant)
+- dormant → archived: 90 days TOTAL since last reference (NOT additional-after-dormant)
 - New entries (< 30 days old): immune to decay (grace period)
 - Evergreen sections: entries within are immune
 - Evergreen TYPES (the 5 judgment types — decision/model/principle/correction/pitfall):
@@ -95,6 +95,37 @@ KNOWLEDGE_EVERGREEN_SECTIONS = frozenset({
     "Pipeline — What It Is & How To Check State [model]",
     "Job System [model]",
 })
+
+# ── EVOLUTION.md Evergreen Sections (run_2816ab1c) ────────────────────────────
+#
+# EVOLUTION.md had ZERO lifecycle integration before this — it accreted forever
+# (its Corrections Captured section is managed SEPARATELY by
+# evolution_maintenance_hook.fold_corrections, which folds narrative DATA-POINT
+# sub-bullets, NOT age-decays entries).
+#
+# DESIGN DECISION (user directive, run_2816ab1c): EVOLUTION is FULLY evergreen for
+# AGE-DECAY — EVERY section is listed here, so no O-entry is ever archived merely
+# for being old-and-unreferenced. The lifecycle wiring runs ONLY the exact-dup
+# DEDUP sweep on EVOLUTION (never age-reclaim). Rationale (Principle 1 — value, not
+# age, decides survival): the "Optimizations Learned" O-entries are DISTILLED
+# operational wisdom (O030 disaster-recovery doctrine, O025 "know your runtime",
+# O009 "mock≠reality"), closer to KNOWLEDGE's load-bearing reference than to
+# MEMORY's disposable GUI/PIT churn. They carry no `created_date` metadata (only
+# prose dates) and EVOLUTION has no usage→ref bridge, so age-decay would treat them
+# as infinitely-old ref:0 noise and strip ALL of them — burying hard-won judgment
+# because a counter never ticked (exactly the Principle-1 failure). Size control
+# for EVOLUTION is fold_corrections (owns the huge Corrections section) + dedup, NOT
+# age-decay. is_keep_class ALSO protects by TYPE inside any section (defence in
+# depth); this frozenset is the section-level layer and now covers all 7 sections.
+EVOLUTION_EVERGREEN_SECTIONS = frozenset({
+    'Design Philosophy — What "Evolution" Means',
+    "Capabilities Built",
+    "Optimizations Learned",
+    "Corrections Captured",
+    "Governance Candidates",
+    "Competence Learned",
+    "Failed Evolutions",
+})
 # PRIMARY insertion target per type. When multiple sections share a type
 # (e.g. "guideline" → Guidelines AND Standing Preferences), this gives the
 # default destination for new entries. Explicitly defined, not computed.
@@ -112,13 +143,14 @@ MEMORY_TYPE_TO_SECTION: dict[str, str] = {
 GRACE_PERIOD_DAYS = 30
 
 # Decay thresholds (days since last reference). Tightened 90/180 -> 60/150
-# (run_186a5f15, user directive): knowledge goes stale faster so always-injected
-# context sheds noise sooner. ARCHIVED is TOTAL days-since-ref (60 idle -> dormant,
-# then 90 more -> archived at 150 total), NOT additional-after-dormant. Archived
-# entries stay FTS5-recallable (knowledge_store indexes Archives) — this only stops
-# always-injection ~30d sooner, it does not drop anything from recall.
+# (run_186a5f15) -> archived 150->90 (run_2816ab1c, user directive): let archive
+# ACTUALLY trigger on a high-recall brain (pure-time 150d was rarely reached).
+# ARCHIVED is TOTAL days-since-ref (60 idle -> dormant, then 30 more -> archived at
+# 90 total), NOT additional-after-dormant — dormant→archived keeps a 30d buffer.
+# Archived entries stay FTS5-recallable (knowledge_store indexes Archives) — this
+# only stops always-injection sooner, it does not drop anything from recall.
 DORMANT_THRESHOLD_DAYS = 60
-ARCHIVED_THRESHOLD_DAYS = 150
+ARCHIVED_THRESHOLD_DAYS = 90
 
 # Types that are EVERGREEN BY TYPE for AGE-DECAY (Step 3, run_123652ae): a real
 # judgment lesson must never be buried on a timer merely for not being recalled
@@ -766,7 +798,7 @@ def assess_decay(
     - Grace period: entries < 30 days old are immune
     - active → dormant: `dormant_days` days since last_referenced
       (defaults to the global DORMANT_THRESHOLD_DAYS=60 when None)
-    - dormant → archived: ARCHIVED_THRESHOLD_DAYS (150 total) — NOT parameterized
+    - dormant → archived: ARCHIVED_THRESHOLD_DAYS (90 total) — NOT parameterized
     - Entries already archived are skipped
     - Entries with no date info are treated as infinitely old (decay immediately)
 
@@ -777,7 +809,7 @@ def assess_decay(
             path passes 45 so volatile operational memory ages faster than the
             hard-won failure-lessons in IMPROVEMENT.md (which stay at 60d). Only
             the dormant threshold is tunable; dormant→archived stays at the
-            global 150d so a faster-dormant entry still gets an archive buffer.
+            global 90d so a faster-dormant entry still gets an archive buffer.
     """
     # dormant_days<1 would make `days_since_ref >= threshold` always true →
     # mark everything past grace dormant. No live caller passes <1 (only 45),
@@ -913,7 +945,7 @@ def archive_entries(
     else:
         header = "# Archived Knowledge Entries\n\n"
         header += "_Entries archived by the Knowledge Lifecycle decay engine. "
-        header += "These entries had no references for 150+ days._\n\n"
+        header += "These entries had no references for 90+ days._\n\n"
         archive_path.write_text(
             header + new_content, encoding="utf-8"
         )
@@ -1204,6 +1236,147 @@ def reclaim_noise_entries(
     return report
 
 
+def reclaim_duplicate_entries(
+    content: str,
+    today: date,
+    project_dir: Path,
+    *,
+    evergreen_sections: "frozenset[str] | set[str] | None" = None,
+    archive_name: str = "IMPROVEMENT-archive.md",
+    source_path: "Path | None" = None,
+    dry_run: bool = True,
+) -> ReclaimReport:
+    """Reclaim ALREADY-ACCUMULATED EXACT duplicates (archive + physically strip).
+
+    Distinct from the two adjacent mechanisms — this fills a real gap:
+      • ``reclaim_noise_entries`` selects by AGE/decay (ref==0 AND dormant/archived).
+        A fresh exact-dup that is still ``active`` is invisible to it.
+      • cultivation's ``content_signature`` intake-dedup only blocks a NEW write
+        against existing entries — it never cleans the backlog already on disk.
+    This sweeps the backlog: group all entries by ``content_signature`` (the SAME
+    format-agnostic normalizer cultivation uses at intake, imported here so a lesson
+    dedups identically whichever path wrote it), and within each collision group
+    keep ONE survivor, archive+strip the rest.
+
+    Survivor selection (deterministic): highest ``ref_count``, tie → newest
+    ``created_date`` (a date-less entry sorts oldest). The survivor is the entry
+    most likely to be the canonical/most-referenced copy.
+
+    ``is_keep_class`` entries NEVER enter a candidate group (Principle 1: a
+    principle/correction/decision/model — or an evergreen-section / COE entry — is
+    never deleted on a duplicate signal; only plain guideline/pitfall/process are
+    dedup-eligible). This is the SAME protection ``reclaim_noise_entries`` applies.
+
+    NOT near-dup / similarity: signatures must be EXACTLY equal after normalization
+    (strip bullet marker, [type] tag, attribution, bold, whitespace, case). This is
+    deliberate — the knowledge governance rule is "never delete on a guess" (see
+    ddd_cultivation.py supersession-language note); similarity-based deletion is a
+    non-goal.
+
+    Recovery: reuses ``_archive_and_strip`` (archive succeeds BEFORE the source is
+    stripped; if ``archive_entries`` raises, the strip never runs). For the
+    non-git-tracked ``.context/*.md`` files, the forward-append archive is the ONLY
+    recovery path (git recovery does not apply) — so archive-before-strip is
+    load-bearing, not just tidy.
+
+    dry_run=True (default): pure preview (candidates listed, nothing written).
+    dry_run=False: archive the non-survivors and persist the stripped source.
+    Idempotent: a second sweep on the stripped content reclaims nothing.
+    """
+    from core.ddd_cultivation import content_signature  # unidirectional import (verified: lifecycle imports nothing from core; cultivation already imports lifecycle, never the reverse)
+
+    report = ReclaimReport()
+    if not content or not content.strip():
+        return report
+
+    entries = parse_entries(content)
+    if not entries:
+        return report
+
+    # Dedup protection is by TYPE ONLY — NOT full is_keep_class (which also protects
+    # evergreen SECTIONS). Rationale: removing an EXACT duplicate loses nothing (the
+    # survivor keeps the content), so it is safe in ANY section — an evergreen
+    # section protects against AGE-death, not against de-duplication. But the 4
+    # judgment TYPES (principle/correction/decision/model) are hand-authored and a
+    # same-signature "dup" there may be an intentional cross-reference, so those are
+    # never auto-deduped (retire by name instead). This is the key difference from
+    # reclaim_noise_entries (which uses full is_keep_class) — and it is what lets
+    # dedup act on EVOLUTION at all (EVOLUTION is fully evergreen for age-decay, so
+    # a section-based guard would make dedup a permanent no-op there too).
+    def _dedup_protected(e: EntryMetadata) -> bool:
+        return e.entry_type in _KEEP_TYPES or "COE" in e.section or "COE" in e.title
+
+    def _sig(e: EntryMetadata) -> str:
+        # raw_text already includes the leading "- " bullet marker; do NOT prepend
+        # another (a double "- - " leaves a residual "- " that content_signature's
+        # single-marker strip can't remove, poisoning the signature). Fall back to
+        # a synthesized bullet only when raw_text is empty.
+        raw = e.raw_text if (e.raw_text and e.raw_text.lstrip().startswith("- ")) else "- " + (e.raw_text or e.title)
+        return content_signature(raw)
+
+    # Group non-type-protected entries by exact content_signature.
+    groups: dict[str, list[EntryMetadata]] = {}
+    for entry in entries:
+        if _dedup_protected(entry):
+            continue
+        sig = _sig(entry)
+        if not sig:
+            continue
+        groups.setdefault(sig, []).append(entry)
+
+    # Count type-protected entries that DO collide (protected-from-dedup gauge).
+    _keep_sigs: dict[str, int] = {}
+    for entry in entries:
+        if not _dedup_protected(entry):
+            continue
+        sig = _sig(entry)
+        if sig:
+            _keep_sigs[sig] = _keep_sigs.get(sig, 0) + 1
+    report.kept_protected = sum(n - 1 for n in _keep_sigs.values() if n > 1)
+
+    # Within each collision group (>=2), keep the survivor, select the rest.
+    def _rank(e: EntryMetadata) -> tuple:
+        # Higher ref first; tie → newer created_date first (None sorts oldest).
+        cd = e.created_date or date.min
+        return (e.ref_count, cd)
+
+    selected: list[EntryMetadata] = []
+    for sig, grp in groups.items():
+        if len(grp) < 2:
+            continue
+        grp_sorted = sorted(grp, key=_rank, reverse=True)
+        # grp_sorted[0] = survivor; the rest are duplicates to reclaim.
+        selected.extend(grp_sorted[1:])
+
+    report.candidates = [e.title for e in selected]
+
+    if dry_run or not selected:
+        return report
+
+    # LINE-PRECISE archive+strip (NOT _archive_and_strip's (title,section) set-strip).
+    # A dedup group shares one content_signature — and since content_signature is
+    # title-INCLUSIVE, the non-survivors necessarily share the survivor's
+    # (title, section). So _archive_and_strip's set-strip would remove the SURVIVOR
+    # too (it can't tell them apart by title) — that is exactly the data-loss the
+    # old ambiguous-guard tried to dodge, at the cost of making dedup a permanent
+    # no-op (every real signature-dup is same-title). The correct identity for
+    # dedup is the entry's own line span. archive the non-survivors, then strip
+    # ONLY their blocks by line_number, leaving the survivor untouched.
+    archived = archive_entries(project_dir, selected, archive_name=archive_name)
+    report.archived = archived
+    # Strip by the entry's own 0-based line index. parse_entries ALWAYS assigns a
+    # real index (0 is valid — an entry at the very first line), so do NOT filter
+    # `> 0` (that would leave a line-0 dup un-stripped — the invariant-weakening
+    # Gate-2 flagged). `selected` are all parsed entries, so every line_number is
+    # genuine; a synthesized entry (line_number defaulting to 0) never reaches here.
+    report.new_content = _strip_entries_by_line(
+        content, {e.line_number for e in selected}
+    )
+    if source_path is not None:
+        Path(source_path).write_text(report.new_content, encoding="utf-8")
+    return report
+
+
 def _archive_and_strip(
     content: str,
     selected: list[EntryMetadata],
@@ -1402,6 +1575,55 @@ def _strip_entries(content: str, keys: "set[tuple[str, str]]", *,
         result.append(line)
         i += 1
 
+    trailing = content.endswith("\n")
+    out = "\n".join(result)
+    if trailing and not out.endswith("\n"):
+        out += "\n"
+    return out
+
+
+def _strip_entries_by_line(content: str, start_lines: "set[int]") -> str:
+    """Return content with the bullet blocks that START at `start_lines` removed.
+
+    `start_lines` are 0-based indices into content.splitlines() — the EXACT
+    `EntryMetadata.line_number` values parse_entries assigned. Used by
+    reclaim_duplicate_entries: a dedup group shares one (title, section) (because
+    content_signature is title-inclusive), so the (title, section) set-strip in
+    _strip_entries CANNOT keep the survivor — it would strip every collider. Line
+    identity is the only precise handle. A "block" is the bullet line + its
+    continuation/wrapped lines + the trailing metadata comment (same boundary as
+    _strip_entries / parse_entries), so the survivor (a different start line) is
+    left fully intact.
+    """
+    if not start_lines:
+        return content
+    lines = content.splitlines()
+    result: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if i in start_lines:
+            # Skip this entry's whole block: bullet + continuations + meta.
+            i += 1
+            while i < n:
+                nxt = lines[i]
+                if nxt.startswith("- ") or nxt.startswith("## "):
+                    break
+                if _META_RE.match(nxt):
+                    i += 1  # consume the metadata line, then stop
+                    break
+                if nxt.strip() == "":
+                    peek = i + 1
+                    if peek < n and _META_RE.match(lines[peek]):
+                        i = peek + 1
+                    break
+                i += 1
+            # Drop a single trailing blank separator to avoid blank-run buildup.
+            if result and result[-1].strip() == "" and i < n and lines[i].strip() == "":
+                i += 1
+            continue
+        result.append(lines[i])
+        i += 1
     trailing = content.endswith("\n")
     out = "\n".join(result)
     if trailing and not out.endswith("\n"):
