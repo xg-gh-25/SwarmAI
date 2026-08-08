@@ -447,7 +447,9 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
     }
 
 
-def build_brain_state(project_dir: Path, *, with_noise: bool) -> dict:
+def build_brain_state(
+    project_dir: Path, *, with_noise: bool, pending_override: Optional[int] = None
+) -> dict:
     """THE single source of a brain's state (Cycle-1 unify — no fork).
 
     ONE builder feeds BOTH routes; the ONLY axis is `with_noise` (a.k.a. detail):
@@ -469,7 +471,11 @@ def build_brain_state(project_dir: Path, *, with_noise: bool) -> dict:
     """
     name = project_dir.name
     present = _sections_present(project_dir)
-    pending = _pending_count(name)
+    # pending_override lets the GALLERY (list_brains) aggregate the attention channel
+    # ONCE via collect(ws) and partition per-brain, instead of paying a full-workspace
+    # collect(brain=name) scan per project (measured 4.67s × N = the 7s stall). When
+    # None (the detail/single-brain path), fall back to the per-brain _pending_count.
+    pending = pending_override if pending_override is not None else _pending_count(name)
     stats = _gallery_entry_stats(project_dir)  # ONE parse → sinking + typeCounts
     health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"])
     if with_noise:
@@ -675,10 +681,14 @@ def _read_kind(project_dir: Path) -> str:
     return "knowledge"
 
 
-def _brain_summary(project_dir: Path) -> dict:
+def _brain_summary(project_dir: Path, pending_override: Optional[int] = None) -> dict:
     """Gallery projection — delegates to the single builder (no fork). Cheap:
-    with_noise=False never calls compute_reclaimable_noise."""
-    return build_brain_state(project_dir, with_noise=False)
+    with_noise=False never calls compute_reclaimable_noise. `pending_override` is
+    the pre-computed per-brain Need-You count from the gallery's single collect(ws)
+    aggregate (see list_brains) — avoids a per-project full-workspace attention scan."""
+    return build_brain_state(
+        project_dir, with_noise=False, pending_override=pending_override
+    )
 
 
 def _brain_detail(project_dir: Path) -> dict:
@@ -776,13 +786,35 @@ def _knowledge_entries(project_dir: Path) -> list[dict]:
 async def list_brains() -> dict:
     """Gallery: one live summary per DDD project (read-only)."""
     dirs = await asyncio.to_thread(_list_project_dirs)
+    # PERF ROOT-FIX (run_cfb460ac): aggregate the Need-You attention channel ONCE,
+    # then partition per-brain — instead of each _brain_summary calling
+    # _pending_count → collect(brain=name), which full-scans the workspace ONCE PER
+    # PROJECT (measured 4.67s × 7 projects ≈ the 7s gallery stall). collect(ws) with
+    # no brain filter does the same disk scan a SINGLE time; we bucket its items by
+    # .brain here. No cache, no mtime key (Gate-1: mtime resets on git checkout) —
+    # just one scan instead of N. Fail-soft: a collect failure degrades every brain
+    # to pending=0 (the same floor _pending_count's own except returns), never a 500.
+    pending_by_brain: dict[str, int] = {}
+    try:
+        from core.attention_authority import collect
+
+        agg = await asyncio.to_thread(collect, _workspace_root())
+        for it in agg.items:
+            if it.brain:  # governance items have brain=None — excluded per-brain (parity with _pending_count)
+                pending_by_brain[it.brain] = pending_by_brain.get(it.brain, 0) + 1
+    except Exception as e:  # never 500 the gallery on an attention-scan hiccup
+        logger.warning("attention aggregate failed, brains show pending=0: %s", e)
+
     # return_exceptions=True: one malformed project (e.g. a git/FS transient)
     # degrades to a dropped card, never a 500 on the whole gallery. The per-file
     # parse helpers already swallow UnicodeError/OSError; this is the outer
     # belt-and-suspenders so an unforeseen raise in ONE summary can't take the
     # list down (the resilient-lens contract).
     results = await asyncio.gather(
-        *(asyncio.to_thread(_brain_summary, d) for d in dirs),
+        *(
+            asyncio.to_thread(_brain_summary, d, pending_by_brain.get(d.name, 0))
+            for d in dirs
+        ),
         return_exceptions=True,
     )
     brains = []

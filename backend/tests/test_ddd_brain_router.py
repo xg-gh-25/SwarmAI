@@ -191,6 +191,37 @@ class TestBrainsList:
         # lifecycle stage is one of the four canonical stages.
         assert sw["lifecycleStage"] in {"CREATE", "GROW", "REVIEW", "DISTRIBUTE"}
 
+    def test_collect_called_once_not_per_project(self, client, monkeypatch):
+        """AC6 perf root-fix: GET /ddd/brains must aggregate the attention channel
+        ONCE (collect(ws)) and partition by brain — NOT call collect(brain=X) once
+        per project. The old path (_pending_count → collect(brain=name) per project)
+        full-scanned the workspace N times (measured 4.67s × 7 = the 7s stall).
+
+        We count invocations of attention_authority.collect during a single
+        GET /ddd/brains. With ≥2 real projects, a per-project implementation would
+        call it ≥2 times; the fixed implementation calls it exactly ONCE."""
+        import core.attention_authority as aa
+
+        calls = {"n": 0}
+        real_collect = aa.collect
+
+        def counting_collect(*args, **kwargs):
+            calls["n"] += 1
+            return real_collect(*args, **kwargs)
+
+        # Patch BOTH the source module and the ddd_brain-local reference paths.
+        monkeypatch.setattr(aa, "collect", counting_collect)
+
+        resp = client.get("/api/ddd/brains")
+        assert resp.status_code == 200
+        n_projects = len(resp.json()["brains"])
+        assert n_projects >= 2, "test needs ≥2 projects to distinguish once-vs-per-project"
+        # The whole point: ONE aggregate scan, not one per project.
+        assert calls["n"] == 1, (
+            f"collect() called {calls['n']}× for {n_projects} projects — "
+            f"expected exactly 1 (aggregate-once-then-partition)"
+        )
+
     def test_no_recall_heat_number_anywhere(self, client):
         """ref_count is dead → NO heat/crown/recall number in the payload (R30#4)."""
         raw = client.get("/api/ddd/brains").text.lower()
