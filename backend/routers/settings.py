@@ -12,6 +12,7 @@ Public symbols:
 - ``set_config_manager``    — Replaces the module-level instance (for testing / DI).
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -234,11 +235,16 @@ def owned_session_ids() -> set[str] | None:
 async def get_open_tabs():
     """Read persisted open-tab state from the filesystem."""
     path = _get_open_tabs_path()
-    try:
+
+    # exists() + read_text() are blocking FS I/O — off the event loop in one worker
+    # thread (run_6ea3cb12), never directly on the loop.
+    def _read():
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    try:
+        return await asyncio.to_thread(_read)
     except Exception as exc:
         logger.warning("Failed to read open_tabs.json: %s", exc)
         return None
@@ -251,9 +257,15 @@ async def save_open_tabs(request: dict):
         raise HTTPException(status_code=422, detail="'tabs' array is required")
 
     path = _get_open_tabs_path()
-    try:
+
+    # mkdir + write_text are blocking FS I/O — off the event loop in one worker
+    # thread (run_6ea3cb12).
+    def _write():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(request, indent=2), encoding="utf-8")
+
+    try:
+        await asyncio.to_thread(_write)
         return {"status": "ok"}
     except Exception as exc:
         logger.error("Failed to write open_tabs.json: %s", exc)

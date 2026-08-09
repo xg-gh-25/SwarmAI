@@ -270,27 +270,37 @@ async def cancel_pipeline(run_id: str) -> dict:
     if not projects_dir.exists():
         return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
-    for project_dir in projects_dir.iterdir():
-        if not project_dir.is_dir():
-            continue
-        run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
-        if run_file.exists():
-            try:
-                state = json.loads(run_file.read_text(encoding="utf-8"))
-                state["status"] = "cancelled"
-                # Atomic write: write to tmp then replace to prevent corruption
-                tmp_file = run_file.with_suffix(".tmp")
-                tmp_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-                tmp_file.replace(run_file)
-                logger.info("Cancelled pipeline %s in project %s", run_id, project_dir.name)
-                return {"status": "cancelled", "run_id": run_id}
-            except (json.JSONDecodeError, OSError) as e:
-                logger.error("Failed to cancel %s: %s", run_id, e)
-                return JSONResponse(
-                    status_code=500,
-                    content={"status": "error", "run_id": run_id, "detail": str(e)},
-                )
+    # The whole scan (iterdir across projects) + read_text + atomic tmp-write/replace
+    # is blocking FS I/O — run it in ONE worker thread (run_6ea3cb12), not per-call on
+    # the loop. Returns (outcome, project_name_or_error) for the loop to translate.
+    def _cancel() -> tuple[str, str | None]:
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
+            if run_file.exists():
+                try:
+                    state = json.loads(run_file.read_text(encoding="utf-8"))
+                    state["status"] = "cancelled"
+                    # Atomic write: write to tmp then replace to prevent corruption
+                    tmp_file = run_file.with_suffix(".tmp")
+                    tmp_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+                    tmp_file.replace(run_file)
+                    return ("cancelled", project_dir.name)
+                except (json.JSONDecodeError, OSError) as e:
+                    return ("error", str(e))
+        return ("not_found", None)
 
+    outcome, info = await asyncio.to_thread(_cancel)
+    if outcome == "cancelled":
+        logger.info("Cancelled pipeline %s in project %s", run_id, info)
+        return {"status": "cancelled", "run_id": run_id}
+    if outcome == "error":
+        logger.error("Failed to cancel %s: %s", run_id, info)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "run_id": run_id, "detail": info},
+        )
     return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
 
@@ -616,48 +626,60 @@ async def pipeline_run_detail(run_id: str):
     if not projects_dir.exists():
         return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
-    for project_dir in projects_dir.iterdir():
-        if not project_dir.is_dir():
-            continue
-        runs_root = (project_dir / ".artifacts" / "runs").resolve()
-        run_dir = (runs_root / run_id).resolve()
-        # Containment: the resolved run dir MUST live under runs_root (defense in
-        # depth beyond the regex — never trust a single guard for a path read).
-        try:
-            run_dir.relative_to(runs_root)
-        except ValueError:
-            continue
-        run_file = run_dir / "run.json"
-        if not run_file.exists():
-            continue
-
-        try:
-            raw = json.loads(run_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
-
-        project = raw.get("_project", raw.get("project", project_dir.name))
-        m = _run_metrics_cached(project, run_id, raw)
-
-        # REPORT.md body (retro), if present + its workspace-relative path so the
-        # overlay can open it in Canvas via swarm:open-file (run_929024a8).
-        report_md = ""
-        report_path: Optional[str] = None
-        rpt = run_dir / "REPORT.md"
-        if rpt.exists():
+    # The whole scan (iterdir across projects) + run.json read + REPORT.md read is
+    # blocking FS I/O — run it in ONE worker thread (run_6ea3cb12). Returns
+    # (found, raw, report_md, report_path, project_dir_name) or a sentinel; the
+    # metrics + response building (in-memory) stay on the loop below.
+    def _scan_and_read():
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            runs_root = (project_dir / ".artifacts" / "runs").resolve()
+            run_dir = (runs_root / run_id).resolve()
+            # Containment: the resolved run dir MUST live under runs_root (defense in
+            # depth beyond the regex — never trust a single guard for a path read).
             try:
-                report_md = rpt.read_text(encoding="utf-8")
-            except OSError:
-                report_md = ""
-            # Workspace-relative (e.g. Projects/<p>/.artifacts/runs/<id>/REPORT.md) —
-            # hits resolve Stage 1 in /workspace/file/resolve. Guard relative_to in
-            # case the run dir ever sits outside the workspace (defensive; it never
-            # does today) — a report we can't express relative to the ws is unopenable
-            # via the workspace resolver, so leave path None (button hidden).
-            try:
-                report_path = str(rpt.relative_to(_get_swarmws()))
+                run_dir.relative_to(runs_root)
             except ValueError:
-                report_path = None
+                continue
+            run_file = run_dir / "run.json"
+            if not run_file.exists():
+                continue
+
+            try:
+                raw = json.loads(run_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return ("corrupt", None, "", None, None)
+
+            # REPORT.md body (retro), if present + its workspace-relative path so the
+            # overlay can open it in Canvas via swarm:open-file (run_929024a8).
+            report_md = ""
+            report_path: Optional[str] = None
+            rpt = run_dir / "REPORT.md"
+            if rpt.exists():
+                try:
+                    report_md = rpt.read_text(encoding="utf-8")
+                except OSError:
+                    report_md = ""
+                # Workspace-relative (e.g. Projects/<p>/.artifacts/runs/<id>/REPORT.md) —
+                # hits resolve Stage 1 in /workspace/file/resolve. Guard relative_to in
+                # case the run dir ever sits outside the workspace (defensive; it never
+                # does today) — a report we can't express relative to the ws is unopenable
+                # via the workspace resolver, so leave path None (button hidden).
+                try:
+                    report_path = str(rpt.relative_to(_get_swarmws()))
+                except ValueError:
+                    report_path = None
+            return ("found", raw, report_md, report_path, project_dir.name)
+        return ("not_found", None, "", None, None)
+
+    outcome, raw, report_md, report_path, project_dir_name = await asyncio.to_thread(_scan_and_read)
+    if outcome != "found":
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+
+    if True:  # preserve original indentation block below (in-memory response build)
+        project = raw.get("_project", raw.get("project", project_dir_name))
+        m = _run_metrics_cached(project, run_id, raw)
 
         # reflect lessons live in the reflect stage record.
         reflect_lessons: list[str] = []
@@ -707,5 +729,3 @@ async def pipeline_run_detail(run_id: str):
             created_at=raw.get("created_at", ""),
             updated_at=raw.get("updated_at", ""),
         )
-
-    return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})

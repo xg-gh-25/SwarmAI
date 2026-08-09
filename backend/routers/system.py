@@ -666,9 +666,16 @@ async def get_auth_hint():
     Helps the frontend pick a sensible default auth method card
     and show real credential status when already configured.
     """
-    has_ada = Path.home().joinpath(".ada").is_dir()
-    has_midway = Path.home().joinpath(".midway").is_dir()
-    has_sso_cache = bool(list(Path.home().joinpath(".aws/sso/cache").glob("*.json")))
+    # is_dir + glob are blocking FS I/O — probe the credential dirs off the event
+    # loop in one worker thread (run_6ea3cb12), like the _probe_* calls below.
+    def _probe_cred_dirs():
+        return (
+            Path.home().joinpath(".ada").is_dir(),
+            Path.home().joinpath(".midway").is_dir(),
+            bool(list(Path.home().joinpath(".aws/sso/cache").glob("*.json"))),
+        )
+
+    has_ada, has_midway, has_sso_cache = await asyncio.to_thread(_probe_cred_dirs)
     has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     # Deployment context drives which auth-method cards the wizard shows:
@@ -1220,10 +1227,10 @@ async def uninstall_cleanup():
         logger.error("Failed to stop services: %s", e)
         results["services"] = f"error: {e}"
 
-    # 3. Remove port file
+    # 3. Remove port file — unlink is blocking FS I/O, off the loop (run_6ea3cb12).
     port_file = PORT_FILE
     try:
-        port_file.unlink(missing_ok=True)
+        await asyncio.to_thread(port_file.unlink, missing_ok=True)
         results["port_file"] = "removed"
     except Exception:
         results["port_file"] = "already gone"
@@ -1344,17 +1351,7 @@ async def ingest_client_logs(batch: ClientLogBatch) -> dict:
     truncates the file from the head when it grows past the size cap.
     """
     try:
-        log_path = get_app_data_dir() / "logs" / "frontend.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Size cap: keep the most recent half when the file exceeds the limit.
-        try:
-            if log_path.exists() and log_path.stat().st_size > _FRONTEND_LOG_MAX_BYTES:
-                tail = log_path.read_bytes()[-(_FRONTEND_LOG_MAX_BYTES // 2):]
-                log_path.write_bytes(tail)
-        except OSError:
-            pass  # rotation is best-effort
-
+        # Line-building is cheap in-memory; do it on the loop.
         lines = []
         for e in batch.entries[:200]:  # cap per request
             ts = e.ts or datetime.now(timezone.utc).isoformat()
@@ -1362,9 +1359,24 @@ async def ingest_client_logs(batch: ClientLogBatch) -> dict:
             src = f" ({e.source})" if e.source else ""
             lines.append(f"{ts} [{e.level.upper()}]{src} {msg}")
 
-        if lines:
-            with open(log_path, "a") as f:
-                f.write("\n".join(lines) + "\n")
+        # All the FS I/O — mkdir + rotation (stat/read_bytes/write_bytes) + append
+        # open/write — is blocking; run the whole write in ONE worker thread
+        # (run_6ea3cb12), never on the event loop.
+        def _rotate_and_append():
+            log_path = get_app_data_dir() / "logs" / "frontend.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Size cap: keep the most recent half when the file exceeds the limit.
+            try:
+                if log_path.exists() and log_path.stat().st_size > _FRONTEND_LOG_MAX_BYTES:
+                    tail = log_path.read_bytes()[-(_FRONTEND_LOG_MAX_BYTES // 2):]
+                    log_path.write_bytes(tail)
+            except OSError:
+                pass  # rotation is best-effort
+            if lines:
+                with open(log_path, "a") as f:
+                    f.write("\n".join(lines) + "\n")
+
+        await asyncio.to_thread(_rotate_and_append)
         return {"status": "ok", "written": len(lines)}
     except Exception as exc:  # never break the client on a logging path
         logger.debug("client-logs ingest failed (non-fatal): %s", exc)

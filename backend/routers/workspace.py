@@ -303,17 +303,18 @@ async def browse_filesystem(request: WorkspaceListRequest):
             status_code=400, detail=f"Path is not a directory: {requested_path}"
         )
 
-    # List directory contents (directories only for folder picker)
-    files: list[WorkspaceFileInfo] = []
-
-    try:
+    # List directory contents (directories only for folder picker).
+    # iterdir() + per-item stat() is blocking FS I/O — run the WHOLE walk in one
+    # worker thread (run_6ea3cb12), never per-item to_thread inside the loop.
+    def _walk() -> list[WorkspaceFileInfo]:
+        out: list[WorkspaceFileInfo] = []
         for item in sorted(target_path.iterdir(), key=lambda x: x.name.lower()):
             # Skip hidden files/directories (starting with .)
             if item.name.startswith('.'):
                 continue
             try:
                 stat = item.stat()
-                files.append(
+                out.append(
                     WorkspaceFileInfo(
                         name=item.name,
                         type="directory" if item.is_dir() else "file",
@@ -324,6 +325,10 @@ async def browse_filesystem(request: WorkspaceListRequest):
             except (PermissionError, OSError):
                 # Skip files we can't access
                 continue
+        return out
+
+    try:
+        files = await asyncio.to_thread(_walk)
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
 
@@ -379,16 +384,18 @@ async def list_files(
             status_code=400, detail=f"Path is not a directory: {request.path}"
         )
 
-    # List directory contents
-    files: list[WorkspaceFileInfo] = []
-
+    # List directory contents.
     # Hide advisory sidecars ONLY in the managed DDD workspace (run_419ff7d4).
     # base_path is set = the "work in a folder" feature pointed at an ARBITRARY repo,
     # where *.lock is legit user content (Cargo.lock, uv.lock, poetry.lock, …) —
     # Gate-2 caught that a blanket filter would hide those. In the managed workspace
     # every *.lock is an advisory flock sidecar and *.tmp is atomic-write scratch.
     filter_sidecars = base_path is None
-    try:
+
+    # iterdir() + per-item stat() is blocking FS I/O — run the WHOLE walk in one
+    # worker thread (run_6ea3cb12), never per-item to_thread inside the loop.
+    def _walk() -> list[WorkspaceFileInfo]:
+        out: list[WorkspaceFileInfo] = []
         for item in sorted(target_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
             # FILES only — a directory named e.g. "foo.lock" is real content, keep it
             # (Gate-2: the suffix check must not swallow directories).
@@ -396,7 +403,7 @@ async def list_files(
                 continue
             try:
                 stat = item.stat()
-                files.append(
+                out.append(
                     WorkspaceFileInfo(
                         name=item.name,
                         type="directory" if item.is_dir() else "file",
@@ -407,6 +414,10 @@ async def list_files(
             except (PermissionError, OSError):
                 # Skip files we can't access
                 continue
+        return out
+
+    try:
+        files = await asyncio.to_thread(_walk)
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
 

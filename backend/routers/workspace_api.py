@@ -1380,9 +1380,14 @@ async def put_workspace_file(
         if _is_readonly_context_file(path):
             raise HTTPException(status_code=403, detail="System-default context files are read-only")
 
-    try:
+    # mkdir + write_text are blocking FS I/O — off the event loop in one worker
+    # thread (run_6ea3cb12).
+    def _write():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(body["content"], encoding="utf-8")
+
+    try:
+        await asyncio.to_thread(_write)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write file: {exc}")
 
@@ -1433,8 +1438,12 @@ async def create_file(request: FolderCreateRequest):
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.touch()
+    # mkdir + touch are blocking FS I/O — off the loop in one worker thread (run_6ea3cb12).
+    def _create():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+
+    await asyncio.to_thread(_create)
 
     _invalidate_tree_cache()
     logger.info("Created file: %s", request.path)
@@ -1488,10 +1497,16 @@ async def delete_folder(request: FolderDeleteRequest):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
-    if target.is_dir():
-        shutil.rmtree(target)
-    else:
-        target.unlink()
+    # rmtree / unlink are blocking FS I/O (rmtree recurses a whole tree) — off the
+    # event loop in one worker thread (run_6ea3cb12). is_dir() branch runs inside so
+    # the whole delete decision is one dispatch.
+    def _delete():
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
+    await asyncio.to_thread(_delete)
 
     _invalidate_tree_cache()
     logger.info("Deleted: %s", request.path)
@@ -1623,8 +1638,12 @@ async def rename_item(request: FolderRenameRequest):
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
 
-    new_target.parent.mkdir(parents=True, exist_ok=True)
-    old_target.rename(new_target)
+    # mkdir + rename are blocking FS I/O — off the loop in one worker thread (run_6ea3cb12).
+    def _rename():
+        new_target.parent.mkdir(parents=True, exist_ok=True)
+        old_target.rename(new_target)
+
+    await asyncio.to_thread(_rename)
 
     # Increment project_files_version for context cache invalidation (Req 34.2)
 
