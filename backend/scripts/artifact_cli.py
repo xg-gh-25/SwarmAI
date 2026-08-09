@@ -4176,12 +4176,45 @@ def cmd_run_analytics(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(analytics, indent=2))
 
 
-def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
-    """Apply pipeline lessons to DDD docs via cultivation engine.
+def _collect_judgment_decisions(run_state: dict) -> list[str]:
+    """Collect judgment-class stage decisions as ``[decision]``-tagged strings.
 
-    Reads the 'lessons' field from the reflect stage in run.json,
-    then calls cultivate_from_reflect() which auto-applies safe additive
-    lessons and escalates risky ones.
+    GAP A (run_fdbc0f08): pipeline ``decisions[]`` were STRUCTURALLY invisible to
+    cultivation — cmd_run_cultivate only ever read ``reflect.lessons[]`` — so the
+    single richest source of decision-shaped rationale ("chose X over Y because Z")
+    was discarded, starving the DDD ``decision`` type. This collects the
+    ``judgment``-class decisions across ALL stages and tags each ``[decision] <desc>``
+    so the (Run 1) declared-type honor routes them to PROJECT.md § Recent Decisions
+    + escalate (safe_auto=False).
+
+    Filter rationale (Gate-0/Gate-1 adjudicated): ``judgment`` only. ``mechanical``
+    (which-file/wiring) and ``taste`` (naming/aesthetic) decisions are run-local
+    noise, not reusable rationale. String-shaped decisions carry no ``classification``
+    and are skipped here — they are session/DailyActivity-sourced (handled by the
+    distillation/context_health path), not pipeline rationale.
+    """
+    tagged: list[str] = []
+    for stage in run_state.get("stages", []):
+        for d in stage.get("decisions", []):
+            if not isinstance(d, dict):
+                continue  # bare string = session/DA-sourced, not a pipeline decision
+            if d.get("classification") != "judgment":
+                continue  # mechanical/taste = run-local noise
+            desc = (d.get("description") or "").strip()
+            if not desc:
+                continue
+            tagged.append(f"[decision] {desc}")
+    return tagged
+
+
+def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
+    """Apply pipeline lessons + judgment decisions to DDD docs via cultivation.
+
+    Reads the 'lessons' field from the reflect stage in run.json, then calls
+    cultivate_from_reflect() which auto-applies safe additive lessons and
+    escalates risky ones. ALSO (GAP A, run_fdbc0f08) collects judgment-class
+    decisions[] across all stages and cultivates them as typed [decision]
+    entries via cultivate_from_decisions() — closing the decision-starvation gap.
 
     This is the CLI bridge that makes cultivation callable from agent
     Bash tools — the agent reads reflect.md instructions and runs this.
@@ -4196,12 +4229,15 @@ def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
             lessons = stage.get("lessons", [])
             break
 
-    if not lessons:
+    # GAP A: judgment-class decisions across ALL stages (typed [decision]).
+    decisions = _collect_judgment_decisions(run_state)
+
+    if not lessons and not decisions:
         print(json.dumps({
             "applied": 0,
             "escalated": 0,
             "rejected": 0,
-            "note": "No lessons found in reflect stage — nothing to cultivate",
+            "note": "No lessons or judgment decisions found — nothing to cultivate",
         }))
         return
 
@@ -4213,10 +4249,24 @@ def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
         print(json.dumps({"error": f"Project directory not found: {project_dir}"}))
         return
 
-    # Run cultivation
-    from core.ddd_cultivation import cultivate_from_reflect
+    # Run cultivation — lessons via cultivate_from_reflect, judgment decisions
+    # via cultivate_from_decisions (both delegate to the same classify_content;
+    # the [decision] tag routes decisions to PROJECT § Recent Decisions).
+    from core.ddd_cultivation import cultivate_from_reflect, cultivate_from_decisions
 
-    result = cultivate_from_reflect(lessons, args.run_id, args.project, project_dir)
+    result = {"applied": 0, "escalated": 0, "rejected": 0, "retired": 0, "drift_errors": []}
+    if lessons:
+        lres = cultivate_from_reflect(lessons, args.run_id, args.project, project_dir)
+        for k in ("applied", "escalated", "rejected", "retired"):
+            result[k] += lres.get(k, 0)
+        result["drift_errors"].extend(lres.get("drift_errors", []))
+    if decisions:
+        dres = cultivate_from_decisions(decisions, args.run_id, args.project, project_dir)
+        for k in ("applied", "escalated", "rejected", "retired"):
+            result[k] += dres.get(k, 0)
+        result["drift_errors"].extend(dres.get("drift_errors", []))
+        result["judgment_decisions_cultivated"] = len(decisions)
+
     print(json.dumps(result, indent=2))
     # Surface section-name drift LOUDLY — a dropped lesson is a config bug, not
     # a benign rejection (run_45ab67c7 root cause). stderr so it can't be missed.

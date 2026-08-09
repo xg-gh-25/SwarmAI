@@ -1179,9 +1179,8 @@ class ContextHealthHook:
 
         today = date.today().isoformat()
 
-        # Route each lesson to its correct section (type → section mapping)
-        from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
-
+        # Route each lesson to its correct section via the shared route_lesson_type
+        # SSOT (imported at the per-lesson site below).
         # Group lessons by target section. Each candidate carries its title so
         # step-6 dedup can compare against existing section entries INSIDE the
         # lock (against the locked snapshot, not a stale pre-lock read).
@@ -1208,7 +1207,14 @@ class ContextHealthHook:
                     reason, lesson,
                 )
                 continue
-            target_section = MEMORY_TYPE_TO_SECTION.get(entry_type, "Guidelines")
+            # Section mapping via the SHARED SSOT helper (run_fdbc0f08): the same
+            # route_lesson_type distillation uses, so the type→section rule is
+            # single-sourced across both auto-writers. The admission gate above
+            # already held back KEEP_TYPES (step 4), so `section` is never None
+            # here; `or "Guidelines"` is a belt-and-suspenders no-op.
+            from core.ddd_entry_lifecycle import route_lesson_type
+            _section, _ = route_lesson_type(lesson)
+            target_section = _section or "Guidelines"
             title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
             title = title.rstrip(".")
             entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})"

@@ -1119,6 +1119,38 @@ _KEEP_TYPES = frozenset({"principle", "correction", "decision", "model"})
 _KEEP_REF_FLOOR = 2
 
 
+def route_lesson_type(lesson: str) -> "tuple[str | None, str]":
+    """Shared type-routing decision for auto-written MEMORY lessons.
+
+    ONE source of truth for "which MEMORY section does this lesson belong to,
+    and may it be auto-written at all?" — used by BOTH the distillation hook
+    (cross-day recurring themes) and context_health (single-run REFLECT lessons)
+    so the KEEP_TYPES hold-back rule can never drift between the two writers.
+
+    Returns ``(section, entry_type)``:
+      • ``entry_type`` — the classify_entry_type guess (one of the 7 types).
+      • ``section`` — the target MEMORY.md section for auto-write, OR ``None``
+        when the type is a KEEP_TYPE (principle/correction/decision/model).
+
+    Why ``None`` for KEEP_TYPES (the load-bearing invariant): those tiers are
+    evergreen — decay can NEVER reclaim them, so a wrong auto-commit is
+    PERMANENT. They must never be auto-written to ANY section (not their own,
+    and — the bug this fixes — not silently buried in Guidelines either). A
+    ``None`` section signals the caller to HOLD BACK (log + drop, or escalate to
+    human review), never to auto-sink. Operational types (guideline/pitfall/
+    process) are decay-reclaimable + git-revertable, so they route to their
+    section. classify_entry_type is a fallible keyword classifier: a KEEP-type
+    lesson phrased without its signal token may misroute to 'guideline' — that
+    is graceful degradation (reclaimable), NOT a hole; the guarantee is "no
+    PERMANENT auto-commit of protected knowledge", not "no protected lesson is
+    ever auto-written".
+    """
+    etype = classify_entry_type(lesson)
+    if etype in _KEEP_TYPES:
+        return (None, etype)
+    return (MEMORY_TYPE_TO_SECTION.get(etype, "Guidelines"), etype)
+
+
 def is_keep_class(
     entry: EntryMetadata,
     evergreen_sections: "frozenset[str] | set[str] | None" = None,

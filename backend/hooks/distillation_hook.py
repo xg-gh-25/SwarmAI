@@ -551,10 +551,32 @@ class DistillationTriggerHook:
             self._run_locked_write(
                 memory_path, MEMORY_TYPE_TO_SECTION["decision"], "\n".join(all_decisions)
             )
+        # GAP B (run_fdbc0f08): route each surviving lesson to its TRUE type's
+        # section instead of hardcoding Guidelines. classify on the RAW text
+        # (route_lesson_type) — a lesson that is really a pitfall lands in
+        # Pitfalls, not buried in Guidelines. KEEP_TYPES (principle/correction/
+        # decision/model) return section=None → HELD BACK (logged, never
+        # auto-written: decay can't reclaim them, so a wrong auto-commit is
+        # permanent). Grouping runs on the post-freq-gate `all_lessons` list, so
+        # the freq-gate is never bypassed (BLOCK-3). One section-keyed dict →
+        # one _run_locked_write per populated section.
         if all_lessons:
-            self._run_locked_write(
-                memory_path, MEMORY_TYPE_TO_SECTION["guideline"], "\n".join(all_lessons)
-            )
+            from core.ddd_entry_lifecycle import route_lesson_type
+
+            by_section: dict[str, list[str]] = {}
+            for enriched in all_lessons:
+                raw = self._raw_lesson_text(enriched)
+                section, etype = route_lesson_type(raw)
+                if section is None:
+                    logger.info(
+                        "distillation: HOLD-BACK protected lesson (type=%s, "
+                        "keep-class/decay-permanent — not auto-written): %.80s",
+                        etype, raw,
+                    )
+                    continue
+                by_section.setdefault(section, []).append(enriched)
+            for section, entries in by_section.items():
+                self._run_locked_write(memory_path, section, "\n".join(entries))
 
         # Write COE registry entries
         if coe_entries:
@@ -616,6 +638,36 @@ class DistillationTriggerHook:
             )
 
         return distilled_count
+
+    @staticmethod
+    def _raw_lesson_text(enriched: str) -> str:
+        """Recover the RAW lesson text from an enriched entry, for type routing.
+
+        The deterministic inverse of the FIRST line of ``_format_enriched_entry``:
+        ``- <date>: <RAW>\\n  Detail: ...\\n  <!-- ... -->``. Type classification
+        (route_lesson_type) MUST run on the raw text — the ``- <date>:`` prefix,
+        the ``Detail:`` provenance line, and any ``[UNVERIFIED]`` tag prepended by
+        ``_tag_unverified_claims`` would all pollute keyword matching.
+
+        Deterministic (no lookup map): robust across ALL sources (DailyActivity,
+        JobResults) and across post-hoc mutations (_tag_unverified_claims /
+        _supersede_by_topic) that rewrite the enriched string — a stored-key map
+        cannot survive those (run_fdbc0f08 Gate-2: the map missed JobResults
+        entirely + broke on the [UNVERIFIED] rewrite). Steps: take the first
+        line, strip a leading ``- ``, strip a leading ``<date>: `` stamp, then
+        strip a leading ``[UNVERIFIED] `` tag.
+        """
+        first = enriched.split("\n", 1)[0]
+        # strip leading "- "
+        if first.startswith("- "):
+            first = first[2:]
+        # strip leading "YYYY-MM-DD: " date stamp
+        m = re.match(r"^\d{4}-\d{2}-\d{2}:\s*", first)
+        if m:
+            first = first[m.end():]
+        # strip a leading [UNVERIFIED] (or similar bracket tag) from git-verify
+        first = re.sub(r"^\[UNVERIFIED\]\s*", "", first)
+        return first.strip()
 
     @staticmethod
     def _format_enriched_entry(
