@@ -102,10 +102,10 @@ def cmd_brief(args) -> None:
 
 
 def cmd_search(args) -> None:
-    from core.recall_multi import recall_all  # type: ignore
-    result = recall_all(args.query, project=args.scope, domains=("library", "codeintel"))
+    from core.recall_multi import recall_library_hits, LIBRARY_DOMAINS  # type: ignore
+    result = recall_library_hits(args.query, args.scope)
     hits = []
-    for domain in ("library", "codeintel"):
+    for domain in LIBRARY_DOMAINS:
         for h in (result.buckets.get(domain) or []):
             hits.append({"domain": domain,
                          "title": h.get("heading") or h.get("name") or h.get("source") or "",

@@ -47,6 +47,14 @@ except Exception:  # pragma: no cover - import guard
 
 DOMAINS = ("context_files", "ddd", "library", "session", "codeintel")
 
+# The domain pair a LIBRARY search fans over (Native Knowledge/ docs + code graph).
+# Single named source for the library-recall surface — referenced by the Library
+# overlay (routers/library_api.py) AND the s_library CLI skill instead of each
+# hardcoding the tuple (unified-recall Run 1, run_9aec3d4a). A named constant, NOT
+# an enum+dispatch facade — 3 distinct domain tuples across all call sites don't
+# justify a mapping subsystem (the design's own C042 rejection applies to itself).
+LIBRARY_DOMAINS = ("library", "codeintel")
+
 
 @dataclass
 class BucketedRecall:
@@ -383,6 +391,25 @@ def recall_all(
         result.hit_layers["codeintel"] = "graph" if hits else "none"
 
     return result
+
+
+def recall_library_hits(query: str, scope: str) -> BucketedRecall:
+    """Shared library-recall entry: fan ``query`` over LIBRARY_DOMAINS for ``scope``.
+
+    The single source for the "search the Library" surface — the Library overlay
+    (``routers/library_api.py``) and the ``s_library`` CLI both call this instead
+    of each hardcoding ``recall_all(..., domains=("library","codeintel"))`` (unified
+    recall Run 1, run_9aec3d4a — removes that duplication).
+
+    Returns the RAW ``BucketedRecall`` on purpose — NOT a pre-projected
+    ``list[dict]``. The two callers have deliberately DIFFERENT presentation: the
+    overlay normalizes the source (``_normalize_hit_source``) and truncates content
+    to 400 chars; the CLI keeps raw source and emits no content field. Sharing the
+    recall CALL + bucket access while leaving field projection to each caller is
+    what keeps this a helper, not a god-object that must know both output shapes
+    (the C046 gut-and-summarize trap). ``scope`` maps to recall_all's ``project``.
+    """
+    return recall_all(query, project=scope, domains=LIBRARY_DOMAINS)
 
 
 # ── Render layer: BucketedRecall → injectable system-prompt string ────

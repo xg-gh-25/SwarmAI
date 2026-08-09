@@ -17,6 +17,7 @@ Endpoints (Run 5):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -58,27 +59,30 @@ async def native_categories() -> dict:
     synthetic "(root)" category.
     """
     kdir = _knowledge_dir()
-    categories: list[dict] = []
 
-    # Root-level loose files → a synthetic "(root)" category.
-    root_files = [p for p in kdir.iterdir() if p.is_file() and not p.name.startswith(".")]
-    if root_files:
-        categories.append({
-            "name": "(root)",
-            "file_count": len(root_files),
-            "total_bytes": sum(_safe_size(p) for p in root_files),
-        })
+    # iterdir + per-subdir rglob over the whole Knowledge/ tree — one worker thread
+    # for the WHOLE walk (run_b2d3ece0), never per-item to_thread inside the loop.
+    def _scan() -> list[dict]:
+        categories: list[dict] = []
+        root_files = [p for p in kdir.iterdir() if p.is_file() and not p.name.startswith(".")]
+        if root_files:
+            categories.append({
+                "name": "(root)",
+                "file_count": len(root_files),
+                "total_bytes": sum(_safe_size(p) for p in root_files),
+            })
+        for sub in sorted(kdir.iterdir()):
+            if not sub.is_dir() or sub.name in _SKIP_CATEGORIES:
+                continue
+            files = [p for p in sub.rglob("*") if p.is_file() and not p.name.startswith(".")]
+            categories.append({
+                "name": sub.name,
+                "file_count": len(files),
+                "total_bytes": sum(_safe_size(p) for p in files),
+            })
+        return categories
 
-    for sub in sorted(kdir.iterdir()):
-        if not sub.is_dir() or sub.name in _SKIP_CATEGORIES:
-            continue
-        files = [p for p in sub.rglob("*") if p.is_file() and not p.name.startswith(".")]
-        categories.append({
-            "name": sub.name,
-            "file_count": len(files),
-            "total_bytes": sum(_safe_size(p) for p in files),
-        })
-
+    categories = await asyncio.to_thread(_scan)
     return {
         "source": "native",
         "root": "Knowledge/",
@@ -98,28 +102,33 @@ async def recent_feed(days: int = Query(default=7, ge=1, le=30)) -> dict:
     """
     kdir = _knowledge_dir()
     cutoff = time.time() - days * 24 * 3600
-    items: list[dict] = []
 
-    for p in kdir.rglob("*"):
-        if not p.is_file() or p.name.startswith("."):
-            continue
-        try:
-            mtime = p.stat().st_mtime
-        except OSError:
-            continue
-        if mtime < cutoff:
-            continue
-        rel = p.relative_to(kdir)
-        category = rel.parts[0] if len(rel.parts) > 1 else "(root)"
-        items.append({
-            "path": f"Knowledge/{rel.as_posix()}",
-            "category": category,
-            "mtime": mtime,
-            "size": _safe_size(p),
-            "source": _source_tag(category),
-        })
+    # rglob over the whole Knowledge/ tree — one worker thread for the WHOLE walk
+    # (run_b2d3ece0), not per-item to_thread inside the loop.
+    def _scan() -> list[dict]:
+        items: list[dict] = []
+        for p in kdir.rglob("*"):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            if mtime < cutoff:
+                continue
+            rel = p.relative_to(kdir)
+            category = rel.parts[0] if len(rel.parts) > 1 else "(root)"
+            items.append({
+                "path": f"Knowledge/{rel.as_posix()}",
+                "category": category,
+                "mtime": mtime,
+                "size": _safe_size(p),
+                "source": _source_tag(category),
+            })
+        items.sort(key=lambda it: it["mtime"], reverse=True)
+        return items
 
-    items.sort(key=lambda it: it["mtime"], reverse=True)
+    items = await asyncio.to_thread(_scan)
     return {
         "window_days": days,
         "count": len(items),
@@ -246,10 +255,10 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
     if not q.strip():
         return {"query": q, "hits": []}
     try:
-        from core.recall_multi import recall_all
-        result = recall_all(q, project=scope, domains=("library", "codeintel"))
+        from core.recall_multi import recall_library_hits, LIBRARY_DOMAINS
+        result = recall_library_hits(q, scope)
         hits: list[dict] = []
-        for domain in ("library", "codeintel"):
+        for domain in LIBRARY_DOMAINS:
             for h in (result.buckets.get(domain) or []):
                 raw_source = h.get("source") or h.get("file_path") or h.get("mount_path") or ""
                 # Normalize the COMPOSED source (post-fallback) ONCE so the frontend's
@@ -297,14 +306,20 @@ async def library_health() -> dict:
     cleanup, never mutates (actions run via POST /health/action on user click)."""
     kdir = _knowledge_dir()
     report_path = kdir / _HEALTH_REPORT
-    if report_path.is_file():
-        try:
-            return json.loads(report_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            logger.warning("library health report unreadable (%s) — rescanning live", exc)
-    # No cached report (or corrupt) → live scan so the section always has data.
-    from core.library_health import scan_library_health
-    return scan_library_health(kdir)
+
+    # Cached-report read OR (on miss) a live Knowledge/ scan — both blocking; run the
+    # whole decision in one worker thread (run_b2d3ece0).
+    def _load_health() -> dict:
+        if report_path.is_file():
+            try:
+                return json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                logger.warning("library health report unreadable (%s) — rescanning live", exc)
+        # No cached report (or corrupt) → live scan so the section always has data.
+        from core.library_health import scan_library_health
+        return scan_library_health(kdir)
+
+    return await asyncio.to_thread(_load_health)
 
 
 @router.post("/health/action")

@@ -877,3 +877,39 @@ class TestRun3RecallLegsE2E:
         blob = " ".join(str(h.get("content", "")) + str(h.get("section", "")) for h in hits)
         assert "zCULTSENTINEL55" in blob, \
             f"cultivated entry must be recallable from a large section, got {[str(h.get('section'))[:30] for h in hits]}"
+
+
+class TestRecallLibraryHits:
+    """recall_library_hits — the shared library recall helper (run_9aec3d4a, unified
+    recall Run 1). It removes the duplicated recall_all(library,codeintel) call from
+    library_api.py + the s_library skill. It returns the RAW BucketedRecall (NOT a
+    projected list[dict]) so each caller keeps its OWN presentation (the API adds
+    _normalize_hit_source + content[:400]; the CLI stays raw) — sharing the recall
+    call + bucket access, NOT the field projection (avoids the C046 gut-and-summarize
+    trap where a shared dict shape drops a field one caller needs)."""
+
+    def test_uses_the_library_domains_constant(self, monkeypatch):
+        """The helper must fan over exactly LIBRARY_DOMAINS = (library, codeintel) —
+        the single named source both callers reference instead of hardcoding."""
+        from core import recall_multi
+        assert recall_multi.LIBRARY_DOMAINS == ("library", "codeintel")
+        captured = {}
+        def _fake_recall_all(query, *, project=None, domains=(), **kw):
+            captured["domains"] = tuple(domains)
+            captured["project"] = project
+            return recall_multi.BucketedRecall(query=query)
+        monkeypatch.setattr(recall_multi, "recall_all", _fake_recall_all)
+        recall_multi.recall_library_hits("some query", "SwarmAI")
+        assert captured["domains"] == ("library", "codeintel")
+        assert captured["project"] == "SwarmAI"
+
+    def test_returns_raw_bucketed_recall_not_projected(self, monkeypatch):
+        """Returns the RAW BucketedRecall (has .buckets), so callers can project
+        their own fields — NOT a pre-shaped list[dict] that would force one shape."""
+        from core import recall_multi
+        br = recall_multi.BucketedRecall(query="q")
+        br.buckets["library"] = [{"heading": "H", "source": "Knowledge/x.md", "content": "body"}]
+        monkeypatch.setattr(recall_multi, "recall_all", lambda *a, **k: br)
+        out = recall_multi.recall_library_hits("q", "GLOBAL")
+        assert hasattr(out, "buckets"), "must return raw BucketedRecall, not a list"
+        assert out.buckets["library"][0]["content"] == "body", "raw fields preserved for caller projection"
