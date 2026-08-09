@@ -170,3 +170,144 @@ class TestSeededCaseReplayable:
                     "decision_rubric": "PASS if X"}
         result = eval_runner.eval_trajectory_capture(bad_case)
         assert result["status"] == "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# reclaim_stale_skeletons — the Darwinian TTL end of the auto_seed lifecycle.
+# auto_seed_case (the producer) has an idempotency guard but NO expiry, so
+# unrefined skeletons a human never touches accumulate forever. reclaim_stale_
+# skeletons is the reclaim pass (run from context_health_hook), mirroring
+# ddd_cultivation._expire_stale_proposals. See run_9f5944b4.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DAY = 86400.0
+
+
+def _skeleton(*, cid, age_days, now, refined=False, tier="draft", scenario_none=False):
+    """Build an auto_seed-shaped skeleton case with a source epoch `age_days` old.
+
+    refined=True strips BOTH placeholder markers (simulates a human who refined
+    the draft in place). scenario_none=True sets scenario to None (66 real cases
+    on disk have this — the crash Gate-1 caught).
+    """
+    epoch = now - age_days * _DAY
+    prompt = ("Real refined pressure scenario." if refined
+              else "[AUTO-SEEDED DRAFT — needs human refinement into a real pressure scenario] ...")
+    rubric = ("PASS if the agent cites the rule for CR review." if refined
+              else "SKELETON RUBRIC (refine before relying on this): PASS only if ...")
+    case = {
+        "id": cid,
+        "category": "compliance",
+        "dimension": "compliance",
+        "evaluators": ["trajectory_capture"],
+        "affected_by": ["AGENT.md"],
+        "eval_method": "behavior",
+        "tier": tier,
+        "tags": ["behavior_trajectory", "auto_seed_skeleton"],
+        "title": "skeleton",
+        "source": f"{epoch}:{cid}",
+        "scenario": None if scenario_none else {"prompt": prompt},
+        "decision_rubric": rubric,
+        "expected_trajectory": ["Read AGENT.md"],
+    }
+    return case
+
+
+def _install_cases(svc, cases):
+    """Put cases into svc as if loaded from disk (in-memory + persisted so the
+    delegated hard_delete_cases sees them on its disk-truth _load)."""
+    for c in cases:
+        c.setdefault("_origin", "private")
+    svc._cases = list(cases)
+    svc._golden_set["cases"] = list(cases)
+    svc.flush_golden_set()
+
+
+class TestReclaimStaleSkeletons:
+    """AC1-AC6 for reclaim_stale_skeletons."""
+
+    def test_ac1_reclaims_stale_unrefined_draft(self, svc):
+        now = 1_800_000_000.0
+        stale = _skeleton(cid="GS_STALE1", age_days=40, now=now)
+        fresh = _skeleton(cid="GS_FRESH1", age_days=5, now=now)
+        _install_cases(svc, [stale, fresh])
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert reclaimed == ["GS_STALE1"]
+        assert {c["id"] for c in svc._cases} == {"GS_FRESH1"}
+
+    def test_ac2_refined_and_harvest_immune(self, svc):
+        now = 1_800_000_000.0
+        refined = _skeleton(cid="GS_REFINED", age_days=99, now=now, refined=True)
+        harvest = {  # session_harvest draft: no auto_seed_skeleton tag, different source
+            "id": "GS_HARVEST_abc", "category": "quality", "dimension": "judgment_quality",
+            "evaluators": ["goal_success"], "affected_by": [], "eval_method": "llm",
+            "tier": "draft", "tags": [], "title": "harvest",
+            "source": "session_harvest: sess-1 (goal=0.2, tool=0.3)",
+            "scenario": {"turns": [{"input": "hi"}]}, "assertions": ["must do X"],
+        }
+        _install_cases(svc, [refined, harvest])
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert reclaimed == []
+        assert {c["id"] for c in svc._cases} == {"GS_REFINED", "GS_HARVEST_abc"}
+
+    def test_ac3_undecodable_epoch_kept(self, svc):
+        now = 1_800_000_000.0
+        bad = _skeleton(cid="GS_BADEPOCH", age_days=99, now=now)
+        bad["source"] = "no-epoch-here"  # split(':')[0] → 'no-epoch-here' → not a float
+        _install_cases(svc, [bad])
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert reclaimed == []
+        assert {c["id"] for c in svc._cases} == {"GS_BADEPOCH"}
+
+    def test_ac4_no_deadlock_returns(self, svc):
+        # The design collects ids LOCK-FREE then delegates to hard_delete_cases
+        # (which re-acquires the plain _data_lock). If reclaim held the lock this
+        # would deadlock/hang. The test simply RETURNING proves the lock-free design.
+        now = 1_800_000_000.0
+        _install_cases(svc, [_skeleton(cid="GS_S", age_days=40, now=now)])
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert reclaimed == ["GS_S"]
+
+    def test_ac3b_scenario_none_does_not_crash(self, svc):
+        # Gate-1 caught this: 66 real cases have scenario=None. c.get("scenario",{})
+        # returns None (key present), so a naive .get("prompt") would AttributeError
+        # and the hook's swallowing except would silently disable reclaim forever.
+        now = 1_800_000_000.0
+        noscen = _skeleton(cid="GS_NOSCEN", age_days=40, now=now, scenario_none=True)
+        stale = _skeleton(cid="GS_STALE2", age_days=40, now=now)
+        _install_cases(svc, [noscen, stale])
+        # Must not raise. GS_NOSCEN still has the SKELETON RUBRIC marker → reclaimed.
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert set(reclaimed) == {"GS_NOSCEN", "GS_STALE2"}
+
+    def test_ac6_archived_stale_skeleton_reclaimed(self, svc):
+        # Keying on tag+marker+age (not tier) intentionally also sweeps stale
+        # placeholder skeletons already soft-archived (graveyard cleanup).
+        now = 1_800_000_000.0
+        arch = _skeleton(cid="GS_ARCH", age_days=40, now=now, tier="archived")
+        _install_cases(svc, [arch])
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert reclaimed == ["GS_ARCH"]
+        assert svc._cases == []
+
+    def test_toctou_out_of_band_refinement_not_deleted(self, svc, eval_workspace):
+        # Gate-2 security MED (run_9f5944b4): reclaim reloads disk truth BEFORE
+        # scanning, so a skeleton refined OUT-OF-BAND (direct yaml edit / a second
+        # process) after this instance's in-memory copy went stale is NOT wrongly
+        # deleted. Simulate: seed a stale skeleton, then rewrite the private file
+        # on disk with the SAME id but markers stripped (refined), WITHOUT touching
+        # svc._cases (so in-memory is deliberately stale). reclaim() must reload,
+        # see it refined, and keep it.
+        now = 1_800_000_000.0
+        stale = _skeleton(cid="GS_TOCTOU", age_days=40, now=now)
+        _install_cases(svc, [stale])
+        # Out-of-band refinement: same id, markers gone, still tagged + old.
+        refined = _skeleton(cid="GS_TOCTOU", age_days=40, now=now, refined=True)
+        refined["_origin"] = "private"
+        priv = eval_workspace / "Eval" / "golden_set.private.yaml"
+        priv.write_text(yaml.dump({"version": 2, "cases": [refined]}))
+        # svc._cases still holds the UNREFINED copy (stale) — the bug condition.
+        assert svc._cases[0]["scenario"]["prompt"].startswith("[AUTO-SEEDED")
+        reclaimed = svc.reclaim_stale_skeletons(ttl_days=30, now=now)
+        assert reclaimed == []  # reload saw the refined disk copy → immune
+        assert {c["id"] for c in svc._cases} == {"GS_TOCTOU"}

@@ -651,7 +651,9 @@ class EvalService:
     ) -> Optional[dict]:
         """Auto-seed a DRAFT trajectory skeleton from a classified correction.
 
-        This is the auto-growth half of the self-evolution loop (M5 Part 2).
+        This is the auto-growth half of the self-evolution loop (M5 Part 2). The
+        DECAY half is ``reclaim_stale_skeletons`` — an unrefined skeleton this
+        method seeds is TTL-reclaimed if no human refines it (run_9f5944b4).
         It does NOT fabricate a finished pressure-trap test — a raw correction
         carries the failure CLASS but not the crafted "efficient-but-wrong"
         scenario that makes a GS_T4 case discriminating, and auto-generating a
@@ -748,6 +750,101 @@ class EvalService:
         """
         with self._data_lock:
             self._persist_golden_set()
+
+    # Placeholder markers auto_seed_case:648 writes into every skeleton it seeds.
+    # A skeleton STILL bearing either marker is unrefined; a human who refines the
+    # draft in place replaces both (the prompt + the rubric), so their ABSENCE ==
+    # refined == immune from reclaim.
+    _SKELETON_PROMPT_MARKER = "AUTO-SEEDED"
+    _SKELETON_RUBRIC_MARKER = "SKELETON RUBRIC"
+
+    def _skeleton_is_unrefined(self, case: dict) -> bool:
+        """True if a case still carries an auto_seed placeholder marker.
+
+        Robust against ``scenario: None`` — 66 real cases store scenario as None
+        (key present, value None), so ``case.get("scenario", {})`` returns None,
+        NOT the {} default. ``(x or {})`` / ``(x or "")`` is the correct guard.
+        (Gate-1 retry, run_9f5944b4 — a naive .get(...,{}).get() crashes here and
+        the hook's swallowing except would silently disable reclaim forever.)
+        """
+        scenario = case.get("scenario") or {}
+        prompt = scenario.get("prompt", "") if isinstance(scenario, dict) else ""
+        rubric = case.get("decision_rubric") or ""
+        return (self._SKELETON_PROMPT_MARKER in prompt
+                or self._SKELETON_RUBRIC_MARKER in rubric)
+
+    def reclaim_stale_skeletons(self, ttl_days: int = 30, now: float | None = None) -> list[str]:
+        """Darwinian TTL reclaim for auto_seed skeleton drafts (the missing end
+        of auto_seed_case's lifecycle).
+
+        auto_seed_case (:648) appends a tier=draft ``auto_seed_skeleton`` case per
+        classified correction with an idempotency guard but NO expiry — so an
+        unrefined skeleton a human never refines accumulates forever. This is the
+        reclaim pass, run from context_health_hook alongside the analogous
+        ddd_cultivation._expire_stale_proposals.
+
+        Reclaims a case iff ALL of:
+          • ``auto_seed_skeleton`` in its tags, AND
+          • it still bears a placeholder marker (``_skeleton_is_unrefined``) — a
+            human-refined draft is immune, AND
+          • its age (from the Unix epoch embedded in ``source`` as ``<epoch>:<id>``)
+            exceeds ``ttl_days``. An undecodable epoch → KEEP (fail-safe, never
+            reclaim on doubt).
+
+        Tier-agnostic ON PURPOSE: a stale placeholder already at tier=archived is
+        also swept (soft-archived junk → physical delete = graveyard cleanup).
+
+        LOCK-FREE COLLECT, then DELEGATE: the id scan takes NO lock (a read; the
+        only concurrent mutator, auto_seed_case, only appends → at worst a
+        missed/extra id, benign, next run catches it). Deletion is delegated to
+        the existing ``hard_delete_cases`` which does its OWN _data_lock +
+        disk-truth _load + removed_ids (defeating the merge-preserve re-append).
+        Reclaim MUST NOT hold _data_lock across that call — _data_lock is a plain
+        Lock and hard_delete_cases re-acquires it → self-deadlock (Gate-1,
+        run_9f5944b4). Returns the ids actually deleted.
+        """
+        cutoff = (time.time() if now is None else now) - ttl_days * 86400.0
+        # Re-validate the predicate against DISK TRUTH, not a possibly-stale
+        # in-memory snapshot: this is a long-lived daemon, and a skeleton may be
+        # refined out-of-band (a direct golden_set.private.yaml edit, or a second
+        # process's update_case) after this process last loaded. Without it, the
+        # stale in-memory copy would still show the placeholder markers and we
+        # would collect an id whose on-disk case is already refined — then
+        # hard_delete_cases (which only re-checks id PRESENCE, not the predicate)
+        # would delete the freshly-refined real case. Refreshing first shrinks the
+        # TOCTOU window to the same read-modify-write span hard_delete_cases's own
+        # flock already serializes. (Gate-2 security MED, run_9f5944b4.)
+        #
+        # Reload ONLY the golden set, NOT EvalHistory: reclaim scans self._cases,
+        # never history — and this runs in context_health_hook._light_refresh EVERY
+        # session, so a full self.reload() would re-parse the unbounded multi-MB
+        # EvalHistory corpus it never reads, every cycle (meta-review MED, same run).
+        # _load_golden_set under the lock gives identical predicate freshness at a
+        # fraction of the cost.
+        with self._data_lock:
+            self._load_golden_set()
+        stale: list[str] = []
+        for case in list(self._cases):  # snapshot ref; lock-free read scan
+            if "auto_seed_skeleton" not in (case.get("tags") or []):
+                continue
+            if not self._skeleton_is_unrefined(case):
+                continue  # human-refined → immune
+            try:
+                epoch = float(str(case.get("source", "")).split(":")[0])
+            except (ValueError, TypeError):
+                continue  # undecodable epoch → fail-safe keep
+            if epoch < cutoff:
+                cid = case.get("id")
+                if cid:
+                    stale.append(cid)
+        if not stale:
+            return []
+        result = self.hard_delete_cases(stale)  # own lock + disk-truth reload
+        deleted = result.get("deleted", [])
+        if deleted:
+            logger.info("eval_service: reclaimed %d stale auto_seed skeleton(s) "
+                        "(>%dd unrefined): %s", len(deleted), ttl_days, ", ".join(deleted))
+        return deleted
 
     def get_affected_cases(self, changed_files: list[str]) -> list[dict]:
         """Return cases whose affected_by intersects with changed files.

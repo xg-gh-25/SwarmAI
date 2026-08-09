@@ -287,6 +287,20 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: proposal TTL skipped: %s", exc)
 
+        # ── TTL golden-set skeletons: reclaim stale unrefined auto_seed drafts ──
+        # The Darwinian end of auto_seed_case's lifecycle (run_9f5944b4). Mirrors
+        # _expire_stale_proposals: an unrefined skeleton nobody refines accumulates
+        # forever. reclaim_stale_skeletons is fail-safe (keeps on undecodable age)
+        # and delegates deletion to hard_delete_cases; this call never blocks.
+        try:
+            from core.eval_service import get_eval_service
+            reclaimed = get_eval_service().reclaim_stale_skeletons()
+            if reclaimed:
+                logger.info("context_health: reclaimed %d stale golden skeleton(s)",
+                            len(reclaimed))
+        except Exception as exc:
+            logger.debug("context_health: skeleton reclaim skipped: %s", exc)
+
         # KNOWLEDGE.md text index refresh is git-gated (only reads git-tracked files)
         current_rev = self._git_rev(ws_path)
         if not (current_rev and current_rev == self._last_refresh_rev):
