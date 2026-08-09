@@ -2380,6 +2380,16 @@ class ChannelGateway:
         go to ``channel_files/<agent_id>/`` (legacy behavior).
 
         Returns the absolute file path on success, or None on failure.
+
+        OFF-LOOP (run_a1f4c2d8): every filesystem step (mkdir, the collision
+        ``exists()`` probe loop, and the ``write_bytes`` of the whole attachment)
+        runs inside the sync ``_stage()`` helper, dispatched via
+        ``asyncio.to_thread``. Previously they executed DIRECTLY in this
+        ``async def`` body, so a large Slack attachment blocked the event loop —
+        stalling every other request and every chat tab's SSE stream for the
+        duration of the write. The sanctioned shape is exactly this: a plain sync
+        helper does the blocking work, the async caller awaits it in a thread
+        (see tests/test_router_async_blocking.py, which now also scans channels/).
         """
         try:
             ws_root = Path(initialization_manager.get_cached_workspace_path())
@@ -2388,21 +2398,30 @@ class ChannelGateway:
                 base_dir = ws_root / "channel_files" / sender_identity.external_id
             else:
                 base_dir = ws_root / "channel_files" / agent_id
-            base_dir.mkdir(parents=True, exist_ok=True)
-
             safe_name = _sanitize_filename(file_name)
-            target = base_dir / safe_name
 
-            # Handle filename collisions with a counter suffix
-            if target.exists():
-                stem = target.stem
-                suffix = target.suffix
-                counter = 1
-                while target.exists():
-                    target = base_dir / f"{stem}_{counter}{suffix}"
-                    counter += 1
+            def _stage() -> Path:
+                """All blocking filesystem work, off the event loop.
 
-            target.write_bytes(file_bytes)
+                Kept as ONE helper (not three awaits) so the collision probe and
+                the write stay in the same thread hop — splitting them would widen
+                the TOCTOU window between "this name is free" and "claim it", and
+                cost 3 context switches instead of 1.
+                """
+                base_dir.mkdir(parents=True, exist_ok=True)
+                target = base_dir / safe_name
+                # Handle filename collisions with a counter suffix
+                if target.exists():
+                    stem = target.stem
+                    suffix = target.suffix
+                    counter = 1
+                    while target.exists():
+                        target = base_dir / f"{stem}_{counter}{suffix}"
+                        counter += 1
+                target.write_bytes(file_bytes)
+                return target
+
+            target = await asyncio.to_thread(_stage)
             logger.info("Staged file '%s' to %s", file_name, target)
             return str(target)
         except Exception:
