@@ -35,11 +35,29 @@ logger = logging.getLogger(__name__)
 # dimension. Kept as a frozenset for validation, not re-derived from eval_runner
 # to avoid a scripts<-core import cycle (the same reason golden_case_validator
 # hand-mirrors its evaluator set).
-_VALID_DIMENSIONS = frozenset(
-    {"factual", "capability", "compliance", "judgment", "utility", "recovery",
-     # golden_set.yaml uses the longer aliases for some — accept both
-     "factual_accuracy", "judgment_quality", "context_utility"}
-)
+# The judge PROMPT teaches SHORTHAND dimension tokens (factual/judgment/utility) —
+# short words score better with the LLM. But the golden-set CANONICAL dimensions are
+# the long forms. This map NORMALIZES the judge's emission → canonical so the scorer
+# ONLY EVER returns a canonical dimension. Without normalization, session_harvest
+# writes the shorthand verbatim into golden_set drafts and they leak into /health as
+# an off-canonical bucket (run_2b73a16e / C044: the 11 GS_HARVEST_* 'judgment' cases).
+# Every canonical value maps to ITSELF (identity) so an already-canonical emission and
+# the no-divergence dims (capability/compliance/recovery) pass through unchanged and
+# never fall into the unknown→capability default. An out-of-vocab token → 'capability'
+# (fail-closed: never trust an unrecognized judge dimension).
+_CANONICAL_DIMENSION = {
+    # shorthand → canonical
+    "factual": "factual_accuracy",
+    "judgment": "judgment_quality",
+    "utility": "context_utility",
+    # canonical → itself (identity — includes the no-shorthand-divergence dims)
+    "factual_accuracy": "factual_accuracy",
+    "judgment_quality": "judgment_quality",
+    "context_utility": "context_utility",
+    "capability": "capability",
+    "compliance": "compliance",
+    "recovery": "recovery",
+}
 
 # JudgeFn: takes a fully-rendered judge prompt (str), returns the model's raw
 # text (str). This is the ONLY external boundary — everything else is pure.
@@ -148,9 +166,9 @@ def score_session(
         return {"status": "error", "notes": "judge output missing/invalid scores",
                 "goal_score": None}
 
-    dim = obj.get("dimension", "capability")
-    if dim not in _VALID_DIMENSIONS:
-        dim = "capability"  # default; never trust an out-of-vocab dimension
+    # Normalize the judge's (shorthand) dimension → canonical; unknown → capability
+    # (fail-closed). The scorer NEVER emits a non-canonical dimension (run_2b73a16e).
+    dim = _CANONICAL_DIMENSION.get(obj.get("dimension", "capability"), "capability")
 
     return {
         "goal_score": goal,
