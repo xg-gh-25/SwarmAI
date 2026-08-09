@@ -51,6 +51,11 @@ export interface DetailHealth {
   /** reclaimable-noise: entries the decay engine would strip. reclaimable>0 → an
    *  owner action (run reclaim). Computed live. */
   noise: { reclaimable: number; rate: number };
+  /** entries in a decaying (dormant/archived) state — a maintenance signal. Emitted
+   *  on EVERY health dict (gallery + detail) by _brain_health_base, so it's present
+   *  on detail health at runtime; declared here so the Overview §② needs-you can read
+   *  it (type must match wire reality — same contract as BrainHealth.sinking). */
+  sinking: number;
   /** doc → section → trust-level string, as stored (no rollup). null = no
    *  scheduled score computed yet. */
   trust: Record<string, Record<string, string | null>> | null;

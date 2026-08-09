@@ -181,6 +181,7 @@ const DETAIL: BrainDetail = {
   hasCodeIntel: true,
   health: {
     noise: { reclaimable: 3, rate: 0.12 },
+    sinking: 0,
     trust: {
       'TECH.md': { Architecture: 'full', Runtime: 'moderate' },
       'PRODUCT.md': { Vision: 'high', Risks: 'low' },
@@ -444,8 +445,10 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
   });
 
   it('AC3: no work → Need-You block still present with a muted "Nothing queued" line', async () => {
+    // §② now also surfaces reclaimable + sinking (run_115aa182), so "no work" means
+    // ALL of pending/uncommitted/reclaimable/sinking are zero.
     await openOverview(
-      { health: { ...DETAIL.health!, escalationPending: 0 } },
+      { health: { ...DETAIL.health!, escalationPending: 0, sinking: 0, noise: { reclaimable: 0, rate: 0 } } },
       [{ ...GALLERY[0], health: { ...GALLERY[0].health, pending: 0, uncommitted: false } }, GALLERY[1]],
     );
     expect(screen.getByTestId('brainhub-needyou')).toBeTruthy();       // always present
@@ -851,12 +854,15 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
 
-  it('renders the redesigned body: verdict + full ontology + needs-you + facts', async () => {
+  it('renders the redesigned body: verdict + full ontology + facts, but NOT needs-you (moved to §②)', async () => {
+    // run_115aa182: the §① strip is ontologyOnly — its own needs-you block is
+    // suppressed so it doesn't duplicate the dedicated §② NeedYouBlock. Verdict dot
+    // (header) + ontology + Trust/Activity facts stay; ddd-needs-you is GONE here.
     await openBrain();
     await waitFor(() => expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy());
     const strip = screen.getByTestId('brainhub-healthstrip');
     expect(strip.querySelector('[data-testid="ddd-verdict"]')).toBeTruthy();
-    expect(strip.querySelector('[data-testid="ddd-needs-you"]')).toBeTruthy();
+    expect(strip.querySelector('[data-testid="ddd-needs-you"]')).toBeNull();  // moved to §②
     expect(strip.querySelector('[data-testid="ddd-fact-trust"]')).toBeTruthy();
     expect(strip.querySelector('[data-testid="ddd-fact-activity"]')).toBeTruthy();
   });
@@ -870,12 +876,28 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     expect(v?.textContent?.toLowerCase()).not.toContain('healthy');
   });
 
-  it('needs-you lists the reclaimable + escalation actionables', async () => {
+  it('§② NeedYouBlock is the SINGLE needs-you owner: proposals + reclaimable + sinking', async () => {
+    // run_115aa182: needs-you moved from §① FullBody to the dedicated §② block, which
+    // now surfaces reclaimable + sinking too (no longer lost). fixture: escalationPending=2,
+    // noise.reclaimable=3, sinking=0 → review row (2) + reclaimable row (3), no sinking row.
     await openBrain();
-    const needs = await screen.findByTestId('ddd-needs-you');
-    // fixture: escalationPending=2, noise.reclaimable=3
-    expect(needs.textContent).toMatch(/2|3/);
-    expect(needs.textContent?.toLowerCase()).toMatch(/review|reclaim/);
+    const needs = await screen.findByTestId('brainhub-needyou');
+    expect(needs.querySelector('[data-testid="needyou-review"]')).toBeTruthy();       // 2 proposals
+    expect(needs.querySelector('[data-testid="needyou-reclaimable"]')).toBeTruthy();  // 3 reclaimable
+    expect(needs.querySelector('[data-testid="needyou-sinking"]')).toBeNull();        // sinking=0 → no row
+    expect(needs.textContent).toMatch(/3/);
+    expect(needs.textContent?.toLowerCase()).toMatch(/reclaim/);
+  });
+
+  it('NO duplicate needs-you: the Overview has EXACTLY ONE needs-you block (run_115aa182)', async () => {
+    // The user-reported bug: §① healthstrip AND §② both rendered a needs-you block.
+    // Fix = §① is ontologyOnly → only §② (brainhub-needyou) remains.
+    await openBrain();
+    await waitFor(() => expect(screen.getByTestId('brainhub-overview')).toBeTruthy());
+    // The FullBody needs-you (ddd-needs-you) must NOT appear anywhere in the Overview.
+    expect(screen.queryAllByTestId('ddd-needs-you')).toHaveLength(0);
+    // Exactly one dedicated needs-you block (§②).
+    expect(screen.queryAllByTestId('brainhub-needyou')).toHaveLength(1);
   });
 
   it('trust fact is a DISTRIBUTION (% ≥ high), NOT a collapsed rollup verdict word', async () => {

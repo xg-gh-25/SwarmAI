@@ -449,8 +449,11 @@ function BrainOverview(
       <div data-testid="brainhub-ontology">
         {detail.health?.noise ? (
           <div data-testid="brainhub-healthstrip">
+            {/* ontologyOnly (run_115aa182): the §② NeedYouBlock below OWNS needs-you
+                (proposals/reclaimable/sinking); this §① strip is the ontology + facts
+                only, so the two don't render a duplicate "Needs you" block. */}
             <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
-              typeCounts={aggregateTypeCounts(detail.sections)} />
+              typeCounts={aggregateTypeCounts(detail.sections)} ontologyOnly />
           </div>
         ) : ontologyCounts ? (
           // No scored health (old daemon / not-yet-computed) but we DO have the
@@ -467,9 +470,17 @@ function BrainOverview(
         )}
       </div>
 
-      {/* §② Need-You — FIXED-position block, never removed. Content varies; the
-          block (and its slot) is always present so its position is a stable anchor. */}
-      <NeedYouBlock pending={pending} uncommitted={uncommitted} onGoToReview={onGoToReview} />
+      {/* §② Need-You — FIXED-position block, never removed. The SINGLE needs-you
+          owner (run_115aa182): besides proposals + uncommitted it also surfaces
+          reclaimable + sinking (previously only shown by the §① FullBody needs-you,
+          which is now suppressed via ontologyOnly to kill the duplicate block). */}
+      <NeedYouBlock
+        pending={pending}
+        uncommitted={uncommitted}
+        reclaimable={detail.health?.noise?.reclaimable ?? 0}
+        sinking={detail.health?.sinking ?? 0}
+        onGoToReview={onGoToReview}
+      />
 
       {/* §③ 4 core-doc cards + group header with [Weekly Report]. */}
       <CoreDocCards
@@ -485,12 +496,16 @@ function BrainOverview(
   );
 }
 
-/** §② the fixed-position Need-You block. */
+/** §② the fixed-position Need-You block — the SINGLE needs-you owner for the
+ *  Overview (run_115aa182): proposals (interactive → Review) + uncommitted +
+ *  reclaimable + sinking. reclaimable/sinking moved here from the §① FullBody
+ *  needs-you (now suppressed) so they're not lost when the duplicate is removed. */
 function NeedYouBlock(
-  { pending, uncommitted, onGoToReview }:
-  { pending: number; uncommitted?: boolean; onGoToReview?: () => void },
+  { pending, uncommitted, reclaimable = 0, sinking = 0, onGoToReview }:
+  { pending: number; uncommitted?: boolean; reclaimable?: number; sinking?: number;
+    onGoToReview?: () => void },
 ) {
-  const hasWork = pending > 0 || !!uncommitted;
+  const hasWork = pending > 0 || !!uncommitted || reclaimable > 0 || sinking > 0;
   return (
     <div
       data-testid="brainhub-needyou"
@@ -520,6 +535,18 @@ function NeedYouBlock(
             <div data-testid="needyou-uncommitted" className="flex items-center gap-2 text-[11px] px-2 py-1">
               <span className="material-symbols-outlined text-[14px] text-[#db8c3a]">pending_actions</span>
               <span className="text-[var(--color-text-muted)]">uncommitted changes in this brain's subtree</span>
+            </div>
+          )}
+          {reclaimable > 0 && (
+            <div data-testid="needyou-reclaimable" className="flex items-center gap-2 text-[11px] px-2 py-1">
+              <span className="font-semibold text-[#f0a500] min-w-[22px]">{reclaimable}</span>
+              <span className="text-[var(--color-text-muted)]">reclaimable (run reclaim)</span>
+            </div>
+          )}
+          {sinking > 0 && (
+            <div data-testid="needyou-sinking" className="flex items-center gap-2 text-[11px] px-2 py-1">
+              <span className="font-semibold text-[#f0a500] min-w-[22px]">{sinking}</span>
+              <span className="text-[var(--color-text-muted)]">entr{sinking === 1 ? 'y' : 'ies'} sinking (decaying)</span>
             </div>
           )}
         </div>

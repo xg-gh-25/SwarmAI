@@ -23,6 +23,7 @@ const CHEAP: BrainHealth = { sinking: 2, pending: 1, uncommitted: true, lastChan
 const CHEAP_CLEAN: BrainHealth = { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '5d ago' };
 const METRICS: DetailHealth = {
   noise: { reclaimable: 5, rate: 0.1 },
+  sinking: 0,
   trust: { 'PRODUCT.md': { identity: 'high', knowledge: 'moderate' } },
   escalationPending: 3,
   recall: { value: null, experimental: true },
@@ -159,6 +160,19 @@ describe('DddCard — full: FULL 3-layer × 7-type ontology (hero visual)', () =
     expect(screen.queryByTestId('ddd-ontology')).toBeNull();
     expect(screen.queryByTestId('ddd-metrics-skeleton')).toBeNull();
     expect(screen.getByTestId('dddcard-S')).toBeTruthy();
+  });
+
+  it('ontologyOnly suppresses the needs-you block but KEEPS ontology + facts (run_115aa182)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} ontologyOnly />);
+    expect(screen.queryByTestId('ddd-needs-you')).toBeNull();       // suppressed (§② owns it)
+    expect(screen.getByTestId('ddd-ontology')).toBeTruthy();        // ontology stays
+    expect(screen.getByTestId('ddd-fact-trust')).toBeTruthy();      // facts stay
+    expect(screen.getByTestId('ddd-fact-activity')).toBeTruthy();
+  });
+
+  it('ontologyOnly DEFAULTS off → Gallery hero unchanged (needs-you still shown)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} />);
+    expect(screen.getByTestId('ddd-needs-you')).toBeTruthy();       // default: shown (gallery hero)
   });
 });
 

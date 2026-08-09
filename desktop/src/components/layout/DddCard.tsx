@@ -95,6 +95,10 @@ interface FullProps extends CommonProps {
    *  already inside the brain, so navigating to itself would be wrong. Presence of
    *  onOpen is the discriminator: button vs plain div. */
   onOpen?: (name: string) => void;
+  /** ontologyOnly (run_115aa182): suppress FullBody's needs-you sub-block (keep
+   *  ontology + facts). Set by the Brain Hub OVERVIEW §① where a dedicated §②
+   *  NeedYouBlock owns needs-you; DEFAULT false keeps the Gallery hero's verdict. */
+  ontologyOnly?: boolean;
 }
 type DddCardProps = CompactProps | FullProps;
 
@@ -214,7 +218,8 @@ export function DddCard(props: DddCardProps) {
   const body = (
     <>
       <CardHeader name={name} kind={kind} verdict={pending != null ? <VerdictDot pending={pending} /> : undefined} />
-      <FullBody metrics={props.metrics} health={props.health} typeCounts={props.typeCounts} />
+      <FullBody metrics={props.metrics} health={props.health} typeCounts={props.typeCounts}
+        ontologyOnly={props.ontologyOnly} />
     </>
   );
   // AC6: clickable hero when onOpen is supplied (gallery), plain div otherwise
@@ -249,8 +254,14 @@ export function DddCard(props: DddCardProps) {
  * `metrics.noise`. With NEITHER typeCounts NOR metrics → render nothing (card survives).
  */
 function FullBody(
-  { metrics, health, typeCounts }:
-  { metrics?: DetailHealth; health?: BrainHealth; typeCounts?: Record<EntryType, number> },
+  { metrics, health, typeCounts, ontologyOnly = false }:
+  { metrics?: DetailHealth; health?: BrainHealth; typeCounts?: Record<EntryType, number>;
+    // ontologyOnly (run_115aa182): suppress the needs-you sub-block, keeping ontology +
+    // Trust/Activity facts. Used by the Brain Hub OVERVIEW §①, where a dedicated §②
+    // NeedYouBlock already owns needs-you (proposals/reclaimable/sinking) — rendering
+    // FullBody's own needs-you there duplicated it. DEFAULT false so the Gallery hero
+    // (no separate §②) keeps its needs-you verdict — its FullBody IS the only signal. */
+    ontologyOnly?: boolean },
 ) {
   const hasMetrics = !!(metrics && metrics.noise);
   const hasOntology = !!typeCounts;
@@ -285,19 +296,21 @@ function FullBody(
       {/* ── Ontology — the hero visual: 3 layers × 7 types with counts ── */}
       {typeCounts && <Ontology typeCounts={typeCounts} />}
 
-      {/* ── Needs you ── */}
-      <div data-testid="ddd-needs-you"
-        className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[#0f1a10] border-[#1f3d24]'}`}>
-        <div className={`text-[9px] uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[#f0a500]' : 'text-[#3fb950]'}`}>
-          {needs.length ? 'Needs you' : '✓ Nothing needs you'}
-        </div>
-        {needs.map((it) => (
-          <div key={it.label} className="flex items-center gap-2 text-[11px] py-0.5">
-            <span className="font-semibold text-[#f0a500] min-w-[28px]">{it.n}</span>
-            <span className="text-[var(--color-text-muted)]">{it.label}</span>
+      {/* ── Needs you ── (suppressed when ontologyOnly: a dedicated §② owns it) */}
+      {!ontologyOnly && (
+        <div data-testid="ddd-needs-you"
+          className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[#0f1a10] border-[#1f3d24]'}`}>
+          <div className={`text-[9px] uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[#f0a500]' : 'text-[#3fb950]'}`}>
+            {needs.length ? 'Needs you' : '✓ Nothing needs you'}
           </div>
-        ))}
-      </div>
+          {needs.map((it) => (
+            <div key={it.label} className="flex items-center gap-2 text-[11px] py-0.5">
+              <span className="font-semibold text-[#f0a500] min-w-[28px]">{it.n}</span>
+              <span className="text-[var(--color-text-muted)]">{it.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Two fact lines: trust distribution + activity ── */}
       <div className="flex flex-col gap-1 text-[11px]">
