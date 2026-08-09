@@ -468,16 +468,34 @@ function RunDetailDrawer({
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
         {loading && <div className="text-xs text-[var(--color-text-faint)]">Loading…</div>}
         {!loading && !detail && <div className="text-xs text-[var(--color-text-faint)]">Run detail not found.</div>}
-        {detail && (
+        {detail && (() => {
+          // Conclusion-first header (run_403a5864): the STATUS is the verdict — promote
+          // it to a colored pill (reuse statusPill, the SAME one the list row uses, so
+          // pill + list never disagree). The requirement is the prominent subject; the
+          // rest (profile · cycle · finish-time) is demoted secondary meta. Timestamp is
+          // FINISH (updatedAt, fallback createdAt) to match the list row for this run —
+          // was createdAt/START, a list-vs-drawer inconsistency.
+          const pill = statusPill(detail.status, detailPauseKind(detail.status, detail.checkpointReason));
+          return (
           <>
             <div>
-              <div className="text-sm text-[var(--color-text)]">{detail.requirement}</div>
-              <div className="text-[11px] font-mono text-[var(--color-text-faint)] mt-0.5">
-                {detail.project} · {detail.profile} · {detail.status} · {fmtCycle(detail.cycleTimeMin)} · {fmtTs(detail.createdAt)}
+              <div className="flex items-start gap-2">
+                <div className="text-sm text-[var(--color-text)] flex-1 min-w-0">{detail.requirement}</div>
+                <span data-testid="pipeline-detail-status"
+                      className={`inline-flex items-center gap-1 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${pill.text}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}
+                </span>
+              </div>
+              <div className="text-[11px] font-mono text-[var(--color-text-faint)] mt-1">
+                {detail.project} · {detail.profile} · {fmtCycle(detail.cycleTimeMin)} · {fmtTs(detail.updatedAt || detail.createdAt)}
               </div>
             </div>
 
-            {detail.checkpointReason && (
+            {/* The paused ⏸ banner is only meaningful while the run is genuinely paused.
+                A delivered-then-superseded run carries a stale checkpointReason but now
+                shows a "completed" verdict pill — don't contradict it with a pause banner
+                (Gate-2 note, run_403a5864). Suppress once the effective verdict is done. */}
+            {detail.checkpointReason && detail.status !== 'completed' && detail.status !== 'complete' && (
               <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-[var(--color-text)]">
                 ⏸ {detail.checkpointReason}
               </div>
@@ -580,7 +598,8 @@ function RunDetailDrawer({
               </button>
             )}
           </>
-        )}
+          );
+        })()}
       </div>
     </OverlayDrawer>
   );

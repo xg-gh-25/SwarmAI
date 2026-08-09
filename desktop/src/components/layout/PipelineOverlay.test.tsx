@@ -160,6 +160,29 @@ describe('PipelineOverlay', () => {
     await waitFor(() => expect(screen.getByText(/Gate 1 BLOCK/)).toBeInTheDocument());
   });
 
+  it('drawer header shows a colored verdict pill + FINISH time (run_403a5864)', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
+    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
+    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
+    // (1) verdict pill: DETAIL is paused + reason 'Gate 1 BLOCK' = a decision-pause →
+    //     statusPill renders "needs you" in rose (colored, not buried mono).
+    const pill = await screen.findByTestId('pipeline-detail-status');
+    expect(pill.textContent).toMatch(/needs you/i);
+    expect(pill.className).toMatch(/rose/);
+    // (2) timestamp = FINISH (updatedAt), NOT start (createdAt) — matches the list
+    //     row for the same run. fmtTs renders in LOCAL time, so compute both stamps
+    //     the same way (TZ-agnostic) and assert finish shown / start not shown.
+    const p = (n: number) => String(n).padStart(2, '0');
+    const fmt = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+    const finish = fmt('2026-08-01T09:30:00+00:00');  // updatedAt
+    const start = fmt('2026-08-01T09:00:00+00:00');    // createdAt
+    const drawer = screen.getByTestId('pipeline-run-drawer');
+    expect(drawer.textContent).toContain(finish);
+    expect(drawer.textContent).not.toContain(start);
+  });
+
   it('Resume routes a run-resume command through onDispatch (Gate-1 #7)', async () => {
     const { onDispatch } = renderAndOpen();
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
