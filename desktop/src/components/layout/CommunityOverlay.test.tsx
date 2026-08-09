@@ -23,11 +23,18 @@ const updateSource = vi.fn();
 const deleteSource = vi.fn();
 const addMember = vi.fn();
 const deleteMember = vi.fn();
+const fetchHotTopics = vi.fn();
+// A WHOLE-SERVICE mock must list EVERY method the component calls: a missing key makes
+// the component's `useFetch(communityService.x)` receive `undefined` and throw a
+// TypeError, which surfaced as 22 unhandled errors + a NON-ZERO vitest exit while all
+// 22 assertions still reported "passed" (fetchHotTopics was added to the overlay but
+// not here). The contract test below pins this so the next added method can't repeat it.
 vi.mock('../../services/community', () => ({
   communityService: {
     fetchFeed: () => fetchFeed(),
     fetchSources: () => fetchSources(),
     fetchEngagement: () => fetchEngagement(),
+    fetchHotTopics: () => fetchHotTopics(),
     addSource: (f: unknown) => addSource(f),
     updateSource: (id: string, p: unknown) => updateSource(id, p),
     deleteSource: (id: string) => deleteSource(id),
@@ -310,5 +317,52 @@ describe('CommunityOverlay — Engagement tab', () => {
     setup();
     fireEvent.click(screen.getByTestId('community-tab-engagement'));
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MOCK-COMPLETENESS CONTRACT (run_a1f4c2d8)
+//
+// A whole-service `vi.mock` is a SNAPSHOT of an interface, and nothing kept it in sync
+// with the component. When fetchHotTopics was added to the overlay but not to the mock,
+// `useFetch(communityService.fetchHotTopics)` got `undefined`, `fetcher()` threw a
+// TypeError, and vitest reported *22 unhandled errors + a non-zero exit* while all 22
+// assertions still said "passed" — i.e. a RED file that reads GREEN in the summary. CI
+// runs `vitest run` over the whole suite, so this failed the frontend job silently.
+//
+// The source fix (try/catch in useFetch) makes such a failure degrade to the visible
+// error state instead of an unhandled rejection. THIS test closes the other half: it
+// scans the component for every `communityService.<method>` reference and asserts the
+// mock above defines each one — so the NEXT added method fails loudly and locally,
+// pointing at the missing key, instead of surfacing as unhandled-error noise.
+// ---------------------------------------------------------------------------
+describe('CommunityOverlay — mock completeness contract', () => {
+  it('the vi.mock lists every communityService method the component calls', async () => {
+    const { readFileSync } = await import('fs');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const here = dirname(fileURLToPath(import.meta.url));
+
+    const component = readFileSync(join(here, 'CommunityOverlay.tsx'), 'utf-8');
+    const self = readFileSync(join(here, 'CommunityOverlay.test.tsx'), 'utf-8');
+
+    const used = [...component.matchAll(/communityService\.([a-zA-Z0-9_]+)/g)]
+      .map((m) => m[1]);
+    expect(used.length, 'no communityService references found — the scan regex broke')
+      .toBeGreaterThan(0);
+
+    // The mock factory body: everything between `communityService: {` and its closing.
+    const factory = self.slice(self.indexOf('vi.mock('), self.indexOf('}));'));
+    const missing = [...new Set(used)].filter(
+      (m) => !new RegExp(`\\b${m}\\s*:`).test(factory),
+    );
+
+    expect(
+      missing,
+      `The component calls these communityService methods but the vi.mock above does ` +
+        `not define them. Each one is \`undefined\` at runtime → \`fetcher()\` throws ` +
+        `a TypeError → unhandled errors + non-zero vitest exit, WITHOUT any assertion ` +
+        `failing. Add them to the mock:\n  ${missing.join('\n  ')}`,
+    ).toEqual([]);
   });
 });

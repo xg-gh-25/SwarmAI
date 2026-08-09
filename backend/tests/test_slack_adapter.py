@@ -746,26 +746,62 @@ class TestUserNameResolution:
         assert result2 == "U_UNKNOWN"
         assert mock_client.users_info.call_count == 1  # still 1, not 2
 
-    def test_known_users_prepopulated(self, adapter):
-        """Known user IDs resolve to human-readable names without API calls (AC2)."""
-        from channels.adapters.slack import _KNOWN_USERS
-        # _KNOWN_USERS should exist and have at least XG's mapping
-        assert isinstance(_KNOWN_USERS, dict)
-        assert len(_KNOWN_USERS) > 0
-        # XG's ID should map to a readable name
-        assert "REDACTED_ID1" in _KNOWN_USERS
-        assert _KNOWN_USERS["REDACTED_ID1"] != "REDACTED_ID1"  # not raw ID
+    # NOTE (run_a1f4c2d8): these two tests used to assert the CONTENT of the ambient
+    # known-users map — `len(_KNOWN_USERS) > 0` and `"REDACTED_ID1" in _KNOWN_USERS`.
+    # That broke in BOTH directions once slack.py moved the mappings out of the repo
+    # (`_DEFAULT_KNOWN_USERS = {}`, loaded from ~/.swarm-ai/slack-known-users.json —
+    # a secret-hygiene change: real Slack IDs must not be committed):
+    #   - on a DEV box the config exists, so _KNOWN_USERS holds REAL ids and the
+    #     redacted placeholder is absent  → RED;
+    #   - on CI there is no config at all, so _KNOWN_USERS == {} and even
+    #     `len(...) > 0` fails                                        → RED.
+    # A unit test must not depend on machine-local config. Both now INJECT a fixture
+    # map and assert the MECHANISM (a pre-populated map is adopted as cache and
+    # short-circuits the API), which is the actual AC2 contract — not the contents of
+    # whoever's laptop is running pytest.
 
-    def test_known_user_resolved_without_api(self, adapter):
-        """Known users resolve from cache, no Slack API call needed."""
-        from channels.adapters.slack import _KNOWN_USERS
-        # Pre-populate cache from known users (done in __init__)
-        adapter._user_cache.update(_KNOWN_USERS)
-        adapter._slack_client = MagicMock()
+    @staticmethod
+    def _adapter_with_known_users(slack_config, on_message, known: dict[str, str]):
+        """Build an adapter whose module-level known-users map is `known`.
 
-        name = adapter._get_user_name("REDACTED_ID1")
-        assert name != "REDACTED_ID1"  # got a real name
-        adapter._slack_client.users_info.assert_not_called()
+        The map is read in __init__ (``self._user_cache = dict(_KNOWN_USERS)``), so the
+        patch must be active DURING construction. No background tasks are started by
+        __init__ (that happens in start()), so no teardown is needed here.
+        """
+        from channels.adapters import slack as slack_mod
+
+        with patch.object(slack_mod, "_KNOWN_USERS", known):
+            return slack_mod.SlackChannelAdapter(
+                channel_id="test-slack-ch",
+                config=slack_config,
+                on_message=on_message,
+            )
+
+    def test_known_users_prepopulated(self, slack_config, on_message):
+        """A known-users map is adopted into the adapter's cache at construction (AC2)."""
+        fixture = {"U_FIXTURE_1": "Fixture One", "U_FIXTURE_2": "Fixture Two"}
+        fresh = self._adapter_with_known_users(slack_config, on_message, fixture)
+
+        # Every fixture mapping is present in the cache the adapter starts with...
+        for uid, name in fixture.items():
+            assert fresh._user_cache.get(uid) == name
+        # ...and it is a COPY, not the module dict (a per-adapter cache mutation must
+        # never leak back into the shared module-level map).
+        assert fresh._user_cache is not fixture
+
+    def test_known_user_resolved_without_api(self, slack_config, on_message):
+        """A known user resolves from cache — zero Slack API calls (AC2)."""
+        fresh = self._adapter_with_known_users(
+            slack_config, on_message, {"U_FIXTURE_1": "Fixture One"})
+        fresh._slack_client = MagicMock()
+
+        assert fresh._get_user_name("U_FIXTURE_1") == "Fixture One"
+        fresh._slack_client.users_info.assert_not_called()
+        # Non-negotiable half: an UNKNOWN id must still go to the API, otherwise this
+        # test would pass on an adapter that never calls Slack at all.
+        fresh._slack_client.users_info.return_value = {"ok": False}
+        fresh._get_user_name("U_NOT_IN_FIXTURE")
+        fresh._slack_client.users_info.assert_called_once()
 
     def test_successful_lookup_still_cached(self, adapter):
         """Successful API resolution is still cached (existing behavior preserved)."""

@@ -102,10 +102,25 @@ function useFetch<T>(fetcher: () => Promise<T>): {
 
   const load = useCallback(async () => {
     setLoading(true);
-    // .catch → null is the ONLY error signal. An empty array [] / all-zero object
-    // is a SUCCESS (renders the empty/zero state), NOT an error — so we branch on
-    // `=== null`, never on truthiness (a falsy-looking [] must not read as error).
-    const res = await fetcher().catch(() => null);
+    // null is the ONLY error signal. An empty array [] / all-zero object is a SUCCESS
+    // (renders the empty/zero state), NOT an error — so we branch on `=== null`, never
+    // on truthiness (a falsy-looking [] must not read as error).
+    //
+    // try/catch, NOT `fetcher().catch(...)`: `.catch` only handles a REJECTED promise.
+    // A SYNCHRONOUS throw from the call itself escapes it entirely — and because load()
+    // is invoked as a floating promise in useEffect, that escape became an UNHANDLED
+    // REJECTION instead of this component's error state. Real occurrence: a new service
+    // method (fetchHotTopics) was added to this overlay but not to the test's
+    // whole-service mock, so `fetcher` was `undefined` → `fetcher()` threw a TypeError
+    // → 22 unhandled errors and a NON-ZERO vitest exit while every assertion still
+    // "passed". try/catch makes ANY failure mode — rejection, sync throw, a
+    // missing/renamed method — land in the visible error branch (run_a1f4c2d8).
+    let res: T | null = null;
+    try {
+      res = await fetcher();
+    } catch {
+      res = null;
+    }
     if (res === null) {
       setError(true);
     } else {
