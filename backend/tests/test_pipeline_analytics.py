@@ -289,3 +289,65 @@ class TestReplacedDuplicateExclusion:
         # and a traversal reason therefore never excludes:
         m = [self._m("A", "abandoned", reason="superseded_by_../../x")]
         assert pa._replaced_duplicate_ids(m, tmp_path) == set()
+
+
+class TestGarbageExclusion:
+    """run_0e68e235: garbage runs (abandoned/crash-paused, never delivered) must be
+    excluded from the weekly-intelligence corpus — the THIRD stats consumer (Gate-1 #8).
+    Delivered-but-mislabeled (abandoned WITH a completed reflect/deliver) stays and
+    counts as a real completion. Integration test on real run dirs (run.json carries
+    the stages that _is_garbage_run keys on; METRICS.json alone cannot decide)."""
+
+    def _run(self, ws: Path, rid: str, *, status, stages, profile="full",
+             abandon_reason=None, checkpoint=None, with_metrics=True):
+        run_dir = ws / "Projects" / "P" / ".artifacts" / "runs" / rid
+        run_dir.mkdir(parents=True, exist_ok=True)
+        r = {"id": rid, "run_id": rid, "project": "P", "profile": profile,
+             "status": status, "stages": stages,
+             "created_at": "2026-08-01T00:00:00+00:00",
+             "updated_at": "2026-08-01T00:00:00+00:00"}
+        if abandon_reason:
+            r["abandon_reason"] = abandon_reason
+        if checkpoint:
+            r["checkpoint"] = checkpoint
+        (run_dir / "run.json").write_text(json.dumps(r))
+        if with_metrics:
+            (run_dir / "METRICS.json").write_text(json.dumps({
+                "run_id": rid, "project": "P", "profile": profile, "status": status,
+                "total_tokens": 1000, "stages_completed": len(stages),
+                "stages_total": 9, "generated_at": "2026-08-01T00:00:00Z"}))
+        return run_dir
+
+    def test_garbage_excluded_from_corpus(self, tmp_path):
+        # a real completion
+        self._run(tmp_path, "run_done", status="completed",
+                  stages=[{"stage": "deliver", "status": "completed"}])
+        # genuine garbage: abandoned, died mid-pipeline
+        self._run(tmp_path, "run_garbage", status="abandoned", abandon_reason="crash_zombie",
+                  stages=[{"stage": "evaluate", "status": "completed"}])
+        # crash-residue paused: garbage
+        self._run(tmp_path, "run_crashpause", status="paused",
+                  checkpoint={"reason": "session_crash_auto_detected"}, stages=[])
+        out = pa.analyze_all_runs(tmp_path)
+        # runs_analyzed counts only NON-garbage (garbage never enters the corpus)
+        assert out["runs_analyzed"] == 1, out
+        rates = out["dimensions"]["profile_accuracy"]["profile_success_rates"]
+        assert rates["full"]["total_runs"] == 1
+        assert rates["full"]["completion_rate"] == pa._safe_pct(1, 1)
+
+    def test_delivered_abandoned_kept_as_completion(self, tmp_path):
+        # mislabeled-done: abandoned BUT delivered → NOT garbage, stays in corpus
+        self._run(tmp_path, "run_misdone", status="abandoned", abandon_reason="superseded_by_x",
+                  stages=[{"stage": "deliver", "status": "completed"},
+                          {"stage": "reflect", "status": "completed"}])
+        out = pa.analyze_all_runs(tmp_path)
+        assert out["runs_analyzed"] == 1, out
+        # it survives as a run in the corpus (not dropped as garbage)
+        rates = out["dimensions"]["profile_accuracy"]["profile_success_rates"]
+        assert rates.get("full", {}).get("total_runs", 0) == 1
+
+    def test_cancelled_and_failed_not_garbage(self, tmp_path):
+        self._run(tmp_path, "run_cancel", status="cancelled", stages=[])
+        self._run(tmp_path, "run_fail", status="failed", stages=[])
+        out = pa.analyze_all_runs(tmp_path)
+        assert out["runs_analyzed"] == 2, out

@@ -48,7 +48,9 @@ from schemas.pipeline_run import (
 # analytics endpoint reuses it (never a 3rd run.json parser — run_0f03fa9d split-brain).
 from scripts.artifact_cli import (
     _CRASH_ZOMBIE_REASON,
+    _effective_analytics_status,
     _extract_run_metrics,
+    _is_garbage_run,
     is_terminal_run,
 )
 
@@ -439,7 +441,15 @@ async def pipeline_analytics(
         except (ValueError, TypeError):
             return True  # undated run → keep (fail-show, never silently drop)
 
-    runs = [r for r in all_runs if _in_window(r)]
+    # Garbage exclusion (run_0e68e235): a garbage run (abandoned OR crash-residue-
+    # paused, that never delivered) must not enter ANY rollup — needs-you count,
+    # completion_rate denominator, tokens, profile_mix, trend, by-project. Filtered
+    # HERE, once, at the top so trend + overall + by_project all share the same
+    # numerator AND denominator (Gate-1 #3). The 22 delivered-but-mislabeled
+    # (abandoned/paused WITH a completed reflect/deliver) are NOT garbage — they
+    # survive this filter and are recategorized to 'completed' below via
+    # _effective_analytics_status (Gate-1 #4), so completions are never undercounted.
+    runs = [r for r in all_runs if _in_window(r) and not _is_garbage_run(r)]
 
     by_project: dict[str, list[PipelineRunSummary]] = {}
     trend_buckets: dict[str, dict] = {}
@@ -461,18 +471,29 @@ async def pipeline_analytics(
         budget = raw.get("budget") or {}
         tok_est = int(sum((budget.get("stage_estimates") or {}).values())) if isinstance(budget, dict) else 0
 
+        # Effective analytics status (run_0e68e235): garbage is already filtered out
+        # of `runs`, so any remaining abandoned/paused-with-a-completed-reflect/deliver
+        # is the "mislabeled-done" class — count it as completed (Gate-1 #4), never
+        # undercount. `eff_status` drives BOTH the completed rollups AND the summary's
+        # status field, so the analytics endpoint and the live dashboard agree (no
+        # split-brain where analytics says completed but the row still reads abandoned
+        # — Gate-1 #2).
+        eff_status = _effective_analytics_status(raw)
         # pause_kind: consume the backend's canonical classification, never re-derive.
         ckpt = raw.get("checkpoint") or {}
         reason = ckpt.get("reason") if isinstance(ckpt, dict) else None
         pause_kind = None
-        if status == "paused":
+        if eff_status == "paused":
             pause_kind = "crash_residue" if reason == _CRASH_ZOMBIE_REASON else "decision"
-        is_aborted = status == "abandoned" or pause_kind == "decision"
+        # After garbage exclusion, a surviving abandoned/decision-pause is a REAL
+        # needs-you item (genuine decision-pause). A mislabeled-done run became
+        # eff_status=='completed', so it is NOT aborted.
+        is_aborted = eff_status == "abandoned" or pause_kind == "decision"
 
         summary = PipelineRunSummary(
             id=run_id,
             requirement=(raw.get("requirement", "") or "")[:100],
-            status=status,
+            status=eff_status,
             profile=profile,
             progress=m.get("stages_completed") is not None
             and f"{m.get('stages_completed', 0)}/{m.get('stages_total', 0)}" or "",
@@ -490,7 +511,7 @@ async def pipeline_analytics(
         profile_mix[profile] = profile_mix.get(profile, 0) + 1
         overall_tokens_actual += tok_actual
         overall_tokens_est += tok_est
-        if status == "completed":
+        if eff_status == "completed":
             overall_completed += 1
         if is_aborted:
             overall_aborted += 1
@@ -503,7 +524,7 @@ async def pipeline_analytics(
             b = trend_buckets.setdefault(wk, {"runs": 0, "completed": 0, "cycles": [], "tokens": 0})
             b["runs"] += 1
             b["tokens"] += tok_actual
-            if status == "completed":
+            if eff_status == "completed":
                 b["completed"] += 1
             if isinstance(cycle, (int, float)):
                 b["cycles"].append(float(cycle))
@@ -670,7 +691,11 @@ async def pipeline_run_detail(run_id: str):
             id=run_id,
             project=project,
             requirement=raw.get("requirement", ""),
-            status=raw.get("status", ""),
+            # Effective status (run_0e68e235, Gate-2 MEDIUM): the analytics LIST shows
+            # a delivered-but-mislabeled run as 'completed' (via _effective_analytics_
+            # status). The detail drawer MUST agree, or clicking a "completed" row opens
+            # a drawer reading "abandoned" — a split-brain. Same SSOT helper as the list.
+            status=_effective_analytics_status(raw),
             profile=raw.get("profile") or "",
             cycle_time_min=m.get("duration_minutes"),
             report_md=report_md,

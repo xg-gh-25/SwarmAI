@@ -756,18 +756,94 @@ def is_terminal_run(data: dict) -> bool:
     status = data.get("status")
     if status in ("completed", "complete", "abandoned", "failed", "cancelled"):
         return True
+    # End-of-run stage markers ONLY (see _delivered_by_stages): a completed
+    # reflect/deliver means the run produced its deliverable. (Do NOT infer
+    # terminal from "all listed stages done" — a mid-pipeline pause satisfies
+    # that yet has next_stage remaining.)
+    return _delivered_by_stages(data)
+
+
+def _delivered_by_stages(data: dict) -> bool:
+    """True iff the run's STAGE ARRAY shows a completed 'reflect' or 'deliver'
+    stage — the pipeline's own end-of-run markers, appended only at the very end.
+
+    This is the ONLY non-circular way to ask "did this run actually deliver?".
+    `is_terminal_run` cannot answer it for an abandoned/paused run, because its
+    status short-circuit (line above) returns True for status=='abandoned'
+    REGARDLESS of stage progress — so a garbage-abandoned empty shell and a
+    delivered-then-mislabeled-abandoned run are indistinguishable by
+    `is_terminal_run`. Extracted (run_0e68e235) so `_is_garbage_run` and
+    `_effective_analytics_status` can key on real delivery, not the status string.
+    Behavior-preserving: `is_terminal_run` calls this after its status
+    short-circuit, so all its consumers see identical results.
+    """
+    if not isinstance(data, dict):
+        return False
     stages = data.get("stages") or []
     if not isinstance(stages, list) or not stages:
         return False
-    # End-of-run stage markers ONLY: a completed reflect/deliver means the run
-    # produced its deliverable. (Do NOT infer terminal from "all listed stages
-    # done" — a mid-pipeline pause satisfies that yet has next_stage remaining.)
     return any(
         isinstance(s, dict)
         and s.get("stage") in ("reflect", "deliver")
         and s.get("status") == "completed"
         for s in stages
     )
+
+
+def _is_garbage_run(raw: dict) -> bool:
+    """Single source of truth: is this run GARBAGE that must be excluded from ALL
+    pipeline analytics/stats (needs-you, completion_rate denominator, tokens,
+    trend, profile_mix, by-project) AND is eligible for retention purge?
+
+    Garbage = a run that NEVER delivered a result AND is in a dead/dead-residue
+    state the user can take no action on:
+      - status == 'abandoned' (reaper death verdict: crash_zombie /
+        crash_residue_empty_shell / superseded_by_* / orphaned_no_resume), OR
+      - status == 'paused' with the crash auto-checkpoint reason
+        (_CRASH_ZOMBIE_REASON) — a dead session's residue, not a real decision-pause
+    ...MINUS any run that actually delivered (`_delivered_by_stages`): the
+    "mislabeled-done" class (measured 22/182 abandoned) reached a completed
+    reflect/deliver stage and was only stamped abandoned/superseded AFTERWARD.
+    Those are real completions — excluding them would UNDERCOUNT delivery
+    (Gate-1 skeptic catch). They are recategorized to 'completed' by
+    `_effective_analytics_status`, never dropped.
+
+    NOT garbage: completed/complete, cancelled (a real user decision), failed
+    (a real signal), running, and genuine (non-crash) decision-pauses. XG
+    directive (run_0e68e235): only abandoned + crash-residue-paused are garbage.
+    """
+    if not isinstance(raw, dict):
+        return False
+    status = raw.get("status")
+    is_crash_paused = (
+        status == "paused"
+        and (raw.get("checkpoint") or {}).get("reason") == _CRASH_ZOMBIE_REASON
+    )
+    if status != "abandoned" and not is_crash_paused:
+        return False
+    # A run that reached deliver/reflect delivered — never garbage.
+    return not _delivered_by_stages(raw)
+
+
+def _effective_analytics_status(raw: dict) -> str:
+    """The status a run should be COUNTED AS in analytics rollups — corrects the
+    mislabeled-done class. A run whose stages show a completed reflect/deliver has
+    DELIVERED, regardless of a status string later stamped 'abandoned'/'paused'
+    (superseded/crash-after-the-fact). Count those as 'completed' so
+    completion_rate does not undercount (Gate-1 #4: covers BOTH abandoned+delivered
+    AND paused+delivered). Everything else passes through unchanged.
+
+    Consumers must still drop `_is_garbage_run` rows FIRST; this only decides how a
+    KEPT run is bucketed (the 22 delivered-abandoned survive the garbage filter via
+    _delivered_by_stages and land here → completed)."""
+    if not isinstance(raw, dict):
+        return ""
+    status = raw.get("status") or ""
+    if status in ("completed", "complete"):
+        return "completed"
+    if status in ("abandoned", "paused") and _delivered_by_stages(raw):
+        return "completed"
+    return status
 
 
 def _abandon_verdict(data: dict, threshold) -> tuple[bool, str | None]:
@@ -934,6 +1010,166 @@ def cmd_cleanup_orphans(args, reg: ArtifactRegistry) -> None:
     threshold = getattr(args, "threshold", None)
     threshold = float(threshold) if threshold is not None else 2.0
     result = cleanup_orphans(threshold_hours=threshold)
+    print(json.dumps(result))
+
+
+def _trash_dir(path: Path) -> None:
+    """Delete a run directory RECOVERABLY. Prefers macOS `trash` (goes to Trash,
+    undoable — STEERING safety: trash > rm); falls back to shutil.rmtree only if
+    the trash tool is absent/fails (e.g. CI, tmpfs). Raises on total failure so the
+    caller counts it as not-purged."""
+    import shutil
+    import subprocess
+    trash_bin = shutil.which("trash")
+    if trash_bin:
+        try:
+            r = subprocess.run([trash_bin, str(path)], capture_output=True, timeout=30)
+            if r.returncode == 0:
+                return
+        except (OSError, subprocess.SubprocessError):
+            pass  # fall through to rmtree
+    shutil.rmtree(path)
+
+
+def _is_git_tracked(path: Path, repo_root: Path) -> bool:
+    """True iff `path` is git-TRACKED in the repo at `repo_root`. Fail-SAFE: if git
+    is unavailable / repo_root isn't a repo / the command errors, returns False
+    (treat as untracked) so a non-git workspace still purges normally. The guard's
+    JOB is to STOP a delete of a tracked file (Gate-2 CRITICAL run_0e68e235) — a
+    false 'untracked' in a non-repo can't cause a git mutation (there's no git)."""
+    import subprocess
+    try:
+        rel = path.relative_to(repo_root)
+    except ValueError:
+        return False
+    try:
+        r = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(rel)],
+            cwd=str(repo_root), capture_output=True, timeout=15,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def purge_garbage_runs(retention_days: float = 30.0, apply: bool = False,
+                       include_tracked: bool = False) -> dict:
+    """Retention purge: recoverably TRASH garbage run directories older than
+    ``retention_days`` across ALL projects (run_0e68e235). SSOT for both the
+    one-time cleanup script and the scheduled retention job — one definition, no
+    drift (R25).
+
+    Garbage = `_is_garbage_run` (abandoned OR crash-residue-paused, that never
+    delivered). NEVER purges completed / cancelled / failed / running /
+    genuine-decision-pause / delivered-but-mislabeled (they are not garbage) — nor
+    FRESH garbage newer than the retention window (a just-crashed run may still be
+    diagnosable). Age is measured on `abandoned_at` || `updated_at` || `created_at`.
+
+    Dry-run is the DEFAULT (apply=False): reports `would_purge` and touches nothing.
+    apply=True trashes the dirs (recoverable) and reports `purged`.
+
+    🔒 GIT-TRACKED GUARD (Gate-2 CRITICAL, run_0e68e235): a run dir that is git-TRACKED
+    is SKIPPED by default (counted in `skipped_tracked`). In the real workspace the
+    SwarmAI project's `.artifacts/runs/*` ARE tracked (origin = the PUBLIC repo) — an
+    earlier assumption that they were gitignored was WRONG (verified via `git ls-files`,
+    not `git check-ignore`). Silently `git rm`-ing tracked runs from an unattended job
+    would mutate the public working tree with no commit/guard. So the scheduled job
+    only trashes UNTRACKED local garbage; deleting tracked garbage is a deliberate,
+    user-owned decision (STEERING #5) gated behind `include_tracked=True`. Fail-safe:
+    a non-git workspace has nothing tracked → everything purges normally.
+
+    Ordering note (Gate-1 #6): this DELETES dirs that cleanup_orphans/proactive_
+    intelligence earlier MARKED abandoned. The two never conflict — mark then delete,
+    same direction; and _load_pipeline_runs tolerates a mid-scan-deleted dir
+    (its read is wrapped in except OSError). Purge runs on a schedule, marking on
+    session-refresh — different triggers, no race.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    ws = _get_workspace()
+    projects_dir = ws / "Projects"
+    if not projects_dir.exists():
+        return {"would_purge": 0, "purged": 0, "projects_scanned": 0, "errors": 0,
+                "skipped_tracked": 0}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    would_purge = 0
+    purged = 0
+    errors = 0
+    skipped_tracked = 0
+    projects_scanned = 0
+
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        runs_dir = project_dir / ".artifacts" / "runs"
+        if not runs_dir.exists():
+            continue
+        projects_scanned += 1
+
+        for rd in list(runs_dir.iterdir()):
+            if not rd.is_dir():
+                continue
+            run_file = rd / "run.json"
+            if not run_file.exists():
+                continue
+            try:
+                data = json.loads(run_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if not _is_garbage_run(data):
+                continue
+
+            # Age gate: only purge garbage OLDER than the retention window.
+            ts = data.get("abandoned_at") or data.get("updated_at") or data.get("created_at") or ""
+            try:
+                when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                # Undated garbage: treat as OLD (it is dead residue with no usable
+                # timestamp) — safe to purge, it can never be a fresh diagnosable run.
+                when = cutoff - timedelta(days=1)
+            if when >= cutoff:
+                continue  # fresh garbage — keep for now
+
+            # 🔒 GIT-TRACKED GUARD (Gate-2 CRITICAL): never silently delete a tracked
+            # run — that would `git rm` from the public working tree unattended. Skip
+            # unless the caller explicitly opts into the deliberate git-rm path.
+            if not include_tracked and _is_git_tracked(run_file, ws):
+                skipped_tracked += 1
+                continue
+
+            would_purge += 1
+            if apply:
+                try:
+                    _trash_dir(rd)
+                    purged += 1
+                except Exception:  # noqa: BLE001 — count failure, never abort the sweep
+                    errors += 1
+
+    return {
+        "would_purge": would_purge,
+        "purged": purged,
+        "skipped_tracked": skipped_tracked,
+        "projects_scanned": projects_scanned,
+        "errors": errors,
+        "retention_days": retention_days,
+        "applied": apply,
+        "include_tracked": include_tracked,
+    }
+
+
+def cmd_purge_garbage(args, reg: ArtifactRegistry) -> None:
+    """CLI handler for purge-garbage subcommand (the scheduled retention entrypoint)."""
+    days = getattr(args, "retention_days", None)
+    days = float(days) if days is not None else 30.0
+    result = purge_garbage_runs(
+        retention_days=days,
+        apply=bool(getattr(args, "apply", False)),
+        include_tracked=bool(getattr(args, "include_tracked", False)),
+    )
     print(json.dumps(result))
 
 
@@ -4412,6 +4648,12 @@ def main() -> None:
     p_cleanup = sub.add_parser("cleanup-orphans", help="Mark stale 'running' pipeline runs as abandoned")
     p_cleanup.add_argument("--threshold", type=float, default=2.0, help="Hours threshold (default 2.0)")
 
+    # purge-garbage (run_0e68e235: retention purge of garbage run dirs, recoverable)
+    p_purge = sub.add_parser("purge-garbage", help="Recoverably trash garbage run dirs (abandoned/crash-paused, never delivered) older than N days")
+    p_purge.add_argument("--retention-days", type=float, default=30.0, help="Purge garbage older than this many days (default 30)")
+    p_purge.add_argument("--apply", action="store_true", help="Actually trash (default: dry-run, reports would_purge only)")
+    p_purge.add_argument("--include-tracked", action="store_true", help="Also purge git-TRACKED garbage (default: skip — avoids an unattended git-rm on the public repo)")
+
     # run-observe (Meta-Intelligence L1: telemetry events)
     p_observe = sub.add_parser("run-observe", help="Record pipeline telemetry event (Meta-Intelligence)")
     p_observe.add_argument("--project", required=True)
@@ -4501,6 +4743,7 @@ def main() -> None:
         "run-analytics": cmd_run_analytics,
         "run-cultivate": cmd_run_cultivate,
         "cleanup-orphans": cmd_cleanup_orphans,
+        "purge-garbage": cmd_purge_garbage,
         "run-observe": cmd_run_observe,
         "bind": cmd_bind,
         "ddd-health": cmd_ddd_health,

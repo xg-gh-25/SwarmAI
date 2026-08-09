@@ -130,9 +130,13 @@ class PipelineProjectGroup(BaseModel):
     """A project/DDD group: its health rollup + its runs."""
     project: str
     run_count: int = 0
-    completion_rate: float = Field(0.0, description="completed / total, 0-1")
+    completion_rate: float = Field(0.0, description="completed / total (garbage excluded), 0-1")
     avg_cycle_min: Optional[float] = None
-    aborted_count: int = Field(0, description="paused(decision)+abandoned needing attention")
+    # run_0e68e235: GENUINE decision-pauses only. Garbage (abandoned / crash-residue-
+    # paused, never delivered) is excluded from analytics entirely and is NOT
+    # needs-you — the user can take no action on a dead run. Delivered-but-mislabeled
+    # abandoned runs are recategorized to completed, not counted here.
+    aborted_count: int = Field(0, description="genuine decision-pauses needing your attention (garbage excluded)")
     runs: list[PipelineRunSummary] = Field(default_factory=list)
 
 

@@ -32,6 +32,12 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Garbage predicate SSOT (run_0e68e235) — sibling script in backend/scripts/. This
+# is the SAME _is_garbage_run the /analytics endpoint uses, so the weekly-intelligence
+# corpus and the live dashboard share ONE definition of garbage (no drift, R25).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from artifact_cli import _is_garbage_run  # noqa: E402
+
 # RP30 scan-recency window: aggregate only runs touched within this many days.
 # Wide (90d) so EVALUATE/BUILD's consumed intelligence stays populated; this is
 # the SCAN bound, not the weekly-report window.
@@ -126,13 +132,30 @@ def _load_all_metrics(
                     # `lifecycle_status`; every other consumer keeps reading the
                     # at-completion `status`.
                     _rf = run_dir / "run.json"
+                    _stamped = False
                     if _rf.exists():
                         try:
                             _r = json.loads(_rf.read_text(encoding="utf-8"))
                             m["lifecycle_status"] = _r.get("status")
                             m["abandon_reason"] = _r.get("abandon_reason")
+                            # GARBAGE STAMP (run_0e68e235): _is_garbage_run needs the
+                            # STAGE ARRAY (delivered-or-not), which METRICS.json does
+                            # NOT carry — so compute it HERE against the full run.json
+                            # and stamp the metric. analyze_all_runs drops garbage from
+                            # the corpus so this 3rd stats consumer stays clean too
+                            # (Gate-1 #8). Reuses the same SSOT predicate as the
+                            # analytics endpoint — no drift.
+                            m["_is_garbage"] = _is_garbage_run(_r)
+                            _stamped = True
                         except (json.JSONDecodeError, OSError):
                             pass
+                    if not _stamped:
+                        # FAIL-CLOSED (Gate-2 LOW): run.json missing/corrupt but
+                        # METRICS.json present. We can't read the stage array, so we
+                        # cannot prove delivery — treat an abandoned METRICS status as
+                        # garbage (bias toward EXCLUDING dead residue from the advisory
+                        # weekly report). A completed/failed/cancelled METRICS stays.
+                        m["_is_garbage"] = m.get("status") == "abandoned"
                     metrics.append(m)
                     continue
                 except (json.JSONDecodeError, OSError):
@@ -145,6 +168,9 @@ def _load_all_metrics(
                     r = json.loads(run_file.read_text(encoding="utf-8"))
                     m = _extract_minimal_metrics(r, project_dir.name)
                     if m:
+                        # Same garbage stamp as the METRICS path (run_0e68e235) — here
+                        # we have the full run.json, so key on it directly.
+                        m["_is_garbage"] = _is_garbage_run(r)
                         metrics.append(m)
                 except (json.JSONDecodeError, OSError):
                     pass
@@ -621,6 +647,13 @@ def analyze_goal_performance(metrics: list[dict], replaced: set | None = None) -
 def analyze_all_runs(workspace: Path, project_filter: str | None = None) -> dict:
     """Run all 6 analysis dimensions and produce pipeline intelligence."""
     metrics = _load_all_metrics(workspace, project_filter)
+    # Garbage exclusion (run_0e68e235, Gate-1 #8): drop garbage runs (abandoned/
+    # crash-paused that never delivered) from the corpus BEFORE any dimension sees
+    # it, so this 3rd stats consumer is as clean as the /analytics endpoint. The
+    # `_is_garbage` stamp was computed at load against the full run.json (METRICS.json
+    # alone lacks the stage array). Delivered-but-mislabeled runs are NOT garbage —
+    # they were never stamped, so they stay and count as real work.
+    metrics = [m for m in metrics if not m.get("_is_garbage")]
     if not metrics:
         return {"error": "No metrics data found", "runs_analyzed": 0}
 

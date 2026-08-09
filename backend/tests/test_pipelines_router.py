@@ -480,36 +480,80 @@ class TestPipelineAnalytics:
 
     def test_overall_and_by_project(self, client, workspace):
         now = datetime.now(timezone.utc).isoformat()
-        # Project A: 1 completed (with metrics), 1 abandoned
+        # Project A: 1 completed (with metrics), 1 GARBAGE-abandoned (died mid-pipeline,
+        # no reflect/deliver stage). run_0e68e235: garbage runs are EXCLUDED from ALL
+        # stats — so ProjA effectively has 1 run, 0 aborted.
         _create_run_dir(workspace, "ProjA", "run_a1", status="completed",
                         created_at=now, completed_at=now,
+                        stages=[{"stage": "deliver", "status": "completed", "token_cost": 4000}],
                         metrics={"total_tokens": 30000, "duration_minutes": 12.0,
                                  "stage_tokens": {"evaluate": 4000}, "stages_completed": 7, "stages_total": 7,
                                  "status": "completed"})
         _create_run_dir(workspace, "ProjA", "run_a2", status="abandoned", created_at=now,
+                        stages=[{"stage": "evaluate", "status": "completed"},
+                                {"stage": "build", "status": "completed"}],  # no deliver/reflect → garbage
                         metrics={"total_tokens": 5000, "duration_minutes": None,
                                  "stage_tokens": {}, "stages_completed": 2, "stages_total": 8, "status": "abandoned"})
         # Project B: 1 completed
         _create_run_dir(workspace, "ProjB", "run_b1", status="completed", profile="bugfix",
                         created_at=now, completed_at=now,
+                        stages=[{"stage": "deliver", "status": "completed", "token_cost": 3000}],
                         metrics={"total_tokens": 20000, "duration_minutes": 8.0,
                                  "stage_tokens": {"evaluate": 3000}, "stages_completed": 8, "stages_total": 8, "status": "completed"})
         resp = client.get("/api/pipelines/analytics?window=ytd")
         assert resp.status_code == 200
         d = resp.json()
         assert d["window"] == "ytd"
-        assert d["overall"]["total_runs"] == 3
+        # garbage run_a2 excluded from EVERY rollup:
+        assert d["overall"]["total_runs"] == 2  # was 3 — garbage dropped
         assert d["overall"]["completed"] == 2
-        assert d["overall"]["aborted_count"] == 1
-        assert d["overall"]["tokens_actual"] == 55000
-        assert d["overall"]["profile_mix"]["full"] == 2
+        assert d["overall"]["aborted_count"] == 0  # was 1 — abandoned-garbage is not needs-you
+        assert d["overall"]["tokens_actual"] == 50000  # was 55000 — garbage's 5000 excluded
+        assert d["overall"]["profile_mix"]["full"] == 1  # was 2 — garbage full-run dropped
         assert d["overall"]["profile_mix"]["bugfix"] == 1
-        # by-project grouping present, both projects
         projects = {g["project"]: g for g in d["by_project"]}
         assert "ProjA" in projects and "ProjB" in projects
-        assert projects["ProjA"]["run_count"] == 2
-        assert projects["ProjA"]["aborted_count"] == 1
+        assert projects["ProjA"]["run_count"] == 1  # was 2 — garbage excluded
+        assert projects["ProjA"]["aborted_count"] == 0
         assert projects["ProjB"]["completion_rate"] == 1.0
+
+    def test_garbage_excluded_but_delivered_abandoned_counts_completed(self, client, workspace):
+        """run_0e68e235: the mislabeled-done class (status=abandoned BUT a completed
+        reflect/deliver stage) is NOT garbage — it counts as COMPLETED, never dropped,
+        never needs-you. Genuine garbage (abandoned, no deliver/reflect) is fully excluded."""
+        now = datetime.now(timezone.utc).isoformat()
+        # A real completion
+        _create_run_dir(workspace, "GProj", "run_done", status="completed", created_at=now, completed_at=now,
+                        stages=[{"stage": "deliver", "status": "completed"}],
+                        metrics={"total_tokens": 10000, "duration_minutes": 5.0, "stage_tokens": {},
+                                 "stages_completed": 8, "stages_total": 8, "status": "completed"})
+        # Mislabeled-done: abandoned BUT delivered → counts as completed
+        _create_run_dir(workspace, "GProj", "run_misdone", status="abandoned",
+                        requirement="superseded after delivering", created_at=now,
+                        stages=[{"stage": "deliver", "status": "completed"},
+                                {"stage": "reflect", "status": "completed"}],
+                        metrics={"total_tokens": 8000, "duration_minutes": 6.0, "stage_tokens": {},
+                                 "stages_completed": 9, "stages_total": 9, "status": "abandoned"})
+        # Genuine garbage: abandoned, died mid-pipeline
+        _create_run_dir(workspace, "GProj", "run_garbage", status="abandoned", created_at=now,
+                        stages=[{"stage": "evaluate", "status": "completed"}],
+                        metrics={"total_tokens": 3000, "duration_minutes": None, "stage_tokens": {},
+                                 "stages_completed": 1, "stages_total": 8, "status": "abandoned"})
+        # Crash-residue paused: garbage
+        _create_run_dir(workspace, "GProj", "run_crashpause", status="paused", created_at=now,
+                        checkpoint={"reason": "session_crash_auto_detected"},
+                        stages=[],
+                        metrics={"total_tokens": 100, "duration_minutes": None, "stage_tokens": {},
+                                 "stages_completed": 0, "stages_total": 8, "status": "paused"})
+        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        # 2 garbage excluded → total 2 (done + misdone); both count completed
+        assert d["overall"]["total_runs"] == 2
+        assert d["overall"]["completed"] == 2  # done + misdone (recategorized)
+        assert d["overall"]["completion_rate"] == 1.0  # NOT undercounted by dropping misdone
+        assert d["overall"]["aborted_count"] == 0  # garbage-abandoned is not needs-you
+        assert d["overall"]["tokens_actual"] == 18000  # 10000+8000, garbage 3000+100 excluded
+        proj = {g["project"]: g for g in d["by_project"]}["GProj"]
+        assert proj["run_count"] == 2
 
     def test_est_tokens_from_budget(self, client, workspace):
         now = datetime.now(timezone.utc).isoformat()
@@ -625,28 +669,36 @@ class TestAnalyticsCapAndCache:
 
     def test_needy_runs_are_never_capped_away(self, client, workspace):
         """Gate-2 MEDIUM (run_929024a8): the overlay's pinned Needs-you region +
-        focus filter must surface EVERY needy (abandoned/paused-decision) run — so a
-        needy run OLDER than the newest-20 must still appear in the payload, else the
-        'N need you' count and the visible needy rows disagree in busy projects (the
-        exact motivating case). Completed runs stay capped at 20; needy runs don't."""
-        # 22 completed (newest) + 1 abandoned that is the OLDEST (sorts past the cap).
+        focus filter must surface EVERY needy run OLDER than the newest-20, else the
+        'N need you' count and the visible needy rows disagree in busy projects.
+        Completed runs stay capped at 20; needy runs don't.
+
+        run_0e68e235 UPDATE: 'needy' is now a GENUINE decision-pause (paused with a
+        real, non-crash reason) — NOT an abandoned run. Abandoned/crash-paused that
+        never delivered is GARBAGE (excluded from every stat, never 'needs you'). So
+        the oldest needy fixture is a paused-DECISION run, not an abandoned one."""
+        # 22 completed (newest) + 1 paused-DECISION that is the OLDEST (sorts past cap).
         for i in range(22):
             _create_run_dir(
                 workspace, "BusyProj", f"run_ok{i:02d}", status="completed",
                 created_at=f"2026-08-02T{i:02d}:00:00+00:00",
                 completed_at=f"2026-08-02T{i:02d}:30:00+00:00",
+                stages=[{"stage": "deliver", "status": "completed"}],
                 metrics={"total_tokens": 1, "duration_minutes": 1.0, "stage_tokens": {},
                          "stages_completed": 7, "stages_total": 7, "status": "completed"},
             )
+        # A genuine decision-pause (Gate BLOCK) — a REAL needs-you item, not garbage.
         _create_run_dir(
-            workspace, "BusyProj", "run_needy_old", status="abandoned",
+            workspace, "BusyProj", "run_needy_old", status="paused",
+            checkpoint={"reason": "Gate 1 BLOCK: awaiting decision"},
+            stages=[{"stage": "evaluate", "status": "completed"}],
             created_at="2026-01-01T00:00:00+00:00",  # oldest (no completed_at → updated_at=created_at)
         )
         d = client.get("/api/pipelines/analytics?window=ytd").json()
         g = next(x for x in d["by_project"] if x["project"] == "BusyProj")
         assert g["run_count"] == 23, "run_count = true total"
         ids = {r["id"] for r in g["runs"]}
-        assert "run_needy_old" in ids, "an abandoned run must NEVER be capped away (Gate-2 MEDIUM)"
+        assert "run_needy_old" in ids, "a genuine needy (decision-pause) run must NEVER be capped away (Gate-2 MEDIUM)"
         # completed runs still bounded (20 newest completed + the 1 needy = 21)
         assert len(g["runs"]) == 21, "newest-20 completed + all needy (1) = 21"
         assert g["aborted_count"] == 1, "count matches the surfaced needy row"

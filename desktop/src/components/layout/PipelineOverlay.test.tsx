@@ -124,6 +124,14 @@ describe('PipelineOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-run-run_cmhk1')).toBeInTheDocument());
   });
 
+  it('renders a run-time column (updatedAt) on each run row', async () => {
+    renderAndOpen();
+    const row = await screen.findByTestId('pipeline-run-run_done1');
+    // fmtTs('2026-08-01T10:12:00+00:00') → 'YYYY-MM-DD HH:MM' (local); assert the
+    // date portion is present (the exact HH:MM is timezone-dependent in CI).
+    expect(row.textContent).toContain('2026-08-01');
+  });
+
   it('does not poll — analytics fetched once, not on an interval', async () => {
     vi.useFakeTimers();
     renderAndOpen();

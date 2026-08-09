@@ -1708,3 +1708,205 @@ class TestTerminalRunNeverCrashZombie:
                     "checkpoint": {"reason": self.CRASH},
                     "stages": [{"stage": "reflect", "status": "completed"}]}
         assert _abandon_verdict(terminal, threshold) == (False, None)
+
+
+class TestGarbageRunPredicate:
+    """run_0e68e235: garbage = (abandoned OR crash-residue-paused) AND NOT delivered.
+    A delivered run (completed reflect/deliver stage) is NEVER garbage even if its
+    status string is 'abandoned'/'paused' (the mislabeled-done class, 22/182 measured).
+    The predicate keys on the STAGE ARRAY, never on the circular status field."""
+
+    CRASH = "session_crash_auto_detected"
+
+    def test_delivered_by_stages_true_on_reflect(self):
+        from scripts.artifact_cli import _delivered_by_stages
+        assert _delivered_by_stages({"stages": [{"stage": "reflect", "status": "completed"}]}) is True
+
+    def test_delivered_by_stages_true_on_deliver(self):
+        from scripts.artifact_cli import _delivered_by_stages
+        assert _delivered_by_stages({"stages": [{"stage": "deliver", "status": "completed"}]}) is True
+
+    def test_delivered_by_stages_false_midpipeline(self):
+        from scripts.artifact_cli import _delivered_by_stages
+        # evaluate..test done but NO reflect/deliver = did not deliver
+        assert _delivered_by_stages({"stages": [
+            {"stage": "evaluate", "status": "completed"},
+            {"stage": "build", "status": "completed"},
+            {"stage": "test", "status": "completed"}]}) is False
+
+    def test_delivered_by_stages_false_empty(self):
+        from scripts.artifact_cli import _delivered_by_stages
+        assert _delivered_by_stages({"stages": []}) is False
+        assert _delivered_by_stages({}) is False
+        assert _delivered_by_stages(None) is False
+
+    def test_is_terminal_run_unchanged_after_extract(self):
+        """REGRESSION: extracting _delivered_by_stages must NOT change is_terminal_run
+        for any of its ~10 consumers. Assert identical behavior across all statuses."""
+        from scripts.artifact_cli import is_terminal_run
+        # status short-circuit cases (all True)
+        for st in ("completed", "complete", "abandoned", "failed", "cancelled"):
+            assert is_terminal_run({"status": st}) is True, f"{st} must be terminal"
+        # running/paused with no deliver/reflect marker → NOT terminal
+        assert is_terminal_run({"status": "running", "stages": [{"stage": "build", "status": "completed"}]}) is False
+        assert is_terminal_run({"status": "paused", "stages": [{"stage": "evaluate", "status": "completed"}]}) is False
+        # running/paused WITH deliver/reflect marker → terminal (finished-but-mislabeled)
+        assert is_terminal_run({"status": "paused", "stages": [{"stage": "reflect", "status": "completed"}]}) is True
+        # non-dict → False
+        assert is_terminal_run(None) is False
+
+    def test_garbage_abandoned_midpipeline(self):
+        """160-class: abandoned run that died mid-pipeline = garbage."""
+        from scripts.artifact_cli import _is_garbage_run
+        assert _is_garbage_run({"status": "abandoned", "abandon_reason": "crash_zombie",
+                                "stages": []}) is True
+        assert _is_garbage_run({"status": "abandoned", "abandon_reason": "superseded_by_run_x",
+                                "stages": [{"stage": "build", "status": "completed"}]}) is True
+
+    def test_garbage_crash_residue_paused(self):
+        """15-class: paused with the crash auto-checkpoint reason, not delivered = garbage."""
+        from scripts.artifact_cli import _is_garbage_run
+        assert _is_garbage_run({"status": "paused", "checkpoint": {"reason": self.CRASH},
+                                "stages": []}) is True
+
+    def test_delivered_abandoned_is_NOT_garbage(self):
+        """22-class: abandoned/paused BUT has a completed reflect/deliver = delivered,
+        NOT garbage (excluding it would undercount real completions)."""
+        from scripts.artifact_cli import _is_garbage_run
+        assert _is_garbage_run({"status": "abandoned", "abandon_reason": "superseded_by_run_x",
+                                "stages": [{"stage": "reflect", "status": "completed"}]}) is False
+        assert _is_garbage_run({"status": "paused", "checkpoint": {"reason": self.CRASH},
+                                "stages": [{"stage": "deliver", "status": "completed"}]}) is False
+
+    def test_real_statuses_never_garbage(self):
+        """completed/cancelled/failed/running are NEVER garbage (cancelled=real user
+        decision, failed=real signal — XG: only abandoned+crash-paused are garbage)."""
+        from scripts.artifact_cli import _is_garbage_run
+        for st in ("completed", "complete", "cancelled", "failed", "running"):
+            assert _is_garbage_run({"status": st, "stages": []}) is False, f"{st} must not be garbage"
+        # an intentional (non-crash) pause is NOT garbage
+        assert _is_garbage_run({"status": "paused", "checkpoint": {"reason": "Gate 1 BLOCK"},
+                                "stages": []}) is False
+
+    def test_effective_analytics_status_recategorizes_delivered(self):
+        """The 22 delivered-but-mislabeled (abandoned OR paused) count as completed."""
+        from scripts.artifact_cli import _effective_analytics_status
+        assert _effective_analytics_status({"status": "completed", "stages": []}) == "completed"
+        assert _effective_analytics_status({"status": "complete", "stages": []}) == "completed"
+        # abandoned + delivered → completed
+        assert _effective_analytics_status({"status": "abandoned",
+            "stages": [{"stage": "deliver", "status": "completed"}]}) == "completed"
+        # paused + delivered → completed (Gate-1 #4)
+        assert _effective_analytics_status({"status": "paused",
+            "stages": [{"stage": "reflect", "status": "completed"}]}) == "completed"
+        # abandoned mid-pipeline stays abandoned (it IS garbage, filtered elsewhere)
+        assert _effective_analytics_status({"status": "abandoned", "stages": []}) == "abandoned"
+        # cancelled/failed pass through unchanged
+        assert _effective_analytics_status({"status": "cancelled", "stages": []}) == "cancelled"
+        assert _effective_analytics_status({"status": "failed", "stages": []}) == "failed"
+
+
+class TestPurgeGarbageRuns:
+    """run_0e68e235: retention purge of garbage run DIRECTORIES (recoverable trash).
+    Purges only garbage (abandoned/crash-paused, never delivered) older than N days;
+    NEVER touches completed/cancelled/failed/delivered-abandoned/fresh-garbage."""
+
+    CRASH = "session_crash_auto_detected"
+
+    def _run_with_stages(self, workspace, project, run_id, status, hours_ago,
+                         stages, abandon_reason=None, checkpoint_reason=None):
+        f = _create_run(workspace, project, run_id, status=status, hours_ago=hours_ago,
+                        stages=stages, checkpoint_reason=checkpoint_reason)
+        if abandon_reason:
+            d = _read_run(f); d["abandon_reason"] = abandon_reason
+            f.write_text(json.dumps(d, indent=2))
+        return f
+
+    def test_dry_run_default_deletes_nothing(self, workspace):
+        from scripts.artifact_cli import purge_garbage_runs
+        # 240h ago = 10 days, older than the 7-day retention → eligible
+        self._run_with_stages(workspace, "P", "run_g", "abandoned", 240, [], abandon_reason="crash_zombie")
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            result = purge_garbage_runs(retention_days=7, apply=False)
+        # dir still exists (dry-run)
+        assert (workspace / "Projects" / "P" / ".artifacts" / "runs" / "run_g").exists()
+        assert result["would_purge"] == 1
+        assert result["purged"] == 0
+
+    def test_apply_trashes_only_old_garbage(self, workspace):
+        from scripts.artifact_cli import purge_garbage_runs
+        # old garbage → purged
+        self._run_with_stages(workspace, "P", "run_oldgarbage", "abandoned", 240, [], abandon_reason="crash_zombie")
+        # old crash-paused garbage → purged
+        self._run_with_stages(workspace, "P", "run_crashp", "paused", 240, [], checkpoint_reason=self.CRASH)
+        # FRESH garbage (< retention) → kept
+        self._run_with_stages(workspace, "P", "run_freshgarbage", "abandoned", 1, [], abandon_reason="crash_zombie")
+        # old COMPLETED → kept (not garbage)
+        self._run_with_stages(workspace, "P", "run_done", "completed", 240,
+                              [{"stage": "deliver", "status": "completed"}])
+        # old CANCELLED → kept (real decision, not garbage)
+        self._run_with_stages(workspace, "P", "run_cancel", "cancelled", 240, [])
+        # old delivered-abandoned (mislabeled-done) → kept (delivered)
+        self._run_with_stages(workspace, "P", "run_misdone", "abandoned", 240,
+                              [{"stage": "reflect", "status": "completed"}], abandon_reason="superseded_by_x")
+        runs_dir = workspace / "Projects" / "P" / ".artifacts" / "runs"
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            result = purge_garbage_runs(retention_days=7, apply=True)
+        assert result["purged"] == 2, result
+        assert not (runs_dir / "run_oldgarbage").exists()
+        assert not (runs_dir / "run_crashp").exists()
+        # everything else survives
+        for keep in ("run_freshgarbage", "run_done", "run_cancel", "run_misdone"):
+            assert (runs_dir / keep).exists(), f"{keep} must be kept"
+
+
+class TestPurgeSkipsGitTracked:
+    """Gate-2 CRITICAL (run_0e68e235): the retention purge must NEVER silently delete
+    a git-TRACKED run dir — in the real workspace SwarmAI's .artifacts/runs/* ARE
+    tracked (origin = the PUBLIC repo), so a raw trash would surface as an unattended
+    mass `git rm` on the public working tree. Default: skip tracked dirs entirely.
+    Only an explicit include_tracked=True opts into touching them."""
+
+    def _git_workspace(self, tmp_path):
+        import subprocess
+        ws = tmp_path
+        runs = ws / "Projects" / "P" / ".artifacts" / "runs"
+        runs.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
+        return ws
+
+    def _garbage(self, ws, rid):
+        _create_run(ws, "P", rid, status="abandoned", hours_ago=240)
+        f = ws / "Projects" / "P" / ".artifacts" / "runs" / rid / "run.json"
+        d = _read_run(f); d["abandon_reason"] = "crash_zombie"; f.write_text(json.dumps(d))
+        return f
+
+    def test_tracked_garbage_is_skipped_by_default(self, tmp_path):
+        import subprocess
+        from scripts.artifact_cli import purge_garbage_runs
+        ws = self._git_workspace(tmp_path)
+        self._garbage(ws, "run_tracked")
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "track"], cwd=ws, check=True)
+        # untracked garbage alongside it
+        self._garbage(ws, "run_untracked")
+        with patch("scripts.artifact_cli._get_workspace", return_value=ws):
+            result = purge_garbage_runs(retention_days=7, apply=True)
+        runs = ws / "Projects" / "P" / ".artifacts" / "runs"
+        # tracked dir survives (never git-rm'd); untracked is trashed
+        assert (runs / "run_tracked").exists(), "a git-TRACKED garbage run must NOT be purged by default"
+        assert not (runs / "run_untracked").exists(), "untracked garbage should still be trashed"
+        assert result["purged"] == 1
+        assert result.get("skipped_tracked", 0) == 1
+
+    def test_non_git_workspace_still_purges(self, workspace):
+        """A workspace with no git repo (nothing tracked) purges normally — the
+        guard must fail-safe to 'not tracked' when git is unavailable."""
+        from scripts.artifact_cli import purge_garbage_runs
+        self._garbage(workspace, "run_g")
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            result = purge_garbage_runs(retention_days=7, apply=True)
+        assert result["purged"] == 1
+        assert not (workspace / "Projects" / "P" / ".artifacts" / "runs" / "run_g").exists()

@@ -371,6 +371,10 @@ function RunRow({ r, onOpenRun, close, showProject }: {
         {r.requirement || r.id}
       </button>
       <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
+      {/* Run-time column (run_0e68e235): when this run last updated (= finish time
+          for a terminal run). Rows arrive newest-first from the backend
+          (summaries.sort updated_at reverse). Absolute stamp, no "N ago" (fmtTs). */}
+      <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-28 text-right" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
       <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-12 text-right">{fmtCycle(r.cycleTimeMin)}</span>
       <span className="text-[10px] font-mono text-[var(--color-text-faint)] shrink-0 w-16 text-right">
         {fmtTokens(r.tokensActual)}/{fmtTokens(r.tokensEst)}
