@@ -396,6 +396,36 @@ SYSTEM_JOBS: list[Job] = [
         safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
 
+    # --- Pipeline Retention (scheduled garbage-run purge) ---
+    # THE scheduled retention job the purge_garbage_runs SSOT was always meant to have
+    # (its docstring referenced "the scheduled retention job" — this Job makes that true).
+    # Recoverably trashes UNTRACKED garbage run dirs (abandoned / crash-residue, never
+    # delivered) older than 30d across all projects, so they stop polluting on-disk
+    # clutter (the analytics endpoints already EXCLUDE garbage from stats at read time).
+    # --apply (act, not dry-run); NO --include-tracked: a tracked delete is an unattended
+    # git-rm on the PUBLIC repo (purge_garbage_runs' own Gate-2 guard) — off-limits for a
+    # scheduled job. type="script" reuses the sanctioned CLI entrypoint (no new JobType —
+    # cmd_purge_garbage is already documented as the scheduled retention entrypoint).
+    # ⚠️ SCOPE (adversarial-review MED, run_a65f2d6c): because tracked runs are skipped,
+    # this reaps ONLY UNTRACKED-project garbage (AIDLC/CMHK/IVTHub/… local-only runs). The
+    # SwarmAI project's own runs are git-tracked (public repo) → intentionally NEVER purged
+    # here; that store is user-owned and only a manual `--include-tracked` (reviewed) touches
+    # it. So this is the retention control for local-only project garbage, NOT for SwarmAI's
+    # run store — it can legitimately purge 0 until untracked-project pipelines crash + age.
+    Job(
+        id="pipeline-retention",
+        name="Pipeline Retention (garbage-run purge)",
+        type="script",
+        schedule="30 8 * * 1-5",        # weekdays UTC 08:30 = ICT 16:30 (light AM slot; no-weekend policy — retention needn't run 7d)
+        enabled=True,
+        category="system",
+        config={
+            "command": "python backend/scripts/purge_garbage_runs.py --apply",
+            "cwd": _SWARMAI_ROOT,
+        },
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+    ),
+
     # --- Code Intelligence Reindex (event-driven) ---
     # Triggered by git_commit events emitted from auto_commit_hook.
     # Runs incremental reindex on projects with code_intel.db.

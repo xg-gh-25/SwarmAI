@@ -65,6 +65,27 @@ def _classify_ip(ip_str: str) -> bool:
     return False
 
 
+def is_blocked_ip_literal(host: str | None) -> bool:
+    """PUBLIC SSRF helper for write-time member validation (community_api).
+
+    True IFF `host` is an IP-LITERAL that must be blocked (private / loopback /
+    link-local / reserved / metadata / CGNAT). A DNS HOSTNAME (not an IP literal)
+    returns False — it is NOT judged here; the actual outbound fetch re-resolves
+    and egress-guards it via ``_validate_egress`` (this is the documented
+    write-time hygiene vs. connect-time-guard split). Pass ``urlparse(url).hostname``
+    (already strips :port, [ipv6] brackets, and user:pw@ — do NOT pass ``.netloc``,
+    which keeps them and makes every port/creds/ipv6 form fail the IP parse and
+    slip through). None/empty → False (a URL with no host fails other checks first).
+    """
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)   # only classify when host IS an IP literal
+    except ValueError:
+        return False                 # DNS hostname → not judged here (egress-guard owns it)
+    return _classify_ip(host)
+
+
 def _resolve_ips(host: str) -> list[str]:
     """Resolve a host to ALL its IPs (v4 + v6). Isolated for test injection."""
     infos = socket.getaddrinfo(host, None)

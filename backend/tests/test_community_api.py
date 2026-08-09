@@ -866,3 +866,42 @@ def test_router_handlers_return_real_shapes() -> None:
         loop.close()
         # restore whatever loop policy state was here before (never leave None)
         asyncio.set_event_loop(prev_loop)
+
+
+# ── SSRF hygiene: _validate_member must reject private/link-local/metadata IPs (③) ──
+# The urls-branch of _validate_member previously accepted ANY http(s) URL with a
+# netloc — so http://169.254.169.254/ (AWS/GCP metadata) or http://10.0.0.1/ landed
+# in config.yaml `urls:`. The downstream RSS fetch (jobs.adapters.http_client) already
+# egress-guards, so this is write-time hygiene / defense-in-depth. The check must use
+# urlparse().hostname (NOT .netloc) — .netloc keeps :port/[ipv6]/user@ and fails the
+# IP parse, letting http://169.254.169.254:8080/ SLIP THROUGH (Gate-1 finding).
+
+@pytest.mark.parametrize("bad_url", [
+    "http://169.254.169.254/latest/meta-data/",   # link-local metadata (bare)
+    "http://169.254.169.254:8080/latest/",        # link-local + PORT (the .netloc bypass)
+    "https://10.0.0.1/feed.xml",                   # private class-A
+    "http://192.168.1.1/rss",                      # private class-C
+    "http://127.0.0.1:9000/feed",                  # loopback + port
+    "http://user:pw@10.0.0.1/x",                   # userinfo-prefixed private
+    "http://[fd00::1]/feed",                        # private IPv6
+])
+def test_add_member_rejects_ssrf_ip_url_for_rss(tmp_config_members: Path, bad_url: str) -> None:
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("rssf", MemberBody(value=bad_url)))
+    assert ei.value.status_code == 422, f"{bad_url} should be rejected 422"
+
+
+@pytest.mark.parametrize("ok_url", [
+    "https://example.com/feed.xml",       # public hostname
+    "http://blog.aws.amazon.com/rss",     # public hostname
+    "https://8.8.8.8/feed",                # public IP literal (must still pass)
+])
+def test_add_member_accepts_public_url_for_rss(tmp_config_members: Path, ok_url: str) -> None:
+    # The SSRF guard must NOT over-reach — public hosts + public IP literals still validate.
+    from routers.community_api import add_member, MemberBody
+    _run(add_member("rssf", MemberBody(value=ok_url)))
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    assert ok_url in f["config"]["urls"]

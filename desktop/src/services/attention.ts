@@ -71,7 +71,9 @@ export const attentionService = {
    */
   async fetchAttention(brain?: string): Promise<AttentionResult> {
     const q = brain ? `?brain=${encodeURIComponent(brain)}` : '';
-    const response = await api.get<RawAttention>(`/api/attention${q}`);
+    // Shared `api` instance's interceptor already prepends /api (api.ts) — pass a
+    // BARE path here, never `/api/...` (that double-prefixes → /api/api → 404).
+    const response = await api.get<RawAttention>(`/attention${q}`);
     return normalize(response.data ?? {});
   },
 };

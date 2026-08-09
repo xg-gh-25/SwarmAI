@@ -10,9 +10,11 @@ completion_rate denominator, token totals, trend, profile_mix, by-project rollup
 XG directive: garbage data must be cleaned AND kept out of all stats, on a schedule.
 
 This script is the thin CLI wrapper over ``artifact_cli.purge_garbage_runs`` (the
-SSOT the scheduled retention job also calls — one definition, no drift). The
-analytics endpoints already EXCLUDE garbage from stats at read time; this script
-removes the on-disk clutter so it stops accumulating.
+SSOT — one definition, no drift). It is BOTH the manual cleanup CLI AND the command
+run by the scheduled ``pipeline-retention`` system job (``jobs/system_jobs.py``,
+weekdays, ``--apply``) — one entrypoint, so the schedule can never drift from the manual
+run. The analytics endpoints already EXCLUDE garbage from stats at read time; this
+script removes the on-disk clutter so it stops accumulating.
 
 WHAT COUNTS AS GARBAGE (``artifact_cli._is_garbage_run`` — the single definition)
 ---------------------------------------------------------------------------------

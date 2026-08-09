@@ -24,6 +24,7 @@ so an invalid feed or member can never reach the adapter's silent-skip path.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -60,7 +61,8 @@ async def community_feed() -> dict:
     Each item: {path, category, name, mtime}. The frontend opens `path` in
     Canvas on click. Community-scoped: only Signals + Reports categories.
     """
-    items = build_feed(_knowledge_dir())
+    # build_feed does rglob("*.md") + per-file open (blocking I/O) — off the event loop.
+    items = await asyncio.to_thread(build_feed, _knowledge_dir())
     # `truncated` is honest: build_feed caps the payload, so a consumer can tell
     # "42 shown of exactly 42" from "100 shown, more on disk" (not a silent cut).
     from core.community_data import feed_cap
@@ -79,7 +81,8 @@ async def community_sources() -> dict:
     capped list (`members_truncated` flags the cut). Editing is via the /feeds +
     /feeds/{id}/members endpoints. Empty list on a fresh install (no config.yaml).
     """
-    sources = parse_sources(_config_path())
+    # parse_sources reads + yaml-parses config.yaml (blocking) — off the event loop.
+    sources = await asyncio.to_thread(parse_sources, _config_path())
     return {"count": len(sources), "sources": sources}
 
 
@@ -91,7 +94,8 @@ async def community_engagement() -> dict:
     quality score — there is no quality-score source on disk. Zeros when the
     GitHub_Community project has no engagement history yet.
     """
-    return aggregate_engagement(_engagement_dir())
+    # aggregate_engagement reads JSONL files (blocking) — off the event loop.
+    return await asyncio.to_thread(aggregate_engagement, _engagement_dir())
 
 
 # ── Phase-2: Sources CRUD (writes config.yaml via the shared serialization authority) ──
@@ -162,7 +166,7 @@ async def add_feed(feed: NewFeed) -> dict:
         })
 
     try:
-        mutate_config(_mutator)
+        await asyncio.to_thread(mutate_config, _mutator)
     except _Dup:
         raise HTTPException(status_code=409, detail=f"Feed id '{feed.id}' already exists")
     return {"ok": True, "id": feed.id}
@@ -194,7 +198,7 @@ async def update_feed(feed_id: str, patch: FeedPatch) -> dict:
         raise _NotFound()
 
     try:
-        mutate_config(_mutator)
+        await asyncio.to_thread(mutate_config, _mutator)
     except _NotFound:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     return {"ok": True, "id": feed_id}
@@ -214,7 +218,7 @@ async def delete_feed(feed_id: str) -> dict:
         config["feeds"] = kept
         return removed
 
-    removed = mutate_config(_mutator)
+    removed = await asyncio.to_thread(mutate_config, _mutator)
     return {"ok": True, "id": feed_id, "removed": bool(removed)}
 
 
@@ -254,6 +258,14 @@ def _validate_member(key: str, value: str) -> None:
         p = urlparse(value)
         if p.scheme not in ("http", "https") or not p.netloc:
             raise _InvalidMember("must be an http(s):// URL")
+        # SSRF hygiene (defense-in-depth — the RSS fetch already egress-guards, but a
+        # dead/internal URL must not land in config.yaml). Reject a private/link-local/
+        # loopback/metadata IP LITERAL. Use .hostname, never .netloc: .netloc keeps
+        # :port/[ipv6]/user@ and would fail the IP parse → the SSRF form would SLIP.
+        from jobs.adapters.http_client import is_blocked_ip_literal
+
+        if is_blocked_ip_literal(p.hostname):
+            raise _InvalidMember("must not be a private/link-local/metadata IP")
     elif key == "repos":
         parts = value.split("/")
         if len(parts) != 2 or not parts[0] or not parts[1] or any(c.isspace() for c in value):
@@ -316,7 +328,7 @@ async def add_member(feed_id: str, body: MemberBody) -> dict:
         raise _NotFound()
 
     try:
-        mutate_config(_mutator)
+        await asyncio.to_thread(mutate_config, _mutator)
     except _NotFound:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     except _NoMemberType:
@@ -356,5 +368,5 @@ async def delete_member(feed_id: str, body: MemberBody) -> dict:
                 return True
         return False
 
-    removed = mutate_config(_mutator)
+    removed = await asyncio.to_thread(mutate_config, _mutator)
     return {"ok": True, "id": feed_id, "value": value, "removed": bool(removed)}
