@@ -165,6 +165,12 @@ class CultivationProposal:
     # surfaced to the human/agent review layer to judge. Additive + defaults None →
     # old proposal JSON round-trips unchanged (AC6).
     contradiction_flag: "Optional[dict]" = None
+    # Knowledge Admission Component B (run_8d5fe9d1): the trust stamp. The SOLE
+    # authority that (in Component C) lets a proposal auto-apply into ANY doc. Stamped
+    # at creation from the source run's canonical gate2_outcome via stamp_trust_from_run.
+    # {"passed", "failed", "n/a"} — fail-closed default "n/a" (never auto without an
+    # explicit Gate-2 pass). Additive + defaults "n/a" → old proposal JSON round-trips.
+    passed_adversarial_gate: str = "n/a"
 
     def to_dict(self) -> dict:
         """Serialize to dict for JSON storage."""
@@ -185,6 +191,7 @@ class CultivationProposal:
             "replacement_content": self.replacement_content,
             "auto_apply_ok": self.auto_apply_ok,
             "contradiction_flag": self.contradiction_flag,
+            "passed_adversarial_gate": self.passed_adversarial_gate,
         }
 
     @classmethod
@@ -212,6 +219,7 @@ class CultivationProposal:
             replacement_content=data.get("replacement_content", ""),
             auto_apply_ok=data.get("auto_apply_ok", False),
             contradiction_flag=data.get("contradiction_flag", None),
+            passed_adversarial_gate=data.get("passed_adversarial_gate", "n/a"),
         )
 
     def is_expired(self) -> bool:
@@ -585,6 +593,10 @@ def filter_lessons_for_ddd(
             evidence=evidence,
             auto_apply_ok=auto_apply_ok,
             contradiction_flag=contradiction_flag,
+            # Component B: stamp trust from the source run's Gate-2 outcome at creation.
+            # Fail-closed to "n/a" when project_dir is None (pure-classify callers) or the
+            # run can't be resolved — so a proposal never claims trust it can't prove.
+            passed_adversarial_gate=stamp_trust_from_run(run_id, project_dir),
         )
         proposals.append(proposal)
 
@@ -1657,6 +1669,44 @@ def trust_from_gate2_outcome(outcome: "str | None") -> str:
     if outcome in _GATE2_BLOCK_OUTCOMES:
         return "failed"
     return "n/a"
+
+
+def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> str:
+    """Resolve a proposal's source run → its trust stamp {passed, failed, n/a}.
+
+    Reads ``<project_dir>/.artifacts/runs/<run_id>/run.json``, derives the canonical
+    gate2 outcome (derive_gate2_outcome), and maps it (trust_from_gate2_outcome).
+
+    FAIL-CLOSED on EVERYTHING that isn't an explicit Gate-2 pass: a non-run source id
+    (``code_intel_drift:x``, a session decision), a missing/unreadable run.json, a bad
+    project_dir, or a run with no canonical enum → ``"n/a"`` (never ``"passed"``).
+    A wrong ``passed`` is a permanent evergreen auto-write (DEC19).
+    """
+    if not run_id or not isinstance(run_id, str) or project_dir is None:
+        return "n/a"
+    # non-run source ids (feeds/session) are not pipeline runs → never trusted.
+    if not run_id.startswith("run_"):
+        return "n/a"
+    # PATH-TRAVERSAL DEFENSE (self-probe: `run_x/../../Other/.../run_win` resolves OUT of
+    # this project to another run that DID pass Gate-2 — a trust-forging exploit). A real
+    # run_id is a flat token; reject anything with path separators or `..`. Same charset
+    # discipline ui_actions._probe already uses. Fail-closed → never trust a crafted id.
+    if not re.fullmatch(r"run_[A-Za-z0-9_-]{1,64}", run_id):
+        return "n/a"
+    try:
+        run_dir = (Path(project_dir) / ".artifacts" / "runs" / run_id).resolve()
+        runs_root = (Path(project_dir) / ".artifacts" / "runs").resolve()
+        # containment check (defense-in-depth): the resolved run dir MUST stay under this
+        # project's runs/ root — a belt to the charset suspenders.
+        if runs_root not in run_dir.parents and run_dir != runs_root:
+            return "n/a"
+        run_file = run_dir / "run.json"
+        if not run_file.is_file():
+            return "n/a"
+        run_state = json.loads(run_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "n/a"  # unreadable / malformed → fail closed
+    return trust_from_gate2_outcome(derive_gate2_outcome(run_state))
 
 
 def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
