@@ -64,14 +64,15 @@ def handle_signal_fetch(
     errors: list[str] = []
     feeds_processed = 0
 
-    # github-community feeds are the SUBSCRIPTION STORE for the dedicated community
-    # engagement engine (monitor.py), NOT signal-pipeline inputs — excluded here so
-    # signal_fetch doesn't emit a "No adapter" WARNING for each on every run (the
-    # adapter is intentionally unregistered from ADAPTER_MAP; see the note there).
-    # (R1 三脑合一 / Gate-2 log-spam fix, run_dd7c15e3)
+    # github-community + github-people feeds are the SUBSCRIPTION STORE for the
+    # dedicated community engagement engine (monitor.py), NOT signal-pipeline inputs —
+    # excluded here so signal_fetch doesn't emit a "No adapter" WARNING for each on
+    # every run (neither adapter is registered in ADAPTER_MAP; see the note there).
+    # (R1 三脑合一 + R2 名人层 / Gate-2 log-spam fix, run_dd7c15e3)
+    _COMMUNITY_ENGINE_TYPES = {FeedType.GITHUB_COMMUNITY, FeedType.GITHUB_PEOPLE}
     enabled_feeds = [
         f for f in feeds
-        if f.enabled and f.type != FeedType.GITHUB_COMMUNITY
+        if f.enabled and f.type not in _COMMUNITY_ENGINE_TYPES
     ]
     logger.info(f"Signal fetch starting: {len(enabled_feeds)} enabled feeds")
 

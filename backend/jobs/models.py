@@ -48,6 +48,7 @@ class FeedType(str, Enum):
     TRENDING = "trending"
     GITHUB_TRENDING = "github-trending"
     GITHUB_COMMUNITY = "github-community"
+    GITHUB_PEOPLE = "github-people"
     WEIBO_TRENDING = "weibo-trending"
     EASTMONEY_MARKET = "eastmoney-market"
 
@@ -67,6 +68,11 @@ MEMBER_KEY: dict["FeedType", str | None] = {
     # owner/name strings) — same shape as github-releases, so it IS string-editable.
     # (It's the feed type behind the overlay's own Engagement tab — was wrongly None.)
     FeedType.GITHUB_COMMUNITY: "repos",
+    # github-people watches individual GitHub users (R2 名人层). config.logins is a
+    # flat list of login strings — the overlay member editor edits them like repos.
+    # Read by monitor.load_people_from_feed; scanned via scan_people (gh search issues
+    # --author). NOT wired into the signal pipeline (it's the community engine's store).
+    FeedType.GITHUB_PEOPLE: "logins",
     FeedType.WEIBO_TRENDING: "keywords",      # weibo topic keywords
     FeedType.EASTMONEY_MARKET: "concept_keywords",  # market concept keywords
     # web-search's fetch adapter is UNIMPLEMENTED (web_search.py returns [] on every

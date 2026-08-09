@@ -289,6 +289,15 @@ def _validate_member(key: str, value: str) -> None:
         parts = value.split("/")
         if len(parts) != 2 or not parts[0] or not parts[1] or any(c.isspace() for c in value):
             raise _InvalidMember("must be 'owner/repo'")
+    elif key == "logins":
+        # GitHub username rules: alphanumeric or single interior hyphens, cannot
+        # begin/end with a hyphen, max 39 chars. A malformed login silently returns
+        # zero results from `gh search issues --author <login>` — reject at write
+        # time so a dead person-subscription never lands in config. (R2 名人层)
+        import re as _re
+
+        if not _re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}", value):
+            raise _InvalidMember("must be a valid GitHub login (alphanumeric + hyphens, ≤39 chars)")
     # keywords / concept_keywords: free-text, non-empty (caller-guaranteed) — no rule
 
 
