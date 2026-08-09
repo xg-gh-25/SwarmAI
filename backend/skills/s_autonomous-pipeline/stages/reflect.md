@@ -125,17 +125,28 @@ python backend/scripts/artifact_cli.py run-update --project <PROJECT> \
     "status": "completed",
     "token_cost": <tokens>,
     "lessons": [
-      "Lesson 1 — concise, actionable, one sentence",
-      "Lesson 2 — what worked, what failed, what to do differently"
+      "[pitfall] Lesson 1 — concise, actionable, one sentence",
+      "[decision] Lesson 2 — what worked, what failed, what to do differently"
     ],
     "decisions": []
   }'
 ```
 
+   **Declare the type — you KNOW it, don't make the classifier guess.** Prefix every
+   lesson with `[type]` (one of the 7: `guideline` `pitfall` `decision` `principle`
+   `correction` `process` `model`). You know at author-time whether a lesson is a
+   *pitfall* (a bug/trap that bit you), a *decision* (a choice you made + why), a
+   *principle* (a first-principle belief), or a *correction* (a wrong→right on your own
+   behavior). Cultivation HONORS the declared type — it drives both the entry's `[type]`
+   tag AND its destination (a `[decision]` → PROJECT § Recent Decisions, `[principle]` →
+   PRODUCT § Design Philosophy, `[correction]` → IMPROVEMENT § What Failed), instead of a
+   keyword guess that structurally over-produces pitfall/guideline. An undeclared or
+   invalid prefix falls back to the keyword guess (safe, but skews the corpus — so declare).
+
    **Lesson quality bar:** Each lesson must be specific and self-contained.
    Bad: "3 lessons captured" / "Tests pass" / "Report written"
-   Good: "SMOKE is highest ROI — caught 2 runtime crashes that unit tests missed"
-   Good: "setTimeout for state propagation is always wrong — use event-driven transitions"
+   Good: "[pitfall] SMOKE is highest ROI — caught 2 runtime crashes that unit tests missed"
+   Good: "[principle] setTimeout for state propagation is always wrong — use event-driven transitions"
 
 9. Record outcome for learning feedback (calibration):
 

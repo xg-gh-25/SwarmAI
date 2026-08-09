@@ -115,7 +115,69 @@ ROUTING_TABLE: dict[str, dict] = {
         "section": None,
         "safe_auto": True,
     },
+    # ── HIGH-ORDER, PROJECT-LOCAL homes (declared-type authoritative routing) ──
+    # These exist so a declared [principle] on a PROJECT pipeline lesson has a
+    # WRITABLE home. Cultivation can only write the 4 canonical docs under
+    # 2-understanding/ (ddd_path); MEMORY.md/EVOLUTION.md resolve OUTSIDE project_dir
+    # and DO NOT EXIST there (verified run_c7e1e39d Gate-1) — so a declared principle
+    # routes here (a real, non-protected PRODUCT section), NOT to the cross-project
+    # `principle` route above. safe_auto=False: high-order knowledge is human-curated.
+    "project_principle": {
+        "doc": "PRODUCT.md",
+        "section": "Design Philosophy — When Beliefs Become Enforcement",
+        "safe_auto": False,
+    },
 }
+
+
+# ── Declared-type honoring (root-fix run_c7e1e39d) ────────────────────────────
+# ROOT: a REFLECT lesson's TYPE is known at author-time, but classify_content
+# re-derived the route purely from prose — and the project-scoped keyword branch
+# STRUCTURALLY cannot reach the high-order homes, starving decision/principle/
+# correction. When the author DECLARES a leading `[type]` (as s_persist already
+# does, SKILL.md:158), we honor it — the guess becomes a fallback, not the primary.
+#
+# Import VALID_TYPES from ddd_entry_lifecycle (ONE source of truth — verified no
+# import cycle: ddd_entry_lifecycle imports neither this module nor anything that
+# reaches back here). Guarded so this leaf module still imports if the dependency
+# graph ever shifts (falls back to the literal 7-set).
+try:
+    from core.ddd_entry_lifecycle import VALID_TYPES as _DECLARED_TYPES
+except ImportError:  # pragma: no cover - defensive; keeps persist_routing importable if the dep graph shifts
+    _DECLARED_TYPES = (
+        "guideline", "pitfall", "decision", "model", "process",
+        "principle", "correction",
+    )
+
+# HIGH-ORDER declared types → authoritative project-local route_key. Keyword
+# routing is BYPASSED for these (it can never reach these homes). Every target is
+# a real ## section in a WRITABLE canonical doc and safe_auto=False.
+#   correction → What Failed (re-homed off cross-project EVOLUTION.md, unwritable
+#   by the project-scoped cultivation path — Gate-1 BLOCK 4a, run_c7e1e39d).
+TYPE_ROUTE: dict[str, str] = {
+    "decision": "project_decision",
+    "principle": "project_principle",
+    "correction": "what_failed",
+}
+
+# OPERATIONAL declared types keep keyword routing (their keyword-reachable sections
+# are type-coherent) — EXCEPT a protected-zone landing, which would be silently
+# DROPPED (skipped_protected). Fence: remap a protected keyword-route to the
+# type-coherent default so an operational lesson is never lost.
+_OPERATIONAL_DEFAULT_ROUTE: dict[str, str] = {
+    "pitfall": "what_failed",
+    "guideline": "watch_for",
+    "process": "convention",
+    "model": "convention",
+}
+# Protected (never-auto) route_keys an operational tag must be fenced away from.
+_PROTECTED_ROUTE_KEYS = frozenset({
+    "product_priority", "product_non_goal", "product_vision",
+})
+
+# Leading `[type] ` prefix detector (mirrors ddd_cultivation.py:675 + the
+# _ALREADY_TITLED_RE tag form — ONE shape, validated against _DECLARED_TYPES).
+_DECLARED_TYPE_RE = re.compile(r"^\[(\w+)\]\s+")
 
 
 # ── Keyword classifiers ──────────────────────────────────────────────────────
@@ -208,6 +270,51 @@ def classify_content(
         }
     """
     stripped = text.strip()
+
+    # ── Declared-type honoring (root-fix run_c7e1e39d) ────────────────────────
+    # If the author declared a VALID leading `[type]`, honor it (the fact was known
+    # at author-time — don't re-guess it from prose). HIGH-ORDER types get an
+    # authoritative project-local route; OPERATIONAL types have the tag stripped so
+    # it can't pollute keyword hits, then keyword-route with a protected-zone fence.
+    # An INVALID/absent tag → unchanged keyword routing (strangler-fig).
+    _declared: Optional[str] = None
+    _m = _DECLARED_TYPE_RE.match(stripped)
+    if _m and _m.group(1).lower() in _DECLARED_TYPES:
+        _declared = _m.group(1).lower()
+        # GOVERNANCE OUTRANKS DECLARED TYPE (Gate-2 Security Finding 1, run_c7e1e39d):
+        # a behavioral-rule change (action+target keywords, e.g. "add rule: … STEERING …
+        # always …") targets SOUL/AGENT/STEERING and MUST hit the governance human-gate
+        # — a declared [decision]/[principle] prefix must NOT reroute it into an ordinary
+        # DDD section and skip that gate. Test governance on the TAG-FREE body FIRST; if
+        # it's governance, fall through (do NOT honor the type) so the governance branch
+        # below fires. `is_quality_lesson`/length gates are unaffected (they run upstream).
+        _body = stripped[_m.end():]
+        _is_gov = (
+            _GOVERNANCE_ACTION_KEYWORDS.search(_body) is not None
+            and _GOVERNANCE_TARGET_KEYWORDS.search(_body) is not None
+        )
+        if _declared in TYPE_ROUTE and project is not None and not _is_gov:
+            route = ROUTING_TABLE[TYPE_ROUTE[_declared]]
+            return {
+                "doc": route["doc"],
+                "section": route["section"],
+                "project": project,
+                # High-order knowledge is human-curated BY NATURE — always escalate,
+                # even when the physical home (e.g. correction→What Failed) is an
+                # otherwise-auto section. safe_auto is a per-proposal property, so a
+                # declared [correction] escalates while a bare failure lesson in the
+                # same section still auto-applies.
+                "safe_auto": False,
+                # Confidence reflects an explicit author declaration (strong signal).
+                "confidence": 0.7,
+                "is_governance": False,
+                "route_key": TYPE_ROUTE[_declared],
+                "declared_type": _declared,
+            }
+        # Operational (or high-order with no project context): strip the tag so the
+        # literal type word can't skew keyword counting; keyword routing continues
+        # on the tag-free body below.
+        stripped = stripped[_m.end():].strip()
 
     # Reject noise
     if len(stripped) < _MIN_LENGTH or NOISE_PATTERNS.match(stripped):
@@ -319,6 +426,13 @@ def classify_content(
         else:
             route_key = "watch_for"
 
+    # Operational-tag protected-zone fence (root-fix run_c7e1e39d): an author who
+    # DECLARED an operational [type] must never have their lesson DROPPED because the
+    # prose keywords steered it into a protected PRODUCT zone (skipped_protected). Remap
+    # to the type-coherent default so it lands in a writable, auto-applicable home.
+    if _declared in _OPERATIONAL_DEFAULT_ROUTE and route_key in _PROTECTED_ROUTE_KEYS:
+        route_key = _OPERATIONAL_DEFAULT_ROUTE[_declared]
+
     route = ROUTING_TABLE[route_key]
     confidence = min(0.4 + total_hits * 0.1, 0.95) if total_hits > 0 else 0.3
 
@@ -330,4 +444,5 @@ def classify_content(
         "confidence": confidence,
         "is_governance": False,
         "route_key": route_key,
+        "declared_type": _declared,
     }

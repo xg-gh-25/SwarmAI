@@ -672,7 +672,12 @@ def _normalize_cultivated_bullet(content: str, entry_type: str) -> "str | None":
     # from the same content via classify_entry_type), so dropping the inline tag is
     # lossless w.r.t. the entry's classification. Prefer the content's own declared
     # type when present (it was a deliberate tag) over the re-classified one.
-    _tag = re.match(r"^\[(\w+)\] ", content)
+    # `\s+` (not a single literal space) to match the two upstream parse sites
+    # (persist_routing._DECLARED_TYPE_RE + ddd_cultivation:892). A double-space
+    # `[decision]  body` else traps a space inside the bold markers → non-lossless
+    # restore (Gate-2 Finding 2, run_c7e1e39d). content[_tag.end():] then strips ALL
+    # the whitespace the tag consumed, so no leading space survives into the title.
+    _tag = re.match(r"^\[(\w+)\]\s+", content)
     if _tag:
         entry_type = _tag.group(1)
         content = content[_tag.end():]
@@ -881,8 +886,19 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         # is lossless + signature-invariant; None = degenerate → keep content unchanged.
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         source_label = f"{proposal.source_stage}" if proposal.source_stage != "reflect" else "auto-cultivated"
-        from core.ddd_entry_lifecycle import classify_entry_type
-        _etype = classify_entry_type(proposal.content)
+        # Prefer the author's DECLARED [type] over a prose guess (root-fix
+        # run_c7e1e39d). The lesson's type is known at author-time; re-guessing it
+        # from prose is the lossy-re-derivation root that skewed the corpus toward
+        # pitfall/guideline. classify_entry_type is now the FALLBACK, fired only when
+        # no valid declaration is present — mirroring ddd_entry_lifecycle.py:546's
+        # `if not entry_type: guess`. (_normalize_cultivated_bullet:675 also honors
+        # the tag, so all three type-parse sites now agree on the declared value.)
+        from core.ddd_entry_lifecycle import classify_entry_type, VALID_TYPES
+        _decl = re.match(r"^\[(\w+)\]\s+", proposal.content)
+        if _decl and _decl.group(1).lower() in VALID_TYPES:
+            _etype = _decl.group(1).lower()
+        else:
+            _etype = classify_entry_type(proposal.content)
         _normalized = _normalize_cultivated_bullet(proposal.content, _etype)
         _entry_body = _normalized if _normalized is not None else proposal.content
         entry = f"- {_entry_body} ({date_str}, {proposal.source_run_id}, {source_label})\n"

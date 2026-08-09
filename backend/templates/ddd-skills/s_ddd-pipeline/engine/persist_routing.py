@@ -109,6 +109,14 @@ ROUTING_TABLE: dict[str, dict] = {
         "section": "Corrections Captured",
         "safe_auto": False,
     },
+    # ── HIGH-ORDER, PROJECT-LOCAL homes (declared-type authoritative routing) ──
+    # Mirror of core/persist_routing.py (root-fix run_c7e1e39d). A declared [principle]
+    # on a PROJECT lesson needs a WRITABLE home — cultivation writes only canonical docs.
+    "project_principle": {
+        "doc": "PRODUCT.md",
+        "section": "Design Philosophy — When Beliefs Become Enforcement",
+        "safe_auto": False,
+    },
     # ── REFERENCE (cross-project → KNOWLEDGE.md) ──
     "reference": {
         "doc": "KNOWLEDGE.md",
@@ -116,6 +124,28 @@ ROUTING_TABLE: dict[str, dict] = {
         "safe_auto": True,
     },
 }
+
+
+# ── Declared-type honoring (root-fix run_c7e1e39d — mirror of core/persist_routing) ──
+# Portable copy: the 7-type set is inline (no ddd_entry_lifecycle in the packaged engine).
+_DECLARED_TYPES = (
+    "guideline", "pitfall", "decision", "model", "process", "principle", "correction",
+)
+TYPE_ROUTE: dict[str, str] = {
+    "decision": "project_decision",
+    "principle": "project_principle",
+    "correction": "what_failed",
+}
+_OPERATIONAL_DEFAULT_ROUTE: dict[str, str] = {
+    "pitfall": "what_failed",
+    "guideline": "watch_for",
+    "process": "convention",
+    "model": "convention",
+}
+_PROTECTED_ROUTE_KEYS = frozenset({
+    "product_priority", "product_non_goal", "product_vision",
+})
+_DECLARED_TYPE_RE = re.compile(r"^\[(\w+)\]\s+")
 
 
 # ── Keyword classifiers ──────────────────────────────────────────────────────
@@ -208,6 +238,31 @@ def classify_content(
         }
     """
     stripped = text.strip()
+
+    # ── Declared-type honoring (root-fix run_c7e1e39d — mirror of core) ───────
+    _declared: Optional[str] = None
+    _m = _DECLARED_TYPE_RE.match(stripped)
+    if _m and _m.group(1).lower() in _DECLARED_TYPES:
+        _declared = _m.group(1).lower()
+        # Governance outranks declared type (test on tag-free body).
+        _body = stripped[_m.end():]
+        _is_gov = (
+            _GOVERNANCE_ACTION_KEYWORDS.search(_body) is not None
+            and _GOVERNANCE_TARGET_KEYWORDS.search(_body) is not None
+        )
+        if _declared in TYPE_ROUTE and project is not None and not _is_gov:
+            route = ROUTING_TABLE[TYPE_ROUTE[_declared]]
+            return {
+                "doc": route["doc"],
+                "section": route["section"],
+                "project": project,
+                "safe_auto": False,
+                "confidence": 0.7,
+                "is_governance": False,
+                "route_key": TYPE_ROUTE[_declared],
+                "declared_type": _declared,
+            }
+        stripped = stripped[_m.end():].strip()
 
     # Reject noise
     if len(stripped) < _MIN_LENGTH or NOISE_PATTERNS.match(stripped):
@@ -312,6 +367,9 @@ def classify_content(
             route_key = "what_failed"
         else:
             route_key = "watch_for"
+
+    if _declared in _OPERATIONAL_DEFAULT_ROUTE and route_key in _PROTECTED_ROUTE_KEYS:
+        route_key = _OPERATIONAL_DEFAULT_ROUTE[_declared]
 
     route = ROUTING_TABLE[route_key]
     confidence = min(0.4 + total_hits * 0.1, 0.95) if total_hits > 0 else 0.3
