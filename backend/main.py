@@ -829,6 +829,40 @@ def _run_scheduler_safe() -> None:
         raise
 
 
+def _prewarm_recall_body() -> None:
+    """Warm the two cold-start recall legs so the FIRST session's recall_leg
+    doesn't pay the first-in-process penalty (run_16113a9b).
+
+    Measured: recall runs ONCE per session; the session leg is 1665ms cold →
+    ~300ms warm, library 819ms → ~350ms warm. The first-in-process cost is
+    two things a fresh startup query legitimately warms and that PERSIST across
+    the fresh per-call connections recall opens:
+      (a) the OS page cache of the session/library DB files, and
+      (b) the function-local deferred imports (sqlite_vec native lib,
+          RecallEngine/KnowledgeStore/SessionRecall) → sys.modules, process-wide.
+    NOTE (Gate-1, verified vec_db.py:155 + session_recall.py:227): recall opens
+    and CLOSES its connection per call, so this does NOT keep a warm connection —
+    page-cache + import-cache are what survive, which is enough. This is a
+    BEST-EFFORT reduction of cold-start VARIANCE, not a guarantee: if the very
+    first user session races ahead of this fire-and-forget task, that session
+    still pays the cold cost.
+
+    Warms ONLY session + library — the two legs with a measured cold penalty.
+    Deliberately NOT ddd (per-project ~800ms CPU-BM25, no active project at
+    startup, and not even on the recall_leg timer) nor context_files/codeintel
+    (no cold-start penalty). Read-only + embed-free; never writes, never raises
+    (a warmup failure must be non-fatal — mirrors _prewarm_boto3).
+    """
+    try:
+        from core import recall_multi
+        recall_multi.recall_all(
+            "warmup", domains=("session", "library"), allow_embed=False,
+        )
+        logger.info("recall pre-warmed (session + library legs)")
+    except Exception:
+        logger.debug("recall pre-warm failed (non-critical)", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -1035,6 +1069,14 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.debug("boto3 pre-warm failed (non-critical)", exc_info=True)
     asyncio.create_task(_prewarm_boto3())
+
+    # Pre-warm the two cold-start recall legs (session + library) off the hot
+    # path so the FIRST session's recall_leg doesn't pay the first-in-process
+    # cost (run_16113a9b). Fire-and-forget in a thread — never blocks startup
+    # readiness; best-effort (a first session racing ahead still pays cold).
+    async def _prewarm_recall():
+        await asyncio.to_thread(_prewarm_recall_body)
+    asyncio.create_task(_prewarm_recall())
 
     # Generate permissions.json for user visibility
     try:
