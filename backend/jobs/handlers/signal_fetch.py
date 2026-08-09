@@ -18,7 +18,6 @@ from ..adapters.hacker_news import fetch_hacker_news
 from ..adapters.web_search import fetch_web_search
 from ..adapters.trending import fetch_trending
 from ..adapters.github_trending import fetch_github_trending
-from ..adapters.github_community import fetch_github_community
 from ..adapters.weibo_trending import fetch_weibo_trending
 from ..adapters.eastmoney_market import fetch_eastmoney_market
 
@@ -32,7 +31,13 @@ ADAPTER_MAP = {
     FeedType.WEB_SEARCH: fetch_web_search,
     FeedType.TRENDING: fetch_trending,
     FeedType.GITHUB_TRENDING: fetch_github_trending,
-    FeedType.GITHUB_COMMUNITY: fetch_github_community,
+    # NOTE: FeedType.GITHUB_COMMUNITY is intentionally NOT registered here. The
+    # github-community-tier{1,2,3} feeds are the SUBSCRIPTION STORE for the
+    # dedicated community engagement engine (monitor.py, via load_repos_from_feeds),
+    # NOT signal-pipeline inputs. Registering the adapter here would double-scan the
+    # same repos (once for the flywheel, once for the signal digest). The adapter
+    # module + its own tests remain (fetch_github_community is a valid stand-alone
+    # fetcher) — it is simply not wired into the signal pipeline. (R1 三脑合一)
     FeedType.WEIBO_TRENDING: fetch_weibo_trending,
     FeedType.EASTMONEY_MARKET: fetch_eastmoney_market,
 }
@@ -59,7 +64,15 @@ def handle_signal_fetch(
     errors: list[str] = []
     feeds_processed = 0
 
-    enabled_feeds = [f for f in feeds if f.enabled]
+    # github-community feeds are the SUBSCRIPTION STORE for the dedicated community
+    # engagement engine (monitor.py), NOT signal-pipeline inputs — excluded here so
+    # signal_fetch doesn't emit a "No adapter" WARNING for each on every run (the
+    # adapter is intentionally unregistered from ADAPTER_MAP; see the note there).
+    # (R1 三脑合一 / Gate-2 log-spam fix, run_dd7c15e3)
+    enabled_feeds = [
+        f for f in feeds
+        if f.enabled and f.type != FeedType.GITHUB_COMMUNITY
+    ]
     logger.info(f"Signal fetch starting: {len(enabled_feeds)} enabled feeds")
 
     for feed in enabled_feeds:
