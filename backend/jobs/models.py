@@ -52,6 +52,30 @@ class FeedType(str, Enum):
     EASTMONEY_MARKET = "eastmoney-market"
 
 
+# Per-FeedType editable-member config key — the SINGLE SOURCE for "which config
+# key holds this feed's editable string members" (consumed by community_data.parse_sources
+# + the /community/feeds/{id}/members endpoints). A feed's members are the individual
+# subscriptions inside it: an RSS feed's urls, a Hacker-News feed's keywords, etc.
+# `None` = this feed type has no user-editable string-list members.
+# ⚠️ EVERY FeedType MUST have an entry (test_member_key_covers_every_feed_type enforces
+# it) — a missing entry is the silent parallel-enumeration drift Gate-1 flagged.
+MEMBER_KEY: dict["FeedType", str | None] = {
+    FeedType.RSS: "urls",                     # pundit/lab blog feeds (Sam Altman, Karpathy, OpenAI…)
+    FeedType.HACKER_NEWS: "keywords",         # topic keywords to watch on HN
+    FeedType.WEB_SEARCH: "queries",           # search queries
+    FeedType.GITHUB_RELEASES: "repos",        # watched repos
+    FeedType.WEIBO_TRENDING: "keywords",      # weibo topic keywords
+    FeedType.EASTMONEY_MARKET: "concept_keywords",  # market concept keywords
+    # trending.platforms is a list of STRUCTURED objects ({id, name}), NOT flat strings
+    # (the adapter does platform.get("id")). It is therefore NOT user-editable via the
+    # string-member path — appending a bare string would corrupt the list and crash the
+    # trending adapter. None = no editable string members (needs an object-aware editor).
+    FeedType.TRENDING: None,
+    FeedType.GITHUB_TRENDING: None,           # no member list (spoken_language/since/top_n scalars only)
+    FeedType.GITHUB_COMMUNITY: None,          # no editable string members
+}
+
+
 class TierType(str, Enum):
     """Signal source authority tier — controls weighting and auto-disable behavior."""
     FRONTIER = "frontier"       # Official labs (OpenAI, Anthropic, Google, etc.)

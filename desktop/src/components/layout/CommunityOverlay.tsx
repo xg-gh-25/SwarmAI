@@ -3,12 +3,16 @@
  *
  * Design: Knowledge/Designs/2026-08-08-community-overlay-mockup.html (approved),
  * built by run_5165013e. Three tabs = the two hands of the flywheel + reports:
- *   📥 Feed              — inbound: recent signal digests + reports (click → Canvas)
- *   🔗 Sources           — inbound: configured feeds (read-only in Phase-1)
+ *   📥 Feed              — inbound: recent signal digests + community reports (click → Canvas)
+ *   🔗 Sources           — inbound: configured feeds — add/toggle/tier/delete a feed AND
+ *                          add/delete a feed's internal members (urls/keywords/queries)
  *   📤 Engagement        — outbound: GitHub community metrics (data-backed only)
  *
- * Phase-1 is READ-ONLY (all three GET endpoints). Phase-2 (a future run) makes
- * Sources editable (add/edit/delete + managed_by:user, coexisting with self_tune).
+ * The Feed's Reports section is community-scoped: internal governance reports
+ * (ddd-weekly/pipeline-weekly/swarmai-monthly/validator-audit) are excluded by the
+ * backend classifier (community_data._is_community_report). All Sources writes —
+ * feed-level AND member-level — go through the shared config lock (managed_by:user,
+ * coexisting with self_tune) so a UI edit and a scheduled tune never clobber.
  *
  * Honesty rules enforced here (Gate-1, run_5165013e):
  *   - No fabricated data. Feed shows real files; Sources shows real config.yaml
@@ -179,7 +183,7 @@ function FeedTab({ close }: { close: () => void }) {
   );
 }
 
-// ── 🔗 Sources tab — configured feeds (read-only Phase-1) ────────────────────
+// ── 🔗 Sources tab — configured feeds (add/toggle/tier/delete + member editing) ──
 
 function SourcesTab() {
   const { data, loading, error, reload } = useFetch<CommunitySource[]>(communityService.fetchSources);
@@ -187,6 +191,7 @@ function SourcesTab() {
   const [busy, setBusy] = useState<string | null>(null); // id being mutated
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // 2-step delete
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null); // feed id whose members are shown
 
   // A mutation: run it, then refetch so the UI reflects the real persisted state
   // (no optimistic-only — the write goes through the shared config lock and we want
@@ -222,16 +227,30 @@ function SourcesTab() {
       )}
       <div className="flex flex-col gap-1">
         {sources.map((s) => (
+          <div key={s.id} data-testid="community-source-row">
           <div
-            key={s.id}
-            data-testid="community-source-row"
-            className="rounded-lg px-3 py-2 hover:bg-[var(--color-hover)] transition-colors grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-3"
+            className="rounded-lg px-3 py-2 hover:bg-[var(--color-hover)] transition-colors grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-3"
           >
+            {/* expand toggle — only for feeds that HAVE editable members */}
+            {s.memberKind !== null ? (
+              <button
+                type="button"
+                data-testid="source-expand"
+                onClick={() => setExpanded((e) => (e === s.id ? null : s.id))}
+                className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                aria-expanded={expanded === s.id}
+                title={expanded === s.id ? 'Hide members' : 'Show members'}
+              >
+                {expanded === s.id ? 'expand_more' : 'chevron_right'}
+              </button>
+            ) : (
+              <span className="w-4" />
+            )}
             <div className="min-w-0">
               <div className="text-[13px] text-[var(--color-text)] truncate">{s.name}</div>
               <div className="text-[11px] text-[var(--color-text-dim)] truncate">
                 {s.type}
-                {s.sourceCount > 0 && ` · ${s.sourceCount} sources`}
+                {s.memberKind !== null && ` · ${s.memberCount} ${s.memberKind}`}
                 {` · ${s.managedBy}`}
               </div>
             </div>
@@ -284,6 +303,10 @@ function SourcesTab() {
               </button>
             )}
           </div>
+          {expanded === s.id && s.memberKind !== null && (
+            <MemberEditor source={s} onChanged={reload} />
+          )}
+          </div>
         ))}
       </div>
 
@@ -293,6 +316,98 @@ function SourcesTab() {
         Your edits are marked <span className="font-mono">user</span>-managed and are never
         auto-disabled by self-tuning. Changes write safely even while a background tune runs.
       </p>
+    </div>
+  );
+}
+
+// Member editor — the individual urls/keywords/queries inside one feed. Reuses the
+// same busy/confirm/error discipline as the feed rows. Writes go through the shared
+// config lock (managed_by:user); refetch after each so the UI reflects persisted truth.
+function MemberEditor({ source, onChanged }: { source: CommunitySource; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<string | null>(null); // member value armed for delete
+  const [err, setErr] = useState<string | null>(null);
+  const [adding, setAdding] = useState('');
+
+  const run = useCallback(
+    async (fn: () => Promise<void>, clearConfirm: boolean) => {
+      setBusy(true);
+      setErr(null);
+      try {
+        await fn();
+        if (clearConfirm) setConfirm(null);
+        onChanged();
+      } catch {
+        setErr('Could not save — try again (duplicate or removed?).');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onChanged],
+  );
+
+  const submitAdd = () => {
+    const v = adding.trim();
+    if (!v) return;
+    run(async () => { await communityService.addMember(source.id, v); setAdding(''); }, false);
+  };
+
+  return (
+    <div data-testid="member-editor" className="ml-7 mb-1 pl-3 border-l border-[var(--color-border)] flex flex-col gap-0.5 max-w-[720px]">
+      {err && <div className="text-[11px] text-red-400 py-1">{err}</div>}
+      {source.members.length === 0 && (
+        <div className="text-[11px] text-[var(--color-text-faint)] py-1">No members yet — add one below.</div>
+      )}
+      {source.members.map((m) => (
+        <div key={m} data-testid="member-row" className="flex items-center gap-2 py-0.5 group">
+          <span className="flex-1 text-[11.5px] font-mono text-[var(--color-text-muted)] truncate" title={m}>{m}</span>
+          {confirm === m ? (
+            <button
+              type="button"
+              data-testid="member-delete-confirm"
+              disabled={busy}
+              onClick={() => run(() => communityService.deleteMember(source.id, m), true)}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/40"
+            >
+              confirm?
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="member-delete"
+              onClick={() => setConfirm(m)}
+              className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100"
+            >
+              close
+            </button>
+          )}
+        </div>
+      ))}
+      {source.membersTruncated && (
+        <div className="text-[10.5px] text-[var(--color-text-faint)] py-0.5">
+          Showing first {source.members.length} of {source.memberCount}.
+        </div>
+      )}
+      <div className="flex items-center gap-2 pt-1">
+        <input
+          data-testid="member-add-input"
+          value={adding}
+          disabled={busy}
+          onChange={(e) => setAdding(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
+          placeholder={`add ${source.memberKind?.replace(/s$/, '') ?? 'member'}…`}
+          className="flex-1 text-[11.5px] bg-transparent border border-[var(--color-border)] rounded px-2 py-1"
+        />
+        <button
+          type="button"
+          data-testid="member-add-submit"
+          disabled={busy || !adding.trim()}
+          onClick={submitAdd}
+          className="text-[11px] px-2 py-1 rounded text-[var(--panel-accent,var(--color-primary))] hover:underline disabled:opacity-40"
+        >
+          add
+        </button>
+      </div>
     </div>
   );
 }

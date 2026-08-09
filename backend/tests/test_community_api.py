@@ -100,6 +100,61 @@ def test_parse_sources_disabled_feed(config_file: Path) -> None:
     assert by_id["hn-ai"]["enabled"] is False
 
 
+def test_parse_sources_emits_members_and_accurate_count(tmp_path: Path) -> None:
+    # B1: each source emits its editable string members + an ACCURATE member_count
+    # (per the per-type MEMBER_KEY), not the urls-only source_count. source_count is
+    # RETAINED for back-compat (existing frontend consumers).
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "feeds:\n"
+        "  - id: rss1\n    name: RSS1\n    type: rss\n    config:\n      urls: [https://a.com/f, https://b.com/f]\n"
+        "  - id: hn1\n    name: HN1\n    type: hacker-news\n    config:\n      keywords: [llm, agent, rag]\n"
+        "  - id: gh1\n    name: GH1\n    type: github-releases\n    config:\n      repos: [a/b, c/d, e/f, g/h]\n"
+    )
+    by_id = {s["id"]: s for s in parse_sources(p)}
+    # rss: members are the urls
+    assert by_id["rss1"]["members"] == ["https://a.com/f", "https://b.com/f"]
+    assert by_id["rss1"]["member_count"] == 2
+    assert by_id["rss1"]["member_kind"] == "urls"
+    assert by_id["rss1"]["source_count"] == 2  # retained
+    # hacker-news: members are the keywords (source_count would be 0 — old bug)
+    assert by_id["hn1"]["members"] == ["llm", "agent", "rag"]
+    assert by_id["hn1"]["member_count"] == 3
+    assert by_id["hn1"]["member_kind"] == "keywords"
+    # github-releases: members are the repos, member_count=4 (source_count was 0 before)
+    assert by_id["gh1"]["member_count"] == 4
+    assert by_id["gh1"]["member_kind"] == "repos"
+
+
+def test_parse_sources_no_member_type_has_null_kind(tmp_path: Path) -> None:
+    # A feed type with no editable string members (github-trending) → member_kind None,
+    # members [], member_count 0 — the UI shows a "no editable members" state.
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "feeds:\n  - id: gt\n    name: GT\n    type: github-trending\n    config:\n      spoken_language: en\n"
+    )
+    s = parse_sources(p)[0]
+    assert s["member_kind"] is None
+    assert s["members"] == []
+    assert s["member_count"] == 0
+
+
+def test_parse_sources_members_truncated_flag(tmp_path: Path) -> None:
+    # A very long member list is capped in the payload with an honest truncated flag.
+    from core.community_data import _MEMBER_CAP
+
+    urls = [f"https://x{i}.com/f" for i in range(_MEMBER_CAP + 5)]
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "feeds:\n  - id: big\n    name: Big\n    type: rss\n    config:\n      urls: ["
+        + ", ".join(urls) + "]\n"
+    )
+    s = parse_sources(p)[0]
+    assert len(s["members"]) == _MEMBER_CAP
+    assert s["members_truncated"] is True
+    assert s["member_count"] == _MEMBER_CAP + 5  # count is the TRUE total, not the capped len
+
+
 def test_parse_sources_missing_file_returns_empty(tmp_path: Path) -> None:
     # A missing config.yaml must return [] (fresh install), never crash.
     assert parse_sources(tmp_path / "nope.yaml") == []
@@ -264,6 +319,69 @@ def test_build_feed_missing_knowledge(tmp_path: Path) -> None:
     assert build_feed(tmp_path / "nope") == []
 
 
+def test_build_feed_excludes_internal_governance_reports(tmp_path: Path) -> None:
+    # Gap A (A1): internal governance reports (ddd-weekly / pipeline-weekly /
+    # swarmai-monthly / validator-audit) must NOT appear in the community feed,
+    # while real community research reports ARE kept. Mirrors the real corpus.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    internal = [
+        "2026-07-27-ddd-weekly.md", "2026-06-swarmai-monthly.md",
+        "pipeline-weekly.md", "validator-check-usage-audit.md",
+    ]
+    community = [
+        "2026-07-12-mattpocock-skills-deep-research.md",
+        "2026-07-27-openworker-research.md",
+        "2026-07-17-Understand-Anything-research.md",
+    ]
+    for n in internal + community:
+        (k / "Reports" / n).write_text("# " + n)
+    names = {it["name"] for it in build_feed(k)}
+    for n in internal:
+        assert n not in names, f"internal report leaked into feed: {n}"
+    for n in community:
+        assert n in names, f"community report wrongly excluded: {n}"
+
+
+def test_build_feed_frontmatter_audience_exact_token_overrides(tmp_path: Path) -> None:
+    # Gap A (A2): `audience: internal` force-EXCLUDES an otherwise-community-named
+    # file; `audience: community` force-INCLUDES an otherwise-internal-named file.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    (k / "Reports" / "2026-08-01-cool-research.md").write_text(
+        "---\naudience: internal\n---\n# secret internal research"
+    )
+    (k / "Reports" / "2026-08-02-ddd-weekly.md").write_text(
+        "---\naudience: community\n---\n# actually a community digest"
+    )
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-08-01-cool-research.md" not in names  # audience:internal wins over community name
+    assert "2026-08-02-ddd-weekly.md" in names          # audience:community wins over internal name
+
+
+def test_build_feed_free_text_audience_is_ignored(tmp_path: Path) -> None:
+    # Gap A (A2, the Gate-1 correction): a FREE-TEXT audience value must NOT be
+    # treated as a classification signal — the gstack brief's audience literally
+    # contains "internally" but is a community report and MUST stay shown.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    (k / "Reports" / "2026-07-27-gstack-gbrain-research.md").write_text(
+        '---\naudience: "how does it work internally + what do we steal"\n---\n# gstack'
+    )
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-07-27-gstack-gbrain-research.md" in names  # free-text audience ignored → default SHOW
+
+
+def test_build_feed_signals_never_filtered(tmp_path: Path) -> None:
+    # Signals dir is pure community digests — never classified/excluded, even if a
+    # signal file's name happened to collide with an internal pattern.
+    k = tmp_path / "Knowledge"
+    (k / "Signals").mkdir(parents=True)
+    (k / "Signals" / "2026-08-07-ddd-weekly.md").write_text("# a signal digest")
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-08-07-ddd-weekly.md" in names  # Signals unfiltered
+
+
 def test_build_feed_drops_symlink_escaping_knowledge(tmp_path: Path) -> None:
     # A symlink under Signals/ pointing OUTSIDE Knowledge/ must NOT be emitted
     # (defense-in-depth vs the /workspace/file/resolve infoleak class).
@@ -307,6 +425,23 @@ from routers.community_api import (
     NewFeed, FeedPatch, add_feed, update_feed, delete_feed,
 )
 from fastapi import HTTPException
+
+
+@pytest.fixture
+def tmp_config_members(tmp_path: Path, monkeypatch) -> Path:
+    """A tmp config.yaml with feeds carrying string members, for member-CRUD tests."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        config_io.CONFIG_HEADER
+        + yaml.dump({"feeds": [
+            {"id": "rssf", "name": "RSS", "type": "rss", "tier": "leaders", "enabled": True,
+             "config": {"urls": ["https://a.com/feed", "https://b.com/feed"]}},
+            {"id": "gtf", "name": "GT", "type": "github-trending", "enabled": True,
+             "config": {"spoken_language": "en"}},
+        ], "defaults": {}}, sort_keys=False)
+    )
+    monkeypatch.setattr(config_io, "CONFIG_FILE", cfg)
+    return cfg
 
 
 @pytest.fixture
@@ -430,6 +565,157 @@ def test_user_feed_survives_self_tune_prune(tmp_config: Path) -> None:
     prune_unused_feeds(config, usage={}, min_days=0, dry_run=False)
     mine = next(f for f in config["feeds"] if f["id"] == "mine")
     assert mine["enabled"] is True  # user feed protected, not auto-disabled
+
+
+# ── Phase-3: MEMBER_KEY map (B5 — every FeedType mapped, no drift) ───────────
+
+
+def test_member_key_covers_every_feed_type() -> None:
+    """B5: MEMBER_KEY must map EVERY FeedType member (to a config key or None).
+    Adding a FeedType without a MEMBER_KEY entry FAILS here — prevents the
+    silent parallel-enumeration drift Gate-1 warned about (run_b8306bd8)."""
+    from jobs.models import FeedType, MEMBER_KEY
+
+    assert set(MEMBER_KEY.keys()) == set(FeedType), (
+        "MEMBER_KEY out of sync with FeedType: "
+        f"missing={set(FeedType) - set(MEMBER_KEY)}, extra={set(MEMBER_KEY) - set(FeedType)}"
+    )
+
+
+def test_member_key_string_list_types_map_to_real_config_keys() -> None:
+    """The string-member feed types map to the config key they actually use."""
+    from jobs.models import FeedType, MEMBER_KEY
+
+    assert MEMBER_KEY[FeedType.RSS] == "urls"
+    assert MEMBER_KEY[FeedType.HACKER_NEWS] == "keywords"
+    assert MEMBER_KEY[FeedType.WEB_SEARCH] == "queries"
+    assert MEMBER_KEY[FeedType.GITHUB_RELEASES] == "repos"
+    assert MEMBER_KEY[FeedType.WEIBO_TRENDING] == "keywords"
+    assert MEMBER_KEY[FeedType.EASTMONEY_MARKET] == "concept_keywords"
+    # No editable STRING members (trending.platforms are {id,name} dicts, not strings —
+    # editing via the string-member path would corrupt the list + crash the adapter).
+    assert MEMBER_KEY[FeedType.TRENDING] is None
+    assert MEMBER_KEY[FeedType.GITHUB_TRENDING] is None
+    assert MEMBER_KEY[FeedType.GITHUB_COMMUNITY] is None
+
+
+# ── Phase-3: member-level CRUD endpoints (B2) ────────────────────────────────
+
+
+def test_add_member_appends_and_stamps_user(tmp_config_members: Path) -> None:
+    from routers.community_api import add_member, MemberBody
+
+    _run(add_member("rssf", MemberBody(value="https://c.com/feed")))
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    assert "https://c.com/feed" in f["config"]["urls"]
+    assert f["managed_by"] == "user"  # editing a member takes ownership
+
+
+def test_add_member_rejects_empty(tmp_config_members: Path) -> None:
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("rssf", MemberBody(value="   ")))
+    assert ei.value.status_code == 422
+
+
+def test_add_member_rejects_duplicate(tmp_config_members: Path) -> None:
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("rssf", MemberBody(value="https://a.com/feed")))
+    assert ei.value.status_code == 409
+
+
+def test_add_member_rejects_no_member_type(tmp_config_members: Path) -> None:
+    # github-trending has no editable string members → 422, never a silent crash.
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("gtf", MemberBody(value="anything")))
+    assert ei.value.status_code == 422
+
+
+def test_add_member_missing_feed_404(tmp_config_members: Path) -> None:
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("ghost", MemberBody(value="x")))
+    assert ei.value.status_code == 404
+
+
+def test_delete_member_removes(tmp_config_members: Path) -> None:
+    from routers.community_api import delete_member, MemberBody
+
+    res = _run(delete_member("rssf", MemberBody(value="https://a.com/feed")))
+    assert res["removed"] is True
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    assert "https://a.com/feed" not in f["config"]["urls"]
+    assert f["managed_by"] == "user"
+
+
+def test_delete_member_idempotent_missing(tmp_config_members: Path) -> None:
+    # deleting an absent member is a 200 no-op (not 500) — safe double-click.
+    from routers.community_api import delete_member, MemberBody
+
+    res = _run(delete_member("rssf", MemberBody(value="https://not-there.com")))
+    assert res["ok"] is True
+    assert res["removed"] is False
+
+
+def test_add_member_slash_value_roundtrips(tmp_config_members: Path) -> None:
+    # A member value with slashes (URL) round-trips (body param, not path param).
+    from routers.community_api import add_member, MemberBody
+
+    _run(add_member("rssf", MemberBody(value="https://x.com/a/b/c?d=e")))
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    assert "https://x.com/a/b/c?d=e" in f["config"]["urls"]
+
+
+def test_delete_member_body_arrives_over_http(tmp_config_members: Path) -> None:
+    # MED (Gate-2): the value travels in the DELETE BODY (axios api.delete(url,{data})).
+    # The direct-handler tests above bypass HTTP — this proves the body actually arrives
+    # through the real ASGI stack (a stack/proxy that drops DELETE bodies would 422 here,
+    # not silently no-op, since MemberBody is required). Guards the value-in-body contract.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.community_api import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    resp = client.request(
+        "DELETE", "/api/community/feeds/rssf/members", json={"value": "https://a.com/feed"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["removed"] is True and body["value"] == "https://a.com/feed"
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    assert "https://a.com/feed" not in f["config"]["urls"]
+
+
+def test_member_write_serializes_with_self_tune_lock(tmp_config_members: Path) -> None:
+    # B3: concurrent member writes all persist (shared sidecar flock). This is the
+    # mutation-target — disabling the flock makes concurrent adds clobber (RED).
+    import threading
+    from routers.community_api import add_member, MemberBody
+
+    def _add(i: int) -> None:
+        _run(add_member("rssf", MemberBody(value=f"https://feed{i}.com/f")))
+
+    threads = [threading.Thread(target=_add, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    for i in range(8):
+        assert f"https://feed{i}.com/f" in f["config"]["urls"], f"member {i} clobbered — lock not serializing"
 
 
 # ── Router wiring (AC5 — endpoints reachable through the real ASGI app) ──────

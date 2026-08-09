@@ -73,6 +73,16 @@ describe('communityService — request paths (single /api, added by the intercep
     expect(mockApi.delete).toHaveBeenCalledWith('/community/feeds/my%3Afeed');
   });
 
+  it('addMember POSTs value in the BODY to /community/feeds/{id}/members (id encoded)', async () => {
+    await communityService.addMember('my:feed', 'https://a.com/f');
+    expect(mockApi.post).toHaveBeenCalledWith('/community/feeds/my%3Afeed/members', { value: 'https://a.com/f' });
+  });
+
+  it('deleteMember DELETEs with value in config.data (body, not path — slash-safe)', async () => {
+    await communityService.deleteMember('my:feed', 'https://a.com/a/b/c');
+    expect(mockApi.delete).toHaveBeenCalledWith('/community/feeds/my%3Afeed/members', { data: { value: 'https://a.com/a/b/c' } });
+  });
+
   it('no community path is ever double-prefixed with /api', async () => {
     await communityService.fetchFeed();
     await communityService.fetchSources();
@@ -80,13 +90,15 @@ describe('communityService — request paths (single /api, added by the intercep
     await communityService.addSource({ id: 'x', name: 'X', type: 'rss' });
     await communityService.updateSource('x', { tier: 'leaders' });
     await communityService.deleteSource('x');
+    await communityService.addMember('x', 'v');
+    await communityService.deleteMember('x', 'v');
     const allPaths = [
       ...mockApi.get.mock.calls,
       ...mockApi.post.mock.calls,
       ...mockApi.put.mock.calls,
       ...mockApi.delete.mock.calls,
     ].map((c) => c[0] as string);
-    expect(allPaths.length).toBe(6);
+    expect(allPaths.length).toBe(8);
     for (const p of allPaths) {
       expect(p.startsWith('/community/')).toBe(true);
       expect(p.startsWith('/api/')).toBe(false); // the bug: '/api/community/...'
@@ -97,19 +109,33 @@ describe('communityService — request paths (single /api, added by the intercep
 describe('communityService — snake→camel normalization', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('fetchSources maps managed_by/source_count → managedBy/sourceCount', async () => {
+  it('fetchSources maps managed_by/source_count + member fields → camelCase', async () => {
     mockApi.get.mockResolvedValue({
       data: {
         sources: [
-          { id: 'a', name: 'A', type: 'rss', tier: 'engineering', enabled: true, managed_by: 'user', source_count: 3, tags: ['x'] },
+          { id: 'a', name: 'A', type: 'rss', tier: 'engineering', enabled: true, managed_by: 'user',
+            source_count: 3, members: ['u1', 'u2'], member_count: 2, members_truncated: false,
+            member_kind: 'urls', tags: ['x'] },
         ],
       },
     });
     const out = await communityService.fetchSources();
     expect(out[0]).toEqual({
       id: 'a', name: 'A', type: 'rss', tier: 'engineering', enabled: true,
-      managedBy: 'user', sourceCount: 3, tags: ['x'],
+      managedBy: 'user', sourceCount: 3, members: ['u1', 'u2'], memberCount: 2,
+      membersTruncated: false, memberKind: 'urls', tags: ['x'],
     });
+  });
+
+  it('fetchSources defaults member fields when backend omits them (back-compat)', async () => {
+    mockApi.get.mockResolvedValue({
+      data: { sources: [{ id: 'b', name: 'B', type: 'rss', tier: 'engineering', enabled: true, managed_by: 'manual', source_count: 0 }] },
+    });
+    const out = await communityService.fetchSources();
+    expect(out[0].members).toEqual([]);
+    expect(out[0].memberCount).toBe(0);
+    expect(out[0].membersTruncated).toBe(false);
+    expect(out[0].memberKind).toBeNull();
   });
 
   it('fetchEngagement defaults missing fields (0 / null stars), no fabricated quality', async () => {

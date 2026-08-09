@@ -21,6 +21,8 @@ const fetchEngagement = vi.fn();
 const addSource = vi.fn();
 const updateSource = vi.fn();
 const deleteSource = vi.fn();
+const addMember = vi.fn();
+const deleteMember = vi.fn();
 vi.mock('../../services/community', () => ({
   communityService: {
     fetchFeed: () => fetchFeed(),
@@ -29,8 +31,22 @@ vi.mock('../../services/community', () => ({
     addSource: (f: unknown) => addSource(f),
     updateSource: (id: string, p: unknown) => updateSource(id, p),
     deleteSource: (id: string) => deleteSource(id),
+    addMember: (id: string, v: string) => addMember(id, v),
+    deleteMember: (id: string, v: string) => deleteMember(id, v),
   },
 }));
+
+// A feed WITH editable members (rss → urls). Helper keeps the new member fields in
+// one place so fixtures don't drift from the CommunitySource shape.
+function srcWithMembers(over: Record<string, unknown> = {}) {
+  return {
+    id: 'ai-eng', name: 'AI Engineering', type: 'rss', tier: 'engineering', enabled: true,
+    managedBy: 'manual', sourceCount: 2,
+    members: ['https://a.com/feed', 'https://b.com/feed'], memberCount: 2,
+    membersTruncated: false, memberKind: 'urls', tags: [],
+    ...over,
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -115,7 +131,7 @@ describe('CommunityOverlay — Sources tab', () => {
   it('renders source rows with managed_by (self_tune-coexistence field)', async () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue([
-      { id: 'ai-eng', name: 'AI Engineering', type: 'rss', tier: 'engineering', enabled: true, managedBy: 'manual', sourceCount: 4, tags: [] },
+      srcWithMembers({ sourceCount: 4 }),
     ]);
     setup();
     fireEvent.click(screen.getByTestId('community-tab-sources'));
@@ -145,7 +161,7 @@ describe('CommunityOverlay — Sources tab', () => {
 
 describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
   const oneSource = [
-    { id: 'ai-eng', name: 'AI Engineering', type: 'rss', tier: 'engineering', enabled: true, managedBy: 'manual', sourceCount: 4, tags: [] },
+    srcWithMembers({ sourceCount: 4 }),
   ];
 
   it('toggle fires updateSource with flipped enabled, then refetches', async () => {
@@ -209,6 +225,56 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fireEvent.click(screen.getByTestId('community-tab-sources'));
     fireEvent.click(await screen.findByTestId('source-toggle'));
     await waitFor(() => expect(screen.getByText(/Couldn't update/i)).toBeTruthy());
+  });
+});
+
+describe('CommunityOverlay — member editing (B4)', () => {
+  async function openSources(sources: unknown[]) {
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(sources);
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    await screen.findByTestId('community-source-row');
+  }
+
+  it('expanding a feed lists its members', async () => {
+    await openSources([srcWithMembers()]);
+    fireEvent.click(screen.getByTestId('source-expand'));
+    const rows = await screen.findAllByTestId('member-row');
+    expect(rows.length).toBe(2);
+    expect(screen.getByText('https://a.com/feed')).toBeTruthy();
+  });
+
+  it('adding a member fires addMember then refetches', async () => {
+    addMember.mockResolvedValue(undefined);
+    await openSources([srcWithMembers()]);
+    fireEvent.click(screen.getByTestId('source-expand'));
+    fireEvent.change(await screen.findByTestId('member-add-input'), { target: { value: 'https://c.com/feed' } });
+    fireEvent.click(screen.getByTestId('member-add-submit'));
+    await waitFor(() => expect(addMember).toHaveBeenCalledWith('ai-eng', 'https://c.com/feed'));
+    await waitFor(() => expect(fetchSources.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('deleting a member requires a SECOND confirm click', async () => {
+    deleteMember.mockResolvedValue(undefined);
+    await openSources([srcWithMembers()]);
+    fireEvent.click(screen.getByTestId('source-expand'));
+    const del = (await screen.findAllByTestId('member-delete'))[0];
+    fireEvent.click(del); // arms confirm
+    expect(deleteMember).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('member-delete-confirm'));
+    await waitFor(() => expect(deleteMember).toHaveBeenCalledWith('ai-eng', 'https://a.com/feed'));
+  });
+
+  it('a no-editable-member feed type has NO expand affordance', async () => {
+    await openSources([srcWithMembers({ id: 'gt', name: 'GT', type: 'github-trending', memberKind: null, members: [], memberCount: 0 })]);
+    expect(screen.queryByTestId('source-expand')).toBeNull();
+  });
+
+  it('shows truncation note when membersTruncated', async () => {
+    await openSources([srcWithMembers({ members: ['u1', 'u2'], memberCount: 55, membersTruncated: true })]);
+    fireEvent.click(screen.getByTestId('source-expand'));
+    expect(await screen.findByText(/Showing first 2 of 55/i)).toBeTruthy();
   });
 });
 

@@ -22,7 +22,7 @@ export interface CommunityFeedItem {
   mtime: number;
 }
 
-/** One configured signal source (feed) — read-only view of config.yaml. */
+/** One configured signal source (feed) — a view of config.yaml. */
 export interface CommunitySource {
   id: string;
   name: string;
@@ -31,7 +31,16 @@ export interface CommunitySource {
   enabled: boolean;
   /** "manual" (default when absent) | "self-tune" | "user". */
   managedBy: string;
+  /** Legacy urls-only count — RETAINED for back-compat. Prefer memberCount. */
   sourceCount: number;
+  /** The feed's editable string members (urls/keywords/queries/repos/…), capped. */
+  members: string[];
+  /** ACCURATE total member count (the true total even if `members` is capped). */
+  memberCount: number;
+  /** true when `members` is a capped view of a longer list. */
+  membersTruncated: boolean;
+  /** The config key the members live under (e.g. "urls"), or null = no editable members. */
+  memberKind: string | null;
   tags: string[];
 }
 
@@ -51,6 +60,10 @@ interface RawSource {
   enabled: boolean;
   managed_by: string;
   source_count: number;
+  members?: string[];
+  member_count?: number;
+  members_truncated?: boolean;
+  member_kind?: string | null;
   tags?: string[];
 }
 
@@ -71,6 +84,10 @@ export const communityService = {
       enabled: s.enabled,
       managedBy: s.managed_by,
       sourceCount: s.source_count,
+      members: s.members ?? [],
+      memberCount: s.member_count ?? 0,
+      membersTruncated: s.members_truncated ?? false,
+      memberKind: s.member_kind ?? null,
       tags: s.tags ?? [],
     }));
   },
@@ -98,5 +115,17 @@ export const communityService = {
 
   async deleteSource(id: string): Promise<void> {
     await api.delete(`/community/feeds/${encodeURIComponent(id)}`);
+  },
+
+  // ── Member-level writes (edit a feed's internal urls/keywords/queries/…) ──
+  // Member values contain slashes (URLs) → sent in the request BODY, never a path
+  // param. Bare /community/... path (the axios interceptor prepends /api).
+
+  async addMember(id: string, value: string): Promise<void> {
+    await api.post(`/community/feeds/${encodeURIComponent(id)}/members`, { value });
+  },
+
+  async deleteMember(id: string, value: string): Promise<void> {
+    await api.delete(`/community/feeds/${encodeURIComponent(id)}/members`, { data: { value } });
   },
 };

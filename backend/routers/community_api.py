@@ -210,3 +210,108 @@ async def delete_feed(feed_id: str) -> dict:
 
     removed = mutate_config(_mutator)
     return {"ok": True, "id": feed_id, "removed": bool(removed)}
+
+
+# ── Member-level CRUD (edit a feed's internal urls/keywords/queries/repos/…) ──
+
+
+class MemberBody(BaseModel):
+    """A single editable member of a feed (a URL / keyword / query / repo). Carried in
+    the request BODY (never a path param — member values contain slashes)."""
+    value: str
+
+
+def _member_key_for_type(feed_type: str) -> str | None:
+    """The config key holding this feed type's editable string members, or None.
+    Single source = core.community_data._feed_member_key → jobs.models.MEMBER_KEY."""
+    from core.community_data import _feed_member_key
+
+    return _feed_member_key(feed_type)
+
+
+@router.post("/feeds/{feed_id}/members")
+async def add_member(feed_id: str, body: MemberBody) -> dict:
+    """Add a string member (url/keyword/query/repo/…) to a feed's config. The target
+    config key is derived from the feed's TYPE via MEMBER_KEY (the single source), so a
+    feed type with no editable members (github-trending) is rejected 422 rather than
+    silently writing an unused key. Empty value → 422, duplicate → 409, missing feed →
+    404. A member edit stamps managed_by:user (protected from self_tune auto-disable).
+    Serialized with self_tune + the feed-level endpoints via the shared config lock (R27).
+    """
+    value = body.value.strip()
+    if not value:
+        raise HTTPException(status_code=422, detail="Member value cannot be empty")
+
+    from jobs.config_io import mutate_config
+
+    class _NotFound(Exception):
+        pass
+
+    class _NoMemberType(Exception):
+        pass
+
+    class _Dup(Exception):
+        pass
+
+    def _mutator(config: dict) -> None:
+        for f in config.get("feeds", []):
+            if isinstance(f, dict) and f.get("id") == feed_id:
+                key = _member_key_for_type(f.get("type", ""))
+                if key is None:
+                    raise _NoMemberType()
+                cfg = f.get("config")
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                    f["config"] = cfg
+                members = cfg.get(key)
+                if not isinstance(members, list):
+                    members = []
+                    cfg[key] = members
+                if value in members:
+                    raise _Dup()
+                members.append(value)
+                f["managed_by"] = "user"
+                return
+        raise _NotFound()
+
+    try:
+        mutate_config(_mutator)
+    except _NotFound:
+        raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
+    except _NoMemberType:
+        raise HTTPException(status_code=422, detail=f"Feed '{feed_id}' has no editable members")
+    except _Dup:
+        raise HTTPException(status_code=409, detail=f"Member already exists in '{feed_id}'")
+    return {"ok": True, "id": feed_id, "value": value}
+
+
+@router.delete("/feeds/{feed_id}/members")
+async def delete_member(feed_id: str, body: MemberBody) -> dict:
+    """Remove a string member from a feed's config. IDEMPOTENT — removing an absent
+    member (or a member from a no-member-type / missing feed) is a 200 no-op with
+    removed=false, never a 500 (safe double-click). Stamps managed_by:user only when a
+    real removal happens. Serialized with self_tune via the shared lock (R27).
+    """
+    value = body.value.strip()
+
+    from jobs.config_io import mutate_config
+
+    def _mutator(config: dict) -> bool:
+        for f in config.get("feeds", []):
+            if isinstance(f, dict) and f.get("id") == feed_id:
+                key = _member_key_for_type(f.get("type", ""))
+                if key is None:
+                    return False
+                cfg = f.get("config")
+                if not isinstance(cfg, dict):
+                    return False
+                members = cfg.get(key)
+                if not isinstance(members, list) or value not in members:
+                    return False
+                cfg[key] = [m for m in members if m != value]
+                f["managed_by"] = "user"
+                return True
+        return False
+
+    removed = mutate_config(_mutator)
+    return {"ok": True, "id": feed_id, "value": value, "removed": bool(removed)}
