@@ -110,21 +110,30 @@ def reset_for_test() -> None:
 
 
 _FLUSH_INTERVAL_S = 300  # 5 min — a batch flush, never per-recall (design §3.4)
+_RETENTION_DAYS = 30  # age out recall_metrics rows older than this on each flush (Run 3
+# retention — bounds the table's otherwise-unbounded growth; row volume is tiny so 30d is
+# generous. Legitimate age-based cleanup, NOT an O030/STEERING#2 truncating control.)
 
 
 async def flush_once() -> int:
-    """Drain the rings and batch-write them to recall_metrics. Returns rows written.
+    """Drain the rings, batch-write to recall_metrics, then age out old rows. Returns
+    rows written (the insert count; pruning is a side effect, not part of the return).
 
     Split from the loop so it's unit-testable (drive one flush, assert rows landed
-    + rings emptied). Drain is atomic swap-and-clear (in recall_metrics); the DB
-    write happens OUTSIDE the lock via the pooled batch writer. Never raises.
+    + rings emptied + old rows pruned). Drain is atomic swap-and-clear (in
+    recall_metrics); the DB write happens OUTSIDE the lock via the pooled batch writer.
+    Retention (prune) is folded in here — no separate scheduler (design §3.4/Run 3).
+    Never raises.
     """
     samples = drain_samples()
-    if not samples:
-        return 0
     try:
         from database import db  # module-level singleton (same as record_token_usage callers)
-        return await db.bulk_insert_recall_metrics(samples)
+        written = await db.bulk_insert_recall_metrics(samples) if samples else 0
+        # Retention: prune AFTER inserting, on the same 5-min cadence. Runs even when
+        # there were no new samples this cycle, so growth is bounded regardless of
+        # recall traffic. Fire-and-forget (prune_recall_metrics never raises).
+        await db.prune_recall_metrics(_RETENTION_DAYS)
+        return written
     except Exception:  # noqa: BLE001 — observability flush must never crash the loop
         import logging
         logging.getLogger(__name__).debug(

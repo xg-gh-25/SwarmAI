@@ -1522,6 +1522,10 @@ app.include_router(ddd_brain_router, prefix="/api/ddd", tags=["ddd-brain"])
 from routers.library_api import router as library_router
 app.include_router(library_router, tags=["library"])  # prefix set in router
 
+# Recall metrics visibility (Run 3): read-only count/p50/p95 by context+domain.
+from routers.recall_metrics_api import router as recall_metrics_router
+app.include_router(recall_metrics_router, tags=["recall-metrics"])  # prefix set in router
+
 from routers.community_api import router as community_router
 app.include_router(community_router, tags=["community"])  # prefix set in router
 

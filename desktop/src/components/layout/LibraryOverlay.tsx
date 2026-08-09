@@ -31,6 +31,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { LibraryTree } from './LibraryTree';
 import { LibraryHealth } from './LibraryHealth';
+import { RecallDashboard } from './RecallDashboard';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
 interface NativeCategory { name: string; file_count: number; total_bytes: number; }
@@ -137,6 +138,13 @@ export function LibraryContent() {
             <div className="mt-0.5 text-[10px] text-[var(--color-text-faint)]">
               {mounts?.registry_ready ? 'indexed in place, never copied' : 'coming soon — index in place, no copy'}
             </div>
+          </div>
+
+          {/* Unified recall-metrics dashboard — the cross-context view (all recall
+              surfaces: session prompt / DDD / Library / Brain Hub). Sits in the
+              Library rail because Library IS the recall-surface overview (Run 3). */}
+          <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+            <RecallDashboard />
           </div>
 
           <div className="mt-auto text-[10px] leading-relaxed text-[var(--color-text-faint)]">
@@ -264,6 +272,9 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
               ))}
             </div>
           )}
+          {/* Recall latency lives in the unified RecallDashboard in the left rail (all
+              contexts, incl. library_overlay) — no separate inline panel here, to avoid
+              rendering the same library_overlay p50/p95 twice (meta-review cross-fix). */}
         </section>
       ) : (
       <>

@@ -299,6 +299,24 @@ class _PoolBorrow:
 _POOL_REGISTRY: dict[tuple[str, int], _ConnectionPool] = {}
 
 
+def _percentile(sorted_values: list[float], pct: float) -> float:
+    """Nearest-rank percentile of an ALREADY-SORTED, non-empty list.
+
+    Used by get_recall_metrics_summary — SQLite has no percentile function, so p50/p95
+    are computed read-side from the raw latency rows. Nearest-rank (not interpolated):
+    for [10,20,30,40,50], p50→30, p95→50. Returns 0.0 for an empty list (defensive; the
+    caller only passes non-empty groups). rounded to 0.1ms for a clean UI read-out.
+    """
+    n = len(sorted_values)
+    if n == 0:
+        return 0.0
+    # nearest-rank: rank = ceil(pct/100 * n), 1-based → index rank-1, clamped.
+    import math
+    rank = max(1, math.ceil((pct / 100.0) * n))
+    idx = min(rank - 1, n - 1)
+    return round(float(sorted_values[idx]), 1)
+
+
 def _get_pool(db_path: str) -> _ConnectionPool:
     """Return the process pool for this db_path on the current event loop.
 
@@ -2511,7 +2529,14 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS recall_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    -- LOCAL-NAIVE default (no 'Z') to MATCH bulk_insert_recall_metrics'
+                    -- writer format — get_recall_metrics_summary/prune_recall_metrics
+                    -- do lexicographic string compares on this column, so a UTC-'Z'
+                    -- default would sort AFTER every written row and silently escape both
+                    -- the window filter and the retention DELETE (Run-3 review LOW). The
+                    -- writer always supplies timestamp so this default is a fallback only,
+                    -- but it must not lie about the format.
+                    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime')),
                     context TEXT NOT NULL,
                     domains TEXT NOT NULL DEFAULT '',
                     latency_ms REAL NOT NULL,
@@ -3302,6 +3327,95 @@ class SQLiteDatabase(BaseDatabase):
             return len(rows)
         except Exception:
             logger.warning("Failed to bulk-insert recall metrics", exc_info=True)
+            return 0
+
+    async def get_recall_metrics_summary(
+        self, window_hours: "int | None" = None, context: "str | None" = None
+    ) -> list[dict]:
+        """Aggregate recall_metrics into count/p50/p95 latency by (context, domain).
+
+        The READ side of the recall-metrics visibility layer (Run 3). Percentiles are
+        computed READ-SIDE in Python from the raw rows — SQLite has no percentile
+        function, and the design (§3.3) forbids pre-aggregation (it would permanently
+        destroy the latency distribution). Row volume is tiny (session once/session +
+        overlay per-search, bounded by retention), so fetch-and-sort is cheap.
+
+        Read-only: a single SELECT via a readonly pooled borrow. It reads the TABLE only
+        and NEVER touches core.recall_metrics' in-memory rings (no double-drain).
+
+        Args:
+            window_hours: if set, only rows with timestamp >= now-window (local-naive,
+                matching the writer's format); None = all-time.
+            context: if set, restrict to that one recall context.
+
+        Returns: list of {context, domain, count, p50_ms, p95_ms}, one per
+        (context, domains) group. Never raises (observability read) — [] on error.
+        """
+        try:
+            clauses: list[str] = []
+            params: list = []
+            if window_hours is not None:
+                from datetime import datetime, timedelta
+                # Cutoff MUST match the writer's LOCAL-NAIVE '%Y-%m-%dT%H:%M:%S' format
+                # (bulk_insert_recall_metrics) — a UTC-suffixed form would string-compare
+                # wrong against the suffix-less rows (Gate-1 SSA(b)).
+                cutoff = (datetime.now() - timedelta(hours=window_hours)).strftime(
+                    "%Y-%m-%dT%H:%M:%S")
+                clauses.append("timestamp >= ?")
+                params.append(cutoff)
+            if context:
+                clauses.append("context = ?")
+                params.append(context)
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            groups: dict[tuple, list[float]] = {}
+            async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+                cursor = await conn.execute(
+                    f"SELECT context, domains, latency_ms FROM recall_metrics{where}",
+                    params,
+                )
+                for ctx, dom, lat in await cursor.fetchall():
+                    groups.setdefault((ctx, dom), []).append(float(lat))
+            out: list[dict] = []
+            for (ctx, dom), lats in groups.items():
+                lats.sort()
+                out.append({
+                    "context": ctx,
+                    "domain": dom,
+                    "count": len(lats),
+                    "p50_ms": _percentile(lats, 50),
+                    "p95_ms": _percentile(lats, 95),
+                })
+            # Stable order: by context then domain, so the dashboard render is deterministic.
+            out.sort(key=lambda r: (r["context"], r["domain"]))
+            return out
+        except Exception:
+            logger.warning("Failed to summarize recall metrics", exc_info=True)
+            return []
+
+    async def prune_recall_metrics(self, days: int = 30) -> int:
+        """Delete recall_metrics rows older than ``days`` — age-based retention that
+        bounds the table's otherwise-unbounded growth. Returns rows pruned.
+
+        This is legitimate retention cleanup, NOT an O030/STEERING#2 disaster-recovery
+        control: it removes nothing in-progress and papers over no root cause — it just
+        ages out stale observability rows. Called from flush_once (the existing 5-min
+        loop), so no new scheduler. Fire-and-forget — never raises.
+
+        The cutoff is formatted LOCAL-NAIVE '%Y-%m-%dT%H:%M:%S' to MATCH the writer
+        (bulk_insert_recall_metrics). The comparison is a lexicographic string compare,
+        so a UTC-suffixed cutoff would mis-compare against the suffix-less rows and
+        delete the wrong set (Gate-1 SSA(b)).
+        """
+        try:
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+            async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+                cursor = await conn.execute(
+                    "DELETE FROM recall_metrics WHERE timestamp < ?", (cutoff,))
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount is not None else 0
+        except Exception:
+            logger.warning("Failed to prune recall metrics", exc_info=True)
             return 0
 
     async def get_token_usage_summary(self) -> dict:

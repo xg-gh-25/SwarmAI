@@ -1537,3 +1537,55 @@ async def get_distribution(name: str) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
     return result
+
+
+# The domains a Brain Hub recall fans over: the DDD knowledge for this project plus the
+# library/codeintel it governs. Shares the recall_all BACKEND with session + library
+# recall (thin-unify, NO facade — design §2/§3.6), NOT their policy: this is the OVERLAY
+# contract (empty-ok / degrade-to-empty), never session's never-empty/fallback.
+_BRAINHUB_RECALL_DOMAINS = ("ddd", "library", "codeintel")
+
+
+@router.get("/brains/{name}/recall")
+async def brain_recall(name: str, q: str = "") -> dict:
+    """Recall DDD knowledge for one brain — the Brain Hub's search box.
+
+    Overlay contract: empty q → empty hits; ANY failure degrades to empty, never 500
+    (mirrors library_api.library_search). Records a ``brainhub_overlay`` metric so the
+    recall-metrics visibility layer (Run 3) can see Brain Hub latency alongside the
+    session + library contexts. A 404 is still raised for an unknown brain (a real
+    routing error, distinct from an empty-recall result)."""
+    project_dir = _resolve_brain_dir(name)   # containment-checked (Run 2 guard)
+    if project_dir is None:
+        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+    if not q.strip():
+        return {"query": q, "count": 0, "hits": []}
+    try:
+        import time as _time
+        from core.recall_multi import recall_all
+        _t0 = _time.perf_counter()
+        result = await asyncio.to_thread(
+            recall_all, q, project=name, domains=_BRAINHUB_RECALL_DOMAINS)
+        _latency_ms = (_time.perf_counter() - _t0) * 1000.0
+        hits: list[dict] = []
+        for domain in _BRAINHUB_RECALL_DOMAINS:
+            for h in (result.buckets.get(domain) or []):
+                source = h.get("source") or h.get("file_path") or h.get("mount_path") or ""
+                hits.append({
+                    "domain": domain,
+                    "title": h.get("heading") or h.get("name") or source or "",
+                    "source": source,
+                    "content": (h.get("content") or "")[:400],
+                })
+        # Recall metric (Run 3): one sample for this overlay search. Fire-and-forget —
+        # never breaks the search (mirrors library_api).
+        try:
+            from core.recall_metrics import record_recall_metric
+            record_recall_metric("brainhub_overlay", _BRAINHUB_RECALL_DOMAINS,
+                                  _latency_ms, hit_count=len(hits))
+        except Exception:  # noqa: BLE001
+            pass
+        return {"query": q, "count": len(hits), "hits": hits}
+    except Exception as exc:  # noqa: BLE001 — degrade to empty, never 500 the overlay
+        logger.warning("brain recall failed for %s: %s", name, exc)
+        return {"query": q, "count": 0, "hits": [], "error": "recall unavailable"}
