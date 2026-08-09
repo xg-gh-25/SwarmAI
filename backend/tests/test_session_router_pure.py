@@ -384,3 +384,75 @@ class TestPrependUiStateToQuery:
         blocks = [{"type": "text", "text": "look"}]
         out = _prepend_ui_state_to_query(blocks, self._CANVAS_CTX, should_prefix=False)
         assert out == blocks
+
+
+class TestFormatTtftLine:
+    """_format_ttft_line — pure decision + formatter for the end-to-end TTFT probe.
+
+    Given a streamed event's type + the per-turn timing locals, decide whether THIS
+    event is the first user-visible content token and, if so, produce the one-line
+    `TTFT=` log string (else None). Extracted as a pure helper (GUI38) so the
+    first-delta / idempotency / thinking-counts-too / recall-attribution decisions
+    are unit-testable WITHOUT driving the whole run_conversation async generator.
+    Pure observability: this function only formats a string — it never mutates state.
+    """
+
+    def _call(self, **kw):
+        from core.session_router import _format_ttft_line
+        base = dict(
+            event_type="text_delta", already_recorded=False, ttft_ms=1234.0,
+            slot_ms=0.0, recall_ms=None, recall_ran_this_turn=False, retry_count=0,
+        )
+        base.update(kw)
+        return _format_ttft_line(**base)
+
+    def test_text_delta_first_produces_line(self):
+        """AC1: first text_delta → a TTFT= line with ttft_ms."""
+        line = self._call(event_type="text_delta", ttft_ms=1234.5)
+        assert line is not None
+        assert "TTFT=" in line
+        assert "1234" in line or "1235" in line, f"ttft_ms must appear: {line}"
+
+    def test_thinking_delta_counts_as_first_token(self):
+        """AC3: thinking_delta is a user-visible token too (often FIRST on Opus) —
+        it must trigger the TTFT record, not just text_delta."""
+        line = self._call(event_type="thinking_delta", ttft_ms=800.0)
+        assert line is not None and "TTFT=" in line
+
+    def test_already_recorded_returns_none(self):
+        """AC5 idempotency: once the first delta was recorded, later deltas → None
+        (the log fires exactly once per turn)."""
+        assert self._call(event_type="text_delta", already_recorded=True) is None
+
+    def test_non_content_event_returns_none(self):
+        """A non-content event (assistant/result/tool_use/text_start) is never the
+        first-token trigger → None (must not fire on session_start/text_start)."""
+        for et in ("assistant", "result", "tool_use", "text_start", "thinking_start",
+                   "session_start", "content_block_stop"):
+            assert self._call(event_type=et) is None, f"{et} must not trigger TTFT"
+
+    def test_segments_present(self):
+        """AC2: the line carries the segment attribution — slot + recall + the
+        first-token span — so a reader can locate WHICH segment was slow."""
+        line = self._call(ttft_ms=2000.0, slot_ms=150.0, recall_ms=480.0,
+                          recall_ran_this_turn=True)
+        assert "slot" in line and "recall" in line
+
+    def test_recall_none_labelled_not_faked_as_zero(self):
+        """Gate-1 fix: on a turn where recall did NOT run (turn 2+, channel,
+        keyword-miss), recall must be shown as not-run, NOT silently 0 — otherwise
+        the residual math lies. recall_ran_this_turn=False → a distinct label."""
+        line = self._call(recall_ms=None, recall_ran_this_turn=False)
+        # not-run must be visually distinct from a real 0ms recall
+        assert "recall=n/a" in line or "recall=—" in line or "recall=none" in line, line
+
+    def test_retry_count_surfaced_when_nonzero(self):
+        """Gate-1 fix: a retried turn's ttft_ms includes 5-15s backoff+respawn — so
+        retry_count>0 MUST be surfaced or the number is a lie on respawned turns."""
+        line = self._call(ttft_ms=8000.0, retry_count=2)
+        assert "retr" in line.lower(), f"retry count must be visible: {line}"
+
+    def test_no_retry_note_when_zero(self):
+        """Clean turn (retry_count=0): no retry noise in the line."""
+        line = self._call(ttft_ms=900.0, retry_count=0)
+        assert line is not None

@@ -566,7 +566,7 @@ async def _maybe_inject_recall(
     options: Any,
     unit: SessionUnit,
     editor_context: Optional[dict] = None,
-) -> None:
+) -> Optional[float]:
     """Augment the system prompt with recalled knowledge from the user's query.
 
     CORRECTNESS-FIRST (run_4d06640b): runs the recall leg to COMPLETION
@@ -596,13 +596,18 @@ async def _maybe_inject_recall(
         failure inside _recall_for_query → logger.warning + metric. NEVER silent —
         silent empty recall is the exact dead-path class that hid for months.
     """
+    # Returns the recall-leg wall-clock (ms) IF recall actually RAN this turn, else
+    # None. None means "no fresh recall this turn" — recall runs once per session
+    # (_recall_injected guard) and never for channels, so turns 2+ get None. The
+    # TTFT probe uses this to label recall as n/a rather than fake a stale/0 value
+    # (Gate-1: attributing turn-1 recall to a later turn corrupts the residual math).
     if unit._recall_injected:
-        return
+        return None
 
     # Channel sessions: skip recall, set flag
     if unit.is_channel_session:
         unit._recall_injected = True
-        return
+        return None
 
     # Dedicated pools for the recall/DDD hot-path (run_c8ad52f8) — keep this
     # session-init blocking work OFF the shared default ThreadPoolExecutor so a
@@ -665,7 +670,7 @@ async def _maybe_inject_recall(
         unit._recall_keyword_misses = getattr(unit, "_recall_keyword_misses", 0) + 1
         if unit._recall_keyword_misses >= _RECALL_KEYWORD_MISS_CAP:
             unit._recall_injected = True
-        return
+        return None
 
     # Instrumentation (READ-line observability, design §2 P2/P3): measure the
     # recall leg wall-clock AND the base system-prompt token size BEFORE injection,
@@ -676,6 +681,7 @@ async def _maybe_inject_recall(
     from .context_directory_loader import ContextDirectoryLoader
     _base_tok = ContextDirectoryLoader.estimate_tokens(options.system_prompt or "")
     _t_recall_start = time.perf_counter()
+    _recall_ms: Optional[float] = None  # set once the recall leg completes (any outcome)
 
     _editor_fp = editor_context.get("file_path") if editor_context else None
 
@@ -798,6 +804,61 @@ async def _maybe_inject_recall(
     # DDD injection already ran above (own _ddd_injected guard, before the
     # keyword gate — Gate-2 HIGH fix). Latch keyword-recall's guard.
     unit._recall_injected = True
+    # _recall_ms is the leg wall-clock when recall RAN this turn (success or
+    # empty-match); it stays None on the disaster-timeout / exception paths (no
+    # meaningful leg time to attribute). The caller labels None as "recall=n/a".
+    return _recall_ms
+
+
+# Event types that are the first USER-VISIBLE content token of a turn. thinking_delta
+# is included deliberately: under Opus adaptive thinking a turn's first streamed token
+# is usually a thinking_delta (streaming_orchestrator.py:804), so a text-only TTFT
+# would be systematically LATE (Gate-0 skeptic). NOT included: *_start / session_start
+# / assistant / result / tool_use / content_block_stop — none carry a visible token.
+_TTFT_FIRST_CONTENT_TYPES = ("text_delta", "thinking_delta")
+
+
+def _format_ttft_line(
+    event_type: str,
+    already_recorded: bool,
+    ttft_ms: float,
+    slot_ms: float,
+    recall_ms: Optional[float],
+    recall_ran_this_turn: bool,
+    retry_count: int,
+) -> Optional[str]:
+    """Pure decision + formatter for the end-to-end TTFT probe (observability-only).
+
+    Returns the one-line ``TTFT=`` log string when ``event_type`` is the FIRST
+    user-visible content token of the turn (and it has not already been recorded),
+    else ``None``. This function ONLY formats a string — it never mutates state, so
+    the caller owns the once-per-turn latch (``already_recorded``).
+
+    Segments (all measured from the ``run_conversation`` entry t0):
+      - ``ttft_ms``  — entry → this first content delta (the headline number)
+      - ``slot_ms``  — time spent in slot-acquire/queue (0 when a slot was free)
+      - ``recall_ms``— the recall leg IF it ran THIS turn (else labelled ``n/a``:
+        recall runs once per session + never for channels, so turn-2+ has no fresh
+        recall — showing a stale/0 value would make the residual math lie, Gate-1).
+      - ``spawn+infer`` residual = ttft − slot − recall (only when recall ran).
+      - ``retries``  — surfaced ONLY when >0: a retried turn's ttft_ms includes
+        5-15s backoff + ``--resume`` respawn, so the raw number is meaningless
+        without this note (Gate-1).
+    """
+    if already_recorded or event_type not in _TTFT_FIRST_CONTENT_TYPES:
+        return None
+    if recall_ran_this_turn and recall_ms is not None:
+        recall_seg = f"recall={recall_ms:.0f}ms"
+        residual = ttft_ms - slot_ms - recall_ms
+        residual_seg = f" spawn+infer={residual:.0f}ms"
+    else:
+        recall_seg = "recall=n/a"  # did not run this turn — NOT a real 0ms
+        residual_seg = ""
+    retry_seg = f" retries={retry_count}" if retry_count else ""
+    return (
+        f"TTFT={ttft_ms:.0f}ms (first-token={event_type}) | "
+        f"slot={slot_ms:.0f}ms {recall_seg}{residual_seg}{retry_seg}"
+    )
 
 
 def _inject_ddd_for_active_project(
@@ -1908,6 +1969,17 @@ class SessionRouter:
         """
         from .session_utils import _build_error_event
 
+        # ── TTFT probe (observability-only, run_ad19fd5b) ──────────────────
+        # End-to-end time-to-first-token: t0 at the true per-turn entry (BEFORE
+        # slot-acquire + recall — the two biggest controllable pre-generation
+        # delays, Gate-0 skeptic), first-token captured in the stream loop below.
+        # All three are plain locals — no cross-object state, no effect on control
+        # flow (pure observability). Segment accumulators: slot + recall (this turn).
+        _ttft_t0 = time.perf_counter()
+        _ttft_recorded = False
+        _ttft_slot_ms = 0.0
+        _ttft_recall_ms: Optional[float] = None
+
         # Resolve session_id — use provided or generate
         if session_id is None:
             session_id = str(uuid4())
@@ -2013,7 +2085,9 @@ class SessionRouter:
         if needs_queue:
             yield {"type": "queued", "position": 1, "estimatedWaitMs": self.QUEUE_TIMEOUT * 1000}
 
+        _ttft_slot_t = time.perf_counter()
         slot_result = await self._acquire_slot(unit)
+        _ttft_slot_ms = (time.perf_counter() - _ttft_slot_t) * 1000.0  # incl. queue wait
         if slot_result == "timeout":
             error_event = _build_error_event(
                 code="QUEUE_TIMEOUT",
@@ -2236,7 +2310,10 @@ class SessionRouter:
         # Replaces the old proactive-keyword recall (in prompt_builder.py)
         # which used generic focus keywords before the user typed.
         if _user_text:
-            await _maybe_inject_recall(
+            # Return value is the recall-leg ms IF recall ran THIS turn, else None
+            # (turn 2+ / channel / keyword-miss). Feeds the TTFT probe's recall
+            # segment — None → labelled n/a, never faked as 0 (Gate-1).
+            _ttft_recall_ms = await _maybe_inject_recall(
                 user_message=_user_text,
                 options=options,
                 unit=unit,
@@ -2301,6 +2378,31 @@ class SessionRouter:
                 # open question.
                 if client_id and unit._turn_client_id != client_id:
                     unit._turn_client_id = client_id
+
+                # ── TTFT probe: record the first user-visible content token ──
+                # Observability-only. Wrapped in a broad try/except so a formatting
+                # or attribute error can NEVER raise inside the stream loop and abort
+                # the turn (Gate-1 point 3 — the one way "pure observability" could
+                # become false). _format_ttft_line is a pure decision (returns a line
+                # only on the FIRST text/thinking delta, else None); the latch lives
+                # here so it fires exactly once per turn.
+                if not _ttft_recorded:
+                    try:
+                        _ttft_line = _format_ttft_line(
+                            event_type=event.get("type", ""),
+                            already_recorded=_ttft_recorded,
+                            ttft_ms=(time.perf_counter() - _ttft_t0) * 1000.0,
+                            slot_ms=_ttft_slot_ms,
+                            recall_ms=_ttft_recall_ms,
+                            recall_ran_this_turn=_ttft_recall_ms is not None,
+                            retry_count=getattr(unit, "_retry_count", 0) or 0,
+                        )
+                        if _ttft_line is not None:
+                            _ttft_recorded = True
+                            logger.info("%s | session_id=%s", _ttft_line, session_id)
+                    except Exception as _ttft_err:  # noqa: BLE001 — never break stream
+                        logger.debug("TTFT probe skipped: %s", _ttft_err)
+
                 # Persist assistant content blocks immediately — crash-safe.
                 # The assistant row's correlation key is the turn client_id with
                 # an "-asst" suffix, matching the frontend's assistant placeholder
