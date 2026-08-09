@@ -16,6 +16,7 @@
     "prebuild": "npm run generate-seed-db",
     "build:all": "npm run prebuild && bash scripts/build.sh",
     "lint": "eslint .",
+    "lint:contract": "eslint -c eslint.contract.config.js --quiet .",
     "test": "vitest",
     "test:run": "vitest run"
   },

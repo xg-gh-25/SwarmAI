@@ -77,3 +77,62 @@ describe('URL path contract — shared axios instance takes BARE paths', () => {
     expect(DOUBLE_PREFIX_RE.test("fetch(`${apiBase}/api/skills/generate-with-agent`, {")).toBe(false);
   });
 });
+
+/**
+ * DRIFT GUARD (run_a1f4c2d8) — the AST tier of this contract lives in TWO eslint
+ * configs and they must not diverge:
+ *   - `eslint.config.js`         — the full dev ruleset (`npm run lint`), currently RED
+ *                                   on 30 pre-existing unrelated errors, so it gates nothing.
+ *   - `eslint.contract.config.js` — a SCOPED config carrying only this contract; green,
+ *                                   and wired into CI as `npm run lint:contract`.
+ * The rule is duplicated because a flat-config array cannot be sliced without dragging
+ * its `extends` presets along. Duplication is only safe with a guard, so: assert both
+ * files carry the SAME selectors. If someone tightens one and forgets the other, this
+ * goes RED — the developer-facing rule and the CI-facing rule can never silently drift.
+ */
+describe('URL path contract — eslint AST tier', () => {
+  const DESKTOP_DIR = join(SERVICES_DIR, '..', '..');
+
+  it('the scoped contract config is wired into CI (not just written)', () => {
+    const ci = readFileSync(join(DESKTOP_DIR, '..', '.github', 'workflows', 'ci.yml'), 'utf-8');
+    // Match an EXECUTED step (`run: npm run lint:contract`), not any occurrence of the
+    // string. A bare `ci.includes('lint:contract')` passes on a mere COMMENT mentioning
+    // it — caught by mutation-testing this very assertion (replacing the run: line with
+    // `echo skipped` left the explanatory comment behind and the check stayed green).
+    // That is the "guard that never executes" class, one level up: a guard that cannot
+    // see its own subject.
+    expect(
+      /run:\s*npm run lint:contract/.test(ci),
+      'ci.yml no longer RUNS `npm run lint:contract` — the AST gate is dormant again, ' +
+        'which is exactly the state this run fixed (a rule nothing executes is prose).',
+    ).toBe(true);
+
+    const pkg = JSON.parse(readFileSync(join(DESKTOP_DIR, 'package.json'), 'utf-8'));
+    expect(pkg.scripts['lint:contract']).toBeTruthy();
+    expect(pkg.scripts['lint:contract']).toContain('eslint.contract.config.js');
+  });
+
+  it('both eslint configs carry the same contract selectors (no drift)', () => {
+    const full = readFileSync(join(DESKTOP_DIR, 'eslint.config.js'), 'utf-8');
+    const scoped = readFileSync(join(DESKTOP_DIR, 'eslint.contract.config.js'), 'utf-8');
+
+    // Extract every `selector:` string literal from a config source.
+    const selectorsOf = (src: string): string[] =>
+      [...src.matchAll(/selector:\s*\n?\s*"([^"]+)"/g)].map((m) => m[1]).sort();
+
+    const fullSelectors = selectorsOf(full);
+    const scopedSelectors = selectorsOf(scoped);
+
+    expect(
+      fullSelectors.length,
+      'eslint.config.js has no `selector:` entries — the URL contract rule was removed there',
+    ).toBeGreaterThan(0);
+    expect(
+      scopedSelectors,
+      'eslint.contract.config.js (the CI gate) and eslint.config.js (the dev ruleset) ' +
+        'carry DIFFERENT selectors — one was edited without the other:\n' +
+        `  full:   ${JSON.stringify(fullSelectors, null, 2)}\n` +
+        `  scoped: ${JSON.stringify(scopedSelectors, null, 2)}`,
+    ).toEqual(fullSelectors);
+  });
+});

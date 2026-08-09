@@ -133,6 +133,17 @@ jobs:
         working-directory: ./desktop
         run: npx tsc --noEmit
 
+      # URL path contract gate (run_a1f4c2d8) — the AST twin of urlContract.test.ts.
+      # SCOPED config on purpose: `npm run lint` (the full ruleset) is RED on 30
+      # pre-existing no-explicit-any / no-unused-vars errors, so it cannot gate
+      # anything today. `lint:contract` carries ONLY the double-`/api`-prefix rules and
+      # is green, so the class is enforced NOW instead of waiting on that cleanup.
+      # Before this step existed the rule was in eslint.config.js but NOTHING ran it —
+      # a guard that never executes (the failure mode this repo hit 6 times).
+      - name: URL path contract (double /api prefix)
+        working-directory: ./desktop
+        run: npm run lint:contract
+
       - name: Run frontend tests
         working-directory: ./desktop
         run: npx vitest run --reporter=verbose
