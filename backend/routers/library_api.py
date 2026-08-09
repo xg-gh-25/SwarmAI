@@ -256,7 +256,9 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
         return {"query": q, "hits": []}
     try:
         from core.recall_multi import recall_library_hits, LIBRARY_DOMAINS
+        _t0 = time.perf_counter()
         result = recall_library_hits(q, scope)
+        _latency_ms = (time.perf_counter() - _t0) * 1000.0
         hits: list[dict] = []
         for domain in LIBRARY_DOMAINS:
             for h in (result.buckets.get(domain) or []):
@@ -274,6 +276,14 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
                     "content": (h.get("content") or "")[:400],
                     "mount_id": h.get("mount_id"),
                 })
+        # Recall metrics (run_40091f5c): one sample for this overlay search.
+        # Fire-and-forget — never breaks the search.
+        try:
+            from core.recall_metrics import record_recall_metric
+            record_recall_metric("library_overlay", LIBRARY_DOMAINS, _latency_ms,
+                                  hit_count=len(hits))
+        except Exception:  # noqa: BLE001
+            pass
         return {"query": q, "scope": scope, "count": len(hits), "hits": hits}
     except Exception as exc:  # noqa: BLE001 — search must degrade to empty, never 500 the overlay
         logger.warning("library search failed: %s", exc)

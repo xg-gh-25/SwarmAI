@@ -707,6 +707,21 @@ async def _maybe_inject_recall(
                 timeout=_RECALL_DISASTER_TIMEOUT_S,
             )
         _recall_ms = (time.perf_counter() - _t_recall_start) * 1000.0
+        # Recall metrics substrate (run_40091f5c): record ONE sample for this
+        # session-prompt recall — total latency + whether it hit. Fire-and-forget
+        # (never raises into recall). Flushed to recall_metrics every ~5 min.
+        try:
+            from core.recall_metrics import record_recall_metric
+            from core.recall_multi import DOMAINS
+            # Non-ddd unified fan-out (ddd runs on its own path, excluded above).
+            _sp_domains = tuple(d for d in DOMAINS if d != "ddd")
+            record_recall_metric(
+                "session_prompt", _sp_domains,
+                _recall_ms, hit_count=(1 if recalled else 0),
+                degraded_reason=(None if recalled else "empty_with_keywords"),
+            )
+        except Exception:  # noqa: BLE001 — metric must never break recall
+            pass
         if recalled:
             # Append to this options instance only — safe even if options is
             # rebuilt on retry (system_prompt is a plain str, so += makes a new str).
@@ -881,8 +896,20 @@ def _inject_ddd_for_active_project(
         _record_ddd_inject(f"declined:{signal}")
         return
 
+    _ddd_t0 = time.perf_counter()
     result = recall_all(user_message, project=project, domains=("ddd",))
+    _ddd_ms = (time.perf_counter() - _ddd_t0) * 1000.0
     ddd_hits = result.buckets.get("ddd", []) if hasattr(result, "buckets") else []
+    # Recall metrics (run_40091f5c): the ddd leg is a REAL per-prompt daemon recall
+    # on its OWN path (excluded from the session_prompt sample) — measure it too, or
+    # daemon recall latency is only half-covered. Runs in the io-thread; the metric's
+    # threading.Lock makes that safe. Fire-and-forget.
+    try:
+        from core.recall_metrics import record_recall_metric
+        record_recall_metric("session_ddd", ("ddd",), _ddd_ms,
+                             hit_count=len(ddd_hits))
+    except Exception:  # noqa: BLE001
+        pass
     if not ddd_hits:
         _record_ddd_inject("declined:no_ddd_hits")
         logger.info("DDD detected project=%s (%s) but 0 DDD sections matched",

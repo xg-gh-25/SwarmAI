@@ -1673,7 +1673,9 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 3 — add hive_accounts + hive_instances tables (2026-04-28)
 # 4 — add messages_fts virtual table + triggers (2026-04-28)
 # 5 — extend messages TTL from 7 days to 90 days (2026-05-02)
-CURRENT_SCHEMA_VERSION = 6
+# 6 — pending-message contract: messages.sent/pending_seq/claimed_at + idx (2026-06-20)
+# 7 — add recall_metrics table (2026-08-09)
+CURRENT_SCHEMA_VERSION = 7
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -2498,6 +2500,33 @@ class SQLiteDatabase(BaseDatabase):
                 "claimed_at + idx_messages_pending) complete"
             )
 
+        if current_version < 7:
+            # Version 7: recall_metrics table (2026-08-09, run_40091f5c) — one ROW
+            # PER RECALL (raw samples, NOT pre-aggregated) so p50/p95 latency by
+            # (context, domain) can be computed downstream (Run 3). Written only by
+            # the 5-min batch flush (core/recall_metrics.drain_samples →
+            # bulk_insert_recall_metrics), never per-recall. Mirrors token_usage's
+            # column style; timestamp defaults UTC in DDL but the writer overrides
+            # with local time (see bulk_insert_recall_metrics), same as token_usage.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS recall_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    context TEXT NOT NULL,
+                    domains TEXT NOT NULL DEFAULT '',
+                    latency_ms REAL NOT NULL,
+                    hit_count INTEGER NOT NULL DEFAULT 0,
+                    degraded_reason TEXT
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recall_metrics_ctx_ts "
+                "ON recall_metrics(context, timestamp)"
+            )
+            await conn.execute("PRAGMA user_version = 7")
+            await conn.commit()
+            logger.info("Migration v7: recall_metrics table created")
+
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 
@@ -3238,6 +3267,42 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.commit()
         except Exception:
             logger.warning("Failed to record token usage", exc_info=True)
+
+    # ── Recall Metrics (batch flush) ─────────────────────────────────────
+    async def bulk_insert_recall_metrics(self, samples: list[dict]) -> int:
+        """Batch-insert recall samples drained from core.recall_metrics. Returns the
+        count inserted. Fire-and-forget safe — never raises (observability only).
+
+        ONE transaction / executemany per drain (not per-sample) to minimise the
+        pooled writer's lock hold-time (the flush loop calls this every ~5 min with
+        a whole window of samples). Local timestamp, same convention as
+        record_token_usage, so time-of-day aggregation matches the user's day.
+        """
+        if not samples:
+            return 0
+        try:
+            from datetime import datetime
+            now_local = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            rows = [
+                (now_local, str(s.get("context", "")), str(s.get("domains", "")),
+                 float(s.get("latency_ms", 0.0)), int(s.get("hit_count", 0) or 0),
+                 s.get("degraded_reason"))
+                for s in samples
+            ]
+            async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+                await conn.executemany(
+                    """
+                    INSERT INTO recall_metrics
+                        (timestamp, context, domains, latency_ms, hit_count, degraded_reason)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                await conn.commit()
+            return len(rows)
+        except Exception:
+            logger.warning("Failed to bulk-insert recall metrics", exc_info=True)
+            return 0
 
     async def get_token_usage_summary(self) -> dict:
         """Return aggregated token usage: today + total (tokens and cost).

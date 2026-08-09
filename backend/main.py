@@ -1312,6 +1312,13 @@ async def lifespan(app: FastAPI):
     from core.readiness_sampler import readiness_sampler_loop
     _readiness_task = asyncio.create_task(readiness_sampler_loop())
 
+    # Recall-metrics batch flush (run_40091f5c): drain the in-memory latency-sample
+    # rings to the recall_metrics table every ~5 min (never per-recall — the write
+    # stays off the recall hot path). Fire-and-forget background task like the
+    # readiness sampler above.
+    from core.recall_metrics import recall_metrics_flush_loop
+    _recall_metrics_task = asyncio.create_task(recall_metrics_flush_loop())
+
     # Independent-thread liveness heartbeat (run_5b0d6ec3): decouples "process
     # alive" from the asyncio loop/GIL so a *busy* backend (heavy CPU on the loop
     # thread) can never be misread as *dead* by the Tauri watchdog → false
@@ -1334,6 +1341,19 @@ async def lifespan(app: FastAPI):
             await _readiness_task
         except asyncio.CancelledError:
             pass
+    # Recall-metrics: cancel the flush loop, then drain the current window ONCE so a
+    # CLEAN stop persists it (only a hard crash should lose ≤5min of samples).
+    if _recall_metrics_task and not _recall_metrics_task.done():
+        _recall_metrics_task.cancel()
+        try:
+            await _recall_metrics_task
+        except asyncio.CancelledError:
+            pass
+    try:
+        from core.recall_metrics import flush_once as _recall_flush_once
+        await _recall_flush_once()
+    except Exception:  # noqa: BLE001 — best-effort shutdown flush, never block teardown
+        logger.debug("recall metrics shutdown flush skipped", exc_info=True)
     # Stop the liveness heartbeat (run_5b0d6ec3): cancel the loop-tick task +
     # stop the independent writer thread (removes the heartbeat file so a
     # restart doesn't read a stale one from this process).
