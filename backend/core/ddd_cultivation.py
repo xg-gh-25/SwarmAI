@@ -1849,6 +1849,78 @@ def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> st
     return trust_from_gate2_outcome(derive_gate2_outcome(run_state))
 
 
+_TERMINAL_STATUSES = frozenset({"applied", "rejected", "expired", "dismissed"})
+
+
+def backfill_proposals(project_dir: "Path", dry_run: bool = False) -> dict:
+    """One-time migration (step-final, AC12): reconcile the inherited proposal pile with
+    the NEW admission rules — WITHOUT irrecoverable data loss (STEERING "trash > rm").
+
+    Two operations, deliberately asymmetric on reversibility:
+      • **GC terminal files** (applied/rejected/expired/dismissed / is_expired) — these
+        are DONE; deleting them is the safe disk-hygiene win. Unlinked directly.
+      • **Re-stamp SURVIVORS** (pending/escalated) — re-derive trust from the source run
+        (a stored stamp may predate Component B) and PERSIST the corrected proposal, but
+        do NOT unlink or auto-write during the migration. A survivor that is now-noise or
+        now-auto is left in place with corrected trust; the NEXT normal cultivation cycle
+        (or human review) acts on it under the new rules. This avoids (a) silently
+        deleting a pending proposal a human never saw if is_noise false-positives, and
+        (b) a batch migration silently auto-writing into DDD docs.
+
+    A now-noise survivor is FLAGGED (counted + logged) so its removal is a visible,
+    reviewable follow-up — never an unlogged rm. Idempotent + fail-safe per file.
+    ``dry_run=True`` reports the plan (counts) without touching disk.
+    Returns {"gc_removed", "flagged_noise", "kept_review", "would_auto"}.
+    """
+    result = {"gc_removed": 0, "flagged_noise": 0, "kept_review": 0, "would_auto": 0}
+    proposals_dir = Path(project_dir) / ".artifacts" / "proposals"
+    if not proposals_dir.is_dir():
+        return result
+    for fp in sorted(proposals_dir.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            proposal = CultivationProposal.from_dict(data)
+        except (json.JSONDecodeError, OSError, KeyError, TypeError):
+            continue  # skip a malformed file (never abort the sweep)
+        # 1. GC terminal files (safe: they are DONE)
+        if proposal.status in _TERMINAL_STATUSES or proposal.is_expired():
+            if not dry_run:
+                try:
+                    fp.unlink()
+                except OSError:
+                    continue
+            result["gc_removed"] += 1
+            continue
+        # 2. re-stamp survivors (re-derive trust; a stored stamp may predate Component B)
+        fresh_trust = stamp_trust_from_run(proposal.source_run_id, project_dir)
+        if fresh_trust != proposal.passed_adversarial_gate and not dry_run:
+            proposal.passed_adversarial_gate = fresh_trust
+            try:
+                fp.write_text(json.dumps(proposal.to_dict(), indent=2), encoding="utf-8")
+            except OSError:
+                pass
+        verdict, _reason = admission_band(proposal, project_dir)
+        if verdict == "discard":
+            # now-noise: FLAG it (visible), do NOT silently unlink a human-unseen item.
+            result["flagged_noise"] += 1
+            logger.info(
+                "backfill: FLAG now-noise survivor (kept for review, not auto-deleted): "
+                "%s § %s (%s): %.80s",
+                proposal.target_doc, proposal.target_section, _reason, proposal.content,
+            )
+        elif verdict == "auto":
+            # now auto-eligible under new rules — do NOT auto-write during migration;
+            # the next cultivation cycle applies it. Count for visibility.
+            result["would_auto"] += 1
+        else:
+            result["kept_review"] += 1
+    logger.info(
+        "backfill_proposals(%s, dry_run=%s): %s",
+        Path(project_dir).name, dry_run, result,
+    )
+    return result
+
+
 def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
     """Write a proposal as an atomic JSON file (escalation path).
 
@@ -2129,8 +2201,10 @@ def _cultivate_proposals(
 ) -> dict:
     """Apply or escalate a list of proposals. Shared by all cultivate_from_* entry points.
 
-    Auto-approval gate (ddd_auto_approval) adds maturity, magnitude, precision,
-    circuit breaker, and conflict checks on top of is_safe_append().
+    The auto/review/discard decision is admission_band (run_8d5fe9d1, Component C): trust
+    (passed_adversarial_gate) gates the zone; ddd_auto_approval's magnitude/circuit-breaker
+    are the surviving hard quality checks; the calibrated per-channel confidence floor
+    (Component D) gates value. (The old is_safe_append doc-whitelist was removed.)
 
     Returns:
         {"applied": N, "escalated": M, "rejected": K, "write_failed": W,
