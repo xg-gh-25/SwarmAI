@@ -1665,9 +1665,84 @@ def trust_from_gate2_outcome(outcome: "str | None") -> str:
     return "n/a"
 
 
-# Admission auto-band confidence floor. A module constant now; Component D (calibration)
-# will override it per-channel from proposal_feedback.get_adjusted_threshold.
+# Admission auto-band confidence floor (DEFAULT / base). Component D calibrates it
+# PER-CHANNEL from proposal_feedback: a channel with poor precision gets a HIGHER auto
+# bar (anti-runaway: the tracker only ever RAISES, never auto-lowers).
 _AUTO_CONFIDENCE_THRESHOLD = 0.7
+
+
+# mtime-keyed cache for channel_stats.json — admission_band calls _channel_auto_threshold
+# once PER PROPOSAL, so an un-cached read re-parses the file N times per batch (measured
+# ~6.6ms/5-proposal batch, Gate-2 perf flag). Key on (path, mtime) so a batch reuses one
+# parse AND a fresh stats write (new mtime) invalidates immediately — no staleness.
+_CHANNEL_STATS_CACHE: "dict[str, tuple[float, dict]]" = {}
+
+
+def _channel_auto_threshold(
+    channel: str, base: float, project_dir: "Path | None"
+) -> float:
+    """Per-channel calibrated auto threshold (Component D, AC6).
+
+    Reads ``<project_dir>/.artifacts/channel_stats.json`` (written on the timer by
+    ddd_orchestrator via ProposalFeedbackTracker.compute_channel_stats) and asks the
+    tracker for the precision-adjusted threshold for this channel. A channel that keeps
+    producing rejected auto-applies gets a HIGHER bar → fewer bad autos → the review
+    burden it creates shrinks over time. Fail-safe: no stats / unreadable / no
+    project_dir → the base default (never crashes cultivation). mtime-cached so a
+    per-proposal batch reads+parses the file once, not N times.
+    """
+    if project_dir is None:
+        return base
+    try:
+        from core.proposal_feedback import ProposalFeedbackTracker, THRESHOLD_FLOOR
+        stats_file = Path(project_dir) / ".artifacts" / "channel_stats.json"
+        if not stats_file.is_file():
+            return max(base, THRESHOLD_FLOOR)
+        key = str(stats_file)
+        mtime = stats_file.stat().st_mtime
+        cached = _CHANNEL_STATS_CACHE.get(key)
+        if cached is not None and cached[0] == mtime:
+            stats = cached[1]
+        else:
+            stats = json.loads(stats_file.read_text(encoding="utf-8"))
+            _CHANNEL_STATS_CACHE[key] = (mtime, stats)
+        return ProposalFeedbackTracker().get_adjusted_threshold(channel, base, stats)
+    except Exception:  # noqa: BLE001 — calibration must never break admission
+        return base
+
+
+def apply_channel_self_corrections(project_dir: "Path | None") -> "list[dict]":
+    """Consume check_self_correction (Component D, AC7) — the previously-DEAD half.
+
+    For each channel that has accumulated ≥ SELF_CORRECTION_BATCH rejections with a
+    dominant reason, surface the mapped fix recommendation as an action record. This
+    CLOSES the loop that was 60% wired (stats computed + recommendation function
+    existed, but NOTHING consumed it). Returned actions are logged + handed to the
+    caller (the maintenance hook) so a persistently-bad channel's correction is
+    ACTED ON / visible, not silently accrued. Fail-safe → [] on any error.
+    """
+    if project_dir is None:
+        return []
+    try:
+        from core.proposal_feedback import ProposalFeedbackTracker
+        stats_file = Path(project_dir) / ".artifacts" / "channel_stats.json"
+        if not stats_file.is_file():
+            return []
+        stats = json.loads(stats_file.read_text(encoding="utf-8"))
+        tracker = ProposalFeedbackTracker()
+        actions: list[dict] = []
+        for channel in stats:
+            rec = tracker.check_self_correction(channel, stats)
+            if rec:
+                logger.info(
+                    "admission self-correction: channel=%s reason=%s fix=%s (rejections=%s)",
+                    rec.get("channel"), rec.get("reason"), rec.get("fix_type"),
+                    rec.get("rejection_count"),
+                )
+                actions.append(rec)
+        return actions
+    except Exception:  # noqa: BLE001 — never break the maintenance hook
+        return []
 
 
 def admission_band(
@@ -1725,9 +1800,13 @@ def admission_band(
     if not criteria.get("circuit_breaker_ok", True):
         return ("review", "circuit_breaker")
 
-    # 4. confidence floor (Component D will calibrate this per channel)
-    if proposal.confidence < _AUTO_CONFIDENCE_THRESHOLD:
-        return ("review", f"below_auto_threshold:{proposal.confidence:.2f}")
+    # 4. confidence floor — PER-CHANNEL calibrated (Component D, AC6): a channel with
+    #    poor precision gets a raised bar, so bad-auto-producing channels self-tighten.
+    threshold = _channel_auto_threshold(
+        proposal.source_stage, _AUTO_CONFIDENCE_THRESHOLD, project_dir
+    )
+    if proposal.confidence < threshold:
+        return ("review", f"below_auto_threshold:{proposal.confidence:.2f}<{threshold:.2f}")
 
     return ("auto", "trust_passed")
 

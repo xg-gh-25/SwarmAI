@@ -581,6 +581,11 @@ class DddCultivationOrchestrator:
                 tracker = ProposalFeedbackTracker()
                 artifacts_dir = proposals_dir.parent  # .artifacts/
                 tracker.compute_channel_stats(proposals_dir, persist_to=artifacts_dir)
+                # Admission Component D (AC7, run_8d5fe9d1): CLOSE the calibration loop —
+                # consume the freshly-computed stats' self-correction recommendations
+                # (previously dead code). project_dir = artifacts_dir.parent.
+                from core.ddd_cultivation import apply_channel_self_corrections
+                apply_channel_self_corrections(artifacts_dir.parent)
         except Exception as exc:
             logger.debug("ddd_orchestrator: feedback tracking skipped: %s", exc)
 
