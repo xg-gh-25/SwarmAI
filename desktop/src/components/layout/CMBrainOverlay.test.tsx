@@ -486,7 +486,11 @@ describe('CMBrainOverlay — AC3/4/5 proposal cards + dual-route actions', () =>
     act(() => { (card.querySelector('[data-testid="cm-card-accept"]') as HTMLElement).click(); });
     await waitFor(() => {
       const posts = (api.post as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
-      expect(posts.some((u) => u.includes('/api/cultivation/proposals/proposal_a8e14d/approve'))).toBe(true);
+      // bare path — the axios interceptor (api.ts) prepends /api. A hard-coded
+      // '/api/cultivation/...' here would become '/api/api/...' → 404 (the bug fixed
+      // 2026-08-09). Assert the exact bare path so the double-prefix can't return.
+      expect(posts.some((u) => u.startsWith('/cultivation/proposals/proposal_a8e14d/approve'))).toBe(true);
+      expect(posts.some((u) => u.startsWith('/api/cultivation/'))).toBe(false);
     });
   });
 

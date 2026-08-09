@@ -198,7 +198,7 @@ export function CMBrainContent() {
     if (kind === 'review') {
       // cultivation: accept→approve, reject→reject (no defer); query-param route, no body.
       const verb = decision === 'accept' ? 'approve' : 'reject';
-      await api.post(`/api/cultivation/proposals/${encodeURIComponent(id)}/${verb}?project=SwarmAI`);
+      await api.post(`/cultivation/proposals/${encodeURIComponent(id)}/${verb}?project=SwarmAI`);
     } else {
       await api.post('/eval/governance/decision', { proposal_id: id, decision });
     }

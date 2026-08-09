@@ -56,12 +56,12 @@ interface RawSource {
 
 export const communityService = {
   async fetchFeed(): Promise<CommunityFeedItem[]> {
-    const res = await api.get('/api/community/feed');
+    const res = await api.get('/community/feed');
     return (res.data?.items ?? []) as CommunityFeedItem[];
   },
 
   async fetchSources(): Promise<CommunitySource[]> {
-    const res = await api.get('/api/community/sources');
+    const res = await api.get('/community/sources');
     const raw = (res.data?.sources ?? []) as RawSource[];
     return raw.map((s) => ({
       id: s.id,
@@ -76,7 +76,7 @@ export const communityService = {
   },
 
   async fetchEngagement(): Promise<CommunityEngagement> {
-    const res = await api.get('/api/community/engagement');
+    const res = await api.get('/community/engagement');
     const d = res.data ?? {};
     return {
       commentsPosted: d.comments_posted ?? 0,
@@ -89,14 +89,14 @@ export const communityService = {
   // ── Phase-2 writes (Sources editable) — all serialize with self_tune on one lock ──
 
   async addSource(feed: { id: string; name: string; type: string; tier?: string }): Promise<void> {
-    await api.post('/api/community/feeds', feed);
+    await api.post('/community/feeds', feed);
   },
 
   async updateSource(id: string, patch: { enabled?: boolean; tier?: string }): Promise<void> {
-    await api.put(`/api/community/feeds/${encodeURIComponent(id)}`, patch);
+    await api.put(`/community/feeds/${encodeURIComponent(id)}`, patch);
   },
 
   async deleteSource(id: string): Promise<void> {
-    await api.delete(`/api/community/feeds/${encodeURIComponent(id)}`);
+    await api.delete(`/community/feeds/${encodeURIComponent(id)}`);
   },
 };
