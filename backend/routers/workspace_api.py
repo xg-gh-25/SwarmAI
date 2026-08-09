@@ -936,8 +936,13 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
     absolute path for the unified Canvas file-change event + copy-path) reuse the
     exact same cascade without an HTTP round-trip. The HTTP endpoint delegates here.
 
-    Cascade (unchanged behavior): absolute → project-symlink → direct → bare-name
-    recursive walk (depth-8, prunes node_modules/.git/etc).
+    Cascade: absolute → direct → project-symlink (Projects/*/{path}) → bare-name
+    recursive walk (depth-8, prunes node_modules/.git/etc) → bound-worktree (Stage 5).
+    Stage 5 (run_1e791215) resolves a MULTI-SEGMENT relative path under the code-repo
+    worktrees a DDD GOVERNs but does NOT contain (declared in Projects/*/bindings.yaml,
+    allowlist-scoped via needs_human_review._worktree_roots) — e.g. a link to SwarmAI's own
+    source that lives outside the workspace and is not symlinked in. Stages 0-4 are
+    behavior-preserving; Stage 5 is additive + last (only reached when 0-4 miss).
 
     Returns ``{"relative": <ws-relative-or-absolute-str>, "absolute": <physical abs>}``
     on success, or ``None`` if not found / invalid. **Fails SAFE to None** — unlike
@@ -1050,6 +1055,36 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
                 continue
             if path in files:
                 return {"relative": str(rel_root / path), "absolute": str(Path(root) / path)}
+
+    # --- Stage 5: governed-but-not-CONTAINED repo (bindings.yaml worktree) ---
+    # A DDD may GOVERN a code-repo whose source lives OUTSIDE the workspace and is
+    # NOT symlinked into Projects/<X>/ (the "GOVERNs, never CONTAINS" paradigm). Try
+    # a MULTI-SEGMENT relative path under each declared bound-worktree root. Null-byte
+    # + ".." were already rejected above; absolute paths were handled by Stage 0 — so
+    # `path` here is a safe relative path. Direct {worktree}/{path} join is O(1) (no
+    # walk on the hot path); bare names are left to Stages 3/4 (already tried above).
+    #
+    # Worktree roots are read from the SINGLE-SOURCE bindings cache in
+    # needs_human_review._worktree_roots (already lru-cached AND invalidated on
+    # bind/unbind via clear_worktree_cache() in ddd_bindings.bind_repo:319) —
+    # NOT a second private cache here (that would silt a stale allowlist that
+    # never sees a new binding until daemon restart; C042/R25 — reuse, don't
+    # duplicate). Roots are pre-resolved + longest-first sorted (nested worktree
+    # wins). We still re-`.resolve()` the candidate so an in-worktree symlink
+    # pointing outside is caught by the _is_path_under containment check.
+    if "/" in path or "\\" in path:
+        from core.needs_human_review import _worktree_roots
+
+        for wt_abs, _repo in _worktree_roots(str(workspace_root)):
+            root = Path(wt_abs)
+            candidate = (root / path).resolve()
+            # Containment: the resolved file must stay UNDER the declared worktree
+            # (a symlink inside the worktree pointing outside is rejected here).
+            if candidate.is_file() and _is_path_under(candidate, root):
+                # Outside the workspace → return the absolute path as display too
+                # (mirrors Stage 0 line ~970; the content-fetch endpoint accepts an
+                # absolute path under $HOME).
+                return {"relative": str(candidate), "absolute": str(candidate)}
 
     return None
 
