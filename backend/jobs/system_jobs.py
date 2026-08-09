@@ -320,19 +320,10 @@ SYSTEM_JOBS: list[Job] = [
         config={"window_days": 7},
     ),
 
-    # --- Todo Resolution (daily auto-resolve stale Radar Todos) ---
-    # 3-layer resolution: pipeline completion check, git keyword match,
-    # staleness cancellation.  Closes the "todos pile up" gap — creation
-    # paths outnumber resolution paths 5:2.5, this job balances it.
-    Job(
-        id="todo-resolution",
-        name="Todo Resolution",
-        type="todo_resolution",
-        schedule="0 9 * * 1-5",           # weekday UTC 09:00 = ICT 17:00
-        enabled=True,
-        category="system",
-        config={"stale_days": 21, "working_stale_days": 14, "git_days": 7},
-    ),
+    # (Todo Resolution job removed run_50db230a — it auto-resolved/cancelled todos,
+    # incl. user manual ones (git-keyword + staleness layers had no source filter).
+    # The ToDo card is now a pure user-planning surface: the user owns their todos'
+    # lifecycle, the system neither writes nor auto-cancels them.)
 
     # --- Evolution Cycle (SOLE trigger) ---
     # This scheduled job is the ONLY trigger for the mine→score→optimize cycle.

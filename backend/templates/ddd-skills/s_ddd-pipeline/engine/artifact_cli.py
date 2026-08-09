@@ -2249,51 +2249,16 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
     except (ValueError, FileNotFoundError):
         artifact_id = None
 
-    # 3. Create Radar todo for visibility and resume
-    # Tests can set SWARM_TODO_DB to a temp path to avoid polluting production DB
-    _todo_db_override = os.environ.get("SWARM_TODO_DB")
-    _todo_db_path = Path(_todo_db_override) if _todo_db_override else None
-    todo_result = _create_checkpoint_todo(
-        project=args.project,
-        run_id=args.run_id,
-        requirement=run_state["requirement"],
-        stage=args.stage,
-        reason=args.reason,
-        completed_stages=completed_stages,
-        db_path=_todo_db_path,
-    )
-
+    # Pipeline-pause state lives in run.json (the portable resume truth) — no todo
+    # write. The ToDo surface is user-planning-only; system signals keep their own homes.
     result = {
         "pipeline_id": args.run_id,
         "status": "paused",
         "checkpoint_artifact": artifact_id,
-        "radar_todo": todo_result,
         "reason": args.reason,
         "next_stage": args.stage,
     }
     print(json.dumps(result, indent=2))
-
-
-def _create_checkpoint_todo(
-    project: str,
-    run_id: str,
-    requirement: str,
-    stage: str,
-    reason: str,
-    completed_stages: list[str],
-    db_path: Path | None = None,
-) -> dict | None:
-    """No-op in the portable DDD engine.
-
-    In SwarmAI, a checkpoint also creates a Radar todo (a `data.db` sqlite row) for
-    UI visibility. A DDD running on Kiro / Claude Code / an AIM package has no Radar
-    and no `data.db` — that was the ONLY sqlite/`config` coupling on this path, so it
-    is dropped. The checkpoint itself is fully preserved: `cmd_run_checkpoint` still
-    writes the checkpoint FILE artifact + pauses `run.json` (the portable state). The
-    todo was a SwarmAI-only convenience; its absence changes nothing about resume,
-    which reads `run.json`. Returns None (no todo created).
-    """
-    return None
 
 
 def cmd_run_history(args, reg: ArtifactRegistry) -> None:

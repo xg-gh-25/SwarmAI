@@ -22,14 +22,12 @@ from core.escalation import (
     block,
     build_sse_event,
     consult,
-    create_radar_todo,
     get_open_escalations,
     inform,
     load_escalation,
     resolve,
     resolve_expired,
     save_escalation,
-    mark_todo_handled,
 )
 
 
@@ -267,35 +265,6 @@ def _sample_options() -> list[Option]:
         Option(label="Option B", description="Do B", risk="medium"),
     ]
 
-
-@pytest.fixture
-def todo_db(tmp_path: Path) -> Path:
-    """Create a minimal SQLite DB with the todos table."""
-    db_path = tmp_path / "data.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE todos (
-            id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT,
-            source TEXT,
-            source_type TEXT NOT NULL DEFAULT 'manual',
-            status TEXT NOT NULL DEFAULT 'pending',
-            priority TEXT NOT NULL DEFAULT 'none',
-            due_date TEXT,
-            linked_context TEXT,
-            task_id TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
-    return db_path
-
-
 # ---------------------------------------------------------------------------
 # L1 CONSULT (v2)
 # ---------------------------------------------------------------------------
@@ -349,96 +318,6 @@ class TestConsult:
         assert loaded.level == Level.CONSULT
         assert loaded.timeout_at is not None
         assert loaded.recommendation == "A"
-
-
-# ---------------------------------------------------------------------------
-# Radar Todo Integration (v2)
-# ---------------------------------------------------------------------------
-
-class TestRadarTodo:
-    def test_l0_skipped(self, todo_db: Path):
-        esc = inform("FYI", "Info")
-        assert create_radar_todo(esc, db_path=todo_db) is None
-
-    def test_l2_creates_high_priority_todo(self, todo_db: Path):
-        esc = block(
-            "Need decision", "Ambiguous scope",
-            _sample_options(), project="SwarmAI", pipeline_stage="evaluate",
-        )
-        todo_id = create_radar_todo(esc, db_path=todo_db)
-        assert todo_id is not None
-
-        conn = sqlite3.connect(str(todo_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
-        conn.close()
-
-        assert row["priority"] == "high"
-        assert row["source"] == f"escalation:{esc.id}"
-        assert row["source_type"] == "ai_detected"
-        assert "[BLOCK]" in row["title"]
-        assert row["status"] == "pending"
-
-        ctx = json.loads(row["linked_context"])
-        assert ctx["escalation_id"] == esc.id
-        assert ctx["escalation_level"] == "BLOCK"
-        assert len(ctx["options"]) == 2
-
-    def test_l1_creates_medium_priority_todo(self, todo_db: Path):
-        esc = consult(
-            "Arch choice", "Two approaches", _sample_options(),
-            project="SwarmAI", recommendation="Option A", timeout_hours=24,
-        )
-        todo_id = create_radar_todo(esc, db_path=todo_db)
-        assert todo_id is not None
-
-        conn = sqlite3.connect(str(todo_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
-        conn.close()
-
-        assert row["priority"] == "medium"
-        assert "[CONSULT]" in row["title"]
-        assert row["due_date"] == esc.timeout_at
-
-    def test_missing_db_returns_none(self, tmp_path: Path):
-        esc = block("Q", "S", _sample_options())
-        assert create_radar_todo(esc, db_path=tmp_path / "nope.db") is None
-
-    def test_mark_todo_handled(self, todo_db: Path):
-        esc = block("Q", "S", _sample_options(), project="X")
-        todo_id = create_radar_todo(esc, db_path=todo_db)
-        assert todo_id is not None
-
-        mark_todo_handled(esc.id, db_path=todo_db)
-
-        conn = sqlite3.connect(str(todo_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT status FROM todos WHERE id = ?", (todo_id,)).fetchone()
-        conn.close()
-        assert row["status"] == "handled"
-
-    def test_mark_todo_handled_noop_missing_db(self, tmp_path: Path):
-        # Should not raise
-        mark_todo_handled("esc_nope", db_path=tmp_path / "nope.db")
-
-    def test_todo_description_includes_options(self, todo_db: Path):
-        opts = [
-            Option(label="Fast path", description="Quick fix", is_recommendation=True),
-            Option(label="Proper fix", description="Full refactor"),
-        ]
-        esc = block("Design Q", "Need to choose", opts, project="P")
-        todo_id = create_radar_todo(esc, db_path=todo_db)
-
-        conn = sqlite3.connect(str(todo_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT description FROM todos WHERE id = ?", (todo_id,)).fetchone()
-        conn.close()
-
-        assert "Fast path" in row["description"]
-        assert "(recommended)" in row["description"]
-        assert "Proper fix" in row["description"]
-
 
 # ---------------------------------------------------------------------------
 # Timeout Resolution (v2)
@@ -503,22 +382,6 @@ class TestTimeoutResolution:
 
         assert len(resolve_expired(workspace, "P")) == 1
         assert len(resolve_expired(workspace, "P")) == 0  # second call is no-op
-
-    def test_timeout_marks_radar_todo_handled(self, workspace, todo_db):
-        esc = self._make_expired_consult()
-        save_escalation(workspace, esc)
-        todo_id = create_radar_todo(esc, db_path=todo_db)
-        assert todo_id is not None
-
-        from unittest.mock import patch
-        with patch("core.escalation._get_db_path", return_value=todo_db):
-            resolve_expired(workspace, "P")
-
-        conn = sqlite3.connect(str(todo_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT status FROM todos WHERE id = ?", (todo_id,)).fetchone()
-        conn.close()
-        assert row["status"] == "handled"
 
     def test_empty_project_returns_empty(self, workspace):
         assert resolve_expired(workspace, "P") == []
@@ -610,3 +473,62 @@ class TestEscalationAPI:
         assert len(data["auto_resolved"]) == 1
         assert data["auto_resolved"][0]["id"] == esc.id
         assert len(data["open"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Spec-stale escalation surfacing (run_50db230a — S5 ToDo→Need-You migration)
+# ---------------------------------------------------------------------------
+
+class TestSpecStaleEscalationSurfaces:
+    """Regression guard: the spec-details-stale signal was moved off the ToDo
+    surface onto an escalation file (context_health_hook._create_spec_stale_
+    escalation → save_escalation). The escalation id MUST match the
+    get_open_escalations glob (`esc_*.json`), or the signal is written but never
+    read — silently lost. Gate-2 (run_50db230a) caught exactly this: an id of
+    `spec_details_stale:<project>` did NOT match `esc_*.json`. This test locks the
+    round-trip so the glob/id contract can't silently drift again."""
+
+    @pytest.fixture()
+    def workspace(self, tmp_path):
+        (tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "escalations").mkdir(parents=True)
+        return tmp_path
+
+    def test_spec_stale_escalation_is_surfaced(self, workspace):
+        # Mirror the exact id shape context_health_hook writes.
+        project = "SwarmAI"
+        esc = Escalation(
+            id=f"esc_spec_details_stale__{project}",
+            level=Level.CONSULT,
+            trigger="CONTRADICTS_LESSON",
+            title=f"spec-details drifted in {project} (2 spec(s))",
+            situation="2 spec-details file(s) no longer match domain content-hash.",
+            recommendation="Regenerate via s_repo-to-ddd",
+            project=project,
+            pipeline_stage="",
+        )
+        save_escalation(workspace, esc)
+
+        # THE contract: it must be readable by the Need-You collector's source fn.
+        open_escs = get_open_escalations(workspace, project)
+        ids = [e.id for e in open_escs]
+        assert esc.id in ids, (
+            f"spec-stale escalation {esc.id!r} not surfaced by get_open_escalations "
+            f"(glob/id mismatch — signal silently lost). Got: {ids}"
+        )
+        surfaced = next(e for e in open_escs if e.id == esc.id)
+        assert surfaced.level == Level.CONSULT  # → REVIEW tier in Need-You
+
+    def test_spec_stale_dedup_atomic_overwrite(self, workspace):
+        """Re-running (same project) overwrites the same file — no spam, one open item."""
+        project = "SwarmAI"
+        def _mk():
+            return Escalation(
+                id=f"esc_spec_details_stale__{project}", level=Level.CONSULT,
+                trigger="CONTRADICTS_LESSON", title="drift", situation="s",
+                recommendation="r", project=project, pipeline_stage="",
+            )
+        save_escalation(workspace, _mk())
+        save_escalation(workspace, _mk())
+        open_escs = [e for e in get_open_escalations(workspace, project)
+                     if e.id == f"esc_spec_details_stale__{project}"]
+        assert len(open_escs) == 1, "deterministic id must overwrite, not spam"

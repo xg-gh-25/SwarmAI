@@ -823,23 +823,33 @@ class ContextHealthHook:
         CONTENT-based since run_fe26ed6c — NOT mtime). Two surfaces:
 
         1. A LOG line (always).
-        2. A Radar TODO via escalation.create_radar_todo (run_fe26ed6c) — a REAL
-           consumable surface the operator acts on, NOT a sink-less event. This
-           is the loop-closing consumer the earlier LOG-only design (run_2bad039d)
-           deferred for lack of one: regeneration is skill-owned (s_repo-to-ddd,
-           LLM-in-agent, C046), and the todo is exactly the operator trigger for it.
-           We deliberately do NOT emit a `spec_details_stale` EVENT — that would be
-           the sink-less write-only signal Gate-2 (run_2bad039d) correctly rejected;
-           a todo has a human consumer, an event has none.
+        2. An ESCALATION file via escalation.save_escalation — a REAL consumable
+           surface the operator acts on, surfaced in the Need-You panel by
+           attention_authority._collect_escalations (Level.CONSULT → REVIEW tier).
+           This is the loop-closing consumer the earlier LOG-only design
+           (run_2bad039d) deferred for lack of one: regeneration is skill-owned
+           (s_repo-to-ddd, LLM-in-agent, C046), and the escalation is exactly the
+           operator trigger for it. We deliberately do NOT emit a
+           `spec_details_stale` EVENT — that would be the sink-less write-only
+           signal Gate-2 (run_2bad039d) correctly rejected; an escalation has a
+           human consumer (Need-You), an event has none.
 
-        Dedup: the todo's source is the deterministic key
-        ``escalation:spec_details_stale:<project>`` — if an OPEN one already exists,
-        we skip (no per-session spam). Fail-open: any todo/escalation error leaves
-        the LOG as the surviving signal, never blocks session start."""
+        NOTE (run_50db230a): this signal was moved OFF the user ToDo surface. The
+        ToDo card is now a pure user-planning surface — system signals like
+        spec-drift live in their own home (the escalation file → Need-You), never
+        as an auto-written todo.
+
+        Dedup: the escalation's deterministic id ``spec_details_stale:<project>``
+        overwrites in place (save_escalation is atomic write-by-id), so a re-run
+        refreshes the same file rather than spamming. Fail-open: any escalation
+        error leaves the LOG as the surviving signal, never blocks session start."""
         try:
             from core.code_intel.freshness import detect_spec_details_staleness
         except Exception:  # pragma: no cover - defensive import
             return
+        # projects_dir is <workspace_root>/Projects — its parent is the workspace
+        # root that save_escalation needs to locate .artifacts/escalations/.
+        workspace_root = projects_dir.parent
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
@@ -856,29 +866,24 @@ class ContextHealthHook:
                 "(%s) — regenerate via s_repo-to-ddd (skill-owned, manual)",
                 project_dir.name, len(stale), ", ".join(stale[:5]),
             )
-            self._create_spec_stale_todo(project_dir.name, stale)
+            self._create_spec_stale_escalation(workspace_root, project_dir.name, stale)
 
-    def _create_spec_stale_todo(self, project: str, stale: list[str]) -> None:
-        """Create (or dedup-skip) a Radar todo prompting spec-details regeneration.
-        Fail-open — a todo/DB error must never break session-start health refresh."""
+    def _create_spec_stale_escalation(
+        self, workspace_root: Path, project: str, stale: list[str]
+    ) -> None:
+        """Persist a spec-drift escalation (surfaced in Need-You as REVIEW) prompting
+        spec-details regeneration. Fail-open — an escalation error must never break
+        session-start health refresh. The signal's home is the escalation file, NOT
+        the user ToDo surface (run_50db230a)."""
         try:
-            from core.escalation import (
-                Escalation, Level, create_radar_todo, _get_db_path,
-            )
-            import sqlite3 as _sqlite3
-            source_key = f"escalation:spec_details_stale:{project}"
-            db = _get_db_path()
-            if db.exists():
-                with _sqlite3.connect(str(db), timeout=5.0) as conn:
-                    row = conn.execute(
-                        "SELECT 1 FROM todos WHERE source=? AND status='pending' LIMIT 1",
-                        (source_key,),
-                    ).fetchone()
-                if row:
-                    return  # an open todo already exists → no spam
+            from core.escalation import Escalation, Level, save_escalation
             specs = ", ".join(stale[:5]) + (" …" if len(stale) > 5 else "")
             esc = Escalation(
-                id=f"spec_details_stale:{project}",
+                # id MUST start with `esc_` — get_open_escalations globs `esc_*.json`,
+                # so a non-prefixed id would be written but never read (the signal would
+                # be silently lost). Deterministic suffix keeps dedup: same project →
+                # same file → save_escalation atomically overwrites (no spam).
+                id=f"esc_spec_details_stale__{project}",
                 level=Level.CONSULT,  # override-window advisory, not a hard BLOCK
                 trigger="CONTRADICTS_LESSON",  # closest existing type (spec ↔ code drift)
                 title=f"spec-details drifted in {project} ({len(stale)} spec(s))",
@@ -889,9 +894,10 @@ class ContextHealthHook:
                 project=project,
                 pipeline_stage="",
             )
-            create_radar_todo(esc)
+            # Atomic write-by-id: re-running refreshes the same file (no spam).
+            save_escalation(workspace_root, esc)
         except Exception as exc:  # noqa: BLE001 — fail-open (log survives as signal)
-            logger.debug("spec-stale todo creation failed for %s: %s", project, exc)
+            logger.debug("spec-stale escalation creation failed for %s: %s", project, exc)
 
     # ------------------------------------------------------------------
     # Auto-cultivation — promote REFLECT lessons into DDD docs

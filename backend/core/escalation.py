@@ -24,7 +24,6 @@ Public API:
   - ``block()``             — L2: emit blocking question (pipeline pauses)
   - ``resolve()``           — Resolve an open escalation
   - ``resolve_expired()``   — Auto-resolve expired L1 CONSULTs
-  - ``create_radar_todo()`` — Create Radar todo from L1/L2 escalation
   - ``build_sse_event()``   — Build SSE event dict from an Escalation
 """
 
@@ -390,97 +389,6 @@ def get_open_escalations(workspace_root: Path, project: str) -> list[Escalation]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Radar Todo Integration (L1 + L2 — creates a self-contained work packet)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_WORKSPACE_ID = "swarmws"
-
-
-def _get_db_path() -> Path:
-    """Resolve database path. Function (not constant) for testability."""
-    from jobs.paths import DB_PATH
-    return DB_PATH
-
-
-def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | None:
-    """Create a Radar todo from an L1/L2 escalation.
-
-    Writes directly to SQLite (same pattern as ``todo_db.py``).
-    Returns the todo ID, or None if creation failed or not applicable.
-
-    L0 INFORM escalations are skipped (no todo needed).
-    """
-    if esc.level == Level.INFORM:
-        return None
-
-    import sqlite3 as _sqlite3
-
-    db = db_path or _get_db_path()
-    if not db.exists():
-        logger.warning("escalation.radar_todo: DB not found at %s", db)
-        return None
-
-    try:
-        todo_id = str(uuid4())
-        now = _now_iso()
-        level_name = Level(esc.level).name
-        priority = "high" if esc.level == Level.BLOCK else "medium"
-
-        # Build linked_context with full escalation packet
-        linked_context = json.dumps({
-            "escalation_id": esc.id,
-            "escalation_level": level_name,
-            "project": esc.project,
-            "pipeline_stage": esc.pipeline_stage,
-            "trigger": esc.trigger,
-            "options": [asdict(o) for o in esc.options],
-            "recommendation": esc.recommendation,
-            "evidence": esc.evidence,
-            "timeout_at": esc.timeout_at,
-            "next_step": f"Resolve escalation: {esc.title}",
-            "acceptance": "Choose an option or discuss further",
-        })
-
-        # Description includes the situation + options for quick scanning
-        options_text = "\n".join(
-            f"  {i+1}. {o.label}{' (recommended)' if o.is_recommendation else ''}"
-            for i, o in enumerate(esc.options)
-        )
-        description = f"{esc.situation}\n\nOptions:\n{options_text}" if options_text else esc.situation
-
-        with _sqlite3.connect(str(db), timeout=5.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(
-                """INSERT INTO todos (id, workspace_id, title, description, source,
-                   source_type, status, priority, due_date, linked_context, task_id,
-                   created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, ?)""",
-                (
-                    todo_id, _WORKSPACE_ID,
-                    f"[{level_name}] {esc.title}",
-                    description,
-                    f"escalation:{esc.id}",
-                    "ai_detected",
-                    priority,
-                    esc.timeout_at,  # due_date = timeout for visual urgency
-                    linked_context,
-                    now, now,
-                ),
-            )
-            conn.commit()
-
-        logger.info(
-            "escalation.radar_todo id=%s esc=%s level=%s priority=%s",
-            todo_id, esc.id, level_name, priority,
-        )
-        return todo_id
-
-    except (_sqlite3.Error, OSError, ValueError) as exc:
-        logger.warning("escalation.radar_todo failed esc=%s: %s", esc.id, exc)
-        return None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Timeout Resolution (L1 CONSULT — auto-accept on expiry)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -514,9 +422,6 @@ def resolve_expired(workspace_root: Path, project: str) -> list[Escalation]:
         resolved_esc = resolve(esc, resolution=resolution, resolved_by="timeout")
         save_escalation(workspace_root, resolved_esc)
 
-        # Also mark the Radar todo as handled
-        mark_todo_handled(esc.id)
-
         resolved_list.append(resolved_esc)
         logger.info(
             "escalation.timeout_resolved id=%s resolution=%s project=%s",
@@ -525,22 +430,3 @@ def resolve_expired(workspace_root: Path, project: str) -> list[Escalation]:
 
     return resolved_list
 
-
-def mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
-    """Mark the Radar todo associated with an escalation as handled."""
-    import sqlite3 as _sqlite3
-
-    db = db_path or _get_db_path()
-    if not db.exists():
-        return
-
-    try:
-        with _sqlite3.connect(str(db), timeout=5.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(
-                "UPDATE todos SET status = 'handled', updated_at = ? WHERE source = ?",
-                (_now_iso(), f"escalation:{escalation_id}"),
-            )
-            conn.commit()
-    except (_sqlite3.Error, OSError) as exc:
-        logger.warning("escalation.mark_todo_handled failed esc=%s: %s", escalation_id, exc)

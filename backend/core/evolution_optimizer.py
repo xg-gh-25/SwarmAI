@@ -1692,11 +1692,13 @@ def _run_evolution_cycle_locked(
 
 
 def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
-    """Write an evolution proposal and create a Radar todo for approval.
+    """Write an evolution proposal to its persistent home for approval.
 
     Proposals accumulate in .context/.evolution_proposals.json. Each proposal
     is a skill optimization that reached HIGH confidence but awaits human
-    approval before deployment.
+    approval before deployment. This file IS the proposal's home — the human
+    reviews it there. No Radar todo is written (run_50db230a): the ToDo card is
+    a pure user-planning surface, not a system-proposal feed.
     """
     proposals_path = ctx_dir / ".evolution_proposals.json"
     proposals = []
@@ -1710,53 +1712,6 @@ def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
     proposals = [p for p in proposals if p.get("skill_name") != proposal["skill_name"]]
     proposals.append(proposal)
     proposals_path.write_text(json.dumps(proposals, indent=2), encoding="utf-8")
-
-    # Only create Radar todo for proposals with sufficient confidence.
-    # Low-confidence proposals (< 0.5) are noise — they stay in proposals.json
-    # for inspection but don't pollute the Radar sidebar.
-    if proposal.get("confidence", 0) < 0.5:
-        logger.debug(
-            "Skipping Radar todo for %s (confidence %.0f%% < 50%%)",
-            proposal["skill_name"], proposal.get("confidence", 0) * 100,
-        )
-        return
-
-    # Create Radar todo for visibility (async API)
-    try:
-        import asyncio
-        from core.todo_manager import ToDoManager
-        from schemas.todo import ToDoCreate
-
-        async def _create_proposal_todo():
-            mgr = ToDoManager()
-            title = f"Evolution proposal: s_{proposal['skill_name']} (conf {proposal['confidence']:.0%})"
-            todo_data = ToDoCreate(
-                workspace_id="swarmws",
-                title=title,
-                description=(
-                    f"Skill optimization ready for approval.\n"
-                    f"Score: {proposal['score_before']:.2f} → {proposal['score_after']:.2f}\n"
-                    f"Changes: {len(proposal['changes'])}\n\n"
-                    f"Review: .context/.evolution_proposals.json\n"
-                    f"Approve: manually deploy or wait for next cycle with approval flag."
-                ),
-                source="evolution_pipeline",
-                source_type="ai_detected",
-                priority="medium",
-            )
-            await mgr.create(todo_data)
-            return title
-
-        # Run async in current or new event loop
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_create_proposal_todo())
-        except RuntimeError:
-            # No event loop — create one (sync context, e.g., CLI/job)
-            title = asyncio.run(_create_proposal_todo())
-            logger.info("Radar todo created: %s", title)
-    except Exception as exc:
-        logger.debug("Could not create Radar todo for evolution proposal: %s", exc)
 
 
 def _write_skill_health(path: Path, report: SkillHealthReport) -> None:

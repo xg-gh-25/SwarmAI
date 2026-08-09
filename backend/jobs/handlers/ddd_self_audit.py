@@ -17,11 +17,13 @@ DESIGN INVARIANTS (Gate-0 run_835f82ff, all live-verified):
   reviewed for prose-vs-CODE drift; a non-code project (business/product/research) for
   prose-vs-PRODUCT-reality drift (internal contradiction, superseded claims, dead refs).
   A uniform "check against live code" prompt on non-code projects = noise.
-- SURFACE in-band: findings → a report (archive) AND a RADAR_TODO per project with
-  findings (the forcing function — a report file alone rots, run_b2e85d61's lesson).
+- SURFACE: findings → a report (archive) at Knowledge/JobResults/*-ddd-self-audit.md.
+  The report is read as a semantic-drift signal by ddd_drift_signal.get_semantic_drift
+  (eval/dashboard). No Radar todo is written (run_50db230a): the ToDo card is a pure
+  user-planning surface — system self-audit findings keep their own home (the report).
 
 Reuses (does NOT reimplement): the executor CLI primitives + _discover_projects +
-_write_job_result + _create_todos_from_result.
+_write_job_result.
 """
 
 from __future__ import annotations
@@ -79,12 +81,12 @@ _RADAR_TODOS_RE = re.compile(r"<!--\s*RADAR_TODOS\s*(\[.*?\])\s*-->", re.DOTALL)
 
 
 def _count_parseable_findings(result_text: str) -> list:
-    """Return the list of findings that will ACTUALLY become todos — i.e. a
-    RADAR_TODOS block that parses as valid JSON. Output can be interrupted mid-JSON
-    (e.g. a subprocess timeout / truncated stream); a malformed block yields 0
-    (matching _parse_structured_todos, which returns [] on JSONDecodeError), so the
-    reported count never over-states findings that won't materialize. Pure, no
-    I/O — unit-testable."""
+    """Return the parseable findings — i.e. a RADAR_TODOS block (the agent's
+    structured-output convention) that parses as valid JSON. Output can be
+    interrupted mid-JSON (e.g. a subprocess timeout / truncated stream); a malformed
+    block yields 0, so the reported drift count never over-states findings. These
+    findings feed the report + the semantic-drift signal (get_semantic_drift), NOT
+    todo creation (removed run_50db230a). Pure, no I/O — unit-testable."""
     if "RADAR_TODOS" not in result_text:
         return []
     m = _RADAR_TODOS_RE.search(result_text)
@@ -217,7 +219,7 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     from ..executor import (
         _resolve_claude_cli, _check_claude_auth, _get_aws_credentials,
         _cli_supports_bare, _load_mcp_config, _build_cli_env, _parse_cli_output,
-        _write_job_result, _create_todos_from_result,
+        _write_job_result,
     )
     from ..models import Job, JobSafety, JobType
     import subprocess, tempfile
@@ -270,7 +272,6 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     report_lines = [f"# DDD Self-Audit — {start.strftime('%Y-%m-%d')}", ""]
     total_findings = 0
     reviewed = 0
-    per_project_results: list[tuple[str, str]] = []  # (project, result_text) for todo creation
 
     for project_name, project_dir in projects:
         code_backed = _is_code_backed(project_dir)
@@ -346,38 +347,30 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         report_lines.append(header)
         report_lines.append(result_text.strip() or "_(no output)_")
         report_lines.append("")
-        if n_findings:  # only queue todo-creation when findings actually parse
-            per_project_results.append((project_name, result_text))
 
     report_lines.insert(2, f"Reviewed {reviewed}/{len(projects)} projects · {total_findings} drift finding(s). "
-                           f"Findings surface as Radar todos; fix via s_persist (detect-only, no auto-edit).")
+                           f"Findings surface as a semantic-drift signal (ddd_drift_signal); "
+                           f"fix via s_persist (detect-only, no auto-edit).")
     report_text = "\n".join(report_lines)
     duration = (datetime.now(timezone.utc) - start).total_seconds()
 
     # Persist the report (Python writes it — the agent never had Write).
     synthetic_job = Job(
         id="ddd-self-audit", name="DDD Self-Audit", type=JobType.DDD_SELF_AUDIT,
-        schedule="", config={
-            "create_todos": True, "todo_source_type": "ai_detected",
-            "todo_priority": "medium", "todo_max": 40,
-        },
+        schedule="", config={},
         safety=JobSafety(),
     )
     output_path = _write_job_result(
         synthetic_job, report_text, start, tokens=0, duration=duration, status="success")
 
-    # Surface findings as Radar todos (the in-band forcing function). Each project's
-    # RADAR_TODOS block is parsed + created; report alone would rot.
-    todos_created = 0
-    for project_name, result_text in per_project_results:
-        try:
-            _create_todos_from_result(synthetic_job, result_text)
-            todos_created += 1
-        except Exception as e:
-            logger.warning("ddd_self_audit: todo creation failed for %s: %s", project_name, e)
+    # Findings live in the report (Knowledge/JobResults/*-ddd-self-audit.md) and are
+    # surfaced as a semantic-drift signal via ddd_drift_signal.get_semantic_drift
+    # (read by eval/dashboard). No Radar todo write (run_50db230a): the ToDo card is
+    # a pure user-planning surface — system self-audit findings keep their own home
+    # (the report), never an auto-written todo.
 
     summary = (f"Audited {reviewed}/{len(projects)} DDD projects · {total_findings} drift finding(s) "
-               f"· {todos_created} project(s) → Radar todos")
+               f"· report → Knowledge/JobResults/")
     logger.info("ddd_self_audit complete: %s", summary)
     return {
         "status": "success",

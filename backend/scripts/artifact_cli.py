@@ -2715,108 +2715,17 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
     except (ValueError, FileNotFoundError):
         artifact_id = None
 
-    # 3. Create Radar todo for visibility and resume
-    # Tests can set SWARM_TODO_DB to a temp path to avoid polluting production DB
-    _todo_db_override = os.environ.get("SWARM_TODO_DB")
-    _todo_db_path = Path(_todo_db_override) if _todo_db_override else None
-    todo_result = _create_checkpoint_todo(
-        project=args.project,
-        run_id=args.run_id,
-        requirement=run_state["requirement"],
-        stage=args.stage,
-        reason=args.reason,
-        completed_stages=completed_stages,
-        db_path=_todo_db_path,
-    )
-
+    # Pipeline-pause visibility lives in run.json (read by the Pipeline overlay)
+    # and the paused_run Need-You source — NOT the user ToDo surface. No todo write:
+    # the ToDo card is a pure user-planning surface, system signals keep their own homes.
     result = {
         "pipeline_id": args.run_id,
         "status": "paused",
         "checkpoint_artifact": artifact_id,
-        "radar_todo": todo_result,
         "reason": args.reason,
         "next_stage": args.stage,
     }
     print(json.dumps(result, indent=2))
-
-
-def _create_checkpoint_todo(
-    project: str,
-    run_id: str,
-    requirement: str,
-    stage: str,
-    reason: str,
-    completed_stages: list[str],
-    db_path: Path | None = None,
-) -> dict | None:
-    """Create a Radar todo for a pipeline checkpoint.
-
-    Uses todo_db.py directly (same pattern as s_radar-todo skill).
-    Deduplicates: won't create a second pending todo with the same title.
-    Returns the todo info or None if DB not available.
-
-    ``db_path`` defaults to ``~/.swarm-ai/data.db``; tests can override
-    to a temp DB to avoid polluting the production database.
-    """
-    import sqlite3
-    import uuid as _uuid
-
-    if db_path is None:
-        from config import get_app_data_dir
-        db_path = get_app_data_dir() / "data.db"
-    if not db_path.exists():
-        return None
-
-    try:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        todo_id = str(_uuid.uuid4())
-
-        title = f"Pipeline paused: {requirement[:60]}"
-        description = (
-            f"Pipeline {run_id} for {project} paused at {stage.upper()} stage.\n"
-            f"Reason: {reason}\n"
-            f"Completed: {', '.join(completed_stages) if completed_stages else 'none'}\n"
-            f"Resume: resolve the issue, then 'resume pipeline for {project}'"
-        )
-        linked_context = json.dumps({
-            "pipeline_id": run_id,
-            "project": project,
-            "pipeline_stage": stage,
-            "completed_stages": completed_stages,
-            "reason": reason,
-            "next_step": f"Resolve '{reason}', then resume pipeline for {project}",
-            "files": [f"Projects/{project}/.artifacts/runs/{run_id}/run.json"],
-        })
-
-        with sqlite3.connect(str(db_path), timeout=5.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            # Dedup: skip if a pending todo with same title already exists
-            existing = conn.execute(
-                "SELECT id FROM todos WHERE title = ? AND status = 'pending' LIMIT 1",
-                (title,),
-            ).fetchone()
-            if existing:
-                return existing[0]  # Return existing todo ID
-            conn.execute(
-                """INSERT INTO todos (id, workspace_id, title, description, source,
-                   source_type, status, priority, due_date, linked_context, task_id,
-                   created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, ?)""",
-                (
-                    todo_id, "swarmws", title, description,
-                    f"pipeline:{run_id}",
-                    "ai_detected",
-                    "high",  # pipeline checkpoints are high priority
-                    None,
-                    linked_context,
-                    now, now,
-                ),
-            )
-            conn.commit()
-        return {"todo_id": todo_id, "title": title}
-    except (sqlite3.Error, OSError) as e:
-        return {"error": str(e)}
 
 
 def cmd_run_history(args, reg: ArtifactRegistry) -> None:

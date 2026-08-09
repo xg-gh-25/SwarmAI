@@ -118,71 +118,44 @@ class TestDeduplicateGate:
         assert todo2["id"] != todo1["id"]
 
 
-class TestEvolutionConfidenceGate:
-    """AC2: Evolution proposals with confidence < 0.5 should not create todos."""
+class TestEvolutionProposalPersistence:
+    """Evolution proposals persist to .evolution_proposals.json and NEVER write a
+    todo (run_50db230a: the ToDo card is a pure user-planning surface; a proposal's
+    home is the json file, reviewed by the human there)."""
 
-    def test_low_confidence_no_todo(self):
-        """Proposals with confidence < 0.5 write to file but skip todo creation."""
+    def test_proposal_persisted_no_todo_any_confidence(self):
+        """A proposal is written to the json file regardless of confidence, and no
+        todo is ever created (the todo-write path was removed)."""
         import json
         import tempfile
         from pathlib import Path
         from core.evolution_optimizer import _write_evolution_proposal
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ctx_dir = Path(tmpdir)
-            proposal = {
-                "skill_name": "test-skill",
-                "confidence": 0.24,
-                "score_before": 0.55,
-                "score_after": 0.57,
-                "changes": [{"reason": "test", "preview": "test"}],
-                "proposed_at": datetime.now(timezone.utc).isoformat(),
-            }
+        for conf in (0.24, 0.65):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ctx_dir = Path(tmpdir)
+                proposal = {
+                    "skill_name": f"test-skill-{conf}",
+                    "confidence": conf,
+                    "score_before": 0.55,
+                    "score_after": 0.70,
+                    "changes": [{"reason": "test", "preview": "test"}],
+                    "proposed_at": datetime.now(timezone.utc).isoformat(),
+                }
 
-            # Patch ToDoManager.create to detect if todo creation is attempted.
-            # The function does a lazy `import asyncio` + `from core.todo_manager import ToDoManager`
-            # inside the high-confidence branch, so we patch the manager itself.
-            with patch("core.todo_manager.ToDoManager.create", new_callable=AsyncMock) as mock_create:
-                _write_evolution_proposal(ctx_dir, proposal)
+                # If any code path still tried to create a todo, this patch would trip.
+                with patch("core.todo_manager.ToDoManager.create", new_callable=AsyncMock) as mock_create:
+                    _write_evolution_proposal(ctx_dir, proposal)
 
-                # Proposals file should be written
-                proposals_path = ctx_dir / ".evolution_proposals.json"
-                assert proposals_path.exists()
-                saved = json.loads(proposals_path.read_text())
-                assert len(saved) == 1
-                assert saved[0]["skill_name"] == "test-skill"
+                    # Proposal file written (the signal's real home) — for BOTH confidences.
+                    proposals_path = ctx_dir / ".evolution_proposals.json"
+                    assert proposals_path.exists()
+                    saved = json.loads(proposals_path.read_text())
+                    assert len(saved) == 1
+                    assert saved[0]["skill_name"] == f"test-skill-{conf}"
 
-                # ToDoManager.create should NOT have been called (confidence < 0.5 → early return)
-                mock_create.assert_not_called()
-
-    def test_high_confidence_creates_todo(self):
-        """Proposals with confidence >= 0.5 should attempt to create a todo."""
-        import tempfile
-        from pathlib import Path
-        from core.evolution_optimizer import _write_evolution_proposal
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ctx_dir = Path(tmpdir)
-            proposal = {
-                "skill_name": "test-skill-high",
-                "confidence": 0.65,
-                "score_before": 0.55,
-                "score_after": 0.70,
-                "changes": [{"reason": "test", "preview": "test"}],
-                "proposed_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            # For high confidence, ToDoManager.create SHOULD be called
-            with patch("core.todo_manager.ToDoManager.create", new_callable=AsyncMock) as mock_create:
-                mock_create.return_value = MagicMock(id="fake-id", title="fake")
-                _write_evolution_proposal(ctx_dir, proposal)
-
-                # Proposals file should be written
-                proposals_path = ctx_dir / ".evolution_proposals.json"
-                assert proposals_path.exists()
-
-                # ToDoManager.create SHOULD have been called (confidence >= 0.5)
-                mock_create.assert_called_once()
+                    # No todo is EVER created now — regardless of confidence.
+                    mock_create.assert_not_called()
 
 
 class TestAutoPurge:
