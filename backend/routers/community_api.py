@@ -1,22 +1,25 @@
 """Community API — the Community overlay's backend.
 
 The Community overlay is SwarmAI's two-way membrane with the outside world.
-Phase-1 (GET) projects on-disk data into the 3 tabs; Phase-2 (POST/PUT/DELETE
-/feeds) makes Sources EDITABLE.
+GET endpoints project on-disk data into the 3 tabs; the /feeds endpoints make
+Sources EDITABLE at both the FEED level and the MEMBER level.
 
-    GET    /api/community/feed        — recent Signals + Reports files (newest-first)
-    GET    /api/community/sources     — configured feeds (id/name/type/tier/enabled/managed_by)
-    GET    /api/community/engagement  — GitHub community engagement metrics (data-backed only)
-    POST   /api/community/feeds       — add a source (managed_by:user)
-    PUT    /api/community/feeds/{id}   — toggle enabled / change tier
-    DELETE /api/community/feeds/{id}   — remove a source (idempotent)
+    GET    /api/community/feed              — recent Signals + community Reports files (newest-first)
+    GET    /api/community/sources           — configured feeds (id/name/type/tier/enabled/managed_by
+                                              + members/member_count/member_kind/members_truncated)
+    GET    /api/community/engagement        — GitHub community engagement metrics (data-backed only)
+    POST   /api/community/feeds             — add a source (managed_by:user)
+    PUT    /api/community/feeds/{id}         — toggle enabled / change tier
+    DELETE /api/community/feeds/{id}         — remove a source (idempotent)
+    POST   /api/community/feeds/{id}/members — add a member (url/keyword/repo…) to a feed
+    DELETE /api/community/feeds/{id}/members — remove a member (idempotent)
 
 Reads: pure parsers in core.community_data. Writes: ALL go through
 jobs.config_io.mutate_config — the SINGLE serialization authority shared with
 self_tune (R27), so a UI edit and a scheduled self_tune run can never clobber
-each other's config.yaml write. Type/tier are validated against FeedType/TierType
-BEFORE the write, so an invalid feed can never reach scheduler.load_feeds's
-silent-skip path.
+each other's config.yaml write. Feed type/tier are validated against
+FeedType/TierType, and a member value is validated per-KIND (url/repo shape),
+so an invalid feed or member can never reach the adapter's silent-skip path.
 """
 
 from __future__ import annotations
@@ -67,11 +70,14 @@ async def community_feed() -> dict:
 
 @router.get("/sources")
 async def community_sources() -> dict:
-    """Configured signal feeds (read-only view of config.yaml `feeds:`).
+    """Configured signal feeds (a view of config.yaml `feeds:`).
 
-    Each source: {id, name, type, tier, enabled, managed_by, source_count, tags}.
-    `managed_by` defaults to "manual" when absent. READ-ONLY in Phase-1 — no
-    add/edit/delete (Phase-2). Empty list on a fresh install (no config.yaml).
+    Each source: {id, name, type, tier, enabled, managed_by, members, member_count,
+    member_kind, members_truncated, tags}. `managed_by` defaults to "manual" when absent.
+    `member_kind` is the config key holding this feed's editable string members (or None
+    for a no-editable-member type); `member_count` is the accurate total; `members` is the
+    capped list (`members_truncated` flags the cut). Editing is via the /feeds +
+    /feeds/{id}/members endpoints. Empty list on a fresh install (no config.yaml).
     """
     sources = parse_sources(_config_path())
     return {"count": len(sources), "sources": sources}
@@ -223,10 +229,40 @@ class MemberBody(BaseModel):
 
 def _member_key_for_type(feed_type: str) -> str | None:
     """The config key holding this feed type's editable string members, or None.
-    Single source = core.community_data._feed_member_key → jobs.models.MEMBER_KEY."""
-    from core.community_data import _feed_member_key
+    Single source = jobs.models.MEMBER_KEY (imported directly — not via another module's
+    private symbol). MEMBER_KEY is keyed by the FeedType ENUM, so the raw string MUST be
+    converted (a bare MEMBER_KEY.get(raw_str) would return None for every feed). An
+    unknown/invalid type → None (no editable members), never a crash."""
+    from jobs.models import FeedType, MEMBER_KEY
 
-    return _feed_member_key(feed_type)
+    try:
+        return MEMBER_KEY.get(FeedType(feed_type))
+    except ValueError:
+        return None
+
+
+def _validate_member(key: str, value: str) -> None:
+    """#8 strict per-KIND validation — raise _InvalidMember (→422) for a value that would
+    silently fail at fetch time. Keeps a dead subscription out of config.
+      - urls (rss):            must parse as an http(s):// URL with a netloc
+      - repos (github-*):      must be `owner/repo` — exactly one '/', both non-empty, no whitespace
+      - keywords/concept_keywords/other: free-text — non-empty already guaranteed by the caller
+    `value` is already .strip()'d and non-empty when this runs."""
+    if key == "urls":
+        from urllib.parse import urlparse
+
+        p = urlparse(value)
+        if p.scheme not in ("http", "https") or not p.netloc:
+            raise _InvalidMember("must be an http(s):// URL")
+    elif key == "repos":
+        parts = value.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1] or any(c.isspace() for c in value):
+            raise _InvalidMember("must be 'owner/repo'")
+    # keywords / concept_keywords: free-text, non-empty (caller-guaranteed) — no rule
+
+
+class _InvalidMember(Exception):
+    """A member value that fails its kind's format rule (#8)."""
 
 
 @router.post("/feeds/{feed_id}/members")
@@ -256,9 +292,14 @@ async def add_member(feed_id: str, body: MemberBody) -> dict:
     def _mutator(config: dict) -> None:
         for f in config.get("feeds", []):
             if isinstance(f, dict) and f.get("id") == feed_id:
+                # kind is only knowable HERE (the feed's type lives in config, read under
+                # the lock) — so #8 per-kind validation happens inside the mutator, after
+                # `key` is resolved and before the append (Gate-1: cannot validate by kind
+                # before mutate_config since the request carries only the value).
                 key = _member_key_for_type(f.get("type", ""))
                 if key is None:
                     raise _NoMemberType()
+                _validate_member(key, value)  # → _InvalidMember → 422
                 cfg = f.get("config")
                 if not isinstance(cfg, dict):
                     cfg = {}
@@ -280,6 +321,8 @@ async def add_member(feed_id: str, body: MemberBody) -> dict:
         raise HTTPException(status_code=404, detail=f"Feed '{feed_id}' not found")
     except _NoMemberType:
         raise HTTPException(status_code=422, detail=f"Feed '{feed_id}' has no editable members")
+    except _InvalidMember as e:
+        raise HTTPException(status_code=422, detail=f"Invalid member for '{feed_id}': {e}")
     except _Dup:
         raise HTTPException(status_code=409, detail=f"Member already exists in '{feed_id}'")
     return {"ok": True, "id": feed_id, "value": value}

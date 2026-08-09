@@ -109,12 +109,12 @@ describe('communityService — request paths (single /api, added by the intercep
 describe('communityService — snake→camel normalization', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('fetchSources maps managed_by/source_count + member fields → camelCase', async () => {
+  it('fetchSources maps managed_by + member fields → camelCase (no dead source_count)', async () => {
     mockApi.get.mockResolvedValue({
       data: {
         sources: [
           { id: 'a', name: 'A', type: 'rss', tier: 'engineering', enabled: true, managed_by: 'user',
-            source_count: 3, members: ['u1', 'u2'], member_count: 2, members_truncated: false,
+            members: ['u1', 'u2'], member_count: 2, members_truncated: false,
             member_kind: 'urls', tags: ['x'] },
         ],
       },
@@ -122,14 +122,15 @@ describe('communityService — snake→camel normalization', () => {
     const out = await communityService.fetchSources();
     expect(out[0]).toEqual({
       id: 'a', name: 'A', type: 'rss', tier: 'engineering', enabled: true,
-      managedBy: 'user', sourceCount: 3, members: ['u1', 'u2'], memberCount: 2,
+      managedBy: 'user', members: ['u1', 'u2'], memberCount: 2,
       membersTruncated: false, memberKind: 'urls', tags: ['x'],
     });
+    expect('sourceCount' in out[0]).toBe(false);  // dead field removed
   });
 
   it('fetchSources defaults member fields when backend omits them (back-compat)', async () => {
     mockApi.get.mockResolvedValue({
-      data: { sources: [{ id: 'b', name: 'B', type: 'rss', tier: 'engineering', enabled: true, managed_by: 'manual', source_count: 0 }] },
+      data: { sources: [{ id: 'b', name: 'B', type: 'rss', tier: 'engineering', enabled: true, managed_by: 'manual' }] },
     });
     const out = await communityService.fetchSources();
     expect(out[0].members).toEqual([]);

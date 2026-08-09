@@ -138,14 +138,13 @@ def parse_sources(config_path: Path) -> list[dict]:
     """Parse the `feeds:` list from a jobs config.yaml into overlay source rows.
 
     Returns [] for a missing/empty/unparseable config (fresh install) — never
-    raises. Each row: {id, name, type, tier, enabled, managed_by, source_count,
+    raises. Each row: {id, name, type, tier, enabled, managed_by,
     members, member_count, member_kind, members_truncated, tags}.
 
-    `managed_by` defaults to "manual" when the key is absent. `source_count` is the
-    legacy urls-only count (RETAINED for back-compat with existing frontend consumers);
-    `member_count` is the ACCURATE per-type count (urls/keywords/queries/repos/…) and
-    `members` is that list capped at _MEMBER_CAP (`members_truncated` flags the cut).
-    `member_kind` is the config key name (or None for a no-editable-member feed type).
+    `managed_by` defaults to "manual" when the key is absent. `member_count` is the
+    ACCURATE per-type member count (urls/keywords/repos/… via MEMBER_KEY) and `members`
+    is that list capped at _MEMBER_CAP (`members_truncated` flags the cut). `member_kind`
+    is the config key name (or None for a no-editable-member feed type).
     """
     if not config_path.is_file():
         return []
@@ -165,10 +164,6 @@ def parse_sources(config_path: Path) -> list[dict]:
         if not isinstance(fid, str) or not fid:
             continue
         cfg = fd.get("config") or {}
-        # source_count = number of concrete sources this feed pulls (urls), a
-        # real derivable datum, 0 when the feed has none.
-        urls = cfg.get("urls") if isinstance(cfg, dict) else None
-        source_count = len(urls) if isinstance(urls, list) else 0
         # managed_by: ABSENT → "manual" (never assume the key). Normalize case so a
         # config typo ("Self-Tune") still matches self_tune's lowercase gate in
         # Phase-2 (self_tune.prune_unused_feeds keys on managed_by=="self-tune").
@@ -186,7 +181,6 @@ def parse_sources(config_path: Path) -> list[dict]:
                 "tier": fd.get("tier", "engineering"),
                 "enabled": bool(fd.get("enabled", True)),
                 "managed_by": managed_by,
-                "source_count": source_count,
                 "member_kind": _feed_member_key(ftype),
                 "member_count": len(members_all),
                 "members": members_all[:_MEMBER_CAP],

@@ -90,8 +90,11 @@ def test_parse_sources_carries_core_fields(config_file: Path) -> None:
     assert s["type"] == "rss"
     assert s["tier"] == "engineering"
     assert s["enabled"] is True
-    # url count is a useful, real, derivable datum (not fabricated)
-    assert s["source_count"] == 2
+    # member_count is the accurate per-type count (rss → urls) — replaced the old
+    # urls-only source_count field (deleted: 0 readers, misleading for non-rss feeds).
+    assert s["member_count"] == 2
+    assert s["member_kind"] == "urls"
+    assert "source_count" not in s  # dead field removed
 
 
 def test_parse_sources_disabled_feed(config_file: Path) -> None:
@@ -102,8 +105,7 @@ def test_parse_sources_disabled_feed(config_file: Path) -> None:
 
 def test_parse_sources_emits_members_and_accurate_count(tmp_path: Path) -> None:
     # B1: each source emits its editable string members + an ACCURATE member_count
-    # (per the per-type MEMBER_KEY), not the urls-only source_count. source_count is
-    # RETAINED for back-compat (existing frontend consumers).
+    # (per the per-type MEMBER_KEY), replacing the urls-only source_count (deleted).
     p = tmp_path / "c.yaml"
     p.write_text(
         "feeds:\n"
@@ -116,12 +118,12 @@ def test_parse_sources_emits_members_and_accurate_count(tmp_path: Path) -> None:
     assert by_id["rss1"]["members"] == ["https://a.com/f", "https://b.com/f"]
     assert by_id["rss1"]["member_count"] == 2
     assert by_id["rss1"]["member_kind"] == "urls"
-    assert by_id["rss1"]["source_count"] == 2  # retained
-    # hacker-news: members are the keywords (source_count would be 0 — old bug)
+    assert "source_count" not in by_id["rss1"]  # dead field removed
+    # hacker-news: members are the keywords (the old source_count would have been 0)
     assert by_id["hn1"]["members"] == ["llm", "agent", "rag"]
     assert by_id["hn1"]["member_count"] == 3
     assert by_id["hn1"]["member_kind"] == "keywords"
-    # github-releases: members are the repos, member_count=4 (source_count was 0 before)
+    # github-releases: members are the repos, member_count=4 (old source_count was 0)
     assert by_id["gh1"]["member_count"] == 4
     assert by_id["gh1"]["member_kind"] == "repos"
 
@@ -582,21 +584,47 @@ def test_member_key_covers_every_feed_type() -> None:
     )
 
 
-def test_member_key_string_list_types_map_to_real_config_keys() -> None:
-    """The string-member feed types map to the config key they actually use."""
-    from jobs.models import FeedType, MEMBER_KEY
+def test_member_key_edits_the_same_list_the_adapter_reads() -> None:
+    """The member editor must edit the SAME list the fetch adapter consumes — proven by
+    a ROUND-TRIP, not a hardcoded key string (the prior version hardcoded is-None and
+    LOCKED the github-community bug; C044 test-theater). For each feed type, we assert
+    `feed_members(cfg, type)` returns exactly the string list an adapter reads from that
+    type's documented config key. A wrong MEMBER_KEY (e.g. github-community=None) makes
+    feed_members return [] for a feed that HAS members → RED.
 
-    assert MEMBER_KEY[FeedType.RSS] == "urls"
-    assert MEMBER_KEY[FeedType.HACKER_NEWS] == "keywords"
-    assert MEMBER_KEY[FeedType.WEB_SEARCH] == "queries"
-    assert MEMBER_KEY[FeedType.GITHUB_RELEASES] == "repos"
-    assert MEMBER_KEY[FeedType.WEIBO_TRENDING] == "keywords"
-    assert MEMBER_KEY[FeedType.EASTMONEY_MARKET] == "concept_keywords"
-    # No editable STRING members (trending.platforms are {id,name} dicts, not strings —
-    # editing via the string-member path would corrupt the list + crash the adapter).
-    assert MEMBER_KEY[FeedType.TRENDING] is None
-    assert MEMBER_KEY[FeedType.GITHUB_TRENDING] is None
-    assert MEMBER_KEY[FeedType.GITHUB_COMMUNITY] is None
+    `EDITABLE` = the config key each adapter actually reads members from (verified live:
+    github_community.py:83 & github_releases → config.repos; rss → config.urls;
+    hacker_news/weibo → config.keywords; eastmoney → config.concept_keywords).
+    `NON_EDITABLE` = types with no flat-string member list (github-trending: only
+    scalars; trending: platforms are {id,name} DICTS — editing as strings would corrupt
+    the list + crash the adapter's .get()). NOTE: we do NOT construct a RawSignal here —
+    github_community's adapter has a latent published_at-vs-published field mismatch
+    (out of scope); feed_members only needs the config dict.
+    """
+    from jobs.models import FeedType, MEMBER_KEY
+    from core.community_data import feed_members
+
+    EDITABLE = {
+        FeedType.RSS: "urls",
+        FeedType.HACKER_NEWS: "keywords",
+        FeedType.GITHUB_RELEASES: "repos",
+        FeedType.GITHUB_COMMUNITY: "repos",   # #1: repos is a flat str list, same as github-releases
+        FeedType.WEIBO_TRENDING: "keywords",
+        FeedType.EASTMONEY_MARKET: "concept_keywords",
+    }
+    NON_EDITABLE = {FeedType.GITHUB_TRENDING, FeedType.TRENDING, FeedType.WEB_SEARCH}
+
+    sample = ["alpha", "beta/gamma"]
+    for ftype, key in EDITABLE.items():
+        # MEMBER_KEY must name this adapter's real member key...
+        assert MEMBER_KEY[ftype] == key, f"{ftype.value}: MEMBER_KEY={MEMBER_KEY[ftype]!r}, adapter reads config.{key!r}"
+        # ...and feed_members must round-trip the list the adapter would read.
+        assert feed_members({key: list(sample)}, ftype.value) == sample, (
+            f"{ftype.value}: member editor does NOT edit the list the adapter reads"
+        )
+    for ftype in NON_EDITABLE:
+        assert MEMBER_KEY[ftype] is None, f"{ftype.value} should have no editable string members"
+        assert feed_members({"anything": ["x"]}, ftype.value) == []
 
 
 # ── Phase-3: member-level CRUD endpoints (B2) ────────────────────────────────
@@ -610,6 +638,69 @@ def test_add_member_appends_and_stamps_user(tmp_config_members: Path) -> None:
     f = next(x for x in data["feeds"] if x["id"] == "rssf")
     assert "https://c.com/feed" in f["config"]["urls"]
     assert f["managed_by"] == "user"  # editing a member takes ownership
+
+
+def test_add_member_rejects_invalid_url_for_rss(tmp_config_members: Path) -> None:
+    # #8 strict: an rss feed's members are urls — a non-URL value ("hello world") would
+    # land in config.urls and silently fail at fetch time. Reject 422 up front.
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("rssf", MemberBody(value="hello world")))
+    assert ei.value.status_code == 422
+
+
+def test_add_member_accepts_valid_url_for_rss(tmp_config_members: Path) -> None:
+    from routers.community_api import add_member, MemberBody
+
+    _run(add_member("rssf", MemberBody(value="https://valid.com/feed.xml")))
+    data = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "rssf")
+    assert "https://valid.com/feed.xml" in f["config"]["urls"]
+
+
+def test_add_member_rejects_invalid_repo_shape(tmp_config_members: Path, monkeypatch) -> None:
+    # #8: a github-releases/github-community member must be owner/repo shape.
+    import jobs.config_io as cio
+    cfg = tmp_config_members
+    data = yaml.safe_load(cfg.read_text())
+    data["feeds"].append({"id": "ghr", "name": "GHR", "type": "github-releases", "enabled": True, "config": {"repos": ["a/b"]}})
+    cfg.write_text(cio.CONFIG_HEADER + yaml.dump(data, sort_keys=False))
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("ghr", MemberBody(value="noslash")))
+    assert ei.value.status_code == 422
+    with pytest.raises(HTTPException) as ei2:
+        _run(add_member("ghr", MemberBody(value="too/many/slashes")))
+    assert ei2.value.status_code == 422
+
+
+def test_add_member_accepts_valid_repo(tmp_config_members: Path) -> None:
+    data = yaml.safe_load(tmp_config_members.read_text())
+    import jobs.config_io as cio
+    data["feeds"].append({"id": "ghr2", "name": "GHR2", "type": "github-releases", "enabled": True, "config": {"repos": []}})
+    tmp_config_members.write_text(cio.CONFIG_HEADER + yaml.dump(data, sort_keys=False))
+    from routers.community_api import add_member, MemberBody
+
+    _run(add_member("ghr2", MemberBody(value="owner/repo")))
+    got = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in got["feeds"] if x["id"] == "ghr2")
+    assert "owner/repo" in f["config"]["repos"]
+
+
+def test_add_member_keyword_is_free_text(tmp_config_members: Path) -> None:
+    # #8: keywords are free-text — any non-empty value is valid (no URL/shape rule).
+    data = yaml.safe_load(tmp_config_members.read_text())
+    import jobs.config_io as cio
+    data["feeds"].append({"id": "hnf", "name": "HN", "type": "hacker-news", "enabled": True, "config": {"keywords": []}})
+    tmp_config_members.write_text(cio.CONFIG_HEADER + yaml.dump(data, sort_keys=False))
+    from routers.community_api import add_member, MemberBody
+
+    _run(add_member("hnf", MemberBody(value="context engineering")))  # spaces OK for keywords
+    got = yaml.safe_load(tmp_config_members.read_text())
+    f = next(x for x in got["feeds"] if x["id"] == "hnf")
+    assert "context engineering" in f["config"]["keywords"]
 
 
 def test_add_member_rejects_empty(tmp_config_members: Path) -> None:

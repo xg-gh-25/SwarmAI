@@ -62,17 +62,23 @@ class FeedType(str, Enum):
 MEMBER_KEY: dict["FeedType", str | None] = {
     FeedType.RSS: "urls",                     # pundit/lab blog feeds (Sam Altman, Karpathy, OpenAI…)
     FeedType.HACKER_NEWS: "keywords",         # topic keywords to watch on HN
-    FeedType.WEB_SEARCH: "queries",           # search queries
-    FeedType.GITHUB_RELEASES: "repos",        # watched repos
+    FeedType.GITHUB_RELEASES: "repos",        # watched repos (owner/name flat strings)
+    # github-community reads config.repos (github_community.py:83, SOURCE_REPOS = flat
+    # owner/name strings) — same shape as github-releases, so it IS string-editable.
+    # (It's the feed type behind the overlay's own Engagement tab — was wrongly None.)
+    FeedType.GITHUB_COMMUNITY: "repos",
     FeedType.WEIBO_TRENDING: "keywords",      # weibo topic keywords
     FeedType.EASTMONEY_MARKET: "concept_keywords",  # market concept keywords
+    # web-search's fetch adapter is UNIMPLEMENTED (web_search.py returns [] on every
+    # path; `queries` is a commented-out TODO). Exposing member editing would be an
+    # affordance with no real backing (violates the overlay's honesty rule) → None until
+    # the Tavily adapter is actually implemented.
+    FeedType.WEB_SEARCH: None,
     # trending.platforms is a list of STRUCTURED objects ({id, name}), NOT flat strings
-    # (the adapter does platform.get("id")). It is therefore NOT user-editable via the
-    # string-member path — appending a bare string would corrupt the list and crash the
-    # trending adapter. None = no editable string members (needs an object-aware editor).
+    # (the adapter does platform.get("id")). NOT user-editable via the string-member path
+    # — appending a bare string would corrupt the list and crash the trending adapter.
     FeedType.TRENDING: None,
     FeedType.GITHUB_TRENDING: None,           # no member list (spoken_language/since/top_n scalars only)
-    FeedType.GITHUB_COMMUNITY: None,          # no editable string members
 }
 
 

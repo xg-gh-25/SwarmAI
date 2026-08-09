@@ -239,6 +239,7 @@ function SourcesTab() {
                 onClick={() => setExpanded((e) => (e === s.id ? null : s.id))}
                 className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 aria-expanded={expanded === s.id}
+                aria-label={`${expanded === s.id ? 'Hide' : 'Show'} members for ${s.name}`}
                 title={expanded === s.id ? 'Hide members' : 'Show members'}
               >
                 {expanded === s.id ? 'expand_more' : 'chevron_right'}
@@ -288,6 +289,7 @@ function SourcesTab() {
                 data-testid="source-delete-confirm"
                 disabled={busy === s.id}
                 onClick={() => mutate(s.id, () => communityService.deleteSource(s.id))}
+                aria-label={`Confirm delete source ${s.name}`}
                 className="text-[10.5px] px-2 py-1 rounded bg-red-500/15 text-red-400 border border-red-500/40"
               >
                 confirm?
@@ -297,7 +299,8 @@ function SourcesTab() {
                 type="button"
                 data-testid="source-delete"
                 onClick={() => setConfirmDelete(s.id)}
-                className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] hover:text-red-400"
+                aria-label={`Delete source ${s.name}`}
+                className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] hover:text-red-400 focus-visible:text-red-400"
               >
                 delete
               </button>
@@ -367,6 +370,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               data-testid="member-delete-confirm"
               disabled={busy}
               onClick={() => run(() => communityService.deleteMember(source.id, m), true)}
+              aria-label={`Confirm remove member ${m}`}
               className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/40"
             >
               confirm?
@@ -376,7 +380,8 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               type="button"
               data-testid="member-delete"
               onClick={() => setConfirm(m)}
-              className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100"
+              aria-label={`Remove member ${m}`}
+              className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)] hover:text-red-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               close
             </button>

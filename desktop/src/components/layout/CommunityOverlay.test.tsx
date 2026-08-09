@@ -41,7 +41,7 @@ vi.mock('../../services/community', () => ({
 function srcWithMembers(over: Record<string, unknown> = {}) {
   return {
     id: 'ai-eng', name: 'AI Engineering', type: 'rss', tier: 'engineering', enabled: true,
-    managedBy: 'manual', sourceCount: 2,
+    managedBy: 'manual',
     members: ['https://a.com/feed', 'https://b.com/feed'], memberCount: 2,
     membersTruncated: false, memberKind: 'urls', tags: [],
     ...over,
@@ -131,7 +131,7 @@ describe('CommunityOverlay — Sources tab', () => {
   it('renders source rows with managed_by (self_tune-coexistence field)', async () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue([
-      srcWithMembers({ sourceCount: 4 }),
+      srcWithMembers(),
     ]);
     setup();
     fireEvent.click(screen.getByTestId('community-tab-sources'));
@@ -161,7 +161,7 @@ describe('CommunityOverlay — Sources tab', () => {
 
 describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
   const oneSource = [
-    srcWithMembers({ sourceCount: 4 }),
+    srcWithMembers(),
   ];
 
   it('toggle fires updateSource with flipped enabled, then refetches', async () => {
