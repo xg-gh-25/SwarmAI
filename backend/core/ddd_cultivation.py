@@ -233,23 +233,11 @@ class CultivationProposal:
         except (ValueError, TypeError):
             return True  # Treat unparseable dates as expired (safe default)
 
-    def is_safe_append(self) -> bool:
-        """Determine if this proposal is a safe additive change (auto-apply).
-
-        M2: authoritative zones (Architecture/Vision/Non-Goals/SELF.md) are NEVER
-        auto-applied — they fall through to escalation (or full block for SELF.md).
-        retire/rewrite are NOT appends → always False here; their auto-apply-vs-
-        escalate decision lives on `auto_apply_ok` (run_ecc7a32b), handled by
-        _cultivate_proposals via apply_retire_proposal — NOT this append gate.
-        """
-        if self.change_type != "append":
-            return False  # retire/rewrite are destructive — never auto-apply
-        if is_protected_zone(self.target_doc, self.target_section):
-            return False  # authoritative zone — escalate, never auto-apply
-        allowed = SAFE_APPEND_SECTIONS.get(self.target_doc)
-        if allowed is None:
-            return False  # PRODUCT.md, PROJECT.md changes need escalation
-        return self.target_section in allowed
+    # is_safe_append() REMOVED (run_8d5fe9d1, Component C): its sole job was the
+    # hardcoded doc/section whitelist (_PROTECTED_ZONES + SAFE_APPEND_SECTIONS), which
+    # trust replaces. The auto decision now lives in admission_band() (trust=passed +
+    # quality checks); the writer apply_to_ddd no longer re-gates (human-approve of a
+    # REVIEW proposal is a separate authority). No callers remain.
 
 
 # M2: authoritative zones — auto-cultivation is STRUCTURALLY blocked from these.
@@ -813,8 +801,14 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     # independent of that classifier — belt + suspenders.
     if proposal.change_type != "append":
         return "not_safe"
-    if not proposal.is_safe_append():
-        return "not_safe"
+    # NOTE (run_8d5fe9d1, Component C): apply_to_ddd is the WRITER, not the decision.
+    # It does NOT re-check trust — the auto/review/discard authority lives in
+    # admission_band (auto path) and in the human-approve endpoint (routers/cultivation:
+    # a human approving a REVIEW proposal IS the authority, and those proposals are
+    # trust=n/a by construction — re-gating trust here would make human approval
+    # impossible). The old is_safe_append() doc-whitelist gate is removed; the only
+    # invariant enforced here is the non-append refusal above (retire/rewrite have
+    # their own applier). Noise/quality already filtered upstream at _classify_lesson.
 
     # VALUE FLOOR at the chokepoint (run_e9cb7e2a). apply_to_ddd is the ONE gate
     # every write path crosses — but the writeback hook reaches it DIRECTLY,
@@ -1671,6 +1665,73 @@ def trust_from_gate2_outcome(outcome: "str | None") -> str:
     return "n/a"
 
 
+# Admission auto-band confidence floor. A module constant now; Component D (calibration)
+# will override it per-channel from proposal_feedback.get_adjusted_threshold.
+_AUTO_CONFIDENCE_THRESHOLD = 0.7
+
+
+def admission_band(
+    proposal: "CultivationProposal", project_dir: "Path | None"
+) -> "tuple[str, str]":
+    """The Knowledge Admission decision band (Component C). Returns (verdict, reason)
+    where verdict ∈ {"auto", "review", "discard"}.
+
+    TRUST IS THE SOLE AUTHORITY (AC11) — there is NO hardcoded doc/section whitelist.
+    A ``trust=passed`` proposal (its source run cleared Gate-2) may AUTO-apply into ANY
+    doc, INCLUDING SELF.md / PRODUCT.md / TECH.md/Architecture — the zones the old
+    ``_check_safe_doc``/``SAFE_APPEND_SECTIONS``/``_PROTECTED_ZONES`` hardcoded shut.
+    Authority moved from "which doc is it?" to "did the producing run survive
+    adversarial review?".
+
+    Bands:
+      • DISCARD — is_noise (machine broadcast / instance-log / fragment).
+      • AUTO    — trust=passed AND reused quality checks clean (magnitude + circuit
+                  breaker; the doc-whitelist check is DROPPED) AND confidence ≥ the
+                  auto threshold. Retire/rewrite are never auto here (change_type gate).
+      • REVIEW  — everything else: trust∈{failed,n/a}, a hard quality block, a gate
+                  error (FAIL-CLOSED — DEC19), or confidence below the auto floor.
+    """
+    # 1. noise → discard (before any work)
+    _noise, _nreason = is_noise(proposal.content or "")
+    if _noise:
+        return ("discard", f"noise:{_nreason}")
+
+    # 2. trust is the gate. Only an explicit Gate-2 pass is auto-eligible.
+    if proposal.passed_adversarial_gate != "passed":
+        return ("review", f"trust:{proposal.passed_adversarial_gate}")
+
+    # destructive changes (retire/rewrite) are never auto-applied via this band
+    if proposal.change_type != "append":
+        return ("review", "non_append")
+
+    # 3. reused quality checks — but WITHOUT the doc-whitelist (that is what trust
+    #    replaces). Fail-closed: any gate error → review, never auto.
+    try:
+        from core.ddd_auto_approval import evaluate_auto_approval
+        decision = evaluate_auto_approval(proposal, project_dir)
+        criteria = decision.criteria_met
+    except Exception as e:  # noqa: BLE001 — gate must never crash cultivation
+        logger.warning(
+            "admission_band: quality gate errored (%s: %s) → FAIL-CLOSED review for %s § %s",
+            type(e).__name__, e, proposal.target_doc, proposal.target_section,
+        )
+        return ("review", "gate_error")
+
+    # HARD blocks that survive the whitelist removal: magnitude + circuit breaker.
+    # (safe_target_doc is DELIBERATELY excluded — trust supersedes the doc whitelist.
+    # maturity/conflict/precision stay SOFT: logged, not blocking, as in the prior gate.)
+    if not criteria.get("small_magnitude", True):
+        return ("review", "too_large")
+    if not criteria.get("circuit_breaker_ok", True):
+        return ("review", "circuit_breaker")
+
+    # 4. confidence floor (Component D will calibrate this per channel)
+    if proposal.confidence < _AUTO_CONFIDENCE_THRESHOLD:
+        return ("review", f"below_auto_threshold:{proposal.confidence:.2f}")
+
+    return ("auto", "trust_passed")
+
+
 def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> str:
     """Resolve a proposal's source run → its trust stamp {passed, failed, n/a}.
 
@@ -2024,15 +2085,16 @@ def _cultivate_proposals(
     drift_errors: List[str] = []
 
     for proposal in proposals:
-        # Admission root-fix (run_97519f7c): a protected-zone target (SELF / PRODUCT>
-        # Vision,Non-Goals,Strategic / TECH>Architecture) is human-distill-only —
-        # apply_to_ddd returns "not_safe" for it, so escalating it into the review
-        # queue creates a DEAD-ON-APPROVE entry a human can never action (37 such
-        # entries were the #1 standing-queue contributor). SKIP it (drop) instead of
-        # escalating. NARROW by design (Gate-1): only is_protected_zone — a
-        # non-protected but not-safe-append target (e.g. PROJECT.md) STILL escalates
-        # below, so legitimate human-gated escalations are not dropped.
-        if is_protected_zone(proposal.target_doc, proposal.target_section):
+        # Admission root-fix (run_97519f7c) + trust cutover (run_8d5fe9d1): a
+        # protected-zone target (SELF / PRODUCT>Vision,Non-Goals,Strategic / TECH>
+        # Architecture) that is NOT trust=passed is human-distill-only — sediment it
+        # UP to the hand-distill candidates sink (not the review queue: it would be
+        # DEAD-ON-APPROVE). BUT a trust=passed proposal (its run cleared Gate-2) is
+        # now AUTO-eligible into these very zones (Component C, AC11) — it must FALL
+        # THROUGH to admission_band, NOT be pre-dropped here. So this pre-drop fires
+        # ONLY for the un-trusted case.
+        if (proposal.passed_adversarial_gate != "passed"
+                and is_protected_zone(proposal.target_doc, proposal.target_section)):
             # Sediment UP, not to a landfill (Principle 1 + Gate-2 red-team MED): a
             # protected-zone lesson is human-distill-only, but dropping it to a DEBUG
             # log is a graveyard — a human never sees the architecture/SELF lessons
@@ -2127,49 +2189,25 @@ def _cultivate_proposals(
                 write_proposal(proposal, project_dir)
                 escalated += 1
             continue
-        if proposal.is_safe_append():
-            # Additional auto-approval gate (maturity, magnitude, circuit breaker).
-            # FAIL-CLOSED (run_e9cb7e2a): a gate that cannot run is NOT a licence to
-            # silent-write. The old `except Exception: pass # allow through` meant a
-            # broken/absent gate flooded the brain with UNGATED appends — the exact
-            # "gate is a router, not a filter" leak. On ANY gate error we now ESCALATE
-            # to the human proposal queue (durable, reviewable), never auto-apply.
-            # (`Exception` alone subsumes `ImportError`; the prior tuple was a lint
-            # smell. Kept broad on purpose — this gate must never crash cultivation,
-            # but "can't evaluate" now means "don't auto-write", not "write anyway".)
-            try:
-                from core.ddd_auto_approval import evaluate_auto_approval
-                decision = evaluate_auto_approval(proposal, project_dir)
-                gate_ok = True
-            except Exception as e:
-                logger.warning(
-                    "auto-approval gate errored (%s: %s) → FAIL-CLOSED, escalating "
-                    "%s § %s instead of silent-writing",
-                    type(e).__name__, e, proposal.target_doc, proposal.target_section,
-                )
-                gate_ok = False
-
-            if not gate_ok:
-                proposal.status = "escalated"
-                write_proposal(proposal, project_dir)
-                escalated += 1
-                continue
-
-            if not decision.approved:
-                # Only escalate if a HARD gate blocked (not maturity absence)
-                # Hard gates: safe_target_doc, circuit_breaker_ok, small_magnitude
-                hard_blocked = (
-                    not decision.criteria_met.get("safe_target_doc", True)
-                    or not decision.criteria_met.get("circuit_breaker_ok", True)
-                    or not decision.criteria_met.get("small_magnitude", True)
-                )
-                if hard_blocked:
-                    proposal.status = "escalated"
-                    write_proposal(proposal, project_dir)
-                    escalated += 1
-                    continue
-                # Soft gates (maturity, conflict, precision) — log but allow
-
+        # ── Admission decision band (Component C, run_8d5fe9d1) ──────────────────
+        # TRUST replaces the old doc-whitelist (is_safe_append/_PROTECTED_ZONES): a
+        # trust=passed proposal may auto-apply into ANY doc incl SELF.md; else review;
+        # noise → discard. Fail-closed (gate error → review). admission_band owns the
+        # whole auto/review/discard decision for appends now.
+        _verdict, _breason = admission_band(proposal, project_dir)
+        if _verdict == "discard":
+            # Noise never reaches the queue OR the doc — silently dropped, logged.
+            logger.info(
+                "admission: DISCARD %s § %s (%s): %.80s",
+                proposal.target_doc, proposal.target_section, _breason, proposal.content,
+            )
+            continue
+        if _verdict == "review":
+            proposal.status = "escalated"
+            write_proposal(proposal, project_dir)
+            escalated += 1
+            continue
+        if _verdict == "auto":
             status = apply_to_ddd(proposal, project_dir)
             if status == "applied":
                 proposal.status = "applied"
@@ -2209,10 +2247,7 @@ def _cultivate_proposals(
                 # Healthy reject: "duplicate", "rejected_low_value", "not_safe" —
                 # the brain DISCERNED and declined to write. Nothing failed.
                 rejected += 1
-        else:
-            proposal.status = "escalated"
-            write_proposal(proposal, project_dir)
-            escalated += 1
+            continue
 
     result = {
         "applied": applied,

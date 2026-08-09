@@ -238,56 +238,9 @@ class TestReadPendingProposals:
             assert result == []
 
 
-class TestIsSafeAppend:
-    """Test the tiered autonomy classification."""
-
-    def test_improvement_what_worked_is_safe(self):
-        from core.ddd_cultivation import CultivationProposal
-
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md",
-            target_section="What Worked",
-            content="test",
-            source_run_id="run_x",
-            confidence=0.7,
-        )
-        assert p.is_safe_append() is True
-
-    def test_tech_runtime_traps_is_safe(self):
-        from core.ddd_cultivation import CultivationProposal
-
-        p = CultivationProposal(
-            target_doc="TECH.md",
-            target_section="Runtime Traps",
-            content="test",
-            source_run_id="run_x",
-            confidence=0.7,
-        )
-        assert p.is_safe_append() is True
-
-    def test_product_is_not_safe(self):
-        from core.ddd_cultivation import CultivationProposal
-
-        p = CultivationProposal(
-            target_doc="PRODUCT.md",
-            target_section="Strategic Priorities",
-            content="test",
-            source_run_id="run_x",
-            confidence=0.7,
-        )
-        assert p.is_safe_append() is False
-
-    def test_unknown_section_is_not_safe(self):
-        from core.ddd_cultivation import CultivationProposal
-
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md",
-            target_section="Some Random Section",
-            content="test",
-            source_run_id="run_x",
-            confidence=0.7,
-        )
-        assert p.is_safe_append() is False
+# TestIsSafeAppend REMOVED (run_8d5fe9d1, Component C): is_safe_append() was deleted —
+# its doc-whitelist job is replaced by trust (admission_band). The auto/review/discard
+# decision is now tested in test_admission_band.py (trust-gated, no doc carved out).
 
 
 class TestApplyToDDD:
@@ -308,6 +261,7 @@ class TestApplyToDDD:
                 content="New pattern discovered during pipeline run",
                 source_run_id="run_test",
                 confidence=0.7,
+                passed_adversarial_gate="passed",  # apply_to_ddd is now trust-gated
             )
             result = apply_to_ddd(p, project_dir)
             assert result == "applied"
@@ -348,24 +302,33 @@ class TestApplyToDDD:
                 content=lesson_text,  # exact same content
                 source_run_id="run_dup",
                 confidence=0.7,
+                passed_adversarial_gate="passed",  # apply_to_ddd is now trust-gated
             )
             result = apply_to_ddd(p, project_dir)
             assert result == "duplicate"  # Full content substring match
 
-    def test_rejects_unsafe_target(self):
+    def test_writer_no_longer_rejects_by_doc_whitelist(self):
+        """Trust cutover (run_8d5fe9d1): apply_to_ddd is the WRITER, not the decision —
+        it no longer rejects by a doc whitelist ('not_safe' by-doc is gone). The auto/
+        review authority lives in admission_band; a human-approved REVIEW proposal (any
+        doc, incl PRODUCT.md) must be writable. With the doc present, the append applies."""
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
+            (project_dir / "PRODUCT.md").write_text(
+                "# Product\n\n## Strategic Priorities\n\n- seed\n"
+            )
             p = CultivationProposal(
                 target_doc="PRODUCT.md",
                 target_section="Strategic Priorities",
-                content="Change the product direction entirely",
+                content="A human-approved strategic priority worth recording in the brain",
                 source_run_id="run_risky",
                 confidence=0.9,
             )
-            result = apply_to_ddd(p, project_dir)
-            assert result == "not_safe"
+            # No doc-whitelist rejection anymore — the writer applies the append.
+            assert apply_to_ddd(p, project_dir) == "applied"
+            assert "human-approved strategic priority" in (project_dir / "PRODUCT.md").read_text()
 
     def test_missing_whitelisted_section_is_auto_created(self):
         """Structural drift fix (run_45ab67c7, user-chosen): when a whitelisted
@@ -384,10 +347,11 @@ class TestApplyToDDD:
             # exercises AUTO-CREATE, not the floor (run_e9cb7e2a).
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
-                target_section="What Worked",  # whitelisted, but missing here
+                target_section="What Worked",  # section missing here (auto-created)
                 content="A genuinely new lesson worth keeping in the brain",
                 source_run_id="run_drift",
                 confidence=0.7,
+                passed_adversarial_gate="passed",  # apply_to_ddd is now trust-gated
             )
             assert apply_to_ddd(p, project_dir) == "created_section"
             content = doc.read_text()
@@ -784,47 +748,48 @@ class TestLogApplication:
 class TestCultivateFromReflect:
     """Test the one-call entry point."""
 
-    def test_applies_safe_and_escalates_risky(self):
+    def test_trust_passed_run_auto_applies_into_any_zone(self):
+        """Trust cutover (run_8d5fe9d1, AC11): a Gate-2-PASSED source run auto-applies
+        into ANY doc — including a formerly-PROTECTED zone. Trust, not doc, decides."""
         from core.ddd_cultivation import cultivate_from_reflect
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
-            # Create IMPROVEMENT.md with the expected section
             doc = project_dir / "IMPROVEMENT.md"
             doc.write_text("# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n")
+            # Stamp trust: a passed adversarial run.json for run_e2e
+            run_dir = project_dir / ".artifacts" / "runs" / "run_e2e"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.json").write_text(json.dumps(
+                {"stages": [{"stage": "adversarial", "status": "completed",
+                             "gate2_outcome": "pass"}]}))
 
             lessons = [
                 "SMOKE caught 2 runtime crashes that unit tests missed — highest ROI check",
-                "This is a strategic non-goal scope priority milestone decision that should escalate",
             ]
             result = cultivate_from_reflect(lessons, "run_e2e", "SwarmAI", project_dir)
 
-            # M4 fix: exact assertions
-            assert result["applied"] == 1  # IMPROVEMENT.md lesson auto-applied
-            # Admission root-fix (run_97519f7c): the 2nd lesson routes to
-            # PRODUCT.md>Non-Goals — a PROTECTED zone (human-distill-only). apply_to_ddd
-            # would return "not_safe" for it, so the OLD behavior (escalate → a
-            # dead-on-approve queue entry) was the bug this run fixes. It is now SKIPPED,
-            # not escalated: 0 escalated, 1 skipped_protected, 0 proposal files written.
-            assert result["escalated"] == 0
-            assert result["skipped_protected"] == 1
-
-            # Verify DDD doc was actually modified
+            assert result["applied"] == 1  # trust=passed → auto-applied
             content = doc.read_text()
             assert "SMOKE caught 2 runtime crashes" in content
-            assert "auto-cultivated" in content  # reflect source_stage = default label
+            assert "auto-cultivated" in content
 
-            # Verify NO dead-on-approve proposal was written for the protected-zone lesson
-            proposals_dir = project_dir / ".artifacts" / "proposals"
-            proposal_files = list(proposals_dir.glob("*.json"))
-            assert len(proposal_files) == 0
+    def test_untrusted_run_escalates_not_auto(self):
+        """The fail-closed floor: a lesson from a run with NO Gate-2 pass (no run.json)
+        → trust=n/a → REVIEW (escalated), never auto-applied. (AC4)"""
+        from core.ddd_cultivation import cultivate_from_reflect
 
-            # Verify changelog was written
-            changelog = project_dir / ".artifacts" / "ddd-changelog.jsonl"
-            assert changelog.exists()
-            entries = changelog.read_text().strip().split("\n")
-            assert len(entries) == 1
-            assert json.loads(entries[0])["action"] == "applied"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n")
+
+            lessons = ["SMOKE caught 2 runtime crashes that unit tests missed — highest ROI check"]
+            result = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", project_dir)
+
+            assert result["applied"] == 0  # no trust → not auto
+            assert result["escalated"] == 1  # → review queue instead
+            assert "SMOKE caught 2 runtime crashes" not in doc.read_text()  # not written
 
 
 class TestCultivateFromCorrections:
@@ -850,12 +815,14 @@ class TestCultivateFromCorrections:
                 corrections, "session_abc123", "SwarmAI", project_dir
             )
 
-            # Correction should be classified (has "daemon", "must", "subprocess", "Path.home" → TECH.md)
-            assert result["applied"] >= 1
-            # Verify it landed in a DDD doc
-            tech_content = (project_dir / "TECH.md").read_text()
-            improvement_content = (project_dir / "IMPROVEMENT.md").read_text()
-            assert "Path.home()" in tech_content or "PATH" in improvement_content
+            # Trust cutover (run_8d5fe9d1): corrections are SESSION-sourced (session_abc123,
+            # not a run_ id) → trust=n/a → they ESCALATE to review, not auto-apply. A
+            # correction is a raw signal, not a Gate-2-vetted lesson. (AC4 fail-closed floor)
+            assert result["applied"] == 0
+            assert result["escalated"] >= 1
+            # It was classified + queued for review (a proposal file exists), not silently dropped.
+            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
+            assert proposals, "correction should be escalated to the review queue"
 
     def test_sets_source_stage_to_correction(self):
         from core.ddd_cultivation import cultivate_from_corrections
@@ -876,14 +843,15 @@ class TestCultivateFromCorrections:
                 corrections, "session_xyz789", "SwarmAI", project_dir
             )
 
-            # Verify changelog has correct source_stage (PE-3)
-            changelog = project_dir / ".artifacts" / "ddd-changelog.jsonl"
-            assert changelog.exists(), "Expected changelog to be written"
-            lines = changelog.read_text().strip().split("\n")
-            assert len(lines) >= 1, "Expected at least one changelog entry"
-            entry = json.loads(lines[0])
-            assert entry["source_run_id"] == "session_xyz789"
-            assert entry["source_stage"] == "correction"
+            # Trust cutover (run_8d5fe9d1): session-sourced → escalated to review. The
+            # source_stage attribution now lives on the ESCALATED PROPOSAL (not a
+            # changelog 'applied' entry, since nothing auto-applied).
+            assert result["escalated"] >= 1
+            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
+            assert proposals, "correction should be escalated to the review queue"
+            pdata = json.loads(proposals[0].read_text())
+            assert pdata["source_run_id"] == "session_xyz789"
+            assert pdata["source_stage"] == "correction"
 
     def test_empty_corrections_returns_zero(self):
         from core.ddd_cultivation import cultivate_from_corrections
@@ -914,12 +882,12 @@ class TestCultivateFromDecisions:
                 decisions, "session_dec001", "SwarmAI", project_dir
             )
 
-            # The decision should classify to TECH.md Conventions (has "pattern", "prefer", "atomic")
-            assert result["applied"] >= 1
-
-            content = doc.read_text()
-            assert "atomic writes" in content
-            assert "decision" in content  # source_stage label for decisions
+            # Trust cutover (run_8d5fe9d1): session-sourced decision → trust=n/a →
+            # escalated to review, not auto-applied into TECH.md.
+            assert result["applied"] == 0
+            assert result["escalated"] >= 1
+            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
+            assert proposals and "atomic writes" in proposals[0].read_text()
 
     def test_sets_source_stage_to_decision(self):
         from core.ddd_cultivation import cultivate_from_decisions
@@ -936,14 +904,13 @@ class TestCultivateFromDecisions:
                 decisions, "session_dec002", "SwarmAI", project_dir
             )
 
-            # Verify changelog source attribution (PE-3)
-            changelog = project_dir / ".artifacts" / "ddd-changelog.jsonl"
-            assert changelog.exists(), "Expected changelog to be written"
-            lines = changelog.read_text().strip().split("\n")
-            assert len(lines) >= 1, "Expected at least one changelog entry"
-            entry = json.loads(lines[0])
-            assert entry["source_run_id"] == "session_dec002"
-            assert entry["source_stage"] == "decision"
+            # Trust cutover (run_8d5fe9d1): source attribution now on the escalated proposal.
+            assert result["escalated"] >= 1
+            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
+            assert proposals, "decision should be escalated to the review queue"
+            pdata = json.loads(proposals[0].read_text())
+            assert pdata["source_run_id"] == "session_dec002"
+            assert pdata["source_stage"] == "decision"
 
     def test_empty_decisions_returns_zero(self):
         from core.ddd_cultivation import cultivate_from_decisions
@@ -1129,15 +1096,17 @@ class TestLessonQualityGate:
         assert is_quality_lesson(
             "The returncode handling pattern is brittle and should be refactored") is True
 
-    def test_architecture_zone_blocks_auto_apply_integration(self):
-        # Adversarial #2 (load-bearing): TECH.md/Architecture IS in
-        # SAFE_APPEND_SECTIONS, so without the zone guard it would auto-apply.
-        # is_safe_append MUST return False for it (escalate, never auto-apply).
-        from core.ddd_cultivation import CultivationProposal
+    def test_architecture_zone_not_auto_without_trust_integration(self):
+        # Trust cutover (run_8d5fe9d1): TECH.md/Architecture is no longer blocked by a
+        # doc-whitelist — it is blocked by TRUST. An un-trusted (trust=n/a) proposal to
+        # Architecture → review, never auto. (A trust=passed one WOULD auto — AC11,
+        # tested in test_admission_band.py.)
+        from core.ddd_cultivation import admission_band, CultivationProposal
         p = CultivationProposal(
             target_doc="TECH.md", target_section="Architecture",
-            content="x" * 40, source_run_id="r", confidence=0.9)
-        assert p.is_safe_append() is False
+            content="A genuinely new architectural lesson worth keeping in the brain",
+            source_run_id="r", confidence=0.9, passed_adversarial_gate="n/a")
+        assert admission_band(p, None)[0] == "review"
 
 
 class TestEvidenceDrivenRetire:
@@ -1253,37 +1222,34 @@ class TestEvidenceDrivenRetire:
         proposals = filter_lessons_for_ddd(lessons, "run_test", "SwarmAI")
         assert all(p.change_type == "append" for p in proposals)
 
-    # ── AC5: retire proposal is NEVER safe-append + apply_to_ddd refuses it ─────
-    def test_retire_proposal_never_safe_append(self):
-        from core.ddd_cultivation import CultivationProposal
+    # ── AC5: retire proposal is NEVER auto-applied by the band + apply_to_ddd refuses it ─
+    def test_retire_proposal_never_auto_via_band(self):
+        # Trust cutover (run_8d5fe9d1): even a trust=passed retire is never "auto" via
+        # admission_band (non-append → review; its real path is apply_retire_proposal).
+        from core.ddd_cultivation import admission_band, CultivationProposal
         p = CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="x" * 40, source_run_id="r", confidence=0.9,
+            content="A genuinely superseded lesson that should be retired from the brain",
+            source_run_id="r", confidence=0.9, passed_adversarial_gate="passed",
             change_type="retire", target_title="Some Entry",
         )
-        # Even in an otherwise safe-append section, retire is never auto-applicable.
-        assert p.is_safe_append() is False
+        assert admission_band(p, None)[0] == "review"
 
-    def test_apply_to_ddd_hard_refuses_retire_independent_of_is_safe_append(self):
-        """HIGH-3 defense-in-depth: apply_to_ddd's change_type guard refuses a
-        non-append EVEN IF is_safe_append were (wrongly) True. This ISOLATES the
-        belt from the suspenders — we force is_safe_append→True so ONLY the HIGH-3
-        guard can produce 'not_safe'. Mutation-proven: removing the guard line at
-        apply_to_ddd makes this go RED (Gate-2 caught the earlier vacuous version
-        that also passed via is_safe_append)."""
+    def test_apply_to_ddd_hard_refuses_retire_by_change_type(self):
+        """HIGH-3 defense-in-depth (run_8d5fe9d1: is_safe_append removed): apply_to_ddd's
+        change_type guard is now the SOLE refusal of a non-append — a retire must NEVER
+        land in the append writer (it would append instead of deleting). Mutation-proven:
+        removing the change_type guard line makes this go RED."""
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
         p = CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
             content="x" * 40, source_run_id="r", confidence=0.9,
             change_type="retire", target_title="X",
         )
-        # Force the suspenders open — is_safe_append lies True. The ONLY thing
-        # standing between a retire and an append-to-doc is now the HIGH-3 guard.
-        object.__setattr__(p, "is_safe_append", lambda: True)
         assert apply_to_ddd(p, Path("/nonexistent")) == "not_safe"
 
-    def test_retire_never_safe_append_via_real_gate(self, tmp_path):
-        """The is_safe_append guard (suspenders) independently refuses retire."""
+    def test_retire_refused_by_change_type_with_real_doc(self, tmp_path):
+        """The change_type guard refuses retire even with a real target doc present."""
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
         doc = tmp_path / "IMPROVEMENT.md"
         doc.write_text("## What Worked\n\n- **X** — y\n", encoding="utf-8")
@@ -2398,6 +2364,9 @@ class TestCultivateWriteFailedDistinction:
             content=content,
             source_run_id="run_wf_test",
             confidence=0.7,
+            # Trust cutover (run_8d5fe9d1): AUTO path (where apply_to_ddd runs) requires
+            # trust=passed. This helper models a proposal that reached the writer.
+            passed_adversarial_gate="passed",
         )
 
     def test_write_failure_is_distinct_from_healthy_reject(self, monkeypatch):
