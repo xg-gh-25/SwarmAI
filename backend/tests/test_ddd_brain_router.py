@@ -769,3 +769,118 @@ class TestUnifiedBrainStateBuilder:
         (pd / ".artifacts" / "ddd-changelog.jsonl").write_text("\n".join(lines), encoding="utf-8")
         h = m.build_brain_state(pd, with_noise=True)["health"]
         assert h["recentActivity"] == 2, "only the 2 in-window stamped entries count"
+
+
+class TestPerfRefactorRun43dc94f6:
+    """run_43dc94f6: shared-parse + batch-git perf refactor — output-identical guarantees."""
+
+    def test_shared_parse_grouped_keyed_by_section_member_rel(self, tmp_path):
+        """_parse_knowledge_docs_grouped keys by the SAME rel string _section_members
+        yields, so entryCount lookup (len(parsed[m['path']])) can never miss."""
+        from routers import ddd_brain as m
+        from core.ddd_paths import ddd_path
+        from core.project_registry import DDD_CANONICAL_DOCS
+        pd = tmp_path / "P"; pd.mkdir()
+        doc = DDD_CANONICAL_DOCS[0]
+        p = ddd_path(pd, doc)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "## Guidelines\n"
+            "- [guideline] **A note** — x (2026-01-01)\n"
+            "  <!-- ref:1 | last:2026-01-01 | decay:active -->\n",
+            encoding="utf-8",
+        )
+        grouped = m._parse_knowledge_docs_grouped(pd)
+        member_rels = set(m._section_members(pd, "knowledge"))
+        # every grouped key IS a knowledge member rel (keys align → entryCount hits)
+        assert set(grouped.keys()) <= member_rels
+        rel = m._rel(pd, p)
+        assert rel in grouped and len(grouped[rel]) == 1
+
+    def test_detail_entrycount_equals_direct_parse(self, tmp_path):
+        """entryCount (now len(parsed[path])) must equal a direct parse of that file —
+        the byte-identity guarantee for the merged parse."""
+        from routers import ddd_brain as m
+        from core.ddd_paths import ddd_path
+        from core.project_registry import DDD_CANONICAL_DOCS
+        pd = tmp_path / "P"; pd.mkdir()
+        doc = DDD_CANONICAL_DOCS[0]
+        p = ddd_path(pd, doc)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "## Guidelines\n"
+            "- [guideline] **One** — a (2026-01-01)\n"
+            "  <!-- ref:1 | last:2026-01-01 | decay:active -->\n"
+            "- [pitfall] **Two** — b (2026-01-01)\n"
+            "  <!-- ref:1 | last:2026-01-01 | decay:active -->\n",
+            encoding="utf-8",
+        )
+        from core.ddd_entry_lifecycle import parse_entries
+        detail = m._brain_detail(pd)
+        know = next(s for s in detail["sections"] if s["key"] == "knowledge")
+        mem = next(x for x in know["members"] if x["path"] == m._rel(pd, p))
+        assert mem["entryCount"] == len(parse_entries(p.read_text(encoding="utf-8"))) == 2
+
+    def test_gallery_stats_shared_vs_selfparse_identical(self, tmp_path):
+        """_gallery_entry_stats(parsed=...) is byte-identical to the self-parse path."""
+        from routers import ddd_brain as m
+        from core.ddd_paths import ddd_path
+        from core.project_registry import DDD_CANONICAL_DOCS
+        pd = tmp_path / "P"; pd.mkdir()
+        doc = DDD_CANONICAL_DOCS[0]
+        p = ddd_path(pd, doc)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "## Guidelines\n"
+            "- [guideline] **Active** — a (2026-01-01)\n"
+            "  <!-- ref:1 | last:2026-01-01 | decay:active -->\n"
+            "- [pitfall] **Dormant** — b (2026-01-01)\n"
+            "  <!-- ref:0 | last:2026-01-01 | decay:dormant -->\n",
+            encoding="utf-8",
+        )
+        self_parsed = m._gallery_entry_stats(pd)
+        shared = m._gallery_entry_stats(pd, parsed=m._parse_knowledge_docs_grouped(pd))
+        assert self_parsed == shared
+        assert self_parsed["sinking"] == 1  # the dormant one
+
+    def test_batch_git_status_rename_keys_new_path(self, tmp_path, monkeypatch):
+        """_batch_git_status parses a porcelain -z rename (R<sp>new\\0old\\0) → keys the
+        NEW path as 'renamed', consuming BOTH fields (does not misread old as a code)."""
+        from routers import ddd_brain as m
+        import subprocess as _sp
+        pd = tmp_path / "Projects" / "P"
+        pd.mkdir(parents=True)
+        (tmp_path / ".git").mkdir()  # make _workspace_root()/.git exist
+        monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)
+
+        class _R:
+            returncode = 0
+            # two entries: a rename (new\0old) then a normal modified file
+            stdout = "R  Projects/P/new.md\0Projects/P/old.md\0 M Projects/P/other.md\0"
+        monkeypatch.setattr(_sp, "run", lambda *a, **k: _R())
+        out = m._batch_git_status(pd)
+        assert out.get("Projects/P/new.md") == "renamed"
+        assert out.get("Projects/P/other.md") == "modified"
+        # the OLD path must NOT leak in as a bogus status (it was consumed by the rename)
+        assert "Projects/P/old.md" not in out
+
+    def test_batch_git_status_absent_git_returns_empty(self, tmp_path, monkeypatch):
+        """No .git → {} so every member lookup falls back to 'clean' (parity with the
+        per-file _file_git_status .git-absent path)."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "Projects" / "P"
+        pd.mkdir(parents=True)
+        monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)  # no .git created
+        assert m._batch_git_status(pd) == {}
+
+    def test_map_git_xy_all_codes(self):
+        """The shared XY→status mapping covers every code _file_git_status used to map
+        inline (SSOT — batch + per-file agree)."""
+        from routers.ddd_brain import _map_git_xy
+        assert _map_git_xy("UU") == "conflicting"
+        assert _map_git_xy("R ") == "renamed"
+        assert _map_git_xy("??") == "untracked"
+        assert _map_git_xy("D ") == "deleted"
+        assert _map_git_xy("A ") == "added"
+        assert _map_git_xy("M ") == "modified"
+        assert _map_git_xy(" M") == "modified"

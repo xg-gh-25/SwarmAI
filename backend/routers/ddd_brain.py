@@ -215,6 +215,12 @@ def _file_git_status(project_dir: Path, file_rel: str) -> str:
     if result.returncode != 0 or not result.stdout.strip("\0").strip():
         return "clean"
     xy = result.stdout.split("\0")[0][:2]
+    return _map_git_xy(xy)
+
+
+def _map_git_xy(xy: str) -> str:
+    """Map a porcelain XY code to our status vocabulary (SSOT for _file_git_status
+    + _batch_git_status — one mapping, no drift)."""
     if "U" in xy:
         return "conflicting"
     if "R" in xy:
@@ -226,6 +232,58 @@ def _file_git_status(project_dir: Path, file_rel: str) -> str:
     if "A" in xy:
         return "added"
     return "modified"
+
+
+def _batch_git_status(project_dir: Path) -> dict[str, str]:
+    """ONE `git status --porcelain -z` over the project subtree → {ws-rel path →
+    status} (run_43dc94f6 perf). Replaces N per-file forks in the detail view.
+
+    Keyed by WORKSPACE-relative posix path (same string _file_git_status builds at
+    line ~205: project_dir.relative_to(ws)/file_rel), so a member lookup is
+    `.get(ws_rel, "clean")` — a file NOT in porcelain (unchanged, or gitignored per
+    STEERING #5) is absent → caller defaults "clean", identical to the per-file
+    "empty stdout → clean". Scoped `-- <project_rel>` so git scans only this subtree
+    (not the whole repo → no latency regression). Fail-soft: .git-absent / non-zero /
+    timeout / OSError → {} so every lookup falls back to "clean" (parity with the
+    per-file except path). Rename-aware: porcelain -z emits `R<sp> new\\0old\\0` as
+    TWO null fields (VERIFIED against real git — the FIRST field is the NEW path, the
+    second is OLD) — key the NEW path (the one on disk + in a member list), consume
+    both fields (Gate-1 E)."""
+    ws = _workspace_root()
+    if not (ws / ".git").exists():  # worktree/submodule has .git as a FILE
+        return {}
+    try:
+        proj_rel = project_dir.relative_to(ws).as_posix()
+    except ValueError:
+        return {}
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "-unormal", "--", proj_rel],
+            cwd=str(ws), capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    out: dict[str, str] = {}
+    fields = result.stdout.split("\0")
+    i = 0
+    while i < len(fields):
+        rec = fields[i]
+        if not rec.strip():
+            i += 1
+            continue
+        xy = rec[:2]
+        path = rec[3:]  # porcelain: "XY <path>", path starts at index 3
+        if "R" in xy:
+            # rename/copy: this field is the NEW path; the NEXT field is the OLD path
+            # (porcelain -z order). Key the new path, consume both fields.
+            out[path] = "renamed"
+            i += 2
+            continue
+        out[path] = _map_git_xy(xy)
+        i += 1
+    return out
 
 
 def _relative_time(iso: Optional[str]) -> str:
@@ -331,8 +389,40 @@ def _rel(project_dir: Path, p: Path) -> str:
 _TYPE_KEYS = VALID_TYPES
 
 
-def _gallery_entry_stats(project_dir: Path) -> dict:
+def _parse_knowledge_docs_grouped(project_dir: Path) -> dict[str, list[EntryMetadata]]:
+    """Parse the ② canonical docs ONCE into {project-relative-path → entries}
+    (run_43dc94f6 perf). Keyed by _rel(project_dir, ddd_path(doc)) — the SAME
+    string _section_members yields for a knowledge member — so a detail caller can
+    reuse it for ALL parse consumers (sinking/typeCounts, noise, sections[].entries,
+    per-file entryCount) instead of reading+parsing the same 4 docs 4+ times.
+
+    Stores ALL entries UNFILTERED (Gate-1 B): sinking (dormant/archived) is a
+    per-entry recompute the callers do over these lists, never pre-filtered here.
+    Missing/unreadable doc degrades to no key (matches the sibling helpers' skip),
+    so a caller's `.get(key, [])` yields the same [] the self-parse path would.
+    """
+    grouped: dict[str, list[EntryMetadata]] = {}
+    for doc in _KNOWLEDGE_DOCS:
+        p = ddd_path(project_dir, doc)
+        if not p.exists():
+            continue
+        try:
+            grouped[_rel(project_dir, p)] = parse_entries(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            continue
+    return grouped
+
+
+def _gallery_entry_stats(
+    project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None
+) -> dict:
     """ONE parse pass over the ② canonical docs → {sinking, typeCounts}.
+
+    `parsed` (run_43dc94f6): a pre-parsed {rel→entries} dict from the detail path
+    to REUSE instead of re-reading the docs. None (gallery + all existing callers)
+    → self-parse, byte-identical to before. When provided, the loop reads entries
+    from the dict but runs the SAME per-entry sinking/type tally, so output is
+    identical either way.
 
     Both signals are derived from the SAME parse_entries walk that the gallery
     already pays for `sinking` — folding the per-entry_type tally into that loop
@@ -351,7 +441,11 @@ def _gallery_entry_stats(project_dir: Path) -> dict:
         if not p.exists():
             continue
         try:
-            for e in parse_entries(p.read_text(encoding="utf-8")):
+            if parsed is not None:
+                entries = parsed.get(_rel(project_dir, p), [])
+            else:
+                entries = parse_entries(p.read_text(encoding="utf-8"))
+            for e in entries:
                 if e.decay_state in ("dormant", "archived"):
                     sinking += 1
                 # entry_type is guaranteed ∈ VALID_TYPES (clamped in parse_entries);
@@ -383,16 +477,6 @@ def _entry_count(project_dir: Path) -> int:
             except (OSError, ValueError, UnicodeError):
                 continue
     return total
-
-
-def _file_entry_count(fp: Path) -> int:
-    """Entry count for a SINGLE ② doc (per-file, NOT the project total _entry_count
-    returns). Used to give each DDD-doc hero card its own entry volume. Pure read;
-    parse failure → 0 (never 500s a brain view)."""
-    try:
-        return len(parse_entries(fp.read_text(encoding="utf-8")))
-    except (OSError, ValueError, UnicodeError):
-        return 0
 
 
 def _file_mtime_relative(fp: Path) -> str:
@@ -448,7 +532,8 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
 
 
 def build_brain_state(
-    project_dir: Path, *, with_noise: bool, pending_override: Optional[int] = None
+    project_dir: Path, *, with_noise: bool, pending_override: Optional[int] = None,
+    parsed: Optional[dict[str, list[EntryMetadata]]] = None,
 ) -> dict:
     """THE single source of a brain's state (Cycle-1 unify — no fork).
 
@@ -476,10 +561,12 @@ def build_brain_state(
     # collect(brain=name) scan per project (measured 4.67s × N = the 7s stall). When
     # None (the detail/single-brain path), fall back to the per-brain _pending_count.
     pending = pending_override if pending_override is not None else _pending_count(name)
-    stats = _gallery_entry_stats(project_dir)  # ONE parse → sinking + typeCounts
+    # `parsed` (run_43dc94f6): the detail path parses the ② docs once and passes them
+    # here so stats + metrics reuse them (None → self-parse, gallery unchanged).
+    stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
     health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"])
     if with_noise:
-        health.update(_brain_detail_metrics(project_dir))
+        health.update(_brain_detail_metrics(project_dir, parsed=parsed))
     return {
         "name": name,
         "kind": _read_kind(project_dir),
@@ -490,7 +577,9 @@ def build_brain_state(
     }
 
 
-def _brain_detail_metrics(project_dir: Path) -> dict:
+def _brain_detail_metrics(
+    project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None
+) -> dict:
     """The DETAIL-only, admission-passing DDD health metrics (per-open).
 
     Design: Knowledge/Designs/2026-08-04-ddd-health-metrics-brainhub-component.md.
@@ -519,7 +608,12 @@ def _brain_detail_metrics(project_dir: Path) -> dict:
     # real failure modes (bad file / bad data shape) so an accidental future write
     # or a genuine logic bug surfaces instead of being swallowed to a silent zero.
     try:
-        entries = _parse_all_knowledge_entries(project_dir)
+        # noise is order-insensitive + across-all-docs (Gate-1 B), so a flatten of
+        # the shared `parsed` groups is identical to _parse_all_knowledge_entries.
+        if parsed is not None:
+            entries = [e for group in parsed.values() for e in group]
+        else:
+            entries = _parse_all_knowledge_entries(project_dir)
         nr = compute_reclaimable_noise(
             entries, date.today(), evergreen_sections=MEMORY_EVERGREEN_SECTIONS
         )
@@ -695,23 +789,45 @@ def _brain_detail(project_dir: Path) -> dict:
     # Detail = the single builder's full state (with_noise=True) PLUS the
     # per-open-only structural extras (sections/entries/specs/hasCodeIntel).
     # health/identity/lifecycle come from build_brain_state — no second builder.
-    state = build_brain_state(project_dir, with_noise=True)
+    #
+    # PERF (run_43dc94f6): parse the ② docs ONCE + fetch git status ONCE up front,
+    # then feed EVERY downstream consumer from those two caches — instead of the old
+    # path that read+parsed the same 4 docs 4+ times (_gallery_entry_stats +
+    # _parse_all_knowledge_entries + _knowledge_entries + per-member _file_entry_count)
+    # and forked git once per member (the old per-member _file_entry_count parse is
+    # gone — entryCount now reads len off the shared parse). Response JSON is
+    # byte-identical; only faster.
+    parsed = _parse_knowledge_docs_grouped(project_dir)
+    git_status = _batch_git_status(project_dir)
+    ws = _workspace_root()
+
+    def _git_of(rel: str) -> str:
+        # Look up the member's WS-relative path in the batch dict (parity with the old
+        # per-file _file_git_status key); absent (unchanged/gitignored) → "clean".
+        try:
+            ws_rel = (project_dir.relative_to(ws) / rel).as_posix()
+        except ValueError:
+            ws_rel = rel
+        return git_status.get(ws_rel, "clean")
+
+    state = build_brain_state(project_dir, with_noise=True, parsed=parsed)
     sections = []
     for key, num, label, own_govern, curator in _SECTIONS:
         member_rels = _section_members(project_dir, key)
         members = [
-            {"path": rel, "gitStatus": _file_git_status(project_dir, rel)}
+            {"path": rel, "gitStatus": _git_of(rel)}
             for rel in member_rels
         ]
         # ② knowledge members are the 4 canonical DDD docs surfaced as hero cards
         # (run_a607f2b0): enrich each with its own last-updated (fs mtime) + entry
         # count so the card answers "is this doc active, and how big". DETAIL-only —
         # never on the cheap gallery projection (build_brain_state with_noise=False).
+        # entryCount reuses the shared parse (len of THIS doc's entries) — keyed by
+        # m["path"], the same rel string _parse_knowledge_docs_grouped keys on.
         if key == "knowledge":
             for m in members:
-                fp = project_dir / m["path"]
-                m["mtime"] = _file_mtime_relative(fp)
-                m["entryCount"] = _file_entry_count(fp)
+                m["mtime"] = _file_mtime_relative(project_dir / m["path"])
+                m["entryCount"] = len(parsed.get(m["path"], []))
         section = {
             "key": key,
             "num": num,
@@ -724,7 +840,7 @@ def _brain_detail(project_dir: Path) -> dict:
             "completeNotBroken": len(members) == 0,
         }
         if key == "knowledge":
-            section["entries"] = _knowledge_entries(project_dir)
+            section["entries"] = _knowledge_entries(project_dir, parsed=parsed)
         sections.append(section)
 
     # Layer the per-open structural extras onto the single builder's state.
@@ -756,18 +872,29 @@ def _spec_files(project_dir: Path) -> list[str]:
     return sorted(p.name for p in d.glob("*.spec.md") if p.is_file() and not p.is_symlink())
 
 
-def _knowledge_entries(project_dir: Path) -> list[dict]:
-    """Per-entry decay/type state for the ② canonical docs (live parse)."""
+def _knowledge_entries(
+    project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None
+) -> list[dict]:
+    """Per-entry decay/type state for the ② canonical docs.
+
+    `parsed` (run_43dc94f6): reuse the shared {rel→entries} dict instead of a live
+    re-parse. None → self-parse (byte-identical). Doc iteration order + per-doc entry
+    order are unchanged (same _KNOWLEDGE_DOCS loop, same parse_entries doc order), so
+    the emitted list is identical whether shared or self-parsed.
+    """
     out: list[dict] = []
     for doc in _KNOWLEDGE_DOCS:
         p = ddd_path(project_dir, doc)
         if not p.exists():
             continue
         rel = _rel(project_dir, p)
-        try:
-            entries = parse_entries(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeError):
-            continue
+        if parsed is not None:
+            entries = parsed.get(rel, [])
+        else:
+            try:
+                entries = parse_entries(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeError):
+                continue
         for e in entries:
             out.append({
                 "title": e.title,
