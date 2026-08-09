@@ -14,6 +14,7 @@ or manually after code_intel re-index.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -58,15 +59,16 @@ def _get_channel_threshold(channel: str, default: float) -> float:
 def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
     """Compare code graph against TECH.md to detect architectural drift.
 
-    Generates CultivationProposal for:
+    Drift is a machine OBSERVATION, not a human-reviewable judgment — so (Knowledge
+    Admission Component A, run_8d5fe9d1) it is emitted as a **health signal**, NOT as
+    a CultivationProposal that would clog the human-review queue. Detects:
     1. Modules with >=5 functions not mentioned in TECH.md
     2. Symbols referenced in TECH.md that don't exist in the code graph
-    3. New entry points (is_entry_point=1) not documented
 
-    Returns the number of proposals generated.
+    Persists a drift health record (enumerable, pull-only) and returns the drift count
+    (kept as the return contract for existing callers). NEVER calls write_proposal.
     """
     from core.code_intel import load_project_graph
-    from core.ddd_cultivation import CultivationProposal, write_proposal
 
     graph = load_project_graph(project)
     if graph is None:
@@ -86,6 +88,7 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
         return 0
 
     proposals_count = 0
+    drift_items: list[dict] = []  # health-signal records (NOT proposals)
 
     # Feedback loop: read adjusted threshold for this channel
     channel_threshold = _get_channel_threshold("code_intel_feed", 0.7)
@@ -124,19 +127,12 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
             continue
 
         symbol_names = [n.get("name", "") for n in nodes if n.get("name")][:5]
-        proposal = CultivationProposal(
-            target_doc="TECH.md",
-            target_section="Key Subsystems",
-            content=(
-                f"Undocumented module `{mod_path}` ({fn_count} functions). "
-                f"Key symbols: {', '.join(symbol_names)}. "
-                f"Consider adding to TECH.md architecture documentation."
-            ),
-            source_run_id=f"code_intel_drift:{mod_path}",
-            confidence=_CONF_UNDOCUMENTED_MODULE,
-            source_stage="code_intel_feed",
-        )
-        write_proposal(proposal, project_dir)
+        drift_items.append({
+            "kind": "undocumented_module",
+            "module": mod_path,
+            "fn_count": fn_count,
+            "key_symbols": symbol_names,
+        })
         proposals_count += 1
 
     # 2. Stale references in TECH.md (symbols mentioned but not in graph)
@@ -155,18 +151,10 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
             if _CONF_STALE_REFERENCE < channel_threshold:
                 continue
 
-            proposal = CultivationProposal(
-                target_doc="TECH.md",
-                target_section="Key Subsystems",
-                content=(
-                    f"Symbol `{sym}` referenced in TECH.md but not found in "
-                    f"code graph. May be renamed, deleted, or a typo."
-                ),
-                source_run_id=f"code_intel_stale:{sym}",
-                confidence=_CONF_STALE_REFERENCE,
-                source_stage="code_intel_feed",
-            )
-            write_proposal(proposal, project_dir)
+            drift_items.append({
+                "kind": "stale_reference",
+                "symbol": sym,
+            })
             proposals_count += 1
             stale_ref_count += 1
 
@@ -175,23 +163,28 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
                 break
 
     logger.info(
-        "code_intel_feed: %d drift proposals for %s", proposals_count, project
+        "code_intel_feed: %d drift items (health signal, not proposals) for %s",
+        proposals_count, project,
     )
 
-    # Emit CODE_INTEL_INDEXED event for DDD cultivation v2
-    if proposals_count > 0:
-        try:
-            from core.cultivation_dispatcher import (
-                EventType, emit_cultivation_event_threadsafe,
-            )
-            emit_cultivation_event_threadsafe(
-                EventType.CODE_INTEL_INDEXED,
-                source="code_intel_feed",
-                payload={"proposals": proposals_count, "project": project},
-                priority=1,
-            )
-        except Exception:
-            pass  # Non-blocking
+    # Persist the drift as a HEALTH RECORD (pull-only: visible when a human looks at
+    # the health report; never pushed to the Need-You review queue). Append-only,
+    # overwritten each scan with the current drift set. Best-effort — a write failure
+    # must not break the health deep-check that calls us.
+    try:
+        health_dir = project_dir / ".artifacts"
+        health_dir.mkdir(parents=True, exist_ok=True)
+        drift_record = {
+            "generated_at_scan": True,
+            "project": project,
+            "drift_count": proposals_count,
+            "items": drift_items[:50],  # bound the payload
+        }
+        (health_dir / "code_drift_health.json").write_text(
+            json.dumps(drift_record, indent=2), encoding="utf-8"
+        )
+    except OSError as e:
+        logger.debug("code_intel_feed: drift health record write failed: %s", e)
 
     return proposals_count
 

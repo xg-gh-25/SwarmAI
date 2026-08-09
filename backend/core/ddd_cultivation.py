@@ -340,6 +340,51 @@ def is_quality_lesson(lesson: str) -> bool:
     return True
 
 
+# ── Knowledge Admission: is_noise() SSOT (Component A) ────────────────────────
+# The SINGLE consolidated noise gate. A proposal that is_noise() → DISCARD before it
+# can be queued / scored / shown to a human. Composes the existing quality primitive
+# (is_quality_lesson: instance-log / narration / sub-sentence fragment) AND adds
+# machine-broadcast detection — the code_intel_feed "Architecture change detected" /
+# "Undocumented module" shapes are pure machine OBSERVATIONS, not human-reviewable
+# judgments (they belong on the health surface, not the review queue). Returns
+# (is_noise, reason) — reason is a short stable token for telemetry, NOT prose.
+
+# Machine-broadcast openers: a distillation entry that OPENS with one of these is a
+# code-intel drift observation, not a lesson. Anchored to the start AND requires the
+# MACHINE SHAPE punctuation — not just the opening words — so a real human lesson that
+# merely OPENS with "Architecture change detected requires…" is NOT dropped (Gate-2
+# HOLE#1: err toward accepting real knowledge, knowledge-loss > queue-noise). The
+# machine forms are exactly: "Architecture change detected:\n- ..." (colon),
+# "Undocumented module `x` (N functions)" (backtick+paren), "Symbol `x` referenced in
+# TECH.md but not found" (the stale-ref sentence).
+_MACHINE_BROADCAST_RE = re.compile(
+    r"^\s*(?:-\s*)?(?:"
+    r"architecture change detected\s*:"                       # colon = the machine list header
+    r"|undocumented module\s+`[^`]+`\s*\(\d+\s+functions?\)"   # backtick module + (N functions)
+    r"|symbol\s+`[^`]+`\s+referenced in tech\.md but not found"  # the exact stale-ref sentence
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_noise(text: str) -> "tuple[bool, str]":
+    """SSOT noise gate. Returns (is_noise, reason).
+
+    reason ∈ {"empty", "machine_broadcast", "instance_log_or_fragment", ""}.
+    "" (empty reason) == NOT noise (clean). Fail toward ACCEPTING real lessons: an
+    ambiguous entry is NOT noise (knowledge loss > a little queue noise, per the
+    is_quality_lesson doctrine). Only the two unambiguous classes are dropped:
+    machine broadcasts and the instance-log/narration/fragment set.
+    """
+    if not text or not text.strip():
+        return (True, "empty")
+    if _MACHINE_BROADCAST_RE.match(text.strip()):
+        return (True, "machine_broadcast")
+    if not is_quality_lesson(text):
+        return (True, "instance_log_or_fragment")
+    return (False, "")
+
+
 # Pure-correction-signal patterns: a raw user prompt whose ENTIRE substance is a
 # correction TRIGGER ("that's wrong, use async instead", "不对，应该用 rebase") carries
 # NO reusable lesson — it is a steering signal, not knowledge. is_quality_lesson()
@@ -447,8 +492,10 @@ def _classify_lesson(lesson: str, project: str = "SwarmAI") -> Optional[tuple]:
     if len(stripped) < MIN_LESSON_LENGTH:
         return None
 
-    # M2 quality gate: reject instance-logs / non-lesson fragments.
-    if not is_quality_lesson(stripped):
+    # Admission noise gate (Component A SSOT): drop instance-logs / narration /
+    # fragments AND machine broadcasts before they can become a proposal.
+    _noise, _reason = is_noise(stripped)
+    if _noise:
         return None
 
     result = classify_content(stripped, project=project)

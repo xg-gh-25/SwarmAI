@@ -61,29 +61,38 @@ def mock_graph():
 class TestDetectTechDrift:
     """Channel 7: code graph vs TECH.md drift detection."""
 
-    def test_undocumented_module_generates_proposal(self, workspace, mock_graph):
-        """Module with >=5 functions not in TECH.md → proposal."""
-        with patch("core.code_intel.load_project_graph", return_value=mock_graph):
-            count = detect_tech_drift(str(workspace))
-
-        # "hooks" module (5 functions) not mentioned in TECH.md → proposal
-        proposals_dir = workspace / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
-        assert proposals_dir.exists()
-        files = list(proposals_dir.glob("*.json"))
-        assert len(files) >= 1
-
-    def test_documented_module_no_proposal(self, workspace, mock_graph):
-        """Module mentioned in TECH.md → no proposal."""
-        with patch("core.code_intel.load_project_graph", return_value=mock_graph):
-            count = detect_tech_drift(str(workspace))
-
-        # "core" module has "session_unit" mentioned in TECH.md → no proposal for it
+    def test_undocumented_module_emits_health_signal_not_proposal(self, workspace, mock_graph):
+        """Admission Component A (run_8d5fe9d1): drift is a HEALTH SIGNAL, not a
+        human-review proposal. Module with >=5 fns not in TECH.md → drift record,
+        ZERO proposals."""
         import json
+        with patch("core.code_intel.load_project_graph", return_value=mock_graph):
+            count = detect_tech_drift(str(workspace))
+
+        # AC2: NO proposals written to the review queue.
         proposals_dir = workspace / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
-        if proposals_dir.exists():
-            for f in proposals_dir.glob("*.json"):
-                data = json.loads(f.read_text())
-                assert "backend/core" not in data["content"]
+        assert not proposals_dir.exists() or not list(proposals_dir.glob("*.json"))
+        # drift IS surfaced as a pull-only health record.
+        health = workspace / "Projects" / "SwarmAI" / ".artifacts" / "code_drift_health.json"
+        assert health.exists()
+        rec = json.loads(health.read_text())
+        assert rec["drift_count"] == count and count >= 1
+        assert any(i["kind"] == "undocumented_module" for i in rec["items"])
+
+    def test_documented_module_no_drift_item(self, workspace, mock_graph):
+        """Module mentioned in TECH.md → not in the drift record."""
+        import json
+        with patch("core.code_intel.load_project_graph", return_value=mock_graph):
+            detect_tech_drift(str(workspace))
+
+        # never writes proposals (AC2)
+        proposals_dir = workspace / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
+        assert not proposals_dir.exists() or not list(proposals_dir.glob("*.json"))
+        # a documented module ("backend/core", session_unit in TECH.md) is not drift
+        health = workspace / "Projects" / "SwarmAI" / ".artifacts" / "code_drift_health.json"
+        if health.exists():
+            rec = json.loads(health.read_text())
+            assert all(i.get("module") != "backend/core" for i in rec["items"])
 
     def test_small_module_skipped(self, tmp_path):
         """Modules with <5 functions → no undocumented-module proposal."""
@@ -112,7 +121,7 @@ class TestDetectTechDrift:
         assert count == 0
 
     def test_stale_symbol_detected(self, workspace, mock_graph):
-        """Symbol in TECH.md backticks but not in graph → stale proposal."""
+        """Symbol in TECH.md backticks but not in graph → stale drift item (count>=1)."""
         # Add a symbol to TECH.md that doesn't exist in graph
         tech_path = workspace / "Projects" / "SwarmAI" / "TECH.md"
         content = tech_path.read_text()

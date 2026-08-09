@@ -319,8 +319,13 @@ class DddCultivationOrchestrator:
             ("signal_ddd_bridge", self._ch_signal_bridge, {
                 EventType.SIGNAL_DIGEST,
             }),
+            # Drift detection is now a HEALTH signal (run_8d5fe9d1, Admission Component A):
+            # it writes code_drift_health.json, no longer proposals. Its old trigger
+            # (CODE_INTEL_INDEXED, emitted by detect_tech_drift itself) is gone with the
+            # proposal path, so run it on the health cadence (TIMER_30MIN) like the other
+            # pull-only health channels — otherwise the handler is orphaned + drift stops.
             ("code_intel_drift", self._ch_code_intel, {
-                EventType.CODE_INTEL_INDEXED,
+                EventType.TIMER_30MIN,
             }),
             ("entry_lifecycle", self._ch_entry_lifecycle, {
                 EventType.TIMER_30MIN, EventType.SESSION_CLOSE,
@@ -1357,16 +1362,11 @@ class DddCultivationOrchestrator:
                             f"AUTO-REFRESH-L2: ESCALATED {project_name}/{doc_name} "
                             f"§{proposal.section_name} (confidence={proposal.confidence:.2f})"
                         )
-                        # Gap #10: Auto-create Radar Todo for escalated proposals
-                        try:
-                            from core.proactive_intelligence import _create_health_todo
-                            _create_health_todo(
-                                f"DDD Escalation: {project_name}/{doc_name} §{proposal.section_name} "
-                                f"needs review (confidence={proposal.confidence:.2f})",
-                                severity="warning",
-                            )
-                        except Exception:
-                            pass  # Non-critical — todo creation is best-effort
+                        # The escalated proposal is already persisted by
+                        # write_proposal(escalation, project_dir) above — that IS its
+                        # user-visible home (surfaced by attention_authority._collect_
+                        # cultivation as a REVIEW item in Need-You). No ToDo write: the
+                        # ToDo card is a pure user-planning surface, not a system feed.
 
             if proposals_generated > 0:
                 logger.info(
