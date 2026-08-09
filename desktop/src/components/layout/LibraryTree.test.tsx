@@ -137,4 +137,43 @@ describe('LibraryTree — rootPath + noise filter', () => {
     expect(txt).toContain('nothing to browse');
     expect(txt).not.toContain('is empty');
   });
+
+  // ── run_4de3103f: hugContent (short tree hugs its rows) + responsive width ──
+
+  it('hugContent: List height = content height (rows×32) when SHORT — so a sibling below hugs the tree', async () => {
+    // 3 visible rows (2-understanding, spec-details, AGENTS.md; noise filtered).
+    // jsdom clientHeight=0 → measure fallback 400; content = 3×32 = 96 → min(400,96)=96.
+    render(<LibraryTree rootPath="Projects/SwarmAI" hugContent />);
+    await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
+    // react-window v2 List puts its `style` (incl height) on the role="tree" element.
+    const list = screen.getByRole('tree') as HTMLElement;
+    expect(list.style.height).toBe('96px');   // hugged to content, NOT the 400 fallback
+    // And the container box itself is content-sized (flexShrink:0), NOT flex-1 fill.
+    const box = screen.getByTestId('library-tree') as HTMLElement;
+    expect(box.style.height).toBe('96px');
+    expect(box.className).not.toContain('flex-1');
+  });
+
+  it('DEFAULT (no hugContent) fills available height — List height = measured (regression)', async () => {
+    render(<LibraryTree rootPath="Projects/SwarmAI" showAllFiles />);
+    await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
+    const list = screen.getByRole('tree') as HTMLElement;
+    // jsdom fallback 400 (fills), NOT shrunk to content — bookshelf behavior unchanged.
+    expect(list.style.height).toBe('400px');
+    const box = screen.getByTestId('library-tree') as HTMLElement;
+    expect(box.className).toContain('flex-1');   // still fills
+    expect(box.style.height).toBe('');           // no inline content-height
+  });
+
+  it('responsive width: maxWidth + minWidth both applied to the tree column', async () => {
+    // NB: jsdom's CSSOM rejects CSS math funcs like min() (→ ''), so this test uses
+    // plain values to prove BOTH props are threaded onto the container style. The
+    // production caller passes maxWidth="min(38%, 560px)" — valid in a real browser;
+    // the threading (not the specific value) is what this pins.
+    render(<LibraryTree rootPath="Projects/SwarmAI" hugContent maxWidth="560px" minWidth="320px" />);
+    await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
+    const box = screen.getByTestId('library-tree') as HTMLElement;
+    expect(box.style.maxWidth).toBe('560px');
+    expect(box.style.minWidth).toBe('320px');
+  });
 });

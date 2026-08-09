@@ -27,7 +27,7 @@
  *
  * @exports LibraryTree
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { List } from 'react-window';
 import type { TreeNode } from '../../types';
 import { workspaceService } from '../../services/workspace';
@@ -192,6 +192,20 @@ interface LibraryTreeProps {
    *  full width (Library bookshelf, unchanged). Brain Hub passes a bound so the
    *  tree doesn't stretch across the whole overlay. */
   maxWidth?: string;
+  /** Lower bound for the tree column width (run_4de3103f). A CSS min-width value
+   *  (e.g. '320px') so deep DDD paths aren't truncated when maxWidth is a small %.
+   *  DEFAULT undefined = no floor (Library bookshelf, unchanged). */
+  minWidth?: string;
+  /** Hug the tree to its CONTENT height instead of filling all available height
+   *  (run_4de3103f). DEFAULT false = fill (Library bookshelf: the tree owns the
+   *  whole panel). true = Brain Hub Browse: the List height becomes
+   *  min(measuredAvailable, contentHeight) so a SHORT tree only takes its content
+   *  height and a sibling below it (the Code Graph disclosure) hugs the tree
+   *  instead of being pushed to the panel bottom. The container div KEEPS
+   *  flex-1 min-h-0 (the ResizeObserver measure target — never 0), so a
+   *  content-heavy tree still caps at the measured available height and scrolls
+   *  internally; virtualization is never collapsed (Gate-0 skeptic hard constraint). */
+  hugContent?: boolean;
 }
 
 /**
@@ -201,11 +215,15 @@ interface LibraryTreeProps {
  * Brain-Hub DDD detail (Projects/<name> root), with the noise filter (isNoiseNode)
  * hiding infra junk so a project root shows only real browsable content.
  */
-export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFiles = false, maxWidth }: LibraryTreeProps = {}) {
+export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFiles = false, maxWidth, minWidth, hugContent = false }: LibraryTreeProps = {}) {
   const [roots, setRoots] = useState<TreeNode[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  // hugContent is ACTIVE only when a parent exists to measure available height off
+  // (REVIEW HIGH): with no parent we fall back to the fill layout so the box can't
+  // lock to a low content-height. Set once in the measure effect after mount.
+  const [hugActive, setHugActive] = useState(false);
   // Directories currently mid-lazy-load, so a double-toggle doesn't double-fetch.
   const loadingDirs = useRef<Set<string>>(new Set());
   // Measured height for react-window (overlay is fullscreen; height must be real).
@@ -241,19 +259,40 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
 
   useEffect(() => { void loadRoots(); }, [loadRoots]);
 
-  // Measure container height for the virtualized List (ResizeObserver, fullscreen).
+  // Measure AVAILABLE height for the virtualized List (ResizeObserver, fullscreen).
   // Guard on ResizeObserver presence — jsdom (test env) and older runtimes lack it;
   // there we fall back to a one-shot clientHeight read + the sane default.
-  useEffect(() => {
+  //
+  // hugContent decoupling (run_4de3103f): the measure target must be the AVAILABLE
+  // space, NOT the container's own box — because when hugContent shrinks the
+  // container to listHeight, reading its own clientHeight would feed listHeight back
+  // into `height`, and min(height, content) would lose its cap (a short tree would
+  // pin `height` low forever). So we measure the PARENT's clientHeight (the flex-1
+  // wrapper that owns the real available space) and observe it. Default (bookshelf)
+  // still measures self — its container IS the flex-1 fill, so parent==self space.
+  // useLayoutEffect (not useEffect): hugActive + the first measurement must be set
+  // BEFORE the browser paints, else the tree renders once in the fill layout (400px)
+  // then snaps to content height on the next frame — a visible flash (Gate-2 HIGH).
+  // Layout-effect runs synchronously post-mutation, pre-paint, so the first painted
+  // frame is already the hug layout.
+  useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const measure = () => setHeight(Math.max(120, el.clientHeight || 400));
+    // hugContent measures the PARENT (the flex-1 available space); if there is no
+    // parent (detached/orphaned — should not happen in Brain Hub, but a reuse or a
+    // test env could), fall back to measuring self. Observing self is safe: the
+    // fallback below ALSO drops the content-height so `el` fills like the default,
+    // so measuring `el` yields a real available height rather than locking low.
+    const hugWithParent = hugContent && !!el.parentElement;
+    setHugActive(hugWithParent);
+    const measureEl = hugWithParent ? el.parentElement! : el;
+    const measure = () => setHeight(Math.max(120, measureEl.clientHeight || 400));
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    ro.observe(measureEl);
     return () => ro.disconnect();
-  }, []);
+  }, [hugContent]);
 
   const onToggle = useCallback((node: TreeNode) => {
     const path = node.path;
@@ -287,8 +326,30 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
 
   const rowProps = useMemo<RowProps>(() => ({ rows, onToggle, onOpen }), [rows, onToggle, onOpen]);
 
+  // List height. Default (bookshelf) = the full measured available height (the tree
+  // owns the panel). hugContent (Brain Hub) = min(measuredAvailable, contentHeight):
+  // a SHORT tree shrinks to its rows so a sibling below (Code Graph) hugs it; a TALL
+  // tree still caps at `height` and scrolls internally (virtualization intact). The
+  // measure target (`height`, from the flex-1 container) is unchanged either way —
+  // hugContent only shrinks the List, never the measured value (Gate-0 constraint).
+  const listHeight = hugActive ? Math.min(height, rows.length * ROW_HEIGHT) : height;
+
+  // Container style: maxWidth/minWidth bound the column. When hugContent, the box
+  // takes exactly listHeight (so a short tree hugs its rows and the sibling below
+  // follows immediately); available height is measured off the parent instead.
+  const containerStyle: React.CSSProperties = {
+    ...(maxWidth ? { maxWidth } : {}),
+    ...(minWidth ? { minWidth } : {}),
+    ...(hugActive ? { height: listHeight, flexShrink: 0 } : {}),
+  };
+  // Default / no-parent fallback: flex-1 min-h-0 (fill the available space). hugActive
+  // (hugContent WITH a parent to measure): content-sized box via inline height, so a
+  // sibling below hugs the tree — no flex-1 (that fill is what pinned it), and no
+  // min-h-0 either (REVIEW LOW: min-height:0 is meaningless on a non-flex box).
+  const containerClass = hugActive ? '' : 'flex-1 min-h-0';
+
   return (
-    <div ref={containerRef} data-testid="library-tree" className="flex-1 min-h-0" style={maxWidth ? { maxWidth } : undefined}>
+    <div ref={containerRef} data-testid="library-tree" className={containerClass} style={Object.keys(containerStyle).length ? containerStyle : undefined}>
       {error ? (
         <div
           data-testid="library-tree-error"
@@ -317,7 +378,7 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
         </div>
       ) : (
         <List
-          style={{ height, width: '100%', overflow: 'auto' }}
+          style={{ height: listHeight, width: '100%', overflow: 'auto' }}
           rowCount={rows.length}
           rowHeight={ROW_HEIGHT}
           rowComponent={LibraryRow}

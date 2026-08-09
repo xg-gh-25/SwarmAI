@@ -651,16 +651,27 @@ function BrainBrowse(
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-auto px-4 pb-4" data-testid="brainhub-browse">
       {/* The REAL, complete Projects/<name> tree (showAllFiles = nothing hidden,
-          infra dimmed) in a BOUNDED left column so it doesn't span the overlay. */}
-      <div className="flex-1 min-h-0" data-testid="brainhub-brain-content">
-        <LibraryTree
-          key={`tree-${name}`}
-          rootPath={`Projects/${name}`}
-          onFileOpen={onOpenFile}
-          showAllFiles
-          maxWidth="420px"
-        />
-      </div>
+          infra dimmed) in a BOUNDED left column so it doesn't span the overlay.
+          hugContent (run_4de3103f): the tree takes only its content height so the
+          Code Graph disclosure below hugs it instead of being flex-pushed to the
+          overlay bottom. NO wrapper div here (removed): LibraryTree is a DIRECT
+          child of this flex-1 BrainBrowse container, so its hugContent measure
+          reads THIS container's clientHeight (the real available height) off
+          parentElement — a stable flex-1 ancestor, no intermediate box to collapse.
+          A short tree shrinks (Code Graph follows); a tall tree caps + scrolls. */}
+      <LibraryTree
+        key={`tree-${name}`}
+        rootPath={`Projects/${name}`}
+        onFileOpen={onOpenFile}
+        showAllFiles
+        hugContent
+        // clamp(min, preferred, max): floor 320px so deep DDD paths aren't
+        // truncated, preferred 38% of the overlay, cap 560px so it never spans.
+        // One expression avoids the minWidth>maxWidth conflict on narrow overlays
+        // (REVIEW MED) — on a <842px overlay clamp still honors the 320px floor
+        // without a separate minWidth fighting the cap.
+        maxWidth="clamp(320px, 38%, 560px)"
+      />
 
       {/* Code Graph — collapsed disclosure BELOW the tree. Only rendered when a
           code_intel.db exists for this brain; only MOUNTED (→ fetched) on expand. */}
