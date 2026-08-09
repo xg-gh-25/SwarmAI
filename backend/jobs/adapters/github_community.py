@@ -57,6 +57,21 @@ def _run_gh(args: list[str], timeout: int = 20) -> str | None:
         return None
 
 
+def _parse_created(created_at: str | None) -> datetime | None:
+    """Parse a GitHub ISO8601 timestamp (e.g. '2024-01-15T10:30:00Z') to a tz-aware
+    datetime, fail-safe to None. Mirrors github_releases.py's parse — GitHub uses
+    ISO8601 (Z suffix), NOT RFC2822, so fromisoformat after a Z→+00:00 swap is the
+    correct parser. A missing/malformed value returns None (never raises) so a bad
+    timestamp cannot crash the scan. (run_36d8ba1c: fixes the published_at→published
+    kwarg drop that left every github-community signal timestamp-less.)"""
+    if not created_at:
+        return None
+    try:
+        return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def _match_topics(text: str) -> list[str]:
     """Match text against topic keywords."""
     text_lower = text.lower()
@@ -116,7 +131,7 @@ def fetch_github_community(feed: Feed, max_age_hours: int = 24) -> list[RawSigna
                 source=f"github:{repo}",
                 tags=["github-community"] + topics,
                 score=min(issue.get("comments", 0) * 2 + (5 if issue.get("comments", 0) == 0 else 0), 50),
-                published_at=issue.get("created_at"),
+                published=_parse_created(issue.get("created_at")),
             ))
 
     # Sort by score descending, limit

@@ -508,6 +508,91 @@ def test_update_feed_toggle_and_tier(tmp_config: Path) -> None:
     assert f["managed_by"] == "user"  # edit takes ownership
 
 
+# ── F4: add_feed must apply the SAME url validation as add_member ─────────────
+# The member route SSRF-checks config.urls (_validate_member); add_feed wrote
+# config verbatim → a private/metadata/non-http(s) URL could be persisted via the
+# feed route, bypassing the guard (run_36d8ba1c). Both write paths must agree.
+
+def test_add_feed_rejects_ssrf_metadata_url_in_config(tmp_config: Path) -> None:
+    # The exact bypass payload: an AWS metadata IP as an rss url in the config blob.
+    with pytest.raises(HTTPException) as ei:
+        _run(add_feed(NewFeed(id="ssrf", name="S", type="rss",
+                              config={"urls": ["http://169.254.169.254/latest/meta-data/"]})))
+    assert ei.value.status_code == 422
+    # and it must NOT have been written
+    data = yaml.safe_load(tmp_config.read_text())
+    assert all(f["id"] != "ssrf" for f in data["feeds"])
+
+
+def test_add_feed_rejects_non_http_scheme_url(tmp_config: Path) -> None:
+    with pytest.raises(HTTPException) as ei:
+        _run(add_feed(NewFeed(id="fileurl", name="F", type="rss",
+                              config={"urls": ["file:///etc/passwd"]})))
+    assert ei.value.status_code == 422
+
+
+def test_add_feed_accepts_valid_public_urls(tmp_config: Path) -> None:
+    _run(add_feed(NewFeed(id="okurls", name="OK", type="rss",
+                          config={"urls": ["https://example.com/feed.xml"]})))
+    data = yaml.safe_load(tmp_config.read_text())
+    f = next(x for x in data["feeds"] if x["id"] == "okurls")
+    assert f["config"]["urls"] == ["https://example.com/feed.xml"]
+
+
+def test_add_feed_no_urls_key_unaffected(tmp_config: Path) -> None:
+    # A non-url feed (keywords) or a feed with no urls key must still succeed.
+    _run(add_feed(NewFeed(id="kw", name="KW", type="hacker-news",
+                          config={"keywords": ["agent"]})))
+    data = yaml.safe_load(tmp_config.read_text())
+    assert any(f["id"] == "kw" for f in data["feeds"])
+
+
+def test_add_feed_non_list_urls_does_not_crash(tmp_config: Path) -> None:
+    # Defensive: a malformed config where urls is not a list must not crash the
+    # validator (it should skip url validation, letting the value through as-is).
+    _run(add_feed(NewFeed(id="weird", name="W", type="rss", config={"urls": "notalist"})))
+    data = yaml.safe_load(tmp_config.read_text())
+    assert any(f["id"] == "weird" for f in data["feeds"])
+
+
+# ── F6: github_community must set RawSignal.published (not the dropped published_at) ──
+# github_community.py:119 passed published_at=created_at → RawSignal has field
+# `published` (Pydantic extra=ignore dropped the kwarg) → every signal had
+# published=None, deprioritized in signal_digest's per-tier newest-first sort.
+
+def test_github_community_parse_created_valid_iso() -> None:
+    from datetime import datetime, timezone
+    from jobs.adapters.github_community import _parse_created
+    got = _parse_created("2024-01-15T10:30:00Z")
+    assert isinstance(got, datetime)
+    assert got == datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+
+def test_github_community_parse_created_failsafe_none() -> None:
+    from jobs.adapters.github_community import _parse_created
+    assert _parse_created("") is None
+    assert _parse_created(None) is None
+    assert _parse_created("not-a-date") is None  # must not raise → scan never crashes
+
+
+def test_github_community_signal_carries_published(monkeypatch) -> None:
+    # E2E of the fix: a fake gh issue must produce a RawSignal whose `published`
+    # is the parsed datetime — proving the kwarg reaches the field (not dropped).
+    from datetime import datetime, timezone
+    import jobs.adapters.github_community as gc
+    from jobs.models import Feed
+
+    fake_issues = [{"title": "New agent framework released", "number": 7,
+                    "html_url": "https://github.com/o/r/issues/7", "comments": 3,
+                    "created_at": "2024-01-15T10:30:00Z"}]
+    monkeypatch.setattr(gc, "_run_gh", lambda args, timeout=20: json.dumps(fake_issues))
+    monkeypatch.setattr(gc, "_match_topics", lambda text: ["agent"])
+    feed = Feed(id="ghc", name="GHC", type="github-community", config={"repos": ["o/r"]})
+    signals = gc.fetch_github_community(feed)
+    assert signals, "expected at least one signal"
+    assert signals[0].published == datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+
 def test_update_feed_404_missing(tmp_config: Path) -> None:
     with pytest.raises(HTTPException) as ei:
         _run(update_feed("ghost", FeedPatch(enabled=False)))
@@ -598,8 +683,9 @@ def test_member_key_edits_the_same_list_the_adapter_reads() -> None:
     `NON_EDITABLE` = types with no flat-string member list (github-trending: only
     scalars; trending: platforms are {id,name} DICTS — editing as strings would corrupt
     the list + crash the adapter's .get()). NOTE: we do NOT construct a RawSignal here —
-    github_community's adapter has a latent published_at-vs-published field mismatch
-    (out of scope); feed_members only needs the config dict.
+    feed_members only needs the config dict. (The github_community published_at-vs-
+    published mismatch this once noted as latent is now FIXED — run_36d8ba1c; see
+    test_github_community_signal_carries_published.)
     """
     from jobs.models import FeedType, MEMBER_KEY
     from core.community_data import feed_members

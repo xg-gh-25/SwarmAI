@@ -150,6 +150,25 @@ async def add_feed(feed: NewFeed) -> dict:
     if not _valid_tier(feed.tier):
         raise HTTPException(status_code=422, detail=f"Invalid tier '{feed.tier}'")
 
+    # Apply the SAME url validation the member route enforces (_validate_member) —
+    # add_feed used to write config verbatim, so an SSRF/private/metadata URL could
+    # be persisted via the feed route while add_member rejected it (asymmetric write
+    # paths, run_36d8ba1c). Validate config.urls HERE, before the lock: unlike
+    # add_member (whose feed type is only knowable on-disk under the lock), the type
+    # arrives in the request body, so we can fail-fast 422 without holding the config
+    # lock. Only urls carry an SSRF surface — other config keys are left as-is
+    # (scope = the asymmetry, not full-config validation). A non-list urls is skipped
+    # (defensive: never crash on a malformed body).
+    urls = feed.config.get("urls") if isinstance(feed.config, dict) else None
+    if isinstance(urls, list):
+        for u in urls:
+            if not isinstance(u, str) or not u.strip():
+                continue
+            try:
+                _validate_member("urls", u.strip())
+            except _InvalidMember as e:
+                raise HTTPException(status_code=422, detail=f"Invalid url '{u}': {e}")
+
     from jobs.config_io import mutate_config
 
     class _Dup(Exception):
