@@ -12,6 +12,7 @@ Additional security:
   file attachment pipeline (Requirements 14.3, 14.4)
 """
 
+import asyncio
 import base64
 import logging
 import mimetypes
@@ -495,22 +496,22 @@ async def read_file(
             detail=f"Image too large for preview. Max size: {MAX_IMAGE_FILE_SIZE // 1024 // 1024}MB",
         )
 
-    # Read file content
-    try:
+    # Read file content off the event loop (run_b2d3ece0). The WHOLE read/encode
+    # decision — incl. the UTF-8→base64 fallback and every read_bytes branch — is one
+    # sync helper so no disk read (happy path OR fallback) blocks the loop. The size
+    # 413 checks stay above (fast in-memory); PermissionError/OSError→HTTP mapping
+    # stays OUTSIDE to_thread (to_thread re-raises the worker exception unchanged).
+    def _read_content() -> tuple[str, str, str]:
+        mt = mime_type
         if is_text:
-            # Read as text
             try:
-                content = file_path.read_text(encoding="utf-8")
-                encoding = "utf-8"
+                return file_path.read_text(encoding="utf-8"), "utf-8", mt
             except UnicodeDecodeError:
                 # Fallback to binary if UTF-8 fails
-                content = base64.b64encode(file_path.read_bytes()).decode("ascii")
-                encoding = "base64"
-                mime_type = "application/octet-stream"
+                return (base64.b64encode(file_path.read_bytes()).decode("ascii"),
+                        "base64", "application/octet-stream")
         elif is_image:
-            # Read as base64 for images
-            content = base64.b64encode(file_path.read_bytes()).decode("ascii")
-            encoding = "base64"
+            return base64.b64encode(file_path.read_bytes()).decode("ascii"), "base64", mt
         else:
             # Binary file - check size limit (use text file limit for safety)
             if file_size > MAX_TEXT_FILE_SIZE:
@@ -518,9 +519,12 @@ async def read_file(
                     status_code=413,
                     detail=f"Binary file too large for preview. Max size: {MAX_TEXT_FILE_SIZE // 1024}KB",
                 )
-            # Read as base64
-            content = base64.b64encode(file_path.read_bytes()).decode("ascii")
-            encoding = "base64"
+            return base64.b64encode(file_path.read_bytes()).decode("ascii"), "base64", mt
+
+    try:
+        content, encoding, mime_type = await asyncio.to_thread(_read_content)
+    except HTTPException:
+        raise  # the 413 from the binary branch — propagate unchanged
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
     except OSError as e:
@@ -660,9 +664,9 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
         target_path = target_dir / f"{original_stem}_{counter}{original_suffix}"
         counter += 1
 
-    # Write file
+    # Write file off the event loop (run_b2d3ece0)
     try:
-        target_path.write_bytes(file_bytes)
+        await asyncio.to_thread(target_path.write_bytes, file_bytes)
     except (PermissionError, OSError) as e:
         raise HTTPException(status_code=500, detail=f"Failed to write file: {e}")
 
@@ -727,9 +731,9 @@ async def write_file(
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
 
-    # Write file
+    # Write file off the event loop (run_b2d3ece0)
     try:
-        file_path.write_text(request.content, encoding='utf-8')
+        await asyncio.to_thread(file_path.write_text, request.content, encoding='utf-8')
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
     except OSError as e:

@@ -205,7 +205,7 @@ async def get_task_logs(task_id: str):
     if not log_path or not Path(log_path).exists():
         return PlainTextResponse("", media_type="text/plain")
 
-    content = Path(log_path).read_text(errors="replace")
+    content = await asyncio.to_thread(Path(log_path).read_text, errors="replace")
     return PlainTextResponse(content, media_type="text/plain")
 
 

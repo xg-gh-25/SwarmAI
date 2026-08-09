@@ -28,6 +28,7 @@ workspace-sandboxed) — no new media endpoint. The frontend points <img> at it.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -658,8 +659,21 @@ async def pollinate_topic_detail(run_name: str):
     if run_dir is None:
         return JSONResponse(status_code=404, content={"detail": "not found"})
 
-    run = _read_run_json(run_dir)
-    assets = _walk_assets(run_dir)
+    # 3 blocking FS ops (run.json read + asset dir walk + content_package.md read) —
+    # run them together in ONE worker thread off the event loop (run_b2d3ece0).
+    def _read_detail():
+        run = _read_run_json(run_dir)
+        assets = _walk_assets(run_dir)
+        content_package = None
+        cp = run_dir / "content_package.md"
+        try:
+            if cp.is_file():
+                content_package = cp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            content_package = None
+        return run, assets, content_package
+
+    run, assets, content_package = await asyncio.to_thread(_read_detail)
     topic = run_name
     domain = None
     status = "unknown"
@@ -669,14 +683,6 @@ async def pollinate_topic_detail(run_name: str):
         domain = run.get("domain")
         status = run.get("status") or "unknown"
         created_at = run.get("created_at") or run.get("updated_at")
-
-    content_package = None
-    cp = run_dir / "content_package.md"
-    try:
-        if cp.is_file():
-            content_package = cp.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        content_package = None
 
     return PollinateTopicDetail(
         run=run_name,

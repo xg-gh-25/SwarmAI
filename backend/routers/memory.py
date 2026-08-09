@@ -13,6 +13,7 @@ Key public symbols:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 from pathlib import Path
@@ -66,67 +67,77 @@ async def get_memory_health():
 
     health: dict = {"status": "ok", "checks": {}}
 
-    # 1. MEMORY.md health
-    memory_path = ws_path / ".context" / "MEMORY.md"
-    if memory_path.exists():
-        stat = memory_path.stat()
-        health["checks"]["memory_md"] = {
-            "exists": True,
-            "size_bytes": stat.st_size,
-            "last_modified": date.fromtimestamp(stat.st_mtime).isoformat(),
-            "warning": "large" if stat.st_size > 5120 else None,
-        }
-    else:
-        health["checks"]["memory_md"] = {"exists": False}
-        health["status"] = "warning"
+    # Sections 1+2 are all blocking FS I/O (stat + glob + per-file read_text over
+    # DailyActivity). Run the whole scan in ONE worker thread (run_b2d3ece0) — NOT
+    # per-file to_thread inside the loop (that would be N dispatches). Section 3 below
+    # is in-memory, stays on the loop.
+    def _scan_fs_health() -> dict:
+        checks: dict = {}
+        status_warn = False
+        # 1. MEMORY.md health
+        memory_path = ws_path / ".context" / "MEMORY.md"
+        if memory_path.exists():
+            stat = memory_path.stat()
+            checks["memory_md"] = {
+                "exists": True,
+                "size_bytes": stat.st_size,
+                "last_modified": date.fromtimestamp(stat.st_mtime).isoformat(),
+                "warning": "large" if stat.st_size > 5120 else None,
+            }
+        else:
+            checks["memory_md"] = {"exists": False}
+            status_warn = True
 
-    # 2. DailyActivity health
-    da_dir = ws_path / "Knowledge" / "DailyActivity"
-    if da_dir.is_dir():
-        da_files = sorted(
-            [f for f in da_dir.glob("*.md") if f.stem[:4].isdigit()],
-            key=lambda f: f.stem,
-            reverse=True,
-        )
-        undistilled = 0
-        last_distilled_date = None
-        for f in da_files:
-            try:
-                content = f.read_text(encoding="utf-8")
-                if not content.startswith("---"):
-                    undistilled += 1
+        # 2. DailyActivity health
+        da_dir = ws_path / "Knowledge" / "DailyActivity"
+        if da_dir.is_dir():
+            da_files = sorted(
+                [f for f in da_dir.glob("*.md") if f.stem[:4].isdigit()],
+                key=lambda f: f.stem,
+                reverse=True,
+            )
+            undistilled = 0
+            last_distilled_date = None
+            for f in da_files:
+                try:
+                    content = f.read_text(encoding="utf-8")
+                    if not content.startswith("---"):
+                        undistilled += 1
+                        continue
+                    end = content.find("---", 3)
+                    if end == -1:
+                        undistilled += 1
+                        continue
+                    fm = content[3:end].strip()
+                    if "distilled: true" not in fm:
+                        undistilled += 1
+                    elif last_distilled_date is None:
+                        for line in fm.splitlines():
+                            if line.startswith("distilled_date:"):
+                                last_distilled_date = line.split(":", 1)[1].strip().strip('"\'')
+                                break
+                except (OSError, UnicodeDecodeError):
                     continue
-                end = content.find("---", 3)
-                if end == -1:
-                    undistilled += 1
-                    continue
-                fm = content[3:end].strip()
-                if "distilled: true" not in fm:
-                    undistilled += 1
-                elif last_distilled_date is None:
-                    # Find the distilled_date
-                    for line in fm.splitlines():
-                        if line.startswith("distilled_date:"):
-                            last_distilled_date = line.split(":", 1)[1].strip().strip('"\'')
-                            break
-            except (OSError, UnicodeDecodeError):
-                continue
 
-        health["checks"]["daily_activity"] = {
-            "total_files": len(da_files),
-            "undistilled_files": undistilled,
-            "last_write_date": da_files[0].stem if da_files else None,
-            "last_distilled_date": last_distilled_date,
-        }
+            checks["daily_activity"] = {
+                "total_files": len(da_files),
+                "undistilled_files": undistilled,
+                "last_write_date": da_files[0].stem if da_files else None,
+                "last_distilled_date": last_distilled_date,
+            }
+            flag_path = da_dir / ".needs_distillation"
+            checks["distillation_flag"] = {
+                "flag_exists": flag_path.exists(),
+                "flag_content": flag_path.read_text().strip() if flag_path.exists() else None,
+            }
+        else:
+            checks["daily_activity"] = {"exists": False}
+            status_warn = True
+        return {"checks": checks, "status_warn": status_warn}
 
-        # Flag file check
-        flag_path = da_dir / ".needs_distillation"
-        health["checks"]["distillation_flag"] = {
-            "flag_exists": flag_path.exists(),
-            "flag_content": flag_path.read_text().strip() if flag_path.exists() else None,
-        }
-    else:
-        health["checks"]["daily_activity"] = {"exists": False}
+    _fs = await asyncio.to_thread(_scan_fs_health)
+    health["checks"].update(_fs["checks"])
+    if _fs["status_warn"]:
         health["status"] = "warning"
 
     # 3. Compliance tracker (in-memory)

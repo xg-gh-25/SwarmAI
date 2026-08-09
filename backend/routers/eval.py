@@ -8,6 +8,7 @@ Read endpoints: health score, run history, case details.
 Mutation endpoints: CRUD on golden set cases, run triggers, promotions.
 """
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -416,7 +417,9 @@ async def get_context_health():
 
     # 4. Learning Dashboard — knowledge growth metrics (source:auto|manual)
     try:
-        result["learning_dashboard"] = _build_learning_dashboard(root)
+        # _build_learning_dashboard walks Projects/*/{IMPROVEMENT,TECH}.md + MEMORY.md
+        # (iterdir + per-file read_text) — off the event loop (run_b2d3ece0).
+        result["learning_dashboard"] = await asyncio.to_thread(_build_learning_dashboard, root)
     except Exception as exc:
         logger.debug("context-health: learning dashboard failed: %s", exc)
         result["learning_dashboard"] = None
@@ -579,10 +582,14 @@ async def get_brain_graph():
                 "drill": {t: [] for t in VALID_TYPES}, "total": 0}
 
     memory_path = Path(ws_path) / ".context" / "MEMORY.md"
-    try:
-        content = memory_path.read_text(encoding="utf-8") if memory_path.is_file() else ""
-    except OSError:
-        content = ""
+
+    def _read_memory() -> str:
+        try:
+            return memory_path.read_text(encoding="utf-8") if memory_path.is_file() else ""
+        except OSError:
+            return ""
+
+    content = await asyncio.to_thread(_read_memory)  # MEMORY.md read off the event loop
     return build_brain_graph(content)
 
 
@@ -603,15 +610,18 @@ async def list_reports():
     if not reports_dir.is_dir():
         return []
 
-    reports = []
-    for f in sorted(reports_dir.glob("*.html"), reverse=True):
-        stat = f.stat()
-        reports.append({
-            "filename": f.name,
-            "sizeBytes": stat.st_size,
-            "modified": stat.st_mtime,
-        })
-    return reports
+    def _scan_reports() -> list:
+        out = []
+        for f in sorted(reports_dir.glob("*.html"), reverse=True):
+            stat = f.stat()
+            out.append({
+                "filename": f.name,
+                "sizeBytes": stat.st_size,
+                "modified": stat.st_mtime,
+            })
+        return out
+
+    return await asyncio.to_thread(_scan_reports)  # glob + per-file stat off the loop
 
 
 @router.get("/reports/{filename}")
@@ -638,7 +648,7 @@ async def get_report(filename: str):
     if report_path.is_symlink() or not report_path.resolve().is_relative_to(reports_dir.resolve()):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    content = report_path.read_text(encoding="utf-8")
+    content = await asyncio.to_thread(report_path.read_text, encoding="utf-8")
     return HTMLResponse(content=content)
 
 

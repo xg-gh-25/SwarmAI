@@ -8,6 +8,7 @@ into a single status view.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -152,8 +153,11 @@ async def unified_status():
     # 1. Scheduled jobs (cron + user)
     try:
         from jobs.scheduler import load_state, load_jobs
-        state = load_state()
-        jobs = load_jobs()
+        # load_state/load_jobs read state.json + jobs.yaml/user-jobs.yaml (blocking) —
+        # both off the event loop in one worker thread (run_b2d3ece0).
+        def _load():
+            return load_state(), load_jobs()
+        state, jobs = await asyncio.to_thread(_load)
 
         # Only ENABLED jobs count toward health/failing — a disabled job is
         # inert (neither healthy nor failing). brain-push (enabled=False) must
@@ -259,7 +263,10 @@ async def job_runs(job_id: str):
     concatenated into a path without that guard.
     """
     empty = JobRunsResponse(job_id=job_id, last_output=None, last_output_date=None, recent=[])
-    try:
+
+    # The whole history read (JOB_RESULTS_JSONL read + parse + per-run .md reads) is
+    # blocking FS I/O — run it in ONE worker thread (run_b2d3ece0), not on the loop.
+    def _build() -> JobRunsResponse:
         if not JOB_RESULTS_JSONL.exists():
             return empty
         matches: list[dict] = []
@@ -323,6 +330,9 @@ async def job_runs(job_id: str):
             last_output_date=last_output_date,
             recent=recent,
         )
+
+    try:
+        return await asyncio.to_thread(_build)
     except Exception as e:  # fail-soft: the drawer must never 500
         logger.error("job_runs failed for '%s': %s", job_id, e)
         return empty
