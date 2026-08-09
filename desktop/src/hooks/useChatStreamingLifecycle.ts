@@ -114,8 +114,13 @@ const STALL_THRESHOLD_TOOL_MS = 180_000;
  * guard (_mergePreservingInteractive: more-complete-content-wins by id) keeps the
  * complete local content; a later cold initial-load (200-cap) restores the full
  * turn. The tail is a perf floor, not a correctness boundary.
+ *
+ * EXPORTED so the tests assert the SAME constant the reconcile sites pass, instead of a
+ * hardcoded literal that would silently diverge if this bound is ever tuned. (This file
+ * already paid for that class: 306a9ad0 switched every reconcile to the tail fetch and 3
+ * tests kept spying on the OLD method name, sitting RED on main unnoticed.)
  */
-const RECONCILE_TAIL = 50;
+export const RECONCILE_TAIL = 50;
 
 // ---------------------------------------------------------------------------
 // Self-healing grace period

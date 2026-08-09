@@ -133,6 +133,14 @@ describe('App-root components must not depend on shell-only context (boot-crash 
       'ErrorBoundary', // the boundary wrapper itself (not a scanned banner)
       'AppRoutes', // defined inline in App.tsx — the mount gate, covered by the App.tsx self-scan
       'PostUpdateToast', // defined inline in App.tsx — covered by the App.tsx self-scan
+      // SwarmToastBridge — also defined INLINE in App.tsx (:229, the one
+      // document `swarm:toast` → ToastContext bridge), so there is no separate module
+      // for the per-file loop to scan. Exempt for the same reason as PostUpdateToast:
+      // the App.tsx self-scan test above runs scanForShellContext over the WHOLE file,
+      // which covers every inline component. This is not a blind spot — verified.
+      // (It was mounted at root without touching this list, which is precisely the
+      // drift this guard exists to catch. The guard worked; the list was stale.)
+      'SwarmToastBridge',
     ]);
     const scanned = new Set(Object.keys(ROOT_MOUNTED_COMPONENTS));
     const uncovered = [...tags].filter((t) => !scanned.has(t) && !EXEMPT.has(t));

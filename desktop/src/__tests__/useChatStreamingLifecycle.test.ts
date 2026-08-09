@@ -78,6 +78,7 @@ import {
   cleanupStalePendingEntries,
   STORAGE_KEY_PREFIX,
   PERSISTED_STATE_VERSION,
+  RECONCILE_TAIL,
 } from '../hooks/useChatStreamingLifecycle';
 import { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 // UnifiedTab type removed — not directly referenced in tests
@@ -1704,7 +1705,7 @@ describe('Fix 6: Per-tab state isolation', () => {
       afterEach(() => { vi.useRealTimers(); });
 
       it('AC3: ask_user_question terminal path schedules a DB reconcile', async () => {
-        const getSpy = vi.spyOn(chatService, 'getSessionMessages').mockResolvedValue([]);
+        const getSpy = vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockResolvedValue([]);
         const invSpy = vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
 
         const { result } = renderHook(() =>
@@ -1739,13 +1740,18 @@ describe('Fix 6: Per-tab state isolation', () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(250); });
 
         expect(invSpy).toHaveBeenCalledWith('sess-q');
-        expect(getSpy).toHaveBeenCalledWith('sess-q');
+        // Assert the TAIL fetch with its bound — not just "some fetch happened". These
+        // spies targeted `getSessionMessages` until 306a9ad0 switched every reconcile
+        // site to `getSessionMessagesReconcileTail(sid, RECONCILE_TAIL)`; the spy was
+        // never updated, so the test went RED on main. Pinning the bound means a silent
+        // revert to a full-history fetch also fails here, not just a missing fetch.
+        expect(getSpy).toHaveBeenCalledWith('sess-q', RECONCILE_TAIL);
         getSpy.mockRestore();
         invSpy.mockRestore();
       });
 
       it('AC3: cmd_permission_request terminal path schedules a DB reconcile', async () => {
-        const getSpy = vi.spyOn(chatService, 'getSessionMessages').mockResolvedValue([]);
+        const getSpy = vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockResolvedValue([]);
         const invSpy = vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
 
         const { result } = renderHook(() =>
@@ -1779,7 +1785,7 @@ describe('Fix 6: Per-tab state isolation', () => {
 
         await act(async () => { await vi.advanceTimersByTimeAsync(250); });
 
-        expect(getSpy).toHaveBeenCalledWith('sess-p');
+        expect(getSpy).toHaveBeenCalledWith('sess-p', RECONCILE_TAIL);
         getSpy.mockRestore();
         invSpy.mockRestore();
       });
@@ -3783,7 +3789,7 @@ describe('TabStatusIndicator component', () => {
           'sess-dc2': { streaming: false, state: 'idle', waitingInput: false, postDisconnectFlushing: false },
         } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
       const msgsSpy = vi
-        .spyOn(chatService, 'getSessionMessages')
+        .spyOn(chatService, 'getSessionMessagesReconcileTail')
         .mockResolvedValue([] as unknown as Awaited<ReturnType<typeof chatService.getSessionMessages>>);
       vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
       try {
@@ -3810,7 +3816,7 @@ describe('TabStatusIndicator component', () => {
         const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
         expect(t.isReconnecting).toBe(false);             // cleared (backend done)
         expect(t._postDisconnectUncertain).toBe(true);    // follow-up send queues
-        expect(msgsSpy).toHaveBeenCalledWith('sess-dc2'); // one-shot DB pull ran
+        expect(msgsSpy).toHaveBeenCalledWith('sess-dc2', RECONCILE_TAIL); // one-shot tail pull ran
       } finally {
         stateSpy.mockRestore();
         msgsSpy.mockRestore();
@@ -3823,7 +3829,7 @@ describe('TabStatusIndicator component', () => {
       const stateSpy = vi
         .spyOn(chatService, 'getStreamingState')
         .mockRejectedValue(new Error('network'));
-      vi.spyOn(chatService, 'getSessionMessages').mockResolvedValue([] as never);
+      vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockResolvedValue([] as never);
       vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
       try {
         const tabId = 'tab-dc-fail';
