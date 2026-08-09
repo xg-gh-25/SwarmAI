@@ -884,3 +884,127 @@ class TestPerfRefactorRun43dc94f6:
         assert _map_git_xy("A ") == "added"
         assert _map_git_xy("M ") == "modified"
         assert _map_git_xy(" M") == "modified"
+
+
+class TestPerfDedupRun9af622ee:
+    """run_9af622ee: kill two per-request perf debts in the brain DETAIL path +
+    make _pending_count degrade-observable (GC19).
+
+    - Detail path computed _pending_count TWICE (build_brain_state + _brain_detail_metrics).
+      Now threaded through as one value → ONE scan per open.
+    - _lifecycle_stage re-parsed the ② docs via _entry_count even though the detail
+      path already parsed them. Now reuses the parsed count.
+    - _pending_count's except now LOGS the failure type before returning 0 (was silent
+      → a lying attention badge).
+    All three keep the response JSON byte-identical (asserted).
+    """
+
+    def _mk_doc_with_entries(self, pd, n):
+        """A ② canonical doc with n active knowledge entries under 2-understanding/."""
+        from core.ddd_paths import ddd_path
+        (pd / ".artifacts").mkdir(parents=True, exist_ok=True)
+        tech = ddd_path(pd, "TECH.md")
+        tech.parent.mkdir(parents=True, exist_ok=True)
+        body = "# T\n\n## Guidelines\n" + "".join(
+            f"- [guideline] **G{i}** — text\n  <!-- ref:0 | last:none | decay:active -->\n"
+            for i in range(n)
+        )
+        tech.write_text(body, encoding="utf-8")
+
+    def test_detail_calls_pending_count_once(self, monkeypatch, tmp_path):
+        """AC5: the detail path (build_brain_state with_noise=True) must invoke
+        _pending_count EXACTLY ONCE, not twice. The value is threaded into
+        _brain_detail_metrics instead of a second collect() scan."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        calls = {"n": 0}
+
+        def _counting(name):
+            calls["n"] += 1
+            return 3
+
+        monkeypatch.setattr(m, "_pending_count", _counting)
+        state = m.build_brain_state(pd, with_noise=True)
+        assert calls["n"] == 1, f"_pending_count called {calls['n']}× on detail open — must be 1 (double-scan)"
+        # value still correct in BOTH consumers (health.pending + escalationPending)
+        assert state["health"]["pending"] == 3
+        assert state["health"]["escalationPending"] == 3
+
+    def test_detail_lifecycle_reuses_parsed_count(self, monkeypatch, tmp_path):
+        """AC6: on the detail path (_brain_detail passes `parsed`), _lifecycle_stage
+        must NOT call _entry_count — it reuses the already-parsed entry count."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        self._mk_doc_with_entries(pd, 4)
+        called = {"entry_count": 0}
+        real_ec = m._entry_count
+
+        def _spy(pdir):
+            called["entry_count"] += 1
+            return real_ec(pdir)
+
+        monkeypatch.setattr(m, "_entry_count", _spy)
+        # detail path builds with parsed (via _parse_knowledge_docs_grouped)
+        parsed = m._parse_knowledge_docs_grouped(pd)
+        state = m.build_brain_state(pd, with_noise=True, parsed=parsed)
+        assert called["entry_count"] == 0, (
+            "_entry_count was called on the detail path — _lifecycle_stage should reuse "
+            "the parsed count, not re-parse"
+        )
+        # and the stage is still correct (4 entries, no pending, no distribute → GROW)
+        assert state["lifecycleStage"] == "GROW"
+
+    def test_lifecycle_parsed_count_equals_entry_count(self, tmp_path):
+        """The perf claim's correctness core: sum-over-parsed == _entry_count(project_dir).
+        If these ever diverge, the reused count would report a wrong lifecycle stage."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        self._mk_doc_with_entries(pd, 7)
+        parsed = m._parse_knowledge_docs_grouped(pd)
+        assert sum(len(v) for v in parsed.values()) == m._entry_count(pd)
+
+    def test_gallery_still_self_parses_lifecycle(self, monkeypatch, tmp_path):
+        """The None-fallback: the gallery path (no parsed) still calls _entry_count —
+        unchanged behavior, and the 4 existing _lifecycle_stage unit tests rely on it."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        self._mk_doc_with_entries(pd, 2)
+        called = {"n": 0}
+        real_ec = m._entry_count
+        monkeypatch.setattr(m, "_entry_count", lambda pdir: (called.__setitem__("n", called["n"] + 1) or real_ec(pdir)))
+        m.build_brain_state(pd, with_noise=False)  # gallery → parsed is None
+        assert called["n"] >= 1, "gallery path must still self-parse via _entry_count (None fallback)"
+
+    def test_pending_count_logs_on_failure(self, monkeypatch, tmp_path, caplog):
+        """AC4: _pending_count degrades OBSERVABLE — on an authority failure it LOGS
+        the exception (was silent → lying '0 needs you' badge) AND still returns 0
+        (list_brains needs no-500)."""
+        import logging
+        from routers import ddd_brain as m
+        import core.attention_authority as aa
+
+        def _boom(*a, **k):
+            raise RuntimeError("authority down")
+
+        monkeypatch.setattr(aa, "collect", _boom)
+        monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)
+        with caplog.at_level(logging.WARNING, logger="routers.ddd_brain"):
+            result = m._pending_count("SomeBrain")
+        assert result == 0, "must still return 0 (no-500 contract)"
+        assert any("pending_count failed" in r.message for r in caplog.records), (
+            "the failure must be LOGGED (degrade-observable), not silently swallowed"
+        )
+
+    def test_pending_count_is_not_a_silent_swallow(self):
+        """Cross-check with the silent-swallow scanner: _pending_count's except must
+        no longer be classified silent (it now logs)."""
+        import inspect
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+        import test_silent_except_baseline as scan
+        from routers import ddd_brain as m
+        src = inspect.getsource(m._pending_count)
+        assert scan._find_silent_swallows(src, "<pending_count>") == [], (
+            "_pending_count's except is still a silent swallow — it must log before return 0"
+        )

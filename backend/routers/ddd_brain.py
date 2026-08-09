@@ -324,7 +324,12 @@ def _pending_count(project_name: str) -> int:
         from core.attention_authority import collect
 
         return len(collect(_workspace_root(), brain=project_name).items)
-    except Exception:  # pragma: no cover - defensive
+    except Exception as e:
+        # Degrade-observable (GC19): still return 0 so the gallery cannot 500
+        # (list_brains needs no-500), but LOG the failure type — a silent
+        # `return 0` here rendered a real authority failure as a truthful-looking
+        # "✓ nothing needs you" badge (the lying-badge root cause).
+        logger.warning("pending_count failed for %s, defaulting to 0: %s", project_name, e)
         return 0
 
 
@@ -566,19 +571,29 @@ def build_brain_state(
     stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
     health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"])
     if with_noise:
-        health.update(_brain_detail_metrics(project_dir, parsed=parsed))
+        # Thread the already-computed `pending` into the detail metrics so
+        # escalationPending reuses it instead of a SECOND _pending_count() scan
+        # (the per-open double-scan; _pending_count → collect() is the expensive leg).
+        health.update(_brain_detail_metrics(project_dir, parsed=parsed, pending=pending))
+    # On the detail path `parsed` is in hand — reuse its entry count instead of
+    # a third re-parse inside _lifecycle_stage (_entry_count re-reads the same ②
+    # docs). sum-over-parsed == _entry_count(project_dir): both iterate _KNOWLEDGE_DOCS
+    # with the same parse_entries + same fault-skip, unfiltered. None (gallery) →
+    # _lifecycle_stage self-parses, unchanged.
+    entry_count = sum(len(v) for v in parsed.values()) if parsed is not None else None
     return {
         "name": name,
         "kind": _read_kind(project_dir),
         "sectionsPresent": present,
-        "lifecycleStage": _lifecycle_stage(project_dir, present, pending),
+        "lifecycleStage": _lifecycle_stage(project_dir, present, pending, entry_count=entry_count),
         "health": health,
         "typeCounts": stats["typeCounts"],
     }
 
 
 def _brain_detail_metrics(
-    project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None
+    project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None,
+    pending: Optional[int] = None,
 ) -> dict:
     """The DETAIL-only, admission-passing DDD health metrics (per-open).
 
@@ -599,7 +614,9 @@ def _brain_detail_metrics(
       HIGH: a two-read version risked a TOCTOU mismatch). Absent/corrupt score → None
       (honest: no scheduled computation yet; never fabricated, never a write). No
       project-composite is invented (Gate-1 MAJOR — vanity); per-doc scores verbatim.
-    - escalationPending: reuse _pending_count (same source as the gallery — no divergence).
+    - escalationPending: the caller's already-computed `pending` (same source as the
+      gallery — no divergence, and no SECOND _pending_count scan per open). Falls back
+      to _pending_count(name) only if the caller passes None (defensive / direct call).
     - recall: {value:None, experimental:True} — recall_suite is a pinned-corpus
       benchmark with no cheap per-DDD value; the tile is shown but labeled experimental
       (design §4), never fabricated.
@@ -700,7 +717,7 @@ def _brain_detail_metrics(
     return {
         "noise": noise,
         "trust": trust,
-        "escalationPending": _pending_count(project_dir.name),
+        "escalationPending": pending if pending is not None else _pending_count(project_dir.name),
         "recall": {"value": None, "experimental": True},
         "cultivation": cultivation,
         "recentActivity": recent_activity,
@@ -713,7 +730,10 @@ def _sections_present(project_dir: Path) -> dict[str, bool]:
     return {key: bool(_section_members(project_dir, key)) for key, *_ in _SECTIONS}
 
 
-def _lifecycle_stage(project_dir: Path, present: dict[str, bool], pending: int) -> str:
+def _lifecycle_stage(
+    project_dir: Path, present: dict[str, bool], pending: int,
+    entry_count: Optional[int] = None,
+) -> str:
     """Heuristic stage (design §4.1 R4 — explicit + cheap, not over-modeled).
 
     CREATE     — skeleton only, no sedimented knowledge yet.
@@ -729,12 +749,25 @@ def _lifecycle_stage(project_dir: Path, present: dict[str, bool], pending: int) 
     frontend renders lifecycleStage as a linear stepper (DISTRIBUTE = terminal),
     so DISTRIBUTE-first would light the bar fully green and HIDE the un-reviewed
     work. `health.pending` still carries the count independently.
+
+    `entry_count` (perf, run_9af622ee): the detail path already parsed the ② docs
+    (build_brain_state's `parsed`) and passes their entry count here so this doesn't
+    re-parse via _entry_count(). It is authoritative for the request — both counts
+    derive from the same _KNOWLEDGE_DOCS parse under the same read, so they match; a
+    TOCTOU divergence (a doc becoming unreadable mid-request) would only make the passed
+    count the fresher of two equally-valid reads. None (gallery + direct callers) →
+    self-parse via _entry_count, byte-identical to before.
     """
     if pending > 0:
         return "REVIEW"
     if _has_distribute_output(project_dir):
         return "DISTRIBUTE"
-    if _entry_count(project_dir) > 0:
+    # `entry_count` (detail path) is the count from the caller's single ②-doc parse —
+    # reuse it instead of a redundant _entry_count() re-parse. It is authoritative for
+    # this request (both derive from the same _KNOWLEDGE_DOCS parse under the same read).
+    # None (gallery / the 4 direct unit tests) → self-parse via _entry_count, unchanged.
+    count = entry_count if entry_count is not None else _entry_count(project_dir)
+    if count > 0:
         return "GROW"
     return "CREATE"
 
