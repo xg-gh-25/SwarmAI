@@ -30,7 +30,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.community_data import aggregate_engagement, build_feed, parse_sources
+from core.community_data import aggregate_engagement, build_feed, parse_hot_topics, parse_sources
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/community", tags=["community"])
@@ -54,6 +54,14 @@ def _engagement_dir():
     return PROJECTS_DIR / "GitHub_Community" / ".artifacts"
 
 
+def _tech_md_path():
+    # The canonical DDD doc lives under 2-understanding/ (the root TECH.md is a
+    # symlink to it — same inode, so either resolves; use the canonical path).
+    from jobs.paths import PROJECTS_DIR
+
+    return PROJECTS_DIR / "GitHub_Community" / "2-understanding" / "TECH.md"
+
+
 @router.get("/feed")
 async def community_feed() -> dict:
     """Recent community signals + reports (files), newest-first.
@@ -68,6 +76,25 @@ async def community_feed() -> dict:
     from core.community_data import feed_cap
 
     return {"count": len(items), "items": items, "truncated": len(items) >= feed_cap()}
+
+
+@router.get("/hot-topics")
+async def community_hot_topics() -> dict:
+    """GitHub Hot Topics (community DEMAND) parsed from the GitHub_Community DDD's
+    TECH.md `## GitHub Hot Topics` → Rankings table.
+
+    Returns {updated, topics:[{rank,topic,evidence,trend}], count}. `updated` is the
+    table's own snapshot date (the source is a manual scan snapshot, NOT live) — the
+    frontend surfaces it as a freshness label. Fail-soft: a missing doc/section → an
+    empty topics list (never 500 on a doc edit). Read-only; blocking file read runs
+    off the event loop.
+    """
+    result = await asyncio.to_thread(parse_hot_topics, _tech_md_path())
+    return {
+        "updated": result["updated"],
+        "topics": result["topics"],
+        "count": len(result["topics"]),
+    }
 
 
 @router.get("/sources")

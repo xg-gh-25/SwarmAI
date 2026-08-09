@@ -8,6 +8,7 @@
  *   GET /api/community/feed        → recent signal digests + reports (files)
  *   GET /api/community/sources     → configured feeds (read-only)
  *   GET /api/community/engagement  → GitHub community metrics (data-backed only)
+ *   GET /api/community/hot-topics  → community DEMAND (TECH.md Rankings, read-only)
  *
  * Backend is snake_case (FastAPI); this layer normalizes to the shapes the
  * overlay renders. All numbers come from the backend (never frontend .length).
@@ -40,6 +41,21 @@ export interface CommunitySource {
   /** The config key the members live under (e.g. "urls"), or null = no editable members. */
   memberKind: string | null;
   tags: string[];
+}
+
+/** One GitHub Hot Topic row (community DEMAND) — parsed from TECH.md Rankings. */
+export interface CommunityHotTopic {
+  rank: number;
+  topic: string;
+  evidence: string;
+  trend: string;
+}
+
+/** Hot Topics payload — the snapshot + its own freshness date. */
+export interface CommunityHotTopics {
+  /** The table's snapshot date (YYYY-MM-DD) — a manual scan, NOT live. null if absent. */
+  updated: string | null;
+  topics: CommunityHotTopic[];
 }
 
 /** Outbound engagement metrics — data-backed only (no fabricated quality score). */
@@ -86,6 +102,17 @@ export const communityService = {
       memberKind: s.member_kind ?? null,
       tags: s.tags ?? [],
     }));
+  },
+
+  async fetchHotTopics(): Promise<CommunityHotTopics> {
+    // Backend returns {updated, topics:[{rank,topic,evidence,trend}], count}.
+    // Single-word lowercase keys → no snake→camel mapping needed. NOT an array
+    // (unlike fetchFeed) — carries both the topics AND the freshness date.
+    const res = await api.get('/community/hot-topics');
+    return {
+      updated: res.data?.updated ?? null,
+      topics: (res.data?.topics ?? []) as CommunityHotTopic[],
+    };
   },
 
   async fetchEngagement(): Promise<CommunityEngagement> {

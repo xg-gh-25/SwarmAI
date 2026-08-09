@@ -384,6 +384,184 @@ def test_build_feed_signals_never_filtered(tmp_path: Path) -> None:
     assert "2026-08-07-ddd-weekly.md" in names  # Signals unfiltered
 
 
+def test_build_feed_surfaces_community_weekly_html(tmp_path: Path) -> None:
+    # gap1: the weekly report is dual-written to Knowledge/Reports/<date>-weekly.html
+    # (report.py). The Feed used to glob *.md ONLY, so the .html weekly never surfaced.
+    # A community weekly (stem "weekly") + the legacy "github-community-weekly-*" +
+    # "community_report.html" MUST now appear.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    (k / "Reports" / "2026-08-09-weekly.html").write_text("<!DOCTYPE html><html><body>weekly</body></html>")
+    (k / "Reports" / "2026-05-30-github-community-weekly-w22.html").write_text("<!DOCTYPE html><html></html>")
+    (k / "Reports" / "community_report.html").write_text("<!DOCTYPE html><html></html>")
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-08-09-weekly.html" in names, "community weekly .html must surface in Feed"
+    assert "2026-05-30-github-community-weekly-w22.html" in names
+    assert "community_report.html" in names
+
+
+def test_build_feed_html_fail_closed_excludes_non_community(tmp_path: Path) -> None:
+    # gap1 CRITICAL (Gate-1): HTML has NO frontmatter, so _report_audience can never
+    # classify it internal — a bare *.html glob would leak confidential CMHK customer
+    # reports + internal eval docs into the OUTWARD-facing Feed. HTML is fail-CLOSED:
+    # DEFAULT-EXCLUDE unless the stem matches the community-report allowlist.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    leak = [
+        "2026-07-19-cmhk-smb-deepdive.html",          # confidential customer financials
+        "2026-07-19-cmhk-strategic-ipmm-review.html",
+        "2026-05-18-bms-risk-intelligence.html",
+        "2026-07-28-swarmai-vs-rocky-eval-scorecard.html",  # internal eval
+        "2026-05-14-meshclaw-vs-swarmai-architecture.html",
+        "report_fixed.html", "_tmp-section-1.html",   # junk/temp
+    ]
+    for n in leak:
+        (k / "Reports" / n).write_text("<!DOCTYPE html><html><body>confidential</body></html>")
+    names = {it["name"] for it in build_feed(k)}
+    for n in leak:
+        assert n not in names, f"NON-community HTML leaked into outward Feed: {n}"
+
+
+def test_build_feed_html_audience_community_opt_in(tmp_path: Path) -> None:
+    # An HTML report with an explicit <meta name="audience" content="community"> in its
+    # head opts IN despite a non-community stem (the HTML analogue of the md frontmatter
+    # audience:community override).
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    (k / "Reports" / "2026-08-01-special-brief.html").write_text(
+        '<!DOCTYPE html><html><head><meta name="audience" content="community"></head><body>x</body></html>'
+    )
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-08-01-special-brief.html" in names
+
+
+def test_build_feed_md_default_show_unchanged(tmp_path: Path) -> None:
+    # Regression guard: the .md path keeps its DEFAULT-SHOW behavior (only HTML is
+    # fail-closed). A community-named .md report with no frontmatter still surfaces.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    (k / "Reports" / "2026-08-01-openworker-research.md").write_text("# community research")
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-08-01-openworker-research.md" in names
+
+
+# ── Hot Topics (gap2 — parse TECH.md ## GitHub Hot Topics) ───────────────────
+
+_TECH_MD_FIXTURE = """# TECH
+
+## Something Before
+
+blah blah
+
+## GitHub Hot Topics (DEMAND — what the community wants to discuss)
+<!-- maturity: sparse -->
+
+### Rankings (Updated 2026-06-14, from W23 scan activity)
+
+| Rank | Topic | Evidence (threads + engagement) | Trend |
+|------|-------|--------------------------------|-------|
+| 1 | **Memory for agents** (persistence, sovereignty) | MemPalace #1784 (2💬), crewAI #6050 (18💬) | 🔥🔥🔥 Dominant |
+| 2 | **Production agent operations** (monitoring) | crewAI #4232 (36💬) | 🔥🔥🔥 Steady |
+| 3 | **Context compression & token budget** | [claude-code #67297](https://github.com/x/y) | 🔥🔥🔥 NEW — Exploding |
+
+### Top Movers (W23 — 2026-06-14)
+
+| Direction | Topic | Signal |
+|-----------|-------|--------|
+| ⬆️ NEW | Context compression | headroom exploding |
+
+## Another Section After
+"""
+
+
+def test_parse_hot_topics_extracts_rankings(tmp_path: Path) -> None:
+    from core.community_data import parse_hot_topics
+    p = tmp_path / "TECH.md"
+    p.write_text(_TECH_MD_FIXTURE)
+    result = parse_hot_topics(p)
+    assert result["updated"] == "2026-06-14"
+    topics = result["topics"]
+    assert len(topics) == 3, "must parse exactly the 3 Rankings rows, NOT bleed into Top Movers"
+    assert topics[0]["rank"] == 1
+    # markdown bold stripped from the topic cell
+    assert topics[0]["topic"].startswith("Memory for agents")
+    assert "**" not in topics[0]["topic"]
+    assert topics[0]["trend"]  # non-empty
+
+
+def test_parse_hot_topics_stops_before_top_movers(tmp_path: Path) -> None:
+    # The Top Movers table sits right below Rankings with a DIFFERENT schema
+    # (Direction|Topic|Signal). The parser must stop at the next ### header.
+    from core.community_data import parse_hot_topics
+    p = tmp_path / "TECH.md"
+    p.write_text(_TECH_MD_FIXTURE)
+    topics = parse_hot_topics(p)["topics"]
+    for t in topics:
+        assert "headroom exploding" not in (t.get("evidence", "") + t.get("topic", "")), \
+            "parser bled into Top Movers table"
+
+
+def test_build_feed_html_prefix_leak_guard(tmp_path: Path) -> None:
+    # Gate-2 HIGH (run_03b5d04f): the stem allowlist must be EXACT for "weekly"/
+    # "community_report", NOT a prefix — else a future confidential
+    # <date>-weekly-cmhk-financials.html / community-cmhk-secret.html would leak.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    must_show = ["2026-08-09-weekly.html", "community_report.html",
+                 "2026-05-30-github-community-weekly-w22.html"]
+    must_hide = ["2026-08-09-weekly-cmhk-secret.html", "weekly-cmhk-financials.html",
+                 "community-cmhk-secret.html", "weekly-report-internal.html"]
+    for n in must_show + must_hide:
+        (k / "Reports" / n).write_text("<!DOCTYPE html><html></html>")
+    names = {it["name"] for it in build_feed(k)}
+    for n in must_show:
+        assert n in names, f"legit community weekly wrongly hidden: {n}"
+    for n in must_hide:
+        assert n not in names, f"prefix-leak: confidential-looking HTML surfaced: {n}"
+
+
+def test_build_feed_html_meta_audience_reversed_order(tmp_path: Path) -> None:
+    # Gate-2 LOW: <meta content="internal" name="audience"> (reversed attr order)
+    # must still force-EXCLUDE, even on a community-stem file.
+    k = tmp_path / "Knowledge"
+    (k / "Reports").mkdir(parents=True)
+    (k / "Reports" / "2026-08-09-weekly.html").write_text(
+        '<!DOCTYPE html><html><head><meta content="internal" name="audience"></head></html>'
+    )
+    names = {it["name"] for it in build_feed(k)}
+    assert "2026-08-09-weekly.html" not in names, "reversed-order audience:internal must exclude"
+
+
+def test_parse_hot_topics_no_updated_clause_still_parses(tmp_path: Path) -> None:
+    # Gate-2 MED: a `### Rankings` header WITHOUT the "(Updated …)" clause must still
+    # parse the table (updated=None), not silently drop it.
+    from core.community_data import parse_hot_topics
+    p = tmp_path / "TECH.md"
+    p.write_text(
+        "## GitHub Hot Topics\n\n### Rankings\n\n"
+        "| Rank | Topic | Evidence | Trend |\n|--|--|--|--|\n"
+        "| 1 | **Memory** | crewAI #1 | 🔥 |\n\n## Next\n"
+    )
+    result = parse_hot_topics(p)
+    assert result["updated"] is None
+    assert len(result["topics"]) == 1
+    assert result["topics"][0]["topic"] == "Memory"
+
+
+def test_parse_hot_topics_missing_section_fail_soft(tmp_path: Path) -> None:
+    from core.community_data import parse_hot_topics
+    p = tmp_path / "TECH.md"
+    p.write_text("# TECH\n\n## No Hot Topics Here\n\nnothing.")
+    result = parse_hot_topics(p)
+    assert result == {"updated": None, "topics": []}
+
+
+def test_parse_hot_topics_missing_file_fail_soft(tmp_path: Path) -> None:
+    from core.community_data import parse_hot_topics
+    result = parse_hot_topics(tmp_path / "nope.md")
+    assert result == {"updated": None, "topics": []}
+
+
 def test_build_feed_drops_symlink_escaping_knowledge(tmp_path: Path) -> None:
     # A symlink under Signals/ pointing OUTSIDE Knowledge/ must NOT be emitted
     # (defense-in-depth vs the /workspace/file/resolve infoleak class).
@@ -907,6 +1085,7 @@ def test_router_endpoints_registered() -> None:
     assert "/api/community/feed" in paths
     assert "/api/community/sources" in paths
     assert "/api/community/engagement" in paths
+    assert "/api/community/hot-topics" in paths  # gap2
 
 
 def test_router_handlers_return_real_shapes() -> None:
@@ -926,6 +1105,7 @@ def test_router_handlers_return_real_shapes() -> None:
         community_feed,
         community_sources,
         community_engagement,
+        community_hot_topics,
     )
 
     try:
@@ -948,6 +1128,11 @@ def test_router_handlers_return_real_shapes() -> None:
         eng = loop.run_until_complete(community_engagement())
         assert "comments_posted" in eng
         assert "avg_quality" not in eng  # no fabricated metric, even live
+
+        hot = loop.run_until_complete(community_hot_topics())
+        assert "topics" in hot and isinstance(hot["topics"], list)
+        assert "updated" in hot  # the freshness label (may be None on a machine w/o the table)
+        assert hot["count"] == len(hot["topics"])
     finally:
         loop.close()
         # restore whatever loop policy state was here before (never leave None)

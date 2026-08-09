@@ -8,7 +8,10 @@ overlay-ready shapes. No mutation, no self_tune coupling, no config writes.
 
 Data sources (all verified live on-disk during the pipeline's PLAN stage):
   - Sources tab  ← Services/swarm-jobs/config.yaml `feeds:` list
-  - Feed tab     ← Knowledge/{Signals,Reports}/*.md (recent, newest-first)
+  - Feed tab     ← Knowledge/{Signals,Reports}/*.{md,html} (recent, newest-first;
+                   HTML reports are fail-closed — see _is_community_html_report)
+  - Hot Topics   ← Projects/GitHub_Community/2-understanding/TECH.md
+                   `## GitHub Hot Topics` Rankings table (parse_hot_topics)
   - Engagement   ← Projects/GitHub_Community/.artifacts/{engagement_log,
                    reply_archive,star_log}.jsonl
 
@@ -70,6 +73,70 @@ _AUDIENCE_COMMUNITY = "community"
 _FRONTMATTER_HEAD_BYTES = 600  # read only the head for frontmatter, never the full file in the feed loop
 
 _DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}(?:-\d{2})?-")
+
+# Community-facing HTML report stems (fail-CLOSED allowlist). Unlike .md, an .html
+# report carries NO `---` frontmatter, so _report_audience can never self-classify it
+# → a bare *.html glob would DEFAULT-SHOW everything, leaking confidential reports
+# (CMHK customer financials, internal eval scorecards, temp files) into the OUTWARD
+# community Feed (Gate-1 CRITICAL, run_03b5d04f). So HTML is fail-CLOSED: excluded
+# UNLESS its date-stripped stem starts with one of these, OR it opts in via an
+# explicit <meta name="audience" content="community"> tag. The community weekly
+# report writer (s_github_community/report.py) emits `<date>-weekly.html`.
+# EXACT date-stripped stems (stem-minus-.html must EQUAL one of these). A prefix
+# match here would leak: `startswith("weekly")` also matches a future confidential
+# `<date>-weekly-cmhk-financials.html` (Gate-2 HIGH, run_03b5d04f) — the community
+# weekly is exactly `<date>-weekly.html`, so require equality, not prefix.
+_COMMUNITY_HTML_EXACT_STEMS = frozenset({
+    "weekly",              # community weekly report (report.py: <date>-weekly.html)
+    "community_report",    # community_report.html
+})
+# INTENTIONAL prefix stems — ONLY a specific, unambiguous community-report family.
+# A bare "community-" prefix was dropped (Gate-2 HIGH): it would leak a future
+# confidential `community-cmhk-secret.html`. Fail-closed — a new community-report
+# family must be added here explicitly, never matched by a loose prefix.
+_COMMUNITY_HTML_PREFIX_STEMS = (
+    "github-community-weekly-",  # legacy community weekly naming (e.g. -w22)
+)
+# An HTML head large enough to catch a <meta name="audience"> tag in <head>.
+_HTML_HEAD_BYTES = 2048
+# Match <meta ... name="audience" ... content="X"> in EITHER attribute order
+# (name-before-content OR content-before-name) — a reversed-order tag must still
+# force-classify (Gate-2 LOW, run_03b5d04f).
+_HTML_AUDIENCE_RES = (
+    re.compile(r"""<meta\s+[^>]*\bname=["']audience["'][^>]*\bcontent=["']([^"']+)["']""", re.IGNORECASE),
+    re.compile(r"""<meta\s+[^>]*\bcontent=["']([^"']+)["'][^>]*\bname=["']audience["']""", re.IGNORECASE),
+)
+
+
+def _html_report_audience(head_text: str) -> str | None:
+    """Return the EXACT audience token from an HTML report's
+    <meta name="audience" content="..."> tag, or None if absent/free-text.
+    The HTML analogue of _report_audience (which reads `---` frontmatter that
+    HTML files do not have)."""
+    for pat in _HTML_AUDIENCE_RES:
+        m = pat.search(head_text)
+        if m:
+            token = m.group(1).strip().lower()
+            return token if token in (_AUDIENCE_INTERNAL, _AUDIENCE_COMMUNITY) else None
+    return None
+
+
+def _is_community_html_report(name: str, head_text: str) -> bool:
+    """Classify a Reports/*.html file — FAIL-CLOSED (default EXCLUDE). Precedence:
+    (1) explicit <meta audience> tag overrides both ways; (2) else surface ONLY if
+    the date-stripped stem matches _COMMUNITY_HTML_STEMS; (3) else EXCLUDE. This is
+    the inverse polarity of _is_community_report (.md), because HTML cannot carry
+    the frontmatter that makes DEFAULT-SHOW safe for markdown."""
+    audience = _html_report_audience(head_text)
+    if audience == _AUDIENCE_INTERNAL:
+        return False
+    if audience == _AUDIENCE_COMMUNITY:
+        return True
+    stem = _DATE_PREFIX_RE.sub("", name.lower())
+    stem_noext = stem[:-5] if stem.endswith(".html") else stem
+    if stem_noext in _COMMUNITY_HTML_EXACT_STEMS:
+        return True
+    return any(stem.startswith(s) for s in _COMMUNITY_HTML_PREFIX_STEMS)
 
 
 def _report_audience(head_text: str) -> str | None:
@@ -275,9 +342,14 @@ def build_feed(knowledge_dir: Path) -> list[dict]:
         cdir = knowledge_dir / category
         if not cdir.is_dir():
             continue
-        for p in cdir.rglob("*.md"):
+        # Glob .md AND .html: the community weekly report is dual-written as
+        # <date>-weekly.html (report.py). HTML is classified FAIL-CLOSED below —
+        # a bare *.html glob would leak confidential reports (gap1, run_03b5d04f).
+        feed_files = sorted(cdir.rglob("*.md")) + sorted(cdir.rglob("*.html"))
+        for p in feed_files:
             if not p.is_file() or p.name.startswith("."):
                 continue
+            is_html = p.suffix.lower() == ".html"
             # Defense-in-depth: rglob follows dir symlinks, so a symlink under
             # Signals/Reports could point OUTSIDE Knowledge/. The downstream
             # /workspace/file/resolve already rejects an escaping path (400), but
@@ -289,16 +361,19 @@ def build_feed(knowledge_dir: Path) -> list[dict]:
             except OSError:
                 continue
             # Reports are classified community-vs-internal (Signals are pure community
-            # digests — never filtered). An internal governance report (ddd-weekly,
-            # pipeline-weekly, swarmai-monthly, validator-audit) is excluded unless its
-            # frontmatter opts in; a community report is kept even if its NAME collides.
+            # digests — never filtered). For .md: internal governance reports are
+            # excluded unless frontmatter opts in (DEFAULT-SHOW). For .html: FAIL-CLOSED
+            # (DEFAULT-EXCLUDE) — HTML has no frontmatter to self-classify, so only a
+            # community-stem or an explicit <meta audience=community> surfaces.
             if category == "Reports":
+                head_bytes = _HTML_HEAD_BYTES if is_html else _FRONTMATTER_HEAD_BYTES
                 try:
                     with open(p, "r", encoding="utf-8", errors="replace") as fh:
-                        head = fh.read(_FRONTMATTER_HEAD_BYTES)
+                        head = fh.read(head_bytes)
                 except OSError:
                     continue
-                if not _is_community_report(p.name, head):
+                classifier = _is_community_html_report if is_html else _is_community_report
+                if not classifier(p.name, head):
                     continue
             try:
                 mtime = p.stat().st_mtime
@@ -315,3 +390,79 @@ def build_feed(knowledge_dir: Path) -> list[dict]:
             )
     items.sort(key=lambda it: it["mtime"], reverse=True)
     return items[:_FEED_CAP]
+
+
+# ── Hot Topics (gap2) — parse TECH.md "## GitHub Hot Topics" → Rankings table ──
+
+_HOT_TOPICS_HEADER = "## GitHub Hot Topics"
+# Enter Rankings on ANY `### Rankings` header (do NOT couple to the freshness
+# clause — a doc edit dropping "(Updated …)" must not silently empty Hot Topics;
+# Gate-2 MED, run_03b5d04f). The date is captured SEPARATELY, optionally.
+_RANKINGS_HEADER_RE = re.compile(r"^###\s+Rankings\b", re.IGNORECASE)
+_RANKINGS_DATE_RE = re.compile(r"\(Updated\s+([0-9]{4}-[0-9]{2}-[0-9]{2})", re.IGNORECASE)
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _strip_md(cell: str) -> str:
+    """Strip markdown bold from a table cell (links/emoji are kept — they carry
+    meaning in the evidence/trend columns). Bold → plain so the UI renders text,
+    not literal asterisks."""
+    return _MD_BOLD_RE.sub(r"\1", cell).strip()
+
+
+def parse_hot_topics(tech_md_path: Path) -> dict:
+    """Parse the ## GitHub Hot Topics → ### Rankings pipe table from a project's
+    TECH.md into {updated: <YYYY-MM-DD|None>, topics: [{rank,topic,evidence,trend}]}.
+
+    FAIL-SOFT: a missing file / missing section / missing table → {updated:None,
+    topics:[]} (never raises — the endpoint must not 500 on a doc edit). Scoped to
+    the Rankings table ONLY: parsing stops at the next `###`/`##` header so it never
+    bleeds into the sibling `### Top Movers` table (different schema). No LLM — the
+    table is fixed-column pipe markdown."""
+    empty = {"updated": None, "topics": []}
+    try:
+        text = tech_md_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return empty
+
+    # Locate the ## GitHub Hot Topics section (bound the search to it).
+    sec_start = text.find(_HOT_TOPICS_HEADER)
+    if sec_start == -1:
+        return empty
+    section = text[sec_start:]
+
+    updated: str | None = None
+    topics: list[dict] = []
+    in_rankings = False
+    for line in section.splitlines():
+        stripped = line.strip()
+        # A new ###/## header AFTER we entered Rankings ends the table scope
+        # (stops before ### Top Movers). The section's own ## header is the first
+        # line, so only treat a header as a terminator once we're in Rankings.
+        if in_rankings and (stripped.startswith("### ") or stripped.startswith("## ")):
+            break
+        if _RANKINGS_HEADER_RE.match(stripped):
+            in_rankings = True
+            dm = _RANKINGS_DATE_RE.search(stripped)  # date is OPTIONAL
+            if dm:
+                updated = dm.group(1)
+            continue
+        if not in_rankings:
+            continue
+        # Inside Rankings: parse pipe rows. Skip the header row (| Rank | Topic |…)
+        # and the separator row (|------|). A data row starts with an int rank.
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 4:
+            continue
+        rank_raw = cells[0].strip()
+        if not rank_raw.isdigit():
+            continue  # header row ("Rank") or separator row ("------")
+        topics.append({
+            "rank": int(rank_raw),
+            "topic": _strip_md(cells[1]),
+            "evidence": _strip_md(cells[2]),
+            "trend": _strip_md(cells[3]),
+        })
+    return {"updated": updated, "topics": topics}

@@ -31,6 +31,7 @@ import {
   type CommunityFeedItem,
   type CommunitySource,
   type CommunityEngagement,
+  type CommunityHotTopics,
 } from '../../services/community';
 
 interface CommunityContentProps {
@@ -156,29 +157,85 @@ function FeedTab({ close }: { close: () => void }) {
     [close],
   );
 
-  const banner = <StateBanner loading={loading} error={error} empty={items.length === 0}
-    emptyMsg="No recent signals or reports." />;
-  if (loading || error || items.length === 0) return banner;
+  // Hot Topics renders ABOVE the feed as an independent SIBLING — NOT gated by the
+  // feed's own loading/empty state (an empty file feed must not hide hot topics).
+  return (
+    <div className="flex flex-col gap-4 max-w-[860px]">
+      <HotTopicsSection />
+      <div>
+        {loading || error || items.length === 0 ? (
+          <StateBanner loading={loading} error={error} empty={items.length === 0}
+            emptyMsg="No recent signals or reports." />
+        ) : (
+          <div className="flex flex-col gap-1">
+            {items.map((it) => (
+              <button
+                key={it.path}
+                type="button"
+                onClick={() => openFile(it.path)}
+                data-testid="community-feed-item"
+                className="group w-full text-left rounded-lg px-3 py-2.5 border border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
+              >
+                <span className="text-[9.5px] font-mono uppercase text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-0.5">
+                  {it.category}
+                </span>
+                <span className="flex-1 text-[13px] text-[var(--color-text)] truncate">{it.name}</span>
+                <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">
+                  open_in_new
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Hot Topics section (gap2) — community DEMAND from TECH.md, read-only ──────
+// Freshness-honest: the source is a MANUAL scan snapshot (not live). The `updated`
+// date is surfaced prominently; if it's stale (>21d) the label warns, so a 2-month-old
+// snapshot never reads as current demand (Gate-1 finding #5).
+const _STALE_DAYS = 21;
+
+function _freshnessLabel(updated: string | null): { text: string; stale: boolean } {
+  if (!updated) return { text: 'snapshot date unknown', stale: true };
+  const then = new Date(updated + 'T00:00:00Z').getTime();
+  if (Number.isNaN(then)) return { text: `last scan ${updated}`, stale: true };
+  const days = Math.floor((Date.now() - then) / 86_400_000);
+  if (days > _STALE_DAYS) return { text: `⚠ stale — last scanned ${updated} (${days}d ago)`, stale: true };
+  return { text: `last scanned ${updated}`, stale: false };
+}
+
+function HotTopicsSection() {
+  const { data, loading, error } = useFetch<CommunityHotTopics>(communityService.fetchHotTopics);
+  // Fail-quiet: hot topics is a secondary panel — on load-fail or empty, render NOTHING
+  // (don't push a red error banner above the primary feed). It's additive context.
+  if (loading || error) return null;
+  const topics = data?.topics ?? [];
+  if (topics.length === 0) return null;
+  const fresh = _freshnessLabel(data?.updated ?? null);
 
   return (
-    <div className="flex flex-col gap-1 max-w-[860px]">
-      {items.map((it) => (
-        <button
-          key={it.path}
-          type="button"
-          onClick={() => openFile(it.path)}
-          data-testid="community-feed-item"
-          className="group w-full text-left rounded-lg px-3 py-2.5 border border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
+    <div data-testid="community-hot-topics" className="rounded-lg border border-[var(--color-border)] px-3 py-2.5">
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[12px] font-semibold text-[var(--color-text)]">🔥 Hot Topics · community demand</span>
+        <span
+          data-testid="hot-topics-freshness"
+          className={`text-[10px] ${fresh.stale ? 'text-amber-500' : 'text-[var(--color-text-faint)]'}`}
         >
-          <span className="text-[9.5px] font-mono uppercase text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-0.5">
-            {it.category}
-          </span>
-          <span className="flex-1 text-[13px] text-[var(--color-text)] truncate">{it.name}</span>
-          <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">
-            open_in_new
-          </span>
-        </button>
-      ))}
+          {fresh.text}
+        </span>
+      </div>
+      <ol className="flex flex-col gap-0.5">
+        {topics.map((t) => (
+          <li key={t.rank} data-testid="hot-topic-row" className="flex items-baseline gap-2 text-[12px] py-0.5" title={t.evidence}>
+            <span className="font-mono text-[10.5px] text-[var(--color-text-faint)] w-4 shrink-0">{t.rank}</span>
+            <span className="flex-1 text-[var(--color-text)] truncate">{t.topic}</span>
+            <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{t.trend}</span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
