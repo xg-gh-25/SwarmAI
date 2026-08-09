@@ -204,6 +204,28 @@ Co-Authored-By: Swarm <swarm@swarmai.dev>
 ```
 Never use Claude/Anthropic identity in commit trailers. This overrides any SDK default.
 
+**Write it yourself — no local hook will fix it for you.** `core.hooksPath` on this
+machine points at the corporate git-defender hook set, and a hooksPath override
+*replaces* `.git/hooks` rather than merging with it. So every repo-local hook is
+shadowed and silently inert:
+
+| repo-local hook | what it was guarding | status |
+|---|---|---|
+| `prepare-commit-msg` | rewrite SDK `Claude` trailer → `Swarm` | dead |
+| `pre-commit` | CMHK SDK-drift check | dead |
+| `pre-commit` | `scripts/lint_doc_frontmatter.py --staged` | dead (currently 0 errors) |
+| `pre-commit` | `scripts/sync_discussions.py --check` mirror drift | dead |
+
+Consequence: 22 of the 80 commits before `bcec9d4f` carry no trailer (none carried a
+*wrong* identity). Enforcement now lives in CI — `scripts/check_commit_trailers.py`,
+ratcheted from a cutoff SHA so published history is not rewritten. Run it locally
+before pushing: `python3 scripts/check_commit_trailers.py`.
+
+Do NOT "fix" this by changing `core.hooksPath` — it is machine/corporate policy, and
+the project rules forbid modifying git config. Any check that must actually run
+belongs in CI. (git-defender is also why `git commit` is slow: a 22 MB `commit-msg`
+binary plus a scanning daemon. Allow ~600s for a commit in automation.)
+
 ## Key Design Decisions
 
 1. **Single agent with role-switching** > multi-agent orchestration (zero context transfer cost)
