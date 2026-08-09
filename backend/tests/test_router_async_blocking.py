@@ -95,16 +95,23 @@ _BLOCKING_DOTTED = frozenset({
     ("subprocess", "run"),
     ("subprocess", "check_output"),
     ("subprocess", "check_call"),
+    # Synchronous SQLite session (run_a1f4c2d8 — see the CLOSED GAP note below). Dotted
+    # so a same-named `.connect()` on an async client/socket object is not flagged.
+    # aiosqlite is NOT here: it is the async driver, awaiting it is the correct pattern.
+    ("sqlite3", "connect"),
 })
 
-# KNOWN GAP (deliberately NOT in the denylist — named, not silently dropped):
-#   sqlite3.connect + a full sync SQLite session is a DISTINCT blocking class (DB
-#   session lifecycle, not one-shot FS I/O). It blocks the loop in library_api.py
-#   list_mounts / register_mount (the latter also runs index_code_mount, a code-index
-#   walk). Fixing those correctly means restructuring the whole try/conn/finally, not
-#   a one-line wrap — so it is a scoped FOLLOW-UP run, not this one. Adding
-#   sqlite3.connect here now would turn the gate RED with no fix in this changeset.
-#   Same out-of-scope-but-named discipline as channels/gateway.py:_stage_file_to_workspace.
+# CLOSED GAP (run_a1f4c2d8) — sqlite3.connect is now DENYLISTED, above.
+#   It was held out because a full sync SQLite session is a DISTINCT blocking class (a
+#   session lifecycle, not one-shot FS I/O) and the only two occurrences —
+#   library_api.py list_mounts / register_mount (the latter also ran judge_mount_kind's
+#   rglob AND index_code_mount, a whole tree-sitter graph build) — needed the entire
+#   try/conn/finally restructured, not a one-line wrap. Denylisting it before that fix
+#   would have turned the gate RED with no fix in the same changeset.
+#   Both are now sync `_read` / `_work` helpers dispatched via asyncio.to_thread, so the
+#   primitive is denylisted and the class is closed rather than documented.
+#   Verified before flipping: those were the ONLY two sqlite3.connect calls in
+#   routers/ + channels/, so this adds coverage without a baseline.
 
 _BACKEND = pathlib.Path(__file__).resolve().parents[1]
 ROUTERS_DIR = _BACKEND / "routers"

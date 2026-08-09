@@ -142,8 +142,16 @@ async def list_mounts(scope: Optional[str] = Query(default=None)) -> dict:
 
     Default (scope=None) lists ALL mounts — the overlay shows the whole shelf
     (GLOBAL + any per-project mounts) regardless of active project. Pass an
-    explicit scope to filter."""
-    try:
+    explicit scope to filter.
+
+    OFF-LOOP (run_a1f4c2d8): a synchronous sqlite3 session — connect, ensure_table (a
+    DDL write), the SELECT, close — ran directly in this ``async def`` body, so every
+    mount listing blocked the event loop for the whole DB round-trip. That is a
+    DISTINCT blocking class from one-shot FS I/O (a session lifecycle, not a single
+    call), which is why test_router_async_blocking.py named it as a known gap instead of
+    denylisting ``sqlite3.connect`` while it was still unfixed. The whole session now
+    lives in the sync ``_read`` helper, dispatched via asyncio.to_thread."""
+    def _read() -> dict:
         import sqlite3
         from jobs.paths import DB_PATH
         from core.library_mounts import LibraryMounts
@@ -166,6 +174,9 @@ async def list_mounts(scope: Optional[str] = Query(default=None)) -> dict:
             return {"count": len(mounts), "mounts": mounts, "registry_ready": True}
         finally:
             conn.close()
+
+    try:
+        return await asyncio.to_thread(_read)
     except Exception as exc:  # noqa: BLE001 — overlay tolerates an empty list
         logger.warning("library mounts list failed: %s", exc)
         return {"count": 0, "mounts": [], "registry_ready": False}
@@ -183,19 +194,33 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
         worth a briefing card — that's semantic, it belongs in chat via s_library,
         not a mechanical endpoint).
     Never copies the directory (index-not-warehouse). 400 if the path isn't a dir.
+
+    OFF-LOOP (run_a1f4c2d8): this was the heaviest loop-blocker in the file — a
+    judge_mount_kind rglob walk, a synchronous sqlite3 session, AND index_code_mount
+    (a whole tree-sitter code-graph build) all ran in the async body, so mounting a
+    real source tree froze every other request and every chat tab's SSE stream for the
+    duration of the index. All three now run in the sync ``_work`` helper via
+    asyncio.to_thread.
+
+    The two REJECTION guards stay in the async body on purpose: they must fail fast,
+    BEFORE any work is dispatched, and both are cheap (one is_dir() stat, one
+    resolve()). Doing the security check inside the worker would mean the thread hop
+    happens before we know the path is even allowed.
     """
     src = Path(path).expanduser()
     if not src.is_dir():
         raise HTTPException(status_code=400, detail=f"{path} is not a directory (a single file goes to the Inbox; only directories are mounted)")
-    try:
+    from core.library_mounts import is_protected_system_path
+    # SECURITY (Gate-2 #1): same guard as the Inbox endpoint — a caller-supplied
+    # path under a protected system root (/etc, ~/.ssh-adjacent, /var, ...) must
+    # NOT be indexed into a searchable graph (host-content exfiltration).
+    if is_protected_system_path(str(src)):
+        raise HTTPException(status_code=400, detail=f"{path} is under a protected system path — system directories cannot be mounted (exfiltration guard).")
+
+    def _work() -> dict:
         import sqlite3
         from jobs.paths import DB_PATH
-        from core.library_mounts import LibraryMounts, judge_mount_kind, index_code_mount, is_protected_system_path
-        # SECURITY (Gate-2 #1): same guard as the Inbox endpoint — a caller-supplied
-        # path under a protected system root (/etc, ~/.ssh-adjacent, /var, ...) must
-        # NOT be indexed into a searchable graph (host-content exfiltration).
-        if is_protected_system_path(str(src)):
-            raise HTTPException(status_code=400, detail=f"{path} is under a protected system path — system directories cannot be mounted (exfiltration guard).")
+        from core.library_mounts import LibraryMounts, judge_mount_kind, index_code_mount
         kind = judge_mount_kind(str(src))
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
@@ -213,6 +238,9 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
                             f"walk it, judge which files matter, and write briefing cards."}
         finally:
             conn.close()
+
+    try:
+        return await asyncio.to_thread(_work)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
