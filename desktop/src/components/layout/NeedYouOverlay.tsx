@@ -34,6 +34,7 @@ const SOURCE_LABEL: Record<AttentionEntry['source'], string> = {
   cultivation: 'proposal',
   governance: 'governance',
   job: 'job',
+  community_digest: 'digest',
 };
 
 /** Group items by brain (null → OS-level), preserving insertion order. */

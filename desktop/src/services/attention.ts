@@ -17,7 +17,7 @@ import api from './api';
 /** One normalized attention item (mirrors backend AttentionItem, snake→camel). */
 export interface AttentionEntry {
   id: string;
-  source: 'escalation' | 'paused_run' | 'cultivation' | 'governance' | 'job';
+  source: 'escalation' | 'paused_run' | 'cultivation' | 'governance' | 'job' | 'community_digest';
   tier: 'blocking' | 'review';
   /** Owning brain/project, or null for OS-level (governance/job infra). */
   brain: string | null;

@@ -47,6 +47,13 @@ logger = logging.getLogger(__name__)
 # the next scheduled run and are NOT the user's problem — only a broken streak is.
 _JOB_CIRCUIT_BREAKER_THRESHOLD = 3
 
+# R3 闭环 dispatch: a fresh community digest/report surfaces as REVIEW for this many
+# hours, then ages out (the window IS the state — no read-marker file, keeps collect()
+# read-only). 20h covers the daily-scan cadence gap without perpetual re-surfacing.
+_DIGEST_FRESH_HOURS = 20
+# Which JobResults belong to the community engine (by job_id substring).
+_COMMUNITY_JOB_MARKER = "github-community"
+
 # Tiers
 TIER_BLOCKING = "blocking"
 TIER_REVIEW = "review"
@@ -279,6 +286,83 @@ def _collect_jobs() -> list[AttentionItem]:
     return items
 
 
+def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
+    """A fresh, SUCCESSFUL community daily-digest / weekly-report → a REVIEW item
+    whose dispatch.message tells the agent to LEARN + s_persist from it (R3 闭环).
+
+    This closes the community loop: job → 🔔 → click → digest injected into chat →
+    agent runs s_learn-content + s_persist to sediment the useful bits into DDD /
+    Library. Distinct from _collect_jobs (which surfaces circuit-BROKEN jobs as
+    BLOCKING) — here we surface a SUCCEEDED digest as REVIEW.
+
+    Time-windowed + read-only (design constraint: collect() never writes disk): a
+    digest surfaces for _DIGEST_FRESH_HOURS then ages out on its own — no marker
+    file, no perpetual noise. Only the NEWEST digest per job_id surfaces (no
+    stacking). Fail-soft: any error → [] (never blank the whole channel)."""
+    items: list[AttentionItem] = []
+    try:
+        from datetime import datetime, timezone, timedelta
+        from core.daily_activity_writer import parse_frontmatter
+
+        jr_dir = workspace_root / "Knowledge" / "JobResults"
+        if not jr_dir.is_dir():
+            return []
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=_DIGEST_FRESH_HOURS)
+        # newest fresh, successful community digest per job_id
+        newest: dict[str, tuple[datetime, Path, dict]] = {}
+        for p in jr_dir.glob("*.md"):
+            try:
+                head = p.read_text()[:600]
+                fm, _ = parse_frontmatter(head)
+            except Exception:
+                continue
+            if not fm:
+                continue
+            job_id = str(fm.get("job_id", ""))
+            if _COMMUNITY_JOB_MARKER not in job_id:
+                continue
+            if str(fm.get("status", "")).lower() != "success":
+                continue
+            run_at_raw = str(fm.get("run_at", ""))
+            try:
+                run_at = datetime.fromisoformat(run_at_raw.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                continue
+            if run_at.tzinfo is None:
+                run_at = run_at.replace(tzinfo=timezone.utc)
+            if run_at < cutoff:
+                continue  # aged out of the freshness window
+            prev = newest.get(job_id)
+            if prev is None or run_at > prev[0]:
+                newest[job_id] = (run_at, p, fm)
+
+        for job_id, (run_at, path, fm) in newest.items():
+            job_name = str(fm.get("job_name", job_id))
+            items.append(AttentionItem(
+                id=f"community_digest:{path.name}",
+                source="community_digest",
+                tier=TIER_REVIEW,  # a fresh digest is review-worthy, never blocking
+                brain="GitHub_Community",
+                title=f"Community digest ready: {job_name}",
+                detail=f"A fresh community digest from {job_name} — dispatch to chat to learn + sediment.",
+                dispatch={
+                    "message": (
+                        f"Read the community digest at {path} — then LEARN from it: "
+                        f"for each engagement/reply/topic worth keeping, run s_persist to "
+                        f"sediment it into the GitHub_Community DDD / Knowledge Library "
+                        f"(what worked, new topic signal, a maintainer relationship). "
+                        f"Skip the routine; sediment only what changes future judgment."
+                    ),
+                    "context": {"kind": "community_digest", "job_id": job_id,
+                                "path": str(path)},
+                },
+            ))
+    except Exception as exc:
+        logger.warning("attention: community_digest source failed: %s", exc)
+    return items
+
+
 # ── Aggregator ───────────────────────────────────────────────────────────────
 
 
@@ -308,6 +392,7 @@ def collect(
     items += _collect_governance()
     items += _collect_paused_runs(pipeline_runs)
     items += _collect_jobs()
+    items += _collect_community_digests(workspace_root)
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

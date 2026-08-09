@@ -49,14 +49,21 @@ def patched_sources(monkeypatch):
     monkeypatch.setattr(aa, "_collect_governance", mk("gov", state["gov"]))
     monkeypatch.setattr(aa, "_collect_paused_runs", mk("paused", state["paused"]))
     monkeypatch.setattr(aa, "_collect_jobs", mk("jobs", state["jobs"]))
+    # R3 6th source: default-empty in the aggregation fixture so the existing
+    # count assertions (6 items) stay valid; exercised in isolation below.
+    monkeypatch.setattr(aa, "_collect_community_digests", mk("digests", []))
     return state
 
 
-def test_aggregates_all_five_sources(patched_sources):
+def test_aggregates_all_sources(patched_sources):
     res = collect(Path("/tmp"))
     sources = {it.source for it in res.items}
+    # 6 collectors wired; community_digest is patched-empty in this fixture (its
+    # own behavior is covered by the _collect_community_digests isolation tests),
+    # so it contributes no source here — the other 5 all appear.
     assert sources == {"escalation", "cultivation", "governance", "paused_run", "job"}
-    assert len(res.items) == 6
+    assert "community_digest" not in sources  # patched-empty in this fixture
+    assert len(res.items) == 6  # 2 esc + 1 cult + 1 gov + 1 paused + 1 job
 
 
 def test_counts_split_by_tier(patched_sources):
@@ -238,3 +245,93 @@ def test_sense_tool_registered_in_ui_server():
     )
     # sibling tools still present (didn't clobber the list)
     assert {"ui_action", "surface_run_outputs"} <= names
+
+
+# ── R3 闭环 dispatch: _collect_community_digests ──────────────────────────────
+# A fresh community daily-digest / weekly-report surfaces as a REVIEW item whose
+# dispatch.message tells the agent to LEARN + s_persist from it — closing the loop
+# (job → 🔔 → click → digest in chat → sediment). Time-windowed (read-only, no
+# marker file): a digest ages out of the window naturally, so no perpetual noise.
+
+import textwrap
+from datetime import datetime, timezone, timedelta
+from core.attention_authority import _collect_community_digests, TIER_REVIEW
+
+
+def _write_jobresult(dir_: Path, name: str, job_id: str, status: str, run_at: datetime):
+    dir_.mkdir(parents=True, exist_ok=True)
+    (dir_ / name).write_text(textwrap.dedent(f"""\
+        ---
+        job_id: {job_id}
+        job_name: {job_id}
+        run_at: {run_at.isoformat()}
+        status: {status}
+        ---
+
+        ## Digest body
+        Published 4 comments today.
+    """))
+
+
+def test_community_digest_surfaces_as_review(tmp_path):
+    """A recent SUCCESSFUL community digest → one REVIEW AttentionItem with a
+    learn+persist dispatch.message."""
+    jr = tmp_path / "Knowledge" / "JobResults"
+    fresh = datetime.now(timezone.utc) - timedelta(hours=2)
+    _write_jobresult(jr, "2026-08-09-github-community-morning.md",
+                     "github-community-morning", "success", fresh)
+    items = _collect_community_digests(tmp_path)
+    assert len(items) == 1
+    it = items[0]
+    assert it.source == "community_digest"
+    assert it.tier == TIER_REVIEW  # a digest is review-worthy, never blocking
+    msg = it.dispatch.get("message", "").lower()
+    assert "learn" in msg or "persist" in msg or "沉淀" in msg
+    assert "github-community-morning" in it.dispatch.get("context", {}).get("path", "") \
+        or "github-community-morning" in it.dispatch.get("message", "")
+
+
+def test_stale_digest_ages_out(tmp_path):
+    """A digest older than the window does NOT surface (no perpetual noise —
+    the window IS the state, no read-marker needed)."""
+    jr = tmp_path / "Knowledge" / "JobResults"
+    old = datetime.now(timezone.utc) - timedelta(hours=48)
+    _write_jobresult(jr, "2026-08-07-github-community-morning.md",
+                     "github-community-morning", "success", old)
+    assert _collect_community_digests(tmp_path) == []
+
+
+def test_failed_digest_not_surfaced(tmp_path):
+    """A FAILED community job is NOT a digest-to-review (that's _collect_jobs'
+    circuit-breaker concern) — only status:success digests surface here."""
+    jr = tmp_path / "Knowledge" / "JobResults"
+    fresh = datetime.now(timezone.utc) - timedelta(hours=1)
+    _write_jobresult(jr, "2026-08-09-github-community-evening.md",
+                     "github-community-evening", "failed", fresh)
+    assert _collect_community_digests(tmp_path) == []
+
+
+def test_non_community_jobresult_ignored(tmp_path):
+    """Only community digests/reports surface — an unrelated job result is ignored."""
+    jr = tmp_path / "Knowledge" / "JobResults"
+    fresh = datetime.now(timezone.utc) - timedelta(hours=1)
+    _write_jobresult(jr, "2026-08-09-memory-health.md", "memory-health", "success", fresh)
+    assert _collect_community_digests(tmp_path) == []
+
+
+def test_only_newest_digest_per_job(tmp_path):
+    """If a job produced 2 fresh digests, surface only the NEWEST (avoid stacking
+    the same job's review items)."""
+    jr = tmp_path / "Knowledge" / "JobResults"
+    now = datetime.now(timezone.utc)
+    _write_jobresult(jr, "2026-08-09-github-community-morning.md",
+                     "github-community-morning", "success", now - timedelta(hours=6))
+    _write_jobresult(jr, "2026-08-09b-github-community-morning.md",
+                     "github-community-morning", "success", now - timedelta(hours=1))
+    items = _collect_community_digests(tmp_path)
+    assert len(items) == 1  # newest only
+
+
+def test_missing_jobresults_dir_returns_empty(tmp_path):
+    """No JobResults dir → [] (fail-soft, never crash the channel)."""
+    assert _collect_community_digests(tmp_path) == []
