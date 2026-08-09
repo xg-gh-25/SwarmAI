@@ -1544,6 +1544,74 @@ def log_application(
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+# ── Knowledge Admission: canonical adversarial outcome + trust stamp ──────────
+# (Design: 2026-08-09-knowledge-admission-subsystem-design.md, step0 + Component B.)
+# The trust stamp is the SOLE authority that lets a proposal auto-write into ANY doc
+# (incl. SELF.md — no doc is carved out). So its derivation MUST be deterministic and
+# fail-closed: only an explicit canonical enum earns trust; prose / absent / unknown /
+# block NEVER yields 'passed'. A wrong 'passed' is a permanent evergreen auto-write
+# (DEC19: False > Stale > Imperfect).
+
+# Canonical machine-readable outcomes the adversarial/deliver stage MUST emit.
+_GATE2_PASS_OUTCOMES = frozenset({"pass", "pass_with_fixes"})
+_GATE2_BLOCK_OUTCOMES = frozenset({"block"})
+_GATE2_ALL_OUTCOMES = _GATE2_PASS_OUTCOMES | _GATE2_BLOCK_OUTCOMES
+
+
+def derive_gate2_outcome(run_state: dict) -> str:
+    """Derive the canonical adversarial outcome from a run's stages.
+
+    Returns one of ``{"pass", "pass_with_fixes", "block", "n/a"}``.
+
+    FAIL-CLOSED contract (AC10): read ONLY the canonical ``gate2_outcome`` enum on a
+    COMPLETED adversarial/deliver stage. A free-text ``gate2_verdict`` (prose) is NEVER
+    heuristically parsed — prose-only, absent stage, or an unrecognized enum value all
+    return ``"n/a"``. ``"n/a"`` is the safe default: it denies auto-apply to protected
+    knowledge, forcing REVIEW.
+
+    Two adversarial-hardened rules (a wrong ``pass`` is a permanent evergreen auto-write):
+      • **BLOCK WINS over document order** — a ``pass`` on one stage must NEVER shadow a
+        ``block`` on another. We scan ALL qualifying stages; if ANY says block → ``block``.
+      • **STATUS-GATED** — a ``gate2_outcome`` is honored ONLY on a stage whose status is
+        ``completed``/``done``. A stale ``pass`` on an in-progress/abandoned/failed stage is
+        ignored (it is preliminary, not authoritative).
+    """
+    if not isinstance(run_state, dict):
+        return "n/a"
+    saw_pass: "str | None" = None
+    for stage in run_state.get("stages", []):
+        if not isinstance(stage, dict):
+            continue
+        if stage.get("stage") not in ("adversarial", "deliver"):
+            continue
+        if stage.get("status") not in ("completed", "done"):
+            continue  # status-gated: preliminary/abandoned verdicts are not authoritative
+        outcome = stage.get("gate2_outcome")
+        if not (isinstance(outcome, str) and outcome in _GATE2_ALL_OUTCOMES):
+            continue  # prose / dict / unknown enum → NOT parsed here
+        if outcome in _GATE2_BLOCK_OUTCOMES:
+            return "block"  # block wins immediately — no pass may shadow it
+        # remember the strongest pass seen but keep scanning for a later block
+        if saw_pass is None or outcome == "pass":
+            saw_pass = outcome
+    return saw_pass if saw_pass is not None else "n/a"
+
+
+def trust_from_gate2_outcome(outcome: "str | None") -> str:
+    """Map a canonical gate2 outcome → the proposal trust stamp.
+
+    Returns one of ``{"passed", "failed", "n/a"}``. FAIL-CLOSED: only an explicit
+    ``pass``/``pass_with_fixes`` yields ``"passed"``; ``block`` → ``"failed"``; ANY other
+    value (``n/a``, ``None``, ``""``, an already-mapped ``"passed"``, or garbage) → ``"n/a"``.
+    This never fabricates trust from an unexpected input.
+    """
+    if outcome in _GATE2_PASS_OUTCOMES:
+        return "passed"
+    if outcome in _GATE2_BLOCK_OUTCOMES:
+        return "failed"
+    return "n/a"
+
+
 def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
     """Write a proposal as an atomic JSON file (escalation path).
 
