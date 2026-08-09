@@ -913,3 +913,80 @@ class TestRecallLibraryHits:
         out = recall_multi.recall_library_hits("q", "GLOBAL")
         assert hasattr(out, "buckets"), "must return raw BucketedRecall, not a list"
         assert out.buckets["library"][0]["content"] == "body", "raw fields preserved for caller projection"
+
+
+# ---------------------------------------------------------------------------
+# Shared ## parse across the two DDD legs (run_a1f4c2d8 perf)
+#
+# _ddd_section_scores_multi and _ddd_entry_hits both need the same ## split of the same
+# corpus and each used to parse it independently — ~1.6 MB of markdown tokenized TWICE
+# per recall_all (measured: 26.9 ms of _recall_ddd's 205 ms; interleaved A/B over the two
+# legs = 31 ms / 15% saved). A perf refactor whose whole claim is "identical output, less
+# work" is only safe with an IDENTITY test, so that is what these are.
+# ---------------------------------------------------------------------------
+class TestSharedSectionParse:
+    _DOCS = {
+        "TECH.md": (
+            "## Architecture\n"
+            "- [decision] use FTS5 for the session leg, never a vector scan\n"
+            "  <!-- ref:0 | decay:active -->\n"
+            "- [pitfall] a spinner pinned by a dropped result event\n"
+            "\n"
+            "## Runtime Traps\n"
+            "- [pitfall] blocking write_bytes on the event loop stalls every SSE stream\n"
+        ),
+        "PRODUCT.md": (
+            "## Strategic Positioning\n"
+            "marketing prose about spinners that should rank low\n"
+            "\n"
+            "## Design Philosophy\n"
+            "- [principle] make the wrong thing impossible, do not add a rule against it\n"
+        ),
+    }
+
+    QUERIES = [
+        "spinner dropped result event",
+        "blocking event loop write_bytes",
+        "principle wrong thing impossible",
+        "zzzz-token-in-no-document",   # no shared vocabulary → both legs empty
+        "",                            # empty query
+    ]
+
+    def test_shared_parse_matches_a_self_parse_for_both_legs(self):
+        from core import recall_multi
+        shared = recall_multi._parse_docs_sections(self._DOCS)
+        for q in self.QUERIES:
+            assert recall_multi._ddd_section_scores_multi(q, self._DOCS) == \
+                recall_multi._ddd_section_scores_multi(q, self._DOCS, sections_by_doc=shared), \
+                f"section leg diverged with a shared parse for q={q!r}"
+            assert recall_multi._ddd_entry_hits(q, self._DOCS, 3) == \
+                recall_multi._ddd_entry_hits(q, self._DOCS, 3, sections_by_doc=shared), \
+                f"entry leg diverged with a shared parse for q={q!r}"
+
+    def test_parse_docs_sections_covers_every_doc_and_section(self):
+        """Non-vacuity: if this returned {} the identity test above would pass while
+        both legs silently fell back to self-parsing — green, zero saving."""
+        from core import recall_multi
+        out = recall_multi._parse_docs_sections(self._DOCS)
+        assert set(out) == set(self._DOCS)
+        assert "Architecture" in out["TECH.md"]
+        assert "Runtime Traps" in out["TECH.md"]
+        assert "Design Philosophy" in out["PRODUCT.md"]
+
+    def test_a_partial_map_degrades_to_self_parse_not_keyerror(self):
+        """A caller that supplies only some docs must still get full, correct output —
+        `.get(doc)` not `[doc]`. Guards the refactor's fallback branch."""
+        from core import recall_multi
+        partial = {"TECH.md": recall_multi._parse_docs_sections(self._DOCS)["TECH.md"]}
+        q = self.QUERIES[0]
+        assert recall_multi._ddd_entry_hits(q, self._DOCS, 3, sections_by_doc=partial) == \
+            recall_multi._ddd_entry_hits(q, self._DOCS, 3)
+        assert recall_multi._ddd_section_scores_multi(q, self._DOCS, sections_by_doc=partial) == \
+            recall_multi._ddd_section_scores_multi(q, self._DOCS)
+
+    def test_empty_and_none_maps_are_both_treated_as_no_shared_parse(self):
+        from core import recall_multi
+        q = self.QUERIES[0]
+        base = recall_multi._ddd_entry_hits(q, self._DOCS, 3)
+        assert recall_multi._ddd_entry_hits(q, self._DOCS, 3, sections_by_doc={}) == base
+        assert recall_multi._ddd_entry_hits(q, self._DOCS, 3, sections_by_doc=None) == base

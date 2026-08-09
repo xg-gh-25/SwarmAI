@@ -78,8 +78,26 @@ class BucketedRecall:
 # ── DDD domain: generic ##-section keyword scorer ─────────────────────
 
 
+def _parse_docs_sections(docs_text: dict[str, str]) -> dict[str, dict[str, str]]:
+    """Parse every doc into ``{doc: {section: body}}`` ONCE (run_a1f4c2d8 perf).
+
+    ``_ddd_section_scores_multi`` and ``_ddd_entry_hits`` both need the same ## split
+    of the same corpus, and each used to parse it independently — so every _recall_ddd
+    call tokenized ~1.6 MB of markdown TWICE. Measured: one pass is 26.9 ms of
+    _recall_ddd's 205 ms, i.e. ~27 ms (13%) was pure duplicate work.
+
+    Both callers take an optional ``sections=`` and self-parse when it is None, so every
+    existing call site is byte-identical; only the shared path skips the second parse.
+    """
+    from core import memory_index
+    return {doc: memory_index.parse_memory_sections(text)
+            for doc, text in docs_text.items()}
+
+
 def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
-                    include_superseded: bool = False) -> list[dict]:
+                    include_superseded: bool = False,
+                    sections_by_doc: Optional[dict[str, dict[str, str]]] = None,
+                    ) -> list[dict]:
     """Entry-level BM25 over the ``- [type]``/``- ``-prefixed entries of MULTIPLE
     DDD docs, scored in ONE shared corpus so scores are COMPARABLE across docs.
 
@@ -116,7 +134,12 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
     entry_doc: dict[str, str] = {}         # key → owning doc
     entry_section: dict[str, str] = {}     # key → owning section name
     for doc, doc_text in docs_text.items():
-        sections = memory_index.parse_memory_sections(doc_text)
+        # Reuse the shared parse when the caller made one (run_a1f4c2d8); None → parse
+        # here, byte-identical to before. `.get(doc)` (not `[doc]`) so a caller that
+        # passes a partial map still degrades to a self-parse rather than KeyError-ing.
+        sections = (sections_by_doc or {}).get(doc)
+        if sections is None:
+            sections = memory_index.parse_memory_sections(doc_text)
         if not sections:
             continue
         for section, body in sections.items():
@@ -167,7 +190,9 @@ def _ddd_section_scores(query: str, doc_text: str) -> dict[str, float]:
 
 
 def _ddd_section_scores_multi(query: str,
-                              docs_text: dict[str, str]) -> list[tuple[str, str, float]]:
+                              docs_text: dict[str, str],
+                              sections_by_doc: Optional[dict[str, dict[str, str]]] = None,
+                              ) -> list[tuple[str, str, float]]:
     """Score the ``## sections`` of MULTIPLE DDD docs in ONE SHARED corpus, so the
     scores are COMPARABLE across docs (run_9092cb25).
 
@@ -187,7 +212,11 @@ def _ddd_section_scores_multi(query: str,
     corpus: dict[str, str] = {}
     key_map: dict[str, tuple[str, str]] = {}
     for doc, text in docs_text.items():
-        for section, body in memory_index.parse_memory_sections(text).items():
+        # Shared parse when supplied (run_a1f4c2d8); None → parse here, unchanged.
+        _secs = (sections_by_doc or {}).get(doc)
+        if _secs is None:
+            _secs = memory_index.parse_memory_sections(text)
+        for section, body in _secs.items():
             key = f"{doc}\x00{section}"  # NUL-join: unambiguous split (no path/section collision)
             corpus[key] = body
             key_map[key] = (doc, section)
@@ -364,6 +393,28 @@ def recall_all(
 
     Returns:
         BucketedRecall with one bucket + hit_layer per requested domain.
+
+    PERF — why the legs are SERIAL, and why that is not the thing to fix
+    (measured run_a1f4c2d8; read this before reaching for concurrency again).
+    run_16113a9b left "the ~920ms warm baseline is a serial 4-leg sum; leg concurrency
+    is a separate fix, rejected here for io-pool starvation risk" on the record. Both
+    halves of that were re-measured and neither survived:
+
+      * The number: recall_all is ~300-440ms warm, not 920ms. Per leg (median, warm):
+        ddd 203-255 / codeintel 111 / session 29 / context_files 13 / library 11 ms.
+      * The lever: a 5-worker ThreadPoolExecutor over the legs measured **1.14x**
+        (284ms -> 248ms, ~36ms). The legs are CPU-bound — BM25 tokenization over
+        ~1.6MB of markdown — so the GIL eats the parallelism. The naive
+        "concurrent == slowest leg (255ms)" model predicts ~165ms saved; reality is
+        36ms. Threads would buy little AND add the starvation risk that was the
+        original objection (recall_all already runs INSIDE an asyncio default-executor
+        thread, so per-leg threads would nest inside that pool).
+
+    The lever is therefore LESS CPU, not more threads: the two DDD legs were each
+    parsing the same corpus independently, and sharing that one parse cut 31ms (15%)
+    off them with no new machinery (see _parse_docs_sections). If more is needed, keep
+    going down that road — cheaper tokenization, a cached parse keyed by mtime, or a
+    smaller ddd corpus — not a thread pool.
     """
     result = BucketedRecall(query=query)
 
@@ -678,10 +729,16 @@ def _recall_ddd(query: str, project: Optional[str],
     # canonical docs so scores are comparable — a weakly-matching marketing section
     # can no longer peg at 1.0 per-doc and crowd out a genuinely-relevant section /
     # the domain layer. (Was: per-doc _ddd_section_scores → every doc's top = 1.0.)
-    scored.extend(_ddd_section_scores_multi(query, _docs_text))
+    # PERF (run_a1f4c2d8): parse the ## sections ONCE and feed BOTH legs. They each used
+    # to parse the same ~1.6 MB corpus independently — 26.9 ms of duplicate tokenization
+    # per recall (13% of this leg). Output is identical; only the second parse is gone.
+    _sections_by_doc = _parse_docs_sections(_docs_text)
+    scored.extend(_ddd_section_scores_multi(query, _docs_text,
+                                            sections_by_doc=_sections_by_doc))
     # Entry-level leg: score ALL docs' entries in one shared corpus (comparable
     # scores across docs) so a matching cultivated lesson surfaces from any doc.
-    entry_hits: list[dict] = _ddd_entry_hits(query, _docs_text, max_sections)
+    entry_hits: list[dict] = _ddd_entry_hits(query, _docs_text, max_sections,
+                                             sections_by_doc=_sections_by_doc)
 
     # ② KNOWLEDGE deep-reference leg: s_ddd-persist routes "reference material →
     # Projects/<X>/Knowledge/" — without this scan that write target is unrecallable
