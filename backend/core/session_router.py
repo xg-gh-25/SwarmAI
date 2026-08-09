@@ -2447,6 +2447,18 @@ class SessionRouter:
                 if client_id and event.get("type") == "result":
                     event["client_id"] = client_id
 
+                # {_abort} is an INTERNAL caller sentinel (send()/_ensure_spawned
+                # emit it to signal "stop consuming" after a clean bail — e.g. the
+                # dead→streaming state-flip guard yields a SESSION_BUSY error event
+                # THEN {_abort}). Every other consumer (prewarm, retry) intercepts
+                # it; this loop must too, or it forwards a typeless
+                # `data: {"_abort": true}` frame down the SSE stream. The
+                # user-facing error was already yielded on the line(s) before the
+                # sentinel, so terminating here delivers the error and drops only
+                # the sentinel. (Gate-2 correctness finding, run_c9fa2382.)
+                if event.get("_abort"):
+                    return
+
                 yield event
         except Exception as send_err:
             # SessionBusyError: session is actively streaming, reject new send.

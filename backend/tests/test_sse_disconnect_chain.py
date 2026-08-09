@@ -303,6 +303,55 @@ class TestSessionBusyErrorEvent:
         assert busy.get("retryPayload") is None, \
             "with server-side pending, retryPayload would cause a double-send"
 
+    @pytest.mark.asyncio
+    async def test_abort_sentinel_not_forwarded_to_sse(self):
+        """run_conversation's send-consumer loop must INTERCEPT the internal
+        {_abort} sentinel (send()'s dead→streaming state-flip guard yields a
+        SESSION_BUSY error event THEN {_abort}). The error must reach the client
+        but the typeless {_abort} frame must NOT be forwarded to the SSE stream.
+        (Gate-2 correctness finding, run_c9fa2382.)"""
+        from core.session_router import SessionRouter
+
+        mock_pb = MagicMock()
+        mock_pb.build_options = AsyncMock(return_value=MagicMock(
+            model="test", system_prompt="test",
+        ))
+        router = SessionRouter(prompt_builder=mock_pb, config=MagicMock())
+        unit = router.get_or_create_unit("test-abort-sess", "default")
+        unit._transition(SessionState.IDLE)
+
+        # Mirror send()'s clean-abort emission: a user-facing error, then the
+        # internal {_abort} sentinel.
+        async def _send_error_then_abort(**kwargs):
+            yield {"type": "error", "code": "SESSION_BUSY",
+                   "message": "refreshed while starting", "error": "refreshed while starting"}
+            yield {"_abort": True}
+
+        with patch.object(unit, "send", _send_error_then_abort), \
+             patch("core.agent_defaults.build_agent_config", new_callable=AsyncMock, return_value={"model": "test"}), \
+             patch("database.db") as mock_db, \
+             patch("core.session_manager.session_manager") as mock_sm:
+            mock_sm.store_session = AsyncMock()
+            mock_db.messages = MagicMock()
+            mock_db.messages.put = AsyncMock()
+
+            events = []
+            async for event in router.run_conversation(
+                session_id="test-abort-sess",
+                agent_id="default",
+                user_message="hi",
+            ):
+                events.append(event)
+
+        # The SESSION_BUSY error reached the client.
+        assert any(
+            e.get("type") == "error" and e.get("code") == "SESSION_BUSY"
+            for e in events
+        ), f"SESSION_BUSY error must be forwarded, got {events}"
+        # The internal {_abort} sentinel must NOT leak into the SSE stream.
+        assert not any(e.get("_abort") for e in events), \
+            f"the internal _abort sentinel must be intercepted, not streamed; got {events}"
+
 
 # ---------------------------------------------------------------------------
 # SessionBusyError exists in exceptions module

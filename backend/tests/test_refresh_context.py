@@ -219,3 +219,145 @@ class TestRefreshEndpointHTTPSemantics:
 
             result = await refresh_session("sess-1")
             assert result["status"] == "refreshed"
+
+
+# ---------------------------------------------------------------------------
+# dead→streaming race guard (run_c9fa2382) — send() must NOT crash the chat
+# stream when a concurrent refresh/release/kill flips the session out of IDLE
+# during its streaming-slot / _client_io wait.
+# ---------------------------------------------------------------------------
+
+class TestSendStateFlipRaceGuard:
+    """send() re-checks state after its blocking waits and before
+    _transition(STREAMING); a concurrent flip to DEAD/COLD → clean SESSION_BUSY
+    abort, never a raw 'Invalid state transition …→streaming' RuntimeError."""
+
+    @pytest.mark.asyncio
+    async def test_flip_to_dead_during_slot_wait_aborts_cleanly(self, monkeypatch):
+        """The exact observed race: unit is IDLE and reaches send()'s waits, a
+        concurrent refresh drives it to DEAD during _await_streaming_slot, and
+        send() must abort with SESSION_BUSY + _abort — NOT raise RuntimeError."""
+        unit = SessionUnit(session_id="sess-race", agent_id="a")
+        unit.state = SessionState.IDLE
+        unit._client = object()  # warm, non-None → no spawn needed
+        unit._last_turn_clean = True  # skip the poison-guard recycle
+
+        # Simulate a concurrent refresh_context()/kill() landing DURING the
+        # streaming-slot wait: flip IDLE → DEAD (the real refresh drives
+        # IDLE→DEAD→COLD; we assert the guard catches ANY non-IDLE state).
+        async def _flip_to_dead_during_wait():
+            unit.state = SessionState.DEAD
+
+        monkeypatch.setattr(unit, "_await_streaming_slot", _flip_to_dead_during_wait)
+
+        events = []
+        # MUST NOT raise RuntimeError("Invalid state transition dead→streaming").
+        async for ev in unit.send("hi", MagicMock()):
+            events.append(ev)
+
+        # send() aborted cleanly: a SESSION_BUSY error event then {_abort}.
+        assert any(
+            e.get("type") == "error" and e.get("code") == "SESSION_BUSY"
+            for e in events
+        ), f"expected a SESSION_BUSY error event, got {events}"
+        assert events[-1].get("_abort") is True, f"expected trailing _abort, got {events}"
+        # And it never transitioned to STREAMING.
+        assert unit.state != SessionState.STREAMING
+
+    @pytest.mark.asyncio
+    async def test_no_flip_reaches_streaming(self, monkeypatch):
+        """Regression guard: with NO concurrent flip, send() still transitions
+        IDLE → STREAMING (the guard must not false-positive on the happy path)."""
+        unit = SessionUnit(session_id="sess-happy", agent_id="a")
+        unit.state = SessionState.IDLE
+        unit._client = object()
+        unit._last_turn_clean = True
+
+        async def _noop_slot():
+            return
+
+        monkeypatch.setattr(unit, "_await_streaming_slot", _noop_slot)
+
+        # Stop send() right AFTER the STREAMING transition (before real streaming
+        # body) so we assert the transition happened without driving the SDK.
+        reached = {"streaming": False}
+        real_transition = unit._transition
+
+        def _spy_transition(new_state):
+            real_transition(new_state)
+            if new_state == SessionState.STREAMING:
+                reached["streaming"] = True
+                raise RuntimeError("stop-after-streaming-transition")
+
+        monkeypatch.setattr(unit, "_transition", _spy_transition)
+
+        with pytest.raises(RuntimeError, match="stop-after-streaming-transition"):
+            async for _ in unit.send("hi", MagicMock()):
+                pass
+        assert reached["streaming"] is True, "happy path must reach STREAMING transition"
+
+
+class TestCompactKilledDuringDrainDenoise:
+    """compact() drain failure caused by an intentional concurrent kill (state
+    DEAD/COLD at except-time) logs at INFO, not ERROR; a genuine failure
+    (state still IDLE) stays ERROR."""
+
+    def _make_idle_unit_with_failing_client(self, *, flip_to_on_drain=None):
+        """Build an IDLE unit whose subprocess drain raises exit -9. If
+        flip_to_on_drain is a SessionState, the unit's state flips to it AT the
+        moment the drain fails — simulating a concurrent refresh/kill killing
+        the subprocess mid-drain (state is IDLE at compact-entry, as it must be
+        to pass compact()'s IDLE guard, then flips during the drain)."""
+        unit = SessionUnit(session_id="sess-compact", agent_id="a")
+        unit.state = SessionState.IDLE
+        client = MagicMock()
+        client.query = AsyncMock()
+
+        async def _boom_receive(*a, **k):
+            if flip_to_on_drain is not None:
+                unit.state = flip_to_on_drain
+            raise RuntimeError("Command failed with exit code -9 (exit code: -9)")
+            yield  # pragma: no cover — async generator
+
+        client.receive_response = _boom_receive
+        unit._client = client
+        unit._sdk_session_id = "sdk-x"
+        return unit
+
+    @pytest.mark.asyncio
+    async def test_killed_during_drain_logs_info_not_error(self, caplog):
+        """Concurrent kill flips state to DEAD DURING the drain → NOT an ERROR."""
+        import logging
+        # IDLE at compact-entry (passes the guard), flips to DEAD when the
+        # drain fails — the real concurrent-kill-mid-drain sequence.
+        unit = self._make_idle_unit_with_failing_client(flip_to_on_drain=SessionState.DEAD)
+
+        with caplog.at_level(logging.INFO, logger="core.session_unit"):
+            result = await unit.compact()
+
+        assert result["success"] is False
+        compact_errors = [
+            r for r in caplog.records
+            if r.levelno >= logging.ERROR and "ompact" in r.getMessage()
+        ]
+        assert not compact_errors, f"killed-during-drain must not log ERROR, got {compact_errors}"
+        assert any(
+            r.levelno == logging.INFO and "killed during drain" in r.getMessage()
+            for r in caplog.records
+        ), "expected an INFO 'killed during drain' line"
+
+    @pytest.mark.asyncio
+    async def test_genuine_failure_still_logs_error(self, caplog):
+        """A genuine drain failure (state still IDLE, subprocess alive) → ERROR."""
+        import logging
+        unit = self._make_idle_unit_with_failing_client()
+        # State stays IDLE (no concurrent kill) → genuine failure.
+
+        with caplog.at_level(logging.INFO, logger="core.session_unit"):
+            result = await unit.compact()
+
+        assert result["success"] is False
+        assert any(
+            r.levelno == logging.ERROR and "Compact failed" in r.getMessage()
+            for r in caplog.records
+        ), "a genuine compact failure (state IDLE) must still log ERROR"

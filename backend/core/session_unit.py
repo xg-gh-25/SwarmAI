@@ -1988,6 +1988,46 @@ class SessionUnit:
         async with self._client_io:
             pass
 
+        # ── Post-wait state re-check (dead→streaming race guard) ─────────
+        # send() holds NO self._lock across _await_streaming_slot() and the
+        # _client_io barrier above — by design (the long stream must not hold
+        # the lock; see the barrier comment). So a concurrent refresh_context()
+        # / kill() / release (all take self._lock and drive the unit
+        # →DEAD→COLD) can flip state OUT of a streamable state DURING those two
+        # awaits. If we then blindly _transition(STREAMING), it raises
+        # RuntimeError (DEAD/COLD→STREAMING is not in _VALID_TRANSITIONS) and
+        # the exception escapes into the chat stream as a raw
+        # "Invalid state transition …→streaming" (observed 2026-08-09,
+        # sessions e31ffa19 / 52034139). This is a check-then-act TOCTOU that
+        # the send-entry DEAD-recovery at ~:1863 cannot cover — the flip
+        # happens AFTER that check, during the waits below it.
+        #
+        # The re-check and the _transition are in ONE synchronous block with
+        # NO await between them — under asyncio's cooperative scheduling that
+        # makes them atomic (no concurrent coroutine can interleave), so this
+        # closes the window rather than merely narrowing it. We do NOT attempt
+        # an inline re-spawn here (Gate-1 Axis-2: re-running _ensure_spawned
+        # after the waits risks a double-spawn / _spawn_lock contention). A
+        # refresh leaves the unit cleanly COLD with resume identity intact, so
+        # a clean abort here makes the user's resend a clean cold-resume — the
+        # correct recovery, not a half-spawned limbo. Mirror the existing
+        # _ensure_spawned bail shape: yield a user-facing error + {_abort}.
+        if self.state != SessionState.IDLE:
+            logger.warning(
+                "session_unit.send_aborted_state_flip session_id=%s state=%s "
+                "— a concurrent refresh/release/kill flipped the session out of "
+                "IDLE during the streaming-slot/io wait; aborting cleanly before "
+                "the STREAMING transition (resend will cold-resume)",
+                self.session_id, self.state.value if self.state else "None",
+            )
+            yield _build_error_event(
+                code="SESSION_BUSY",
+                message="This session was refreshed or released while starting — send again to continue.",
+                suggested_action="Send your message again; it will resume with a fresh context.",
+            )
+            yield {"_abort": True}
+            return
+
         # IDLE → STREAMING
         self._transition(SessionState.STREAMING)
         self._model_name = getattr(options, "model", None)
@@ -3848,10 +3888,29 @@ class SessionUnit:
             self._compaction_guard.activate()
             return {"success": True, "message": "Session compacted"}
         except Exception as exc:
-            logger.error(
-                "Compact failed for session %s: %s",
-                self.session_id, exc,
-            )
+            # Denoise (dead→streaming race family): compact() drains the SAME
+            # subprocess but does NOT hold self._lock, so a concurrent
+            # refresh_context()/kill()/release (all take the lock and drive the
+            # unit →DEAD→COLD) can kill the subprocess mid-drain. That surfaces
+            # here as an "exit code -9" — but WE killed it on purpose, it is not
+            # a compact failure. Distinguish by state: compact() itself never
+            # transitions (IDLE→IDLE), so a state of DEAD/COLD at except-time
+            # means a concurrent kill fired → log at INFO. A genuine drain
+            # failure leaves the unit IDLE (subprocess alive) → keep ERROR loud.
+            if self.state in (SessionState.DEAD, SessionState.COLD):
+                logger.info(
+                    "session_unit.compact_aborted session_id=%s state=%s "
+                    "— subprocess killed during drain by a concurrent "
+                    "refresh/release/kill (not a compact failure): %s",
+                    self.session_id,
+                    self.state.value if self.state else "None",
+                    exc,
+                )
+            else:
+                logger.error(
+                    "Compact failed for session %s: %s",
+                    self.session_id, exc,
+                )
             return {"success": False, "message": str(exc)}
 
     async def health_check(self) -> bool:
