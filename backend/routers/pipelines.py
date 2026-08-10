@@ -323,6 +323,14 @@ async def list_pipelines(
     # Pair each raw run dict with its response: is_terminal_run needs the RAW
     # dict (stage array), which _to_response does not carry forward. Filtering on
     # the response alone (status only) would leave terminal zombies in `active`.
+    #
+    # NOTE on garbage: unlike /analytics, this dashboard list DELIBERATELY does NOT
+    # drop garbage runs. It feeds the Radar sidebar, where an abandoned/orphaned run
+    # is a real needs-you SIGNAL (an unrecovered crash the user may want to see), not
+    # a stat to be excluded (test_abandoned_surfaced_in_http_dashboard pins this). The
+    # /analytics filter exists to keep garbage out of completion-rate/token ROLLUPS —
+    # a different consumer with a different contract. Kept explicit so the divergence
+    # reads as intentional, not as the same "sibling missed the filter" gap.
     paired = [(raw, _to_response(raw)) for raw in all_runs]
 
     if active:
