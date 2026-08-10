@@ -29,6 +29,45 @@ _ECHO_LIKE = re.compile(r"\b(echo|printf|cat\s+<<|yes)\b")
 _GREP_LIKE = re.compile(r"\b(grep|rg|ag)\b")
 _RECURSIVE = re.compile(r"\b(grep|rg|ag)\b[^|]*\s-[a-zA-Z]*r")
 _TRUNCATED = re.compile(r"\|\s*(head|tail)\b")
+# Command chaining / substitution / redirection: none of these appear in a legitimate
+# single-grep enumeration. They let an author replace the real enumeration with a
+# controlled-output command (`; echo …`), truncate via a subshell, or (shell=True)
+# inject side effects. Rejected outright (Gate-3 M4). Detected on the QUOTE-MASKED
+# string so a `;`/`>` inside a grep pattern literal is not mistaken for shell syntax.
+_CHAIN = re.compile(r";|&&|\|\||\$\(|\$\{|`|>|<(?!<)")
+# File-scoping flags curate the enumeration to a file subset — a sibling in an excluded
+# file becomes invisible (Gate-3 H3). Reject; enumerate the whole tree.
+_SCOPE_FLAG = re.compile(r"--(?:include|exclude)(?:-dir)?\b")
+# A SHELL pipe (`|`) — NOT grep-BRE alternation (`\|`, backslash-escaped) and NOT a `|`
+# inside a quoted grep pattern (masked before splitting). Splits the command into stages.
+_SHELL_PIPE = re.compile(r"(?<!\\)\|")
+# The ONE sanctioned pipe stage: `| grep -v 'def '` drops the sink's own DEFINITION lines
+# (structural), leaving only its CALLERS. Any other filter (a positive grep, `grep -v
+# <a-member-name>`, sed/awk/head/tail/cut) CURATES or TRUNCATES the member set and
+# re-imports the author's blind spot (Gate-3 H1/M3). Allowlist, not blocklist (C044).
+_ALLOWED_PIPE_FILTER = re.compile(r"^grep\s+-v\s+['\"]?def\b")
+# Single/double-quoted spans — masked to spaces so shell metachar detection ignores
+# characters that live inside a grep PATTERN literal (e.g. the `\|` alternation).
+_QUOTED_SPAN = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def _mask_quoted(s: str) -> str:
+    """Blank out quoted spans (preserving length/offsets) so shell-structure regexes
+    (`_CHAIN`, `_SHELL_PIPE`) see only UNquoted metacharacters."""
+    return _QUOTED_SPAN.sub(lambda m: " " * len(m.group()), s)
+
+
+def _split_shell_pipes(cmd: str) -> "list[str]":
+    """Split `cmd` on SHELL pipes only, ignoring `|` inside quotes and grep-BRE `\\|`.
+    Returns the stage strings from the ORIGINAL (unmasked) command."""
+    masked = _mask_quoted(cmd)
+    idxs = [m.start() for m in _SHELL_PIPE.finditer(masked)]
+    segments, prev = [], 0
+    for i in idxs:
+        segments.append(cmd[prev:i])
+        prev = i + 1
+    segments.append(cmd[prev:])
+    return segments
 # The grep's directory target. It MUST be a tree ROOT (`.`, `backend/`, or a top-level
 # package dir), NOT a deep subdir (Gate-2 #4: `grep -r backend/hooks/` is recursive but
 # omits siblings in backend/core/ → re-imports the blind spot). A "deep" target has ≥2
@@ -49,21 +88,41 @@ def validate_enumeration_cmd(cmd: str) -> "tuple[bool, str]":
     c = (cmd or "").strip()
     if not c:
         return (False, "empty enumeration_cmd")
+    masked = _mask_quoted(c)
+    # Command chaining / substitution / redirection (Gate-3 M4): reject on the
+    # quote-masked string so a `;`/`>` inside a grep pattern literal is not flagged.
+    if _CHAIN.search(masked):
+        return (False, "command chaining/substitution/redirection (; && || $( ) ` > <) is not "
+                        "allowed — the enumeration must be a single grep, not a command that can "
+                        "produce controlled output or side effects")
     if _ECHO_LIKE.search(c):
         return (False, "echo/printf-style literal member list — re-imports the author's "
                         "blind spot; grep a physical sink across the tree instead")
     if not _GREP_LIKE.search(c):
         return (False, "not a grep/rg/ag over source — must enumerate a physical sink")
+    # File-scoping flags curate the enumeration to a file subset (Gate-3 H3).
+    if _SCOPE_FLAG.search(c):
+        return (False, "--include/--exclude scopes the grep to a file subset — a sibling in an "
+                        "excluded file is invisible; enumerate the whole tree root")
     if _TRUNCATED.search(c):
         return (False, "| head/tail truncates the member set — silently drops class members")
-    if not _RECURSIVE.search(c):
+    # Pipe discipline (Gate-3 H1/M3): the ONLY allowed pipe stage is `| grep -v 'def '`
+    # (drops the sink's own definition lines, structural). Any other filter — a positive
+    # grep, `grep -v <member-name>`, sed/awk/cut — curates/truncates the member set.
+    stages = _split_shell_pipes(c)
+    for extra in stages[1:]:
+        if not _ALLOWED_PIPE_FILTER.match(extra.strip()):
+            return (False, f"pipe stage '{extra.strip()[:40]}' curates or transforms the member "
+                            f"set — the only sanctioned pipe is `| grep -v 'def '` (drop the "
+                            f"sink's own definition lines); anything else re-imports the blind spot")
+    if not _RECURSIVE.search(stages[0]):
         return (False, "non-recursive grep — a sibling in another file is invisible; "
                         "use `grep -r` across the tree root")
     # scope check: a RELATIVE grep target must be a tree ROOT, not a deep subdir (Gate-2 #4:
     # `grep -r backend/hooks/` omits backend/core/). Only applies to relative targets — an
     # absolute path is scored by its trailing depth-from-a-recognizable-root, which we can't
     # know, so we only guard the real-pipeline shape (repo-relative `pkg/sub/`).
-    m = _GREP_DIR_TARGET.search(c)
+    m = _GREP_DIR_TARGET.search(stages[0])
     if m:
         target = m.group(1).strip()
         if not target.startswith("/"):                 # relative only
@@ -98,14 +157,18 @@ def _run_enumeration(cmd: str, cwd: Path) -> list[str]:
 
 
 def _valid_locator(locator: str) -> bool:
-    """A locator MUST be `<relative/path>:<line>` — a real path (≥1 slash OR a .py file)
-    AND a line number. Gate-2 #2: a bare basename with no line is a wildcard that absorbs
-    every sink call in the file; reject it at validation so one member can't hide N siblings."""
+    """A locator MUST be `<relative/path>:<line>` — a DIRECTORY-QUALIFIED .py path (≥1
+    slash) AND a line number. Gate-2 #2: a bare basename with no line is a wildcard that
+    absorbs every sink call in the file. Gate-3 M2: a bare basename WITH a line (`x.py:10`)
+    still false-matches a different-directory `a/b/x.py:10` in `_locator_matches_line`'s
+    suffix match — so require ≥1 slash, pinning the member to one real file on disk."""
     loc = (locator or "").strip()
     if not loc:
         return False
     parts = loc.split(":")
-    return len(parts) >= 2 and parts[1].strip().isdigit() and parts[0].strip().endswith(".py")
+    path = parts[0].strip()
+    return (len(parts) >= 2 and parts[1].strip().isdigit()
+            and path.endswith(".py") and "/" in path)
 
 
 def _locator_matches_line(locator: str, live_line: str) -> bool:
@@ -156,6 +219,19 @@ def check_migration_class(migration_class: "dict | None", cwd: Path) -> Complete
         table = f"CLASS: {desc}\n  ❌ BAD_ENUMERATION — {reason}"
         return CompletenessResult(passed=False, blocked=blocked, coverage_table=table)
 
+    # Gate-3 C1 (CRITICAL fail-open fix): a class that declares an enumeration_cmd but an
+    # EMPTY members[] is not a real declaration — with zero declared rows the reconcile
+    # loop can never produce a MISSED, so it silently PASSes exactly the run_0d60e04e miss.
+    # (EVALUATE's validator requires non-empty members, but check_migration_class is called
+    # DIRECTLY by goal_cycle step 2.5, so it must self-guard — defence in depth.) BLOCK.
+    if not members:
+        blocked.append({"kind": "EMPTY_MEMBERS", "member": "(migration_class)",
+                        "detail": "enumeration_cmd is declared but members[] is empty — with zero "
+                                  "declared members the completeness check is vacuous (cannot detect "
+                                  "a MISSED sibling). Declare every live sink caller as a member."})
+        table = f"CLASS: {desc}\n  ❌ EMPTY_MEMBERS — a declared class must list its members"
+        return CompletenessResult(passed=False, blocked=blocked, coverage_table=table)
+
     # Every declared member MUST carry a valid `path.py:line` locator (Gate-2 #2): a
     # bare-basename / no-line locator is a wildcard that lets one member absorb siblings.
     for m in members:
@@ -169,10 +245,11 @@ def check_migration_class(migration_class: "dict | None", cwd: Path) -> Complete
 
     live = _run_enumeration(cmd, cwd)
 
-    # Gate-2 #3 (fail-open fix): a non-empty declared class whose enumeration returns ZERO
-    # live members means the enumeration_cmd is broken (typo'd sink, wrong cwd) — the exact
-    # blind spot the gate exists to catch. BLOCK, never silently PASS on an empty result.
-    if members and not live:
+    # Gate-2 #3 + Gate-3 C2 (fail-open fix): an enumeration that returns ZERO live members
+    # means the enumeration_cmd is broken (typo'd sink, wrong cwd) — the exact blind spot the
+    # gate exists to catch. `members` is guaranteed non-empty here (EMPTY_MEMBERS above), so a
+    # zero-live result can never be legitimate. BLOCK, never silently PASS on an empty result.
+    if not live:
         blocked.append({"kind": "EMPTY_ENUMERATION", "member": "(enumeration_cmd)",
                         "detail": "enumeration returned 0 live members but the class declares "
                                   f"{len(members)} — the grep found nothing (typo'd sink / wrong cwd). "

@@ -56,6 +56,36 @@ class TestEnumerationValidation:
             "grep -n '_run_locked_write(' backend/hooks/distill.py")
         assert ok is False and ("subset" in reason.lower() or "tree" in reason.lower())
 
+    # ── Gate-3 hardening: shell-abuse / curation vectors on the enumeration_cmd ──
+    def test_reject_command_chaining(self):
+        for c in ("grep -rn 's(' backend/ ; echo faked",
+                  "grep -rn 's(' $(cat dirs)",
+                  "grep -rn 's(' backend/ && echo x",
+                  "grep -rn 's(' backend/ > out.txt"):
+            ok, reason = validate_enumeration_cmd(c)
+            assert ok is False, f"must reject chaining/redirection: {c}"
+
+    def test_chain_char_inside_grep_pattern_is_allowed(self):
+        # a `\|` BRE alternation inside the quoted pattern is NOT shell chaining
+        ok, _ = validate_enumeration_cmd("grep -rn '_a(\\|_b(' backend/")
+        assert ok is True
+
+    def test_reject_include_exclude_scope_flag(self):
+        ok, reason = validate_enumeration_cmd("grep -rn --include=*.py 's(' backend/")
+        assert ok is False and ("include" in reason.lower() or "subset" in reason.lower())
+
+    def test_reject_non_def_pipe_filter(self):
+        # only `| grep -v 'def '` is sanctioned; any other pipe curates/transforms
+        for c in ("grep -rn 's(' backend/ | sed 's/x/y/'",
+                  "grep -rn 's(' backend/ | grep memory",
+                  "grep -rn 's(' backend/ | grep -v somemember"):
+            ok, reason = validate_enumeration_cmd(c)
+            assert ok is False, f"must reject curating pipe: {c}"
+
+    def test_accept_sanctioned_grep_v_def_pipe(self):
+        ok, _ = validate_enumeration_cmd("grep -rn 's(' backend/ | grep -v 'def '")
+        assert ok is True
+
 
 # ── AC3/AC8: reconcile live members; an undeclared live member BLOCKS ─────────
 class TestReconciliation:
@@ -69,9 +99,9 @@ class TestReconciliation:
     def test_all_declared_migrated_passes(self, tmp_path):
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "decisions", "disposition": "migrated", "locator": "distill.py:4", "evidence": "_admit_memory_lesson"},
-            {"id": "writeback", "disposition": "migrated", "locator": "cult.py:2", "evidence": "admission_band"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
+            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_memory_lesson"},
+            {"id": "writeback", "disposition": "migrated", "locator": "core/cult.py:2", "evidence": "admission_band"},
         ])
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.passed is True
@@ -82,8 +112,8 @@ class TestReconciliation:
         members[] row = MISSED → BLOCK."""
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "writeback", "disposition": "migrated", "locator": "cult.py:2", "evidence": "admission_band"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
+            {"id": "writeback", "disposition": "migrated", "locator": "core/cult.py:2", "evidence": "admission_band"},
             # 'decisions' sink caller (distill.py:4) deliberately NOT declared
         ])
         res = check_migration_class(mc, cwd=tmp_path)
@@ -93,9 +123,9 @@ class TestReconciliation:
     def test_carveout_with_reason_passes(self, tmp_path):
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "decisions", "disposition": "migrated", "locator": "distill.py:4", "evidence": "_admit_memory_lesson"},
-            {"id": "writeback", "disposition": "carved-out", "locator": "cult.py:2", "evidence": "value-refresh not ingestion"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
+            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_memory_lesson"},
+            {"id": "writeback", "disposition": "carved-out", "locator": "core/cult.py:2", "evidence": "value-refresh not ingestion"},
         ])
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.passed is True
@@ -104,9 +134,9 @@ class TestReconciliation:
         """AC5 — carve-out must carry a one-line reason, else UNJUSTIFIED → block."""
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "decisions", "disposition": "migrated", "locator": "distill.py:4", "evidence": "_admit_memory_lesson"},
-            {"id": "writeback", "disposition": "carved-out", "locator": "cult.py:2", "evidence": ""},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
+            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_memory_lesson"},
+            {"id": "writeback", "disposition": "carved-out", "locator": "core/cult.py:2", "evidence": ""},
         ])
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.passed is False
@@ -120,7 +150,7 @@ class TestCoverageTable:
         mc = {
             "description": "writes",
             "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_to_ddd(' {tmp_path} | grep -v 'def '",
-            "members": [{"id": "lessons", "disposition": "migrated", "locator": "distill.py:2", "evidence": "_admit_memory_lesson"}],
+            "members": [{"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"}],
         }
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.coverage_table  # non-empty string
@@ -151,8 +181,9 @@ class TestGate2Regressions:
     def test_2_bare_locator_rejected(self):
         # #2: a no-line / no-path locator is a wildcard → rejected at validation
         from check_migration_class import _valid_locator
-        assert _valid_locator("distill.py") is False       # no line
-        assert _valid_locator("distill.py:4") is True
+        assert _valid_locator("distill.py") is False          # no line
+        assert _valid_locator("distill.py:4") is False        # Gate-3 M2: bare basename (no dir) → rejected
+        assert _valid_locator("hooks/distill.py:4") is True   # directory-qualified → valid
         assert _valid_locator("") is False
 
     def test_2_bad_locator_member_blocks(self, tmp_path):
@@ -167,7 +198,7 @@ class TestGate2Regressions:
         # #3: a non-empty class whose grep matches nothing must BLOCK, not fail-open
         mc = {"description": "writes",
               "enumeration_cmd": f"grep -rn '_TYPO_NEVER_MATCHES(' {tmp_path}",
-              "members": [{"id": "m", "disposition": "migrated", "locator": "f.py:1", "evidence": "s"}]}
+              "members": [{"id": "m", "disposition": "migrated", "locator": "hooks/f.py:1", "evidence": "s"}]}
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.passed is False
         assert any(b["kind"] == "EMPTY_ENUMERATION" for b in res.blocked)
