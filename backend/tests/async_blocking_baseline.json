@@ -1,0 +1,9 @@
+{
+  "core/backup_manager.py": 7,
+  "core/mcp_migration.py": 3,
+  "core/plugin_manager.py": 21,
+  "core/projection_layer.py": 6,
+  "core/skill_manager.py": 3,
+  "core/swarm_workspace_manager.py": 3,
+  "core/voice_transcribe.py": 3
+}

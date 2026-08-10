@@ -28,17 +28,27 @@ DISCRIMINATOR (Gate-1 verified, run_6ea3cb12):
   bare-attribute form ``to_thread(path.read_text)`` is an ``ast.Attribute`` (no call,
   ast never sees a Call node) and needs no guard.
 
-SCOPE: ``backend/routers/`` + ``backend/channels/`` (see SCOPE_DIRS). ``channels/``
-was folded in by run_a1f4c2d8, which also FIXED the site this docstring previously
-named as out-of-scope (``channels/gateway.py`` ``_stage_file_to_workspace`` —
-``target.write_bytes`` of a whole Slack attachment on the loop). ``core/`` remains
-out of scope with its size stated on the record (64 findings) — see the SCOPE_DIRS
-comment; naming a gap with a number is the discipline, silently dropping it is not.
+SCOPE — TWO TIERS (run_a1f4c2d8):
+  * STRICT_DIRS = ``backend/routers/`` + ``backend/channels/`` — ZERO tolerance. Both are
+    clean, so one new violation is RED. ``channels/`` was folded in by this run, which
+    also FIXED the site this docstring used to name as out-of-scope
+    (``channels/gateway.py`` ``_stage_file_to_workspace`` — ``write_bytes`` of a whole
+    Slack attachment on the loop).
+  * BASELINED_DIRS = ``backend/core/`` — a per-file COUNT ratchet in
+    ``async_blocking_baseline.json`` (46 findings across 7 files at freeze time). core/
+    is a multi-run cleanup in colder user-initiated paths, so it is FROZEN rather than
+    left unscanned: a NEW blocking call there is RED immediately, and the existing 46
+    get cleaned in later batches without blocking anything. Putting core/ in the strict
+    tier today would turn the gate RED with no fix in the changeset — the exact
+    anti-pattern this file warns about for sqlite3.connect.
+Nothing is silently out of scope any more: every directory that can host this class is
+either at zero or frozen with its number on the record.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 
 # ---------------------------------------------------------------------------
@@ -115,6 +125,29 @@ _BLOCKING_DOTTED = frozenset({
 
 _BACKEND = pathlib.Path(__file__).resolve().parents[1]
 ROUTERS_DIR = _BACKEND / "routers"
+
+# ── TWO TIERS (run_a1f4c2d8) ────────────────────────────────────────────────
+# STRICT_DIRS  — zero tolerance. Already clean, so a single new violation is RED.
+# BASELINED_DIRS — a per-file COUNT ratchet (core/), because it holds 46 findings in
+#   colder user-initiated paths that are a multi-run cleanup. Adding core/ to the strict
+#   tier would turn the gate RED with no fix in the changeset — the exact anti-pattern
+#   this file warns about for sqlite3.connect. Freezing it instead means:
+#     * a NEW blocking call in core/ is RED immediately (the class stops growing), and
+#     * the remaining 46 get cleaned in later batches without blocking anything.
+#   Same shape as tests/silent_except_baseline.json, deliberately — one ratchet pattern
+#   in this codebase, not two.
+#
+# WHY FREEZE INSTEAD OF FINISHING THE CLEANUP: batch 2 measured the returns. Of
+# swarm_workspace_manager's 6 reported findings, 3 were FALSE POSITIVES (already
+# dispatched via anyio) — a third of the batch was phantom, and hand-restructuring the
+# real ones churned correct code. The remaining files are cold paths (plugin install,
+# one-time legacy cleanup) where a hand refactor carries more regression risk than the
+# loop-blocking it removes. A gate that makes new violations impossible is worth more
+# than 46 hand edits, and it is what this repo has repeatedly found to be the only
+# durable lever (SOUL P7: prose has been bypassed; build a gate outside the agent).
+STRICT_DIRS = (ROUTERS_DIR, _BACKEND / "channels")
+BASELINED_DIRS = (_BACKEND / "core",)
+BASELINE_PATH = pathlib.Path(__file__).with_name("async_blocking_baseline.json")
 
 # Scanned scope. ``channels/`` joined in run_a1f4c2d8 (the sibling gate
 # test_silent_except_baseline.py already scanned routers+core+channels, so the narrow
@@ -215,16 +248,16 @@ def _find_violations(source: str, filename: str = "<src>") -> list[tuple[str, in
     return violations
 
 
-def _scan_routers() -> list[tuple[str, int, str, str]]:
-    """Scan every ``*.py`` under each SCOPE_DIRS entry for violations.
+def _scan_dirs(scopes) -> list[tuple[str, int, str, str]]:
+    """Scan every ``*.py`` under each scope for violations.
 
     ``rglob`` (not ``glob``) so a package subdir cannot hide a violation —
-    ``channels/adapters/`` is a real subpackage, and routers/ may grow one. Filenames
-    are reported dir-qualified (``channels/gateway.py``) so a finding is unambiguous
-    when two scoped dirs hold a same-named module.
+    ``channels/adapters/`` and ``core/code_intel/`` are real subpackages. Filenames are
+    reported dir-qualified (``channels/gateway.py``) so a finding is unambiguous when
+    two scoped dirs hold a same-named module, AND so the baseline keys below are stable.
     """
     out: list[tuple[str, int, str, str]] = []
-    for scope in SCOPE_DIRS:
+    for scope in scopes:
         if not scope.is_dir():
             continue
         for path in sorted(scope.rglob("*.py")):
@@ -235,8 +268,28 @@ def _scan_routers() -> list[tuple[str, int, str, str]]:
     return out
 
 
+def _scan_routers() -> list[tuple[str, int, str, str]]:
+    """The STRICT tier (routers + channels) — kept under its historic name so the
+    existing regression guard below reads unchanged."""
+    return _scan_dirs(STRICT_DIRS)
+
+
+def _scan_baselined() -> dict[str, int]:
+    """The BASELINED tier (core/) as {dir-qualified file: violation count}."""
+    counts: dict[str, int] = {}
+    for f, _ln, _prim, _fn in _scan_dirs(BASELINED_DIRS):
+        counts[f] = counts.get(f, 0) + 1
+    return counts
+
+
+def _load_baseline() -> dict[str, int]:
+    if not BASELINE_PATH.is_file():
+        return {}
+    return json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+
+
 # ---------------------------------------------------------------------------
-# AC1 — the real gate: zero blocking I/O directly on the loop in any router.
+# AC1 — the real gate: zero blocking I/O directly on the loop in routers/ + channels/.
 # ---------------------------------------------------------------------------
 def test_no_blocking_io_in_async_handlers():
     violations = _scan_routers()
@@ -249,6 +302,72 @@ def test_no_blocking_io_in_async_handlers():
             f"(they stall the event loop — wrap in a sync helper dispatched via "
             f"`await asyncio.to_thread(...)`, the run_b2d3ece0 pattern):\n{detail}"
         )
+
+
+# ---------------------------------------------------------------------------
+# AC8 (run_a1f4c2d8) — core/ RATCHET: the class must not GROW.
+#
+# core/ is not zero yet (46 findings in colder user-initiated paths — a multi-run
+# cleanup), so it is frozen per-file rather than left unscanned. A NEW blocking call in
+# core/ pushes its file above the committed baseline → RED → the change cannot merge
+# green. Cleanup batches lower the numbers; nothing raises them silently.
+#
+# Ratchet is a per-file COUNT, not line identity (same accepted trade-off as
+# silent_except_baseline.json): line numbers shift on every edit, so identity would be
+# git-brittle. A net-zero churn within one file passes — the job is to stop GROWTH, not
+# to forbid refactoring.
+#
+# There is deliberately NO per-call escape hatch (no `# noqa`): a bypassable annotation
+# is the C041 whitelist trap. The sanctioned moves are (a) dispatch the call off-loop,
+# or (b) regenerate the baseline ON THE RECORD via
+#     python -m tests.test_router_async_blocking --update-baseline
+# ---------------------------------------------------------------------------
+def test_core_blocking_io_does_not_exceed_baseline():
+    baseline = _load_baseline()
+    current = _scan_baselined()
+    regressions = {
+        f: (current[f], baseline.get(f, 0))
+        for f in current
+        if current[f] > baseline.get(f, 0)
+    }
+    if regressions:
+        detail = "\n".join(
+            f"  {f}: {cur} blocking call(s) in an async body (baseline {base})"
+            for f, (cur, base) in sorted(regressions.items())
+        )
+        raise AssertionError(
+            "blocking I/O was ADDED to an async body in core/ — it stalls the event "
+            "loop for every request and every chat tab's SSE stream. Move it into a "
+            "sync helper and `await asyncio.to_thread(helper)` (or "
+            "`anyio.to_thread.run_sync`), NOT a `# noqa`. If this is a legitimate mass "
+            "change, regenerate the baseline via `python -m "
+            "tests.test_router_async_blocking --update-baseline`:\n" + detail
+        )
+
+
+def test_core_baseline_is_an_honest_snapshot():
+    """The baseline must MATCH the live scan — not merely bound it.
+
+    A loose ceiling rots: a file cleaned from 7 to 2 would keep a stale 7 of headroom,
+    silently re-admitting 5 new violations later. So a REDUCTION fails here too and must
+    be recorded with --update-baseline. Same stance (and same friction) as
+    silent_except_baseline.json — an honest snapshot, not a high-water mark.
+    """
+    baseline = _load_baseline()
+    current = _scan_baselined()
+    assert baseline, (
+        f"{BASELINE_PATH.name} is missing or empty — regenerate it with "
+        f"`python -m tests.test_router_async_blocking --update-baseline`"
+    )
+    only_current = {f: c for f, c in current.items() if baseline.get(f, 0) != c}
+    only_baseline = {f: c for f, c in baseline.items() if current.get(f, 0) != c}
+    assert current == baseline, (
+        f"{BASELINE_PATH.name} is OUT OF SYNC with the live scan. Regenerate it "
+        f"(`python -m tests.test_router_async_blocking --update-baseline`) and commit — "
+        f"the baseline must be an HONEST snapshot, not a loose ceiling.\n"
+        f"  live-differs (new/increased): {only_current}\n"
+        f"  baseline-differs (removed/decreased): {only_baseline}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -433,3 +552,90 @@ def test_subprocess_match_requires_module_qualifier():
         f"bare `.run()` still false-positives — that is what blocked widening to "
         f"channels/ (gateway.py heartbeat_mgr.run()): {v}"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC9 (run_a1f4c2d8) — the RATCHET itself must have teeth, and must not be VACUOUS.
+#
+# A baseline gate has two silent failure modes, and both look green:
+#   1. the scan reaches nothing (a bad scope path) → every count is 0 → any real
+#      violation is "within baseline" forever;
+#   2. the comparison is written so a regression cannot fail it.
+# Six guards in this repo shipped without ever executing, so assert both directly
+# instead of trusting that the two tests above would have caught a regression.
+# ---------------------------------------------------------------------------
+def test_baselined_scan_actually_reaches_core():
+    scoped = {p.name for p in BASELINED_DIRS}
+    assert "core" in scoped, "core/ dropped out of BASELINED_DIRS"
+    assert (_BACKEND / "core").is_dir(), "BASELINED_DIRS points at nothing"
+
+    counts = _scan_baselined()
+    assert counts, (
+        "the core/ scan returned NO files at all. Either the scope path is wrong or "
+        "_find_violations stopped matching — either way the ratchet is inert and every "
+        "future violation would pass as 'within baseline'."
+    )
+    # Keys must be dir-qualified, or a baseline written today would not match tomorrow's
+    # scan of a same-named module in another scope.
+    assert all(k.startswith("core/") for k in counts), (
+        f"baseline keys lost their dir qualifier: {sorted(counts)[:3]}"
+    )
+
+
+def test_ratchet_flags_an_increase_over_baseline():
+    """Drive the comparison with a synthetic +1 and assert it is a regression.
+
+    Mirrors test_core_blocking_io_does_not_exceed_baseline's logic against a known-bad
+    input, so a future edit that makes the real check unable to fail is caught here.
+    """
+    baseline = {"core/example.py": 1}
+    current = {"core/example.py": 2}
+    regressions = {
+        f: (current[f], baseline.get(f, 0))
+        for f in current
+        if current[f] > baseline.get(f, 0)
+    }
+    assert regressions == {"core/example.py": (2, 1)}
+
+    # A brand-new file (absent from the baseline) must also count as a regression —
+    # otherwise a whole new module could arrive full of blocking calls unnoticed.
+    regressions_new = {
+        f: (v, baseline.get(f, 0))
+        for f, v in {"core/brand_new.py": 1}.items()
+        if v > baseline.get(f, 0)
+    }
+    assert regressions_new == {"core/brand_new.py": (1, 0)}
+
+    # And a DECREASE must not be reported as a regression (cleanup is not a failure of
+    # the growth check — it fails the separate honesty check, which demands a rewrite).
+    assert not {
+        f: v for f, v in {"core/example.py": 0}.items() if v > baseline.get(f, 0)
+    }
+
+
+# ---------------------------------------------------------------------------
+# --update-baseline regenerator (the ONLY sanctioned way to move the baseline).
+#   python -m tests.test_router_async_blocking --update-baseline
+# ---------------------------------------------------------------------------
+def _update_baseline() -> None:
+    counts = _scan_baselined()
+    ordered = {k: counts[k] for k in sorted(counts)}
+    BASELINE_PATH.write_text(
+        json.dumps(ordered, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    total = sum(ordered.values())
+    print(f"wrote {BASELINE_PATH} — {len(ordered)} files, "
+          f"{total} async-blocking call(s) in core/")
+
+
+if __name__ == "__main__":
+    import sys
+    if "--update-baseline" in sys.argv:
+        _update_baseline()
+    else:
+        strict = _scan_routers()
+        print(f"STRICT (routers+channels): {len(strict)} violation(s)")
+        for f, ln, prim, fn in strict:
+            print(f"  {f}:{ln}  {prim}()  in async {fn}")
+        cur = _scan_baselined()
+        print(json.dumps({k: cur[k] for k in sorted(cur)}, indent=2))
+        print(f"BASELINED (core/): {sum(cur.values())} across {len(cur)} files")
