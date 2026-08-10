@@ -1434,6 +1434,54 @@ class TestFindingConfidenceGate:
         assert not self._finding_errors(errors), (
             f"unresolved LOW must NOT block regardless of confidence, got: {errors}")
 
+    def test_class_completeness_finding_blocks_via_generic_gate(self):
+        """AC6 (run_1d3df9e6) — the class-completeness gate needs NO bespoke
+        validator code: `to_delivery_finding()` emits a HIGH finding that the
+        EXISTING generic HIGH gate blocks. Building a `class_completeness`-specific
+        validator branch would be the C042 over-build the sibling cross_boundary
+        gate deliberately deferred (IMPROVEMENT.md, run_e4f2684e). This test LOCKS
+        the seam end-to-end using the REAL core output — so a future refactor of
+        either `_blocked_findings` (drop HIGH) or `to_delivery_finding` (downgrade
+        severity / add resolved) that silently reopens the run_0d60e04e hole
+        fails HERE, at both the publish and completion gates.
+
+        Wire: goal_cycle.md step 2.5 appends this finding into
+        adversarial_review.findings[] when the class gate BLOCKS; that is why
+        proving the generic gate blocks it IS the enforcement of AC6.
+        """
+        from scripts.pipeline_validator import (
+            validate_artifact_data, _blocked_findings,
+        )
+        from scripts.check_migration_class import (
+            CompletenessResult, to_delivery_finding,
+        )
+
+        # Real BLOCK result → real finding (not a hand-built stub — guards the seam).
+        res = CompletenessResult(passed=False, blocked=[
+            {"kind": "MISSED", "member": "distill.py:4 _run_locked_write(Decisions)",
+             "detail": "live sink caller with no declared member"},
+        ])
+        finding = to_delivery_finding(res)
+        assert finding is not None
+        assert finding["severity"] == "HIGH" and finding["resolved"] is False, (
+            "to_delivery_finding must emit an UNRESOLVED HIGH finding, or the "
+            "generic gate cannot block it")
+
+        # Helper level: the real finding is in the blocking set.
+        assert _blocked_findings([finding]), (
+            "class_completeness HIGH finding must be blocked by the generic gate")
+
+        # Publish gate: a deliver artifact carrying it BLOCKS.
+        errors = validate_artifact_data("deliver", self._deliver([finding]),
+                                        profile="goal")
+        assert self._finding_errors(errors), (
+            f"deliver artifact carrying a class_completeness BLOCK finding must "
+            f"be blocked at publish, got: {errors}")
+
+        # Positive control: a PASS/no-op result yields no finding → nothing to block.
+        assert to_delivery_finding(CompletenessResult(passed=True, noop=True)) is None
+        assert to_delivery_finding(CompletenessResult(passed=True)) is None
+
     def test_helper_returns_blocking_findings_directly(self):
         """Unit-test the helper in isolation: returns exactly the blocking set."""
         from scripts.pipeline_validator import _blocked_findings

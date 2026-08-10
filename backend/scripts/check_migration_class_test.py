@@ -17,6 +17,8 @@ from check_migration_class import (
     check_migration_class,
     validate_enumeration_cmd,
     CompletenessResult,
+    _valid_locator,
+    _locator_matches_line,
 )
 
 
@@ -213,3 +215,60 @@ class TestGate2Regressions:
     def test_4_truncated_output_rejected(self):
         ok, reason = validate_enumeration_cmd("grep -rn 'sink(' backend/ | head -3")
         assert ok is False and ("head" in reason.lower() or "truncat" in reason.lower())
+
+
+# ── Gate-3 adversarial regressions (E2E audit of run_1d3df9e6) ────────────────
+class TestGate3Regressions:
+    """Locks the CRITICAL/HIGH findings the E2E audit confirmed and fixed. Each test
+    replays the exact attack vector; a future edit that reopens the hole fails HERE."""
+
+    def _mc(self, tmp_path, members, cmd=None):
+        return {"description": "writes",
+                "enumeration_cmd": cmd or f"grep -rn '_run_locked_write(\\|apply_to_ddd(' {tmp_path} | grep -v 'def '",
+                "members": members}
+
+    def test_C1_empty_members_blocks_not_fail_open(self, tmp_path):
+        """C1 (CRITICAL): a class that declares enumeration_cmd but members=[] previously
+        PASSED silently (reconcile loop can't produce MISSED with zero declared rows) —
+        the exact run_0d60e04e miss. Must now BLOCK with EMPTY_MEMBERS."""
+        _write_tree(tmp_path)
+        res = check_migration_class(self._mc(tmp_path, []), cwd=tmp_path)
+        assert res.passed is False, "empty members[] must not fail-open to PASS"
+        assert any(b["kind"] == "EMPTY_MEMBERS" for b in res.blocked)
+
+    def test_H1_member_curating_pipe_rejected(self):
+        """H1 (HIGH): `| grep -v <member-name>` filters the to-be-missed sibling out of
+        the enumeration → never MISSED → PASS. Only `| grep -v 'def '` is sanctioned."""
+        ok, _ = validate_enumeration_cmd("grep -rn '_run_locked_write(' backend/ | grep -v decisions")
+        assert ok is False
+        # the sanctioned structural filter still works:
+        assert validate_enumeration_cmd("grep -rn '_run_locked_write(' backend/ | grep -v 'def '")[0] is True
+
+    def test_H3_scope_flag_rejected(self):
+        """H3 (HIGH): --include/--exclude scopes the grep to a file subset."""
+        assert validate_enumeration_cmd("grep -rn --include='*_new.py' 's(' backend/")[0] is False
+
+    def test_M3_sed_awk_truncation_rejected(self):
+        """M3: sed/awk post-filters truncate the member set (like head/tail)."""
+        assert validate_enumeration_cmd("grep -rn 's(' backend/ | sed -n '1,3p'")[0] is False
+        assert validate_enumeration_cmd("grep -rn 's(' backend/ | awk 'NR<=2'")[0] is False
+
+    def test_M4_command_chaining_rejected(self):
+        """M4: chaining/substitution/redirection lets an author fake the enumeration
+        output or run side effects under shell=True."""
+        for c in ("grep -rn 's(' backend/; true",
+                  "grep -rn 's(' backend/ && echo x",
+                  "grep -rn 's(' $(cat dirs)",
+                  "grep -rn 's(' backend/ > out"):
+            assert validate_enumeration_cmd(c)[0] is False, f"must reject: {c}"
+
+    def test_M4_bre_alternation_not_mistaken_for_chaining(self):
+        """M4 guard: a grep-BRE `\\|` alternation inside the quoted pattern is NOT a
+        shell pipe/chain — it must still pass (else the sanctioned sink-alternation breaks)."""
+        assert validate_enumeration_cmd("grep -rn '_a(\\|_b(' backend/")[0] is True
+
+    def test_M2_bare_basename_locator_no_cross_dir_match(self):
+        """M2: `x.py:10` suffix-matched a different-dir `a/b/x.py:10`. Require ≥1 slash."""
+        assert _valid_locator("x.py:10") is False
+        assert _valid_locator("hooks/x.py:10") is True
+        assert _locator_matches_line("hooks/distill.py:4", "z/core/distill.py:4:s()") is False

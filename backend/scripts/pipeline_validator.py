@@ -859,18 +859,33 @@ def _check_working_backwards(data: dict, profile: str) -> list[str]:
 # class-completeness gate (goal_cycle Final Quality Gate step 2.5) no-ops and a class
 # sibling ships ungated (the run_0d60e04e decisions-path miss). Opt-in was the C036
 # escape; this makes it mandatory-on-keyword. Enforced here so it is NOT prose-only.
-_MIGRATION_KEYWORDS = (
-    "migrate", "migration", "unify", "unified", "consolidate", "de-dup", "dedup",
-    "route all", "route every", "gate all", "gate every", "every path", "all callers",
-    "all paths", "single ", "one gate", "funnel", "chokepoint", "through one",
-)
+# Gate-3 M1 (false-positive fix): the old table matched bare substrings — `"single "`
+# fired on "add a single retry", `"funnel"` on "funnel chart", `"consolidate"` on
+# "consolidate two CSS files", `"one gate"` on a literal parking-gate UI. A class
+# migration is not any sentence containing one of those words; it is moving a COLLECTION
+# (all callers / every path / a class of siblings) onto one target. So each pattern is a
+# WORD-BOUNDED regex that requires the migrate-a-collection SHAPE, not a lone noun.
+# Dropped as too broad (real false positives from the E2E probe): bare "single ",
+# "funnel", "one gate", "consolidate <two things>", standalone "unified".
+_MIGRATION_PATTERNS = tuple(re.compile(p) for p in (
+    r"\bmigrat(?:e|es|ing|ion)\b",                    # migrate/migration (the core verb)
+    r"\b(?:unify|unifies|unifying|consolidat\w+|de-?dup\w*)\b\s+(?:all|every|the\s+\w+\s+(?:callers|paths|sites))",
+    r"\ball\s+(?:callers|call\s?sites|paths|writers|write\s+paths|sink\s+callers)\b",
+    r"\bevery\s+(?:caller|call\s?site|path|writer|write\s+path)\b",
+    r"\b(?:route|gate|funnel|channel)\s+(?:all|every)\b",          # "route/gate all …"
+    r"\bthrough\s+(?:one|a\s+single)\s+\w+",                        # "through one gate"
+    r"\bsingle\s+(?:gate|entry\s?point|chokepoint|ingestion|admission)\b\s+for\s+(?:all|every)",
+    r"\bchokepoint\b",
+))
 
 
 def _check_migration_class_declared(data: dict, profile: str) -> list[str]:
     """AC11: if the evaluation's requirement/understanding text is migration-shaped, the
     artifact MUST carry a non-empty `migration_class` block. Strict profiles only (a docs/
     research run that merely mentions 'migrate' isn't shipping code). Fail-CLOSED on the
-    keyword hit — the whole point is to remove the opt-out for the runs that need it."""
+    keyword hit — the whole point is to remove the opt-out for the runs that need it.
+    Matching is via word-bounded shape patterns (Gate-3 M1), NOT bare substrings, so a
+    benign "single retry" / "funnel chart" / "consolidate two files" does NOT false-fire."""
     if profile in _RELAXED_UNDERSTANDING_PROFILES:
         return []
     und = data.get("understanding") if isinstance(data.get("understanding"), dict) else {}
@@ -878,7 +893,7 @@ def _check_migration_class_declared(data: dict, profile: str) -> list[str]:
         und.get("claim", ""), und.get("evidence", ""), data.get("summary", ""),
         data.get("requirement", ""),
     ))
-    if not any(kw in haystack for kw in _MIGRATION_KEYWORDS):
+    if not any(p.search(haystack) for p in _MIGRATION_PATTERNS):
         return []
     mc = data.get("migration_class")
     if isinstance(mc, dict) and mc.get("enumeration_cmd") and mc.get("members"):

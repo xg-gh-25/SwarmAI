@@ -135,6 +135,36 @@ class TestMigrationClassGate:
         errors = validate_artifact_data("evaluate", data, profile="full")
         assert self._mc_errors(errors) == [], f"non-migration requirement must not fire: {errors}"
 
+    @pytest.mark.parametrize("claim", [
+        "add a single retry to the upload button",       # bare "single " — old bug
+        "build a unified dashboard card",                # "unified" alone — old bug
+        "funnel chart component for the analytics page",  # "funnel" alone — old bug
+        "consolidate the two CSS files into one",        # "consolidate <two things>" — old bug
+        "add a single sign-on button",
+        "create one gate component for the parking UI",  # "one gate" literal — old bug
+    ])
+    def test_benign_keyword_no_false_positive(self, claim):
+        """Gate-3 M1: the E2E audit found the old bare-substring table false-blocked all
+        of these benign, non-migration requirements. Word-bounded shape patterns must NOT
+        fire on them (each was a confirmed false positive)."""
+        data = _eval("bugfix")
+        data["understanding"]["claim"] = claim
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert self._mc_errors(errors) == [], f"benign claim wrongly blocked: {claim!r} -> {errors}"
+
+    @pytest.mark.parametrize("claim", [
+        "migrate every write path through the single admission gate",
+        "unify all callers of the sink into one ingestion gate",
+        "route all store writes through one chokepoint",
+    ])
+    def test_real_migration_still_blocks(self, claim):
+        """Gate-3 M1 negative control: tightening the patterns must NOT weaken the gate —
+        genuine class-migration phrasing (no migration_class declared) must still BLOCK."""
+        data = _eval("refactor")
+        data["understanding"]["claim"] = claim
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert self._mc_errors(errors), f"real migration claim must still block: {claim!r}"
+
     def test_relaxed_profile_exempt(self):
         data = _eval("refactor")
         data["understanding"]["claim"] = "migrate and unify all the write paths"
