@@ -482,6 +482,45 @@ class TestLastErrorPersistence:
         _update_job_state(state, "j", result)
         assert len(state.jobs["j"].last_error) == 500
 
+    def test_auth_failed_does_not_increment_circuit_breaker(self):
+        """A transient auth failure must NOT count toward the circuit breaker —
+        else a brief SSO/IdC token expiry trips the breaker (3 strikes) and forces
+        a 24h cooldown or manual reset. It also must NOT reset a real failure
+        streak (that would hide genuine job bugs)."""
+        from jobs.models import SchedulerState, JobState, JobResult
+        from jobs.executor import _update_job_state
+
+        state = SchedulerState(jobs={"j": JobState(consecutive_failures=2)})
+        result = JobResult(
+            job_id="j", timestamp=datetime.now(timezone.utc),
+            status="auth_failed", error="auth_preflight_failed",
+        )
+        _update_job_state(state, "j", result)
+        # streak neither incremented (not a job bug) nor reset (not a success)
+        assert state.jobs["j"].consecutive_failures == 2
+        assert state.jobs["j"].last_status == "auth_failed"
+
+
+class TestAuthPreflightIsTransient:
+    """Auth PRE-flight failure must route through auth_failed (transient), not
+    'failed' — so it auto-retries next tick instead of tripping the breaker.
+    Regression: github-community-evening tripped the breaker on a brief token
+    expiry and needed a manual reset."""
+
+    def test_preflight_auth_failure_returns_auth_failed_status(self):
+        from jobs.models import Job, SchedulerState
+        from jobs import executor
+
+        job = Job(id="j", name="J", type="agent_task", schedule="0 * * * *",
+                  enabled=True, config={"prompt": "hi"})
+        with patch("jobs.executor._resolve_claude_cli", return_value="/usr/bin/claude"), \
+             patch("jobs.executor._check_claude_auth", return_value="not logged in"):
+            result = executor._handle_agent_task(job, SchedulerState())
+
+        # THE fix: transient auth expiry → auth_failed (auto-retry), not failed
+        assert result.status == "auth_failed"
+        assert result.error == "auth_preflight_failed"
+
 
 # ── run_14d01964: unified_status failing-count excludes disabled jobs ─
 

@@ -711,12 +711,22 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
     # Pre-flight: verify CLI auth before committing to a long timeout.
     # `claude auth status` returns JSON with loggedIn: true/false.
     # If auth is dead, fail fast instead of wasting 300s on a doomed timeout.
+    #
+    # status="auth_failed" (NOT "failed"): a dead SSO/IdC token is TRANSIENT and
+    # not the job's bug — the same class as the mid-run MCP auth failure at ~L857.
+    # Routing it through auth_failed means _update_job_state does NOT count it
+    # toward the circuit breaker (L2116), and should_run_job auto-retries it on the
+    # next scheduler tick once auth is restored (L378) — instead of tripping the
+    # breaker after 3 strikes and forcing a 24h cooldown or manual reset.
     auth_err = _check_claude_auth(claude_path)
     if auth_err:
         return JobResult(
             job_id=job.id, timestamp=start,
-            status="failed",
-            summary=f"Auth pre-check failed: {auth_err}",
+            status="auth_failed",
+            summary=(
+                f"Auth pre-check failed: {auth_err}. "
+                f"Will retry on next scheduler tick after auth is restored."
+            ),
             duration_seconds=(datetime.now(timezone.utc) - start).total_seconds(),
             error="auth_preflight_failed",
         )
