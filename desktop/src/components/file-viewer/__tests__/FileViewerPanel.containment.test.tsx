@@ -45,7 +45,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('FileViewerPanel Canvas-content-column containment', () => {
-  it('the content column (parent of the outputs navbar + FileViewer) sets contain:layout', () => {
+  it('the content column (parent of the outputs navbar + FileViewer) sets contain:layout (NOT paint)', () => {
     render(<FileViewerPanel {...baseProps} />);
     // The outputs navbar lives inside the content column; the FileViewer stub is its
     // sibling. Their common parent IS the content column.
@@ -55,6 +55,13 @@ describe('FileViewerPanel Canvas-content-column containment', () => {
     // Sanity: this really is the content column (holds both the navbar and the viewer).
     expect(contentColumn.querySelector('[data-testid="file-viewer-stub"]')).toBeTruthy();
     expect(contentColumn.style.contain).toBe('layout');
+    // run_2daacd0f REVIEW guard: paint containment must NOT be added here. This column
+    // also hosts FileEditorCore's `position:fixed` selection-comment popover and
+    // unsaved-changes modal (via non-portaled render); `contain:paint` on an ancestor
+    // makes it their containing block → the full-screen modal (`fixed inset-0`) would
+    // clip to the column instead of the viewport. Paint isolation for the 6th-recurrence
+    // lag is scoped to HtmlRenderer's root instead (no fixed descendants there).
+    expect(contentColumn.style.contain).not.toContain('paint');
   });
 
   it('the outer panel box (holding the spout) does NOT set contain (spout must overhang, not be clipped)', () => {

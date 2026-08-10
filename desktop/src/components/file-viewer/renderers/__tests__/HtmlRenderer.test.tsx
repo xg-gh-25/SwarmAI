@@ -260,4 +260,23 @@ describe('HtmlRenderer Fit-width mode', () => {
     const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
     expect(sizer.style.transform).toMatch(/scale\(0\.5\)/); // 600/1200
   });
+
+  // run_2daacd0f — 6th-recurrence "Canvas 开着时 chat input 输入卡" lag. The composite-
+  // heavy Canvas surface (this iframe report + transform:scale sizer) gets WebKit
+  // paint/composite isolation via `contain:paint` on the renderer root, so a keystroke
+  // repaint in the sibling chat column doesn't force re-compositing it. Scoped HERE
+  // (not the Canvas content column) BECAUSE this renderer has no `position:fixed`
+  // descendants — the column does (FileEditorCore popover/modal), where paint would
+  // re-anchor + clip them. Mutation check: drop `style={{ contain: 'paint' }}` → RED.
+  it('the renderer root carries contain:paint (composite isolation, fixed-safe scope)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const iframe = container.querySelector('iframe')!;
+    // Select by data-testid (not the Tailwind class chain) so a utility-class refactor
+    // can't false-negative this guard (Gate-2 finding).
+    const root = screen.getByTestId('html-renderer-root') as HTMLElement;
+    expect(root).toBeTruthy();
+    // Sanity: this really is the root (the iframe surface lives inside it).
+    expect(root.contains(iframe)).toBe(true);
+    expect(root.style.contain).toBe('paint');
+  });
 });

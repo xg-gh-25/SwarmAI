@@ -165,7 +165,22 @@ export default function HtmlRenderer({
   }
 
   return (
-    <div className="flex flex-col h-full w-full relative">
+    // `contain: paint` (run_2daacd0f, 6th-recurrence Canvas-open chat-input lag) gives
+    // WebKit paint/composite isolation for THIS surface — the composite-heavy part of an
+    // open Canvas: an opaque-origin iframe rendering an agent HTML report + a
+    // transform:scale sizer (FIT mode). On WKWebView (this app is Tauri, not Electron) a
+    // keystroke repaint in the sibling chat column could otherwise force re-compositing
+    // this enlarged surface. `paint` lets the compositor skip this subtree on an
+    // ancestor/sibling repaint. Scoped HERE (not the whole Canvas content column) on
+    // purpose: paint containment makes the box a containing block for `position:fixed`
+    // descendants, and the column also hosts FileEditorCore's fixed popover/modal — so
+    // column-level paint would re-anchor + clip those (a REVIEW finding). This renderer
+    // has NO fixed/portaled descendants (only a self-anchored `absolute` toolbar), and
+    // its root is already `h-full w-full relative` + the iframe fills it → paint's clip
+    // is visually inert. UNVERIFIED by profiling (both documented lag mechanisms are
+    // already closed on modern WebKit — user chose to act on the composite hypothesis);
+    // trivially revertible. If lag persists, PROFILE before attempt #7.
+    <div className="flex flex-col h-full w-full relative" style={{ contain: 'paint' }} data-testid="html-renderer-root">
       {/* Toolbar (top-right): Fit/Actual (rendered mode only) + Source/Rendered. */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
         {mode === 'rendered' && (

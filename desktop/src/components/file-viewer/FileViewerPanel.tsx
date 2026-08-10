@@ -479,7 +479,14 @@ function FileViewerPanelImpl({
           never changes Canvas width → `layout` containment is both effective and
           spout-safe. `contain:layout` (NOT paint/content/size) does not clip, so zero
           visual change; absolute children inside the column are positioned relative to
-          ancestors inside it (no-op), and popovers are portaled/fixed (unaffected). */}
+          ancestors inside it (no-op), and popovers are portaled/fixed (unaffected).
+          NOTE (run_2daacd0f): paint/composite isolation for the 6th-recurrence lag is
+          scoped NARROWLY to HtmlRenderer's root (the iframe report + transform:scale
+          sizer — the actual composite-heavy surface), NOT here. Paint containment on
+          THIS column would capture FileEditorCore's `position:fixed` popover/modal
+          (selection-comment button + unsaved-changes backdrop) as its containing block,
+          re-anchoring them to the column and clipping the full-screen modal — a REVIEW
+          finding. Keep this column layout-only. */}
       {/* `pointer-events:none` ONLY while dragging (drag-shield): the content column
           hosts HtmlRenderer's sandboxed opaque-origin iframe (w-full h-full). A drag
           started on the seam moves the cursor OVER that iframe, and the document-level
