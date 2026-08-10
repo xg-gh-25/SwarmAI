@@ -731,8 +731,13 @@ class DistillationTriggerHook:
         # now lives in ingestion_gate.admit_memory_lesson so ALL four MEMORY doors
         # (this distillation path + runtime_hooks + context_health_hook +
         # memory_extractor) share ONE authority — the P8 structural end-state.
+        # admit_memory_lesson returns a 4-tuple (…, distilled_text); distillation
+        # writes its own `enriched` text (has an enrichment layer), so it keeps the
+        # 3-tuple contract here and ignores the distilled rewrite. The shape-distill
+        # root-fix targets the 3 backdoors that write raw un-distilled text.
         from core.ingestion_gate import admit_memory_lesson
-        return admit_memory_lesson(raw_text)
+        verdict, section, reason, _distilled = admit_memory_lesson(raw_text)
+        return (verdict, section, reason)
 
     @staticmethod
     def _archive_discarded(context_dir: "Path", raw: str, enriched: str,

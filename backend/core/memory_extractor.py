@@ -499,9 +499,12 @@ async def extract_and_save(
                 # and _SECTION_MAP[key] is its correct type-section (decisions→Decisions
                 # etc.). The judge's job here is ADMIT/REJECT only — re-routing to the
                 # judge's section would BREAK the extraction bucket→section consistency.
-                verdict, _sec, reason = admit_memory_lesson(entry)
+                verdict, _sec, reason, distilled = admit_memory_lesson(entry)
                 if verdict == "auto":
-                    kept.append(entry)
+                    # ROOT-FIX (capture-vs-distill): write the DISTILLED rule when the
+                    # gate rewrote a shape-dirty entry; fail-open → distilled=None keeps
+                    # the original. The writer never finalizes its own text.
+                    kept.append(distilled or entry)
                 else:
                     _dropped += 1
                     logger.info("memory_extractor: judge DISCARD (%s): %.80s", reason, entry)

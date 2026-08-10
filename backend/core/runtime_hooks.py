@@ -389,14 +389,19 @@ def create_user_correction_detector(
                     # [pitfall]→## Pitfalls (its fixed home since Gap #17), so we do NOT
                     # re-route on the judge's section (that would write "[pitfall]" into
                     # e.g. ## Corrections — a type/section mismatch, adversarial BUG#1).
-                    verdict, _section, _reason = admit_memory_lesson(summary)
+                    verdict, _section, _reason, distilled = admit_memory_lesson(summary)
                     if verdict == "auto":
+                        # ROOT-FIX (capture-vs-distill): if the gate distilled a
+                        # shape-dirty entry, write the DISTILLED rule, never our own
+                        # raw summary (writer≠finalizer). fail-open: distilled=None →
+                        # keep summary.
+                        body = distilled or summary
                         ws = _Path.home() / ".swarm-ai" / "SwarmWS"
                         memory_path = ws / ".context" / "MEMORY.md"
                         if memory_path.exists():
                             today = time.strftime("%Y-%m-%d")
                             entry_text = (
-                                f"\n- [pitfall] **{summary}** — "
+                                f"\n- [pitfall] **{body}** — "
                                 f"({today}, {sid[:8]}, correction)\n"
                             )
                             # dedup=True: don't re-append a lesson already in MEMORY.

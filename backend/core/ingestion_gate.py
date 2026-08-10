@@ -560,7 +560,55 @@ def ingestion_gate(
         return GateVerdict("review", ran, f"gate_error:{type(e).__name__}")
 
 
-def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str]":
+# ── _distill_entry — the DISTILL pass (capture-vs-distill separation, root-fix B) ──
+# ROOT-FIX: the writer must NOT be the finalizer. When the judge admits a shape-dirty
+# entry (verbose/narrative — "this session's story" fused with "the durable rule"), a
+# SEPARATE pass (different prompt, refute→distill objective) rewrites it into a single
+# durable imperative rule, stripping session narrative. The writer never sees final text
+# it authored — it writes what the distiller returns. FAIL-OPEN: distill infra failure →
+# original text (the judge already admitted it as real knowledge; a shape-only concern
+# must never DROP it — knowledge-over-tidiness).
+_DISTILL_MAX_TOKENS = 400
+_DISTILL_PROMPT = """You are a knowledge DISTILLER for a durable agent-memory store.
+Rewrite the entry below into ONE durable, reusable rule — an imperative lesson that
+holds across sessions. STRIP all session narrative: "this session", "I fixed/caught",
+run-ids, dates, blow-by-blow story, first-person recounting. KEEP the load-bearing
+rule + its one-line why. Do NOT invent facts not present. Preserve any leading
+"- [type] **Title** —" scaffold if present; rewrite only the body.
+
+Output ONLY the rewritten entry, nothing else (no preamble, no "here is").
+
+<<<ENTRY_START>>>
+{text}
+<<<ENTRY_END>>>"""
+
+
+def _distill_entry(text: str) -> str:
+    """Rewrite a shape-dirty entry into a durable rule via a separate Bedrock pass.
+    Returns the distilled text. Raises on infra failure (caller decides fail-open).
+    Isolated for mockability (tests patch this)."""
+    import json as _json
+    client, model_id = _judge_client()
+    safe = _neutralize_untrusted(text)
+    prompt = _DISTILL_PROMPT.format(text=safe)
+    resp = client.invoke_model(
+        modelId=model_id, contentType="application/json", accept="application/json",
+        body=_json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": _DISTILL_MAX_TOKENS, "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }),
+    )
+    result = _json.loads(resp["body"].read())
+    content = result.get("content", [])
+    out = content[0]["text"] if content and content[0].get("type") == "text" else ""
+    out = (out or "").strip()
+    if not out:
+        raise ValueError("distill returned empty")
+    return out
+
+
+def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str, str | None]":
     """SSOT MEMORY admission decision — the SINGLE door every MEMORY writer funnels
     through (P8 "One Brain, Many Doors"). Routes one entry through
     ingestion_gate(store="MEMORY", trigger="memory_distill") so the self_adversarial
@@ -578,6 +626,12 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str]":
         MEMORY_TYPE_TO_SECTION[etype]).
       • "discard" + None          — judge non-pass (suspect/noise), structural noise,
         gate-error (fail-closed), or unroutable type. Caller archives (recoverable).
+    Returns (verdict, section, reason, distilled_text):
+      • distilled_text is the SHAPE-distilled rewrite when the judge admitted a
+        shape-dirty entry (verbose/narrative) — the writer MUST use it instead of its
+        own text (capture-vs-distill separation: the writer never finalizes). It is
+        None when the entry was already shape-clean OR distill failed (fail-open →
+        caller uses original) OR verdict is discard.
     Moved here from distillation_hook._admit_memory_lesson (was door-local; promoting
     to module level makes it the shared primitive all doors import — the P8 structural
     end-state: change admission once, every door inherits it)."""
@@ -591,23 +645,49 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str]":
     if v.verdict == "auto":
         resolved = section or MEMORY_TYPE_TO_SECTION.get(etype)
         if resolved:
-            # SHAPE gate (WARN-only): the judge admitted this (whether-gate); now flag
-            # verbose/narrative shape so the writer sees it's a story not a rule. Never
-            # blocks — shape is quality, judge owns admit/reject. One log at the shared
-            # chokepoint → all four MEMORY doors are shape-checked (P8).
+            # SHAPE gate: the judge admitted this (whether-gate). Now enforce SHAPE by
+            # DISTILLATION, not just a warning — the ROOT-FIX for writer==finalizer.
+            # If shape-dirty, a SEPARATE distill pass rewrites it to a durable rule and
+            # the writer uses THAT (it never finalizes its own text). One point → all
+            # four MEMORY doors inherit distillation (P8). FAIL-OPEN: distill infra
+            # failure → distilled=None → caller keeps original (judge already admitted
+            # it; a shape concern must never drop real knowledge).
+            distilled = None
             try:
                 sw = shape_warnings(raw_text)
                 if sw:
                     import logging as _logging
-                    _logging.getLogger(__name__).warning(
-                        "ingestion_gate SHAPE-WARN [%s]: %s :: %.80s",
-                        resolved, "; ".join(sw), raw_text)
-            except Exception:  # noqa: BLE001 — advisory only
-                pass
-            return ("auto", resolved, reason)
-        return ("discard", None, reason or "unroutable_type")
+                    _log = _logging.getLogger(__name__)
+                    try:
+                        cand = _distill_entry(raw_text)
+                        # RE-VALIDATE the distiller's output before trusting it (adversarial
+                        # review: distilled text was written blindly). It must (a) not be
+                        # structural junk and (b) actually be shape-clean — else the distill
+                        # made it no better. Fail-OPEN to original on any failure: the entry
+                        # is already judge-admitted, so worst case = pre-distill state, never
+                        # worse, never dropped.
+                        if structural_noise(cand):
+                            _log.warning("ingestion_gate distill output is structural noise "
+                                         "(fail-open, keeping original) [%s]: %.80s", resolved, cand)
+                            distilled = None
+                        elif shape_warnings(cand):
+                            _log.warning("ingestion_gate distill output still shape-dirty "
+                                         "(fail-open, keeping original) [%s]: %.80s", resolved, cand)
+                            distilled = None
+                        else:
+                            distilled = cand
+                            _log.info("ingestion_gate DISTILLED [%s] (%s): %.60s → %.60s",
+                                      resolved, "; ".join(sw), raw_text, distilled)
+                    except Exception as de:  # noqa: BLE001 — fail-OPEN, keep original
+                        _log.warning("ingestion_gate distill FAILED (fail-open, keeping "
+                                     "original) [%s]: %s :: %.80s", resolved, de, raw_text)
+                        distilled = None
+            except Exception:  # noqa: BLE001 — shape check advisory; never break admit
+                distilled = None
+            return ("auto", resolved, reason, distilled)
+        return ("discard", None, reason or "unroutable_type", None)
     # verdict is "review" (gate-error, fail-closed) or "discard" → both discard here
-    return ("discard", None, reason)
+    return ("discard", None, reason, None)
 
 
 # ── shape_warnings — the SHAPE gate (concise-vs-verbose, rule-vs-narrative) ────

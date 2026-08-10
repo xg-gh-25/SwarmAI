@@ -675,7 +675,7 @@ class TestAdmitMemoryLessonSSOT:
     def test_judge_pass_is_auto_with_section(self):
         from core.ingestion_gate import admit_memory_lesson
         with self._mock("pass"):
-            verdict, section, _ = admit_memory_lesson(
+            verdict, section, _, _d = admit_memory_lesson(
                 "A real durable lesson about verifying state before asserting a cause.")
         assert verdict == "auto"
         assert section  # routed to a real MEMORY section
@@ -683,7 +683,7 @@ class TestAdmitMemoryLessonSSOT:
     def test_judge_noise_is_discard(self):
         from core.ingestion_gate import admit_memory_lesson
         with self._mock("noise"):
-            verdict, section, reason = admit_memory_lesson(
+            verdict, section, reason, _d = admit_memory_lesson(
                 "A real durable lesson about verifying state before asserting a cause.")
         assert verdict == "discard" and section is None
         assert "noise" in reason
@@ -691,14 +691,14 @@ class TestAdmitMemoryLessonSSOT:
     def test_judge_suspect_is_discard(self):
         from core.ingestion_gate import admit_memory_lesson
         with self._mock("suspect"):
-            verdict, section, _ = admit_memory_lesson(
+            verdict, section, _, _d = admit_memory_lesson(
                 "some borderline claim long enough to clear the structural floor here")
         assert verdict == "discard" and section is None
 
     def test_structural_noise_discarded_without_judge(self):
         # source-type / structural junk is caught before the judge (no Bedrock call needed)
         from core.ingestion_gate import admit_memory_lesson
-        verdict, section, reason = admit_memory_lesson("| col | col |")
+        verdict, section, reason, _d = admit_memory_lesson("| col | col |")
         assert verdict == "discard" and section is None
 
     def test_keep_type_routes_to_its_section_on_pass(self):
@@ -706,7 +706,7 @@ class TestAdmitMemoryLessonSSOT:
         # admit_memory_lesson must resolve it to the type's real MEMORY section, not drop it.
         from core.ingestion_gate import admit_memory_lesson
         with self._mock("pass"):
-            verdict, section, _ = admit_memory_lesson(
+            verdict, section, _, _d = admit_memory_lesson(
                 "Decision: the judge is the sole admission authority for all MEMORY writes.")
         assert verdict == "auto"
         assert section  # NOT None — resolved via MEMORY_TYPE_TO_SECTION
@@ -756,3 +756,97 @@ class TestShapeContract:
         from core.ingestion_gate import shape_warnings
         assert shape_warnings("") == []
         assert isinstance(shape_warnings("garbage no type prefix"), list)
+
+
+class TestDistillAtChokepoint:
+    """ROOT-FIX (capture-vs-distill separation, B): admit_memory_lesson does not just
+    admit — when the judge PASSES but the entry is shape-dirty (verbose/narrative), it
+    runs a DISTILL pass and returns the rewritten text. The writer never finalizes:
+    all 4 doors write the distilled form. Returns (verdict, section, reason, distilled).
+    fail-OPEN: distill infra failure → original text (knowledge already judge-admitted,
+    never dropped for a shape-only concern)."""
+
+    def _judge(self, verdict):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        return patch.object(ig, "self_adversarial_judge", lambda *a, **k: (verdict, "judged"))
+
+    def test_clean_entry_returns_original_no_distill(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        called = {"n": 0}
+        def _distill(t): called["n"] += 1; return "SHOULD NOT BE CALLED"
+        with self._judge("pass"), patch.object(ig, "_distill_entry", _distill):
+            v, sec, reason, distilled = ig.admit_memory_lesson(
+                "- [guideline] **Guard at caller** — guard at the shared-component caller, not the renderer.")
+        assert v == "auto"
+        assert called["n"] == 0, "clean entry must NOT trigger a distill call"
+        assert distilled is None or "SHOULD NOT" not in distilled
+
+    def test_verbose_entry_triggers_distill_and_returns_rewrite(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        long_g = "- [guideline] **X** — this session I " + " ".join(["rambled"] * 60)
+        with self._judge("pass"), patch.object(ig, "_distill_entry", lambda t: "distilled concise rule"):
+            v, sec, reason, distilled = ig.admit_memory_lesson(long_g)
+        assert v == "auto"
+        assert distilled == "distilled concise rule"
+
+    def test_distill_failure_is_fail_open_original_text(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        long_g = "- [guideline] **X** — this session " + " ".join(["word"] * 60)
+        def _boom(t): raise RuntimeError("bedrock down")
+        with self._judge("pass"), patch.object(ig, "_distill_entry", _boom):
+            v, sec, reason, distilled = ig.admit_memory_lesson(long_g)
+        assert v == "auto", "distill failure must NOT drop a judge-admitted entry (fail-open)"
+        assert distilled is None, "fail-open → caller uses original text"
+
+    def test_discard_never_distills(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        called = {"n": 0}
+        with self._judge("noise"), patch.object(ig, "_distill_entry", lambda t: called.__setitem__("n", called["n"]+1) or "x"):
+            v, sec, reason, distilled = ig.admit_memory_lesson("- [guideline] **X** — " + " ".join(["w"]*60))
+        assert v == "discard"
+        assert called["n"] == 0, "a discarded entry is never distilled"
+
+
+class TestDistillOutputRevalidation:
+    """Adversarial-review fix: the distiller's output is NOT trusted blindly — it is
+    re-validated (structural_noise + shape) before use. A junk/verbose distill → fail-open
+    to original (entry already judge-admitted, never dropped, never made worse)."""
+
+    def _judge(self, verdict):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        return patch.object(ig, "self_adversarial_judge", lambda *a, **k: (verdict, "judged"))
+
+    def test_distill_returning_structural_noise_falls_open(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        dirty = "- [guideline] **X** — this session " + " ".join(["w"] * 60)
+        with self._judge("pass"), patch.object(ig, "_distill_entry", lambda t: "| junk | table |"):
+            v, sec, reason, distilled = ig.admit_memory_lesson(dirty)
+        assert v == "auto"
+        assert distilled is None, "structural-noise distill output must be rejected (fail-open)"
+
+    def test_distill_returning_still_verbose_falls_open(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        dirty = "- [guideline] **X** — this session " + " ".join(["w"] * 60)
+        # distiller "rewrite" is still 60-word verbose guideline → must be rejected
+        still_verbose = "- [guideline] **X** — " + " ".join(["still"] * 60)
+        with self._judge("pass"), patch.object(ig, "_distill_entry", lambda t: still_verbose):
+            v, sec, reason, distilled = ig.admit_memory_lesson(dirty)
+        assert v == "auto"
+        assert distilled is None, "still-verbose distill output must be rejected (fail-open)"
+
+    def test_clean_distill_output_is_used(self):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        dirty = "- [guideline] **X** — this session " + " ".join(["w"] * 60)
+        clean = "- [guideline] **Guard at caller** — guard at the shared-component caller, not the renderer."
+        with self._judge("pass"), patch.object(ig, "_distill_entry", lambda t: clean):
+            v, sec, reason, distilled = ig.admit_memory_lesson(dirty)
+        assert distilled == clean, "a clean, concise distill output must be used"

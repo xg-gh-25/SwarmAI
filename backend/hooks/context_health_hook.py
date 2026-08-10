@@ -1204,7 +1204,7 @@ class ContextHealthHook:
             # noise) → discard (dropped, logged, never a human sink).
             try:
                 from core.ingestion_gate import admit_memory_lesson
-                verdict, target_section, reason = admit_memory_lesson(lesson)
+                verdict, target_section, reason, distilled = admit_memory_lesson(lesson)
             except Exception as exc:
                 logger.warning(
                     "context_health: MEMORY judge crashed, DISCARD "
@@ -1217,6 +1217,9 @@ class ContextHealthHook:
                     reason, lesson,
                 )
                 continue
+            # ROOT-FIX (capture-vs-distill): write the DISTILLED rule when the gate
+            # rewrote a shape-dirty lesson; fail-open → distilled=None keeps original.
+            lesson = distilled or lesson
             # entry_type from the type router (section already came from the judge helper).
             _, entry_type = route_lesson_type(lesson)
             title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
