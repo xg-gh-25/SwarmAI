@@ -30,6 +30,68 @@ logger = logging.getLogger(__name__)
 MIN_MESSAGES_FOR_EXTRACTION = 8
 
 
+def _gate_and_apply_writeback(proposal, project_dir: Path) -> str:
+    """Run a writeback proposal through the unified admission gate, then apply/escalate.
+
+    C4a (run_0d60e04e): the single DDD ingestion path that used to bypass admission_band.
+    Both admission_band and apply_to_ddd/write_proposal are SYNC (fcntl + atomic rename +
+    a possible Bedrock judge call) — this whole function is offloaded via one
+    asyncio.to_thread by the caller, so nothing here touches the event loop.
+
+    Returns the outcome token: apply_to_ddd's status on `auto` (applied / created_section
+    / duplicate / rejected_low_value / …), or the gate verdict ("review" / "discard") when
+    the gate does NOT auto-apply. A `review` verdict escalates to the human proposal queue
+    (write_proposal) — never blind-applied, never dropped. `discard` is noise (dropped).
+    """
+    from core.ddd_cultivation import admission_band, apply_to_ddd, write_proposal
+
+    verdict, _reason = admission_band(proposal, project_dir)
+    if verdict == "auto":
+        return apply_to_ddd(proposal, project_dir)
+    if verdict == "review":
+        # Escalate to the human queue — a session lesson the gate won't auto-trust
+        # must be reviewable, not lost (Principle 1: sediment up, not a landfill).
+        try:
+            write_proposal(proposal, project_dir)
+            return "review"
+        except OSError as exc:
+            # Gate-2 HIGH (run_0d60e04e): do NOT return "review" here — the queue write
+            # FAILED, so claiming escalation would be a contract lie that SILENTLY LOSES
+            # the lesson. Sediment it to a durable failsafe log instead (recoverable),
+            # and return a DISTINCT status so the caller logs a real fault (not "review").
+            logger.warning("writeback: escalate write_proposal failed: %s", exc)
+            if _failsafe_persist(proposal, project_dir, exc):
+                return "escalation_failsafe"
+            return "escalation_lost"  # both queue AND failsafe failed → surfaced, not hidden
+    return "discard"  # noise — dropped by design
+
+
+def _failsafe_persist(proposal, project_dir: Path, exc: Exception) -> bool:
+    """Durable fallback when the human-queue write fails: append the lesson to a
+    recoverable JSONL so a review-verdict lesson is never SILENTLY lost (Gate-2 HIGH).
+    Returns True if the failsafe line was written. Best-effort — never raises."""
+    import json
+    from datetime import datetime, timezone
+    try:
+        fs_dir = project_dir / ".artifacts"
+        fs_dir.mkdir(parents=True, exist_ok=True)
+        with (fs_dir / "escalation-failsafe.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "reason": f"write_proposal_failed:{type(exc).__name__}",
+                "target_doc": proposal.target_doc,
+                "target_section": proposal.target_section,
+                "content": (proposal.content or "")[:2000],
+                "source_run_id": proposal.source_run_id,
+                "source_stage": proposal.source_stage,
+            }, ensure_ascii=False) + "\n")
+        return True
+    except OSError as exc2:
+        logger.error("writeback: FAILSAFE persist ALSO failed (%s) — lesson lost: %s",
+                     type(exc2).__name__, (proposal.content or "")[:80])
+        return False
+
+
 class ImprovementWritebackHook:
     """Extracts lessons from closed sessions into project IMPROVEMENT.md.
 
@@ -292,7 +354,7 @@ class ImprovementWritebackHook:
             hook is awaited directly on the event loop (session_hooks.py:577), so
             each call is offloaded with ``asyncio.to_thread`` to avoid blocking it.
         """
-        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+        from core.ddd_cultivation import CultivationProposal
 
         project_dir = improvement_path.parent
         # session_id is NOT a pipeline run_id; tag it distinctly so the changelog /
@@ -314,15 +376,25 @@ class ImprovementWritebackHook:
                     source_stage="writeback",
                     change_type="append",
                 )
-                # Offload the sync file I/O off the event loop (hook is awaited on it).
-                status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
-                # "duplicate" and "rejected_low_value" are the gate WORKING as intended
-                # (the chokepoint dedup + value floor doing their job) — expected, not a
-                # fault. Only an unexpected status (doc_missing / locked / not_safe)
-                # warrants a warning.
-                if status not in ("applied", "created_section", "duplicate", "rejected_low_value"):
+                # UNIFIED GATE (run_0d60e04e C4a): writeback was the ONE DDD ingestion
+                # path that bypassed admission_band — it blind-called apply_to_ddd, so a
+                # session-sourced (trust=n/a) lesson auto-wrote IMPROVEMENT.md with no
+                # adversarial check. Now it routes through the SAME decision gate REFLECT
+                # uses: admission_band decides auto/review/discard (a trust=n/a
+                # non-protected lesson gets the self_adversarial judge), and only an
+                # `auto` verdict reaches the apply executor. `review` escalates to the
+                # human proposal queue (never blind-applied, never silently dropped);
+                # `discard` is noise. Both gate + apply are sync → offloaded together off
+                # the event loop the hook is awaited on (session_hooks.py:577).
+                outcome = await asyncio.to_thread(
+                    _gate_and_apply_writeback, proposal, project_dir
+                )
+                # "duplicate"/"rejected_low_value" = the chokepoint working (dedup + value
+                # floor). "review"/"discard" = the admission gate working. Only an
+                # unexpected apply fault (doc_missing / locked / not_safe) warrants a warn.
+                if outcome not in ("applied", "created_section", "duplicate",
+                                   "rejected_low_value", "review", "discard"):
                     logger.warning(
-                        "writeback: apply_to_ddd returned %s for a %s lesson "
-                        "(session %s)",
-                        status, section, context.session_id[:8],
+                        "writeback: gate+apply returned %s for a %s lesson (session %s)",
+                        outcome, section, context.session_id[:8],
                     )

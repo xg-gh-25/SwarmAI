@@ -1,26 +1,34 @@
-"""Tests for the improvement_writeback_hook UNIFIED intake (run_4c5f81ce).
+"""Tests for the improvement_writeback_hook UNIFIED intake (run_4c5f81ce)
++ C4a unified-gate routing (run_0d60e04e).
 
-After unification, the hook no longer writes IMPROVEMENT.md with its own
-_insert_after_header + bespoke dedup. It routes each extracted lesson through
-ddd_cultivation.apply_to_ddd (the shared admission chokepoint) via
-asyncio.to_thread, tagged source_stage="writeback".
+The hook routes each extracted lesson through the shared admission path. C4a change:
+it no longer BLIND-calls apply_to_ddd — it goes through admission_band FIRST (the same
+decision gate REFLECT uses). A writeback lesson is session-sourced (trust=n/a), so on a
+non-protected doc (IMPROVEMENT.md) it gets the self_adversarial judge; only an `auto`
+verdict applies, `review` escalates to the human queue, `discard` is noise.
 
 Covers:
-  AC1 — a writeback lesson duplicating an existing entry (either format) is
-        rejected by the shared content_signature dedup (not written twice).
-  AC3 — the sync apply_to_ddd is offloaded via asyncio.to_thread (never blocks
-        the event loop the hook is awaited on).
-  AC4 — a novel writeback lesson lands in IMPROVEMENT.md with honest
-        source_stage="writeback" attribution (not "auto-cultivated").
+  AC1 — a duplicating lesson is deduped by the shared content_signature.
+  AC3 — the sync gate+apply is offloaded via asyncio.to_thread (never blocks the loop).
+  AC4 — a judge-`auto` novel lesson lands with honest source_stage="writeback".
+  C4a — writeback routes through admission_band (not blind apply); review→escalate,
+        discard→drop; the self_adversarial judge is invoked for trust=n/a lessons.
 """
 
 import asyncio
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
-
+import core.ddd_cultivation as _dc
 from core.session_hooks import HookContext
 from hooks.improvement_writeback_hook import ImprovementWritebackHook
+
+
+def _judge(verdict: str):
+    """Patch the self_adversarial judge (Bedrock) to a fixed verdict — writeback lessons
+    are trust=n/a, so admission_band runs the judge; tests must not hit the network."""
+    return patch.object(_dc, "self_adversarial_judge", lambda *a, **k: (verdict, "test"))
 
 
 def _ctx(session_id: str = "f1f7201b1234") -> HookContext:
@@ -37,9 +45,13 @@ class TestWritebackRoutesThroughAdmission:
     """AC1 + AC4: writeback lessons go through apply_to_ddd (shared dedup +
     honest provenance), NOT the old _insert_after_header."""
 
-    def test_novel_lesson_lands_with_writeback_attribution(self):
-        """AC4: a new lesson is written to IMPROVEMENT.md via the shared path,
-        tagged 'writeback' (honest provenance, not 'auto-cultivated')."""
+    def test_novel_lesson_applied_when_gate_autos(self):
+        """AC4 (C4a-updated): a novel lesson lands in IMPROVEMENT.md with honest
+        'writeback' provenance — but ONLY when the gate returns `auto`. Writeback
+        proposals are confidence=0.5 (< the 0.7 auto floor), so to exercise the
+        APPLY path we bump confidence above the floor (the low-confidence path is
+        covered by test_low_confidence_writeback_escalates below)."""
+        import unittest.mock as m
         hook = ImprovementWritebackHook(workspace_path="/unused")
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
@@ -47,22 +59,44 @@ class TestWritebackRoutesThroughAdmission:
             doc.write_text("# Lessons\n\n## What Failed\n\n")
             lessons = {"worked": [], "failed": ["retry loop reused a poisoned subprocess"]}
 
-            asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+            # judge pass + a proposal that clears the 0.7 auto floor + clean magnitude
+            # → admission_band returns auto → apply. (Patch confidence at construction
+            #  by patching the gate's threshold read to accept 0.5 is fragile; instead
+            #  raise the proposal confidence via a construction patch.)
+            _orig_init = _dc.CultivationProposal.__init__
+            def _hi_conf_init(self, *a, **k):
+                k["confidence"] = 0.95
+                _orig_init(self, *a, **k)
+            with _judge("pass"), \
+                 m.patch.object(_dc.CultivationProposal, "__init__", _hi_conf_init), \
+                 m.patch("core.ddd_auto_approval.evaluate_auto_approval") as me:
+                me.return_value = type("D", (), {"criteria_met": {
+                    "small_magnitude": True, "circuit_breaker_ok": True}})()
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
 
             text = doc.read_text()
-            # The shared cultivation admission path gives the bullet a bold title
-            # via _normalize_cultivated_bullet (INSERT-ONLY: adds a `[type] ` prefix
-            # and one `**…**` pair around a leading span so the lifecycle parser can
-            # read it). So the lesson does NOT appear as one contiguous run — it is
-            # split by the inserted markers, e.g.
-            #   - [guideline] **retry loop reused a poisoned** subprocess (…, writeback)
-            # Assert the TRUE-LOSSLESS invariant instead: stripping the `**` markers
-            # restores the original lesson verbatim (this is a STRONGER probe than the
-            # old contiguous-substring check — it encodes the no-data-loss contract).
+            # INSERT-ONLY normalization splits the lesson with `**…**` markers; the
+            # no-data-loss invariant is that stripping them restores the text verbatim.
             assert "retry loop reused a poisoned subprocess" in text.replace("**", "")
-            # honest provenance: attribution carries the writeback source label,
-            # NOT reflect/auto-cultivated
-            assert "writeback" in text
+            assert "writeback" in text  # honest provenance, not 'auto-cultivated'
+
+    def test_low_confidence_writeback_escalates(self):
+        """C4a: the DEFAULT writeback confidence (0.5) is below the 0.7 auto floor, so
+        even a judge-pass lesson ESCALATES to review (no longer blind-applied). This is
+        the behavior change C4a introduces — session lessons are no longer auto-written."""
+        hook = ImprovementWritebackHook(workspace_path="/unused")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# Lessons\n\n## What Failed\n\n")
+            lessons = {"worked": [], "failed": ["retry loop reused a poisoned subprocess again"]}
+
+            with _judge("pass"):  # judge passes, but confidence 0.5 < 0.7 floor
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+
+            assert "retry loop reused a poisoned" not in doc.read_text().replace("**", "")
+            queue = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
+            assert len(queue) == 1, "a below-floor writeback lesson must escalate, not vanish"
 
     def test_duplicate_against_cultivation_format_is_rejected(self):
         """AC1: a writeback lesson whose text already exists as a CULTIVATION-
@@ -78,7 +112,8 @@ class TestWritebackRoutesThroughAdmission:
             )
             lessons = {"worked": [], "failed": [text]}
 
-            asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+            with _judge("pass"):
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
 
             # still exactly one occurrence of the lesson text
             assert doc.read_text().count(text) == 1
@@ -105,6 +140,91 @@ class TestWritebackOffloadsEventLoop:
             doc.write_text("# L\n\n## What Worked\n\n")
             lessons = {"worked": ["clean single-writer intake works"], "failed": []}
 
-            asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+            with _judge("pass"):
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
 
-        assert calls["to_thread"] >= 1, "apply_to_ddd must be offloaded via asyncio.to_thread"
+        assert calls["to_thread"] >= 1, "gate+apply must be offloaded via asyncio.to_thread"
+
+
+class TestC4aUnifiedGateRouting:
+    """C4a: writeback routes through admission_band, NOT a blind apply_to_ddd."""
+
+    def test_review_verdict_escalates_not_applied(self):
+        """A judge-`suspect` (trust=n/a) → review → escalated to the human proposal
+        queue, NOT written to IMPROVEMENT.md."""
+        hook = ImprovementWritebackHook(workspace_path="/unused")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# L\n\n## What Failed\n\n")
+            lessons = {"worked": [], "failed": ["a dubious unverifiable claim about the world"]}
+
+            with _judge("suspect"):
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+
+            # NOT applied to the doc …
+            assert "dubious unverifiable claim" not in doc.read_text().replace("**", "")
+            # … but escalated to the human proposal queue (not lost).
+            queue = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
+            assert len(queue) == 1, "review verdict must escalate to the human queue"
+
+    def test_discard_verdict_drops_nothing_persisted(self):
+        """A judge-`noise` → discard → not applied AND not queued (noise is dropped)."""
+        hook = ImprovementWritebackHook(workspace_path="/unused")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# L\n\n## What Failed\n\n")
+            lessons = {"worked": [], "failed": ["some genuine-looking lesson text here now"]}
+
+            with _judge("noise"):
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+
+            assert "some genuine-looking lesson" not in doc.read_text().replace("**", "")
+            proposals_dir = project_dir / ".artifacts" / "proposals"
+            queue = list(proposals_dir.glob("*.json")) if proposals_dir.is_dir() else []
+            assert queue == [], "discard verdict must NOT queue anything"
+
+    def test_review_write_failure_goes_to_failsafe_not_lost(self):
+        """Gate-2 HIGH regression: if the human-queue write FAILS on a review verdict,
+        the lesson must NOT be silently lost — it lands in the durable failsafe JSONL and
+        the outcome is a visible fault status (not a lying "review")."""
+        import json as _json
+        hook = ImprovementWritebackHook(workspace_path="/unused")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# L\n\n## What Failed\n\n")
+            lessons = {"worked": [], "failed": ["a lesson whose queue write will fail hard"]}
+
+            with _judge("suspect"), \
+                 patch.object(_dc, "write_proposal", side_effect=OSError("disk full")):
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+
+            # not applied to the doc, queue write failed → must be in the failsafe log
+            fs = project_dir / ".artifacts" / "escalation-failsafe.jsonl"
+            assert fs.is_file(), "a failed escalation must be sedimented to the failsafe log"
+            rec = _json.loads(fs.read_text().strip().splitlines()[0])
+            assert "queue write will fail hard" in rec["content"]
+            assert rec["reason"].startswith("write_proposal_failed")
+
+    def test_judge_is_actually_invoked_for_writeback(self):
+        """The whole point of C4a: a trust=n/a writeback lesson MUST reach the judge
+        (it was blind-applied before). Prove the judge is called."""
+        hook = ImprovementWritebackHook(workspace_path="/unused")
+        calls = {"n": 0}
+
+        def _spy(*a, **k):
+            calls["n"] += 1
+            return ("pass", "spied")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# L\n\n## What Worked\n\n")
+            lessons = {"worked": ["a real reusable engineering lesson worth keeping here"], "failed": []}
+
+            with patch.object(_dc, "self_adversarial_judge", _spy):
+                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
+
+        assert calls["n"] == 1, "writeback (trust=n/a) must go through the self_adversarial judge"
