@@ -162,7 +162,23 @@ def is_noise_entry(entry: str) -> bool:
     # Agent internal monologue
     if AGENT_MONOLOGUE.match(entry):
         return True
-    # Checkbox/status markers that aren't decisions
+    # Emoji-prefix status markers. A BARE marker ("✅ done", "🟡 wip") is noise — but a
+    # CURATED entry that merely OPENS with an emoji yet carries a **bold title** or
+    # substantial content ("🟡 **Frontend reconcile race** — GUARDED …") is real knowledge,
+    # NOT noise (run_85beeb04: the old blanket rule wrongly flagged 8 real MEMORY
+    # Open-Thread/COE entries). Discriminate: emoji-prefixed IS noise only when it lacks a
+    # bold title AND is short (a bare status word, not a titled/described entry).
     if _EMOJI_PREFIX.match(entry):
-        return True
+        rest = _EMOJI_PREFIX.sub("", entry, count=1).strip()
+        # Gate-2 (run_85beeb04): AGENT_MONOLOGUE at line 163 is anchored at ^, so the emoji
+        # prefix HIDES a monologue from it ("✅ I'll diagnose…" doesn't match there). Re-check
+        # the STRIPPED rest — else emoji-prefixed monologue escapes as non-noise into MEMORY.
+        if AGENT_MONOLOGUE.match(rest):
+            return True
+        # A real **bold span** (balanced, non-empty) marks a curated titled entry — a stray
+        # "**" must NOT whitelist junk (Gate-2), so require a full span, not a substring.
+        has_bold_title = bool(re.search(r"\*\*[^*]+\*\*", rest))
+        is_substantial = len(rest) >= 30
+        if not has_bold_title and not is_substantial:
+            return True
     return False

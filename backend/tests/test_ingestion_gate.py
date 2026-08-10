@@ -31,7 +31,44 @@ class TestTwoLayerNoiseSplit:
         from core.ingestion_gate import structural_noise
         assert structural_noise("| col | col |") is True            # table fragment
         assert structural_noise("I'll diagnose the root cause") is True  # agent monologue
-        assert structural_noise("✅ done") is True              # emoji-prefix marker
+        assert structural_noise("✅ done") is True              # emoji-prefix BARE status marker
+
+    def test_emoji_prefix_bare_status_is_noise(self):
+        # run_85beeb04: a BARE emoji status marker (short, no titled content) is noise.
+        from core.ingestion_gate import structural_noise
+        assert structural_noise("✅ done") is True
+        assert structural_noise("🟡 wip") is True
+        assert structural_noise("❌ failed") is True
+
+    def test_emoji_prefixed_titled_entry_is_NOT_noise(self):
+        # run_85beeb04 BUGFIX: a curated MEMORY entry that merely OPENS with an emoji but
+        # carries a **bold title** + substantial content is NOT structural noise. The old
+        # _EMOJI_PREFIX rule flagged these identically to '✅ done' → 8 real MEMORY
+        # entries wrongly audited as noise.
+        from core.ingestion_gate import structural_noise
+        assert structural_noise("🟡 **Frontend reconcile race** — GUARDED (not fixed)") is False
+        assert structural_noise("✅ **R6 Session arbitration** — IMPLEMENTED + DEPLOYED (2026-06)") is False
+        assert structural_noise("⚠️ **E2E chain missing** — PARTIALLY RESOLVED: smoke_e2e.py added") is False
+
+    def test_emoji_prefixed_monologue_is_STILL_noise(self):
+        # Gate-2 over-correction guard (run_85beeb04): the emoji prefix must NOT let agent
+        # monologue escape — AGENT_MONOLOGUE is ^-anchored so the emoji hides it; the fix
+        # re-checks the stripped rest. These are long (>30 chars) with no bold, so they'd
+        # escape the length/bold discriminator if the monologue re-check were missing.
+        from core.ingestion_gate import structural_noise
+        assert structural_noise("✅ I'll diagnose the root cause of this issue and fix it") is True
+        assert structural_noise("🟡 Let me check the logs and then update the cache layer") is True
+
+    def test_emoji_bold_check_requires_balanced_span(self):
+        # Gate-2: the bold-title whitelist requires a BALANCED **…** span, not a stray '**'
+        # substring. A single dangling '**' does NOT count as a title (so it can't be the
+        # thing that rescues an entry from the noise floor).
+        from core.extraction_patterns import _EMOJI_PREFIX
+        import re
+        # a real balanced span → recognized as a title
+        assert bool(re.search(r"\*\*[^*]+\*\*", "**Real Title** — desc")) is True
+        # a stray/dangling '**' → NOT a title
+        assert bool(re.search(r"\*\*[^*]+\*\*", "** dangling no close")) is False
 
     def test_ddd_value_floor_rejects_short_fragment(self):
         # The ≥5-word floor is a DDD lesson-value gate — NOT applied to MEMORY.
