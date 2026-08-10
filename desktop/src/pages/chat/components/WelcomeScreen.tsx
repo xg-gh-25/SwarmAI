@@ -203,8 +203,10 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
         onOpenBrain={(name) => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub', { detail: { brain: name } }))}
       />
 
-      {/* Briefing content */}
-      {!loaded ? null : hasAnyBriefing ? (
+      {/* Briefing content — renders only when there is something to show.
+          Empty/unloaded briefing shows nothing (no marketing fallback): the
+          honest empty state is a quiet screen, not a slogan (run: welcome-declutter). */}
+      {loaded && hasAnyBriefing && (
         <div className="w-full space-y-3 mt-2">
           {/* Focus bar (full width) */}
           {hasFocus && (
@@ -231,21 +233,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
               </p>
             </div>
           )}
-        </div>
-      ) : (
-        /* Fallback when no briefing data */
-        <div className="mt-4 space-y-3 text-center">
-          <p className="text-base text-[var(--color-text)]">
-            Work smarter. Move faster. Stress less.
-          </p>
-          <p className="text-sm text-[var(--color-text-secondary)] max-w-sm mx-auto">
-            Remembers everything. Learns every session. Gets better every time.
-          </p>
-          <div className="flex items-center gap-4 mt-4 text-[var(--color-text-secondary)] justify-center">
-            {['Chat', 'Research', 'Code', 'Remember'].map((label) => (
-              <span key={label} className="text-[11px]">{label}</span>
-            ))}
-          </div>
         </div>
       )}
       </div>

@@ -112,9 +112,8 @@ function DecisionBlock({ brains, onOpenBrain }: { brains: BrainSummary[]; onOpen
             <span className="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(240,165,0,.14)', color: '#f0a500' }}>
               {b.health.pending} pending
             </span>
-            {b.health.sinking > 0 && (
-              <span className="text-[11px] text-[var(--color-text-faint)] shrink-0">{b.health.sinking} sinking</span>
-            )}
+            {/* `sinking` removed from the first screen (run: welcome-declutter): it is an
+                internal aging signal with no clear user action — lives in Brain Hub detail only. */}
           </button>
         ))}
       </div>
