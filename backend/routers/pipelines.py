@@ -467,6 +467,24 @@ async def pipeline_analytics(
     # _effective_analytics_status (Gate-1 #4), so completions are never undercounted.
     runs = [r for r in all_runs if _in_window(r) and not _is_garbage_run(r)]
 
+    # Pre-fetch ALL run metrics OFF the event loop in ONE to_thread hop. Each
+    # _run_metrics_cached does a stat()+read_text() (and sometimes a write_text() to
+    # cache) — inline in the loop below that was hundreds of synchronous file ops
+    # DIRECTLY on the loop (measured: a ~900-run scan), stalling every other request
+    # and SSE stream for the whole aggregation. _load_pipeline_runs was already
+    # offloaded but this sibling read loop was not — the same half-migration pattern.
+    # The metrics are keyed by (project, run_id); the loop below is now pure in-memory
+    # aggregation over this dict.
+    def _prefetch_metrics() -> dict:
+        out: dict = {}
+        for raw in runs:
+            project = raw.get("_project", raw.get("project", "unknown"))
+            run_id = raw.get("id", "unknown")
+            out[(project, run_id)] = _run_metrics_cached(project, run_id, raw)
+        return out
+
+    metrics_by_run = await asyncio.to_thread(_prefetch_metrics)
+
     by_project: dict[str, list[PipelineRunSummary]] = {}
     trend_buckets: dict[str, dict] = {}
     overall_completed = 0
@@ -481,7 +499,7 @@ async def pipeline_analytics(
         run_id = raw.get("id", "unknown")
         status = raw.get("status", "unknown")
         profile = raw.get("profile") or "unknown"
-        m = _run_metrics_cached(project, run_id, raw)
+        m = metrics_by_run.get((project, run_id), {})  # pre-fetched off-loop above
         cycle = m.get("duration_minutes")
         tok_actual = int(m.get("total_tokens") or 0)
         budget = raw.get("budget") or {}
