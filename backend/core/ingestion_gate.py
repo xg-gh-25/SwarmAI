@@ -658,6 +658,16 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str, str | Non
                 if sw:
                     import logging as _logging
                     _log = _logging.getLogger(__name__)
+                    # BUDGET GUARD (self-audit risk#2): _distill_entry is a real Bedrock
+                    # call and MUST share the judge's rolling-window rate limit — else a
+                    # distillation fan-out over hundreds of shape-dirty candidates = an
+                    # un-throttled Bedrock storm (the exact reason the judge is budgeted).
+                    # Over-budget → skip distill, fail-OPEN to original (judge already
+                    # admitted it; a shape concern must never drop or block real knowledge).
+                    if not _judge_budget_available():
+                        _log.info("ingestion_gate distill SKIPPED (budget exhausted, "
+                                  "keeping original) [%s]: %.80s", resolved, raw_text)
+                        return ("auto", resolved, reason, None)
                     try:
                         cand = _distill_entry(raw_text)
                         # RE-VALIDATE the distiller's output before trusting it (adversarial

@@ -850,3 +850,25 @@ class TestDistillOutputRevalidation:
         with self._judge("pass"), patch.object(ig, "_distill_entry", lambda t: clean):
             v, sec, reason, distilled = ig.admit_memory_lesson(dirty)
         assert distilled == clean, "a clean, concise distill output must be used"
+
+
+class TestDistillBudgetGuard:
+    """Self-audit risk#2: _distill_entry is real Bedrock load and must share the judge's
+    rolling-window budget. Over-budget → skip distill, fail-open to original (never drop)."""
+
+    def test_distill_skipped_when_budget_exhausted(self, monkeypatch):
+        import core.ingestion_gate as ig
+        # NON-VACUOUS: judge tier and distill SHARE _judge_budget_available. Let the JUDGE
+        # call succeed (verdict=auto) then have the DISTILL budget-check fail — else verdict
+        # never reaches auto and the test passes for the wrong reason (discard, not skip).
+        # side_effect sequences the two checks: [True (judge admits), False (distill skip)].
+        monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
+        seq = iter([True, False])
+        monkeypatch.setattr(ig, "_judge_budget_available", lambda: next(seq))
+        called = {"n": 0}
+        monkeypatch.setattr(ig, "_distill_entry", lambda t: called.__setitem__("n", called["n"]+1) or "x")
+        dirty = "- [guideline] **X** — this session " + " ".join(["w"] * 60)
+        v, sec, reason, distilled = ig.admit_memory_lesson(dirty)
+        assert v == "auto", "judge admitted (first budget check True) — must reach the distill step"
+        assert called["n"] == 0, "distill must be SKIPPED when its budget check fails"
+        assert distilled is None, "budget-exhausted distill → fail-open to original (never dropped)"
