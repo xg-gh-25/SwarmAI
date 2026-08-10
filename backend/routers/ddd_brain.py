@@ -174,6 +174,43 @@ def _git_status_dirty(project_dir: Path) -> bool:
     return bool(result.stdout.strip("\0").strip())
 
 
+def _batch_dirty_project_dirs(project_dirs: list[Path]) -> Optional[set[str]]:
+    """ONE whole-repo `git status --porcelain` → the set of project dir names that
+    have any uncommitted change under them. Replaces N per-project `git status` forks
+    in the gallery (list_brains ran _git_status_dirty once PER project). Keyed by the
+    top-level project dir NAME (Projects/<name>/...), matching how the gallery iterates.
+
+    Returns None (NOT an empty set) on .git-absent / non-zero / timeout / OSError, so
+    the caller can tell "batch ran, this project is clean" (→ authoritative False) from
+    "batch could not run" (→ fall back to the per-project _git_status_dirty fork). An
+    empty set would fail-OPEN: a git hiccup would mark every project clean and suppress
+    the fallback. Scoped to Projects/ so a dirty file outside it never marks a project."""
+    ws = _workspace_root()
+    if not (ws / ".git").exists():
+        return None
+    names = {d.name for d in project_dirs}
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "-unormal", "--", "Projects"],
+            cwd=str(ws), capture_output=True, text=True, timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    dirty: set[str] = set()
+    for rec in result.stdout.split("\0"):
+        rec = rec.strip()
+        if not rec:
+            continue
+        path = rec[3:]  # "XY <path>"
+        # path is ws-relative posix: Projects/<name>/...
+        parts = path.split("/")
+        if len(parts) >= 2 and parts[0] == "Projects" and parts[1] in names:
+            dirty.add(parts[1])
+    return dirty
+
+
 def _git_last_commit_iso(project_dir: Path) -> Optional[str]:
     """ISO timestamp of the last commit touching this project subtree, or None."""
     ws = _workspace_root()
@@ -519,7 +556,8 @@ def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
     return entries
 
 
-def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinking: int) -> dict:
+def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinking: int,
+                       dirty_override: Optional[bool] = None) -> dict:
     """The CHEAP health fields present at EVERY density (gallery + detail).
 
     `sinking` is passed in (computed once by build_brain_state via
@@ -527,11 +565,18 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
     work here is git status + the pre-computed counts — no section_health read, no
     detail-metrics N-glob. (Correction: the gallery DOES parse ② docs once for
     sinking/typeCounts; it just avoids the expensive noise/section_health block.)
+
+    `dirty_override` (run: git-fork batching): the gallery computes uncommitted-ness
+    for ALL projects in ONE whole-repo `git status` (_batch_dirty_project_dirs) and
+    passes the per-project bool here, instead of this helper forking `git status` once
+    PER project (N forks → 1). None (the detail/single-brain path) → self-fork via
+    _git_status_dirty, unchanged.
     """
+    uncommitted = dirty_override if dirty_override is not None else _git_status_dirty(project_dir)
     return {
         "sinking": sinking,
         "pending": pending,
-        "uncommitted": _git_status_dirty(project_dir),
+        "uncommitted": uncommitted,
         "lastChangeRelative": _relative_time(_git_last_commit_iso(project_dir)),
     }
 
@@ -539,6 +584,7 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
 def build_brain_state(
     project_dir: Path, *, with_noise: bool, pending_override: Optional[int] = None,
     parsed: Optional[dict[str, list[EntryMetadata]]] = None,
+    dirty_override: Optional[bool] = None,
 ) -> dict:
     """THE single source of a brain's state (Cycle-1 unify — no fork).
 
@@ -569,7 +615,8 @@ def build_brain_state(
     # `parsed` (run_43dc94f6): the detail path parses the ② docs once and passes them
     # here so stats + metrics reuse them (None → self-parse, gallery unchanged).
     stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
-    health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"])
+    health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"],
+                                dirty_override=dirty_override)
     if with_noise:
         # Thread the already-computed `pending` into the detail metrics so
         # escalationPending reuses it instead of a SECOND _pending_count() scan
@@ -808,13 +855,17 @@ def _read_kind(project_dir: Path) -> str:
     return "knowledge"
 
 
-def _brain_summary(project_dir: Path, pending_override: Optional[int] = None) -> dict:
+def _brain_summary(project_dir: Path, pending_override: Optional[int] = None,
+                   dirty_override: Optional[bool] = None) -> dict:
     """Gallery projection — delegates to the single builder (no fork). Cheap:
     with_noise=False never calls compute_reclaimable_noise. `pending_override` is
     the pre-computed per-brain Need-You count from the gallery's single collect(ws)
-    aggregate (see list_brains) — avoids a per-project full-workspace attention scan."""
+    aggregate (see list_brains) — avoids a per-project full-workspace attention scan.
+    `dirty_override` is the pre-computed uncommitted bool from the gallery's single
+    whole-repo git status (_batch_dirty_project_dirs) — avoids a per-project git fork."""
     return build_brain_state(
-        project_dir, with_noise=False, pending_override=pending_override
+        project_dir, with_noise=False, pending_override=pending_override,
+        dirty_override=dirty_override,
     )
 
 
@@ -970,9 +1021,21 @@ async def list_brains() -> dict:
     # parse helpers already swallow UnicodeError/OSError; this is the outer
     # belt-and-suspenders so an unforeseen raise in ONE summary can't take the
     # list down (the resilient-lens contract).
+    # Uncommitted-ness for ALL projects in ONE whole-repo git status, instead of a
+    # `git status` fork PER project inside each _brain_summary (N forks → 1). Off-loop
+    # (subprocess is blocking). Fail-soft: an empty set means every project falls back
+    # to its own _git_status_dirty fork at the call site (identity-preserving).
+    dirty_names = await asyncio.to_thread(_batch_dirty_project_dirs, dirs)
+
+    def _dirty_for(name: str) -> Optional[bool]:
+        # None → batch couldn't run → _brain_summary falls back to a per-project fork.
+        # A set → authoritative membership (True dirty / False clean).
+        return None if dirty_names is None else (name in dirty_names)
+
     results = await asyncio.gather(
         *(
-            asyncio.to_thread(_brain_summary, d, pending_by_brain.get(d.name, 0))
+            asyncio.to_thread(_brain_summary, d, pending_by_brain.get(d.name, 0),
+                              _dirty_for(d.name))
             for d in dirs
         ),
         return_exceptions=True,

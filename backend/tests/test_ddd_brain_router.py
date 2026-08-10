@@ -222,6 +222,42 @@ class TestBrainsList:
             f"expected exactly 1 (aggregate-once-then-partition)"
         )
 
+    def test_git_status_batched_not_per_project(self, client, monkeypatch):
+        """Perf: GET /ddd/brains must resolve uncommitted-ness for all projects in ONE
+        whole-repo git status (_batch_dirty_project_dirs), NOT a per-project
+        _git_status_dirty fork. Count _git_status_dirty invocations during one GET —
+        the batched path calls it ZERO times (the batch supplies dirty_override)."""
+        import routers.ddd_brain as m
+
+        calls = {"per_project": 0, "batch": 0}
+        real_dirty = m._git_status_dirty
+        real_batch = m._batch_dirty_project_dirs
+
+        def counting_dirty(*a, **k):
+            calls["per_project"] += 1
+            return real_dirty(*a, **k)
+
+        def counting_batch(*a, **k):
+            calls["batch"] += 1
+            return real_batch(*a, **k)
+
+        monkeypatch.setattr(m, "_git_status_dirty", counting_dirty)
+        monkeypatch.setattr(m, "_batch_dirty_project_dirs", counting_batch)
+
+        resp = client.get("/api/ddd/brains")
+        assert resp.status_code == 200
+        n_projects = len(resp.json()["brains"])
+        assert n_projects >= 2, "test needs ≥2 projects to distinguish batch-vs-per-project"
+        assert calls["batch"] == 1, f"expected ONE batch git status, got {calls['batch']}"
+        # Batched path supplies dirty_override for every project → no per-project fork.
+        assert calls["per_project"] == 0, (
+            f"_git_status_dirty forked {calls['per_project']}× — the batch should have "
+            f"replaced all per-project git-status forks"
+        )
+        # And uncommitted must still be a real bool in the response (not dropped).
+        for b in resp.json()["brains"]:
+            assert isinstance(b["health"]["uncommitted"], bool)
+
     def test_no_recall_heat_number_anywhere(self, client):
         """ref_count is dead → NO heat/crown/recall number in the payload (R30#4)."""
         raw = client.get("/api/ddd/brains").text.lower()
