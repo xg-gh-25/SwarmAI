@@ -1319,7 +1319,7 @@ def test_add_member_rejects_ssrf_ip_url_for_rss(tmp_config_members: Path, bad_ur
 
 @pytest.mark.parametrize("ok_url", [
     "https://example.com/feed.xml",       # public hostname
-    "http://blog.aws.amazon.com/rss",     # public hostname
+    "https://blog.aws.amazon.com/rss",    # public hostname (https — http would dead-fetch)
     "https://8.8.8.8/feed",                # public IP literal (must still pass)
 ])
 def test_add_member_accepts_public_url_for_rss(tmp_config_members: Path, ok_url: str) -> None:
@@ -1329,3 +1329,15 @@ def test_add_member_accepts_public_url_for_rss(tmp_config_members: Path, ok_url:
     data = yaml.safe_load(tmp_config_members.read_text())
     f = next(x for x in data["feeds"] if x["id"] == "rssf")
     assert ok_url in f["config"]["urls"]
+
+
+def test_add_member_rejects_http_url_for_rss(tmp_config_members: Path) -> None:
+    # http:// must be rejected at write time: the RSS egress guard is https-ONLY
+    # (jobs.adapters.http_client._validate_egress), so an http URL passes no fetch — it
+    # would be a dead subscription silently failing forever. Align write-gate ↔ fetch.
+    from routers.community_api import add_member, MemberBody
+
+    with pytest.raises(HTTPException) as ei:
+        _run(add_member("rssf", MemberBody(value="http://blog.aws.amazon.com/rss")))
+    assert ei.value.status_code == 422
+    assert "https" in str(ei.value.detail).lower()

@@ -300,7 +300,8 @@ def _member_key_for_type(feed_type: str) -> str | None:
 def _validate_member(key: str, value: str) -> None:
     """#8 strict per-KIND validation — raise _InvalidMember (→422) for a value that would
     silently fail at fetch time. Keeps a dead subscription out of config.
-      - urls (rss):            must parse as an http(s):// URL with a netloc
+      - urls (rss):            must parse as an https:// URL with a netloc (http rejected —
+                               the fetch egress guard is https-only, so http would dead-fail)
       - repos (github-*):      must be `owner/repo` — exactly one '/', both non-empty, no whitespace
       - keywords/concept_keywords/other: free-text — non-empty already guaranteed by the caller
     `value` is already .strip()'d and non-empty when this runs."""
@@ -308,8 +309,12 @@ def _validate_member(key: str, value: str) -> None:
         from urllib.parse import urlparse
 
         p = urlparse(value)
-        if p.scheme not in ("http", "https") or not p.netloc:
-            raise _InvalidMember("must be an http(s):// URL")
+        # https-ONLY (not http): the RSS egress guard rejects any non-https scheme
+        # (jobs.adapters.http_client — "scheme not allowed: 'http' (https only)"), so an
+        # http:// URL would pass this write-time gate but SILENTLY fail every fetch. Reject
+        # it here so a dead http subscription never lands in config (align write ↔ fetch).
+        if p.scheme != "https" or not p.netloc:
+            raise _InvalidMember("must be an https:// URL")
         # SSRF hygiene (defense-in-depth — the RSS fetch already egress-guards, but a
         # dead/internal URL must not land in config.yaml). Reject a private/link-local/
         # loopback/metadata IP LITERAL. Use .hostname, never .netloc: .netloc keeps

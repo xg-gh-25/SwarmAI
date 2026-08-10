@@ -203,8 +203,9 @@ def _append_judge_telemetry(text: str, section: str, verdict: str, reason: str) 
 # hundreds of candidates (lessons + decisions + corrections + competence), so an
 # unbounded fan-out = a serial Bedrock storm (minutes of wall-clock, throttle risk)
 # on a hot write path. This caps judge INVOCATIONS in a rolling wall-clock window;
-# over-budget candidates fail-closed to "review" (recoverable — sedimented by the
-# caller, never dropped) WITHOUT issuing a Bedrock call. A time WINDOW (not a
+# over-budget candidates fail-closed to "review"/budget_exhausted (recoverable — the
+# caller DEFERS to distill-pending.jsonl or archives it, NOT the deleted review queue;
+# never dropped) WITHOUT issuing a Bedrock call. A time WINDOW (not a
 # monotonic counter) is deliberate: it self-heals with no caller-side reset, so a
 # caller that forgets to reset can't permanently wedge the judge (the "declared but
 # not enforced" trap). Env-overridable for tests / ops.
@@ -510,10 +511,15 @@ def ingestion_gate(
                 # Self-adversarial refute. pass → continue; suspect → review; noise → discard.
                 # FAIL-CLOSED inside self_adversarial_judge (error → suspect → review).
                 # BUDGET (fan-out cap): the judge does a serial Bedrock call per candidate;
-                # once the rolling-window budget is spent, hold the REMAINING candidates
-                # for review WITHOUT a Bedrock call — recoverable (sedimented upstream),
-                # never dropped, and it caps a session-close storm at _JUDGE_BUDGET_MAX
-                # calls / window instead of hundreds. Fail-toward-review keeps it safe.
+                # once the rolling-window budget is spent, return the REMAINING candidates
+                # as "review"/budget_exhausted WITHOUT a Bedrock call. This is NOT the old
+                # human-review queue (deleted run_86f44f35) — the CALLER special-cases
+                # judge:budget_exhausted: distillation lesson/decision paths DEFER it to
+                # distill-pending.jsonl (re-judged next cycle with a fresh budget), and the
+                # EVOLUTION path archives it recoverably. Either way it is never dropped,
+                # and this caps a session-close storm at _JUDGE_BUDGET_MAX calls / window
+                # instead of hundreds. (If a NEW caller ignores this reason, "review" with
+                # no queue would silently discard — every caller MUST branch on it.)
                 if not _judge_budget_available():
                     return GateVerdict("review", ran, "judge:budget_exhausted")
                 # PROPAGATE jr (judge reason) into the verdict so a judge INFRA failure

@@ -1454,12 +1454,17 @@ class DistillationTriggerHook:
         sidecar) would flow straight into the cognitive substrate.
 
         This closes the hole STRUCTURALLY: every entry runs through ingestion_gate
-        (trigger=evolution_distill: noise→keep_type_holdback→judge). Only a gate-"auto"
-        entry is written. An auto-extracted EVOLUTION entry is trust=n/a and is typically
-        a KEEP_TYPE (correction) → keep_type_holdback → review → HELD (a constitutional
-        entry must not silently auto-write; it goes to a recoverable sink for human intake,
-        never a blind append). "discard" = structural noise, dropped. Returns the subset
-        that may be auto-written (usually empty by design — that's the point).
+        (trigger=evolution_distill: noise→judge — AUTONOMY-FIRST run_86f44f35 REMOVED
+        keep_type_holdback from this tier list, see TRIGGER_TIERS). Only a gate-"auto"
+        entry is written. The judge is now the SOLE admit authority: pass → auto-write to
+        its section; every NON-pass verdict (suspect / noise / budget_exhausted) → DISCARD
+        to the recoverable archive (_archive_discarded / discarded-*.jsonl). There is NO
+        human-review sink and NO human-intake step — the review queue was deleted
+        (run_86f44f35); "recoverable" means the archive file, which nobody is required to
+        process. NOTE: unlike the lesson/decision paths (which DEFER budget_exhausted to
+        distill-pending.jsonl for re-judging), this EVOLUTION path archives it — a
+        budget-starved correction is recoverable but not auto-retried. Returns the subset
+        that may be auto-written (usually empty by design).
         """
         from core.ingestion_gate import ingestion_gate
 

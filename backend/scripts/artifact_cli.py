@@ -1014,10 +1014,14 @@ def cmd_cleanup_orphans(args, reg: ArtifactRegistry) -> None:
 
 
 def _trash_dir(path: Path) -> None:
-    """Delete a run directory RECOVERABLY. Prefers macOS `trash` (goes to Trash,
-    undoable — STEERING safety: trash > rm); falls back to shutil.rmtree only if
-    the trash tool is absent/fails (e.g. CI, tmpfs). Raises on total failure so the
-    caller counts it as not-purged."""
+    """Delete a run directory, PREFERRING recoverable trash but SILENTLY DEGRADING to
+    PERMANENT delete when trash is unavailable. Path 1 (recoverable): macOS `trash` →
+    goes to Trash, undoable (STEERING safety: trash > rm). Path 2 (PERMANENT, NOT
+    recoverable): shutil.rmtree — taken when the `trash` tool is absent (CI, tmpfs, PATH
+    gap under launchd) or errors. This is a deliberate degrade (a purge must still make
+    progress), but it is NOT "recoverable" as the name implies — so which path ran is
+    RECORDED to stderr, otherwise a permanent delete looks identical to a recoverable one
+    in the logs. Raises on total failure so the caller counts it as not-purged."""
     import shutil
     import subprocess
     trash_bin = shutil.which("trash")
@@ -1025,9 +1029,15 @@ def _trash_dir(path: Path) -> None:
         try:
             r = subprocess.run([trash_bin, str(path)], capture_output=True, timeout=30)
             if r.returncode == 0:
+                print(json.dumps({"trash": "recoverable", "path": str(path)}),
+                      file=sys.stderr)
                 return
         except (OSError, subprocess.SubprocessError):
             pass  # fall through to rmtree
+    # PERMANENT delete path — make it auditable (see docstring): the delete is real and
+    # unrecoverable, so record it rather than let it pass as a recoverable trash.
+    print(json.dumps({"trash": "PERMANENT_rmtree", "path": str(path),
+                      "reason": "trash tool absent or failed"}), file=sys.stderr)
     shutil.rmtree(path)
 
 
