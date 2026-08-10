@@ -623,3 +623,71 @@ class TestEnsureReportForRun:
         src = inspect.getsource(build_surface_events)
         assert "cmd_run_report" not in src, "build_surface_events must stay pure (no report-gen)"
         assert "to_thread" not in src, "build_surface_events must not spawn work"
+
+
+# ── parse_completion_run_id — the backend-auto Canvas-surface pre-filter ─────────
+# (run_beff6754) Canvas auto-open on pipeline completion must NOT depend on the agent
+# remembering to call surface_run_outputs (the failed 2026-08-05 prose fix). Instead
+# the orchestrator observes the `run-update --status completed` Bash command and
+# auto-fires build_surface_events. This pure parser is the cheap PRE-FILTER that
+# recognizes such a command and extracts its run_id; the orchestrator then confirms
+# authority against run.json status (a blocked completion exits 0, so the command
+# string alone is not proof — run.json is). These tests pin the parser contract.
+class TestParseCompletionRunId:
+    def test_matches_spaced_status_and_extracts_run_id(self):
+        """The canonical form INSTRUCTIONS.md step 6 emits: argparse spaced flags."""
+        from core.ui_actions import parse_completion_run_id
+        cmd = ("python backend/scripts/artifact_cli.py run-update "
+               "--project SwarmAI --run-id run_beff6754 --status completed")
+        assert parse_completion_run_id(cmd) == "run_beff6754"
+
+    def test_matches_equals_form_both_flags(self):
+        """A defensive second form (--flag=value) — matched so a hand-typed variant
+        still surfaces (F1 from Gate-1: accept both, the CLI itself only writes spaced
+        but the observer must not silently miss the equals form)."""
+        from core.ui_actions import parse_completion_run_id
+        cmd = ("python backend/scripts/artifact_cli.py run-update "
+               "--run-id=run_abc123 --status=completed --project=SwarmAI")
+        assert parse_completion_run_id(cmd) == "run_abc123"
+
+    def test_flag_order_independent(self):
+        """--status may precede --run-id."""
+        from core.ui_actions import parse_completion_run_id
+        cmd = "artifact_cli.py run-update --status completed --run-id run_xyz789 --project P"
+        assert parse_completion_run_id(cmd) == "run_xyz789"
+
+    def test_none_when_not_run_update(self):
+        from core.ui_actions import parse_completion_run_id
+        assert parse_completion_run_id("python foo.py --status completed --run-id run_x") is None
+
+    def test_none_when_status_not_completed(self):
+        """--status paused / running / abandoned MUST NOT match — only a genuine
+        completion surfaces (F4: no surface on a non-completion update)."""
+        from core.ui_actions import parse_completion_run_id
+        for st in ("paused", "running", "abandoned", "cancelled"):
+            cmd = f"artifact_cli.py run-update --run-id run_x --status {st}"
+            assert parse_completion_run_id(cmd) is None, f"status={st} must not match"
+
+    def test_none_when_no_status_flag(self):
+        """A run-update that only records a stage (no --status completed) must NOT
+        surface — else every stage-json update would pop the Canvas."""
+        from core.ui_actions import parse_completion_run_id
+        cmd = "artifact_cli.py run-update --run-id run_x --stage-json '{\"stage\":\"build\"}'"
+        assert parse_completion_run_id(cmd) is None
+
+    def test_none_when_run_id_missing(self):
+        from core.ui_actions import parse_completion_run_id
+        assert parse_completion_run_id("artifact_cli.py run-update --status completed") is None
+
+    def test_no_false_positive_status_substring(self):
+        """'completed' as a substring of another token (e.g. a --reason string) must
+        not trip the matcher when it is not the --status value."""
+        from core.ui_actions import parse_completion_run_id
+        cmd = ("artifact_cli.py run-update --run-id run_x --status paused "
+               "--reason 'work not completed yet'")
+        assert parse_completion_run_id(cmd) is None
+
+    def test_empty_and_garbage_never_raise(self):
+        from core.ui_actions import parse_completion_run_id
+        for junk in ("", "   ", "rm -rf /", "ls -la", None, 12345):
+            assert parse_completion_run_id(junk) is None

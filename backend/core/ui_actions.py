@@ -542,6 +542,57 @@ async def ensure_report_for_run(run_id: object) -> bool:
         return False
 
 
+# ── Backend-auto Canvas surface on pipeline completion (run_beff6754) ─────────
+# Canvas auto-open on pipeline completion had ONE trigger: the frontend
+# useCanvasAutoSurface hook reacting to a file_changed(kind=knowledge) event, which
+# build_surface_events emits — but the orchestrator only called it when it OBSERVED
+# the agent invoke the surface_run_outputs tool. complete.md tells docs-only runs
+# (0 source commits) to SKIP that call, so the most common pipeline (708 completed
+# runs, the vast majority commits=0 WITH a REPORT.md) never emitted the knowledge
+# event and Canvas never auto-opened. A prior 2026-08-05 fix added PROSE to
+# complete.md ("remember to call surface") and did NOT hold — leaving the trigger on
+# agent discipline is the recurring CLASS-A failure.
+#
+# The structural fix: the orchestrator OBSERVES the `run-update --status completed`
+# Bash command and auto-fires build_surface_events. This pure function is the cheap
+# PRE-FILTER — it recognizes such a command and extracts its run_id. It is NOT the
+# authority: a BLOCKED completion still `return`s exit 0 from the CLI (artifact_cli
+# gate prints an error and returns, it does NOT sys.exit non-zero), so the command
+# string alone does not prove the run completed. The orchestrator confirms authority
+# by reading run.json status == "completed" before emitting. This parser only decides
+# "is this a completion-attempt worth checking?" — keeping the hot-path regex cheap.
+_COMPLETION_STATUS_RE = None  # lazily compiled (module import stays light)
+
+
+def parse_completion_run_id(command: object) -> Optional[str]:
+    """Return the run_id if `command` is an artifact_cli ``run-update`` invocation
+    that sets ``--status completed``; else None. Pure, never raises.
+
+    Recognizes BOTH flag forms — ``--status completed`` (the spaced form argparse
+    accepts, what the CLI actually emits) AND ``--status=completed`` (a defensive
+    hand-typed variant) — and is flag-order independent. Requires the command to be a
+    ``run-update`` subcommand carrying BOTH ``--status completed`` and a ``--run-id``.
+
+    This is a PRE-FILTER, not proof of completion (a blocked completion still exits 0).
+    The orchestrator re-confirms against run.json status before surfacing.
+    """
+    if not isinstance(command, str) or not command:
+        return None
+    # Must be a run-update subcommand — else a foo.py that happens to carry the flags
+    # (or an unrelated tool) would false-match.
+    if "run-update" not in command:
+        return None
+    import re
+    # --status completed | --status=completed  (value token is exactly "completed",
+    # not merely containing it — a --reason 'not completed yet' must NOT match).
+    if not re.search(r"--status[=\s]+completed(?:\s|$)", command):
+        return None
+    m = re.search(r"--run-id[=\s]+([A-Za-z0-9_-]+)", command)
+    if not m:
+        return None
+    return m.group(1)
+
+
 # ── The SDK-MCP tool the agent calls ─────────────────────────────────────────
 
 # Tool name as the agent sees it (SDK-MCP convention: mcp__<server>__<tool>).
