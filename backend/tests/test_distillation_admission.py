@@ -21,7 +21,10 @@ from hooks.distillation_hook import DistillationTriggerHook
 
 class TestMemoryDistillAdmission:
     def _admit(self, text):
-        return DistillationTriggerHook._admit_memory_lesson(text)
+        # _admit_memory_lesson returns (verdict, section, reason); these tests assert
+        # on verdict/section only, so drop the reason token here to keep call sites 2-tuple.
+        verdict, section, _reason = DistillationTriggerHook._admit_memory_lesson(text)
+        return verdict, section
 
     def test_structural_noise_discarded(self):
         # a table fragment → discard (real noise, safe to drop), no judge needed
@@ -120,16 +123,33 @@ class TestC6EvolutionGate:
             admitted = DistillationTriggerHook._gate_evolution_entries(
                 [("2026-08-10", "| junk | table |")], ctx, "correction")
             assert admitted == []
-            # discard (noise) → NOT sedimented (only review-held lessons are)
+            # STRUCTURAL discard → NOT sedimented (deterministic, safe to drop)
             sink = ctx / "memory-held-lessons.jsonl"
             assert not sink.is_file()
+
+    def test_judge_noise_correction_is_sedimented_not_dropped(self):
+        # A FALLIBLE LLM `judge:noise` verdict must sediment (recoverable), NOT drop —
+        # the source is marked distilled=True after the cycle, so a wrong noise call
+        # would be permanent loss. Distinguished from structural noise via reason token.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"
+            ctx.mkdir()
+            # a non-structural sentence the judge (mocked) rules noise
+            with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("noise", "j")):
+                admitted = DistillationTriggerHook._gate_evolution_entries(
+                    [("2026-08-10", "The retry loop backs off exponentially on throttle here.")],
+                    ctx, "lesson")
+            assert admitted == []
+            sink = ctx / "memory-held-lessons.jsonl"
+            assert sink.is_file(), "judge:noise must be sedimented, not permanently dropped"
+            assert "retry loop" in sink.read_text()
 
     def test_decisions_path_gated_same_as_lessons(self):
         """E2E-review fix: the all_decisions → MEMORY path is gated by _admit_memory_lesson
         (it was the sibling rating-5 hole the first C5 pass left ungated). A distilled
         decision is a KEEP_TYPE → review → held (not auto-written)."""
         with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
-            verdict, section = DistillationTriggerHook._admit_memory_lesson(
+            verdict, section, _reason = DistillationTriggerHook._admit_memory_lesson(
                 "chose single-writer MessageStore to kill the reconcile race for good")
         # a genuine decision routes to KEEP_TYPE (section None) → review, never auto
         assert verdict == "review"

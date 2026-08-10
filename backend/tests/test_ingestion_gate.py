@@ -477,3 +477,75 @@ class TestC3AdversarialFixes:
         from core.ddd_cultivation import _predrop_is_protected_untrusted
         p = self._p("SELF.md", "X", gate="passed", source="inherited_gate2")
         assert _predrop_is_protected_untrusted(p) is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Admission-gate hardening (run: admission-gate-hardening)
+#   • judge reason propagation — a dead judge (judge_error:*) must be visible, not
+#     collapsed into the same "judge:suspect" token as a genuine content holdback
+#   • judge fan-out budget — a session-close storm caps at N calls/window; over-budget
+#     candidates fail-closed to review WITHOUT a Bedrock call (recoverable, not dropped)
+# ══════════════════════════════════════════════════════════════════════════════
+class TestJudgeReasonPropagation:
+    def test_judge_error_reason_is_visible_in_verdict(self):
+        # A judge INFRA failure (fail-closed → suspect) must carry judge_error:* in
+        # reason, NOT be indistinguishable from a real content holdback.
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._judge_client", side_effect=RuntimeError("net")):
+            v = ingestion_gate("some borderline entry text here",
+                               store="MEMORY", trigger="memory_distill", context={})
+        assert v.verdict == "review"
+        assert "judge_error" in v.reason, f"dead judge invisible in reason: {v.reason!r}"
+
+    def test_genuine_suspect_reason_is_not_error(self):
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                "VERDICT: suspect\nREASON: dubious")):
+            v = ingestion_gate("A plausible but unverified memory claim about the system.",
+                               store="MEMORY", trigger="memory_distill", context={})
+        assert v.verdict == "review"
+        assert "judge_error" not in v.reason
+        assert v.reason.startswith("judge:suspect")
+
+
+class TestJudgeFanoutBudget:
+    def setup_method(self):
+        import core.ingestion_gate as ig
+        ig._judge_call_times.clear()
+
+    def teardown_method(self):
+        import core.ingestion_gate as ig
+        ig._judge_call_times.clear()
+
+    def test_over_budget_holds_for_review_without_bedrock_call(self, monkeypatch):
+        import core.ingestion_gate as ig
+        monkeypatch.setattr(ig, "_JUDGE_BUDGET_MAX", 3)
+        monkeypatch.setattr(ig, "_JUDGE_BUDGET_WINDOW_S", 300.0)
+        calls = {"n": 0}
+
+        def _counting_judge(text, section, neighbors):
+            calls["n"] += 1
+            return ("pass", "judged")
+
+        monkeypatch.setattr(ig, "self_adversarial_judge", _counting_judge)
+        # 5 candidates, budget=3 → first 3 hit the judge, last 2 fail-closed to review
+        verdicts = []
+        for i in range(5):
+            v = ig.ingestion_gate(f"a distinct borderline memory entry number {i} here",
+                                  store="MEMORY", trigger="memory_distill", context={})
+            verdicts.append(v)
+        assert calls["n"] == 3, f"judge called {calls['n']}x, expected 3 (budget cap)"
+        over = [v for v in verdicts if v.reason == "judge:budget_exhausted"]
+        assert len(over) == 2, f"expected 2 budget-exhausted, got {len(over)}"
+        assert all(v.verdict == "review" for v in over), "over-budget must be recoverable review"
+
+    def test_budget_zero_disables_judge_all_review(self, monkeypatch):
+        import core.ingestion_gate as ig
+        monkeypatch.setattr(ig, "_JUDGE_BUDGET_MAX", 0)
+        called = {"n": 0}
+        monkeypatch.setattr(ig, "self_adversarial_judge",
+                            lambda *a, **k: (called.__setitem__("n", called["n"] + 1), ("pass", "x"))[1])
+        v = ig.ingestion_gate("another borderline memory entry text here",
+                              store="MEMORY", trigger="memory_distill", context={})
+        assert v.verdict == "review" and v.reason == "judge:budget_exhausted"
+        assert called["n"] == 0, "budget=0 must not issue any Bedrock call"

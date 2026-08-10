@@ -973,14 +973,15 @@ class EvolutionOptimizer:
                 f"{changes_summary}\n"
             )
 
-            # Append to Competence Learned section if it exists, else append at end
-            content = evo_path.read_text(encoding="utf-8")
-            if "## Competence Learned" in content:
-                from scripts.locked_write import locked_read_modify_write
-                locked_read_modify_write(evo_path, "Competence Learned", entry, "append")
-            else:
-                with open(evo_path, "a", encoding="utf-8") as f:
-                    f.write(entry)
+            # ALWAYS go through locked_read_modify_write (anti-pattern #5: every
+            # MEMORY/EVOLUTION write must be flock-guarded). It appends under
+            # "Competence Learned" when present, and when absent lands the entry
+            # under its managed FALLBACK_SECTION — IN-LOCK — instead of the prior
+            # bare `open(...,"a")` else-branch, which both bypassed the lock (racing
+            # concurrent EVOLUTION writers → interleaved/corrupt entries) AND created
+            # an orphan end-of-file append no section manager ever tracked.
+            from scripts.locked_write import locked_read_modify_write
+            locked_read_modify_write(evo_path, "Competence Learned", entry, "append")
         except Exception as exc:
             logger.debug("Failed to log to EVOLUTION.md: %s", exc)
 

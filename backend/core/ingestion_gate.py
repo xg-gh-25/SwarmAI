@@ -161,6 +161,51 @@ def is_noise(text: str) -> "tuple[bool, str]":
 _JUDGE_VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(pass|suspect|noise)\b", re.IGNORECASE | re.MULTILINE)
 _JUDGE_MAX_TOKENS = 256
 
+# ── Judge fan-out budget (fail-closed rolling-window rate limit) ──────────────
+# The judge tier does a SERIAL Bedrock call per candidate. distillation runs on
+# EVERY session close (UNDISTILLED_THRESHOLD=0) over a 30-day scan and can present
+# hundreds of candidates (lessons + decisions + corrections + competence), so an
+# unbounded fan-out = a serial Bedrock storm (minutes of wall-clock, throttle risk)
+# on a hot write path. This caps judge INVOCATIONS in a rolling wall-clock window;
+# over-budget candidates fail-closed to "review" (recoverable — sedimented by the
+# caller, never dropped) WITHOUT issuing a Bedrock call. A time WINDOW (not a
+# monotonic counter) is deliberate: it self-heals with no caller-side reset, so a
+# caller that forgets to reset can't permanently wedge the judge (the "declared but
+# not enforced" trap). Env-overridable for tests / ops.
+import os as _os
+import time as _time
+try:
+    _JUDGE_BUDGET_MAX = int(_os.environ.get("SWARM_JUDGE_BUDGET_MAX", "60"))
+except ValueError:
+    _JUDGE_BUDGET_MAX = 60
+try:
+    _JUDGE_BUDGET_WINDOW_S = float(_os.environ.get("SWARM_JUDGE_BUDGET_WINDOW_S", "300"))
+except ValueError:
+    _JUDGE_BUDGET_WINDOW_S = 300.0
+# Timestamps (monotonic seconds) of recent judge invocations within the window.
+_judge_call_times: list[float] = []
+
+
+def _judge_budget_available() -> bool:
+    """True if a judge Bedrock call is within the rolling-window budget.
+
+    Prunes timestamps older than the window, then admits iff the in-window count
+    is under _JUDGE_BUDGET_MAX. Records the timestamp on admit. Not thread-safe by
+    design — the distillation fan-out is serial; a stray concurrent caller can at
+    worst admit a few extra calls, never fewer (fail-toward-review stays safe).
+    """
+    if _JUDGE_BUDGET_MAX <= 0:  # 0/negative = judge disabled entirely (all → review)
+        return False
+    now = _time.monotonic()
+    cutoff = now - _JUDGE_BUDGET_WINDOW_S
+    # Prune in place (list stays small: bounded by MAX).
+    while _judge_call_times and _judge_call_times[0] < cutoff:
+        _judge_call_times.pop(0)
+    if len(_judge_call_times) >= _JUDGE_BUDGET_MAX:
+        return False
+    _judge_call_times.append(now)
+    return True
+
 _JUDGE_PROMPT = """You are a skeptic reviewing ONE candidate knowledge entry for a project's brain.
 You have ZERO context on why it was written. Your job is to REFUTE it, not trust it.
 
@@ -187,25 +232,22 @@ When uncertain between pass and suspect, choose suspect (a human will look)."""
 def _judge_client():
     """Return a timeout-scoped Bedrock client + model id. Isolated for mockability.
 
-    Reuses jobs.bedrock.get_client() (the credential SSOT) + a per-call timeout
-    config (connect=5s/read=25s, 1 attempt) so a slow Bedrock fails cleanly instead
-    of hanging a write path.
+    Uses jobs.bedrock.build_timeout_client() — the credential SSOT's throwaway,
+    fail-fast client that INJECTS pre-resolved credentials (the boto3 default
+    chain / credential_process resolves FALSE under launchd, which is exactly how
+    this daemon runs). The prior implementation called get_client() only to read
+    region_name and then built a raw boto3.client() on the default chain, so under
+    launchd every judge call raised → fail-closed to "suspect" → every lesson HELD,
+    silently. build_timeout_client gives read=25s/1-attempt fail-fast + real creds.
     """
-    import boto3
-    from botocore.config import Config as BotoConfig
-    from jobs.bedrock import get_client
-    base = get_client()
+    from jobs.bedrock import build_timeout_client
     try:
         from core.app_config_manager import AppConfigManager
         model_id = (AppConfigManager.instance().get("bedrock_model_map") or {}).get(
             "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6")
     except Exception:
         model_id = "us.anthropic.claude-sonnet-4-6"
-    client = boto3.client(
-        "bedrock-runtime", region_name=base.meta.region_name,
-        config=BotoConfig(connect_timeout=5, read_timeout=25,
-                          retries={"max_attempts": 1, "mode": "standard"}),
-    )
+    client = build_timeout_client(read_timeout=25, max_attempts=1)
     return client, model_id
 
 
@@ -376,11 +418,23 @@ def ingestion_gate(
             elif tier == "judge":
                 # Self-adversarial refute. pass → continue; suspect → review; noise → discard.
                 # FAIL-CLOSED inside self_adversarial_judge (error → suspect → review).
-                verdict, _r = self_adversarial_judge(text, section, neighbors)
+                # BUDGET (fan-out cap): the judge does a serial Bedrock call per candidate;
+                # once the rolling-window budget is spent, hold the REMAINING candidates
+                # for review WITHOUT a Bedrock call — recoverable (sedimented upstream),
+                # never dropped, and it caps a session-close storm at _JUDGE_BUDGET_MAX
+                # calls / window instead of hundreds. Fail-toward-review keeps it safe.
+                if not _judge_budget_available():
+                    return GateVerdict("review", ran, "judge:budget_exhausted")
+                # PROPAGATE jr (judge reason) into the verdict so a judge INFRA failure
+                # ("judge_error:*") is distinguishable downstream from a genuine content
+                # holdback ("judged"). Before, the reason was hardcoded "judge:suspect",
+                # making a fully-dead judge (fail-closed → everything HELD) invisible in
+                # the log — the silent-death twin of any fail-closed design.
+                verdict, jr = self_adversarial_judge(text, section, neighbors)
                 if verdict == "noise":
-                    return GateVerdict("discard", ran, "judge:noise")
+                    return GateVerdict("discard", ran, f"judge:noise:{jr}")
                 if verdict == "suspect":
-                    return GateVerdict("review", ran, "judge:suspect")
+                    return GateVerdict("review", ran, f"judge:suspect:{jr}")
                 # verdict == "pass" → continue (does NOT bypass downstream tiers)
 
             elif tier == "human":
