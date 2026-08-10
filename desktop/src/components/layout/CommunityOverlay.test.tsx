@@ -279,6 +279,21 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     ));
   });
 
+  it('the add-type dropdown offers github-people (backend FeedType with editable logins)', async () => {
+    // Regression guard for the frontend-zero-wiring bug: github-people is a real
+    // FeedType the backend accepts + has editable `logins` members, but was missing
+    // from the type <select> so no user could create one.
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
+    fireEvent.click(await screen.findByTestId('source-add-open'));
+    const sel = await screen.findByTestId('add-type');
+    const values = Array.from(sel.querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value);
+    expect(values).toContain('github-people');
+    expect(values).toContain('github-community');
+  });
+
   it('surfaces an error when a mutation rejects (does not silently swallow)', async () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue(oneSource);

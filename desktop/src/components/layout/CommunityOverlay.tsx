@@ -598,7 +598,11 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
       <div className="flex gap-2 items-center">
         <select data-testid="add-type" value={type} onChange={(e) => setType(e.target.value)}
           className="text-[11px] bg-transparent border border-[var(--color-border)] rounded px-1.5 py-1">
-          {['rss', 'web-search', 'github-releases', 'hacker-news', 'trending', 'github-trending', 'github-community', 'weibo-trending', 'eastmoney-market'].map((t) => (
+          {/* Must stay in sync with backend FeedType (jobs/models.py). `github-people`
+              was MISSING here — the backend accepts it and it has editable `logins`
+              members (MEMBER_KEY), but users had no UI to create one (frontend
+              zero-wiring). Added next to its github-community sibling. */}
+          {['rss', 'web-search', 'github-releases', 'hacker-news', 'trending', 'github-trending', 'github-community', 'github-people', 'weibo-trending', 'eastmoney-market'].map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
