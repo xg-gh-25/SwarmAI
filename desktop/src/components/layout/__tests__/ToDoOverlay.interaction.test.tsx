@@ -26,8 +26,12 @@ vi.mock('../../../services/todos', () => ({
     list: vi.fn(),
     history: vi.fn(),
     create: vi.fn(),
+    update: vi.fn(),
     delete: vi.fn(),
     dispatch: vi.fn(),
+    listAttachments: vi.fn(),
+    uploadAttachment: vi.fn(),
+    deleteAttachment: vi.fn(),
   },
 }));
 
@@ -57,6 +61,9 @@ describe('ToDoOverlay (flat table)', () => {
     mockHistory([]);
     (todosService.create as ReturnType<typeof vi.fn>).mockResolvedValue(mkTodo({ id: 'new' }));
     (todosService.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (todosService.listAttachments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (todosService.uploadAttachment as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'att1', todoId: 't1', filename: 'x', relPath: 'x', size: 1, createdAt: RECENT });
+    (todosService.deleteAttachment as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 
   it('renders a row for each todo', async () => {
@@ -69,9 +76,9 @@ describe('ToDoOverlay (flat table)', () => {
     render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(screen.getByTestId('todo-new-btn'));
-    fireEvent.change(await screen.findByTestId('todo-new-title'), { target: { value: 'My task' } });
-    fireEvent.change(screen.getByTestId('todo-new-nextstep'), { target: { value: 'Read X first' } });
-    fireEvent.click(screen.getByTestId('todo-new-submit'));
+    fireEvent.change(await screen.findByTestId('todo-form-title'), { target: { value: 'My task' } });
+    fireEvent.change(screen.getByTestId('todo-form-nextstep'), { target: { value: 'Read X first' } });
+    fireEvent.click(screen.getByTestId('todo-form-submit'));
 
     await waitFor(() => expect(todosService.create).toHaveBeenCalledTimes(1));
     const arg = (todosService.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -85,8 +92,8 @@ describe('ToDoOverlay (flat table)', () => {
     render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     await screen.findByTestId('todo-overlay');
     fireEvent.click(screen.getByTestId('todo-new-btn'));
-    fireEvent.click(await screen.findByTestId('todo-new-submit'));
-    expect(await screen.findByTestId('todo-new-err')).toBeTruthy();
+    fireEvent.click(await screen.findByTestId('todo-form-submit'));
+    expect(await screen.findByTestId('todo-form-err')).toBeTruthy();
     expect(todosService.create).not.toHaveBeenCalled();
   });
 
@@ -250,5 +257,65 @@ describe('ToDoOverlay (flat table)', () => {
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
     expect(err.textContent).not.toContain('client error');
+  });
+
+  // Gate-1 F6 safety property: editing a system todo (rich work-packet) must
+  // PRESERVE every dispatch key the form doesn't expose. A wholesale-overwrite
+  // regression (linkedContext = {next_step} only) fails this — the mutation guard.
+  it('editing a work-packet todo preserves files/commits, only changes next_step', async () => {
+    const rich = mkTodo({
+      id: 't1', sourceType: 'ai_detected',
+      linkedContext: JSON.stringify({
+        next_step: 'old step', files: ['a.ts', 'b.ts'], commits: ['abc123'],
+        design_docs: ['d.md'], sessions: ['s1'], memory_refs: ['m1'],
+        blockers: ['x'], acceptance: 'done when green', notes: 'keep me',
+      }),
+    });
+    mockList([rich]);
+    (todosService.update as ReturnType<typeof vi.fn>).mockResolvedValue(rich);
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    // open detail → edit
+    fireEvent.click(await screen.findByTestId('todo-row'));
+    fireEvent.click(await screen.findByTestId('todo-drawer-edit'));
+    const nsField = await screen.findByTestId('todo-form-nextstep');
+    fireEvent.change(nsField, { target: { value: 'new step' } });
+    fireEvent.click(screen.getByTestId('todo-form-submit'));
+
+    await waitFor(() => expect(todosService.update).toHaveBeenCalledTimes(1));
+    const [, payload] = (todosService.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    const merged = JSON.parse(payload.linkedContext);
+    // the ONE changed field
+    expect(merged.next_step).toBe('new step');
+    // ALL other dispatch keys survive (this is the whole point — no context loss)
+    expect(merged.files).toEqual(['a.ts', 'b.ts']);
+    expect(merged.commits).toEqual(['abc123']);
+    expect(merged.design_docs).toEqual(['d.md']);
+    expect(merged.sessions).toEqual(['s1']);
+    expect(merged.memory_refs).toEqual(['m1']);
+    expect(merged.blockers).toEqual(['x']);
+    expect(merged.acceptance).toBe('done when green');
+    expect(merged.notes).toBe('keep me');
+  });
+
+  // Gate-2 MED#2: clearing the SOLE packet field must PERSIST the clear (send "",
+  // not undefined — undefined is skipped by toSnakeCase → the clear silently
+  // wouldn't stick and the old value would remain).
+  it('clearing the only next_step persists an empty packet (not a silent no-op)', async () => {
+    const one = mkTodo({ id: 't1', linkedContext: JSON.stringify({ next_step: 'old step' }) });
+    mockList([one]);
+    (todosService.update as ReturnType<typeof vi.fn>).mockResolvedValue(one);
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    fireEvent.click(await screen.findByTestId('todo-row'));
+    fireEvent.click(await screen.findByTestId('todo-drawer-edit'));
+    fireEvent.change(await screen.findByTestId('todo-form-nextstep'), { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('todo-form-submit'));
+
+    await waitFor(() => expect(todosService.update).toHaveBeenCalledTimes(1));
+    const [, payload] = (todosService.update as ReturnType<typeof vi.fn>).mock.calls[0];
+    // linkedContext MUST be present (empty string), not undefined — else the
+    // clear is dropped by toSnakeCase and never persisted.
+    expect(payload.linkedContext).toBe('');
   });
 });

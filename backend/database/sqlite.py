@@ -2012,6 +2012,24 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
     CREATE INDEX IF NOT EXISTS idx_todos_workspace_status ON todos(workspace_id, status);
 
+    -- ToDo attachments (run_162b8817) — user-uploaded files attached to a ToDo.
+    -- Metadata lives HERE (not in the linked_context work-packet JSON) so uploads
+    -- never race the work-packet edit and never hit the 10K-char linked_context cap.
+    -- The file itself lives on disk at Attachments/todos/<todo_id>/<filename>;
+    -- rel_path is workspace-relative. FK CASCADE cleans rows on a todo HARD-delete;
+    -- the on-disk dir is swept by the lifecycle purge (soft-delete keeps both).
+    CREATE TABLE IF NOT EXISTS todo_attachments (
+        id TEXT PRIMARY KEY,
+        todo_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        rel_path TEXT NOT NULL,
+        size INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_todo_attachments_todo_id ON todo_attachments(todo_id);
+
     -- Workspace MCPs junction table (MCP server configuration per workspace)
     -- Validates: Requirements 19.3
     CREATE TABLE IF NOT EXISTS workspace_mcps (
@@ -2147,6 +2165,7 @@ class SQLiteDatabase(BaseDatabase):
         self._workspace_config = SQLiteWorkspaceConfigTable[dict]("workspace_config", self.db_path)
         # Daily Work Operating Loop tables
         self._todos = SQLiteToDosTable[dict]("todos", self.db_path)
+        self._todo_attachments = SQLiteTable[dict]("todo_attachments", self.db_path)
         # Workspace configuration tables
         self._workspace_mcps = SQLiteWorkspaceMcpsTable[dict]("workspace_mcps", self.db_path)
         self._workspace_knowledgebases = SQLiteWorkspaceKnowledgebasesTable[dict]("workspace_knowledgebases", self.db_path)
@@ -2795,6 +2814,26 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: linked_context column added to todos")
 
+        # Migration Step 1b (run_162b8817): create todo_attachments on existing DBs.
+        # The schema CREATE only runs on a fresh init; this backfills older DBs.
+        # Idempotent (IF NOT EXISTS) — safe to run every startup.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS todo_attachments (
+                id TEXT PRIMARY KEY,
+                todo_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                rel_path TEXT NOT NULL,
+                size INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE CASCADE
+            )
+        """)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_todo_attachments_todo_id ON todo_attachments(todo_id)"
+        )
+        await conn.commit()
+
         # Migration Step 2: Update source_type CHECK constraint to include 'chat' and 'ai_detected'
         # SQLite cannot ALTER CHECK constraints, so we use the table-rebuild pattern.
         # Wrapped in BEGIN IMMEDIATE ... COMMIT for crash safety (PE Finding #7).
@@ -3203,6 +3242,11 @@ class SQLiteDatabase(BaseDatabase):
     def todos(self) -> SQLiteToDosTable:
         """Get the todos table."""
         return self._todos
+
+    @property
+    def todo_attachments(self) -> "SQLiteTable":
+        """Get the todo_attachments table (run_162b8817)."""
+        return self._todo_attachments
 
     @property
     def workspace_mcps(self) -> SQLiteWorkspaceMcpsTable:

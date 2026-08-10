@@ -11,10 +11,14 @@ Requirements: 6.1-6.8
 """
 import json
 import logging
+import re
+import shutil
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from schemas.todo import (
@@ -383,3 +387,136 @@ async def bind_todo_to_session(session_id: str, request: BindTodoRequest):
         "todo_id": request.todo_id,
         "todo_status": new_status,
     }
+
+
+# ── ToDo Attachments (run_162b8817) ──────────────────────────────────
+# User-uploaded files attached to a ToDo. Metadata → todo_attachments table;
+# the file itself → <workspace>/Attachments/todos/<todo_id>/<safe_name>.
+# NO size/type limit (STEERING #2 — cost/limits are not added unilaterally).
+
+_UUID_SEG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _attachments_root_for(todo_id: str) -> Path:
+    """Resolve (and path-traversal-guard) the on-disk dir for a todo's attachments.
+
+    Raises HTTPException(400) if todo_id is not a single safe path segment — a
+    crafted id ('..', a separator, an absolute path) must never escape the
+    Attachments/todos/ tree.
+    """
+    if not _UUID_SEG_RE.match(todo_id) or todo_id in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid todo_id")
+    from core.initialization_manager import initialization_manager
+    ws = initialization_manager.get_cached_workspace_path()
+    if not ws:
+        raise HTTPException(status_code=500, detail="Workspace path unavailable")
+    base = (Path(ws) / "Attachments" / "todos").resolve()
+    target = (base / todo_id).resolve()
+    # Defense-in-depth: the resolved dir MUST stay under the attachments base.
+    if not (target == base / todo_id and str(target).startswith(str(base))):
+        raise HTTPException(status_code=400, detail="Invalid todo_id path")
+    return target
+
+
+@router.get("/{todo_id}/attachments")
+async def list_todo_attachments(todo_id: str):
+    """List a todo's attachments (metadata rows), newest first."""
+    from database import db
+    async with db.todo_attachments._get_connection(readonly=True) as conn:
+        import aiosqlite
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT * FROM todo_attachments WHERE todo_id = ? ORDER BY created_at DESC",
+            (todo_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return {"attachments": [dict(r) for r in rows]}
+
+
+@router.post("/{todo_id}/attachments", status_code=201)
+async def upload_todo_attachment(todo_id: str, request: Request):
+    """Attach an uploaded file to a ToDo (multipart form, field name ``file``).
+
+    Writes the file to <workspace>/Attachments/todos/<todo_id>/<safe_name> and
+    records a metadata row. No size/type restriction. Returns the metadata row.
+    """
+    from starlette.datastructures import UploadFile as StarletteUploadFile
+    from database import db
+
+    # The todo must exist (avoid orphan attachment dirs for a bad id).
+    existing = await todo_manager.get(todo_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="ToDo not found")
+
+    target_dir = _attachments_root_for(todo_id)
+    form = await request.form()
+    try:
+        file_field = form.get("file")
+        if not isinstance(file_field, StarletteUploadFile):
+            raise HTTPException(status_code=400, detail="'file' field must be a file upload")
+        data = await file_field.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty file")
+        # Filename: only the basename survives (strip any path the client sent).
+        safe_name = Path(file_field.filename or "attachment").name or "attachment"
+
+        def _write() -> int:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            dest = target_dir / safe_name
+            # Collision: suffix -1, -2, … so a second same-named upload doesn't clobber.
+            if dest.exists():
+                stem, suf = dest.stem, dest.suffix
+                i = 1
+                while (target_dir / f"{stem}-{i}{suf}").exists():
+                    i += 1
+                dest = target_dir / f"{stem}-{i}{suf}"
+            dest.write_bytes(data)
+            return dest.stat().st_size, dest.name  # type: ignore[return-value]
+
+        import asyncio
+        size, final_name = await asyncio.to_thread(_write)
+
+        from jobs.paths import SWARMWS
+        rel_path = str((target_dir / final_name).relative_to(SWARMWS)) \
+            if str(target_dir).startswith(str(SWARMWS)) else f"Attachments/todos/{todo_id}/{final_name}"
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "todo_id": todo_id,
+            "filename": final_name,
+            "rel_path": rel_path,
+            "size": size,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.todo_attachments.put(row)
+        logger.info("ToDo %s attachment saved: %s (%d bytes)", todo_id[:8], final_name, size)
+        return row
+    finally:
+        await form.close()
+
+
+@router.delete("/{todo_id}/attachments/{attachment_id}")
+async def delete_todo_attachment(todo_id: str, attachment_id: str):
+    """Delete one attachment: remove the metadata row AND the on-disk file.
+
+    The file path is re-derived from the guarded attachments root (never trusts a
+    stored path directly), so a tampered rel_path cannot delete outside the tree.
+    """
+    from database import db
+    row = await db.todo_attachments.get(attachment_id)
+    if not row or row.get("todo_id") != todo_id:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    target_dir = _attachments_root_for(todo_id)
+    fname = Path(str(row.get("filename") or "")).name
+    if fname:
+        dest = (target_dir / fname).resolve()
+        # Only unlink a file that truly lives inside this todo's attachment dir.
+        if str(dest).startswith(str(target_dir)) and dest.is_file():
+            def _rm():
+                dest.unlink(missing_ok=True)
+            import asyncio
+            await asyncio.to_thread(_rm)
+    await db.todo_attachments.delete(attachment_id)
+    logger.info("ToDo %s attachment %s deleted", todo_id[:8], attachment_id[:8])
+    return {"deleted": True, "attachment_id": attachment_id}

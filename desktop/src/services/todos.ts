@@ -7,6 +7,7 @@ import type {
   ToDoCreateRequest,
   ToDoUpdateRequest,
   ToDoStatus,
+  ToDoAttachment,
 } from '../types/todo';
 import type { Task } from '../types';
 
@@ -127,6 +128,44 @@ export const todosService = {
   /** Bind a ToDo to a chat session (drag-to-chat). */
   async bindToSession(sessionId: string, todoId: string): Promise<void> {
     await api.post(`/todos/bind-session/${sessionId}`, { todo_id: todoId });
+  },
+
+  // ── Attachments (run_162b8817) — files on disk, metadata in todo_attachments ──
+
+  /** List a ToDo's attachments (metadata), newest first. */
+  async listAttachments(todoId: string): Promise<ToDoAttachment[]> {
+    const res = await api.get(`/todos/${todoId}/attachments`);
+    return (res.data.attachments ?? []).map((d: Record<string, unknown>): ToDoAttachment => ({
+      id: d.id as string,
+      todoId: d.todo_id as string,
+      filename: d.filename as string,
+      relPath: d.rel_path as string,
+      size: (d.size as number) ?? 0,
+      createdAt: d.created_at as string,
+    }));
+  },
+
+  /** Upload a file to a ToDo (multipart). Returns the created attachment row. */
+  async uploadAttachment(todoId: string, file: File): Promise<ToDoAttachment> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    // Do NOT set Content-Type — Axios sets multipart boundary automatically
+    // (explicit Content-Type breaks the boundary). Same contract as chat transcribe.
+    const res = await api.post(`/todos/${todoId}/attachments`, form, { timeout: 120_000 });
+    const d = res.data as Record<string, unknown>;
+    return {
+      id: d.id as string,
+      todoId: d.todo_id as string,
+      filename: d.filename as string,
+      relPath: d.rel_path as string,
+      size: (d.size as number) ?? 0,
+      createdAt: d.created_at as string,
+    };
+  },
+
+  /** Delete one attachment (removes disk file + metadata row). */
+  async deleteAttachment(todoId: string, attachmentId: string): Promise<void> {
+    await api.delete(`/todos/${todoId}/attachments/${attachmentId}`);
   },
 
   // ── ToDo flow-closure (A2) ──────────────────────────────────────────

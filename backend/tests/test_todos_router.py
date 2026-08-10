@@ -537,3 +537,65 @@ class TestLinkedContextStringContract:
         assert "你好" in row["linked_context"], "CJK must be raw, not \\uXXXX-escaped"
         import json as _json
         assert _json.loads(row["linked_context"])["notes"] == "你好"
+
+
+# ---------------------------------------------------------------------------
+# linked_context on UPDATE (run_162b8817 — the silent-drop bug fix) + attachments
+# ---------------------------------------------------------------------------
+
+class TestUpdatePersistsLinkedContext:
+    """PUT /todos/{id} must PERSIST linked_context. Historically update() built its
+    updates dict without a linked_context branch, so the schema accepted the field
+    and the manager silently dropped it — an edit to the work-packet was a no-op.
+    RED-on-revert: remove the branch in todo_manager.update() → this fails."""
+
+    def test_update_persists_linked_context(self, client: TestClient, workspace_id: str):
+        created = _create_todo(client, workspace_id, title="Editable")
+        import json as _json
+        packet = _json.dumps({"next_step": "do it", "files": ["a.ts"], "notes": "keep"})
+        resp = client.put(f"/api/todos/{created['id']}", json={"linked_context": packet})
+        assert resp.status_code == 200
+        # Re-fetch: the packet MUST be there (not dropped).
+        row = client.get(f"/api/todos/{created['id']}").json()
+        assert row["linked_context"] is not None, "linked_context was silently dropped on update"
+        parsed = _json.loads(row["linked_context"])
+        assert parsed["next_step"] == "do it"
+        assert parsed["files"] == ["a.ts"]
+        assert parsed["notes"] == "keep"
+
+    def test_update_linked_context_merge_preserves_other_fields(self, client: TestClient, workspace_id: str):
+        """The edit CONTRACT (frontend does the merge; backend stores verbatim): a
+        client that read-merges and re-sends the full packet must round-trip intact."""
+        import json as _json
+        created = _create_todo(
+            client, workspace_id, title="Rich",
+            linked_context=_json.dumps({"next_step": "old", "commits": ["c1"], "acceptance": "green"}),
+        )
+        # Simulate the frontend merge: change next_step, preserve commits+acceptance.
+        merged = _json.dumps({"next_step": "new", "commits": ["c1"], "acceptance": "green"})
+        client.put(f"/api/todos/{created['id']}", json={"linked_context": merged})
+        row = client.get(f"/api/todos/{created['id']}").json()
+        parsed = _json.loads(row["linked_context"])
+        assert parsed["next_step"] == "new"
+        assert parsed["commits"] == ["c1"]
+        assert parsed["acceptance"] == "green"
+
+
+class TestTodoAttachmentSecurity:
+    """The attachment endpoints must reject path-traversal in todo_id — a crafted
+    id must never escape <workspace>/Attachments/todos/."""
+
+    @pytest.mark.parametrize("bad_id", ["..", "../evil", "a/b", "a\\b", "..%2f", "."])
+    def test_upload_rejects_traversal_todo_id(self, client: TestClient, bad_id: str):
+        # No multipart body needed — the id guard fires before file handling
+        # (or the route simply doesn't match a slash-containing id → 404/400/405).
+        resp = client.post(f"/api/todos/{bad_id}/attachments", files={"file": ("x.txt", b"hi")})
+        assert resp.status_code in (400, 404, 405), (
+            f"traversal id {bad_id!r} not rejected (got {resp.status_code})"
+        )
+
+    def test_list_attachments_empty_for_new_todo(self, client: TestClient, workspace_id: str):
+        created = _create_todo(client, workspace_id, title="No attachments")
+        resp = client.get(f"/api/todos/{created['id']}/attachments")
+        assert resp.status_code == 200
+        assert resp.json()["attachments"] == []

@@ -81,4 +81,23 @@ export interface ToDoUpdateRequest {
   status?: ToDoStatus;
   priority?: Priority;
   dueDate?: string;
+  /** JSON-encoded work packet. REQUIRED for edit-save to persist a work-packet
+   *  change (next_step, notes, …): without threading this, todo_manager.update()
+   *  has nothing to write and PUT silently drops the edit (run_162b8817 — the
+   *  same silent-no-op class as the create-side Gate-1 A3 bug). The edit path must
+   *  read-merge the existing packet and send the FULL JSON here (never overwrite
+   *  the fields the form doesn't expose: files/design_docs/commits/sessions/
+   *  memory_refs/blockers/acceptance/notes). */
+  linkedContext?: string;
+}
+
+/** A file attached to a ToDo. Metadata lives in the todo_attachments table; the
+ *  file is on disk at <workspace>/relPath. (run_162b8817) */
+export interface ToDoAttachment {
+  id: string;
+  todoId: string;
+  filename: string;
+  relPath: string;
+  size: number;
+  createdAt: string;
 }

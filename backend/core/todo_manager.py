@@ -290,6 +290,16 @@ class ToDoManager:
             updates["priority"] = data.priority.value
         if data.due_date is not None:
             updates["due_date"] = data.due_date.isoformat()
+        if data.linked_context is not None:
+            # Persist the work-packet / attachment-refs JSON on edit. Historically
+            # dropped here: the schema accepted linked_context (ToDoUpdate) but this
+            # method never wrote it, so PUT silently discarded a user's edit to the
+            # work packet (next_step, notes, etc.). We store the caller-provided
+            # string verbatim (the caller is responsible for read-merge-preserving
+            # the full packet — see the frontend edit path); unlike create() we do
+            # NOT re-run validate_linked_context (which injects _missing_fields) —
+            # a manual edit must not have machinery fields forced onto it.
+            updates["linked_context"] = data.linked_context
 
         if not updates:
             return self._dict_to_response(existing)

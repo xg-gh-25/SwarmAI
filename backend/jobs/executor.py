@@ -1937,6 +1937,23 @@ def _purge_terminal_todos(
                 row_ids,
             )
 
+            # Cascade the on-disk attachment dirs (run_162b8817). The
+            # todo_attachments ROWS cascade via FK ON DELETE; the FILES do not, so
+            # sweep <workspace>/Attachments/todos/<id>/ here — the ONLY place a todo
+            # is hard-deleted (soft-delete keeps files for the ≤retention_days
+            # recovery window, by design). Per-dir try/except: one bad dir must
+            # never abort the purge. Guard: only rmtree a dir that resolves to
+            # exactly Attachments/todos/<id> (never escapes the tree).
+            import shutil as _shutil
+            _att_base = (SWARMWS / "Attachments" / "todos").resolve()
+            for _tid in row_ids:
+                try:
+                    _d = (_att_base / str(_tid)).resolve()
+                    if _d.parent == _att_base and _d.is_dir():
+                        _shutil.rmtree(_d, ignore_errors=True)
+                except OSError as _exc:
+                    logger.warning("todo purge: attachment dir cleanup failed for %s: %s", _tid, _exc)
+
             count = len(rows)
             logger.info(
                 "Purged %d terminal todos (>%dd)%s",

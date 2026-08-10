@@ -32,10 +32,10 @@
  *
  * @exports ToDoContent, parseWorkPacket, WorkPacket
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { todosService } from '../../services/todos';
 import { classifyLoadError } from '../../services/api';
-import type { ToDo, Priority } from '../../types/todo';
+import type { ToDo, Priority, ToDoAttachment } from '../../types/todo';
 import {
   deriveStatus, sortTodos, filterByRange, computeKpis, weeklyBuckets, sourceDist,
   type SortKey, type SortDir, type TodoStatusLabel,
@@ -63,6 +63,41 @@ export interface WorkPacket {
   blockers?: string[];
   notes?: string;
   [k: string]: unknown;
+}
+
+/** Merge a user's form edits INTO the existing work-packet JSON without dropping
+ *  any key the form doesn't expose. This is the Gate-1 F6 safety property: the
+ *  edit form exposes ONLY next_step, but buildDispatchPrompt (ChatPage) consumes
+ *  9 keys (files/design_docs/commits/sessions/memory_refs/blockers/next_step/
+ *  acceptance/notes) + possibly _missing_fields — a spread of the parsed existing
+ *  packet preserves ALL of them (stronger than an explicit allow-list), so a
+ *  system/dispatched todo never loses context on edit. `edits` overwrites only
+ *  any key the form doesn't expose. Returns a JSON string for linkedContext, or
+ *  undefined if the result is empty (no packet at all). `edits` overwrites only
+ *  the named keys; every pre-existing key (incl. unknowns / _missing_fields) is
+ *  carried through verbatim. */
+function mergeWorkPacket(
+  existing: string | null,
+  edits: Partial<WorkPacket>,
+): string | undefined {
+  const base = parseWorkPacket(existing) ?? {};
+  const merged: WorkPacket = { ...base };
+  for (const [k, v] of Object.entries(edits)) {
+    // An explicit '' / undefined clears that field; anything else sets it.
+    if (v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) {
+      delete merged[k];
+    } else {
+      merged[k] = v;
+    }
+  }
+  const keys = Object.keys(merged);
+  // Empty packet → return "" (NOT undefined). In edit mode this is an intentional
+  // clear (user emptied the sole field); toSnakeCase skips `undefined`, so an
+  // undefined here would silently drop the write and the old value would stick
+  // (Gate-2 MED). An empty string IS sent, and the backend's `is not None` guard
+  // persists it; parseWorkPacket("") → null on next read (a clean empty packet).
+  if (keys.length === 0) return '';
+  return JSON.stringify(merged);
 }
 export function parseWorkPacket(linkedContext: string | null): WorkPacket | null {
   if (!linkedContext) return null;
@@ -117,6 +152,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ToDo | null>(null);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<ToDo | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
   // A fetch that hits the 1000-row cap is truncated — surface it so the count is
@@ -190,8 +226,9 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
     }
   }, [selected, refresh]);
 
-  const handleCreated = useCallback(() => {
+  const handleSaved = useCallback(() => {
     setCreating(false);
+    setEditing(null);
     void refresh();
   }, [refresh]);
 
@@ -202,34 +239,45 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
         gap={2}
         loading={loading}
         left={(
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Time range — segmented; filters table + charts */}
-            <div className="flex items-center gap-0.5 rounded-md border border-[var(--color-border)] p-0.5" data-testid="todo-range">
-              {RANGES.map((r, i) => (
-                <button
-                  key={r.label}
-                  onClick={() => setRangeIdx(i)}
-                  data-testid={`todo-range-${r.label}`}
-                  className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
-                    rangeIdx === i ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                  }`}
-                >{r.label}</button>
-              ))}
+          // Two clearly-separated filter groups. Each carries a small leading
+          // label so the two 'All' controls (range-All vs status-All) can never be
+          // confused (Gate-1 F3): the label + a wider inter-group gap make "which
+          // All?" self-evident. Space WITHIN a group is tight; space BETWEEN groups
+          // is wide (Refactoring UI #9 — ambiguous spacing is the bug).
+          <div className="flex items-center gap-5 flex-wrap">
+            {/* Group 1 — Time range (filters table + charts) */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] shrink-0">Range</span>
+              <div className="flex items-center gap-0.5 rounded-md border border-[var(--color-border)] p-0.5" data-testid="todo-range">
+                {RANGES.map((r, i) => (
+                  <button
+                    key={r.label}
+                    onClick={() => setRangeIdx(i)}
+                    data-testid={`todo-range-${r.label}`}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      rangeIdx === i ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
+                    }`}
+                  >{r.label}</button>
+                ))}
+              </div>
             </div>
-            {/* Status chips — filters table only */}
-            <div className="flex items-center gap-1 flex-wrap" data-testid="todo-status-chips">
-              {STATUS_FILTERS.map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setStatusFilter(f)}
-                  data-testid={`todo-chip-${f.replace(/\s+/g, '-')}`}
-                  className={`px-2 py-0.5 text-[11px] font-medium rounded-full border transition-colors ${
-                    statusFilter === f
-                      ? 'border-primary/50 bg-primary/10 text-primary'
-                      : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                  }`}
-                >{f}</button>
-              ))}
+            {/* Group 2 — Status (filters table only) */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] shrink-0">Status</span>
+              <div className="flex items-center gap-1 flex-wrap" data-testid="todo-status-chips">
+                {STATUS_FILTERS.map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setStatusFilter(f)}
+                    data-testid={`todo-chip-${f.replace(/\s+/g, '-')}`}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded-full border transition-colors ${
+                      statusFilter === f
+                        ? 'border-primary/50 bg-primary/10 text-primary'
+                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
+                    }`}
+                  >{f}</button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -301,8 +349,15 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
         onSelect={setSelected}
       />
 
-      {selected && <DetailDrawer todo={selected} onClose={() => setSelected(null)} />}
-      {creating && <NewTodoForm onCreated={handleCreated} onCancel={() => setCreating(false)} />}
+      {selected && (
+        <DetailDrawer
+          todo={selected}
+          onClose={() => setSelected(null)}
+          onEdit={() => { setEditing(selected); setSelected(null); }}
+        />
+      )}
+      {creating && <TodoForm mode="create" onSaved={handleSaved} onCancel={() => setCreating(false)} />}
+      {editing && <TodoForm mode="edit" initial={editing} onSaved={handleSaved} onCancel={() => setEditing(null)} />}
     </div>
   );
 }
@@ -311,9 +366,13 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
 
 function KpiRow({ kpis, rangeLabel }: { kpis: ReturnType<typeof computeKpis>; rangeLabel: string }) {
   const pct = Math.round(kpis.completionRate * 100);
+  // The KPI row is the PRIMARY scannable layer — big numbers, the one thing that
+  // stands out (Von Restorff). 'Open' is the actionable headline, emphasized; the
+  // rest are context. Grid (not flex-gap) so it shares the analytics strip's
+  // column rhythm below → no more misalignment (Gate-1 F4).
   return (
-    <div className="shrink-0 flex items-center gap-6 px-4 py-2.5 border-b border-[var(--color-border)]" data-testid="todo-kpis">
-      <Kpi label="Open" value={kpis.open} testid="kpi-open" />
+    <div className="shrink-0 grid grid-cols-4 gap-4 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-kpis">
+      <Kpi label="Open" value={kpis.open} testid="kpi-open" primary />
       <Kpi label="In Progress" value={kpis.inProgress} testid="kpi-inprogress" />
       <Kpi label={`Completed · ${rangeLabel}`} value={kpis.completed} testid="kpi-completed" />
       <Kpi label="Completion" value={`${pct}%`} testid="kpi-rate" />
@@ -321,10 +380,12 @@ function KpiRow({ kpis, rangeLabel }: { kpis: ReturnType<typeof computeKpis>; ra
   );
 }
 
-function Kpi({ label, value, testid }: { label: string; value: number | string; testid: string }) {
+function Kpi({ label, value, testid, primary }: { label: string; value: number | string; testid: string; primary?: boolean }) {
+  // Hierarchy via weight+color, not just size (Refactoring UI): the primary KPI is
+  // the accent color + heaviest; the rest share one muted tone.
   return (
     <div className="flex flex-col" data-testid={testid}>
-      <span className="text-[18px] font-semibold text-[var(--color-text)] leading-tight tabular-nums">{value}</span>
+      <span className={`text-[22px] leading-tight tabular-nums ${primary ? 'font-bold text-primary' : 'font-semibold text-[var(--color-text)]'}`}>{value}</span>
       <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{label}</span>
     </div>
   );
@@ -336,14 +397,18 @@ function AnalyticsStrip({ weekly, sources }: {
   weekly: ReturnType<typeof weeklyBuckets>;
   sources: ReturnType<typeof sourceDist>;
 }) {
+  // Secondary layer: same px-4 + 2-col grid as KpiRow (shared rhythm → aligned,
+  // not offset). Headers are deliberately muted/smaller than the KPI numbers so
+  // this reads as supporting context, not a competing headline (Von Restorff:
+  // only ONE thing dominant — the KPIs above).
   return (
-    <div className="shrink-0 grid grid-cols-2 gap-4 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-analytics">
-      <div className="flex flex-col gap-1.5" data-testid="todo-weekly">
-        <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Weekly · created vs completed</div>
+    <div className="shrink-0 grid grid-cols-2 gap-4 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg)]/30" data-testid="todo-analytics">
+      <div className="flex flex-col gap-1" data-testid="todo-weekly">
+        <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Weekly · created vs completed</div>
         <WeeklyBars data={weekly} />
       </div>
-      <div className="flex flex-col gap-1.5" data-testid="todo-sources">
-        <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Source distribution</div>
+      <div className="flex flex-col gap-1" data-testid="todo-sources">
+        <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Source distribution</div>
         <SourceBars data={sources} />
       </div>
     </div>
@@ -538,12 +603,19 @@ function GuideBanner() {
 
 // ── Detail drawer ───────────────────────────────────────────────────
 
-function DetailDrawer({ todo, onClose }: { todo: ToDo; onClose: () => void }) {
+function DetailDrawer({ todo, onClose, onEdit }: { todo: ToDo; onClose: () => void; onEdit: () => void }) {
   const wp = parseWorkPacket(todo.linkedContext);
   const priColor = PRIORITY_COLOR[todo.priority] === 'transparent' ? 'var(--color-text-faint)' : PRIORITY_COLOR[todo.priority];
   const status = deriveStatus(todo);
+  // Attachments are fetched lazily when the drawer opens (metadata only).
+  const [attachments, setAttachments] = useState<ToDoAttachment[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void todosService.listAttachments(todo.id).then((a) => { if (alive) setAttachments(a); }).catch(() => {});
+    return () => { alive = false; };
+  }, [todo.id]);
   return (
-    <OverlayDrawer widthPx={360} maxWidthPct={70} z={10} testid="todo-detail-drawer">
+    <OverlayDrawer widthPx={420} maxWidthPct={70} z={10} testid="todo-detail-drawer">
       <div className="flex items-start gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="mt-1 w-1.5 h-4 rounded-full shrink-0" style={{ background: priColor }} />
         <div className="flex-1 min-w-0">
@@ -556,6 +628,9 @@ function DetailDrawer({ todo, onClose }: { todo: ToDo; onClose: () => void }) {
             <span>{status}</span>
           </div>
         </div>
+        <button onClick={onEdit} data-testid="todo-drawer-edit" title="Edit" className="text-[var(--color-text-muted)] hover:text-primary">
+          <span className="material-symbols-outlined text-[18px]">edit</span>
+        </button>
         <button onClick={onClose} data-testid="todo-drawer-close" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <span className="material-symbols-outlined text-[18px]">close</span>
         </button>
@@ -587,6 +662,7 @@ function DetailDrawer({ todo, onClose }: { todo: ToDo; onClose: () => void }) {
             <MaterialList label="Files" items={wp.files} mono />
             <MaterialList label="Design docs" items={wp.design_docs} mono />
             <MaterialList label="Commits" items={wp.commits} mono />
+            <MaterialList label="Sessions" items={wp.sessions} mono />
             <MaterialList label="Memory refs" items={wp.memory_refs} mono />
             <MaterialList label="Blockers" items={wp.blockers} />
             {wp.notes && <Section label="Notes"><p className="text-[var(--color-text-muted)] break-words whitespace-pre-wrap">{wp.notes}</p></Section>}
@@ -594,9 +670,30 @@ function DetailDrawer({ todo, onClose }: { todo: ToDo; onClose: () => void }) {
         ) : (
           <div className="text-[11px] text-[var(--color-text-faint)] italic">No work-packet context attached.</div>
         )}
+
+        {attachments.length > 0 && (
+          <Section label={`Attachments · ${attachments.length}`}>
+            <ul className="flex flex-col gap-1">
+              {attachments.map((a) => (
+                <li key={a.id} className="flex items-center gap-2 text-[11px] text-[var(--color-text)]" data-testid="todo-detail-attachment">
+                  <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
+                  <span className="flex-1 truncate">{a.filename}</span>
+                  <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
       </div>
     </OverlayDrawer>
   );
+}
+
+/** Human-readable byte size. */
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
@@ -630,55 +727,148 @@ function MaterialList({ label, items, mono }: { label: string; items?: string[];
   );
 }
 
-// ── New ToDo inline form ────────────────────────────────────────────
+// ── Unified ToDo form (create + edit) ───────────────────────────────
+// One component for BOTH "+ New ToDo" and "Edit" (Detail's pencil). The layout
+// is shared so editing a todo reuses the create surface (issue 5). The critical
+// safety property (Gate-1 F6): in EDIT mode, save READ-MERGES the existing work
+// packet — it only overwrites next_step (the one packet field the form exposes)
+// and preserves every other dispatch key (files/commits/design_docs/sessions/
+// memory_refs/blockers/acceptance/notes) so a system/dispatched todo never loses
+// its context on edit. Attachments are a full-stack feature: uploaded to disk via
+// the backend endpoint, listed/removed live. In CREATE mode the todo doesn't
+// exist yet, so attachments upload right after create (staged, then flushed).
 
-function NewTodoForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
-  const [title, setTitle] = useState('');
-  const [priority, setPriority] = useState<Priority>('none');
-  const [description, setDescription] = useState('');
-  const [nextStep, setNextStep] = useState('');
+interface StagedFile { key: string; file: File }
+
+function TodoForm({ mode, initial, onSaved, onCancel }: {
+  mode: 'create' | 'edit';
+  initial?: ToDo;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const initialWp = useMemo(() => parseWorkPacket(initial?.linkedContext ?? null), [initial]);
+  const [title, setTitle] = useState(initial?.title ?? '');
+  const [priority, setPriority] = useState<Priority>(initial?.priority ?? 'none');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [nextStep, setNextStep] = useState((initialWp?.next_step as string) ?? '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Existing (already-uploaded) attachments — edit mode only.
+  const [attachments, setAttachments] = useState<ToDoAttachment[]>([]);
+  // Staged files in create mode (no todo id yet) — uploaded after create.
+  const [staged, setStaged] = useState<StagedFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const isEdit = mode === 'edit';
+
+  useEffect(() => {
+    if (isEdit && initial) {
+      let alive = true;
+      void todosService.listAttachments(initial.id).then((a) => { if (alive) setAttachments(a); }).catch(() => {});
+      return () => { alive = false; };
+    }
+  }, [isEdit, initial]);
+
+  const onPickFiles = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setErr(null);
+    if (isEdit && initial) {
+      // Upload immediately against the existing todo.
+      setBusy(true);
+      try {
+        for (const f of Array.from(files)) {
+          const row = await todosService.uploadAttachment(initial.id, f);
+          setAttachments((prev) => [row, ...prev]);
+        }
+      } catch {
+        setErr('Attachment upload failed.');
+      } finally {
+        setBusy(false);
+      }
+    } else {
+      // Create mode: stage for upload-after-create.
+      const add = Array.from(files).map((file, i) => ({ key: `${file.name}-${file.size}-${i}-${staged.length}`, file }));
+      setStaged((prev) => [...prev, ...add]);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [isEdit, initial, staged.length]);
+
+  const removeExisting = useCallback(async (att: ToDoAttachment) => {
+    if (!initial) return;
+    setAttachments((prev) => prev.filter((a) => a.id !== att.id)); // optimistic
+    try {
+      await todosService.deleteAttachment(initial.id, att.id);
+    } catch {
+      setErr('Could not remove attachment.');
+      void todosService.listAttachments(initial.id).then(setAttachments).catch(() => {});
+    }
+  }, [initial]);
 
   const submit = useCallback(async () => {
     const t = title.trim();
     if (!t) { setErr('Title is required.'); return; }
     setBusy(true); setErr(null);
+    const ns = nextStep.trim();
     try {
-      const ns = nextStep.trim();
-      await todosService.create({
-        // workspace_id is REQUIRED at the Pydantic schema level (ToDoCreate,
-        // Field(...)) — FastAPI 422s before the manager's default can fire.
-        workspaceId: 'swarmws',
-        title: t,
-        priority,
-        sourceType: 'manual',
-        description: description.trim() || undefined,
-        linkedContext: ns ? JSON.stringify({ next_step: ns }) : undefined,
-      });
-      onCreated();
+      if (isEdit && initial) {
+        // READ-MERGE: overwrite ONLY next_step; preserve all other packet keys.
+        const linkedContext = mergeWorkPacket(initial.linkedContext, { next_step: ns });
+        await todosService.update(initial.id, {
+          title: t,
+          priority,
+          description: description.trim(),
+          linkedContext,
+        });
+      } else {
+        const created = await todosService.create({
+          workspaceId: 'swarmws',
+          title: t,
+          priority,
+          sourceType: 'manual',
+          description: description.trim() || undefined,
+          linkedContext: ns ? JSON.stringify({ next_step: ns }) : undefined,
+        });
+        // Flush staged attachments now that we have an id. The todo is already
+        // created; count failures so we can tell the user which files to re-add
+        // instead of silently losing them (Gate-2 MED — no silent data loss).
+        let failed = 0;
+        for (const s of staged) {
+          try { await todosService.uploadAttachment(created.id, s.file); } catch { failed += 1; }
+        }
+        if (failed > 0) {
+          setErr(`ToDo created, but ${failed} attachment${failed > 1 ? 's' : ''} failed to upload — re-add ${failed > 1 ? 'them' : 'it'} via Edit.`);
+          setBusy(false);
+          // Refresh the list (the todo exists) but keep the drawer open so the
+          // message is seen; the user closes it manually.
+          return;
+        }
+      }
+      onSaved();
     } catch {
-      setErr('Failed to create ToDo.');
+      setErr(isEdit ? 'Failed to save changes.' : 'Failed to create ToDo.');
       setBusy(false);
     }
-  }, [title, priority, description, nextStep, onCreated]);
+  }, [isEdit, initial, title, priority, description, nextStep, staged, onSaved]);
+
+  const taClass = 'w-full px-2.5 py-2 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none resize-y';
 
   return (
-    <OverlayDrawer widthPx={360} maxWidthPct={70} z={20} testid="todo-new-form">
+    <OverlayDrawer widthPx={520} maxWidthPct={80} z={20} testid={isEdit ? 'todo-edit-form' : 'todo-new-form'}>
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-        <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">New ToDo</span>
-        <button onClick={onCancel} data-testid="todo-new-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+        <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">{isEdit ? 'Edit ToDo' : 'New ToDo'}</span>
+        <button onClick={onCancel} data-testid="todo-form-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <span className="material-symbols-outlined text-[18px]">close</span>
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 text-[12px]">
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3.5 text-[12px]">
         <Field label="Title *">
-          <input
+          <textarea
             autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            data-testid="todo-new-title"
-            className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none"
+            data-testid="todo-form-title"
+            rows={2}
+            className={taClass}
             placeholder="What needs doing?"
           />
         </Field>
@@ -688,7 +878,7 @@ function NewTodoForm({ onCreated, onCancel }: { onCreated: () => void; onCancel:
               <button
                 key={p}
                 onClick={() => setPriority(p)}
-                data-testid={`todo-new-pri-${p}`}
+                data-testid={`todo-form-pri-${p}`}
                 className={`px-2 py-1 text-[11px] rounded-md border transition-colors ${
                   priority === p ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
                 }`}
@@ -696,34 +886,87 @@ function NewTodoForm({ onCreated, onCancel }: { onCreated: () => void; onCancel:
             ))}
           </div>
         </Field>
-        <Field label="Description">
+        <Field label="Description — the detailed context">
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            data-testid="todo-new-desc"
-            rows={3}
-            className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none resize-none"
-            placeholder="Why this exists / background"
+            data-testid="todo-form-desc"
+            rows={8}
+            className={taClass}
+            placeholder="Why this exists, background, links, everything the executor needs to start cold…"
           />
         </Field>
         <Field label="Next step">
-          <input
+          <textarea
             value={nextStep}
             onChange={(e) => setNextStep(e.target.value)}
-            data-testid="todo-new-nextstep"
-            className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none"
-            placeholder="Concrete first action"
+            data-testid="todo-form-nextstep"
+            rows={3}
+            className={taClass}
+            placeholder="Concrete first action(s)"
           />
         </Field>
-        {err && <div className="text-[11px] text-red-400" data-testid="todo-new-err">{err}</div>}
+
+        {/* Attachments — screenshots + any file, no size/type limit */}
+        <Field label="Attachments — screenshots, files, anything">
+          <div className="flex flex-col gap-2" data-testid="todo-form-attachments">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={(e) => void onPickFiles(e.target.files)}
+              className="hidden"
+              data-testid="todo-form-file-input"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy}
+              data-testid="todo-form-attach-btn"
+              className="self-start inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[15px]">upload_file</span>
+              Add files
+            </button>
+            {(attachments.length > 0 || staged.length > 0) && (
+              <ul className="flex flex-col gap-1">
+                {attachments.map((a) => (
+                  <li key={a.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-attachment">
+                    <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
+                    <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
+                    <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                    <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  </li>
+                ))}
+                {staged.map((s) => (
+                  <li key={s.key} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-staged">
+                    <span className="material-symbols-outlined text-[14px] text-[var(--color-text-faint)]">schedule</span>
+                    <span className="flex-1 truncate text-[var(--color-text-muted)]">{s.file.name}</span>
+                    <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
+                    <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!isEdit && staged.length > 0 && (
+              <span className="text-[10px] text-[var(--color-text-faint)]">Files upload when you create the ToDo.</span>
+            )}
+          </div>
+        </Field>
+
+        {err && <div className="text-[11px] text-red-400" data-testid="todo-form-err">{err}</div>}
       </div>
       <div className="flex items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] shrink-0">
         <button
           onClick={submit}
           disabled={busy}
-          data-testid="todo-new-submit"
+          data-testid="todo-form-submit"
           className="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-50 transition-colors"
-        >{busy ? 'Creating…' : 'Create ToDo'}</button>
+        >{busy ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save changes' : 'Create ToDo')}</button>
         <button
           onClick={onCancel}
           className="px-3 py-1.5 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors"
