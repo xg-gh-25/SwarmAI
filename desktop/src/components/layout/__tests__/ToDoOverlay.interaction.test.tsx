@@ -318,4 +318,27 @@ describe('ToDoOverlay (flat table)', () => {
     // clear is dropped by toSnakeCase and never persisted.
     expect(payload.linkedContext).toBe('');
   });
+
+  // E2E finding P0: attachments were a "black hole" (name shown, not openable).
+  // Clicking one must dispatch `swarm:open-file` with its workspace-relative path
+  // (the sanctioned in-app open path; window.open is dead in the Tauri webview).
+  it('clicking a detail attachment opens it via swarm:open-file', async () => {
+    (todosService.listAttachments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'att1', todoId: 't1', filename: 'shot.png', relPath: 'Attachments/todos/t1/shot.png', size: 1234, createdAt: RECENT },
+    ]);
+    const openSpy = vi.fn();
+    document.addEventListener('swarm:open-file', openSpy as EventListener);
+    try {
+      render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+      await screen.findByTestId('todo-overlay');
+      fireEvent.click(await screen.findByTestId('todo-row'));
+      const openBtn = await screen.findByTestId('todo-detail-attachment-open');
+      fireEvent.click(openBtn);
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      const ev = openSpy.mock.calls[0][0] as CustomEvent;
+      expect(ev.detail.path).toBe('Attachments/todos/t1/shot.png');
+    } finally {
+      document.removeEventListener('swarm:open-file', openSpy as EventListener);
+    }
+  });
 });

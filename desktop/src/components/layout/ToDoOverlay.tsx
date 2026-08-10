@@ -244,7 +244,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           // confused (Gate-1 F3): the label + a wider inter-group gap make "which
           // All?" self-evident. Space WITHIN a group is tight; space BETWEEN groups
           // is wide (Refactoring UI #9 — ambiguous spacing is the bug).
-          <div className="flex items-center gap-5 flex-wrap">
+          <div className="flex items-center gap-x-4 gap-y-2 flex-wrap">
             {/* Group 1 — Time range (filters table + charts) */}
             <div className="flex items-center gap-1.5">
               <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] shrink-0">Range</span>
@@ -675,10 +675,19 @@ function DetailDrawer({ todo, onClose, onEdit }: { todo: ToDo; onClose: () => vo
           <Section label={`Attachments · ${attachments.length}`}>
             <ul className="flex flex-col gap-1">
               {attachments.map((a) => (
-                <li key={a.id} className="flex items-center gap-2 text-[11px] text-[var(--color-text)]" data-testid="todo-detail-attachment">
-                  <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
-                  <span className="flex-1 truncate">{a.filename}</span>
-                  <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                <li key={a.id} data-testid="todo-detail-attachment">
+                  <button
+                    type="button"
+                    onClick={() => openAttachment(a.relPath)}
+                    title={`Open ${a.filename}`}
+                    data-testid="todo-detail-attachment-open"
+                    className="w-full flex items-center gap-2 text-[11px] text-[var(--color-text)] hover:text-primary hover:bg-[var(--color-hover)] rounded px-1 py-0.5 -mx-1 transition-colors text-left"
+                  >
+                    <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
+                    <span className="flex-1 truncate">{a.filename}</span>
+                    <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                    <span className="material-symbols-outlined text-[13px] text-[var(--color-text-faint)]">open_in_new</span>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -694,6 +703,17 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Open a ToDo attachment in the in-app FileViewer/Canvas. The attachment's
+ *  relPath is workspace-relative, so we reuse the SAME `swarm:open-file` event
+ *  that explorer/chat file-clicks use (handled by ChatPage's useCanvasHost →
+ *  FileViewer, which renders images/PDF/text). This is the sanctioned open path:
+ *  a raw `window.open` is silently ignored by the Tauri v2 webview (see
+ *  utils/openExternal.ts), so we do NOT use it. No new backend endpoint — the
+ *  FileViewer streams from the existing GET /api/workspace/file/raw. */
+function openAttachment(relPath: string): void {
+  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: relPath } }));
 }
 
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
@@ -932,10 +952,18 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               <ul className="flex flex-col gap-1">
                 {attachments.map((a) => (
                   <li key={a.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[11px]" data-testid="todo-form-attachment">
-                    <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
-                    <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
-                    <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
-                    <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400">
+                    <button
+                      type="button"
+                      onClick={() => openAttachment(a.relPath)}
+                      title={`Open ${a.filename}`}
+                      data-testid="todo-form-attachment-open"
+                      className="flex-1 min-w-0 flex items-center gap-2 hover:text-primary transition-colors text-left"
+                    >
+                      <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">attach_file</span>
+                      <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
+                      <span className="font-mono text-[10px] text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
+                    </button>
+                    <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-red-400 shrink-0">
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </button>
                   </li>
