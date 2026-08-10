@@ -338,6 +338,37 @@ def aggregate_engagement(artifacts_dir: Path) -> dict:
 # KPI counts stay the TRUE totals; this only bounds the rendered rows).
 _ENGAGEMENT_ITEMS_CAP = 200
 
+# Our own GitHub identity — a reply BY us is not a reply we owe an answer to. The
+# community engine posts as this login (monitor.py/track.py all query xg-gh-25).
+_OUR_GH_LOGIN = "xg-gh-25"
+
+
+def _is_bot_author(author: str) -> bool:
+    """A CI/app bot reply (dependabot[bot], github-actions[bot], *-bot) is not a
+    human waiting on us. Mirrors monitor.py's bot heuristic."""
+    a = (author or "").lower()
+    return a.endswith("[bot]") or a.endswith("-bot")
+
+
+def _needs_followup(reply_rows: list[dict]) -> bool:
+    """A thread needs OUR follow-up iff the LATEST reply is from someone else —
+    not us (_OUR_GH_LOGIN) and not a bot. A thread where WE replied last (or only
+    bots replied) is NOT waiting on us. `reply_rows` are in reply_archive order,
+    which is chronological (track.py appends as it fetches), so the last element is
+    the newest.
+
+    This is the fix for the 'needs-followup is 72% noise' bug: the old rule
+    (bool(reply_rows) — ANY reply) flagged every thread we'd already answered, so
+    the highest-priority sort sorted nothing. The signal is the LAST voice in the
+    thread, not the mere existence of replies."""
+    if not reply_rows:
+        return False
+    last = reply_rows[-1]
+    author = (last.get("author") or "").lower()  # case-insensitive (matches _is_bot_author)
+    if author == _OUR_GH_LOGIN.lower() or _is_bot_author(author):
+        return False
+    return True
+
 
 def engagement_items(artifacts_dir: Path) -> list[dict]:
     """Join engagement_log × reply_archive into per-engagement rows for the Outbound
@@ -387,7 +418,17 @@ def engagement_items(artifacts_dir: Path) -> list[dict]:
             }
             for r in matched
         ]
+        # Chronological order (oldest→newest) so reply_rows[-1] is reliably the LATEST
+        # reply — _needs_followup keys off the last voice in the thread. Don't trust
+        # append order; sort explicitly. A MISSING created_at sorts LAST (newest), not
+        # first: an un-timestamped reply is most likely a just-fetched one, and burying
+        # it under a timestamped human reply would falsely flag a thread WE answered as
+        # needs-followup (adversarial HIGH). "￿" sorts after any real ISO date.
+        reply_rows.sort(key=lambda rr: rr.get("created_at") or "￿")
         has_maintainer = any(rr["is_maintainer"] for rr in reply_rows)
+        # needs_followup = the LATEST reply is from someone else (not us, not a bot) —
+        # i.e. a human is waiting on OUR response. A thread we replied to last is done.
+        needs = _needs_followup(reply_rows)
         items.append({
             "repo": repo,
             "issue_number": issue,
@@ -398,17 +439,36 @@ def engagement_items(artifacts_dir: Path) -> list[dict]:
             "confidence": e.get("confidence"),
             "reply_count": len(reply_rows),
             "has_maintainer_reply": has_maintainer,
-            "needs_followup": bool(reply_rows),
+            "needs_followup": needs,
             "replies": reply_rows,
         })
 
-    # Sort: needs-followup first (maintainer replies above plain replies), then newest.
-    # Two stable passes (Python sort is stable): (1) newest-first by posted_at, then
-    # (2) by tier — so within each tier the newest stays on top. Missing posted_at ("")
-    # sorts oldest, which is the correct "least urgent" position.
+    # Sort tiers (gate on needs_followup FIRST — a maintainer thread we already
+    # answered is NOT urgent): 0 = a maintainer is waiting on us, 1 = someone is
+    # waiting on us, 2 = no action needed (we replied last / no reply). Two stable
+    # passes: (1) newest-first by posted_at, then (2) by tier — newest stays on top
+    # within a tier. Missing posted_at ("") sorts oldest = least urgent.
+    def _tier(it: dict) -> int:
+        if it["needs_followup"]:
+            return 0 if it["has_maintainer_reply"] else 1
+        return 2
     items.sort(key=lambda it: it.get("posted_at") or "", reverse=True)
-    items.sort(key=lambda it: 0 if it["has_maintainer_reply"] else (1 if it["needs_followup"] else 2))
+    items.sort(key=_tier)
     return items[:_ENGAGEMENT_ITEMS_CAP]
+
+
+# A community weekly REPORT filename: `<date>-weekly.md|html` (report.py emits exactly
+# this stem). Matches ONLY the bare `weekly` stem — NOT `ddd-weekly` / `pipeline-weekly`
+# / any other `*-weekly` internal report (those carry a qualifier before "weekly" and
+# are internal, excluded upstream). Date prefix optional, extension .md or .html.
+_WEEKLY_REPORT_NAME_RE = re.compile(r"^(?:\d{4}-\d{2}(?:-\d{2})?-)?weekly\.(?:md|html)$", re.IGNORECASE)
+
+
+def _is_weekly_report_name(name: str) -> bool:
+    """True for a community weekly report filename (<date>-weekly.md|html), which is a
+    REPORT even when it lives in Knowledge/Signals/. Excludes qualified weeklies
+    (ddd-weekly, pipeline-weekly, …) — those are internal and already filtered."""
+    return bool(_WEEKLY_REPORT_NAME_RE.match(name))
 
 
 def build_feed(knowledge_dir: Path) -> list[dict]:
@@ -464,10 +524,21 @@ def build_feed(knowledge_dir: Path) -> list[dict]:
             except OSError:
                 continue
             rel = p.relative_to(knowledge_dir)
+            # A community WEEKLY report is written into Knowledge/Signals/ as
+            # <date>-weekly.md (the engine dual-writes .html to Reports/ + .md to
+            # Signals/). By file location it lands in the Signals category, but it is a
+            # REPORT, not a daily digest — so the Inbound tab was still interleaving 11
+            # weekly .md files into the daily-signal flow (the "reports mixed in" bug the
+            # .html-only card fix missed). Reclassify by NAME so the frontend's
+            # category split routes it to the report card, not the signal list. The
+            # `*-ddd-weekly*` internal governance reports are already excluded upstream
+            # by _is_community_report (they live in Reports/), so this only catches the
+            # community weekly.
+            effective_category = "Reports" if _is_weekly_report_name(p.name) else category
             items.append(
                 {
                     "path": f"Knowledge/{rel.as_posix()}",
-                    "category": category,
+                    "category": effective_category,
                     "name": p.name,
                     "mtime": mtime,
                 }

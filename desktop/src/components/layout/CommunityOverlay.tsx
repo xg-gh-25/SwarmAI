@@ -627,6 +627,10 @@ function OutboundTab() {
 
   const followups = items.filter((it) => it.needsFollowup);
   const posted = items.filter((it) => !it.needsFollowup);
+  // Honest cap disclosure: the KPI count is the TRUE total (e.g. 216) but the list is
+  // capped, so a user counting rows must not think the number lies. Show it only when
+  // the list is actually shorter than the posted-comments total.
+  const capped = e.kpis.commentsPosted > items.length;
 
   return (
     <div className="max-w-[860px] flex flex-col gap-4">
@@ -642,12 +646,17 @@ function OutboundTab() {
         <>
           {followups.length > 0 && (
             <EngagementGroup
-              hint="⬤ Needs follow-up — someone replied, awaiting your response"
+              hint={`⬤ Needs follow-up — someone else replied last, awaiting your response (${followups.length})`}
               items={followups}
             />
           )}
           {posted.length > 0 && (
-            <EngagementGroup hint="⬤ Posted" items={posted} muted />
+            <EngagementGroup hint="⬤ Posted / handled" items={posted} muted />
+          )}
+          {capped && (
+            <div data-testid="community-list-cap" className="text-[10.5px] text-[var(--color-text-faint)] italic">
+              Showing the {items.length} most recent of {e.kpis.commentsPosted} posted comments.
+            </div>
           )}
         </>
       )}

@@ -388,6 +388,31 @@ describe('CommunityOverlay — Outbound tab', () => {
     fireEvent.click(screen.getByTestId('community-tab-outbound'));
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
   });
+
+  it('discloses the list cap when KPI total exceeds shown rows (no silent truncation)', async () => {
+    fetchFeed.mockResolvedValue([]);
+    // 216 posted total, but only 2 items in the list → must say "showing 2 of 216"
+    fetchEngagement.mockResolvedValue(engWith(
+      [item({ repo: 'a/b', issueNumber: 1 }), item({ repo: 'c/d', issueNumber: 2 })],
+      { commentsPosted: 216, repliesReceived: 100, maintainerReplies: 5, stars: null },
+    ));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    await waitFor(() => expect(screen.getByTestId('community-list-cap')).toBeTruthy());
+    expect(screen.getByTestId('community-list-cap').textContent).toContain('2 most recent of 216');
+  });
+
+  it('does NOT show the cap note when the list already shows every posted comment', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchEngagement.mockResolvedValue(engWith(
+      [item({ repo: 'a/b', issueNumber: 1 })],
+      { commentsPosted: 1, repliesReceived: 0, maintainerReplies: 0, stars: null },
+    ));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    await screen.findByTestId('community-engagement-row');
+    expect(screen.queryByTestId('community-list-cap')).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

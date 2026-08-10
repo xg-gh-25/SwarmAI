@@ -323,6 +323,80 @@ def test_engagement_items_missing_dir(tmp_path: Path) -> None:
     assert engagement_items(tmp_path / "nope") == []
 
 
+def _eng_reply_fixture(tmp_path: Path, replies: list[dict]) -> Path:
+    d = tmp_path / ".artifacts"
+    d.mkdir()
+    (d / "engagement_log.jsonl").write_text(
+        json.dumps({"comment_id": "c1", "status": "published", "repo": "a/b", "issue_number": 1, "comment_url": "u1", "posted_at": "2026-08-01T00:00:00Z"}) + "\n"
+    )
+    (d / "reply_archive.jsonl").write_text("\n".join(json.dumps(r) for r in replies) + "\n")
+    return d
+
+
+def test_needs_followup_false_when_we_replied_last(tmp_path: Path) -> None:
+    # A thread where OUR login (xg-gh-25) posted the LAST reply is handled — NOT
+    # awaiting our response. This is the fix for the 72%-noise bug.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "q"},
+        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our answer"},
+    ])
+    items = engagement_items(d)
+    assert items[0]["reply_count"] == 2
+    assert items[0]["needs_followup"] is False  # we replied last → handled
+
+
+def test_needs_followup_true_when_other_replied_last(tmp_path: Path) -> None:
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "our comment"},
+        {"author": "maintainer1", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "reply to us"},
+    ])
+    items = engagement_items(d)
+    assert items[0]["needs_followup"] is True  # they replied last → we owe a response
+    assert items[0]["has_maintainer_reply"] is True
+
+
+def test_needs_followup_false_when_bot_replied_last(tmp_path: Path) -> None:
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "github-actions[bot]", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "triage"},
+    ])
+    items = engagement_items(d)
+    assert items[0]["needs_followup"] is False  # a bot is not a human waiting on us
+
+
+def test_needs_followup_ignores_reply_archive_order(tmp_path: Path) -> None:
+    # Even if reply_archive is out of chronological order, the LATEST by created_at
+    # decides — here 'other' is chronologically last despite being written first.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "other", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-09T00:00:00Z", "body": "later"},
+        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "earlier"},
+    ])
+    items = engagement_items(d)
+    assert items[0]["needs_followup"] is True  # 'other' at 08-09 is the true last
+
+
+def test_needs_followup_our_login_case_insensitive(tmp_path: Path) -> None:
+    # Adversarial HIGH: our login may appear with different casing in reply_archive —
+    # "XG-GH-25" must still count as US (handled), not a stranger awaiting a reply.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "q"},
+        {"author": "XG-GH-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our answer, upper-cased login"},
+    ])
+    items = engagement_items(d)
+    assert items[0]["needs_followup"] is False  # case-insensitive: we replied last
+
+
+def test_needs_followup_missing_created_at_on_our_last_reply(tmp_path: Path) -> None:
+    # Adversarial HIGH: our reply has NO created_at (just-fetched). It must still sort
+    # LAST (newest) so the thread reads as handled — not buried under the timestamped
+    # human reply, which would falsely flag needs_followup.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "human q"},
+        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "body": "our answer, no timestamp"},
+    ])
+    items = engagement_items(d)
+    assert items[0]["needs_followup"] is False  # our untimestamped reply sorts newest
+
+
 def test_engagement_items_none_keys_do_not_false_join(tmp_path: Path) -> None:
     # REVIEW HIGH: a reply missing source_issue must NOT cross-attach to a published
     # comment that also happens to be missing issue_number via a (repo, None) match.
@@ -381,6 +455,20 @@ def test_build_feed_carries_path_and_category(knowledge_dir: Path) -> None:
 
 def test_build_feed_missing_knowledge(tmp_path: Path) -> None:
     assert build_feed(tmp_path / "nope") == []
+
+
+def test_build_feed_reclassifies_weekly_in_signals_as_report(knowledge_dir: Path) -> None:
+    # The community weekly report is written into Knowledge/Signals/ as
+    # <date>-weekly.md (engine dual-writes). By folder it's a Signal, but it's a
+    # REPORT — the Inbound tab must route it to the report card, NOT the daily signal
+    # list. The knowledge_dir fixture has Signals/2026-08-06-weekly.md.
+    items = build_feed(knowledge_dir)
+    weekly = [it for it in items if it["name"] == "2026-08-06-weekly.md"]
+    assert len(weekly) == 1
+    assert weekly[0]["category"] == "Reports"  # reclassified by name, not folder
+    # the daily digest stays a Signal
+    digest = [it for it in items if it["name"] == "2026-08-07-digest.md"]
+    assert digest and digest[0]["category"] == "Signals"
 
 
 def test_build_feed_excludes_internal_governance_reports(tmp_path: Path) -> None:
