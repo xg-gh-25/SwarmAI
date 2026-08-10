@@ -428,3 +428,85 @@ def test_completion_build_failure_does_not_break_turn(monkeypatch):
                       _tool_result(tool_use_id="tu-c1"), _make_result_message()])
     )
     assert raised is None, "a build_surface_events crash must not kill the streaming turn"
+
+
+# ── (h) Layer-4 CROSS-BOUNDARY E2E — drive the REAL seam end-to-end ─────────────
+#    cross_boundary.value == true (SSE/event-bus/ACT-SENSE). The seam is:
+#      completion command → orchestrator observation → REAL build_surface_events
+#      → file_changed(kind=knowledge) SSE → (frontend useCanvasAutoSurface gate).
+#    This test does NOT stub build_surface_events or read_run_status — it runs the
+#    REAL functions against a REAL on-disk run.json + REPORT.md for a DOCS-ONLY run
+#    (0 commits). Only get_swarmws (the workspace-root leaf) is redirected to tmp.
+#    Mutation-verified: reverting the completion-emit branch → this goes RED (proven
+#    manually during BUILD; the wiring tests above are the automated mutation guards).
+
+def test_layer4_docs_only_completion_drives_real_surface_e2e(tmp_path, monkeypatch):
+    """E2E: a docs-only run (commits=[]) with a real REPORT.md on disk, completed via
+    the real `run-update --status completed` observation, drives the REAL
+    build_surface_events + read_run_status (NOT mocked) and emits the kind=knowledge
+    REPORT.md event the frontend needs. This is the true seam, unmocked."""
+    import json
+    # Real docs-only run on disk: 0 commits, status=completed, healthy REPORT.md.
+    run_dir = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "runs" / "run_e2e_docs"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"commits": [], "status": "completed"}))
+    (run_dir / "REPORT.md").write_text("# Pipeline Report\n" + ("x" * 600))
+
+    # Redirect BOTH resolvers that the real functions use to the tmp workspace.
+    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
+    # ensure_report_for_run early-returns for 0-commit runs (correct — no source batch
+    # to pair); the report already exists, so build_surface_events appends it anyway.
+
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(
+        _drive(orch, [_bash_complete_tool_use(run_id="run_e2e_docs"),
+                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
+    )
+    assert raised is None
+    fc = [e for e in events if e.get("type") == "file_changed"]
+    assert len(fc) == 1, f"real seam must emit exactly the REPORT.md event, got {fc}"
+    assert fc[0]["kind"] == "knowledge"
+    assert fc[0]["relevance"] == "deliverable"
+    assert str(fc[0]["path"]).endswith("REPORT.md")
+
+
+def test_layer4_real_status_authority_blocks_incomplete_run(tmp_path, monkeypatch):
+    """E2E mutation-companion: the SAME real path, but run.json status is NOT
+    'completed' (a gate-BLOCKED completion — the CLI still exited 0). The REAL
+    read_run_status must return the real status and the orchestrator must NOT surface.
+    Proves the status-authority gate is load-bearing against real data, not the mock."""
+    import json
+    run_dir = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "runs" / "run_e2e_blocked"
+    run_dir.mkdir(parents=True)
+    # status=running: the completion gate blocked it, but the command string said
+    # --status completed. Real read_run_status returns 'running' → no surface.
+    (run_dir / "run.json").write_text(json.dumps({"commits": [], "status": "running"}))
+    (run_dir / "REPORT.md").write_text("# Pipeline Report\n" + ("x" * 600))
+    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
+
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(
+        _drive(orch, [_bash_complete_tool_use(run_id="run_e2e_blocked"),
+                      _tool_result(tool_use_id="tu-c1"), _make_result_message()])
+    )
+    assert raised is None
+    assert not [e for e in events if e.get("type") == "file_changed"], \
+        "real run.json status != completed must NOT surface (authority is run.json, not the cmd)"
+
+
+def test_layer4_frontend_gate_accepts_the_emitted_kind():
+    """Cross-language contract binding: the kind the completion path emits
+    ('knowledge', from build_surface_events) MUST be in the frontend auto-pop accepted
+    set parsed from useCanvasAutoSurface.ts — else Canvas would never open on it. Binds
+    the backend emit to the REAL frontend gate source (a divergence goes RED)."""
+    import re as _re
+    from pathlib import Path as _P
+    ts = (_P(__file__).resolve().parents[2] / "desktop" / "src" / "hooks"
+          / "useCanvasAutoSurface.ts").read_text()
+    kind_line = next(l for l in ts.splitlines()
+                     if "kind !== undefined" in l and "return" in l)
+    accepted = set(_re.findall(r"kind !== '([a-z-]+)'", kind_line))
+    assert "knowledge" in accepted, (
+        f"the completion path emits kind=knowledge; frontend accepted kinds are "
+        f"{accepted} — if 'knowledge' is missing, Canvas would never auto-open on "
+        f"pipeline completion (the whole point of this fix)")
