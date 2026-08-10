@@ -70,13 +70,25 @@ class TestGateVerdict:
 
 
 class TestTriggerTiers:
-    def test_all_seven_triggers_declared(self):
+    def test_all_triggers_declared(self):
         from core.ingestion_gate import TRIGGER_TIERS
-        # the 7 ingestion triggers (KNOWLEDGE index refresh is not ingestion)
+        # every store's triggers are declared (DDD spec + dispatcher-served + carve-outs)
         for t in ("ddd_reflect", "ddd_writeback", "ddd_orch_llm_refresh",
                   "ddd_orch_mechanical", "memory_distill", "memory_save_button",
                   "evolution_distill"):
             assert t in TRIGGER_TIERS, f"{t} missing from TRIGGER_TIERS"
+
+    def test_dispatcher_serves_only_memory_and_evolution(self):
+        """C7 honesty (post-C4): the DISPATCHER (ingestion_gate) serves MEMORY + EVOLUTION
+        triggers; DDD goes through admission_band; orchestrator triggers are carve-outs.
+        _DISPATCHER_TRIGGERS must NOT include any ddd_* trigger."""
+        from core.ingestion_gate import _DISPATCHER_TRIGGERS
+        assert _DISPATCHER_TRIGGERS == {
+            "memory_distill", "memory_save_button", "memory_persist",
+            "evolution_distill", "evolution_persist",
+        }
+        assert not any(t.startswith("ddd_") for t in _DISPATCHER_TRIGGERS), \
+            "DDD triggers are served by admission_band, not the dispatcher"
 
     def test_memory_distill_has_no_ddd_value_floor(self):
         # Gate-1 ⓐ: MEMORY must NOT get the ≥5-word confident floor.
@@ -106,12 +118,21 @@ class TestDispatcherNoiseDedupConfident:
         assert v.verdict == "discard"
         assert "noise" in v.tiers_run
 
-    def test_ddd_short_fragment_discarded_by_confident(self):
-        # DDD DOES apply the value floor: same short fragment → discard on confident.
+    def test_ddd_trigger_rejected_by_dispatcher_guard(self):
+        # C7 (post-C4): the dispatcher serves MEMORY/EVOLUTION only. DDD goes through
+        # admission_band, so a ddd_* trigger reaching ingestion_gate() is a mis-wire →
+        # fail-closed to review (NOT run the DDD tier-spec through the dispatcher).
         from core.ingestion_gate import ingestion_gate
         v = ingestion_gate("done", store="DDD", trigger="ddd_reflect",
                            context={"proposal": {"content": "done"}})
-        assert v.verdict == "discard"
+        assert v.verdict == "review"
+        assert "non_dispatcher_trigger" in v.reason
+
+    def test_ddd_value_floor_applied_via_admission_band(self):
+        # The DDD value-floor (short fragment → discard) lives in admission_band now,
+        # not the dispatcher. Verify the tier PRIMITIVE still works (ddd_value_floor).
+        from core.ingestion_gate import ddd_value_floor
+        assert ddd_value_floor("done") is True  # <5 words → floored (DDD-only)
 
     def test_unknown_trigger_fails_closed_to_review(self):
         from core.ingestion_gate import ingestion_gate

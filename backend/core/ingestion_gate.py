@@ -270,15 +270,19 @@ class GateVerdict:
 # pre-drop in _cultivate_proposals so it can sink to protected-zone-candidates.jsonl.
 # confident (=ddd_value_floor) is DDD-only (Gate-1 ⓐ): MEMORY short fragments must
 # survive. trust/magnitude are DDD-only (need context['proposal']/['run_id']).
-# judge/keep_type_holdback land in C2; declared here so the table is complete.
+#
+# ⚠️ C7 HONESTY NOTE (run_0d60e04e — post-C4 code-verified reality):
+#   • MEMORY + EVOLUTION triggers are DISPATCHER-SERVED: production callers pass these
+#     strings to ingestion_gate() (distillation_hook _admit_memory_lesson /
+#     _gate_evolution_entries). These are the LIVE dispatcher contract.
+#   • DDD triggers (ddd_*) are served by admission_band (the DDD decision tree), NOT the
+#     dispatcher — no caller passes a "ddd_*" string to ingestion_gate(). They are kept
+#     here as the DDD tier SPEC (what admission_band implements), NOT as live dispatch rows.
+#   • ddd_orch_llm_refresh / ddd_orch_mechanical are CARVE-OUTS: C4 code-verified the
+#     orchestrator paths are value-refresh (current→proposed replace), NOT ingestion —
+#     they are NEVER gated. Listed for the record with a carve-out marker, never dispatched.
 TRIGGER_TIERS: dict[str, list[str]] = {
-    # DDD — full quality set (protected_zone handled by caller, not here)
-    "ddd_reflect":          ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
-    "ddd_session_signal":   ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
-    "ddd_writeback":        ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
-    "ddd_orch_llm_refresh": ["noise", "confident", "magnitude", "dedup"],
-    "ddd_orch_mechanical":  ["noise", "confident", "dedup"],
-    "ddd_conversation":     ["human"],
+    # ── DISPATCHER-SERVED (live: passed to ingestion_gate() in production) ──
     # MEMORY — NO confident (no ≥5-word floor); keep_type_holdback + judge on auto path
     "memory_distill":       ["noise", "keep_type_holdback", "judge", "dedup"],
     "memory_save_button":   ["noise", "dedup"],
@@ -286,7 +290,23 @@ TRIGGER_TIERS: dict[str, list[str]] = {
     # EVOLUTION
     "evolution_distill":    ["noise", "keep_type_holdback", "judge", "dedup"],
     "evolution_persist":    ["dedup"],
+    # ── DDD SPEC (served by admission_band, NOT this dispatcher — kept for the record) ──
+    "ddd_reflect":          ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
+    "ddd_session_signal":   ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
+    "ddd_writeback":        ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
+    "ddd_conversation":     ["human"],
+    # ── CARVE-OUTS (C4: value-refresh, NOT ingestion — NEVER gated/dispatched) ──
+    "ddd_orch_llm_refresh": ["noise", "confident", "magnitude", "dedup"],  # carve-out (never dispatched)
+    "ddd_orch_mechanical":  ["noise", "confident", "dedup"],               # carve-out (never dispatched)
 }
+
+# The triggers this dispatcher actually SERVES (a caller passes them to ingestion_gate).
+# DDD triggers go through admission_band; orchestrator triggers are carve-outs. This set
+# lets the dispatcher fail-closed on a trigger that isn't a live dispatch target.
+_DISPATCHER_TRIGGERS = frozenset({
+    "memory_distill", "memory_save_button", "memory_persist",
+    "evolution_distill", "evolution_persist",
+})
 
 # Tiers implemented in C1+C2. trust/magnitude are C3 (DDD-only, need context['proposal']
 # /['run_id']) — until then treated as no-op PASS (they only tighten toward review,
@@ -318,6 +338,13 @@ def ingestion_gate(
     tiers = TRIGGER_TIERS.get(trigger)
     if tiers is None:
         return GateVerdict("review", [], f"unknown_trigger:{trigger}")
+    # C7 (run_0d60e04e): the dispatcher SERVES only MEMORY/EVOLUTION triggers. A DDD trigger
+    # (served by admission_band) or an orchestrator carve-out (value-refresh, never gated)
+    # reaching HERE means a caller wired it to the wrong path — fail-closed to review rather
+    # than run a DDD tier-spec through the store-agnostic dispatcher. Makes _DISPATCHER_TRIGGERS
+    # a REAL guard (was documentation-only), not just a comment (P7: enforce, don't narrate).
+    if trigger not in _DISPATCHER_TRIGGERS:
+        return GateVerdict("review", [], f"non_dispatcher_trigger:{trigger}")
 
     section = context.get("section", "")
     neighbors = context.get("neighbors", [])
