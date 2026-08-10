@@ -37,6 +37,11 @@ from pathlib import Path
 from typing import List, Optional
 
 from core.ddd_paths import ddd_path
+# Unified ingestion gate (run_0d60e04e): the self-adversarial refute judge lives in
+# the leaf module. Imported at module level (ingestion_gate is a LEAF — it does only
+# lazy in-function imports of DDD code, so no cycle). admission_band (the DDD decision
+# tree) delegates the trust=n/a refute step to it.
+from core.ingestion_gate import self_adversarial_judge
 
 # Maximum proposals generated per pipeline run (prevents noise)
 MAX_PROPOSALS_PER_RUN = 5
@@ -171,6 +176,16 @@ class CultivationProposal:
     # {"passed", "failed", "n/a"} — fail-closed default "n/a" (never auto without an
     # explicit Gate-2 pass). Additive + defaults "n/a" → old proposal JSON round-trips.
     passed_adversarial_gate: str = "n/a"
+    # Knowledge Admission v2 (run_0d60e04e, C3): WHERE the trust came from. Two
+    # sources are equal-authority for NON-protected zones but NOT for protected ones:
+    #   "inherited_gate2"  — the source run really cleared pipeline Gate-2 (adversarial).
+    #   "self_adversarial" — no source gate; the zero-context refute judge passed it.
+    #   "none"             — untrusted (trust=n/a / failed).
+    # Protected zones (SELF.md / PRODUCT>Vision·Non-Goals·Strategic·Design Philosophy /
+    # TECH>Architecture) may ONLY be auto-entered by inherited_gate2 — a self_adversarial
+    # pass is NOT enough (run_8dea0dd5 R2/R4: else the judge could auto-write SELF.md).
+    # Additive + defaults "none" → old proposal JSON round-trips unchanged.
+    trust_source: str = "none"
 
     def to_dict(self) -> dict:
         """Serialize to dict for JSON storage."""
@@ -192,6 +207,7 @@ class CultivationProposal:
             "auto_apply_ok": self.auto_apply_ok,
             "contradiction_flag": self.contradiction_flag,
             "passed_adversarial_gate": self.passed_adversarial_gate,
+            "trust_source": self.trust_source,
         }
 
     @classmethod
@@ -220,6 +236,7 @@ class CultivationProposal:
             auto_apply_ok=data.get("auto_apply_ok", False),
             contradiction_flag=data.get("contradiction_flag", None),
             passed_adversarial_gate=data.get("passed_adversarial_gate", "n/a"),
+            trust_source=data.get("trust_source", "none"),
         )
 
     def is_expired(self) -> bool:
@@ -570,12 +587,20 @@ def filter_lessons_for_ddd(
             if _flag is not None:
                 contradiction_flag = _flag.to_dict()
 
+        # Component B/C: the creation-time stamp comes from the SOURCE RUN's Gate-2
+        # outcome — so a "passed" here is by definition INHERITED gate2 authority (the
+        # only source at creation; self_adversarial is stamped later, in admission_band).
+        # trust_source MUST track the stamp: a "passed" stamp → "inherited_gate2", else
+        # "none". Without this, admission_band's protected-zone pre-drop (which requires
+        # inherited_gate2 to fall through) would wrongly bar EVERY legit gate2 proposal.
+        _creation_trust = stamp_trust_from_run(run_id, project_dir)
         proposal = CultivationProposal(
             target_doc=target_doc,
             target_section=target_section,
             content=lesson.strip(),
             source_run_id=run_id,
             confidence=confidence,
+            trust_source=("inherited_gate2" if _creation_trust == "passed" else "none"),
             change_type=change_type,
             target_title=target_title,
             evidence=evidence,
@@ -584,7 +609,7 @@ def filter_lessons_for_ddd(
             # Component B: stamp trust from the source run's Gate-2 outcome at creation.
             # Fail-closed to "n/a" when project_dir is None (pure-classify callers) or the
             # run can't be resolved — so a proposal never claims trust it can't prove.
-            passed_adversarial_gate=stamp_trust_from_run(run_id, project_dir),
+            passed_adversarial_gate=_creation_trust,
         )
         proposals.append(proposal)
 
@@ -1781,9 +1806,52 @@ def admission_band(
     if _noise:
         return ("discard", f"noise:{_nreason}")
 
-    # 2. trust is the gate. Only an explicit Gate-2 pass is auto-eligible.
+    # 1b. PROTECTED-ZONE INVARIANT (UNCONDITIONAL — Gate-2 CRITICAL, run_0d60e04e C3):
+    #     a protected zone (SELF.md / PRODUCT high-sections / TECH Architecture) may be
+    #     auto-entered ONLY by inherited_gate2. This guard is OUTSIDE the trust!="passed"
+    #     block on purpose: a proposal that ALREADY carries passed+self_adversarial on
+    #     ENTRY (re-read from disk with a stamped JSON, a retry, a second call site) must
+    #     STILL be barred — else the judge's stamp, once persisted, would silently grant
+    #     protected-zone authority it never had. inherited_gate2 falls through to the
+    #     normal quality/confidence floor below; everything else → review, no judge.
+    if is_protected_zone(proposal.target_doc, proposal.target_section):
+        if not (proposal.passed_adversarial_gate == "passed"
+                and proposal.trust_source == "inherited_gate2"):
+            return ("review", f"protected_zone_requires_inherited_gate2:{proposal.trust_source}")
+
+    # 2. trust is the gate. Two trust SOURCES are auto-eligible (run_0d60e04e C3):
+    #    (a) inherited_gate2 — the source run cleared pipeline Gate-2. May enter ANY
+    #        zone, protected included.
+    #    (b) self_adversarial — no inherited gate (trust=n/a); the zero-context refute
+    #        judge is run HERE and, if it passes, stamps trust=passed(self_adversarial).
+    #        NON-protected zones ONLY (run_8dea0dd5 R1/R4): a self_adversarial pass has
+    #        NO authority to open SELF.md / PRODUCT high-sections / TECH Architecture —
+    #        those stay inherited_gate2-only. The judge is NOT run for a protected zone
+    #        (it could never grant entry there anyway) → straight to review.
     if proposal.passed_adversarial_gate != "passed":
-        return ("review", f"trust:{proposal.passed_adversarial_gate}")
+        # (protected-zone case already returned at 1b above — a trust=n/a protected-zone
+        #  proposal never reaches here, so the judge is never run for a protected zone.)
+        # A non-append (retire/rewrite) with no trust is never judged for auto here.
+        if proposal.change_type != "append":
+            return ("review", "non_append")
+        # Non-protected + trust=n/a → run the self-adversarial refute judge.
+        # FAIL-CLOSED lives inside self_adversarial_judge (error/timeout → "suspect").
+        # neighbors: contradiction-detection only; empty here (a richer neighbor set is
+        # a future enrichment — an empty set only makes the judge STRICTER, never laxer).
+        _verdict, _jr = self_adversarial_judge(
+            proposal.content or "", proposal.target_section, []
+        )
+        if _verdict == "noise":
+            return ("discard", f"judge:noise:{_jr}")
+        if _verdict != "pass":  # "suspect" or any non-pass → review (fail-closed)
+            return ("review", f"judge:{_verdict}")
+        # Judge passed → this proposal is now self_adversarial-trusted. Stamp it so the
+        # applier + pre-drop see a real source (NOT inherited_gate2 → still barred from
+        # protected zones, but we already ruled those out above). Fall through to the
+        # SAME quality/confidence floor inherited_gate2 faces (trust necessary, not
+        # sufficient — run_8dea0dd5 R-"trust 必要非充分").
+        proposal.passed_adversarial_gate = "passed"
+        proposal.trust_source = "self_adversarial"
 
     # destructive changes (retire/rewrite) are never auto-applied via this band
     if proposal.change_type != "append":
@@ -1818,7 +1886,7 @@ def admission_band(
     if proposal.confidence < threshold:
         return ("review", f"below_auto_threshold:{proposal.confidence:.2f}<{threshold:.2f}")
 
-    return ("auto", "trust_passed")
+    return ("auto", f"trust_passed:{proposal.trust_source or 'inherited_gate2'}")
 
 
 def stamp_trust_from_run(run_id: "str | None", project_dir: "Path | None") -> str:
@@ -1901,10 +1969,17 @@ def backfill_proposals(project_dir: "Path", dry_run: bool = False) -> dict:
                     continue
             result["gc_removed"] += 1
             continue
-        # 2. re-stamp survivors (re-derive trust; a stored stamp may predate Component B)
+        # 2. re-stamp survivors (re-derive trust; a stored stamp may predate Component B).
+        #    A fresh "passed" here is a re-derivation from the source run.json → INHERITED
+        #    gate2 authority; keep trust_source in lockstep with the stamp (else a re-stamped
+        #    "passed" with a stale/blank trust_source would be barred from — or worse, if the
+        #    stored source were self_adversarial, wrongly evaluated against — protected zones).
         fresh_trust = stamp_trust_from_run(proposal.source_run_id, project_dir)
-        if fresh_trust != proposal.passed_adversarial_gate and not dry_run:
+        _fresh_source = "inherited_gate2" if fresh_trust == "passed" else "none"
+        if (fresh_trust != proposal.passed_adversarial_gate
+                or _fresh_source != proposal.trust_source) and not dry_run:
             proposal.passed_adversarial_gate = fresh_trust
+            proposal.trust_source = _fresh_source
             try:
                 fp.write_text(json.dumps(proposal.to_dict(), indent=2), encoding="utf-8")
             except OSError:
@@ -2206,6 +2281,25 @@ def read_workspace_cultivation_health(root: Path, window_days: int = 7) -> dict:
     return health
 
 
+def _predrop_is_protected_untrusted(proposal: "CultivationProposal") -> bool:
+    """True if this proposal must be pre-dropped to the human-distill sink because it
+    targets a protected zone WITHOUT inherited_gate2 authority.
+
+    run_8dea0dd5 R2/R4 (the code-verified hole): the pre-drop used to fire on
+    ``passed_adversarial_gate != "passed"`` — but once the self_adversarial judge stamps
+    a proposal ``passed`` (trust_source="self_adversarial"), that condition goes False and
+    the proposal would FALL THROUGH into a protected zone (SELF.md / PRODUCT high-sections
+    / TECH Architecture) with only judge authority. Protected zones are inherited_gate2-ONLY.
+    So the fall-through condition is: passed AND trust_source == "inherited_gate2". Anything
+    else (n/a, failed, or self_adversarial-passed) targeting a protected zone is pre-dropped.
+    """
+    if not is_protected_zone(proposal.target_doc, proposal.target_section):
+        return False
+    inherited = (proposal.passed_adversarial_gate == "passed"
+                 and proposal.trust_source == "inherited_gate2")
+    return not inherited
+
+
 def _cultivate_proposals(
     proposals: List[CultivationProposal], project_dir: Path
 ) -> dict:
@@ -2256,8 +2350,7 @@ def _cultivate_proposals(
         # now AUTO-eligible into these very zones (Component C, AC11) — it must FALL
         # THROUGH to admission_band, NOT be pre-dropped here. So this pre-drop fires
         # ONLY for the un-trusted case.
-        if (proposal.passed_adversarial_gate != "passed"
-                and is_protected_zone(proposal.target_doc, proposal.target_section)):
+        if _predrop_is_protected_untrusted(proposal):
             # Sediment UP, not to a landfill (Principle 1 + Gate-2 red-team MED): a
             # protected-zone lesson is human-distill-only, but dropping it to a DEBUG
             # log is a graveyard — a human never sees the architecture/SELF lessons
