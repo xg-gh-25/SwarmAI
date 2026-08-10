@@ -180,3 +180,47 @@ class TestFlush:
         from core import recall_metrics
         recall_metrics.reset_for_test()
         assert await recall_metrics.flush_once() == 0
+
+    @pytest.mark.asyncio
+    async def test_failed_write_requeues_window_not_lost(self, monkeypatch):
+        """A DB write that fails must NOT lose the drained window: drain empties the
+        ring, so the samples are re-queued for the next flush instead of vanishing."""
+        from core import recall_metrics
+
+        class _FailingDB:
+            async def bulk_insert_recall_metrics(self, samples):
+                raise RuntimeError("db down")
+
+            async def prune_recall_metrics(self, days):
+                return 0
+
+        recall_metrics.reset_for_test()
+        import database
+        monkeypatch.setattr(database, "db", _FailingDB(), raising=False)
+        recall_metrics.record_recall_metric("session_prompt", ("ddd",), 90.0, hit_count=1)
+        n = await recall_metrics.flush_once()
+        assert n == 0, "failed write reports 0 written"
+        # The window survived: it's back in the ring for the next flush, not dropped.
+        remaining = recall_metrics.drain_samples()
+        assert len(remaining) == 1 and remaining[0]["latency_ms"] == 90.0
+
+    @pytest.mark.asyncio
+    async def test_write_returning_zero_on_nonempty_requeues(self, monkeypatch):
+        """bulk_insert swallows DB errors and returns 0. A 0 for a NON-empty window
+        means the write dropped it → requeue (not the same as 'nothing to write')."""
+        from core import recall_metrics
+
+        class _SilentDropDB:
+            async def bulk_insert_recall_metrics(self, samples):
+                return 0  # internal error swallowed → 0 despite real samples
+
+            async def prune_recall_metrics(self, days):
+                return 0
+
+        recall_metrics.reset_for_test()
+        import database
+        monkeypatch.setattr(database, "db", _SilentDropDB(), raising=False)
+        recall_metrics.record_recall_metric("session_prompt", ("ddd",), 12.0)
+        await recall_metrics.flush_once()
+        remaining = recall_metrics.drain_samples()
+        assert len(remaining) == 1, "a 0-write of a non-empty window must requeue"

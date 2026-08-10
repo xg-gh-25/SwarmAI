@@ -119,6 +119,30 @@ def drain_samples() -> list[dict]:
         return []
 
 
+def requeue_samples(samples: list[dict]) -> None:
+    """Return drained-but-unwritten samples to their rings after a FAILED flush.
+
+    drain_samples() is an atomic swap-and-clear, so a DB write that then fails would
+    LOSE the whole window (the ring was already emptied). This re-appends those samples
+    so the next flush retries them, instead of silently dropping a window of metrics on
+    a transient DB error. Bounded naturally: the ring's maxlen caps re-queued volume, so
+    a persistently failing DB sheds oldest samples rather than growing unbounded — the
+    same lossy-but-bounded contract as a live overflow. Lock-guarded, never raises."""
+    if not samples:
+        return
+    try:
+        with _LOCK:
+            for s in samples:
+                ctx = str(s.get("context", ""))
+                ring = _samples.get(ctx)
+                if ring is None:
+                    ring = deque(maxlen=_MAXLEN_PER_CONTEXT)
+                    _samples[ctx] = ring
+                ring.append(s)
+    except Exception:  # noqa: BLE001 — a requeue failure must never break the flush loop
+        pass
+
+
 def reset_for_test() -> None:
     """Test-only: clear all rings so cases don't bleed into each other."""
     with _LOCK:
@@ -145,15 +169,23 @@ async def flush_once() -> int:
     try:
         from database import db  # module-level singleton (same as record_token_usage callers)
         written = await db.bulk_insert_recall_metrics(samples) if samples else 0
+        # If the write dropped a non-empty window (bulk_insert swallows DB errors and
+        # returns 0), REQUEUE it so the next flush retries — drain already emptied the
+        # ring, so without this a transient DB error silently loses a whole window of
+        # metrics (the exact gap: atomic drain + best-effort write = data hole on fail).
+        if samples and written == 0:
+            requeue_samples(samples)
         # Retention: prune AFTER inserting, on the same 5-min cadence. Runs even when
         # there were no new samples this cycle, so growth is bounded regardless of
         # recall traffic. Fire-and-forget (prune_recall_metrics never raises).
         await db.prune_recall_metrics(_RETENTION_DAYS)
         return written
     except Exception:  # noqa: BLE001 — observability flush must never crash the loop
+        # The write may have raised BEFORE returning — requeue so the window isn't lost.
+        requeue_samples(samples)
         import logging
         logging.getLogger(__name__).debug(
-            "recall metrics flush failed (non-critical)", exc_info=True)
+            "recall metrics flush failed (non-critical), samples requeued", exc_info=True)
         return 0
 
 
