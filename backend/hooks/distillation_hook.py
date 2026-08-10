@@ -614,17 +614,23 @@ class DistillationTriggerHook:
             memory_path, [f for f, _, _ in extracted_files]
         )
 
-        # Write corrections and competence to EVOLUTION.md
+        # Write corrections and competence to EVOLUTION.md — C6 (run_0d60e04e): gate the
+        # auto-write path FIRST (finding D format-hole). _gate_evolution_entries routes
+        # each through ingestion_gate; an auto-extracted correction is trust=n/a + KEEP_TYPE
+        # → held for review (sedimented), so `admitted` is usually empty by design (a
+        # constitutional store must not silently auto-append). context_dir = .context/.
+        _ctx_dir = evolution_path.parent
         if all_corrections:
-            self._write_corrections(evolution_path, all_corrections)
-            # Auto-trigger steeringify proposals when new corrections are written
-            self._check_steeringify_proposals(evolution_path, ws_path)
-            # Cross-loop signal: notify evolution pipeline that new corrections
-            # are available. If ≥5 pending, evolution_maintenance_hook will run
-            # the cycle on next session close without waiting for the 7-day timer.
-            self._signal_evolution_corrections(ws_path, len(all_corrections))
+            admitted = self._gate_evolution_entries(all_corrections, _ctx_dir, "correction")
+            if admitted:
+                self._write_corrections(evolution_path, admitted)
+                # steeringify + cross-loop signal only for entries that actually landed.
+                self._check_steeringify_proposals(evolution_path, ws_path)
+                self._signal_evolution_corrections(ws_path, len(admitted))
         if all_competence:
-            self._write_competence(evolution_path, all_competence)
+            admitted_c = self._gate_evolution_entries(all_competence, _ctx_dir, "competence")
+            if admitted_c:
+                self._write_competence(evolution_path, admitted_c)
 
         # Enforce section caps on MEMORY.md to prevent unbounded growth.
         # Always run — caps must be enforced even when no new entries were added
@@ -908,7 +914,11 @@ class DistillationTriggerHook:
                 continue
             if in_corrections_section and stripped.startswith("- "):
                 entry = stripped[2:].strip()
-                if len(entry) > 10 and entry != "(none)":
+                # C6 (run_0d60e04e): structural-noise filter at the SOURCE — a bullet-ised
+                # DA (the format-hole trigger) must not inject table fragments / monologue
+                # into the EVOLUTION auto-write path. The admission gate downstream is the
+                # primary defense; this is defense-in-depth at extraction.
+                if len(entry) > 10 and entry != "(none)" and not _is_noise_entry(entry):
                     corrections.append(entry[:200])
         return corrections[:10]  # Cap
 
@@ -1321,6 +1331,43 @@ class DistillationTriggerHook:
             "Wrote %d competence entries to EVOLUTION.md", len(competence_entries)
         )
 
+    @staticmethod
+    def _gate_evolution_entries(
+        entries: list[tuple[str, str]], context_dir: "Path", kind: str,
+    ) -> list[tuple[str, str]]:
+        """C6 (run_0d60e04e): the unified admission gate for the EVOLUTION auto-write
+        path — the survey's finding D ("armed but starved" format-hole). `_write_corrections`
+        / `_write_competence` auto-append to EVOLUTION.md (an agent-owned constitutional
+        store, R21) every session close with NO gate; it doesn't erupt today only because
+        the live DailyActivity format is a `**Corrections:** <count>` header, not bullets.
+        That is a format ACCIDENT, not a guardrail — a bullet-ised DA (or a filled JSONL
+        sidecar) would flow straight into the cognitive substrate.
+
+        This closes the hole STRUCTURALLY: every entry runs through ingestion_gate
+        (trigger=evolution_distill: noise→keep_type_holdback→judge). Only a gate-"auto"
+        entry is written. An auto-extracted EVOLUTION entry is trust=n/a and is typically
+        a KEEP_TYPE (correction) → keep_type_holdback → review → HELD (a constitutional
+        entry must not silently auto-write; it goes to a recoverable sink for human intake,
+        never a blind append). "discard" = structural noise, dropped. Returns the subset
+        that may be auto-written (usually empty by design — that's the point).
+        """
+        from core.ingestion_gate import ingestion_gate
+
+        admitted: list[tuple[str, str]] = []
+        for file_date, text in entries:
+            v = ingestion_gate(text, store="EVOLUTION", trigger="evolution_distill",
+                               context={"section": kind})
+            if v.verdict == "auto":
+                admitted.append((file_date, text))
+            elif v.verdict == "review":
+                DistillationTriggerHook._sediment_held_lesson(
+                    context_dir, text, f"[EVOLUTION/{kind}] {text}")
+                logger.info("distillation: EVOLUTION %s HELD for review (sedimented): %.80s",
+                            kind, text)
+            else:
+                logger.info("distillation: EVOLUTION %s discarded as noise: %.80s", kind, text)
+        return admitted
+
     def _write_corrections(
         self,
         evolution_path: Path,
@@ -1330,6 +1377,10 @@ class DistillationTriggerHook:
 
         Each correction gets a C-prefixed sequential ID. All entries are
         batched into a single locked_write call.
+
+        C6 (run_0d60e04e): entries are pre-gated by _gate_evolution_entries at the caller
+        (the format-hole fix) — by the time they reach here, they are gate-"auto". This
+        function is the EXECUTION layer (writes what admission already cleared).
         """
         # Read current EVOLUTION.md to find next C-ID
         try:

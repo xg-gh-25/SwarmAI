@@ -91,3 +91,47 @@ class TestHeldLessonSediment:
             clash.write_text("i am a file, not a dir")
             ok = DistillationTriggerHook._sediment_held_lesson(clash / "sub", "x", "y")
             assert ok is False
+
+
+class TestC6EvolutionGate:
+    """C6: the EVOLUTION auto-write path (finding D format-hole) is gated. An auto-
+    extracted correction is trust=n/a + KEEP_TYPE → held for review (sedimented), NOT
+    silently appended to the constitutional store."""
+
+    def test_correction_is_held_not_auto_written(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"
+            ctx.mkdir()
+            with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
+                admitted = DistillationTriggerHook._gate_evolution_entries(
+                    [("2026-08-10", "Correction: never auto-deploy without approval, verify first.")],
+                    ctx, "correction")
+            # KEEP_TYPE correction → held → NOT admitted for auto-write
+            assert admitted == []
+            # … but sedimented to the recoverable sink (not lost)
+            sink = ctx / "memory-held-lessons.jsonl"
+            assert sink.is_file()
+            assert "never auto-deploy" in sink.read_text()
+
+    def test_structural_noise_correction_discarded_not_sedimented(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"
+            ctx.mkdir()
+            admitted = DistillationTriggerHook._gate_evolution_entries(
+                [("2026-08-10", "| junk | table |")], ctx, "correction")
+            assert admitted == []
+            # discard (noise) → NOT sedimented (only review-held lessons are)
+            sink = ctx / "memory-held-lessons.jsonl"
+            assert not sink.is_file()
+
+    def test_format_hole_closed_at_extraction(self):
+        """The format-hole: a bullet-ised **Corrections:** section with a table fragment
+        must be filtered by structural_noise at extraction (defense-in-depth)."""
+        body = (
+            "**Corrections:**\n"
+            "- | junk | table | fragment |\n"
+            "- a real user correction of agent behavior that is long enough\n"
+        )
+        got = DistillationTriggerHook._extract_corrections(body)
+        assert not any("junk | table" in c for c in got), "structural noise must be filtered"
+        assert any("real user correction" in c for c in got)
