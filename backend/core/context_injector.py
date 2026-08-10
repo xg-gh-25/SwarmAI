@@ -308,7 +308,15 @@ def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
                             files.add(rel)
                             break
         return sorted(files)[:30]
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. Rationale shared by the five _extract_*/_count_*
+        # siblings below: they feed build_resume_context, the thing that turns a cold
+        # resume from ~3K into ~50-100K tokens of "where I left off". A silent [] does
+        # not read as "extraction broke", it reads as "this session touched nothing" —
+        # so a parser regression yields a confident, empty, WRONG checkpoint and the
+        # enrichment quietly stops working with zero signal. Keep degrading (a partial
+        # resume beats a failed one) but say so.
+        logger.warning("_extract_files_touched failed, resume context omits it: %s", exc)
         return []
 
 
@@ -344,7 +352,9 @@ def _extract_git_activity(messages: list[dict]) -> list[str]:
                         if msg_text and not msg_text.startswith("$("):
                             commits.append(msg_text[:80])
         return commits[-5:]
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE, see _extract_files_touched.
+        logger.warning("_extract_git_activity failed, resume context omits it: %s", exc)
         return []
 
 
@@ -377,7 +387,9 @@ def _extract_agent_spawns(messages: list[dict]) -> list[str]:
                         desc = desc[7:]
                     spawns.append(desc[:100])
         return spawns[-5:]
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE, see _extract_files_touched.
+        logger.warning("_extract_agent_spawns failed, resume context omits it: %s", exc)
         return []
 
 
@@ -408,7 +420,10 @@ def _extract_skill_invocations(messages: list[dict]) -> list[str]:
                     seen.add(skill_name)
                     skills.append(skill_name)
         return skills
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE, see _extract_files_touched.
+        logger.warning(
+            "_extract_skill_invocations failed, resume context omits it: %s", exc)
         return []
 
 
@@ -433,7 +448,10 @@ def _count_user_turns(messages: list[dict]) -> int:
     """Count user messages (= number of conversation turns)."""
     try:
         return sum(1 for m in messages if m.get("role") == "user")
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE, see _extract_files_touched. 0 turns reads as a brand-new
+        # session, which is the most misleading value this function can return.
+        logger.warning("_count_user_turns failed, reporting 0 turns: %s", exc)
         return 0
 
 

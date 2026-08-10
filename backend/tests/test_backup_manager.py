@@ -444,6 +444,53 @@ class TestKeychainToken:
         assert token is None
 
 
+class TestFileTokenPermissions:
+    """The file fallback stores a SECRET, so 0600 is a security invariant.
+
+    Regression guard for the original ``write_text()`` then ``chmod(0o600)`` order:
+    that left the token on disk at the default umask (typically 0644) for the window
+    in between, and if the chmod raised, ``_file_set_token`` returned False while the
+    secret stayed on disk world-readable — a silent failure that was also a silent
+    disclosure. The token must never exist on disk at any moment with loose perms,
+    hence create-with-mode rather than fix-up-after.
+    """
+
+    def test_token_file_is_0600_on_create(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        from core.backup_manager import _file_set_token
+
+        assert _file_set_token("ghp_secret") is True
+        path = tmp_path / ".swarm-ai" / ".backup-token"
+        assert path.read_text() == "ghp_secret\n"
+        assert oct(path.stat().st_mode & 0o777) == "0o600"
+
+    def test_preexisting_loose_perms_are_tightened(self, tmp_path, monkeypatch):
+        """O_CREAT keeps an existing file's mode, so the explicit chmod must still run."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        from core.backup_manager import _file_get_token, _file_set_token
+
+        assert _file_set_token("first") is True
+        path = tmp_path / ".swarm-ai" / ".backup-token"
+        path.chmod(0o644)  # simulate a token file left behind by the old code path
+
+        assert _file_set_token("second") is True
+        assert oct(path.stat().st_mode & 0o777) == "0o600"
+        # and the longer previous value must be fully truncated, not overwritten in place
+        assert path.read_text() == "second\n"
+        assert _file_get_token() == "second"
+
+    def test_write_failure_is_reported_and_logged(self, tmp_path, monkeypatch, caplog):
+        """The last-resort writer failing means the token is stored NOWHERE — the
+        reason must reach the log, not just a bare False (Degrade-OBSERVABLE)."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        from core.backup_manager import _file_set_token
+
+        with patch("core.backup_manager.os.open", side_effect=OSError("disk full")):
+            with caplog.at_level("WARNING", logger="core.backup_manager"):
+                assert _file_set_token("ghp_secret") is False
+        assert "disk full" in caplog.text
+
+
 class TestBackupStatus:
     """Status API returns accurate last_backup info."""
 

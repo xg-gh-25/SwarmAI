@@ -64,6 +64,7 @@ DESIGN CONSTRAINTS
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date
 from pathlib import Path
@@ -71,6 +72,8 @@ from typing import Optional
 
 from core.project_registry import get_projects_dir
 from utils.file_lock import md_lock
+
+logger = logging.getLogger(__name__)
 
 # Max anchors kept in a project's .ddd-usage.json. Evict-oldest (by recorded
 # date) beyond this. A disaster-recovery bound on file size, not a business
@@ -142,7 +145,12 @@ def entry_anchor_text(text: str) -> str:
 def _usage_path(project: str) -> Optional[Path]:
     try:
         return get_projects_dir() / project / _USAGE_FILENAME
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. None here disables usage tracking for the project
+        # ENTIRELY and silently: every record_ddd_hit becomes a no-op and every
+        # load_ddd_usage returns {}, which the decay signal reads as "no lesson was
+        # ever used" — indistinguishable from a genuinely cold project.
+        logger.warning("cannot resolve DDD usage path for %r: %s", project, exc)
         return None
 
 
@@ -190,8 +198,12 @@ def record_ddd_hit(
             if len(data) > _USAGE_CAP:
                 data = _evict_oldest(data, _USAGE_CAP)
             _atomic_write(path, data)
-    except Exception:
-        # best-effort: swallow everything (recall_multi.py:24 principle).
+    except Exception as exc:  # noqa: BLE001
+        # Keep swallowing — the docstring's "NEVER raises" is a real contract: recall
+        # must not break for telemetry (recall_multi.py:24 principle). But DEBUG-log it,
+        # because a persistently unwritable usage file otherwise decays every entry
+        # toward "unused" with no trace of why.
+        logger.debug("record_ddd_hit(%r) swallowed: %s", project, exc)
         return
 
 
@@ -209,9 +221,13 @@ def load_ddd_usage(project: str) -> dict[str, date]:
             try:
                 out[k] = date.fromisoformat(v)
             except (ValueError, TypeError):
-                continue
+                continue  # expected: one corrupt date must not void the whole file
         return out
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. {} is read by the decay signal as "nothing was ever
+        # surfaced", so a load failure looks like evidence FOR aging entries out.
+        logger.warning("cannot load DDD usage for %r, treating as empty: %s",
+                       project, exc)
         return {}
 
 

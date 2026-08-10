@@ -72,7 +72,13 @@ def _keychain_get_token() -> str | None:
             capture_output=True, text=True, timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else None
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # DEBUG on purpose: get_backup_token() calls this on EVERY platform, so off-macOS
+        # this raises FileNotFoundError (no `security` binary) by design and falls
+        # through to _file_get_token(). Expected miss, not an incident — but still say
+        # something, because a genuine macOS keychain fault currently reads identically
+        # to "the user never configured a backup token".
+        logger.debug("keychain token lookup unavailable (%s); trying file fallback", exc)
         return None
 
 
@@ -85,7 +91,13 @@ def _keychain_set_token(token: str) -> bool:
             capture_output=True, timeout=5, check=True,
         )
         return True
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # WARNING, unlike the getter above: set_backup_token() only routes here when
+        # sys.platform == "darwin", so this is never the "no keychain on Linux" case —
+        # it is a real macOS keychain failure. The caller does propagate False, but
+        # without the reason the user just sees "couldn't save token" and has nothing
+        # to act on.
+        logger.warning("failed to store backup token in keychain: %s", exc)
         return False
 
 
@@ -104,10 +116,23 @@ def _file_set_token(token: str) -> bool:
     """Write token to ~/.swarm-ai/.backup-token with chmod 600."""
     path = Path(os.path.expanduser("~/.swarm-ai/.backup-token"))
     try:
-        path.write_text(token + "\n")
-        path.chmod(0o600)
+        # Create with 0600 ALREADY SET, before the secret is written. The previous
+        # write_text()-then-chmod() order left the token on disk at the default umask
+        # (typically 0644) for the window in between, and if chmod raised we returned
+        # False while the secret stayed on disk world-readable — a silent failure that
+        # was also a silent disclosure.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, (token + "\n").encode())
+        finally:
+            os.close(fd)
+        os.chmod(path, 0o600)  # enforce on a pre-existing file, whose mode O_CREAT keeps
         return True
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Last-resort writer: if this fails the token is stored NOWHERE, so backup auth
+        # will fail later at a point far from the cause.
+        logger.warning("failed to write backup token to %s: %s", path, exc)
         return False
 
 

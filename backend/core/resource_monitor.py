@@ -490,7 +490,13 @@ class ResourceMonitor:
                 state=state,
                 uptime_seconds=0.0,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # This is the FALLBACK reader (psutil unavailable / ps path). A silent None
+            # here means "no metrics for this process", which callers read as nothing to
+            # act on — so both the primary and the fallback failing looks identical to a
+            # healthy idle process. Log so the fallback's own failures are visible.
+            logger.warning("ps-based process metrics fallback failed for pid=%s: %s",
+                           pid, exc)
             return None
 
     def process_rss(self, pid: int) -> int:
@@ -506,8 +512,15 @@ class ResourceMonitor:
         try:
             return psutil.Process(pid).memory_info().rss
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return 0
-        except Exception:
+            return 0  # expected: process gone / not ours — silence is correct here
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE (GC19). 0 is a LOAD-BEARING LIE for RSS: it reads as
+            # "this process uses no memory", which is exactly the input the RSS kill
+            # thresholds (3.5GB proactive / 7GB streaming) act on. A silently-failing
+            # reader therefore doesn't degrade to "unknown" — it degrades to "healthy",
+            # permanently disabling the very guard it feeds. Log the unforeseen case;
+            # the narrow handler above still covers the expected one.
+            logger.warning("process_rss(%s) failed, reporting 0: %s", pid, exc)
             return 0
 
     def process_tree_rss(self, pid: int) -> int:
@@ -528,8 +541,12 @@ class ResourceMonitor:
                     pass
             return total
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return 0
-        except Exception:
+            return 0  # expected: process gone / not ours
+        except Exception as exc:  # noqa: BLE001
+            # Same load-bearing lie as process_rss, but worse: this is the TREE total,
+            # the number the streaming RSS check compares against 7GB. Silent 0 → the
+            # kill never fires.
+            logger.warning("process_tree_rss(%s) failed, reporting 0: %s", pid, exc)
             return 0
 
     def tree_cpu_seconds(self, pid: int) -> Optional[float]:
@@ -596,7 +613,11 @@ class ResourceMonitor:
             for p in parts:
                 secs = secs * 60 + p
             return secs + days * 86400
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Parsing ps's elapsed-time format. None reads as "no CPU time known", which
+            # silently removes this process from any CPU-based judgement. Low stakes
+            # relative to RSS, but the same lying-None shape — log it.
+            logger.debug("cpu-seconds fallback parse failed for pid=%s: %s", pid, exc)
             return None
 
 
