@@ -1864,6 +1864,109 @@ class TestEnforcementInjector:
             assert ("中文" in ac or "Chinese" in ac)
             assert "English" not in ac
 
+    # ── injected UI-state prefix must NOT pollute language classification ──
+    _UI_BLOCK = (
+        "## Current UI State\n"
+        "This is what you are currently showing the user in the app "
+        "(a request-time snapshot — it may change as they interact):\n"
+        "- Canvas (output panel): closed, 1 output listed"
+    )
+
+    @pytest.mark.asyncio
+    async def test_A_short_chinese_with_ui_prefix_stays_chinese(self, session_context):
+        """THE live bug (2026-08-10): a short CJK message PREPENDED with the 30+
+        English-word UI-state block was mis-flipped to English (weight 0.17 < 0.30).
+        The block is system-injected proprioception, NOT the user's language — R19
+        must classify only the user text. These exact messages misfired in prod."""
+        hook = self._hook(session_context)
+        for user in ("你给我说中文", "修语言 hook 的 bug", "你为什么又给我建新branch了", "commit 吗"):
+            prompt = f"{self._UI_BLOCK}\n\n{user}"
+            ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+            assert "中文" in ac, f"expected Chinese reminder for {user!r}, got: {ac!r}"
+            assert "respond in English" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_english_user_with_ui_prefix_stays_english(self, session_context):
+        """The mirror: a genuinely English user message under the UI block must still
+        classify English (the strip must not over-correct toward Chinese)."""
+        hook = self._hook(session_context)
+        prompt = f"{self._UI_BLOCK}\n\nfix the language hook bug please"
+        ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert "English" in ac
+        assert "中文" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_direct_mode_survives_ui_prefix(self, session_context):
+        """Signal B also judges user text: a direct-mode trigger AFTER the UI block
+        still fires the adversarial reminder."""
+        hook = self._hook(session_context)
+        prompt = f"{self._UI_BLOCK}\n\n直接做 别走 pipeline 帮我改一下"
+        ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert "adversarial" in ac.lower()
+        assert "中文" in ac  # and the CJK user text is still Chinese
+
+    @pytest.mark.asyncio
+    async def test_A_ui_block_from_real_renderer_stays_chinese(self, session_context):
+        """Build the UI block from the REAL renderer (not hand-written) so a future
+        change to _render_ui_context_section that introduces a \\n\\n (which would
+        break the seam) fails HERE instead of silently in prod."""
+        from core.prompt_builder import _render_ui_context_section
+        block = _render_ui_context_section(
+            {"file_name": "EVOLUTION.md", "file_path": "/x/EVOLUTION.md",
+             "canvas": {"open": False, "output_count": 1}}
+        ).lstrip("\n")
+        hook = self._hook(session_context)
+        ac = (await hook({"prompt": f"{block}\n\n你给我说中文"}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert "中文" in ac
+        assert "respond in English" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_legacy_open_file_header_stripped(self, session_context):
+        """The OTHER leading header — '## Currently Open File' — must also be stripped
+        (regression guard: it was untested, so dropping it from the tuple would slip)."""
+        block = ("## Currently Open File\n"
+                 "The user has `x.py` open in the editor (`/x.py`). "
+                 "Consider this file as relevant context when responding.")
+        hook = self._hook(session_context)
+        ac = (await hook({"prompt": f"{block}\n\n改一下这个函数"}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert "中文" in ac
+        assert "respond in English" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_wrap_up_append_does_not_flip_chinese(self, session_context):
+        """Finding #6a: the wrap-up prompt is APPENDED (`{user}\\n\\n---\\n\\n{SYSTEM NOTE…}`)
+        — ~45 English words after the user text. Must be dropped, not counted."""
+        from core.session_healing import WRAP_UP_PROMPT
+        hook = self._hook(session_context)
+        prompt = f"{self._UI_BLOCK}\n\n改一下这里的 bug\n\n---\n\n{WRAP_UP_PROMPT}"
+        ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert "中文" in ac
+        assert "respond in English" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_heal_continuation_prepend_does_not_flip_chinese(self, session_context):
+        """Finding #6b: heal-continuation is PREPENDED (`## Task Continuation …\\n\\n---\\n\\n{user}`),
+        pushing the user text into a later segment. The system block must be dropped."""
+        cont = ("## Task Continuation\n\nYou were working on a task and the system "
+                "refreshed for health reasons. Continue seamlessly.\n\n"
+                "**Original request:** fix the parser")
+        hook = self._hook(session_context)
+        prompt = f"{cont}\n\n---\n\n你继续修那个 parser 的问题"
+        ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert "中文" in ac
+        assert "respond in English" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_non_str_prompt_fail_safe(self, session_context):
+        """Finding #4: a multimodal LIST prompt must not crash the classifier — the
+        hook is fail-safe (returns {} on any error), never breaks the chain."""
+        hook = self._hook(session_context)
+        result = await hook({"prompt": [{"type": "text", "text": "hi"}]}, None, MagicMock())
+        # A non-str prompt classifies to nothing → no reminder, and crucially NO crash
+        # (the outer try/except would also catch, but _strip_injected_prefix's isinstance
+        # guard means we return {} cleanly, not via the exception path).
+        assert result == {}
+
     @pytest.mark.asyncio
     async def test_A_full_range_kana_and_hangul_are_non_english(self, session_context):
         """AC3: full-range detector — Kana/Hangul also count as non-English (they

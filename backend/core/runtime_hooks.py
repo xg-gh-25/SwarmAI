@@ -873,10 +873,65 @@ def create_post_compact_injection(
 # B: direct-mode adversarial reminder) — run_e57b7554
 # ---------------------------------------------------------------------------
 
+# SYSTEM-injected blocks get glued onto the user's message before it reaches this
+# hook, and they are ENGLISH prose — classifying the COMBINED string mis-flips R19
+# (verified live 2026-08-10: "你给我说中文" + the UI-state block → weight 0.17 < 0.30
+# → wrongly "en"). R19 must reflect the USER's language, so these blocks are stripped
+# before classification. Three known injectors (adversarial run abc8551392a864ff2):
+#   1. UI-state PREFIX (session_router._prefix_ui_state_onto_query): `{block}\n\n{user}`
+#      — leading, header in _INJECTED_LEADING_HEADERS, single-\n internally.
+#   2. wrap-up APPEND (session_unit.send): `{user}\n\n---\n\n{WRAP_UP_PROMPT}` — trailing.
+#   3. heal-continuation PREPEND (session_unit.send): `{continuation}\n\n---\n\n{user}`.
+# (2)+(3) are delimited by the system's own `\n\n---\n\n` separator and carry a
+# recognizable header/marker — split on that and drop segments that ARE a system block.
+_INJECTED_LEADING_HEADERS = ("## Current UI State", "## Currently Open File")
+_SYSTEM_BLOCK_MARKERS = (
+    "## Current UI State", "## Currently Open File",  # UI-state
+    "## Task Continuation",                            # heal-continuation
+    "SYSTEM NOTE",                                      # wrap-up prompts
+)
+_INJECT_DELIM = "\n\n---\n\n"
+
+
+def _strip_injected_prefix(prompt: str) -> str:
+    """Return ONLY the user's own text, with system-injected blocks removed, so
+    language classification reflects the USER's language — not the English UI-state /
+    wrap-up / heal-continuation prose the router+session layer glue onto the query.
+
+    Fail-safe by construction: non-str input returns unchanged; if stripping would
+    remove everything (a prompt that is ALL system blocks, or a real user message
+    that merely starts with one of these headers), the ORIGINAL prompt is returned
+    rather than an empty string — never drop real user content on a false match."""
+    if not isinstance(prompt, str):
+        return prompt  # multimodal list / non-str → not our concern (leave as-is)
+
+    # Split on the system's own block delimiter and drop whole segments that ARE a
+    # known system block; from surviving segments, strip a leading UI-state header
+    # block (prepended with only `\n\n`, no `---`).
+    kept: list[str] = []
+    for seg in prompt.split(_INJECT_DELIM):
+        s = seg.lstrip()
+        if s.startswith(_SYSTEM_BLOCK_MARKERS) and not s.startswith(_INJECTED_LEADING_HEADERS):
+            continue  # a pure system block (heal-continuation / wrap-up) → drop
+        if s.startswith(_INJECTED_LEADING_HEADERS):
+            # UI-state block leads this segment; the FIRST blank line is the seam to
+            # the user text (the block itself is single-\n-joined internally).
+            seam = s.find("\n\n")
+            seg = s[seam + 2:] if seam != -1 else ""
+        kept.append(seg)
+
+    user = _INJECT_DELIM.join(kept).strip()
+    return user if user else prompt  # never return empty — fail back to the original
+
+
 def _classify_message_language(prompt: str) -> Optional[str]:
     """Return "zh" if the message is CJK-majority, "en" if it is clearly Latin
     text, or None when ambiguous (too short / symbol-only) — in which case NO
     language reminder is injected (silence beats a wrong flip).
+
+    Strips any system-injected UI-state prefix FIRST (see _strip_injected_prefix):
+    R19 must reflect the USER's language, not the English proprioception block the
+    session router prepends to the query.
 
     REUSES the single canonical full-range CJK detector
     ``ContextDirectoryLoader._CJK_RE`` (the ONE object, imported — NOT copied:
@@ -885,6 +940,7 @@ def _classify_message_language(prompt: str) -> Optional[str]:
     parallel regex). "zh" here is shorthand for "a CJK-like language" — the full
     range includes Kana/Hangul, all of which are correctly NOT-English.
     """
+    prompt = _strip_injected_prefix(prompt)
     stripped = "".join(prompt.split())
     if len(stripped) < 3:
         return None  # too short to classify — stay silent
@@ -943,10 +999,15 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
             if not prompt:
                 return {}
 
+            # Both signals judge the USER's message, not the system-injected UI-state
+            # prefix the session router prepends — strip it once, use for both.
+            user_text = _strip_injected_prefix(prompt)
+
             parts: list[str] = []
 
-            # Signal A — symmetric language reminder
-            lang = _classify_message_language(prompt)
+            # Signal A — symmetric language reminder (classifier re-strips defensively,
+            # but pass the already-stripped text so the two signals agree on the input).
+            lang = _classify_message_language(user_text)
             if lang == "zh":
                 parts.append(
                     "⚠️ 用户这条消息是中文 → 本轮必须用中文回复(R19:匹配用户输入语言)。"
@@ -958,7 +1019,7 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
                 )
 
             # Signal B — direct-mode adversarial guard
-            if _DIRECT_MODE_RE.search(prompt):
+            if _DIRECT_MODE_RE.search(user_text):
                 parts.append(
                     "⚠️ Direct-mode request detected: adversarial review is STILL "
                     "mandatory before commit (sequence: code → test → adversarial → "
