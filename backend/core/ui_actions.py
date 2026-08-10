@@ -401,6 +401,26 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
         return []
 
 
+async def build_surface_events_async(
+    run_id: object, workspace_root: object = None
+) -> list[dict]:
+    """OFF-LOOP entry point for build_surface_events — the ONLY form the streaming
+    hot path may call.
+
+    ROOT-FIX (audit Finding 2): build_surface_events does synchronous FS I/O
+    (glob + read + stat over run.json/REPORT.md). On the daemon's single shared
+    event loop, calling it inline stalls EVERY session (and /health) on cold-cache /
+    slow-disk until it returns. The orchestrator has three completion branches that
+    each need this batch; requiring every caller to remember `await asyncio.to_thread`
+    is exactly the omission that shipped (one of three sites was left on-loop).
+    Wrapping the offload HERE makes off-loop the property of the entry point, not a
+    discipline each call site must re-implement — the on-loop form is no longer
+    reachable from the hot path. Same fail-safe contract as the sync fn (returns []
+    on any problem; to_thread propagates no new exceptions the sync body didn't).
+    """
+    return await asyncio.to_thread(build_surface_events, run_id, workspace_root)
+
+
 # Minimum bytes for a REPORT.md to count as "real" (a present-but-stub report is
 # the documented failure mode — IMPROVEMENT.md: 5/6 runs once froze empty). Mirrors
 # the run-update completion gate (artifact_cli.py `report_size < 500`).

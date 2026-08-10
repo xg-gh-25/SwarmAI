@@ -405,6 +405,52 @@ class TestWarmFastPathPreserved:
         )
 
 
+class TestTurnClientIdResetAtSendEntry:
+    """ROOT-FIX (audit Finding 1): _turn_client_id shares the pending-question turn
+    lifecycle, so it MUST be zeroed in send()'s new-turn reset batch — at the single
+    admission chokepoint — NOT patched per-entrance in the router.
+
+    Why this is the root fix (and the router `elif` was a band-aid): the stale-key
+    bug was 'a keyless drain turn inherits a prior KEYED turn's cid → its answer row
+    keys to the wrong bubble'. Resetting HERE means every entrance (main / drain /
+    channel) starts from None, so the router only ever SETS a key, never has to
+    remember to CLEAR one. This test drives the REAL send() and captures the field
+    at the reuse-decision slot — the same seam as the clean-flag trap test above —
+    proving the reset actually runs before any continuation could read it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stale_turn_client_id_cleared_at_send_entry(self):
+        """A prior KEYED turn left cid='prior-keyed' on the unit. The next turn's
+        send() must have zeroed it by the time execution reaches the reuse decision —
+        so a keyless (drain) turn's continuation can never inherit the stale key."""
+        unit = _make_unit(state=SessionState.IDLE)
+        unit._client = MagicMock()
+        unit._last_turn_clean = True
+        unit._turn_client_id = "prior-keyed"  # residue from an earlier keyed turn
+
+        seen = {}
+
+        async def _capture_at_slot():
+            seen["cid_at_reuse"] = unit._turn_client_id
+            raise _StopAfterDecisionError("stop after decision")
+
+        with patch.object(unit, "_crash_to_cold_async", AsyncMock()), \
+             patch.object(unit, "_arm_recovery_checkpoint", AsyncMock()), \
+             patch.object(unit, "_await_streaming_slot", _capture_at_slot):
+            with pytest.raises(_StopAfterDecisionError):
+                async for _ in unit.send(
+                    "hi", MagicMock(), app_session_id="app-sess-456"
+                ):
+                    pass
+
+        assert seen.get("cid_at_reuse") is None, (
+            "_turn_client_id must be reset to None in send()'s new-turn batch — a "
+            "stale prior-turn key would attach a keyless turn's continuation content "
+            "to the wrong bubble (Finding 1 root regression)"
+        )
+
+
 class TestPoisonGuardClassifiedZombie:
     """The poison-guard recycle's SIGKILL must classify ZOMBIE (~0.5s respawn),
     NOT OOM (30/60/120s backoff) — else 'first resume fails' becomes 'first resume

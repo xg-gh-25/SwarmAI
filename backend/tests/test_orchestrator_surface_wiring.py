@@ -250,7 +250,7 @@ def test_surface_tool_awaits_ensure_report_before_batch(monkeypatch):
 
     # patch at the orchestrator's import site (it imported the names into its module)
     monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _spy_ensure)
-    monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _spy_build)
+    monkeypatch.setattr("core.ui_actions.build_surface_events",_spy_build)
 
     orch = _make_orchestrator()
     events, raised = asyncio.run(
@@ -277,7 +277,7 @@ def test_surface_tool_survives_ensure_failure(monkeypatch):
         return [{"type": "file_changed", "path": "b.py", "operation": "written",
                  "relevance": "deliverable", "kind": "source-final"}]
 
-    monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _build)
+    monkeypatch.setattr("core.ui_actions.build_surface_events",_build)
 
     orch = _make_orchestrator()
     events, raised = asyncio.run(
@@ -286,6 +286,46 @@ def test_surface_tool_survives_ensure_failure(monkeypatch):
     assert raised is None, "ensure returning False must not break the turn"
     assert [e for e in events if e.get("type") == "file_changed"], \
         "source rows must still emit even when ensure could not produce a report"
+
+
+def test_surface_tool_builds_off_loop(monkeypatch):
+    """REGRESSION (audit Finding 2): the explicit surface_run_outputs branch MUST run
+    build_surface_events (glob+read+stat) OFF the event loop via asyncio.to_thread —
+    SYMMETRIC with the two completion branches (8103fc37 moved those off-loop but
+    missed this third one). Running it inline stalls the shared daemon loop (+/health)
+    on cold-cache/slow-disk mid-streaming-turn.
+
+    Assert build_surface_events executed in a DIFFERENT thread than the event loop —
+    the observable signature of to_thread offloading."""
+    import threading
+
+    loop_thread = threading.get_ident()
+    build_thread: dict[str, int] = {}
+
+    async def _ensure(run_id):
+        return True
+
+    def _build(run_id, workspace_root=None):
+        build_thread["tid"] = threading.get_ident()
+        return [{"type": "file_changed", "path": "b.py", "operation": "written",
+                 "relevance": "deliverable", "kind": "source-final"}]
+
+    monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
+    monkeypatch.setattr("core.ui_actions.build_surface_events",_build)
+
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(
+        _drive(orch, [_surface_tool_use(run_id="run_offloop"), _make_result_message()])
+    )
+    assert raised is None
+    assert "tid" in build_thread, "build_surface_events was never called"
+    assert build_thread["tid"] != loop_thread, (
+        "build_surface_events ran ON the event-loop thread — the glob+read+stat is "
+        "NOT off-loop (Finding 2 regression: use await asyncio.to_thread)"
+    )
+    # the batch still emits (offloading preserves the fall-through).
+    fc = [e for e in events if e.get("type") == "file_changed"]
+    assert len(fc) == 1 and fc[0]["kind"] == "source-final"
 
 
 # ── (g) BACKEND-AUTO surface on pipeline COMPLETION (run_beff6754) ──────────────
@@ -330,7 +370,7 @@ def _patch_completion_helpers(monkeypatch, *, status="completed", run_id_seen=No
         return status  # authority: the orchestrator trusts run.json, not the cmd string
 
     monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
-    monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _build)
+    monkeypatch.setattr("core.ui_actions.build_surface_events",_build)
     # The status reader is a new helper the orchestrator uses; patch it at the
     # orchestrator import site (it imports the name).
     monkeypatch.setattr("core.streaming_orchestrator.read_run_status", _status,
@@ -440,7 +480,7 @@ def test_completion_build_failure_does_not_break_turn(monkeypatch):
         raise RuntimeError("build exploded")
 
     monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
-    monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _build_boom)
+    monkeypatch.setattr("core.ui_actions.build_surface_events",_build_boom)
     monkeypatch.setattr("core.streaming_orchestrator.read_run_status",
                         lambda run_id: "completed", raising=False)
     orch = _make_orchestrator()

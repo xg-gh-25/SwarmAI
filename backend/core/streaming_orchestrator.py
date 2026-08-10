@@ -27,7 +27,7 @@ from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
 from .ui_actions import (
     build_ui_command_event,
-    build_surface_events,
+    build_surface_events_async,
     ensure_report_for_run,
     parse_completion_run_id,
     read_run_status,
@@ -903,12 +903,9 @@ class StreamingOrchestrator:
                                         )
                                         if _um_status == "completed":
                                             await ensure_report_for_run(_um_rid)
-                                            # build_surface_events does a glob+read+stat;
-                                            # off-loop it to keep the hot streaming turn
-                                            # free (Gate-2 operational finding).
-                                            _um_surf = await asyncio.to_thread(
-                                                build_surface_events, _um_rid
-                                            )
+                                            # glob+read+stat — off-loop entry point
+                                            # keeps the hot streaming turn free.
+                                            _um_surf = await build_surface_events_async(_um_rid)
                                             for _ev in _um_surf:
                                                 yield _ev
                                             _um_seen.add(_um_rid)
@@ -1157,7 +1154,10 @@ class StreamingOrchestrator:
                             _sf_already = isinstance(_sf_run_id, str) and _sf_run_id in _sf_seen
                             if not _sf_already:
                                 await ensure_report_for_run(_sf_run_id)
-                                for _sf_ev in build_surface_events(_sf_run_id):
+                                # off-loop entry point (glob+read+stat) — keeps the
+                                # shared daemon loop (+/health) free mid-streaming-turn.
+                                _sf_events = await build_surface_events_async(_sf_run_id)
+                                for _sf_ev in _sf_events:
                                     yield _sf_ev
                                 if isinstance(_sf_run_id, str) and _sf_run_id:
                                     _sf_seen.add(_sf_run_id)
@@ -1275,9 +1275,9 @@ class StreamingOrchestrator:
                                         )
                                         if _status == "completed":
                                             await ensure_report_for_run(_completion_rid)
-                                            # off-loop the glob+read (Gate-2 operational)
-                                            _fc_events += await asyncio.to_thread(
-                                                build_surface_events, _completion_rid
+                                            # off-loop entry point (glob+read)
+                                            _fc_events += await build_surface_events_async(
+                                                _completion_rid
                                             )
                                             _seen.add(_completion_rid)
                                 except Exception as _e:  # noqa: BLE001 — hot-path fail-safe

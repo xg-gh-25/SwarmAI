@@ -2408,6 +2408,12 @@ class SessionRouter:
                 # `if client_id` guard prevents a drain/channel turn (client_id=None)
                 # from CLOBBERING a still-valid stash from the turn that owns the
                 # open question.
+                # A keyed turn stamps its cid here; a keyless turn (drain / channel)
+                # leaves the stash at the None that send() reset it to at admission
+                # (session_unit.py — the _turn_client_id lifecycle reset). No stale
+                # inheritance is possible, so no explicit clear is needed here. The
+                # `if client_id` guard also stops an intruding WAITING_INPUT send from
+                # clobbering the open turn's stash (that send raises before this loop).
                 if client_id and unit._turn_client_id != client_id:
                     unit._turn_client_id = client_id
 

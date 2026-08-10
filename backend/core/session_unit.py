@@ -722,25 +722,20 @@ class SessionUnit:
         # main-path rows. Without this, a continuation row is keyless and a
         # reconcile-tail cut landing on it produces a duplicate bubble (run_9bbf1761).
         #
-        # ⚠️ LOAD-BEARING INVARIANT / STALE-KEY DEPENDENCY (run_2aea0237 retro):
-        # this field is NEVER reset to None — it is set once at init and only ever
-        # UPDATED (never cleared) at router:2294. It therefore holds the LAST keyed
-        # turn's client_id for the unit's whole lifetime. The readers (router:2505/
-        # 2533) stamp `{_turn_client_id}-asst` on EVERY persisted assistant row.
-        # Safety today rests on ONE premise: within a single unit, no *keyed* turn is
-        # ever followed by a *keyless main-path* turn. If that premise breaks — a
-        # future keyless send path on a desktop unit that previously had a keyed turn
-        # — the keyless turn's row would be stamped with the PRIOR turn's key →
-        # content attached to the wrong bubble (worse than a dup). Currently
-        # unreachable: (a) all desktop send paths carry a key after run_2aea0237's
-        # 5-entrance sweep (drain/retry/reconnect/continuation); (b) channel sessions
-        # are a SEPARATE unit (is_channel_session, own channel_sessions mapping) that
-        # is keyless for its whole life → stash stays None → rows get client_id=None
-        # (safe no-match, never a stale key). The `if client_id` guard at router:2293
-        # additionally prevents a keyless turn from CLOBBERING a valid stash. If a
-        # new keyless-main-path desktop entrance is ever added, reset this to None at
-        # that turn's admission (NOT pre-loop — pre-loop reset re-opens the
-        # WAITING_INPUT/SessionBusyError clobber the 2293 guard closed).
+        # TURN-LIFECYCLE FIELD (run_2aea0237 + audit Finding-1 root-fix): the
+        # continuation-row correlation key for the CURRENTLY-open turn. It shares the
+        # exact lifecycle of _pending_tool_use_id / _pending_question above — set for
+        # a turn, meaningful only while that turn's question is open, and RESET to
+        # None at the single new-turn admission point in send() (alongside the
+        # _pending_* reset). The readers (router continuation persists) stamp
+        # `{_turn_client_id}-asst` on every persisted assistant row; because send()
+        # zeroes it before any yield, EVERY entrance (main / drain worker / channel)
+        # starts clean and the router's in-loop `if client_id` write fills the right
+        # key — a keyless turn simply leaves it None (safe no-match), so a drain turn
+        # can never inherit a prior keyed turn's cid → answer content never attaches
+        # to the wrong bubble. The `if client_id` guard at router additionally
+        # prevents an intruding send during WAITING_INPUT from clobbering the open
+        # turn's stash (that send RAISES SessionBusyError before the reset, upstream).
         self._turn_client_id: Optional[str] = None
         # Seqs of the most recently drained pending set, surfaced to the frontend
         # mirror by the streaming-state read API (L5/2A). Best-effort hint.
@@ -1914,6 +1909,21 @@ class SessionUnit:
         self._pending_tool_use_id = None
         self._pending_question = None
         self._last_drained_seqs = []
+        # ROOT-FIX (audit Finding 1): the continuation-row correlation key
+        # (_turn_client_id) shares the SAME turn lifecycle as the pending-question
+        # fields above — it is meaningful only WHILE this turn's question is open.
+        # Reset it here, at the single new-turn admission point, so EVERY entrance
+        # (main send / drain worker / channel) starts from None and the router's
+        # `if client_id` set-logic fills in the correct key (or leaves None for a
+        # keyless turn). This is why a keyless drain turn no longer inherits a prior
+        # keyed turn's cid → answer content can never attach to the wrong bubble.
+        # SAFE PLACEMENT: this point is downstream of the WAITING_INPUT busy-guard
+        # (which RAISES before here for an intruding send, preserving the pending
+        # turn's stash) and BEFORE the first yield (so the router's in-loop stash
+        # write always runs after this reset, never races it). Continuations run via
+        # continue_with_answer/continue_with_permission — SEPARATE methods that never
+        # re-enter send() — so this reset cannot drop a stash a continuation needs.
+        self._turn_client_id = None
 
         # ── Resume-poison guard (fail-closed) — recycle-before-reuse ────
         # If we are about to REUSE a warm IDLE subprocess that did NOT end its

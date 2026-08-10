@@ -189,3 +189,8 @@ class TestContinuationClientIdStash:
         except SessionBusyError:
             pass
         assert unit._turn_client_id == "cid1"  # NOT clobbered to cid2
+
+    # NOTE: the keyless-drain stale-key regression is now covered at its ROOT seam —
+    # send()'s new-turn reset batch — by test_stale_turn_client_id_cleared_at_send_entry
+    # in test_session_unit_cleanliness.py. That drives the REAL send() (this file's
+    # harness stubs unit.send, which would make a reset-in-send() assertion vacuous).
