@@ -727,22 +727,12 @@ class DistillationTriggerHook:
         `reason` is the GateVerdict.reason token, propagated for the caller's log (a
         judge_error:* infra failure stays visible vs a genuine judge verdict).
         """
-        from core.ingestion_gate import ingestion_gate
-        from core.ddd_entry_lifecycle import route_lesson_type
-
-        section, etype = route_lesson_type(raw_text)
-        v = ingestion_gate(
-            raw_text, store="MEMORY", trigger="memory_distill",
-            context={"section": section or ""},
-        )
-        reason = getattr(v, "reason", "") or ""
-        if v.verdict == "auto":
-            # KEEP_TYPES route to section=None; resolve to the type's real MEMORY section.
-            resolved = section or MEMORY_TYPE_TO_SECTION.get(etype)
-            if resolved:
-                return ("auto", resolved, reason)
-            return ("discard", None, reason or "unroutable_type")
-        return ("discard", None, reason)
+        # Delegates to the module-level SSOT (run_04fd397c): the admission decision
+        # now lives in ingestion_gate.admit_memory_lesson so ALL four MEMORY doors
+        # (this distillation path + runtime_hooks + context_health_hook +
+        # memory_extractor) share ONE authority — the P8 structural end-state.
+        from core.ingestion_gate import admit_memory_lesson
+        return admit_memory_lesson(raw_text)
 
     @staticmethod
     def _archive_discarded(context_dir: "Path", raw: str, enriched: str,

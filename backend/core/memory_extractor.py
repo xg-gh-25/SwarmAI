@@ -479,6 +479,49 @@ async def extract_and_save(
             error="Nothing new to save",
         )
 
+    # 7.5 JUDGE GATE (run_04fd397c, XG decision A): the manual "Save to Memory"
+    # button was a MEMORY BACKDOOR — it wrote LLM-extracted entries with only a dedup
+    # check, never the self_adversarial judge, violating "the judge is the sole admit
+    # authority" (P8). Even a user-initiated save now goes through the judge (decision
+    # A: user intent does NOT bypass it; judge fail-closed is the floor). Each entry is
+    # routed through admit_memory_lesson; only verdict=="auto" survives. A judge-discard
+    # is dropped (not written) — logged for observability. Section stays as the LLM
+    # classified it for the manual-save UX (the judge decides admit/reject, not re-route).
+    try:
+        from core.ingestion_gate import admit_memory_lesson
+        gated: dict[str, list[str]] = {}
+        _dropped = 0
+        for key, section_header in _SECTION_MAP.items():
+            kept = []
+            for entry in extracted.get(key, []):
+                # NOTE (adversarial BUG#2, judged unfounded): _sec is deliberately
+                # ignored. The LLM extraction already sorted this entry into `key`,
+                # and _SECTION_MAP[key] is its correct type-section (decisions→Decisions
+                # etc.). The judge's job here is ADMIT/REJECT only — re-routing to the
+                # judge's section would BREAK the extraction bucket→section consistency.
+                verdict, _sec, reason = admit_memory_lesson(entry)
+                if verdict == "auto":
+                    kept.append(entry)
+                else:
+                    _dropped += 1
+                    logger.info("memory_extractor: judge DISCARD (%s): %.80s", reason, entry)
+            if kept:
+                gated[key] = kept
+        extracted = gated
+        if _dropped:
+            logger.info("memory_extractor: judge dropped %d entries (session %s)", _dropped, session_id)
+        if not extracted:
+            return MemoryExtractionResult(
+                next_message_idx=total_messages,
+                error="Nothing passed the memory admission judge",
+            )
+    except Exception as exc:  # noqa: BLE001 — gate error must fail-CLOSED (write nothing)
+        logger.error("memory_extractor: judge gate crashed, writing NOTHING (fail-closed): %s", exc)
+        return MemoryExtractionResult(
+            next_message_idx=total_messages,
+            error=f"Memory admission judge failed: {type(exc).__name__}",
+        )
+
     # 8. Write entries to MEMORY.md
     result = MemoryExtractionResult(next_message_idx=total_messages)
     write_failures = 0

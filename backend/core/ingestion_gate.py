@@ -558,3 +558,40 @@ def ingestion_gate(
         return GateVerdict("auto", ran, "passed_tiers")
     except Exception as e:  # noqa: BLE001 — gate must never crash a write path
         return GateVerdict("review", ran, f"gate_error:{type(e).__name__}")
+
+
+def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str]":
+    """SSOT MEMORY admission decision — the SINGLE door every MEMORY writer funnels
+    through (P8 "One Brain, Many Doors"). Routes one entry through
+    ingestion_gate(store="MEMORY", trigger="memory_distill") so the self_adversarial
+    judge is the SOLE admit authority for ALL MEMORY writes — distillation AND the
+    three former backdoors (runtime_hooks correction→pitfall, context_health_hook
+    reflection lessons, memory_extractor manual "Save to Memory"). Decision A
+    (run_04fd397c, XG): even a user-initiated manual save goes through the judge;
+    user intent does not bypass it. judge FAIL-CLOSED is the safety floor.
+
+    AUTONOMY-FIRST (run_86f44f35): keep_type_holdback is off the tier list, so the
+    judge decides every type. Returns (verdict, section, reason), verdict ∈
+    {"auto","discard"} (NO "review" — human queue is 0):
+      • "auto"    + real section — judge passed; route to the entry-TYPE's MEMORY
+        section (KEEP_TYPES get section=None from route_lesson_type → fall back to
+        MEMORY_TYPE_TO_SECTION[etype]).
+      • "discard" + None          — judge non-pass (suspect/noise), structural noise,
+        gate-error (fail-closed), or unroutable type. Caller archives (recoverable).
+    Moved here from distillation_hook._admit_memory_lesson (was door-local; promoting
+    to module level makes it the shared primitive all doors import — the P8 structural
+    end-state: change admission once, every door inherits it)."""
+    from core.ddd_entry_lifecycle import route_lesson_type, MEMORY_TYPE_TO_SECTION
+    section, etype = route_lesson_type(raw_text)
+    v = ingestion_gate(
+        raw_text, store="MEMORY", trigger="memory_distill",
+        context={"section": section or ""},
+    )
+    reason = getattr(v, "reason", "") or ""
+    if v.verdict == "auto":
+        resolved = section or MEMORY_TYPE_TO_SECTION.get(etype)
+        if resolved:
+            return ("auto", resolved, reason)
+        return ("discard", None, reason or "unroutable_type")
+    # verdict is "review" (gate-error, fail-closed) or "discard" → both discard here
+    return ("discard", None, reason)

@@ -369,25 +369,28 @@ def create_user_correction_detector(
                 # (counter_state=ignored) never seeds a case. The corrections.jsonl
                 # append above is the durable signal that path consumes.
 
-                # Gap #17: Immediate correction → MEMORY.md as [pitfall].
+                # Gap #17: Immediate correction → MEMORY.md.
                 # Best-effort — failure must never break the hook chain.
                 #
-                # UNIFIED VALUE GATE (run_4443a967): a correction-detected prompt is a
-                # SIGNAL, not automatically a lesson. Route it through the SAME value
-                # floor the cultivation writeback leg uses (is_quality_lesson +
-                # MIN_LESSON_LENGTH + a pure-correction-signal reject) BEFORE writing —
-                # symmetric with the golden-case seeding leg, which is already
-                # post-session + CLASS-gated. Without this, raw prompt[:150] dumps
-                # (test-session noise, task-notification XML, bare "that's wrong")
-                # poisoned MEMORY ungated. The corrections.jsonl append above is the
-                # durable signal the post-session classifier consumes — so skipping
-                # the MEMORY write here loses NO signal, only noise.
+                # JUDGE-GATED (run_04fd397c, XG decision A): this was a MEMORY BACKDOOR —
+                # it wrote via a value-floor (is_memory_worthy_correction) that is NOT the
+                # self_adversarial judge, violating "the judge is the sole admit authority"
+                # (P8). Now routes through admit_memory_lesson — the SAME judge every other
+                # MEMORY door uses. verdict=="auto" → write to the judge-routed section
+                # (fail-closed: judge error/suspect/noise → discard, NOT written). The
+                # corrections.jsonl append above is the durable signal the post-session
+                # classifier consumes, so a judge-discard here loses NO signal, only noise.
                 try:
                     from pathlib import Path as _Path
-                    from core.ddd_cultivation import is_memory_worthy_correction
+                    from core.ingestion_gate import admit_memory_lesson
                     from scripts.locked_write import locked_read_modify_write
                     summary = prompt[:150].replace("\n", " ").strip()
-                    if is_memory_worthy_correction(summary):
+                    # Judge decides ADMIT/REJECT only; a correction is semantically a
+                    # [pitfall]→## Pitfalls (its fixed home since Gap #17), so we do NOT
+                    # re-route on the judge's section (that would write "[pitfall]" into
+                    # e.g. ## Corrections — a type/section mismatch, adversarial BUG#1).
+                    verdict, _section, _reason = admit_memory_lesson(summary)
+                    if verdict == "auto":
                         ws = _Path.home() / ".swarm-ai" / "SwarmWS"
                         memory_path = ws / ".context" / "MEMORY.md"
                         if memory_path.exists():

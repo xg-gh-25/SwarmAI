@@ -1738,11 +1738,21 @@ class TestMemoryWorthyCorrectionGate:
     async def test_hook_writes_real_lesson_to_memory(
         self, corrections_file, session_context, tmp_path, monkeypatch
     ):
-        """AC2 end-to-end: a genuine lesson correction DOES append to MEMORY."""
+        """AC2 end-to-end: a genuine lesson correction DOES append to MEMORY.
+
+        JUDGE-GATED (run_04fd397c): the correction now routes through the
+        self_adversarial judge (admit_memory_lesson), so the judge must be mocked
+        to a pass — an unmocked test would hit live Bedrock → fail-closed → nothing
+        written. This asserts the judge-PASS path writes; a separate test covers
+        judge-DISCARD dropping the write.
+        """
         import core.eval_hooks as eh
+        import core.ingestion_gate as ig
         monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
+        monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
         mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
         mem.parent.mkdir(parents=True)
+        # A correction stays a [pitfall]→## Pitfalls (fixed home; judge admits, not re-routes).
         mem.write_text("## Pitfalls\n")
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
@@ -1755,15 +1765,21 @@ class TestMemoryWorthyCorrectionGate:
 
         body = mem.read_text()
         assert "[pitfall]" in body and "TAURI_SIGNING" in body, \
-            "genuine mid-session lesson must be written to MEMORY"
+            "genuine mid-session lesson (judge-pass) must be written to ## Pitfalls"
 
     @pytest.mark.asyncio
     async def test_memory_write_dedups(
         self, corrections_file, session_context, tmp_path, monkeypatch
     ):
-        """AC4: a lesson already present in MEMORY is not re-appended (dedup=True)."""
+        """AC4: a lesson already present in MEMORY is not re-appended (dedup=True).
+
+        JUDGE-GATED (run_04fd397c): judge mocked to pass so the correction reaches
+        the write; dedup must still stop the second append.
+        """
         import core.eval_hooks as eh
+        import core.ingestion_gate as ig
         monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
+        monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
         mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
         mem.parent.mkdir(parents=True)
         mem.write_text("## Pitfalls\n")

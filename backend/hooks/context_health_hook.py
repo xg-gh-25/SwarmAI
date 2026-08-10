@@ -1193,34 +1193,32 @@ class ContextHealthHook:
         from collections import defaultdict
         by_section: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
+        from core.ddd_entry_lifecycle import route_lesson_type
         for lesson in lessons[:3]:
-            # ADMIT / HOLD-BACK gate (fail-loud: any gate error → HOLD-BACK, and
-            # is caught here so a single bad lesson can't abort the batch via the
-            # caller's best-effort except:pass at the call site).
+            # JUDGE GATE (run_04fd397c, XG decision A): this reflection→MEMORY path
+            # was a BACKDOOR — it used _admit_lesson_to_memory (a code-side Step-0
+            # STAND-IN), NOT the self_adversarial judge, so "the judge is the sole
+            # admit authority" (P8) was false here. Now routes through the SAME
+            # admit_memory_lesson every other MEMORY door uses. verdict=="auto" →
+            # write to the judge-routed section; fail-closed (judge error/suspect/
+            # noise) → discard (dropped, logged, never a human sink).
             try:
-                admit, reason, entry_type = self._admit_lesson_to_memory(
-                    lesson, run_qualified
-                )
+                from core.ingestion_gate import admit_memory_lesson
+                verdict, target_section, reason = admit_memory_lesson(lesson)
             except Exception as exc:
                 logger.warning(
-                    "context_health: MEMORY admission gate crashed, HOLD-BACK "
+                    "context_health: MEMORY judge crashed, DISCARD "
                     "lesson (%s: %s): %.80s", type(exc).__name__, exc, lesson,
                 )
                 continue
-            if not admit:
+            if verdict != "auto" or not target_section:
                 logger.info(
-                    "context_health: HOLD-BACK MEMORY lesson (%s): %.80s",
+                    "context_health: judge DISCARD MEMORY lesson (%s): %.80s",
                     reason, lesson,
                 )
                 continue
-            # Section mapping via the SHARED SSOT helper (run_fdbc0f08): the same
-            # route_lesson_type distillation uses, so the type→section rule is
-            # single-sourced across both auto-writers. The admission gate above
-            # already held back KEEP_TYPES (step 4), so `section` is never None
-            # here; `or "Guidelines"` is a belt-and-suspenders no-op.
-            from core.ddd_entry_lifecycle import route_lesson_type
-            _section, _ = route_lesson_type(lesson)
-            target_section = _section or "Guidelines"
+            # entry_type from the type router (section already came from the judge helper).
+            _, entry_type = route_lesson_type(lesson)
             title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
             title = title.rstrip(".")
             entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})"

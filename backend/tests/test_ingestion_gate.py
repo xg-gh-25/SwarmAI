@@ -659,3 +659,54 @@ class TestJudgeFanoutBudget:
                               store="MEMORY", trigger="memory_distill", context={})
         assert v.verdict == "review" and v.reason == "judge:budget_exhausted"
         assert called["n"] == 0, "budget=0 must not issue any Bedrock call"
+
+
+class TestAdmitMemoryLessonSSOT:
+    """admit_memory_lesson — the module-level SSOT every MEMORY door funnels through
+    (run_04fd397c, P8). The 3 former backdoors (runtime_hooks / context_health_hook /
+    memory_extractor) + distillation all call this ONE function, so the judge is the
+    sole admit authority. Decision A (XG): even manual save goes through it."""
+
+    def _mock(self, verdict):
+        import core.ingestion_gate as ig
+        from unittest.mock import patch
+        return patch.object(ig, "self_adversarial_judge", lambda *a, **k: (verdict, "judged"))
+
+    def test_judge_pass_is_auto_with_section(self):
+        from core.ingestion_gate import admit_memory_lesson
+        with self._mock("pass"):
+            verdict, section, _ = admit_memory_lesson(
+                "A real durable lesson about verifying state before asserting a cause.")
+        assert verdict == "auto"
+        assert section  # routed to a real MEMORY section
+
+    def test_judge_noise_is_discard(self):
+        from core.ingestion_gate import admit_memory_lesson
+        with self._mock("noise"):
+            verdict, section, reason = admit_memory_lesson(
+                "A real durable lesson about verifying state before asserting a cause.")
+        assert verdict == "discard" and section is None
+        assert "noise" in reason
+
+    def test_judge_suspect_is_discard(self):
+        from core.ingestion_gate import admit_memory_lesson
+        with self._mock("suspect"):
+            verdict, section, _ = admit_memory_lesson(
+                "some borderline claim long enough to clear the structural floor here")
+        assert verdict == "discard" and section is None
+
+    def test_structural_noise_discarded_without_judge(self):
+        # source-type / structural junk is caught before the judge (no Bedrock call needed)
+        from core.ingestion_gate import admit_memory_lesson
+        verdict, section, reason = admit_memory_lesson("| col | col |")
+        assert verdict == "discard" and section is None
+
+    def test_keep_type_routes_to_its_section_on_pass(self):
+        # a KEEP_TYPE (decision/principle/…) gets section=None from route_lesson_type;
+        # admit_memory_lesson must resolve it to the type's real MEMORY section, not drop it.
+        from core.ingestion_gate import admit_memory_lesson
+        with self._mock("pass"):
+            verdict, section, _ = admit_memory_lesson(
+                "Decision: the judge is the sole admission authority for all MEMORY writes.")
+        assert verdict == "auto"
+        assert section  # NOT None — resolved via MEMORY_TYPE_TO_SECTION
