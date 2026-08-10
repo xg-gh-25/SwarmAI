@@ -29,12 +29,36 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 # Reuse the proven harness (fake SDK client + parent stub) from the leak-guard suite.
 from tests.test_tool_call_leak_guard import (
     _drive,
     _make_orchestrator,
     _make_result_message,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_permission_queue():
+    """Each test drives the orchestrator under its OWN event loop (asyncio.run —
+    RP62 fix: run_until_complete borrowed a prior test's loop and went RED once a
+    sibling suite closed it). But _read_formatted_response fetches a per-session
+    asyncio.Queue from the module-level `permission_manager` singleton, cached by
+    session_id ("sess-test" — hardcoded in _make_orchestrator). Once test N's loop
+    closes, that cached Queue is bound to a DEAD loop; test N+1's `perm_queue.get()`
+    then hangs forever. Clear the cached queue between tests so each fresh loop gets
+    a fresh queue. (Test-only: in production a session maps to one immortal daemon
+    loop, so this cross-loop hazard cannot arise.)
+
+    NOTE for future extension: `ask_question_manager._answer_events` is the SAME
+    class of loop-bound singleton cache. These tests never enter the
+    ask_user_question path, so it is not cleared here — but if you add a test that
+    does, clear it in this fixture too or it will hang identically."""
+    from core.permission_manager import permission_manager
+    permission_manager.remove_session_queue("sess-test")
+    yield
+    permission_manager.remove_session_queue("sess-test")
 
 
 def _write_tool_use(tool_use_id: str = "tu-w1", file_path: str = "Knowledge/Designs/x.md"):
@@ -82,7 +106,7 @@ def _patch_boundaries(monkeypatch, *, review_worthy: bool = True, kind: str = "c
 def test_write_tool_result_emits_file_changed(monkeypatch):
     _patch_boundaries(monkeypatch, review_worthy=True, kind="content")
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_write_tool_use(file_path="Knowledge/Designs/x.md"),
                       _tool_result(), _make_result_message()])
     )
@@ -102,7 +126,7 @@ def test_write_tool_result_emits_file_changed(monkeypatch):
 def test_failed_write_tool_result_does_not_emit(monkeypatch):
     _patch_boundaries(monkeypatch, review_worthy=True, kind="content")
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_write_tool_use(), _tool_result(is_error=True), _make_result_message()])
     )
     assert raised is None
@@ -115,7 +139,7 @@ def test_failed_write_tool_result_does_not_emit(monkeypatch):
 def test_non_review_worthy_write_is_dropped(monkeypatch):
     _patch_boundaries(monkeypatch, review_worthy=False, kind="process")
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_write_tool_use(), _tool_result(), _make_result_message()])
     )
     assert raised is None
@@ -128,7 +152,7 @@ def test_non_review_worthy_write_is_dropped(monkeypatch):
 def test_source_write_emits_with_source_kind(monkeypatch):
     _patch_boundaries(monkeypatch, review_worthy=True, kind="source")
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_write_tool_use(file_path="backend/foo.py"),
                       _tool_result(), _make_result_message()])
     )
@@ -153,7 +177,7 @@ def test_bash_rm_tool_result_emits_deleted(monkeypatch):
     # delete path verdict now runs off-loop (RP53 fix) — same boundary stub as writes.
     _patch_boundaries(monkeypatch, review_worthy=True, kind="content")
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_bash_rm_tool_use(path="Knowledge/Designs/old.md"),
                       _tool_result(tool_use_id="tu-rm1"), _make_result_message()])
     )
@@ -229,7 +253,7 @@ def test_surface_tool_awaits_ensure_report_before_batch(monkeypatch):
     monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _spy_build)
 
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_surface_tool_use(run_id="run_xyz"), _make_result_message()])
     )
     assert raised is None
@@ -256,7 +280,7 @@ def test_surface_tool_survives_ensure_failure(monkeypatch):
     monkeypatch.setattr("core.streaming_orchestrator.build_surface_events", _build)
 
     orch = _make_orchestrator()
-    events, raised = asyncio.get_event_loop().run_until_complete(
+    events, raised = asyncio.run(
         _drive(orch, [_surface_tool_use(), _make_result_message()])
     )
     assert raised is None, "ensure returning False must not break the turn"
