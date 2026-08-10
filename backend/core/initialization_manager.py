@@ -373,10 +373,18 @@ class InitializationManager:
         # Step 0: Clean stale git index.lock from previous crash/restart.
         # Safe at startup because no git operations from our app can be
         # in-flight when the backend is just booting.
-        try:
+        # OFF-LOOP (run_a1f4c2d8): probe + unlink in ONE hop — checking existence and
+        # then deleting are one logical operation, and splitting them would widen the
+        # window where another process recreates the lock between the two.
+        def _clear_stale_git_lock() -> bool:
             lock_file = Path(workspace_path) / ".git" / "index.lock"
-            if lock_file.exists():
-                lock_file.unlink()
+            if not lock_file.exists():
+                return False
+            lock_file.unlink()
+            return True
+
+        try:
+            if await asyncio.to_thread(_clear_stale_git_lock):
                 logger.warning(
                     "Removed stale .git/index.lock from %s (left by previous crash)",
                     workspace_path,

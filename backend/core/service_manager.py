@@ -136,7 +136,11 @@ class ServiceManager:
             logger.info("No Services/ directory — skipping service discovery")
             return
 
-        for service_dir in sorted(services_dir.iterdir()):
+        # OFF-LOOP (run_a1f4c2d8): the Services/ scan is a directory listing on the
+        # startup path. One hop for the listing; the per-service config parse below
+        # already has its own error handling and stays where it is.
+        service_dirs = await asyncio.to_thread(lambda: sorted(services_dir.iterdir()))
+        for service_dir in service_dirs:
             config_file = service_dir / "service.json"
             if not config_file.is_file():
                 continue

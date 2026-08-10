@@ -16,6 +16,7 @@ Key public symbols:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -429,12 +430,18 @@ async def extract_and_save(
         )
 
     # 5. Load current MEMORY.md for dedup context
+    # OFF-LOOP (run_a1f4c2d8): MEMORY.md is the largest context file in the system and
+    # this read feeds the dedup prompt — exists + read in one hop.
+    def _read_memory() -> str:
+        if not memory_path.exists():
+            return ""
+        return memory_path.read_text(encoding="utf-8")
+
     memory_content = ""
-    if memory_path.exists():
-        try:
-            memory_content = memory_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    try:
+        memory_content = await asyncio.to_thread(_read_memory)
+    except Exception:
+        pass
 
     # 6. Build prompt and call LLM
     today = date.today().isoformat()

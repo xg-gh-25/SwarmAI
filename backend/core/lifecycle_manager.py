@@ -1589,12 +1589,18 @@ class LifecycleManager:
             today_str = datetime.now().strftime("%Y-%m-%d")
             ws_path = Path(initialization_manager.get_cached_workspace_path())
             da_path = ws_path / "Knowledge" / "DailyActivity" / f"{today_str}.md"
+            # OFF-LOOP (run_a1f4c2d8): exists + read in one hop. A DailyActivity file
+            # grows all day, so this is not a trivially small read.
+            def _read_da() -> str:
+                if not da_path.exists():
+                    return ""
+                return da_path.read_text(encoding="utf-8")
+
             da_content = ""
-            if da_path.exists():
-                try:
-                    da_content = da_path.read_text(encoding="utf-8")
-                except Exception:
-                    pass
+            try:
+                da_content = await asyncio.to_thread(_read_da)
+            except Exception:
+                pass
 
             fired = 0
             # Cap startup backlog to prevent flooding the hook queue.

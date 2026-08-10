@@ -187,11 +187,24 @@ def _find_violations(source: str, filename: str = "<src>") -> list[tuple[str, in
         if not isinstance(enclosing_fn, ast.AsyncFunctionDef):
             continue  # inside a SYNC helper → sanctioned (may be to_thread-dispatched)
 
-        # Lexically inside asyncio.to_thread(...) → sanctioned (the lambda form).
+        # Lexically inside a thread-dispatch call → sanctioned (the lambda form).
+        # Covers BOTH off-loop dispatchers used in this codebase:
+        #   asyncio.to_thread(lambda: p.read_text())
+        #   anyio.to_thread.run_sync(lambda: p.write_text(...))   <- run_a1f4c2d8
+        # The anyio spelling was MISSING and produced a wave of FALSE POSITIVES in
+        # core/: swarm_workspace_manager alone contributed 6 "findings" that were all
+        # ALREADY correctly dispatched via anyio (routers/artifacts.py never tripped it
+        # because it passes a bare helper — `run_sync(_helper)` is an ast.Attribute with
+        # no Call node — so the gap stayed hidden while the scan was routers-only).
+        # Matching the ATTRIBUTE NAME (`to_thread` / `run_sync`) rather than the full
+        # dotted path keeps this robust to aliasing (`from anyio import to_thread`), at
+        # the cost of exempting an unrelated `x.run_sync(...)` — acceptable under the
+        # file's under-match principle, and no such call exists in scope.
+        _DISPATCH_ATTRS = {"to_thread", "run_sync"}
         in_to_thread = any(
             isinstance(a, ast.Call)
             and isinstance(a.func, ast.Attribute)
-            and a.func.attr == "to_thread"
+            and a.func.attr in _DISPATCH_ATTRS
             for a in anc
         )
         if in_to_thread:
@@ -279,9 +292,53 @@ def test_scanner_passes_sanctioned_to_thread_patterns():
         "async def via_lambda():\n"
         "    p = Path('/tmp/x')\n"
         "    return await asyncio.to_thread(lambda: p.read_text())\n"  # inside to_thread(...) → OK
+        "\n"
+        "async def via_anyio_lambda():\n"
+        "    import anyio\n"
+        "    p = Path('/tmp/x')\n"
+        # anyio is the OTHER dispatcher this codebase uses; the lambda form must be
+        # exempt exactly like asyncio's (run_a1f4c2d8 — it was NOT, and produced 3
+        # phantom findings in core/swarm_workspace_manager alone)
+        "    return await anyio.to_thread.run_sync(lambda: p.write_text('data'))\n"
+        "\n"
+        "async def via_anyio_bare():\n"
+        "    import anyio\n"
+        "    def _work():\n"
+        "        return Path('/tmp/x').read_text()\n"
+        "    return await anyio.to_thread.run_sync(_work)\n"
     )
     v = _find_violations(good, filename="<sanctioned>")
     assert v == [], f"scanner FALSE-POSITIVED on the sanctioned to_thread pattern: {v}"
+
+
+# ---------------------------------------------------------------------------
+# AC7 (run_a1f4c2d8) — the anyio exemption must not become a BLANKET pass.
+#
+# Widening the dispatch-call exemption from {to_thread} to {to_thread, run_sync} risks
+# over-matching: if it were implemented as "anywhere under a Call", a blocking call
+# merely NEAR a dispatch would go unflagged. Assert the exemption is LEXICAL — inside the
+# dispatch call's arguments — by checking a violation SIBLING to a dispatch is still
+# caught. Without this, the FP fix could silently hollow out the gate.
+# ---------------------------------------------------------------------------
+def test_anyio_exemption_does_not_blanket_pass_the_handler():
+    mixed = (
+        "import anyio\n"
+        "from pathlib import Path\n"
+        "async def handler():\n"
+        "    p = Path('/tmp/x')\n"
+        "    await anyio.to_thread.run_sync(lambda: p.write_text('ok'))\n"  # exempt
+        "    return p.read_text()\n"  # NOT exempt — sibling statement, still on the loop
+    )
+    v = _find_violations(mixed, filename="<mixed>")
+    prims = {prim for _, _, prim, _ in v}
+    assert "read_text" in prims, (
+        "a blocking call SIBLING to an anyio dispatch was not flagged — the exemption "
+        "leaked from 'inside the dispatch arguments' to 'anywhere in the handler', "
+        "which would hollow out the whole gate"
+    )
+    assert "write_text" not in prims, (
+        f"the anyio lambda form is still false-positiving: {v}"
+    )
 
 
 # ---------------------------------------------------------------------------
