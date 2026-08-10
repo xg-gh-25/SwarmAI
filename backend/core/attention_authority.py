@@ -313,7 +313,14 @@ def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
         newest: dict[str, tuple[datetime, Path, dict]] = {}
         for p in jr_dir.glob("*.md"):
             try:
-                head = p.read_text()[:600]
+                # Read only the HEAD, not the whole file. Frontmatter lives in the
+                # first few hundred bytes, but this used to read_text() the ENTIRE
+                # file (299 JobResult .md files, ~549KB total) just to slice [:600] —
+                # reading megabytes to look at kilobytes, on every attention collect().
+                # open+read(600) touches only what's needed. errors="replace" keeps
+                # the fail-soft contract (a bad byte must not abort the digest scan).
+                with open(p, "r", encoding="utf-8", errors="replace") as _fh:
+                    head = _fh.read(600)
                 fm, _ = parse_frontmatter(head)
             except Exception:
                 continue
