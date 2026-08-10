@@ -417,6 +417,28 @@ SYSTEM_JOBS: list[Job] = [
         safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
 
+    # --- Judge Telemetry Report (the READ side of the judge gauge) ---
+    # The judge is the single chokepoint all 4 ingestion doors funnel through (P8);
+    # ingestion_gate logs every verdict to .context/judge-telemetry.jsonl. Autonomy-first
+    # cultivation (no human-review queue; non-pass → recoverable archive) is only SAFE if
+    # the judge is well-calibrated — a discard pile nobody reads = silent knowledge loss.
+    # This weekly report is that look: pass/discard distribution + fail-closed share (infra
+    # failures faked as 'suspect') + the discarded-text list to eyeball for a too-harsh judge.
+    # type="script" reuses the sanctioned CLI (no new JobType). Writes to Knowledge/JobResults/.
+    Job(
+        id="judge-telemetry-report",
+        name="Judge Telemetry Report — pass/discard gauge + discard pile",
+        type="script",
+        schedule="45 6 * * 1",          # Monday UTC 06:45 = ICT 14:45 (weekly, after weekly-maintenance)
+        enabled=True,
+        category="system",
+        config={
+            "command": "python backend/scripts/judge_telemetry_report.py --days 7 --write",
+            "cwd": _SWARMAI_ROOT,
+        },
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+    ),
+
     # --- Code Intelligence Reindex (event-driven) ---
     # Triggered by git_commit events emitted from auto_commit_hook.
     # Runs incremental reindex on projects with code_intel.db.

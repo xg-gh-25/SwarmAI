@@ -490,6 +490,22 @@ async def reset_database():
     await close_all_pools()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
+    """Redirect judge telemetry to a temp dir for EVERY test (P7: structural guard,
+    not per-test discipline). self_adversarial_judge logs each verdict to
+    .context/judge-telemetry.jsonl; without this, any test that exercises the judge
+    (admission_band / distillation / cultivation) writes fixture junk into the REAL
+    workspace telemetry, corrupting the live pass/discard gauge. Redirecting the one
+    _telemetry_dir chokepoint immunizes all callers at once."""
+    d = tmp_path_factory.mktemp("judge_telemetry") / ".context"
+    try:
+        import core.ingestion_gate as _ig
+        monkeypatch.setattr(_ig, "_telemetry_dir", lambda: d, raising=False)
+    except Exception:  # noqa: BLE001 — never let telemetry isolation break a test
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Sample test data fixtures
 # ---------------------------------------------------------------------------

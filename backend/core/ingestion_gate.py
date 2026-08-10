@@ -161,6 +161,42 @@ def is_noise(text: str) -> "tuple[bool, str]":
 _JUDGE_VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(pass|suspect|noise)\b", re.IGNORECASE | re.MULTILINE)
 _JUDGE_MAX_TOKENS = 256
 
+# ── Judge telemetry — one log, all four doors (P8) ─────────────────────────────
+# The judge is the SINGLE chokepoint every door funnels through (DDD via
+# admission_band, MEMORY/EVOLUTION via distillation_hook). Logging every verdict at
+# this one point gives us the judge's REAL pass/suspect/noise distribution over live
+# traffic — the missing gauge that made "the judge rejected 21/21" unmeasurable.
+# FAIL-OPEN by contract: telemetry is OBSERVATION, never a gate — a logging failure
+# must NEVER change a verdict (the opposite of the judge's own fail-CLOSED stance).
+_JUDGE_TELEMETRY_TEXT_CAP = 1000
+
+
+def _telemetry_dir():
+    """Canonical .context dir for judge telemetry (patchable in tests)."""
+    from jobs.paths import CONTEXT_DIR
+    return CONTEXT_DIR
+
+
+def _append_judge_telemetry(text: str, section: str, verdict: str, reason: str) -> None:
+    """Append one judge verdict to .context/judge-telemetry.jsonl. FAIL-OPEN —
+    any error is swallowed so telemetry can never alter/deny a verdict."""
+    import json as _json
+    import hashlib as _hashlib
+    import datetime as _dt
+    d = _telemetry_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    row = {
+        "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "section": section,
+        "verdict": verdict,
+        "reason": reason,
+        "text_len": len(text or ""),
+        "text_sha": _hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12],
+        "text": (text or "")[:_JUDGE_TELEMETRY_TEXT_CAP],
+    }
+    with (d / "judge-telemetry.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+
 # ── Judge fan-out budget (fail-closed rolling-window rate limit) ──────────────
 # The judge tier does a SERIAL Bedrock call per candidate. distillation runs on
 # EVERY session close (UNDISTILLED_THRESHOLD=0) over a 30-day scan and can present
@@ -290,7 +326,21 @@ def self_adversarial_judge(text: str, section: str, neighbors: list) -> "tuple[s
     never "pass" — an un-refuted auto-write into the brain is the exact risk this exists
     to remove. Neighbors are for contradiction detection only and should EXCLUDE prior
     self_adversarial-admitted entries (caller's responsibility) to avoid self-reinforcement.
+
+    This is the SINGLE chokepoint all 4 doors share (P8), so telemetry is emitted here
+    exactly once → every door is measured with zero drift. Telemetry is FAIL-OPEN: it
+    can never change the verdict returned to the caller.
     """
+    verdict, reason = _self_adversarial_judge_impl(text, section, neighbors)
+    try:
+        _append_judge_telemetry(text, section, verdict, reason)
+    except Exception:  # noqa: BLE001 — telemetry is observation, NEVER a gate
+        pass
+    return (verdict, reason)
+
+
+def _self_adversarial_judge_impl(text: str, section: str, neighbors: list) -> "tuple[str, str]":
+    """The actual refute call. Kept separate so the public wrapper owns telemetry."""
     import json as _json
     try:
         client, model_id = _judge_client()

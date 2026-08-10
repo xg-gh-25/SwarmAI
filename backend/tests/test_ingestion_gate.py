@@ -248,6 +248,70 @@ class TestSelfAdversarialJudge:
         assert verdict == "suspect"
 
 
+class TestJudgeTelemetry:
+    """Every judge verdict (across ALL 4 doors — P8) is logged to one telemetry
+    JSONL, so we can measure the judge's real pass/discard distribution instead of
+    flying blind. Telemetry is FAIL-OPEN: a logging failure must never change the
+    verdict (observation ≠ gate)."""
+
+    def _read_telemetry(self, tmp_path):
+        import json as _json
+        p = tmp_path / ".context" / "judge-telemetry.jsonl"
+        if not p.exists():
+            return []
+        return [_json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+    def test_verdict_is_logged(self, tmp_path):
+        from core.ingestion_gate import self_adversarial_judge
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                 "VERDICT: pass\nREASON: real")):
+            self_adversarial_judge("A real load-bearing lesson about X.", "What Worked", [])
+        rows = self._read_telemetry(tmp_path)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["verdict"] == "pass"
+        assert r["section"] == "What Worked"
+        assert r["text_len"] == len("A real load-bearing lesson about X.")
+        assert "text_sha" in r and len(r["text_sha"]) >= 8
+        assert "ts" in r
+        # text preview present (so a human can eyeball the discard pile)
+        assert "A real load-bearing lesson" in r["text"]
+
+    def test_all_verdicts_logged_incl_suspect_and_noise(self, tmp_path):
+        from core.ingestion_gate import self_adversarial_judge
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"):
+            with patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                    "VERDICT: suspect\nREASON: vague")):
+                self_adversarial_judge("meh", "S", [])
+            with patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                    "VERDICT: noise\nREASON: frag")):
+                self_adversarial_judge("frag", "S", [])
+        rows = self._read_telemetry(tmp_path)
+        assert [r["verdict"] for r in rows] == ["suspect", "noise"]
+
+    def test_fail_closed_verdict_also_logged(self, tmp_path):
+        # Bedrock error → suspect (fail-closed) — the telemetry must capture WHY.
+        from core.ingestion_gate import self_adversarial_judge
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("core.ingestion_gate._judge_client", side_effect=RuntimeError("boom")):
+            self_adversarial_judge("x", "S", [])
+        rows = self._read_telemetry(tmp_path)
+        assert len(rows) == 1
+        assert rows[0]["verdict"] == "suspect"
+        assert "error" in rows[0]["reason"].lower()
+
+    def test_telemetry_failure_does_not_break_judge(self, tmp_path):
+        # Telemetry write blows up → verdict still returned unchanged (FAIL-OPEN).
+        from core.ingestion_gate import self_adversarial_judge
+        with patch("core.ingestion_gate._append_judge_telemetry",
+                   side_effect=OSError("disk full")), \
+             patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                 "VERDICT: pass\nREASON: real")):
+            verdict, _ = self_adversarial_judge("x", "S", [])
+        assert verdict == "pass"
+
+
 class TestKeepTypeHoldback:
     def test_keep_type_holds_back(self):
         # A [principle]/[decision] etc (KEEP_TYPES) → review (permanent write, must not auto).
