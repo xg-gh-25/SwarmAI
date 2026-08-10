@@ -37,7 +37,12 @@ def _ensure_cultivation_imports():
         _EventType = EventType
         _get_dispatcher_fn = _gd
         return True
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. False disables the DDD cultivation dispatcher for the
+        # process; every downstream event then no-ops and the knowledge engine looks
+        # merely idle rather than broken.
+        logger.warning("cultivation imports unavailable; DDD event dispatch is "
+                       "disabled for this process: %s", exc)
         return False
 
 

@@ -358,7 +358,11 @@ class MechanicalRefresher:
                 DORMANT_THRESHOLD_DAYS as _DORM,
                 ARCHIVED_THRESHOLD_DAYS as _ARCH,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE. [] reads as "no entry crossed a decay window", so a
+            # broken threshold import silently stops all dormant/archive transitions.
+            logger.warning("decay-window thresholds unavailable, reporting no "
+                           "transitions: %s", exc)
             return []
 
         results: list[RefreshResult] = []

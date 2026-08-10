@@ -118,7 +118,10 @@ def _node_has_test_caller(node_id: str, graph_store: GraphStore) -> bool:
     """
     try:
         callers = graph_store.find_callers(node_id, depth=1)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. False reads as "no test covers this node" — a claim about
+        # coverage that a failed lookup has not actually established.
+        logger.debug("test-caller lookup failed for %s: %s", node_id, exc)
         return False
     return any("test" in caller_id.lower() for caller_id, _hop in callers)
 

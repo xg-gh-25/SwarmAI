@@ -64,7 +64,11 @@ except Exception:  # pragma: no cover - fallback keeps the module importable off
     def _read_domain_skills(aim_path: Path) -> list[str]:
         try:
             data = json.loads(Path(aim_path).read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE. [] reads as "this domain declares no skills", so a
+            # malformed manifest silently ships a package with its skills stripped.
+            logger.warning("cannot read domain skills from %s, packaging none: %s",
+                           aim_path, exc)
             return []
         plugins = data.get("plugins") if isinstance(data, dict) else None
         domain = plugins.get("domain_skills") if isinstance(plugins, dict) else None

@@ -158,7 +158,10 @@ class _ClaudeClientWrapper:
                     continue
 
             return None
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE. None reads as "no PID found", a legitimate answer, so
+            # a parse regression looks exactly like a process that is not running.
+            logger.debug("PID extraction failed: %s", exc)
             return None
 
     async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object) -> bool:

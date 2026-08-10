@@ -638,7 +638,11 @@ def _tree_has_error(tree) -> bool:
     try:
         root = tree.root_node
         return bool(getattr(root, "has_error", False))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # "Never invent a failure" (docstring) stands — False on can't-tell is right.
+        # DEBUG only, since this runs per parse and a missing attribute is expected on
+        # older tree-sitter builds.
+        logger.debug("parse-error probe unavailable, assuming clean tree: %s", exc)
         return False
 
 

@@ -1833,7 +1833,12 @@ class SessionRouter:
         try:
             self._drain_enqueued.add(session_id)
             self._drain_queue.put_nowait(session_id)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # The discard correctly un-marks the session so a later enqueue can retry,
+            # but silently: this session simply never drains, and the only symptom is
+            # work that quietly did not happen.
+            logger.warning("could not enqueue drain for session %s: %s",
+                           session_id, exc)
             self._drain_enqueued.discard(session_id)
             return
         if self._drain_worker_task is None or self._drain_worker_task.done():

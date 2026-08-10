@@ -759,7 +759,12 @@ class SlackChannelAdapter(ChannelAdapter):
             action_id = action.get("action_id", "")
             value = action.get("value", "")
             clicker_id = (body.get("user") or {}).get("id", "")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE. Returning here drops the interaction entirely: the
+            # user's button click does nothing, with no error in Slack and, until now,
+            # nothing in the log either.
+            logger.warning("could not parse Slack block action payload, ignoring "
+                           "the interaction: %s", exc)
             return
         main_loop = self._loop
         if main_loop is not None and not main_loop.is_closed() and not self._stopped:

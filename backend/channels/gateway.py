@@ -665,7 +665,12 @@ class ChannelGateway:
                 u.state == SessionState.STREAMING and u.is_channel_session
                 for u in router._units.values()
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE. False means "slot free", so this concurrency guard
+            # fails OPEN: a failure admits a second channel session and two users get
+            # served at once, which is exactly what the check exists to prevent.
+            logger.warning("channel slot-busy check failed, treating slot as FREE: %s",
+                           exc)
             return False
 
     # ------------------------------------------------------------------

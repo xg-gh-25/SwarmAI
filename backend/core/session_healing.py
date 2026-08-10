@@ -59,8 +59,13 @@ def get_process_rss_mb(pid: int | None = None) -> int:
         import psutil
         proc = psutil.Process(target_pid)
         return proc.memory_info().rss // (1024 * 1024)
-    except Exception:
-        return 0  # Never crash on monitoring failure
+    except Exception as exc:  # noqa: BLE001
+        # Never crash on monitoring failure — but 0 MB is a load-bearing lie for RSS:
+        # it reads as a process using no memory, so a failing reader degrades to
+        # "healthy" rather than "unknown" and any RSS-driven healing stops firing.
+        logger.warning("RSS probe failed for pid=%s, reporting 0 MB: %s",
+                       target_pid, exc)
+        return 0
 
 logger = logging.getLogger(__name__)
 

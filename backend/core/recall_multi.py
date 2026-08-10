@@ -1125,7 +1125,10 @@ def _project_skill_prefix(project_name: str) -> Optional[str]:
     try:
         from core.ddd_orchestrator import _derive_skill_prefix
         return _derive_skill_prefix(project_name)
-    except Exception:  # noqa: BLE001 — detection must never crash recall
+    except Exception as exc:  # noqa: BLE001 — detection must never crash recall
+        # Degrade-OBSERVABLE. None reads as "this project has no skill prefix", so
+        # prefix-scoped recall silently widens instead of reporting a broken derivation.
+        logger.debug("skill-prefix derivation failed for %r: %s", project_name, exc)
         return None
 
 

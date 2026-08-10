@@ -37,6 +37,10 @@ from .summarization import StructuredSummary
 
 logger = logging.getLogger(__name__)
 
+# Latch so "summaries are not being sanitised" is warned once per process rather than
+# once per activity write (see _sanitize_summary_injection's import guard).
+_WARNED_SCANNER_IMPORT: set[bool] = set()
+
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from a DailyActivity file.
@@ -389,7 +393,17 @@ def _sanitize_summary_injection(summary: StructuredSummary) -> None:
     """
     try:
         from core.injection_patterns import scan_text
-    except Exception:  # pragma: no cover - import guard
+    except Exception as exc:  # pragma: no cover - import guard
+        # WARNING, and once per process: this import either always works or always
+        # fails, so a failure does not degrade sanitisation — it disables it ENTIRELY
+        # while the activity write keeps succeeding. Unsanitised text then lands in
+        # DailyActivity, which is loaded back into context on later sessions, so a
+        # silent failure here turns a write path into a persistence path for
+        # injection patterns. Not blocking the write is still right (docstring).
+        if not _WARNED_SCANNER_IMPORT:
+            _WARNED_SCANNER_IMPORT.add(True)
+            logger.warning("injection scanner unavailable; DailyActivity summaries are "
+                           "NOT being sanitised for this process: %s", exc)
         return
     for fname in _SUMMARY_INJECTION_FIELDS:
         val = getattr(summary, fname, None)

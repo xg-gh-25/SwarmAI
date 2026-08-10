@@ -205,7 +205,11 @@ def detect_cross_module_changes(
     # Build full module map for prefix resolution
     try:
         raw_map = graph_store.get_module_map()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. [] reads as "this change crosses no module boundary",
+        # which is the answer that suppresses the warning the function exists to raise.
+        logger.debug("module map unavailable, reporting no cross-module changes: %s",
+                     exc)
         return []
 
     groups = _regroup_if_flat(raw_map)

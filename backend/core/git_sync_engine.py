@@ -364,5 +364,11 @@ class GitSyncEngine:
         try:
             result = _run_git(["remote", "get-url", "origin"], self.workspace_dir)
             return result.stdout.strip() if result.returncode == 0 else None
-        except (subprocess.TimeoutExpired, Exception):
+        except Exception as exc:  # noqa: BLE001
+            # Was `except (subprocess.TimeoutExpired, Exception)`, which is just
+            # `except Exception` with extra words — TimeoutExpired is already a
+            # subclass, so listing it implied a narrowness the clause did not have.
+            # None reads as "no origin remote configured", which sends a reader looking
+            # at git config rather than at the failure that actually happened.
+            logger.warning("cannot read origin remote URL: %s", exc)
             return None

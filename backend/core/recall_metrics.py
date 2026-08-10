@@ -100,6 +100,14 @@ def drain_samples() -> list[dict]:
                 ring.clear()
             return out
     except Exception:  # noqa: BLE001
+        # Degrade-OBSERVABLE. [] reads as "no samples were collected", which is
+        # indistinguishable from metrics collection having stopped working.
+        # Local `import logging` matches this module's existing convention (see the
+        # flush handler below): this is a leaf that both recall surfaces import, so it
+        # deliberately keeps its module-level import surface minimal.
+        import logging
+        logging.getLogger(__name__).debug(
+            "recall metrics drain failed, reporting no samples", exc_info=True)
         return []
 
 

@@ -721,7 +721,15 @@ def _is_readonly_context_file(relative_path: str) -> bool:
             if spec.filename == filename and not spec.user_customized:
                 return True
         return False
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. The permissive default is a documented decision
+        # (Req 9.4, see docstring) so it is preserved — but note what permissive
+        # MEANS here: False says "not readonly", which ALLOWS the write. If
+        # CONTEXT_FILES is ever unimportable or malformed, this fails open and the
+        # 0o444 system-default identity files (SWARMAI/IDENTITY/SOUL) become
+        # writable through the API. That must not be able to happen quietly.
+        logger.warning("readonly-context check failed for %r, defaulting to WRITABLE "
+                       "(Req 9.4 permissive default): %s", relative_path, exc)
         return False
 
 

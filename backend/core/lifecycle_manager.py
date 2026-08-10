@@ -1718,8 +1718,13 @@ class LifecycleManager:
             except PermissionError:
                 return False  # Can't check → assume alive (fail safe)
 
-        except Exception:
-            return False  # Any error → don't kill (fail safe)
+        except Exception as exc:  # noqa: BLE001
+            # Fail-safe (never kill on uncertainty) is correct and stays. But False
+            # also means "not an orphan", so a systematically failing check silently
+            # retires the orphan reaper and leaks processes with nothing to show why.
+            logger.warning("orphan-ownership check failed, NOT reaping (fail safe): %s",
+                           exc)
+            return False
 
     async def _read_process_owner_pid(self, pid: int) -> int | None:
         """Read SWARMAI_OWNER_PID from a process's environment.
