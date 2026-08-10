@@ -217,7 +217,12 @@ class ManifestLoader:
                 data = json.loads(result.stdout)
                 installed = set(data.get("dependencies", {}).keys())
             missing = [pkg for pkg in npm_deps if pkg not in installed]
-        except (subprocess.TimeoutExpired, Exception) as e:
+        except Exception as e:
+            # subprocess.TimeoutExpired IS already a subclass of Exception, so the
+            # former `except (subprocess.TimeoutExpired, Exception)` was `except
+            # Exception` with extra words that implied a narrowness it never had.
+            # Behaviour is unchanged; this only removes the misleading tuple
+            # (matches the git_sync_engine cleanup, same class).
             logger.warning("Failed to check npm deps for %s: %s", manifest.name, e)
             missing = npm_deps  # Assume all missing, try install
 

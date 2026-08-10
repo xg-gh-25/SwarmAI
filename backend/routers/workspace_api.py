@@ -63,6 +63,11 @@ from schemas.workspace_config import (
 
 logger = logging.getLogger(__name__)
 
+# Latch so the readonly-context check's fail-open degrade (see
+# _is_readonly_context_file) is warned once per process rather than on every
+# workspace file resolution.
+_WARNED_READONLY_CHECK: set[bool] = set()
+
 # ─── ETag / tree cache ────────────────────────────────────────────────────────
 # The frontend polls /workspace/tree every 30s.  Running `git status` +
 # recursive iterdir on every poll wastes ~50ms CPU per call — the #1 source
@@ -728,8 +733,16 @@ def _is_readonly_context_file(relative_path: str) -> bool:
         # CONTEXT_FILES is ever unimportable or malformed, this fails open and the
         # 0o444 system-default identity files (SWARMAI/IDENTITY/SOUL) become
         # writable through the API. That must not be able to happen quietly.
-        logger.warning("readonly-context check failed for %r, defaulting to WRITABLE "
-                       "(Req 9.4 permissive default): %s", relative_path, exc)
+        # Latch: the failure mode is process-persistent (a broken import/module
+        # stays broken), so warn ONCE per process rather than on every file
+        # resolution — an unlatched warning here floods the log on every
+        # workspace file read and drowns out the signal (mirrors
+        # daily_activity_writer._WARNED_SCANNER_IMPORT).
+        if not _WARNED_READONLY_CHECK:
+            _WARNED_READONLY_CHECK.add(True)
+            logger.warning("readonly-context check failed, defaulting to WRITABLE "
+                           "(Req 9.4 permissive default) — 0o444 identity files are "
+                           "writable through the API until this is fixed: %s", exc)
         return False
 
 
