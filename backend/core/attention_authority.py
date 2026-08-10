@@ -58,6 +58,24 @@ _COMMUNITY_JOB_MARKER = "github-community"
 TIER_BLOCKING = "blocking"
 TIER_REVIEW = "review"
 
+# Human-readable phrasing for cognitive source-classes, kept in sync with the
+# frontend CMBrainOverlay CLASS_PHRASE map. A governance proposal's raw class
+# (CLASS_A/B/C/...) is meaningless to the user — this turns it into the failure
+# pattern the rule is meant to prevent, so the "Need You" card reads as a sentence
+# ("inferred without verifying · recurred 3×") instead of a bare type ("governance rule").
+_CLASS_PHRASE = {
+    "CLASS_A": "over-confidence → skipped a step",
+    "CLASS_B": "inferred without verifying",
+    "CLASS_C": "fixed the wrong layer",
+    "SESSION_LOW_QUALITY": "low-quality session signal",
+}
+
+
+def _class_phrase(source_class: str) -> str:
+    if not source_class:
+        return "recurring pattern"
+    return _CLASS_PHRASE.get(source_class, f"recurring pattern ({source_class})")
+
 
 @dataclass
 class AttentionItem:
@@ -186,14 +204,40 @@ def _collect_governance() -> list[AttentionItem]:
         for gp in pending.get("proposals", []):
             gid = gp.get("id") or gp.get("proposal_id") or ""
             kind = gp.get("proposal_kind") or gp.get("kind") or "rule"
-            title = gp.get("title") or gp.get("summary") or f"governance {kind}"
+
+            # Title: prefer an explicit title/summary, else BUILD one from the actual
+            # proposed rule text — never fall back to the bare "governance rule" type,
+            # which tells the user nothing (the card looked empty before this).
+            rule_text = str(gp.get("proposed_rule") or "").strip()
+            explicit = gp.get("title") or gp.get("summary")
+            if explicit:
+                title = str(explicit)
+            elif rule_text:
+                title = f"New {kind}: {rule_text}"
+            else:
+                title = f"New governance {kind} (no rule text)"
+
+            # Detail: the human failure-pattern this rule prevents + how often it
+            # recurred + confidence — the "why you're seeing this" the card lacked.
+            occ = gp.get("occurrence_count")
+            conf = gp.get("confidence")
+            phrase = _class_phrase(str(gp.get("source_class") or ""))
+            bits = [phrase]
+            if isinstance(occ, int):
+                bits.append(f"recurred {occ}×")
+            if isinstance(conf, (int, float)):
+                bits.append(f"{round(conf * 100)}% confidence")
+            why = " · ".join(bits)
+            rationale = str(gp.get("rationale") or gp.get("description") or "").strip()
+            detail = f"{why} — {rationale}" if rationale else why
+
             items.append(AttentionItem(
                 id=f"governance:{gid}",
                 source="governance",
                 tier=TIER_REVIEW,
                 brain=None,  # OS-level — no owning brain
-                title=str(title)[:120],
-                detail=str(gp.get("rationale") or gp.get("description") or "")[:400],
+                title=title[:120],
+                detail=detail[:400],
                 dispatch={
                     "message": f"Review governance {kind} proposal {gid}: {title}",
                     "context": {"kind": "governance", "proposal_id": gid, "proposal_kind": kind},

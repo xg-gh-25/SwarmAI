@@ -335,3 +335,53 @@ def test_only_newest_digest_per_job(tmp_path):
 def test_missing_jobresults_dir_returns_empty(tmp_path):
     """No JobResults dir → [] (fail-soft, never crash the channel)."""
     assert _collect_community_digests(tmp_path) == []
+
+
+# --- governance card readability (the "governance rule" empty-card fix) ---
+
+def _patch_governance(monkeypatch, proposals):
+    """Drive _collect_governance with a fake eval service returning `proposals`."""
+    class _FakeEval:
+        def get_pending_governance(self):
+            return {"proposals": proposals}
+
+    import core.eval_service as es
+    monkeypatch.setattr(es, "get_eval_service", lambda: _FakeEval())
+
+
+def test_governance_title_built_from_proposed_rule(monkeypatch):
+    """No explicit title → the card title is built from the actual rule text,
+    NOT the useless bare type 'governance rule'."""
+    _patch_governance(monkeypatch, [{
+        "id": "g1", "proposal_kind": "rule",
+        "proposed_rule": "always verify a file exists before editing",
+        "source_class": "CLASS_B", "occurrence_count": 3, "confidence": 0.82,
+    }])
+    items = aa._collect_governance()
+    assert len(items) == 1
+    it = items[0]
+    assert it.title == "New rule: always verify a file exists before editing"
+    assert it.title != "governance rule"          # the old empty-card bug
+    # detail explains WHY: human failure-pattern + recurrence + confidence
+    assert "inferred without verifying" in it.detail
+    assert "recurred 3×" in it.detail
+    assert "82% confidence" in it.detail
+
+
+def test_governance_explicit_title_wins(monkeypatch):
+    """An explicit title/summary is respected as-is."""
+    _patch_governance(monkeypatch, [{
+        "id": "g2", "proposal_kind": "gate",
+        "title": "Block edits without a prior Read",
+        "proposed_rule": "…", "source_class": "CLASS_A",
+    }])
+    items = aa._collect_governance()
+    assert items[0].title == "Block edits without a prior Read"
+
+
+def test_governance_no_rule_text_is_still_labeled(monkeypatch):
+    """Even with no rule text, never fall back to a bare type — say so explicitly."""
+    _patch_governance(monkeypatch, [{"id": "g3", "proposal_kind": "rule"}])
+    it = aa._collect_governance()[0]
+    assert it.title == "New governance rule (no rule text)"
+    assert it.detail  # still carries the class phrase ("recurring pattern")
