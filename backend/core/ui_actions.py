@@ -561,7 +561,6 @@ async def ensure_report_for_run(run_id: object) -> bool:
 # string alone does not prove the run completed. The orchestrator confirms authority
 # by reading run.json status == "completed" before emitting. This parser only decides
 # "is this a completion-attempt worth checking?" — keeping the hot-path regex cheap.
-_COMPLETION_STATUS_RE = None  # lazily compiled (module import stays light)
 
 
 def parse_completion_run_id(command: object) -> Optional[str]:
