@@ -719,11 +719,31 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 # escape hatch), but require ADVERSARIAL-review vocabulary (refute/attack/find bugs/
 # red-team/poke holes/stress-test/skeptic/对抗/挑刺), NOT bare "review"/"find code",
 # so a locate/investigate Explore agent is cleanly excluded.
-_ADVERSARIAL_TYPE_RE = re.compile(r"adversar|red.?team|skeptic|reviewer", re.IGNORECASE)
+# agent_type must be ADVERSARIALLY-qualified — bare "reviewer" is NOT enough (a
+# generic code-reviewer doing a style pass is not an adversarial review; REVIEW
+# HIGH-2). Require an adversarial/red-team/skeptic qualifier.
+_ADVERSARIAL_TYPE_RE = re.compile(
+    r"adversar|red.?team|skeptic|adversarial.?review", re.IGNORECASE
+)
+# Intent verbs that signal ADVERSARIAL review. Two tiers, either matches:
+#  (1) strong standalone terms — refute/attack/red-team/hunt/audit/vulnerab/…
+#      (liberal per the threat model: a false-block just pushes users to FORCE).
+#  (2) "find/look-for <defect>" — but ONLY when bound to the DIFF/CHANGE subject,
+#      so an Explore prompt ("find the config file", "find bugs get logged") is
+#      NOT swept in (REVIEW MED-2). The bare "find bugs" with no diff-anchor is
+#      deliberately excluded.
+_DEFECT = r"(?:bugs?|regressions?|issues?|flaws?|holes?|weakness(?:es)?|vulnerab\w*|edge\s+cases?)"
+_SUBJECT = r"(?:this|the)\s+(?:diff|change|changeset|code|design|implementation|fix|pr|patch)"
 _ADVERSARIAL_INTENT_RE = re.compile(
-    r"adversar|refute|red.?team|poke\s+holes?|stress.?test|find\s+(?:bugs?|regressions?|"
-    r"issues?|flaws?|holes?)|attack\s+(?:this|the)\s+(?:diff|change|design|code)|"
-    r"try\s+to\s+break|review\s+as\s+a\s+skeptic|对抗|挑刺|找\s*bug|找出\s*bug",
+    r"adversar|refute|red.?team|poke\s+holes?|stress.?test|"
+    r"try\s+to\s+break|break\s+(?:this|it)\b|review\s+as\s+a\s+skeptic|"
+    r"challenge\s+(?:the|this|your)|critically\s+review|"
+    r"hunt\s+for\s+" + _DEFECT + r"|audit\s+" + _SUBJECT + r"|"
+    r"look\s+for\s+(?:security\s+)?" + _DEFECT + r"|"
+    # "find <defect> in this diff/change/code" — diff-anchored (excludes Explore)
+    r"(?:find|hunt\s+for|look\s+for)\s+" + _DEFECT + r"[^.\n]{0,40}?\bin\s+" + _SUBJECT + r"|"
+    r"attack\s+" + _SUBJECT + r"|"
+    r"对抗|挑刺|找\s*bug|找出\s*bug|攻击(?:这|该)",
     re.IGNORECASE,
 )
 
@@ -751,12 +771,18 @@ def create_agent_tool_audit_hook(
     validator reads this file to confirm the Agent tool was actually invoked
     during adversarial review — structural proof, not honor-system.
 
-    Two modes:
+    Three markers (the first two are the original pipeline-validator evidence,
+    unchanged; the third gates the commit hook):
     1. If ``_active_pipeline_run_id`` is set in session_context: writes
        ``<run_id>.marker`` (precise match — pipeline orchestrator sets this).
-    2. Otherwise: writes ``<session_id>_<ts>.marker`` as session-level evidence.
-       The validator accepts either form. This ensures the hook produces
-       evidence even before the orchestrator wires up the run_id.
+    2. Always: writes ``session_<session_id>_<ts>.marker`` as session-level
+       evidence. The validator (Check 9b) accepts either form.
+    3. CONDITIONAL: if THIS sub-agent's intent is adversarial-review (classified
+       via _is_adversarial_intent on agent_type + the transcript-head spawn
+       prompt), ALSO writes ``session_<session_id>_adv_<ts>.marker``. This is the
+       evidence security_hooks.create_adversarial_commit_gate requires — an
+       investigation/Explore sub-agent writes markers 1–2 but NOT this one, so it
+       cannot satisfy the commit gate.
     """
     ctx = session_context if session_context is not None else {}
 

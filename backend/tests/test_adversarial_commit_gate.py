@@ -1,13 +1,15 @@
 """Tests for create_adversarial_commit_gate — the R1 "no commit without adversarial
 review first" PreToolUse Bash backstop (CLASS A skip-attempt #12, 2026-08-10).
 
-The gate DENYs `git commit` when NO SubagentStop marker exists for the session
-(zero adversarial evidence for the diff). It READS the marker that
-create_agent_tool_audit_hook writes on every SubagentStop.
+The gate DENYs `git commit` unless an ADVERSARIAL-review sub-agent completed this
+session (a session_<sid>_adv_ marker exists). Tightened in run_df2668b4: a base
+SubagentStop marker (any sub-agent, incl. Explore) no longer suffices — only the
+adversarial marker create_agent_tool_audit_hook writes on adversarial completion.
 
 Invariants:
-  • DENY a git commit when the session has no sub-agent marker.
-  • APPROVE once a marker exists (a sub-agent ran).
+  • DENY a git commit when the session has no ADVERSARIAL marker.
+  • DENY when only a base (non-adversarial, e.g. Explore) marker exists.
+  • APPROVE once an adversarial marker exists.
   • APPROVE all non-commit / non-Bash commands (fail-safe).
   • FAIL-OPEN: missing session id, unreadable dir → approve (never false-block).
   • SWARM_ADVERSARIAL_GATE_FORCE=1 → approve (sanctioned explicit bypass).
@@ -46,6 +48,13 @@ def _is_deny(result):
 
 
 def _mark(audit_dir: Path, session_id: str):
+    """Write an ADVERSARIAL marker (what the gate now requires)."""
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    (audit_dir / f"session_{session_id}_adv_123.marker").write_text('{"adversarial": true}')
+
+
+def _mark_base(audit_dir: Path, session_id: str):
+    """Write a base (non-adversarial) marker — an Explore/investigation agent ran."""
     audit_dir.mkdir(parents=True, exist_ok=True)
     (audit_dir / f"session_{session_id}_123.marker").write_text("{}")
 
@@ -88,10 +97,17 @@ class TestGateDeniesWithoutEvidence:
         gate = create_adversarial_commit_gate({"sdk_session_id": "sess-A"})
         assert _is_deny(_run(gate, "git commit -m 'fix'")) is True
 
-    def test_commit_approved_after_subagent_marker(self, audit_dir):
+    def test_commit_approved_after_adversarial_marker(self, audit_dir):
         _mark(audit_dir, "sess-A")
         gate = create_adversarial_commit_gate({"sdk_session_id": "sess-A"})
         assert _run(gate, "git commit -m 'fix'") == {"decision": "approve"}
+
+    def test_commit_denied_with_only_base_marker(self, audit_dir):
+        # An Explore/investigation agent ran (base marker) but no adversarial
+        # review — the exact hole run_df2668b4 closed. Must still DENY.
+        _mark_base(audit_dir, "sess-A")
+        gate = create_adversarial_commit_gate({"sdk_session_id": "sess-A"})
+        assert _is_deny(_run(gate, "git commit -m 'fix'")) is True
 
     def test_marker_is_session_scoped(self, audit_dir):
         # A marker for a DIFFERENT session must NOT authorize this one.

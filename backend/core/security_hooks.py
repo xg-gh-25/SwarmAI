@@ -1788,17 +1788,23 @@ def _session_has_adversarial_evidence(session_id: str) -> bool:
     try:
         if not _AGENT_AUDIT_DIR.is_dir():
             return False
-        needle = f"session_{session_id}_adv_"
-        return any(p.name.startswith(needle) for p in _AGENT_AUDIT_DIR.iterdir())
+        # Exact shape: session_<sid>_adv_<digits>.marker. A `startswith` needle
+        # would let a DIFFERENT session whose id begins with "<sid>_adv_run…" match
+        # this sid's evidence (prefix ambiguity, REVIEW LOW-3). Bind the boundary.
+        pat = re.compile(rf"^session_{re.escape(session_id)}_adv_\d+\.marker$")
+        return any(pat.match(p.name) for p in _AGENT_AUDIT_DIR.iterdir())
     except OSError:
         return True  # fail open on FS error
 
 
 def create_adversarial_commit_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate that DENYs `git commit` when NO SubagentStop
-    marker exists for this session — the R1 "no commit without adversarial review"
-    structural backstop. session_context is the mutable dict SessionUnit updates with
-    the live sdk_session_id (read at call time, not bind time)."""
+    """Factory: PreToolUse (Bash) gate that DENYs `git commit` when NO
+    ADVERSARIAL-review SubagentStop marker exists for this session — the R1 "no
+    commit without adversarial review" structural backstop. A base SubagentStop
+    marker (any sub-agent ran) no longer suffices: only a session_<sid>_adv_
+    marker (an adversarial-intent sub-agent completed) does. session_context is
+    the mutable dict SessionUnit updates with the live sdk_session_id (read at
+    call time, not bind time)."""
 
     async def _gate(
         input_data: dict[str, Any],

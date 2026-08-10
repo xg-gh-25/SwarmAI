@@ -2088,6 +2088,40 @@ class TestAdversarialIntentClassifier:
         # Empty everything → not adversarial (fail-safe: no evidence = not adversarial)
         assert _is_adversarial_intent("", "", "") is False
 
+    def test_bare_reviewer_type_is_not_adversarial(self):
+        """REVIEW HIGH-2: a generic 'code-reviewer' type (style/quality pass) must
+        NOT count as adversarial on type alone — else it re-opens the false-accept
+        hole. It only counts if its PROMPT shows adversarial intent."""
+        from core.runtime_hooks import _is_adversarial_intent
+        assert _is_adversarial_intent("code-reviewer", "", "Check style and naming.") is False
+        assert _is_adversarial_intent("peer-reviewer", "", "") is False
+
+    def test_realistic_adversarial_prompts_without_literal_adversarial(self):
+        """REVIEW MED-1: real adversarial-review spawns rarely say the word
+        'adversarial'. These MUST match, or a genuine review false-blocks the
+        commit and trains the user toward the FORCE escape hatch."""
+        from core.runtime_hooks import _is_adversarial_intent as f
+        for prompt in [
+            "Hunt for regressions in this diff.",
+            "Look for security vulnerabilities in this code.",
+            "Find edge cases that break this change.",
+            "Audit this diff for governance violations.",
+            "Challenge the assumptions and try to break it.",
+            "Critically review this changeset.",
+        ]:
+            assert f("general-purpose", "", prompt) is True, f"should match: {prompt!r}"
+
+    def test_explore_find_bugs_not_diff_anchored_excluded(self):
+        """REVIEW MED-2: an Explore prompt that mentions 'find bugs/issues' but is
+        NOT bound to the diff/change must NOT be accepted."""
+        from core.runtime_hooks import _is_adversarial_intent as f
+        for prompt in [
+            "Find where bugs get logged and report the file.",
+            "Find the issues tracker config and summarize it.",
+            "Locate the code that reports bugs to Sentry.",
+        ]:
+            assert f("Explore", "", prompt) is False, f"should NOT match: {prompt!r}"
+
 
 class TestAdversarialCompletionMarker:
     """AC2/AC7/AC8: the SubagentStop audit hook writes a DISTINCT adversarial
