@@ -1672,10 +1672,17 @@ async def release_publish_guard(
 # binary-detectable route: a `git commit` with zero SubagentStop evidence this session.
 #
 # EXPLICIT SCOPE (this is a guardrail, NOT the P1 fix — do not mistake it for one):
-#   • It proves a sub-agent RAN this session (SubagentStop marker exists) — it does
-#     NOT prove that sub-agent was adversarial, nor that it reviewed THIS diff. A
-#     determined skip (spawn any Agent, then commit) passes. Threat model = the
+#   • It proves an ADVERSARIAL sub-agent COMPLETED this session (a session_<sid>_adv_
+#     marker exists, written at SubagentStop by runtime_hooks when the completing
+#     sub-agent's agent_type/spawn-prompt showed adversarial-review intent). It does
+#     NOT prove that review covered THIS diff — an adversarial review of an EARLIER
+#     diff in the same session still satisfies it (session-scoped, not diff-scoped;
+#     diff-relevance is the deliberately-out-of-scope "Plan A"). Threat model = the
 #     手滑 "test passed → commit" reflex that #12 was, NOT a malicious bypass.
+#   • run_df2668b4 TIGHTENED this: it used to accept ANY sub-agent marker, so an
+#     Explore/investigation agent (spawned to locate code) satisfied it — the exact
+#     hole that let this session commit two un-reviewed diffs. Now only an _adv_
+#     marker counts.
 #   • Marker producer already exists: runtime_hooks.create_agent_tool_audit_hook
 #     writes STATE_DIR/pipeline_agent_audit/session_<sid>_<ts>.marker on EVERY
 #     SubagentStop. This gate only READS it. No new producer, no coupling added.
@@ -1760,17 +1767,29 @@ def _command_has_git_commit(command: str) -> bool:
     return any(_segment_is_git_commit(seg) for seg in segments)
 
 
-def _session_has_subagent_evidence(session_id: str) -> bool:
-    """True iff a SubagentStop marker exists for *session_id* (proof a sub-agent ran
-    this session). Reads the markers create_agent_tool_audit_hook writes. Fail-OPEN:
-    any error (unreadable dir, etc.) returns True so the guard never false-blocks."""
+# NOTE: the old _session_has_subagent_evidence (accepted ANY session_<sid>_ marker)
+# was REMOVED in run_df2668b4 — it was the loose check that let an Explore agent
+# satisfy the gate. Do NOT reintroduce it: the gate now requires an ADVERSARIAL
+# marker via _session_has_adversarial_evidence (below). The base marker it read is
+# still written (for pipeline_validator Check 9b), just no longer sufficient to commit.
+
+
+def _session_has_adversarial_evidence(session_id: str) -> bool:
+    """True iff an ADVERSARIAL-review marker exists for *session_id* (proof an
+    adversarial sub-agent COMPLETED this session). Matches the `_adv_` infix
+    written by runtime_hooks.create_agent_tool_audit_hook — a base marker
+    (session_<sid>_<numeric ts>) can never contain `_adv_`, so the two are
+    unambiguous. Fail-OPEN on any error / missing session_id (mirrors
+    _session_has_subagent_evidence): a guard that false-blocks a legit commit is
+    worse than the skip it prevents (the threat is the honest reflex, not a
+    malicious bypass — and a local commit is reversible)."""
     if not session_id:
         return True  # cannot scope → fail open (never block on missing identity)
     try:
         if not _AGENT_AUDIT_DIR.is_dir():
             return False
-        prefix = f"session_{session_id}_"
-        return any(p.name.startswith(prefix) for p in _AGENT_AUDIT_DIR.iterdir())
+        needle = f"session_{session_id}_adv_"
+        return any(p.name.startswith(needle) for p in _AGENT_AUDIT_DIR.iterdir())
     except OSError:
         return True  # fail open on FS error
 
@@ -1798,7 +1817,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
 
         session_id = session_context.get("sdk_session_id", "") or ""
-        if _session_has_subagent_evidence(session_id):
+        if _session_has_adversarial_evidence(session_id):
             return {"decision": "approve"}
 
         logger.warning("[BLOCKED] git commit with no adversarial sub-agent this session "
@@ -1809,8 +1828,8 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     "git commit → DENY: R1 requires an adversarial review BEFORE any commit "
-                    "(sequence code→test→adversarial→fix→commit), and NO sub-agent ran this "
-                    "session — there is zero adversarial evidence for this diff. "
+                    "(sequence code→test→adversarial→fix→commit), and NO ADVERSARIAL sub-agent "
+                    "completed this session — an investigation/Explore agent does NOT count. "
                     "'This change is too simple for adversarial' IS the signal it's needed "
                     "(CLASS A skip-attempt #12, 2026-08-10: a 'simple' commit skipped the gate; "
                     "the forced pass then found a real HIGH governance bug). "

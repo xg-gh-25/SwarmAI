@@ -690,3 +690,85 @@ class TestTagDeleteCarveOut:
         assert f("git push origin main") is False
         assert f("git push origin src:dst") is False
         assert f("git push origin refs/tags/v1.0.0") is False  # a normal (non-delete) tag push
+
+
+# ---------------------------------------------------------------------------
+# Adversarial commit gate — TIGHTENED evidence (Plan B v4, run_df2668b4)
+# The gate must pass only when an ADVERSARIAL sub-agent completed this session,
+# not any sub-agent (an Explore/investigation marker must NOT satisfy it).
+# ---------------------------------------------------------------------------
+
+class TestAdversarialCommitGateEvidence:
+    def _mk_gate(self, tmp_path, monkeypatch, session_id="sess-1"):
+        import core.security_hooks as sh
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
+        return sh.create_adversarial_commit_gate({"sdk_session_id": session_id})
+
+    def _write(self, tmp_path, name):
+        (tmp_path / name).write_text('{"event":"SubagentStop"}')
+
+    @staticmethod
+    def _bash(cmd):
+        return {"tool_name": "Bash", "tool_input": {"command": cmd}}
+
+    @pytest.mark.asyncio
+    async def test_deny_when_only_investigation_marker(self, tmp_path, monkeypatch):
+        """AC1: only a base (non-adversarial) marker present → DENY git commit."""
+        gate = self._mk_gate(tmp_path, monkeypatch)
+        self._write(tmp_path, "session_sess-1_1234.marker")  # base marker (Explore ran)
+        out = await gate(self._bash("git commit -m x"), None, None)
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_approve_when_adversarial_marker(self, tmp_path, monkeypatch):
+        """AC2: an _adv_ marker present → APPROVE."""
+        gate = self._mk_gate(tmp_path, monkeypatch)
+        self._write(tmp_path, "session_sess-1_1234.marker")       # base
+        self._write(tmp_path, "session_sess-1_adv_1235.marker")   # adversarial
+        out = await gate(self._bash("git commit -m x"), None, None)
+        assert out.get("decision") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_base_marker_never_satisfies_adv_check(self, tmp_path, monkeypatch):
+        """AC9: a base marker (numeric ts, no _adv_ infix) can never be mistaken
+        for adversarial evidence."""
+        import core.security_hooks as sh
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
+        self._write(tmp_path, "session_s_1234.marker")
+        assert sh._session_has_adversarial_evidence("s") is False
+        self._write(tmp_path, "session_s_adv_1236.marker")
+        assert sh._session_has_adversarial_evidence("s") is True
+
+    @pytest.mark.asyncio
+    async def test_fail_open_missing_session_id(self, tmp_path, monkeypatch):
+        """AC3: no session_id → approve (fail-open, never false-block)."""
+        import core.security_hooks as sh
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
+        gate = sh.create_adversarial_commit_gate({"sdk_session_id": ""})
+        out = await gate(self._bash("git commit -m x"), None, None)
+        assert out.get("decision") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_fail_open_on_fs_error(self, tmp_path, monkeypatch):
+        """AC3: an OSError scanning the dir → approve (fail-open)."""
+        import core.security_hooks as sh
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
+        def boom(*a, **k):
+            raise OSError("boom")
+        monkeypatch.setattr(type(tmp_path), "iterdir", boom, raising=False)
+        assert sh._session_has_adversarial_evidence("sess-1") is True  # fail-open
+
+    @pytest.mark.asyncio
+    async def test_force_env_bypasses(self, tmp_path, monkeypatch):
+        """AC4: SWARM_ADVERSARIAL_GATE_FORCE=1 → approve even with no markers."""
+        monkeypatch.setenv("SWARM_ADVERSARIAL_GATE_FORCE", "1")
+        gate = self._mk_gate(tmp_path, monkeypatch)
+        out = await gate(self._bash("git commit -m x"), None, None)
+        assert out.get("decision") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_non_commit_bash_approved(self, tmp_path, monkeypatch):
+        """A non-commit Bash command is not this gate's concern → approve."""
+        gate = self._mk_gate(tmp_path, monkeypatch)
+        out = await gate(self._bash("git status"), None, None)
+        assert out.get("decision") == "approve"
