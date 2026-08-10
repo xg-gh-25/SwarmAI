@@ -89,7 +89,22 @@ _BLOCKING_ATTRS = frozenset({
 })
 
 # Bare-name calls (``open(...)``):
-_BLOCKING_NAMES = frozenset({"open"})
+#
+# Also lists the KNOWN-BLOCKING sync recall entrypoints. These are not FS primitives
+# but user-defined sync functions that internally do a heavy BM25 tokenize + a
+# multi-source file walk — calling one DIRECTLY on the loop stalls it exactly like a
+# read_text (measured 7–13× /health stall while library_search was inline). The AST
+# gate is primitive-name based, so it was BLIND to "call a helper that blocks
+# inside": recall_library_hits() sat un-offloaded in library_api.library_search while
+# every sibling handler used to_thread, and the gate still reported the router clean —
+# the exact "half-migrated, gate green" hole the report flagged. Denylisting these
+# names by identity closes it: a bare recall_*/recall_all call in an async handler is
+# now RED, so the offload can never silently regress. (They are module-level sync defs
+# in core.recall_multi; there is no same-named async method in scope to false-positive.)
+_BLOCKING_NAMES = frozenset({
+    "open",
+    "recall_all", "recall_library_hits", "recall_multi",
+})
 
 # Dotted calls needing a module qualifier so we don't confuse them with harmless
 # same-named methods (``time.sleep`` blocks; ``asyncio.sleep`` does NOT;
@@ -394,6 +409,35 @@ def test_scanner_catches_injected_violation():
 # AC4 — no FALSE POSITIVE on the sanctioned patterns (the run_b2d3ece0 shape).
 # Both the sync-helper form and the bare-attribute to_thread form must be CLEAN.
 # ---------------------------------------------------------------------------
+def test_scanner_catches_bare_sync_recall_call():
+    """Non-vacuity for the recall-entrypoint denylist: a bare recall_library_hits()
+    (or recall_all()) directly in an async handler must be flagged. This is the class
+    the AST gate was blind to — a heavy sync helper called on the loop — and the exact
+    site (library_api.library_search) that was half-migrated while the gate stayed green."""
+    bad = (
+        "import asyncio\n"
+        "async def library_search(q, scope):\n"
+        "    from core.recall_multi import recall_library_hits\n"
+        "    return recall_library_hits(q, scope)\n"  # blocking sync helper, on the loop
+    )
+    v = _find_violations(bad, filename="<recall>")
+    assert any(prim == "recall_library_hits" and fn == "library_search"
+               for _, _, prim, fn in v), (
+        "scanner FAILED to flag a bare sync recall_library_hits() on the loop — the "
+        "half-migration hole is still open"
+    )
+    # And the sanctioned offload form must NOT be flagged.
+    good = (
+        "import asyncio\n"
+        "async def library_search(q, scope):\n"
+        "    from core.recall_multi import recall_library_hits\n"
+        "    return await asyncio.to_thread(recall_library_hits, q, scope)\n"
+    )
+    assert _find_violations(good, filename="<recall_ok>") == [], (
+        "the to_thread-offloaded recall call must be clean"
+    )
+
+
 def test_scanner_passes_sanctioned_to_thread_patterns():
     good = (
         "import asyncio\n"

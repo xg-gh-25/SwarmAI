@@ -285,7 +285,14 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
     try:
         from core.recall_multi import recall_library_hits, LIBRARY_DOMAINS
         _t0 = time.perf_counter()
-        result = recall_library_hits(q, scope)
+        # recall_library_hits is a SYNCHRONOUS, CPU/IO-heavy walk (BM25 tokenize +
+        # file reads across Knowledge/ + code mounts). Left inline it BLOCKED the
+        # event loop for the whole search — measured 7–13× /health stall while a
+        # search was in flight. Every OTHER handler in this router already offloads
+        # its sync work via asyncio.to_thread (list_mounts/register_mount/health/
+        # categories/items); this was the one leg the offload sweep missed, so the
+        # "routers/ is STRICT no-blocking" guarantee was only half-true. Offload it.
+        result = await asyncio.to_thread(recall_library_hits, q, scope)
         _latency_ms = (time.perf_counter() - _t0) * 1000.0
         hits: list[dict] = []
         for domain in LIBRARY_DOMAINS:
