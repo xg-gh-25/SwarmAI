@@ -73,7 +73,7 @@ _LOG_METHODS = frozenset({
 _LOG_BARE_NAMES = frozenset({"print"})
 _TRACEBACK_PRINTERS = frozenset({"print_exc", "print_exception"})
 
-# Error-event BUILDERS: yielding one of these is the third communication form, and
+# Error-event BUILDERS: yielding one of these is a further communication form, and
 # arguably the strongest — it puts the failure (with its traceback in ``detail``) on the
 # operator's SCREEN, not merely in a log file. Modelled as an explicit allowlist of
 # builder names, deliberately NOT "any yield counts": a blanket yield rule would let
@@ -96,6 +96,27 @@ def _handler_communicates(handler: ast.ExceptHandler) -> bool:
             generator cannot log-and-return its way out of a streaming turn; its way to
             report is to yield an error event down the stream, which reaches the USER.
             Restricted to named builders on purpose — see that constant.
+    Uses  = the handler BINDS the exception (``as e``) and LOADS that name in its body.
+
+    On that last form — it separates "swallowed" from "handled through a NON-LOG
+    channel", and it matters because logging is not the only way to report a failure::
+
+        except Exception as e:
+            return VerifyResult(success=False, error=str(e))              # API response
+            checks.append(Check("total_rss", True, f"unreadable: {e}"))   # health check
+            await message_queue.put(("error", e))                         # SSE consumer
+            self.last_search_errors.append(f"vec:{type(exc).__name__}")   # diagnostics
+
+    Each of those puts the failure somewhere a human or a caller will actually see it,
+    frequently somewhere BETTER than a log file. Measured when this was added: 33 of the
+    218 then-"silent" handlers had this shape, and inspecting all 33 showed every one was
+    genuinely propagating — so the gate was demanding a redundant log line beside an
+    error that already reached the user, which is the fastest way to teach people to work
+    around a gate. The other 185 bind nothing at all and are unaffected.
+
+    The rule stays tight because it requires an actual LOAD of the bound name:
+    ``except Exception as e: pass`` and ``except Exception as e: return None`` are both
+    still silent.
 
     ⚠️ Nested-scope guard (Gate-2 correctness, run_9af622ee): we walk the handler's own
     statements but do NOT descend into a nested ``def``/``async def``/``lambda``/``class``
@@ -139,7 +160,33 @@ def _handler_communicates(handler: ast.ExceptHandler) -> bool:
                 return True
         return False
 
-    return _scan(ast.iter_child_nodes(handler))
+    if _scan(ast.iter_child_nodes(handler)):
+        return True
+
+    # "Uses" form: the handler propagates the exception VALUE somewhere instead of
+    # logging it. Requires a real Load of the bound name, so binding-and-discarding
+    # (`except Exception as e: pass`) is still silent.
+    #
+    # Uses the same recursive walk as _scan rather than ast.walk, for the same
+    # nested-definition reason: a use of the exception inside an uncalled nested def
+    # does not run when the handler fires. (ast.walk cannot express that skip — a
+    # `continue` on the def node still yields its children on later iterations.)
+    if not handler.name:
+        return False
+
+    def _uses(nodes) -> bool:
+        for node in nodes:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef, ast.Lambda)):
+                continue
+            if (isinstance(node, ast.Name) and node.id == handler.name
+                    and isinstance(node.ctx, ast.Load)):
+                return True
+            if _uses(ast.iter_child_nodes(node)):
+                return True
+        return False
+
+    return _uses(ast.iter_child_nodes(handler))
 
 
 def _is_broad_except(handler: ast.ExceptHandler) -> bool:
@@ -342,6 +389,68 @@ def test_scanner_passes_communicating_handlers():
     assert v == [], f"scanner FALSE-POSITIVED on a communicating handler: {v}"
 
 
+def test_uses_exception_rule_is_narrow():
+    """The "handler uses the exception" rule must require a real LOAD of the name.
+
+    Its whole value is separating "reported through a non-log channel" from
+    "swallowed", so the boundary has to hold in both directions: propagating the
+    exception into a return value / collection / queue counts, while binding it and
+    dropping it does NOT. If this loosened to "binds an exception", every
+    `except Exception as e: pass` in the codebase would launder itself clean.
+    """
+    handled = (
+        "def api():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        return {'ok': False, 'error': str(e)}\n"       # -> caller sees it
+        "\n"
+        "def health(checks):\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        checks.append(f'unreadable: {e}')\n"           # -> health output
+        "\n"
+        "def retrying():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as exc:\n"
+        "        last_exc = exc\n"                              # -> kept for reporting
+        "        return None\n"
+    )
+    assert _find_silent_swallows(handled, filename="<handled>") == [], (
+        "flagged a handler that PROPAGATES the exception into a return value, a "
+        "collection, or a saved variable — those are reported, not swallowed"
+    )
+
+    swallowed = (
+        "def a():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        pass\n"                                        # binds, discards
+        "\n"
+        "def b():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        return None\n"                                 # binds, discards
+        "\n"
+        "def c():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        def unused():\n"
+        "            return str(e)\n"                           # never CALLED -> silent
+        "        return []\n"
+    )
+    lines = [ln for _f, ln in _find_silent_swallows(swallowed, filename="<swallowed>")]
+    assert len(lines) == 3, (
+        "the uses-exception rule LEAKED — binding an exception and then discarding it "
+        f"(or only touching it inside an uncalled nested def) is still silent: {lines}"
+    )
+
+
 def test_yield_allowlist_is_narrow():
     """The error-event yield rule must not degenerate into "any yield counts".
 
@@ -370,11 +479,15 @@ def test_yield_allowlist_is_narrow():
         "    except Exception:\n"
         "        yield make_payload(1)\n"               # SILENT (not an error builder)
         "\n"
+        # Deliberately does NOT bind `as e`: this case isolates the YIELD boundary
+        # (built but never sent). Binding and using the exception would additionally
+        # trip the independent "uses" rule and the case would no longer test what its
+        # name claims.
         "async def built_but_dropped():\n"
         "    try:\n"
         "        risky()\n"
-        "    except Exception as e:\n"
-        "        ev = _build_error_event(code='X', detail=str(e))\n"  # SILENT: never sent
+        "    except Exception:\n"
+        "        ev = _build_error_event(code='X')\n"       # SILENT: never sent
         "        return\n"
     )
     lines = [ln for _f, ln in _find_silent_swallows(src, filename="<narrow>")]

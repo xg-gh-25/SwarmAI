@@ -437,11 +437,21 @@ class BackupManager:
                     try:
                         cur = conn.execute(f'SELECT COUNT(*) FROM "{table}"')
                         counts[f"{table}_count"] = cur.fetchone()[0]
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001
+                        # These counts are the RESTORE VERIFICATION — the numbers a user
+                        # reads to confirm their data came back. A silent 0 makes a
+                        # successful restore look empty (and an empty one look verified),
+                        # which is the worst possible lie at exactly this moment.
+                        logger.warning("could not count restored rows in %s: %s",
+                                       table, exc)
                         counts[f"{table}_count"] = 0
                 conn.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # Whole-DB open failed, so `counts` stays {} and the caller reports no
+                # verification numbers at all. Non-fatal (the restore itself already
+                # succeeded), but it must not look like a clean verification.
+                logger.warning("post-restore verification could not open %s: %s",
+                               self.db_path, exc)
 
             # Update state
             state = self._load_state()
