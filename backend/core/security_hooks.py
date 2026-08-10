@@ -1660,6 +1660,172 @@ async def release_publish_guard(
 
 
 # ---------------------------------------------------------------------------
+# adversarial-commit gate — R1 structural backstop (PreToolUse, Bash)
+# ---------------------------------------------------------------------------
+# R1 (AGENT.md): "NO COMMIT WITHOUT ADVERSARIAL REVIEW FIRST" — every code change,
+# pipeline OR direct, MUST spawn an adversarial sub-agent BEFORE commit (sequence
+# code→test→adversarial→fix→commit). This was prose-only and got skipped: CLASS A
+# skip-attempt #12 (2026-08-10, this workspace) — the agent did code→test then asked
+# "commit?" with no adversarial pass; the pass, once forced, found a real HIGH
+# governance bug. EVOLUTION.md's own verdict on prose gates: "Mechanical gates catch
+# specific KNOWN bypass routes." This is that backstop for the ONE known, stable,
+# binary-detectable route: a `git commit` with zero SubagentStop evidence this session.
+#
+# EXPLICIT SCOPE (this is a guardrail, NOT the P1 fix — do not mistake it for one):
+#   • It proves a sub-agent RAN this session (SubagentStop marker exists) — it does
+#     NOT prove that sub-agent was adversarial, nor that it reviewed THIS diff. A
+#     determined skip (spawn any Agent, then commit) passes. Threat model = the
+#     手滑 "test passed → commit" reflex that #12 was, NOT a malicious bypass.
+#   • Marker producer already exists: runtime_hooks.create_agent_tool_audit_hook
+#     writes STATE_DIR/pipeline_agent_audit/session_<sid>_<ts>.marker on EVERY
+#     SubagentStop. This gate only READS it. No new producer, no coupling added.
+#   • FAIL-OPEN on its own errors (missing session id, unreadable dir, any exception)
+#     — a guard that false-blocks a legit commit is worse than the skip it prevents.
+#     SWARM_ADVERSARIAL_GATE_FORCE=1 is the sanctioned explicit bypass (logged).
+#   • Scope is `git commit` only (reusing the segment-split + wrapper-strip discipline
+#     of _is_irreversible_external_op). Non-commit git (add/status/push), non-git,
+#     and the amuse-case `git commit --amend` all count as commits (still need review).
+
+_AGENT_AUDIT_DIR = get_app_data_dir() / "state" / "pipeline_agent_audit"
+
+
+def _segment_is_git_commit(tokens: list[str]) -> bool:
+    """True iff this ONE already-separator-split segment is a `git commit`.
+
+    Mirrors _segment_is_irreversible's wrapper/env-assignment strip + git global-option
+    skip so `env X=y git -C path commit`, `sudo git commit`, `git -c k=v commit` all
+    match. Only the `commit` subcommand — NOT add/status/log/diff/push."""
+    _WRAPPERS = {"sudo", "env", "command", "nice", "nohup", "time"}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if "=" in t and t.split("=", 1)[0].replace("_", "").isalnum() and not t.startswith("-"):
+            i += 1
+        elif t in _WRAPPERS:
+            i += 1
+        else:
+            break
+    tokens = tokens[i:]
+    if not tokens or tokens[0] != "git":
+        return False
+    k = 1
+    while k < len(tokens):
+        t = tokens[k]
+        if t in ("-C", "-c", "--namespace"):
+            k += 2  # option that consumes a value
+        elif t.startswith(("--git-dir", "--work-tree", "--namespace=", "-C", "-c")):
+            k += 1  # =form, self-contained
+        elif t.startswith("-"):
+            k += 1  # any other global flag
+        else:
+            break  # the subcommand
+    return k < len(tokens) and tokens[k] == "commit"
+
+
+def _command_has_git_commit(command: str) -> bool:
+    """True iff any shell segment of *command* is a `git commit`. Reuses the same
+    newline→';', glued-';' resplit, and separator-split normalization as
+    _is_irreversible_external_op so chained/multiline commits are seen. Fail-safe:
+    unparseable input → substring fallback (only a real `git commit` token pattern)."""
+    try:
+        all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
+    except ValueError:
+        return bool(re.search(r"\bgit\b[^;&|]*\bcommit\b", command))
+    if not all_tokens:
+        return False
+    _resplit: list[str] = []
+    for tok in all_tokens:
+        if ";" in tok and tok != ";":
+            parts = tok.split(";")
+            for idx, p in enumerate(parts):
+                if p:
+                    _resplit.append(p)
+                if idx < len(parts) - 1:
+                    _resplit.append(";")
+        else:
+            _resplit.append(tok)
+    all_tokens = _resplit
+    _SEPARATORS = {";", "&&", "||", "|", "&"}
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for tok in all_tokens:
+        if tok in _SEPARATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+    return any(_segment_is_git_commit(seg) for seg in segments)
+
+
+def _session_has_subagent_evidence(session_id: str) -> bool:
+    """True iff a SubagentStop marker exists for *session_id* (proof a sub-agent ran
+    this session). Reads the markers create_agent_tool_audit_hook writes. Fail-OPEN:
+    any error (unreadable dir, etc.) returns True so the guard never false-blocks."""
+    if not session_id:
+        return True  # cannot scope → fail open (never block on missing identity)
+    try:
+        if not _AGENT_AUDIT_DIR.is_dir():
+            return False
+        prefix = f"session_{session_id}_"
+        return any(p.name.startswith(prefix) for p in _AGENT_AUDIT_DIR.iterdir())
+    except OSError:
+        return True  # fail open on FS error
+
+
+def create_adversarial_commit_gate(session_context: dict[str, Any]):
+    """Factory: PreToolUse (Bash) gate that DENYs `git commit` when NO SubagentStop
+    marker exists for this session — the R1 "no commit without adversarial review"
+    structural backstop. session_context is the mutable dict SessionUnit updates with
+    the live sdk_session_id (read at call time, not bind time)."""
+
+    async def _gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("tool_name") != "Bash":
+            return {"decision": "approve"}
+        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+        if not command or not _command_has_git_commit(command):
+            return {"decision": "approve"}
+
+        if os.environ.get("SWARM_ADVERSARIAL_GATE_FORCE") == "1":
+            logger.warning("[adversarial-gate] FORCE override — commit without subagent "
+                           "evidence: %s", command[:80])
+            return {"decision": "approve"}
+
+        session_id = session_context.get("sdk_session_id", "") or ""
+        if _session_has_subagent_evidence(session_id):
+            return {"decision": "approve"}
+
+        logger.warning("[BLOCKED] git commit with no adversarial sub-agent this session "
+                       "(session=%s): %s", session_id, command[:80])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "git commit → DENY: R1 requires an adversarial review BEFORE any commit "
+                    "(sequence code→test→adversarial→fix→commit), and NO sub-agent ran this "
+                    "session — there is zero adversarial evidence for this diff. "
+                    "'This change is too simple for adversarial' IS the signal it's needed "
+                    "(CLASS A skip-attempt #12, 2026-08-10: a 'simple' commit skipped the gate; "
+                    "the forced pass then found a real HIGH governance bug). "
+                    "FIX: spawn an adversarial sub-agent (Agent/Task tool) to REFUTE this diff — "
+                    "have it hunt bugs/regressions/governance violations — fix what it finds, "
+                    "THEN commit. (Deliberate exception, e.g. a docs-only or revert commit with "
+                    "no logic: set SWARM_ADVERSARIAL_GATE_FORCE=1 for that one command.)"
+                ),
+            }
+        }
+
+    return _gate
+
+
+# ---------------------------------------------------------------------------
 # bash-syntax guard — hang prevention via parse-check (PreToolUse, Bash)
 # ---------------------------------------------------------------------------
 # A syntactically INCOMPLETE bash command (unterminated quote/backtick, unclosed

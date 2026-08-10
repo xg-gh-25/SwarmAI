@@ -29,6 +29,7 @@ from .security_hooks import (
     pytest_command_guard,
     eval_command_guard,
     release_publish_guard,
+    create_adversarial_commit_gate,
     bash_syntax_guard,
     inclusive_term_guard,
     create_image_read_dedup_guard,
@@ -364,6 +365,17 @@ async def build_hooks(
     #       dead; it was never the real ceiling). run_1141ea02.
     registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash", no_timeout=True)
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
+
+    # ── PreToolUse: adversarial-commit gate (Bash-scoped) ────
+    # R1 structural backstop: DENY `git commit` when NO sub-agent ran this session
+    # (no SubagentStop marker) → "no commit without adversarial review first." Reads
+    # the marker create_agent_tool_audit_hook already writes; fail-OPEN on its own
+    # errors; SWARM_ADVERSARIAL_GATE_FORCE=1 escapes for a docs-only/revert commit.
+    # Guardrail for the CLASS-A "test passed → commit" reflex (#12), NOT a P1 fix.
+    registry.register(
+        "PreToolUse", create_adversarial_commit_gate(hook_session_context),
+        "adversarial_commit_gate", matcher="Bash",
+    )
 
     # ── PreToolUse: AskUserQuestion gate (AskUserQuestion-scoped) ──
     # Intercepts AskUserQuestion before the CLI self-resolves it in headless
