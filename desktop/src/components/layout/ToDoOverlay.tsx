@@ -131,6 +131,55 @@ function matchesStatusFilter(t: ToDo, f: StatusFilter): boolean {
   return s === f;
 }
 
+/**
+ * Segmented control — the ONE filter primitive shared by BOTH the Range and Status
+ * groups (Method B). A single filled slider is the selected state (bg-primary +
+ * white); everything else is a transparent tab. Because both groups render through
+ * this one component they can never drift into inconsistent selected styles. The
+ * bordered container is the visible group boundary (Gestalt common-region), so the
+ * label no longer has to carry the grouping.
+ */
+function Segmented<T extends string>({
+  label, options, value, onChange, testid, optionTestid,
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  testid?: string;
+  optionTestid?: (v: T) => string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] shrink-0">{label}</span>
+      <div
+        role="tablist"
+        aria-label={label}
+        data-testid={testid}
+        className="flex items-center gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-0.5"
+      >
+        {options.map((o) => {
+          const active = o.value === value;
+          return (
+            <button
+              key={o.value}
+              role="tab"
+              aria-selected={active}
+              onClick={() => onChange(o.value)}
+              data-testid={optionTestid?.(o.value)}
+              className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                active
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+              }`}
+            >{o.label}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** Merge active-list + history rows: dedup by id, prefer the newer updatedAt on
  *  collision, drop soft-deleted rows (withdrawn = gone). */
 function mergeRows(list: ToDo[], history: ToDo[]): ToDo[] {
@@ -239,55 +288,38 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
         gap={2}
         loading={loading}
         left={(
-          // Two clearly-separated filter groups. Each carries a small leading
-          // label so the two 'All' controls (range-All vs status-All) can never be
-          // confused (Gate-1 F3): the label + a wider inter-group gap make "which
-          // All?" self-evident. Space WITHIN a group is tight; space BETWEEN groups
-          // is wide (Refactoring UI #9 — ambiguous spacing is the bug).
-          <div className="flex items-center gap-x-4 gap-y-2 flex-wrap">
-            {/* Group 1 — Time range (filters table + charts) */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] shrink-0">Range</span>
-              <div className="flex items-center gap-0.5 rounded-md border border-[var(--color-border)] p-0.5" data-testid="todo-range">
-                {RANGES.map((r, i) => (
-                  <button
-                    key={r.label}
-                    onClick={() => setRangeIdx(i)}
-                    data-testid={`todo-range-${r.label}`}
-                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
-                      rangeIdx === i ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                    }`}
-                  >{r.label}</button>
-                ))}
-              </div>
-            </div>
-            {/* Group 2 — Status (filters table only) */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] shrink-0">Status</span>
-              <div className="flex items-center gap-1 flex-wrap" data-testid="todo-status-chips">
-                {STATUS_FILTERS.map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => setStatusFilter(f)}
-                    data-testid={`todo-chip-${f.replace(/\s+/g, '-')}`}
-                    className={`px-2 py-0.5 text-[11px] font-medium rounded-full border transition-colors ${
-                      statusFilter === f
-                        ? 'border-primary/50 bg-primary/10 text-primary'
-                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                    }`}
-                  >{f}</button>
-                ))}
-              </div>
-            </div>
+          // Method B: two matching segmented controls through the SAME <Segmented>
+          // primitive (one selected-state rule → no style drift). A 1px vertical rule
+          // + wide gap BETWEEN groups, tight gap WITHIN each — spacing hierarchy makes
+          // "which group / which All" self-evident (Refactoring UI #9). Distinct
+          // bordered containers + kept-visible labels → the two 'All's can't confuse.
+          <div className="flex items-center gap-3 flex-wrap">
+            <Segmented
+              label="Range"
+              testid="todo-range"
+              options={RANGES.map((r) => ({ value: r.label, label: r.label }))}
+              value={RANGES[rangeIdx].label}
+              onChange={(v) => setRangeIdx(RANGES.findIndex((r) => r.label === v))}
+              optionTestid={(v) => `todo-range-${v}`}
+            />
+            <span aria-hidden className="h-5 w-px bg-[var(--color-border)] shrink-0" />
+            <Segmented
+              label="Status"
+              testid="todo-status-chips"
+              options={STATUS_FILTERS.map((f) => ({ value: f, label: f }))}
+              value={statusFilter}
+              onChange={setStatusFilter}
+              optionTestid={(v) => `todo-chip-${v.replace(/\s+/g, '-')}`}
+            />
           </div>
         )}
         right={(
           <button
             onClick={() => { setSelected(null); setCreating(true); }}
             data-testid="todo-new-btn"
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors shrink-0"
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-white hover:opacity-90 transition-opacity shrink-0 shadow-sm"
           >
-            <span className="material-symbols-outlined text-[15px]">add</span>New ToDo
+            <span className="material-symbols-outlined text-[16px]">add</span>New ToDo
           </button>
         )}
       />
@@ -354,6 +386,8 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           todo={selected}
           onClose={() => setSelected(null)}
           onEdit={() => { setEditing(selected); setSelected(null); }}
+          onDispatch={handleDispatch}
+          onWithdraw={(t) => { void handleWithdraw(t); }}
         />
       )}
       {creating && <TodoForm mode="create" onSaved={handleSaved} onCancel={() => setCreating(false)} />}
@@ -371,22 +405,36 @@ function KpiRow({ kpis, rangeLabel }: { kpis: ReturnType<typeof computeKpis>; ra
   // rest are context. Grid (not flex-gap) so it shares the analytics strip's
   // column rhythm below → no more misalignment (Gate-1 F4).
   return (
-    <div className="shrink-0 grid grid-cols-4 gap-4 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-kpis">
-      <Kpi label="Open" value={kpis.open} testid="kpi-open" primary />
-      <Kpi label="In Progress" value={kpis.inProgress} testid="kpi-inprogress" />
-      <Kpi label={`Completed · ${rangeLabel}`} value={kpis.completed} testid="kpi-completed" />
-      <Kpi label="Completion" value={`${pct}%`} testid="kpi-rate" />
+    <div className="shrink-0 grid grid-cols-4 gap-3 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-kpis">
+      <Kpi label="Open" value={kpis.open} testid="kpi-open" icon="pending_actions" primary />
+      <Kpi label="In Progress" value={kpis.inProgress} testid="kpi-inprogress" icon="autorenew" />
+      <Kpi label={`Completed · ${rangeLabel}`} value={kpis.completed} testid="kpi-completed" icon="task_alt" />
+      <Kpi label="Completion" value={`${pct}%`} testid="kpi-rate" icon="donut_large" />
     </div>
   );
 }
 
-function Kpi({ label, value, testid, primary }: { label: string; value: number | string; testid: string; primary?: boolean }) {
-  // Hierarchy via weight+color, not just size (Refactoring UI): the primary KPI is
-  // the accent color + heaviest; the rest share one muted tone.
+function Kpi({ label, value, testid, icon, primary }: { label: string; value: number | string; testid: string; icon: string; primary?: boolean }) {
+  // Each KPI is now a bordered card (subtle bg lift) with a leading icon in a rounded
+  // tile — a coherent "stat card" language shared with the rest of the surface. The
+  // primary card (Open = the actionable headline) gets the accent border + tinted bg
+  // so exactly ONE card dominates (Von Restorff); hierarchy via color+weight, not size.
   return (
-    <div className="flex flex-col" data-testid={testid}>
-      <span className={`text-[22px] leading-tight tabular-nums ${primary ? 'font-bold text-primary' : 'font-semibold text-[var(--color-text)]'}`}>{value}</span>
-      <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">{label}</span>
+    <div
+      data-testid={testid}
+      className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
+        primary
+          ? 'border-primary/30 bg-primary/[0.07]'
+          : 'border-[var(--color-border)] bg-[var(--color-bg)]/40'
+      }`}
+    >
+      <span
+        className={`material-symbols-outlined text-[18px] shrink-0 ${primary ? 'text-primary' : 'text-[var(--color-text-muted)]'}`}
+      >{icon}</span>
+      <div className="flex flex-col min-w-0">
+        <span className={`text-[20px] leading-none tabular-nums ${primary ? 'font-bold text-primary' : 'font-semibold text-[var(--color-text)]'}`}>{value}</span>
+        <span className="mt-1 text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)] truncate">{label}</span>
+      </div>
     </div>
   );
 }
@@ -402,12 +450,21 @@ function AnalyticsStrip({ weekly, sources }: {
   // this reads as supporting context, not a competing headline (Von Restorff:
   // only ONE thing dominant — the KPIs above).
   return (
-    <div className="shrink-0 grid grid-cols-2 gap-4 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg)]/30" data-testid="todo-analytics">
-      <div className="flex flex-col gap-1" data-testid="todo-weekly">
-        <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Weekly · created vs completed</div>
+    <div className="shrink-0 grid grid-cols-2 gap-3 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-analytics">
+      {/* Each chart lives in a matching card (same border/radius/bg as the KPI cards
+          above) so the whole surface reads as one system, not stacked ad-hoc rows. */}
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-2.5" data-testid="todo-weekly">
+        <div className="flex items-center justify-between">
+          <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Weekly activity</div>
+          {/* Legend — was missing entirely; gray vs accent bars were unlabeled. */}
+          <div className="flex items-center gap-2.5 text-[9px] text-[var(--color-text-muted)]">
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-[var(--color-text-faint)]/40" />Created</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary" />Completed</span>
+          </div>
+        </div>
         <WeeklyBars data={weekly} />
       </div>
-      <div className="flex flex-col gap-1" data-testid="todo-sources">
+      <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-2.5" data-testid="todo-sources">
         <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Source distribution</div>
         <SourceBars data={sources} />
       </div>
@@ -416,15 +473,15 @@ function AnalyticsStrip({ weekly, sources }: {
 }
 
 function WeeklyBars({ data }: { data: ReturnType<typeof weeklyBuckets> }) {
-  if (data.length === 0) return <div className="text-[11px] text-[var(--color-text-faint)] py-2">No data in range</div>;
+  if (data.length === 0) return <div className="text-[11px] text-[var(--color-text-faint)] py-4 text-center">No activity in range</div>;
   const max = Math.max(1, ...data.map((d) => Math.max(d.created, d.completed)));
   return (
     <div className="flex items-end gap-1.5 h-16">
       {data.slice(-10).map((d) => (
-        <div key={d.week} className="flex-1 flex flex-col justify-end gap-0.5" title={`${d.week}: ${d.created} created / ${d.completed} completed`}>
+        <div key={d.week} className="flex-1 flex flex-col justify-end gap-0.5 group" title={`${d.week}: ${d.created} created / ${d.completed} completed`}>
           <div className="flex items-end gap-0.5 h-full">
-            <div className="flex-1 bg-[var(--color-text-faint)]/40 rounded-sm self-end" style={{ height: `${(d.created / max) * 100}%` }} />
-            <div className="flex-1 bg-primary rounded-sm self-end" style={{ height: `${(d.completed / max) * 100}%` }} />
+            <div className="flex-1 bg-[var(--color-text-faint)]/40 rounded-sm self-end transition-opacity group-hover:opacity-80" style={{ height: `${(d.created / max) * 100}%` }} />
+            <div className="flex-1 bg-primary rounded-sm self-end transition-opacity group-hover:opacity-80" style={{ height: `${(d.completed / max) * 100}%` }} />
           </div>
         </div>
       ))}
@@ -481,20 +538,25 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
         <EmptyTodoHint />
       ) : (
         <table className="w-full text-[12px]">
-          <thead className="sticky top-0 bg-[var(--color-card)] text-[var(--color-text-muted)] z-[1]">
-            <tr>
-              {COLUMNS.map((c) => (
-                <th
-                  key={c.key}
-                  onClick={() => onSort(c.key)}
-                  data-testid={`todo-th-${c.key}`}
-                  className="text-left px-3 py-2.5 font-medium cursor-pointer select-none hover:text-[var(--color-text)] whitespace-nowrap"
-                >
-                  {c.label}
-                  <span className="ml-1 text-[10px] text-primary">{sortKey === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
-                </th>
-              ))}
-              <th className="text-right px-3 py-2.5 font-medium">Actions</th>
+          <thead className="sticky top-0 bg-[var(--color-card)] z-[1]">
+            <tr className="border-b border-[var(--color-border)]">
+              {COLUMNS.map((c) => {
+                const active = sortKey === c.key;
+                return (
+                  <th
+                    key={c.key}
+                    onClick={() => onSort(c.key)}
+                    data-testid={`todo-th-${c.key}`}
+                    className={`text-left px-3 py-2 text-[10px] font-mono uppercase tracking-wider cursor-pointer select-none whitespace-nowrap transition-colors ${
+                      active ? 'text-primary' : 'text-[var(--color-text-faint)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {c.label}
+                    <span className="ml-1 text-[9px]">{active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
+                  </th>
+                );
+              })}
+              <th className="text-right px-3 py-2 text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -512,28 +574,34 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
   todo: ToDo; onDispatch: (t: ToDo) => void; onWithdraw: (t: ToDo) => void; onSelect: (t: ToDo) => void;
 }) {
   const status = deriveStatus(todo);
+  const terminal = status === 'Completed' || status === 'Cancelled';
+  const priColor = PRIORITY_COLOR[todo.priority];
   return (
     <tr
-      className="border-t border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-hover)] cursor-pointer"
+      className="group border-b border-[var(--color-border)]/60 text-[var(--color-text)] hover:bg-[var(--color-hover)] cursor-pointer transition-colors"
       data-testid="todo-row"
       onClick={() => onSelect(todo)}
     >
+      {/* Priority — colored dot + label; the dot doubles as a left status accent. */}
       <td className="px-3 py-2.5">
         <span className="inline-flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: PRIORITY_COLOR[todo.priority] }} />
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: priColor === 'transparent' ? 'var(--color-border)' : priColor }} />
           <span className="text-[11px] text-[var(--color-text-muted)] capitalize">{todo.priority === 'none' ? '—' : todo.priority}</span>
         </span>
       </td>
-      <td className="px-3 py-2.5 max-w-[300px] truncate">{todo.title}</td>
+      <td className="px-3 py-2.5 max-w-[320px]">
+        <span className="block truncate font-medium text-[var(--color-text)]">{todo.title}</span>
+      </td>
       <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-muted)]">{todo.sourceType}</td>
       <td className="px-3 py-2.5"><StatusBadge status={status} /></td>
       <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.createdAt)}</td>
       <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.updatedAt)}</td>
       <td className="px-3 py-2.5 font-mono text-[11px] text-[var(--color-text-faint)] whitespace-nowrap">{fmtTs(todo.completedAt)}</td>
-      {/* Actions must not open the drawer */}
+      {/* Actions must not open the drawer. Quiet until row-hover (opacity) so the
+          table scans clean; the primary Dispatch stays accent-colored on reveal. */}
       <td className="px-3 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-        <div className="inline-flex items-center gap-1">
-          {status !== 'Completed' && status !== 'Cancelled' && (
+        <div className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          {!terminal && (
             <RowBtn onClick={() => onDispatch(todo)} icon="play_arrow" label="Dispatch" primary testid="todo-action-dispatch" />
           )}
           <RowBtn onClick={() => onWithdraw(todo)} icon="delete" label="Withdraw" testid="todo-action-withdraw" />
@@ -543,6 +611,8 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
   );
 }
 
+/** Status badge — colored dot + label so status is legible at a glance and color is
+ *  never the SOLE signal (accessibility). Shared by the table AND the detail header. */
 function StatusBadge({ status }: { status: TodoStatusLabel }) {
   const cls: Record<TodoStatusLabel, string> = {
     Pending: 'text-[var(--color-text-muted)] bg-[var(--color-hover)]',
@@ -550,7 +620,17 @@ function StatusBadge({ status }: { status: TodoStatusLabel }) {
     Completed: 'text-emerald-400 bg-emerald-500/10',
     Cancelled: 'text-red-400 bg-red-500/10',
   };
-  return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${cls[status]}`}>{status}</span>;
+  const dot: Record<TodoStatusLabel, string> = {
+    Pending: 'bg-[var(--color-text-muted)]',
+    'In Progress': 'bg-amber-400',
+    Completed: 'bg-emerald-400',
+    Cancelled: 'bg-red-400',
+  };
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${cls[status]}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dot[status]}`} />{status}
+    </span>
+  );
 }
 
 function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void; icon: string; label: string; primary?: boolean; testid: string }) {
@@ -559,11 +639,11 @@ function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void
       onClick={onClick}
       title={label}
       data-testid={testid}
-      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
-        primary ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
+      className={`inline-flex items-center gap-0.5 px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
+        primary ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-red-400'
       }`}
     >
-      <span className="material-symbols-outlined text-[13px]">{icon}</span>{label}
+      <span className="material-symbols-outlined text-[14px]">{icon}</span>{label}
     </button>
   );
 }
@@ -603,10 +683,17 @@ function GuideBanner() {
 
 // ── Detail drawer ───────────────────────────────────────────────────
 
-function DetailDrawer({ todo, onClose, onEdit }: { todo: ToDo; onClose: () => void; onEdit: () => void }) {
+function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw }: {
+  todo: ToDo;
+  onClose: () => void;
+  onEdit: () => void;
+  onDispatch: (t: ToDo) => void;
+  onWithdraw: (t: ToDo) => void;
+}) {
   const wp = parseWorkPacket(todo.linkedContext);
   const priColor = PRIORITY_COLOR[todo.priority] === 'transparent' ? 'var(--color-text-faint)' : PRIORITY_COLOR[todo.priority];
   const status = deriveStatus(todo);
+  const terminal = status === 'Completed' || status === 'Cancelled';
   // Attachments are fetched lazily when the drawer opens (metadata only).
   const [attachments, setAttachments] = useState<ToDoAttachment[]>([]);
   useEffect(() => {
@@ -615,28 +702,40 @@ function DetailDrawer({ todo, onClose, onEdit }: { todo: ToDo; onClose: () => vo
     return () => { alive = false; };
   }, [todo.id]);
   return (
-    <OverlayDrawer widthPx={420} maxWidthPct={70} z={10} testid="todo-detail-drawer">
-      <div className="flex items-start gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-        <span className="mt-1 w-1.5 h-4 rounded-full shrink-0" style={{ background: priColor }} />
-        <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-semibold text-[var(--color-text)] leading-snug break-words">{todo.title}</div>
-          <div className="mt-0.5 flex items-center gap-2 text-[10px] font-mono text-[var(--color-text-faint)]">
-            <span>{todo.sourceType}</span>
-            <span>·</span>
-            <span>{todo.priority}</span>
-            <span>·</span>
-            <span>{status}</span>
-          </div>
+    <OverlayDrawer widthPx={440} maxWidthPct={70} z={10} testid="todo-detail-drawer">
+      {/* Header: title is the headline; status is a first-class COLORED badge (was
+          buried in a gray "·"-joined line). Priority pill replaces the redundant
+          lowercase text; source stays quiet. Hierarchy: title → status → meta. */}
+      <div className="px-4 py-3 border-b border-[var(--color-border)] shrink-0">
+        <div className="flex items-start gap-2.5">
+          <span className="mt-0.5 w-1 h-5 rounded-full shrink-0" style={{ background: priColor }} />
+          <div className="flex-1 min-w-0 text-[14px] font-semibold text-[var(--color-text)] leading-snug break-words">{todo.title}</div>
+          <button onClick={onEdit} data-testid="todo-drawer-edit" title="Edit" className="text-[var(--color-text-muted)] hover:text-primary shrink-0">
+            <span className="material-symbols-outlined text-[18px]">edit</span>
+          </button>
+          <button onClick={onClose} data-testid="todo-drawer-close" title="Close" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0">
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
         </div>
-        <button onClick={onEdit} data-testid="todo-drawer-edit" title="Edit" className="text-[var(--color-text-muted)] hover:text-primary">
-          <span className="material-symbols-outlined text-[18px]">edit</span>
-        </button>
-        <button onClick={onClose} data-testid="todo-drawer-close" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-          <span className="material-symbols-outlined text-[18px]">close</span>
-        </button>
+        <div className="mt-2 flex items-center gap-2 flex-wrap pl-3.5">
+          <StatusBadge status={status} />
+          <PriorityPill priority={todo.priority} />
+          <span className="text-[10px] font-mono text-[var(--color-text-faint)]">{todo.sourceType}</span>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4 text-[12px]">
+      <div className="flex-1 overflow-y-auto px-4 py-3.5 flex flex-col gap-4 text-[12px]">
+        {/* Next step — THE thing you open a todo to see; promoted to a highlighted
+            callout above the fold, not a gray peer of Timeline. */}
+        {wp?.next_step && (
+          <div className="rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5" data-testid="todo-drawer-nextstep">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-primary">
+              <span className="material-symbols-outlined text-[13px]">arrow_forward</span>Next step
+            </div>
+            <p className="mt-1 text-[12px] text-[var(--color-text)] leading-relaxed break-words">{wp.next_step}</p>
+          </div>
+        )}
+
         {todo.description && (
           <Section label="Description">
             <p className="text-[var(--color-text)] leading-relaxed whitespace-pre-wrap break-words">{todo.description}</p>
@@ -657,7 +756,7 @@ function DetailDrawer({ todo, onClose, onEdit }: { todo: ToDo; onClose: () => vo
 
         {wp ? (
           <>
-            {wp.next_step && <Section label="Next step"><p className="text-[var(--color-text)] break-words">{wp.next_step}</p></Section>}
+            {/* next_step rendered as the callout above — not repeated here. */}
             {wp.acceptance && <Section label="Done when"><p className="text-[var(--color-text)] break-words">{wp.acceptance}</p></Section>}
             <MaterialList label="Files" items={wp.files} mono />
             <MaterialList label="Design docs" items={wp.design_docs} mono />
@@ -694,7 +793,44 @@ function DetailDrawer({ todo, onClose, onEdit }: { todo: ToDo; onClose: () => vo
           </Section>
         )}
       </div>
+
+      {/* Footer action bar — the drawer's primary CTA. Opening a todo then having to
+          close + hunt for the row's Dispatch button was the real gap; Dispatch is now
+          the emphasized action right here, Withdraw the quiet destructive secondary. */}
+      <div className="flex items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] shrink-0">
+        {!terminal ? (
+          <button
+            onClick={() => onDispatch(todo)}
+            data-testid="todo-drawer-dispatch"
+            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-[12px] font-semibold rounded-md bg-primary text-white hover:opacity-90 transition-opacity shadow-sm"
+          >
+            <span className="material-symbols-outlined text-[16px]">play_arrow</span>Dispatch to chat
+          </button>
+        ) : (
+          <span className="flex-1 text-[11px] text-[var(--color-text-faint)]">This ToDo is {status.toLowerCase()} — no action needed.</span>
+        )}
+        <button
+          onClick={() => onWithdraw(todo)}
+          data-testid="todo-drawer-withdraw"
+          title="Withdraw"
+          className="inline-flex items-center gap-1 px-3 py-2 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+        >
+          <span className="material-symbols-outlined text-[16px]">delete</span>Withdraw
+        </button>
+      </div>
     </OverlayDrawer>
+  );
+}
+
+/** Small colored priority pill for the detail header (replaces redundant text). */
+function PriorityPill({ priority }: { priority: Priority }) {
+  if (priority === 'none') return null;
+  const color = PRIORITY_COLOR[priority];
+  return (
+    <span
+      className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
+      style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
+    >{priority}</span>
   );
 }
 
@@ -893,17 +1029,24 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
           />
         </Field>
         <Field label="Priority">
-          <div className="flex gap-1">
-            {(['high', 'medium', 'low', 'none'] as Priority[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPriority(p)}
-                data-testid={`todo-form-pri-${p}`}
-                className={`px-2 py-1 text-[11px] rounded-md border transition-colors ${
-                  priority === p ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                }`}
-              >{p}</button>
-            ))}
+          <div className="flex gap-1.5">
+            {(['high', 'medium', 'low', 'none'] as Priority[]).map((p) => {
+              const active = priority === p;
+              const c = PRIORITY_COLOR[p];
+              return (
+                <button
+                  key={p}
+                  onClick={() => setPriority(p)}
+                  data-testid={`todo-form-pri-${p}`}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium capitalize rounded-md border transition-colors ${
+                    active ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: c === 'transparent' ? 'var(--color-border)' : c }} />
+                  {p}
+                </button>
+              );
+            })}
           </div>
         </Field>
         <Field label="Description — the detailed context">
