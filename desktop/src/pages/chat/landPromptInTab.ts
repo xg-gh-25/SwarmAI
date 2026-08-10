@@ -24,18 +24,30 @@
 import { resolveResumeTarget, type ResumeTabInfo } from './resumeTarget';
 
 /** The side-effect-free landing decision. `focus` carries the already-open tab id;
- *  `reuse` carries the active idle tab id; `newtab` needs no id (caller adds one). */
+ *  `reuse` carries the active idle tab id; `newtab` needs no id (caller adds one).
+ *  `occupied` = at cap and the only reuse candidate holds real history we refuse to
+ *  wipe (dispatch convergence) → caller toasts "close a tab". */
 export type LandingVerdict =
   | { kind: 'land'; mode: 'focus' | 'reuse'; tabId: string }
   | { kind: 'land'; mode: 'newtab' }
-  | { kind: 'blocked'; reason: 'cap' | 'busy' | 'draft'; busyStatus?: string };
+  | { kind: 'blocked'; reason: 'cap' | 'busy' | 'draft' | 'occupied'; busyStatus?: string };
 
 /** Draft-guard inputs. `hasDraft` = the target-tab reuse would clobber an unsent
  *  draft (caller computes from input/attachment refs). `applyDraftGuard` = whether
- *  this caller wants the guard at all (dispatch=true, resume=false). */
+ *  this caller wants the guard at all (dispatch=true, resume=false).
+ *
+ *  `allowReuseCurrent` gates the reuse-current branch (run: dispatch convergence).
+ *  Resume passes true — it CLEARS then RELOADS the session, so reusing an idle tab
+ *  with history loses nothing. The two dispatch handlers pass FALSE: dispatching is
+ *  new work and clearing a history-bearing idle tab would silently destroy that
+ *  conversation. When false we still reuse a genuinely EMPTY idle tab (no sessionId)
+ *  so a chatMax===1 user is never deadlocked (Gate-1 CRITICAL parity, resumeTarget
+ *  module doc); an idle tab WITH a sessionId becomes blocked:occupied → "close a
+ *  tab". This is the "dispatch 收敛到只开新 tab,满了让用户关 tab" product decision. */
 export interface LandingGuardOpts {
   hasDraft: boolean;
   applyDraftGuard: boolean;
+  allowReuseCurrent: boolean;
 }
 
 /**
@@ -62,6 +74,16 @@ export function classifyLanding(
       // Reuse clears the active idle tab. If it holds an unsent draft AND this
       // caller opted into the guard, refuse rather than destroy the draft.
       if (guard.applyDraftGuard && guard.hasDraft) return { kind: 'blocked', reason: 'draft' };
+      // Dispatch convergence: dispatch (allowReuseCurrent=false) must NOT wipe a
+      // history-bearing idle tab. Reuse only a genuinely EMPTY idle tab (no session)
+      // — that loses nothing and keeps a chatMax===1 user unblocked (Gate-1). An
+      // idle tab that already holds a conversation → blocked:occupied ("close a
+      // tab"). Resume (allowReuseCurrent=true) always reuses: it reloads a session
+      // right after clearing, so nothing is lost.
+      if (!guard.allowReuseCurrent) {
+        const target = tabs.find((t) => t.id === decision.tabId);
+        if (target?.sessionId) return { kind: 'blocked', reason: 'occupied' };
+      }
       return { kind: 'land', mode: 'reuse', tabId: decision.tabId };
     }
     case 'needs-close':

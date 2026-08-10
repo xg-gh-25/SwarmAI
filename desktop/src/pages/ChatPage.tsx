@@ -1166,6 +1166,14 @@ export default function ChatPage() {
     let message: string;
     if (v.reason === 'draft') {
       message = `This tab has an unsent draft — send or clear it, or open a new tab, then ${verb}.`;
+    } else if (v.reason === 'occupied') {
+      // Dispatch convergence: at cap and the only idle tab holds a conversation we
+      // won't wipe. User must free a slot rather than lose that history. For a
+      // single-tab user (chatMax===1) "close a tab" sounds like a dead end — tell
+      // them closing their only tab is safe (closeTab auto-respawns an empty one).
+      message = maxTabsInfo.chatMax === 1
+        ? `This tab holds a conversation — closing it starts a fresh one (a new empty tab opens automatically). Close it, then ${verb}.`
+        : `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab, then ${verb}.`;
     } else if (v.reason === 'busy') {
       // Never leak the raw machine status token (e.g. "permission_needed") to the
       // user. Map to a human phrase + the right action. A completed/errored tab is
@@ -1236,7 +1244,7 @@ export default function ChatPage() {
     // is new work). Dispatch opts INTO the draft guard (reuse would clobber a draft).
     const verdict = classifyLanding(
       `__dispatch__${todo.id}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
-      { hasDraft: activeTabHasDraft(), applyDraftGuard: true },
+      { hasDraft: activeTabHasDraft(), applyDraftGuard: true, allowReuseCurrent: false },
     );
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
 
@@ -1275,7 +1283,7 @@ export default function ChatPage() {
     // Same fresh-work landing as todo (sentinel key, opt into the draft guard).
     const verdict = classifyLanding(
       `__jobprompt__${prompt.slice(0, 24)}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
-      { hasDraft: activeTabHasDraft(), applyDraftGuard: true },
+      { hasDraft: activeTabHasDraft(), applyDraftGuard: true, allowReuseCurrent: false },
     );
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
 
@@ -1295,7 +1303,7 @@ export default function ChatPage() {
     // draft guard — it never had one, and adding it would change behavior (Gate-1).
     const verdict = classifyLanding(
       session.id, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
-      { hasDraft: false, applyDraftGuard: false },
+      { hasDraft: false, applyDraftGuard: false, allowReuseCurrent: true },
     );
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Resume'); return false; }
 
