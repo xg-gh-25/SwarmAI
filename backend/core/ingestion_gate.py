@@ -479,6 +479,15 @@ def ingestion_gate(
     # a REAL guard (was documentation-only), not just a comment (P7: enforce, don't narrate).
     if trigger not in _DISPATCHER_TRIGGERS:
         return GateVerdict("review", [], f"non_dispatcher_trigger:{trigger}")
+    # STORE↔TRIGGER consistency (was: `store` accepted but NEVER read — a caller that
+    # wired store="MEMORY" onto trigger="evolution_distill" would silently gate an
+    # EVOLUTION write with MEMORY intent, undetected). The dispatcher triggers are
+    # store-prefixed (memory_* → MEMORY, evolution_* → EVOLUTION), so the pair MUST agree.
+    # Fail-closed to review on a mismatch rather than run a write under the wrong store's
+    # intent (P7: enforce, don't narrate — makes the `store` param a real guard).
+    _expected_store = "MEMORY" if trigger.startswith("memory_") else "EVOLUTION"
+    if store != _expected_store:
+        return GateVerdict("review", [], f"store_trigger_mismatch:{store}!={_expected_store}")
 
     section = context.get("section", "")
     neighbors = context.get("neighbors", [])

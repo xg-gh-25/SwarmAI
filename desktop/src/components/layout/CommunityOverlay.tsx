@@ -337,8 +337,15 @@ function SourcesTab() {
         await fn();
         setConfirmDelete((c) => (c === id ? null : c)); // clear armed-delete only on SUCCESS
         reload();
-      } catch {
-        setActionErr(`Couldn't update "${id}". Try again.`);
+      } catch (e) {
+        // Surface the backend's real reason (FastAPI 422/409 `detail`) instead of a
+        // generic "Try again" — a validation failure (e.g. "must be an https:// URL",
+        // "already exists") is ACTIONABLE, and swallowing it makes the write look flaky.
+        // Axios puts the body on error.response.data.detail; fall back only if absent.
+        const detail = (e as { response?: { data?: { detail?: unknown } } })
+          ?.response?.data?.detail;
+        const reason = typeof detail === 'string' && detail.trim() ? detail : null;
+        setActionErr(reason ?? `Couldn't update "${id}". Try again.`);
         // leave confirmDelete as-is on failure — the row keeps its state, user can retry
       } finally {
         setBusy(null);

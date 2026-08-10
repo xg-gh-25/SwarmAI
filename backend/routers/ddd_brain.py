@@ -254,6 +254,48 @@ def _git_last_commit_iso(project_dir: Path) -> Optional[str]:
     return out or None
 
 
+def _batch_last_commit_iso(project_dirs: list[Path]) -> Optional[dict[str, str]]:
+    """ONE `git log --name-only` walk over Projects/ → {project dir NAME: ISO time of the
+    most-recent commit touching that subtree}. Replaces N per-project `git log` forks in
+    the gallery (list_brains ran _git_last_commit_iso once PER project — the half that the
+    dirty-status batching left un-batched). Because commits are newest-first, the FIRST
+    time a project name appears is its last-commit time, so we keep only the first sighting.
+
+    Returns None (NOT an empty dict) on .git-absent / non-zero / timeout / OSError, so the
+    caller can tell "batch ran, no commit for this project" (→ authoritative None, no
+    fallback) from "batch could not run" (→ fall back to the per-project fork). Scoped to
+    Projects/ and bounded (-n cap) so a huge history can't stall the gallery. A project not
+    seen in the capped window falls back to its own _git_last_commit_iso at the call site."""
+    ws = _workspace_root()
+    if not (ws / ".git").exists():
+        return None
+    names = {d.name for d in project_dirs}
+    try:
+        result = subprocess.run(
+            # %x00<ISO> record marker per commit, then the changed paths (newest-first).
+            ["git", "log", "-n", "2000", "--format=%x00%cI", "--name-only", "--", "Projects"],
+            cwd=str(ws), capture_output=True, text=True, timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+
+    last: dict[str, str] = {}
+    cur_iso: Optional[str] = None
+    for line in result.stdout.split("\n"):
+        if line.startswith("\0"):
+            cur_iso = line[1:].strip() or None
+            continue
+        if not line or cur_iso is None:
+            continue
+        parts = line.split("/")
+        if len(parts) >= 2 and parts[0] == "Projects" and parts[1] in names:
+            # newest-first: only record the FIRST (= most recent) sighting per project.
+            last.setdefault(parts[1], cur_iso)
+    return last
+
+
 def _file_git_status(project_dir: Path, file_rel: str) -> str:
     """Git status of a single project-relative file: clean|modified|untracked|…"""
     ws = _workspace_root()
@@ -578,7 +620,9 @@ def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
 
 
 def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinking: int,
-                       dirty_override: Optional[bool] = None) -> dict:
+                       dirty_override: Optional[bool] = None,
+                       last_commit_override: Optional[str] = None,
+                       last_commit_batched: bool = False) -> dict:
     """The CHEAP health fields present at EVERY density (gallery + detail).
 
     `sinking` is passed in (computed once by build_brain_state via
@@ -592,13 +636,23 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
     passes the per-project bool here, instead of this helper forking `git status` once
     PER project (N forks → 1). None (the detail/single-brain path) → self-fork via
     _git_status_dirty, unchanged.
+
+    `last_commit_override` + `last_commit_batched` (run: git-fork batching, 2nd half):
+    the gallery ALSO computes last-commit-time for ALL projects in ONE `git log` walk
+    (_batch_last_commit_iso) — the fork this helper used to do PER project via
+    _git_last_commit_iso. `last_commit_batched=True` means the batch RAN, so the
+    override is authoritative even when None (project not in the capped window → truly
+    no recent commit → don't re-fork). `last_commit_batched=False` (detail/single path)
+    → self-fork, unchanged.
     """
     uncommitted = dirty_override if dirty_override is not None else _git_status_dirty(project_dir)
+    last_iso = (last_commit_override if last_commit_batched
+                else _git_last_commit_iso(project_dir))
     return {
         "sinking": sinking,
         "pending": pending,
         "uncommitted": uncommitted,
-        "lastChangeRelative": _relative_time(_git_last_commit_iso(project_dir)),
+        "lastChangeRelative": _relative_time(last_iso),
     }
 
 
@@ -606,6 +660,8 @@ def build_brain_state(
     project_dir: Path, *, with_noise: bool, pending_override: Optional[int] = None,
     parsed: Optional[dict[str, list[EntryMetadata]]] = None,
     dirty_override: Optional[bool] = None,
+    last_commit_override: Optional[str] = None,
+    last_commit_batched: bool = False,
 ) -> dict:
     """THE single source of a brain's state (Cycle-1 unify — no fork).
 
@@ -637,7 +693,9 @@ def build_brain_state(
     # here so stats + metrics reuse them (None → self-parse, gallery unchanged).
     stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
     health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"],
-                                dirty_override=dirty_override)
+                                dirty_override=dirty_override,
+                                last_commit_override=last_commit_override,
+                                last_commit_batched=last_commit_batched)
     if with_noise:
         # Thread the already-computed `pending` into the detail metrics so
         # escalationPending reuses it instead of a SECOND _pending_count() scan
@@ -877,16 +935,22 @@ def _read_kind(project_dir: Path) -> str:
 
 
 def _brain_summary(project_dir: Path, pending_override: Optional[int] = None,
-                   dirty_override: Optional[bool] = None) -> dict:
+                   dirty_override: Optional[bool] = None,
+                   last_commit_override: Optional[str] = None,
+                   last_commit_batched: bool = False) -> dict:
     """Gallery projection — delegates to the single builder (no fork). Cheap:
     with_noise=False never calls compute_reclaimable_noise. `pending_override` is
     the pre-computed per-brain Need-You count from the gallery's single collect(ws)
     aggregate (see list_brains) — avoids a per-project full-workspace attention scan.
     `dirty_override` is the pre-computed uncommitted bool from the gallery's single
-    whole-repo git status (_batch_dirty_project_dirs) — avoids a per-project git fork."""
+    whole-repo git status (_batch_dirty_project_dirs) — avoids a per-project git fork.
+    `last_commit_override`/`last_commit_batched` do the same for last-commit time via the
+    gallery's single _batch_last_commit_iso `git log` walk (the 2nd per-project fork)."""
     return build_brain_state(
         project_dir, with_noise=False, pending_override=pending_override,
         dirty_override=dirty_override,
+        last_commit_override=last_commit_override,
+        last_commit_batched=last_commit_batched,
     )
 
 
@@ -1047,6 +1111,10 @@ async def list_brains() -> dict:
     # (subprocess is blocking). Fail-soft: an empty set means every project falls back
     # to its own _git_status_dirty fork at the call site (identity-preserving).
     dirty_names = await asyncio.to_thread(_batch_dirty_project_dirs, dirs)
+    # Last-commit time for ALL projects in ONE `git log` walk (the 2nd per-project fork
+    # the dirty-batching left behind). Same fail-soft contract: None → batch couldn't run
+    # → per-project fallback; a dict → authoritative (a missing key = no recent commit).
+    last_commit_map = await asyncio.to_thread(_batch_last_commit_iso, dirs)
 
     def _dirty_for(name: str) -> Optional[bool]:
         # None → batch couldn't run → _brain_summary falls back to a per-project fork.
@@ -1056,7 +1124,9 @@ async def list_brains() -> dict:
     results = await asyncio.gather(
         *(
             asyncio.to_thread(_brain_summary, d, pending_by_brain.get(d.name, 0),
-                              _dirty_for(d.name))
+                              _dirty_for(d.name),
+                              None if last_commit_map is None else last_commit_map.get(d.name),
+                              last_commit_map is not None)
             for d in dirs
         ),
         return_exceptions=True,

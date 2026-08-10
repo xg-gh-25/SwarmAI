@@ -204,6 +204,30 @@ class TestDispatcherNoiseDedupConfident:
         assert v.verdict == "review"
         assert "non_dispatcher_trigger" in v.reason
 
+    def test_store_trigger_mismatch_fails_closed_to_review(self):
+        # The `store` param used to be accepted but NEVER read: a caller that wired
+        # store="MEMORY" onto trigger="evolution_distill" (or vice-versa) would silently
+        # gate the write under the wrong store's intent. Now the store↔trigger pair MUST
+        # agree (memory_* → MEMORY, evolution_* → EVOLUTION) → fail-closed to review.
+        from core.ingestion_gate import ingestion_gate
+        v = ingestion_gate("a real lesson worth keeping here", store="MEMORY",
+                           trigger="evolution_distill", context={"section": "x"})
+        assert v.verdict == "review"
+        assert "store_trigger_mismatch" in v.reason
+        # and the reverse mis-wire
+        v2 = ingestion_gate("a real lesson worth keeping here", store="EVOLUTION",
+                            trigger="memory_distill", context={"section": "x"})
+        assert v2.verdict == "review"
+        assert "store_trigger_mismatch" in v2.reason
+
+    def test_matching_store_trigger_passes_the_guard(self):
+        # The guard must NOT over-reach: a correctly-wired pair proceeds past it (the
+        # verdict then depends on the tiers, but it must NOT be a store_trigger_mismatch).
+        from core.ingestion_gate import ingestion_gate
+        v = ingestion_gate("a real lesson worth keeping here", store="MEMORY",
+                           trigger="memory_distill", context={"section": "x"})
+        assert "store_trigger_mismatch" not in v.reason
+
     def test_ddd_value_floor_applied_via_admission_band(self):
         # The DDD value-floor (short fragment → discard) lives in admission_band now,
         # not the dispatcher. Verify the tier PRIMITIVE still works (ddd_value_floor).

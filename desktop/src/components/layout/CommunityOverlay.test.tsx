@@ -308,6 +308,25 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fireEvent.click(await screen.findByTestId('source-toggle'));
     await waitFor(() => expect(screen.getByText(/Couldn't update/i)).toBeTruthy());
   });
+
+  it('surfaces the backend 422 detail verbatim (not a generic "Try again")', async () => {
+    // A validation failure (FastAPI 422 detail) is ACTIONABLE — the UI must show it,
+    // not swallow it into the generic fallback. Axios puts the body on
+    // error.response.data.detail.
+    fetchFeed.mockResolvedValue([]);
+    fetchSources.mockResolvedValue(oneSource);
+    updateSource.mockRejectedValue({
+      response: { data: { detail: 'Invalid url: must be an https:// URL' } },
+    });
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
+    fireEvent.click(await screen.findByTestId('source-toggle'));
+    await waitFor(() =>
+      expect(screen.getByText(/must be an https:\/\/ URL/i)).toBeTruthy(),
+    );
+    // and NOT the generic fallback
+    expect(screen.queryByText(/Try again/i)).toBeNull();
+  });
 });
 
 describe('CommunityOverlay — member editing (B4)', () => {

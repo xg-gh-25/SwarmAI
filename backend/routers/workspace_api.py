@@ -740,9 +740,10 @@ def _is_readonly_context_file(relative_path: str) -> bool:
         # daily_activity_writer._WARNED_SCANNER_IMPORT).
         if not _WARNED_READONLY_CHECK:
             _WARNED_READONLY_CHECK.add(True)
-            logger.warning("readonly-context check failed, defaulting to WRITABLE "
+            logger.warning("readonly-context check failed for %r, defaulting to WRITABLE "
                            "(Req 9.4 permissive default) — 0o444 identity files are "
-                           "writable through the API until this is fixed: %s", exc)
+                           "writable through the API until this is fixed: %s",
+                           relative_path, exc)
         return False
 
 
