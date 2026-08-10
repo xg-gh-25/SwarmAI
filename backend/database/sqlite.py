@@ -1693,7 +1693,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 5 — extend messages TTL from 7 days to 90 days (2026-05-02)
 # 6 — pending-message contract: messages.sent/pending_seq/claimed_at + idx (2026-06-20)
 # 7 — add recall_metrics table (2026-08-09)
-CURRENT_SCHEMA_VERSION = 7
+# 8 — index recall_metrics(timestamp) so the retention prune range-seeks (2026-08-10)
+CURRENT_SCHEMA_VERSION = 8
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -2570,6 +2571,23 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("PRAGMA user_version = 7")
             await conn.commit()
             logger.info("Migration v7: recall_metrics table created")
+
+        if current_version < 8:
+            # Version 8: index recall_metrics(timestamp) for the retention DELETE.
+            # prune_recall_metrics does `DELETE ... WHERE timestamp < ?` (no context
+            # predicate), but the only index was the COMPOSITE (context, timestamp).
+            # SQLite can use a composite index only when its LEFTMOST column (context)
+            # is constrained — a timestamp-only range can't, so prune fell back to a
+            # full-table SCAN (EXPLAIN: SCAN recall_metrics). A leading-timestamp index
+            # lets the range DELETE seek. The composite stays for the by-context window
+            # summary. Cheap: this table is tiny (5-min batch, 30d retention).
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recall_metrics_ts "
+                "ON recall_metrics(timestamp)"
+            )
+            await conn.execute("PRAGMA user_version = 8")
+            await conn.commit()
+            logger.info("Migration v8: idx_recall_metrics_ts (timestamp) for prune range")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

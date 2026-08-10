@@ -182,6 +182,24 @@ class TestFlush:
         assert await recall_metrics.flush_once() == 0
 
     @pytest.mark.asyncio
+    async def test_prune_range_uses_timestamp_index_not_full_scan(self, tmp_path):
+        """The retention DELETE (WHERE timestamp < ?) must SEEK a timestamp index, not
+        SCAN the whole table. The only pre-v8 index was composite (context, timestamp),
+        unusable for a context-less range → full SCAN. v8 adds idx_recall_metrics_ts."""
+        from database.sqlite import SQLiteDatabase, _get_pool
+        db = SQLiteDatabase(str(tmp_path / "d.db"))
+        await db.initialize()
+        async with _get_pool(str(db.db_path)).borrow(readonly=True) as conn:
+            cur = await conn.execute(
+                "EXPLAIN QUERY PLAN DELETE FROM recall_metrics WHERE timestamp < ?",
+                ("2020-01-01T00:00:00",),
+            )
+            plan = " ".join(str(c) for row in await cur.fetchall() for c in row).upper()
+        assert "IDX_RECALL_METRICS_TS" in plan, f"prune not using the ts index: {plan}"
+        assert "SCAN RECALL_METRICS" not in plan or "USING INDEX" in plan, \
+            f"prune still full-scans recall_metrics: {plan}"
+
+    @pytest.mark.asyncio
     async def test_failed_write_requeues_window_not_lost(self, monkeypatch):
         """A DB write that fails must NOT lose the drained window: drain empties the
         ring, so the samples are re-queued for the next flush instead of vanishing."""
