@@ -40,8 +40,13 @@ from .extraction_patterns import (
     DECISION_PATTERNS_BROAD as _DECISION_PATTERNS,
     AGENT_MONOLOGUE as _AGENT_MONOLOGUE,
     NOISE_PATTERNS as _NOISE_PATTERNS,
-    is_noise_entry as _is_noise_entry,
 )
+# C5/C7 (run_0d60e04e): structural-noise SSOT = ingestion_gate.structural_noise (wraps
+# extraction_patterns.is_noise_entry). Matches on all non-empty input; differs only on
+# empty/whitespace (SSOT→True vs is_noise_entry→False) — unreachable here (the call site
+# gates on _DECISION_PATTERNS.search first, so an empty sentence never reaches it).
+# ingestion_gate is a LEAF (no cycle).
+from core.ingestion_gate import structural_noise as _is_noise_entry
 
 # Tool names whose input contains file paths
 _FILE_TOOL_NAMES = {"Write", "Edit", "Read", "Bash"}

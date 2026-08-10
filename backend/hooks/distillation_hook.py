@@ -109,8 +109,15 @@ except Exception as _e:  # pragma: no cover — SSoT import should always succee
 from core.extraction_patterns import (
     DECISION_PATTERNS_STRICT as _DECISION_PATTERNS,
     LESSON_PATTERNS as _LESSON_PATTERNS,
-    is_noise_entry as _is_noise_entry,
 )
+# C5/C7 (run_0d60e04e): the structural-noise SSOT is now ingestion_gate.structural_noise
+# (it wraps extraction_patterns.is_noise_entry). Semantics match on all NON-empty input;
+# they differ ONLY on empty/whitespace (structural_noise("")=True, is_noise_entry("")=False)
+# — unreachable at the 2 call sites here, both guarded by `len(entry) > 15` on a stripped
+# string, so an empty/whitespace entry never reaches the alias. Point it at the SSOT so
+# these decision-extraction sites use the ONE noise gate; is_noise_entry's direct callers
+# collapse to this single leaf (C7 closeout).
+from core.ingestion_gate import structural_noise as _is_noise_entry
 
 # Competence patterns: "now I know how to X" — positive capability acquisition.
 # Distinct from lessons ("next time avoid X") which are corrective/negative.
@@ -561,20 +568,32 @@ class DistillationTriggerHook:
         # the freq-gate is never bypassed (BLOCK-3). One section-keyed dict →
         # one _run_locked_write per populated section.
         if all_lessons:
-            from core.ddd_entry_lifecycle import route_lesson_type
-
+            # C5 (run_0d60e04e): route each lesson through the UNIFIED ingestion_gate
+            # before writing — MEMORY auto-distillation was the survey's #1 rating-5 hole
+            # (fully automated, NO adversarial gate). _admit_memory_lesson runs
+            # noise(structural)→keep_type_holdback→judge and returns (admit, section);
+            # only an admitted lesson (gate=auto AND a routable non-KEEP_TYPE section) is
+            # written. Noise/judge-reject/keep-type-holdback → dropped (stays in its
+            # un-distilled source, not lost). section routing still by route_lesson_type
+            # (inside the helper); freq-gate already ran upstream (store-local,量非质).
             by_section: dict[str, list[str]] = {}
             for enriched in all_lessons:
                 raw = self._raw_lesson_text(enriched)
-                section, etype = route_lesson_type(raw)
-                if section is None:
+                verdict, section = self._admit_memory_lesson(raw)
+                if verdict == "auto":
+                    by_section.setdefault(section, []).append(enriched)
+                elif verdict == "review":
+                    # Held for a human (judge-suspect / keep-type). The DailyActivity file
+                    # is marked distilled=True after this cycle, so a held lesson NOT
+                    # sedimented is lost forever (Gate-2 HIGH). Sink it to a recoverable
+                    # failsafe the way C4a does — sediment up, not a landfill (Principle 1).
+                    self._sediment_held_lesson(memory_path.parent, raw, enriched)
                     logger.info(
-                        "distillation: HOLD-BACK protected lesson (type=%s, "
-                        "keep-class/decay-permanent — not auto-written): %.80s",
-                        etype, raw,
+                        "distillation: lesson HELD for review (judge-suspect/keep-type), "
+                        "sedimented to failsafe: %.80s", raw,
                     )
-                    continue
-                by_section.setdefault(section, []).append(enriched)
+                else:  # "discard" — real noise (structural / judge-noise)
+                    logger.info("distillation: lesson DISCARDED as noise: %.80s", raw)
             for section, entries in by_section.items():
                 self._run_locked_write(memory_path, section, "\n".join(entries))
 
@@ -638,6 +657,65 @@ class DistillationTriggerHook:
             )
 
         return distilled_count
+
+    @staticmethod
+    def _admit_memory_lesson(raw_text: str) -> "tuple[str, str | None]":
+        """C5 (run_0d60e04e): the unified MEMORY-distillation admission decision.
+
+        Routes one lesson through ingestion_gate(store="MEMORY", trigger="memory_distill")
+        — the gate runs noise(structural, NO ≥5-word floor)→keep_type_holdback→judge (the
+        survey's #1 rating-5 hole: MEMORY auto-distillation had NO adversarial gate).
+
+        Returns (verdict, section) where verdict ∈ {"auto","review","discard"}:
+          • "auto"    + a real section — write it (gate=auto AND routable non-KEEP_TYPE).
+          • "review"  + section|None   — held for a human: judge-suspect OR keep-type
+            holdback. NOT auto-written, but MUST be sedimented to a recoverable sink by
+            the caller (else it's lost when the DailyActivity file is marked distilled).
+          • "discard" + None           — real noise (structural / judge-noise): dropped.
+
+        Distinguishing review vs discard matters (Gate-2 HIGH): the file is marked
+        `distilled=True` after the cycle regardless, so a "review" lesson NOT sedimented
+        is silently lost forever (Principle 1: sediment up, not a landfill). section
+        routing stays route_lesson_type's job; keep_type_holdback is the gate's tier.
+        """
+        from core.ingestion_gate import ingestion_gate
+        from core.ddd_entry_lifecycle import route_lesson_type
+
+        section, _etype = route_lesson_type(raw_text)
+        v = ingestion_gate(
+            raw_text, store="MEMORY", trigger="memory_distill",
+            context={"section": section or ""},
+        )
+        if v.verdict == "auto" and section is not None:
+            return ("auto", section)
+        if v.verdict == "discard":
+            return ("discard", None)      # real noise — safe to drop
+        # everything else (review: judge-suspect / keep_type_holdback; or auto-but-
+        # section-None) is HELD — recoverable, not noise.
+        return ("review", section)
+
+    @staticmethod
+    def _sediment_held_lesson(context_dir: "Path", raw: str, enriched: str) -> bool:
+        """Durable sink for a MEMORY lesson the gate HELD for review (judge-suspect /
+        keep-type holdback). The DailyActivity source is marked distilled=True after the
+        cycle, so a held lesson that isn't sedimented is lost forever (Gate-2 HIGH). Append
+        it to a recoverable JSONL (alongside MEMORY.md in .context/) the weekly report /
+        a human can drain. Best-effort — a sink failure must never break distillation."""
+        import json as _json
+        from datetime import datetime, timezone
+        try:
+            context_dir.mkdir(parents=True, exist_ok=True)
+            with (context_dir / "memory-held-lessons.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(_json.dumps({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "raw": raw[:2000],
+                    "enriched": enriched[:2000],
+                }, ensure_ascii=False) + "\n")
+            return True
+        except OSError as exc:
+            logger.error("distillation: held-lesson sink FAILED (%s) — lesson lost: %.80s",
+                         type(exc).__name__, raw)
+            return False
 
     @staticmethod
     def _raw_lesson_text(enriched: str) -> str:
