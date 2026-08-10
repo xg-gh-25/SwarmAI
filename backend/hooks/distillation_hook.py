@@ -554,10 +554,28 @@ class DistillationTriggerHook:
         # "Lessons Learned" names were removed in PRI01; writing to them made
         # _modify_content fall back to an orphan "## Distilled" section that the
         # index, recall, and caps never manage (R3 write-target drift fix).
+        # C5 (run_0d60e04e, E2E-review fix): the DECISIONS path is gated identically to
+        # lessons — it was the sibling rating-5 hole the first C5 pass left ungated. A
+        # distilled decision is a KEEP_TYPE (route_lesson_type → None → decay-permanent),
+        # so it holds→review→sediment (a permanent decision must never silently auto-write
+        # to MEMORY without an adversarial check). Same _admit_memory_lesson gate; held
+        # decisions sediment to the recoverable sink (not lost when the DA is marked done).
         if all_decisions:
-            self._run_locked_write(
-                memory_path, MEMORY_TYPE_TO_SECTION["decision"], "\n".join(all_decisions)
-            )
+            gated_decisions: list[str] = []
+            for enriched in all_decisions:
+                raw = self._raw_lesson_text(enriched)
+                verdict, _section = self._admit_memory_lesson(raw)
+                if verdict == "auto":
+                    gated_decisions.append(enriched)
+                elif verdict == "review":
+                    self._sediment_held_lesson(memory_path.parent, raw, enriched)
+                    logger.info("distillation: DECISION held for review (sedimented): %.80s", raw)
+                else:
+                    logger.info("distillation: DECISION discarded as noise: %.80s", raw)
+            if gated_decisions:
+                self._run_locked_write(
+                    memory_path, MEMORY_TYPE_TO_SECTION["decision"], "\n".join(gated_decisions)
+                )
         # GAP B (run_fdbc0f08): route each surviving lesson to its TRUE type's
         # section instead of hardcoding Guidelines. classify on the RAW text
         # (route_lesson_type) — a lesson that is really a pitfall lands in

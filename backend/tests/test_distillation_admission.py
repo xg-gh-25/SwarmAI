@@ -124,6 +124,16 @@ class TestC6EvolutionGate:
             sink = ctx / "memory-held-lessons.jsonl"
             assert not sink.is_file()
 
+    def test_decisions_path_gated_same_as_lessons(self):
+        """E2E-review fix: the all_decisions → MEMORY path is gated by _admit_memory_lesson
+        (it was the sibling rating-5 hole the first C5 pass left ungated). A distilled
+        decision is a KEEP_TYPE → review → held (not auto-written)."""
+        with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
+            verdict, section = DistillationTriggerHook._admit_memory_lesson(
+                "chose single-writer MessageStore to kill the reconcile race for good")
+        # a genuine decision routes to KEEP_TYPE (section None) → review, never auto
+        assert verdict == "review"
+
     def test_format_hole_closed_at_extraction(self):
         """The format-hole: a bullet-ised **Corrections:** section with a table fragment
         must be filtered by structural_noise at extraction (defense-in-depth)."""
