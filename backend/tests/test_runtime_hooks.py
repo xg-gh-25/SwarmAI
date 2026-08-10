@@ -2087,3 +2087,64 @@ class TestAdversarialIntentClassifier:
         assert _is_adversarial_intent("adversarial-reviewer", "", "") is True
         # Empty everything → not adversarial (fail-safe: no evidence = not adversarial)
         assert _is_adversarial_intent("", "", "") is False
+
+
+class TestAdversarialCompletionMarker:
+    """AC2/AC7/AC8: the SubagentStop audit hook writes a DISTINCT adversarial
+    marker (session_<sid>_adv_<ts>.marker) ONLY when the completing sub-agent's
+    transcript/agent_type shows adversarial intent. Completion-proof (written at
+    SubagentStop, not spawn) + per-agent-correct (reads its OWN transcript)."""
+
+    @pytest.mark.asyncio
+    async def test_adversarial_agent_writes_adv_marker(self, tmp_path, monkeypatch):
+        import core.runtime_hooks as rh
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+        transcript = tmp_path / "sub.jsonl"
+        transcript.write_text(
+            '{"isSidechain": true, "type": "user", "message": {"content": '
+            '"You are an adversarial reviewer. Refute this diff and find bugs."}}\n'
+        )
+        ctx = {"sdk_session_id": "sess-adv"}
+        hook = rh.create_agent_tool_audit_hook(ctx)
+        await hook(
+            {"agent_id": "a-1", "agent_transcript_path": str(transcript), "agent_type": "general-purpose"},
+            None, MagicMock(),
+        )
+        adv = list(tmp_path.glob("session_sess-adv_adv_*.marker"))
+        base = [p for p in tmp_path.glob("session_sess-adv_*.marker") if "_adv_" not in p.name]
+        assert len(adv) == 1, "adversarial completion must write an _adv_ marker"
+        assert json.loads(adv[0].read_text())["adversarial"] is True
+        assert len(base) == 1, "base marker must still be written (validator Check 9b)"
+
+    @pytest.mark.asyncio
+    async def test_explore_agent_writes_no_adv_marker(self, tmp_path, monkeypatch):
+        import core.runtime_hooks as rh
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+        transcript = tmp_path / "sub.jsonl"
+        transcript.write_text(
+            '{"isSidechain": true, "type": "user", "message": {"content": '
+            '"Find where the system prompt is built. Locate the file and report."}}\n'
+        )
+        ctx = {"sdk_session_id": "sess-exp"}
+        hook = rh.create_agent_tool_audit_hook(ctx)
+        await hook(
+            {"agent_id": "a-2", "agent_transcript_path": str(transcript), "agent_type": "Explore"},
+            None, MagicMock(),
+        )
+        adv = list(tmp_path.glob("session_sess-exp_adv_*.marker"))
+        base = [p for p in tmp_path.glob("session_sess-exp_*.marker") if "_adv_" not in p.name]
+        assert len(adv) == 0, "Explore completion must NOT write an _adv_ marker"
+        assert len(base) == 1, "base marker still written"
+
+    @pytest.mark.asyncio
+    async def test_agent_type_adversarial_without_transcript(self, tmp_path, monkeypatch):
+        """agent_type alone (dedicated reviewer type) suffices even if transcript unreadable."""
+        import core.runtime_hooks as rh
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+        ctx = {"sdk_session_id": "sess-t"}
+        hook = rh.create_agent_tool_audit_hook(ctx)
+        await hook(
+            {"agent_id": "a-3", "agent_transcript_path": "/nonexistent.jsonl", "agent_type": "adversarial-reviewer"},
+            None, MagicMock(),
+        )
+        assert len(list(tmp_path.glob("session_sess-t_adv_*.marker"))) == 1

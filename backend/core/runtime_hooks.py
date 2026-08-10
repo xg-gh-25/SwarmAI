@@ -767,6 +767,18 @@ def create_agent_tool_audit_hook(
         if not session_id and not run_id:
             return {}
 
+        # Classify THIS sub-agent's intent (Plan B v4): agent_type is the primary
+        # signal; if inconclusive, read the HEAD of the sub-agent's OWN transcript
+        # (the spawn prompt) as a fallback. Per-agent-correct by construction — this
+        # SubagentStop fires for exactly one sub-agent and reads only its transcript.
+        agent_type = _extract_field(input_data, "agent_type", "")
+        adversarial = _is_adversarial_intent(agent_type, "", "")
+        if not adversarial:
+            transcript_path = _extract_field(input_data, "agent_transcript_path", "")
+            prompt_head = _read_subagent_prompt_head(transcript_path) if transcript_path else ""
+            if prompt_head:
+                adversarial = _is_adversarial_intent(agent_type, "", prompt_head)
+
         try:
             _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
             ts = time.time()
@@ -786,7 +798,9 @@ def create_agent_tool_audit_hook(
                         "session_id": session_id,
                     }))
 
-                # Always write session-level marker as fallback evidence
+                # Always write session-level marker as fallback evidence. UNCHANGED
+                # shape — pipeline_validator Check 9b + _session_has_subagent_evidence
+                # both read this; do not rename/restructure it.
                 session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts)}.marker"
                 session_marker.write_text(json.dumps({
                     "ts": ts,
@@ -795,6 +809,21 @@ def create_agent_tool_audit_hook(
                     "run_id": run_id or "unknown",
                 }))
 
+                # DISTINCT adversarial marker — the commit gate's tightened evidence
+                # (_session_has_adversarial_evidence). Written ONLY on adversarial
+                # completion + only when we have a session to scope it to. The `_adv_`
+                # infix is what the gate matches; a base marker (ts is numeric) can
+                # never contain it, so the two are unambiguous.
+                if adversarial and session_id:
+                    adv_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_adv_{int(ts)}.marker"
+                    adv_marker.write_text(json.dumps({
+                        "ts": ts,
+                        "event": "SubagentStop",
+                        "session_id": session_id,
+                        "adversarial": True,
+                        "agent_type": agent_type or "unknown",
+                    }))
+
             await asyncio.to_thread(_write_markers)
         except Exception:
             logger.warning("Failed to write agent audit marker (session=%s)", session_id)
@@ -802,6 +831,42 @@ def create_agent_tool_audit_hook(
         return {}
 
     return _hook
+
+
+def _read_subagent_prompt_head(transcript_path: str) -> str:
+    """Return the sub-agent's spawn prompt from the HEAD of its transcript (the
+    first sidechain user message), or "" on any error. The spawn prompt reveals
+    adversarial-review intent; unlike the error-capture hook (which reads the
+    TAIL for errors), intent lives at the head. Bounded read, fail-soft."""
+    try:
+        p = Path(transcript_path)
+        if not p.exists():
+            return ""
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            for _ in range(12):  # scan only the first few records
+                line = f.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") != "user":
+                    continue
+                msg = rec.get("message", rec)
+                content = msg.get("content", "") if isinstance(msg, dict) else msg
+                if isinstance(content, list):  # content-block array
+                    content = " ".join(
+                        b.get("text", "") for b in content if isinstance(b, dict)
+                    )
+                if isinstance(content, str) and content.strip():
+                    return content[:2000]
+        return ""
+    except Exception:
+        return ""
 
 
 def create_subagent_capture_hook(
