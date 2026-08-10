@@ -1910,3 +1910,81 @@ class TestPurgeSkipsGitTracked:
             result = purge_garbage_runs(retention_days=7, apply=True)
         assert result["purged"] == 1
         assert not (workspace / "Projects" / "P" / ".artifacts" / "runs" / "run_g").exists()
+
+
+class TestPurgeFailClosed:
+    """run: purge fail-open fix. Two layers used to fail toward DELETION on an
+    unattended destructive sweep; both are now fail-CLOSED (keep, don't delete)."""
+
+    CRASH = "session_crash_auto_detected"
+
+    def _git_ws_with_tracked_garbage(self, tmp_path):
+        import subprocess
+        ws = tmp_path
+        runs = ws / "Projects" / "P" / ".artifacts" / "runs"
+        runs.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
+        _create_run(ws, "P", "run_tracked", status="abandoned", hours_ago=240)
+        f = runs / "run_tracked" / "run.json"
+        d = _read_run(f); d["abandon_reason"] = "crash_zombie"; f.write_text(json.dumps(d))
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "track"], cwd=ws, check=True)
+        return ws, runs
+
+    def test_git_unavailable_in_repo_fails_closed_keeps_tracked(self, tmp_path):
+        """If the git SUBPROCESS errors (missing PATH / timeout / lock) INSIDE a git
+        working tree, a tracked run must be treated as tracked → SKIPPED, not deleted.
+        The old code returned False on any git error → would trash a tracked public run."""
+        import subprocess
+        from scripts.artifact_cli import purge_garbage_runs
+        ws, runs = self._git_ws_with_tracked_garbage(tmp_path)
+        # Simulate git being unavailable at ls-files time (the launchd failure mode).
+        real_run = subprocess.run
+
+        def _fake_run(cmd, *a, **k):
+            if cmd and cmd[0] == "git" and "ls-files" in cmd:
+                raise OSError("git not found")
+            return real_run(cmd, *a, **k)
+
+        with patch("scripts.artifact_cli._get_workspace", return_value=ws), \
+             patch("subprocess.run", side_effect=_fake_run):
+            result = purge_garbage_runs(retention_days=7, apply=True)
+        assert (runs / "run_tracked").exists(), \
+            "git-unavailable INSIDE a repo must fail-closed — tracked run kept, not trashed"
+        assert result["purged"] == 0
+        assert result.get("skipped_tracked", 0) == 1
+
+    def test_undated_garbage_is_kept_not_purged(self, workspace):
+        """Garbage with an unparseable/missing timestamp must be KEPT (fail-closed),
+        not treated as old and purged — a schema drift dropping the ts fields must not
+        silently make every run purge-eligible."""
+        from scripts.artifact_cli import purge_garbage_runs
+        runs = workspace / "Projects" / "P" / ".artifacts" / "runs"
+        _create_run(workspace, "P", "run_undated", status="abandoned", hours_ago=240)
+        f = runs / "run_undated" / "run.json"
+        d = _read_run(f)
+        d["abandon_reason"] = "crash_zombie"
+        # Corrupt/blank all timestamp fields → unparseable
+        d["abandoned_at"] = ""; d["updated_at"] = "not-a-date"; d["created_at"] = None
+        f.write_text(json.dumps(d))
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            result = purge_garbage_runs(retention_days=7, apply=True)
+        assert (runs / "run_undated").exists(), "undated garbage must be kept (fail-closed)"
+        assert result["purged"] == 0
+
+    def test_has_git_dir_detects_repo(self, tmp_path):
+        from scripts.artifact_cli import _has_git_dir
+        (tmp_path / ".git").mkdir()
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        assert _has_git_dir(deep) is True
+        assert _has_git_dir(tmp_path) is True
+
+    def test_has_git_dir_false_for_non_repo(self, tmp_path):
+        from scripts.artifact_cli import _has_git_dir
+        plain = tmp_path / "x" / "y"
+        plain.mkdir(parents=True)
+        # NOTE: relies on tmp_path having no .git ancestor (pytest tmp dirs don't).
+        assert _has_git_dir(plain) is False

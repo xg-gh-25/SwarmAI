@@ -1031,12 +1031,37 @@ def _trash_dir(path: Path) -> None:
     shutil.rmtree(path)
 
 
+def _has_git_dir(repo_root: Path) -> bool:
+    """Filesystem-only (NO subprocess) check for whether repo_root is inside a git
+    working tree: walk up looking for a `.git` dir OR file (worktree/submodule use a
+    `.git` FILE). Deliberately avoids `git`; it is the fail-CLOSED fallback used when
+    the git SUBPROCESS is exactly what failed, so it must not depend on git running."""
+    p = repo_root
+    for _ in range(40):  # bounded walk-up (defensive against a symlink loop)
+        if (p / ".git").exists():
+            return True
+        if p.parent == p:
+            break
+        p = p.parent
+    return False
+
+
 def _is_git_tracked(path: Path, repo_root: Path) -> bool:
-    """True iff `path` is git-TRACKED in the repo at `repo_root`. Fail-SAFE: if git
-    is unavailable / repo_root isn't a repo / the command errors, returns False
-    (treat as untracked) so a non-git workspace still purges normally. The guard's
-    JOB is to STOP a delete of a tracked file (Gate-2 CRITICAL run_0e68e235) — a
-    false 'untracked' in a non-repo can't cause a git mutation (there's no git)."""
+    """True iff `path` MUST be treated as git-TRACKED for delete-safety purposes.
+
+    Fail-CLOSED (run: purge fail-open fix): the guard's JOB is to STOP an unattended
+    delete of a tracked file (Gate-2 CRITICAL run_0e68e235). `_trash_dir` deletes via
+    trash/rmtree — NOT git — so deleting a tracked run's dir mutates the (public) git
+    working tree even when git itself is unavailable. So we must distinguish:
+      • git RAN and said untracked (returncode != 0) → genuinely untracked → False.
+      • git RAN and said tracked (returncode == 0)   → tracked → True.
+      • git could NOT run (OSError/timeout/subprocess error): INDETERMINATE. In a git
+        working tree (`_has_git_dir`) we CANNOT rule out tracked → return True
+        (fail-closed: skip the delete). Only when there is NO `.git` anywhere up the
+        tree is there truly nothing to mutate → return False (non-git ws purges normally).
+    The prior version returned False on ANY error, so a transient git hiccup under
+    launchd (missing PATH / lock / timeout) would let the sweep trash a tracked public
+    run unattended — the exact fail-open this closes."""
     import subprocess
     try:
         rel = path.relative_to(repo_root)
@@ -1049,7 +1074,8 @@ def _is_git_tracked(path: Path, repo_root: Path) -> bool:
         )
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
-        return False
+        # Indeterminate: fail-CLOSED inside a git working tree, open only if truly non-git.
+        return _has_git_dir(repo_root)
 
 
 def purge_garbage_runs(retention_days: float = 30.0, apply: bool = False,
@@ -1127,10 +1153,16 @@ def purge_garbage_runs(retention_days: float = 30.0, apply: bool = False,
                 when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 if when.tzinfo is None:
                     when = when.replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                # Undated garbage: treat as OLD (it is dead residue with no usable
-                # timestamp) — safe to purge, it can never be a fresh diagnosable run.
-                when = cutoff - timedelta(days=1)
+            except (ValueError, TypeError, AttributeError):
+                # Undated / unparseable timestamp: fail-CLOSED — treat as FRESH and
+                # KEEP it (run: purge fail-open fix). The prior code treated undated
+                # garbage as OLD and purged it, which is the unsafe direction for an
+                # unattended destructive sweep: a malformed (not truly absent) ts, or a
+                # schema drift that stops populating these fields, would silently make
+                # EVERY run purge-eligible. A dead-residue dir that genuinely has no
+                # timestamp costs little to keep; deleting a mis-dated run is not
+                # recoverable-by-design. (AttributeError guards ts being a non-str.)
+                continue
             if when >= cutoff:
                 continue  # fresh garbage — keep for now
 
