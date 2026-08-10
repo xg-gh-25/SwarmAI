@@ -116,62 +116,47 @@ class TestWriteProposalDedup:
             assert len(files) == 2
 
 
-# ── Fix 2: _cultivate_proposals skips protected zones (narrow guard) ──────────
-class TestProtectedZoneSkip:
-    def test_is_protected_zone_covers_the_targets(self):
-        """Sanity: the protected zones we skip are the ones apply_to_ddd rejects."""
-        from core.ddd_cultivation import is_protected_zone
-        assert is_protected_zone("TECH.md", "Architecture") is True
-        assert is_protected_zone("PRODUCT.md", "Vision") is True
-        assert is_protected_zone("SELF.md", "anything") is True
-        # non-protected additive sections stay open
-        assert is_protected_zone("TECH.md", "Conventions") is False
-        assert is_protected_zone("IMPROVEMENT.md", "What Worked") is False
-        assert is_protected_zone("PRODUCT.md", "Overview") is False
+# ── AUTONOMY-FIRST (run_86f44f35): protected zones DELETED ────────────────────
+# The former TestProtectedZoneSkip is replaced: there is no protected zone, no
+# pre-drop, no candidates sink. A former-protected-zone lesson now flows to
+# admission_band where the judge decides (pass→auto any doc, non-pass→discard).
+class TestNoProtectedZoneAutonomyFirst:
+    def test_is_protected_zone_symbol_is_gone(self):
+        """The protected-zone API is removed entirely (no import)."""
+        import core.ddd_cultivation as dc
+        assert not hasattr(dc, "is_protected_zone"), "is_protected_zone must be deleted"
+        assert not hasattr(dc, "_PROTECTED_ZONES"), "_PROTECTED_ZONES must be deleted"
+        assert not hasattr(dc, "_predrop_is_protected_untrusted"), "pre-drop must be deleted"
 
-    def test_cultivate_skips_protected_zone_proposal(self):
-        """A protected-zone lesson is SKIPPED (not escalated) — 0 written proposal."""
+    def test_judge_pass_auto_writes_former_protected_zone(self, tmp_path):
+        """A TECH.md/Architecture lesson (was protected) → judge pass → AUTO (no zone bar)."""
+        import unittest.mock as m
+        import core.ddd_cultivation as dc
+        p = dc.CultivationProposal(
+            target_doc="TECH.md", target_section="Architecture",
+            content="The real ACT->SENSE gap was an injection-layer mismatch across modules.",
+            source_run_id="run_x", confidence=0.7)
+        with m.patch.object(dc, "self_adversarial_judge", lambda *a, **k: ("pass", "t")), \
+             m.patch("core.ddd_auto_approval.evaluate_auto_approval") as mq:
+            mq.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+            verdict, _ = dc.admission_band(p, tmp_path)
+        assert verdict == "auto", "former protected zone now auto-writes on judge pass"
+
+    def test_no_candidates_sink_written(self, tmp_path):
+        """_cultivate_proposals no longer writes a protected-zone-candidates sink, and
+        skipped_protected stays 0 (the mechanism is gone)."""
+        import unittest.mock as m
         from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            (project_dir / ".artifacts" / "proposals").mkdir(parents=True)
-            prop = CultivationProposal(
-                target_doc="TECH.md", target_section="Architecture",
-                content="The real ACT->SENSE gap was an injection-layer mismatch across modules.",
-                source_run_id="run_x", confidence=0.7,
-            )
-            res = _cultivate_proposals([prop], project_dir)
-            files = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert len(files) == 0, "protected-zone proposal must not be written"
-            assert res.get("escalated", 0) == 0
-            assert res.get("skipped_protected", 0) >= 1
-            # Gate-2 red-team MED: it must sediment UP to a human-distill sink, not vanish
-            sink = project_dir / ".artifacts" / "protected-zone-candidates.jsonl"
-            assert sink.exists(), "protected-zone lesson must be written to the human-distill sink"
-            line = json.loads(sink.read_text().strip())
-            assert line["target_doc"] == "TECH.md"
-            assert line["target_section"] == "Architecture"
-
-    def test_cultivate_still_escalates_non_protected_unsafe(self):
-        """A NON-protected but not-safe-append target STILL escalates (no over-drop).
-
-        PROJECT.md is not in _PROTECTED_ZONES and not a SAFE_APPEND section →
-        is_safe_append False → must still escalate to the human queue, NOT be skipped.
-        """
-        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal, is_protected_zone
-        assert is_protected_zone("PROJECT.md", "Current Status") is False
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            (project_dir / ".artifacts" / "proposals").mkdir(parents=True)
-            prop = CultivationProposal(
-                target_doc="PROJECT.md", target_section="Current Status",
-                content="A genuinely human-gated project-status change worth escalating.",
-                source_run_id="run_y", confidence=0.7,
-            )
-            res = _cultivate_proposals([prop], project_dir)
-            # not dropped as protected — either escalated or written for human
-            assert res.get("skipped_protected", 0) == 0
+        (tmp_path / ".artifacts" / "proposals").mkdir(parents=True)
+        prop = CultivationProposal(
+            target_doc="SELF.md", target_section="What I Am",
+            content="A silent race drops a bubble when two writes interleave without a client_id.",
+            source_run_id="run_x", confidence=0.7)
+        with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            res = _cultivate_proposals([prop], tmp_path)
+        sink = tmp_path / ".artifacts" / "protected-zone-candidates.jsonl"
+        assert not sink.exists(), "candidates sink must no longer be written"
+        assert res.get("skipped_protected", 0) == 0
 
 
 # ── Fix 3: code_change_feed does not write arch-change proposals ──────────────

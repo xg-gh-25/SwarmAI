@@ -257,17 +257,11 @@ class CultivationProposal:
     # REVIEW proposal is a separate authority). No callers remain.
 
 
-# M2: authoritative zones — auto-cultivation is STRUCTURALLY blocked from these.
-# Only human edits / distillation may write here. (run_123a6530)
-# Intentionally a SUPERSET of ddd_orchestrator._SEMANTIC_SECTIONS (Non-Goals,
-# Vision, Architecture): cultivation also protects PRODUCT/Strategic Priorities
-# and the whole resident SELF.md. Broader-here is safe (more escalation, never
-# less). NOT a mirror — do not assume the two lists are identical.
-_PROTECTED_ZONES: dict[str, set[str] | None] = {
-    "SELF.md": None,  # None = whole doc protected (human/distill only)
-    "PRODUCT.md": {"Vision", "Non-Goals", "Strategic Priorities"},
-    "TECH.md": {"Architecture"},
-}
+# AUTONOMY-FIRST (run_86f44f35, XG directive): _PROTECTED_ZONES + is_protected_zone are
+# DELETED. There is no doc/section auto-cultivation is structurally blocked from — the
+# adversarial judge (admission_band) decides every proposal; a judge-pass writes ANY doc
+# incl SELF/PRODUCT/TECH. (The orchestrator's own _SEMANTIC_SECTIONS on the value-refresh
+# carve-out paths is a SEPARATE mechanism and is intentionally left untouched.)
 
 # M2: instance-log / slip signatures — text that is an EVENT record, not a
 # generalizable lesson. These must never be cultivated into DDD.
@@ -305,14 +299,6 @@ _NARRATION_RE = re.compile(
 )
 
 
-def is_protected_zone(target_doc: str, target_section: str) -> bool:
-    """True if (doc, section) is an authoritative zone auto-cultivation must not touch."""
-    if target_doc not in _PROTECTED_ZONES:
-        return False
-    sections = _PROTECTED_ZONES[target_doc]
-    if sections is None:
-        return True  # whole-doc protection (e.g. SELF.md)
-    return target_section in sections
 
 
 def is_quality_lesson(lesson: str) -> bool:
@@ -1806,56 +1792,37 @@ def admission_band(
     if _noise:
         return ("discard", f"noise:{_nreason}")
 
-    # 1b. PROTECTED-ZONE INVARIANT (UNCONDITIONAL — Gate-2 CRITICAL, run_0d60e04e C3):
-    #     a protected zone (SELF.md / PRODUCT high-sections / TECH Architecture) may be
-    #     auto-entered ONLY by inherited_gate2. This guard is OUTSIDE the trust!="passed"
-    #     block on purpose: a proposal that ALREADY carries passed+self_adversarial on
-    #     ENTRY (re-read from disk with a stamped JSON, a retry, a second call site) must
-    #     STILL be barred — else the judge's stamp, once persisted, would silently grant
-    #     protected-zone authority it never had. inherited_gate2 falls through to the
-    #     normal quality/confidence floor below; everything else → review, no judge.
-    if is_protected_zone(proposal.target_doc, proposal.target_section):
-        if not (proposal.passed_adversarial_gate == "passed"
-                and proposal.trust_source == "inherited_gate2"):
-            return ("review", f"protected_zone_requires_inherited_gate2:{proposal.trust_source}")
-
-    # 2. trust is the gate. Two trust SOURCES are auto-eligible (run_0d60e04e C3):
-    #    (a) inherited_gate2 — the source run cleared pipeline Gate-2. May enter ANY
-    #        zone, protected included.
-    #    (b) self_adversarial — no inherited gate (trust=n/a); the zero-context refute
-    #        judge is run HERE and, if it passes, stamps trust=passed(self_adversarial).
-    #        NON-protected zones ONLY (run_8dea0dd5 R1/R4): a self_adversarial pass has
-    #        NO authority to open SELF.md / PRODUCT high-sections / TECH Architecture —
-    #        those stay inherited_gate2-only. The judge is NOT run for a protected zone
-    #        (it could never grant entry there anyway) → straight to review.
+    # 2. AUTONOMY-FIRST (run_86f44f35, XG directive — OVERRIDES run_8dea0dd5 Gate-2):
+    #    the adversarial judge IS the authority. There is NO protected zone: a judge-pass
+    #    proposal auto-writes ANY doc incl SELF/PRODUCT/TECH (the old inherited-gate2-only
+    #    protected-zone bar rotted those docs by starving them of auto-cultivation). Two
+    #    trust sources are auto-eligible:
+    #      (a) inherited_gate2 — source run cleared pipeline Gate-2. Skips the judge.
+    #      (b) trust=n/a / failed — run the self_adversarial refute judge HERE:
+    #            pass    → stamp self_adversarial, fall through to the quality floor (any doc).
+    #            NON-pass (suspect OR noise) → DISCARD (never review — human queue is 0;
+    #                      the caller archives the discard so it is recoverable).
     if proposal.passed_adversarial_gate != "passed":
-        # (protected-zone case already returned at 1b above — a trust=n/a protected-zone
-        #  proposal never reaches here, so the judge is never run for a protected zone.)
-        # A non-append (retire/rewrite) with no trust is never judged for auto here.
+        # A non-append (retire/rewrite) is destructive+reversible-only-via-archive; it is
+        # never judged for auto here → discard (was review; autonomy-first: no human queue).
         if proposal.change_type != "append":
-            return ("review", "non_append")
-        # Non-protected + trust=n/a → run the self-adversarial refute judge.
-        # FAIL-CLOSED lives inside self_adversarial_judge (error/timeout → "suspect").
-        # neighbors: contradiction-detection only; empty here (a richer neighbor set is
-        # a future enrichment — an empty set only makes the judge STRICTER, never laxer).
+            return ("discard", "non_append")
+        # trust=n/a / failed → the self-adversarial refute judge decides (any doc, no zone).
+        # FAIL-CLOSED lives inside self_adversarial_judge (error/timeout → "suspect" → discard).
         _verdict, _jr = self_adversarial_judge(
             proposal.content or "", proposal.target_section, []
         )
-        if _verdict == "noise":
-            return ("discard", f"judge:noise:{_jr}")
-        if _verdict != "pass":  # "suspect" or any non-pass → review (fail-closed)
-            return ("review", f"judge:{_verdict}")
-        # Judge passed → this proposal is now self_adversarial-trusted. Stamp it so the
-        # applier + pre-drop see a real source (NOT inherited_gate2 → still barred from
-        # protected zones, but we already ruled those out above). Fall through to the
-        # SAME quality/confidence floor inherited_gate2 faces (trust necessary, not
-        # sufficient — run_8dea0dd5 R-"trust 必要非充分").
+        if _verdict != "pass":  # suspect OR noise → discard (recoverable archive), NOT review
+            return ("discard", f"judge:{_verdict}:{_jr}")
+        # Judge passed → self_adversarial-trusted. Same authority as inherited_gate2 now
+        # (no protected zone). Fall through to the SAME quality/confidence floor.
         proposal.passed_adversarial_gate = "passed"
         proposal.trust_source = "self_adversarial"
 
-    # destructive changes (retire/rewrite) are never auto-applied via this band
+    # destructive changes (retire/rewrite) with trust are still not auto-applied here →
+    # discard (autonomy-first: no human review queue; recoverable via archive).
     if proposal.change_type != "append":
-        return ("review", "non_append")
+        return ("discard", "non_append")
 
     # 3. reused quality checks — but WITHOUT the doc-whitelist (that is what trust
     #    replaces). Fail-closed: any gate error → review, never auto.
@@ -1870,21 +1837,25 @@ def admission_band(
         )
         return ("review", "gate_error")
 
-    # HARD blocks that survive the whitelist removal: magnitude + circuit breaker.
-    # (safe_target_doc is DELIBERATELY excluded — trust supersedes the doc whitelist.
+    # HARD quality/safety blocks — AUTONOMY-FIRST (run_86f44f35): these are NOT the judge,
+    # so a block here → DISCARD (recoverable archive), NOT review. There is no human queue;
+    # the judge is the sole admit authority and these floors only gate the auto-WRITE.
+    # (safe_target_doc is DELIBERATELY excluded — the judge supersedes any doc whitelist.
     # maturity/conflict/precision stay SOFT: logged, not blocking, as in the prior gate.)
     if not criteria.get("small_magnitude", True):
-        return ("review", "too_large")
+        return ("discard", "too_large")
     if not criteria.get("circuit_breaker_ok", True):
-        return ("review", "circuit_breaker")
+        return ("discard", "circuit_breaker")
 
-    # 4. confidence floor — PER-CHANNEL calibrated (Component D, AC6): a channel with
-    #    poor precision gets a raised bar, so bad-auto-producing channels self-tighten.
+    # 4. confidence floor — PER-CHANNEL calibrated (Component D, AC6): a channel with poor
+    #    precision gets a raised bar, so bad-auto-producing channels self-tighten. Below the
+    #    floor → discard (was review; autonomy-first has no queue). The judge already passed
+    #    it; the floor is a WRITE-quality gate, and a below-floor entry is dropped (recoverable).
     threshold = _channel_auto_threshold(
         proposal.source_stage, _AUTO_CONFIDENCE_THRESHOLD, project_dir
     )
     if proposal.confidence < threshold:
-        return ("review", f"below_auto_threshold:{proposal.confidence:.2f}<{threshold:.2f}")
+        return ("discard", f"below_auto_threshold:{proposal.confidence:.2f}<{threshold:.2f}")
 
     return ("auto", f"trust_passed:{proposal.trust_source or 'inherited_gate2'}")
 
@@ -2004,6 +1975,32 @@ def backfill_proposals(project_dir: "Path", dry_run: bool = False) -> dict:
         Path(project_dir).name, dry_run, result,
     )
     return result
+
+
+def _archive_discarded_proposal(proposal: "CultivationProposal", project_dir: Path,
+                                reason: str) -> bool:
+    """AUTONOMY-FIRST (run_86f44f35) recoverable archive for a DDD proposal the gate did
+    NOT auto-admit (judge non-pass, below-floor, magnitude/circuit block, or a gate error).
+    NOT a human-review queue — a safety net so a fallible-judge / gate-crash drop is
+    recoverable, never a silent permanent loss (Gate-2 #2/#3). Best-effort; never raises."""
+    try:
+        arch_dir = project_dir / ".artifacts"
+        arch_dir.mkdir(parents=True, exist_ok=True)
+        with (arch_dir / "discarded-proposals.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "reason": reason,
+                "target_doc": proposal.target_doc,
+                "target_section": proposal.target_section,
+                "content": (proposal.content or "")[:2000],
+                "source_run_id": proposal.source_run_id,
+                "source_stage": proposal.source_stage,
+            }, ensure_ascii=False) + "\n")
+        return True
+    except OSError as exc:
+        logger.error("cultivation: discard archive FAILED (%s) — proposal lost: %.80s",
+                     type(exc).__name__, proposal.content or "")
+        return False
 
 
 def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
@@ -2281,25 +2278,6 @@ def read_workspace_cultivation_health(root: Path, window_days: int = 7) -> dict:
     return health
 
 
-def _predrop_is_protected_untrusted(proposal: "CultivationProposal") -> bool:
-    """True if this proposal must be pre-dropped to the human-distill sink because it
-    targets a protected zone WITHOUT inherited_gate2 authority.
-
-    run_8dea0dd5 R2/R4 (the code-verified hole): the pre-drop used to fire on
-    ``passed_adversarial_gate != "passed"`` — but once the self_adversarial judge stamps
-    a proposal ``passed`` (trust_source="self_adversarial"), that condition goes False and
-    the proposal would FALL THROUGH into a protected zone (SELF.md / PRODUCT high-sections
-    / TECH Architecture) with only judge authority. Protected zones are inherited_gate2-ONLY.
-    So the fall-through condition is: passed AND trust_source == "inherited_gate2". Anything
-    else (n/a, failed, or self_adversarial-passed) targeting a protected zone is pre-dropped.
-    """
-    if not is_protected_zone(proposal.target_doc, proposal.target_section):
-        return False
-    inherited = (proposal.passed_adversarial_gate == "passed"
-                 and proposal.trust_source == "inherited_gate2")
-    return not inherited
-
-
 def _cultivate_proposals(
     proposals: List[CultivationProposal], project_dir: Path
 ) -> dict:
@@ -2342,40 +2320,10 @@ def _cultivate_proposals(
     drift_errors: List[str] = []
 
     for proposal in proposals:
-        # Admission root-fix (run_97519f7c) + trust cutover (run_8d5fe9d1): a
-        # protected-zone target (SELF / PRODUCT>Vision,Non-Goals,Strategic / TECH>
-        # Architecture) that is NOT trust=passed is human-distill-only — sediment it
-        # UP to the hand-distill candidates sink (not the review queue: it would be
-        # DEAD-ON-APPROVE). BUT a trust=passed proposal (its run cleared Gate-2) is
-        # now AUTO-eligible into these very zones (Component C, AC11) — it must FALL
-        # THROUGH to admission_band, NOT be pre-dropped here. So this pre-drop fires
-        # ONLY for the un-trusted case.
-        if _predrop_is_protected_untrusted(proposal):
-            # Sediment UP, not to a landfill (Principle 1 + Gate-2 red-team MED): a
-            # protected-zone lesson is human-distill-only, but dropping it to a DEBUG
-            # log is a graveyard — a human never sees the architecture/SELF lessons
-            # they should hand-write. Append it to a durable candidates sink the DDD
-            # weekly report surfaces ("lessons for you to hand-distill into TECH.md>
-            # Architecture / SELF / PRODUCT>Vision"). Best-effort — never break cultivation.
-            try:
-                cand_dir = project_dir / ".artifacts"
-                cand_dir.mkdir(parents=True, exist_ok=True)
-                with (cand_dir / "protected-zone-candidates.jsonl").open("a", encoding="utf-8") as _cf:
-                    _cf.write(json.dumps({
-                        "target_doc": proposal.target_doc,
-                        "target_section": proposal.target_section,
-                        "content": (proposal.content or "")[:500],
-                        "source_run_id": proposal.source_run_id,
-                        "confidence": proposal.confidence,
-                    }, ensure_ascii=False) + "\n")
-            except OSError as _e:
-                logger.warning("cultivation: protected-zone candidate sink write failed: %s", _e)
-            logger.debug(
-                "cultivation: protected-zone lesson → human-distill sink (not escalated): %s § %s",
-                proposal.target_doc, proposal.target_section,
-            )
-            skipped_protected += 1
-            continue
+        # AUTONOMY-FIRST (run_86f44f35): the protected-zone pre-drop + candidates sink are
+        # DELETED. There is no human-distill zone — admission_band's judge decides every
+        # proposal (pass→auto any doc incl SELF/PRODUCT/TECH, non-pass→discard). No
+        # sediment-to-human step remains.
 
         # 宁缺毋滥 — conversation-derived knowledge is NEVER auto-written
         # (capability C, run_e346b8ed). The "settled decision vs chatter?"
@@ -2452,16 +2400,24 @@ def _cultivate_proposals(
         # whole auto/review/discard decision for appends now.
         _verdict, _breason = admission_band(proposal, project_dir)
         if _verdict == "discard":
-            # Noise never reaches the queue OR the doc — silently dropped, logged.
+            # AUTONOMY-FIRST (run_86f44f35): not auto → archive to a RECOVERABLE sink
+            # (Gate-2: a fallible-judge / below-floor drop must be recoverable, not a
+            # silent permanent loss), then drop. No human queue.
+            _archive_discarded_proposal(proposal, project_dir, _breason)
             logger.info(
-                "admission: DISCARD %s § %s (%s): %.80s",
+                "admission: DISCARD %s § %s (%s, archived): %.80s",
                 proposal.target_doc, proposal.target_section, _breason, proposal.content,
             )
             continue
         if _verdict == "review":
-            proposal.status = "escalated"
-            write_proposal(proposal, project_dir)
-            escalated += 1
+            # admission_band only returns "review" on a genuine gate ERROR now (never a
+            # trust/judge outcome). No human queue — but a gate-error entry MUST be
+            # archived (Gate-2 #2: a gate crash was silently losing the entry), then dropped.
+            _archive_discarded_proposal(proposal, project_dir, f"gate_error:{_breason}")
+            logger.warning(
+                "admission: gate-error → archived + dropped (no human queue) %s § %s (%s): %.80s",
+                proposal.target_doc, proposal.target_section, _breason, proposal.content,
+            )
             continue
         if _verdict == "auto":
             status = apply_to_ddd(proposal, project_dir)

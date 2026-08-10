@@ -774,9 +774,10 @@ class TestCultivateFromReflect:
             assert "SMOKE caught 2 runtime crashes" in content
             assert "auto-cultivated" in content
 
-    def test_untrusted_run_escalates_not_auto(self):
-        """The fail-closed floor: a lesson from a run with NO Gate-2 pass (no run.json)
-        → trust=n/a → REVIEW (escalated), never auto-applied. (AC4)"""
+    def test_untrusted_run_judge_suspect_discards_not_auto(self):
+        """AUTONOMY-FIRST (run_86f44f35): a lesson from a run with NO Gate-2 pass → trust=n/a
+        → the judge decides. A judge-suspect → DISCARD (never auto, never a review queue)."""
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_reflect
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -785,22 +786,26 @@ class TestCultivateFromReflect:
             doc.write_text("# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n")
 
             lessons = ["SMOKE caught 2 runtime crashes that unit tests missed — highest ROI check"]
-            result = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", project_dir)
+            with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+                result = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", project_dir)
 
-            assert result["applied"] == 0  # no trust → not auto
-            assert result["escalated"] == 1  # → review queue instead
+            assert result["applied"] == 0  # no trust + judge suspect → not auto
+            assert result["escalated"] == 0  # NO human queue (autonomy-first)
             assert "SMOKE caught 2 runtime crashes" not in doc.read_text()  # not written
+            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json")) \
+                if (project_dir / ".artifacts" / "proposals").is_dir() else []
+            assert proposals == [], "autonomy-first: no review queue"
 
 
 class TestCultivateFromCorrections:
     """Test corrections cultivation entry point (Ch6 — highest priority)."""
 
-    def test_applies_correction_to_ddd_doc(self):
+    def test_correction_judge_pass_auto_applies(self):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_corrections
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
-            # Create both docs since classifier routes by keyword heuristic
             (project_dir / "IMPROVEMENT.md").write_text(
                 "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
             )
@@ -811,20 +816,18 @@ class TestCultivateFromCorrections:
             corrections = [
                 "Bug: daemon subprocess PATH was not expanded — must use Path.home() instead of os.path.expandvars",
             ]
-            result = cultivate_from_corrections(
-                corrections, "session_abc123", "SwarmAI", project_dir
-            )
+            # AUTONOMY-FIRST (run_86f44f35): session-sourced (trust=n/a) → the judge decides.
+            # A judge-PASS now AUTO-applies (no keep-type holdback, no human queue).
+            with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("pass", "t")), \
+                 m.patch("core.ddd_auto_approval.evaluate_auto_approval") as mq:
+                mq.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+                result = cultivate_from_corrections(corrections, "session_abc123", "SwarmAI", project_dir)
 
-            # Trust cutover (run_8d5fe9d1): corrections are SESSION-sourced (session_abc123,
-            # not a run_ id) → trust=n/a → they ESCALATE to review, not auto-apply. A
-            # correction is a raw signal, not a Gate-2-vetted lesson. (AC4 fail-closed floor)
-            assert result["applied"] == 0
-            assert result["escalated"] >= 1
-            # It was classified + queued for review (a proposal file exists), not silently dropped.
-            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert proposals, "correction should be escalated to the review queue"
+            assert result["applied"] >= 1, "judge-pass correction auto-applies"
+            assert result["escalated"] == 0, "autonomy-first: no review queue"
 
-    def test_sets_source_stage_to_correction(self):
+    def test_correction_judge_suspect_discards_no_queue(self):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_corrections
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -839,19 +842,15 @@ class TestCultivateFromCorrections:
             corrections = [
                 "Bug: lsof hangs on macOS sandbox — always use nc -z instead for port checks",
             ]
-            result = cultivate_from_corrections(
-                corrections, "session_xyz789", "SwarmAI", project_dir
-            )
+            with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+                result = cultivate_from_corrections(corrections, "session_xyz789", "SwarmAI", project_dir)
 
-            # Trust cutover (run_8d5fe9d1): session-sourced → escalated to review. The
-            # source_stage attribution now lives on the ESCALATED PROPOSAL (not a
-            # changelog 'applied' entry, since nothing auto-applied).
-            assert result["escalated"] >= 1
-            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert proposals, "correction should be escalated to the review queue"
-            pdata = json.loads(proposals[0].read_text())
-            assert pdata["source_run_id"] == "session_xyz789"
-            assert pdata["source_stage"] == "correction"
+            # judge-suspect → discard, never a queue (autonomy-first)
+            assert result["applied"] == 0
+            assert result["escalated"] == 0
+            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json")) \
+                if (project_dir / ".artifacts" / "proposals").is_dir() else []
+            assert proposals == [], "autonomy-first: no review queue"
 
     def test_empty_corrections_returns_zero(self):
         from core.ddd_cultivation import cultivate_from_corrections
@@ -867,7 +866,8 @@ class TestCultivateFromCorrections:
 class TestCultivateFromDecisions:
     """Test decisions cultivation entry point (Ch5)."""
 
-    def test_applies_convention_decision_to_tech(self):
+    def test_convention_decision_judge_pass_auto_applies(self):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_decisions
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -878,18 +878,18 @@ class TestCultivateFromDecisions:
             decisions = [
                 "Standing rule: always prefer atomic writes with tmp+rename pattern to prevent corruption",
             ]
-            result = cultivate_from_decisions(
-                decisions, "session_dec001", "SwarmAI", project_dir
-            )
+            # AUTONOMY-FIRST (run_86f44f35): session-sourced decision (trust=n/a) → judge decides.
+            # judge-PASS → auto-applies (no keep-type holdback, no queue).
+            with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("pass", "t")), \
+                 m.patch("core.ddd_auto_approval.evaluate_auto_approval") as mq:
+                mq.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+                result = cultivate_from_decisions(decisions, "session_dec001", "SwarmAI", project_dir)
 
-            # Trust cutover (run_8d5fe9d1): session-sourced decision → trust=n/a →
-            # escalated to review, not auto-applied into TECH.md.
-            assert result["applied"] == 0
-            assert result["escalated"] >= 1
-            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert proposals and "atomic writes" in proposals[0].read_text()
+            assert result["applied"] >= 1, "judge-pass decision auto-applies"
+            assert result["escalated"] == 0, "autonomy-first: no review queue"
 
-    def test_sets_source_stage_to_decision(self):
+    def test_decision_judge_suspect_discards_no_queue(self):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_decisions
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -900,17 +900,11 @@ class TestCultivateFromDecisions:
             decisions = [
                 "Convention: never use lsof in daemon scripts — prefer nc -z for port checking",
             ]
-            result = cultivate_from_decisions(
-                decisions, "session_dec002", "SwarmAI", project_dir
-            )
+            with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+                result = cultivate_from_decisions(decisions, "session_dec002", "SwarmAI", project_dir)
 
-            # Trust cutover (run_8d5fe9d1): source attribution now on the escalated proposal.
-            assert result["escalated"] >= 1
-            proposals = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert proposals, "decision should be escalated to the review queue"
-            pdata = json.loads(proposals[0].read_text())
-            assert pdata["source_run_id"] == "session_dec002"
-            assert pdata["source_stage"] == "decision"
+            assert result["applied"] == 0
+            assert result["escalated"] == 0, "autonomy-first: no review queue"
 
     def test_empty_decisions_returns_zero(self):
         from core.ddd_cultivation import cultivate_from_decisions
@@ -923,7 +917,11 @@ class TestCultivateFromDecisions:
             assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "skipped_protected": 0, "drift_errors": []}
 
     def test_real_corrections_without_keywords_still_classify(self):
-        """PE-1: Real production corrections lack keywords but should still classify."""
+        """PE-1: Real production corrections lack keywords but should still classify (not be
+        rejected as noise). AUTONOMY-FIRST: they route to the judge → a judge-pass AUTO-applies
+        (no queue). The point stands: they must reach the gate, not be dropped as unroutable."""
+        import unittest.mock as m
+        import core.ddd_cultivation as dc
         from core.ddd_cultivation import cultivate_from_corrections
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -941,13 +939,22 @@ class TestCultivateFromDecisions:
                 "Agent opened DMG but didn't launch app — user had to ask again explicitly to open/run it",
                 "Agent pushed only swarm-brain when user said push to github — user had to follow up asking about SwarmAI codebase specifically",
             ]
-            result = cultivate_from_corrections(
-                corrections, "session_pe1_test", "SwarmAI", project_dir
-            )
+            # Bump confidence above the auto floor so a judge-pass genuinely AUTO-applies
+            # (the DEFAULT correction confidence is 0.40 < 0.70 → would discard on the floor;
+            # this test's point is that no-keyword corrections still CLASSIFY + reach the gate).
+            _orig = dc.CultivationProposal.__init__
+            def _hi(self, *a, **k):
+                k["confidence"] = 0.95
+                _orig(self, *a, **k)
+            with m.patch.object(dc, "self_adversarial_judge", lambda *a, **k: ("pass", "t")), \
+                 m.patch.object(dc.CultivationProposal, "__init__", _hi), \
+                 m.patch("core.ddd_auto_approval.evaluate_auto_approval") as mq:
+                mq.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+                result = cultivate_from_corrections(corrections, "session_pe1_test", "SwarmAI", project_dir)
 
-            # ALL real corrections must classify (not be rejected)
-            total = result["applied"] + result["escalated"]
-            assert total >= 2, f"Expected ≥2 corrections classified, got {total} (applied={result['applied']}, escalated={result['escalated']}, rejected={result['rejected']})"
+            # they classify + reach the gate → judge-pass + above-floor → auto-applies (not dropped pre-gate)
+            assert result["applied"] >= 2, \
+                f"Expected ≥2 classified+applied, got applied={result['applied']} rejected={result['rejected']}"
 
     def test_noise_decisions_rejected(self):
         from core.ddd_cultivation import cultivate_from_decisions
@@ -1068,16 +1075,13 @@ class TestLessonQualityGate:
         # And a non-CJK char matches neither.
         assert not cult_re.search("A") and not loader_re.search("A")
 
-    def test_authoritative_zone_blocks_autocultivation(self):
-        from core.ddd_cultivation import is_protected_zone
-        # NEGATIVE: auto-cultivation must be structurally blocked from these
-        assert is_protected_zone("TECH.md", "Architecture") is True
-        assert is_protected_zone("PRODUCT.md", "Vision") is True
-        assert is_protected_zone("PRODUCT.md", "Non-Goals") is True
-        # SELF.md is fully protected (human/distill only)
-        assert is_protected_zone("SELF.md", "anything") is True
-        # normal append target is NOT protected
-        assert is_protected_zone("IMPROVEMENT.md", "What Failed") is False
+    def test_no_authoritative_zone_autonomy_first(self):
+        # AUTONOMY-FIRST (run_86f44f35): there is NO protected zone. The is_protected_zone
+        # API is deleted — the judge decides every doc incl SELF/PRODUCT/TECH. This is the
+        # explicit override of the old "authoritative zones block auto-cultivation" rule.
+        import core.ddd_cultivation as dc
+        assert not hasattr(dc, "is_protected_zone")
+        assert not hasattr(dc, "_PROTECTED_ZONES")
 
     def test_classify_lesson_rejects_instance_log(self):
         # Integration: the choke point _classify_lesson rejects an instance-log
@@ -1096,17 +1100,18 @@ class TestLessonQualityGate:
         assert is_quality_lesson(
             "The returncode handling pattern is brittle and should be refactored") is True
 
-    def test_architecture_zone_not_auto_without_trust_integration(self):
-        # Trust cutover (run_8d5fe9d1): TECH.md/Architecture is no longer blocked by a
-        # doc-whitelist — it is blocked by TRUST. An un-trusted (trust=n/a) proposal to
-        # Architecture → review, never auto. (A trust=passed one WOULD auto — AC11,
-        # tested in test_admission_band.py.)
+    def test_architecture_zone_judged_not_auto_without_trust_integration(self):
+        # AUTONOMY-FIRST (run_86f44f35): TECH.md/Architecture is no longer a protected zone.
+        # An un-trusted (trust=n/a) proposal → the judge decides. A judge-suspect → discard
+        # (never review — no human queue). A judge-pass WOULD auto (tested in test_admission_band.py).
+        import unittest.mock as m
         from core.ddd_cultivation import admission_band, CultivationProposal
         p = CultivationProposal(
             target_doc="TECH.md", target_section="Architecture",
             content="A genuinely new architectural lesson worth keeping in the brain",
             source_run_id="r", confidence=0.9, passed_adversarial_gate="n/a")
-        assert admission_band(p, None)[0] == "review"
+        with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            assert admission_band(p, None)[0] == "discard"
 
 
 class TestEvidenceDrivenRetire:
@@ -1224,8 +1229,9 @@ class TestEvidenceDrivenRetire:
 
     # ── AC5: retire proposal is NEVER auto-applied by the band + apply_to_ddd refuses it ─
     def test_retire_proposal_never_auto_via_band(self):
-        # Trust cutover (run_8d5fe9d1): even a trust=passed retire is never "auto" via
-        # admission_band (non-append → review; its real path is apply_retire_proposal).
+        # Even a trust=passed retire is never "auto" via admission_band (non-append → not
+        # this band's job; its real path is apply_retire_proposal). AUTONOMY-FIRST
+        # (run_86f44f35): the non-append verdict is now "discard" (no human review queue).
         from core.ddd_cultivation import admission_band, CultivationProposal
         p = CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
@@ -1233,7 +1239,7 @@ class TestEvidenceDrivenRetire:
             source_run_id="r", confidence=0.9, passed_adversarial_gate="passed",
             change_type="retire", target_title="Some Entry",
         )
-        assert admission_band(p, None)[0] == "review"
+        assert admission_band(p, None)[0] == "discard"
 
     def test_apply_to_ddd_hard_refuses_retire_by_change_type(self):
         """HIGH-3 defense-in-depth (run_8d5fe9d1: is_safe_append removed): apply_to_ddd's

@@ -1,13 +1,20 @@
-"""Knowledge Admission — Component C: the decision band (trust is the SOLE authority).
+"""Knowledge Admission — Component C: the decision band (AUTONOMY-FIRST, run_86f44f35).
 
 admission_band(proposal, project_dir) -> "auto" | "review" | "discard".
-Trust REPLACES the hardcoded doc-whitelist: a trust=passed proposal that also
-passes the reused quality checks may AUTO-apply into ANY doc (incl SELF.md,
-PROJECT.md, PRODUCT.md/Vision). trust!=passed → review. is_noise → discard.
-Any gate error → review (fail-closed). (Design AC4/AC11.)
+
+XG directive (overrides run_8dea0dd5): the adversarial judge IS the authority. There is
+NO protected zone — a judge-pass proposal auto-writes ANY doc incl SELF/PRODUCT/TECH.
+  • inherited_gate2 (trust=passed)         → auto (any doc), subject to quality floor.
+  • trust=n/a / failed  → run the self_adversarial judge:
+        judge pass    → auto (any doc), subject to quality floor.
+        judge non-pass (suspect OR noise)  → DISCARD (recoverable archive), NEVER review.
+  • is_noise (structural) → discard before any work.
+Human-review queue → 0: admission_band no longer returns "review" for a trust/judge
+outcome (only a genuine gate ERROR fails closed to review — DEC19).
 """
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 _BACKEND = Path(__file__).resolve().parents[1]
 if str(_BACKEND) not in sys.path:
@@ -26,51 +33,68 @@ def _prop(**kw):
     return CultivationProposal(**base)
 
 
-class TestAdmissionBand:
+def _judge(verdict):
+    import core.ddd_cultivation as dc
+    return patch.object(dc, "self_adversarial_judge", lambda *a, **k: (verdict, "t"))
+
+
+def _clean_quality():
+    # stub the reused quality gate (magnitude/circuit) clean so the band reaches its verdict
+    import unittest.mock as m
+    return m.patch("core.ddd_auto_approval.evaluate_auto_approval")
+
+
+class TestAdmissionBandAutonomyFirst:
     def _fn(self):
         from core.ddd_cultivation import admission_band
         return admission_band
 
     def test_noise_is_discard(self):
         band = self._fn()
-        p = _prop(content="exit_code: 0")
-        assert band(p, None)[0] == "discard"
+        assert band(_prop(content="exit_code: 0"), None)[0] == "discard"
 
-    def test_trust_passed_into_formerly_locked_zone_is_auto(self, tmp_path):
-        # AC11: trust=passed → AUTO even into TECH.md/Architecture (was _PROTECTED_ZONES).
-        # (quality checks stubbed to clean via a mature section + small content)
+    def test_inherited_gate2_auto_into_any_doc(self, tmp_path):
         band = self._fn()
-        p = _prop(passed_adversarial_gate="passed", target_doc="TECH.md",
-                  target_section="Architecture")
-        verdict, _reason = band(p, tmp_path)
-        assert verdict == "auto", f"trust=passed should auto, got {verdict}"
+        with _clean_quality() as mq:
+            mq.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+            for doc, sec in [("TECH.md", "Architecture"), ("SELF.md", "What I Am"),
+                             ("PRODUCT.md", "Vision")]:
+                p = _prop(passed_adversarial_gate="passed", trust_source="inherited_gate2",
+                          target_doc=doc, target_section=sec)
+                assert band(p, tmp_path)[0] == "auto", f"{doc}>{sec} inherited_gate2 must auto"
 
-    def test_trust_passed_into_self_md_is_auto(self, tmp_path):
-        # AC11: NO doc carved out — SELF.md is auto-eligible at trust=passed.
+    def test_judge_pass_auto_into_formerly_protected_doc(self, tmp_path):
+        # THE directive: judge-pass (trust=n/a) auto-writes SELF/PRODUCT/TECH — NO protected zone.
         band = self._fn()
-        p = _prop(passed_adversarial_gate="passed", target_doc="SELF.md",
-                  target_section="What I Am")
-        verdict, _ = band(p, tmp_path)
-        assert verdict == "auto"
+        with _judge("pass"), _clean_quality() as mq:
+            mq.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+            for doc, sec in [("SELF.md", "What I Am"), ("PRODUCT.md", "Vision"),
+                             ("TECH.md", "Architecture")]:
+                p = _prop(passed_adversarial_gate="n/a", target_doc=doc, target_section=sec)
+                assert band(p, tmp_path)[0] == "auto", f"judge-pass must auto into {doc}>{sec}"
 
-    def test_trust_na_is_review_not_auto(self, tmp_path):
-        # the fail-closed floor: un-vetted source → review, never auto.
+    def test_judge_suspect_is_DISCARD_not_review(self, tmp_path):
         band = self._fn()
-        p = _prop(passed_adversarial_gate="n/a", target_doc="TECH.md",
-                  target_section="Architecture")
-        assert band(p, tmp_path)[0] == "review"
+        with _judge("suspect"):
+            assert band(_prop(passed_adversarial_gate="n/a"), tmp_path)[0] == "discard"
 
-    def test_trust_failed_is_review(self, tmp_path):
+    def test_judge_noise_is_discard(self, tmp_path):
         band = self._fn()
-        p = _prop(passed_adversarial_gate="failed")
-        assert band(p, tmp_path)[0] == "review"
+        with _judge("noise"):
+            assert band(_prop(passed_adversarial_gate="n/a"), tmp_path)[0] == "discard"
 
-    def test_trust_is_the_gate_not_the_doc(self, tmp_path):
-        # the mutation that proves trust (not doc) decides: same proposal, flip trust.
+    def test_no_review_verdict_for_trust_outcomes(self, tmp_path):
+        # human-review → 0: neither n/a+suspect, n/a+noise, nor failed yields "review".
         band = self._fn()
-        auto_p = _prop(passed_adversarial_gate="passed", target_doc="PROJECT.md",
-                       target_section="Recent Decisions")
-        na_p = _prop(passed_adversarial_gate="n/a", target_doc="PROJECT.md",
-                     target_section="Recent Decisions")
-        assert band(auto_p, tmp_path)[0] == "auto"
-        assert band(na_p, tmp_path)[0] == "review"
+        for gate, jverdict in [("n/a", "suspect"), ("n/a", "noise"), ("failed", "suspect")]:
+            with _judge(jverdict):
+                v = band(_prop(passed_adversarial_gate=gate), tmp_path)[0]
+                assert v != "review", f"{gate}+{jverdict} must not be review (got {v})"
+
+    def test_gate_error_still_fails_closed_to_review(self, tmp_path):
+        # the ONE remaining review path: a genuine quality-gate exception (DEC19 fail-closed).
+        band = self._fn()
+        with _judge("pass"), _clean_quality() as mq:
+            mq.side_effect = RuntimeError("gate boom")
+            v = band(_prop(passed_adversarial_gate="n/a"), tmp_path)[0]
+            assert v == "review", "a gate ERROR still fails closed to review"

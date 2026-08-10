@@ -321,68 +321,6 @@ class TestC3TrustSourceField:
         assert p.trust_source == "none"
 
 
-class TestC3SelfAdversarialTree:
-    """admission_band: trust=n/a now runs the self_adversarial judge (non-protected only)."""
-
-    def _p(self, doc="TECH.md", section="Conventions", gate="n/a", conf=0.9):
-        from core.ddd_cultivation import CultivationProposal
-        return CultivationProposal(target_doc=doc, target_section=section,
-                                   content="Prefer dedicated ThreadPoolExecutor for blocking calls over the default pool.",
-                                   source_run_id="run_x", confidence=conf,
-                                   passed_adversarial_gate=gate)
-
-    def test_protected_zone_trust_na_review_judge_NOT_run(self, monkeypatch):
-        """SELF.md + trust=n/a → review, and the judge must NOT be called (R1 gate)."""
-        import core.ingestion_gate as ig
-        called = {"n": 0}
-        def _spy(*a, **k):
-            called["n"] += 1
-            return ("pass", "judged")
-        monkeypatch.setattr(ig, "self_adversarial_judge", _spy)
-        from core.ddd_cultivation import admission_band
-        verdict, reason = admission_band(self._p(doc="SELF.md", section="Anything"), None)
-        assert verdict == "review"
-        assert called["n"] == 0, "judge must NOT run for a protected-zone trust=n/a proposal"
-
-    def test_nonprotected_trust_na_judge_pass_can_auto(self, monkeypatch):
-        import core.ddd_cultivation as dc
-        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
-        # magnitude/circuit clean + confidence high
-        verdict, reason = admission_band_helper(dc, self._p(gate="n/a", conf=0.95))
-        assert verdict == "auto"
-        assert "self_adversarial" in reason or "self" in reason
-
-    def test_nonprotected_trust_na_judge_suspect_review(self, monkeypatch):
-        import core.ddd_cultivation as dc
-        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("suspect", "dubious"))
-        verdict, reason = dc.admission_band(self._p(gate="n/a"), None)
-        assert verdict == "review"
-
-    def test_nonprotected_trust_na_judge_noise_discard(self, monkeypatch):
-        import core.ddd_cultivation as dc
-        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("noise", "junk"))
-        verdict, reason = dc.admission_band(self._p(gate="n/a"), None)
-        assert verdict == "discard"
-
-    def test_inherited_gate2_still_autos_without_judge(self, monkeypatch):
-        """trust=passed(inherited) → judge NOT run, original path preserved."""
-        import unittest.mock as m
-        import core.ddd_cultivation as dc
-        called = {"n": 0}
-        monkeypatch.setattr(dc, "self_adversarial_judge",
-                            lambda *a, **k: (called.__setitem__("n", called["n"] + 1), ("pass", ""))[1])
-        p = self._p(gate="passed", conf=0.95)
-        p.trust_source = "inherited_gate2"
-        # project_dir=None would fail-close evaluate_auto_approval to review (a real gate
-        # error, not the path under test) — mock the quality gate clean like the auto helper.
-        with m.patch("core.ddd_auto_approval.evaluate_auto_approval") as mock_eval:
-            mock_eval.return_value = type("D", (), {"criteria_met": {
-                "small_magnitude": True, "circuit_breaker_ok": True}})()
-            verdict, reason = dc.admission_band(p, None)
-        assert verdict == "auto"
-        assert called["n"] == 0, "inherited_gate2 must not invoke the judge"
-
-
 def admission_band_helper(dc, proposal):
     """admission_band needs magnitude/circuit clean; evaluate_auto_approval is patched
     to clean in the fixture-less path via monkeypatching inside each test that needs it."""
@@ -392,72 +330,67 @@ def admission_band_helper(dc, proposal):
         return dc.admission_band(proposal, None)
 
 
-class TestC3PreDropHardened:
-    """The protected-zone pre-drop must require inherited_gate2 (not just passed),
-    else a self_adversarial 'passed' stamp reopens the protected-zone hole (run_8dea0dd5 R2)."""
+class TestAutonomyFirstAdmissionBand:
+    """run_86f44f35 (XG directive, OVERRIDES run_8dea0dd5): NO protected zone. The judge
+    is the sole authority — pass → auto ANY doc incl SELF/PRODUCT/TECH; non-pass → discard
+    (never review). Human-review queue = 0."""
 
-    def test_self_adversarial_passed_still_predropped_in_protected_zone(self, tmp_path):
-        from core.ddd_cultivation import _predrop_is_protected_untrusted, CultivationProposal
-        p = CultivationProposal(target_doc="SELF.md", target_section="X",
-                                content="x" * 40, source_run_id="r", confidence=0.9,
-                                passed_adversarial_gate="passed", trust_source="self_adversarial")
-        # self_adversarial passed → still pre-dropped (only inherited_gate2 falls through)
-        assert _predrop_is_protected_untrusted(p) is True
-
-    def test_inherited_gate2_passed_falls_through_predrop(self):
-        from core.ddd_cultivation import _predrop_is_protected_untrusted, CultivationProposal
-        p = CultivationProposal(target_doc="SELF.md", target_section="X",
-                                content="x" * 40, source_run_id="r", confidence=0.9,
-                                passed_adversarial_gate="passed", trust_source="inherited_gate2")
-        assert _predrop_is_protected_untrusted(p) is False
-
-
-class TestC3AdversarialFixes:
-    """Gate-2 CRITICAL fixes: protected-zone auto-entry is inherited_gate2-ONLY,
-    unconditionally — even if a proposal ENTERS with passed+self_adversarial (re-read
-    from disk / retry / second call site)."""
-
-    def _p(self, doc, section, gate, source, conf=0.95):
+    def _p(self, doc="TECH.md", section="Conventions", gate="n/a", conf=0.9, source="none"):
         from core.ddd_cultivation import CultivationProposal
         return CultivationProposal(target_doc=doc, target_section=section,
-                                   content="Prefer dedicated executors for blocking IO over the default pool.",
+                                   content="Prefer dedicated ThreadPoolExecutor for blocking calls over the default pool.",
                                    source_run_id="run_x", confidence=conf,
                                    passed_adversarial_gate=gate, trust_source=source)
 
-    def test_selfadv_passed_ENTRY_still_barred_from_protected_zone(self, monkeypatch):
-        """The CRITICAL: a proposal arriving ALREADY stamped passed+self_adversarial
-        (e.g. re-read from disk) targeting SELF.md must be barred, judge NOT run."""
+    def test_judge_pass_auto_into_former_protected_zone(self, monkeypatch):
+        """SELF.md + trust=n/a + judge pass → AUTO (no protected zone anymore)."""
+        import core.ddd_cultivation as dc
+        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
+        verdict, reason = admission_band_helper(dc, self._p(doc="SELF.md", section="What I Am", conf=0.95))
+        assert verdict == "auto"
+        assert "self_adversarial" in reason
+
+    def test_judge_pass_nonprotected_auto(self, monkeypatch):
+        import core.ddd_cultivation as dc
+        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
+        verdict, reason = admission_band_helper(dc, self._p(gate="n/a", conf=0.95))
+        assert verdict == "auto"
+
+    def test_judge_suspect_is_discard_not_review(self, monkeypatch):
+        import core.ddd_cultivation as dc
+        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("suspect", "dubious"))
+        verdict, reason = dc.admission_band(self._p(gate="n/a"), None)
+        assert verdict == "discard", "suspect → discard (never review — human queue is 0)"
+
+    def test_judge_noise_is_discard(self, monkeypatch):
+        import core.ddd_cultivation as dc
+        monkeypatch.setattr(dc, "self_adversarial_judge", lambda *a, **k: ("noise", "junk"))
+        verdict, reason = dc.admission_band(self._p(gate="n/a"), None)
+        assert verdict == "discard"
+
+    def test_inherited_gate2_autos_without_judge_any_doc(self, monkeypatch):
+        """trust=passed(inherited) → judge NOT run; auto into SELF.md."""
+        import unittest.mock as m
         import core.ddd_cultivation as dc
         called = {"n": 0}
         monkeypatch.setattr(dc, "self_adversarial_judge",
-                            lambda *a, **k: (called.__setitem__("n", called["n"]+1), ("pass",""))[1])
-        p = self._p("SELF.md", "What I Am", gate="passed", source="self_adversarial")
-        verdict, reason = dc.admission_band(p, None)
-        assert verdict == "review"
-        assert "inherited_gate2" in reason
-        assert called["n"] == 0
-
-    def test_inherited_gate2_still_enters_protected_zone(self):
-        """Regression guard for my creation-path fix: a legit inherited_gate2 proposal
-        MUST still be able to auto-enter a protected zone (else I broke the main path)."""
-        import unittest.mock as m
-        import core.ddd_cultivation as dc
-        p = self._p("SELF.md", "What I Am", gate="passed", source="inherited_gate2")
-        with m.patch("core.ddd_auto_approval.evaluate_auto_approval") as me:
-            me.return_value = type("D", (), {"criteria_met": {"small_magnitude": True, "circuit_breaker_ok": True}})()
+                            lambda *a, **k: (called.__setitem__("n", called["n"] + 1), ("pass", ""))[1])
+        p = self._p(doc="SELF.md", section="What I Am", gate="passed", conf=0.95, source="inherited_gate2")
+        with m.patch("core.ddd_auto_approval.evaluate_auto_approval") as mock_eval:
+            mock_eval.return_value = type("D", (), {"criteria_met": {
+                "small_magnitude": True, "circuit_breaker_ok": True}})()
             verdict, reason = dc.admission_band(p, None)
-        assert verdict == "auto", f"inherited_gate2 must enter protected zone, got {verdict}:{reason}"
+        assert verdict == "auto"
+        assert called["n"] == 0, "inherited_gate2 must not invoke the judge"
 
     def test_creation_path_sets_trust_source_for_inherited_pass(self, tmp_path, monkeypatch):
-        """filter_lessons_for_ddd must set trust_source=inherited_gate2 when the source
-        run passed — else the pre-drop wrongly bars every legit gate2 proposal."""
+        """filter_lessons_for_ddd sets trust_source=inherited_gate2 when the source run passed."""
         import core.ddd_cultivation as dc
         monkeypatch.setattr(dc, "stamp_trust_from_run", lambda *a, **k: "passed")
         props = dc.filter_lessons_for_ddd(
             ["Prefer dedicated executors for blocking IO over the default pool."],
             run_id="run_abc", project="SwarmAI", project_dir=tmp_path)
-        assert props, "expected a proposal"
-        assert props[0].passed_adversarial_gate == "passed"
+        assert props and props[0].passed_adversarial_gate == "passed"
         assert props[0].trust_source == "inherited_gate2"
 
     def test_creation_path_na_source_is_none(self, tmp_path, monkeypatch):
@@ -468,15 +401,11 @@ class TestC3AdversarialFixes:
             run_id="run_abc", project="SwarmAI", project_dir=tmp_path)
         assert props and props[0].trust_source == "none"
 
-    def test_predrop_selfadv_passed_protected_still_dropped(self):
-        from core.ddd_cultivation import _predrop_is_protected_untrusted
-        p = self._p("SELF.md", "X", gate="passed", source="self_adversarial")
-        assert _predrop_is_protected_untrusted(p) is True
-
-    def test_predrop_inherited_falls_through(self):
-        from core.ddd_cultivation import _predrop_is_protected_untrusted
-        p = self._p("SELF.md", "X", gate="passed", source="inherited_gate2")
-        assert _predrop_is_protected_untrusted(p) is False
+    def test_protected_zone_api_deleted(self):
+        """The protected-zone mechanism is gone entirely."""
+        import core.ddd_cultivation as dc
+        assert not hasattr(dc, "is_protected_zone")
+        assert not hasattr(dc, "_predrop_is_protected_untrusted")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

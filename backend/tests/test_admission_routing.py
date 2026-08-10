@@ -50,9 +50,10 @@ class TestSourceRouting:
         else:
             assert verdict == "review"  # trusted but low-value → still reviewed
 
-    def test_trust_necessary_not_sufficient(self, tmp_path):
-        # explicit: trust=passed + confidence BELOW floor → review (not auto). Trust
-        # opens the zone; it does not bypass the value floor.
+    def test_confidence_floor_below_is_discard_not_auto(self, tmp_path):
+        # AUTONOMY-FIRST (run_86f44f35): trust=passed + confidence BELOW floor → discard
+        # (was review). The judge/trust admits; the value floor gates the auto-WRITE, and a
+        # below-floor entry is dropped (recoverable), never a human queue.
         from core.ddd_cultivation import CultivationProposal, admission_band
         p = CultivationProposal(
             target_doc="SELF.md", target_section="What I Am",
@@ -60,32 +61,37 @@ class TestSourceRouting:
             source_run_id="run_x", confidence=0.55, passed_adversarial_gate="passed",
             source_stage="reflect",
         )
-        assert admission_band(p, tmp_path)[0] == "review"
+        assert admission_band(p, tmp_path)[0] == "discard"
 
-    def test_reflect_untrusted_reviews(self, tmp_path):
+    def test_reflect_untrusted_judge_suspect_discards(self, tmp_path):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_reflect
-        _improvement_doc(tmp_path)  # no run.json → trust n/a
+        _improvement_doc(tmp_path)  # no run.json → trust n/a → judge decides
         lessons = ["SMOKE catches runtime crashes that unit tests miss — a highest-ROI check to keep."]
-        res = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", tmp_path)
-        assert res["applied"] == 0 and res["escalated"] == 1
+        with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            res = cultivate_from_reflect(lessons, "run_untrusted", "SwarmAI", tmp_path)
+        assert res["applied"] == 0 and res["escalated"] == 0  # autonomy-first: no queue
 
-    def test_decision_session_sourced_reviews(self, tmp_path):
-        # decisions from a session id (not run_) → trust n/a → escalate, never auto
+    def test_decision_session_sourced_judge_suspect_discards(self, tmp_path):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_decisions
         (tmp_path / "TECH.md").write_text(
             "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n")
         decisions = ["Standing rule: prefer atomic tmp+rename writes to prevent corruption of the store."]
-        res = cultivate_from_decisions(decisions, "session_d", "SwarmAI", tmp_path)
-        assert res["applied"] == 0 and res["escalated"] >= 1
+        with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            res = cultivate_from_decisions(decisions, "session_d", "SwarmAI", tmp_path)
+        assert res["applied"] == 0 and res["escalated"] == 0
 
-    def test_correction_session_sourced_reviews(self, tmp_path):
+    def test_correction_session_sourced_judge_suspect_discards(self, tmp_path):
+        import unittest.mock as m
         from core.ddd_cultivation import cultivate_from_corrections
         (tmp_path / "TECH.md").write_text(
             "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n")
         _improvement_doc(tmp_path)
         corrections = ["Bug: daemon PATH not expanded — must use Path.home() not os.path.expandvars in scripts."]
-        res = cultivate_from_corrections(corrections, "session_c", "SwarmAI", tmp_path)
-        assert res["applied"] == 0 and res["escalated"] >= 1
+        with m.patch("core.ddd_cultivation.self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            res = cultivate_from_corrections(corrections, "session_c", "SwarmAI", tmp_path)
+        assert res["applied"] == 0 and res["escalated"] == 0
 
     def test_conversation_never_autos_even_if_trusted(self, tmp_path):
         # conversation is force-escalated by construction — even a (hypothetical) passed

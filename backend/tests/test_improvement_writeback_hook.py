@@ -80,10 +80,10 @@ class TestWritebackRoutesThroughAdmission:
             assert "retry loop reused a poisoned subprocess" in text.replace("**", "")
             assert "writeback" in text  # honest provenance, not 'auto-cultivated'
 
-    def test_low_confidence_writeback_escalates(self):
-        """C4a: the DEFAULT writeback confidence (0.5) is below the 0.7 auto floor, so
-        even a judge-pass lesson ESCALATES to review (no longer blind-applied). This is
-        the behavior change C4a introduces — session lessons are no longer auto-written."""
+    def test_low_confidence_writeback_discarded_to_archive(self):
+        """AUTONOMY-FIRST (run_86f44f35): DEFAULT writeback confidence (0.5) is below the
+        0.7 auto floor, so even a judge-pass lesson does NOT auto-write — it's DISCARDED to
+        the recoverable archive (NOT a human queue; queue = 0)."""
         hook = ImprovementWritebackHook(workspace_path="/unused")
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
@@ -95,8 +95,11 @@ class TestWritebackRoutesThroughAdmission:
                 asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
 
             assert "retry loop reused a poisoned" not in doc.read_text().replace("**", "")
-            queue = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert len(queue) == 1, "a below-floor writeback lesson must escalate, not vanish"
+            queue = list((project_dir / ".artifacts" / "proposals").glob("*.json")) \
+                if (project_dir / ".artifacts" / "proposals").is_dir() else []
+            assert queue == [], "autonomy-first: no human queue"
+            archive = project_dir / ".artifacts" / "discarded-writeback.jsonl"
+            assert archive.is_file(), "below-floor lesson archived (recoverable), not vanished"
 
     def test_duplicate_against_cultivation_format_is_rejected(self):
         """AC1: a writeback lesson whose text already exists as a CULTIVATION-
@@ -149,9 +152,10 @@ class TestWritebackOffloadsEventLoop:
 class TestC4aUnifiedGateRouting:
     """C4a: writeback routes through admission_band, NOT a blind apply_to_ddd."""
 
-    def test_review_verdict_escalates_not_applied(self):
-        """A judge-`suspect` (trust=n/a) → review → escalated to the human proposal
-        queue, NOT written to IMPROVEMENT.md."""
+    def test_judge_suspect_discarded_to_archive_not_queued(self):
+        """AUTONOMY-FIRST (run_86f44f35): judge-suspect → DISCARD to the recoverable
+        archive (discarded-writeback.jsonl), NOT written to the doc and NOT a human queue."""
+        import json as _json
         hook = ImprovementWritebackHook(workspace_path="/unused")
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
@@ -164,12 +168,18 @@ class TestC4aUnifiedGateRouting:
 
             # NOT applied to the doc …
             assert "dubious unverifiable claim" not in doc.read_text().replace("**", "")
-            # … but escalated to the human proposal queue (not lost).
-            queue = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert len(queue) == 1, "review verdict must escalate to the human queue"
+            # … NO human queue (autonomy-first: queue = 0) …
+            queue = list((project_dir / ".artifacts" / "proposals").glob("*.json")) \
+                if (project_dir / ".artifacts" / "proposals").is_dir() else []
+            assert queue == [], "autonomy-first: no human proposal queue"
+            # … but recoverable in the discard archive (not silently lost).
+            archive = project_dir / ".artifacts" / "discarded-writeback.jsonl"
+            assert archive.is_file(), "discarded lesson must land in the recoverable archive"
+            rec = _json.loads(archive.read_text().strip().splitlines()[0])
+            assert "dubious unverifiable claim" in rec["content"]
 
-    def test_discard_verdict_drops_nothing_persisted(self):
-        """A judge-`noise` → discard → not applied AND not queued (noise is dropped)."""
+    def test_judge_noise_discarded_to_archive(self):
+        """A judge-`noise` → discard → not applied, no queue, archived (recoverable)."""
         hook = ImprovementWritebackHook(workspace_path="/unused")
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
@@ -181,32 +191,8 @@ class TestC4aUnifiedGateRouting:
                 asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
 
             assert "some genuine-looking lesson" not in doc.read_text().replace("**", "")
-            proposals_dir = project_dir / ".artifacts" / "proposals"
-            queue = list(proposals_dir.glob("*.json")) if proposals_dir.is_dir() else []
-            assert queue == [], "discard verdict must NOT queue anything"
-
-    def test_review_write_failure_goes_to_failsafe_not_lost(self):
-        """Gate-2 HIGH regression: if the human-queue write FAILS on a review verdict,
-        the lesson must NOT be silently lost — it lands in the durable failsafe JSONL and
-        the outcome is a visible fault status (not a lying "review")."""
-        import json as _json
-        hook = ImprovementWritebackHook(workspace_path="/unused")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            doc = project_dir / "IMPROVEMENT.md"
-            doc.write_text("# L\n\n## What Failed\n\n")
-            lessons = {"worked": [], "failed": ["a lesson whose queue write will fail hard"]}
-
-            with _judge("suspect"), \
-                 patch.object(_dc, "write_proposal", side_effect=OSError("disk full")):
-                asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
-
-            # not applied to the doc, queue write failed → must be in the failsafe log
-            fs = project_dir / ".artifacts" / "escalation-failsafe.jsonl"
-            assert fs.is_file(), "a failed escalation must be sedimented to the failsafe log"
-            rec = _json.loads(fs.read_text().strip().splitlines()[0])
-            assert "queue write will fail hard" in rec["content"]
-            assert rec["reason"].startswith("write_proposal_failed")
+            archive = project_dir / ".artifacts" / "discarded-writeback.jsonl"
+            assert archive.is_file(), "noise discard is archived (recoverable), not silently gone"
 
     def test_judge_is_actually_invoked_for_writeback(self):
         """The whole point of C4a: a trust=n/a writeback lesson MUST reach the judge

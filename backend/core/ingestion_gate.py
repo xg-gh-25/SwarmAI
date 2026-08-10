@@ -325,12 +325,17 @@ class GateVerdict:
 #     they are NEVER gated. Listed for the record with a carve-out marker, never dispatched.
 TRIGGER_TIERS: dict[str, list[str]] = {
     # ── DISPATCHER-SERVED (live: passed to ingestion_gate() in production) ──
-    # MEMORY — NO confident (no ≥5-word floor); keep_type_holdback + judge on auto path
-    "memory_distill":       ["noise", "keep_type_holdback", "judge", "dedup"],
+    # AUTONOMY-FIRST (run_86f44f35): keep_type_holdback REMOVED from the distill triggers.
+    # It was the MEMORY/EVOLUTION-side "protected zone" — it short-circuited a KEEP_TYPE
+    # (principle/correction/decision/model) to review BEFORE the judge ran, so a
+    # judge-worthy permanent lesson could never auto-write. Per XG directive the judge is
+    # the sole authority: pass → auto (any type), non-pass → discard. No type is held back.
+    # MEMORY — NO confident (no ≥5-word floor so short fragments survive).
+    "memory_distill":       ["noise", "judge", "dedup"],
     "memory_save_button":   ["noise", "dedup"],
     "memory_persist":       ["dedup"],
     # EVOLUTION
-    "evolution_distill":    ["noise", "keep_type_holdback", "judge", "dedup"],
+    "evolution_distill":    ["noise", "judge", "dedup"],
     "evolution_persist":    ["dedup"],
     # ── DDD SPEC (served by admission_band, NOT this dispatcher — kept for the record) ──
     "ddd_reflect":          ["noise", "trust", "judge", "confident", "magnitude", "dedup"],

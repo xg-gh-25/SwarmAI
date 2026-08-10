@@ -31,54 +31,45 @@ MIN_MESSAGES_FOR_EXTRACTION = 8
 
 
 def _gate_and_apply_writeback(proposal, project_dir: Path) -> str:
-    """Run a writeback proposal through the unified admission gate, then apply/escalate.
+    """Run a writeback proposal through the unified admission gate, then apply or discard.
 
-    C4a (run_0d60e04e): the single DDD ingestion path that used to bypass admission_band.
-    Both admission_band and apply_to_ddd/write_proposal are SYNC (fcntl + atomic rename +
-    a possible Bedrock judge call) — this whole function is offloaded via one
-    asyncio.to_thread by the caller, so nothing here touches the event loop.
+    C4a (run_0d60e04e) + AUTONOMY-FIRST (run_86f44f35): the single DDD ingestion path that
+    used to bypass admission_band. admission_band + apply_to_ddd are SYNC — this whole
+    function is offloaded via one asyncio.to_thread by the caller (off the event loop).
 
     Returns the outcome token: apply_to_ddd's status on `auto` (applied / created_section
-    / duplicate / rejected_low_value / …), or the gate verdict ("review" / "discard") when
-    the gate does NOT auto-apply. A `review` verdict escalates to the human proposal queue
-    (write_proposal) — never blind-applied, never dropped. `discard` is noise (dropped).
+    / duplicate / rejected_low_value / …), else "discard" — the gate did NOT auto-admit
+    (judge non-pass, below-floor, or a gate error). There is NO human-review queue: a
+    non-auto lesson is archived to a recoverable JSONL (never silently lost) and dropped.
     """
-    from core.ddd_cultivation import admission_band, apply_to_ddd, write_proposal
+    from core.ddd_cultivation import admission_band, apply_to_ddd
 
-    verdict, _reason = admission_band(proposal, project_dir)
+    verdict, reason = admission_band(proposal, project_dir)
     if verdict == "auto":
         return apply_to_ddd(proposal, project_dir)
-    if verdict == "review":
-        # Escalate to the human queue — a session lesson the gate won't auto-trust
-        # must be reviewable, not lost (Principle 1: sediment up, not a landfill).
-        try:
-            write_proposal(proposal, project_dir)
-            return "review"
-        except OSError as exc:
-            # Gate-2 HIGH (run_0d60e04e): do NOT return "review" here — the queue write
-            # FAILED, so claiming escalation would be a contract lie that SILENTLY LOSES
-            # the lesson. Sediment it to a durable failsafe log instead (recoverable),
-            # and return a DISTINCT status so the caller logs a real fault (not "review").
-            logger.warning("writeback: escalate write_proposal failed: %s", exc)
-            if _failsafe_persist(proposal, project_dir, exc):
-                return "escalation_failsafe"
-            return "escalation_lost"  # both queue AND failsafe failed → surfaced, not hidden
-    return "discard"  # noise — dropped by design
+    # AUTONOMY-FIRST (run_86f44f35): admission_band no longer returns "review" for a
+    # trust/judge outcome — only a genuine gate ERROR fails closed to "review". Either way
+    # (judge non-pass discard, or gate-error), there is NO human queue: archive to a
+    # recoverable failsafe (a session lesson is never silently lost) and drop. The archive
+    # is a safety net nobody must process — not a review queue.
+    _failsafe_persist(proposal, project_dir, reason)
+    return "discard"
 
 
-def _failsafe_persist(proposal, project_dir: Path, exc: Exception) -> bool:
-    """Durable fallback when the human-queue write fails: append the lesson to a
-    recoverable JSONL so a review-verdict lesson is never SILENTLY lost (Gate-2 HIGH).
-    Returns True if the failsafe line was written. Best-effort — never raises."""
+def _failsafe_persist(proposal, project_dir: Path, reason: str = "") -> bool:
+    """AUTONOMY-FIRST (run_86f44f35) recoverable archive for a writeback lesson the gate
+    did NOT auto-admit (judge non-pass, or a gate error). NOT a human-review queue — a
+    safety net so a session lesson is never SILENTLY lost. Append to a recoverable JSONL.
+    Returns True if written. Best-effort — never raises."""
     import json
     from datetime import datetime, timezone
     try:
         fs_dir = project_dir / ".artifacts"
         fs_dir.mkdir(parents=True, exist_ok=True)
-        with (fs_dir / "escalation-failsafe.jsonl").open("a", encoding="utf-8") as fh:
+        with (fs_dir / "discarded-writeback.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "ts": datetime.now(timezone.utc).isoformat(),
-                "reason": f"write_proposal_failed:{type(exc).__name__}",
+                "reason": reason,
                 "target_doc": proposal.target_doc,
                 "target_section": proposal.target_section,
                 "content": (proposal.content or "")[:2000],
@@ -87,7 +78,7 @@ def _failsafe_persist(proposal, project_dir: Path, exc: Exception) -> bool:
             }, ensure_ascii=False) + "\n")
         return True
     except OSError as exc2:
-        logger.error("writeback: FAILSAFE persist ALSO failed (%s) — lesson lost: %s",
+        logger.error("writeback: discard archive FAILED (%s) — lesson lost: %s",
                      type(exc2).__name__, (proposal.content or "")[:80])
         return False
 
@@ -390,10 +381,10 @@ class ImprovementWritebackHook:
                     _gate_and_apply_writeback, proposal, project_dir
                 )
                 # "duplicate"/"rejected_low_value" = the chokepoint working (dedup + value
-                # floor). "review"/"discard" = the admission gate working. Only an
-                # unexpected apply fault (doc_missing / locked / not_safe) warrants a warn.
+                # floor). "discard" = the admission gate working (non-pass → archived).
+                # Only an unexpected apply fault (doc_missing / locked / not_safe) warns.
                 if outcome not in ("applied", "created_section", "duplicate",
-                                   "rejected_low_value", "review", "discard"):
+                                   "rejected_low_value", "discard"):
                     logger.warning(
                         "writeback: gate+apply returned %s for a %s lesson (session %s)",
                         outcome, section, context.session_id[:8],

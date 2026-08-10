@@ -561,23 +561,19 @@ class DistillationTriggerHook:
         # to MEMORY without an adversarial check). Same _admit_memory_lesson gate; held
         # decisions sediment to the recoverable sink (not lost when the DA is marked done).
         if all_decisions:
+            # AUTONOMY-FIRST (run_86f44f35): the judge decides. verdict==auto → write ANY
+            # section (no keep-type holdback, no protected zone); anything else → DISCARD
+            # to a recoverable archive (never a human-review sink). One branch, no sediment-
+            # to-human — the archive is a safety net nobody must process, not a queue.
             gated_decisions: list[str] = []
             for enriched in all_decisions:
                 raw = self._raw_lesson_text(enriched)
                 verdict, _section, reason = self._admit_memory_lesson(raw)
                 if verdict == "auto":
                     gated_decisions.append(enriched)
-                elif verdict == "review":
-                    self._sediment_held_lesson(memory_path.parent, raw, enriched)
-                    logger.info("distillation: DECISION held for review (%s, sedimented): %.80s",
-                                reason or "?", raw)
-                elif reason.startswith("judge:noise"):
-                    # Fallible LLM noise verdict on a DECISION → sediment, don't drop.
-                    self._sediment_held_lesson(memory_path.parent, raw, enriched)
-                    logger.info("distillation: DECISION judge-NOISE (%s) — sedimented: %.80s",
-                                reason, raw)
                 else:
-                    logger.info("distillation: DECISION discarded as noise (%s): %.80s",
+                    self._archive_discarded(memory_path.parent, raw, enriched, reason)
+                    logger.info("distillation: DECISION discarded (%s, archived): %.80s",
                                 reason or "?", raw)
             if gated_decisions:
                 self._run_locked_write(
@@ -607,35 +603,14 @@ class DistillationTriggerHook:
                 verdict, section, reason = self._admit_memory_lesson(raw)
                 if verdict == "auto":
                     by_section.setdefault(section, []).append(enriched)
-                elif verdict == "review":
-                    # Held for a human (judge-suspect / keep-type). The DailyActivity file
-                    # is marked distilled=True after this cycle, so a held lesson NOT
-                    # sedimented is lost forever (Gate-2 HIGH). Sink it to a recoverable
-                    # failsafe the way C4a does — sediment up, not a landfill (Principle 1).
-                    # `reason` is logged so a judge_error:* (dead judge → everything HELD)
-                    # is distinguishable from a real keep_type/judge-suspect holdback.
-                    self._sediment_held_lesson(memory_path.parent, raw, enriched)
-                    logger.info(
-                        "distillation: lesson HELD for review (%s), "
-                        "sedimented to failsafe: %.80s", reason or "?", raw,
-                    )
-                else:  # "discard"
-                    # SPLIT the discard reason (Gate-2 review left this hole): a
-                    # STRUCTURAL noise verdict (table/monologue/emoji fragment) is
-                    # deterministic → safe to drop. A `judge:noise:*` verdict is a
-                    # FALLIBLE LLM judgment → treat it like review: sediment to the
-                    # recoverable sink instead of permanent loss (the DailyActivity
-                    # source is marked distilled=True after this cycle, so a dropped
-                    # judge-noise lesson is gone forever). Same fix the review path got.
-                    if reason.startswith("judge:noise"):
-                        self._sediment_held_lesson(memory_path.parent, raw, enriched)
-                        logger.info(
-                            "distillation: lesson judge-NOISE (%s) — sedimented (LLM "
-                            "verdict is fallible, not dropped): %.80s", reason, raw,
-                        )
-                    else:
-                        logger.info("distillation: lesson DISCARDED as noise (%s): %.80s",
-                                    reason or "?", raw)
+                else:
+                    # AUTONOMY-FIRST (run_86f44f35): non-auto → DISCARD to a recoverable
+                    # archive. No human-review sink, no judge-noise/review split — the
+                    # judge decides, its non-pass verdicts all drop (recoverable). `reason`
+                    # is logged so a judge_error:* (dead judge → all dropped) is visible.
+                    self._archive_discarded(memory_path.parent, raw, enriched, reason)
+                    logger.info("distillation: lesson discarded (%s, archived): %.80s",
+                                reason or "?", raw)
             for section, entries in by_section.items():
                 self._run_locked_write(memory_path, section, "\n".join(entries))
 
@@ -714,61 +689,58 @@ class DistillationTriggerHook:
         — the gate runs noise(structural, NO ≥5-word floor)→keep_type_holdback→judge (the
         survey's #1 rating-5 hole: MEMORY auto-distillation had NO adversarial gate).
 
-        Returns (verdict, section, reason) where verdict ∈ {"auto","review","discard"}:
-          • "auto"    + a real section — write it (gate=auto AND routable non-KEEP_TYPE).
-          • "review"  + section|None   — held for a human: judge-suspect OR keep-type
-            holdback. NOT auto-written, but MUST be sedimented to a recoverable sink by
-            the caller (else it's lost when the DailyActivity file is marked distilled).
-          • "discard" + None           — real noise (structural / judge-noise): dropped.
-
-        `reason` is the GateVerdict.reason token, propagated so the caller's log can
-        DISTINGUISH a genuine holdback (e.g. "keep_type_holdback"/"judged") from a
-        judge INFRA failure ("judge_error:*") — those were byte-identical in the log
-        before, so a fully-dead judge (fail-closed → everything HELD) was invisible
-        (the exact silent-death twin trap of any fail-closed design).
-
-        Distinguishing review vs discard matters (Gate-2 HIGH): the file is marked
-        `distilled=True` after the cycle regardless, so a "review" lesson NOT sedimented
-        is silently lost forever (Principle 1: sediment up, not a landfill). section
-        routing stays route_lesson_type's job; keep_type_holdback is the gate's tier.
+        AUTONOMY-FIRST (run_86f44f35): keep_type_holdback is removed from the tier list, so
+        the judge decides every type (incl KEEP_TYPES — decision/principle/correction/model).
+        Returns (verdict, section, reason) where verdict ∈ {"auto","discard"} (NO "review" —
+        human queue is 0):
+          • "auto"    + a real section — judge passed; route to the entry-TYPE's MEMORY
+            section (route_lesson_type gives section=None for KEEP_TYPES, so fall back to
+            MEMORY_TYPE_TO_SECTION[etype] — a passed decision writes to Decisions, etc.).
+          • "discard" + None           — judge non-pass (suspect/noise) OR structural noise.
+            The caller archives it (recoverable), never a human sink.
+        `reason` is the GateVerdict.reason token, propagated for the caller's log (a
+        judge_error:* infra failure stays visible vs a genuine judge verdict).
         """
         from core.ingestion_gate import ingestion_gate
         from core.ddd_entry_lifecycle import route_lesson_type
 
-        section, _etype = route_lesson_type(raw_text)
+        section, etype = route_lesson_type(raw_text)
         v = ingestion_gate(
             raw_text, store="MEMORY", trigger="memory_distill",
             context={"section": section or ""},
         )
         reason = getattr(v, "reason", "") or ""
-        if v.verdict == "auto" and section is not None:
-            return ("auto", section, reason)
-        if v.verdict == "discard":
-            return ("discard", None, reason)      # real noise — safe to drop
-        # everything else (review: judge-suspect / keep_type_holdback; or auto-but-
-        # section-None) is HELD — recoverable, not noise.
-        return ("review", section, reason)
+        if v.verdict == "auto":
+            # KEEP_TYPES route to section=None; resolve to the type's real MEMORY section.
+            resolved = section or MEMORY_TYPE_TO_SECTION.get(etype)
+            if resolved:
+                return ("auto", resolved, reason)
+            return ("discard", None, reason or "unroutable_type")
+        return ("discard", None, reason)
 
     @staticmethod
-    def _sediment_held_lesson(context_dir: "Path", raw: str, enriched: str) -> bool:
-        """Durable sink for a MEMORY lesson the gate HELD for review (judge-suspect /
-        keep-type holdback). The DailyActivity source is marked distilled=True after the
-        cycle, so a held lesson that isn't sedimented is lost forever (Gate-2 HIGH). Append
-        it to a recoverable JSONL (alongside MEMORY.md in .context/) the weekly report /
-        a human can drain. Best-effort — a sink failure must never break distillation."""
+    def _archive_discarded(context_dir: "Path", raw: str, enriched: str,
+                           reason: str = "") -> bool:
+        """AUTONOMY-FIRST (run_86f44f35) recoverable archive for a DISCARDED entry (judge
+        non-pass / structural noise). NOT a human-review queue — nobody must process it; it
+        is a safety net so a fallible-judge drop is recoverable, not permanent. The
+        DailyActivity source is marked distilled=True after the cycle, so an un-archived
+        discard would be gone forever. Append to .context/discarded-lessons.jsonl.
+        Best-effort — an archive failure must never break distillation."""
         import json as _json
         from datetime import datetime, timezone
         try:
             context_dir.mkdir(parents=True, exist_ok=True)
-            with (context_dir / "memory-held-lessons.jsonl").open("a", encoding="utf-8") as fh:
+            with (context_dir / "discarded-lessons.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(_json.dumps({
                     "ts": datetime.now(timezone.utc).isoformat(),
+                    "reason": reason,
                     "raw": raw[:2000],
                     "enriched": enriched[:2000],
                 }, ensure_ascii=False) + "\n")
             return True
         except OSError as exc:
-            logger.error("distillation: held-lesson sink FAILED (%s) — lesson lost: %.80s",
+            logger.error("distillation: discard archive FAILED (%s) — entry lost: %.80s",
                          type(exc).__name__, raw)
             return False
 
@@ -1409,19 +1381,12 @@ class DistillationTriggerHook:
             reason = getattr(v, "reason", "") or "?"
             if v.verdict == "auto":
                 admitted.append((file_date, text))
-            elif v.verdict == "review":
-                DistillationTriggerHook._sediment_held_lesson(
-                    context_dir, text, f"[EVOLUTION/{kind}] {text}")
-                logger.info("distillation: EVOLUTION %s HELD for review (%s, sedimented): %.80s",
-                            kind, reason, text)
-            elif reason.startswith("judge:noise"):
-                # Fallible LLM noise verdict → sediment, don't permanently drop.
-                DistillationTriggerHook._sediment_held_lesson(
-                    context_dir, text, f"[EVOLUTION/{kind}] {text}")
-                logger.info("distillation: EVOLUTION %s judge-NOISE (%s) — sedimented: %.80s",
-                            kind, reason, text)
             else:
-                logger.info("distillation: EVOLUTION %s discarded as noise (%s): %.80s",
+                # AUTONOMY-FIRST (run_86f44f35): judge decides. Non-auto (suspect/noise) →
+                # DISCARD to the recoverable archive, never a human-review sink.
+                DistillationTriggerHook._archive_discarded(
+                    context_dir, text, f"[EVOLUTION/{kind}] {text}", reason)
+                logger.info("distillation: EVOLUTION %s discarded (%s, archived): %.80s",
                             kind, reason, text)
         return admitted
 

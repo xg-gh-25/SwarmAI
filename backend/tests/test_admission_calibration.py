@@ -54,8 +54,9 @@ class TestCalibratedThreshold:
         assert t >= 0.7
 
     def test_band_uses_calibrated_threshold(self, tmp_path):
-        # AC6 end-to-end: a proposal at 0.72 that would AUTO at the 0.7 default is sent
-        # to REVIEW once the channel's calibrated threshold rises above 0.72.
+        # AC6 end-to-end: a proposal at 0.72 that would AUTO at the 0.7 default is DISCARDED
+        # once the channel's calibrated threshold rises above 0.72. AUTONOMY-FIRST
+        # (run_86f44f35): a below-floor entry is discard (recoverable), not a review queue.
         band = self._band()
         artifacts = tmp_path / ".artifacts"
         artifacts.mkdir(parents=True)
@@ -64,7 +65,7 @@ class TestCalibratedThreshold:
         (artifacts / "channel_stats.json").write_text(json.dumps(stats))
         p = _prop(confidence=0.72, source_stage="reflect")
         verdict, reason = band(p, tmp_path)
-        assert verdict == "review", f"calibrated (raised) threshold should demote to review, got {verdict} ({reason})"
+        assert verdict == "discard", f"calibrated (raised) threshold should demote to discard, got {verdict} ({reason})"
 
     def test_healthy_channel_still_autos(self, tmp_path):
         # a high-precision channel keeps the default bar → a trusted 0.72 proposal autos.

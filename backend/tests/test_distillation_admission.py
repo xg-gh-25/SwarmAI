@@ -31,20 +31,21 @@ class TestMemoryDistillAdmission:
         verdict, section = self._admit("| col | col |")
         assert verdict == "discard"
 
-    def test_keep_type_lesson_held_for_review(self):
-        # a KEEP_TYPE (principle/correction/decision/model) → review (held, recoverable),
-        # NOT discard — permanent knowledge a human should see, not noise.
+    def test_keep_type_lesson_judge_pass_is_AUTO(self):
+        # AUTONOMY-FIRST (run_86f44f35): keep_type_holdback removed — a KEEP_TYPE
+        # (principle/decision) that the judge PASSES now AUTO-writes to its type section.
         with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
             verdict, section = self._admit(
                 "Principle: confidence is a counter-signal; verify before asserting always.")
-        assert verdict == "review"
+        assert verdict == "auto"
+        assert section == "Principles"  # KEEP_TYPE routes to its type's MEMORY section
 
-    def test_judge_suspect_is_review_not_discard(self):
-        # judge suspect → review (held, recoverable), NOT dropped as noise
+    def test_judge_suspect_is_discard_not_review(self):
+        # AUTONOMY-FIRST: judge suspect → discard (recoverable archive), never review.
         with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("suspect", "dubious")):
             verdict, section = self._admit(
                 "The streaming reconcile sometimes duplicates a bubble on tab switch here.")
-        assert verdict == "review"
+        assert verdict == "discard"
 
     def test_judge_noise_is_discard(self):
         with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("noise", "junk")):
@@ -71,88 +72,77 @@ class TestMemoryDistillAdmission:
         assert called["n"] == 1, "short MEMORY fragment must reach the judge, not be floored"
 
 
-class TestHeldLessonSediment:
-    """Gate-2 HIGH: a review-held lesson must be sedimented to a recoverable sink,
-    because the DailyActivity source is marked distilled=True after the cycle."""
+class TestDiscardArchive:
+    """AUTONOMY-FIRST (run_86f44f35): a discarded entry (judge non-pass) goes to a
+    RECOVERABLE archive (discarded-lessons.jsonl) — NOT a human-review sink. The
+    DailyActivity source is marked distilled=True after the cycle, so the archive is the
+    only recovery path for a fallible-judge drop."""
 
-    def test_sediment_writes_recoverable_jsonl(self):
+    def test_archive_writes_recoverable_jsonl(self):
         import json
         with tempfile.TemporaryDirectory() as tmpdir:
             ctx_dir = Path(tmpdir) / ".context"
-            ok = DistillationTriggerHook._sediment_held_lesson(
-                ctx_dir, "a held raw lesson", "- 2026-08-10: a held raw lesson\n  Detail: x")
+            ok = DistillationTriggerHook._archive_discarded(
+                ctx_dir, "a discarded raw lesson", "- 2026-08-10: a discarded raw lesson", "judge:suspect")
             assert ok is True
-            sink = ctx_dir / "memory-held-lessons.jsonl"
+            sink = ctx_dir / "discarded-lessons.jsonl"
             assert sink.is_file()
             rec = json.loads(sink.read_text().strip().splitlines()[0])
-            assert rec["raw"] == "a held raw lesson"
+            assert rec["raw"] == "a discarded raw lesson"
+            assert rec["reason"] == "judge:suspect"
 
-    def test_sediment_failure_is_best_effort(self):
-        # a bad path (mkdir under a FILE) → OSError → returns False, never raises
+    def test_archive_failure_is_best_effort(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             clash = Path(tmpdir) / "clash"
             clash.write_text("i am a file, not a dir")
-            ok = DistillationTriggerHook._sediment_held_lesson(clash / "sub", "x", "y")
+            ok = DistillationTriggerHook._archive_discarded(clash / "sub", "x", "y", "r")
             assert ok is False
 
 
 class TestC6EvolutionGate:
-    """C6: the EVOLUTION auto-write path (finding D format-hole) is gated. An auto-
-    extracted correction is trust=n/a + KEEP_TYPE → held for review (sedimented), NOT
-    silently appended to the constitutional store."""
+    """C6 + AUTONOMY-FIRST (run_86f44f35): the EVOLUTION auto-write path is gated by the
+    judge. Pass → admitted (auto-write, incl corrections — no keep-type holdback); non-pass
+    → discard to the recoverable archive (never a human sink)."""
 
-    def test_correction_is_held_not_auto_written(self):
+    def test_correction_judge_pass_is_admitted(self):
+        # AUTONOMY-FIRST: a correction the judge PASSES now auto-writes (keep-type holdback gone).
         with tempfile.TemporaryDirectory() as tmpdir:
-            ctx = Path(tmpdir) / ".context"
-            ctx.mkdir()
+            ctx = Path(tmpdir) / ".context"; ctx.mkdir()
             with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
                 admitted = DistillationTriggerHook._gate_evolution_entries(
                     [("2026-08-10", "Correction: never auto-deploy without approval, verify first.")],
                     ctx, "correction")
-            # KEEP_TYPE correction → held → NOT admitted for auto-write
-            assert admitted == []
-            # … but sedimented to the recoverable sink (not lost)
-            sink = ctx / "memory-held-lessons.jsonl"
-            assert sink.is_file()
-            assert "never auto-deploy" in sink.read_text()
+            assert len(admitted) == 1, "judge-pass correction must be admitted (no keep-type hold)"
 
-    def test_structural_noise_correction_discarded_not_sedimented(self):
+    def test_correction_judge_suspect_is_discarded_archived(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            ctx = Path(tmpdir) / ".context"
-            ctx.mkdir()
+            ctx = Path(tmpdir) / ".context"; ctx.mkdir()
+            with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+                admitted = DistillationTriggerHook._gate_evolution_entries(
+                    [("2026-08-10", "Correction: some dubious unverifiable claim about the world here.")],
+                    ctx, "correction")
+            assert admitted == []
+            sink = ctx / "discarded-lessons.jsonl"
+            assert sink.is_file(), "non-pass → recoverable archive"
+
+    def test_structural_noise_discarded_archived(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"; ctx.mkdir()
             admitted = DistillationTriggerHook._gate_evolution_entries(
                 [("2026-08-10", "| junk | table |")], ctx, "correction")
             assert admitted == []
-            # STRUCTURAL discard → NOT sedimented (deterministic, safe to drop)
-            sink = ctx / "memory-held-lessons.jsonl"
-            assert not sink.is_file()
+            # discarded (structural noise) → archived (autonomy-first: one path, recoverable)
+            sink = ctx / "discarded-lessons.jsonl"
+            assert sink.is_file()
 
-    def test_judge_noise_correction_is_sedimented_not_dropped(self):
-        # A FALLIBLE LLM `judge:noise` verdict must sediment (recoverable), NOT drop —
-        # the source is marked distilled=True after the cycle, so a wrong noise call
-        # would be permanent loss. Distinguished from structural noise via reason token.
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ctx = Path(tmpdir) / ".context"
-            ctx.mkdir()
-            # a non-structural sentence the judge (mocked) rules noise
-            with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("noise", "j")):
-                admitted = DistillationTriggerHook._gate_evolution_entries(
-                    [("2026-08-10", "The retry loop backs off exponentially on throttle here.")],
-                    ctx, "lesson")
-            assert admitted == []
-            sink = ctx / "memory-held-lessons.jsonl"
-            assert sink.is_file(), "judge:noise must be sedimented, not permanently dropped"
-            assert "retry loop" in sink.read_text()
-
-    def test_decisions_path_gated_same_as_lessons(self):
-        """E2E-review fix: the all_decisions → MEMORY path is gated by _admit_memory_lesson
-        (it was the sibling rating-5 hole the first C5 pass left ungated). A distilled
-        decision is a KEEP_TYPE → review → held (not auto-written)."""
+    def test_decision_judge_pass_is_auto(self):
+        """AUTONOMY-FIRST: a distilled decision (KEEP_TYPE) that passes the judge → AUTO
+        (routes to Decisions), NOT held."""
         with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
             verdict, section, _reason = DistillationTriggerHook._admit_memory_lesson(
                 "chose single-writer MessageStore to kill the reconcile race for good")
-        # a genuine decision routes to KEEP_TYPE (section None) → review, never auto
-        assert verdict == "review"
+        assert verdict == "auto"
+        assert section == "Decisions"
 
     def test_format_hole_closed_at_extraction(self):
         """The format-hole: a bullet-ised **Corrections:** section with a table fragment
