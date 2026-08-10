@@ -2045,3 +2045,45 @@ class TestEnforcementInjector:
         assert set(enf_out.keys()) == set(pc_out.keys()) == {"hookSpecificOutput"}
         assert enf_out["hookSpecificOutput"]["hookEventName"] == pc_out["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
         assert isinstance(enf_out["hookSpecificOutput"]["additionalContext"], str)
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-intent detection at SubagentStop (Plan B v4 — commit-gate evidence)
+# ---------------------------------------------------------------------------
+
+class TestAdversarialIntentClassifier:
+    """AC6: classify a sub-agent as adversarial-review from agent_type (primary)
+    + transcript-head prompt (fallback). Must separate adversarial-review intent
+    from Explore/investigation intent, incl. CJK + synonyms; and NOT false-accept
+    a plain 'find code' Explore."""
+
+    def test_adversarial_prompts_match(self):
+        from core.runtime_hooks import _is_adversarial_intent
+        adversarial = [
+            ("general-purpose", "adversarial review", "You are an adversarial reviewer. Refute this diff."),
+            ("general-purpose", "", "Try to REFUTE the claim and find bugs in this changeset."),
+            ("general-purpose", "", "Red-team this design; poke holes and stress-test it."),
+            ("general-purpose", "", "Attack this diff — find any regression or security hole."),
+            ("general-purpose", "", "对抗性审查这个改动,找出 bug 和回归。"),
+            ("code-reviewer", "", "review as a skeptic; break it"),
+        ]
+        for st, desc, prompt in adversarial:
+            assert _is_adversarial_intent(st, desc, prompt) is True, f"should match: {prompt!r}"
+
+    def test_explore_prompts_do_not_match(self):
+        from core.runtime_hooks import _is_adversarial_intent
+        non_adversarial = [
+            ("Explore", "", "Find where the system prompt is built. Locate the file and report."),
+            ("general-purpose", "", "Investigate how recall works and summarize the call path."),
+            ("Explore", "", "Search the codebase for the marker writer and cite file:line."),
+            ("general-purpose", "", "定位生成 governance 卡的代码,报告文件和行号。"),
+        ]
+        for st, desc, prompt in non_adversarial:
+            assert _is_adversarial_intent(st, desc, prompt) is False, f"should NOT match: {prompt!r}"
+
+    def test_agent_type_primary_signal(self):
+        from core.runtime_hooks import _is_adversarial_intent
+        # A dedicated adversarial subagent_type is sufficient even with empty prompt
+        assert _is_adversarial_intent("adversarial-reviewer", "", "") is True
+        # Empty everything → not adversarial (fail-safe: no evidence = not adversarial)
+        assert _is_adversarial_intent("", "", "") is False

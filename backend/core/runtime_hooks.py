@@ -703,6 +703,43 @@ _ERROR_PATTERNS = re.compile(
 
 _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 
+# Adversarial-intent classification (Plan B v4). The commit gate
+# (security_hooks.create_adversarial_commit_gate) must pass ONLY when an
+# ADVERSARIAL-review sub-agent completed this session — not any sub-agent (an
+# Explore/investigation agent must NOT satisfy it). The spike (run_df2668b4)
+# established: the SDK gives SubagentStop `agent_type` + `agent_transcript_path`
+# (the sub-agent's OWN transcript, whose HEAD is the spawn prompt), and there is
+# NO tool_use_id on SubagentStop to correlate back to the Agent PreToolUse call —
+# so classification happens HERE, at completion, per-agent-correct by construction.
+#
+# subagent_type is the PRIMARY signal (a dedicated adversarial/reviewer type is
+# unambiguous); the spawn prompt is a LIBERAL keyword fallback. Bias LIBERAL on the
+# adversarial side (the threat model is the honest 手滑 "test passed → commit"
+# reflex, NOT a malicious bypass — a false-block just trains users toward the FORCE
+# escape hatch), but require ADVERSARIAL-review vocabulary (refute/attack/find bugs/
+# red-team/poke holes/stress-test/skeptic/对抗/挑刺), NOT bare "review"/"find code",
+# so a locate/investigate Explore agent is cleanly excluded.
+_ADVERSARIAL_TYPE_RE = re.compile(r"adversar|red.?team|skeptic|reviewer", re.IGNORECASE)
+_ADVERSARIAL_INTENT_RE = re.compile(
+    r"adversar|refute|red.?team|poke\s+holes?|stress.?test|find\s+(?:bugs?|regressions?|"
+    r"issues?|flaws?|holes?)|attack\s+(?:this|the)\s+(?:diff|change|design|code)|"
+    r"try\s+to\s+break|review\s+as\s+a\s+skeptic|对抗|挑刺|找\s*bug|找出\s*bug",
+    re.IGNORECASE,
+)
+
+
+def _is_adversarial_intent(subagent_type: str, description: str, prompt: str) -> bool:
+    """True if a sub-agent was spawned for ADVERSARIAL review (vs Explore/investigate).
+
+    subagent_type is the primary signal; description + prompt are a liberal keyword
+    fallback. Empty everything → False (no evidence = not adversarial; fail-safe:
+    the gate should DENY, not silently pass, when intent is unknowable)."""
+    st = str(subagent_type or "")
+    if _ADVERSARIAL_TYPE_RE.search(st):
+        return True
+    blob = f"{description or ''}\n{prompt or ''}"
+    return bool(_ADVERSARIAL_INTENT_RE.search(blob))
+
 
 def create_agent_tool_audit_hook(
     session_context: Optional[dict] = None,
