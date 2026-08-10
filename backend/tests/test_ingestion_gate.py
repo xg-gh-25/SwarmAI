@@ -710,3 +710,49 @@ class TestAdmitMemoryLessonSSOT:
                 "Decision: the judge is the sole admission authority for all MEMORY writes.")
         assert verdict == "auto"
         assert section  # NOT None — resolved via MEMORY_TYPE_TO_SECTION
+
+
+class TestShapeContract:
+    """shape_warnings(text) — the SHAPE gate (run_04fd397c follow-up): whether-gate
+    (judge) decides noise-vs-signal; this decides concise-vs-verbose + narrative-vs-rule.
+    WARN-only (shape is quality, not safety — judge already owns admit/reject). Type-aware:
+    operational types (guideline/pitfall/process) must be concise; cognitive types
+    (principle/decision/model/correction) may be long (they carry reasoning)."""
+
+    def test_operational_verbose_warns(self):
+        from core.ingestion_gate import shape_warnings
+        long_guideline = "- [guideline] **X** — " + " ".join(["word"] * 60)
+        w = shape_warnings(long_guideline)
+        assert any("verbose" in x or "word" in x.lower() for x in w)
+
+    def test_operational_concise_no_warn(self):
+        from core.ingestion_gate import shape_warnings
+        ok = "- [guideline] **Guard at the caller** — guard at the shared-component caller, not the renderer."
+        w = shape_warnings(ok)
+        assert not any("verbose" in x for x in w)
+
+    def test_cognitive_long_is_allowed(self):
+        from core.ingestion_gate import shape_warnings
+        # a principle carrying full reasoning (80 words) must NOT get a verbose warn
+        long_principle = "- [principle] **P** — " + " ".join(["reasoning"] * 80)
+        w = shape_warnings(long_principle)
+        assert not any("verbose" in x for x in w)
+
+    def test_narrative_marker_in_body_warns_any_type(self):
+        from core.ingestion_gate import shape_warnings
+        # narrative markers in the BODY = "story mixed into rule" — warns even for a principle
+        narr = "- [principle] **P** — this session I fixed run_1a2b3c4d and it worked out."
+        w = shape_warnings(narr)
+        assert any("narrative" in x.lower() for x in w)
+
+    def test_run_id_in_metadata_is_fine(self):
+        from core.ingestion_gate import shape_warnings
+        # run_id in the trailing (date, run_xxx) provenance is NOT a narrative-in-body violation
+        ok = "- [guideline] **Clean fix** — move the invariant to the write side (2026-08-10, run_9bbf1761)"
+        w = shape_warnings(ok)
+        assert not any("narrative" in x.lower() for x in w)
+
+    def test_shape_warnings_never_raises(self):
+        from core.ingestion_gate import shape_warnings
+        assert shape_warnings("") == []
+        assert isinstance(shape_warnings("garbage no type prefix"), list)

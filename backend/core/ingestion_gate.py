@@ -591,7 +591,81 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str]":
     if v.verdict == "auto":
         resolved = section or MEMORY_TYPE_TO_SECTION.get(etype)
         if resolved:
+            # SHAPE gate (WARN-only): the judge admitted this (whether-gate); now flag
+            # verbose/narrative shape so the writer sees it's a story not a rule. Never
+            # blocks — shape is quality, judge owns admit/reject. One log at the shared
+            # chokepoint → all four MEMORY doors are shape-checked (P8).
+            try:
+                sw = shape_warnings(raw_text)
+                if sw:
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "ingestion_gate SHAPE-WARN [%s]: %s :: %.80s",
+                        resolved, "; ".join(sw), raw_text)
+            except Exception:  # noqa: BLE001 — advisory only
+                pass
             return ("auto", resolved, reason)
         return ("discard", None, reason or "unroutable_type")
     # verdict is "review" (gate-error, fail-closed) or "discard" → both discard here
     return ("discard", None, reason)
+
+
+# ── shape_warnings — the SHAPE gate (concise-vs-verbose, rule-vs-narrative) ────
+# Complements the judge (whether-gate: noise-vs-signal). The judge decides ADMIT;
+# shape decides "written as a durable rule or a session story?". WARN-only — shape is
+# QUALITY not safety, so a false positive must never block a write (the judge owns
+# reject). Type-aware: operational types (guideline/pitfall/process) must be concise;
+# cognitive types (principle/decision/model/correction) carry reasoning and may be long.
+# Root cause it targets: writer==finalizer with no capture-vs-distill split → "this
+# session's story" + "the durable rule" get written as one 78-word narrative entry.
+_SHAPE_OPERATIONAL_TYPES = frozenset({"guideline", "pitfall", "process"})
+_SHAPE_WORD_CAP = 40  # operational-entry body word cap (a single imperative rule)
+# Narrative markers that belong in a session log, not a durable brain entry. run_id is
+# allowed ONLY in the trailing provenance (…, run_xxx) — flagged only when in the BODY.
+_SHAPE_NARRATIVE_RE = re.compile(
+    r"\bthis session\b|\bI'?ll\b|\bI'?ve\b|\bI (?:fixed|caught|missed|realized)\b"
+    r"|本 ?session|这次(?:我|的)|这一轮",
+    re.IGNORECASE,
+)
+_SHAPE_TYPE_RE = re.compile(r"^\s*-?\s*\[([a-z]+)\]")
+_SHAPE_TITLE_RE = re.compile(r"^\s*-?\s*\[[a-z]+\]\s*(?:\*\*.*?\*\*\s*[—-]\s*)?(.*)$", re.DOTALL)
+# run_id sitting in the body (not the trailing provenance) = narrative leaked in.
+_SHAPE_BODY_RUNID_RE = re.compile(r"run_[0-9a-f]{6,}")
+_SHAPE_PROVENANCE_RE = re.compile(r"\([^)]*run_[0-9a-f]{6,}[^)]*\)\s*$")
+
+
+def shape_warnings(text: str) -> "list[str]":
+    """Return a list of SHAPE warnings for one MEMORY/DDD entry (empty = clean).
+    WARN-only, never raises, never blocks. Two checks:
+      1. verbose: an OPERATIONAL-type entry whose body exceeds _SHAPE_WORD_CAP words.
+      2. narrative-in-body: session-story markers (this session / I fixed / a bare
+         run_id NOT in the trailing provenance) — flagged for ANY type (a rule should
+         not encode a one-time story)."""
+    try:
+        if not text or not text.strip():
+            return []
+        warns: list[str] = []
+        tm = _SHAPE_TYPE_RE.match(text)
+        etype = tm.group(1) if tm else ""
+        bm = _SHAPE_TITLE_RE.match(text)
+        body = (bm.group(1) if bm else text).strip()
+
+        # 1. verbose — operational types only (cognitive types carry reasoning, may be long)
+        if etype in _SHAPE_OPERATIONAL_TYPES:
+            wc = len(body.split())
+            if wc > _SHAPE_WORD_CAP:
+                warns.append(f"verbose: {etype} body is {wc} words (>{_SHAPE_WORD_CAP}) "
+                             f"— a single imperative rule, not a story")
+
+        # 2. narrative-in-body — any type. Strip the trailing (…, run_xxx) provenance
+        # first so a legit provenance run_id is not mis-flagged.
+        body_wo_prov = _SHAPE_PROVENANCE_RE.sub("", text).strip()
+        if _SHAPE_NARRATIVE_RE.search(body_wo_prov):
+            warns.append("narrative: session-story marker in body "
+                         "(capture-vs-distill not separated — distill to the durable rule)")
+        elif _SHAPE_BODY_RUNID_RE.search(body_wo_prov):
+            warns.append("narrative: bare run_id in body (belongs in the trailing "
+                         "provenance metadata, not the rule text)")
+        return warns
+    except Exception:  # noqa: BLE001 — shape is advisory; never break a write
+        return []
