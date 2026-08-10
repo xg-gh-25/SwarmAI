@@ -29,6 +29,8 @@ from .ui_actions import (
     build_ui_command_event,
     build_surface_events,
     ensure_report_for_run,
+    parse_completion_run_id,
+    read_run_status,
     UI_ACTION_FULL_TOOL_NAME,
     SURFACE_OUTPUTS_FULL_TOOL_NAME,
 )
@@ -163,6 +165,24 @@ class StreamingOrchestrator:
     def stall_seconds(self) -> Optional[float]:
         """Proxy to parent's streaming_stall_seconds."""
         return self._parent.streaming_stall_seconds
+
+    def _auto_surfaced_run_ids(self) -> set:
+        """Session-scoped set of run_ids whose finish-time Canvas surface has already
+        fired this session (run_beff6754) — the idempotency guard shared by BOTH the
+        explicit surface_run_outputs branch and the backend-auto completion
+        observation, so a run is surfaced AT MOST ONCE regardless of which path fired.
+
+        Lazily attached to the parent SessionUnit via getattr rather than declared in
+        SessionUnit.__init__ — that class is CRITICAL (500+ callers) and this state is
+        orchestrator-owned; a lazy attr keeps the change fully local to this module.
+        A per-run-id set (not per-turn) is correct: it dedups auto-vs-explicit within a
+        session while still surfacing a genuinely different run, and a re-run of the
+        SAME completed run_id (retry) correctly does not re-pop the Canvas."""
+        seen = getattr(self._parent, "_auto_surfaced_run_ids_set", None)
+        if seen is None:
+            seen = set()
+            self._parent._auto_surfaced_run_ids_set = seen
+        return seen
 
     def _clear_completed_sub_agents(self, message: Any) -> None:
         """Remove tracking entries for sub-agents (Agent tool) that completed.
@@ -530,6 +550,12 @@ class StreamingOrchestrator:
         # run_5a7be540). Separate from _pending_file_changes because one Bash command
         # can both write and delete.
         _pending_file_deletes: dict[str, list[str]] = {}
+        # tool_use_id → run_id for a Bash `run-update --status completed` command
+        # (run_beff6754). Emits the finish-time Canvas surface at the ToolResult point
+        # IF run.json confirms status==completed — the backend-auto replacement for the
+        # agent-discipline surface_run_outputs call (which docs-only runs skipped, so
+        # Canvas never auto-opened on the most common pipeline).
+        _pending_completion: dict[str, str] = {}
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
         # Turn-scoped (local to this method), so no cross-session leak; keyed by the
         # raw path string. Only deliverable-candidate writes are ever resolved —
@@ -858,13 +884,42 @@ class StreamingOrchestrator:
                                     )
                                     for _ev in _del_events:
                                         yield _ev
+                            # ── Backend-auto Canvas surface on pipeline COMPLETE ──
+                            # (run_beff6754) A successful `run-update --status completed`
+                            # tool_result → confirm run.json ACTUALLY reached completed
+                            # (a gate-BLOCKED completion still exits 0, so the command
+                            # string is not proof), then fire build_surface_events so the
+                            # REPORT.md kind=knowledge event auto-opens Canvas WITHOUT the
+                            # agent calling surface_run_outputs (which docs-only runs skip).
+                            # Idempotent vs an explicit surface (per-session run-id set);
+                            # fully fail-safe (any error → no surface, turn survives).
+                            if _tuid in _pending_completion:
+                                _um_rid = _pending_completion.pop(_tuid, None)
+                                try:
+                                    _um_seen = self._auto_surfaced_run_ids()
+                                    if _um_rid and _um_rid not in _um_seen:
+                                        _um_status = await asyncio.to_thread(
+                                            read_run_status, _um_rid
+                                        )
+                                        if _um_status == "completed":
+                                            await ensure_report_for_run(_um_rid)
+                                            for _ev in build_surface_events(_um_rid):
+                                                yield _ev
+                                            _um_seen.add(_um_rid)
+                                except Exception as _e:  # noqa: BLE001 — hot-path fail-safe
+                                    logger.warning(
+                                        "auto-surface on completion failed for %r: %s",
+                                        _um_rid, _e,
+                                    )
                         else:
-                            # FAILED tool result: discard any pending write/delete tracking
-                            # so it can never surface later (symmetric with the AssistantMessage
-                            # ToolResult branch). Turn-local dicts, so this is hygiene, not a
-                            # cross-turn leak — but the two branches MUST behave identically.
+                            # FAILED tool result: discard any pending write/delete/completion
+                            # tracking so it can never surface later (symmetric with the
+                            # AssistantMessage ToolResult branch). Turn-local dicts, so this
+                            # is hygiene, not a cross-turn leak — but the two branches MUST
+                            # behave identically.
                             _pending_file_changes.pop(_tuid, None)
                             _pending_file_deletes.pop(_tuid, None)
+                            _pending_completion.pop(_tuid, None)
                 continue
 
             # ── AssistantMessage: full content blocks ─────────────
@@ -1015,6 +1070,17 @@ class StreamingOrchestrator:
                             _del_targets = parse_bash_delete_targets(_cmd)
                             if _del_targets:
                                 _pending_file_deletes[block.id] = _del_targets
+                            # ── Backend-auto Canvas surface on pipeline COMPLETE ──
+                            # (run_beff6754) If this Bash command is a `run-update
+                            # --status completed`, register its run_id; the matching
+                            # SUCCESSFUL ToolResult confirms run.json status and fires
+                            # build_surface_events — so the REPORT.md kind=knowledge
+                            # event auto-opens Canvas WITHOUT the agent having to call
+                            # surface_run_outputs (which docs-only runs skip). This is
+                            # only a PRE-FILTER; run.json is the authority at emit time.
+                            _completion_run_id = parse_completion_run_id(_cmd)
+                            if _completion_run_id:
+                                _pending_completion[block.id] = _completion_run_id
                         # ── UI-action (ACT): agent drives its own UI (Run 2) ──
                         # The agent calls the ui_action tool; we observe it here,
                         # validate cmd against the fail-closed allowlist, and yield
@@ -1064,6 +1130,11 @@ class StreamingOrchestrator:
                             await ensure_report_for_run(_sf_run_id)
                             for _sf_ev in build_surface_events(_sf_run_id):
                                 yield _sf_ev
+                            # Idempotency (run_beff6754): record that THIS run was
+                            # surfaced explicitly, so the backend-auto completion
+                            # observation below does not double-emit the same batch.
+                            if isinstance(_sf_run_id, str) and _sf_run_id:
+                                self._auto_surfaced_run_ids().add(_sf_run_id)
                             # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this
@@ -1159,11 +1230,39 @@ class StreamingOrchestrator:
                                 _fc_events += await self._build_file_delete_events(
                                     _deleted_paths, _resolve_cache
                                 )
+                            # ── Backend-auto Canvas surface on pipeline COMPLETE ──
+                            # (run_beff6754) A successful `run-update --status completed`
+                            # tool_result: confirm run.json ACTUALLY reached completed
+                            # (a gate-BLOCKED completion still exits 0 — the command
+                            # string is not proof), then fire build_surface_events so the
+                            # REPORT.md kind=knowledge event auto-opens Canvas. Idempotent
+                            # vs an explicit surface_run_outputs (per-session run-id set).
+                            # Fully fail-safe: any error degrades to prior behavior (no
+                            # surface) and never breaks the streaming turn.
+                            _completion_rid = _pending_completion.pop(block.tool_use_id, None)
+                            if _completion_rid:
+                                try:
+                                    _seen = self._auto_surfaced_run_ids()
+                                    if _completion_rid not in _seen:
+                                        _status = await asyncio.to_thread(
+                                            read_run_status, _completion_rid
+                                        )
+                                        if _status == "completed":
+                                            await ensure_report_for_run(_completion_rid)
+                                            _fc_events += build_surface_events(_completion_rid)
+                                            _seen.add(_completion_rid)
+                                except Exception as _e:  # noqa: BLE001 — hot-path fail-safe
+                                    logger.warning(
+                                        "auto-surface on completion failed for %r: %s",
+                                        _completion_rid, _e,
+                                    )
                         else:
                             # a FAILED tool result: discard any pending tracking (never
-                            # surface a write/delete that errored) so it can't leak later.
+                            # surface a write/delete/completion that errored) so it can't
+                            # leak later.
                             _pending_file_changes.pop(block.tool_use_id, None)
                             _pending_file_deletes.pop(block.tool_use_id, None)
+                            _pending_completion.pop(block.tool_use_id, None)
                         if _fc_events:
                             # Flush accumulated content blocks first (ordering:
                             # the tool_result must precede its file_changed).

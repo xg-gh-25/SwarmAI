@@ -593,6 +593,32 @@ def parse_completion_run_id(command: object) -> Optional[str]:
     return m.group(1)
 
 
+def read_run_status(run_id: object) -> Optional[str]:
+    """Return run.json ``status`` for ``run_id`` (the AUTHORITY for "did it actually
+    complete?"), or None if the run can't be found / read. Pure, never raises.
+
+    The completion CLI prints an error and ``return``s (exit 0) when a gate BLOCKS —
+    so the ``run-update --status completed`` command string is NOT proof the run
+    completed. The orchestrator reads THIS after the completion command's successful
+    tool_result and only surfaces when status == "completed". This is a single
+    off-loop stat+read (the orchestrator wraps it in asyncio.to_thread).
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    try:
+        import json
+        import re
+        from pathlib import Path
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
+            return None
+        ws = Path(str(get_swarmws())).resolve()
+        for hit in (ws / "Projects").glob("*/.artifacts/runs/" + run_id + "/run.json"):
+            return json.loads(hit.read_text()).get("status")
+        return None
+    except Exception:  # noqa: BLE001 — pure/fail-safe reader on the hot path
+        return None
+
+
 # ── The SDK-MCP tool the agent calls ─────────────────────────────────────────
 
 # Tool name as the agent sees it (SDK-MCP convention: mcp__<server>__<tool>).
