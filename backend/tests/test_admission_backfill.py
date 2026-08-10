@@ -48,35 +48,49 @@ class TestBackfill:
         assert not list(pdir.glob("p_applied.json"))
         assert not list(pdir.glob("p_rejected.json"))
 
-    def test_machine_broadcast_survivor_is_flagged_not_deleted(self, tmp_path):
-        # STEERING "trash > rm": a now-noise SURVIVOR (human never saw it) is FLAGGED for
-        # review, NOT silently unlinked — is_noise could false-positive on real knowledge.
+    def test_noise_survivor_archived_and_removed(self, tmp_path):
+        # AUTONOMY-FIRST (run_86f44f35): a now-noise survivor is DISCARDED — archived to a
+        # recoverable sink (discarded-proposals.jsonl) AND removed from the live queue. XG
+        # directive: noise is dropped, never kept for a human. (Structural machine-broadcast
+        # is caught by is_noise before the judge, so no judge mock needed.)
         backfill = self._fn()
         pdir = self._setup(tmp_path)
         _write_proposal(pdir, "p_noise", status="escalated",
                         content="Architecture change detected:\n- new_module: `backend/core/x.py`")
         result = backfill(tmp_path)
-        assert result["flagged_noise"] >= 1
-        assert list(pdir.glob("p_noise.json")), "survivor must NOT be auto-deleted (reversibility)"
+        assert result["flagged_noise"] >= 1  # counter = discarded
+        assert not list(pdir.glob("p_noise.json")), "discard removes it from the live queue"
+        archive = tmp_path / ".artifacts" / "discarded-proposals.jsonl"
+        assert archive.is_file(), "discard must be archived (recoverable)"
 
-    def test_untrusted_survivor_stays_escalated(self, tmp_path):
+    def test_untrusted_survivor_judged_and_discarded(self, tmp_path):
+        import unittest.mock as m
+        import core.ddd_cultivation as dc
         backfill = self._fn()
         pdir = self._setup(tmp_path)
-        # trust n/a (no run.json) → review → stays in queue
+        # trust n/a (no run.json) → judge decides; judge-suspect → discard (no queue)
         _write_proposal(pdir, "p_review", status="escalated")
-        result = backfill(tmp_path)
-        assert result["kept_review"] >= 1
-        assert list(pdir.glob("p_review.json"))  # still there for human review
+        with m.patch.object(dc, "self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            result = backfill(tmp_path)
+        assert result["kept_review"] == 0, "autonomy-first: no review queue"
+        assert not list(pdir.glob("p_review.json")), "judge-suspect survivor is discarded"
 
-    def test_survivor_trust_is_restamped(self, tmp_path):
-        # a survivor's stale stored stamp is re-derived + persisted (n/a here: no run.json)
+    def test_survivor_trust_restamped_before_judge(self, tmp_path):
+        # a survivor's stale 'passed' stamp is re-derived to n/a (no run.json) BEFORE the
+        # judge runs. With judge-suspect it discards; the re-stamp still happened (verified
+        # via the archive carrying the discard, not a lingering 'passed' file).
+        import unittest.mock as m
+        import core.ddd_cultivation as dc
         backfill = self._fn()
         pdir = self._setup(tmp_path)
         _write_proposal(pdir, "p_stale", status="escalated",
                         passed_adversarial_gate="passed", source_run_id="run_missing")
-        backfill(tmp_path)
-        restamped = json.loads((pdir / "p_stale.json").read_text())
-        assert restamped["passed_adversarial_gate"] == "n/a", "stale 'passed' must be re-derived to n/a"
+        with m.patch.object(dc, "self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            backfill(tmp_path)
+        # re-stamped n/a → judged suspect → discarded (file gone, archived)
+        assert not list(pdir.glob("p_stale.json"))
+        archive = tmp_path / ".artifacts" / "discarded-proposals.jsonl"
+        assert archive.is_file()
 
     def test_dry_run_touches_nothing(self, tmp_path):
         backfill = self._fn()
@@ -91,15 +105,20 @@ class TestBackfill:
         assert json.loads((pdir / "p_review.json").read_text())["passed_adversarial_gate"] == "passed"
 
     def test_backfill_is_idempotent(self, tmp_path):
-        # running twice must not double-process or crash
+        # running twice must not double-process or crash. AUTONOMY-FIRST: a trust=n/a
+        # survivor is judged on run 1 (judge-suspect → discarded+unlinked); run 2 finds
+        # nothing left to process. GC still fires once for the terminal file.
+        import unittest.mock as m
+        import core.ddd_cultivation as dc
         backfill = self._fn()
         pdir = self._setup(tmp_path)
         _write_proposal(pdir, "p_rejected", status="rejected")
         _write_proposal(pdir, "p_review", status="escalated")
-        r1 = backfill(tmp_path)
-        r2 = backfill(tmp_path)
+        with m.patch.object(dc, "self_adversarial_judge", lambda *a, **k: ("suspect", "t")):
+            r1 = backfill(tmp_path)
+            r2 = backfill(tmp_path)
         assert r1["gc_removed"] == 1 and r2["gc_removed"] == 0  # nothing terminal left
-        assert list(pdir.glob("p_review.json"))  # review survivor stable
+        assert not list(pdir.glob("p_review.json"))  # discarded on run 1, gone on run 2 (idempotent)
 
     def test_no_proposals_dir_is_safe(self, tmp_path):
         backfill = self._fn()

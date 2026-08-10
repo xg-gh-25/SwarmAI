@@ -1957,10 +1957,19 @@ def backfill_proposals(project_dir: "Path", dry_run: bool = False) -> dict:
                 pass
         verdict, _reason = admission_band(proposal, project_dir)
         if verdict == "discard":
-            # now-noise: FLAG it (visible), do NOT silently unlink a human-unseen item.
-            result["flagged_noise"] += 1
+            # AUTONOMY-FIRST (run_86f44f35): a discard is ARCHIVED (recoverable) + UNLINKED —
+            # NOT flagged-and-kept. XG directive: noise is dropped, never a human queue.
+            # The archive (discarded-proposals.jsonl) makes it recoverable, satisfying the
+            # "never an unlogged rm" concern without keeping it in the live pending set.
+            result["flagged_noise"] += 1  # keep the counter name for callers; = discarded
+            if not dry_run:
+                _archive_discarded_proposal(proposal, project_dir, f"backfill:{_reason}")
+                try:
+                    fp.unlink()
+                except OSError:
+                    pass
             logger.info(
-                "backfill: FLAG now-noise survivor (kept for review, not auto-deleted): "
+                "backfill: DISCARD now-noise survivor (archived + removed from queue): "
                 "%s § %s (%s): %.80s",
                 proposal.target_doc, proposal.target_section, _reason, proposal.content,
             )
