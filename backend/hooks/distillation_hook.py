@@ -204,9 +204,16 @@ class DistillationTriggerHook:
             self._get_undistilled_files, da_dir
         )
 
-        if len(undistilled_files) <= UNDISTILLED_THRESHOLD:
+        # A pending queue (budget-deferred entries from a prior over-budget cycle) must
+        # ALSO trigger a run even when there are no new undistilled files — else those
+        # deferred lessons would never drain if the workspace goes quiet (run: judge-
+        # budget starvation fix). Their source DA files are already marked distilled, so
+        # the queue is their only remaining home.
+        _pending_exists = (ws_path_obj := Path(ws_path)) and (
+            ws_path_obj / ".context" / self._PENDING_FILE).is_file()
+        if len(undistilled_files) <= UNDISTILLED_THRESHOLD and not _pending_exists:
             logger.debug(
-                "Undistilled count %d <= %d, no distillation needed",
+                "Undistilled count %d <= %d and no pending queue, no distillation needed",
                 len(undistilled_files),
                 UNDISTILLED_THRESHOLD,
             )
@@ -381,8 +388,14 @@ class DistillationTriggerHook:
         # Collect all entries across files, then write once per section.
         # Track which files were successfully extracted (marked distilled
         # AFTER writes succeed — see GAP 12).
-        all_decisions: list[str] = []
-        all_lessons: list[str] = []
+        # Drain budget-deferred entries from a PRIOR cycle FIRST, so they get re-judged
+        # ahead of new candidates with this cycle's fresh (self-healed) judge budget.
+        # This is what makes judge:budget_exhausted a DEFERRAL, not a silent discard
+        # (run: judge-budget starvation fix). Their source DA files are already marked
+        # distilled, so the pending queue is the only place they still live.
+        _pending_decisions, _pending_lessons = self._drain_pending(ws_path / ".context")
+        all_decisions: list[str] = list(_pending_decisions)
+        all_lessons: list[str] = list(_pending_lessons)
         extracted_files: list[tuple[Path, dict, str]] = []  # (path, frontmatter, body)
 
         for da_file in files:
@@ -571,6 +584,11 @@ class DistillationTriggerHook:
                 verdict, _section, reason = self._admit_memory_lesson(raw)
                 if verdict == "auto":
                     gated_decisions.append(enriched)
+                elif reason == "judge:budget_exhausted":
+                    # Un-judged (budget ran out) → DEFER, don't discard. Next cycle
+                    # re-judges it first with a fresh budget.
+                    self._requeue_pending(memory_path.parent, "decision", enriched)
+                    logger.info("distillation: DECISION deferred (budget): %.80s", raw)
                 else:
                     self._archive_discarded(memory_path.parent, raw, enriched, reason)
                     logger.info("distillation: DECISION discarded (%s, archived): %.80s",
@@ -603,6 +621,14 @@ class DistillationTriggerHook:
                 verdict, section, reason = self._admit_memory_lesson(raw)
                 if verdict == "auto":
                     by_section.setdefault(section, []).append(enriched)
+                elif reason == "judge:budget_exhausted":
+                    # Un-judged (the judge's rolling-window budget ran out this cycle) →
+                    # DEFER to the pending queue, NOT the discard archive. The next cycle
+                    # drains it first with a fresh budget, so a big session-close that
+                    # overflows the budget loses NO real lesson — it just spreads the
+                    # judging over a few cycles (run: judge-budget starvation fix).
+                    self._requeue_pending(memory_path.parent, "lesson", enriched)
+                    logger.info("distillation: lesson deferred (budget): %.80s", raw)
                 else:
                     # AUTONOMY-FIRST (run_86f44f35): non-auto → DISCARD to a recoverable
                     # archive. No human-review sink, no judge-noise/review split — the
@@ -743,6 +769,69 @@ class DistillationTriggerHook:
             logger.error("distillation: discard archive FAILED (%s) — entry lost: %.80s",
                          type(exc).__name__, raw)
             return False
+
+    # ── Budget-deferral requeue (run: judge-budget starvation fix) ──────────────
+    # A "judge:budget_exhausted" verdict means the judge's rolling-window budget ran
+    # out THIS cycle — the candidate was NOT judged, so it is neither auto nor a real
+    # discard. Routing it to _archive_discarded (the "nobody processes it" sink) would
+    # silently lose a genuine lesson just because a big session-close overflowed the
+    # budget. Instead defer it to a re-ingestible pending file that the NEXT cycle
+    # drains FIRST (with a fresh, self-healed budget). Same requeue pattern as
+    # recall_metrics: bounded work, no Bedrock storm, no loss — a large backlog drains
+    # over a few cycles. `kind` ∈ {"decision","lesson"} so the drain can re-route it.
+    _PENDING_FILE = "distill-pending.jsonl"
+
+    @staticmethod
+    def _requeue_pending(context_dir: "Path", kind: str, enriched: str) -> bool:
+        """Defer a budget-exhausted (un-judged) entry to the pending queue for the next
+        cycle. Best-effort — a requeue failure must never break distillation."""
+        import json as _json
+        try:
+            context_dir.mkdir(parents=True, exist_ok=True)
+            with (context_dir / DistillationTriggerHook._PENDING_FILE).open(
+                    "a", encoding="utf-8") as fh:
+                fh.write(_json.dumps({"kind": kind, "enriched": enriched},
+                                     ensure_ascii=False) + "\n")
+            return True
+        except OSError as exc:
+            logger.warning("distillation: pending requeue FAILED (%s): %.80s",
+                           type(exc).__name__, enriched)
+            return False
+
+    @staticmethod
+    def _drain_pending(context_dir: "Path") -> "tuple[list[str], list[str]]":
+        """Drain the pending queue (budget-deferred entries from a prior cycle) and
+        DELETE it, returning (decisions, lessons) to re-judge FIRST this cycle. The
+        delete-after-read is why a persistently over-budget system still converges: each
+        cycle re-judges what fits under the fresh budget and re-defers only the overflow.
+        Fail-soft: a missing/unreadable file → ([], [])."""
+        import json as _json
+        pending = context_dir / DistillationTriggerHook._PENDING_FILE
+        if not pending.is_file():
+            return ([], [])
+        decisions: list[str] = []
+        lessons: list[str] = []
+        try:
+            for line in pending.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except ValueError:
+                    continue
+                enriched = rec.get("enriched", "")
+                if not enriched:
+                    continue
+                if rec.get("kind") == "decision":
+                    decisions.append(enriched)
+                else:
+                    lessons.append(enriched)
+            pending.unlink()  # drained — the requeue loop below re-defers any overflow
+        except OSError as exc:
+            logger.warning("distillation: pending drain FAILED (%s)", type(exc).__name__)
+            return ([], [])
+        return (decisions, lessons)
 
     @staticmethod
     def _raw_lesson_text(enriched: str) -> str:

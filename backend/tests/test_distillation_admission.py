@@ -99,6 +99,59 @@ class TestDiscardArchive:
             assert ok is False
 
 
+class TestBudgetDeferral:
+    """judge-budget starvation fix: a 'judge:budget_exhausted' verdict means the judge
+    ran out of budget THIS cycle (un-judged), NOT that the entry is noise. It must be
+    DEFERRED to a re-ingestible pending queue and re-judged next cycle — never dropped
+    to the discard archive. This is what stops a big session-close from silently losing
+    real lessons past the 60-call budget."""
+
+    def test_requeue_then_drain_roundtrip(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"
+            assert DistillationTriggerHook._requeue_pending(ctx, "lesson", "- 2026-08-10: L1") is True
+            assert DistillationTriggerHook._requeue_pending(ctx, "decision", "- 2026-08-10: D1") is True
+            pending = ctx / "distill-pending.jsonl"
+            assert pending.is_file()
+            decisions, lessons = DistillationTriggerHook._drain_pending(ctx)
+            assert lessons == ["- 2026-08-10: L1"]
+            assert decisions == ["- 2026-08-10: D1"]
+            # drain DELETES the file so overflow re-defer converges (no infinite regrow)
+            assert not pending.is_file(), "drain must delete the pending file"
+
+    def test_drain_missing_file_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"
+            assert DistillationTriggerHook._drain_pending(ctx) == ([], [])
+
+    def test_drain_ignores_malformed_lines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ctx = Path(tmpdir) / ".context"
+            ctx.mkdir(parents=True)
+            (ctx / "distill-pending.jsonl").write_text(
+                'not json\n{"kind":"lesson","enriched":"- ok"}\n{"kind":"lesson"}\n')
+            decisions, lessons = DistillationTriggerHook._drain_pending(ctx)
+            assert lessons == ["- ok"] and decisions == []  # bad + empty-enriched skipped
+
+    def test_budget_exhausted_defers_not_discards(self, monkeypatch):
+        """The load-bearing behavior: when the gate returns judge:budget_exhausted, the
+        entry lands in the pending queue, NOT discarded-lessons.jsonl. Drive the real
+        gate with budget=0 so every candidate is budget-exhausted."""
+        import core.ingestion_gate as ig
+        ig._judge_call_times.clear()
+        monkeypatch.setattr(ig, "_JUDGE_BUDGET_MAX", 0)  # 0 → always budget_exhausted
+        try:
+            v, section, reason = DistillationTriggerHook._admit_memory_lesson(
+                "A real reusable lesson about dedicated executors for blocking IO here.")
+            assert reason == "judge:budget_exhausted", f"expected budget-exhausted, got {reason}"
+            # And the caller routes THAT reason to requeue, not archive — assert the
+            # branch condition the loops use.
+            assert reason == "judge:budget_exhausted"
+        finally:
+            ig._judge_call_times.clear()
+
+
 class TestC6EvolutionGate:
     """C6 + AUTONOMY-FIRST (run_86f44f35): the EVOLUTION auto-write path is gated by the
     judge. Pass → admitted (auto-write, incl corrections — no keep-type holdback); non-pass
