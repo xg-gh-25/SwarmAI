@@ -67,7 +67,15 @@ def record_recall_metric(
     over (serialized to TEXT). ``latency_ms`` — total wall-clock for this recall.
     """
     try:
+        # Stamp the MEASUREMENT time HERE, at record time — NOT at flush time. The
+        # flush loop drains a whole 5-min window at once, so a single flush-time
+        # timestamp collapsed every sample in a window onto one instant, making the
+        # table unable to answer "WHEN was recall slow?" (the very question this
+        # substrate exists for) and skewing any window filter by up to the flush
+        # interval. Local time, %Y-%m-%dT%H:%M:%S — same shape bulk_insert wrote.
+        from datetime import datetime
         sample = {
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "context": str(context),
             "domains": _serialize_domains(domains),
             "latency_ms": float(latency_ms),

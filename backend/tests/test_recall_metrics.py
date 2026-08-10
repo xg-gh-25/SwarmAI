@@ -35,6 +35,23 @@ def test_record_retains_samples_not_counts():
     assert lat == [100.0, 300.0], "both individual samples retained, not summed"
 
 
+def test_each_sample_carries_its_own_record_time_timestamp():
+    """Bug fix: the timestamp must be stamped at MEASUREMENT time (per sample), not
+    at flush time. A flush-time timestamp collapsed a whole 5-min window onto one
+    instant, so the table could not answer WHEN recall was slow. Each drained sample
+    must carry a non-empty 'timestamp' in the expected shape."""
+    import re
+    rm = _reset()
+    rm.record_recall_metric("session_prompt", ("ddd",), 100.0)
+    rm.record_recall_metric("session_prompt", ("ddd",), 200.0)
+    samples = rm.drain_samples()
+    assert len(samples) == 2
+    for s in samples:
+        assert s.get("timestamp"), "each sample must carry its own record-time timestamp"
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", s["timestamp"]), \
+            f"unexpected timestamp shape: {s['timestamp']!r}"
+
+
 def test_drain_is_swap_and_clear():
     """drain returns the buffered samples AND empties the ring — a second drain
     with no new records returns nothing (no double-count, no residue)."""

@@ -3344,8 +3344,16 @@ class SQLiteDatabase(BaseDatabase):
 
         ONE transaction / executemany per drain (not per-sample) to minimise the
         pooled writer's lock hold-time (the flush loop calls this every ~5 min with
-        a whole window of samples). Local timestamp, same convention as
-        record_token_usage, so time-of-day aggregation matches the user's day.
+        a whole window of samples).
+
+        TIMESTAMP: use each SAMPLE's own record-time timestamp (stamped in
+        core.recall_metrics.record_recall_metric at MEASUREMENT time). A single
+        flush-time timestamp used to collapse a whole 5-min window onto one instant —
+        the table then could not answer WHEN recall was slow (the substrate's whole
+        purpose) and skewed window filters by up to the flush interval. Fall back to
+        flush-time local now() only for a legacy sample that predates the per-sample
+        stamp (an in-flight ring across the deploy). Local time, same convention as
+        record_token_usage (time-of-day aggregation matches the user's day).
         """
         if not samples:
             return 0
@@ -3353,7 +3361,8 @@ class SQLiteDatabase(BaseDatabase):
             from datetime import datetime
             now_local = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             rows = [
-                (now_local, str(s.get("context", "")), str(s.get("domains", "")),
+                (str(s.get("timestamp") or now_local),
+                 str(s.get("context", "")), str(s.get("domains", "")),
                  float(s.get("latency_ms", 0.0)), int(s.get("hit_count", 0) or 0),
                  s.get("degraded_reason"))
                 for s in samples
