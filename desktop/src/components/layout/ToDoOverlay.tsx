@@ -281,6 +281,44 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
     void refresh();
   }, [refresh]);
 
+  // Manual status change from the detail drawer's dropdown. Routes each target ZONE
+  // through its SANCTIONED endpoint — NOT a raw PUT of status. This preserves the
+  // backend lifecycle invariants that a bare `update({status})` bypasses:
+  //   • Completed → mark-handled  (transition_status, guards terminal re-entry)
+  //   • Cancelled → mark-cancelled (same)
+  //   • To Do (Pending) → retreat  (clears the dispatch snapshot ②→①)
+  // 'In Progress' is intentionally NOT a manual target — it is entered by DISPATCH
+  // (drag-to-chat, needs a tab), not a status flip. Terminal zones show no control
+  // (see StatusSelect), so this only ever fires for legal forward transitions.
+  //
+  // Guard on the DERIVED zone (not raw status): a dispatched-but-pending todo derives
+  // 'In Progress' while raw status is still 'pending' — comparing raw would fire a
+  // spurious write. No rows[] optimistic patch (it made the row vanish under the
+  // 'Open' filter mid-write); we refresh from server truth. Terminal transitions
+  // close the drawer (matches Withdraw); retreat keeps it open and re-syncs `selected`.
+  const handleSetZone = useCallback(async (todo: ToDo, target: TodoStatusLabel) => {
+    if (deriveStatus(todo) === target) return;
+    setActionErr(null);
+    try {
+      if (target === 'Completed') {
+        await todosService.markHandled(todo.id);
+        setSelected((cur) => (cur?.id === todo.id ? null : cur));
+      } else if (target === 'Cancelled') {
+        await todosService.markCancelled(todo.id);
+        setSelected((cur) => (cur?.id === todo.id ? null : cur));
+      } else if (target === 'Pending') {
+        const updated = await todosService.retreat(todo.id);
+        setSelected((cur) => (cur?.id === todo.id ? updated : cur));
+      } else {
+        return; // 'In Progress' is dispatch-only — not a manual target
+      }
+      void refresh();
+    } catch {
+      setActionErr('Could not change status — please try again.');
+      void refresh();
+    }
+  }, [refresh]);
+
   return (
     <div className="flex-1 min-h-0 flex flex-col relative" data-testid="todo-overlay">
       {/* FilterBar: range + status chips (left) · New ToDo (right) */}
@@ -388,6 +426,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           onEdit={() => { setEditing(selected); setSelected(null); }}
           onDispatch={handleDispatch}
           onWithdraw={(t) => { void handleWithdraw(t); }}
+          onSetZone={(t, z) => { void handleSetZone(t, z); }}
         />
       )}
       {creating && <TodoForm mode="create" onSaved={handleSaved} onCancel={() => setCreating(false)} />}
@@ -633,6 +672,60 @@ function StatusBadge({ status }: { status: TodoStatusLabel }) {
   );
 }
 
+/** Status control for the detail drawer — a StatusBadge that becomes a dropdown when
+ *  (and only when) legal manual transitions exist. Covers the case the auto-hook
+ *  can't: a manual todo with no bound session / no linked files never auto-completes,
+ *  so a human close needs a direct control.
+ *
+ *  Operates in the derived-ZONE domain (the label the user sees), and offers ONLY
+ *  targets that map to a SANCTIONED backend endpoint from the current zone:
+ *    • To Do / In Progress → Completed | Cancelled  (mark-handled / mark-cancelled)
+ *    • In Progress → (also) To Do                    (retreat — clears dispatch)
+ *  Terminal zones (Completed, Cancelled) expose NO control — they render as a plain
+ *  read-only badge. This is deliberate: `transition_status` refuses terminal→X on the
+ *  backend, so a dropdown there would be a dead control that silently no-ops (the exact
+ *  reviewed-todo failure the adversarial review caught). 'In Progress' is never a
+ *  manual TARGET — it is reached by Dispatch (drag-to-chat), not a status flip. */
+const ZONE_TARGETS: Record<TodoStatusLabel, TodoStatusLabel[]> = {
+  Pending: ['Completed', 'Cancelled'],
+  'In Progress': ['Completed', 'Cancelled', 'Pending'],
+  Completed: [],
+  Cancelled: [],
+};
+function StatusSelect({ todo, onSetZone }: {
+  todo: ToDo;
+  onSetZone: (t: ToDo, target: TodoStatusLabel) => void;
+}) {
+  const status = deriveStatus(todo);
+  const targets = ZONE_TARGETS[status];
+  // Terminal (or no legal move) → read-only badge, no dropdown affordance.
+  if (targets.length === 0) {
+    return <span data-testid="todo-status-readonly"><StatusBadge status={status} /></span>;
+  }
+  return (
+    <span className="relative inline-flex items-center" data-testid="todo-status-select">
+      <StatusBadge status={status} />
+      <span className="material-symbols-outlined text-[13px] text-[var(--color-text-muted)] -ml-0.5 pointer-events-none">arrow_drop_down</span>
+      {/* Native <select> overlaid transparently → real keyboard/a11y + zero-dep menu.
+          value pinned to the current zone; options are current + legal targets. The
+          onChange only fires onSetZone for a DIFFERENT target (handler also guards). */}
+      <select
+        aria-label="Change status"
+        data-testid="todo-status-select-input"
+        value={status}
+        onChange={(e) => onSetZone(todo, e.target.value as TodoStatusLabel)}
+        onClick={(e) => e.stopPropagation()}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+      >
+        <option value={status}>{status}</option>
+        {targets.map((t) => (
+          <option key={t} value={t}>{t}</option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
 function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void; icon: string; label: string; primary?: boolean; testid: string }) {
   return (
     <button
@@ -683,12 +776,13 @@ function GuideBanner() {
 
 // ── Detail drawer ───────────────────────────────────────────────────
 
-function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw }: {
+function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone }: {
   todo: ToDo;
   onClose: () => void;
   onEdit: () => void;
   onDispatch: (t: ToDo) => void;
   onWithdraw: (t: ToDo) => void;
+  onSetZone: (t: ToDo, target: TodoStatusLabel) => void;
 }) {
   const wp = parseWorkPacket(todo.linkedContext);
   const priColor = PRIORITY_COLOR[todo.priority] === 'transparent' ? 'var(--color-text-faint)' : PRIORITY_COLOR[todo.priority];
@@ -718,7 +812,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw }: {
           </button>
         </div>
         <div className="mt-2 flex items-center gap-2 flex-wrap pl-3.5">
-          <StatusBadge status={status} />
+          <StatusSelect todo={todo} onSetZone={onSetZone} />
           <PriorityPill priority={todo.priority} />
           <span className="text-[10px] font-mono text-[var(--color-text-faint)]">{todo.sourceType}</span>
         </div>

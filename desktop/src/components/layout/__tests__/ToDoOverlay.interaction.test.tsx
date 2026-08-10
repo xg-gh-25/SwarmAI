@@ -29,6 +29,9 @@ vi.mock('../../../services/todos', () => ({
     update: vi.fn(),
     delete: vi.fn(),
     dispatch: vi.fn(),
+    retreat: vi.fn(),
+    markHandled: vi.fn(),
+    markCancelled: vi.fn(),
     listAttachments: vi.fn(),
     uploadAttachment: vi.fn(),
     deleteAttachment: vi.fn(),
@@ -61,6 +64,9 @@ describe('ToDoOverlay (flat table)', () => {
     mockHistory([]);
     (todosService.create as ReturnType<typeof vi.fn>).mockResolvedValue(mkTodo({ id: 'new' }));
     (todosService.delete as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (todosService.markHandled as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (todosService.markCancelled as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (todosService.retreat as ReturnType<typeof vi.fn>).mockResolvedValue(mkTodo({ dispatchedAt: null }));
     (todosService.listAttachments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (todosService.uploadAttachment as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'att1', todoId: 't1', filename: 'x', relPath: 'x', size: 1, createdAt: RECENT });
     (todosService.deleteAttachment as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
@@ -122,6 +128,56 @@ describe('ToDoOverlay (flat table)', () => {
     await waitFor(() => expect(todosService.delete).toHaveBeenCalledWith('t1'));
     // optimistic removal → row gone
     await waitFor(() => expect(screen.queryByTestId('todo-row')).toBeNull());
+  });
+
+  it('drawer status dropdown → Completed routes through the SANCTIONED mark-handled endpoint (NOT a raw PUT)', async () => {
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    fireEvent.click(await screen.findByTestId('todo-row'));
+    const drawer = await screen.findByTestId('todo-detail-drawer');
+    // dropdown options are derived ZONE labels, not raw status values
+    fireEvent.change(within(drawer).getByTestId('todo-status-select-input'), { target: { value: 'Completed' } });
+    await waitFor(() => expect(todosService.markHandled).toHaveBeenCalledWith('t1'));
+    // GOVERNANCE: must NOT bypass the review invariant via PUT status=handled
+    expect(todosService.update).not.toHaveBeenCalled();
+  });
+
+  it('drawer status dropdown → Cancelled routes through the SANCTIONED mark-cancelled endpoint', async () => {
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    fireEvent.click(await screen.findByTestId('todo-row'));
+    const drawer = await screen.findByTestId('todo-detail-drawer');
+    fireEvent.change(within(drawer).getByTestId('todo-status-select-input'), { target: { value: 'Cancelled' } });
+    await waitFor(() => expect(todosService.markCancelled).toHaveBeenCalledWith('t1'));
+    expect(todosService.update).not.toHaveBeenCalled();
+  });
+
+  it('an In-Progress todo → To Do routes through retreat (NOT a raw PUT, NOT a no-op)', async () => {
+    // In Progress via status='in_discussion' (bind-session path) — the exact case
+    // the adversarial review flagged as a silent no-op. Filter must show it, so use
+    // 'In Progress' chip. Seeded row carries dispatchedTabLabel too so deriveStatus
+    // is unambiguous In Progress regardless of which branch fires.
+    mockList([mkTodo({ id: 'ip1', status: 'in_discussion', dispatchedTabLabel: 'Tab A', title: 'In prog one' })]);
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    fireEvent.click(screen.getByTestId('todo-chip-In-Progress'));
+    fireEvent.click(await screen.findByTestId('todo-row'));
+    const drawer = await screen.findByTestId('todo-detail-drawer');
+    fireEvent.change(within(drawer).getByTestId('todo-status-select-input'), { target: { value: 'Pending' } });
+    await waitFor(() => expect(todosService.retreat).toHaveBeenCalledWith('ip1'));
+    expect(todosService.update).not.toHaveBeenCalled();
+  });
+
+  it('a terminal (Completed) todo shows a READ-ONLY status badge — no dead dropdown', async () => {
+    mockList([mkTodo({ id: 'done1', status: 'handled', title: 'Done one' })]);
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
+    await screen.findByTestId('todo-overlay');
+    // switch filter to Completed so the terminal row is visible, then open it
+    fireEvent.click(screen.getByTestId('todo-chip-Completed'));
+    fireEvent.click(await screen.findByTestId('todo-row'));
+    const drawer = await screen.findByTestId('todo-detail-drawer');
+    expect(within(drawer).getByTestId('todo-status-readonly')).toBeTruthy();
+    expect(within(drawer).queryByTestId('todo-status-select-input')).toBeNull();
   });
 
   it('status chip default Open hides a terminal (completed) todo', async () => {

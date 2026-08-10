@@ -314,20 +314,31 @@ async def dispatch_todo(todo_id: str, request: DispatchTodoRequest):
 
 @router.post("/{todo_id}/retreat")
 async def retreat_todo(todo_id: str):
-    """↩ Retreat ②→①: clear the dispatch snapshot so a dispatched-but-not-yet-
-    progressed todo returns to the To Do zone (run_5088b841, A2). Handles the
-    job-only gap: a todo dispatched (injected) but never sent would otherwise
-    sit in ② forever (the sweep has no session reply to complete it)."""
+    """↩ Retreat ②→①: return an In-Progress todo to the To Do zone. Clears the
+    dispatch snapshot AND, if the todo reached ② via drag-to-chat (status set to
+    'in_discussion' by bind-session, WITHOUT a dispatched_* snapshot), resets status
+    back to 'pending'. Without the status reset, deriveStatus still keys In Progress
+    off status=='in_discussion' (todoTable.ts) → retreat would be a silent no-op for
+    that path (adversarial run: reworked-status-dropdown, 2026-08-10).
+
+    Two ways a todo is In Progress, both handled here:
+      • dispatched_* set (job/tab inject, status stays 'pending') → clear snapshot.
+      • status=='in_discussion' (bind-session) → reset to 'pending'.
+    Terminal todos (handled/cancelled) are left untouched — status is only reset
+    from the in_discussion progress state, never resurrected from a terminal one."""
     todo = await todo_manager.get(todo_id)
     if not todo:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    await db.todos.update(todo_id, {
+    patch: dict = {
         "dispatched_session_id": None,
         "dispatched_tab_label": None,
         "dispatched_at": None,
         "updated_at": now,
-    })
+    }
+    if todo.status == ToDoStatus.IN_DISCUSSION.value:
+        patch["status"] = ToDoStatus.PENDING.value
+    await db.todos.update(todo_id, patch)
     return await todo_manager.get(todo_id)
 
 

@@ -468,6 +468,36 @@ class TestDispatchRetreat:
         assert d["dispatched_at"] is None
         assert d["status"] == "pending"
 
+    def test_retreat_resets_in_discussion_to_pending(self, client: TestClient, workspace_id: str):
+        """Retreat on an in_discussion todo (bind-session path, NO dispatched_*) must
+        reset status→pending, else deriveStatus keeps it 'In Progress' and the UI
+        'To Do' control is a silent no-op (adversarial: reworked-status-dropdown)."""
+        todo = _create_todo(client, workspace_id, title="in discussion retreat")
+        # Reach in_discussion WITHOUT a dispatch snapshot (mirrors bind-session).
+        client.put(f"/api/todos/{todo['id']}", json={"status": "in_discussion"})
+        resp = client.post(f"/api/todos/{todo['id']}/retreat")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["status"] == "pending"
+        assert d["dispatched_at"] is None
+
+    def test_retreat_status_reset_is_narrow_to_in_discussion(self, client: TestClient, workspace_id: str):
+        """The reset fires ONLY from in_discussion — never from a terminal status, and
+        never from plain pending. Guards both directions the narrow `== IN_DISCUSSION`
+        check protects: (a) a terminal todo is not resurrected, (b) a pending todo is
+        untouched. A broadened guard (e.g. `!= terminal`) would still pass a cancelled
+        case, so we ALSO assert the in_discussion→pending move in the same test to lock
+        the guard's exact width (adversarial pass-3: the terminal-only variant was
+        vacuous — passed with the guard removed)."""
+        # (a) terminal stays terminal
+        term = _create_todo(client, workspace_id, title="terminal retreat")
+        client.put(f"/api/todos/{term['id']}", json={"status": "cancelled"})
+        assert client.post(f"/api/todos/{term['id']}/retreat").json()["status"] == "cancelled"
+        # (b) in_discussion resets to pending (this arm RED-fails if the guard is removed)
+        ind = _create_todo(client, workspace_id, title="ind retreat")
+        client.put(f"/api/todos/{ind['id']}", json={"status": "in_discussion"})
+        assert client.post(f"/api/todos/{ind['id']}/retreat").json()["status"] == "pending"
+
     def test_dispatch_404(self, client: TestClient):
         resp = client.post("/api/todos/nonexistent/dispatch", json={"tab_label": "Tab 1"})
         assert resp.status_code == 404
