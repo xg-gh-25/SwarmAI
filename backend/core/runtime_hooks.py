@@ -734,14 +734,21 @@ _ADVERSARIAL_TYPE_RE = re.compile(
 #      deliberately excluded.
 _DEFECT = r"(?:bugs?|regressions?|issues?|flaws?|holes?|weakness(?:es)?|vulnerab\w*|edge\s+cases?)"
 _SUBJECT = r"(?:this|the)\s+(?:diff|change|changeset|code|design|implementation|fix|pr|patch)"
+# Optional adjectives an adversarial prompt puts between the verb and the defect:
+# "find ANY bugs", "find SECURITY issues", "find POTENTIAL regressions".
+_QUAL = r"(?:(?:any|all|potential|possible|security|hidden|subtle|real)\s+){0,3}"
 _ADVERSARIAL_INTENT_RE = re.compile(
     r"adversar|refute|red.?team|poke\s+holes?|stress.?test|"
     r"try\s+to\s+break|break\s+(?:this|it)\b|review\s+as\s+a\s+skeptic|"
     r"challenge\s+(?:the|this|your)|critically\s+review|"
-    r"hunt\s+for\s+" + _DEFECT + r"|audit\s+" + _SUBJECT + r"|"
-    r"look\s+for\s+(?:security\s+)?" + _DEFECT + r"|"
-    # "find <defect> in this diff/change/code" — diff-anchored (excludes Explore)
-    r"(?:find|hunt\s+for|look\s+for)\s+" + _DEFECT + r"[^.\n]{0,40}?\bin\s+" + _SUBJECT + r"|"
+    r"hunt\s+for\s+" + _QUAL + _DEFECT + r"|audit\s+" + _SUBJECT + r"|"
+    # "find/look for <qual> <defect> in the code/diff" — the SUBJECT includes 'code',
+    # so "find security issues in the code" matches; still excludes Explore prompts
+    # like "find the config file" (no defect token) and "find bugs get logged" (no
+    # 'in <subject>').
+    r"(?:find|look\s+for)\s+" + _QUAL + _DEFECT + r"[^.\n]{0,40}?\bin\s+" + _SUBJECT + r"|"
+    # "review this diff ... find <defect>" — adversarial review phrased subject-first
+    r"review\s+" + _SUBJECT + r"[^.\n]{0,40}?\b(?:find|for)\s+" + _QUAL + _DEFECT + r"|"
     r"attack\s+" + _SUBJECT + r"|"
     r"对抗|挑刺|找\s*bug|找出\s*bug|攻击(?:这|该)",
     re.IGNORECASE,
@@ -793,27 +800,33 @@ def create_agent_tool_audit_hook(
         if not session_id and not run_id:
             return {}
 
-        # Classify THIS sub-agent's intent (Plan B v4): agent_type is the primary
-        # signal; if inconclusive, read the HEAD of the sub-agent's OWN transcript
-        # (the spawn prompt) as a fallback. Per-agent-correct by construction — this
-        # SubagentStop fires for exactly one sub-agent and reads only its transcript.
+        # agent_type is read cheaply on-loop (it's already in input_data). The
+        # transcript READ + intent classification + marker writes ALL run in ONE
+        # off-loop thread hop below — the sub-agent transcript is on the same disk
+        # the daemon is actively writing, so reading it inline would block the event
+        # loop on a busy disk (RP53; the sibling create_subagent_capture_hook already
+        # offloads its transcript read via to_thread).
         agent_type = _extract_field(input_data, "agent_type", "")
-        adversarial = _is_adversarial_intent(agent_type, "", "")
-        if not adversarial:
-            transcript_path = _extract_field(input_data, "agent_transcript_path", "")
-            prompt_head = _read_subagent_prompt_head(transcript_path) if transcript_path else ""
-            if prompt_head:
-                adversarial = _is_adversarial_intent(agent_type, "", prompt_head)
+        transcript_path = _extract_field(input_data, "agent_transcript_path", "")
 
         try:
             _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
             ts = time.time()
 
-            # OFF-LOOP (run_a1f4c2d8): both audit markers in ONE thread hop, not two —
-            # they are written as a PAIR (run-specific when available, session-level
-            # always, as fallback evidence), so splitting them would double the hops and
-            # let a cancellation land between two writes meant to be one audit record.
-            def _write_markers() -> None:
+            # OFF-LOOP (run_a1f4c2d8 + run_df2668b4): transcript read, classification,
+            # and BOTH/all markers in ONE thread hop — the reads+writes are one audit
+            # record; splitting them would double hops and let a cancellation land
+            # mid-record.
+            def _classify_and_write() -> None:
+                # Classify THIS sub-agent's intent: agent_type primary; the HEAD of
+                # its OWN transcript (spawn prompt) as fallback. Per-agent-correct by
+                # construction — this SubagentStop fires for exactly one sub-agent.
+                adversarial = _is_adversarial_intent(agent_type, "", "")
+                if not adversarial and transcript_path:
+                    prompt_head = _read_subagent_prompt_head(transcript_path)
+                    if prompt_head:
+                        adversarial = _is_adversarial_intent(agent_type, "", prompt_head)
+
                 # Write run-specific marker if run_id available (primary path)
                 if run_id:
                     marker_file = _PIPELINE_AUDIT_DIR / f"{run_id}.marker"
@@ -850,7 +863,7 @@ def create_agent_tool_audit_hook(
                         "agent_type": agent_type or "unknown",
                     }))
 
-            await asyncio.to_thread(_write_markers)
+            await asyncio.to_thread(_classify_and_write)
         except Exception:
             logger.warning("Failed to write agent audit marker (session=%s)", session_id)
 

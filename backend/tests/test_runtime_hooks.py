@@ -2108,6 +2108,11 @@ class TestAdversarialIntentClassifier:
             "Audit this diff for governance violations.",
             "Challenge the assumptions and try to break it.",
             "Critically review this changeset.",
+            # Gate-2 findings: real defect-hunting phrasings that MUST match
+            "find security issues in the code",
+            "Review this diff and find any bugs or regressions.",
+            "find any bugs in this change",
+            "find hidden vulnerabilities in the implementation",
         ]:
             assert f("general-purpose", "", prompt) is True, f"should match: {prompt!r}"
 
@@ -2169,6 +2174,33 @@ class TestAdversarialCompletionMarker:
         base = [p for p in tmp_path.glob("session_sess-exp_*.marker") if "_adv_" not in p.name]
         assert len(adv) == 0, "Explore completion must NOT write an _adv_ marker"
         assert len(base) == 1, "base marker still written"
+
+    @pytest.mark.asyncio
+    async def test_transcript_read_is_offloaded_not_on_event_loop(self, tmp_path, monkeypatch):
+        """Gate-2 HIGH-A (RP53): the transcript read must run in a worker thread,
+        not inline on the async event loop. Assert _read_subagent_prompt_head is
+        invoked on a DIFFERENT thread than the running loop's thread."""
+        import threading, asyncio
+        import core.runtime_hooks as rh
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+        loop_thread = threading.get_ident()
+        seen = {}
+        real = rh._read_subagent_prompt_head
+        def _spy(path):
+            seen["thread"] = threading.get_ident()
+            return real(path)
+        monkeypatch.setattr(rh, "_read_subagent_prompt_head", _spy)
+        transcript = tmp_path / "sub.jsonl"
+        transcript.write_text(
+            '{"isSidechain": true, "type": "user", "message": {"content": "Locate the file."}}\n'
+        )
+        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-off"})
+        await hook(
+            {"agent_id": "a", "agent_transcript_path": str(transcript), "agent_type": "Explore"},
+            None, MagicMock(),
+        )
+        assert "thread" in seen, "transcript read never happened"
+        assert seen["thread"] != loop_thread, "transcript read ran ON the event loop (RP53)"
 
     @pytest.mark.asyncio
     async def test_agent_type_adversarial_without_transcript(self, tmp_path, monkeypatch):
