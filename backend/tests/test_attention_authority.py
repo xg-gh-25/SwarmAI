@@ -385,3 +385,61 @@ def test_governance_no_rule_text_is_still_labeled(monkeypatch):
     it = aa._collect_governance()[0]
     assert it.title == "New governance rule (no rule text)"
     assert it.detail  # still carries the class phrase ("recurring pattern")
+
+
+def test_governance_malformed_fields_do_not_leak(monkeypatch):
+    """Adversarial hardening: producer fields are untrusted. bool occurrence_count
+    must NOT render 'recurred True×'; out-of-range confidence must be clamped; a
+    non-string proposed_rule must NOT leak a Python repr into the title."""
+    # bool occurrence_count (bool is an int subclass — the HIGH finding)
+    _patch_governance(monkeypatch, [{
+        "id": "b", "proposal_kind": "rule", "proposed_rule": "x",
+        "source_class": "CLASS_A", "occurrence_count": True, "confidence": True,
+    }])
+    d = aa._collect_governance()[0].detail
+    assert "True×" not in d and "recurred True" not in d
+    assert "100% confidence" not in d  # confidence=True must not become 100%
+
+    # out-of-range confidence is clamped to [0,1]
+    _patch_governance(monkeypatch, [{
+        "id": "c", "proposal_kind": "rule", "proposed_rule": "x",
+        "source_class": "CLASS_A", "confidence": 1.5,
+    }])
+    assert "150%" not in aa._collect_governance()[0].detail
+
+    # float occurrence_count is honored (symmetric with confidence), rendered int
+    _patch_governance(monkeypatch, [{
+        "id": "f", "proposal_kind": "rule", "proposed_rule": "x",
+        "source_class": "CLASS_A", "occurrence_count": 3.0,
+    }])
+    assert "recurred 3×" in aa._collect_governance()[0].detail
+
+    # non-string proposed_rule must not leak a repr — falls back to the safe label
+    _patch_governance(monkeypatch, [{
+        "id": "l", "proposal_kind": "rule", "proposed_rule": ["a", "b"],
+    }])
+    t = aa._collect_governance()[0].title
+    assert "[" not in t and "'" not in t
+    assert t == "New governance rule (no rule text)"
+
+
+def test_governance_nonfinite_occurrence_does_not_abort_loop(monkeypatch):
+    """2nd-round adversarial: int(inf)/int(nan) would throw and, inside the single
+    try/except over the proposals loop, silently drop EVERY remaining card. A
+    poisoned proposal must not take out its siblings."""
+    _patch_governance(monkeypatch, [
+        {"id": "bad", "proposal_kind": "rule", "proposed_rule": "x",
+         "source_class": "CLASS_A", "occurrence_count": float("inf")},
+        {"id": "nan", "proposal_kind": "rule", "proposed_rule": "y",
+         "source_class": "CLASS_A", "occurrence_count": float("nan")},
+        {"id": "good", "proposal_kind": "rule", "proposed_rule": "z",
+         "source_class": "CLASS_A", "occurrence_count": 5},
+    ])
+    items = aa._collect_governance()
+    # all three survive (no exception), and inf/nan just omit the recurred clause
+    ids = {i.id for i in items}
+    assert ids == {"governance:bad", "governance:nan", "governance:good"}
+    bad = next(i for i in items if i.id == "governance:bad")
+    assert "recurred" not in bad.detail  # non-finite → clause dropped, no crash
+    good = next(i for i in items if i.id == "governance:good")
+    assert "recurred 5×" in good.detail

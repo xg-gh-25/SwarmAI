@@ -2115,6 +2115,7 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
 
     if result.status == "failed":
         js.consecutive_failures += 1
+        js.consecutive_auth_failures = 0  # a real failure clears the auth streak
         # Persist WHY it failed so the 🔔 Needs-You queue is diagnosable
         # (was always empty → "failed" with no reason). Prefer error, fall
         # back to summary; truncate to keep state.json small.
@@ -2123,33 +2124,72 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
         # Only fires once per streak (exactly at threshold, not every failure after).
         if js.consecutive_failures == _FAILURE_ALERT_THRESHOLD:
             _write_failure_streak_alert(job_id, js.consecutive_failures, result)
-    elif result.status != "auth_failed":
-        # auth_failed is transient — don't reset streak (would hide real
-        # failures) but don't increment either (not a job bug).
+    elif result.status == "auth_failed":
+        # Transient by default — don't touch consecutive_failures (would hide real
+        # failures / trip the breaker on a blip). But track auth failures separately:
+        # a PERSISTENT auth failure must not retry invisibly forever. Persist the
+        # reason and, once the streak crosses the threshold, write a streak alert so
+        # it surfaces in the briefing + the BLOCKING Need-You queue (see
+        # attention_authority._collect_jobs) — instead of disappearing entirely.
+        js.consecutive_auth_failures += 1
+        js.last_error = (result.error or result.summary or "")[:500] or None
+        if js.consecutive_auth_failures == _FAILURE_ALERT_THRESHOLD:
+            _write_failure_streak_alert(
+                job_id, js.consecutive_auth_failures, result, is_auth=True
+            )
+    else:
+        # A real success clears both streaks + the stale error.
         js.consecutive_failures = 0
-        js.last_error = None  # cleared on a real success
+        js.consecutive_auth_failures = 0
+        js.last_error = None
 
 
-def _write_failure_streak_alert(job_id: str, streak: int, last_result: JobResult) -> None:
+def _write_failure_streak_alert(
+    job_id: str, streak: int, last_result: JobResult, is_auth: bool = False
+) -> None:
     """Write a high-visibility alert entry to .job-results.jsonl.
 
     This entry appears in the session briefing alongside normal job results,
     making consecutive failures impossible to miss. Fires once per streak
     (at exactly _FAILURE_ALERT_THRESHOLD), not on every subsequent failure.
+
+    `is_auth`: the streak is AUTH pre-check failures, not job failures. The two
+    have opposite remediation + retry semantics, so the alert text must NOT be
+    shared verbatim — an auth streak is not a code bug and is NOT in 24h cooldown
+    (auth-failed jobs retry hourly, not after cooldown). The briefing renders
+    job_name/status verbatim (proactive_intelligence._format_job_result_highlights),
+    so a wrong label here is a user-facing lie.
     """
-    alert_entry = {
-        "job_id": job_id,
-        "job_name": f"⚠️ ALERT: {job_id} failed {streak}x in a row",
-        "run_at": datetime.now(timezone.utc).isoformat(),
-        "status": "failed",
-        "tokens_used": 0,
-        "duration_seconds": 0,
-        "summary": (
-            f"Job '{job_id}' has failed {streak} consecutive times. "
-            f"Last error: {(last_result.error or last_result.summary or 'unknown')[:150]}. "
-            f"Job is now in 24h cooldown — will auto-retry after cooldown expires."
-        ),
-    }
+    last = (last_result.error or last_result.summary or "unknown")[:150]
+    if is_auth:
+        alert_entry = {
+            "job_id": job_id,
+            "job_name": f"⚠️ ALERT: {job_id} auth failing {streak}x in a row",
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "status": "auth_failed",
+            "tokens_used": 0,
+            "duration_seconds": 0,
+            "summary": (
+                f"Job '{job_id}' failed its auth pre-check {streak} consecutive times — "
+                f"auth is not self-healing (revoked/expired SSO IdC, wrong region). "
+                f"Restore CLI auth (claude auth login / refresh SSO IdC); it retries "
+                f"automatically (hourly, no cooldown). Last: {last}."
+            ),
+        }
+    else:
+        alert_entry = {
+            "job_id": job_id,
+            "job_name": f"⚠️ ALERT: {job_id} failed {streak}x in a row",
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "status": "failed",
+            "tokens_used": 0,
+            "duration_seconds": 0,
+            "summary": (
+                f"Job '{job_id}' has failed {streak} consecutive times. "
+                f"Last error: {last}. "
+                f"Job is now in 24h cooldown — will auto-retry after cooldown expires."
+            ),
+        }
 
     try:
         JOB_RESULTS_JSONL.parent.mkdir(parents=True, exist_ok=True)

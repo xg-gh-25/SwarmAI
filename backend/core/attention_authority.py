@@ -37,6 +37,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,10 @@ def _collect_governance() -> list[AttentionItem]:
             # Title: prefer an explicit title/summary, else BUILD one from the actual
             # proposed rule text — never fall back to the bare "governance rule" type,
             # which tells the user nothing (the card looked empty before this).
-            rule_text = str(gp.get("proposed_rule") or "").strip()
+            # Only STRING proposed_rule is usable — a list/dict would str() to a
+            # Python repr ("['a', 'b']") and leak brackets into user-facing text.
+            raw_rule = gp.get("proposed_rule")
+            rule_text = raw_rule.strip() if isinstance(raw_rule, str) else ""
             explicit = gp.get("title") or gp.get("summary")
             if explicit:
                 title = str(explicit)
@@ -223,9 +227,19 @@ def _collect_governance() -> list[AttentionItem]:
             conf = gp.get("confidence")
             phrase = _class_phrase(str(gp.get("source_class") or ""))
             bits = [phrase]
-            if isinstance(occ, int):
-                bits.append(f"recurred {occ}×")
-            if isinstance(conf, (int, float)):
+            # `not isinstance(bool)`: bool is an int subclass — `True` would render
+            # "recurred True×". Accept int OR float (a producer may write 3.0); the
+            # confidence field below already accepts float, so keep them symmetric.
+            # `math.isfinite`: int(inf)→OverflowError, int(nan)→ValueError would
+            # abort the whole proposals loop (one try/except) and silently drop
+            # every remaining governance card.
+            if isinstance(occ, (int, float)) and not isinstance(occ, bool) and math.isfinite(occ):
+                bits.append(f"recurred {int(occ)}×")
+            if isinstance(conf, (int, float)) and not isinstance(conf, bool):
+                # Clamp to [0,1] — an unvalidated producer field of 1.5 or -0.2
+                # would otherwise print "150% confidence" / "-20% confidence".
+                # (max/min also collapses nan→1.0 safely; no int() on conf.)
+                conf = max(0.0, min(1.0, float(conf)))
                 bits.append(f"{round(conf * 100)}% confidence")
             why = " · ".join(bits)
             rationale = str(gp.get("rationale") or gp.get("description") or "").strip()
@@ -295,7 +309,13 @@ def _collect_paused_runs(pipeline_runs: Optional[list[dict]] = None) -> list[Att
 
 
 def _collect_jobs() -> list[AttentionItem]:
-    """Circuit-broken jobs (consecutive_failures >= threshold) → BLOCKING.
+    """Broken jobs → BLOCKING. Two classes, both gated on a >=threshold STREAK:
+
+    1. Circuit-broken (consecutive_failures) — a real job bug that stopped it.
+    2. Persistently auth-failing (consecutive_auth_failures) — auth failures
+       self-heal + auto-retry (so a blip does NOT surface), but a PERSISTENT one
+       (revoked IdC, wrong region) would otherwise retry invisibly forever with
+       no user-facing trace. Past the threshold it MUST reach the user.
 
     Filter tightening vs the old frontend (>0): only a BROKEN STREAK is the
     user's problem; transient failures self-heal next scheduled run. Jobs are
@@ -308,23 +328,42 @@ def _collect_jobs() -> list[AttentionItem]:
         state = load_state()
         jobs_by_id = {j.id: j for j in load_jobs()}
         for job_id, js in (state.jobs or {}).items():
-            if (js.consecutive_failures or 0) < _JOB_CIRCUIT_BREAKER_THRESHOLD:
-                continue
             job = jobs_by_id.get(job_id)
             name = getattr(job, "name", None) or job_id
-            items.append(AttentionItem(
-                id=f"job:{job_id}",
-                source="job",
-                tier=TIER_BLOCKING,
-                brain=None,  # OS-level infra
-                title=f"Circuit-broken job: {name} (×{js.consecutive_failures})",
-                detail=(js.last_error or "")[:400],
-                dispatch={
-                    "message": f"Triage circuit-broken job {job_id} ({js.consecutive_failures} consecutive failures): {js.last_error or ''}",
-                    "context": {"kind": "job", "job_id": job_id,
-                                "consecutive_failures": js.consecutive_failures},
-                },
-            ))
+            fails = js.consecutive_failures or 0
+            auth_fails = getattr(js, "consecutive_auth_failures", 0) or 0
+
+            if fails >= _JOB_CIRCUIT_BREAKER_THRESHOLD:
+                items.append(AttentionItem(
+                    id=f"job:{job_id}",
+                    source="job",
+                    tier=TIER_BLOCKING,
+                    brain=None,  # OS-level infra
+                    title=f"Circuit-broken job: {name} (×{fails})",
+                    detail=(js.last_error or "")[:400],
+                    dispatch={
+                        "message": f"Triage circuit-broken job {job_id} ({fails} consecutive failures): {js.last_error or ''}",
+                        "context": {"kind": "job", "job_id": job_id,
+                                    "consecutive_failures": fails},
+                    },
+                ))
+            elif auth_fails >= _JOB_CIRCUIT_BREAKER_THRESHOLD:
+                # Persistent auth failure — not a job bug, an auth problem the user
+                # must fix (re-login / refresh SSO IdC). Distinct id + wording so it
+                # doesn't read as a code failure.
+                items.append(AttentionItem(
+                    id=f"job_auth:{job_id}",
+                    source="job",
+                    tier=TIER_BLOCKING,
+                    brain=None,  # OS-level infra
+                    title=f"Auth broken for job: {name} (×{auth_fails} — not self-healing)",
+                    detail=(js.last_error or "")[:400],
+                    dispatch={
+                        "message": f"Job {job_id} has failed auth pre-check {auth_fails} times in a row — auth is not self-healing. Restore CLI auth (claude auth login / refresh SSO IdC), then it retries automatically. Last: {js.last_error or ''}",
+                        "context": {"kind": "job_auth", "job_id": job_id,
+                                    "consecutive_auth_failures": auth_fails},
+                    },
+                ))
     except Exception as exc:
         logger.warning("attention: job source failed: %s", exc)
     return items

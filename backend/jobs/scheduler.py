@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 import yaml
 
 from .models import Feed, FeedType, Job, JobSafety, SchedulerDefaults, SchedulerState
-from .executor import execute_job
+from .executor import execute_job, _FAILURE_ALERT_THRESHOLD
 from .cron_utils import is_cron_due
 from .paths import (
     STATE_FILE, CONFIG_FILE, USER_JOBS_FILE, SWARMWS,
@@ -370,16 +370,24 @@ def is_job_due(job: Job, state: SchedulerState) -> bool:
     if not job.enabled:
         return False
 
-    # Retry auth_failed jobs on next scheduler tick (same calendar day UTC).
-    # When MCP auth expires (SSO, token revocation), all tool-dependent jobs
-    # fail but the agent itself ran fine.  After the user restores auth, the
-    # next hourly scheduler tick automatically retries these jobs.
+    # Fast-retry auth_failed jobs on the next scheduler tick — but ONLY while the
+    # auth failure still looks TRANSIENT (streak below the alert threshold). When
+    # auth expires (SSO, token revocation), the agent itself ran fine; the next
+    # hourly tick auto-retries once the user restores auth.
+    #
+    # The streak gate (not a time window) is what BOUNDS this: `last_run` is
+    # refreshed on every run, so a `now - last_run < 24h` window would never expire
+    # for a permanently-dead auth job — it would hot-loop hourly forever. Instead we
+    # stop the fast-retry once consecutive_auth_failures crosses the threshold: at
+    # that point _collect_jobs surfaces it as a BLOCKING "auth broken" card, so the
+    # user is notified and the job falls back to its normal cron cadence (no more
+    # hourly precheck churn) until auth is actually fixed — a real success clears
+    # the streak and fast-retry resumes.
     job_state = state.jobs.get(job.id)
     if (
         job_state
         and job_state.last_status == "auth_failed"
-        and job_state.last_run
-        and job_state.last_run.date() == datetime.now(timezone.utc).date()
+        and (job_state.consecutive_auth_failures or 0) < _FAILURE_ALERT_THRESHOLD
     ):
         return True
 

@@ -197,6 +197,11 @@ class JobState(BaseModel):
     last_status: str = "never"
     last_error: str | None = None      # error/summary of most recent failure (🔔 diagnostics); cleared on success
     consecutive_failures: int = 0
+    # Transient auth failures don't count toward consecutive_failures (they self-heal
+    # + auto-retry), but a PERSISTENT auth failure (revoked IdC, wrong region) must
+    # still reach the user instead of retrying invisibly forever. Tracked separately
+    # so it can escalate to the BLOCKING Need-You queue past a threshold.
+    consecutive_auth_failures: int = 0
     total_runs: int = 0
     total_tokens: int = 0
 

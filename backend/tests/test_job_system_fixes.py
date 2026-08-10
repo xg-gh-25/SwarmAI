@@ -499,6 +499,108 @@ class TestLastErrorPersistence:
         # streak neither incremented (not a job bug) nor reset (not a success)
         assert state.jobs["j"].consecutive_failures == 2
         assert state.jobs["j"].last_status == "auth_failed"
+        # NEW behavior (adversarial HIGH fix): the auth streak IS tracked separately
+        # so a persistent auth failure can escalate instead of retrying invisibly.
+        assert state.jobs["j"].consecutive_auth_failures == 1
+
+    def test_persistent_auth_failure_escalates_to_visible_blocking(self):
+        """Adversarial HIGH: a PERMANENT auth failure (revoked IdC, wrong region)
+        must not retry invisibly forever — past the threshold it surfaces as a
+        BLOCKING Need-You card, distinct from a code circuit-break."""
+        from jobs.models import SchedulerState, JobState, JobResult
+        from jobs.executor import _update_job_state, _FAILURE_ALERT_THRESHOLD
+        from core.attention_authority import _collect_jobs, TIER_BLOCKING
+        from jobs import scheduler as sched
+
+        state = SchedulerState()
+        # Drive N consecutive auth failures.
+        for _ in range(_FAILURE_ALERT_THRESHOLD):
+            _update_job_state(state, "stuck", JobResult(
+                job_id="stuck", timestamp=datetime.now(timezone.utc),
+                status="auth_failed", error="auth_preflight_failed",
+            ))
+        assert state.jobs["stuck"].consecutive_auth_failures == _FAILURE_ALERT_THRESHOLD
+        # It must now appear as a BLOCKING attention item (was structurally invisible
+        # before the fix: _collect_jobs only checked consecutive_failures).
+        with patch("jobs.scheduler.load_state", return_value=state), \
+             patch("jobs.scheduler.load_jobs", return_value=[]):
+            items = _collect_jobs()
+        auth_items = [i for i in items if i.id == "job_auth:stuck"]
+        assert len(auth_items) == 1
+        assert auth_items[0].tier == TIER_BLOCKING
+        assert "Auth broken" in auth_items[0].title
+
+    def test_recovery_clears_auth_streak(self):
+        """A real success wipes the auth streak (so a recovered job stops nagging)."""
+        from jobs.models import SchedulerState, JobState, JobResult
+        from jobs.executor import _update_job_state
+
+        state = SchedulerState(jobs={"j": JobState(consecutive_auth_failures=3)})
+        _update_job_state(state, "j", JobResult(
+            job_id="j", timestamp=datetime.now(timezone.utc),
+            status="success", summary="ok",
+        ))
+        assert state.jobs["j"].consecutive_auth_failures == 0
+
+    def test_auth_streak_alert_wording_is_not_a_failure_lie(self, tmp_path):
+        """2nd-round adversarial HIGH: the streak alert is rendered verbatim in the
+        briefing. An AUTH streak must NOT be labeled a code 'failure' nor claim a
+        '24h cooldown' (auth jobs retry hourly, no cooldown)."""
+        import json as _json
+        from jobs.models import JobResult
+        from jobs import executor
+
+        alert_path = tmp_path / "alerts.jsonl"
+        with patch.object(executor, "JOB_RESULTS_JSONL", alert_path):
+            executor._write_failure_streak_alert(
+                "stuck", 3,
+                JobResult(job_id="stuck", timestamp=datetime.now(timezone.utc),
+                          status="auth_failed", error="auth_preflight_failed"),
+                is_auth=True,
+            )
+        entry = _json.loads(alert_path.read_text().strip())
+        summary = entry["summary"].lower()
+        assert entry["status"] == "auth_failed"          # not "failed"
+        assert "auth" in summary
+        # must NOT repeat the failure-path lie "in 24h cooldown — auto-retry after
+        # cooldown expires"; saying "no cooldown" is the correct opposite.
+        assert "24h cooldown" not in summary
+        assert "no cooldown" in summary
+
+
+class TestAuthRetryIsBounded:
+    """2nd-round adversarial MED: a PERMANENTLY dead auth job must not fast-retry
+    hourly forever. Fast-retry is gated on the streak being below threshold; past
+    it, the job stops churning and relies on the BLOCKING card + normal cron."""
+
+    def test_fast_retry_stops_once_auth_streak_hits_threshold(self):
+        from jobs.models import Job, SchedulerState, JobState
+        from jobs.executor import _FAILURE_ALERT_THRESHOLD
+        from jobs import scheduler as sched
+
+        # RECENT last_run + a once-daily cron whose slot is NOT now → the cron gate
+        # would NOT fire on its own, so `is_job_due` can only be True via the
+        # auth fast-retry branch. This isolates the gate we're testing.
+        now = datetime.now(timezone.utc)
+        recent = now - timedelta(minutes=5)
+        # pick a cron hour that is definitely not the current hour
+        cron_hour = (now.hour + 6) % 24
+        job = Job(id="j", name="J", type="agent_task",
+                  schedule=f"0 {cron_hour} * * *",
+                  enabled=True, config={"prompt": "x"})
+
+        # below threshold → fast-retry ON (transient auth blip auto-retries)
+        transient = SchedulerState(jobs={"j": JobState(
+            last_status="auth_failed", last_run=recent,
+            consecutive_auth_failures=_FAILURE_ALERT_THRESHOLD - 1)})
+        assert sched.is_job_due(job, transient) is True
+
+        # at threshold → fast-retry OFF (no hourly churn; BLOCKING card carries it,
+        # job falls back to its normal cron cadence until auth is fixed)
+        stuck = SchedulerState(jobs={"j": JobState(
+            last_status="auth_failed", last_run=recent,
+            consecutive_auth_failures=_FAILURE_ALERT_THRESHOLD)})
+        assert sched.is_job_due(job, stuck) is False
 
 
 class TestAuthPreflightIsTransient:
