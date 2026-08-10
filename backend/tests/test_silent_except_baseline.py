@@ -73,15 +73,29 @@ _LOG_METHODS = frozenset({
 _LOG_BARE_NAMES = frozenset({"print"})
 _TRACEBACK_PRINTERS = frozenset({"print_exc", "print_exception"})
 
+# Error-event BUILDERS: yielding one of these is the third communication form, and
+# arguably the strongest — it puts the failure (with its traceback in ``detail``) on the
+# operator's SCREEN, not merely in a log file. Modelled as an explicit allowlist of
+# builder names, deliberately NOT "any yield counts": a blanket yield rule would let
+# `yield None` / `yield {}` launder a genuinely silent handler. Measured blast radius
+# when introduced: exactly 2 handlers (retry_manager's two spawn-failure paths), both
+# `yield _build_error_event(code="SPAWN_FAILED", detail=spawn_tb, ...)`.
+_ERROR_EVENT_BUILDERS = frozenset({"_build_error_event", "build_error_event"})
+
 
 def _handler_communicates(handler: ast.ExceptHandler) -> bool:
-    """True if the handler body LOGS or RE-RAISES in code that RUNS when the handler fires.
+    """True if the handler body LOGS, RE-RAISES, or SURFACES an error event in code that
+    RUNS when the handler fires.
 
     Logs  = ``<x>.error/.warning/.exception/.warn/.critical/.info/.debug(...)`` (the
             standard ``logger.*`` / ``log.*`` / ``self.logger.*`` shape),
             ``traceback.print_exc()`` / ``print_exception()``, or a bare ``print(...)``.
     Raise = any ``raise`` statement (bare / ``raise X`` / conditional ``if c: raise`` —
             a conditional re-raise propagates on that branch, so the handler is NOT silent).
+    Yield = ``yield <builder>(...)`` for a builder in ``_ERROR_EVENT_BUILDERS``. An async
+            generator cannot log-and-return its way out of a streaming turn; its way to
+            report is to yield an error event down the stream, which reaches the USER.
+            Restricted to named builders on purpose — see that constant.
 
     ⚠️ Nested-scope guard (Gate-2 correctness, run_9af622ee): we walk the handler's own
     statements but do NOT descend into a nested ``def``/``async def``/``lambda``/``class``
@@ -103,6 +117,14 @@ def _handler_communicates(handler: ast.ExceptHandler) -> bool:
                 continue
             if isinstance(node, ast.Raise):
                 return True
+            # `yield <error-event builder>(...)` — surfaces to the user. Matched at the
+            # Yield node (not the bare Call) so that merely CONSTRUCTING an event and
+            # dropping it on the floor does not count as having communicated it.
+            if isinstance(node, (ast.Yield, ast.YieldFrom)):
+                v = node.value
+                if (isinstance(v, ast.Call) and isinstance(v.func, ast.Name)
+                        and v.func.id in _ERROR_EVENT_BUILDERS):
+                    return True
             if isinstance(node, ast.Call):
                 fn = node.func
                 if isinstance(fn, ast.Attribute):
@@ -308,9 +330,58 @@ def test_scanner_passes_communicating_handlers():
         "    except Exception:\n"
         "        print('boom')\n"                      # bare print → clean
         "        return 0\n"
+        "\n"
+        "async def surfaced():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        yield _build_error_event(code='X', detail=str(e))\n"  # surfaces → clean
+        "        return\n"
     )
     v = _find_silent_swallows(good, filename="<communicating>")
     assert v == [], f"scanner FALSE-POSITIVED on a communicating handler: {v}"
+
+
+def test_yield_allowlist_is_narrow():
+    """The error-event yield rule must not degenerate into "any yield counts".
+
+    An allowlist's only real risk is being too loose, so pin the boundary: yielding a
+    NAMED error-event builder communicates, but yielding a bare value, a dict, or some
+    other function's result does NOT — otherwise `yield None` would launder every
+    silent handler in an async generator. Also pins that merely CONSTRUCTING an event
+    and dropping it is not communicating.
+    """
+    src = (
+        "async def bare_yield():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception:\n"
+        "        yield None\n"                          # SILENT
+        "\n"
+        "async def dict_yield():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception:\n"
+        "        yield {'_abort': True}\n"              # SILENT (no reason carried)
+        "\n"
+        "async def other_call_yield():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception:\n"
+        "        yield make_payload(1)\n"               # SILENT (not an error builder)
+        "\n"
+        "async def built_but_dropped():\n"
+        "    try:\n"
+        "        risky()\n"
+        "    except Exception as e:\n"
+        "        ev = _build_error_event(code='X', detail=str(e))\n"  # SILENT: never sent
+        "        return\n"
+    )
+    lines = [ln for _f, ln in _find_silent_swallows(src, filename="<narrow>")]
+    assert len(lines) == 4, (
+        "the yield allowlist LEAKED — one of yield None / yield {...} / "
+        f"yield other_call() / build-without-yield was treated as communicating: {lines}"
+    )
 
 
 def test_scanner_ignores_logging_in_unused_nested_def():

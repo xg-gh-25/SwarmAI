@@ -76,6 +76,10 @@ _QUEUES: dict[str, "asyncio.Queue[dict]"] = {}
 # full queue drops the oldest-unread (the surface is best-effort, not a ledger).
 _MAX_QUEUE = 256
 
+# Latch so the "surfacing is disabled" warning is emitted once per process rather
+# than once per file event (see resolve_sole_streaming_session's import guard).
+_WARNED_SESSION_STATE_IMPORT: set[bool] = set()
+
 
 def register(session_id: str) -> "asyncio.Queue[dict]":
     """Register (or return the existing) injection queue for a session.
@@ -130,7 +134,17 @@ def resolve_sole_streaming_session(router: Any) -> Optional[str]:
     # keep this module unit-testable with a fake router.
     try:
         from core.session_unit import SessionState
-    except Exception:  # pragma: no cover - import guard
+    except Exception as exc:  # pragma: no cover - import guard
+        # WARNING, not debug: this import either always works or always fails, so a
+        # failure here does not degrade surfacing — it disables the feature ENTIRELY for
+        # the life of the process while every call returns the same legitimate-looking
+        # "no sole streaming session". Warn ONCE so a total outage is visible without
+        # emitting a line per file event.
+        if not _WARNED_SESSION_STATE_IMPORT:
+            _WARNED_SESSION_STATE_IMPORT.add(True)
+            logger.warning(
+                "SessionState import failed; file-event surfacing is disabled for this "
+                "process: %s", exc)
         return None
 
     try:
@@ -190,7 +204,13 @@ def publish_file_event(event: dict, router: Any = None) -> int:
                 q.get_nowait()
                 q.put_nowait(event)
                 return 1
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                # DEBUG, matching the outer handler: 0 means "surfaced to nobody", and
+                # the caller is free to ignore that. But this is the drop-oldest RETRY
+                # failing after the queue was already full, so it is the path where an
+                # event is genuinely lost — worth a line even if it is expected to be
+                # rare under a consumer that has stopped reading.
+                logger.debug("publish_file_event drop-oldest retry failed: %s", exc)
                 return 0
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("publish_file_event failed: %s", exc)

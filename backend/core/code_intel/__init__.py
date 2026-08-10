@@ -202,7 +202,12 @@ def resolve_owned_repo_root(project_dir) -> str | None:
         # <cwd>/~/repos/x, is_dir()=False → a legit project silently un-indexed).
         resolved = Path(candidate.rstrip("/")).expanduser().resolve()
         return str(resolved) if resolved.is_dir() else None
-    except Exception:  # noqa: BLE001 — ownership check must never raise into a caller
+    except Exception as exc:  # noqa: BLE001 — ownership check must never raise into a caller
+        # Degrade-OBSERVABLE. None means "this project owns no repo", i.e. exactly the
+        # "a legit project silently un-indexed" outcome the expanduser comment above
+        # guards against — reached here by a different route and, until now, with no
+        # trace at all. Keep returning None (never raise into a caller), but say why.
+        logger.warning("owned-repo resolution failed for %s: %s", project_dir, exc)
         return None
 
 
@@ -229,7 +234,11 @@ def repo_root_is_owned(project_dir, stored_repo_root: str | None) -> bool:
         if stored.is_dir() and owned_p.is_dir():
             return os.path.samefile(stored, owned_p)
         return False
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # Fail CLOSED on purpose — an ownership check that cannot decide must deny. But
+        # the denial was invisible, so "why is my repo not indexed?" had no answer.
+        logger.warning("ownership check failed for %s vs stored %r, denying: %s",
+                       project_dir, stored_repo_root, exc)
         return False
 
 

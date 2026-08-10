@@ -167,7 +167,10 @@ def _search_routes_in_graph(graph, url_path: str) -> str | None:
     """
     try:
         routes = graph.get_routes()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. None reads as "that URL is not a known route", which is a
+        # legitimate answer — so a broken graph is indistinguishable from a genuine miss.
+        logger.debug("route lookup unavailable for %r: %s", url_path, exc)
         return None
 
     # Filter out test file routes
@@ -387,5 +390,9 @@ def _get_top_callers(graph, rel_path: str, limit: int = 3) -> list[dict]:
                 break
 
         return results
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. [] reads as "nothing calls this file" — the single most
+        # misleading answer a caller-graph query can give, since it invites the reader to
+        # treat the file as dead code.
+        logger.debug("top-callers lookup failed for %s: %s", rel_path, exc)
         return []
