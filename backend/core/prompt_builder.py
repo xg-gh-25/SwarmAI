@@ -884,43 +884,60 @@ class PromptBuilder:
             # and WARN (not crash, not truncate) when it exceeds the reservation.
             _loader_tok = ContextDirectoryLoader.estimate_tokens(context_text)
 
-            # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──
-            bootstrap_path = context_dir / "BOOTSTRAP.md"
-            if bootstrap_path.exists():
-                try:
-                    bootstrap_content = bootstrap_path.read_text(encoding="utf-8").strip()
-                    if bootstrap_content:
-                        context_text = f"## Onboarding\n{bootstrap_content}\n\n{context_text}"
-                except (OSError, UnicodeDecodeError):
-                    pass
-
             # ── Session-type: channel sessions skip heavy ephemeral context ──
             is_channel = channel_context is not None
 
-            # ── DailyActivity reading — most recent file only (ephemeral) ──
-            # Only today's file is injected. Yesterday's actionable items
-            # are already covered by Proactive Briefing (L0-L4) and Memory
-            # Index. The agent can Read older files on demand.
-            # Skipped for channel sessions: quick exchanges don't need logs.
-            daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
-            if daily_activity_dir.is_dir() and not is_channel:
-                da_files = sorted(
-                    [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
-                    key=lambda f: f.stem,
-                    reverse=True,
-                )[:2]  # last 2 days (pure-filesystem recall design §3.1, DoD3)
-                for daily_file in da_files:
+            # ── BOOTSTRAP.md + DailyActivity (ephemeral, not in L1 cache) ──
+            # OFF-LOOP (run_a1f4c2d8): a BOOTSTRAP.md read, a DailyActivity glob, and up
+            # to 2 daily-file reads ran directly in this `async def`. build_system_prompt
+            # is awaited on EVERY session start, so that I/O stalled the event loop —
+            # and every other chat tab's SSE stream — right at the moment the user is
+            # waiting for a first token. Gathered into ONE sync helper (one thread hop
+            # for the whole ephemeral-file group, not four) that returns pure strings;
+            # the async body only concatenates. Both fault paths are unchanged: an
+            # unreadable file is skipped, never fatal.
+            def _read_ephemeral_files() -> tuple[str, list[tuple[str, str]]]:
+                """(bootstrap_text, [(day_stem, content), ...]) — all blocking reads."""
+                bootstrap = ""
+                bootstrap_path = context_dir / "BOOTSTRAP.md"
+                if bootstrap_path.exists():
                     try:
-                        daily_content = daily_file.read_text(encoding="utf-8").strip()
-                        if daily_content:
-                            token_count = ContextDirectoryLoader.estimate_tokens(daily_content)
-                            if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                                daily_content = _truncate_daily_content(
-                                    daily_content, TOKEN_CAP_PER_DAILY_FILE
-                                )
-                            context_text += f"\n\n## Daily Activity ({daily_file.stem})\n{daily_content}"
+                        bootstrap = bootstrap_path.read_text(encoding="utf-8").strip()
                     except (OSError, UnicodeDecodeError):
-                        pass
+                        bootstrap = ""
+                dailies: list[tuple[str, str]] = []
+                # Only the most recent files are injected. Older actionable items are
+                # already covered by Proactive Briefing (L0-L4) and Memory Index; the
+                # agent can Read older files on demand. Skipped for channel sessions:
+                # quick exchanges don't need logs.
+                daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
+                if daily_activity_dir.is_dir() and not is_channel:
+                    da_files = sorted(
+                        [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
+                        key=lambda f: f.stem,
+                        reverse=True,
+                    )[:2]  # last 2 days (pure-filesystem recall design §3.1, DoD3)
+                    for daily_file in da_files:
+                        try:
+                            content = daily_file.read_text(encoding="utf-8").strip()
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                        if content:
+                            dailies.append((daily_file.stem, content))
+                return bootstrap, dailies
+
+            _bootstrap_content, _daily_files = await asyncio.to_thread(_read_ephemeral_files)
+
+            if _bootstrap_content:
+                context_text = f"## Onboarding\n{_bootstrap_content}\n\n{context_text}"
+
+            for _day_stem, _daily_content in _daily_files:
+                token_count = ContextDirectoryLoader.estimate_tokens(_daily_content)
+                if token_count > TOKEN_CAP_PER_DAILY_FILE:
+                    _daily_content = _truncate_daily_content(
+                        _daily_content, TOKEN_CAP_PER_DAILY_FILE
+                    )
+                context_text += f"\n\n## Daily Activity ({_day_stem})\n{_daily_content}"
 
                 # ── Distillation flag check ──
                 flag_path = daily_activity_dir / ".needs_distillation"
@@ -959,12 +976,17 @@ class PromptBuilder:
             # Inject pending USER.md update suggestions if the file exists
             # and has content. Written by UserObserverHook, consumed here.
             if not is_channel:
-                try:
+                # OFF-LOOP (run_a1f4c2d8): a read on the session-start path.
+                def _read_user_suggestions() -> str:
                     suggestions_path = Path(working_directory) / ".context" / "user_suggestions.md"
-                    if suggestions_path.exists():
-                        suggestions_text = suggestions_path.read_text(encoding="utf-8").strip()
-                        if suggestions_text and len(suggestions_text) < 2048:
-                            context_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
+                    if not suggestions_path.exists():
+                        return ""
+                    return suggestions_path.read_text(encoding="utf-8").strip()
+
+                try:
+                    suggestions_text = await asyncio.to_thread(_read_user_suggestions)
+                    if suggestions_text and len(suggestions_text) < 2048:
+                        context_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
                 except Exception as exc:
                     logger.debug("User suggestions injection skipped: %s", exc)
 
@@ -1075,39 +1097,52 @@ class PromptBuilder:
                     )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
-            for spec in CONTEXT_FILES:
-                filepath = context_dir / spec.filename
-                try:
-                    if not filepath.exists():
-                        continue
-                    file_content = filepath.read_text(encoding="utf-8").strip()
-                    if not file_content:
-                        continue
-                    tokens = ContextDirectoryLoader.estimate_tokens(file_content)
+            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 11 context files (exists + a full
+            # read_text each) inside the async body, purely to compute token counts for a
+            # DIAGNOSTIC viewer — the most expensive loop-blocker on the session-start
+            # path, and duplicate work on top (the loader already read every one of these
+            # files to assemble context_text). Moved wholesale into one sync helper. The
+            # truncation detection stays with it: it only reads the already-assembled
+            # in-memory string, so keeping it inside the helper costs nothing and keeps
+            # the per-file record built in one place.
+            def _collect_file_metadata() -> list[dict]:
+                out: list[dict] = []
+                for spec in CONTEXT_FILES:
+                    filepath = context_dir / spec.filename
+                    try:
+                        if not filepath.exists():
+                            continue
+                        file_content = filepath.read_text(encoding="utf-8").strip()
+                        if not file_content:
+                            continue
+                        tokens = ContextDirectoryLoader.estimate_tokens(file_content)
 
-                    # Detect truncation: find this section's block in the
-                    # assembled text and check for [Truncated: ... tokens]
-                    truncated = False
-                    if context_text and spec.section_name:
-                        section_header = f"## {spec.section_name}\n"
-                        header_pos = context_text.find(section_header)
-                        if header_pos != -1:
-                            next_header = context_text.find("\n## ", header_pos + len(section_header))
-                            section_block = (
-                                context_text[header_pos:next_header]
-                                if next_header != -1
-                                else context_text[header_pos:]
-                            )
-                            truncated = "[Truncated:" in section_block and "tokens]" in section_block
+                        # Detect truncation: find this section's block in the
+                        # assembled text and check for [Truncated: ... tokens]
+                        truncated = False
+                        if context_text and spec.section_name:
+                            section_header = f"## {spec.section_name}\n"
+                            header_pos = context_text.find(section_header)
+                            if header_pos != -1:
+                                next_header = context_text.find("\n## ", header_pos + len(section_header))
+                                section_block = (
+                                    context_text[header_pos:next_header]
+                                    if next_header != -1
+                                    else context_text[header_pos:]
+                                )
+                                truncated = "[Truncated:" in section_block and "tokens]" in section_block
 
-                    prompt_metadata["files"].append({
-                        "filename": spec.filename,
-                        "tokens": tokens,
-                        "truncated": truncated,
-                        "user_customized": spec.user_customized,
-                    })
-                except (OSError, UnicodeDecodeError):
-                    continue
+                        out.append({
+                            "filename": spec.filename,
+                            "tokens": tokens,
+                            "truncated": truncated,
+                            "user_customized": spec.user_customized,
+                        })
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                return out
+
+            prompt_metadata["files"].extend(await asyncio.to_thread(_collect_file_metadata))
 
             total_tokens = sum(f["tokens"] for f in prompt_metadata["files"])
             prompt_metadata["total_tokens"] = total_tokens

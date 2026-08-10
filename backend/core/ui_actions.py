@@ -469,44 +469,74 @@ async def ensure_report_for_run(run_id: object) -> bool:
     fail-safe by construction: ANY failure degrades to the prior behavior (source
     rows still auto-open; the existing loud-WARN branch in build_surface_events
     still fires). NEVER raises — this runs on the hot streaming turn.
+
+    OFF-LOOP (run_a1f4c2d8): the regeneration was already dispatched to a thread, but
+    the PROBE in front of it was not — a ``Projects/*/.artifacts/runs/<id>/run.json``
+    glob (one directory scan per project), a read_text of run.json, and a stat of
+    REPORT.md all ran directly on the event loop. This function is awaited from the
+    streaming token loop (streaming_orchestrator), so that probe stalled the loop on
+    EVERY surface_run_outputs call, including the common case where the report is
+    already healthy and there is nothing to do. Probe and regeneration are now each one
+    thread hop; the async body only branches.
     """
     if not isinstance(run_id, str) or not run_id:
         return False
-    try:
+
+    def _probe() -> tuple[str, str, bool] | None:
+        """(project, ws, healthy) — or None when this run needs no report guard.
+
+        One helper, not three awaits: the glob → read → stat chain is a single logical
+        lookup and splitting it would triple the hops for no benefit.
+        """
         import json
         import re
         from pathlib import Path
 
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
-            return False
+            return None
         ws = Path(str(get_swarmws())).resolve()
         run_json = None
         for hit in (ws / "Projects").glob("*/.artifacts/runs/" + run_id + "/run.json"):
             run_json = hit
             break
         if run_json is None or not run_json.exists():
-            return False
+            return None
 
         # Only a committed SOURCE run pairs a report with rows — a docs/knowledge-only
         # run (commits[] empty) has no source batch, so no report row to guard.
         data = json.loads(run_json.read_text())
         if not (data.get("commits") or []):
-            return False
+            return None
 
         # parents: [0]=<run_id>dir [1]=runs [2]=.artifacts [3]=<PROJECT> [4]=Projects
         project = run_json.parents[3].name
-
         report_path = run_json.parent / "REPORT.md"
         healthy = report_path.exists() and report_path.stat().st_size >= _MIN_REPORT_BYTES
+        return project, str(ws), healthy
+
+    def _report_healthy(ws: str) -> bool:
+        """Re-check after regeneration — also off-loop (it is another stat)."""
+        from pathlib import Path
+        for hit in (Path(ws) / "Projects").glob("*/.artifacts/runs/" + run_id + "/REPORT.md"):
+            try:
+                return hit.stat().st_size >= _MIN_REPORT_BYTES
+            except OSError:
+                return False
+        return False
+
+    try:
+        probed = await asyncio.to_thread(_probe)
+        if probed is None:
+            return False
+        project, ws, healthy = probed
         if healthy:
             return True  # no-op: a real report is already there
 
         # Missing or stub → regenerate off the event loop (blocking CLI logic).
         # Pass the SAME ws root we located the run under, so the CLI writes REPORT.md
         # to the dir we re-check below (Gate-2 #2: unify the dual resolver).
-        await asyncio.to_thread(_run_report_sync, project, run_id, str(ws))
-
-        return report_path.exists() and report_path.stat().st_size >= _MIN_REPORT_BYTES
+        await asyncio.to_thread(_run_report_sync, project, run_id, ws)
+        return await asyncio.to_thread(_report_healthy, ws)
     except Exception as e:  # noqa: BLE001 — hot-path fail-safe, never break the turn
         logger.warning("ensure_report_for_run failed for run %r: %s", run_id, e)
         return False

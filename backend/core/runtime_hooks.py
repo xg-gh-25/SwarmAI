@@ -12,6 +12,7 @@ Key public symbols:
 - ``create_user_correction_detector``— UserPromptSubmit → corrections.jsonl
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -563,10 +564,17 @@ def create_session_checkpoint(
             "session_summary": session_summary,
         }
 
-        try:
+        # OFF-LOOP (run_a1f4c2d8): SDK hook callbacks are awaited ON the event loop
+        # mid-session, so a mkdir + write here stalled every other request and every
+        # chat tab's SSE stream. Small writes, but they fire on a cadence during an
+        # active turn — exactly when latency is visible.
+        def _write_checkpoint() -> None:
             p = Path(path)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8")
+
+        try:
+            await asyncio.to_thread(_write_checkpoint)
         except Exception:
             logger.exception("Failed to write session checkpoint to %s", path)
 
@@ -615,8 +623,13 @@ def create_session_checkpoint(
             # filesystem level.  These hooks are observe-only and crash-safe by
             # design — a torn write loses one checkpoint entry, which is
             # acceptable for mid-session snapshots.
-            with open(da_file, "a", encoding="utf-8") as f:
-                f.write(entry)
+            # OFF-LOOP (run_a1f4c2d8): the append goes to a thread; the atomicity
+            # reasoning above is unchanged (still one plain open("a") of a <1KB entry).
+            def _append_da(_f=da_file, _e=entry) -> None:
+                with open(_f, "a", encoding="utf-8") as f:
+                    f.write(_e)
+
+            await asyncio.to_thread(_append_da)
 
             ctx[last_da_count_key] = len(files)
             ctx["_last_da_commit_count"] = len(git_commits)
@@ -713,24 +726,31 @@ def create_agent_tool_audit_hook(
             _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
             ts = time.time()
 
-            # Write run-specific marker if run_id available (primary path)
-            if run_id:
-                marker_file = _PIPELINE_AUDIT_DIR / f"{run_id}.marker"
-                marker_file.write_text(json.dumps({
+            # OFF-LOOP (run_a1f4c2d8): both audit markers in ONE thread hop, not two —
+            # they are written as a PAIR (run-specific when available, session-level
+            # always, as fallback evidence), so splitting them would double the hops and
+            # let a cancellation land between two writes meant to be one audit record.
+            def _write_markers() -> None:
+                # Write run-specific marker if run_id available (primary path)
+                if run_id:
+                    marker_file = _PIPELINE_AUDIT_DIR / f"{run_id}.marker"
+                    marker_file.write_text(json.dumps({
+                        "ts": ts,
+                        "event": "SubagentStop",
+                        "run_id": run_id,
+                        "session_id": session_id,
+                    }))
+
+                # Always write session-level marker as fallback evidence
+                session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts)}.marker"
+                session_marker.write_text(json.dumps({
                     "ts": ts,
                     "event": "SubagentStop",
-                    "run_id": run_id,
                     "session_id": session_id,
+                    "run_id": run_id or "unknown",
                 }))
 
-            # Always write session-level marker as fallback evidence
-            session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts)}.marker"
-            session_marker.write_text(json.dumps({
-                "ts": ts,
-                "event": "SubagentStop",
-                "session_id": session_id,
-                "run_id": run_id or "unknown",
-            }))
+            await asyncio.to_thread(_write_markers)
         except Exception:
             logger.warning("Failed to write agent audit marker (session=%s)", session_id)
 
@@ -764,13 +784,21 @@ def create_subagent_capture_hook(
             if not p.exists():
                 return {}
 
-            # Read tail of transcript
-            size = p.stat().st_size
-            with open(p, "r", encoding="utf-8", errors="replace") as f:
-                if size > _SUBAGENT_TAIL_BYTES:
-                    f.seek(size - _SUBAGENT_TAIL_BYTES)
-                    f.readline()  # skip partial first line
-                tail = f.read()
+            # Read tail of transcript — OFF-LOOP (run_a1f4c2d8). Bounded to
+            # _SUBAGENT_TAIL_BYTES, but a transcript lives on the same disk the agent is
+            # actively writing to, so even a seek+read is real latency on the loop. The
+            # stat and the read stay in ONE helper: the seek offset is derived from the
+            # size, so splitting them would open a window where the file grew between
+            # measuring and seeking.
+            def _read_tail() -> str:
+                size = p.stat().st_size
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    if size > _SUBAGENT_TAIL_BYTES:
+                        f.seek(size - _SUBAGENT_TAIL_BYTES)
+                        f.readline()  # skip partial first line
+                    return f.read()
+
+            tail = await asyncio.to_thread(_read_tail)
 
             # Extract error patterns
             errors = _ERROR_PATTERNS.findall(tail)
@@ -1018,20 +1046,27 @@ def create_high_signal_capture(
         try:
             from datetime import datetime
             now = datetime.now()
-            da_dir = Path(ws) / "Knowledge" / "DailyActivity"
-            da_dir.mkdir(parents=True, exist_ok=True)
-            da_file = da_dir / f"{now.strftime('%Y-%m-%d')}.md"
 
             entry = (
                 f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): "
                 f"{prompt[:500]}\n"
             )
-            # Concurrency note: plain open("a") is safe here — entries are
+
+            # OFF-LOOP (run_a1f4c2d8): mkdir + append in ONE thread hop. This fires on a
+            # UserPromptSubmit hook — i.e. the instant the user hits send — so blocking
+            # here directly delays the turn the user is waiting on.
+            # Concurrency note (unchanged): plain open("a") is safe here — entries are
             # well under 4KB (macOS/APFS atomic append threshold).  These are
             # observe-only hooks; a torn write loses one signal entry, which is
             # acceptable.  locked_write.py is not needed for this use case.
-            with open(da_file, "a", encoding="utf-8") as f:
-                f.write(entry)
+            def _append_signal() -> None:
+                da_dir = Path(ws) / "Knowledge" / "DailyActivity"
+                da_dir.mkdir(parents=True, exist_ok=True)
+                da_file = da_dir / f"{now.strftime('%Y-%m-%d')}.md"
+                with open(da_file, "a", encoding="utf-8") as f:
+                    f.write(entry)
+
+            await asyncio.to_thread(_append_signal)
 
             logger.debug("High-signal captured to DailyActivity: %.80s", prompt)
         except Exception:

@@ -1707,7 +1707,13 @@ def _channel_auto_threshold(
             stats = json.loads(stats_file.read_text(encoding="utf-8"))
             _CHANNEL_STATS_CACHE[key] = (mtime, stats)
         return ProposalFeedbackTracker().get_adjusted_threshold(channel, base, stats)
-    except Exception:  # noqa: BLE001 — calibration must never break admission
+    except Exception as exc:  # noqa: BLE001 — calibration must never break admission
+        # Degrade-OBSERVABLE (GC19): still fall back to the un-calibrated base so
+        # admission cannot break, but LOG it. Silent, this reads as "calibration is
+        # off" rather than "calibration is BROKEN" — a corrupt stats file would quietly
+        # pin every channel to its default threshold forever with no signal.
+        logger.warning("channel threshold calibration failed for %s, using base %s: %s",
+                       channel, base, exc)
         return base
 
 
@@ -1741,7 +1747,11 @@ def apply_channel_self_corrections(project_dir: "Path | None") -> "list[dict]":
                 )
                 actions.append(rec)
         return actions
-    except Exception:  # noqa: BLE001 — never break the maintenance hook
+    except Exception as exc:  # noqa: BLE001 — never break the maintenance hook
+        # Degrade-OBSERVABLE (GC19): the hook still survives on [], but a silent []
+        # is indistinguishable from "nothing needed correcting" — the lying-empty-result
+        # shape. Log so a permanently-failing self-correction pass is visible.
+        logger.warning("channel self-corrections failed, returning none: %s", exc)
         return []
 
 
