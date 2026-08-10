@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   communityService,
-  type CommunityFeedItem,
+  type CommunityFeed,
   type CommunitySource,
   type CommunityEngagement,
   type CommunityEngagementItem,
@@ -169,7 +169,7 @@ function StateBanner({ loading, error, empty, emptyMsg }: {
 // by `category === 'Reports'`, so a future report type surfaces automatically.
 
 function InboundTab({ close }: { close: () => void }) {
-  const { data, loading, error } = useFetch<CommunityFeedItem[]>(communityService.fetchFeed);
+  const { data, loading, error } = useFetch<CommunityFeed>(communityService.fetchFeed);
 
   const openFile = useCallback(
     (path: string) => {
@@ -182,11 +182,17 @@ function InboundTab({ close }: { close: () => void }) {
   // Split by category: Reports → card(s), everything else (Signals) → daily list.
   // Backend already returns newest-first, so [0] is the latest of each kind.
   const { latestReport, pastReports, signals } = useMemo(() => {
-    const items = data ?? [];
+    const items = data?.items ?? [];
     const reports = items.filter((it) => it.category === 'Reports');
     const sigs = items.filter((it) => it.category !== 'Reports');
     return { latestReport: reports[0] ?? null, pastReports: reports.slice(1), signals: sigs };
   }, [data]);
+
+  // Honest cap disclosure: the backend caps the feed and flags `truncated`. Surfacing
+  // it (instead of dropping it as before) turns a SILENT partial list into a visible
+  // "showing newest N — more on disk" note, so the feed never reads as complete when
+  // it isn't. Mirrors the Sources tab's member-cap disclosure.
+  const truncated = data?.truncated === true;
 
   // Hot Topics renders ABOVE as an independent SIBLING — never gated by the feed's
   // own loading/empty state (an empty file feed must not hide hot topics).
@@ -245,6 +251,14 @@ function InboundTab({ close }: { close: () => void }) {
                 </span>
               </button>
             ))}
+            {truncated && (
+              <div
+                data-testid="community-feed-truncated"
+                className="px-3 py-1.5 text-[11px] text-[var(--color-text-faint)]"
+              >
+                Showing the newest {signals.length} signals — more on disk.
+              </div>
+            )}
           </div>
         )}
       </div>

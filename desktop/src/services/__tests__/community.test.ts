@@ -48,6 +48,23 @@ describe('communityService — request paths (single /api, added by the intercep
     expect(mockApi.get).toHaveBeenCalledWith('/community/feed');
   });
 
+  it('fetchFeed preserves the backend truncated/count flags (no silent cut)', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: { count: 100, truncated: true, items: [{ path: 'Knowledge/Signals/a.md', category: 'Signals', name: 'a.md', mtime: 1 }] },
+    });
+    const feed = await communityService.fetchFeed();
+    expect(feed.truncated).toBe(true);
+    expect(feed.count).toBe(100);
+    expect(feed.items).toHaveLength(1);
+  });
+
+  it('fetchFeed defaults truncated=false and count to items.length when absent', async () => {
+    mockApi.get.mockResolvedValueOnce({ data: { items: [{ path: 'p', category: 'Signals', name: 'n', mtime: 1 }] } });
+    const feed = await communityService.fetchFeed();
+    expect(feed.truncated).toBe(false);
+    expect(feed.count).toBe(1);
+  });
+
   it('fetchSources calls /community/sources', async () => {
     await communityService.fetchSources();
     expect(mockApi.get).toHaveBeenCalledWith('/community/sources');

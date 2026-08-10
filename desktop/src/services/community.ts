@@ -23,6 +23,16 @@ export interface CommunityFeedItem {
   mtime: number;
 }
 
+/** The /community/feed response: capped item list + honest truncation flag.
+ *  `truncated` is the backend's own signal that the list was cut at the cap
+ *  (more exist on disk) — the UI must surface it, not silently show a partial
+ *  list as if it were the whole feed. */
+export interface CommunityFeed {
+  items: CommunityFeedItem[];
+  count: number;
+  truncated: boolean;
+}
+
 /** One configured signal source (feed) — a view of config.yaml. */
 export interface CommunitySource {
   id: string;
@@ -131,9 +141,18 @@ interface RawSource {
 }
 
 export const communityService = {
-  async fetchFeed(): Promise<CommunityFeedItem[]> {
+  async fetchFeed(): Promise<CommunityFeed> {
     const res = await api.get('/community/feed');
-    return (res.data?.items ?? []) as CommunityFeedItem[];
+    // Preserve `truncated`/`count` — the backend marks a capped feed honestly, and
+    // dropping them here (returning a bare item[]) is what made the cut SILENT: the
+    // UI showed 100 of N with no "more on disk" disclosure. Mirrors fetchSources,
+    // which already keeps memberCount/membersTruncated.
+    const items = (res.data?.items ?? []) as CommunityFeedItem[];
+    return {
+      items,
+      count: typeof res.data?.count === 'number' ? res.data.count : items.length,
+      truncated: res.data?.truncated === true,
+    };
   },
 
   async fetchSources(): Promise<CommunitySource[]> {

@@ -43,6 +43,12 @@ vi.mock('../../services/community', () => ({
   },
 }));
 
+// fetchFeed now returns { items, count, truncated } (not a bare array) so the UI can
+// surface the honest cap. Wrap fixture items in that shape in one place.
+function feedOf(items: unknown[], over: Record<string, unknown> = {}) {
+  return { items, count: items.length, truncated: false, ...over };
+}
+
 // A feed WITH editable members (rss → urls). Helper keeps the new member fields in
 // one place so fixtures don't drift from the CommunitySource shape.
 function srcWithMembers(over: Record<string, unknown> = {}) {
@@ -114,10 +120,10 @@ describe('CommunityOverlay — Inbound tab', () => {
   });
 
   it('separates the latest Report into a card, keeping Signals in the daily flow', async () => {
-    fetchFeed.mockResolvedValue([
+    fetchFeed.mockResolvedValue(feedOf([
       { path: 'Knowledge/Reports/2026-08-09-weekly.html', category: 'Reports', name: '2026-08-09-weekly.html', mtime: 300 },
       { path: 'Knowledge/Signals/2026-08-07-digest.md', category: 'Signals', name: '2026-08-07-digest.md', mtime: 200 },
-    ]);
+    ]));
     setup();
     // Report → its own card; Signal → the feed list. They are NOT in one flat list.
     const card = await screen.findByTestId('community-report-card');
@@ -129,9 +135,9 @@ describe('CommunityOverlay — Inbound tab', () => {
   });
 
   it('renders signal items and opens a file on click (closes overlay + dispatches)', async () => {
-    fetchFeed.mockResolvedValue([
+    fetchFeed.mockResolvedValue(feedOf([
       { path: 'Knowledge/Signals/2026-08-07-digest.md', category: 'Signals', name: '2026-08-07-digest.md', mtime: 100 },
-    ]);
+    ]));
     const close = vi.fn();
     const handler = vi.fn();
     document.addEventListener('swarm:open-file', handler);
@@ -148,10 +154,29 @@ describe('CommunityOverlay — Inbound tab', () => {
     document.removeEventListener('swarm:open-file', handler);
   });
 
+  it('surfaces the honest cap when the feed is truncated (no silent partial list)', async () => {
+    fetchFeed.mockResolvedValue(feedOf(
+      [{ path: 'Knowledge/Signals/a.md', category: 'Signals', name: 'a.md', mtime: 100 }],
+      { count: 100, truncated: true },
+    ));
+    setup();
+    const note = await screen.findByTestId('community-feed-truncated');
+    expect(note.textContent).toMatch(/more on disk/i);
+  });
+
+  it('does NOT show the cap note when the feed is complete', async () => {
+    fetchFeed.mockResolvedValue(feedOf([
+      { path: 'Knowledge/Signals/a.md', category: 'Signals', name: 'a.md', mtime: 100 },
+    ]));
+    setup();
+    await screen.findByTestId('community-feed-item');
+    expect(screen.queryByTestId('community-feed-truncated')).toBeNull();
+  });
+
   it('report card click opens the report file in Canvas', async () => {
-    fetchFeed.mockResolvedValue([
+    fetchFeed.mockResolvedValue(feedOf([
       { path: 'Knowledge/Reports/2026-08-09-weekly.html', category: 'Reports', name: '2026-08-09-weekly.html', mtime: 300 },
-    ]);
+    ]));
     const close = vi.fn();
     const handler = vi.fn();
     document.addEventListener('swarm:open-file', handler);
