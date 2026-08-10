@@ -188,11 +188,13 @@ function InboundTab({ close }: { close: () => void }) {
     return { latestReport: reports[0] ?? null, pastReports: reports.slice(1), signals: sigs };
   }, [data]);
 
-  // Honest cap disclosure: the backend caps the feed and flags `truncated`. Surfacing
-  // it (instead of dropping it as before) turns a SILENT partial list into a visible
-  // "showing newest N — more on disk" note, so the feed never reads as complete when
-  // it isn't. Mirrors the Sources tab's member-cap disclosure.
+  // Honest cap disclosure: the backend caps the WHOLE feed (Signals + Reports) at
+  // feed_cap and flags `truncated`. Surface it instead of dropping it (was silent).
+  // NOTE: the cap is on the whole feed, so the disclosed number is `data.count` (the
+  // total capped items fetched) — NOT signals.length, which is only the post-split
+  // signal subset and would misstate the cap (adversarial-review finding).
   const truncated = data?.truncated === true;
+  const fetchedCount = data?.count ?? 0;
 
   // Hot Topics renders ABOVE as an independent SIBLING — never gated by the feed's
   // own loading/empty state (an empty file feed must not hide hot topics).
@@ -256,7 +258,7 @@ function InboundTab({ close }: { close: () => void }) {
                 data-testid="community-feed-truncated"
                 className="px-3 py-1.5 text-[11px] text-[var(--color-text-faint)]"
               >
-                Showing the newest {signals.length} signals — more on disk.
+                Showing the newest {fetchedCount} {fetchedCount === 1 ? 'item' : 'items'} — more on disk.
               </div>
             )}
           </div>

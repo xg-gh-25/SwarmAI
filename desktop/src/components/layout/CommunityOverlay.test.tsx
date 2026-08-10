@@ -162,6 +162,11 @@ describe('CommunityOverlay — Inbound tab', () => {
     setup();
     const note = await screen.findByTestId('community-feed-truncated');
     expect(note.textContent).toMatch(/more on disk/i);
+    // Must disclose the TRUE fetched count (100 = whole-feed cap), NOT signals.length
+    // (which is 1 here). Guards the adversarial-review finding that the note misstated
+    // the number. Also assert it is NOT the misleading signal-subset count.
+    expect(note.textContent).toContain('100');
+    expect(note.textContent).not.toMatch(/newest 1 /);
   });
 
   it('does NOT show the cap note when the feed is complete', async () => {

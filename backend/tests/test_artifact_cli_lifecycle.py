@@ -1956,6 +1956,34 @@ class TestPurgeFailClosed:
         assert result["purged"] == 0
         assert result.get("skipped_tracked", 0) == 1
 
+    def test_git_fatal_returncode_fails_closed_keeps_tracked(self, tmp_path):
+        """A FATAL git rc (128 — corrupt/locked index) at ls-files time must fail-CLOSED,
+        NOT be read as 'untracked'. This is the rc-based fail-open the adversarial review
+        found: the old `return rc==0` collapsed rc==1 (untracked) and rc==128 (fatal) into
+        the same 'delete-eligible' answer, so a corrupt index would trash a TRACKED run."""
+        import subprocess
+        from scripts.artifact_cli import purge_garbage_runs
+        ws, runs = self._git_ws_with_tracked_garbage(tmp_path)
+        real_run = subprocess.run
+
+        class _FatalResult:
+            returncode = 128
+            stdout = b""
+            stderr = b"fatal: not a git repository (or any parent up to mount point)"
+
+        def _fake_run(cmd, *a, **k):
+            if cmd and cmd[0] == "git" and "ls-files" in cmd:
+                return _FatalResult()  # git ran but FAILED fatally
+            return real_run(cmd, *a, **k)
+
+        with patch("scripts.artifact_cli._get_workspace", return_value=ws), \
+             patch("subprocess.run", side_effect=_fake_run):
+            result = purge_garbage_runs(retention_days=7, apply=True)
+        assert (runs / "run_tracked").exists(), \
+            "a FATAL git rc must fail-closed — tracked run kept, not trashed"
+        assert result["purged"] == 0
+        assert result.get("skipped_tracked", 0) == 1
+
     def test_undated_garbage_is_kept_not_purged(self, workspace):
         """Garbage with an unparseable/missing timestamp must be KEPT (fail-closed),
         not treated as old and purged — a schema drift dropping the ts fields must not

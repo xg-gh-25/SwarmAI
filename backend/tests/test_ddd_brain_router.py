@@ -1044,3 +1044,63 @@ class TestPerfDedupRun9af622ee:
         assert scan._find_silent_swallows(src, "<pending_count>") == [], (
             "_pending_count's except is still a silent swallow — it must log before return 0"
         )
+
+
+class TestBatchDirtyProjectDirs:
+    """_batch_dirty_project_dirs must match per-project _git_status_dirty truth.
+
+    Regression guard (adversarial review): the porcelain -z parser used rec.strip(),
+    which ate the leading SPACE of the XY status field for any purely-UNSTAGED change
+    (X=space, e.g. ' M'), shifting the 'XY ' prefix and mangling the path → the record
+    was dropped → a genuinely DIRTY project was reported CLEAN. These build a real temp
+    git repo and assert the batch equals the per-project truth for each dirty shape.
+    """
+
+    def _git_ws(self, tmp_path):
+        import subprocess
+        ws = tmp_path
+        for name in ("Alpha", "Beta"):
+            d = ws / "Projects" / name
+            d.mkdir(parents=True)
+            (d / "PRODUCT.md").write_text(f"# {name}\ncommitted\n")
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=ws, check=True)
+        return ws
+
+    def test_unstaged_modified_project_is_reported_dirty(self, tmp_path, monkeypatch):
+        # The exact bug: a purely-unstaged edit (porcelain ' M ...', X=space).
+        import routers.ddd_brain as m
+        ws = self._git_ws(tmp_path)
+        (ws / "Projects" / "Alpha" / "PRODUCT.md").write_text("# Alpha\nEDITED unstaged\n")
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
+        batch = m._batch_dirty_project_dirs(dirs)
+        assert batch == {"Alpha"}, f"unstaged-modified Alpha must be dirty, got {batch}"
+        # Batch MUST agree with the per-project fork for every project (the correctness
+        # the perf-only test never checked).
+        for d in dirs:
+            assert (d.name in batch) == m._git_status_dirty(d), \
+                f"batch/per-project disagree for {d.name}"
+
+    def test_cross_project_rename_marks_both_sides(self, tmp_path, monkeypatch):
+        import subprocess
+        import routers.ddd_brain as m
+        ws = self._git_ws(tmp_path)
+        # rename Alpha/PRODUCT.md -> Beta/moved.md (staged rename spans two projects)
+        subprocess.run(["git", "mv", "Projects/Alpha/PRODUCT.md", "Projects/Beta/moved.md"],
+                       cwd=ws, check=True)
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
+        batch = m._batch_dirty_project_dirs(dirs)
+        assert "Beta" in batch, f"rename destination Beta must be dirty, got {batch}"
+        assert "Alpha" in batch, f"rename origin Alpha must be dirty (was dropped by the bug), got {batch}"
+
+    def test_clean_repo_returns_empty_set_not_none(self, tmp_path, monkeypatch):
+        import routers.ddd_brain as m
+        ws = self._git_ws(tmp_path)
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
+        assert m._batch_dirty_project_dirs(dirs) == set(), "clean repo → empty set (success), not None"

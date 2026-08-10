@@ -198,16 +198,37 @@ def _batch_dirty_project_dirs(project_dirs: list[Path]) -> Optional[set[str]]:
         return None
     if result.returncode != 0:
         return None
-    dirty: set[str] = set()
-    for rec in result.stdout.split("\0"):
-        rec = rec.strip()
-        if not rec:
-            continue
-        path = rec[3:]  # "XY <path>"
+
+    def _mark(path: str) -> None:
         # path is ws-relative posix: Projects/<name>/...
         parts = path.split("/")
         if len(parts) >= 2 and parts[0] == "Projects" and parts[1] in names:
             dirty.add(parts[1])
+
+    dirty: set[str] = set()
+    # Porcelain -z record = "XY<space>PATH" (XY is a 2-char status; for a purely
+    # UNSTAGED change X is a SPACE, e.g. " M"). Do NOT .strip() the record — that ate
+    # the leading space and shifted the "XY " prefix, mangling every space-prefixed
+    # path (" M Projects/Foo" → "rojects/Foo" → dropped → project wrongly reported
+    # CLEAN). Only skip genuinely empty fields. Rename/copy (X or Y in {R,C}) emits the
+    # ORIGIN path as a SEPARATE NUL field right after — consume it and mark it too, so a
+    # cross-project rename marks BOTH sides dirty.
+    fields = result.stdout.split("\0")
+    i = 0
+    while i < len(fields):
+        rec = fields[i]
+        if not rec:
+            i += 1
+            continue
+        xy = rec[:2]
+        _mark(rec[3:])  # "XY <path>" → path starts at index 3
+        if "R" in xy or "C" in xy:
+            # next field is the rename/copy ORIGIN path (no XY prefix)
+            if i + 1 < len(fields) and fields[i + 1]:
+                _mark(fields[i + 1])
+            i += 2
+            continue
+        i += 1
     return dirty
 
 

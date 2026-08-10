@@ -1072,7 +1072,16 @@ def _is_git_tracked(path: Path, repo_root: Path) -> bool:
             ["git", "ls-files", "--error-unmatch", str(rel)],
             cwd=str(repo_root), capture_output=True, timeout=15,
         )
-        return r.returncode == 0
+        # Distinguish by EXACT rc (adversarial-review CONFIRMED bug): rc==0 tracked,
+        # rc==1 genuinely untracked, rc>=128 FATAL (corrupt/locked index — a real
+        # unattended failure mode). The old `return rc==0` collapsed rc==1 AND rc==128
+        # into "untracked" → a corrupt index would let the sweep trash a TRACKED public
+        # run (fail-open). Route any non-{0,1} code to the fail-CLOSED fallback.
+        if r.returncode == 0:
+            return True   # tracked
+        if r.returncode == 1:
+            return False  # genuinely untracked → delete-eligible
+        return _has_git_dir(repo_root)  # fatal/unexpected → indeterminate → fail-closed
     except (OSError, subprocess.SubprocessError):
         # Indeterminate: fail-CLOSED inside a git working tree, open only if truly non-git.
         return _has_git_dir(repo_root)
