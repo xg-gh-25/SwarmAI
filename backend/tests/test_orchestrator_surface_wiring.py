@@ -409,6 +409,27 @@ def test_completion_idempotent_after_explicit_surface(monkeypatch):
         f"build_surface_events must run exactly once (explicit surface then completion), got {build_calls}"
 
 
+def test_completion_first_then_explicit_surface_no_double_emit(monkeypatch):
+    """AC2 (symmetric idempotency — Gate-2 correctness finding): if the backend-auto
+    completion surfaces FIRST, a subsequent explicit surface_run_outputs for the SAME
+    run must NOT re-emit. Drives completion THEN surface; build_surface_events runs
+    exactly once. Guards the asymmetry the adversarial reviewer caught."""
+    build_calls = []
+    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(
+        _drive(orch, [
+            _bash_complete_tool_use(run_id="run_ce", tool_use_id="tu-c1"),
+            _tool_result(tool_use_id="tu-c1"),
+            _surface_tool_use(run_id="run_ce", tool_use_id="tu-s1"),
+            _make_result_message(),
+        ])
+    )
+    assert raised is None
+    assert build_calls == ["run_ce"], \
+        f"completion-first then explicit surface must emit exactly once, got {build_calls}"
+
+
 def test_completion_build_failure_does_not_break_turn(monkeypatch):
     """AC4: build_surface_events raising in the completion branch must be swallowed —
     the streaming turn survives (fail-safe on the hot path)."""

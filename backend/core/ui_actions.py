@@ -582,9 +582,12 @@ def parse_completion_run_id(command: object) -> Optional[str]:
     if "run-update" not in command:
         return None
     import re
-    # --status completed | --status=completed  (value token is exactly "completed",
-    # not merely containing it — a --reason 'not completed yet' must NOT match).
-    if not re.search(r"--status[=\s]+completed(?:\s|$)", command):
+    # (^|\s)--status completed | --status=completed  (value token is exactly
+    # "completed", not merely containing it — a --reason 'not completed yet' must NOT
+    # match). The leading (?:^|\s) anchors --status to a real token boundary so a
+    # hypothetical sibling flag ending in "-status" can't substring-match (RP: matcher
+    # robustness). The trailing (?:\s|$) keeps "completed" a whole value, not a prefix.
+    if not re.search(r"(?:^|\s)--status[=\s]+completed(?:\s|$)", command):
         return None
     m = re.search(r"--run-id[=\s]+([A-Za-z0-9_-]+)", command)
     if not m:

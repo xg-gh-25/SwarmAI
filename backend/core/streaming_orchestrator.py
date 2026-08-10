@@ -903,9 +903,27 @@ class StreamingOrchestrator:
                                         )
                                         if _um_status == "completed":
                                             await ensure_report_for_run(_um_rid)
-                                            for _ev in build_surface_events(_um_rid):
+                                            # build_surface_events does a glob+read+stat;
+                                            # off-loop it to keep the hot streaming turn
+                                            # free (Gate-2 operational finding).
+                                            _um_surf = await asyncio.to_thread(
+                                                build_surface_events, _um_rid
+                                            )
+                                            for _ev in _um_surf:
                                                 yield _ev
                                             _um_seen.add(_um_rid)
+                                        else:
+                                            # Observability (Gate-2 meta-review): a
+                                            # completion COMMAND whose run.json is not
+                                            # actually 'completed' (gate BLOCKED it — CLI
+                                            # still exited 0) drops the surface. debug, not
+                                            # warning: a non-completed run-update is normal
+                                            # + frequent, only useful when chasing "Canvas
+                                            # didn't open after my pipeline finished".
+                                            logger.debug(
+                                                "auto-surface skipped: run %r status=%r "
+                                                "(not 'completed')", _um_rid, _um_status,
+                                            )
                                 except Exception as _e:  # noqa: BLE001 — hot-path fail-safe
                                     logger.warning(
                                         "auto-surface on completion failed for %r: %s",
@@ -1127,14 +1145,22 @@ class StreamingOrchestrator:
                             # (off-loop, fail-safe: never raises) so build_surface_events
                             # (still PURE) finds it and emits the report row.
                             _sf_run_id = block.input.get("run_id")
-                            await ensure_report_for_run(_sf_run_id)
-                            for _sf_ev in build_surface_events(_sf_run_id):
-                                yield _sf_ev
-                            # Idempotency (run_beff6754): record that THIS run was
-                            # surfaced explicitly, so the backend-auto completion
-                            # observation below does not double-emit the same batch.
-                            if isinstance(_sf_run_id, str) and _sf_run_id:
-                                self._auto_surfaced_run_ids().add(_sf_run_id)
+                            # Idempotency (run_beff6754): surface a run AT MOST ONCE per
+                            # session regardless of which path fires. SYMMETRIC guard —
+                            # the completion-observation branch checks-before-emit, so
+                            # this branch must too, else a completion that surfaced FIRST
+                            # (backend-auto) followed by an explicit surface_run_outputs
+                            # would double-emit (Gate-2 correctness finding). In the
+                            # common flow (explicit surface precedes completion) the set
+                            # is empty here, so this still emits normally.
+                            _sf_seen = self._auto_surfaced_run_ids()
+                            _sf_already = isinstance(_sf_run_id, str) and _sf_run_id in _sf_seen
+                            if not _sf_already:
+                                await ensure_report_for_run(_sf_run_id)
+                                for _sf_ev in build_surface_events(_sf_run_id):
+                                    yield _sf_ev
+                                if isinstance(_sf_run_id, str) and _sf_run_id:
+                                    _sf_seen.add(_sf_run_id)
                             # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this
@@ -1249,7 +1275,10 @@ class StreamingOrchestrator:
                                         )
                                         if _status == "completed":
                                             await ensure_report_for_run(_completion_rid)
-                                            _fc_events += build_surface_events(_completion_rid)
+                                            # off-loop the glob+read (Gate-2 operational)
+                                            _fc_events += await asyncio.to_thread(
+                                                build_surface_events, _completion_rid
+                                            )
                                             _seen.add(_completion_rid)
                                 except Exception as _e:  # noqa: BLE001 — hot-path fail-safe
                                     logger.warning(
