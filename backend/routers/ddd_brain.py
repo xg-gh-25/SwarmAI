@@ -1290,7 +1290,13 @@ def _pending_proposals_payload(project_dir: Path) -> list[dict]:
                 "source_run_id": getattr(p, "source_run_id", ""),
             })
         return out
-    except Exception:  # pragma: no cover
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE, and the highest-consequence instance of the pattern in
+        # this router: [] renders as "nothing is waiting for approval", so a broken
+        # payload builder does not surface as an error — it makes every pending
+        # proposal INVISIBLE and therefore unapprovable, while the UI looks calm.
+        logger.warning("cannot build pending-proposals payload for %s, reporting "
+                       "none pending: %s", project_dir, exc)
         return []
 
 

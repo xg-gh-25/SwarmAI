@@ -887,7 +887,13 @@ def _probe_iam_instance_role() -> dict | None:
             pass  # identity doc is bonus info, role presence is sufficient
 
         return details
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. None means "this host has no IAM instance role", a
+        # legitimate answer on any non-EC2 machine — so a genuine IMDS failure on a host
+        # that DOES have a role is reported identically to a laptop. The inner handler
+        # above stays silent on purpose: it only enriches with the identity doc, and role
+        # presence has already been established by the time it runs.
+        logger.debug("IAM instance-role probe failed, reporting no role: %s", exc)
         return None
 
 

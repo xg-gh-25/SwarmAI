@@ -401,7 +401,13 @@ def _run_metrics_cached(project: str, run_id: str, raw: dict) -> dict:
             mfile.parent.mkdir(parents=True, exist_ok=True)
             mfile.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         return metrics
-    except Exception:  # noqa: BLE001 — dashboard read must be fault-tolerant
+    except Exception as exc:  # noqa: BLE001 — dashboard read must be fault-tolerant
+        # Keep the fault tolerance (a broken metrics file must not 500 the dashboard),
+        # but {} renders as a run with no metrics at all — visually identical to a run
+        # that produced none. Without this line, a systematic metrics regression shows up
+        # only as a dashboard that has quietly gone blank.
+        logger.warning("metrics unavailable for %s/%s, rendering empty: %s",
+                       project, run_id, exc)
         return {}
 
 

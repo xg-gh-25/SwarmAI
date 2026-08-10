@@ -63,7 +63,7 @@ class TestInitializedFieldConsistency:
             return None
 
         # Mock the agent retrieval
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(_agent_id=None):
             if agent_ready:
                 return {
                     "name": "SwarmAgent",
@@ -84,7 +84,7 @@ class TestInitializedFieldConsistency:
         mock_db.app_settings.get = AsyncMock(return_value=None)
 
         with patch("routers.system.db", mock_db), \
-             patch("routers.system.get_default_agent", mock_get_default_agent), \
+             patch("routers.system.build_agent_config", mock_build_agent_config), \
              patch("routers.system.channel_gateway", mock_gateway):
 
             response = client.get("/api/system/status")
@@ -142,7 +142,7 @@ class TestInitializedFieldConsistency:
             return None
 
         # Mock the agent retrieval
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(_agent_id=None):
             if agent_ready:
                 return {
                     "name": "SwarmAgent",
@@ -163,7 +163,7 @@ class TestInitializedFieldConsistency:
         mock_db.app_settings.get = AsyncMock(return_value=None)
 
         with patch("routers.system.db", mock_db), \
-             patch("routers.system.get_default_agent", mock_get_default_agent), \
+             patch("routers.system.build_agent_config", mock_build_agent_config), \
              patch("routers.system.channel_gateway", mock_gateway):
 
             response = client.get("/api/system/status")
@@ -228,7 +228,7 @@ class TestInitializedFieldConsistency:
                     }
                 return None
 
-            async def mock_get_default_agent(ready=agent_ready):
+            async def mock_build_agent_config(_agent_id=None, ready=agent_ready):
                 if ready:
                     return {"name": "SwarmAgent", "allowed_skills": [], "mcp_ids": []}
                 return None
@@ -243,7 +243,7 @@ class TestInitializedFieldConsistency:
             mock_db.workspace_config.get_config = mock_get_default_workspace
 
             with patch("routers.system.db", mock_db), \
-                 patch("routers.system.get_default_agent", mock_get_default_agent), \
+                 patch("routers.system.build_agent_config", mock_build_agent_config), \
                  patch("routers.system.channel_gateway", mock_gateway):
 
                 response = client.get("/api/system/status")
@@ -284,7 +284,7 @@ class TestInitializedFieldConsistency:
                 "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS"
             }
 
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(_agent_id=None):
             return {
                 "name": "SwarmAgent",
                 "allowed_skills": [f"skill-{i}" for i in range(skills_count)],
@@ -302,7 +302,7 @@ class TestInitializedFieldConsistency:
         mock_db.app_settings.get = AsyncMock(return_value=None)
 
         with patch("routers.system.db", mock_db), \
-             patch("routers.system.get_default_agent", mock_get_default_agent), \
+             patch("routers.system.build_agent_config", mock_build_agent_config), \
              patch("routers.system.channel_gateway", mock_gateway):
 
             response = client.get("/api/system/status")

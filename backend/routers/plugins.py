@@ -342,7 +342,14 @@ def _marketplace_to_response(m: dict) -> MarketplaceResponse:
         import json
         try:
             cached_plugins = json.loads(cached_plugins)
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            # Was a BARE `except:`, which also swallowed KeyboardInterrupt and
+            # SystemExit — a shutdown signal arriving mid-parse would have been
+            # absorbed into an empty plugin list. Narrowed to the parse errors that
+            # can actually occur here, and made observable: [] renders as "this
+            # marketplace offers no plugins", indistinguishable from a corrupt cache.
+            logger.warning("marketplace %s has an unparseable cached_plugins blob, "
+                           "reporting empty: %s", m.get("id"), exc)
             cached_plugins = []
 
     return MarketplaceResponse(
@@ -448,7 +455,12 @@ def _plugin_to_response(p: dict, marketplace_name: Optional[str] = None) -> Plug
         if isinstance(val, str):
             try:
                 return json.loads(val)
-            except:
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                # Same bare-`except:` fix as _marketplace_to_response above. This one
+                # feeds PluginResponse fields, so [] silently strips a plugin's
+                # declared capabilities/dependencies and the plugin looks inert.
+                logger.warning("plugin %s has an unparseable JSON list field, "
+                               "reporting empty: %s", p.get("id"), exc)
                 return []
         return val or []
 

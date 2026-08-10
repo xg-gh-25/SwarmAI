@@ -407,6 +407,79 @@ def test_scanner_ignores_logging_in_unused_nested_def():
 
 
 # ---------------------------------------------------------------------------
+# AC4 — bare `except:` is BANNED outright, with no baseline and no ratchet.
+#
+# It is strictly worse than `except Exception:` because it also catches
+# KeyboardInterrupt and SystemExit, so a shutdown signal arriving inside the try
+# block gets absorbed and the process refuses to die. Unlike the silent-swallow
+# count there is no debt to work down here — the codebase was already at exactly 2
+# (both JSON parses in routers/plugins.py) when this gate was written, both fixed in
+# the same commit. Zero is therefore the permanent floor, which is why this is a
+# hard assertion rather than another entry in the baseline.
+#
+# Scope is DELIBERATELY WIDER than SCOPE_DIRS: the silent-swallow baseline is scoped
+# to routers/core/channels because that is where the debt was inventoried, but a bare
+# except is a bug anywhere, and there is no reason to let one land in jobs/ or hooks/.
+# ---------------------------------------------------------------------------
+_BARE_EXCEPT_SCOPE = ("routers", "core", "channels", "jobs", "hooks", "utils",
+                      "database", "skills", "middleware")
+
+
+def _find_bare_excepts() -> list[str]:
+    out: list[str] = []
+    for sub in _BARE_EXCEPT_SCOPE:
+        base = BACKEND_DIR / sub
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if "/tests/" in path.as_posix() or path.name.startswith("test_"):
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError, ValueError, UnicodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ExceptHandler) and node.type is None:
+                    out.append(f"{path.relative_to(BACKEND_DIR).as_posix()}:{node.lineno}")
+    return out
+
+
+def test_no_bare_except_anywhere():
+    found = _find_bare_excepts()
+    assert found == [], (
+        f"{len(found)} bare `except:` found — it also catches KeyboardInterrupt and "
+        f"SystemExit, so a shutdown signal raised inside the try block is swallowed and "
+        f"the process will not exit. Name the exceptions you actually expect "
+        f"(`except (json.JSONDecodeError, TypeError):`), or use `except Exception as e:` "
+        f"with a log if it truly must be broad:\n  " + "\n  ".join(found)
+    )
+
+
+def test_bare_except_scanner_is_not_vacuous():
+    """The gate above asserts an empty list, which a broken scanner also satisfies.
+
+    Pin that the detector actually fires — and that it does NOT fire on the narrowed
+    form the fix uses, otherwise the gate would just be banning all error handling.
+    """
+    bare = "def f():\n    try:\n        risky()\n    except:\n        return []\n"
+    narrowed = ("import json\n"
+                "def f():\n    try:\n        risky()\n"
+                "    except (json.JSONDecodeError, TypeError):\n        return []\n")
+    broad_named = "def f():\n    try:\n        risky()\n    except Exception:\n        return []\n"
+
+    def bare_lines(src: str) -> list[int]:
+        return [n.lineno for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.ExceptHandler) and n.type is None]
+
+    assert bare_lines(bare) == [4], "detector missed a bare except:"
+    assert bare_lines(narrowed) == [], "detector false-positived on a narrowed except"
+    assert bare_lines(broad_named) == [], (
+        "detector false-positived on `except Exception:` — that is the silent-swallow "
+        "gate's business, not this one's"
+    )
+
+
+# ---------------------------------------------------------------------------
 # --update-baseline regenerator (the ONLY sanctioned way to move the baseline).
 #   python -m tests.test_silent_except_baseline --update-baseline
 # Run from backend/ with the venv active.

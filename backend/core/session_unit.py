@@ -3633,8 +3633,17 @@ class SessionUnit:
                 _rss_executor,
                 resource_monitor.process_tree_rss, pid,
             )
-        except Exception:
-            return  # psutil failure — skip silently
+        except Exception as exc:  # noqa: BLE001
+            # Was "skip silently". Skipping is still right — a failed RSS read must not
+            # kill a healthy session — but this is the CONSUMER side of the same
+            # load-bearing lie process_tree_rss carries: silence here means the
+            # proactive-restart guard simply never fires, and a session can grow past
+            # PROACTIVE_RSS_THRESHOLD with nothing anywhere recording that the check
+            # stopped running. (process_tree_rss now logs its own failures; this covers
+            # the executor-submission path, which it cannot see.)
+            logger.warning("session_unit.rss_check_skipped session_id=%s — proactive "
+                           "restart will not fire this cycle: %s", self.session_id, exc)
+            return
 
         if tree_rss <= self.PROACTIVE_RSS_THRESHOLD:
             return
@@ -3705,7 +3714,14 @@ class SessionUnit:
         try:
             from .prompt_builder import PromptBuilder
             window = PromptBuilder.get_model_context_window(self._model_name)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Degrade-OBSERVABLE. Returning here disables SOFT COMPACTION for this
+            # session, so context keeps growing until it fails hard at the window
+            # boundary — a late, confusing failure whose actual cause (an unresolvable
+            # model window) happened much earlier and said nothing.
+            logger.warning("session_unit.soft_compact_skipped session_id=%s model=%s — "
+                           "cannot resolve context window: %s",
+                           self.session_id, self._model_name, exc)
             return
         if window <= 0:
             return
@@ -4208,8 +4224,15 @@ class SessionUnit:
                     "conversation history is preserved."
                 ),
             }
-        except Exception:
-            return None  # observability is best-effort; never break streaming
+        except Exception as exc:  # noqa: BLE001
+            # "never break streaming" stands — but note WHAT is being dropped: this
+            # builds the user-facing "automatic recovery has stopped" notice. Losing it
+            # silently leaves the user with a session that has given up and no message
+            # saying so, which is the one case where the missing event is the whole point.
+            logger.warning("session_unit.recovery_exhausted_event_failed session_id=%s "
+                           "trigger=%s — user will not be told recovery stopped: %s",
+                           self.session_id, trigger, exc)
+            return None
 
     def _capture_wrapup_text(self, event: dict) -> None:
         """Accumulate assistant text emitted during the graceful wrap-up turn.

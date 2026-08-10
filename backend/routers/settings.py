@@ -70,7 +70,12 @@ def _probe_aws_credentials() -> bool:
         session = boto3.Session()
         creds = session.get_credentials()
         return creds is not None
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Degrade-OBSERVABLE. False is reported to the UI as "AWS credentials not
+        # available", which sends the user to check their credential chain — the wrong
+        # place entirely when the real cause was, say, a boto3 import or config-parse
+        # failure. Keep the honest-but-conservative False; log the actual reason.
+        logger.warning("AWS credential probe failed, reporting unavailable: %s", exc)
         return False
 
 
