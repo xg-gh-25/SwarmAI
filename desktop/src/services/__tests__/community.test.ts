@@ -139,9 +139,37 @@ describe('communityService — snake→camel normalization', () => {
     expect(out[0].memberKind).toBeNull();
   });
 
-  it('fetchEngagement defaults missing fields (0 / null stars), no fabricated quality', async () => {
+  it('fetchEngagement maps the {kpis, items} contract + nested replies → camelCase', async () => {
+    mockApi.get.mockResolvedValue({
+      data: {
+        kpis: { comments_posted: 216, replies_received: 387, maintainer_replies: 21, stars: null },
+        items: [
+          {
+            repo: 'a/b', issue_number: 1, topic: 'T-MEM', status: 'published',
+            comment_url: 'https://github.com/a/b/issues/1#c1', posted_at: '2026-08-01T10:00:00Z',
+            confidence: 9, reply_count: 1, has_maintainer_reply: true, needs_followup: true,
+            replies: [{ author: 'm1', body: 'merged', is_maintainer: true, created_at: '2026-08-02T10:00:00Z' }],
+          },
+        ],
+      },
+    });
+    const out = await communityService.fetchEngagement();
+    expect(out.kpis).toEqual({ commentsPosted: 216, repliesReceived: 387, maintainerReplies: 21, stars: null });
+    expect(out.items).toHaveLength(1);
+    expect(out.items[0]).toEqual({
+      repo: 'a/b', issueNumber: 1, topic: 'T-MEM', status: 'published',
+      commentUrl: 'https://github.com/a/b/issues/1#c1', postedAt: '2026-08-01T10:00:00Z',
+      confidence: 9, replyCount: 1, hasMaintainerReply: true, needsFollowup: true,
+      replies: [{ author: 'm1', body: 'merged', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' }],
+    });
+  });
+
+  it('fetchEngagement falls back to a flat pre-list backend (no kpis wrapper → still maps counts)', async () => {
+    // A rolling deploy where the backend still returns the old flat shape must NOT
+    // silently zero the strip — the d.kpis ?? d fallback reads the top-level counts.
     mockApi.get.mockResolvedValue({ data: { comments_posted: 2 } });
     const out = await communityService.fetchEngagement();
-    expect(out).toEqual({ commentsPosted: 2, repliesReceived: 0, maintainerReplies: 0, stars: null });
+    expect(out.kpis).toEqual({ commentsPosted: 2, repliesReceived: 0, maintainerReplies: 0, stars: null });
+    expect(out.items).toEqual([]);
   });
 });

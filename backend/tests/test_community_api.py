@@ -22,6 +22,7 @@ import yaml
 from core.community_data import (
     parse_sources,
     aggregate_engagement,
+    engagement_items,
     build_feed,
 )
 
@@ -213,25 +214,30 @@ def test_aggregate_engagement_maintainer_case_insensitive(tmp_path: Path) -> Non
 def artifacts_dir(tmp_path: Path) -> Path:
     d = tmp_path / ".artifacts"
     d.mkdir()
-    # engagement_log.jsonl — real shape: comment_id/status/posted_at/topic/repo
+    # engagement_log.jsonl — PRODUCTION shape: publish.py writes status="published"
+    # on a successful post (community engine publish.py:136), NOT "posted". The old
+    # fixture used "posted" — a value the writer never emits — which made the green
+    # test mask the live comments_posted=0 bug (O009: a fixture encoding the wrong
+    # assumption). issue_number + comment_url are real fields used by the Outbound list.
     (d / "engagement_log.jsonl").write_text(
         "\n".join(
             json.dumps(x)
             for x in [
-                {"comment_id": "c1", "status": "posted", "posted_at": "2026-08-01T10:00:00Z", "repo": "a/b", "topic": "memory"},
-                {"comment_id": "c2", "status": "posted", "posted_at": "2026-08-05T10:00:00Z", "repo": "c/d", "topic": "pipeline"},
-                {"comment_id": "c3", "status": "draft", "posted_at": "2026-08-06T10:00:00Z", "repo": "e/f", "topic": "skills"},
+                {"comment_id": "c1", "status": "published", "posted_at": "2026-08-01T10:00:00Z", "repo": "a/b", "issue_number": 1, "topic": "memory", "confidence": 9, "comment_url": "https://github.com/a/b/issues/1#c1"},
+                {"comment_id": "c2", "status": "published", "posted_at": "2026-08-05T10:00:00Z", "repo": "c/d", "issue_number": 2, "topic": "pipeline", "confidence": 8, "comment_url": "https://github.com/c/d/issues/2#c2"},
+                {"comment_id": "c3", "status": "draft", "posted_at": "2026-08-06T10:00:00Z", "repo": "e/f", "issue_number": 3, "topic": "skills"},
             ]
         )
         + "\n"
     )
-    # reply_archive.jsonl — real shape: author/is_maintainer/created_at/source_repo
+    # reply_archive.jsonl — real shape: author/is_maintainer/created_at/source_repo/
+    # source_issue/body. Joins to engagement on (source_repo,source_issue)==(repo,issue_number).
     (d / "reply_archive.jsonl").write_text(
         "\n".join(
             json.dumps(x)
             for x in [
-                {"id": "r1", "author": "maintainer1", "is_maintainer": True, "created_at": "2026-08-02T10:00:00Z", "source_repo": "a/b"},
-                {"id": "r2", "author": "user9", "is_maintainer": False, "created_at": "2026-08-03T10:00:00Z", "source_repo": "a/b"},
+                {"id": "r1", "author": "maintainer1", "is_maintainer": True, "created_at": "2026-08-02T10:00:00Z", "source_repo": "a/b", "source_issue": 1, "body": "great point, merged"},
+                {"id": "r2", "author": "user9", "is_maintainer": False, "created_at": "2026-08-03T10:00:00Z", "source_repo": "a/b", "source_issue": 1, "body": "+1"},
             ]
         )
         + "\n"
@@ -243,9 +249,10 @@ def artifacts_dir(tmp_path: Path) -> Path:
     return d
 
 
-def test_aggregate_engagement_counts_posted_comments(artifacts_dir: Path) -> None:
+def test_aggregate_engagement_counts_published_comments(artifacts_dir: Path) -> None:
     agg = aggregate_engagement(artifacts_dir)
-    # Only status=posted count as published comments (2 of 3).
+    # Only status=published count (2 of 3 — the draft is excluded). This is the
+    # value publish.py actually writes; the pre-fix code matched "posted" → 0.
     assert agg["comments_posted"] == 2
 
 
@@ -272,11 +279,66 @@ def test_aggregate_engagement_skips_bad_jsonl_lines(tmp_path: Path) -> None:
     d = tmp_path / ".artifacts"
     d.mkdir()
     (d / "engagement_log.jsonl").write_text(
-        json.dumps({"comment_id": "c1", "status": "posted"}) + "\nNOT JSON\n"
-        + json.dumps({"comment_id": "c2", "status": "posted"}) + "\n"
+        json.dumps({"comment_id": "c1", "status": "published"}) + "\nNOT JSON\n"
+        + json.dumps({"comment_id": "c2", "status": "published"}) + "\n"
     )
     agg = aggregate_engagement(d)
     assert agg["comments_posted"] == 2  # bad line skipped, not fatal
+
+
+# ── Engagement items (Outbound clickable list — join engagement × replies) ───
+
+
+def test_engagement_items_shape_and_join(artifacts_dir: Path) -> None:
+    items = engagement_items(artifacts_dir)
+    # 2 published comments become rows; the draft (c3) is KPI-only, not a row.
+    assert len(items) == 2
+    # a/b #1 received 2 replies (1 maintainer) → surfaced first (needs_followup).
+    first = items[0]
+    assert first["repo"] == "a/b" and first["issue_number"] == 1
+    assert first["comment_url"] == "https://github.com/a/b/issues/1#c1"
+    assert first["reply_count"] == 2
+    assert first["has_maintainer_reply"] is True
+    assert first["needs_followup"] is True
+    assert {r["author"] for r in first["replies"]} == {"maintainer1", "user9"}
+    assert any(r["is_maintainer"] and r["body"] == "great point, merged" for r in first["replies"])
+
+
+def test_engagement_items_needs_followup_sorts_first(artifacts_dir: Path) -> None:
+    items = engagement_items(artifacts_dir)
+    # c/d #2 has no reply → not needs_followup → sorts AFTER a/b #1.
+    assert items[0]["needs_followup"] is True
+    assert items[1]["repo"] == "c/d" and items[1]["needs_followup"] is False
+    assert items[1]["replies"] == []
+
+
+def test_engagement_items_excludes_unpublished(artifacts_dir: Path) -> None:
+    items = engagement_items(artifacts_dir)
+    # the draft engagement (e/f #3) must NOT appear as an actionable row.
+    assert all(it["status"] == "published" for it in items)
+    assert not any(it["repo"] == "e/f" for it in items)
+
+
+def test_engagement_items_missing_dir(tmp_path: Path) -> None:
+    assert engagement_items(tmp_path / "nope") == []
+
+
+def test_engagement_items_none_keys_do_not_false_join(tmp_path: Path) -> None:
+    # REVIEW HIGH: a reply missing source_issue must NOT cross-attach to a published
+    # comment that also happens to be missing issue_number via a (repo, None) match.
+    d = tmp_path / ".artifacts"
+    d.mkdir()
+    (d / "engagement_log.jsonl").write_text(
+        json.dumps({"comment_id": "c1", "status": "published", "repo": "a/b", "issue_number": None, "comment_url": "u1"}) + "\n"
+    )
+    (d / "reply_archive.jsonl").write_text(
+        # a reply on a/b but with a MISSING source_issue — must be dropped from the join
+        json.dumps({"id": "r1", "author": "x", "is_maintainer": False, "source_repo": "a/b", "source_issue": None, "body": "unrelated"}) + "\n"
+    )
+    items = engagement_items(d)
+    assert len(items) == 1
+    assert items[0]["reply_count"] == 0  # NOT false-joined via (a/b, None)
+    assert items[0]["needs_followup"] is False
 
 
 # ── Feed (recent signal digests + reports files) ─────────────────────────────
@@ -1126,8 +1188,11 @@ def test_router_handlers_return_real_shapes() -> None:
             assert "managed_by" in s
 
         eng = loop.run_until_complete(community_engagement())
-        assert "comments_posted" in eng
-        assert "avg_quality" not in eng  # no fabricated metric, even live
+        # New contract: {kpis:{...counts...}, items:[...list...]}.
+        assert "kpis" in eng and "items" in eng
+        assert "comments_posted" in eng["kpis"]
+        assert isinstance(eng["items"], list)
+        assert "avg_quality" not in eng["kpis"]  # no fabricated metric, even live
 
         hot = loop.run_until_complete(community_hot_topics())
         assert "topics" in hot and isinstance(hot["topics"], list)

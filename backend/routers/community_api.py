@@ -30,7 +30,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.community_data import aggregate_engagement, build_feed, parse_hot_topics, parse_sources
+from core.community_data import aggregate_engagement, build_feed, engagement_items, parse_hot_topics, parse_sources
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/community", tags=["community"])
@@ -115,14 +115,20 @@ async def community_sources() -> dict:
 
 @router.get("/engagement")
 async def community_engagement() -> dict:
-    """GitHub community engagement metrics (data-backed only).
+    """GitHub community engagement metrics + actionable list (data-backed only).
 
-    {comments_posted, replies_received, maintainer_replies, stars}. No fabricated
-    quality score — there is no quality-score source on disk. Zeros when the
-    GitHub_Community project has no engagement history yet.
+    Returns {kpis: {comments_posted, replies_received, maintainer_replies, stars},
+    items: [per-engagement rows with comment_url + nested replies]}. `kpis` is the
+    scalar summary (Outbound strip); `items` is the clickable engagement list
+    (needs-followup first — see engagement_items). No fabricated quality score —
+    there is no quality-score source on disk. Empty/zeros when GitHub_Community has
+    no engagement history yet.
     """
-    # aggregate_engagement reads JSONL files (blocking) — off the event loop.
-    return await asyncio.to_thread(aggregate_engagement, _engagement_dir())
+    # Both read JSONL files (blocking) — off the event loop. One dir read each.
+    d = _engagement_dir()
+    kpis = await asyncio.to_thread(aggregate_engagement, d)
+    items = await asyncio.to_thread(engagement_items, d)
+    return {"kpis": kpis, "items": items}
 
 
 # ── Phase-2: Sources CRUD (writes config.yaml via the shared serialization authority) ──

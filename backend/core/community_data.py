@@ -1,19 +1,22 @@
-"""community_data — read-only data layer behind the Community overlay (Phase-1).
+"""community_data — read-only data layer behind the Community overlay.
 
 The Community overlay is SwarmAI's two-way membrane with the outside world:
 inbound signals (what we subscribe to + what's worth reading) and outbound
-engagement (how our community participation is doing). Phase-1 is strictly
-READ-ONLY — three pure functions parse existing on-disk sources into
-overlay-ready shapes. No mutation, no self_tune coupling, no config writes.
+engagement (how our community participation is doing). READ-ONLY — pure
+functions parse existing on-disk sources into overlay-ready shapes. No mutation,
+no self_tune coupling, no config writes.
 
 Data sources (all verified live on-disk during the pipeline's PLAN stage):
-  - Sources tab  ← Services/swarm-jobs/config.yaml `feeds:` list
-  - Feed tab     ← Knowledge/{Signals,Reports}/*.{md,html} (recent, newest-first;
-                   HTML reports are fail-closed — see _is_community_html_report)
+  - Watching tab ← Services/swarm-jobs/config.yaml `feeds:` list (parse_sources)
+  - Inbound tab  ← Knowledge/{Signals,Reports}/*.{md,html} (recent, newest-first;
+                   HTML reports are fail-closed — see _is_community_html_report;
+                   build_feed — the overlay splits Reports vs Signals by category)
   - Hot Topics   ← Projects/GitHub_Community/2-understanding/TECH.md
                    `## GitHub Hot Topics` Rankings table (parse_hot_topics)
-  - Engagement   ← Projects/GitHub_Community/.artifacts/{engagement_log,
-                   reply_archive,star_log}.jsonl
+  - Outbound tab ← Projects/GitHub_Community/.artifacts/{engagement_log,
+                   reply_archive,star_log}.jsonl — aggregate_engagement (scalar
+                   KPIs) + engagement_items (the per-engagement list, joined
+                   engagement×replies, needs-followup first)
 
 Design decisions forced by the data (Gate-1, run_5165013e):
   - config.yaml feeds have NO `managed_by` key → default to "manual" (never
@@ -293,6 +296,12 @@ def _read_jsonl(path: Path) -> list[dict]:
     return out
 
 
+def _is_true(v: object) -> bool:
+    """Truthy for a real bool True OR a stringified 'true'/'1' (jsonl round-trips
+    vary by writer — is_maintainer may be a bool or a string)."""
+    return v is True or (isinstance(v, str) and v.lower() in ("true", "1"))
+
+
 def aggregate_engagement(artifacts_dir: Path) -> dict:
     """Aggregate GitHub_Community engagement jsonl into data-backed metrics.
 
@@ -305,14 +314,12 @@ def aggregate_engagement(artifacts_dir: Path) -> dict:
     replies = _read_jsonl(artifacts_dir / "reply_archive.jsonl")
     stars = _read_jsonl(artifacts_dir / "star_log.jsonl")
 
-    comments_posted = sum(1 for e in eng if e.get("status") == "posted")
+    # publish.py writes status="published" on a successful comment post (community
+    # engine publish.py:136). The old predicate matched "posted" — a value the
+    # writer never emits — so comments_posted was silently 0 on the live corpus
+    # (216 published / 0 posted). Count what the writer actually writes.
+    comments_posted = sum(1 for e in eng if e.get("status") == "published")
     replies_received = len(replies)
-    # is_maintainer may be a real bool OR a string ("True"/"true"/"TRUE") — jsonl
-    # round-trips vary by writer. Normalize via str().lower() so every truthy form
-    # matches, not just the three literals we happened to think of.
-    def _is_true(v: object) -> bool:
-        return v is True or (isinstance(v, str) and v.lower() in ("true", "1"))
-
     maintainer_replies = sum(1 for r in replies if _is_true(r.get("is_maintainer")))
     latest_stars = None
     if stars:
@@ -325,6 +332,83 @@ def aggregate_engagement(artifacts_dir: Path) -> dict:
         "maintainer_replies": maintainer_replies,
         "stars": latest_stars,
     }
+
+
+# Cap the Outbound engagement list payload (not a silent truncation of value — the
+# KPI counts stay the TRUE totals; this only bounds the rendered rows).
+_ENGAGEMENT_ITEMS_CAP = 200
+
+
+def engagement_items(artifacts_dir: Path) -> list[dict]:
+    """Join engagement_log × reply_archive into per-engagement rows for the Outbound
+    list — the clickable companion to aggregate_engagement's scalar KPIs.
+
+    Each row = one PUBLISHED comment we posted, with any replies it received nested
+    under it. The join is EXACT on (repo, issue_number) == (source_repo, source_issue)
+    — both sides use the same value space ("owner/name" string + int). Rows that
+    received a reply (esp. a maintainer reply) are surfaced FIRST (needs_followup),
+    because a reply to us is the highest-priority action (TECH.md Scoring Formula
+    reply_to_us_bonus). Newest-first within each group.
+
+    Returns [] on a missing dir (never crashes). Only PUBLISHED engagements appear —
+    drafts/errors/blocked are KPI-only, not actionable rows.
+    """
+    eng = _read_jsonl(artifacts_dir / "engagement_log.jsonl")
+    replies = _read_jsonl(artifacts_dir / "reply_archive.jsonl")
+
+    # Index replies by (source_repo, source_issue) → list, for an O(1) join.
+    # SKIP replies missing either key half: a (None, None) key would false-match every
+    # engagement that also happens to be missing repo/issue_number (e.g. a malformed
+    # row), cross-attaching unrelated replies. A reply we can't attribute is dropped
+    # from the join (it never inflates a wrong row).
+    replies_by_key: dict[tuple[str, object], list[dict]] = {}
+    for r in replies:
+        key = (r.get("source_repo"), r.get("source_issue"))
+        if key[0] is None or key[1] is None:
+            continue
+        replies_by_key.setdefault(key, []).append(r)
+
+    items: list[dict] = []
+    for e in eng:
+        if e.get("status") != "published":
+            continue  # only actionable, actually-posted comments
+        repo = e.get("repo")
+        issue = e.get("issue_number")
+        # Only join when BOTH key halves are present — else no replies (never a
+        # (None,None) match). A published comment with a missing repo/issue still
+        # renders as a row, just with zero replies.
+        matched = replies_by_key.get((repo, issue), []) if (repo is not None and issue is not None) else []
+        reply_rows = [
+            {
+                "author": r.get("author", ""),
+                "body": r.get("body", ""),
+                "is_maintainer": _is_true(r.get("is_maintainer")),
+                "created_at": r.get("created_at", ""),
+            }
+            for r in matched
+        ]
+        has_maintainer = any(rr["is_maintainer"] for rr in reply_rows)
+        items.append({
+            "repo": repo,
+            "issue_number": issue,
+            "topic": e.get("topic", ""),
+            "status": e.get("status", ""),
+            "comment_url": e.get("comment_url", ""),
+            "posted_at": e.get("posted_at", ""),
+            "confidence": e.get("confidence"),
+            "reply_count": len(reply_rows),
+            "has_maintainer_reply": has_maintainer,
+            "needs_followup": bool(reply_rows),
+            "replies": reply_rows,
+        })
+
+    # Sort: needs-followup first (maintainer replies above plain replies), then newest.
+    # Two stable passes (Python sort is stable): (1) newest-first by posted_at, then
+    # (2) by tier — so within each tier the newest stays on top. Missing posted_at ("")
+    # sorts oldest, which is the correct "least urgent" position.
+    items.sort(key=lambda it: it.get("posted_at") or "", reverse=True)
+    items.sort(key=lambda it: 0 if it["has_maintainer_reply"] else (1 if it["needs_followup"] else 2))
+    return items[:_ENGAGEMENT_ITEMS_CAP]
 
 
 def build_feed(knowledge_dir: Path) -> list[dict]:

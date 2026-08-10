@@ -25,12 +25,13 @@
  * Clone lineage: NeedYouOverlay (fetch+list shape) + BrainHub.openFile (close-then
  * -dispatch swarm:open-file). Chrome/geometry owned by OverlayHost.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   communityService,
   type CommunityFeedItem,
   type CommunitySource,
   type CommunityEngagement,
+  type CommunityEngagementItem,
   type CommunityHotTopics,
 } from '../../services/community';
 
@@ -39,16 +40,18 @@ interface CommunityContentProps {
   close: () => void;
 }
 
-type TabId = 'feed' | 'sources' | 'engagement';
+type TabId = 'inbound' | 'watching' | 'outbound';
 
-const TABS: Array<{ id: TabId; label: string }> = [
-  { id: 'feed', label: '📥 Feed' },
-  { id: 'sources', label: '🔗 Sources' },
-  { id: 'engagement', label: '📤 Engagement & Reports' },
+// Two-hands-of-the-membrane IA (run_edcd9672): Inbound = what we read from the world,
+// Watching = what we watch, Outbound = what we say back. Subtitles make each self-evident.
+const TABS: Array<{ id: TabId; label: string; sub: string }> = [
+  { id: 'inbound', label: '📥 Inbound', sub: 'read the world' },
+  { id: 'watching', label: '🔗 Watching', sub: 'what we watch' },
+  { id: 'outbound', label: '📤 Outbound', sub: 'speak back' },
 ];
 
 export function CommunityContent({ close }: CommunityContentProps) {
-  const [tab, setTab] = useState<TabId>('feed');
+  const [tab, setTab] = useState<TabId>('inbound');
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="community-overlay">
@@ -75,14 +78,15 @@ export function CommunityContent({ close }: CommunityContentProps) {
             ].join(' ')}
           >
             {t.label}
+            <span className="ml-1.5 text-[10px] font-normal text-[var(--color-text-faint)]">{t.sub}</span>
           </button>
         ))}
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {tab === 'feed' && <FeedTab close={close} />}
-        {tab === 'sources' && <SourcesTab />}
-        {tab === 'engagement' && <EngagementTab />}
+        {tab === 'inbound' && <InboundTab close={close} />}
+        {tab === 'watching' && <SourcesTab />}
+        {tab === 'outbound' && <OutboundTab />}
       </div>
     </div>
   );
@@ -158,11 +162,14 @@ function StateBanner({ loading, error, empty, emptyMsg }: {
   return null;
 }
 
-// ── 📥 Feed tab — recent signal digests + reports (files → Canvas) ──────────
+// ── 📥 Inbound tab — Hot Topics + weekly-report card + Signals-only daily flow ──
+// IA split (run_edcd9672): Reports and Signals are DIFFERENT artifacts (weekly
+// synthesis vs daily raw log) — no longer interleaved in one mtime list. The latest
+// Report is a hero card; Signals are the daily stream below. Reports are separated
+// by `category === 'Reports'`, so a future report type surfaces automatically.
 
-function FeedTab({ close }: { close: () => void }) {
+function InboundTab({ close }: { close: () => void }) {
   const { data, loading, error } = useFetch<CommunityFeedItem[]>(communityService.fetchFeed);
-  const items = data ?? [];
 
   const openFile = useCallback(
     (path: string) => {
@@ -172,30 +179,68 @@ function FeedTab({ close }: { close: () => void }) {
     [close],
   );
 
-  // Hot Topics renders ABOVE the feed as an independent SIBLING — NOT gated by the
-  // feed's own loading/empty state (an empty file feed must not hide hot topics).
+  // Split by category: Reports → card(s), everything else (Signals) → daily list.
+  // Backend already returns newest-first, so [0] is the latest of each kind.
+  const { latestReport, pastReports, signals } = useMemo(() => {
+    const items = data ?? [];
+    const reports = items.filter((it) => it.category === 'Reports');
+    const sigs = items.filter((it) => it.category !== 'Reports');
+    return { latestReport: reports[0] ?? null, pastReports: reports.slice(1), signals: sigs };
+  }, [data]);
+
+  // Hot Topics renders ABOVE as an independent SIBLING — never gated by the feed's
+  // own loading/empty state (an empty file feed must not hide hot topics).
   return (
     <div className="flex flex-col gap-4 max-w-[860px]">
       <HotTopicsSection />
+
+      {/* Weekly report — the latest synthesis, as a hero card (not buried in the flow) */}
+      {latestReport && (
+        <div>
+          <div className="text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)] font-semibold mb-1.5">
+            Latest report
+          </div>
+          <button
+            type="button"
+            onClick={() => openFile(latestReport.path)}
+            data-testid="community-report-card"
+            className="group w-full text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-hover)]/40 hover:border-[var(--color-border-strong)] transition-colors px-4 py-3 flex items-center gap-3"
+          >
+            <span className="text-[18px]">📊</span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[13px] font-medium text-[var(--color-text)] truncate">{latestReport.name}</span>
+              <span className="block text-[11px] text-[var(--color-text-dim)]">Weekly community report</span>
+            </span>
+            {pastReports.length > 0 && (
+              <span className="text-[10.5px] text-[var(--color-text-faint)] shrink-0">
+                +{pastReports.length} past
+              </span>
+            )}
+            <span className="text-[12px] text-[var(--panel-accent,var(--color-primary))] shrink-0">open ↗</span>
+          </button>
+        </div>
+      )}
+
+      {/* Daily signals — Signals only, newest-first, click → Canvas */}
       <div>
-        {loading || error || items.length === 0 ? (
-          <StateBanner loading={loading} error={error} empty={items.length === 0}
-            emptyMsg="No recent signals or reports." />
+        <div className="text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)] font-semibold mb-1.5">
+          Daily signals
+        </div>
+        {loading || error || signals.length === 0 ? (
+          <StateBanner loading={loading} error={error} empty={signals.length === 0}
+            emptyMsg="No recent signals." />
         ) : (
           <div className="flex flex-col gap-1">
-            {items.map((it) => (
+            {signals.map((it) => (
               <button
                 key={it.path}
                 type="button"
                 onClick={() => openFile(it.path)}
                 data-testid="community-feed-item"
-                className="group w-full text-left rounded-lg px-3 py-2.5 border border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
+                className="group w-full text-left rounded-lg px-3 py-2 border border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
               >
-                <span className="text-[9.5px] font-mono uppercase text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-0.5">
-                  {it.category}
-                </span>
                 <span className="flex-1 text-[13px] text-[var(--color-text)] truncate">{it.name}</span>
-                <span className="material-symbols-outlined text-[16px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">
+                <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">
                   open_in_new
                 </span>
               </button>
@@ -560,38 +605,135 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
   );
 }
 
-// ── 📤 Engagement tab — data-backed metrics only ─────────────────────────────
+// ── 📤 Outbound tab — demoted KPI strip + the actionable engagement LIST ─────
+// The KPI strip is DEMOTED (small, muted) — it's context, not the answer. The
+// answer is the list: what we posted, what came back, what needs a reply. Rows the
+// backend marks needs_followup (a reply / maintainer reply) sort first; row click
+// opens the comment on GitHub; replies expand inline. (run_edcd9672)
 
-function EngagementTab() {
+function OutboundTab() {
   const { data, loading, error } = useFetch<CommunityEngagement>(communityService.fetchEngagement);
 
-  const banner = <StateBanner loading={loading} error={error} empty={false} emptyMsg="" />;
-  if (loading || error) return banner;
+  if (loading || error) return <StateBanner loading={loading} error={error} empty={false} emptyMsg="" />;
   const e = data!;
+  const items = e.items ?? [];
 
-  const kpis: Array<{ label: string; value: string }> = [
-    { label: 'comments posted', value: String(e.commentsPosted) },
-    { label: 'replies received', value: String(e.repliesReceived) },
-    { label: 'maintainer replies', value: String(e.maintainerReplies) },
+  const kpiParts: string[] = [
+    `${e.kpis.commentsPosted} posted`,
+    `${e.kpis.repliesReceived} replies`,
+    `${e.kpis.maintainerReplies} maintainer`,
   ];
-  if (e.stars !== null) kpis.push({ label: 'repo stars', value: String(e.stars) });
+  if (e.kpis.stars !== null) kpiParts.push(`${e.kpis.stars} stars`);
+
+  const followups = items.filter((it) => it.needsFollowup);
+  const posted = items.filter((it) => !it.needsFollowup);
 
   return (
-    <div className="max-w-[860px]">
-      <div className="flex gap-8">
-        {kpis.map((k) => (
-          <div key={k.label} data-testid="community-kpi">
-            <div className="text-[24px] font-semibold font-mono leading-none text-[var(--color-text)]">
-              {k.value}
-            </div>
-            <div className="mt-1.5 text-[11.5px] text-[var(--color-text-faint)]">{k.label}</div>
-          </div>
+    <div className="max-w-[860px] flex flex-col gap-4">
+      {/* Demoted KPI strip — one muted line, not a wall of big numbers */}
+      <div data-testid="community-kpi-strip" className="text-[11.5px] text-[var(--color-text-muted)]">
+        {kpiParts.join('  ·  ')}
+        <span className="text-[var(--color-text-faint)]"> — outbound GitHub engagement (data-backed only)</span>
+      </div>
+
+      {items.length === 0 ? (
+        <StateBanner loading={false} error={false} empty emptyMsg="No engagements yet." />
+      ) : (
+        <>
+          {followups.length > 0 && (
+            <EngagementGroup
+              hint="⬤ Needs follow-up — someone replied, awaiting your response"
+              items={followups}
+            />
+          )}
+          {posted.length > 0 && (
+            <EngagementGroup hint="⬤ Posted" items={posted} muted />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function EngagementGroup({ hint, items, muted }: { hint: string; items: CommunityEngagementItem[]; muted?: boolean }) {
+  return (
+    <div>
+      <div className={`text-[11px] mb-1.5 ${muted ? 'text-[var(--color-text-faint)]' : 'text-[var(--color-text-muted)]'}`}>
+        {hint}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {items.map((it) => (
+          <EngagementRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
         ))}
       </div>
-      <p className="mt-4 text-[11px] text-[var(--color-text-faint)] italic leading-relaxed max-w-[600px]">
-        Metrics reflect our outbound GitHub community engagement. Only data-backed
-        numbers are shown.
-      </p>
+    </div>
+  );
+}
+
+function EngagementRow({ item }: { item: CommunityEngagementItem }) {
+  const [open, setOpen] = useState(false);
+  const dotClass = item.hasMaintainerReply
+    ? 'bg-[var(--panel-accent,var(--color-primary))]'
+    : item.needsFollowup
+      ? 'bg-emerald-500'
+      : 'bg-[var(--color-text-faint)]';
+
+  const hasUrl = !!item.commentUrl.trim();
+  const openComment = useCallback(() => {
+    // Guard the empty-URL case: window.open('') opens a blank about:blank tab.
+    if (hasUrl) window.open(item.commentUrl, '_blank', 'noopener,noreferrer');
+  }, [item.commentUrl, hasUrl]);
+
+  return (
+    <div data-testid="community-engagement-row" className="rounded-lg border border-[var(--color-border)] overflow-hidden">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} aria-hidden />
+        <button
+          type="button"
+          onClick={openComment}
+          disabled={!hasUrl}
+          data-testid="engagement-open-github"
+          className="group flex-1 min-w-0 text-left disabled:cursor-default"
+          title={item.commentUrl || 'no comment URL'}
+        >
+          <span className="block text-[13px] text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
+            {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
+          </span>
+          <span className="block text-[11px] text-[var(--color-text-dim)] truncate">
+            {item.topic && <span className="font-mono">{item.topic}</span>}
+            {item.postedAt && <span> · {item.postedAt.slice(0, 10)}</span>}
+            {item.confidence != null && <span> · conf {item.confidence}</span>}
+          </span>
+        </button>
+        {item.replyCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            data-testid="engagement-toggle-replies"
+            className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-emerald-500'}`}
+            aria-expanded={open}
+          >
+            {item.hasMaintainerReply ? '● maintainer ' : '● '}{item.replyCount} {open ? '▾' : '▸'}
+          </button>
+        )}
+        <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)] shrink-0">open_in_new</span>
+      </div>
+      {open && item.replies.length > 0 && (
+        <div className="border-t border-[var(--color-border)] bg-[var(--color-hover)]/40 px-3 py-2 flex flex-col gap-2">
+          {item.replies.map((r, i) => (
+            <div key={`${r.author}-${r.createdAt}-${i}`} className="text-[12px]">
+              <span className="text-[var(--color-text)] font-medium">{r.author}</span>
+              {r.isMaintainer && (
+                <span className="ml-1.5 text-[9px] uppercase text-[var(--panel-accent,var(--color-primary))] border border-[var(--panel-accent,var(--color-primary))] rounded px-1 py-0.5">
+                  maintainer
+                </span>
+              )}
+              {r.createdAt && <span className="ml-1.5 text-[10.5px] text-[var(--color-text-faint)]">{r.createdAt.slice(0, 10)}</span>}
+              <p className="mt-0.5 text-[var(--color-text-dim)] leading-snug">{r.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

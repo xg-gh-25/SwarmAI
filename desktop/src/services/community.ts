@@ -58,12 +58,62 @@ export interface CommunityHotTopics {
   topics: CommunityHotTopic[];
 }
 
-/** Outbound engagement metrics — data-backed only (no fabricated quality score). */
-export interface CommunityEngagement {
+/** Scalar KPI summary for the Outbound strip — data-backed only (no fabricated score). */
+export interface CommunityEngagementKpis {
   commentsPosted: number;
   repliesReceived: number;
   maintainerReplies: number;
   stars: number | null;
+}
+
+/** One reply we received on a comment we posted (nested under an engagement item). */
+export interface CommunityReply {
+  author: string;
+  body: string;
+  isMaintainer: boolean;
+  createdAt: string;
+}
+
+/** One outbound engagement — a comment we posted, with any replies it drew. */
+export interface CommunityEngagementItem {
+  repo: string;
+  issueNumber: number | null;
+  topic: string;
+  status: string;
+  commentUrl: string;
+  postedAt: string;
+  confidence: number | null;
+  replyCount: number;
+  hasMaintainerReply: boolean;
+  needsFollowup: boolean;
+  replies: CommunityReply[];
+}
+
+/** Outbound engagement — scalar KPIs + the clickable per-engagement list. */
+export interface CommunityEngagement {
+  kpis: CommunityEngagementKpis;
+  items: CommunityEngagementItem[];
+}
+
+interface RawReply {
+  author?: string;
+  body?: string;
+  is_maintainer?: boolean;
+  created_at?: string;
+}
+
+interface RawEngagementItem {
+  repo?: string;
+  issue_number?: number | null;
+  topic?: string;
+  status?: string;
+  comment_url?: string;
+  posted_at?: string;
+  confidence?: number | null;
+  reply_count?: number;
+  has_maintainer_reply?: boolean;
+  needs_followup?: boolean;
+  replies?: RawReply[];
 }
 
 interface RawSource {
@@ -116,13 +166,38 @@ export const communityService = {
   },
 
   async fetchEngagement(): Promise<CommunityEngagement> {
+    // New contract: {kpis:{...counts}, items:[...list]}. The old response was the
+    // flat counts object; read from d.kpis now (a flat-shape fallback keeps an old
+    // backend from silently zeroing the strip during a rolling deploy).
     const res = await api.get('/community/engagement');
     const d = res.data ?? {};
+    const k = d.kpis ?? d; // fallback: pre-list backend returned counts at top level
+    const rawItems = (d.items ?? []) as RawEngagementItem[];
     return {
-      commentsPosted: d.comments_posted ?? 0,
-      repliesReceived: d.replies_received ?? 0,
-      maintainerReplies: d.maintainer_replies ?? 0,
-      stars: d.stars ?? null,
+      kpis: {
+        commentsPosted: k.comments_posted ?? 0,
+        repliesReceived: k.replies_received ?? 0,
+        maintainerReplies: k.maintainer_replies ?? 0,
+        stars: k.stars ?? null,
+      },
+      items: rawItems.map((it) => ({
+        repo: it.repo ?? '',
+        issueNumber: it.issue_number ?? null,
+        topic: it.topic ?? '',
+        status: it.status ?? '',
+        commentUrl: it.comment_url ?? '',
+        postedAt: it.posted_at ?? '',
+        confidence: it.confidence ?? null,
+        replyCount: it.reply_count ?? 0,
+        hasMaintainerReply: it.has_maintainer_reply ?? false,
+        needsFollowup: it.needs_followup ?? false,
+        replies: (it.replies ?? []).map((r) => ({
+          author: r.author ?? '',
+          body: r.body ?? '',
+          isMaintainer: r.is_maintainer ?? false,
+          createdAt: r.created_at ?? '',
+        })),
+      })),
     };
   },
 

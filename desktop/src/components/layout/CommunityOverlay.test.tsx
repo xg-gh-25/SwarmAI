@@ -12,7 +12,7 @@
  * The community service is mocked at the boundary (system boundary = HTTP).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
 import { CommunityContent } from './CommunityOverlay';
 
 const fetchFeed = vi.fn();
@@ -66,21 +66,21 @@ function setup(close = vi.fn()) {
 }
 
 describe('CommunityOverlay — tabs', () => {
-  it('renders all three tabs and defaults to Feed', async () => {
+  it('renders all three tabs (Inbound/Watching/Outbound) and defaults to Inbound', async () => {
     fetchFeed.mockResolvedValue([]);
     setup();
-    expect(screen.getByTestId('community-tab-feed')).toBeTruthy();
-    expect(screen.getByTestId('community-tab-sources')).toBeTruthy();
-    expect(screen.getByTestId('community-tab-engagement')).toBeTruthy();
-    // Feed fetch fires on mount (default tab)
+    expect(screen.getByTestId('community-tab-inbound')).toBeTruthy();
+    expect(screen.getByTestId('community-tab-watching')).toBeTruthy();
+    expect(screen.getByTestId('community-tab-outbound')).toBeTruthy();
+    // Inbound fetch fires on mount (default tab)
     await waitFor(() => expect(fetchFeed).toHaveBeenCalled());
   });
 
-  it('switches to Sources tab and fetches sources', async () => {
+  it('switches to Watching tab and fetches sources', async () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue([]);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     await waitFor(() => expect(fetchSources).toHaveBeenCalled());
   });
 
@@ -88,23 +88,23 @@ describe('CommunityOverlay — tabs', () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue([]);
     setup();
-    const feedTab = screen.getByTestId('community-tab-feed');
-    const sourcesTab = screen.getByTestId('community-tab-sources');
-    // Feed active on mount (underline via panel-accent border class)
-    expect(feedTab.className).toContain('border-[var(--panel-accent');
-    fireEvent.click(sourcesTab);
+    const inboundTab = screen.getByTestId('community-tab-inbound');
+    const watchingTab = screen.getByTestId('community-tab-watching');
+    // Inbound active on mount (underline via panel-accent border class)
+    expect(inboundTab.className).toContain('border-[var(--panel-accent');
+    fireEvent.click(watchingTab);
     await waitFor(() => {
-      expect(sourcesTab.className).toContain('border-[var(--panel-accent');
-      expect(feedTab.className).not.toContain('border-[var(--panel-accent');
+      expect(watchingTab.className).toContain('border-[var(--panel-accent');
+      expect(inboundTab.className).not.toContain('border-[var(--panel-accent');
     });
   });
 });
 
-describe('CommunityOverlay — Feed tab', () => {
-  it('shows empty state when no items', async () => {
+describe('CommunityOverlay — Inbound tab', () => {
+  it('shows empty state when no signals', async () => {
     fetchFeed.mockResolvedValue([]);
     setup();
-    await waitFor(() => expect(screen.getByText(/No recent signals or reports/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/No recent signals/i)).toBeTruthy());
   });
 
   it('shows error state when fetch rejects', async () => {
@@ -113,7 +113,22 @@ describe('CommunityOverlay — Feed tab', () => {
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
   });
 
-  it('renders feed items and opens a file on click (closes overlay + dispatches)', async () => {
+  it('separates the latest Report into a card, keeping Signals in the daily flow', async () => {
+    fetchFeed.mockResolvedValue([
+      { path: 'Knowledge/Reports/2026-08-09-weekly.html', category: 'Reports', name: '2026-08-09-weekly.html', mtime: 300 },
+      { path: 'Knowledge/Signals/2026-08-07-digest.md', category: 'Signals', name: '2026-08-07-digest.md', mtime: 200 },
+    ]);
+    setup();
+    // Report → its own card; Signal → the feed list. They are NOT in one flat list.
+    const card = await screen.findByTestId('community-report-card');
+    expect(card.textContent).toContain('2026-08-09-weekly.html');
+    const item = await screen.findByTestId('community-feed-item');
+    expect(item.textContent).toContain('2026-08-07-digest.md');
+    // The report is NOT also rendered as a feed item (no interleaving).
+    expect(item.textContent).not.toContain('weekly.html');
+  });
+
+  it('renders signal items and opens a file on click (closes overlay + dispatches)', async () => {
     fetchFeed.mockResolvedValue([
       { path: 'Knowledge/Signals/2026-08-07-digest.md', category: 'Signals', name: '2026-08-07-digest.md', mtime: 100 },
     ]);
@@ -132,6 +147,21 @@ describe('CommunityOverlay — Feed tab', () => {
     expect(close.mock.invocationCallOrder[0]).toBeLessThan(handler.mock.invocationCallOrder[0]);
     document.removeEventListener('swarm:open-file', handler);
   });
+
+  it('report card click opens the report file in Canvas', async () => {
+    fetchFeed.mockResolvedValue([
+      { path: 'Knowledge/Reports/2026-08-09-weekly.html', category: 'Reports', name: '2026-08-09-weekly.html', mtime: 300 },
+    ]);
+    const close = vi.fn();
+    const handler = vi.fn();
+    document.addEventListener('swarm:open-file', handler);
+    setup(close);
+    fireEvent.click(await screen.findByTestId('community-report-card'));
+    expect(close).toHaveBeenCalled();
+    const ev = handler.mock.calls[0][0] as CustomEvent;
+    expect(ev.detail.path).toBe('Knowledge/Reports/2026-08-09-weekly.html');
+    document.removeEventListener('swarm:open-file', handler);
+  });
 });
 
 describe('CommunityOverlay — Sources tab', () => {
@@ -141,7 +171,7 @@ describe('CommunityOverlay — Sources tab', () => {
       srcWithMembers(),
     ]);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     const row = await screen.findByTestId('community-source-row');
     expect(row.textContent).toContain('AI Engineering');
     expect(row.textContent).toContain('manual'); // managed_by rendered
@@ -153,7 +183,7 @@ describe('CommunityOverlay — Sources tab', () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue([]);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     await waitFor(() => expect(screen.getByTestId('source-add-open')).toBeTruthy());
   });
 
@@ -161,7 +191,7 @@ describe('CommunityOverlay — Sources tab', () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockRejectedValue(new Error('boom'));
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
   });
 });
@@ -176,7 +206,7 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fetchSources.mockResolvedValue(oneSource);
     updateSource.mockResolvedValue(undefined);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     const toggle = await screen.findByTestId('source-toggle');
     fireEvent.click(toggle);
     await waitFor(() => expect(updateSource).toHaveBeenCalledWith('ai-eng', { enabled: false }));
@@ -189,7 +219,7 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fetchSources.mockResolvedValue(oneSource);
     updateSource.mockResolvedValue(undefined);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     const tier = await screen.findByTestId('source-tier');
     fireEvent.change(tier, { target: { value: 'frontier' } });
     await waitFor(() => expect(updateSource).toHaveBeenCalledWith('ai-eng', { tier: 'frontier' }));
@@ -200,7 +230,7 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fetchSources.mockResolvedValue(oneSource);
     deleteSource.mockResolvedValue(undefined);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     const del = await screen.findByTestId('source-delete');
     fireEvent.click(del); // first click → arms confirm, does NOT delete
     expect(deleteSource).not.toHaveBeenCalled();
@@ -214,7 +244,7 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fetchSources.mockResolvedValue(oneSource);
     addSource.mockResolvedValue(undefined);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     fireEvent.click(await screen.findByTestId('source-add-open'));
     fireEvent.change(screen.getByTestId('add-id'), { target: { value: 'new-feed' } });
     fireEvent.change(screen.getByTestId('add-name'), { target: { value: 'New Feed' } });
@@ -229,7 +259,7 @@ describe('CommunityOverlay — Sources tab (editable, Phase-2)', () => {
     fetchSources.mockResolvedValue(oneSource);
     updateSource.mockRejectedValue(new Error('409'));
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     fireEvent.click(await screen.findByTestId('source-toggle'));
     await waitFor(() => expect(screen.getByText(/Couldn't update/i)).toBeTruthy());
   });
@@ -240,7 +270,7 @@ describe('CommunityOverlay — member editing (B4)', () => {
     fetchFeed.mockResolvedValue([]);
     fetchSources.mockResolvedValue(sources);
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-sources'));
+    fireEvent.click(screen.getByTestId('community-tab-watching'));
     await screen.findByTestId('community-source-row');
   }
 
@@ -285,37 +315,77 @@ describe('CommunityOverlay — member editing (B4)', () => {
   });
 });
 
-describe('CommunityOverlay — Engagement tab', () => {
-  it('renders data-backed KPIs and NO fabricated quality score', async () => {
-    fetchFeed.mockResolvedValue([]);
-    fetchEngagement.mockResolvedValue({
-      commentsPosted: 12, repliesReceived: 7, maintainerReplies: 3, stars: 42,
-    });
-    setup();
-    fireEvent.click(screen.getByTestId('community-tab-engagement'));
-    await waitFor(() => expect(screen.getAllByTestId('community-kpi').length).toBeGreaterThan(0));
-    const body = document.body.textContent ?? '';
-    expect(body).toContain('comments posted');
-    expect(body).toContain('maintainer replies');
-    // No fabricated quality metric anywhere.
-    expect(body.toLowerCase()).not.toContain('quality');
+describe('CommunityOverlay — Outbound tab', () => {
+  const engWith = (items: unknown[], kpis = { commentsPosted: 12, repliesReceived: 7, maintainerReplies: 3, stars: 42 }) => ({ kpis, items });
+  const item = (over: Record<string, unknown> = {}) => ({
+    repo: 'a/b', issueNumber: 1, topic: 'T-MEM', status: 'published',
+    commentUrl: 'https://github.com/a/b/issues/1#c1', postedAt: '2026-08-01T10:00:00Z',
+    confidence: 9, replyCount: 0, hasMaintainerReply: false, needsFollowup: false, replies: [],
+    ...over,
   });
 
-  it('omits the stars KPI when stars is null', async () => {
+  it('renders a demoted KPI strip (data-backed, no fabricated quality score)', async () => {
     fetchFeed.mockResolvedValue([]);
-    fetchEngagement.mockResolvedValue({
-      commentsPosted: 5, repliesReceived: 2, maintainerReplies: 1, stars: null,
-    });
+    fetchEngagement.mockResolvedValue(engWith([]));
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-engagement'));
-    await waitFor(() => expect(screen.getAllByTestId('community-kpi').length).toBe(3));
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    await waitFor(() => expect(screen.getByTestId('community-kpi-strip')).toBeTruthy());
+    const strip = screen.getByTestId('community-kpi-strip').textContent ?? '';
+    expect(strip).toContain('12 posted');
+    expect(strip).toContain('3 maintainer');
+    expect((document.body.textContent ?? '').toLowerCase()).not.toContain('quality');
+  });
+
+  it('renders the engagement LIST with a clickable GitHub comment link', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchEngagement.mockResolvedValue(engWith([item()]));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    const row = await screen.findByTestId('community-engagement-row');
+    expect(row.textContent).toContain('a/b #1');
+    expect(row.textContent).toContain('T-MEM');
+    // The row's GitHub-open control carries the real comment URL.
+    const opener = within(row).getByTestId('engagement-open-github');
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    fireEvent.click(opener);
+    expect(openSpy).toHaveBeenCalledWith('https://github.com/a/b/issues/1#c1', '_blank', 'noopener,noreferrer');
+    openSpy.mockRestore();
+  });
+
+  it('surfaces needs-followup rows FIRST and expands replies on click', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchEngagement.mockResolvedValue(engWith([
+      item({ repo: 'c/d', issueNumber: 2, needsFollowup: false }),
+      item({
+        repo: 'a/b', issueNumber: 1, needsFollowup: true, hasMaintainerReply: true, replyCount: 1,
+        replies: [{ author: 'maintainer1', body: 'merged, thanks', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' }],
+      }),
+    ]));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    const rows = await screen.findAllByTestId('community-engagement-row');
+    // needs-followup (a/b) sorts before posted-only (c/d)
+    expect(rows[0].textContent).toContain('a/b #1');
+    expect(rows[1].textContent).toContain('c/d #2');
+    // reply body hidden until toggled
+    expect(within(rows[0]).queryByText(/merged, thanks/)).toBeNull();
+    fireEvent.click(within(rows[0]).getByTestId('engagement-toggle-replies'));
+    await waitFor(() => expect(within(rows[0]).getByText(/merged, thanks/)).toBeTruthy());
+  });
+
+  it('shows empty state when there are no engagements', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchEngagement.mockResolvedValue(engWith([], { commentsPosted: 0, repliesReceived: 0, maintainerReplies: 0, stars: null }));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    await waitFor(() => expect(screen.getByText(/No engagements yet/i)).toBeTruthy());
   });
 
   it('shows error state when engagement fetch rejects', async () => {
     fetchFeed.mockResolvedValue([]);
     fetchEngagement.mockRejectedValue(new Error('boom'));
     setup();
-    fireEvent.click(screen.getByTestId('community-tab-engagement'));
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
   });
 });
