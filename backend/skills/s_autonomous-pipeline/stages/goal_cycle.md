@@ -369,6 +369,34 @@ velocity = gm.get_velocity()
    code correct?" — cross-path adversarial asks "is this code correct FOR
    ALL ITS USES?"
 
+2.5. **Class-Completeness Gate (MANDATORY when `migration_class` is declared — run_1d3df9e6):**
+
+   Runs AFTER the cross-path adversarial (step 2), BEFORE marking the stage complete.
+   The cross-path adversarial is DIFF-SCOPED — it only sees code the cycles TOUCHED, so a
+   class sibling that NO cycle touched is invisible to it (this is how the `decisions`
+   write path shipped ungated in run_0d60e04e: 7 per-cycle adversarials all passed). This
+   gate is CLASS-SCOPED: it enumerates the FULL class from live source and blocks any
+   member neither migrated nor carved-out.
+
+   ```python
+   from scripts.check_migration_class import check_migration_class, to_delivery_finding
+   mc = evaluation_artifact.get("migration_class")   # None on a non-migration goal
+   res = check_migration_class(mc, cwd=Path.cwd())
+   print(res.coverage_table)                          # AC7: always emit the audit table
+   if not res.passed:
+       finding = to_delivery_finding(res)             # HIGH, confidence 9
+       # AC6 TEETH: carry into the DELIVER adversarial_review.findings[] so the existing
+       # _blocked_findings gate blocks COMPLETE exactly like a fresh adversarial finding.
+       adversarial_review["findings"].append(finding)
+   ```
+
+   - `migration_class` absent → `check_migration_class` returns a no-op PASS (AC2): a
+     feature/bugfix goal is unaffected. But if the goal's REQUIREMENT contained a migration
+     keyword, EVALUATE Gate-0 already BLOCKED the run until `migration_class` was declared
+     (evaluate.md AC11) — so a real migration cannot reach here undeclared.
+   - A MISSED / BAD_ENUMERATION / UNJUSTIFIED_CARVEOUT member → the HIGH finding blocks
+     COMPLETE. Fix = migrate the member (or declare an honest carve-out) and re-run.
+
 3. If adversarial finds issues → execute up to 3 more fix cycles
 4. If issues persist after 3 fix cycles → CHECKPOINT with findings
 

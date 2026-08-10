@@ -102,6 +102,53 @@ class TestGreenfieldStrictRequiresBlock:
 # ---------------------------------------------------------------------------
 # Economic fields — each must be non-empty (the NOVEL, non-redundant slice)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Migration-class Gate (AC11, run_1d3df9e6) — code-enforced, closes the opt-in escape
+# ---------------------------------------------------------------------------
+class TestMigrationClassGate:
+    MC = "Migration-class Gate"
+
+    def _mc_errors(self, errors):
+        return [e for e in errors if self.MC in e]
+
+    def _good_mc(self):
+        return {"description": "all cognitive write paths",
+                "enumeration_cmd": "grep -rn '_run_locked_write(' backend/",
+                "members": [{"id": "a", "disposition": "migrated", "locator": "x.py:1", "evidence": "s"}]}
+
+    def test_migration_keyword_without_block_blocks(self):
+        # a migration-shaped claim + no migration_class → BLOCK (strict profile)
+        data = _eval("refactor")
+        data["understanding"]["claim"] = "unify all write paths through one gate — every path funnels through it"
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert self._mc_errors(errors), f"migration keyword without migration_class must block: {errors}"
+
+    def test_migration_keyword_with_valid_block_passes(self):
+        data = _eval("refactor", migration_class=self._good_mc())
+        data["understanding"]["claim"] = "consolidate every caller of the sink into one gate"
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert self._mc_errors(errors) == [], f"valid migration_class must pass: {errors}"
+
+    def test_no_migration_keyword_no_false_positive(self):
+        data = _eval("bugfix")
+        data["understanding"]["claim"] = "the handler dereferences a null when the cache misses"
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert self._mc_errors(errors) == [], f"non-migration requirement must not fire: {errors}"
+
+    def test_relaxed_profile_exempt(self):
+        data = _eval("refactor")
+        data["understanding"]["claim"] = "migrate and unify all the write paths"
+        errors = validate_artifact_data("evaluate", data, profile="docs")
+        assert self._mc_errors(errors) == [], f"docs profile must be exempt: {errors}"
+
+    def test_empty_migration_class_still_blocks(self):
+        # a present-but-empty block (no enumeration_cmd/members) is not a real declaration
+        data = _eval("refactor", migration_class={"description": "x"})
+        data["understanding"]["claim"] = "unify all write paths through one gate"
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert self._mc_errors(errors), f"empty migration_class must still block: {errors}"
+
+
 class TestEconomicFieldsEnforced:
     # NOTE: target_customer is NOT enforced (adversarial: overlaps Understanding
     # "who"). The 3 enforced novel fields are current_workaround/why_better/must_be_true.

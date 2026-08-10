@@ -161,6 +161,36 @@ the other side of the wall.
 > the refactor-specific rigor rides on `work_type=refactor`, exactly as `greenfield`'s
 > Working-Backwards rigor rides on `work_type=greenfield` without being its own profile.
 
+> **⚠️ `migration_class` — MANDATORY Gate-0 block for a class-migration requirement
+> (run_1d3df9e6, AC9/AC11).** A goal run that migrates a *class* (all callers of a
+> chokepoint / all siblings of a type) across cycles has a blind spot no per-cycle
+> adversarial can see: a class member NO cycle touches is never in any diff. run_0d60e04e
+> shipped the `decisions` write path ungated for exactly this reason. The
+> class-completeness gate (goal_cycle Final Quality Gate step 2.5) closes it — but ONLY if
+> the run declares a `migration_class`.
+>
+> **Gate-0 rule (BLOCKS the evaluation until satisfied):** if the requirement contains a
+> migration keyword — **migrate / unify / consolidate / de-dup / "route … all" /
+> "gate … all" / "every … through" / "single … for all"** — the evaluation artifact MUST
+> include a `migration_class` block. Opt-in was the C036 escape hatch: an agent with an
+> incomplete mental model simply omits it → the gate no-ops → the exact miss ships. Making
+> it mandatory-on-keyword removes that hatch. A keyword-free requirement needs no block
+> (the gate no-ops, zero false-positive).
+>
+> **`migration_class` shape (see the design doc for the full contract):**
+> ```json
+> "migration_class": {
+>   "description": "<the class in one line>",
+>   "enumeration_cmd": "grep -rn '<sink_fn>(' backend/ | grep -v 'def '",
+>   "members": [{"id","disposition":"migrated|carved-out","locator":"file:line","evidence":"symbol|reason"}]
+> }
+> ```
+> **`enumeration_cmd` MUST grep a PHYSICAL SINK across the tree (R-A), NOT a hand-listed
+> set** — a self-authored member list inherits the same blind spot that caused the miss.
+> `scripts/check_migration_class.validate_enumeration_cmd` REJECTS an echo/printf literal
+> list or a single-file-scoped grep. Enumerate the sink (the last-mile write call every
+> member is forced through); let the grep find the files, don't curate them.
+
 **Three mechanisms — all mechanical, none rely on agent discipline:**
 
 - **M1 — Separation (the wall).** The `claim` must describe the PRESENT, not a

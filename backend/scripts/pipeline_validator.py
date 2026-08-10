@@ -843,9 +843,6 @@ def _check_working_backwards(data: dict, profile: str) -> list[str]:
                 f"Understanding/Pre-mortem gates do NOT capture — answer it concretely."
             )
 
-    # pre_mortem REUSE — required + non-empty for greenfield (first enforcement).
-    # Read from the top-level artifact (the Pre-mortem Gate's output), not from wb,
-    # so it is genuinely the SAME array, not a duplicate.
     pre_mortem = data.get("pre_mortem")
     if not isinstance(pre_mortem, list) or len([p for p in pre_mortem if p]) == 0:
         errs.append(
@@ -855,6 +852,46 @@ def _check_working_backwards(data: dict, profile: str) -> list[str]:
         )
 
     return errs
+
+
+# ── Migration-class Gate (AC11, run_1d3df9e6) — CODE-ENFORCED, closes the opt-in escape ──
+# A migration-shaped requirement MUST declare a migration_class, else the goal-run
+# class-completeness gate (goal_cycle Final Quality Gate step 2.5) no-ops and a class
+# sibling ships ungated (the run_0d60e04e decisions-path miss). Opt-in was the C036
+# escape; this makes it mandatory-on-keyword. Enforced here so it is NOT prose-only.
+_MIGRATION_KEYWORDS = (
+    "migrate", "migration", "unify", "unified", "consolidate", "de-dup", "dedup",
+    "route all", "route every", "gate all", "gate every", "every path", "all callers",
+    "all paths", "single ", "one gate", "funnel", "chokepoint", "through one",
+)
+
+
+def _check_migration_class_declared(data: dict, profile: str) -> list[str]:
+    """AC11: if the evaluation's requirement/understanding text is migration-shaped, the
+    artifact MUST carry a non-empty `migration_class` block. Strict profiles only (a docs/
+    research run that merely mentions 'migrate' isn't shipping code). Fail-CLOSED on the
+    keyword hit — the whole point is to remove the opt-out for the runs that need it."""
+    if profile in _RELAXED_UNDERSTANDING_PROFILES:
+        return []
+    und = data.get("understanding") if isinstance(data.get("understanding"), dict) else {}
+    haystack = " ".join(str(x).lower() for x in (
+        und.get("claim", ""), und.get("evidence", ""), data.get("summary", ""),
+        data.get("requirement", ""),
+    ))
+    if not any(kw in haystack for kw in _MIGRATION_KEYWORDS):
+        return []
+    mc = data.get("migration_class")
+    if isinstance(mc, dict) and mc.get("enumeration_cmd") and mc.get("members"):
+        return []
+    return [
+        "Migration-class Gate (AC11): the requirement is migration-shaped (a class of "
+        "callers/siblings migrated across cycles) but no non-empty 'migration_class' block "
+        "is declared. Without it, the goal-run class-completeness gate no-ops and a class "
+        "sibling no cycle touches ships ungated (the run_0d60e04e decisions miss). Declare "
+        "migration_class{description, enumeration_cmd (a physical-sink grep across the tree "
+        "root — NOT a hand list), members[{id,disposition,locator,evidence}]}. If this is "
+        "NOT a class migration, rephrase the requirement to drop the migration keyword."
+    ]
 
 
 # M1 — solution-INTENT phrases (not bare verbs: "the state change is not
@@ -1320,6 +1357,12 @@ def validate_artifact_data(
         # understanding.work_type=='greenfield' AND strict — the first gate keyed
         # on work_type. Distinct 'Working-Backwards:' tag (run_b5b26ebe).
         errors.extend(_check_working_backwards(data, profile))
+
+        # ── Migration-class Gate (AC11, run_1d3df9e6) ─────────────────────
+        # A migration-shaped requirement MUST declare migration_class, else the
+        # goal-run class-completeness gate no-ops → a class sibling ships ungated.
+        # Code-enforced here (not prose) to close the C036 opt-in escape.
+        errors.extend(_check_migration_class_declared(data, profile))
 
     # ── Self-Socratic ambiguity scan (think) ──────────────────────────────
     # THINK re-scans its risk-probe assumptions + recommendation. THINK has no
