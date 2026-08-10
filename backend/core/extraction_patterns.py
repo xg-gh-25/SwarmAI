@@ -95,6 +95,24 @@ NOISE_PATTERNS = re.compile(
 # Compiled once — used by is_noise_entry()
 _EMOJI_PREFIX = re.compile(r"^(?:\u2705|\u274c|\u26a0\ufe0f|\U0001f534|\U0001f7e1|\U0001f535) ")
 
+# Source-type noise (2026-08-10 ROOT-FIX): syntactically well-formed fragments that
+# are NOT knowledge because of WHERE they came from \u2014 an injected UI-State snapshot,
+# a build/gradle/brazil log line, or raw conversation carrying an attachment marker.
+# These slipped past is_noise_entry (no table/emoji/monologue shape) and got
+# mis-classified as [correction]/[pitfall]. Signatures are deterministic + anchored so
+# a real lesson merely MENTIONING these words is not caught (see the precision test).
+_SOURCE_NOISE_PATTERNS = re.compile(
+    r"(?:"
+    r"^#*\s*Current UI State\b"                                  # injected UI-State block
+    r"|what you are currently showing the user in the app"
+    r"|request-time snapshot"
+    r"|^\s*>\s*(?:Configure project|Task\s*:)"                    # gradle/brazil build log
+    r"|Wrote Brazil environment variables"
+    r"|\[Attached file:\s*[^\]]+\]"                              # raw chat turn w/ attachment
+    r")",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Correction patterns — detect user corrections after skill/agent output
@@ -158,6 +176,10 @@ def is_noise_entry(entry: str) -> bool:
     """
     # Table fragments: starts with |
     if entry.startswith("|") or re.match(r"^\|.*\|.*\|", entry):
+        return True
+    # Source-type noise: injected UI-State, build logs, attachment-carrying chat turns
+    # (well-formed text that is not knowledge because of its SOURCE — 2026-08-10 root-fix).
+    if _SOURCE_NOISE_PATTERNS.search(entry):
         return True
     # Agent internal monologue
     if AGENT_MONOLOGUE.match(entry):

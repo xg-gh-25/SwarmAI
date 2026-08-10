@@ -40,6 +40,37 @@ class TestTwoLayerNoiseSplit:
         assert structural_noise("🟡 wip") is True
         assert structural_noise("❌ failed") is True
 
+    def test_source_type_noise_is_caught(self):
+        # ROOT-FIX (2026-08-10): the 16 entries cleaned from MEMORY this session were
+        # conversation / UI-State / build-log fragments MIS-CLASSIFIED as knowledge —
+        # syntactically well-formed, so the old structural_noise missed them all.
+        # These have deterministic SOURCE signatures and must be caught at the door.
+        from core.ingestion_gate import structural_noise
+        # (a) injected UI-State snapshot
+        assert structural_noise(
+            "## Current UI State This is what you are currently showing the user "
+            "in the app (a request-time snapshot — it may change as they interact)") is True
+        assert structural_noise(
+            "This is what you are currently showing the user in the app (a request-time snapshot)") is True
+        # (b) build-log / gradle / brazil output
+        assert structural_noise(
+            "> Configure project : BrazilPlugin was loaded for project 'IVTHubClientConfig'") is True
+        assert structural_noise("> Task :writeBrazilEnvironment Wrote Brazil environment variables") is True
+        # (c) raw conversation carrying an attachment marker
+        assert structural_noise(
+            "那个左侧粗线条 不要加了 [Attached file: 08f4d5ca-d573-442d.png] saved at Attachments") is True
+
+    def test_source_type_gate_does_not_eat_real_knowledge(self):
+        # The source-type gate must be PRECISE — a real lesson that merely mentions
+        # "UI state" or "build" or a file path must NOT be flagged.
+        from core.ingestion_gate import structural_noise
+        assert structural_noise(
+            "The resume path must rebuild UI state from the backend snapshot, not client memory.") is False
+        assert structural_noise(
+            "A build-time claim must be verified by building, not by reading the comment.") is False
+        assert structural_noise(
+            "Guard at the shared-component caller, not the renderer (R27).") is False
+
     def test_emoji_prefixed_titled_entry_is_NOT_noise(self):
         # run_85beeb04 BUGFIX: a curated MEMORY entry that merely OPENS with an emoji but
         # carries a **bold title** + substantial content is NOT structural noise. The old
