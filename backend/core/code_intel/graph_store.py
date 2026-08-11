@@ -1193,6 +1193,87 @@ class GraphStore:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def top_callers_by_file(self, file_path: str, limit: int = 3) -> list[dict]:
+        """Top callers of the symbols in *file_path*, one per caller-file, with a
+        test-coverage flag — for the code_intel hook's "blast radius" preview.
+
+        Returns: ``[{"name": "<basename>::<caller_name>", "has_test": bool}, ...]``,
+        deduped to ONE caller per caller-file (first in ``file_path`` order), capped
+        at *limit*.
+
+        ``has_test`` is True if EITHER (a) the caller's own file path contains
+        ``test`` (case-insensitive substring) OR (b) the caller has ANY inbound edge
+        (of ANY edge_type — calls/extends/references/imports) from a file whose path
+        contains ``test``. This preserves the OLD ``_get_top_callers`` semantics
+        exactly, including the deliberately-asymmetric edge_type handling (see the
+        query comment): the caller SET is 'calls'-only, but the test-coverage check
+        counts any inbound test-file edge. **Bare ``%test%`` substring on purpose**
+        — NOT the segment-anchored ``_is_test_symbol_path`` (that would flip
+        ``has_test`` for ``attestation.py``-type paths; a separate test-detection
+        concern, out of scope for this perf rewrite — R2, run_0ee8b3be).
+
+        PERF (the whole point of R2): the old code ran ONE nested ``LIKE '%test%'``
+        subquery PER non-test caller — O(callers) unindexed scans that degraded to
+        tens of seconds. This is ONE query: the caller set is joined ONCE to a
+        test-file-caller existence flag via a LEFT JOIN + MAX() aggregate, so the
+        single leading-wildcard scan happens once, not N times. Dedup + limit stay
+        in Python to preserve the old "first caller per file in file_path order"
+        representative-row choice (a GROUP BY would let the engine pick a different
+        representative ``name``). Runs through the _LockingConnection proxy, so the
+        ``execute(...).fetchall()`` is lock-serialized + row-materialized (R1).
+        """
+        # One query. `tc.*` is the "is this caller called by a test file?" side:
+        # LEFT JOIN so callers with NO test-caller survive; MAX(...) collapses the
+        # possibly-many test-caller rows into a single 0/1 per caller. `caller_is_test`
+        # is the caller's OWN-file test flag (condition a). Ordered by caller file
+        # path so the Python dedup below keeps a deterministic first-per-file row.
+        # ⚠️ edge_type filters are ASYMMETRIC on purpose — this preserves the OLD
+        # code's exact semantics (Gate-2 HIGH, run_0ee8b3be):
+        #   • `e` (target's callers) IS filtered to edge_type='calls' — the old
+        #     step-2 query only counted 'calls' edges as callers.
+        #   • `te` (is-this-caller-called-by-a-test-file?) is NOT filtered by
+        #     edge_type — the old condition-(b) test-check subquery had NO edge_type
+        #     filter, so ANY inbound edge from a test file (calls / extends /
+        #     references / imports) marked the caller test-covered. Adding
+        #     te.edge_type='calls' here would silently flip has_test True→False for a
+        #     caller only subclassed/imported by a test — a semantic regression.
+        # `caller_cap` bounds pathological materialization (a target called by 10k+
+        # symbols): fetch enough file-ordered candidates to satisfy `limit` after
+        # the Python per-file dedup, not the whole caller set — caps row transfer +
+        # lock hold. limit*50 is generous headroom over the per-file dedup ratio.
+        caller_cap = max(limit * 50, 50)
+        rows = self._conn.execute(
+            "SELECT cn.id, cn.file_path, cn.name, "
+            "       (LOWER(cn.file_path) LIKE '%test%') AS caller_is_test, "
+            "       MAX(CASE WHEN tcn.id IS NOT NULL THEN 1 ELSE 0 END) AS has_test_caller "
+            "FROM code_nodes tgt "
+            "JOIN code_edges e ON e.target_id = tgt.id AND e.edge_type = 'calls' "
+            "JOIN code_nodes cn ON cn.id = e.source_id "
+            "LEFT JOIN code_edges te ON te.target_id = cn.id "
+            "LEFT JOIN code_nodes tcn ON tcn.id = te.source_id "
+            "     AND LOWER(tcn.file_path) LIKE '%test%' "
+            "WHERE tgt.file_path = ? AND cn.file_path != ? "
+            "GROUP BY cn.id, cn.file_path, cn.name "
+            "ORDER BY cn.file_path "
+            "LIMIT ?",
+            (file_path, file_path, caller_cap),
+        ).fetchall()
+
+        seen_files: set[str] = set()
+        results: list[dict] = []
+        for _cid, caller_file, caller_name, caller_is_test, has_test_caller in rows:
+            if caller_file in seen_files:
+                continue
+            seen_files.add(caller_file)
+            has_test = bool(caller_is_test) or bool(has_test_caller)
+            results.append({
+                "name": f"{caller_file.split('/')[-1]}::{caller_name}",
+                "has_test": has_test,
+            })
+            if len(results) >= limit:
+                break
+        return results
+
     # ── search ───────────────────────────────────────────────────────────
 
     def search_symbols(self, query: str, limit: int = 20) -> list[dict]:

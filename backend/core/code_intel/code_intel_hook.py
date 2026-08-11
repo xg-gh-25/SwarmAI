@@ -360,59 +360,19 @@ def _get_top_callers(graph, rel_path: str, limit: int = 3) -> list[dict]:
     """Get top N callers of symbols in this file, with test coverage flag.
 
     Returns: [{"name": "session_router.py::route_message", "has_test": True}, ...]
+
+    Thin wrapper over ``GraphStore.top_callers_by_file`` (R2, run_0ee8b3be): the
+    query — and its test-coverage computation — now lives in GraphStore as ONE
+    query (was an O(callers) per-caller nested-subquery fan-out here that touched
+    ``graph._conn`` raw and degraded to tens of seconds). This wrapper keeps the
+    degrade-observable ``[]`` guard: [] reads as "nothing calls this file", the
+    single most misleading answer a caller-graph query can give (invites treating
+    the file as dead code), so a lookup FAILURE must not surface as that — it stays
+    a logged degrade. The guard also protects _build_context's direct callers
+    (test_builds_context_string calls it with a MagicMock graph).
     """
     try:
-        # Get all node IDs in this file
-        node_ids = [
-            row[0] for row in graph._conn.execute(
-                "SELECT id FROM code_nodes WHERE file_path = ?", (rel_path,)
-            ).fetchall()
-        ]
-        if not node_ids:
-            return []
-
-        # Find callers across all nodes in this file, deduplicated by source file
-        placeholders = ",".join("?" * len(node_ids))
-        caller_rows = graph._conn.execute(
-            f"SELECT DISTINCT e.source_id, n.file_path, n.name "
-            f"FROM code_edges e "
-            f"JOIN code_nodes n ON n.id = e.source_id "
-            f"WHERE e.target_id IN ({placeholders}) "
-            f"AND e.edge_type = 'calls' "
-            f"AND n.file_path != ? "
-            f"ORDER BY n.file_path "
-            f"LIMIT ?",
-            node_ids + [rel_path, limit * 3],  # fetch extra, then deduplicate
-        ).fetchall()
-
-        # Deduplicate by file (show one caller per file)
-        seen_files: set[str] = set()
-        results = []
-        for source_id, caller_file, caller_name in caller_rows:
-            if caller_file in seen_files:
-                continue
-            seen_files.add(caller_file)
-            has_test = "test" in caller_file.lower()
-            # For non-test callers, check if THEY have test callers
-            if not has_test:
-                test_check = graph._conn.execute(
-                    "SELECT 1 FROM code_edges e "
-                    "JOIN code_nodes n ON n.id = e.source_id "
-                    "WHERE e.target_id = ? AND n.file_path LIKE '%test%' LIMIT 1",
-                    (source_id,)
-                ).fetchone()
-                has_test = test_check is not None
-            results.append({
-                "name": f"{caller_file.split('/')[-1]}::{caller_name}",
-                "has_test": has_test,
-            })
-            if len(results) >= limit:
-                break
-
-        return results
+        return graph.top_callers_by_file(rel_path, limit=limit)
     except Exception as exc:  # noqa: BLE001
-        # Degrade-OBSERVABLE. [] reads as "nothing calls this file" — the single most
-        # misleading answer a caller-graph query can give, since it invites the reader to
-        # treat the file as dead code.
         logger.debug("top-callers lookup failed for %s: %s", rel_path, exc)
         return []

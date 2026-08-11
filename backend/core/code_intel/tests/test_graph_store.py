@@ -1052,3 +1052,95 @@ class TestConnectionThreadSafety:
         assert any(r[0] == "a1" for r in rows)
         # The connection wrapper must carry a reentrant lock (serialization primitive).
         assert hasattr(store._conn, "_lock")
+
+
+class TestTopCallersByFile:
+    """R2 (run_0ee8b3be) — top_callers_by_file replaces the O(symbols×callers)
+    per-caller nested subquery in code_intel_hook._get_top_callers with ONE query.
+
+    has_test semantics (PRESERVED exactly from the old hook code, bare '%test%'
+    substring — NOT the segment-anchored _is_test_symbol_path):
+      a caller is has_test=True if EITHER
+        (a) its own file path contains 'test' (case-insensitive substring), OR
+        (b) it is itself called by a file whose path contains 'test'.
+    Output: [{"name": "<basename>::<caller_name>", "has_test": bool}], deduped to
+    ONE caller per file (first in file_path order), capped at limit.
+    """
+
+    def _seed(self, store):
+        # target file with one symbol t1
+        store.upsert_nodes([_make_node(node_id="t1", file_path="src/target.py", name="target_fn")])
+        # caller A: non-test file, but CALLED BY a test file → has_test via (b)
+        store.upsert_nodes([_make_node(node_id="a1", file_path="src/caller_a.py", name="fn_a")])
+        store.upsert_nodes([_make_node(node_id="ta", file_path="tests/test_a.py", name="test_fn_a")])
+        # caller B: test file itself → has_test via (a)
+        store.upsert_nodes([_make_node(node_id="b1", file_path="tests/caller_b.py", name="fn_b")])
+        # caller C: non-test, no test caller → has_test False
+        store.upsert_nodes([_make_node(node_id="c1", file_path="src/caller_c.py", name="fn_c")])
+        # edges: a1→t1, b1→t1, c1→t1 (callers of target); ta→a1 (test calls caller A)
+        store.upsert_edges([
+            _make_edge(source="a1", target="t1"),
+            _make_edge(source="b1", target="t1"),
+            _make_edge(source="c1", target="t1"),
+            _make_edge(source="ta", target="a1"),
+        ])
+
+    def test_has_test_both_conditions(self, store):
+        self._seed(store)
+        rows = store.top_callers_by_file("src/target.py", limit=10)
+        by_file = {r["name"]: r["has_test"] for r in rows}
+        # caller A: called by tests/test_a.py → True (condition b)
+        assert by_file["caller_a.py::fn_a"] is True
+        # caller B: own file tests/caller_b.py contains 'test' → True (condition a)
+        assert by_file["caller_b.py::fn_b"] is True
+        # caller C: non-test, no test caller → False
+        assert by_file["caller_c.py::fn_c"] is False
+
+    def test_dedup_one_per_file(self, store):
+        self._seed(store)
+        # add a SECOND symbol in caller_a.py that also calls target
+        store.upsert_nodes([_make_node(node_id="a2", file_path="src/caller_a.py", name="fn_a2")])
+        store.upsert_edges([_make_edge(source="a2", target="t1")])
+        rows = store.top_callers_by_file("src/target.py", limit=10)
+        files = [r["name"].split("::")[0] for r in rows]
+        assert files.count("caller_a.py") == 1, f"caller_a.py not deduped: {files}"
+
+    def test_limit_respected(self, store):
+        self._seed(store)
+        rows = store.top_callers_by_file("src/target.py", limit=2)
+        assert len(rows) <= 2
+
+    def test_empty_for_uncalled_file(self, store):
+        store.upsert_nodes([_make_node(node_id="z1", file_path="src/lonely.py", name="z")])
+        rows = store.top_callers_by_file("src/lonely.py", limit=3)
+        assert rows == []
+
+    def test_has_test_counts_non_calls_edge_from_test_file(self, store):
+        # Gate-2 HIGH tripwire (run_0ee8b3be): condition (b) must count ANY inbound
+        # edge from a test file, NOT only 'calls' edges — the old code's test-check
+        # subquery had no edge_type filter. A non-test caller that a test file only
+        # EXTENDS (subclasses) — never calls — must still be has_test=True. Before
+        # the fix (te.edge_type='calls') this returned False → this test would RED.
+        store.upsert_nodes([_make_node(node_id="tt", file_path="src/target3.py", name="t3")])
+        store.upsert_nodes([_make_node(node_id="p1", file_path="src/parent.py", name="Parent")])
+        store.upsert_nodes([_make_node(node_id="tx", file_path="tests/test_x.py", name="TestSub")])
+        # p1 CALLS target3 (so it's a caller); test_x EXTENDS p1 (non-calls edge)
+        store.upsert_edges([
+            _make_edge(source="p1", target="tt", edge_type="calls"),
+            _make_edge(source="tx", target="p1", edge_type="extends"),
+        ])
+        rows = store.top_callers_by_file("src/target3.py", limit=3)
+        by_file = {r["name"]: r["has_test"] for r in rows}
+        assert by_file["parent.py::Parent"] is True, \
+            "a caller extended (non-calls) by a test file must be has_test=True (old semantics)"
+
+    def test_bare_substring_not_segment_anchored(self, store):
+        # PRESERVE the old bare-substring semantics: a caller file named
+        # 'attestation.py' (contains 'test' as a substring) is has_test=True under
+        # the bare rule — even though it is NOT a real test file. This locks the
+        # deliberate decision to keep bare '%test%', NOT _is_test_symbol_path.
+        store.upsert_nodes([_make_node(node_id="tt", file_path="src/target2.py", name="t2")])
+        store.upsert_nodes([_make_node(node_id="at", file_path="src/attestation.py", name="attest")])
+        store.upsert_edges([_make_edge(source="at", target="tt")])
+        rows = store.top_callers_by_file("src/target2.py", limit=3)
+        assert rows[0]["has_test"] is True  # bare substring matches 'attestation'
