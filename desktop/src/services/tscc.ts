@@ -132,8 +132,17 @@ export async function getRecallSnapshot(
   try {
     const response = await api.get(`/chat/${sessionId}/recall`);
     const data = response.data as Record<string, unknown>;
+    const hits = (data.hits as Record<string, unknown>[]) ?? [];
     return {
       ran: (data.ran as boolean) ?? false,
+      hits: hits.map((h) => ({
+        domain: (h.domain as string) ?? '',
+        source: (h.source as string) ?? '',
+        score: (h.score as number) ?? 0,
+        hasScore: (h.has_score as boolean) ?? false,
+        method: (h.method as string) ?? '',
+        text: (h.text as string) ?? '',
+      })),
       body: (data.body as string) ?? '',
       tokens: (data.tokens as number) ?? 0,
       latencyMs: (data.latency_ms as number) ?? 0,

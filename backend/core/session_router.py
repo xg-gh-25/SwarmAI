@@ -464,10 +464,90 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
         return ""
 
 
+def _flatten_recall_hits(result: Any, project: Optional[str]) -> list[dict]:
+    """Flatten a BucketedRecall into TSCC's structured per-hit list — the REAL
+    hits that were recalled this turn (source + score + domain), NOT a re-run.
+
+    Shape per hit: {domain, source, score, method, text}. Size-bounded by the
+    recall caps already in recall_multi (max_sections=3/domain, content truncated),
+    so this is a few KB. Best-effort: any shape surprise is skipped, never raises
+    (a panel-observability helper must not break the recall leg)."""
+    hits: list[dict] = []
+    # Hit dict shapes VARY per domain (verified against recall_multi.py + graph_store):
+    #   library:       {source, heading, content, score}          score in [0,1]
+    #   ddd:           {doc, section, score, (content)}            score in [0,1]
+    #   context_files: {section, (content)}                       NO score
+    #   session:       {text}                                     NO source, NO score
+    #   codeintel:     {name, file_path, rank}                    rank = NEGATIVE FTS5, NOT [0,1]
+    # Probe the REAL keys, synthesize a source where the domain has none, and only
+    # surface a score when it's a real normalized [0,1] value (adversarial HIGH,
+    # run_abab234c: old probes gave blank sources / false 0.0 / a negative "BM25"
+    # for codeintel under a "[0,1]" label).
+    def _source_for(domain: str, h: dict) -> str:
+        if h.get("doc") and h.get("section"):
+            return f"{h['doc']} § {h['section']}"
+        cand = (h.get("source_file") or h.get("source") or h.get("heading")
+                or h.get("section") or h.get("name") or h.get("file_path") or "")
+        if cand:
+            return str(cand)
+        if domain == "session":
+            return "past session"
+        if domain == "codeintel":
+            return "code symbol"
+        return ""
+
+    def _score_for(h: dict):
+        # Only real normalized [0,1] scores. context_files/session have none;
+        # codeintel `rank` is a raw negative FTS5 rank — NOT comparable to BM25 [0,1],
+        # so it is NOT surfaced as a score (return None -> UI omits the number).
+        raw = h.get("hybrid_score", h.get("score", h.get("fts_score")))
+        if raw is None:
+            return None
+        try:
+            return round(float(raw), 3)
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        buckets = getattr(result, "buckets", None) or {}
+        layers = getattr(result, "hit_layers", None) or {}
+        for domain, bucket in buckets.items():
+            method = layers.get(domain, "")
+            for h in (bucket or []):
+                if not isinstance(h, dict):
+                    continue
+                text = (h.get("text") or h.get("content") or h.get("body")
+                        or h.get("heading") or "")
+                score = _score_for(h)
+                hits.append({
+                    "domain": str(domain),
+                    "source": _source_for(str(domain), h)[:200],
+                    "score": score if score is not None else 0.0,
+                    "has_score": score is not None,
+                    "method": str(method),
+                    "text": str(text)[:400],
+                })
+    except Exception:  # noqa: BLE001 — structuring must never break recall
+        return hits
+    return hits
+
+
 def _unified_recall_body(
     query: str, editor_file_path: Optional[str] = None,
-) -> str:
-    """C-full (run_ccd1b6c5): the UNIFIED recall path — one recall_all fan-out
+) -> tuple[str, Optional[list[dict]]]:
+    """Returns (rendered_body_str, structured_hits | None).
+
+    The STRING is the injectable recall block (unchanged — this is what the model
+    receives, via render_recall_body). The STRUCTURED list is the SAME turn's real
+    hits (source/score/domain) captured for the TSCC panel — extracted from the
+    BucketedRecall that recall_all() already produced, BEFORE it was stringified.
+    NOT a re-run: it is the exact object that fed the injected block.
+
+    Callers use the STRING for the empty→fallback strangler-fig check (body falsy
+    → legacy path); the structured list is purely additive (None on the failure/
+    fallback branches).
+
+    C-full (run_ccd1b6c5): the UNIFIED recall path — one recall_all fan-out
     across ALL 5 domains (context_files / ddd / library / session / codeintel),
     rendered to an injectable body. Replaces the runtime path's old 3-leg subset
     (Library+Transcript+Memory) — it now also surfaces DDD + code symbols, and
@@ -506,12 +586,17 @@ def _unified_recall_body(
         non_ddd = tuple(d for d in DOMAINS if d != "ddd")
         result = recall_all(query, project=project, domains=non_ddd, allow_embed=False)
         graph_context = _graph_enrich_recall(query)
-        return render_recall_body(result, project=project, graph_context=graph_context)
+        body = render_recall_body(result, project=project, graph_context=graph_context)
+        # Structured hits from the SAME result object (the real recalled hits with
+        # scores) — for the TSCC panel. Extracted here, before the caller discards
+        # `result`. None-safe: on empty body the caller falls back and ignores this.
+        structured = _flatten_recall_hits(result, project)
+        return body, structured
     except Exception as exc:  # noqa: BLE001 — fail to "" so caller falls back to legacy
         _record_recall_degraded(f"unified_exception:{type(exc).__name__}")
         logger.warning("unified recall raised (falling back to legacy 3-leg): %s: %s",
                         type(exc).__name__, exc)
-        return ""
+        return "", None
 
 
 def _graph_enrich_recall(query: str) -> str:
@@ -692,20 +777,27 @@ async def _maybe_inject_recall(
         # keyword/FTS5-only (allow_embed=False); disaster cap only fires on a hang.
         # active-project detection (blocking iterdir) runs INSIDE the thread
         # (_unified_recall_body), off the event loop (Gate-2 M1).
-        recalled = await asyncio.wait_for(
+        # _unified_recall_body now returns (body_str, structured_hits|None). The
+        # empty→fallback strangler-fig check stays on the BODY string (unchanged
+        # semantics); structured is additive for the TSCC panel (None on fallback).
+        _unified_out = await asyncio.wait_for(
             # 'io' pool, not the default one (run_c8ad52f8): FTS5/sqlite recall on
             # the session-init hot path — must not compete for a default-pool worker
             # with bulk work (which would starve the readiness sampler → false offline).
             executors.run_in("io", _unified_recall_body, keywords, _editor_fp),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
+        recalled, _structured_hits = _unified_out
         if not recalled:
-            # Fallback to legacy 3-leg path (strangler-fig safety net).
+            # Fallback to legacy 3-leg path (strangler-fig safety net). Legacy
+            # returns a bare string and has no structured hits → _structured_hits
+            # stays None (the TSCC Recall tab shows the rendered body without cards).
             _record_recall_degraded("unified_empty_fallback_legacy")
             recalled = await asyncio.wait_for(
                 executors.run_in("io", _recall_for_query, keywords, _RECALL_MAX_TOKENS, False),
                 timeout=_RECALL_DISASTER_TIMEOUT_S,
             )
+            _structured_hits = None
         _recall_ms = (time.perf_counter() - _t_recall_start) * 1000.0
         # Recall metrics substrate (run_40091f5c): record ONE sample for this
         # session-prompt recall — total latency + whether it hit. Fire-and-forget
@@ -767,16 +859,18 @@ async def _maybe_inject_recall(
             # recall leg took (design §2 P2/P3).
             _recall_tok = ContextDirectoryLoader.estimate_tokens(recalled)
             # TSCC recall snapshot (read-only panel) — fire-and-forget stash of the
-            # ALREADY-rendered result onto the unit. NO new recall computation: every
-            # value here (recalled/_recall_tok/_recall_ms/keywords) is already in hand.
-            # Copied to session_registry.recall_snapshot after this coroutine returns
-            # (mirrors system_prompt_metadata). Must NEVER raise into the recall leg
-            # (same discipline as the metric block above) — a panel-observability stash
-            # cannot be allowed to break the chat hot path.
+            # STRUCTURED hits (source/score/domain) that were ACTUALLY recalled this
+            # turn. NO new recall computation and NO re-run: _structured_hits was
+            # extracted from the SAME BucketedRecall that produced the injected block
+            # above — it is the real session state, not a simulation. `body` is kept
+            # ONLY as a fallback for rendering when structured is None (legacy path).
+            # O(1) reference assignment (list already built); guarded so a panel
+            # stash can never raise into the chat recall leg.
             try:
                 unit._recall_snapshot = {
                     "ran": True,
-                    "body": recalled,
+                    "hits": _structured_hits or [],
+                    "body": recalled if not _structured_hits else "",
                     "tokens": _recall_tok,
                     "latency_ms": _recall_ms or 0.0,
                     "keywords": list(keywords[:32]),
@@ -2371,11 +2465,31 @@ class SessionRouter:
             # Copy the recall snapshot to the registry for the read-only TSCC panel
             # (mirrors the system_prompt_metadata copy above). Guarded + best-effort:
             # a panel-observability copy must never perturb the send path.
+            #
+            # ALSO refresh full_text to the REAL sent prompt — but ONLY on the turn
+            # recall actually ran. The metadata captured above (~:2391) stored the
+            # PRE-recall prompt; _maybe_inject_recall mutates options.system_prompt (a
+            # different var) by appending the "## Recalled Knowledge" block, so on the
+            # recall turn full_text must be re-pointed at options.system_prompt to show
+            # what was ACTUALLY sent (an existing str ref — NO copy, NO dumps).
+            #
+            # GATE on `_ttft_recall_ms is not None` (adversarial HIGH, run_abab234c):
+            # recall runs at most ONCE per session (_recall_injected guard) and returns
+            # its ms only on that turn, else None. On a warm-reuse turn 2+, the rebuilt
+            # options.system_prompt is DISCARDED (send() reuses the live subprocess and
+            # only ships query_content) — it lacks the recall block and was never sent.
+            # Refreshing unconditionally would clobber the correct turn-1 full_text with
+            # that never-sent prompt (the exact "shows a simulation" failure this rework
+            # kills). So refresh full_text only when recall ran this turn.
             try:
                 _rsnap = getattr(unit, "_recall_snapshot", None)
                 if _rsnap and session_id:
                     from . import session_registry
                     session_registry.recall_snapshot[session_id] = _rsnap
+                    if _ttft_recall_ms is not None and options.system_prompt:
+                        _spm_live = session_registry.system_prompt_metadata.get(session_id)
+                        if _spm_live is not None:
+                            _spm_live["full_text"] = options.system_prompt
             except Exception:  # noqa: BLE001 — observability copy must never break send
                 pass
 

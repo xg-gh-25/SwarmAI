@@ -140,6 +140,19 @@ class SystemPromptMetadata(BaseModel):
     full_text: str = Field("", description="Complete assembled system prompt text")
 
 
+class RecallHit(BaseModel):
+    """One structured recalled hit — the REAL hit that fed the injected block this
+    turn (extracted from the BucketedRecall, not a re-run). Powers the mockup's
+    per-source recall cards with their BM25 scores."""
+
+    domain: str = Field("", description="Recall domain: context_files | library | ddd | session | codeintel")
+    source: str = Field("", description="Source file / section / heading the hit came from")
+    score: float = Field(0.0, description="BM25/hybrid relevance score, normalized [0,1] (only meaningful when has_score)")
+    has_score: bool = Field(False, description="True when score is a real normalized [0,1] value; False for domains with no comparable score (context_files/session/codeintel)")
+    method: str = Field("", description="How it matched: keyword | hybrid | fts | graph")
+    text: str = Field("", description="Hit excerpt (truncated)")
+
+
 class RecallSnapshot(BaseModel):
     """Recalled-knowledge snapshot for a session, returned by the recall endpoint.
 
@@ -148,14 +161,19 @@ class RecallSnapshot(BaseModel):
     The panel reads this snapshot only — it never triggers recall itself, so this
     endpoint is fully decoupled from the chat send path.
 
-    ``body`` is the already-rendered recall markdown (carries ``[RECALLED]`` /
-    ``[DDD:project]`` provenance tags). ``ran`` distinguishes "recall ran and hit"
-    from "no recall this session" (channel / keyword-miss / turn 2+), so a UI blank
-    is never ambiguous with a dead path.
+    ``hits`` are the STRUCTURED per-source hits (domain/source/score) extracted from
+    the SAME BucketedRecall that produced the injected block — the real session
+    state, not a re-run. ``body`` is a fallback rendered string used ONLY when
+    structured hits are unavailable (legacy fallback path). ``ran`` distinguishes
+    "recall ran" from "no recall this session" (channel / keyword-miss / turn 2+),
+    so a UI blank is never ambiguous with a dead path.
     """
 
     ran: bool = Field(False, description="Whether the recall leg ran and injected this session")
-    body: str = Field("", description="Rendered recall markdown (with [RECALLED]/[DDD] provenance)")
+    hits: list[RecallHit] = Field(
+        default_factory=list, description="Structured per-source hits (the real recalled hits)"
+    )
+    body: str = Field("", description="Fallback rendered markdown (only when structured hits unavailable)")
     tokens: int = Field(0, description="Estimated tokens of the recalled block (estimate_tokens)")
     latency_ms: float = Field(0.0, description="Recall-leg wall-clock in ms")
     keywords: list[str] = Field(

@@ -28,7 +28,8 @@ class TestUnifiedRecallCfull:
         editor path resolves the SwarmAI project so codeintel has a graph."""
         from core.session_router import _unified_recall_body
         # 2nd arg is now editor_file_path (project detected inside, off-loop).
-        s = _unified_recall_body(
+        # Returns (body_str, structured_hits|None) — unpack the body.
+        s, _structured = _unified_recall_body(
             "session resume timeout",
             "/x/SwarmWS/Projects/SwarmAI/TECH.md",
         )
@@ -40,7 +41,7 @@ class TestUnifiedRecallCfull:
         codeintel empty, but the other domains still recall (recall never
         degrades to empty just because there's no active project)."""
         from core.session_router import _unified_recall_body
-        s = _unified_recall_body("resume cold start latency", None)
+        s, _structured = _unified_recall_body("resume cold start latency", None)
         assert "Code Symbols" not in s and len(s) > 100
 
     def test_unified_exception_returns_empty_for_fallback(self):
@@ -52,8 +53,10 @@ class TestUnifiedRecallCfull:
         orig = rm.recall_all
         rm.recall_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
         try:
-            assert _unified_recall_body("test query", None) == "", \
-                "unified exception must return '' so caller falls back to legacy"
+            _body, _structured = _unified_recall_body("test query", None)
+            assert _body == "", \
+                "unified exception must return '' body so caller falls back to legacy"
+            assert _structured is None, "exception path yields no structured hits"
         finally:
             rm.recall_all = orig
 

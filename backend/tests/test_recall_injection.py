@@ -101,7 +101,8 @@ class TestMaybeInjectRecall:
         Autouse-safe: tests that never reach recall (channel/opener/second-msg
         early-returns) simply never call the patched leg.
         """
-        with patch("core.session_router._unified_recall_body", return_value=""):
+        # _unified_recall_body now returns (body_str, structured_hits|None).
+        with patch("core.session_router._unified_recall_body", return_value=("", None)):
             yield
 
     @pytest.fixture

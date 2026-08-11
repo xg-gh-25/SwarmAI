@@ -1133,9 +1133,20 @@ export interface SystemPromptMetadata {
   fullText: string;
 }
 
+/** One structured recalled hit — real hit that fed the injected block. */
+export interface RecallHit {
+  domain: string;
+  source: string;
+  score: number;
+  hasScore: boolean;
+  method: string;
+  text: string;
+}
+
 /** Recalled-knowledge snapshot returned by the recall endpoint (read-only). */
 export interface RecallSnapshot {
   ran: boolean;
+  hits: RecallHit[];
   body: string;
   tokens: number;
   latencyMs: number;

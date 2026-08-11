@@ -35,11 +35,18 @@ export interface TSCCPopoverButtonProps {
 // if the layout constants change, update here.
 const LEFT_NAV_RIGHT = 150;
 const CHAT_TOP = 80;
-const MARGIN = 10; // breathing room from each chrome edge
-const PREFERRED_W = 420;
-const PREFERRED_H = 480;
-const MIN_W = 300;
-const MIN_H = 260;
+const MARGIN = 12; // breathing room from each chrome edge
+// Responsive-LARGE: the panel fills most of the safe region (bounded by the
+// left-nav on the left and the tab-bar on top) rather than a small fixed box —
+// the mockup's summary strip + charts + recall cards need room to breathe. We
+// cap at a comfortable max so it doesn't stretch absurdly wide on a huge monitor,
+// but on a normal window it grows to ~72% width / ~82% height of the safe region.
+const MAX_W = 720;
+const MAX_H = 720;
+const MIN_W = 340;
+const MIN_H = 300;
+const FILL_W = 0.72; // fraction of available safe width to occupy
+const FILL_H = 0.82; // fraction of available safe height to occupy
 
 interface PanelBox {
   right: number; // px from viewport right edge
@@ -107,24 +114,19 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
     const availW = vw - right - (LEFT_NAV_RIGHT + MARGIN);
     const availH = vh - bottom - (CHAT_TOP + MARGIN);
 
-    // If the safe region cannot fit a USABLE minimum panel, do NOT render a
-    // collapsed one. The prior fix guaranteed "never overflow the safe region"
-    // but at a tiny window that produced width/height = 0 → an invisible-but-
-    // present dialog (focusable, screen-reader-announced, but nothing drawn), which
-    // is worse to debug than a visible overflow (adversarial finding #2, re-review).
-    // Clearing box → the `&& box` render gate below keeps the panel closed until the
-    // window is big enough. NaN/degenerate-viewport (innerWidth ~0 during Tauri
-    // startup frames) also lands here and is skipped, preserving the last good box.
-    if (!(availW >= MIN_W) || !(availH >= MIN_H)) {
-      setBox(null);
+    // Degenerate/startup viewport (innerWidth ~0 during Tauri boot frames, or a
+    // window narrower than the chrome itself) → skip, keep the last good box.
+    if (!Number.isFinite(availW) || !Number.isFinite(availH) || availW < 120 || availH < 120) {
       return;
     }
 
-    // Clamp to preferred size, but NEVER exceed the safe region (the overlap/
-    // overflow guarantee wins over comfort). MIN is now a floor we KNOW fits
-    // (guarded above), so the outer cap is a no-op in practice but kept for safety.
-    const width = Math.min(Math.max(MIN_W, Math.min(PREFERRED_W, availW)), availW);
-    const height = Math.min(Math.max(MIN_H, Math.min(PREFERRED_H, availH)), availH);
+    // Responsive-LARGE sizing: occupy a generous fraction of the safe region,
+    // clamped to [MIN, MAX] AND hard-capped at the region itself so it can NEVER
+    // overlap the left-nav / tab-bar / window edge. On a small window it shrinks
+    // to fit (down to MIN or the region, whichever is smaller) and scrolls inside
+    // — it is always VISIBLE, never hidden and never overflowing.
+    const width = Math.min(availW, Math.max(MIN_W, Math.min(MAX_W, Math.round(availW * FILL_W))));
+    const height = Math.min(availH, Math.max(MIN_H, Math.min(MAX_H, Math.round(availH * FILL_H))));
 
     setBox({ right, bottom, width, height });
   }, []);
@@ -190,7 +192,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
             rounded-xl shadow-2xl overflow-hidden
           "
         >
-          <div className="flex-1 overflow-y-auto p-3">
+          <div className="flex-1 min-h-0 p-3">
             <SystemPromptModule sessionId={sessionId} metadata={metadata} />
           </div>
         </div>,

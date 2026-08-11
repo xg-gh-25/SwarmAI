@@ -26,6 +26,103 @@ def _cleanup(session_id: str):
     session_registry.recall_snapshot.pop(session_id, None)
 
 
+class TestStructuredRecall:
+    """The recall snapshot carries STRUCTURED hits (source/score/domain) — the real
+    hits that fed the injected block, powering the mockup's per-source cards."""
+
+    def test_flatten_extracts_source_and_score(self):
+        """_flatten_recall_hits turns a BucketedRecall into [{domain,source,score,...}]
+        — proving we can serve the mockup's card scores from REAL recall data, not a
+        re-run."""
+        from core.session_router import _flatten_recall_hits
+        from core.recall_multi import BucketedRecall
+
+        result = BucketedRecall(
+            query="tscc context",
+            buckets={
+                "library": [
+                    {"source_file": "pure-fs-migration.md", "hybrid_score": 0.63, "text": "two estimators diverge"},
+                    {"source_file": "context-arch.md", "fts_score": 0.38, "content": "SOUL/AGENT behavior"},
+                ],
+                "ddd": [
+                    {"heading": "TECH.md § Context", "score": 0.67, "text": "canonical loader"},
+                ],
+            },
+            hit_layers={"library": "fts", "ddd": "keyword"},
+        )
+        hits = _flatten_recall_hits(result, "SwarmAI")
+        assert len(hits) == 3
+        lib = [h for h in hits if h["domain"] == "library"]
+        assert lib[0]["source"] == "pure-fs-migration.md"
+        assert lib[0]["score"] == 0.63
+        assert lib[0]["has_score"] is True
+        assert lib[0]["method"] == "fts"
+        # heading-based hit (context-arch.md via fts_score)
+        assert lib[1]["source"] == "context-arch.md" and lib[1]["score"] == 0.38
+        ddd = [h for h in hits if h["domain"] == "ddd"]
+        assert ddd[0]["score"] == 0.67 and ddd[0]["source"] == "TECH.md § Context"
+
+    def test_flatten_domains_without_score_marked_has_score_false(self):
+        """context_files/session have NO comparable score; codeintel `rank` is a
+        raw negative FTS5 value — none should surface a fake [0,1] score."""
+        from core.session_router import _flatten_recall_hits
+        from core.recall_multi import BucketedRecall
+
+        result = BucketedRecall(
+            query="x",
+            buckets={
+                "context_files": [{"section": "Guidelines", "content": "some memory"}],
+                "session": [{"text": "a past chat blob"}],
+                "codeintel": [{"name": "foo", "file_path": "a.py", "rank": -8.42}],
+            },
+            hit_layers={"context_files": "keyword", "session": "fts", "codeintel": "graph"},
+        )
+        hits = _flatten_recall_hits(result, None)
+        for h in hits:
+            assert h["has_score"] is False, f"{h['domain']} must not claim a [0,1] score"
+        # sources synthesized/real, never blank
+        cf = next(h for h in hits if h["domain"] == "context_files")
+        assert cf["source"] == "Guidelines"
+        ci = next(h for h in hits if h["domain"] == "codeintel")
+        assert ci["source"] == "foo"  # name preferred over synth label
+
+    def test_flatten_never_raises_on_bad_shape(self):
+        """A shape surprise must yield [] (or partial), never raise into the recall leg."""
+        from core.session_router import _flatten_recall_hits
+
+        class Weird:
+            buckets = {"x": ["not-a-dict", 42, None]}
+            hit_layers = {}
+        assert _flatten_recall_hits(Weird(), None) == []
+        assert _flatten_recall_hits(None, None) == []
+
+    def test_structured_hits_roundtrip_through_endpoint(self, client: TestClient):
+        """Structured hits stored in the snapshot are returned by GET /recall,
+        coerced into RecallHit models (domain/source/score)."""
+        _seed("rec-struct", {
+            "ran": True,
+            "hits": [
+                {"domain": "ddd", "source": "TECH.md § Context", "score": 0.67, "has_score": True, "method": "keyword", "text": "loader"},
+                {"domain": "library", "source": "arch.md", "score": 0.38, "has_score": True, "method": "fts", "text": "soul/agent"},
+            ],
+            "body": "",
+            "tokens": 88,
+            "latency_ms": 210.0,
+            "keywords": ["tscc"],
+        })
+        try:
+            resp = client.get("/api/chat/rec-struct/recall")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["ran"] is True
+            assert len(body["hits"]) == 2
+            assert body["hits"][0]["source"] == "TECH.md § Context"
+            assert body["hits"][0]["score"] == 0.67
+            assert body["hits"][0]["domain"] == "ddd"
+        finally:
+            _cleanup("rec-struct")
+
+
 class TestRecallEndpoint:
     """Tests for the GET recall endpoint."""
 
