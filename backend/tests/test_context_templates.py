@@ -1,22 +1,62 @@
-"""Unit tests for context file template content verification.
+"""Structural tests for the context-file templates in ``backend/context/``.
 
-Verifies that all context file templates in ``backend/context/`` contain
-the required markers, sections, directives, and that removed content is
-absent. Also checks that the total system-default token count stays
-within the 3,000-token budget.
+Scope is deliberately narrow: these tests guard the templates' EXISTENCE and
+their ownership labelling, plus the memory-distill skill's machine-read
+frontmatter. They do NOT assert prose wording.
 
-Testing methodology: unit tests with direct file reads.
+Why no prose assertions (2026-08-11)
+------------------------------------
+This module used to assert ~70 exact substrings lifted from the templates
+("## CRITICAL: Continuity", "Files > Brain", "You're not a chatbot", "Good:",
+"getting to know a person", ...). Not one of those strings is read by anything
+in production — grepping ``backend/**/*.py`` for them returns only this test
+file. The templates are prose the AGENT reads, and they are rewritten
+constantly, so every edit broke a test that had never caught a defect. The
+dependency ran backwards: the document served the test.
+
+The same reasoning already retired the hardcoded token-budget tests that used to
+live here (2026-03-23: "System-default files evolve frequently; static
+thresholds produced false failures without catching real regressions"). It
+applies verbatim to prose substrings; it just was not generalised at the time.
+
+Worse, several substring tests had rotted into tautologies. When content moved
+out of STEERING.md into AGENT.md, five tests named ``test_*steering*`` were
+re-pointed at AGENT.md and weakened until they passed — ending up asserting
+that a governance document contains the string "MEMORY.md". They could not
+fail, and their names misreported what they covered.
+
+Where the real invariant lives
+------------------------------
+"The agent never boots without its constitution" is enforced where it belongs:
+``context_directory_loader.required_prompt_sections()`` (the SSOT) feeding
+``prompt_builder.assert_core_sections()`` — a line-anchored completeness gate
+that runs against the ASSEMBLED prompt at runtime and fails loud. It is driven
+by the spec list rather than by wording, so prose edits cannot break it and a
+genuinely missing section cannot slip past it.
+
+Testing methodology: direct file reads, parametrized off the ``CONTEXT_FILES``
+SSOT so adding or re-classifying a context file is covered automatically.
+
 Key invariants:
-- Each template preserves its correct marker (⚙️/👤/🤖)
-- Required Chinese directives are present where specified
-- Removed legacy content is absent
-- System-default files fit within token budget
+- Every file in ``CONTEXT_FILES`` ships a readable, non-empty template.
+- Ownership labelling never LIES: a system-owned template (edits destroyed on
+  next startup) says so; a runtime-owned one never claims to be a system default.
+- The memory-distill skill exists and declares the name its loader resolves.
 """
 import pytest
 from pathlib import Path
 
+from core.context_directory_loader import CONTEXT_FILES
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "context"
+SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
+# The only marker with a real consequence attached: it declares that edits to
+# this file are destroyed on the next startup.
+SYSTEM_DEFAULT_MARKER = "⚙️ SYSTEM DEFAULT"
+
+_SYSTEM_OWNED = [s.filename for s in CONTEXT_FILES if s.user_customized is False]
+_RUNTIME_OWNED = [s.filename for s in CONTEXT_FILES if s.user_customized is True]
 
 
 def _read_template(filename: str) -> str:
@@ -27,358 +67,98 @@ def _read_template(filename: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Marker verification
+# Templates exist and are not empty
 # ---------------------------------------------------------------------------
 
-class TestTemplateMarkers:
-    """Verify each template contains its correct inline comment marker."""
+class TestTemplatesExist:
+    """A file listed in the SSOT must ship a real template behind it."""
 
-    @pytest.mark.parametrize("filename", [
-        "SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md",
-    ])
-    def test_system_default_marker(self, filename: str):
+    @pytest.mark.parametrize("spec", CONTEXT_FILES, ids=lambda s: s.filename)
+    def test_template_is_readable_and_not_empty(self, spec):
+        """An emptied or deleted template is the one failure at this layer with
+        real blast radius: ``ensure_directory()`` would provision a blank file
+        and the agent would boot missing that slice of its context, silently.
+
+        Deliberately a non-empty check — not a size, section, or wording check.
+        The templates are meant to be rewritten freely; the only thing that must
+        never happen is one going to zero.
+        """
+        content = _read_template(spec.filename)
+        assert content.strip(), (
+            f"{spec.filename} (priority {spec.priority}, section "
+            f"'{spec.section_name}') has an empty template — the agent would "
+            "boot with this part of its context blank"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Ownership labelling must not contradict the spec
+# ---------------------------------------------------------------------------
+
+class TestOwnershipLabelling:
+    """The marker is the only in-file signal telling a reader whether their edits
+    survive a restart. Nothing in production parses it — ``ensure_directory()``
+    decides overwrite-vs-preserve from ``CONTEXT_FILES``, and
+    ``context_directory_loader`` says at :710 that the markers "are useful for
+    human editors". So presence for its own sake is not the invariant worth
+    testing; what matters is that a marker never CONTRADICTS the spec, because a
+    mislabelled file either destroys edits the reader believed were safe or
+    invites edits into a file that gets overwritten on the next startup.
+
+    Note: a MISSING marker is tolerated (SELF.md carries none today). A missing
+    label is a documentation gap; a wrong label is a lie, and only the lie can
+    cost someone their work.
+    """
+
+    @pytest.mark.parametrize("filename", _SYSTEM_OWNED)
+    def test_system_owned_declares_itself(self, filename: str):
         content = _read_template(filename)
-        assert "⚙️ SYSTEM DEFAULT" in content, (
-            f"{filename} missing ⚙️ SYSTEM DEFAULT marker"
+        assert SYSTEM_DEFAULT_MARKER in content, (
+            f"{filename} is user_customized=False — always overwritten from this "
+            f"template and chmod 0o444 — but carries no {SYSTEM_DEFAULT_MARKER} "
+            "marker, so a reader has no way to know their edits will be lost"
         )
 
-    @pytest.mark.parametrize("filename", [
-        "USER.md", "STEERING.md", "TOOLS.md", "KNOWLEDGE.md", "PROJECTS.md",
-    ])
-    def test_user_customized_marker(self, filename: str):
+    @pytest.mark.parametrize("filename", _RUNTIME_OWNED)
+    def test_runtime_owned_does_not_claim_system_default(self, filename: str):
         content = _read_template(filename)
-        assert "✏️ YOUR FILE" in content, (
-            f"{filename} missing ✏️ YOUR FILE marker"
-        )
-
-    def test_memory_agent_managed_marker(self):
-        content = _read_template("MEMORY.md")
-        assert "⚠️ AGENT-OWNED" in content, (
-            "MEMORY.md missing ⚠️ AGENT-OWNED marker"
+        assert SYSTEM_DEFAULT_MARKER not in content, (
+            f"{filename} is user_customized=True — copy-only-if-missing, the "
+            f"workspace copy is the source of truth — but carries the "
+            f"{SYSTEM_DEFAULT_MARKER} marker, telling the reader their edits "
+            "will be destroyed when they will actually persist"
         )
 
 
 # ---------------------------------------------------------------------------
-# SOUL.md content verification
-# ---------------------------------------------------------------------------
-
-class TestSoulTemplate:
-    """Verify SOUL.md has required OpenClaw-inspired content."""
-
-    def test_chinese_framing(self):
-        content = _read_template("SOUL.md")
-        assert "You're not a chatbot" in content
-        assert "becoming someone" in content
-
-    def test_good_bad_examples(self):
-        content = _read_template("SOUL.md")
-        assert "Good:" in content
-        assert "Bad:" in content
-
-    def test_continuity_section(self):
-        content = _read_template("SOUL.md")
-        assert "## 🚨 CRITICAL: Continuity" in content
-        assert "context files ARE your memory" in content
-
-
-# ---------------------------------------------------------------------------
-# IDENTITY.md content verification
-# ---------------------------------------------------------------------------
-
-class TestIdentityTemplate:
-    """Verify IDENTITY.md has avatar field and evolving identity guidance."""
-
-    def test_avatar_field(self):
-        content = _read_template("IDENTITY.md")
-        assert "Avatar:" in content or "avatar" in content.lower()
-
-    def test_evolving_identity(self):
-        content = _read_template("IDENTITY.md")
-        assert "Evolving Identity" in content or "evolving" in content.lower()
-
-
-# ---------------------------------------------------------------------------
-# AGENT.md content verification
-# ---------------------------------------------------------------------------
-
-class TestAgentTemplate:
-    """Verify AGENT.md has core governance structure, safety rules, and principles."""
-
-    def test_files_over_brain_directive(self):
-        content = _read_template("AGENT.md")
-        assert "Files > Brain" in content
-
-    def test_trash_over_rm_rule(self):
-        content = _read_template("AGENT.md")
-        assert "trash > rm" in content
-
-    def test_has_rules_section(self):
-        content = _read_template("AGENT.md")
-        # Three-Layer Governance: rules tagged with parent principle
-        assert "## Rules" in content
-
-    def test_has_intake_gate(self):
-        content = _read_template("AGENT.md")
-        assert "Intake Gate" in content
-
-    def test_has_coding_rules(self):
-        content = _read_template("AGENT.md")
-        assert "Coding" in content
-
-    def test_has_safety_section(self):
-        content = _read_template("AGENT.md")
-        assert "Safety" in content
-
-    def test_memory_writing_rules(self):
-        content = _read_template("AGENT.md")
-        assert "DailyActivity" in content
-        assert "MEMORY.md" in content
-
-
-# ---------------------------------------------------------------------------
-# USER.md content verification
-# ---------------------------------------------------------------------------
-
-class TestUserTemplate:
-    """Verify USER.md has Background section and humanistic footer."""
-
-    def test_background_section(self):
-        content = _read_template("USER.md")
-        assert "## Background" in content
-
-    def test_humanistic_footer(self):
-        content = _read_template("USER.md")
-        assert "getting to know a person" in content
-        assert "not building a dossier" in content
-
-
-# ---------------------------------------------------------------------------
-# STEERING.md content verification
-# ---------------------------------------------------------------------------
-
-class TestSteeringTemplate:
-    """Verify STEERING.md is a clean user-editable file (system content moved to AGENT.md)."""
-
-    def test_write_it_down_directive(self):
-        """Memory protocol details now live in AGENT.md, not STEERING.md."""
-        content = _read_template("AGENT.md")
-        assert "memory" in content.lower() or "MEMORY.md" in content
-
-    def test_no_mental_notes(self):
-        content = _read_template("STEERING.md")
-        assert "note important discoveries mentally" not in content
-
-    def test_two_tier_model(self):
-        """Two-tier memory model is documented in AGENT.md."""
-        content = _read_template("AGENT.md")
-        assert "DailyActivity" in content
-        assert "MEMORY.md" in content
-
-    def test_distillation_rules(self):
-        """Distillation rules are documented in AGENT.md."""
-        content = _read_template("AGENT.md")
-        assert "distill" in content.lower() or "MEMORY.md" in content
-
-    def test_updated_directory_structure(self):
-        """Session start references key files."""
-        content = _read_template("AGENT.md")
-        # New AGENT.md references DailyActivity in Session Start
-        assert "DailyActivity" in content
-        assert "MEMORY.md" in content
-        assert "STEERING.md" in content
-
-    def test_no_knowledge_base_reference(self):
-        content = _read_template("STEERING.md")
-        assert "Knowledge Base/" not in content
-
-    def test_file_saving_rules(self):
-        """AGENT.md references Knowledge directory via DDD enrichment."""
-        content = _read_template("AGENT.md")
-        # New AGENT.md references Knowledge in DDD enrichment and self-enhancement
-        assert "Knowledge" in content
-        assert "KNOWLEDGE.md" in content
-
-
-# ---------------------------------------------------------------------------
-# MEMORY.md content verification
-# ---------------------------------------------------------------------------
-
-class TestMemoryTemplate:
-    """Verify MEMORY.md has two-tier model guidance and distillation."""
-
-    def test_two_tier_guidance(self):
-        content = _read_template("MEMORY.md")
-        assert "DailyActivity" in content
-        assert "two-tier" in content.lower() or "Two-tier" in content
-
-    def test_distillation_instructions(self):
-        content = _read_template("MEMORY.md")
-        assert "distill" in content.lower()
-
-
-# ---------------------------------------------------------------------------
-# KNOWLEDGE.md content verification
-# ---------------------------------------------------------------------------
-
-class TestKnowledgeTemplate:
-    """Verify KNOWLEDGE.md is restructured as Knowledge Directory index."""
-
-    def test_no_old_sections(self):
-        content = _read_template("KNOWLEDGE.md")
-        assert "## Tech Stack" not in content
-        assert "## Coding Conventions" not in content
-        assert "## Architecture Notes" not in content
-        assert "## Reference" not in content
-
-    def test_subfolder_sections(self):
-        content = _read_template("KNOWLEDGE.md")
-        assert "Notes" in content
-        assert "Reports" in content
-        assert "Meetings" in content
-        assert "Library" in content
-        assert "Archives" in content
-        assert "DailyActivity" in content
-
-    def test_index_guidance(self):
-        content = _read_template("KNOWLEDGE.md")
-        assert "index" in content.lower() or "Index" in content
-
-
-# ---------------------------------------------------------------------------
-# PROJECTS.md content verification
-# ---------------------------------------------------------------------------
-
-class TestProjectsTemplate:
-    """Verify PROJECTS.md has project folder linking guidance."""
-
-    def test_folder_linking(self):
-        content = _read_template("PROJECTS.md")
-        assert "SwarmWS/Projects/" in content or "Projects/" in content
-        assert "Folder:" in content or "folder" in content.lower()
-
-
-# ---------------------------------------------------------------------------
-# Token budget verification — REMOVED
-# ---------------------------------------------------------------------------
-# Hardcoded token budget tests removed (2026-03-23).  System-default files
-# evolve frequently; static thresholds (4000/3500) produced false failures
-# without catching real regressions.  Token budgets are enforced dynamically
-# by ContextDirectoryLoader's budget tiers, not by unit-test constants.
-
-
-# ---------------------------------------------------------------------------
-# Session-start Open Threads verification (Req 5.2, 5.3)
-# ---------------------------------------------------------------------------
-
-SKILLS_DIR = Path(__file__).parent.parent / "skills"
-
-
-class TestSessionStartOpenThreads:
-    """Verify AGENT.md and STEERING.md use session-start Open Threads review."""
-
-    def test_agent_md_session_start_open_threads(self):
-        """Req 5.2: AGENT.md contains Session Start section referencing open threads."""
-        content = _read_template("AGENT.md")
-        assert "Session Start" in content, (
-            "AGENT.md missing 'Session Start' section"
-        )
-        assert "open threads" in content.lower(), (
-            "AGENT.md missing open threads reference"
-        )
-
-    def test_agent_md_no_session_end_open_threads(self):
-        """Req 5.2: AGENT.md should NOT have 'At session end' for Open Threads."""
-        content = _read_template("AGENT.md")
-        assert "At session end" not in content, (
-            "AGENT.md still contains 'At session end' directive"
-        )
-
-    def test_steering_md_extended_memory_protocol(self):
-        """Req 5.3: Memory protocol details now live in AGENT.md (STEERING.md is user-editable)."""
-        content = _read_template("AGENT.md")
-        assert "memory" in content.lower() or "MEMORY.md" in content, (
-            "AGENT.md missing memory protocol content"
-        )
-
-    def test_steering_md_no_session_end_block(self):
-        """Req 5.3: STEERING.md should NOT have 'At session end (if asked)' block."""
-        content = _read_template("STEERING.md")
-        assert "At session end (if asked)" not in content, (
-            "STEERING.md still contains 'At session end (if asked)' block"
-        )
-
-    def test_steering_md_distillation_in_place(self):
-        """Req 5.5: Distillation rules now live in AGENT.md (STEERING.md is user-editable)."""
-        content = _read_template("AGENT.md")
-        assert "distill" in content.lower() or "MEMORY.md" in content, (
-            "AGENT.md missing distillation directive"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Distillation skill verification (Req 3.1, 3.6)
+# memory-distill skill: only what the loader machine-reads
 # ---------------------------------------------------------------------------
 
 class TestDistillationSkill:
-    """Verify s_memory-distill/SKILL.md exists and contains required content."""
+    """MEMORY.md distillation is invoked as a named skill, so exactly two things
+    here are machine-read and worth asserting: the file sits at the path the
+    skill loader scans, and its frontmatter declares the name that resolves.
+
+    The body is instructions for the agent (detection thresholds, archiving
+    windows, the locked_write requirement) and is NOT asserted. Those rules are
+    enforced by the code that implements them — asserting that the words appear
+    in a markdown file proves nothing about whether the behaviour holds.
+    """
+
+    SKILL_PATH = SKILLS_DIR / "s_memory-distill" / "SKILL.md"
 
     def test_skill_file_exists(self):
-        """Req 3.1: SKILL.md exists at the expected path."""
-        skill_path = SKILLS_DIR / "s_memory-distill" / "SKILL.md"
-        assert skill_path.is_file(), (
-            f"Distillation skill not found at {skill_path}"
+        assert self.SKILL_PATH.is_file(), (
+            f"memory-distill skill not found at {self.SKILL_PATH} — the skill "
+            "loader scans this path, so a move or rename silently disables it"
         )
 
-    def test_skill_has_yaml_frontmatter(self):
-        """SKILL.md has YAML frontmatter with name and description."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert content.startswith("---"), "SKILL.md missing YAML frontmatter"
-        assert "name: memory-distill" in content
-
-    def test_skill_has_detection_section(self):
-        """Req 3.2/3.3: SKILL.md has Detection section with threshold."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "Detection" in content
-        assert "≤ 3" in content or "<= 3" in content or "≤3" in content
-
-    def test_skill_has_extraction_section(self):
-        """Req 3.4: SKILL.md has Extraction section."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "Extraction" in content
-        assert "key decisions" in content.lower()
-        assert "lessons" in content.lower()
-
-    def test_skill_has_writing_section(self):
-        """Req 3.5/3.8: SKILL.md has Writing section with locked_write."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "Writing" in content or "MEMORY.md" in content
-        assert "locked_write" in content
-
-    def test_skill_has_marking_section(self):
-        """Req 3.6: SKILL.md references distilled: true frontmatter marking."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "distilled: true" in content
-        assert "distilled_date" in content
-
-    def test_skill_has_archiving_section(self):
-        """Req 3.7: SKILL.md has Archiving section with age thresholds."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "Archiving" in content or "Archives" in content
-        assert "30" in content  # 30-day threshold
-        assert "90" in content  # 90-day threshold
-
-    def test_skill_has_open_threads_section(self):
-        """Req 5.4: SKILL.md has Open Threads cross-reference."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "Open Threads" in content
-
-    def test_skill_is_silent(self):
-        """Req 3.9: SKILL.md specifies silent operation."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "silent" in content.lower()
-
-    def test_skill_has_fallback_section(self):
-        """Req 3.5: SKILL.md has fallback ## Distilled section."""
-        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
-        assert "Distilled" in content
-        assert "fallback" in content.lower()
+    def test_frontmatter_declares_loader_name(self):
+        content = self.SKILL_PATH.read_text(encoding="utf-8")
+        assert content.startswith("---"), (
+            "SKILL.md must open with YAML frontmatter — the loader parses it"
+        )
+        assert "name: memory-distill" in content, (
+            "frontmatter must declare the name the skill loader resolves; "
+            "changing it unregisters the skill without any other error"
+        )
