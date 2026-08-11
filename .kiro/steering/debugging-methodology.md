@@ -23,20 +23,16 @@ Rules for diagnosing issues in this project. Learned from real incidents.
    4. `tail -20 ~/.swarm-ai/logs/backend-stderr.log` — crash output?
    5. If agent not loaded: `launchctl load ~/Library/LaunchAgents/com.swarmai.backend.plist`
 
-4. **Two isolated systems — never cross-contaminate:**
-   - SwarmAI: port 18321, `~/.swarm-ai/`, `com.swarmai.backend`
-   - swarm-ai-internal: port 18421, `~/.swarm-ai-internal/`, `com.amazon.swarmai.backend`
-
 ## General Debugging Discipline
 
-5. **Don't say "transient" without evidence**
+4. **Don't say "transient" without evidence**
    - If the user can reproduce it, it's not transient
    - Reproduce it yourself or trace the exact code path
 
-6. **Trace errors to their source, don't patch symptoms**
+5. **Trace errors to their source, don't patch symptoms**
    - `PermissionError: ''` → who passed the empty string? → which variable? → where should it be defined?
    - Follow the call chain backwards, don't guess forward
 
-7. **Refactoring verification**
+6. **Refactoring verification**
    - When a variable is renamed/moved: grep ALL consumers, not just the definition
    - `set -u` in scripts catches undefined variables — recommend adding it

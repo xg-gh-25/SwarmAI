@@ -75,10 +75,6 @@ Project A discovers that a specific API needs retry with exponential backoff. Pr
 > is a **Product Domain Brain — a control plane** that **OWNs cognition** and **GOVERNs
 > the physical**. The cultivation engine (§8) grows one part of it (② Knowledge); recall
 > (§7) retrieves from it; but the *thing itself* is the brain.
->
-> Normative SSOT: the **DDD Agent-Brain Paradigm** design (SwarmAI-internal, §3.5–§3.7).
-> This section summarizes the publicly-shareable shape; the internal paradigm doc governs
-> the full normative spec.
 
 ### 3.1 The one-line definition
 
@@ -150,7 +146,6 @@ by adding a brain "type" — and never by adding a seventh section.
 > Every DDD is organized into **exactly six sections** — the SAME structure for every user
 > and every domain. ①–④ are **OWNed** (cognitive assets, shipped in full); ⑤–⑥ **GOVERN**
 > the physical (data/pointers + a shipped mechanism). Only the governed-asset set varies.
-> Normative SSOT: the **DDD Agent-Brain Paradigm** design (SwarmAI-internal, §3.6).
 
 ```
 DDD = Product Domain BRAIN (control plane)
@@ -322,8 +317,7 @@ The interface layer alone is documentation — and documentation decays. Layer 2
 
 > The single idea that separates a DDD from a document: **a belief is not left as prose to be
 > remembered — it graduates into a mechanism that enforces itself.** This is the 养成 (cultivation)
-> ladder. Fuller treatment: PRODUCT.md "Design Philosophy — When Beliefs Become Enforcement" +
-> the **DDD Agent-Brain Paradigm** design §4 (SwarmAI-internal; the ladder is normative there).
+> ladder. Fuller treatment: PRODUCT.md "Design Philosophy — When Beliefs Become Enforcement".
 
 ### 6.1 The 养成 ladder — prose → judgment → gate
 
