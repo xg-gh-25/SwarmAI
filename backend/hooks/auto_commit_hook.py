@@ -49,6 +49,28 @@ EXTENSION_CATEGORIES: dict[str, str] = {
 
 DEFAULT_CATEGORY = "chore"
 
+# CODE file extensions — the R1-governed surface. A tracked file with one of
+# these extensions is source code that must not be auto-committed un-reviewed
+# (bypassing the Bash adversarial-commit gate). Extension-based (NOT a path
+# prefix) so a code file ANYWHERE is caught — incl. the in-SwarmWS pipeline
+# engine (Projects/.../engine/*.py) and pollinate scripts under Knowledge/ —
+# while auto-generated sediment (DailyActivity/Signals/.context — .md/.json,
+# and .html/.yaml which SwarmWS tracks as report OUTPUT + skill manifest DATA,
+# not R1 source) is never withheld.
+#
+# Why an extension set (not "withhold anything not in `covered`"): auto_commit
+# does `git add -A`, which stages post-review auto-sediment (DailyActivity,
+# run.json, index files) that is legitimately NOT in the reviewer's `covered`
+# diff — inverting the axis would withhold that sediment and break the hook's
+# core job. So we withhold only the CODE class. The set is kept aligned to
+# what SwarmWS actually tracks (verified via `git ls-files`): .js/.mjs/.cjs
+# are all present-or-plausible JS variants; the .py/.ts/.tsx bulk is the
+# real engine/service surface. (Gate-2 MED: .mjs was a live tracked miss.)
+_CODE_EXTENSIONS = frozenset(
+    {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+     ".go", ".rs", ".java", ".rb", ".sh"}
+)
+
 
 class WorkspaceAutoCommitHook:
     """Smart git commit at session close with conventional commit messages.
@@ -90,11 +112,90 @@ class WorkspaceAutoCommitHook:
         # THIS session's commit (DEC30). Computed here (async ctx) so _smart_commit
         # stays a pure thread body.
         exclude = self._other_live_sessions_touched(context.session_id)
+        # R1 (auto-commit door): the subprocess commit below BYPASSES the Bash
+        # adversarial-commit gate. The un-reviewed-code withhold is computed
+        # INSIDE _smart_commit AFTER `git add -A` (that's when the staged set
+        # exists), so we thread the session_id through — not a precomputed set.
+        session_id = context.session_id
         if self._git_lock:
             async with self._git_lock:
-                await asyncio.to_thread(self._smart_commit, ws_path, exclude)
+                await asyncio.to_thread(self._smart_commit, ws_path, exclude, session_id)
         else:
-            await asyncio.to_thread(self._smart_commit, ws_path, exclude)
+            await asyncio.to_thread(self._smart_commit, ws_path, exclude, session_id)
+
+    @staticmethod
+    def _uncovered_code_paths(ws_path: str, session_id: str) -> set[str]:
+        """Absolute paths of STAGED CODE files this session's adversarial review
+        did NOT cover — to be unstaged before the auto-commit (R1 door parity).
+
+        MUST be called AFTER `git add -A` — it reads the staged set (`git diff
+        --cached`), which is empty pre-stage.
+
+        Mirrors the Bash adversarial-commit gate's coverage semantics EXACTLY
+        (P8 — one brain, many doors): reads the SAME session markers via
+        ``_session_adversarial_coverage`` and treats the SAME cases as
+        "commit all" (withhold NOTHING):
+          - no marker (has_marker=False) → non-pipeline session → not gated here
+            (this door deliberately does not gate marker-less sessions, so
+            auto_commit keeps sedimenting Knowledge/.context every session);
+          - unbounded marker (path-less) → back-compat, matches the gate's approve;
+          - coverage error / empty session_id → ``_session_adversarial_coverage``
+            returns has_unbounded=True → fail-open, matches gate.
+        Otherwise withhold every staged CODE path (by ``_CODE_EXTENSIONS``) whose
+        realpath is NOT in the reviewed ``covered`` set. Non-code (sediment,
+        .md/.json/output) is NEVER withheld. Fail-safe: ANY error → empty set
+        (fall back to prior sweep behavior — never crash the commit).
+        """
+        if not session_id:
+            return set()
+        try:
+            from core.security_hooks import _session_adversarial_coverage
+
+            has_marker, covered, has_unbounded = _session_adversarial_coverage(session_id)
+            if not has_marker or has_unbounded:
+                return set()  # not gated / unbounded / fail-open → withhold nothing
+
+            # `git diff --cached --name-only` emits paths relative to the REPO
+            # ROOT, and `covered` holds realpaths resolved against that root — so
+            # resolve staged paths against the root, NOT ws_path (defense-in-depth
+            # vs a future where the cached workspace path is a repo SUBDIR, which
+            # would otherwise make every code path look uncovered → over-withhold).
+            root = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=ws_path, capture_output=True, text=True,
+                timeout=WorkspaceAutoCommitHook.GIT_TIMEOUT,
+            )
+            base = root.stdout.strip() if root.returncode == 0 and root.stdout.strip() else ws_path
+
+            # Staged paths (name-only, NUL-safe), resolved to absolute realpaths to
+            # match `covered` (which holds realpath'd absolutes from the marker).
+            staged = subprocess.run(
+                ["git", "diff", "--cached", "--name-only", "-z"],
+                cwd=ws_path, capture_output=True, text=True,
+                timeout=WorkspaceAutoCommitHook.GIT_TIMEOUT,
+            )
+            if staged.returncode != 0:
+                return set()
+            withhold: set[str] = set()
+            for rel in staged.stdout.split("\0"):
+                rel = rel.strip()
+                if not rel:
+                    continue
+                if os.path.splitext(rel)[1].lower() not in _CODE_EXTENSIONS:
+                    continue  # only CODE is gated here; sediment always commits
+                ap = os.path.realpath(os.path.join(base, rel))
+                if ap not in covered:
+                    withhold.add(ap)
+            if withhold:
+                logger.warning(
+                    "auto_commit: withholding %d un-reviewed code path(s) from "
+                    "auto-commit (R1 door): %s",
+                    len(withhold), ", ".join(sorted(withhold)[:5]),
+                )
+            return withhold
+        except Exception as e:  # never crash the commit path
+            logger.debug("auto_commit: uncovered-code computation failed: %s", e)
+            return set()
 
     @staticmethod
     def _other_live_sessions_touched(current_session_id: str) -> set[str]:
@@ -212,7 +313,12 @@ class WorkspaceAutoCommitHook:
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning("auto_commit: unstage of sibling paths failed (non-fatal): %s", e)
 
-    def _smart_commit(self, ws_path: str, exclude: set[str] | None = None) -> None:
+    def _smart_commit(
+        self,
+        ws_path: str,
+        exclude: set[str] | None = None,
+        session_id: str = "",
+    ) -> None:
         """Run git operations in a background thread.
 
         All subprocess calls use ``GIT_TIMEOUT`` to fail fast on lock
@@ -222,6 +328,10 @@ class WorkspaceAutoCommitHook:
         ``exclude``: absolute paths another live session is mid-edit — unstaged
         after the bulk add so a sibling's in-flight work is never swept into this
         session's commit (R29/DEC30). Empty/None → prior ``git add -A`` behavior.
+
+        ``session_id``: this session's id, used AFTER staging to unstage any
+        un-reviewed CODE path (R1 auto-commit door — see ``_uncovered_code_paths``).
+        Empty → that check is skipped (prior behavior).
         """
         # 0. Clean stale lock from previous crash
         self._cleanup_stale_git_lock(ws_path)
@@ -252,8 +362,17 @@ class WorkspaceAutoCommitHook:
             # in-flight edits. `git reset` only unstages (working tree untouched), so
             # the sibling's changes stay on disk for ITS own commit. Fail-safe: a reset
             # error is logged, not fatal — worst case is the prior sweep behavior.
-            if exclude:
-                self._unstage_paths(ws_path, exclude)
+            #
+            # 2c. R1 auto-commit door: also unstage any staged CODE path this
+            # session's adversarial review did NOT cover (computed AFTER `git add
+            # -A`, when the staged set exists). Un-reviewed code stays on disk for
+            # a later gated commit; sediment (.md/.json) is never withheld. Union
+            # into the same unstage set so both are reset in one pass.
+            to_unstage = set(exclude) if exclude else set()
+            if session_id:
+                to_unstage |= self._uncovered_code_paths(ws_path, session_id)
+            if to_unstage:
+                self._unstage_paths(ws_path, to_unstage)
 
             # 3. Analyze staged changes
             diff_stat = subprocess.run(
