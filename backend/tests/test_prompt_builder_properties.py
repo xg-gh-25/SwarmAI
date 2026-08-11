@@ -693,6 +693,42 @@ class TestSystemPromptFaultIsolation:
         assert any(r.levelno >= logging.ERROR for r in caplog.records), \
             "core-context failure must log at ERROR (fail-loud), not warning"
 
+    def test_ac4_degraded_signal_reaches_metadata(self, tmp_path):
+        """REVIEW MED (multi-specialist): the degraded flag must not be write-only.
+        It must be mirrored into _system_prompt_metadata (which IS copied downstream
+        to session-init/TSCC), so the fail-loud signal is consumable, not just a log."""
+        import unittest.mock as mock
+        with mock.patch(
+            "core.context_directory_loader.ContextDirectoryLoader.load_all",
+            side_effect=RuntimeError("core load boom"),
+        ):
+            cfg = self._run_build(tmp_path)
+        meta = cfg.get("_system_prompt_metadata") or {}
+        assert meta.get("degraded"), (
+            "degraded signal must be surfaced in _system_prompt_metadata (consumable "
+            "downstream), not only in agent_config['_context_degraded'] / logs"
+        )
+        assert meta["degraded"] == cfg.get("_context_degraded")
+
+    def test_ac4_stale_degraded_cleared_on_reentry(self, tmp_path):
+        """REVIEW RED-TEAM MED: build_system_prompt can be called twice on the SAME
+        agent_config (resume-fallback). A failed call #1 must not leave a stale
+        _context_degraded that makes a successful call #2 report a healthy prompt as
+        degraded. The flag must be a fresh per-build computation."""
+        import asyncio
+        import unittest.mock as mock
+        builder = _make_builder()
+        agent_config: dict = {"_context_degraded": "core_context_failed: stale from prior build"}
+        with mock.patch("core.proactive_intelligence.get_focus_keywords", return_value=""):
+            asyncio.run(builder.build_system_prompt(
+                agent_config=agent_config, working_directory=str(tmp_path),
+            ))
+        # call #2 succeeded (real template workspace) → stale flag must be gone
+        assert agent_config.get("_context_degraded") is None, \
+            "stale degraded flag survived a successful rebuild (resume-fallback false-positive)"
+        meta = agent_config.get("_system_prompt_metadata") or {}
+        assert not meta.get("degraded"), "stale degraded leaked into fresh metadata"
+
     # ── AC5: no double-append of core ───────────────────────────────────
     def test_ac5_core_committed_exactly_once(self, tmp_path):
         """After early-commit + ephemeral-append refactor, each core header must

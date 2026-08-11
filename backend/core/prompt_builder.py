@@ -826,6 +826,13 @@ class PromptBuilder:
         # Reset system_prompt to avoid duplication when _build_options is
         # called twice with the same agent_config (resume-fallback path).
         agent_config["system_prompt"] = ""
+        # Clear any stale degraded flag from a PRIOR build on this same
+        # agent_config (resume-fallback re-entry, run_e47c1cfb REVIEW RED-TEAM MED):
+        # the degraded signal must be a fresh per-build computation, exactly like
+        # the fresh prompt_metadata below. Without this, a failed call #1 leaves the
+        # flag set, and a fully-successful call #2 would still be reported degraded
+        # (the metadata mirror below would copy the stale flag into a healthy prompt).
+        agent_config.pop("_context_degraded", None)
         prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         context_text = ""
         # Explicit core-commit flag (run_e47c1cfb REVIEW MEDIUM#2): the except
@@ -1354,9 +1361,15 @@ class PromptBuilder:
         if _gate_applies:
             missing = assert_core_sections(context_text_final)
             if missing:
-                agent_config["_context_degraded"] = (
-                    f"missing_core_sections: {','.join(missing)}"
-                )
+                # Preserve a more-specific reason already set by the except handler
+                # (core_context_failed: <exc> retains the root-cause exception).
+                # core failure ALWAYS implies missing sections, so only set the
+                # generic gate reason when nothing more specific exists — else the
+                # symptom would clobber the cause (REVIEW RED-TEAM LOW).
+                if not agent_config.get("_context_degraded"):
+                    agent_config["_context_degraded"] = (
+                        f"missing_core_sections: {','.join(missing)}"
+                    )
                 logger.error(
                     "SYSTEM PROMPT INCOMPLETE — core context section(s) missing: %s. "
                     "The agent would run without part of its constitution. "
@@ -1364,6 +1377,16 @@ class PromptBuilder:
                     "assembly, do NOT ship a degraded prompt silently.",
                     ", ".join(missing),
                 )
+
+        # Mirror the degraded signal into the metadata dict (REVIEW MED,
+        # multi-specialist confirmed: the flag was write-only — nothing downstream
+        # read agent_config['_context_degraded']). _system_prompt_metadata IS copied
+        # downstream (session init / TSCC viewer), so surfacing it here makes the
+        # fail-loud signal consumable, not just a log line. Set from either source:
+        # the except-handler (core_context_failed) or the gate (missing_core_sections).
+        _degraded = agent_config.get("_context_degraded")
+        if _degraded:
+            prompt_metadata["degraded"] = _degraded
 
         if context_text_final:
             return f"{builder_text}\n\n{context_text_final}"
