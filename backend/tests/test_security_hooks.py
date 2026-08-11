@@ -772,3 +772,144 @@ class TestAdversarialCommitGateEvidence:
         gate = self._mk_gate(tmp_path, monkeypatch)
         out = await gate(self._bash("git status"), None, None)
         assert out.get("decision") == "approve"
+
+
+class TestAdversarialGateDiffBinding:
+    """Plan A: the gate binds adversarial evidence to the reviewed PATH-SET.
+    Covers subset-approve, uncovered-deny, -a/pathspec/-o pending folding, the
+    []-vs-key-absent union semantics, and timeout fail-open."""
+
+    @staticmethod
+    def _git(d, *args, env=None):
+        import subprocess, os
+        e = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+             "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(d), "PATH": os.environ.get("PATH", "")}
+        subprocess.run(["git", "-C", str(d), *args], env=e, capture_output=True, check=True)
+
+    def _repo(self, tmp_path):
+        import subprocess, os
+        d = tmp_path / "repo"; d.mkdir()
+        self._git(d, "init", "-q")
+        (d / "a.py").write_text("1\n"); (d / "b.py").write_text("2\n")
+        self._git(d, "add", "-A"); self._git(d, "commit", "-q", "-m", "init")
+        return d
+
+    def _adv_marker(self, audit, sid, reviewed_paths=None):
+        import json
+        audit.mkdir(parents=True, exist_ok=True)
+        payload = {"adversarial": True, "session_id": sid}
+        if reviewed_paths is not None:
+            payload["reviewed_paths"] = reviewed_paths
+        (audit / f"session_{sid}_adv_1.marker").write_text(json.dumps(payload))
+
+    def _gate(self, audit, monkeypatch, sid="s"):
+        import core.security_hooks as sh
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
+        return sh.create_adversarial_commit_gate({"sdk_session_id": sid})
+
+    async def _run(self, gate, repo, cmd):
+        return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(repo)}, None, None)
+
+    @staticmethod
+    def _approved(r):
+        return r.get("decision") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_covered_paths_approve(self, tmp_path, monkeypatch):
+        import os
+        repo = self._repo(tmp_path)
+        (repo / "a.py").write_text("999\n")
+        self._git(repo, "add", "a.py")
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])
+        gate = self._gate(audit, monkeypatch)
+        assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
+
+    @pytest.mark.asyncio
+    async def test_uncovered_new_file_denies(self, tmp_path, monkeypatch):
+        import os
+        repo = self._repo(tmp_path)
+        (repo / "c.py").write_text("new\n")     # NEW file the review never saw
+        self._git(repo, "add", "c.py")
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])  # only reviewed a.py
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -m x")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    @pytest.mark.asyncio
+    async def test_commit_dash_a_folds_working_tree(self, tmp_path, monkeypatch):
+        """git commit -am sweeps tracked mods that were never staged → must be in pending."""
+        import os
+        repo = self._repo(tmp_path)
+        (repo / "b.py").write_text("changed\n")  # modified, NOT staged
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])  # reviewed a.py only
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -am wip")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"  # b.py uncovered
+
+    @pytest.mark.asyncio
+    async def test_commit_positional_pathspec_folds(self, tmp_path, monkeypatch):
+        """git commit <path> commits that path bypassing the index → must be in pending."""
+        import os
+        repo = self._repo(tmp_path)
+        (repo / "b.py").write_text("changed\n")
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -m x b.py")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    @pytest.mark.asyncio
+    async def test_empty_reviewed_marker_alone_denies(self, tmp_path, monkeypatch):
+        """A []-marker (reviewed nothing) must NOT be a blank check — covers nothing."""
+        import os
+        repo = self._repo(tmp_path)
+        (repo / "a.py").write_text("999\n"); self._git(repo, "add", "a.py")
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", [])  # reviewed nothing
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -m x")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    @pytest.mark.asyncio
+    async def test_union_empty_plus_pathful_not_poisoned(self, tmp_path, monkeypatch):
+        """union([], [a.py]) == {a.py} — an empty marker must not poison coverage."""
+        import os, json
+        repo = self._repo(tmp_path)
+        (repo / "a.py").write_text("999\n"); self._git(repo, "add", "a.py")
+        audit = tmp_path / "audit"; audit.mkdir(parents=True)
+        (audit / "session_s_adv_1.marker").write_text(json.dumps({"adversarial": True, "session_id": "s", "reviewed_paths": []}))
+        (audit / "session_s_adv_2.marker").write_text(json.dumps({"adversarial": True, "session_id": "s", "reviewed_paths": [os.path.realpath(str(repo / "a.py"))]}))
+        gate = self._gate(audit, monkeypatch)
+        assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
+
+    @pytest.mark.asyncio
+    async def test_pathless_marker_is_unbounded(self, tmp_path, monkeypatch):
+        """A key-absent (path-less) marker = unbounded coverage (back-compat)."""
+        repo = self._repo(tmp_path)
+        (repo / "c.py").write_text("new\n"); self._git(repo, "add", "c.py")
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", None)  # no reviewed_paths key
+        gate = self._gate(audit, monkeypatch)
+        assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
+
+    @pytest.mark.asyncio
+    async def test_non_git_cwd_fail_open(self, tmp_path, monkeypatch):
+        """Pending uncomputable (not a git repo) → fail-open approve (marker exists)."""
+        nongit = tmp_path / "plain"; nongit.mkdir()
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", ["/some/reviewed/path.py"])
+        gate = self._gate(audit, monkeypatch)
+        assert self._approved(await self._run(gate, nongit, "git commit -m x")) is True
+
+    @pytest.mark.asyncio
+    async def test_no_marker_still_denies(self, tmp_path, monkeypatch):
+        """Plan B parity: no adversarial marker at all → deny."""
+        repo = self._repo(tmp_path)
+        (repo / "a.py").write_text("9\n"); self._git(repo, "add", "a.py")
+        audit = tmp_path / "audit"; audit.mkdir(parents=True)
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -m x")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"

@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -1797,14 +1798,160 @@ def _session_has_adversarial_evidence(session_id: str) -> bool:
         return True  # fail open on FS error
 
 
+_GATE_GIT_TIMEOUT = 5  # a gate that shells git must never hang the commit (bash_syntax_guard discipline)
+
+
+def _gate_repo_root_for(dir_path: str) -> str | None:
+    """Canonical repo-root resolver — MUST match runtime_hooks._repo_root_for so
+    the gate's absolute paths compare byte-for-byte with the marker's. realpath of
+    `git -C <dir> rev-parse --show-toplevel`, or None if not a repo / git error."""
+    if not dir_path:
+        return None
+    try:
+        r = subprocess.run(
+            ["git", "-C", dir_path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=_GATE_GIT_TIMEOUT,
+        )
+        if r.returncode != 0:
+            return None
+        top = r.stdout.strip()
+        return os.path.realpath(top) if top else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
+    """The set of ABSOLUTE paths a `git commit` is about to commit, or None if
+    uncomputable (not a repo / git error / timeout → gate fails OPEN). Folds in
+    EVERY sweep form a commit can take (Gate-1 round-2): staged (`--cached`),
+    `-a/--all` (tracked working-tree mods), positional pathspec (`git commit foo.py`),
+    and `-o/--only <path>`. Missing any form is a coverage bypass."""
+    import shlex as _shlex
+    root = _gate_repo_root_for(dir_path)
+    if root is None:
+        return None
+    try:
+        tokens = _shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+
+    def _diff(*extra: str) -> list[str] | None:
+        try:
+            r = subprocess.run(
+                ["git", "-C", root, "diff", "--name-only", *extra],
+                capture_output=True, text=True, timeout=_GATE_GIT_TIMEOUT,
+            )
+            if r.returncode != 0:
+                return None
+            return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    rels: set[str] = set()
+    staged = _diff("--cached")
+    if staged is None:
+        return None  # git couldn't answer → uncomputable → caller fails open
+    rels.update(staged)
+
+    # Decode the commit's flags/pathspec. Walk tokens AFTER the `commit` subcommand.
+    dash_a = False
+    pathspecs: list[str] = []
+    only_paths: list[str] = []
+    try:
+        ci = tokens.index("commit")
+    except ValueError:
+        ci = 0
+    i = ci + 1
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--":
+            pathspecs.extend(tokens[i + 1:]); break
+        if t.startswith("--"):
+            if t in ("--all",):
+                dash_a = True
+            elif t in ("--only",):
+                if i + 1 < len(tokens):
+                    only_paths.append(tokens[i + 1]); i += 1
+            elif t in ("--message", "--author", "--date", "--reuse-message",
+                       "--reedit-message", "--fixup", "--squash", "--template",
+                       "--gpg-sign", "--cleanup"):
+                i += 1  # option that consumes the next token
+            # other --flags (e.g. --amend, --no-edit) take no path arg
+        elif t.startswith("-") and len(t) > 1:
+            cluster = t[1:]
+            if "a" in cluster:
+                dash_a = True
+            if "o" in cluster and i + 1 < len(tokens):
+                only_paths.append(tokens[i + 1]); i += 1
+            elif "m" in cluster and not cluster.endswith("m"):
+                pass  # -m bundled with value-less flags; value is a separate token only if trailing
+            if cluster.endswith("m") and i + 1 < len(tokens):
+                i += 1  # -m <msg> / -am <msg> — skip the message token
+        else:
+            pathspecs.append(t)  # positional pathspec
+        i += 1
+
+    if dash_a:
+        wt = _diff()  # tracked working-tree modifications -a will sweep
+        if wt is None:
+            return None
+        rels.update(wt)
+    for p in pathspecs + only_paths:
+        # a pathspec names a committed path directly (bypasses the index)
+        rels.add(p)
+
+    out: set[str] = set()
+    for rel in rels:
+        ap = rel if os.path.isabs(rel) else os.path.join(root, rel)
+        out.add(os.path.realpath(ap))
+    return out
+
+
+def _session_adversarial_coverage(session_id: str):
+    """Return (has_marker, covered_abs_paths, has_unbounded) for this session's
+    adversarial markers. `has_unbounded` is True iff SOME marker lacks the
+    reviewed_paths KEY (git-unavailable at review time = unbounded, back-compat).
+    A marker with reviewed_paths == [] contributes the EMPTY set to `covered` and
+    does NOT set has_unbounded — the []-vs-key-absent distinction is by KEY
+    PRESENCE, never truthiness (Gate-1 round-2 #3). Fail-open signalled by the
+    caller; this returns (True, set(), True) on OSError so the gate approves."""
+    covered: set[str] = set()
+    has_marker = False
+    has_unbounded = False
+    if not session_id:
+        return (True, covered, True)  # cannot scope → treat as unbounded (fail-open)
+    try:
+        if not _AGENT_AUDIT_DIR.is_dir():
+            return (False, covered, False)
+        pat = re.compile(rf"^session_{re.escape(session_id)}_adv_\d+\.marker$")
+        for p in _AGENT_AUDIT_DIR.iterdir():
+            if not pat.match(p.name):
+                continue
+            has_marker = True
+            try:
+                data = json.loads(p.read_text())
+            except (OSError, json.JSONDecodeError):
+                has_unbounded = True  # unreadable marker → don't false-block
+                continue
+            if "reviewed_paths" not in data:      # KEY ABSENT → unbounded
+                has_unbounded = True
+            else:
+                covered.update(data.get("reviewed_paths") or [])  # [] contributes nothing
+        return (has_marker, covered, has_unbounded)
+    except OSError:
+        return (True, covered, True)  # FS error → fail open
+
+
 def create_adversarial_commit_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate that DENYs `git commit` when NO
-    ADVERSARIAL-review SubagentStop marker exists for this session — the R1 "no
-    commit without adversarial review" structural backstop. A base SubagentStop
-    marker (any sub-agent ran) no longer suffices: only a session_<sid>_adv_
-    marker (an adversarial-intent sub-agent completed) does. session_context is
-    the mutable dict SessionUnit updates with the live sdk_session_id (read at
-    call time, not bind time)."""
+    """Factory: PreToolUse (Bash) gate that DENYs `git commit` unless an
+    ADVERSARIAL-review sub-agent COMPLETED this session AND its review covered the
+    paths being committed (Plan A diff-binding). Coverage = the pending-commit
+    path-set (staged + -a + pathspec + -o) must be a subset of the union of the
+    session's adversarial markers' reviewed_paths — UNLESS some marker is path-less
+    (git-unavailable at review time → unbounded, back-compat) or the pending set is
+    uncomputable (not a repo / git error → fail-open). A base SubagentStop marker
+    (any sub-agent ran) never suffices. session_context is the mutable dict
+    SessionUnit updates with the live sdk_session_id (read at call time)."""
 
     async def _gate(
         input_data: dict[str, Any],
@@ -1823,26 +1970,68 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
 
         session_id = session_context.get("sdk_session_id", "") or ""
-        if _session_has_adversarial_evidence(session_id):
-            return {"decision": "approve"}
+        cwd = input_data.get("cwd", "") or ""
 
-        logger.warning("[BLOCKED] git commit with no adversarial sub-agent this session "
-                       "(session=%s): %s", session_id, command[:80])
+        # Coverage decision (all git subprocesses run off-loop + are per-call
+        # timeout-bounded so this gate can never hang the commit — bash_syntax_guard
+        # discipline). Order of the fail-OPEN branches is load-bearing.
+        try:
+            has_marker, covered, has_unbounded = await asyncio.wait_for(
+                asyncio.to_thread(_session_adversarial_coverage, session_id),
+                timeout=_GATE_GIT_TIMEOUT + 2,
+            )
+        except (asyncio.TimeoutError, Exception):
+            return {"decision": "approve"}  # can't read evidence → fail open
+
+        if not has_marker:
+            pass  # → DENY below (Plan B parity: no adversarial review at all)
+        elif has_unbounded:
+            return {"decision": "approve"}  # a path-less marker = unbounded (back-compat)
+        else:
+            # Bind to the diff: every pending path must be covered. Pending set
+            # uncomputable (not a repo / git error / timeout) → fail OPEN.
+            try:
+                pending = await asyncio.wait_for(
+                    asyncio.to_thread(_pending_commit_paths, cwd, command),
+                    timeout=_GATE_GIT_TIMEOUT + 2,
+                )
+            except (asyncio.TimeoutError, Exception):
+                return {"decision": "approve"}  # fail open on gate-infra failure
+            if pending is None:
+                return {"decision": "approve"}  # uncomputable → fail open
+            if not pending:
+                # Nothing to bind (empty pending, e.g. a no-op/amend with no diff) →
+                # existence-only (Plan B parity), NOT a vacuous all([]) coverage-pass.
+                return {"decision": "approve"}
+            if pending <= covered:  # subset → fully reviewed
+                return {"decision": "approve"}
+            # else: some pending path was never adversarially reviewed → DENY below
+
+        uncovered = ""
+        try:
+            if has_marker and not has_unbounded:
+                extra = sorted(p for p in (pending or set()) if p not in covered)
+                if extra:
+                    uncovered = " Uncovered path(s): " + ", ".join(extra[:5])
+        except Exception:
+            uncovered = ""
+
+        logger.warning("[BLOCKED] git commit not covered by an adversarial review this "
+                       "session (session=%s): %s", session_id, command[:80])
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
-                    "git commit → DENY: R1 requires an adversarial review BEFORE any commit "
-                    "(sequence code→test→adversarial→fix→commit), and NO ADVERSARIAL sub-agent "
-                    "completed this session — an investigation/Explore agent does NOT count. "
+                    "git commit → DENY: R1 requires an adversarial review of THIS diff before "
+                    "commit. Either NO adversarial sub-agent completed this session, or one did "
+                    "but it did not review the file(s) being committed." + uncovered + " "
                     "'This change is too simple for adversarial' IS the signal it's needed "
-                    "(CLASS A skip-attempt #12, 2026-08-10: a 'simple' commit skipped the gate; "
-                    "the forced pass then found a real HIGH governance bug). "
-                    "FIX: spawn an adversarial sub-agent (Agent/Task tool) to REFUTE this diff — "
-                    "have it hunt bugs/regressions/governance violations — fix what it finds, "
-                    "THEN commit. (Deliberate exception, e.g. a docs-only or revert commit with "
-                    "no logic: set SWARM_ADVERSARIAL_GATE_FORCE=1 for that one command.)"
+                    "(CLASS A skip-attempt #12, 2026-08-10). FIX: spawn an adversarial sub-agent "
+                    "(Agent/Task tool) to REFUTE this diff — have it read the changed files and "
+                    "hunt bugs/regressions/governance violations — fix what it finds, THEN commit. "
+                    "(Deliberate exception, e.g. a docs-only or revert commit: set "
+                    "SWARM_ADVERSARIAL_GATE_FORCE=1 for that one command.)"
                 ),
             }
         }
