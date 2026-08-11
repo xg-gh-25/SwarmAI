@@ -50,7 +50,7 @@ class TestStructuredRecall:
             },
             hit_layers={"library": "fts", "ddd": "keyword"},
         )
-        hits = _flatten_recall_hits(result, "SwarmAI")
+        hits = _flatten_recall_hits(result)
         assert len(hits) == 3
         lib = [h for h in hits if h["domain"] == "library"]
         assert lib[0]["source"] == "pure-fs-migration.md"
@@ -77,7 +77,7 @@ class TestStructuredRecall:
             },
             hit_layers={"context_files": "keyword", "session": "fts", "codeintel": "graph"},
         )
-        hits = _flatten_recall_hits(result, None)
+        hits = _flatten_recall_hits(result)
         for h in hits:
             assert h["has_score"] is False, f"{h['domain']} must not claim a [0,1] score"
         # sources synthesized/real, never blank
@@ -87,14 +87,51 @@ class TestStructuredRecall:
         assert ci["source"] == "foo"  # name preferred over synth label
 
     def test_flatten_never_raises_on_bad_shape(self):
-        """A shape surprise must yield [] (or partial), never raise into the recall leg."""
+        """A shape surprise must yield [] (or partial), never raise into the recall leg.
+
+        NOTE: both cases here take the HAPPY path — isinstance(h, dict) filters the
+        junk hits and a None result short-circuits on getattr. The exception
+        handler is covered by the next test, written after the review pointed out
+        that neither of these reaches it."""
         from core.session_router import _flatten_recall_hits
 
         class Weird:
             buckets = {"x": ["not-a-dict", 42, None]}
             hit_layers = {}
-        assert _flatten_recall_hits(Weird(), None) == []
-        assert _flatten_recall_hits(None, None) == []
+        assert _flatten_recall_hits(Weird()) == []
+        assert _flatten_recall_hits(None) == []
+
+    def test_flatten_structural_failure_logs_and_returns_partial(self, caplog):
+        """ENTERS the exception handler: ``buckets`` is a list, so .items() raises.
+
+        The handler returns what it has, logs, and counts the degradation. This was
+        the module's only silent degradation leg, so a structural change in
+        BucketedRecall would have shortened the panel's hit list indefinitely with
+        nothing in the log to explain it (review run_abab234c, LOW #10)."""
+        import logging
+        from core.session_router import _flatten_recall_hits
+
+        class BadBuckets:
+            buckets = [("library", [{"source": "a.md", "score": 0.5}])]  # a LIST
+            hit_layers = {}
+
+        with caplog.at_level(logging.WARNING, logger="core.session_router"):
+            hits = _flatten_recall_hits(BadBuckets())
+
+        assert hits == [], "nothing was collected before the structural failure"
+        assert any("flattening failed" in r.getMessage() for r in caplog.records), (
+            "structural failure must be logged, got: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_flatten_takes_no_project_argument(self):
+        """``project`` was never read. Dropped rather than left as a dead knob a
+        caller could reasonably expect to change the output (LOW #11)."""
+        import inspect
+        from core.session_router import _flatten_recall_hits
+
+        params = list(inspect.signature(_flatten_recall_hits).parameters)
+        assert params == ["result"], f"unexpected signature: {params}"
 
     def test_structured_hits_roundtrip_through_endpoint(self, client: TestClient):
         """Structured hits stored in the snapshot are returned by GET /recall,

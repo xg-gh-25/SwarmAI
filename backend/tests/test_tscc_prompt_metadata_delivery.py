@@ -403,3 +403,101 @@ class TestRecallMissIsReported:
             resp = client.get("/api/chat/tscc-recall-absent/recall")
         assert resp.status_code == 200
         assert resp.json()["ran"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Restart must not leave a stale recall snapshot behind (review MED #9)
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestRestartClearsRecallSnapshot:
+    """_cleanup_internal cleared the snapshot on the UNIT but left the registry
+    copy — and the registry copy is the one the panel reads. So after a restart
+    the panel paired a pre-restart recall snapshot with a post-restart prompt
+    that carries no recall block."""
+
+    def test_cleanup_clears_both_unit_and_registry(self):
+        from core import session_registry
+
+        sid = "tscc-restart-clear"
+        unit = SessionUnit(session_id=sid, agent_id="default")
+        unit._recall_snapshot = {"ran": True, "hits": [], "body": "",
+                                 "tokens": 5, "latency_ms": 1.0, "keywords": ["x"]}
+        session_registry.recall_snapshot[sid] = unit._recall_snapshot
+        try:
+            unit._cleanup_internal()
+
+            assert unit._recall_snapshot is None
+            assert sid not in session_registry.recall_snapshot, (
+                "the registry copy is what the panel reads — clearing only the "
+                "unit attribute leaves the stale snapshot visible"
+            )
+        finally:
+            session_registry.recall_snapshot.pop(sid, None)
+
+    @pytest.mark.asyncio
+    async def test_same_send_recycle_restores_this_turn_snapshot(
+        self, spawnable, registry_clean,
+    ):
+        """The one case a blunt pop would break: a recycle-before-reuse inside the
+        SAME send tears the subprocess down after the router copied the snapshot,
+        then respawns with a prompt that DOES carry the recall block. The armed
+        pending value must restore it, or the panel would claim no recall ran on a
+        turn where it did."""
+        from core import session_registry
+
+        sid = registry_clean
+        unit = SessionUnit(session_id=sid, agent_id="default")
+        snap = {"ran": True, "hits": [], "body": "", "tokens": 0,
+                "latency_ms": 12.0, "keywords": ["evolution"]}
+        # What the router does on a turn where recall ran.
+        unit._recall_snapshot = snap
+        session_registry.recall_snapshot[sid] = snap
+        unit._pending_recall_snapshot = snap
+        try:
+            unit._cleanup_internal()          # the recycle
+            assert sid not in session_registry.recall_snapshot
+
+            await unit._spawn(_opts("prompt with ## Recalled Knowledge"), None)
+
+            assert session_registry.recall_snapshot.get(sid) == snap, (
+                "respawn must restore the snapshot matching the delivered prompt"
+            )
+            assert unit._pending_recall_snapshot is None, "one-shot"
+        finally:
+            session_registry.recall_snapshot.pop(sid, None)
+
+    @pytest.mark.asyncio
+    async def test_respawn_on_a_later_turn_does_not_resurrect(
+        self, spawnable, registry_clean,
+    ):
+        """A restart on a turn where recall did NOT run leaves nothing armed, so the
+        respawn must publish nothing — the delivered prompt has no recall block."""
+        from core import session_registry
+
+        sid = registry_clean
+        unit = SessionUnit(session_id=sid, agent_id="default")
+        unit._recall_snapshot = {"ran": True, "hits": [], "body": "",
+                                 "tokens": 0, "latency_ms": 1.0, "keywords": ["old"]}
+        session_registry.recall_snapshot[sid] = unit._recall_snapshot
+        # Router arms nothing because _ttft_recall_ms was None this turn.
+        unit._pending_recall_snapshot = None
+        try:
+            unit._cleanup_internal()
+            await unit._spawn(_opts("rebuilt prompt, no recall block"), None)
+
+            assert sid not in session_registry.recall_snapshot, (
+                "a prompt with no recall block must not be paired with an old "
+                "recall snapshot"
+            )
+        finally:
+            session_registry.recall_snapshot.pop(sid, None)
+
+    def test_router_arms_only_when_recall_ran(self):
+        """Reintroduction guard: the arm must stay gated on _ttft_recall_ms, which
+        is non-None exactly on the turn recall ran."""
+        from core import session_router
+
+        src = inspect.getsource(session_router)
+        assert "_rsnap if _ttft_recall_ms is not None else None" in src, (
+            "arming unconditionally would resurrect stale snapshots on respawn"
+        )

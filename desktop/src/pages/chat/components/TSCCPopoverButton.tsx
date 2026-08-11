@@ -45,6 +45,10 @@ const MAX_W = 720;
 const MAX_H = 720;
 const MIN_W = 340;
 const MIN_H = 300;
+// Below this the panel is not usable at all — the tab bar alone needs more than
+// this. Under the floor we close rather than render a sliver (or keep a stale
+// oversized box that would overlap the chrome).
+const FLOOR = 120;
 const FILL_W = 0.72; // fraction of available safe width to occupy
 const FILL_H = 0.82; // fraction of available safe height to occupy
 
@@ -114,9 +118,23 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
     const availW = vw - right - (LEFT_NAV_RIGHT + MARGIN);
     const availH = vh - bottom - (CHAT_TOP + MARGIN);
 
-    // Degenerate/startup viewport (innerWidth ~0 during Tauri boot frames, or a
-    // window narrower than the chrome itself) → skip, keep the last good box.
-    if (!Number.isFinite(availW) || !Number.isFinite(availH) || availW < 120 || availH < 120) {
+    // Two different "cannot size it" cases, which must NOT be treated alike.
+    //
+    // (a) Degenerate viewport — innerWidth/innerHeight ~0 during Tauri boot
+    //     frames, or a non-finite measurement. Nothing real is being reported,
+    //     so keep the last good box rather than thrashing the panel closed.
+    if (!Number.isFinite(vw) || !Number.isFinite(vh) || vw < 1 || vh < 1) {
+      return;
+    }
+    // (b) A REAL viewport that is genuinely too small for a usable panel. Here
+    //     an early return would retain the previous, larger box — which then
+    //     overlaps the left-nav and tab-bar, contradicting the guarantee below
+    //     (review run_abab234c, LOW #12). Clear the box instead: the `&& box`
+    //     render gate closes the panel until the window can hold it, so nothing
+    //     overlaps and no 0px-sized dialog is left focusable to a screen reader.
+    if (!Number.isFinite(availW) || !Number.isFinite(availH)
+        || availW < FLOOR || availH < FLOOR) {
+      setBox(null);
       return;
     }
 

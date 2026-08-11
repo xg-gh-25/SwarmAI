@@ -464,14 +464,16 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
         return ""
 
 
-def _flatten_recall_hits(result: Any, project: Optional[str]) -> list[dict]:
+def _flatten_recall_hits(result: Any) -> list[dict]:
     """Flatten a BucketedRecall into TSCC's structured per-hit list — the REAL
     hits that were recalled this turn (source + score + domain), NOT a re-run.
 
     Shape per hit: {domain, source, score, method, text}. Size-bounded by the
     recall caps already in recall_multi (max_sections=3/domain, content truncated),
-    so this is a few KB. Best-effort: any shape surprise is skipped, never raises
-    (a panel-observability helper must not break the recall leg)."""
+    so this is a few KB. Best-effort: a per-hit shape surprise is skipped and a
+    structural failure returns the partial list — it never raises, because a
+    panel-observability helper must not break the recall leg. It does LOG and
+    count that degradation, so a silently shortened list is still visible."""
     hits: list[dict] = []
     # Hit dict shapes VARY per domain (verified against recall_multi.py + graph_store):
     #   library:       {source, heading, content, score}          score in [0,1]
@@ -527,7 +529,18 @@ def _flatten_recall_hits(result: Any, project: Optional[str]) -> list[dict]:
                     "method": str(method),
                     "text": str(text)[:400],
                 })
-    except Exception:  # noqa: BLE001 — structuring must never break recall
+    except Exception as exc:  # noqa: BLE001 — structuring must never break recall
+        # Returning the partial list is right for a panel helper on the chat hot
+        # path, but it must not be the module's one SILENT degradation: every
+        # other leg here logs and counts. A structural change in BucketedRecall
+        # would otherwise just shorten the hit list, and the panel would quietly
+        # under-report forever (review run_abab234c, LOW #10).
+        _record_recall_degraded(f"flatten_exception:{type(exc).__name__}")
+        logger.warning(
+            "recall hit flattening failed after %d hit(s) — panel will show a "
+            "partial list (recall itself is unaffected): %s: %s",
+            len(hits), type(exc).__name__, exc,
+        )
         return hits
     return hits
 
@@ -590,7 +603,7 @@ def _unified_recall_body(
         # Structured hits from the SAME result object (the real recalled hits with
         # scores) — for the TSCC panel. Extracted here, before the caller discards
         # `result`. None-safe: on empty body the caller falls back and ignores this.
-        structured = _flatten_recall_hits(result, project)
+        structured = _flatten_recall_hits(result)
         return body, structured
     except Exception as exc:  # noqa: BLE001 — fail to "" so caller falls back to legacy
         _record_recall_degraded(f"unified_exception:{type(exc).__name__}")
@@ -2512,6 +2525,18 @@ class SessionRouter:
                 if _rsnap and session_id:
                     from . import session_registry
                     session_registry.recall_snapshot[session_id] = _rsnap
+                # Arm the snapshot for re-publication if a recycle inside this
+                # same send tears the subprocess down (teardown drops the registry
+                # entry, because at that instant no prompt is in force). Armed
+                # ONLY when recall ran this turn — `_ttft_recall_ms is not None`
+                # is exactly that condition — so a respawn on some later turn
+                # cannot resurrect a stale snapshot next to a prompt that has no
+                # recall block. Cannot be replaced by the immediate copy above:
+                # that copy is what a warm-reuse turn (recall after a zero-keyword
+                # opener, which never spawns) depends on.
+                unit._pending_recall_snapshot = (
+                    _rsnap if _ttft_recall_ms is not None else None
+                )
             except Exception:  # noqa: BLE001 — observability copy must never break send
                 pass
 

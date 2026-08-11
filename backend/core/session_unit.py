@@ -543,6 +543,12 @@ class SessionUnit:
         # replaced turn 1's real prompt with a turn-2 prompt that was never sent.
         # Delivery-time publication makes that structurally impossible.
         self._pending_prompt_metadata: Optional[dict] = None
+        # Recall snapshot armed for THIS turn's prompt, republished by _spawn if a
+        # recycle inside the same send drops the registry entry. Armed by the
+        # router only when recall actually ran this turn — otherwise a respawn on
+        # a later turn would resurrect an old snapshot next to a prompt that
+        # carries no recall block.
+        self._pending_recall_snapshot: Optional[dict] = None
         # Own once-guard for runtime DDD injection (run_91bc0651 M2): separate
         # from _recall_injected so signal-1 (deterministic editor path) fires
         # regardless of the keyword-recall gate.
@@ -2995,15 +3001,27 @@ class SessionUnit:
         # build_options, and any --resume rewrite from _build_retry_options.
         # Publishing here rather than at build time is what stops a rebuilt,
         # discarded turn-2 prompt from clobbering turn 1's real one.
+        #
+        # The recall snapshot rides along for one narrow but real case: a
+        # recycle-before-reuse inside THIS send tears down the subprocess after
+        # the router already copied the snapshot, and _cleanup_internal drops the
+        # registry entry (correct — at that instant no prompt is in force). The
+        # armed pending value lets the respawn restore the snapshot that matches
+        # the prompt we are about to deliver. It is armed only on a turn where
+        # recall actually ran, so a respawn on a later turn cannot resurrect it.
         try:
+            from . import session_registry
             _pending = self._pending_prompt_metadata
             if _pending is not None and self.session_id:
-                from . import session_registry
                 _pending["full_text"] = options.system_prompt or ""
                 session_registry.system_prompt_metadata[self.session_id] = _pending
                 # One-shot: a later respawn must publish ITS own turn's metadata,
                 # never re-publish this one.
                 self._pending_prompt_metadata = None
+            _pending_recall = self._pending_recall_snapshot
+            if _pending_recall is not None and self.session_id:
+                session_registry.recall_snapshot[self.session_id] = _pending_recall
+                self._pending_recall_snapshot = None
         except Exception:  # noqa: BLE001 — a panel publish must never break spawn
             logger.debug(
                 "session_unit.spawn session_id=%s — prompt metadata publish skipped",
@@ -4223,11 +4241,23 @@ class SessionUnit:
         # Reset recall injection flag — new subprocess needs fresh recall.
         self._recall_injected = False
         self._ddd_injected = False
-        # Clear the TSCC recall snapshot too: if the post-restart recall MISSES
-        # (no stash on the empty branch), a surviving pre-restart snapshot would be
-        # re-copied to the registry and the panel would show recall body that no
-        # longer matches the current subprocess's prompt (adversarial MED finding).
+        # Clear the TSCC recall snapshot, on the unit AND in the registry. The
+        # subprocess is gone, so no prompt is in force and there is no recall to
+        # report; leaving the registry entry behind paired a pre-restart snapshot
+        # with a post-restart prompt that carries no recall block (review
+        # run_abab234c, MED #9 — the unit attribute was cleared but the registry
+        # copy the panel actually reads was not).
+        #
+        # Safe against the same-send recycle case: if recall ran THIS turn, the
+        # router armed _pending_recall_snapshot, and the respawn in this same
+        # send republishes it. _pending_recall_snapshot is deliberately NOT
+        # cleared here for that reason.
         self._recall_snapshot = None
+        try:
+            from . import session_registry
+            session_registry.recall_snapshot.pop(self.session_id, None)
+        except Exception:  # noqa: BLE001 — teardown must never raise on cleanup
+            pass
         self._recall_keyword_misses = 0
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)
