@@ -91,6 +91,25 @@ def _section_dir(project_dir: "Path", section_key: str) -> "Path":
         cand_new = _P(project_dir) / _new
         return cand_new if cand_new.exists() else _P(project_dir) / _old
 
+
+def _canonical_doc_path(project_dir: "Path", doc: str) -> "Path":
+    """Resolve a canonical ② doc (e.g. "PRODUCT.md") to its physical path.
+
+    The numbered-layout redesign (commit ad7f6623) moved the 4 docs under
+    2-understanding/, but _check_knowledge kept probing the project ROOT — so
+    EVERY six-section DDD (AIDLC/SwarmAI/SecDLC) false-FAILed ② with "missing
+    doc(s)". Route through the same strangler-aware resolver as _section_dir:
+    core.ddd_paths.ddd_path knows doc names, and falls back to the bare root for
+    an un-migrated DDD. Guarded so the gate stays PORTABLE off-host (no SwarmAI core).
+    """
+    try:  # ddd-six-section-fallback (mirror of _section_dir)
+        from core.ddd_paths import ddd_path
+        return ddd_path(project_dir, doc)
+    except ImportError:
+        from pathlib import Path as _P
+        cand_new = _P(project_dir) / "2-understanding" / doc
+        return cand_new if cand_new.exists() else _P(project_dir) / doc
+
 # Placeholder markers left by the s_project-manager CREATE scaffold. A doc whose
 # body is (almost) only these = not yet written = FAIL.
 _PLACEHOLDER_MARKERS = (
@@ -211,13 +230,13 @@ def _doc_is_placeholder(text: str) -> bool:
 
 def _check_knowledge(d: Path) -> tuple[str, str, str]:
     """② KNOWLEDGE: all 4 canonical docs present AND non-placeholder + Knowledge/ dir."""
-    missing = [doc for doc in CANONICAL_DOCS if not (d / doc).exists()]
+    missing = [doc for doc in CANONICAL_DOCS if not _canonical_doc_path(d, doc).exists()]
     if missing:
         return ("② Knowledge", STATUS_FAIL, f"missing doc(s): {', '.join(missing)}")
     placeholders = []
     for doc in CANONICAL_DOCS:
         try:
-            if _doc_is_placeholder((d / doc).read_text(encoding="utf-8")):
+            if _doc_is_placeholder(_canonical_doc_path(d, doc).read_text(encoding="utf-8")):
                 placeholders.append(doc)
         except Exception as e:
             placeholders.append(f"{doc}(unreadable: {type(e).__name__})")

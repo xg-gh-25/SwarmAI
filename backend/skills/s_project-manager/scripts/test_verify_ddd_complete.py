@@ -47,17 +47,27 @@ def _make_ddd(
     bindings_yaml: str | None = None,
     skills: list[str] | None = None,
     code_intel: bool = False,
+    numbered_layout: bool = False,
 ) -> Path:
-    """Build a synthetic DDD dir. Returns the project dir."""
+    """Build a synthetic DDD dir. Returns the project dir.
+
+    numbered_layout=False (default) → OLD bare layout: the 4 docs live at the
+    project root. numbered_layout=True → NEW six-section layout: the 4 docs live
+    under 2-understanding/ (the shape s_project-manager CREATE actually scaffolds
+    since commit ad7f6623). The gate MUST resolve both — regression coverage for
+    the _check_knowledge root-only probe bug that false-FAILed every real DDD.
+    """
     d = root / name
     d.mkdir(parents=True, exist_ok=True)
-    # ② KNOWLEDGE — 4 docs
+    # ② KNOWLEDGE — 4 docs, at root (old) or under 2-understanding/ (new)
+    doc_dir = (d / "2-understanding") if numbered_layout else d
     if docs:
+        doc_dir.mkdir(parents=True, exist_ok=True)
         for doc in CANONICAL_DOCS:
             if doc_placeholder:
-                (d / doc).write_text(f"# {name} — {doc}\n\n_What is this?_\n")
+                (doc_dir / doc).write_text(f"# {name} — {doc}\n\n_What is this?_\n")
             else:
-                (d / doc).write_text(
+                (doc_dir / doc).write_text(
                     f"# {name} — {doc}\n\nReal content line one describing the domain.\n"
                     "A second substantive paragraph so it is not a placeholder stub.\n"
                 )
@@ -236,6 +246,42 @@ def test_missing_doc_fails_naming_it(tmp_path):
 
 def test_placeholder_doc_fails(tmp_path):
     d = _make_ddd(tmp_path, "Placeholder", doc_placeholder=True)
+    report = gate.verify_project(d)
+    assert _status_of(report, "knowledge") == "FAIL"
+    assert report["overall"] == "FAIL"
+
+
+# ── Numbered-layout (six-section) resolution — regression for the root-only probe ──
+# commit ad7f6623 moved the 4 docs under 2-understanding/; _check_knowledge kept
+# probing the root and false-FAILed every real DDD. These pin BOTH layouts so the
+# regression can't return. Mutation-provable: reverting _check_knowledge to
+# `(d / doc)` turns test_numbered_layout_docs_pass RED while the old-layout tests
+# stay green — proving the coverage actually exercises the new path.
+
+def test_numbered_layout_docs_pass(tmp_path):
+    """4 substantive docs under 2-understanding/ (the shape CREATE scaffolds) → ② PASS."""
+    d = _make_ddd(tmp_path, "NumberedDDD", numbered_layout=True)
+    # sanity: docs really are under 2-understanding/, NOT at root
+    assert (d / "2-understanding" / "PRODUCT.md").exists()
+    assert not (d / "PRODUCT.md").exists()
+    report = gate.verify_project(d)
+    assert _status_of(report, "knowledge") == "PASS", report
+
+
+def test_numbered_layout_missing_doc_still_fails_naming_it(tmp_path):
+    """Fail-closed is preserved on the new layout: a truly-missing doc still FAILs."""
+    d = _make_ddd(tmp_path, "NumberedMissing", numbered_layout=True)
+    (d / "2-understanding" / "TECH.md").unlink()
+    report = gate.verify_project(d)
+    assert _status_of(report, "knowledge") == "FAIL"
+    assert report["overall"] == "FAIL"
+    kdetail = next(c["detail"] for c in report["checks"] if "knowledge" in c["name"].lower())
+    assert "TECH.md" in kdetail
+
+
+def test_numbered_layout_placeholder_doc_fails(tmp_path):
+    """A placeholder doc under 2-understanding/ still FAILs (no false-green on new layout)."""
+    d = _make_ddd(tmp_path, "NumberedPlaceholder", numbered_layout=True, doc_placeholder=True)
     report = gate.verify_project(d)
     assert _status_of(report, "knowledge") == "FAIL"
     assert report["overall"] == "FAIL"
