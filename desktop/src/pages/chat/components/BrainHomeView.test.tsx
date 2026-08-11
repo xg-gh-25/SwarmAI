@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 
 describe('BrainHomeView — TIER 1: needs decision', () => {
-  it('lists ONLY brains with health.pending>0 (amber rows w/ pending + sinking)', async () => {
+  it('lists ONLY brains with health.pending>0 (amber rows show pending, NOT sinking)', async () => {
     mockGetBrainsWithPinned.mockResolvedValue({
       brains: [mk('SwarmAI', { pending: 78, sinking: 185 }, TC), mk('AIDLC', { pending: 0 }, TC), mk('CMHK', { pending: 4, sinking: 21 }, TC)],
       pinned: ['SwarmAI', 'AIDLC', 'CMHK'],
@@ -49,7 +49,13 @@ describe('BrainHomeView — TIER 1: needs decision', () => {
     // pending==0 brain excluded
     expect(screen.queryByTestId('decision-AIDLC')).toBeNull();
     expect(screen.getByTestId('decision-SwarmAI').textContent).toContain('78 pending');
-    expect(screen.getByTestId('decision-SwarmAI').textContent).toContain('185 sinking');
+    // NEGATIVE guard (run: welcome-declutter, 16525126): `sinking` was deliberately
+    // removed from the first screen — it is an internal aging signal with no clear
+    // user action, and lives in Brain Hub detail only. Asserting its ABSENCE (rather
+    // than just deleting the old positive assertion) is what keeps the product
+    // decision enforced: re-adding the badge turns this RED instead of passing silently.
+    expect(screen.getByTestId('decision-SwarmAI').textContent).not.toContain('sinking');
+    expect(screen.getByTestId('decision-SwarmAI').textContent).not.toContain('185');
   });
 
   it('decision block absent when no brain has pending>0', async () => {
