@@ -1088,11 +1088,11 @@ export function ChatInput({
                   type="button"
                   onClick={onRefreshContext}
                   disabled={isStreaming || disabled}
-                  className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   title="Refresh context — restart AI with conversation summary"
                   aria-label="Refresh context"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                  <span className="material-symbols-outlined text-[18px]">
                     refresh
                   </span>
                 </button>

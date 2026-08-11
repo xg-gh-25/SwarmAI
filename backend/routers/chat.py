@@ -1238,16 +1238,22 @@ async def release_session(session_id: str, request: Request):
 
 @router.post("/refresh/{session_id}")
 async def refresh_session(session_id: str):
-    """Refresh a session's context by killing subprocess and preparing for resume.
+    """Refresh a session's context by killing subprocess + dropping resume id.
 
-    This is a user-triggered "same-tab restart": the subprocess is killed,
-    but _sdk_session_id is preserved so the next send() will use --resume,
-    injecting a structured summary of the conversation into the new context.
+    User-triggered "same-tab restart": the subprocess is killed AND
+    _sdk_session_id is DROPPED (session_unit.refresh_context calls
+    _crash_to_cold_async(clear_identity=True) → _sdk_session_id=None). This is
+    the load-bearing choice: with the SDK session id gone, the next send() does
+    NOT take the SDK --resume path (which would replay the FULL transcript and
+    defeat the button's purpose). Instead it is a TRUE cold resume — session_router
+    injects a STRUCTURED conversation summary (mechanism B) into a fresh system
+    prompt, shedding the bloated transcript. (Code is truth: an earlier version of
+    this docstring wrongly claimed _sdk_session_id is preserved — it is dropped.)
 
     The frontend should:
     1. Insert a visual separator in the chat
     2. Dim old messages
-    3. Send the next user message normally (which triggers auto-resume)
+    3. Send the next user message normally (which triggers the cold-resume summary)
     """
     logger.info(f"Received refresh request for session {session_id}")
     result = await _get_router().refresh_session(session_id)
