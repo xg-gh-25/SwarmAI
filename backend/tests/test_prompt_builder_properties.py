@@ -652,6 +652,31 @@ class TestSystemPromptFaultIsolation:
             "SwarmAI", "Identity", "Soul", "Agent Directives"
         }
 
+    # ── Layer 4: cross-boundary E2E (session-spawn seam) ────────────────
+    def test_layer4_real_session_build_produces_complete_prompt(self, tmp_path):
+        """Cross-boundary E2E (cross_boundary=true, session-spawn shared path):
+        drive the REAL build_system_prompt end-to-end (no mock of the
+        thing-under-change — real ContextDirectoryLoader, real ephemeral path with
+        daily files + distillation flag, real completeness gate) and assert the
+        prompt every session receives is complete: all 4 required constitution
+        sections present, no _context_degraded flag, and each required section
+        appears exactly once (no double-append).
+
+        This is the seam Layers 1-3 don't drive: the actual session-spawn output.
+        Mutation-proof of non-vacuity is in test_layer4_mutation_daily_scope_regresses.
+        """
+        self._seed_daily(tmp_path)
+        (tmp_path / "Knowledge" / "DailyActivity" / ".needs_distillation").write_text("")
+        cfg = self._run_build(tmp_path)
+        out = self._full(cfg)
+        assert cfg.get("_context_degraded") is None, \
+            f"real session build reported degraded: {cfg.get('_context_degraded')}"
+        for hdr in ["## SwarmAI\n", "## Identity\n", "## Soul\n", "## Agent Directives\n"]:
+            assert out.count(hdr) == 1, f"required section {hdr!r} count={out.count(hdr)} (want 1)"
+        # The ephemeral seam also reconnected (daily + flag rode through).
+        assert "## Daily Activity (2026-08-11)" in out
+        assert "## Memory Maintenance Required" in out
+
     # ── AC4: fail-loud ──────────────────────────────────────────────────
     def test_ac4_core_failure_is_loud(self, tmp_path, caplog):
         """When core assembly (load_all) raises, the build sets a degraded flag +
