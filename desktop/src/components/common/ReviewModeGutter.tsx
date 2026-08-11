@@ -11,6 +11,7 @@
 
 import { useCallback, useRef } from 'react';
 import CommentPopover from './CommentPopover';
+import { computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from './FileEditorCore';
 import type { ReviewComment } from '../../hooks/useReviewMode';
 
 /** Line height must match the editor textarea (leading-6 = 24px). */
@@ -34,6 +35,8 @@ interface ReviewModeGutterProps {
   onSendSingle?: (text: string, lineNumber: number) => void;
   /** Check if a comment has been applied (target lines changed). */
   isCommentApplied?: (comment: ReviewComment) => boolean;
+  /** Scroll-area viewport height (px) — drives the virtualized line window. */
+  viewportHeight?: number;
 }
 
 export default function ReviewModeGutter({
@@ -50,9 +53,14 @@ export default function ReviewModeGutter({
   getCommentForLine,
   onSendSingle,
   isCommentApplied,
+  viewportHeight = 0,
 }: ReviewModeGutterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gutterWidth = `${Math.max(3, String(lineCount).length) + 1}ch`;
+  const virtualize = lineCount > GUTTER_VIRTUALIZE_MIN_LINES;
+  const { start: winStart, end: winEnd } = virtualize
+    ? computeGutterWindow(lineCount, scrollTop, viewportHeight)
+    : { start: 0, end: lineCount };
 
   const handleLineClick = useCallback(
     (lineNumber: number) => {
@@ -79,13 +87,32 @@ export default function ReviewModeGutter({
 
   return (
     <div ref={containerRef} className="relative shrink-0 select-none border-r border-[var(--color-border)] bg-[var(--color-background)] overflow-hidden" style={{ width: gutterWidth }}>
-      {/* Line numbers */}
+      {/* Line numbers — virtualized above GUTTER_VIRTUALIZE_MIN_LINES so a
+          large file in review mode doesn't mount lineCount clickable divs.
+          A full-height sizer preserves scroll height; the window is absolutely
+          positioned at its start line, then shifted with translateY(-scrollTop)
+          exactly like the small-file path. */}
       <div
-        className="font-mono text-xs leading-6 text-right pr-2 pt-4"
+        className="relative"
         style={{ transform: `translateY(-${scrollTop}px)` }}
       >
-        {Array.from({ length: lineCount }, (_, i) => {
-          const lineNum = i + 1;
+        {/* Sizer consistent with LineGutter: lineCount*24 + 32 (p-4 top+bottom).
+            See LineGutter's sizer comment — inert while numbers are absolute,
+            kept consistent to avoid a latent clip on refactor. */}
+        {virtualize && (
+          <div data-testid="review-gutter-sizer" style={{ height: `${lineCount * LINE_HEIGHT + 32}px` }} />
+        )}
+        <div
+          data-testid="review-gutter-line-numbers"
+          className={
+            virtualize
+              ? 'absolute left-0 right-0 font-mono text-xs leading-6 text-right pr-2'
+              : 'font-mono text-xs leading-6 text-right pr-2 pt-4'
+          }
+          style={virtualize ? { top: `${winStart * LINE_HEIGHT + EDITOR_PADDING_TOP}px` } : undefined}
+        >
+        {Array.from({ length: winEnd - winStart }, (_, i) => {
+          const lineNum = winStart + i + 1;
           const comment = getCommentForLine(lineNum);
           const hasComment = !!comment;
           const isPopoverTarget = activePopoverLine === lineNum;
@@ -94,6 +121,7 @@ export default function ReviewModeGutter({
           return (
             <div
               key={lineNum}
+              style={virtualize ? { height: `${LINE_HEIGHT}px` } : undefined}
               className={`relative cursor-pointer transition-colors ${
                 isPopoverTarget
                   ? 'bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
@@ -117,6 +145,7 @@ export default function ReviewModeGutter({
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* Comment Popover — rendered via Portal to avoid overflow clipping */}

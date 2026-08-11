@@ -148,36 +148,125 @@ function BreadcrumbBar({ filePath }: { filePath: string }) {
 /*  LineGutter                                                          */
 /* ------------------------------------------------------------------ */
 
-function LineGutter({ lineCount, scrollTop, activeLineNumber }: {
+/** Editor line height in px — matches the textarea's leading-6 (24px). */
+const GUTTER_LINE_HEIGHT = 24;
+/** Above this line count, gutters virtualize (render only the visible window).
+ *  Below it, they render every line — the un-virtualized path is byte-for-byte
+ *  unchanged, so normal-sized files (the common case) have zero behavior change. */
+export const GUTTER_VIRTUALIZE_MIN_LINES = 2_000;
+/** Extra lines rendered above+below the viewport so fast scroll shows no gap. */
+const GUTTER_OVERSCAN = 40;
+/** Viewport-height fallback when the real height is unavailable (initial mount,
+ *  or jsdom where clientHeight is 0) — renders a sensible first window. */
+const GUTTER_FALLBACK_VIEWPORT_PX = 1_200;
+
+/**
+ * Compute the visible line-number window [start, end) for a virtualized gutter.
+ * Pure — exported for testing. `end` is exclusive. Falls back to a default
+ * viewport height when `viewportHeight` is 0 so the first paint is never empty.
+ */
+export function computeGutterWindow(
+  lineCount: number,
+  scrollTop: number,
+  viewportHeight: number,
+): { start: number; end: number } {
+  const vh = viewportHeight > 0 ? viewportHeight : GUTTER_FALLBACK_VIEWPORT_PX;
+  const visible = Math.ceil(vh / GUTTER_LINE_HEIGHT) + GUTTER_OVERSCAN * 2;
+  // Clamp start into [0, lineCount] BEFORE computing end. Without the upper
+  // clamp, a scrollTop past the file's end (defensive: shouldn't happen since
+  // the textarea bounds scroll, but a stale scrollTop during a shrink can) makes
+  // start > end → Array.from({length: end-start}) gets a negative length.
+  const rawStart = Math.floor(scrollTop / GUTTER_LINE_HEIGHT) - GUTTER_OVERSCAN;
+  const start = Math.min(Math.max(0, rawStart), lineCount);
+  const end = Math.min(lineCount, start + visible);
+  return { start, end };
+}
+
+function LineGutter({ lineCount, scrollTop, activeLineNumber, viewportHeight = 0 }: {
   lineCount: number;
   scrollTop: number;
   activeLineNumber?: number;
+  viewportHeight?: number;
 }) {
   const gutterWidth = `${Math.max(3, String(lineCount).length) + 1}ch`;
+  const virtualize = lineCount > GUTTER_VIRTUALIZE_MIN_LINES;
+
+  // Small files: unchanged full render (zero regression).
+  if (!virtualize) {
+    return (
+      <div
+        className="shrink-0 select-none border-r border-[var(--color-border)] bg-[var(--color-background)] overflow-hidden"
+        style={{ width: gutterWidth }}
+      >
+        <div
+          data-testid="gutter-line-numbers"
+          className="font-mono text-xs leading-6 text-right pr-2 pt-4"
+          style={{ transform: `translateY(-${scrollTop}px)` }}
+        >
+          {Array.from({ length: lineCount }, (_, i) => {
+            const lineNum = i + 1;
+            const isActive = lineNum === activeLineNumber;
+            return (
+              <div
+                key={lineNum}
+                className={isActive
+                  ? 'text-[var(--color-text)] bg-[var(--color-hover)]'
+                  : 'text-[var(--color-text-muted)]'
+                }
+              >
+                {lineNum}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Large files: render only the visible window, sized by a full-height spacer
+  // so the scrollbar reflects the whole file. The window is offset by its
+  // start line, then shifted with the shared translateY(-scrollTop) so it
+  // stays aligned with the textarea exactly like the un-virtualized path.
+  const { start, end } = computeGutterWindow(lineCount, scrollTop, viewportHeight);
   return (
     <div
       className="shrink-0 select-none border-r border-[var(--color-border)] bg-[var(--color-background)] overflow-hidden"
       style={{ width: gutterWidth }}
     >
       <div
-        className="font-mono text-xs leading-6 text-right pr-2 pt-4"
+        className="relative"
         style={{ transform: `translateY(-${scrollTop}px)` }}
       >
-        {Array.from({ length: lineCount }, (_, i) => {
-          const lineNum = i + 1;
-          const isActive = lineNum === activeLineNumber;
-          return (
-            <div
-              key={lineNum}
-              className={isActive
-                ? 'text-[var(--color-text)] bg-[var(--color-hover)]'
-                : 'text-[var(--color-text-muted)]'
-              }
-            >
-              {lineNum}
-            </div>
-          );
-        })}
+        {/* Full-height sizer reserves the file's full scroll height so the
+            translated (overflow-hidden) gutter box is tall enough that no line
+            number is clipped at max scroll. lineCount*24 + 32 = content + p-4
+            top+bottom padding, matching the textarea's scrollable height. Kept
+            consistent with ReviewModeGutter's sizer. (The visible numbers are
+            position:absolute, so this only matters if they ever become in-flow
+            — but consistency prevents a latent clip on future refactor.) */}
+        <div data-testid="gutter-sizer" style={{ height: `${lineCount * GUTTER_LINE_HEIGHT + 32}px` }} />
+        <div
+          data-testid="gutter-line-numbers"
+          className="absolute left-0 right-0 font-mono text-xs leading-6 text-right pr-2"
+          style={{ top: `${start * GUTTER_LINE_HEIGHT + 16 /* pt-4 */}px` }}
+        >
+          {Array.from({ length: end - start }, (_, i) => {
+            const lineNum = start + i + 1;
+            const isActive = lineNum === activeLineNumber;
+            return (
+              <div
+                key={lineNum}
+                style={{ height: `${GUTTER_LINE_HEIGHT}px` }}
+                className={isActive
+                  ? 'text-[var(--color-text)] bg-[var(--color-hover)]'
+                  : 'text-[var(--color-text-muted)]'
+                }
+              >
+                {lineNum}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -604,6 +693,14 @@ export default function FileEditorCore({
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
+  // Viewport height of the scroll area — drives the virtualized gutter's window.
+  // Seeded from window.innerHeight so the FIRST paint never under-fills a tall
+  // panel (Gate-2 B: a 0→fallback-1200 seed truncated the window on >1200px
+  // displays for one frame). Corrected to the textarea's real clientHeight on
+  // mount + scroll + resize below.
+  const [viewportHeight, setViewportHeight] = useState(
+    () => (typeof window !== 'undefined' ? window.innerHeight : 0),
+  );
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const lastFetchRef = useRef(Date.now());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -621,6 +718,19 @@ export default function FileEditorCore({
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+
+  // Track the scroll-area viewport height for the virtualized gutter. Seed on
+  // mount and follow window/panel resizes via ResizeObserver. handleScroll also
+  // refreshes it, so the window stays correct during interaction.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    setViewportHeight(ta.clientHeight);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setViewportHeight(ta.clientHeight));
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, []);
 
   // Resolve workspace root once on mount — avoids API call on every button click
   const wsRootRef = useRef<string>('');
@@ -868,6 +978,8 @@ export default function FileEditorCore({
       highlightRef.current.scrollTop = top;
       highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
       setScrollTop(top);
+      // Keep the virtualized gutter's window sized to the real viewport.
+      setViewportHeight(textareaRef.current.clientHeight);
     }
   }, []);
 
@@ -1599,6 +1711,7 @@ export default function FileEditorCore({
                 <ReviewModeGutter
                   lineCount={lineCount}
                   scrollTop={scrollTop}
+                  viewportHeight={viewportHeight}
                   comments={review.comments}
                   activePopoverLine={review.activePopoverLine}
                   editingCommentId={review.editingCommentId}
@@ -1619,6 +1732,7 @@ export default function FileEditorCore({
                   lineCount={lineCount}
                   scrollTop={scrollTop}
                   activeLineNumber={activeLineNumber}
+                  viewportHeight={viewportHeight}
                 />
               )}
               <div className="flex-1 relative overflow-hidden">
