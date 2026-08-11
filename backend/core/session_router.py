@@ -2414,11 +2414,24 @@ class SessionRouter:
             extra_mcps=unit._extra_mcps or None,
         )
 
-        # Copy system prompt metadata to registry for TSCC viewer
+        # System prompt metadata for the TSCC viewer. This metadata describes the
+        # prompt we just BUILT — which is not necessarily the prompt that gets
+        # SENT: send() reuses a live subprocess on turn 2+ and discards
+        # options.system_prompt entirely. So the authoritative publish happens at
+        # delivery, in SessionUnit._spawn(), which is the only consumer of
+        # options.system_prompt (it also folds in the recall block appended
+        # below, after this point).
+        #
+        # Here we only (a) hand the unit the pending metadata to publish on its
+        # next spawn, and (b) seed the registry when the session has NO entry yet,
+        # so the panel is not blank during a cold start's spawn window. The seed
+        # is deliberately write-if-absent: overwriting is what destroyed turn 1's
+        # real prompt with a rebuilt, never-sent one from turn 2 onward.
         _spm = agent_config.get("_system_prompt_metadata")
         if _spm and session_id:
             from . import session_registry
-            session_registry.system_prompt_metadata[session_id] = _spm
+            unit._pending_prompt_metadata = _spm
+            session_registry.system_prompt_metadata.setdefault(session_id, _spm)
 
         # Delegate to SessionUnit — stream response
 
@@ -2462,34 +2475,23 @@ class SessionRouter:
                 unit=unit,
                 editor_context=editor_context,
             )
-            # Copy the recall snapshot to the registry for the read-only TSCC panel
-            # (mirrors the system_prompt_metadata copy above). Guarded + best-effort:
-            # a panel-observability copy must never perturb the send path.
+            # Copy the recall snapshot to the registry for the read-only TSCC panel.
+            # Guarded + best-effort: a panel-observability copy must never perturb
+            # the send path.
             #
-            # ALSO refresh full_text to the REAL sent prompt — but ONLY on the turn
-            # recall actually ran. The metadata captured above (~:2391) stored the
-            # PRE-recall prompt; _maybe_inject_recall mutates options.system_prompt (a
-            # different var) by appending the "## Recalled Knowledge" block, so on the
-            # recall turn full_text must be re-pointed at options.system_prompt to show
-            # what was ACTUALLY sent (an existing str ref — NO copy, NO dumps).
-            #
-            # GATE on `_ttft_recall_ms is not None` (adversarial HIGH, run_abab234c):
-            # recall runs at most ONCE per session (_recall_injected guard) and returns
-            # its ms only on that turn, else None. On a warm-reuse turn 2+, the rebuilt
-            # options.system_prompt is DISCARDED (send() reuses the live subprocess and
-            # only ships query_content) — it lacks the recall block and was never sent.
-            # Refreshing unconditionally would clobber the correct turn-1 full_text with
-            # that never-sent prompt (the exact "shows a simulation" failure this rework
-            # kills). So refresh full_text only when recall ran this turn.
+            # full_text needs NO refresh here. _maybe_inject_recall has just
+            # appended the "## Recalled Knowledge" block to options.system_prompt,
+            # and _spawn() publishes full_text off that same object at delivery —
+            # so the block is included when the prompt is actually sent, and no
+            # stale value is written when it is not. An earlier version tried to
+            # re-point full_text here, gated on `_ttft_recall_ms is not None`; the
+            # gate was moot because the build-time write above had already
+            # overwritten turn 1's value (review run_abab234c, HIGH #1).
             try:
                 _rsnap = getattr(unit, "_recall_snapshot", None)
                 if _rsnap and session_id:
                     from . import session_registry
                     session_registry.recall_snapshot[session_id] = _rsnap
-                    if _ttft_recall_ms is not None and options.system_prompt:
-                        _spm_live = session_registry.system_prompt_metadata.get(session_id)
-                        if _spm_live is not None:
-                            _spm_live["full_text"] = options.system_prompt
             except Exception:  # noqa: BLE001 — observability copy must never break send
                 pass
 

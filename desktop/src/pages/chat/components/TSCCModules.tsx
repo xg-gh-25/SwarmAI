@@ -5,17 +5,22 @@
  * security grade badge + severity grid.
  *
  * DATA LOADING: the panel FETCHES on open (not only via the post-turn SSE event).
+ * Every fetch is owned by the shell (`SystemPromptModule`) so each datum is
+ * requested exactly once — the summary strip and the tabs share one result.
  * - Files/Prompt: uses the SSE `metadata` prop if present, else fetches
  *   GET /chat/{id}/system-prompt so a freshly-opened tab is never blank.
- * - Recall: GET /chat/{id}/recall (read-only snapshot, lazy on tab open).
- * - Security: GET /chat/{id}/security-scan (server-side scan, lazy on tab open).
+ * - Recall: GET /chat/{id}/recall on open — a cheap read of a snapshot already
+ *   stashed during the turn; it never re-runs recall.
+ * - Security: GET /chat/{id}/security-scan, deferred until the Security tab is
+ *   first opened. That scan regexes the whole assembled prompt, so a panel that
+ *   is only used for Flow/Files must not pay for it.
  * Nothing here touches the chat send path.
  *
  * Key exports:
  * - ``SystemPromptModule`` — the tabbed panel body (name kept for call-site compat)
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
   SystemPromptMetadata,
   RecallSnapshot,
@@ -37,6 +42,11 @@ export interface SystemPromptModuleProps {
 }
 
 type TabKey = 'flow' | 'files' | 'recall' | 'security' | 'prompt';
+
+/** Lifecycle of a shell-owned fetch. `idle` means "not started yet" — which for
+ *  the security scan is a real, lasting state: it only starts when the Security
+ *  tab is first opened, so a panel that is never taken there costs zero scans. */
+type FetchState = 'idle' | 'loading' | 'done' | 'error';
 
 // ---------------------------------------------------------------------------
 // Ownership classification (matches backend context_directory_loader priority)
@@ -314,24 +324,12 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
 // Tab 2: Recall — provenance body (mockup: cards; real data: rendered markdown)
 // ===========================================================================
 
-function RecallTab({ sessionId }: { sessionId: string }) {
-  const [snap, setSnap] = useState<RecallSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setErr(false);
-    getRecallSnapshot(sessionId)
-      .then((s) => alive && setSnap(s))
-      .catch(() => alive && setErr(true))
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, [sessionId]);
-
-  if (loading) return <p className="text-sm text-[var(--color-text-muted)] py-4">Loading…</p>;
-  if (err) return <p className="text-sm text-[var(--color-text-muted)] italic py-4">Failed to load recall snapshot</p>;
+/** Presentational: the shell owns the single fetch (see FetchState) so opening
+ *  this tab issues no request of its own — the summary strip and this tab read
+ *  the SAME snapshot instead of fetching one each. */
+function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchState }) {
+  if (state === 'loading' || state === 'idle') return <p className="text-sm text-[var(--color-text-muted)] py-4">Loading…</p>;
+  if (state === 'error') return <p className="text-sm text-[var(--color-text-muted)] italic py-4">Failed to load recall snapshot</p>;
   if (!snap || !snap.ran) {
     return (
       <p className="text-sm text-[var(--color-text-muted)] italic py-4">
@@ -430,24 +428,14 @@ const GRADE_COLOR: Record<string, string> = {
   A: '#4ade80', 'A-': '#4ade80', B: '#fbbf24', C: '#f87171', 'n/a': '#8b93a7',
 };
 
-function SecurityTab({ sessionId }: { sessionId: string }) {
-  const [scan, setScan] = useState<SecurityScanResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setErr(false);
-    getSecurityScan(sessionId)
-      .then((s) => alive && setScan(s))
-      .catch(() => alive && setErr(true))
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, [sessionId]);
-
-  if (loading) return <p className="text-sm text-[var(--color-text-muted)] py-4">Scanning…</p>;
-  if (err || !scan) return <p className="text-sm text-[var(--color-text-muted)] italic py-4">Failed to run security scan</p>;
+/** Presentational: the shell owns the single scan and only starts it when this
+ *  tab is first opened. The scan is NOT a cached read — it walks the whole
+ *  assembled prompt (up to ~400KB) through every credential detector — so it
+ *  must not run for someone who only glances at the Flow tab, and must not run
+ *  twice because the strip and this tab each asked for it. */
+function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: FetchState }) {
+  if (state === 'loading' || state === 'idle') return <p className="text-sm text-[var(--color-text-muted)] py-4">Scanning…</p>;
+  if (state === 'error' || !scan) return <p className="text-sm text-[var(--color-text-muted)] italic py-4">Failed to run security scan</p>;
   if (scan.grade === 'n/a') return <p className="text-sm text-[var(--color-text-muted)] italic py-4">No assembled prompt to scan yet</p>;
 
   const gc = GRADE_COLOR[scan.grade] ?? '#8b93a7';
@@ -616,17 +604,65 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
 
   const metadata = metadataProp ?? fetched;
 
-  // Recall/Security are always mounted lazily (own fetch); recall hit count for
-  // the strip comes from a light shared fetch so the header is populated.
+  // ── Shell-owned fetches: exactly one request per datum ──────────────────
+  // Both the summary strip and the corresponding tab read these, so the fetches
+  // live here rather than inside the tabs. Previously the shell prefetched both
+  // AND each tab fetched its own, so opening Security ran the scan twice.
   const [recall, setRecall] = useState<RecallSnapshot | null>(null);
+  const [recallState, setRecallState] = useState<FetchState>('idle');
   const [security, setSecurity] = useState<SecurityScanResult | null>(null);
+  const [securityState, setSecurityState] = useState<FetchState>('idle');
+
+  // Recall is an eager fetch: the endpoint returns a snapshot that was already
+  // stashed during the turn, so it is a cheap dict read with no recall re-run.
   useEffect(() => {
     if (!sessionId) return;
     let alive = true;
-    getRecallSnapshot(sessionId).then((r) => alive && setRecall(r)).catch(() => {});
-    getSecurityScan(sessionId).then((s) => alive && setSecurity(s)).catch(() => {});
+    setRecallState('loading');
+    getRecallSnapshot(sessionId)
+      .then((r) => { if (alive) { setRecall(r); setRecallState('done'); } })
+      .catch(() => { if (alive) setRecallState('error'); });
     return () => { alive = false; };
   }, [sessionId]);
+
+  // Security is a LAZY fetch, started only once the Security tab is opened. The
+  // endpoint's contract is "runs when the user opens the security panel, never
+  // during message send", and the scan itself is expensive — regexing the whole
+  // assembled prompt. Firing it on every panel open would break both.
+  //
+  // The started-flag is a ref keyed by session, not state, for two reasons: a
+  // state flag in this effect's deps would re-run the effect the moment it set
+  // `loading` and cancel its own request, and switching tabs mid-scan must not
+  // discard the result (the shell stays mounted, so the scan is still wanted).
+  // Results are therefore applied unless the component unmounted or the session
+  // changed underneath them.
+  const scannedForRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    // A new session invalidates any previous scan and its displayed grade.
+    if (scannedForRef.current !== null && scannedForRef.current !== sessionId) {
+      scannedForRef.current = null;
+      setSecurity(null);
+      setSecurityState('idle');
+    }
+    if (tab !== 'security' || scannedForRef.current === sessionId) return;
+    scannedForRef.current = sessionId;
+    const sid = sessionId;
+    setSecurityState('loading');
+    getSecurityScan(sid)
+      .then((s) => {
+        if (!mountedRef.current || scannedForRef.current !== sid) return;
+        setSecurity(s);
+        setSecurityState('done');
+      })
+      .catch(() => {
+        if (!mountedRef.current || scannedForRef.current !== sid) return;
+        setSecurityState('error');
+      });
+  }, [sessionId, tab]);
 
   if (!sessionId) {
     return <p className="text-sm text-[var(--color-text-muted)] italic">No active session</p>;
@@ -637,6 +673,19 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
       <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
         System Prompt
       </h4>
+
+      {/* Fail-loud degradation banner. The backend logs an error when a core
+          context section is missing, but a log the user never sees is not
+          "loud" — this is the consumer that makes the signal visible. */}
+      {metadata?.degraded && (
+        <div className="flex items-start gap-2 mb-3 px-2.5 py-2 rounded-lg border border-[#f87171]/40 bg-[#f87171]/10">
+          <span className="material-symbols-outlined text-[16px] text-[#f87171] flex-shrink-0">warning</span>
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold text-[#f87171]">Prompt assembled incomplete</div>
+            <div className="text-[10.5px] font-mono text-[var(--color-text-muted)] break-words">{metadata.degraded}</div>
+          </div>
+        </div>
+      )}
 
       {/* Summary strip */}
       <SummaryStrip metadata={metadata} recall={recall} security={security} />
@@ -668,8 +717,8 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
         {tab === 'files' && (loading && !metadata
           ? <p className="text-sm text-[var(--color-text-muted)] py-4">Loading…</p>
           : <FilesTab metadata={metadata} />)}
-        {tab === 'recall' && <RecallTab sessionId={sessionId} />}
-        {tab === 'security' && <SecurityTab sessionId={sessionId} />}
+        {tab === 'recall' && <RecallTab snap={recall} state={recallState} />}
+        {tab === 'security' && <SecurityTab scan={security} state={securityState} />}
         {tab === 'prompt' && <PromptTab sessionId={sessionId} metadata={metadata} />}
       </div>
     </div>

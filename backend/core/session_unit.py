@@ -535,6 +535,14 @@ class SessionUnit:
         # attribute (a future direct read won't AttributeError); the live read in
         # session_router uses getattr(..., None) so None == "no snapshot".
         self._recall_snapshot: Optional[dict] = None
+        # TSCC system-prompt metadata AWAITING DELIVERY. The router stashes the
+        # freshly-built metadata here; _spawn() publishes it to
+        # session_registry.system_prompt_metadata at the moment the prompt is
+        # actually handed to the CLI. Build-time publication was wrong: a warm
+        # reuse rebuilds options and DISCARDS them, so publishing at build time
+        # replaced turn 1's real prompt with a turn-2 prompt that was never sent.
+        # Delivery-time publication makes that structurally impossible.
+        self._pending_prompt_metadata: Optional[dict] = None
         # Own once-guard for runtime DDD injection (run_91bc0651 M2): separate
         # from _recall_injected so signal-1 (deterministic editor path) fires
         # regardless of the keyword-recall gate.
@@ -2976,6 +2984,31 @@ class SessionUnit:
         self._wrapper = wrapper
         self._client = client
         self.last_used = time.time()
+
+        # ── Publish TSCC prompt metadata AT DELIVERY ──────────────────
+        # This is the ONLY place options.system_prompt reaches the CLI: send()
+        # rebuilds options every turn, but a warm reuse never passes them here.
+        # So this is the only point where "the prompt the panel shows" and "the
+        # prompt the model got" are guaranteed to be the same string.
+        # full_text is read off the options we just handed over, which is why it
+        # includes the "## Recalled Knowledge" block the router appends AFTER
+        # build_options, and any --resume rewrite from _build_retry_options.
+        # Publishing here rather than at build time is what stops a rebuilt,
+        # discarded turn-2 prompt from clobbering turn 1's real one.
+        try:
+            _pending = self._pending_prompt_metadata
+            if _pending is not None and self.session_id:
+                from . import session_registry
+                _pending["full_text"] = options.system_prompt or ""
+                session_registry.system_prompt_metadata[self.session_id] = _pending
+                # One-shot: a later respawn must publish ITS own turn's metadata,
+                # never re-publish this one.
+                self._pending_prompt_metadata = None
+        except Exception:  # noqa: BLE001 — a panel publish must never break spawn
+            logger.debug(
+                "session_unit.spawn session_id=%s — prompt metadata publish skipped",
+                self.session_id, exc_info=True,
+            )
 
         # ── Capture configured MCP names for post-spawn health check ──
         # options.mcp_servers is a dict when MCPs are configured.

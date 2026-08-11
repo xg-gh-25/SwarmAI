@@ -1131,6 +1131,11 @@ export interface SystemPromptMetadata {
   files: SystemPromptFileInfo[];
   totalTokens: number;
   fullText: string;
+  /** Fail-loud degradation reason from prompt assembly. Empty/absent when the
+   *  prompt assembled completely. Optional because the SSE event spreads the
+   *  backend metadata dict verbatim, which omits the key on a healthy build,
+   *  while the HTTP endpoint always emits it (schema default ''). */
+  degraded?: string;
 }
 
 /** One structured recalled hit — real hit that fed the injected block. */

@@ -46,6 +46,12 @@ const makeSampleState = (
   ...overrides,
 });
 
+/** The panel opens on the Flow tab (a static assembly diagram), so per-file
+ *  assertions must switch to Files first. Addressed by role because the summary
+ *  strip reuses the tab words as stat labels. */
+const openFilesTab = () =>
+  fireEvent.click(screen.getByRole('button', { name: /Files/ }));
+
 const sampleMetadata: SystemPromptMetadata = {
   files: [
     { filename: 'SWARMAI.md', tokens: 500, truncated: false },
@@ -162,6 +168,7 @@ describe('TSCCPanel', () => {
 
     it('renders file list from metadata', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
+      openFilesTab();
       expect(screen.getByText('SWARMAI.md')).toBeInTheDocument();
       expect(screen.getByText('IDENTITY.md')).toBeInTheDocument();
       expect(screen.getByText('KNOWLEDGE.md')).toBeInTheDocument();
@@ -169,16 +176,19 @@ describe('TSCCPanel', () => {
 
     it('renders truncation indicator for truncated files', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      // Badge reads "smart" (smart-selected / truncated to fit budget) — the
-      // title carries the full meaning, so assert both label and tooltip.
+      openFilesTab();
+      // The badge label is terse ("smart"), so the tooltip has to carry the
+      // meaning — assert both, or a future rename could leave the badge
+      // unexplained.
       expect(screen.getByText('smart')).toBeInTheDocument();
       expect(
-        screen.getByTitle('Smart-selected / truncated to fit budget'),
+        screen.getByTitle('Smart-selected to fit budget'),
       ).toBeInTheDocument();
     });
 
     it('renders total token count', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
+      openFilesTab();
       expect(screen.getByText('1,900 tokens')).toBeInTheDocument();
     });
 

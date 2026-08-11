@@ -110,6 +110,7 @@ export async function getSystemPromptMetadata(
       })),
       totalTokens: (data.total_tokens as number) ?? 0,
       fullText: (data.full_text as string) ?? '',
+      degraded: (data.degraded as string) ?? '',
     };
   } catch (err: unknown) {
     // 404 is expected when session hasn't been initialized yet

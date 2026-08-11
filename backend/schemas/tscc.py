@@ -138,6 +138,18 @@ class SystemPromptMetadata(BaseModel):
     )
     total_tokens: int = Field(0, description="Total estimated tokens across all files")
     full_text: str = Field("", description="Complete assembled system prompt text")
+    # The fail-loud degradation reason from prompt assembly (prompt_builder mirrors
+    # ``_context_degraded`` into the metadata dict). This field MUST exist here or
+    # Pydantic's default extra='ignore' silently drops it at the response boundary,
+    # which is exactly how the signal stayed unreachable (review run_abab234c,
+    # HIGH #2). Empty string = prompt assembled completely.
+    degraded: str = Field(
+        "",
+        description=(
+            "Fail-loud degradation reason (e.g. 'missing_core_sections: SOUL'); "
+            "empty when the prompt assembled completely"
+        ),
+    )
 
 
 class RecallHit(BaseModel):
