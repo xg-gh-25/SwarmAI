@@ -505,6 +505,17 @@ async def extract_and_save(
                     # gate rewrote a shape-dirty entry; fail-open → distilled=None keeps
                     # the original. The writer never finalizes its own text.
                     kept.append(distilled or entry)
+                elif verdict == "pending":
+                    # RECOVERABLE (judge budget-exhausted / infra down) — DEFER to the
+                    # shared distill-pending.jsonl, never drop. Even a user's manual
+                    # "Save to Memory" is not lost when the judge is transiently down;
+                    # the next distillation cycle re-judges it with a fresh budget.
+                    try:
+                        from hooks.distillation_hook import requeue_pending_lesson
+                        requeue_pending_lesson(memory_path.parent, "lesson", entry)
+                        logger.info("memory_extractor: entry deferred (%s): %.80s", reason, entry)
+                    except Exception:  # noqa: BLE001 — defer is best-effort
+                        logger.warning("memory_extractor: pending defer FAILED: %.80s", entry)
                 else:
                     _dropped += 1
                     logger.info("memory_extractor: judge DISCARD (%s): %.80s", reason, entry)

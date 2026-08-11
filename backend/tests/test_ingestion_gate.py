@@ -173,19 +173,23 @@ class TestTriggerTiers:
 
 class TestDispatcherNoiseDedupConfident:
     def test_memory_short_fragment_survives_gate(self):
-        # End-to-end: a short MEMORY decision fragment must NOT be discarded by the
-        # STRUCTURAL noise tier (the point of this test — MEMORY has no ≥5-word floor).
-        # MUST mock the judge: unmocked, this test's result depended on whether Bedrock
-        # was reachable (unreachable → fail-closed suspect → review; reachable → the
-        # judge's own verdict, which can be discard) — a flaky env-coincidence, not an
-        # assertion. Pin the structural-tier behavior with the judge held to "pass".
+        # MEMORY has NO ≥5-word DDD value floor — a SHORT decision fragment must survive
+        # the structural + thin tiers and reach the judge (Gate-1 ⓐ). The fixture must be
+        # short (proves no word-floor) AND carry real signal (clears the restored
+        # content_floor, which correctly rejects a 0.1-confidence fragment like the old
+        # "enableMCP = always true" — that was a hole the judge-only path left open).
+        # Judge held to "pass" so we pin the DETERMINISTIC tiers, not a judge accident.
         from unittest.mock import patch as _patch
-        from core.ingestion_gate import ingestion_gate
+        from core.ingestion_gate import ingestion_gate, structural_noise, thin_floor
+        frag = "Use single-writer MessageStore to end the reconcile race"
+        assert not structural_noise(frag) and not thin_floor(frag)  # short, real signal
         with _patch("core.ingestion_gate.self_adversarial_judge",
                     lambda *a, **k: ("pass", "t")):
-            v = ingestion_gate("enableMCP = always true", store="MEMORY",
+            v = ingestion_gate(frag, store="MEMORY",
                                trigger="memory_distill", context={})
-        assert v.verdict != "discard"
+        assert v.verdict != "discard", (
+            "a short but meaningful MEMORY fragment must survive the deterministic "
+            f"floors and reach the judge — got {v.verdict}/{v.reason}")
 
     def test_structural_junk_discarded_any_store(self):
         from core.ingestion_gate import ingestion_gate
@@ -872,3 +876,40 @@ class TestDistillBudgetGuard:
         assert v == "auto", "judge admitted (first budget check True) — must reach the distill step"
         assert called["n"] == 0, "distill must be SKIPPED when its budget check fails"
         assert distilled is None, "budget-exhausted distill → fail-open to original (never dropped)"
+
+
+class TestMemoryDistillTierContract:
+    """STRUCTURAL guard against the 2c8fc37f regression class: the MEMORY door must keep
+    its deterministic HARD-DENY floors, and the judge must run AFTER them (so a floor
+    holds even when the judge is down). Deleting keep_type_holdback / thin / content_floor
+    / episodic from the tier list — the exact silent-drop 2c8fc37f did — turns this RED."""
+
+    def test_memory_distill_has_deterministic_floors_before_judge(self):
+        from core.ingestion_gate import TRIGGER_TIERS
+        tiers = TRIGGER_TIERS["memory_distill"]
+        required = {"noise", "thin", "content_floor", "episodic", "judge"}
+        missing = required - set(tiers)
+        assert not missing, f"memory_distill lost deterministic floors: {missing}"
+        ji = tiers.index("judge")
+        for floor in ("noise", "thin", "content_floor", "episodic"):
+            assert tiers.index(floor) < ji, (
+                f"'{floor}' must run BEFORE the judge (so it holds when the judge is "
+                f"unavailable) — tier order: {tiers}")
+
+    def test_memory_distill_has_NO_prejudge_keep_type_holdback(self):
+        # CONVERGENCE guard (adversarial fix): keep_type_holdback must NOT be a pre-judge
+        # memory_distill tier — a pure-text short-circuit before the judge can never be
+        # re-judged, so a keep-type would requeue to distill-pending.jsonl forever (never
+        # written, never discarded, permanent non-convergent load). keep-types flow through
+        # the judge; XG 乙's "don't drop when judge down" is the judge_error→pending path.
+        from core.ingestion_gate import TRIGGER_TIERS
+        assert "keep_type_holdback" not in TRIGGER_TIERS["memory_distill"], (
+            "keep_type_holdback as a pre-judge tier creates an infinite requeue loop")
+
+    def test_evolution_distill_keeps_thin_and_judge(self):
+        # EVOLUTION deliberately has NO content_floor/keep_type_holdback (correction IS
+        # its keep-type content; governance is legitimate) — but thin + judge must stay.
+        from core.ingestion_gate import TRIGGER_TIERS
+        tiers = TRIGGER_TIERS["evolution_distill"]
+        assert "thin" in tiers and "judge" in tiers
+        assert "keep_type_holdback" not in tiers, "EVOLUTION must NOT hold its own keep-types"

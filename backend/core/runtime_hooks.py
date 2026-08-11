@@ -385,18 +385,48 @@ def create_user_correction_detector(
                     from core.ingestion_gate import admit_memory_lesson
                     from scripts.locked_write import locked_read_modify_write
                     summary = prompt[:150].replace("\n", " ").strip()
-                    # Judge decides ADMIT/REJECT only; a correction is semantically a
-                    # [pitfall]→## Pitfalls (its fixed home since Gap #17), so we do NOT
-                    # re-route on the judge's section (that would write "[pitfall]" into
-                    # e.g. ## Corrections — a type/section mismatch, adversarial BUG#1).
-                    verdict, _section, _reason, distilled = admit_memory_lesson(summary)
-                    if verdict == "auto":
+                    # DETERMINISTIC CORRECTION FLOOR (restored — call-out #2): a raw
+                    # correction prompt is a SIGNAL, not automatically a lesson. Strip the
+                    # trigger phrases ("that's wrong", "use X instead"); if the residue
+                    # teaches nothing (< MIN_LESSON_LENGTH) it must NEVER reach MEMORY —
+                    # even if the judge would pass it. 2c8fc37f dropped this floor and left
+                    # the judge as the only guard, so a pure "That's wrong, use async
+                    # instead" would sediment as a [pitfall]. This floor is correction-
+                    # specific (belongs to THIS door, not the shared memory_distill tiers,
+                    # which must not strip trigger phrases from a normal reflection lesson).
+                    # The corrections.jsonl append already happened above — rejecting here
+                    # loses NO signal, only declines to sediment a non-lesson.
+                    try:
+                        from core.ddd_cultivation import is_memory_worthy_correction
+                        _worthy = is_memory_worthy_correction(summary)
+                    except Exception:  # noqa: BLE001 — floor error → fail-closed (don't write)
+                        _worthy = False
+                    if not _worthy:
+                        verdict = "discard"
+                        distilled = None
+                    else:
+                        # Judge decides ADMIT/REJECT only; a correction is semantically a
+                        # [pitfall]→## Pitfalls (its fixed home since Gap #17), so we do NOT
+                        # re-route on the judge's section (that would write "[pitfall]" into
+                        # e.g. ## Corrections — a type/section mismatch, adversarial BUG#1).
+                        verdict, _section, _reason, distilled = admit_memory_lesson(summary)
+                    ws = _Path.home() / ".swarm-ai" / "SwarmWS"
+                    if verdict == "pending":
+                        # RECOVERABLE (judge budget-exhausted / infra down) — DEFER to the
+                        # shared distill-pending.jsonl, never drop. Fixes the silent-drop:
+                        # the SSOT door used to collapse pending→discard, so once the judge
+                        # window filled, every correction was lost with no archive.
+                        try:
+                            from hooks.distillation_hook import requeue_pending_lesson
+                            requeue_pending_lesson(ws / ".context", "lesson", summary)
+                        except Exception:  # noqa: BLE001 — defer is best-effort
+                            pass
+                    elif verdict == "auto":
                         # ROOT-FIX (capture-vs-distill): if the gate distilled a
                         # shape-dirty entry, write the DISTILLED rule, never our own
                         # raw summary (writer≠finalizer). fail-open: distilled=None →
                         # keep summary.
                         body = distilled or summary
-                        ws = _Path.home() / ".swarm-ai" / "SwarmWS"
                         memory_path = ws / ".context" / "MEMORY.md"
                         if memory_path.exists():
                             today = time.strftime("%Y-%m-%d")

@@ -584,11 +584,13 @@ class DistillationTriggerHook:
                 verdict, _section, reason = self._admit_memory_lesson(raw)
                 if verdict == "auto":
                     gated_decisions.append(enriched)
-                elif reason == "judge:budget_exhausted":
-                    # Un-judged (budget ran out) → DEFER, don't discard. Next cycle
-                    # re-judges it first with a fresh budget.
+                elif verdict == "pending":
+                    # Un-judged (budget ran out this window, OR the judge INFRA was down —
+                    # both are recoverable, NOT a refusal) → DEFER, don't discard. Next
+                    # cycle re-judges it first with a fresh budget. This is why the SSOT
+                    # door returns "pending" instead of collapsing to discard.
                     self._requeue_pending(memory_path.parent, "decision", enriched)
-                    logger.info("distillation: DECISION deferred (budget): %.80s", raw)
+                    logger.info("distillation: DECISION deferred (%s): %.80s", reason, raw)
                 else:
                     self._archive_discarded(memory_path.parent, raw, enriched, reason)
                     logger.info("distillation: DECISION discarded (%s, archived): %.80s",
@@ -609,10 +611,12 @@ class DistillationTriggerHook:
         if all_lessons:
             # C5 (run_0d60e04e): route each lesson through the UNIFIED ingestion_gate
             # before writing — MEMORY auto-distillation was the survey's #1 rating-5 hole
-            # (fully automated, NO adversarial gate). _admit_memory_lesson runs
-            # noise(structural)→keep_type_holdback→judge and returns (admit, section);
-            # only an admitted lesson (gate=auto AND a routable non-KEEP_TYPE section) is
-            # written. Noise/judge-reject/keep-type-holdback → dropped (stays in its
+            # (fully automated, NO adversarial gate). _admit_memory_lesson runs the
+            # deterministic floors (noise→thin→content_floor→episodic) THEN the judge, and
+            # returns (verdict, section); only verdict=="auto" (incl a judge-passed keep-
+            # type, routed to its type section) is written. verdict=="pending" (judge
+            # unavailable) → requeued; "discard" (a floor, or the judge refusing) → dropped
+            # (stays in its
             # un-distilled source, not lost). section routing still by route_lesson_type
             # (inside the helper); freq-gate already ran upstream (store-local,量非质).
             by_section: dict[str, list[str]] = {}
@@ -621,14 +625,15 @@ class DistillationTriggerHook:
                 verdict, section, reason = self._admit_memory_lesson(raw)
                 if verdict == "auto":
                     by_section.setdefault(section, []).append(enriched)
-                elif reason == "judge:budget_exhausted":
-                    # Un-judged (the judge's rolling-window budget ran out this cycle) →
-                    # DEFER to the pending queue, NOT the discard archive. The next cycle
-                    # drains it first with a fresh budget, so a big session-close that
-                    # overflows the budget loses NO real lesson — it just spreads the
-                    # judging over a few cycles (run: judge-budget starvation fix).
+                elif verdict == "pending":
+                    # Un-judged — budget ran out this window OR the judge INFRA was down
+                    # (both recoverable, NOT a refusal) → DEFER to the pending queue, NOT
+                    # the discard archive. Next cycle drains it first with a fresh budget,
+                    # so a big session-close that overflows the budget (or a transient
+                    # Bedrock outage) loses NO real lesson — judging just spreads over a
+                    # few cycles (judge-budget starvation + infra-error deferral fix).
                     self._requeue_pending(memory_path.parent, "lesson", enriched)
-                    logger.info("distillation: lesson deferred (budget): %.80s", raw)
+                    logger.info("distillation: lesson deferred (%s): %.80s", reason, raw)
                 else:
                     # AUTONOMY-FIRST (run_86f44f35): non-auto → DISCARD to a recoverable
                     # archive. No human-review sink, no judge-noise/review split — the
@@ -712,18 +717,22 @@ class DistillationTriggerHook:
         """C5 (run_0d60e04e): the unified MEMORY-distillation admission decision.
 
         Routes one lesson through ingestion_gate(store="MEMORY", trigger="memory_distill")
-        — the gate runs noise(structural, NO ≥5-word floor)→keep_type_holdback→judge (the
-        survey's #1 rating-5 hole: MEMORY auto-distillation had NO adversarial gate).
+        — the gate runs the deterministic HARD-DENY floors (noise→thin→content_floor→
+        episodic) FIRST so the brain is guarded even when the judge is down, THEN the judge
+        (the survey's #1 rating-5 hole: MEMORY auto-distillation had NO adversarial gate).
 
-        AUTONOMY-FIRST (run_86f44f35): keep_type_holdback is removed from the tier list, so
-        the judge decides every type (incl KEEP_TYPES — decision/principle/correction/model).
-        Returns (verdict, section, reason) where verdict ∈ {"auto","discard"} (NO "review" —
-        human queue is 0):
-          • "auto"    + a real section — judge passed; route to the entry-TYPE's MEMORY
-            section (route_lesson_type gives section=None for KEEP_TYPES, so fall back to
-            MEMORY_TYPE_TO_SECTION[etype] — a passed decision writes to Decisions, etc.).
-          • "discard" + None           — judge non-pass (suspect/noise) OR structural noise.
-            The caller archives it (recoverable), never a human sink.
+        AUTONOMY-FIRST (run_86f44f35): no keep_type_holdback tier — the judge decides every
+        type (incl KEEP_TYPES). Returns (verdict, section, reason), verdict ∈ {auto,pending,
+        discard}:
+          • "auto"    + a real section — passed floors AND judge; route to the entry-TYPE's
+            MEMORY section (route_lesson_type gives section=None for KEEP_TYPES → fall back
+            to MEMORY_TYPE_TO_SECTION[etype], so a passed decision writes to Decisions).
+          • "pending" + None — judge UNAVAILABLE (budget/infra). CONVERGENT: the caller
+            requeues to distill-pending.jsonl, re-judged next cycle (never dropped). This is
+            how a keep-type is protected when the judge is down (XG 乙) — NOT a pre-judge
+            hold (which could never be re-judged → infinite requeue).
+          • "discard" + None — a REAL rejection: a deterministic floor, or the judge online
+            saying suspect/noise. The caller archives it (recoverable), never a human sink.
         `reason` is the GateVerdict.reason token, propagated for the caller's log (a
         judge_error:* infra failure stays visible vs a genuine judge verdict).
         """
@@ -2434,6 +2443,21 @@ class DistillationTriggerHook:
             f"flagged_at={datetime.now().isoformat()}\n",
             encoding="utf-8",
         )
+
+
+def requeue_pending_lesson(context_dir: "Path", kind: str, text: str) -> bool:
+    """Public module-level defer helper for the 3 non-distillation MEMORY backdoors
+    (runtime_hooks correction, context_health reflection, memory_extractor manual save).
+
+    When admit_memory_lesson returns verdict=="pending" (judge budget-exhausted this
+    window, judge INFRA down, or a keep-type held while the judge is unavailable — all
+    RECOVERABLE, per XG decision 乙), the backdoor MUST NOT drop the entry. It defers to
+    the SAME distill-pending.jsonl the distillation cycle drains + re-judges with a fresh
+    budget — so no correction / reflection lesson / manual save is ever silently lost
+    (the "never dropped" contract the SSOT door previously violated by collapsing
+    pending→discard). Delegates to the class helper so there is ONE pending-queue writer.
+    Best-effort: a requeue failure is logged, never raised."""
+    return DistillationTriggerHook._requeue_pending(context_dir, kind, text)
 
 
 def _is_distilled(content: str) -> bool:

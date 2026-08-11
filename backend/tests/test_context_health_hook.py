@@ -717,7 +717,16 @@ class TestAutoSessionSignalCultivation:
             ],
         }])
 
-        hook._auto_cultivate_session_signals(workspace)
+        # The MEMORY/DDD admission judge is an LLM (Bedrock) call that FAILS CLOSED
+        # to "discard" with no backend (the test env). commit 2c8fc37f routed this
+        # cultivation door through that judge (P8: judge is the sole admit authority),
+        # so the write no longer happens on a raw fixture. Stub the judge to a
+        # deterministic pass — this test asserts the ROUTING/WRITE behavior, not the
+        # judge's semantics (that lives in test_admission_band). Patch at the
+        # ddd_cultivation call site (admission_band → self_adversarial_judge).
+        import core.ddd_cultivation as _dc
+        with patch.object(_dc, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
+            hook._auto_cultivate_session_signals(workspace)
 
         # Verify the decision was applied to TECH.md
         content = (proj / "TECH.md").read_text()
@@ -857,10 +866,22 @@ class TestProjectsRefreshAfterCultivation:
         }
         (runs_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
 
-        # Mock refresh_projects_index to track if it's called
+        # Stub the LLM admission judge to a deterministic pass (see the note in
+        # test_cultivates_decisions_from_jsonl): with no Bedrock backend it fails
+        # closed to "discard", so nothing would be written and _ddd_docs_modified
+        # would stay False. This test asserts the refresh-on-write WIRING, not the
+        # judge's semantics. Patch both call sites (DDD cultivation + MEMORY door).
+        import core.ddd_cultivation as _dc
+        import core.ingestion_gate as _ig
+        # Also stub _sync_knowledge_library: _light_refresh drives the full Knowledge-
+        # Library aiosqlite sync, which hangs on the connection worker thread in the
+        # test env (unrelated to this test — it asserts the cultivation→refresh wiring).
         with patch(
             "hooks.context_health_hook.ContextHealthHook._refresh_projects_index_sync"
-        ) as mock_refresh:
+        ) as mock_refresh, \
+             patch.object(hook, "_sync_knowledge_library", lambda *a, **k: None), \
+             patch.object(_dc, "self_adversarial_judge", lambda *a, **k: ("pass", "t")), \
+             patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
             hook._light_refresh(workspace, str(workspace))
 
             # Cultivation should have written to DDD docs and set dirty flag
@@ -912,11 +933,19 @@ class TestExtractLessonsNoOrphan:
             "- [guideline] **Existing entry** — prior lesson (2026-06-01)\n"
             "  <!-- ref:3 | last:2026-06-20 | decay:active -->\n"
         )
-        # Extract a new confident lesson into MEMORY.md
-        hook._extract_lessons_to_memory(
-            ws, ["Always verify before asserting — a new guideline lesson here"],
-            "run_test", "TestProject",
-        )
+        # Stub the LLM admission judge to a deterministic pass (see the note in
+        # test_cultivates_decisions_from_jsonl): _extract_lessons_to_memory routes
+        # through admit_memory_lesson → ingestion_gate → self_adversarial_judge,
+        # which fails closed to "discard" with no Bedrock backend, so the lesson
+        # would never be written. This test asserts the WRITER's insert math (no
+        # orphaned meta, newest-at-top), not the judge's admit decision.
+        import core.ingestion_gate as _ig
+        with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
+            # Extract a new confident lesson into MEMORY.md
+            hook._extract_lessons_to_memory(
+                ws, ["Always verify before asserting — a new guideline lesson here"],
+                "run_test", "TestProject",
+            )
         content = (ctx / "MEMORY.md").read_text()
         # No bullet may be followed by TWO consecutive metadata lines
         import re
@@ -1238,15 +1267,34 @@ class TestUsageDecayGate:
 
 
 class TestCognitiveAdmissionGate:
-    """ADMIT / HOLD-BACK gate on _extract_lessons_to_memory (run_f73a33e2).
+    """Deterministic-floor + judge admission gate on _extract_lessons_to_memory.
 
-    Governs the live MEMORY.md auto-writer: auto-sink only clear operational
-    knowledge (guideline/pitfall from a qualified run, non-dup); HOLD-BACK
-    protected/risky/unqualified/noise/dup. The safety core (AC1): a keep-class
-    tier (principle/correction/decision/model) is NEVER auto-written, because
-    the decay engine protects keep-class forever — a wrong auto-principle is
-    permanent. Mutation-proof: reverting the tier-gate turns AC1 RED.
+    THE MUTATION-PROOF CONTRACT (the fix for the false-green class): every reject-path
+    test STUBS THE JUDGE TO PASS and asserts the entry is STILL held. That proves the
+    DETERMINISTIC FLOOR does the holding — not an accidental judge fail-close (no
+    Bedrock in CI). Before this rewrite these tests were green only because the judge
+    crashed; stubbing it to pass turned them red, exposing that the floor 2c8fc37f
+    dropped was gone. The autouse _judge_pass fixture enforces the stub structurally so
+    a future reject-path test cannot silently regress to "green because the judge died".
+
+    Verdicts: auto = written; pending = held recoverably (judge UNAVAILABLE — infra
+    error / budget); discard = a real rejection (a deterministic floor, or the judge
+    online saying suspect/noise). keep-types are NOT held by a pre-judge short-circuit
+    (that can never be re-judged → infinite requeue, an adversarial HIGH we fixed); they
+    flow through the judge normally, and XG 乙 ("never DROP a keep-type when the judge is
+    down") is delivered by the CONVERGENT judge-down→pending path.
     """
+
+    @pytest.fixture(autouse=True)
+    def _judge_pass(self):
+        """STRUCTURAL guard against the false-green class: force the LLM judge to PASS
+        for every test in this class. A reject-path test that still holds its entry is
+        then proving the DETERMINISTIC FLOOR, never a judge fail-close. Remove this and
+        the reject tests would go green for the wrong reason (judge crash) — exactly the
+        bug this class now guards against."""
+        import core.ingestion_gate as _ig
+        with patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged")):
+            yield
 
     def _mk_memory(self, tmp_path, body: str = ""):
         ws = tmp_path / "SwarmWS"
@@ -1260,98 +1308,87 @@ class TestCognitiveAdmissionGate:
         (ctx / "MEMORY.md").write_text(base + body)
         return ws, ctx / "MEMORY.md"
 
-    def test_ac1_protected_principle_held_back(self, hook, tmp_path):
-        """AC1 (safety core): a principle-classified lesson is NOT auto-written.
-
-        Mutation-proof: revert the keep-class tier-gate → this goes RED.
-        """
+    def test_ac1_keep_type_deferred_when_judge_unavailable(self, hook, tmp_path):
+        """AC1 (safety core, XG 乙): when the judge is UNAVAILABLE a keep-type principle is
+        NOT auto-written — it defers (pending), so a permanent/decay-immune entry never
+        rides into MEMORY on a judge that could not actually vet it. This overrides the
+        autouse judge=pass with an infra-error stub. (The judge-AVAILABLE keep-type path —
+        pass → written — is covered in test_distillation_admission; splitting the two is
+        what makes the design CONVERGENT instead of an infinite pre-judge hold.)"""
+        import core.ingestion_gate as _ig
         ws, mem = self._mk_memory(tmp_path)
-        # principle-signal text → classify_entry_type == 'principle' (keep-class)
         principle = (
             "The first principle is that confidence is a counter-signal: the more "
             "certain I feel, the more likely I skipped verification."
         )
-        hook._extract_lessons_to_memory(ws, [principle], "run_x", "Proj", run_qualified=True)
+        with patch.object(_ig, "self_adversarial_judge",
+                          lambda *a, **k: ("suspect", "judge_error:EndpointConnectionError")):
+            hook._extract_lessons_to_memory(ws, [principle], "run_x", "Proj")
         content = mem.read_text()
         assert "confidence is a counter-signal" not in content, (
-            "protected-tier principle was auto-written to MEMORY.md — the exact "
-            f"permanent-auto-commit the gate must prevent:\n{content}"
+            "a keep-type principle was written to MEMORY while the judge was UNAVAILABLE "
+            f"— it must defer (pending), never ride an un-vetted permanent write:\n{content}"
         )
 
-    def test_ac2_operational_qualified_admitted(self, hook, tmp_path):
-        """AC2: a guideline from a qualified run, non-dup → ADMITTED (written)."""
+    def test_ac2_operational_admitted(self, hook, tmp_path):
+        """AC2: a clean operational guideline (judge passes) → ADMITTED (written)."""
         ws, mem = self._mk_memory(tmp_path)
         g = ("When editing MEMORY.md always take the .lock before the "
              "read-modify-write to avoid a lost-update race across writers.")
-        hook._extract_lessons_to_memory(ws, [g], "run_ok", "Proj", run_qualified=True)
+        hook._extract_lessons_to_memory(ws, [g], "run_ok", "Proj")
         content = mem.read_text()
         assert "lost-update race across writers" in content, (
-            f"operational+qualified lesson was NOT written:\n{content}"
+            f"operational lesson was NOT written:\n{content}"
         )
 
-    def test_ac3_unqualified_run_held_back(self, hook, tmp_path):
-        """AC3: same operational lesson from an UNQUALIFIED run → HELD-BACK."""
+    def test_ac4_thin_held_even_when_judge_passes(self, hook, tmp_path):
+        """AC4a: a too-thin fragment is held by the deterministic thin floor EVEN WHEN
+        THE JUDGE PASSES (not an accidental fail-close)."""
         ws, mem = self._mk_memory(tmp_path)
-        g = ("When editing MEMORY.md always take the .lock before the "
-             "read-modify-write to avoid a lost-update race across writers.")
-        hook._extract_lessons_to_memory(ws, [g], "run_bad", "Proj", run_qualified=False)
-        content = mem.read_text()
-        assert "lost-update race across writers" not in content, (
-            f"lesson from an unqualified run was auto-written:\n{content}"
-        )
-
-    def test_ac4_thin_held_back(self, hook, tmp_path):
-        """AC4a: a too-thin (len<20) lesson → HELD-BACK."""
-        ws, mem = self._mk_memory(tmp_path)
-        hook._extract_lessons_to_memory(ws, ["too short"], "r", "P", run_qualified=True)
+        hook._extract_lessons_to_memory(ws, ["too short"], "r", "P")
         assert "too short" not in mem.read_text()
 
-    def test_ac4_step2_gates_on_confidence_not_falsy_return(self, hook):
-        """AC4b (Gate-1 must-fix): step 2 gates on classify_content confidence<=0.3,
-        NOT on a (never-occurring) falsy classify_content return.
-
-        classify_content NEVER rejects — it always returns a routing dict, so a
-        naive `if not classify_content(x)` would be a silent no-op admitting
-        everything. This patches classify_content to the 0.1-confidence dict real
-        noise gets and asserts the helper HOLD-BACKs citing the confidence floor —
-        mutation-visible if someone reverts the numeric check to a truthiness one.
-        """
-        from unittest.mock import patch
+    def test_ac4_low_confidence_denied_even_when_judge_passes(self, hook, tmp_path):
+        """AC4b: content_floor holds a low-confidence (<=0.3) entry EVEN WHEN THE JUDGE
+        PASSES. classify_content NEVER rejects (always routes), so the numeric floor —
+        not a truthiness check — must do the holding. Patched to the 0.1-confidence dict
+        real noise gets; asserts NOT written. Direct floor-level assertion too."""
+        from core.ingestion_gate import content_floor
         lesson = ("Always take the .lock before the read-modify-write on MEMORY.md "
                   "to avoid a lost-update race across concurrent writers here.")
         with patch("core.persist_routing.classify_content",
                    return_value={"confidence": 0.1, "is_governance": False}):
-            admit, reason, _ = hook._admit_lesson_to_memory(lesson, run_qualified=True)
-        assert admit is False, "low-confidence lesson must be HELD-BACK"
-        assert "confidence" in reason.lower() or "volatile" in reason.lower(), (
-            f"HOLD-BACK reason must cite the confidence floor, got: {reason!r}"
-        )
+            deny, reason = content_floor(lesson)
+            assert deny is True, "low-confidence entry must be DENIED by content_floor"
+            assert "confidence" in reason.lower(), f"reason must cite confidence: {reason!r}"
+            ws, mem = self._mk_memory(tmp_path)
+            hook._extract_lessons_to_memory(ws, [lesson], "r", "P")
+            assert "lost-update race across concurrent writers" not in mem.read_text()
 
-    def test_ac4_high_confidence_reaches_admit(self, hook):
-        """AC4b companion: a normal-confidence dict does NOT trip step 2 (proves
-        the floor isn't over-broad — an operational lesson passes through to ADMIT)."""
-        from unittest.mock import patch
+    def test_ac4_high_confidence_passes_floor(self, hook):
+        """AC4b companion: a normal-confidence dict does NOT trip content_floor (proves
+        the floor isn't over-broad — an operational lesson passes through)."""
+        from core.ingestion_gate import content_floor
         lesson = ("Always take the .lock before the read-modify-write on MEMORY.md "
                   "to avoid a lost-update race across concurrent writers here.")
         with patch("core.persist_routing.classify_content",
                    return_value={"confidence": 0.6, "is_governance": False}):
-            admit, reason, _ = hook._admit_lesson_to_memory(lesson, run_qualified=True)
-        assert admit is True, f"operational lesson should ADMIT, got HOLD-BACK: {reason}"
+            deny, reason = content_floor(lesson)
+        assert deny is False, f"normal-confidence lesson must pass the floor, got: {reason}"
 
-    def test_ac4_governance_held_back(self, hook, tmp_path):
-        """AC4c: a governance-phrased lesson → HELD-BACK (belongs to s_self-evolution)."""
+    def test_ac4_governance_held_even_when_judge_passes(self, hook, tmp_path):
+        """AC4c: a governance-phrased lesson is held by content_floor EVEN WHEN THE
+        JUDGE PASSES (belongs to s_self-evolution, not MEMORY)."""
         ws, mem = self._mk_memory(tmp_path)
         gov = ("From now on always run the full adversarial review before every "
                "merge to main — this is a new standing rule for the team.")
         from core.persist_routing import classify_content
         assert classify_content(gov).get("is_governance"), "fixture not governance"
-        hook._extract_lessons_to_memory(ws, [gov], "r", "P", run_qualified=True)
+        hook._extract_lessons_to_memory(ws, [gov], "r", "P")
         assert "new standing rule" not in mem.read_text()
 
-    def test_ac4_duplicate_held_back(self, hook, tmp_path):
-        """AC4d: an exact-title duplicate of an existing section entry → HELD-BACK."""
-        # Pre-seed Guidelines with an entry whose title matches what the writer
-        # will derive (title = text before the em-dash).
+    def test_ac4_duplicate_held(self, hook, tmp_path):
+        """AC4d: an exact-title duplicate of an existing section entry → HELD (dedup)."""
         body = (
             "- [guideline] **Always lock before write** — prior lesson (2026-06-01)\n"
             "  <!-- ref:2 | last:2026-06-10 | decay:active -->\n"
@@ -1366,21 +1403,18 @@ class TestCognitiveAdmissionGate:
         )
         mem = ctx / "MEMORY.md"
         dup = "Always lock before write — take the .lock before read-modify-write always"
-        hook = ContextHealthHook()
-        hook._extract_lessons_to_memory(ws, [dup], "r", "P", run_qualified=True)
+        hook._extract_lessons_to_memory(ws, [dup], "r", "P")
         content = mem.read_text()
-        # The pre-existing entry stays; the new dup body must NOT be appended.
         assert content.count("Always lock before write") == 1, (
             f"duplicate title was auto-written (expected 1 occurrence):\n{content}"
         )
 
-    def test_ac5_no_regression_default_qualified(self, hook, tmp_path):
-        """AC5: the writer still writes a legit operational lesson with the
-        DEFAULT run_qualified (back-compat — the pre-existing 4-arg call path)."""
+    def test_ac5_no_regression_operational_written(self, hook, tmp_path):
+        """AC5: the writer still writes a legit operational lesson (back-compat, the
+        judge-pass happy path)."""
         ws, mem = self._mk_memory(tmp_path)
         g = ("Verify runtime state by observation before asserting a cause — "
              "read the live gauge, do not infer from a stale log string.")
-        # 4-arg call (no run_qualified) — exercises the default=True path
         hook._extract_lessons_to_memory(ws, [g], "run_z", "Proj")
         assert "read the live gauge" in mem.read_text()
 

@@ -37,6 +37,12 @@ from typing import Any, Callable
 
 # ── Constants (SSOT for the noise primitives; ddd_cultivation re-exports) ──────
 MIN_LESSON_LENGTH = 30
+# MEMORY thin floor — DISTINCT from MIN_LESSON_LENGTH. MEMORY deliberately has NO
+# ≥5-word DDD value floor (short decision fragments like "enableMCP = always true"
+# must survive — Gate-1 ⓐ). But a truly-thin fragment (< this) teaches nothing. This
+# is the exact floor the old _admit_lesson_to_memory step-0 used (len<20) before
+# 2c8fc37f dropped it; restored here as the deterministic `thin` tier.
+MIN_MEMORY_LESSON_LENGTH = 20
 
 # CJK codepoint presence — a CJK-heavy fragment clears the word-floor on char length.
 _CJK_RE = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿＀-￯]")
@@ -316,7 +322,12 @@ def _judge_client():
             "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6")
     except Exception:
         model_id = "us.anthropic.claude-sonnet-4-6"
-    client = build_timeout_client(read_timeout=25, max_attempts=1)
+    # max_attempts=2: the judge guards the brain, so ONE transient (throttle / cold
+    # connection / brief network blip) must not fail-close and silently HOLD a whole
+    # session's lessons. boto standard retry mode adds backoff on the 2nd attempt;
+    # worst case ~2×read_timeout, acceptable on this background hook path. Still
+    # fail-CLOSED after the retry (a persistent outage → suspect → pending, never pass).
+    client = build_timeout_client(read_timeout=25, max_attempts=2)
     return client, model_id
 
 
@@ -383,6 +394,59 @@ def keep_type_holdback(text: str) -> "tuple[bool, str]":
         return (True, "holdback_error")
 
 
+def thin_floor(text: str) -> bool:
+    """True if `text` is too thin to be a durable lesson (deterministic HARD-DENY).
+
+    A cheap, network-free floor that holds even when the judge is unavailable — the
+    first line of the defense-in-depth that commit 2c8fc37f silently removed from the
+    MEMORY write path (only the dead _admit_lesson_to_memory still had it). Uses
+    MIN_MEMORY_LESSON_LENGTH (20 — the old step-0 floor), NOT MIN_LESSON_LENGTH (30 —
+    the DDD ≥5-word floor MEMORY deliberately skips so short decision fragments like
+    "enableMCP = always true" survive). CJK-aware: a CJK-heavy fragment is dense per
+    character, so it clears the floor at a lower length (mirrors _is_quality_lesson)."""
+    stripped = (text or "").strip()
+    floor = MIN_MEMORY_LESSON_LENGTH
+    if _CJK_RE.search(stripped):
+        floor = max(6, MIN_MEMORY_LESSON_LENGTH // 3)  # CJK is dense; a shorter char floor
+    return len(stripped) < floor
+
+
+def content_floor(text: str) -> "tuple[bool, str]":
+    """Deterministic value/governance floor (HARD-DENY, network-free). Returns
+    (deny, reason). Two checks folded into ONE classify_content call (mirrors the
+    former _admit_lesson_to_memory steps 2+3):
+      • confidence <= 0.3  → volatile / zero-value  (classify_content never rejects,
+        it always routes; the 0.3 floor mirrors ddd_cultivation's value floor).
+      • is_governance      → a behavioral RULE belongs to s_self-evolution, not MEMORY.
+    FAIL-CLOSED: a classifier error DENIES (never silent-admit) — the whole point of a
+    floor that must hold when things go wrong."""
+    try:
+        from core.persist_routing import classify_content
+        r = classify_content(text)
+    except Exception as exc:  # noqa: BLE001 — fail-closed: classifier error → DENY
+        return (True, f"content_floor_error:{type(exc).__name__}")
+    if r.get("confidence", 0.0) <= 0.3:
+        return (True, f"low_confidence:{r.get('confidence')}")
+    if r.get("is_governance"):
+        return (True, "governance")
+    return (False, "")
+
+
+def episodic_warstory(text: str) -> bool:
+    """True if `text` narrates a single-run gate EVENT (a war-story) — it belongs in
+    IMPROVEMENT.md/run.json, never the injected MEMORY hot path. Deterministic floor
+    restored from the deleted _admit_lesson_to_memory step-6 (root cause of the 92-entry
+    decay-archive sweep, 2026-07-28). LAZY import: the detector lives in
+    context_health_hook, which lazily imports THIS module — importing it at top level
+    would risk a cycle. Fail-OPEN (detector error → NOT a war-story): a false-negative
+    is a recoverable, decay-reclaimable entry; never break admission on a heuristic."""
+    try:
+        from hooks.context_health_hook import _is_episodic_warstory
+        return _is_episodic_warstory(text)
+    except Exception:  # noqa: BLE001 — heuristic floor, fail-open (don't block on error)
+        return False
+
+
 # ── GateVerdict — DECISION only (no apply status; gate ≠ execution) ────────────
 @dataclass
 class GateVerdict:
@@ -417,13 +481,30 @@ TRIGGER_TIERS: dict[str, list[str]] = {
     # (principle/correction/decision/model) to review BEFORE the judge ran, so a
     # judge-worthy permanent lesson could never auto-write. Per XG directive the judge is
     # the sole authority: pass → auto (any type), non-pass → discard. No type is held back.
-    # MEMORY — NO confident (no ≥5-word floor so short fragments survive).
-    "memory_distill":       ["noise", "judge", "dedup"],
-    "memory_save_button":   ["noise", "dedup"],
-    "memory_persist":       ["dedup"],
-    # EVOLUTION
-    "evolution_distill":    ["noise", "judge", "dedup"],
-    "evolution_persist":    ["dedup"],
+    # MEMORY — deterministic HARD-DENY floors run BEFORE the judge so the brain is
+    # guarded even when the judge is unavailable (restores the defense-in-depth that
+    # 2c8fc37f silently dropped). Order: cheap structural → thin → value/governance →
+    # episodic war-story → judge (quality) → dedup. NO `confident` (the ≥5-word DDD
+    # floor) so short MEMORY fragments survive. NO keep_type_holdback tier: a KEEP_TYPE
+    # is NOT held by a deterministic short-circuit (that never reaches the judge, so
+    # "re-judge next cycle" is impossible → an infinite requeue loop, adversarial HIGH).
+    # XG 乙's real intent is "don't DROP a keep-type when the judge is UNAVAILABLE" —
+    # which the judge_error/budget→pending path already delivers for ALL types AND
+    # converges (once the judge recovers, the keep-type is judged: pass→written to its
+    # type section, refuse→discard). judge-available + pass → a keep-type auto-writes
+    # (autonomy-first, as 2c8fc37f intended); the deterministic floors above still guard
+    # the brain when the judge is down.
+    "memory_distill":       ["noise", "thin", "content_floor", "episodic", "judge", "dedup"],
+    # manual "Save to Memory" — deterministic floors + judge (XG decision A: user intent
+    # does not bypass the judge). No keep_type_holdback: a user explicitly saving a
+    # principle is intentional, and the LLM extractor already type-bucketed it.
+    "memory_save_button":   ["noise", "thin", "content_floor", "judge", "dedup"],
+    "memory_persist":       ["noise", "thin", "dedup"],
+    # EVOLUTION — thin floor + judge. NO content_floor/keep_type_holdback: a correction
+    # IS EVOLUTION's normal keep-type content, and governance rules are legitimate here,
+    # so those floors would wrongly reject valid constitutional entries.
+    "evolution_distill":    ["noise", "thin", "judge", "dedup"],
+    "evolution_persist":    ["noise", "thin", "dedup"],
     # ── DDD SPEC (served by admission_band, NOT this dispatcher — kept for the record) ──
     "ddd_reflect":          ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
     "ddd_session_signal":   ["noise", "trust", "judge", "confident", "magnitude", "dedup"],
@@ -446,7 +527,8 @@ _DISPATCHER_TRIGGERS = frozenset({
 # /['run_id']) — until then treated as no-op PASS (they only tighten toward review,
 # and the DDD path's real trust still lives in admission_band until C3 migrates it).
 _IMPLEMENTED_TIERS = frozenset({"noise", "confident", "dedup", "human",
-                                "judge", "keep_type_holdback"})
+                                "judge", "keep_type_holdback",
+                                "thin", "content_floor", "episodic"})
 
 
 def ingestion_gate(
@@ -509,6 +591,26 @@ def ingestion_gate(
                 # DDD-only value floor (≥5-word + instance-log + narration + machine-broadcast).
                 if ddd_value_floor(text):
                     return GateVerdict("discard", ran, "noise:ddd_value_floor")
+
+            elif tier == "thin":
+                # Deterministic HARD-DENY (network-free): too-thin fragment. Restores the
+                # floor 2c8fc37f dropped from MEMORY — holds even if the judge is down.
+                if thin_floor(text):
+                    return GateVerdict("discard", ran, "thin")
+
+            elif tier == "content_floor":
+                # Deterministic HARD-DENY: volatile/zero-value (confidence<=0.3) OR a
+                # governance rule (belongs to s_self-evolution, not MEMORY). Fail-closed.
+                deny, why = content_floor(text)
+                if deny:
+                    return GateVerdict("discard", ran, why)
+
+            elif tier == "episodic":
+                # Deterministic HARD-DENY: a single-run gate war-story ("Gate-2 caught…",
+                # "Nth catch this session") belongs in IMPROVEMENT.md, not the MEMORY hot
+                # path (92-entry decay-archive root cause). Fail-open on detector error.
+                if episodic_warstory(text):
+                    return GateVerdict("discard", ran, "episodic_warstory")
 
             elif tier == "keep_type_holdback":
                 # KEEP_TYPES (principle/correction/decision/model) → review (permanent write).
@@ -618,20 +720,28 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str, str | Non
     (run_04fd397c, XG): even a user-initiated manual save goes through the judge;
     user intent does not bypass it. judge FAIL-CLOSED is the safety floor.
 
-    AUTONOMY-FIRST (run_86f44f35): keep_type_holdback is off the tier list, so the
-    judge decides every type. Returns (verdict, section, reason), verdict ∈
-    {"auto","discard"} (NO "review" — human queue is 0):
-      • "auto"    + real section — judge passed; route to the entry-TYPE's MEMORY
-        section (KEEP_TYPES get section=None from route_lesson_type → fall back to
-        MEMORY_TYPE_TO_SECTION[etype]).
-      • "discard" + None          — judge non-pass (suspect/noise), structural noise,
-        gate-error (fail-closed), or unroutable type. Caller archives (recoverable).
-    Returns (verdict, section, reason, distilled_text):
-      • distilled_text is the SHAPE-distilled rewrite when the judge admitted a
-        shape-dirty entry (verbose/narrative) — the writer MUST use it instead of its
-        own text (capture-vs-distill separation: the writer never finalizes). It is
-        None when the entry was already shape-clean OR distill failed (fail-open →
-        caller uses original) OR verdict is discard.
+    Deterministic HARD-DENY floors run BEFORE the judge (thin/content_floor/
+    keep_type_holdback via memory_distill tiers) so the brain is guarded even when the
+    judge is unavailable. Returns (verdict, section, reason, distilled_text),
+    verdict ∈ {"auto","discard","pending"}:
+      • "auto"    + real section — passed floors AND the judge; route to the entry-
+        TYPE's MEMORY section (KEEP_TYPES get section=None from route_lesson_type →
+        fall back to MEMORY_TYPE_TO_SECTION[etype]).
+      • "discard" + None          — a REAL refusal: structural noise, a deterministic
+        floor (thin/low-confidence/governance), the judge saying suspect/noise while
+        ONLINE, or an unroutable type. Not recoverable; caller archives.
+      • "pending" + None          — RECOVERABLE deferral, NOT a refusal: the judge was
+        UNAVAILABLE (budget_exhausted this window, or a judge INFRA error — network/
+        Bedrock down), so no quality verdict exists yet. The caller MUST defer to
+        distill-pending.jsonl for a fresh-budget re-judge next cycle — NEVER drop it
+        (the module docstring's "never dropped" promise; the bug this fixes was the
+        SSOT door collapsing budget/infra-error into discard, silently losing every
+        correction/lesson/manual-save once the window filled). keep-type held by the
+        deterministic floor while the judge is down also lands here (XG decision 乙).
+      • distilled_text — the SHAPE-distilled rewrite when the judge admitted a
+        shape-dirty entry; the writer MUST use it instead of its own text (writer≠
+        finalizer). None when already shape-clean, distill failed (fail-open), or the
+        verdict is discard/pending.
     Moved here from distillation_hook._admit_memory_lesson (was door-local; promoting
     to module level makes it the shared primitive all doors import — the P8 structural
     end-state: change admission once, every door inherits it)."""
@@ -696,8 +806,31 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str, str | Non
                 distilled = None
             return ("auto", resolved, reason, distilled)
         return ("discard", None, reason or "unroutable_type", None)
-    # verdict is "review" (gate-error, fail-closed) or "discard" → both discard here
-    return ("discard", None, reason, None)
+    # verdict is "review" or "discard". Split by RECOVERABILITY (the fix for the
+    # silent-drop bug): budget_exhausted (judge not called this window) and a judge
+    # INFRA error (judge_error:* — Bedrock/network down, fail-closed to suspect) mean
+    # NO quality verdict exists YET → "pending" (caller defers to distill-pending.jsonl,
+    # re-judged with a fresh budget). This is CONVERGENT: once the judge recovers the
+    # re-judge yields a real pass/discard, so nothing loops forever. It also delivers
+    # XG 乙 for EVERY type incl keep-types ("don't DROP when the judge is unavailable").
+    # A judge that RAN and refused (judge:suspect:judged / judge:noise) or a deterministic
+    # floor (thin/low_confidence/governance/episodic/noise:structural) is a REAL rejection
+    # → "discard". NB: keep_type_holdback is deliberately NOT here — it is not a
+    # memory_distill tier anymore (a pre-judge short-circuit can never be re-judged →
+    # infinite requeue; adversarial HIGH). keep-types now flow through the judge normally.
+    is_recoverable = (
+        reason == "judge:budget_exhausted"
+        or reason.startswith("judge:suspect:judge_error")
+        # Defense-in-depth: the real judge is fail-closed INTERNALLY (returns
+        # ("suspect","judge_error:*"), never raises), so gate_error should not normally
+        # occur past the deterministic floors. But if a future change lets an exception
+        # escape the tier loop, the outer except returns review/gate_error:* — treat that
+        # as RECOVERABLE too (defer, re-judge) rather than silently DROP the entry. The
+        # deterministic floors already ran BEFORE the judge, so a gate_error here is an
+        # infra/judge fault, not a content rejection.
+        or reason.startswith("gate_error")
+    )
+    return ("pending" if is_recoverable else "discard", None, reason, None)
 
 
 # ── shape_warnings — the SHAPE gate (concise-vs-verbose, rule-vs-narrative) ────

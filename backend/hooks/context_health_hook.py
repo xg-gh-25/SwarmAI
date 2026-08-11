@@ -1043,14 +1043,8 @@ class ContextHealthHook:
                     # applied to DDD — if DDD accepted them, they're confident).
                     if result.get("applied", 0) > 0:
                         try:
-                            # Trust signal (AC2/AC3): a lesson from a run that
-                            # itself COMPLETED is trustworthy; one from an
-                            # abandoned/blocked run is held back. status is a
-                            # top-level run.json field (verified 414/414 runs).
-                            run_qualified = run_data.get("status") == "completed"
                             self._extract_lessons_to_memory(
                                 root, lessons, run_id, project_name,
-                                run_qualified=run_qualified,
                             )
                         except Exception:
                             pass  # Best-effort — DDD cultivation is primary
@@ -1085,100 +1079,24 @@ class ContextHealthHook:
 
         return any_applied
 
-    def _admit_lesson_to_memory(
-        self, lesson: str, run_qualified: bool,
-    ) -> tuple[bool, str, str]:
-        """ADMIT / HOLD-BACK admission gate for a single cognitive lesson.
-
-        Returns (admit: bool, reason: str, entry_type: str). A Step-0-equivalent
-        admission gate (AGENT.md R30 in spirit) in front of the MEMORY.md write.
-        Seven ordered checks; PROTECTION is checked FIRST among the classifiers so a
-        keep-class lesson can never reach ADMIT even if the run is qualified:
-
-          0. len >= 20                              (too thin)
-          1. is_quality_lesson                      (instance-log/fragment noise)
-          2. classify_content confidence > 0.3      (volatile/zero-value — classify_content
-                                                      NEVER rejects, it always routes; the
-                                                      0.3 floor mirrors ddd_cultivation.py:217)
-          3. NOT is_governance                      (a behavioral rule belongs to
-                                                      s_self-evolution, not MEMORY)
-          4. classify_entry_type NOT in _KEEP_TYPES (PROTECTION FIRST: principle/correction/
-                                                      decision/model are evergreen — decay can
-                                                      NEVER reclaim them, so a wrong auto-commit
-                                                      is permanent → never auto-write)
-          5. run_qualified                          (lesson from a run that itself completed)
-          6. NOT _is_episodic_warstory              (a lesson that OPENS by narrating a
-                                                      single run-event — "Gate-2 caught X",
-                                                      "Nth catch this session", "GUIxxx
-                                                      RECURRED", "又抓到" — is episodic, not
-                                                      a reusable rule → stays in IMPROVEMENT.md,
-                                                      never the injected MEMORY hot path)
-
-        Dedup (the in-lock step) is NOT here — it needs the locked MEMORY.md snapshot,
-        so it runs at the write site inside the lock (avoids a stale-snapshot race).
-
-        classify_entry_type is a fallible keyword classifier: a principle phrased
-        without a principle-signal token can misroute to 'guideline' and slip past
-        step 4 into the reclaimable Guidelines slot. That is graceful degradation,
-        NOT a hole — the guarantee is "no PERMANENT auto-commit of protected
-        knowledge" (a misrouted principle-as-guideline is decay-reclaimable +
-        git-revertable), not "no principle is ever auto-written."
-        """
-        from core.ddd_entry_lifecycle import classify_entry_type, _KEEP_TYPES
-
-        # Step 0 — too thin
-        if len(lesson) < 20:
-            return (False, "thin (len<20)", "")
-        # Step 1 — instance-log / fragment noise
-        try:
-            from core.ddd_cultivation import is_quality_lesson
-            if not is_quality_lesson(lesson):
-                return (False, "noise (is_quality_lesson=False)", "")
-        except Exception as exc:  # fail-loud → HOLD-BACK, never silent-ADMIT
-            return (False, f"admission error (is_quality_lesson): {type(exc).__name__}: {exc}", "")
-        # Steps 2+3 — one classify_content call (confidence floor + governance)
-        try:
-            from core.persist_routing import classify_content
-            r = classify_content(lesson)
-        except Exception as exc:
-            return (False, f"admission error (classify_content): {type(exc).__name__}: {exc}", "")
-        if r.get("confidence", 0.0) <= 0.3:
-            return (False, f"volatile/zero-value (confidence={r.get('confidence')})", "")
-        if r.get("is_governance"):
-            return (False, "governance (belongs to s_self-evolution, not MEMORY)", "")
-        # Step 4 — PROTECTION FIRST: keep-class tier is never auto-written
-        entry_type = classify_entry_type(lesson)
-        if entry_type in _KEEP_TYPES:
-            return (False, f"protected tier '{entry_type}' (keep-class, decay-permanent)", entry_type)
-        # Step 5 — run-outcome trust
-        if not run_qualified:
-            return (False, "unqualified run (status != completed)", entry_type)
-        # Step 6 — episodic war-story gate: a lesson whose BODY narrates a single
-        # run-event (Gate-N caught X / Nth catch this session / GUIxxx RECURRED /
-        # 又抓到 …) is episodic, not a reusable rule — it belongs in
-        # IMPROVEMENT.md/run.json, NOT the injected MEMORY hot path. Root cause of
-        # the 92-entry decay-archive sweep (2026-07-28, run_117bcdf4).
-        if _is_episodic_warstory(lesson):
-            return (False, "episodic war-story (run-event narration, not reusable rule)", entry_type)
-        return (True, "admit", entry_type)
-
     def _extract_lessons_to_memory(
         self, root: Path, lessons: list[str], run_id: str, project: str,
-        run_qualified: bool = True,
     ) -> None:
-        """Extract REFLECT lessons to MEMORY.md through an ADMIT/HOLD-BACK gate.
+        """Extract REFLECT lessons to MEMORY.md through the SSOT admission gate.
 
-        Governs the live cognitive auto-writer (run_f73a33e2): each lesson passes
-        the ``_admit_lesson_to_memory`` Step-0-equivalent admission gate (a
-        code-side stand-in for s_persist's Step-0, AGENT.md R30 in spirit) + a
-        keep-class PROTECTION check + a run-qualification (``run_qualified``) trust
-        signal + an exact/normalized-title dedup inside the write lock. ADMIT →
-        written; every HOLD-BACK is logged with its reason and DROPPED (never
-        auto-written, never sent to the broken MEMORY proposal-queue). Uses
-        classify_entry_type for section routing (guideline→Guidelines,
-        pitfall→Pitfalls). Only ``guideline``/``pitfall`` from a qualified,
-        non-duplicate run are auto-sunk — protected tiers (principle/correction/
-        decision/model) are always HELD-BACK because decay can never reclaim them.
+        Every lesson routes through ``ingestion_gate.admit_memory_lesson`` — the ONE
+        MEMORY door all writers share (P8). That gate runs the deterministic HARD-DENY
+        floors FIRST (structural-noise → thin → content_floor[confidence/governance] →
+        keep_type_holdback), then the LLM judge, so the brain is guarded even when the
+        judge is unavailable. Verdicts:
+          • auto    → written to the judge-routed section (dedup inside the write lock).
+          • pending → RECOVERABLE (judge budget-exhausted / infra down, or a keep-type
+            held while the judge is down) → deferred to distill-pending.jsonl for a
+            fresh-budget re-judge next cycle; NEVER dropped, NEVER auto-written.
+          • discard → a real refusal (a deterministic floor, or the judge online saying
+            suspect/noise) → not written (the source lesson still lives upstream).
+        (The former ``run_qualified`` trust param + the ``_admit_lesson_to_memory``
+        code-side stand-in were removed — the SSOT gate is the sole authority now.)
         """
 
         memory_path = root / ".context" / "MEMORY.md"
@@ -1212,6 +1130,21 @@ class ContextHealthHook:
                     "context_health: MEMORY judge crashed, DISCARD "
                     "lesson (%s: %s): %.80s", type(exc).__name__, exc, lesson,
                 )
+                continue
+            if verdict == "pending":
+                # RECOVERABLE (judge budget-exhausted / infra down / keep-type held while
+                # the judge is unavailable) — DEFER, never drop. Lands in the shared
+                # distill-pending.jsonl for a fresh-budget re-judge next cycle. This is
+                # the fix for the silent-drop bug: the SSOT door used to collapse
+                # pending→discard, losing every reflection lesson once the window filled.
+                try:
+                    from hooks.distillation_hook import requeue_pending_lesson
+                    requeue_pending_lesson(root / ".context", "lesson", lesson)
+                    logger.info("context_health: MEMORY lesson deferred (%s): %.80s",
+                                reason, lesson)
+                except Exception as exc:  # noqa: BLE001 — defer is best-effort, never break
+                    logger.warning("context_health: pending defer FAILED (%s), lesson "
+                                   "NOT lost from source: %.80s", type(exc).__name__, lesson)
                 continue
             if verdict != "auto" or not target_section:
                 logger.info(

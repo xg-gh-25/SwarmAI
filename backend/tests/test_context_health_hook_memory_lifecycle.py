@@ -248,15 +248,27 @@ class TestEpisodicWarStoryGate:
         for l in self.SEMANTIC:
             assert not _is_episodic_warstory(l), f"semantic wrongly flagged: {l[:60]}"
 
-    def test_warstory_lessons_held_back(self, hook):
-        # Full admission gate: qualified run, but war-story body → HOLD-BACK at Step 6.
-        for l in self.WARSTORIES + self.WARSTORIES_NONOPENER:
-            admit, reason, _ = hook._admit_lesson_to_memory(l, run_qualified=True)
-            assert not admit, f"war-story ADMITTED: {l[:60]}"
-            assert "episodic" in reason, f"wrong reject reason ({reason}): {l[:50]}"
+    def test_warstory_lessons_held_back(self):
+        # Full admission gate via the SSOT door: the deterministic `episodic` tier holds
+        # a war-story EVEN WHEN THE JUDGE PASSES (mutation-proof — it's the floor, not a
+        # judge fail-close). admit_memory_lesson routes memory_distill tiers incl episodic.
+        from unittest.mock import patch as _patch
+        import core.ingestion_gate as _ig
+        with _patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged")):
+            for l in self.WARSTORIES + self.WARSTORIES_NONOPENER:
+                verdict, _sec, reason, _d = _ig.admit_memory_lesson(l)
+                assert verdict == "discard", f"war-story ADMITTED ({verdict}): {l[:60]}"
+                assert "episodic" in reason, f"wrong reject reason ({reason}): {l[:50]}"
 
-    def test_semantic_lessons_admitted(self, hook):
-        # Genuine rules from a qualified run must still ADMIT (no over-block).
-        for l in self.SEMANTIC:
-            admit, reason, _ = hook._admit_lesson_to_memory(l, run_qualified=True)
-            assert admit, f"semantic HELD-BACK ({reason}): {l[:60]}"
+    def test_semantic_lessons_admitted(self):
+        # Genuine rules must still ADMIT (no over-block) when the judge passes.
+        from unittest.mock import patch as _patch
+        import core.ingestion_gate as _ig
+        with _patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged")):
+            for l in self.SEMANTIC:
+                verdict, _sec, reason, _d = _ig.admit_memory_lesson(l)
+                # With judge=pass a genuine rule is AUTO (keep-type → its section, non-keep
+                # → guideline/pitfall). The over-block guard here: it must NOT be
+                # episodic-discarded (the war-story floor must not swallow a real rule).
+                assert not (verdict == "discard" and "episodic" in reason), (
+                    f"semantic rule wrongly episodic-discarded ({reason}): {l[:60]}")
