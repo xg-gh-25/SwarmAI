@@ -2,7 +2,7 @@
 title: Codebase Metrics
 status: living
 created: 2026-07-19
-updated: 2026-08-10
+updated: 2026-08-11
 ---
 # Codebase Metrics (auto-refreshed)
 
@@ -16,18 +16,18 @@ updated: 2026-08-10
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 3633+ | `git log --oneline | wc -l` |
-| Duration | ~169 days | First commit to latest (1 human contributor) |
-| Backend core modules | 175 Python files, 95181 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
-| Total backend LOC | 235763 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
-| Test files | 478 | `find backend/tests -name "*.py" | wc -l` |
+| Total commits | 3668+ | `git log --oneline | wc -l` |
+| Duration | ~170 days | First commit to latest (1 human contributor) |
+| Backend core modules | 175 Python files, 96407 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
+| Total backend LOC | 237535 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
+| Test files | 482 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 85 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 15 | `ls backend/hooks/*.py | wc -l` |
 | React components | 280 | `find desktop/src -name "*.tsx" | wc -l` |
 | Pipeline spec depth | 1556 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 4614 lines | `wc -l backend/core/session_unit.py` |
+| Largest state machine | 4629 lines | `wc -l backend/core/session_unit.py` |
 | Context system | 1220 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
 | Background jobs | 16 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-| Code graph | 25,252 symbols, 41,749 edges | `code_intel.db` (code_nodes / code_edges tables) |
+| Code graph | 25,489 symbols, 38,208 edges | `code_intel.db` (code_nodes / code_edges tables) |
 <!-- METRICS_END -->
