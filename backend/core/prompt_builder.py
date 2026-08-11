@@ -1710,6 +1710,27 @@ class PromptBuilder:
         # setting_sources tells Claude SDK where to discover skills/config.
         # "project" means: look in {cwd}/.claude/ subdirectory for skills.
         setting_sources = ["project"]
+
+        # PER-SPAWN injection-surface guard (run_8ada36d7). setting_sources=["project"]
+        # makes the harness load {cwd}/CLAUDE.md + AGENTS.md as project-instructions
+        # that OVERRIDE governance, bypassing this builder — and the harness re-reads
+        # them fresh at EVERY subprocess spawn. Force them to the read-only sentinel
+        # here, immediately before cwd is handed to the SDK, so any pollution written
+        # since startup is overwritten before this session reads it. Skipped for
+        # channel sender-dir sessions (a different, freshly-created + access-scoped
+        # cwd — out of scope). Fail-open: never block a spawn.
+        if not _channel_sender_dir:
+            try:
+                from core.swarm_workspace_manager import (
+                    _assert_ai_instruction_sentinels,
+                )
+                _assert_ai_instruction_sentinels(Path(working_directory))
+            except Exception as exc:  # noqa: BLE001 — must never block a spawn
+                logger.warning(
+                    "ai-instruction-sentinel (per-spawn) skipped (non-blocking): %s",
+                    exc,
+                )
+
         global_user_mode = agent_config.get("global_user_mode", True)
 
         if _channel_sender_dir:
