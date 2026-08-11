@@ -1014,6 +1014,12 @@ export interface ChatStreamingLifecycleDeps {
    *  recovery has given up. Clears the tab to a new session (history preserved
    *  server-side). */
   onStartFresh?: (tabId: string) => void;
+  /** Callback fired when a tab binds its own backend session (session_start),
+   *  for ANY tab — active OR background. Lets the owner (ChatPage) backfill a
+   *  pending ToDo-dispatch record even when the tab is not the active one (the
+   *  global-sessionId effect only covers the active tab). Opaque to the hook —
+   *  keeps ToDo logic out of the streaming hot path. */
+  onTabSessionBound?: (tabId: string, sessionId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,6 +1037,7 @@ export function useChatStreamingLifecycle(
     activeTabIdRef,
     onSelectTab,
     onStartFresh,
+    onTabSessionBound,
   } = deps;
 
   // --- Toast for reconnection notifications ---
@@ -2676,6 +2683,19 @@ export function useChatStreamingLifecycle(
           if (tabState) {
             tabState.sessionId = event.sessionId;
             // Keep tabState.isStreaming = true (set by setIsStreaming(true) in handleSendMessage)
+          }
+          // Notify the owner that THIS tab bound a session — fires for background
+          // tabs too, so a dispatched ToDo record can backfill even when the tab
+          // is not active (the active-only global-sessionId effect misses those).
+          // Opaque callback: no ToDo logic enters the streaming hot path. Wrapped
+          // so a throw in the owner's callback can never break session_start
+          // handling (P0: never degrade the streaming path).
+          if (capturedTabId) {
+            try {
+              onTabSessionBound?.(capturedTabId, event.sessionId);
+            } catch (err) {
+              console.error('[useChatStreamingLifecycle] onTabSessionBound threw (ignored):', err);
+            }
           }
           // Only update useState if this is the active foreground tab
           if (isActiveTab) {

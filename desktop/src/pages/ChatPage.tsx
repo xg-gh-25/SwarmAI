@@ -67,6 +67,7 @@ import { type ResumeTabInfo } from './chat/resumeTarget';
 import { classifyLanding, type LandingVerdict } from './chat/landPromptInTab';
 import { dispatchInjectChatInput } from './chat/injectChatInput';
 import { canBindSessionToActiveTab } from './chat/sessionBinding';
+import { planDispatchBackfill } from './chat/dispatchBackfill';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
 import { useAttentionQueue } from '../hooks/useAttentionQueue';
@@ -278,6 +279,12 @@ export default function ChatPage() {
   // session" action — handleNewChat is defined below the hook call, so the hook
   // gets a stable wrapper that reads this ref.
   const startFreshRef = useRef<(tabId: string) => void>(() => {});
+  // Same forward-ref pattern for the per-tab ToDo backfill (backfillDispatchForTab
+  // is defined below the hook call): the hook's onTabSessionBound reads this ref.
+  const backfillDispatchForTabRef = useRef<(tabId: string, sessionId: string) => void>(() => {});
+  // Dedup guard: (tabId::sessionId) already backfilled — the active tab reaches
+  // the backfill by two paths (callback + effect); dispatch each pair only once.
+  const backfilledTabSessionsRef = useRef<Set<string>>(new Set());
 
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
   // isStreaming, refs, and stream handler factories (Phase 0 extraction).
@@ -325,6 +332,10 @@ export default function ChatPage() {
     onDrainQueue: (tabId: string) => drainQueueRef.current(tabId),
     onSelectTab: (tabId: string) => selectTab(tabId),
     onStartFresh: (tabId: string) => startFreshRef.current(tabId),
+    // Backfill a dispatched ToDo's session_id the moment its tab binds a session
+    // — fires for BACKGROUND tabs too (the active-only effect misses those).
+    // Decoupled: the hook fires this opaque callback; all ToDo logic stays here.
+    onTabSessionBound: (tabId: string, boundSessionId: string) => backfillDispatchForTabRef.current(tabId, boundSessionId),
   });
 
   // TSCC state management — lifecycle state and UI preferences only.
@@ -1821,6 +1832,28 @@ export default function ChatPage() {
 
 
 
+  // Backfill a ToDo dispatch record once its tab owns a session. Pure decision
+  // in planDispatchBackfill; here we perform the effect (dispatch + prune ref).
+  // Reused by BOTH the active-tab bind effect below AND the background-tab
+  // onTabSessionBound callback (fired from session_start for any tab) — one
+  // helper, no per-branch duplication. Keeps ToDo logic in ChatPage, out of the
+  // streaming hot path (the hook only fires an opaque callback).
+  const backfillDispatchForTab = useCallback((tabId: string, boundSessionId: string) => {
+    const plan = planDispatchBackfill(dispatchPendingRef.current, tabId, boundSessionId);
+    if (!plan.toDispatch) return;
+    // Idempotency guard: a session_start on the ACTIVE tab reaches this helper by
+    // BOTH paths — the onTabSessionBound callback (background/any-tab) AND the
+    // global-sessionId bind effect. Without a guard the same record could dispatch
+    // twice (Gate-2 race). One dispatch per (tab,session) pair, whichever path wins.
+    const key = `${tabId}::${boundSessionId}`;
+    if (backfilledTabSessionsRef.current.has(key)) return;
+    backfilledTabSessionsRef.current.add(key);
+    void todosService.dispatch(plan.toDispatch.todoId, plan.toDispatch.tabLabel, boundSessionId)
+      .catch(() => {/* non-fatal */});
+    dispatchPendingRef.current = plan.remaining;
+  }, []);
+  backfillDispatchForTabRef.current = backfillDispatchForTab;
+
   // Bind the global sessionId to the active tab when a session materializes FOR
   // that tab — and backfill any pending ToDo-dispatch record. UNIFIED GUARD
   // (run_3e0672d2 perpetual-thinking fix): both actions gate on
@@ -1846,25 +1879,16 @@ export default function ChatPage() {
     if (tabState && !tabState.sessionId) {
       updateTabSessionId(boundTabId, boundSessionId);
     }
-    // ToDo Dispatch backfill (A2): this tab's session just materialized — fill
-    // dispatched_session_id for the NEWEST record on this tab (append-only;
-    // newest wins if the user dispatched twice before sending), then DROP all
-    // of this tab's records (backfill is done for this tab — prevents unbounded
-    // growth, Gate-2 MEDIUM #9). Older superseded records are correctly discarded.
-    const pend = dispatchPendingRef.current;
-    const mine = pend.filter((p) => p.tabId === boundTabId);
-    if (mine.length > 0) {
-      const newest = mine[mine.length - 1];
-      void todosService.dispatch(newest.todoId, newest.tabLabel, boundSessionId).catch(() => {/* non-fatal */});
-      dispatchPendingRef.current = pend.filter((p) => p.tabId !== boundTabId);
-    }
+    // ToDo Dispatch backfill: this tab's session just materialized (active path).
+    // Same helper the background-tab onTabSessionBound callback uses (unified).
+    backfillDispatchForTab(boundTabId, boundSessionId);
     // `openTabs` in deps (not just consumed) makes this SELF-HEALING: if the guard
     // early-returned because another tab transiently owned this session, closing
     // or rebinding that tab changes the memoized openTabs identity → the effect
     // re-evaluates and completes the now-unblocked bind. Without it the effect
     // only re-runs on sessionId/activeTabId change and a transient block could
     // (in an unreached-but-possible ordering) strand the bind.
-  }, [sessionId, activeTabId, updateTabSessionId, tabMapRef, openTabs]);
+  }, [sessionId, activeTabId, updateTabSessionId, tabMapRef, openTabs, backfillDispatchForTab]);
 
   // Build content array from text and attachments using delivery strategy
   const buildContentArray = useCallback(
