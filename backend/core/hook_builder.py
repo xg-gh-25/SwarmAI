@@ -30,6 +30,7 @@ from .security_hooks import (
     eval_command_guard,
     release_publish_guard,
     create_adversarial_commit_gate,
+    create_commit_trailer_gate,
     bash_syntax_guard,
     inclusive_term_guard,
     create_image_read_dedup_guard,
@@ -375,6 +376,20 @@ async def build_hooks(
     registry.register(
         "PreToolUse", create_adversarial_commit_gate(hook_session_context),
         "adversarial_commit_gate", matcher="Bash",
+    )
+
+    # ── PreToolUse: commit-trailer gate (Bash-scoped) ────
+    # DENY a `git commit` whose INLINE message lacks `Co-Authored-By: Swarm` (or
+    # carries a forbidden Claude/Anthropic identity). The rule's other enforcers
+    # cannot PREVENT a violation: .git/hooks/prepare-commit-msg never runs
+    # (core.hooksPath = corporate git-defender, which REPLACES .git/hooks), and CI's
+    # check_commit_trailers.py fires only at PUSH (days late under commit-on-main,
+    # so the remedy becomes a history rewrite). This catches it while the fix is one
+    # re-run. Fails OPEN for any message it cannot read (-F <path>, --amend
+    # --no-edit, -C, editor); SWARM_TRAILER_GATE_FORCE=1 is the logged bypass.
+    registry.register(
+        "PreToolUse", create_commit_trailer_gate(),
+        "commit_trailer_gate", matcher="Bash",
     )
 
     # ── PreToolUse: AskUserQuestion gate (AskUserQuestion-scoped) ──

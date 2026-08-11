@@ -204,8 +204,9 @@ Co-Authored-By: Swarm <swarm@swarmai.dev>
 ```
 Never use Claude/Anthropic identity in commit trailers. This overrides any SDK default.
 
-**Write it yourself — no local hook will fix it for you.** `core.hooksPath` on this
-machine points at the corporate git-defender hook set, and a hooksPath override
+**Write it yourself — no local hook will fix it for you.** A PreToolUse gate BLOCKS a
+commit whose message omits the trailer, but nothing auto-inserts it. `core.hooksPath`
+on this machine points at the corporate git-defender hook set, and a hooksPath override
 *replaces* `.git/hooks` rather than merging with it. So every repo-local hook is
 shadowed and silently inert:
 
@@ -217,9 +218,19 @@ shadowed and silently inert:
 | `pre-commit` | `scripts/sync_discussions.py --check` mirror drift | dead |
 
 Consequence: 22 of the 80 commits before `bcec9d4f` carry no trailer (none carried a
-*wrong* identity). Enforcement now lives in CI — `scripts/check_commit_trailers.py`,
-ratcheted from a cutoff SHA so published history is not rewritten. Run it locally
-before pushing: `python3 scripts/check_commit_trailers.py`.
+*wrong* identity). Enforcement is now TWO layers, because CI alone was too late:
+
+| layer | when it fires | what it does |
+|---|---|---|
+| `security_hooks.create_commit_trailer_gate` (PreToolUse, Bash) | at `git commit` | DENIES the command when its **inline** message (`-m`/`-am`/`--message`/`-F -`) lacks the trailer or carries a Claude/Anthropic identity. Fails OPEN for any message it cannot read (`-F <path>`, `--amend --no-edit`, `-C`, editor). Bypass: `SWARM_TRAILER_GATE_FORCE=1`. |
+| `scripts/check_commit_trailers.py` | at push (CI `version-check`) | backstop for the paths the gate cannot see; ratcheted from a cutoff SHA so published history is not rewritten. Run locally: `python3 scripts/check_commit_trailers.py`. |
+
+Why the gate exists: CI catches this at PUSH, which under this repo's
+commit-on-main-for-days workflow is hours-to-days late — and by then the only repair
+is a history rewrite. On 2026-08-11 three violations accumulated in 4h and cost an
+18-commit rebase to fix. The gate moves the catch to the one moment the fix is free
+(re-run the command with the line appended). Bump `ENFORCED_FROM` ONLY to record a
+deliberate, explained amnesty — never to paper over a fresh violation.
 
 Do NOT "fix" this by changing `core.hooksPath` — it is machine/corporate policy, and
 the project rules forbid modifying git config. Any check that must actually run

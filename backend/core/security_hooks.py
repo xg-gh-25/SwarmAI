@@ -2106,6 +2106,124 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
 
 
 # ---------------------------------------------------------------------------
+# commit-trailer gate — project identity enforced at COMMIT TIME (PreToolUse, Bash)
+# ---------------------------------------------------------------------------
+# The rule ("every commit ends with Co-Authored-By: Swarm") had three enforcers and
+# NONE of them can PREVENT a violation:
+#   • .git/hooks/prepare-commit-msg — NEVER RUNS. core.hooksPath points at the
+#     corporate git-defender set, and a hooksPath override REPLACES .git/hooks
+#     instead of merging, so every repo-local hook is inert. It also only REWROTE a
+#     Claude trailer into Swarm — it never ADDED a missing one, so even un-shadowed
+#     it could not fix the `missing` class (which is 3/3 of the real violations).
+#   • scripts/check_commit_trailers.py — real, tested, CI-wired, but it fires at
+#     PUSH. Under this repo's commit-on-main-for-days workflow that is hours-to-days
+#     late, and by then the only remedy is rewriting history: 2026-08-11 accumulated
+#     3 violations in 4h, costing an 18-commit rebase to repair.
+#   • prose (s_workspace-git/SKILL.md "Always include Co-Authored-By"). Leaving a
+#     mechanical invariant to agent discipline is this repo's documented recurring
+#     CLASS-A failure — the same shape as complete.md's surface_run_outputs prose,
+#     which "did NOT hold".
+#
+# This gate closes the loop at the one moment the fix is FREE: before the commit
+# object exists. A DENY costs the agent one re-run; the alternative costs a rebase.
+# It does not replace the CI check — CI stays as the backstop for the paths this
+# gate deliberately cannot see.
+#
+# SCOPE / FAIL-OPEN (deliberately narrow — a false block here would be worse than
+# the violation it prevents, since CI already catches the violation):
+#   • Only inspects commits whose message is INLINE and therefore readable in the
+#     command string: -m/-am/--message, or the stdin form -F -/--file=- (whose
+#     heredoc body IS the command string).
+#   • EVERY other message source is opaque → APPROVE: -F <path>, --amend --no-edit,
+#     -C/--reuse-message, --squash/--fixup, or the bare editor form. The gate must
+#     never block a commit whose message it cannot read.
+#   • SWARM_TRAILER_GATE_FORCE=1 is the sanctioned, logged bypass.
+_REQUIRED_TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
+
+# Identities the project rule forbids outright ("Never use Claude/Anthropic identity
+# in commit trailers") — kept in sync with check_commit_trailers.FORBIDDEN_MARKERS.
+_FORBIDDEN_TRAILER_RE = re.compile(
+    r"Co-authored-by:[^\n]*(?:claude|anthropic)", re.IGNORECASE
+)
+
+# Token-anchored so a PATH or an unrelated flag cannot masquerade as a message flag.
+# `-[A-Za-z]*m` covers the combined short forms git actually accepts (-m, -am, -sm);
+# `--amend` cannot match it (the second `-` is not [A-Za-z], and `(?:^|\s)` forbids
+# re-anchoring mid-token).
+_INLINE_MSG_RE = re.compile(
+    r"(?:^|\s)(?:-[A-Za-z]*m|--message(?:=|\s)|-F\s+-(?:\s|$)|--file(?:=|\s+)-(?:\s|$))"
+)
+
+
+def _commit_message_is_inline(command: str) -> bool:
+    """True iff *command* supplies its commit message inline (so the gate can read
+    it). False for every opaque source (-F <path>, --amend --no-edit, -C, editor)."""
+    return bool(_INLINE_MSG_RE.search(command))
+
+
+def create_commit_trailer_gate():
+    """Factory: PreToolUse (Bash) gate that DENYs a `git commit` whose INLINE message
+    is missing the project identity trailer (or carries a forbidden Claude/Anthropic
+    one). Takes no session context — the decision is a pure function of the command
+    string, so there is no state to bind and nothing that can go stale."""
+
+    async def _gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("tool_name") != "Bash":
+            return {"decision": "approve"}
+        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+        if not command or not _command_has_git_commit(command):
+            return {"decision": "approve"}
+
+        if os.environ.get("SWARM_TRAILER_GATE_FORCE") == "1":
+            logger.warning("[trailer-gate] FORCE override — commit without the project "
+                           "trailer: %s", command[:80])
+            return {"decision": "approve"}
+
+        # Message not readable from the command → nothing to judge → approve.
+        if not _commit_message_is_inline(command):
+            return {"decision": "approve"}
+
+        forbidden = _FORBIDDEN_TRAILER_RE.search(command)
+        if _REQUIRED_TRAILER in command and not forbidden:
+            return {"decision": "approve"}
+
+        if forbidden:
+            problem = (
+                f"the message carries a FORBIDDEN co-author identity "
+                f"({forbidden.group(0)[:60]!r}). The project rule: never a "
+                f"Claude/Anthropic identity in a commit trailer."
+            )
+        else:
+            problem = "the message has no Co-Authored-By trailer."
+
+        logger.warning("[BLOCKED] git commit missing/wrong project trailer: %s",
+                       command[:80])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"git commit → DENY: {problem} Every commit in this repo MUST end "
+                    f"with exactly:\n\n    {_REQUIRED_TRAILER}\n\n"
+                    "FIX: re-run the same command with that line appended to the commit "
+                    "message. Fixing it NOW is free — no repo-local git hook will add it "
+                    "for you (core.hooksPath is the corporate git-defender set, which "
+                    "shadows .git/hooks), and CI's check_commit_trailers.py only catches "
+                    "it at PUSH, by which point the repair is a history rewrite. "
+                    "(Deliberate exception: set SWARM_TRAILER_GATE_FORCE=1 for that one "
+                    "command.)"
+                ),
+            }
+        }
+
+    return _gate
+
+
+# ---------------------------------------------------------------------------
 # bash-syntax guard — hang prevention via parse-check (PreToolUse, Bash)
 # ---------------------------------------------------------------------------
 # A syntactically INCOMPLETE bash command (unterminated quote/backtick, unclosed
