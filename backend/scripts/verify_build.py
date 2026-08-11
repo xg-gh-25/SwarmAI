@@ -177,6 +177,19 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
     print(f"  Port:   {port}")
     print(f"{'='*60}\n")
 
+    # Guard the --thinking-display CLI flag (Opus 4.8 thinking-summary fix depends
+    # on it; the flag is .hideHelp() hidden and silently droppable).
+    #
+    # Probed BEFORE the backend starts, on purpose: this is a pure CLI check with
+    # no dependency on the running server, and exec'ing a ~216MB Node binary while
+    # the backend + its models are resident is what made the probe flaky (timeouts
+    # and SIGKILL-shaped empty output, 2026-08-11). Result is reported below, in
+    # capability order, so the output layout is unchanged.
+    cli = _find_bundled_claude_cli(binary_path)
+    thinking_probe = (
+        _check_thinking_display_flag(str(cli)) if cli is not None else None
+    )
+
     # Start the binary
     # start_new_session=True → own process group (Unix killpg); harmless on Windows
     proc = subprocess.Popen(
@@ -224,17 +237,20 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         # Verify capabilities via the binary's Python environment
         passed, failed_critical, failed_important = _verify_capabilities(port)
 
-        # Guard the --thinking-display CLI flag (Opus 4.8 thinking-summary fix
-        # depends on it; flag is .hideHelp() hidden and silently droppable).
-        cli = _find_bundled_claude_cli(binary_path)
-        if cli is None:
+        # Report the --thinking-display guard probed above (before backend start).
+        if thinking_probe is None:
             failed_important.append("thinking_display_flag")
             print("  🟡 thinking_display_flag       bundled claude CLI not found (dev?)")
         else:
-            ok, detail = _check_thinking_display_flag(str(cli))
-            bucket = passed if ok else failed_critical
+            verdict, detail = thinking_probe
+            icon, bucket_name = _thinking_probe_bucket(verdict)
+            bucket = {
+                "passed": passed,
+                "critical": failed_critical,
+                "important": failed_important,
+            }[bucket_name]
             bucket.append("thinking_display_flag")
-            print(f"  {'✅' if ok else '🔴'} thinking_display_flag       {detail}")
+            print(f"  {icon} thinking_display_flag       {detail}")
 
         return passed, failed_critical, failed_important
 
@@ -359,44 +375,121 @@ def _find_bundled_claude_cli(binary_path: str) -> Path | None:
     return None
 
 
-def _check_thinking_display_flag(cli_path: str) -> tuple[bool, str]:
+# Verdicts for the --thinking-display guard. Three states, deliberately: a probe
+# that could not be measured is NOT the same as a flag that is gone.
+PROBE_OK = "ok"                      # flag confirmed present (blocks nothing)
+PROBE_MISSING = "missing"            # flag confirmed absent  (blocks the release)
+PROBE_INCONCLUSIVE = "inconclusive"  # could not measure      (warns, never blocks)
+
+# The bundled CLI is a ~216MB Node single-executable. Its first exec after a fresh
+# build pays for a Gatekeeper scan plus paging the whole image in, which is far
+# slower than a warm run (~3s). The original 30s was tuned on a warm cache and
+# produced false timeouts during real builds.
+_PROBE_TIMEOUT_S = 90
+
+
+def _thinking_probe_bucket(verdict: str) -> tuple[str, str]:
+    """Map a probe verdict to (icon, bucket) for reporting.
+
+    Only a CONFIRMED missing flag is critical. An unmeasurable probe warns — a
+    release gate must never block on ignorance, or it trains the operator to
+    bypass it (2026-08-11: it falsely blocked two good builds).
+    """
+    if verdict == PROBE_OK:
+        return "✅", "passed"
+    if verdict == PROBE_MISSING:
+        return "🔴", "critical"
+    return "🟡", "important"
+
+
+def _run_cli_probe(cli_path: str, args: list[str]) -> tuple[str | None, str]:
+    """Run the bundled CLI once and return (output, diagnostic).
+
+    ``output`` is None when the CLI gave no usable answer — it timed out, could
+    not be spawned, or exited without writing to either stream. That is a failure
+    of the *measurement*, and it carries NO information about the flag.
+
+    stdin is /dev/null so a non-interactive probe can never block on an inherited
+    stdin that never reaches EOF.
+    """
+    try:
+        proc = subprocess.run(
+            [cli_path, *args],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {_PROBE_TIMEOUT_S}s"
+    except OSError as e:
+        return None, f"could not spawn bundled CLI: {e}"
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    if not output.strip():
+        return None, f"exit={proc.returncode}, no output on stdout or stderr"
+    return output, f"exit={proc.returncode}"
+
+
+def _check_thinking_display_flag(cli_path: str) -> tuple[str, str]:
     """Guard the `--thinking-display` CLI flag the Opus 4.8 thinking fix depends on.
 
-    The flag is `.hideHelp()` hidden, so we cannot grep `--help`. The Claude CLI
-    also *silently tolerates unknown flags* (exit 0 + version output) and exits 0
-    even on an enum-validation error — so neither a positive probe nor the exit
-    code can distinguish flag-present from flag-absent.
+    The flag is `.hideHelp()` hidden, so we cannot grep `--help`, and the Claude
+    CLI *silently tolerates unknown flags* (prints the version instead of
+    complaining) — so a positive probe cannot distinguish present from absent.
 
-    The only falsifiable signal is a NEGATIVE probe: pass a bogus value and look
-    for the enum-validation error that names the allowed choices. That error is
-    emitted ONLY when the flag exists and validates its enum. If the flag is gone,
-    the bogus value rides along on a tolerated unknown flag → no choices in output.
+    The falsifiable signal is a NEGATIVE probe: pass a bogus value and look for the
+    enum-validation error that names the allowed choices. That error is emitted
+    ONLY when the flag exists and validates its enum. If the flag is gone, the
+    bogus value rides along on a tolerated unknown flag → no choices in output.
+    (CLI 2.1.190 exits 1 on that validation error. Do not rely on the exit code
+    either way: an earlier version of this docstring claimed it always exits 0.
+    The *output* is the signal; the code is only recorded for diagnosis.)
 
-    Returns (ok, detail). ok=False means the contract the Opus 4.8 thinking fix
-    relies on is broken — the build would silently regress to blank thinking.
+    A negative result is only trustworthy if the instrument works, so before
+    reporting a regression we run a plain ``--version`` CONTROL. If the control
+    cannot answer either, the environment simply could not run the CLI and the
+    verdict is INCONCLUSIVE — reporting "flag missing" there is a false alarm that
+    blocks a perfectly good release (observed 2026-08-11: two consecutive builds
+    failed this gate, once with empty output and once with a timeout, while the
+    flag was demonstrably present in the very file being probed).
+
+    Returns (verdict, detail) — see PROBE_OK / PROBE_MISSING / PROBE_INCONCLUSIVE.
     See run_4108aeef (the fix) + run_a972318c (this guard).
     """
     if not Path(cli_path).exists():
-        return False, f"bundled claude CLI not found at {cli_path}"
-    try:
-        proc = subprocess.run(
-            [cli_path, "--thinking-display", "__verify_build_bogus__", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        return False, "bundled CLI timed out on --thinking-display probe"
-    except OSError as e:
-        return False, f"could not spawn bundled CLI: {e}"
+        return PROBE_INCONCLUSIVE, f"bundled claude CLI not found at {cli_path}"
 
-    output = (proc.stdout or "") + (proc.stderr or "")
+    # NEGATIVE probe. Retried once: a cold first exec can be killed or stall, and
+    # that says nothing about the flag.
+    probe_args = ["--thinking-display", "__verify_build_bogus__", "--version"]
+    output, diag = _run_cli_probe(cli_path, probe_args)
+    if output is None:
+        output, diag = _run_cli_probe(cli_path, probe_args)
+
     # The enum-validation error names BOTH choices when the flag is recognized.
-    if "summarized" in output and "omitted" in output:
-        return True, "flag validates enum (summarized, omitted)"
-    return False, (
+    if output is not None and "summarized" in output and "omitted" in output:
+        return PROBE_OK, "flag validates enum (summarized, omitted)"
+
+    # Positive control: prove the CLI is answerable at all in this environment.
+    control, control_diag = _run_cli_probe(cli_path, ["--version"])
+    if control is None:
+        return PROBE_INCONCLUSIVE, (
+            "cannot verify flag — the bundled CLI did not answer a plain --version "
+            f"control either ({control_diag}), so the environment could not run it. "
+            f"Flag state UNKNOWN, not disproven. Negative probe: {diag}"
+        )
+    if output is None:
+        return PROBE_INCONCLUSIVE, (
+            f"cannot verify flag — control --version answered ({control_diag}) but the "
+            f"--thinking-display probe did not ({diag}). Flag state UNKNOWN."
+        )
+
+    # Control answered AND the probe answered without naming the choices: the CLI
+    # really is treating --thinking-display as an unknown flag.
+    return PROBE_MISSING, (
         "--thinking-display NOT recognized by bundled CLI — Opus 4.8 thinking "
-        "summary would silently regress to blank. Probe output: "
+        f"summary would silently regress to blank. Probe ({diag}): "
         f"{output.strip()[:200]!r}"
     )
 
