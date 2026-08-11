@@ -66,6 +66,7 @@ import { OverlayHost } from '../components/layout/OverlayHost';
 import { type ResumeTabInfo } from './chat/resumeTarget';
 import { classifyLanding, type LandingVerdict } from './chat/landPromptInTab';
 import { dispatchInjectChatInput } from './chat/injectChatInput';
+import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
 import { useAttentionQueue } from '../hooks/useAttentionQueue';
@@ -1820,28 +1821,50 @@ export default function ChatPage() {
 
 
 
-  // Update tab's sessionId when a new session is created
+  // Bind the global sessionId to the active tab when a session materializes FOR
+  // that tab — and backfill any pending ToDo-dispatch record. UNIFIED GUARD
+  // (run_3e0672d2 perpetual-thinking fix): both actions gate on
+  // canBindSessionToActiveTab, which refuses to bind/act on a session already
+  // owned by ANOTHER tab. Previously this stamped ANY ambient global sessionId
+  // onto a session-less active tab — so opening a fresh tab (dispatch / "+ New
+  // Session" / resume) WHILE the prior tab was still streaming made the fresh
+  // empty tab inherit the streaming session → two tabs, one session → perpetual
+  // "thinking" + queued sends. The real per-tab bind already happens at the
+  // source (session_start writes tabState.sessionId; resume calls
+  // updateTabSessionId), so this effect is a backstop that must NEVER claim a
+  // foreign session. One chokepoint fixes every tab-open entrance at once.
   useEffect(() => {
-    if (sessionId && activeTabId) {
-      // Read from the map directly (stable, avoids openTabs dependency)
-      const tabState = tabMapRef.current.get(activeTabId);
-      if (tabState && !tabState.sessionId) {
-        updateTabSessionId(activeTabId, sessionId);
-      }
-      // ToDo Dispatch backfill (A2): this tab's session just materialized — fill
-      // dispatched_session_id for the NEWEST record on this tab (append-only;
-      // newest wins if the user dispatched twice before sending), then DROP all
-      // of this tab's records (backfill is done for this tab — prevents unbounded
-      // growth, Gate-2 MEDIUM #9). Older superseded records are correctly discarded.
-      const pend = dispatchPendingRef.current;
-      const mine = pend.filter((p) => p.tabId === activeTabId);
-      if (mine.length > 0) {
-        const newest = mine[mine.length - 1];
-        void todosService.dispatch(newest.todoId, newest.tabLabel, sessionId).catch(() => {/* non-fatal */});
-        dispatchPendingRef.current = pend.filter((p) => p.tabId !== activeTabId);
-      }
+    // Read the LIVE map (not the memoized openTabs projection, which can lag the
+    // direct tabState.sessionId writes session_start makes) so ownership is
+    // decided against current truth.
+    const liveTabs = [...tabMapRef.current.values()].map((t) => ({ id: t.id, sessionId: t.sessionId }));
+    if (!canBindSessionToActiveTab(sessionId, activeTabId ?? undefined, liveTabs)) return;
+    const boundSessionId = sessionId as string;
+    const boundTabId = activeTabId as string;
+    // Read from the map directly (stable, avoids openTabs dependency)
+    const tabState = tabMapRef.current.get(boundTabId);
+    if (tabState && !tabState.sessionId) {
+      updateTabSessionId(boundTabId, boundSessionId);
     }
-  }, [sessionId, activeTabId, updateTabSessionId, tabMapRef]);
+    // ToDo Dispatch backfill (A2): this tab's session just materialized — fill
+    // dispatched_session_id for the NEWEST record on this tab (append-only;
+    // newest wins if the user dispatched twice before sending), then DROP all
+    // of this tab's records (backfill is done for this tab — prevents unbounded
+    // growth, Gate-2 MEDIUM #9). Older superseded records are correctly discarded.
+    const pend = dispatchPendingRef.current;
+    const mine = pend.filter((p) => p.tabId === boundTabId);
+    if (mine.length > 0) {
+      const newest = mine[mine.length - 1];
+      void todosService.dispatch(newest.todoId, newest.tabLabel, boundSessionId).catch(() => {/* non-fatal */});
+      dispatchPendingRef.current = pend.filter((p) => p.tabId !== boundTabId);
+    }
+    // `openTabs` in deps (not just consumed) makes this SELF-HEALING: if the guard
+    // early-returned because another tab transiently owned this session, closing
+    // or rebinding that tab changes the memoized openTabs identity → the effect
+    // re-evaluates and completes the now-unblocked bind. Without it the effect
+    // only re-runs on sessionId/activeTabId change and a transient block could
+    // (in an unreached-but-possible ordering) strand the bind.
+  }, [sessionId, activeTabId, updateTabSessionId, tabMapRef, openTabs]);
 
   // Build content array from text and attachments using delivery strategy
   const buildContentArray = useCallback(
