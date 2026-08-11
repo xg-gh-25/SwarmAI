@@ -1,0 +1,11 @@
+# Manifest for s_context-hygiene
+name: context-hygiene
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: scripts/scan.py
+    description: "READ-ONLY context-file hygiene scanner — surfaces cleanup candidates (echoed-title / drift-number / dated-pointer) and prints the live source-routing table (--routing). Never edits; the agent reads-and-judges each candidate. No --fix mode by design."
+
+resources:
+  - scripts
