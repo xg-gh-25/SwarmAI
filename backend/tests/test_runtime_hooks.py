@@ -2214,3 +2214,70 @@ class TestAdversarialCompletionMarker:
             None, MagicMock(),
         )
         assert len(list(tmp_path.glob("session_sess-t_adv_*.marker"))) == 1
+
+
+class TestReviewedPathsCapture:
+    """Plan A AC1/AC4/AC8: on adversarial completion the adv marker records the
+    REVIEWED path-set (absolute, repo-root-resolved). Tri-state:
+      - git ok + changes  -> reviewed_paths = [abs paths]
+      - git ok + clean     -> reviewed_paths = []            (covers nothing)
+      - not a git repo/err -> reviewed_paths key ABSENT      (unbounded, back-compat)
+    """
+
+    @staticmethod
+    def _init_repo(d):
+        import subprocess
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(d), "PATH": __import__("os").environ.get("PATH", "")}
+        subprocess.run(["git", "init", "-q"], cwd=str(d), env=env, check=True)
+        (d / "a.py").write_text("x = 1\n")
+        (d / "b.py").write_text("y = 2\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(d), env=env, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(d), env=env, check=True)
+        return env
+
+    @pytest.mark.asyncio
+    async def test_reviewed_paths_captured_when_changes(self, tmp_path, monkeypatch):
+        import core.runtime_hooks as rh, json, os
+        repo = tmp_path / "repo"; repo.mkdir()
+        self._init_repo(repo)
+        (repo / "a.py").write_text("x = 999\n")  # modify one tracked file
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
+        transcript = tmp_path / "sub.jsonl"
+        transcript.write_text('{"isSidechain":true,"type":"user","message":{"content":"Adversarially review this diff, refute it, find bugs."}}\n')
+        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "s"})
+        await hook({"agent_id": "a", "agent_transcript_path": str(transcript),
+                    "agent_type": "general-purpose", "cwd": str(repo)}, None, MagicMock())
+        adv = list((tmp_path / "audit").glob("session_s_adv_*.marker"))
+        assert len(adv) == 1
+        data = json.loads(adv[0].read_text())
+        assert "reviewed_paths" in data
+        assert data["reviewed_paths"] == [os.path.realpath(str(repo / "a.py"))]
+
+    @pytest.mark.asyncio
+    async def test_reviewed_paths_empty_on_clean_tree(self, tmp_path, monkeypatch):
+        """git ok but no changes → reviewed_paths == [] (covers nothing, NOT unbounded)."""
+        import core.runtime_hooks as rh, json
+        repo = tmp_path / "repo"; repo.mkdir()
+        self._init_repo(repo)  # clean tree after commit
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
+        transcript = tmp_path / "sub.jsonl"
+        transcript.write_text('{"isSidechain":true,"type":"user","message":{"content":"adversarial: refute this diff"}}\n')
+        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "s"})
+        await hook({"agent_id": "a", "agent_transcript_path": str(transcript),
+                    "agent_type": "general-purpose", "cwd": str(repo)}, None, MagicMock())
+        data = json.loads(list((tmp_path / "audit").glob("session_s_adv_*.marker"))[0].read_text())
+        assert data["reviewed_paths"] == []  # present + empty, distinct from absent
+
+    @pytest.mark.asyncio
+    async def test_reviewed_paths_absent_when_not_git(self, tmp_path, monkeypatch):
+        """Not a git repo → reviewed_paths key ABSENT → path-less → unbounded (back-compat)."""
+        import core.runtime_hooks as rh, json
+        nongit = tmp_path / "plain"; nongit.mkdir()
+        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
+        transcript = tmp_path / "sub.jsonl"
+        transcript.write_text('{"isSidechain":true,"type":"user","message":{"content":"adversarial: attack this diff"}}\n')
+        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "s"})
+        await hook({"agent_id": "a", "agent_transcript_path": str(transcript),
+                    "agent_type": "general-purpose", "cwd": str(nongit)}, None, MagicMock())
+        data = json.loads(list((tmp_path / "audit").glob("session_s_adv_*.marker"))[0].read_text())
+        assert "reviewed_paths" not in data  # unbounded (back-compat)

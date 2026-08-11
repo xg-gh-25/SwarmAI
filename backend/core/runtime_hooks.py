@@ -808,6 +808,7 @@ def create_agent_tool_audit_hook(
         # offloads its transcript read via to_thread).
         agent_type = _extract_field(input_data, "agent_type", "")
         transcript_path = _extract_field(input_data, "agent_transcript_path", "")
+        hook_cwd = _extract_field(input_data, "cwd", "")
 
         try:
             _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
@@ -854,14 +855,22 @@ def create_agent_tool_audit_hook(
                 # infix is what the gate matches; a base marker (ts is numeric) can
                 # never contain it, so the two are unambiguous.
                 if adversarial and session_id:
-                    adv_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_adv_{int(ts)}.marker"
-                    adv_marker.write_text(json.dumps({
+                    payload = {
                         "ts": ts,
                         "event": "SubagentStop",
                         "session_id": session_id,
                         "adversarial": True,
                         "agent_type": agent_type or "unknown",
-                    }))
+                    }
+                    # Plan A diff-relevance: bind the review to the paths it covered.
+                    # KEY PRESENCE is load-bearing — reviewed_paths present (incl. [])
+                    # bounds coverage; ABSENT = unbounded (git unavailable, back-compat).
+                    # The gate reads this by key presence, never Python truthiness.
+                    reviewed = _reviewed_paths_at_head(hook_cwd) if hook_cwd else None
+                    if reviewed is not None:
+                        payload["reviewed_paths"] = reviewed
+                    adv_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_adv_{int(ts)}.marker"
+                    adv_marker.write_text(json.dumps(payload))
 
             await asyncio.to_thread(_classify_and_write)
         except Exception:
@@ -906,6 +915,58 @@ def _read_subagent_prompt_head(transcript_path: str) -> str:
         return ""
     except Exception:
         return ""
+
+
+# Git timeout for the diff-relevance capture (Plan A). Bounded so a hung/locked git
+# never wedges the SubagentStop thread (mirrors the gate's fail-open discipline).
+_GIT_CAPTURE_TIMEOUT = 10
+
+
+def _repo_root_for(dir_path: str) -> Optional[str]:
+    """Canonical repo-root resolver — MUST be identical to the gate's, so the
+    writer's and the gate's absolute paths compare byte-for-byte (macOS /var vs
+    /private/var etc.). Returns realpath of `git -C <dir> rev-parse --show-toplevel`,
+    or None if not a git repo / git unavailable / timeout."""
+    if not dir_path:
+        return None
+    try:
+        r = subprocess.run(
+            ["git", "-C", dir_path, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=_GIT_CAPTURE_TIMEOUT,
+        )
+        if r.returncode != 0:
+            return None
+        top = r.stdout.strip()
+        return __import__("os").path.realpath(top) if top else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _reviewed_paths_at_head(dir_path: str) -> Optional[list[str]]:
+    """The set of file paths the reviewer's working tree changed vs HEAD, as
+    ABSOLUTE realpaths (repo-root-resolved). TRI-STATE — the caller stores the
+    result by KEY PRESENCE, never truthiness:
+      - None  → git unavailable / not a repo / error → caller OMITS reviewed_paths
+                (path-less marker = unbounded coverage, back-compat).
+      - []    → git ran, working tree clean → reviewed NOTHING → caller stores []
+                (bounds coverage to the empty set; NOT unbounded).
+      - [abs] → git ran, these paths changed.
+    """
+    import os
+    root = _repo_root_for(dir_path)
+    if root is None:
+        return None
+    try:
+        r = subprocess.run(
+            ["git", "-C", root, "diff", "--name-only", "HEAD"],
+            capture_output=True, text=True, timeout=_GIT_CAPTURE_TIMEOUT,
+        )
+        if r.returncode != 0:
+            return None  # git couldn't answer → unbounded (distinct from clean=[])
+        rels = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        return [os.path.realpath(os.path.join(root, rel)) for rel in rels]
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def create_subagent_capture_hook(
