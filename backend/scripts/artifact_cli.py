@@ -56,6 +56,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.artifact_registry import ArtifactRegistry
 from core.pipeline_profiles import get_profile_stages
 
+# Sibling module in backend/scripts/ — pure completion commit+surface gate logic.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from completion_gate import completion_surface_verdict
+
 # Fields that `publish --stage` auto-records into a stage stub (see cmd_publish)
 # and that a subsequent `run-update --stage-json` finalize must NOT lose to the
 # full-record replace. ONLY artifact_id: it is the sole publish-set field that a
@@ -1839,77 +1843,59 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # the surface step, not proof the rail populated. A run with NO run-scoped
             # source commits (knowledge/docs-only, OR commits that are all
             # sibling-session files) is NOT gated (no false-block).
-            _commits = run_state.get("commits") or []
-            _committed_files: set[str] = set()
-            for _c in _commits:
-                if isinstance(_c, dict):
-                    for _f in _c.get("files", []) or []:
-                        _committed_files.add(_f)
-            _run_touched = set(run_state.get("files_touched") or [])
-            # Run-scoped source = committed files that THIS run declared it touched.
-            # Match a repo-relative commit path ("backend/foo.py") against a
-            # files_touched entry regardless of absolute/relative recording, but
-            # require a DIRECTORY-anchored suffix (not a bare basename) so unrelated
-            # files that merely share a basename ("a/config.py" vs "b/config.py")
-            # never collide (Gate-2 LOW 1). A path with no "/" (bare basename in
-            # files_touched) only matches an identical bare basename or an exact
-            # full-path equality — never a deep path by basename alone.
-            def _tail_match(a: set[str], b: set[str]) -> bool:
-                for x in a:
-                    for y in b:
-                        if x == y:
-                            return True
-                        # dir-anchored: the shorter must be a trailing PATH segment
-                        # of the longer (both sides carry the separator), so
-                        # "sub/foo.py" matches "/abs/sub/foo.py" but "foo.py" does
-                        # NOT match "sub/foo.py".
-                        if "/" in x and y.endswith("/" + x):
-                            return True
-                        if "/" in y and x.endswith("/" + y):
-                            return True
-                return False
-            _run_scoped_source = bool(_committed_files) and _tail_match(_committed_files, _run_touched)
-            if _run_scoped_source:
-                # Consider BOTH the persisted deliver record AND an incoming
-                # --stage-json in THIS same call (Gate-2 MEDIUM 1): the stage_json
-                # write is applied later (below), so without this a single
-                # `run-update --status completed --stage-json '{deliver...
-                # outputs_surfaced:true}'` would read the STALE record and
-                # false-block. Merge the incoming deliver ack into the gate's view.
-                # Back-compat: accept the legacy local_pr_surfaced key too, so an
-                # in-flight run recorded before run_b8ea6d5c still completes.
-                _deliver = next(
-                    (s for s in run_state.get("stages", [])
-                     if s.get("stage", s.get("name", "")) == "deliver"
-                     and s.get("status") in ("completed", "done")),
-                    None,
-                )
-                def _ack(d: "dict | None") -> bool:
-                    return bool(d and (d.get("outputs_surfaced") or d.get("local_pr_surfaced")))
-                _surfaced = _ack(_deliver)
-                if not _surfaced and getattr(args, "stage_json", None):
-                    try:
-                        _incoming = json.loads(args.stage_json)
-                        if (_incoming.get("stage", _incoming.get("name")) == "deliver"
-                                and _ack(_incoming)):
-                            _surfaced = True
-                    except (ValueError, TypeError):
-                        pass
-                if not _surfaced:
-                    print(json.dumps({
-                        "error": "Cannot mark completed: this run committed source "
-                                 "changes but they were not surfaced to the Canvas "
-                                 "OUTPUTS rail. At COMPLETE you MUST call the "
-                                 "`surface_run_outputs` tool with this run_id (it emits "
-                                 "the committed files as PR-review rows), then record it "
-                                 "on the deliver stage.",
-                        "pipeline_id": args.run_id,
-                        "fix": 'run-update --stage-json \'{"stage":"deliver",'
-                               '"status":"completed","outputs_surfaced":true,'
-                               '"stage_doc_consumed":true}\'',
-                        "committed_source_files": sorted(_committed_files),
-                    }))
-                    return
+            # Compute the surfaced-ack (persisted deliver record OR an incoming
+            # --stage-json in THIS same call — the stage_json write is applied
+            # later, so without merging the incoming ack a single
+            # `run-update --status completed --stage-json '{deliver...
+            # outputs_surfaced:true}'` would read the STALE record and false-block).
+            # Back-compat: accept the legacy local_pr_surfaced key too.
+            def _ack(d: "dict | None") -> bool:
+                return bool(d and (d.get("outputs_surfaced") or d.get("local_pr_surfaced")))
+            _deliver = next(
+                (s for s in run_state.get("stages", [])
+                 if s.get("stage", s.get("name", "")) == "deliver"
+                 and s.get("status") in ("completed", "done")),
+                None,
+            )
+            _surfaced = _ack(_deliver)
+            if not _surfaced and getattr(args, "stage_json", None):
+                try:
+                    _incoming = json.loads(args.stage_json)
+                    if (_incoming.get("stage", _incoming.get("name")) == "deliver"
+                            and _ack(_incoming)):
+                        _surfaced = True
+                except (ValueError, TypeError):
+                    pass
+
+            # ── Completion delivery gate (run_0851350b root fix) ──────────────
+            # Key off files_touched (BUILD ground truth of what source the run
+            # WROTE), NOT run_state.commits (written only by run-commit). The old
+            # commits-based trigger let a HAND-committed run (commits empty) be
+            # mis-read as docs-only and skip BOTH commit + surface enforcement —
+            # the C045 recurrence (run_3e0672d2, run_2c89bc8d completed with no
+            # auto-commit, no Canvas). Now: source written + not committed via
+            # run-commit -> BLOCK; committed + not surfaced -> BLOCK; docs-only or
+            # legacy-unknown files_touched -> never false-block. See completion_gate.py.
+            _verdict = completion_surface_verdict(
+                files_touched=run_state.get("files_touched"),
+                commits=run_state.get("commits"),
+                deliver_surfaced=_surfaced,
+            )
+            if not _verdict.ok:
+                _fix = ('run-commit --project <P> --run-id ' + str(args.run_id)
+                        if _verdict.block_reason == "uncommitted_source"
+                        else 'run-update --stage-json \'{"stage":"deliver",'
+                             '"status":"completed","outputs_surfaced":true,'
+                             '"stage_doc_consumed":true}\' (after calling the '
+                             'surface_run_outputs tool)')
+                print(json.dumps({
+                    "error": _verdict.message,
+                    "block_reason": _verdict.block_reason,
+                    "pipeline_id": args.run_id,
+                    "fix": _fix,
+                    "committed_source_files": _verdict.committed_source_files,
+                }))
+                return
 
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion
