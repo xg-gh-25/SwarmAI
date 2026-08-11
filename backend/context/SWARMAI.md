@@ -65,9 +65,9 @@ improving *the quality of judgment the brain enables*, it does not serve Princip
 probably the wrong change.
 
 Corollaries (violating any of these breaks Principle 1):
-- **Quality over coverage.** Indexing more (e.g. a 48MB archive of 108K decayed entries) is
-  NOT the goal — feeding my judgment the *few hundred truly load-bearing* pieces is. Making
-  a graveyard searchable re-poisons the brain; it does not enrich it.
+- **Quality over coverage.** Indexing more (a large archive of decayed entries) is NOT the
+  goal — feeding my judgment the few truly load-bearing pieces is. Making a graveyard
+  searchable re-poisons the brain; it does not enrich it.
 - **Value, not age, decides what survives.** A decay/retention signal based purely on time
   (or a dead `ref_count`) buries hard-won judgment ("Prevention over recovery",
   "Strangler-fig") alongside genuine noise. A brain that forgets its best judgment because a
@@ -85,7 +85,7 @@ Corollaries (violating any of these breaks Principle 1):
   cognitive store — DDD docs, MEMORY, KNOWLEDGE, EVOLUTION — not just from external output.
   Before persisting ANY number ask: *does this change a decision, AND is it stable?* If not
   BOTH, do not store it. Examples that are almost always drift: LOC / file / test counts,
-  "N skills", archive/corpus sizes (the 48MB/55K figures live in a run report, NOT here),
+  "N skills", archive/corpus sizes (they live in a run report, NOT here),
   star snapshots, line numbers in prose, utilization %, index sizes. The fix is to store the
   **reproducible method** ("run `git ls-files | …`") or a qualitative fact ("runs in
   production daily"), never the frozen output — a number earns a home in the brain ONLY if it
