@@ -138,6 +138,19 @@ class SystemPromptMetadata(BaseModel):
     )
     total_tokens: int = Field(0, description="Total estimated tokens across all files")
     full_text: str = Field("", description="Complete assembled system prompt text")
+    # The DYNAMIC per-model budget from ContextDirectoryLoader.compute_token_budget
+    # (100K at >=500K window, 50K at >=200K, 30K at >=64K, instance default below).
+    # Declared here for the same reason as ``degraded``: without a field, Pydantic
+    # drops it and the panel is left guessing — it hardcoded the 100K tier and so
+    # under-reported usage by 2-3x on every smaller model (review run_abab234c,
+    # MED #5). 0 means "not reported"; consumers must not substitute a tier.
+    effective_token_budget: int = Field(
+        0,
+        description=(
+            "Dynamic token budget actually applied for this model's context "
+            "window; 0 when the build did not report one"
+        ),
+    )
     # The fail-loud degradation reason from prompt assembly (prompt_builder mirrors
     # ``_context_degraded`` into the metadata dict). This field MUST exist here or
     # Pydantic's default extra='ignore' silently drops it at the response boundary,
@@ -176,12 +189,23 @@ class RecallSnapshot(BaseModel):
     ``hits`` are the STRUCTURED per-source hits (domain/source/score) extracted from
     the SAME BucketedRecall that produced the injected block — the real session
     state, not a re-run. ``body`` is a fallback rendered string used ONLY when
-    structured hits are unavailable (legacy fallback path). ``ran`` distinguishes
-    "recall ran" from "no recall this session" (channel / keyword-miss / turn 2+),
-    so a UI blank is never ambiguous with a dead path.
+    structured hits are unavailable (legacy fallback path).
+
+    ``ran`` means the recall LEG EXECUTED, which is deliberately not the same as
+    "recall found something": a keyword miss stashes ``ran=True`` with zero hits.
+    That distinction matters — "ran and matched nothing" is a tracked degradation
+    signal, while ``ran=False`` means recall never ran at all (channel session,
+    turn 2+, or the disaster-timeout / exception paths). Collapsing the two would
+    report a systematic keyword miss as a feature that never fired.
     """
 
-    ran: bool = Field(False, description="Whether the recall leg ran and injected this session")
+    ran: bool = Field(
+        False,
+        description=(
+            "Whether the recall leg executed this session (True even when it "
+            "matched nothing — check hits for that)"
+        ),
+    )
     hits: list[RecallHit] = Field(
         default_factory=list, description="Structured per-source hits (the real recalled hits)"
     )

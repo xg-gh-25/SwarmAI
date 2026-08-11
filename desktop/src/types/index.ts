@@ -1131,6 +1131,10 @@ export interface SystemPromptMetadata {
   files: SystemPromptFileInfo[];
   totalTokens: number;
   fullText: string;
+  /** Dynamic per-model token budget actually applied (100K/50K/30K tier).
+   *  Absent or 0 means the build did not report one — render "unknown" rather
+   *  than assuming a tier, or the gauge lies by 2-3x on smaller models. */
+  effectiveTokenBudget?: number;
   /** Fail-loud degradation reason from prompt assembly. Empty/absent when the
    *  prompt assembled completely. Optional because the SSE event spreads the
    *  backend metadata dict verbatim, which omits the key on a healthy build,

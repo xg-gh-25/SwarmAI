@@ -93,6 +93,31 @@ export async function getTSCCState(threadId: string): Promise<TSCCState> {
   return toCamelCase(response.data as Record<string, unknown>);
 }
 
+/** snake_case → camelCase for system prompt metadata.
+ *
+ *  Exported because the SAME payload arrives by two routes: the HTTP endpoint
+ *  below, and the `system_prompt_metadata` SSE event, which spreads the backend
+ *  dict verbatim. The SSE handler used to cast that dict straight to the
+ *  camelCase type, so every multi-word field (`total_tokens`,
+ *  `effective_token_budget`) silently read as undefined on the live path. One
+ *  shared mapper is the only way both routes stay in sync. */
+export function promptMetadataToCamelCase(
+  data: Record<string, unknown>,
+): SystemPromptMetadata {
+  const files = (data.files as Record<string, unknown>[]) ?? [];
+  return {
+    files: files.map((f) => ({
+      filename: f.filename as string,
+      tokens: f.tokens as number,
+      truncated: f.truncated as boolean,
+    })),
+    totalTokens: (data.total_tokens as number) ?? 0,
+    fullText: (data.full_text as string) ?? '',
+    effectiveTokenBudget: (data.effective_token_budget as number) ?? 0,
+    degraded: (data.degraded as string) ?? '',
+  };
+}
+
 /** Fetch system prompt metadata for a session (snake_case → camelCase).
  *  Returns null if the session hasn't been initialized yet (404). */
 export async function getSystemPromptMetadata(
@@ -100,18 +125,9 @@ export async function getSystemPromptMetadata(
 ): Promise<SystemPromptMetadata | null> {
   try {
     const response = await api.get(`/chat/${sessionId}/system-prompt`);
-    const data = response.data as Record<string, unknown>;
-    const files = (data.files as Record<string, unknown>[]) ?? [];
-    return {
-      files: files.map((f) => ({
-        filename: f.filename as string,
-        tokens: f.tokens as number,
-        truncated: f.truncated as boolean,
-      })),
-      totalTokens: (data.total_tokens as number) ?? 0,
-      fullText: (data.full_text as string) ?? '',
-      degraded: (data.degraded as string) ?? '',
-    };
+    return promptMetadataToCamelCase(
+      response.data as Record<string, unknown>,
+    );
   } catch (err: unknown) {
     // 404 is expected when session hasn't been initialized yet
     if (err && typeof err === 'object' && 'response' in err) {

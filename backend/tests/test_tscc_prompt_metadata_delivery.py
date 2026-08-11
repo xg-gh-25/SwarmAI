@@ -288,3 +288,118 @@ class TestDegradedReachesConsumer:
             assert resp.json()["degraded"] == ""
         finally:
             session_registry.system_prompt_metadata.pop(sid, None)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# effective_token_budget must survive the response model (review MED #5)
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestBudgetReachesConsumer:
+    """The budget is per-model — 100K only at a >=500K context window, 50K at
+    >=200K, 30K at >=64K. The panel hardcoded the 100K tier because the schema
+    dropped the real value, so a 45K prompt on a 200K model read "45% · in
+    budget" while sitting at 90% of its actual ceiling."""
+
+    def test_schema_keeps_budget(self):
+        from schemas.tscc import SystemPromptMetadata
+
+        dumped = SystemPromptMetadata(
+            files=[], total_tokens=45_000, full_text="x",
+            effective_token_budget=50_000,
+        ).model_dump()
+        assert dumped["effective_token_budget"] == 50_000
+
+    def test_endpoint_returns_budget(self):
+        from fastapi.testclient import TestClient
+        from core import session_registry
+        from main import app
+
+        sid = "tscc-budget-endpoint"
+        session_registry.system_prompt_metadata[sid] = {
+            "files": [], "total_tokens": 45_000, "full_text": "z",
+            "effective_token_budget": 50_000,
+        }
+        try:
+            with TestClient(app) as client:
+                resp = client.get(f"/api/chat/{sid}/system-prompt")
+            assert resp.status_code == 200
+            assert resp.json()["effective_token_budget"] == 50_000
+        finally:
+            session_registry.system_prompt_metadata.pop(sid, None)
+
+    def test_unreported_budget_is_zero_not_a_guessed_tier(self):
+        """A build that reported no budget must serialize 0. The UI reads 0 as
+        "unknown" and omits the percentage — substituting a tier here would put
+        the 2-3x misreport straight back."""
+        from fastapi.testclient import TestClient
+        from core import session_registry
+        from main import app
+
+        sid = "tscc-budget-missing"
+        session_registry.system_prompt_metadata[sid] = {
+            "files": [], "total_tokens": 45_000, "full_text": "z",
+        }
+        try:
+            with TestClient(app) as client:
+                resp = client.get(f"/api/chat/{sid}/system-prompt")
+            assert resp.status_code == 200
+            assert resp.json()["effective_token_budget"] == 0
+        finally:
+            session_registry.system_prompt_metadata.pop(sid, None)
+
+    def test_prompt_builder_reports_the_computed_budget(self, tmp_path):
+        """Guards the producer side: the metadata key the schema now exposes is
+        the one compute_token_budget actually returns."""
+        import inspect
+        from core import prompt_builder
+        from core.context_directory_loader import ContextDirectoryLoader
+
+        src = inspect.getsource(prompt_builder)
+        assert 'prompt_metadata["effective_token_budget"]' in src
+        assert "compute_token_budget(model_context_window)" in src
+        # And the tiers the panel now renders are the ones the loader computes —
+        # the panel must never re-derive these, only display what it is told.
+        loader = ContextDirectoryLoader(context_dir=tmp_path)
+        assert loader.compute_token_budget(1_000_000) == 100_000
+        assert loader.compute_token_budget(200_000) == 50_000
+        assert loader.compute_token_budget(128_000) == 30_000
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# A recall miss must read as "ran, matched nothing" (review MED #6/#7)
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestRecallMissIsReported:
+    def test_endpoint_reports_ran_with_zero_hits(self):
+        """The panel needs to tell "the wording missed" apart from "recall never
+        ran" — they call for opposite actions from the user."""
+        from fastapi.testclient import TestClient
+        from core import session_registry
+        from main import app
+
+        sid = "tscc-recall-miss"
+        session_registry.recall_snapshot[sid] = {
+            "ran": True, "hits": [], "body": "",
+            "tokens": 0, "latency_ms": 41.5, "keywords": ["evolution", "pipeline"],
+        }
+        try:
+            with TestClient(app) as client:
+                resp = client.get(f"/api/chat/{sid}/recall")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["ran"] is True
+            assert body["hits"] == []
+            assert body["keywords"] == ["evolution", "pipeline"]
+        finally:
+            session_registry.recall_snapshot.pop(sid, None)
+
+    def test_no_snapshot_still_reports_never_ran(self):
+        """The ran=False default must stay meaningful — it is now the ONLY way to
+        say "recall did not run", so it must not be reachable by a miss."""
+        from fastapi.testclient import TestClient
+        from main import app
+
+        with TestClient(app) as client:
+            resp = client.get("/api/chat/tscc-recall-absent/recall")
+        assert resp.status_code == 200
+        assert resp.json()["ran"] is False

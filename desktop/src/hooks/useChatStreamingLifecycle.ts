@@ -50,6 +50,7 @@ import type {
 import type { PendingQuestion } from '../pages/chat/types';
 import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { chatService } from '../services/chat';
+import { promptMetadataToCamelCase } from '../services/tscc';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { isOt01DiagEnabled } from '../utils/diagFlags';
 import { dispatchUiCommand } from '../utils/uiCommands';
@@ -3675,15 +3676,23 @@ export function useChatStreamingLifecycle(
         // context_warning.  Same display mirror pattern: write to tabMapRef,
         // mirror to React state only for the active tab.
         else if (event.type === 'system_prompt_metadata') {
-          const { type: _type, ...metadata } = event;
+          const { type: _type, ...raw } = event;
+          // The event spreads the backend metadata dict, so it is snake_case.
+          // Casting it to the camelCase type (as this did) left total_tokens and
+          // effective_token_budget reading as undefined — the panel showed 0
+          // tokens and no budget whenever the prop came from SSE rather than the
+          // HTTP fetch. Use the same mapper the endpoint uses.
+          const metadata = promptMetadataToCamelCase(
+            raw as Record<string, unknown>,
+          );
           const spmTab = capturedTabId
             ? tabMapRef.current.get(capturedTabId)
             : undefined;
           if (spmTab) {
-            spmTab.promptMetadata = metadata as SystemPromptMetadata;
+            spmTab.promptMetadata = metadata;
           }
           if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
-            setPromptMetadata(metadata as SystemPromptMetadata);
+            setPromptMetadata(metadata);
           }
         }
         // MCP health warning — backend emits once per session if configured

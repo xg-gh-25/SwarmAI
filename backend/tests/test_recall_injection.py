@@ -158,6 +158,30 @@ class TestMaybeInjectRecall:
         assert sp.index("**[RECALLED]**") < sp.index("Some recalled knowledge")
 
     @pytest.mark.asyncio
+    async def test_empty_match_stashes_ran_snapshot(self, mock_unit, mock_options):
+        """Recall ran and matched NOTHING — the panel must hear ran=True with zero
+        hits. Without a stash the endpoint falls back to its ran=False default and
+        the panel says "no recall this session", turning a systematic keyword miss
+        into "the feature never fired" (review run_abab234c, MED #6)."""
+        from core.session_router import _maybe_inject_recall
+
+        with patch("core.session_router._recall_for_query", return_value=""):
+            await _maybe_inject_recall(
+                user_message="How does the evolution pipeline work?",
+                options=mock_options,
+                unit=mock_unit,
+            )
+
+        snap = mock_unit._recall_snapshot
+        assert isinstance(snap, dict), "empty-match branch must stash a snapshot"
+        assert snap["ran"] is True, "the leg DID run — only the match was empty"
+        assert snap["hits"] == [], "no hits to report"
+        assert snap["body"] == "", "and no rendered body either"
+        assert snap["keywords"], "the keywords that missed are the useful signal"
+        # The re-search nudge is prompt text, not recalled knowledge.
+        assert snap["tokens"] == 0
+
+    @pytest.mark.asyncio
     async def test_second_message_skips_recall(self, mock_unit, mock_options):
         from core.session_router import _maybe_inject_recall
 

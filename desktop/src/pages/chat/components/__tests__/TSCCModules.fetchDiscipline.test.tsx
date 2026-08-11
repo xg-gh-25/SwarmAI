@@ -130,6 +130,101 @@ describe('TSCC panel fetch discipline', () => {
   });
 });
 
+describe('TSCC budget gauge', () => {
+  it('measures against the model\'s real budget, not a hardcoded 100K', async () => {
+    // 45K assembled on a 200K-window model (50K budget) is 90% of the ceiling.
+    // Against the old hardcoded 100K it read a comfortable 45%.
+    render(
+      <SystemPromptModule
+        sessionId="s1"
+        metadata={{ ...metadata, totalTokens: 45_000, effectiveTokenBudget: 50_000 }}
+      />,
+    );
+    fireEvent.click(tab('Prompt'));
+
+    expect(screen.getByText('90%')).toBeInTheDocument();
+    expect(screen.getByText('↑ 50K budget')).toBeInTheDocument();
+    expect(screen.queryByText('↑ 100K budget')).not.toBeInTheDocument();
+  });
+
+  it('flags over-budget against the real ceiling', async () => {
+    // 60K would be "in budget" under a 100K assumption; on a 50K budget it is not.
+    render(
+      <SystemPromptModule
+        sessionId="s1"
+        metadata={{ ...metadata, totalTokens: 60_000, effectiveTokenBudget: 50_000 }}
+      />,
+    );
+    fireEvent.click(tab('Prompt'));
+
+    expect(screen.getByText('120%')).toBeInTheDocument();
+    expect(screen.getByText('no cut · warn')).toBeInTheDocument();
+  });
+
+  it('says unknown rather than inventing a ceiling when none was reported', async () => {
+    render(
+      <SystemPromptModule
+        sessionId="s1"
+        metadata={{ ...metadata, totalTokens: 45_000, effectiveTokenBudget: 0 }}
+      />,
+    );
+    fireEvent.click(tab('Prompt'));
+
+    expect(
+      screen.getByText(/Budget not reported for this session/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/in budget/)).not.toBeInTheDocument();
+  });
+
+  it('shows the real budget in the summary strip', async () => {
+    render(
+      <SystemPromptModule
+        sessionId="s1"
+        metadata={{ ...metadata, effectiveTokenBudget: 30_000 }}
+      />,
+    );
+    expect(screen.getByText('30K')).toBeInTheDocument();
+  });
+});
+
+describe('TSCC recall miss', () => {
+  it('reports "ran but matched nothing" instead of "no recall ran"', async () => {
+    vi.mocked(getRecallSnapshot).mockResolvedValue({
+      ran: true,
+      hits: [],
+      body: '',
+      tokens: 0,
+      latencyMs: 41,
+      keywords: ['evolution', 'pipeline'],
+    } as never);
+
+    render(<SystemPromptModule sessionId="s1" metadata={metadata} />);
+    await waitFor(() => expect(getRecallSnapshot).toHaveBeenCalledTimes(1));
+    fireEvent.click(tab('Recall'));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Recall ran but matched nothing/)).toBeInTheDocument(),
+    );
+    // The keywords that missed are the actionable part — keep them visible.
+    expect(screen.getByText('evolution')).toBeInTheDocument();
+    expect(screen.queryByText(/No recall ran this session/)).not.toBeInTheDocument();
+  });
+
+  it('still distinguishes a session where recall never ran', async () => {
+    vi.mocked(getRecallSnapshot).mockResolvedValue({
+      ran: false, hits: [], body: '', tokens: 0, latencyMs: 0, keywords: [],
+    } as never);
+
+    render(<SystemPromptModule sessionId="s1" metadata={metadata} />);
+    await waitFor(() => expect(getRecallSnapshot).toHaveBeenCalledTimes(1));
+    fireEvent.click(tab('Recall'));
+
+    await waitFor(() =>
+      expect(screen.getByText(/No recall ran this session/)).toBeInTheDocument(),
+    );
+  });
+});
+
 describe('TSCC degraded banner', () => {
   it('surfaces a degraded prompt assembly', async () => {
     render(

@@ -72,8 +72,10 @@ function ownerOf(filename: string): Owner {
 }
 
 function fmtK(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(n);
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  // Round budgets read as "100K"/"50K", not "100.0K"; 1900 still reads "1.9K".
+  return `${k % 1 === 0 ? k : k.toFixed(1)}K`;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +224,8 @@ function SummaryStrip({
 }) {
   const fileCount = metadata?.files.length ?? 0;
   const totalTok = metadata?.totalTokens ?? 0;
+  // The model's REAL budget tier, not the 100K one. See PromptTab.
+  const budget = metadata?.effectiveTokenBudget ?? 0;
   // REAL hit count from structured hits — not a regex guess on rendered text.
   const recallHits = recall?.ran ? recall.hits.length : 0;
   const grade = security?.grade ?? '—';
@@ -229,7 +233,7 @@ function SummaryStrip({
   const stats: { k: string; v: string; cls: string }[] = [
     { k: 'Files', v: String(fileCount), cls: 'text-[#6ea8fe]' },
     { k: 'Tokens', v: fmtK(totalTok), cls: 'text-[#fbbf24]' },
-    { k: 'Budget', v: '100K', cls: 'text-[#4ade80]' },
+    { k: 'Budget', v: budget > 0 ? fmtK(budget) : '—', cls: 'text-[#4ade80]' },
     { k: 'Recall', v: recall?.ran ? String(recallHits) : '0', cls: 'text-[#a78bfa]' },
     { k: 'Security', v: grade, cls: 'text-[#38d9c4]' },
   ];
@@ -411,7 +415,15 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
         // Fallback: legacy path with no structured hits — show the rendered body.
         <pre className="text-[12px] text-[var(--color-text)] whitespace-pre-wrap font-mono leading-relaxed opacity-90">{snap.body}</pre>
       ) : (
-        <p className="text-sm text-[var(--color-text-muted)] italic py-2">Recall ran but matched nothing this turn.</p>
+        // Reachable state, not a placeholder: the keyword leg ran and matched
+        // nothing. Distinct from "no recall ran" above — this one means the
+        // query's wording missed, which is the load-bearing failure mode now
+        // that the vector leg is retired.
+        <p className="text-sm text-[var(--color-text-muted)] italic py-2">
+          Recall ran but matched nothing — the agent was prompted to grep
+          <span className="font-mono not-italic"> Knowledge/ </span>
+          with synonyms instead.
+        </p>
       )}
     </div>
   );
@@ -501,7 +513,9 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
 // Tab 4: Prompt — token budget gauge + full-text launcher
 // ===========================================================================
 
-const BUDGET_1M = 100000;
+/** The gauge's x-axis runs to 1.5x the budget, so the budget marker sits at 2/3. */
+const GAUGE_HEADROOM = 1.5;
+const BUDGET_MARKER_PCT = 100 / GAUGE_HEADROOM;
 
 function PromptTab({
   sessionId,
@@ -528,9 +542,18 @@ function PromptTab({
   }, [sessionId, metadata?.fullText]);
 
   const total = metadata?.totalTokens ?? 0;
-  const pctOfBudget = Math.min(150, Math.round((total / BUDGET_1M) * 100));
-  const over = total > BUDGET_1M;
-  const barPct = Math.min(100, (total / (BUDGET_1M * 1.5)) * 100);
+  // The REAL budget for this model, from the backend. It is NOT always 100K —
+  // that is only the >=500K-window tier. Hardcoding it made a 45K prompt on a
+  // 200K model read "45% · in budget" when it was actually at 90% of its ceiling.
+  const budget = metadata?.effectiveTokenBudget ?? 0;
+  const hasBudget = budget > 0;
+  const pctOfBudget = hasBudget
+    ? Math.min(150, Math.round((total / budget) * 100))
+    : 0;
+  const over = hasBudget && total > budget;
+  const barPct = hasBudget
+    ? Math.min(100, (total / (budget * GAUGE_HEADROOM)) * 100)
+    : 0;
 
   return (
     <div>
@@ -540,19 +563,31 @@ function PromptTab({
           <div className="text-lg font-bold font-mono" style={{ color: over ? '#fbbf24' : 'var(--color-text)' }}>{fmtK(total)}</div>
           <div className="text-[10px] text-[var(--color-text-muted)]">assembled</div>
         </div>
-        <div className="flex-1">
-          <div className="h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden relative">
-            <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: over ? 'linear-gradient(90deg,#4ade80,#fbbf24)' : '#4ade80' }} />
-            <div className="absolute top-[-2px] w-0.5 h-[14px] bg-[#f87171]" style={{ left: '66.6%' }} title="budget 100K" />
+        {hasBudget ? (
+          <>
+            <div className="flex-1">
+              <div className="h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden relative">
+                <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: over ? 'linear-gradient(90deg,#4ade80,#fbbf24)' : '#4ade80' }} />
+                <div className="absolute top-[-2px] w-0.5 h-[14px] bg-[#f87171]" style={{ left: `${BUDGET_MARKER_PCT}%` }} title={`budget ${fmtK(budget)}`} />
+              </div>
+              <div className="flex justify-between text-[9px] text-[var(--color-text-muted)] mt-1 font-mono">
+                <span>0</span>
+                <span className="text-[#f87171]">↑ {fmtK(budget)} budget</span>
+                <span>{fmtK(budget * GAUGE_HEADROOM)}</span>
+              </div>
+            </div>
+            <div className="text-right min-w-[64px]">
+              <div className="text-[12px] font-mono font-semibold" style={{ color: over ? '#f87171' : '#4ade80' }}>{pctOfBudget}%</div>
+              <div className="text-[9px] text-[var(--color-text-muted)]">{over ? 'no cut · warn' : 'in budget'}</div>
+            </div>
+          </>
+        ) : (
+          // No budget reported. Drawing a gauge would mean inventing a ceiling,
+          // which is the bug this replaced — say "unknown" instead.
+          <div className="flex-1 text-[10px] text-[var(--color-text-muted)] italic">
+            Budget not reported for this session — percentage unavailable.
           </div>
-          <div className="flex justify-between text-[9px] text-[var(--color-text-muted)] mt-1 font-mono">
-            <span>0</span><span className="text-[#f87171]">↑ 100K budget</span><span>150K</span>
-          </div>
-        </div>
-        <div className="text-right min-w-[64px]">
-          <div className="text-[12px] font-mono font-semibold" style={{ color: over ? '#f87171' : '#4ade80' }}>{pctOfBudget}%</div>
-          <div className="text-[9px] text-[var(--color-text-muted)]">{over ? 'no cut · warn' : 'in budget'}</div>
-        </div>
+        )}
       </div>
 
       <button

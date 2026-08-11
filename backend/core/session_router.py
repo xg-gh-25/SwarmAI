@@ -907,6 +907,26 @@ async def _maybe_inject_recall(
                 "for this query. If prior context likely exists under different "
                 "wording, Grep `Knowledge/` (incl. `Archives/`) with synonyms.)_"
             )
+            # Stash a snapshot for the TSCC panel on THIS branch too. Recall ran
+            # — it just matched nothing. Without a snapshot the endpoint returns
+            # its default (ran=False) and the panel says "no recall this session",
+            # which is a different and wrong statement: it hides a systematic
+            # keyword miss behind "the feature didn't run" (review run_abab234c,
+            # MED #6). ran=True with zero hits is the honest report, and it is
+            # what makes the panel's "ran but matched nothing" branch reachable.
+            # tokens=0 because nothing was recalled; the re-search nudge appended
+            # above is prompt text, not recalled knowledge.
+            try:
+                unit._recall_snapshot = {
+                    "ran": True,
+                    "hits": [],
+                    "body": "",
+                    "tokens": 0,
+                    "latency_ms": _recall_ms or 0.0,
+                    "keywords": list(keywords[:32]),
+                }
+            except Exception:  # noqa: BLE001 — snapshot must never break recall
+                pass
             logger.info(
                 "recall ran but matched nothing | keywords=%s | "
                 "first-msg context: base=%d tok (no recall) | recall_leg=%.0fms",
