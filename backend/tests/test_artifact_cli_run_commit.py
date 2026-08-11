@@ -195,11 +195,12 @@ class TestRunCommitPersistsCommits:
     Gate-1 fix: the write RE-READS run.json fresh + merges ONLY `commits`, so a
     concurrent stage update is not clobbered by a stale write-back."""
 
-    def _git(self, repo, *a):
+    def _git(self, repo, *a, env=None):
         return subprocess.run(["git", "-C", str(repo), *a],
-                              capture_output=True, text=True, timeout=15)
+                              capture_output=True, text=True, timeout=15, env=env)
 
     def _setup_repo(self, tmp_path, name):
+        import os
         repo = tmp_path / name
         repo.mkdir()
         self._git(repo, "init", "-q")
@@ -207,7 +208,13 @@ class TestRunCommitPersistsCommits:
         self._git(repo, "config", "user.name", "t")
         (repo / "f.py").write_text("v1\n")
         self._git(repo, "add", "-A")
-        self._git(repo, "commit", "-qm", "base")
+        # Backdate the setup 'base' commit BEFORE the run's created_at (2026-07-04,
+        # set by _write_run) so the fixture matches production: pre-existing commits
+        # predate the run start and are NOT credited by FIX B's --since window. The
+        # run's OWN change (v2, committed at wall-clock-now) is the only in-window commit.
+        env_old = {**os.environ, "GIT_AUTHOR_DATE": "2020-01-01T00:00:00",
+                   "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"}
+        self._git(repo, "commit", "-qm", "base", env=env_old)
         (repo / "f.py").write_text("v2\n")
         return repo
 
@@ -270,6 +277,81 @@ class TestRunCommitPersistsCommits:
         assert data.get("concurrent_marker") == "from_parallel_stage", \
             "G1 write must re-read fresh and NOT clobber a concurrent field update"
         assert len(data.get("commits", [])) == 1, "commits still persisted"
+
+
+class TestRunCommitAlreadyCommitted:
+    """FIX B (run_c526d393): when the agent per-cycle-commits (BUILD.md:428), the
+    files are ALREADY on main by run-commit time → `git add` stages nothing.
+    Previously run-commit only WARNed → commits[] stayed empty → the completion
+    gate mis-read the run as uncommitted_source and BLOCKED it. Now run-commit
+    finds the REAL run-scoped commit and records it, so completion is credited.
+    R29 / no-mis-attribution: bounded by files_touched pathspec + reachable-from-HEAD
+    + --since=created_at."""
+
+    def _git(self, repo, *a, env=None):
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, timeout=15, env=env)
+
+    def _init(self, tmp_path, name):
+        import os
+        repo = tmp_path / name
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        return repo
+
+    def test_already_committed_files_are_credited(self, workspace, tmp_path, capsys):
+        """The bug repro: file committed per-cycle → commits[] populated (not empty)."""
+        repo = self._init(tmp_path, "abrepo")
+        (repo / "f.py").write_text("v1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        # run starts at created_at (default 2026-07-04 in _write_run); commit AFTER it
+        (repo / "f.py").write_text("v2 — the run's real change\n")
+        self._git(repo, "commit", "-qam", "per-cycle commit of the run's file")
+        expected_sha = self._git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+
+        rf = _write_run(workspace, "run_ab",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_ab")
+        data = json.loads(rf.read_text())
+        # THE FIX-B ASSERTION: the already-made commit is credited, commits[] non-empty
+        assert data.get("commits"), "per-cycle-committed file must be credited (commits[] non-empty)"
+        shas = {c.get("sha") for c in data["commits"]}
+        assert expected_sha in shas, f"the real run commit {expected_sha} must be recorded, got {shas}"
+        # and its files are run-scoped (⊆ files_touched, repo-relative)
+        assert all("f.py" in c.get("files", []) for c in data["commits"])
+
+    def test_commit_before_run_start_is_NOT_credited(self, workspace, tmp_path, capsys):
+        """SECURITY (AC2): a commit OLDER than created_at must NOT be credited —
+        prevents crediting pre-existing/sibling work outside this run's window."""
+        repo = self._init(tmp_path, "abrepo2")
+        (repo / "f.py").write_text("ancient\n")
+        self._git(repo, "add", "-A")
+        # backdate WELL before the run's created_at (2026-07-04)
+        env_old = {**__import__("os").environ,
+                   "GIT_AUTHOR_DATE": "2020-01-01T00:00:00",
+                   "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"}
+        self._git(repo, "commit", "-qm", "ancient", env=env_old)
+        rf = _write_run(workspace, "run_ab2",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_ab2")
+        data = json.loads(rf.read_text())
+        # tree clean + only a pre-run commit exists → nothing credited → gate will block
+        assert not data.get("commits"), "a pre-run-start commit must NOT be credited (AC2)"
+
+    def test_lookup_helper_fails_closed_without_since(self, tmp_path):
+        """_lookup_already_committed with empty run_since → [] (never a HEAD guess)."""
+        from scripts.artifact_cli import _lookup_already_committed
+        repo = self._init(tmp_path, "abrepo3")
+        (repo / "f.py").write_text("x\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "c")
+        assert _lookup_already_committed(str(repo), [str(repo / "f.py")], "") == []
+        assert _lookup_already_committed(str(repo), [], "2020-01-01T00:00:00+00:00") == []
 
 
 # ── PR-review surface (run_b8ea6d5c): LOCAL_PR.md REMOVED; finish batch = rail rows ──

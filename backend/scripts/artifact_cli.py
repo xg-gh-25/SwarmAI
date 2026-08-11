@@ -2116,6 +2116,74 @@ def _path_exists_in_repo(f: str, root: str) -> bool:
     return p.exists() if p.is_absolute() else (Path(root) / f).exists()
 
 
+def _lookup_already_committed(
+    root: str, real_files: list[str], run_since: str
+) -> list[dict]:
+    """FIX B (run_c526d393): find the REAL commits that already landed *this run's*
+    files, so a per-cycle-committed run (BUILD.md:428) is credited in run.json
+    commits[] instead of being mis-read as uncommitted by the completion gate.
+
+    Triple-bounded so it can NEVER credit a sibling session's commit (Gate-1 AC2):
+      1. per-file pathspec — only THIS run's ``real_files`` (already existence- +
+         files_touched-filtered by the caller);
+      2. reachable-from-HEAD only — ``git log HEAD`` (NOT ``--all``), so a parallel
+         branch's commit is invisible;
+      3. time-windowed — ``--since=<run_since>`` where run_since is run.json
+         ``created_at`` passed VERBATIM (tz-aware ISO8601 — never strip the tz),
+         so a commit that touched the same file BEFORE this run started is excluded.
+
+    Returns a list of {repo, sha, files} where ``files`` is the repo-relative subset
+    of real_files each commit actually touched (so completion_gate._tail_match stays
+    run-scoped). Empty run_since → return [] (cannot bound → do NOT guess; the caller
+    then reports genuinely-uncommitted and the completion gate blocks — fail-closed,
+    never a HEAD guess). Any git error → [] (same fail-closed posture)."""
+    if not run_since or not real_files:
+        return []
+    import subprocess
+    # Resolve each recorded file to its repo-relative form (pathspec for git log).
+    rel_files: list[str] = []
+    for f in real_files:
+        try:
+            r = subprocess.run(
+                ["git", "-C", root, "ls-files", "--full-name", "--", f],
+                capture_output=True, text=True, timeout=10,
+            )
+            for ln in r.stdout.splitlines():
+                if ln.strip():
+                    rel_files.append(ln.strip())
+        except (subprocess.TimeoutExpired, OSError):
+            return []
+    if not rel_files:
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for rel in rel_files:
+        try:
+            # reachable-from-HEAD (bound 2) + --since (bound 3) + this file (bound 1)
+            log = subprocess.run(
+                ["git", "-C", root, "log", "HEAD", f"--since={run_since}",
+                 "--format=%h", "--", rel],
+                capture_output=True, text=True, timeout=15,
+            )
+            if log.returncode != 0:
+                continue
+            for sha in (ln.strip() for ln in log.stdout.splitlines() if ln.strip()):
+                key = f"{sha}:{rel}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Group by sha: one {repo,sha,files:[...]} record per commit, files
+                # accumulated across the per-file scans (all ⊆ this run's real_files).
+                existing = next((c for c in out if c.get("sha") == sha), None)
+                if existing is None:
+                    out.append({"repo": root, "sha": sha, "files": [rel]})
+                elif rel not in existing["files"]:
+                    existing["files"].append(rel)
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+    return out
+
+
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
 
@@ -2261,7 +2329,36 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         staged = subprocess.run(["git", "-C", root, "diff", "--cached", "--name-only"],
                                 capture_output=True, text=True, timeout=10).stdout.strip()
         if not staged:
-            warnings.append(f"[{root}] no staged changes for tracked files (already committed?)")
+            # FIX B (run_c526d393): nothing staged = this run's files were ALREADY
+            # committed per-cycle (BUILD.md:428 "commit after each green cycle").
+            # Previously this only WARNed → commits[] stayed empty → the completion
+            # gate mis-read a correctly-delivered run as `uncommitted_source` and
+            # blocked it (the exact BUILD-vs-gate contradiction this run fixes).
+            # Instead: find the REAL commits that already landed these files DURING
+            # this run and record them, so the completion gate credits them.
+            #
+            # R29 / no-mis-attribution (Gate-1 AC2): the lookup is triple-bounded —
+            #   (1) per-file pathspec restricted to THIS run's real_files,
+            #   (2) reachable-from-HEAD only (`git log HEAD`, never --all → a
+            #       parallel branch's commit can't leak),
+            #   (3) time-windowed to `--since=<run.created_at>` (verbatim tz-aware
+            #       ISO8601 — NEVER strip the tz, Gate-1 attack #3), so a commit
+            #       that touched the same file BEFORE this run started is excluded.
+            # And each recorded commit's `files` is filtered to this run's
+            # files_touched, so completion_gate._tail_match stays run-scoped.
+            run_since = run_state.get("created_at", "") or ""
+            already = _lookup_already_committed(root, real_files, run_since)
+            if already:
+                committed.extend(already)
+                warnings.append(
+                    f"[{root}] {len(real_files)} file(s) already committed per-cycle → "
+                    f"credited {len(already)} real run-scoped commit(s) to commits[]"
+                )
+            else:
+                warnings.append(
+                    f"[{root}] no staged changes AND no run-scoped commit found for "
+                    f"tracked files — genuinely uncommitted (completion gate will block)"
+                )
             continue
 
         commit = subprocess.run(["git", "-C", root, "commit", "-m", commit_msg],
