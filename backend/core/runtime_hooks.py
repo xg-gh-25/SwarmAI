@@ -451,7 +451,11 @@ def create_user_correction_detector(
 # PostToolUse: file tracker — records Read/Edit/Write file paths
 # ---------------------------------------------------------------------------
 
-_TRACKED_TOOLS = {"Read", "Edit", "Write"}
+# DoD2: MultiEdit/NotebookEdit are file-writing tools the sibling-exclude set
+# (auto_commit_hook._other_live_sessions_touched) must see — before this they
+# were invisible, so a sibling's MultiEdit/NotebookEdit could be swept into
+# another session's commit. NotebookEdit uses `notebook_path`, not `file_path`.
+_TRACKED_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
 def create_file_tracker(
@@ -459,31 +463,53 @@ def create_file_tracker(
 ):
     """Factory: creates a PostToolUse hook that tracks files touched during the session.
 
-    Populates ``session_context["_files_touched"]`` (a set) with file paths
-    from Read, Edit, and Write tool calls.  Used by PreCompact injection and
-    session checkpoint.
+    Populates ``session_context["_files_touched"]`` (a set) with file paths from
+    Read/Edit/Write/MultiEdit (``file_path``), NotebookEdit (``notebook_path``),
+    and Bash write targets (``>``/``>>``/``tee``/``cp``/``mv`` via
+    ``parse_bash_write_targets``).  Used by PreCompact injection, session
+    checkpoint, AND the auto_commit sibling-exclude set (R29/DEC30) — the latter
+    is why coverage must be complete: a missed write is a path a sibling session
+    could sweep into its own commit.
     """
     ctx = session_context or {}
+
+    def _add_touched(path: str) -> None:
+        if not path:
+            return
+        if "_files_touched" not in ctx:
+            ctx["_files_touched"] = set()
+        ctx["_files_touched"].add(path)
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         tool = _extract_field(input_data, "tool_name", "")
 
-        # Detect test/scan execution (Self-Monitoring evidence)
         if tool == "Bash":
             tool_input = _extract_field(input_data, "tool_input", {})
             command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            # Detect test/scan execution (Self-Monitoring evidence)
             if "pytest" in command or "python -m pytest" in command:
                 ctx["_ran_tests"] = True
+            # DoD2: record Bash write targets (`>`/`>>`/tee/cp/mv DEST) so a
+            # Bash-written file lands in _files_touched (reuses the SSOT parser —
+            # never a second write-target parser). Fail-safe: parser returns []
+            # on anything it can't confidently resolve.
+            if command:
+                try:
+                    from core.file_change_classifier import parse_bash_write_targets
+                    for tgt in parse_bash_write_targets(command):
+                        _add_touched(tgt)
+                except Exception as e:  # never break the hook path
+                    logger.debug("file_tracker: bash write-target parse failed: %s", e)
+            return {}
 
         if tool not in _TRACKED_TOOLS:
             return {}
 
         tool_input = _extract_field(input_data, "tool_input", {})
-        file_path = tool_input.get("file_path", "") if isinstance(tool_input, dict) else ""
-        if file_path:
-            if "_files_touched" not in ctx:
-                ctx["_files_touched"] = set()
-            ctx["_files_touched"].add(file_path)
+        if isinstance(tool_input, dict):
+            # Edit/Write/MultiEdit → file_path; NotebookEdit → notebook_path.
+            _add_touched(tool_input.get("file_path", ""))
+            _add_touched(tool_input.get("notebook_path", ""))
 
         return {}
 

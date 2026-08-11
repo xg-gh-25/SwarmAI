@@ -451,6 +451,154 @@ def _is_tag_ref(ref: str) -> bool:
     return True
 
 
+def _is_history_rewrite(command: str) -> bool:
+    """Fail-closed predicate: is this a LOCAL git history-rewrite op?
+
+    DoD1 (2026-08-11): a sibling session's ``git rebase`` once dropped a whole
+    commit (gate-enforcing code) from HEAD while another session was live on the
+    SAME shared working tree (single ``main``, shared index). Unlike
+    ``_is_irreversible_external_op`` (which guards REMOTE ops: force-push, gh
+    delete/visibility), this guards the LOCAL ops that rewrite committed history
+    reachable from HEAD, so they can be blocked WHEN another live session may
+    lose work. Gate wiring decides whether to block; this only classifies.
+
+    Flags True for:
+    - ``git rebase`` (any form, incl. ``-i`` / ``--onto``)
+    - ``git reset --hard`` / ``--merge`` / ``--keep`` (working-tree/HEAD-moving
+      resets that can discard commits). A BARE ``git reset`` / ``reset -q -- <p>``
+      is unstage-only (the auto_commit hook itself uses it) → NOT flagged.
+    - ``git commit --amend`` (rewrites the tip commit)
+    - ``git filter-branch`` / ``git filter-repo`` (history rewriters)
+
+    Token-aware (``shlex``), segment-split on shell separators so a rewrite op
+    chained after a benign command is still caught. Unparseable input mentioning
+    ``git`` → True (fail closed). Non-git → False.
+    """
+    try:
+        all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
+    except ValueError:
+        # Unparseable: only fail closed if a rewrite signature is literally present.
+        return bool(re.search(r"\b(rebase|reset\s+--hard|--amend|filter-branch|filter-repo)\b", command))
+    if not all_tokens:
+        return False
+    # Re-split glued ';' (shlex leaves 'status;' fused).
+    _resplit: list[str] = []
+    for tok in all_tokens:
+        if ";" in tok and tok != ";":
+            for idx, p in enumerate(tok.split(";")):
+                if p:
+                    _resplit.append(p)
+                if idx < len(tok.split(";")) - 1:
+                    _resplit.append(";")
+        else:
+            _resplit.append(tok)
+    all_tokens = _resplit
+
+    _SEPARATORS = {";", "&&", "||", "|", "&"}
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for tok in all_tokens:
+        if tok in _SEPARATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+
+    return any(_segment_is_history_rewrite(seg) for seg in segments)
+
+
+def _segment_is_history_rewrite(tokens: list[str]) -> bool:
+    """Judge ONE command segment (already split on shell separators)."""
+    _WRAPPERS = {"sudo", "env", "command", "nice", "nohup", "time"}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if "=" in t and t.split("=", 1)[0].replace("_", "").isalnum() and not t.startswith("-"):
+            i += 1  # env assignment NAME=value
+        elif t in _WRAPPERS:
+            i += 1
+        else:
+            break
+    tokens = tokens[i:]
+    if not tokens or tokens[0] != "git":
+        return False
+    # Skip git global options that precede the subcommand (`git -C p rebase …`).
+    k = 1
+    while k < len(tokens):
+        t = tokens[k]
+        if t in ("-C", "-c", "--namespace"):
+            k += 2
+        elif t.startswith(("--git-dir", "--work-tree", "--namespace=", "-C", "-c")):
+            k += 1
+        elif t.startswith("-"):
+            k += 1
+        else:
+            break
+    if k >= len(tokens):
+        return False
+    sub = tokens[k]
+    rest = tokens[k + 1:]
+    if sub in ("rebase", "filter-branch", "filter-repo", "update-ref"):
+        # update-ref rewrites a ref pointer directly (can orphan commits).
+        return True
+    if sub == "commit":
+        return any(a == "--amend" or a.startswith("--amend") for a in rest)
+    if sub == "reset":
+        # --hard / --merge / --keep move HEAD/working-tree destructively.
+        # A bare `git reset` or `git reset -- <path>` is unstage-only → safe.
+        return any(a in ("--hard", "--merge", "--keep") for a in rest)
+    if sub == "branch":
+        # `git branch -f/-D/-M <name> [<start>]` force-moves/deletes a branch
+        # pointer → can orphan commits on the shared tree (the incident's class).
+        # `-m`/`-c` (rename/copy) and a bare `git branch` (list) are safe.
+        return any(a in ("-f", "--force", "-D", "-M") or a.startswith("--force") for a in rest)
+    if sub == "checkout":
+        # `git checkout -B <name>` force-resets an existing branch to a start point
+        # → orphans commits. Plain `-b` (create-new, fails if exists) is safe.
+        return any(a == "-B" for a in rest)
+    return False
+
+
+def _other_live_sessions_present(current_app_session_id: str) -> "bool | None":
+    """True iff another LIVE session (besides *current_app_session_id*) exists.
+
+    Reads the session registry via ``list_units()`` (same source as
+    ``auto_commit_hook._other_live_sessions_touched``). Compares each unit's own
+    ``session_id`` (the app-level key ``_units`` is indexed by, and the value
+    stored in ``session_context['sdk_session_id']``) — NOT the SDK/agent
+    ``session_key``, which lives in a different namespace (Gate-2 BUG A).
+
+    Only ``is_alive`` units count: ``_units`` retains DEAD/COLD units up to ~1h
+    (lifecycle_manager._purge_stale_cold), so an unfiltered scan would gate every
+    rewrite for an hour after a sibling died (Gate-2 BUG B).
+
+    Returns:
+    - ``True``  → at least one OTHER live session exists
+    - ``False`` → this is the only live session
+    - ``None``  → registry unavailable / error (caller decides fail-safe)
+    """
+    try:
+        from core import session_registry
+        router = session_registry.session_router
+        if router is None:
+            return None
+        list_units = getattr(router, "list_units", None)
+        if list_units is None:
+            return None
+        for unit in list_units():
+            if not getattr(unit, "is_alive", False):
+                continue
+            if getattr(unit, "session_id", None) != current_app_session_id:
+                return True
+        return False
+    except Exception as e:  # pragma: no cover - registry edge
+        logger.debug("history-rewrite gate: could not read session registry: %s", e)
+        return None
+
+
 def load_dangerous_patterns() -> list[str]:
     """Load glob patterns from ``~/.swarm-ai/dangerous_commands.json``.
 
@@ -657,6 +805,24 @@ def create_dangerous_command_gate(
             or _is_dangerous_rm(command)
             or _is_irreversible_external_op(command)
         )
+        # DoD1: local history-rewrite (rebase / reset --hard / commit --amend /
+        # filter-*) is dangerous ONLY when a SIBLING live session could lose work
+        # on the shared tree. Solo session → a local rewrite affects only its own
+        # history, not gated. Registry unavailable → fail-safe stringent (these
+        # ops are irreversible; s_workspace-git already requires asking first).
+        if not is_dangerous and _is_history_rewrite(command):
+            # Use the app-level session_id (the _units key), NOT session_key —
+            # session_key is resume_session_id/agent_id, a different namespace, so
+            # a solo session would never self-match → falsely gated (Gate-2 BUG A).
+            app_sid = session_context.get("sdk_session_id") or session_key
+            others = _other_live_sessions_present(app_sid)
+            if others is not False:  # True (sibling exists) OR None (unknown)
+                is_dangerous = True
+                logger.warning(
+                    "[HISTORY-REWRITE] gated (%s): %s",
+                    "sibling live" if others else "registry unavailable — fail-safe",
+                    command[:80],
+                )
         if not is_dangerous:
             return {"decision": "approve"}
 

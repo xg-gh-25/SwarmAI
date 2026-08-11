@@ -1323,8 +1323,12 @@ class TestFileTracker:
         assert "/src/main.py" in session_context["_files_touched"]
 
     @pytest.mark.asyncio
-    async def test_bash_tool_not_tracked(self, session_context):
-        """Bash tool does NOT populate _files_touched."""
+    async def test_readonly_bash_not_tracked(self, session_context):
+        """A read-only Bash command (no write target) does NOT populate _files_touched.
+
+        (DoD2 tightened the old 'Bash never tracked' contract: Bash write
+        targets ARE now tracked; a read-only command like `ls` still is not.)
+        """
         from core.runtime_hooks import create_file_tracker
 
         hook = create_file_tracker(session_context)
@@ -1346,6 +1350,56 @@ class TestFileTracker:
                 "tu_1", MagicMock(),
             )
         assert len(session_context["_files_touched"]) == 1
+
+    # --- DoD2: complete the exclude signal (MultiEdit/NotebookEdit/Bash-write) ---
+
+    @pytest.mark.asyncio
+    async def test_multiedit_tracked(self, session_context):
+        """DoD2: MultiEdit file_path is tracked (was invisible before)."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "MultiEdit", "tool_input": {"file_path": "/src/multi.py"}, "tool_response": "ok"},
+            "tu_1", MagicMock(),
+        )
+        assert "/src/multi.py" in session_context["_files_touched"]
+
+    @pytest.mark.asyncio
+    async def test_notebookedit_tracked_via_notebook_path(self, session_context):
+        """DoD2: NotebookEdit uses notebook_path (NOT file_path) — must still track."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/nb/analysis.ipynb"}, "tool_response": "ok"},
+            "tu_1", MagicMock(),
+        )
+        assert "/nb/analysis.ipynb" in session_context["_files_touched"]
+
+    @pytest.mark.asyncio
+    async def test_bash_write_target_tracked(self, session_context):
+        """DoD2: a Bash write target (`>`) lands in _files_touched (sibling-exclude)."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi > /out/report.txt"}, "tool_response": ""},
+            "tu_1", MagicMock(),
+        )
+        assert "/out/report.txt" in session_context["_files_touched"]
+
+    @pytest.mark.asyncio
+    async def test_bash_mv_dest_tracked(self, session_context):
+        """DoD2: `mv src dest` records the DEST as touched."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "Bash", "tool_input": {"command": "mv /a/x.py /b/y.py"}, "tool_response": ""},
+            "tu_1", MagicMock(),
+        )
+        assert "/b/y.py" in session_context["_files_touched"]
 
 
 # ---------------------------------------------------------------------------

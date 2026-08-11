@@ -338,6 +338,128 @@ class TestIrreversibleExternalOpPredicate:
 
 
 # ---------------------------------------------------------------------------
+# DoD1: local history-rewrite predicate + gate wiring
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryRewritePredicate:
+    """DoD1: a sibling session's `git rebase` on the shared tree once dropped a
+    committed gate-enforcing change from HEAD. This LOCAL-op predicate (distinct
+    from _is_irreversible_external_op, which guards REMOTE ops) flags history
+    rewrites so the gate can block them when a sibling session could lose work.
+    A bare `git reset` (unstage-only, used by the auto_commit hook itself) is NOT
+    a rewrite and must never be flagged."""
+
+    def test_history_rewrites_flagged(self):
+        from core.security_hooks import _is_history_rewrite
+        for cmd in [
+            "git rebase -i HEAD~3",
+            "git rebase main",
+            "git rebase --onto A B C",
+            "git reset --hard origin/main",
+            "git reset --hard HEAD~2",
+            "git reset --merge",
+            "git reset --keep HEAD~1",
+            "git commit --amend -m x",
+            "git commit --amend --no-edit",
+            "git filter-branch --force",
+            "git filter-repo --path x",
+            "git status && git rebase main",     # chained after benign
+            "git -C /repo rebase main",          # global opt before subcommand
+            "env X=1 git rebase main",           # env prefix
+            # Gate-2 SHOULD-FIX: local branch-pointer moves that orphan commits
+            "git branch -f main HEAD~3",
+            "git branch -D feature",
+            "git branch -M main HEAD~1",
+            "git checkout -B main HEAD~3",
+            "git update-ref refs/heads/main HEAD~3",
+        ]:
+            assert _is_history_rewrite(cmd) is True, f"Expected rewrite flag: {cmd!r}"
+
+    def test_non_rewrites_not_flagged(self):
+        from core.security_hooks import _is_history_rewrite
+        for cmd in [
+            "git reset -q -- somefile.py",       # unstage-only (auto_commit uses this)
+            "git reset HEAD file.py",            # bare reset (mixed reset, no --hard/merge/keep)
+            "git reset",                         # bare reset
+            "git commit -m 'normal'",            # normal commit (no --amend)
+            "git add -A",
+            "git status",
+            "git log --oneline",
+            "git push --force origin main",      # REMOTE rewrite — the OTHER predicate's job
+            "git branch",                        # list branches
+            "git branch feature",                # create branch (no force)
+            "git branch -m old new",             # rename (not a pointer-orphan)
+            "git checkout -b feature",           # create-new (fails if exists) — safe
+            "git checkout main",                 # switch branch
+            "echo git rebase",                   # not the git command word
+            "ls -la",
+            "rebase",                            # bare word, not `git rebase`
+        ]:
+            assert _is_history_rewrite(cmd) is False, f"Expected NOT flagged: {cmd!r}"
+
+    def test_unparseable_git_rewrite_fails_closed(self):
+        from core.security_hooks import _is_history_rewrite
+        assert _is_history_rewrite('git rebase "unbalanced') is True
+        assert _is_history_rewrite('git reset --hard "unbalanced') is True
+
+    def test_other_live_sessions_present_none_on_no_router(self, monkeypatch):
+        """Registry unavailable → None (caller fail-safes to stringent)."""
+        from core import security_hooks, session_registry
+        monkeypatch.setattr(session_registry, "session_router", None, raising=False)
+        assert security_hooks._other_live_sessions_present("s1") is None
+
+    def test_other_live_sessions_present_keys_on_app_session_id(self, monkeypatch):
+        """Gate-2 BUG A regression: the function must compare against each unit's
+        own .session_id (the _units key / session_context['sdk_session_id']), NOT
+        the SDK session_key namespace — else a solo session never self-matches and
+        is falsely gated. Uses list_units() + is_alive (BUG B)."""
+        from core import security_hooks, session_registry
+
+        class _Unit:
+            def __init__(self, sid, alive=True):
+                self.session_id = sid
+                self.is_alive = alive
+
+        class _Router:
+            def __init__(self, units):
+                self._u = units
+            def list_units(self):
+                return self._u
+
+        # Solo: only my own app session_id present → False (was TRUE under BUG A).
+        monkeypatch.setattr(session_registry, "session_router",
+                            _Router([_Unit("app-sid-1")]), raising=False)
+        assert security_hooks._other_live_sessions_present("app-sid-1") is False
+
+        # A live sibling → True.
+        monkeypatch.setattr(session_registry, "session_router",
+                            _Router([_Unit("app-sid-1"), _Unit("app-sid-2")]), raising=False)
+        assert security_hooks._other_live_sessions_present("app-sid-1") is True
+
+    def test_dead_sibling_not_counted(self, monkeypatch):
+        """Gate-2 BUG B regression: a DEAD/COLD sibling unit (is_alive False) must
+        NOT count — else every rewrite is gated for ~1h after a sibling died."""
+        from core import security_hooks, session_registry
+
+        class _Unit:
+            def __init__(self, sid, alive):
+                self.session_id = sid
+                self.is_alive = alive
+
+        class _Router:
+            def __init__(self, units):
+                self._u = units
+            def list_units(self):
+                return self._u
+
+        monkeypatch.setattr(session_registry, "session_router",
+                            _Router([_Unit("me", True), _Unit("dead-sib", False)]),
+                            raising=False)
+        assert security_hooks._other_live_sessions_present("me") is False
+
+
+# ---------------------------------------------------------------------------
 # Governance file gate tests
 # ---------------------------------------------------------------------------
 
@@ -526,6 +648,61 @@ class TestDangerousCommandGateIntegration:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "审批超时" in reason
         assert "User denied" not in reason  # must be distinguishable
+
+    # --- DoD1: history-rewrite is gated ONLY when a sibling session is live ---
+
+    @pytest.mark.asyncio
+    async def test_history_rewrite_with_sibling_goes_to_approval(self, monkeypatch):
+        """`git rebase` WHILE another live session exists → routes to approval flow
+        (and we deny it). Proves the predicate is wired AND sibling-gated."""
+        from core import security_hooks
+        monkeypatch.setattr(security_hooks, "_other_live_sessions_present", lambda k: True)
+        gate, _pm = self._make_gate(decision_to_return="deny")
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "git rebase -i HEAD~3"}},
+            None, None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_history_rewrite_solo_session_auto_approved(self, monkeypatch):
+        """`git rebase` with NO sibling session → approve without a prompt (a solo
+        rewrite touches only this session's own history). _make_gate's wait would
+        block if the approval path were wrongly reached."""
+        from core import security_hooks
+        monkeypatch.setattr(security_hooks, "_other_live_sessions_present", lambda k: False)
+        gate, _pm = self._make_gate()  # no decision → wait would block if reached
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "git rebase -i HEAD~3"}},
+            None, None,
+        )
+        assert result == {"decision": "approve"}
+
+    @pytest.mark.asyncio
+    async def test_history_rewrite_registry_unavailable_fail_safe_gates(self, monkeypatch):
+        """Registry unavailable (None) → fail-safe stringent: still routed to approval
+        (irreversible op, don't silently allow when siblings are unknown)."""
+        from core import security_hooks
+        monkeypatch.setattr(security_hooks, "_other_live_sessions_present", lambda k: None)
+        gate, _pm = self._make_gate(decision_to_return="deny")
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "git reset --hard HEAD~5"}},
+            None, None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_unstage_reset_never_gated_even_with_sibling(self, monkeypatch):
+        """The auto_commit hook's own `git reset -- <path>` (unstage-only) must NEVER
+        be gated, even with a sibling live — else the hook deadlocks itself."""
+        from core import security_hooks
+        monkeypatch.setattr(security_hooks, "_other_live_sessions_present", lambda k: True)
+        gate, _pm = self._make_gate()  # wait would block if wrongly gated
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "git reset -q -- foo.py bar.py"}},
+            None, None,
+        )
+        assert result == {"decision": "approve"}
 
 
 class TestAskQuestionGate:
