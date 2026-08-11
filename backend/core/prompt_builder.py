@@ -46,6 +46,41 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def assert_core_sections(prompt_text: str) -> list[str]:
+    """Completeness gate for the system prompt (run_e47c1cfb).
+
+    Returns the list of CORE section names (core_section_names() SSOT) that are
+    ABSENT from ``prompt_text``. An empty list means the prompt is complete.
+
+    Matching is LINE-ANCHORED on the exact header form the loader emits —
+    ``## {section_name}`` at the start of a line (``## {name}\n`` mid-text, or as
+    the very first line). A bare substring check would false-pass when a header
+    string appears inside another section's BODY (Gate-1 CHECK4); anchoring to a
+    line boundary prevents that. This is a pure function on a string — callers
+    decide how loud to be about the result.
+    """
+    from .context_directory_loader import core_section_names
+
+    missing: list[str] = []
+    for name in core_section_names():
+        header = f"## {name}"
+        # Line-anchored: header at BOF, or preceded by a newline; and followed by
+        # end-of-line (newline or end of string) so "## Soul Extras" != "## Soul".
+        found = False
+        idx = prompt_text.find(header)
+        while idx != -1:
+            at_line_start = idx == 0 or prompt_text[idx - 1] == "\n"
+            end = idx + len(header)
+            at_line_end = end == len(prompt_text) or prompt_text[end] == "\n"
+            if at_line_start and at_line_end:
+                found = True
+                break
+            idx = prompt_text.find(header, idx + 1)
+        if not found:
+            missing.append(name)
+    return missing
+
+
 # ── Sensitive MCP gate (G2) — single source of truth ──────────────────
 # MCP servers a NON-OWNER channel sender must never reach (even TRUSTED tier):
 # email = acting-as-XG + personal data; sentral = XG revenue/CRM (raw business
@@ -872,10 +907,10 @@ class PromptBuilder:
             _t_load = time.perf_counter() - _t1
 
             # recall#G ephemeral-budget observability (run_a16d61ad, design §G):
-            # the 11 context files are token-budgeted inside load_all(), but the
+            # the 12 context files are token-budgeted inside load_all(), but the
             # EPHEMERAL sections appended below (DailyActivity, briefing, user
             # suggestions, sibling digest, editor, deferred-MCP) are NOT — they
-            # just `+=` onto context_text against a fixed EPHEMERAL_HEADROOM
+            # just `+=` onto ephemeral_text against a fixed EPHEMERAL_HEADROOM
             # reservation with no combined ceiling. On a 1M model that is fine
             # (the design bets on it), but a silent overshoot means ephemeral
             # content quietly eats the budget the context files were supposed to
@@ -883,6 +918,20 @@ class PromptBuilder:
             # injection-complete log below can report ephemeral = total − loader
             # and WARN (not crash, not truncate) when it exceeds the reservation.
             _loader_tok = ContextDirectoryLoader.estimate_tokens(context_text)
+
+            # ── COMMIT CORE FIRST (fault isolation, run_e47c1cfb) ──────────
+            # The 12 core context files are assembled and committed to
+            # system_prompt HERE, BEFORE any ephemeral section runs. This is the
+            # structural fix: a failure in any ephemeral section (a NameError, a
+            # bad briefing, a broken digest) can append nothing and lose only
+            # itself — it can NEVER zero out the core context, because core is
+            # already committed. Ephemeral sections accumulate into `ephemeral_text`
+            # and are committed ONCE, after this, below.
+            if context_text:
+                _existing_core = agent_config.get("system_prompt", "") or ""
+                agent_config["system_prompt"] = (
+                    _existing_core + "\n\n" + context_text if _existing_core else context_text
+                )
 
             # ── Session-type: channel sessions skip heavy ephemeral context ──
             is_channel = channel_context is not None
@@ -896,8 +945,16 @@ class PromptBuilder:
             # for the whole ephemeral-file group, not four) that returns pure strings;
             # the async body only concatenates. Both fault paths are unchanged: an
             # unreadable file is skipped, never fatal.
-            def _read_ephemeral_files() -> tuple[str, list[tuple[str, str]]]:
-                """(bootstrap_text, [(day_stem, content), ...]) — all blocking reads."""
+            def _read_ephemeral_files() -> tuple[str, list[tuple[str, str]], str]:
+                """(bootstrap_text, [(day_stem, content), ...], needs_distillation_flag_path).
+
+                All blocking reads. The distillation-flag PATH is resolved HERE where
+                `daily_activity_dir` is in scope and returned to the caller — a prior
+                refactor (039c4f32) left the flag check in the outer scope referencing
+                this local, raising NameError on every session with daily files and
+                (via the monolithic try) zeroing out ALL core context. Returning the
+                resolved path keeps the var in the only scope that defines it.
+                """
                 bootstrap = ""
                 bootstrap_path = context_dir / "BOOTSTRAP.md"
                 if bootstrap_path.exists():
@@ -906,6 +963,7 @@ class PromptBuilder:
                     except (OSError, UnicodeDecodeError):
                         bootstrap = ""
                 dailies: list[tuple[str, str]] = []
+                distill_flag = ""
                 # Only the most recent files are injected. Older actionable items are
                 # already covered by Proactive Briefing (L0-L4) and Memory Index; the
                 # agent can Read older files on demand. Skipped for channel sessions:
@@ -924,31 +982,46 @@ class PromptBuilder:
                             continue
                         if content:
                             dailies.append((daily_file.stem, content))
-                return bootstrap, dailies
+                    flag_path = daily_activity_dir / ".needs_distillation"
+                    if flag_path.is_file():
+                        distill_flag = str(flag_path)
+                return bootstrap, dailies, distill_flag
 
-            _bootstrap_content, _daily_files = await asyncio.to_thread(_read_ephemeral_files)
+            # ── Ephemeral sections (each isolated) append to `ephemeral_text`,
+            #    which is committed to system_prompt ONCE, AFTER core is already
+            #    committed below. A failure in any ephemeral section can never
+            #    drop the core context files.
+            ephemeral_text = ""
+            try:
+                _bootstrap_content, _daily_files, _distill_flag = await asyncio.to_thread(
+                    _read_ephemeral_files
+                )
 
-            if _bootstrap_content:
-                context_text = f"## Onboarding\n{_bootstrap_content}\n\n{context_text}"
+                if _bootstrap_content:
+                    # Onboarding prepends the (already-committed) core; here it goes
+                    # at the FRONT of the ephemeral block so it still leads the prompt
+                    # tail after core.
+                    ephemeral_text = f"## Onboarding\n{_bootstrap_content}\n\n{ephemeral_text}"
 
-            for _day_stem, _daily_content in _daily_files:
-                token_count = ContextDirectoryLoader.estimate_tokens(_daily_content)
-                if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                    _daily_content = _truncate_daily_content(
-                        _daily_content, TOKEN_CAP_PER_DAILY_FILE
-                    )
-                context_text += f"\n\n## Daily Activity ({_day_stem})\n{_daily_content}"
+                for _day_stem, _daily_content in _daily_files:
+                    token_count = ContextDirectoryLoader.estimate_tokens(_daily_content)
+                    if token_count > TOKEN_CAP_PER_DAILY_FILE:
+                        _daily_content = _truncate_daily_content(
+                            _daily_content, TOKEN_CAP_PER_DAILY_FILE
+                        )
+                    ephemeral_text += f"\n\n## Daily Activity ({_day_stem})\n{_daily_content}"
 
-                # ── Distillation flag check ──
-                flag_path = daily_activity_dir / ".needs_distillation"
-                if flag_path.is_file():
-                    context_text += (
+                # ── Distillation flag (path resolved in _read_ephemeral_files) ──
+                if _distill_flag:
+                    ephemeral_text += (
                         "\n\n## Memory Maintenance Required\n"
                         "Run the s_memory-distill skill now — there are undistilled "
                         "DailyActivity files that need promotion to MEMORY.md. "
                         "After distillation completes, delete the flag file at "
-                        f"`{flag_path}`."
+                        f"`{_distill_flag}`."
                     )
+            except Exception as exc:
+                logger.warning("Ephemeral (bootstrap/daily) injection failed: %s", exc)
 
             # ── Proactive Intelligence briefing (ephemeral) ──
             # Skipped for channel sessions: briefing is for session planning,
@@ -967,7 +1040,7 @@ class PromptBuilder:
                     # opens a sqlite connection on the assembly path.
                     briefing = await asyncio.to_thread(build_session_briefing, working_directory)
                     if briefing:
-                        context_text += f"\n\n{briefing}"
+                        ephemeral_text += f"\n\n{briefing}"
                 except Exception as exc:
                     logger.warning("Proactive intelligence injection failed: %s", exc)
             _t_briefing = time.perf_counter() - _t_briefing_start
@@ -986,7 +1059,7 @@ class PromptBuilder:
                 try:
                     suggestions_text = await asyncio.to_thread(_read_user_suggestions)
                     if suggestions_text and len(suggestions_text) < 2048:
-                        context_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
+                        ephemeral_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
                 except Exception as exc:
                     logger.debug("User suggestions injection skipped: %s", exc)
 
@@ -1010,7 +1083,7 @@ class PromptBuilder:
                     current_session_id=agent_config.get("resume_app_session_id") or "",
                 )
                 if digest:
-                    context_text += f"\n\n{digest}"
+                    ephemeral_text += f"\n\n{digest}"
             except Exception as exc:
                 logger.debug("Active session digest failed (non-fatal): %s", exc)
 
@@ -1023,52 +1096,63 @@ class PromptBuilder:
             # agent's own UI — open file + Canvas state + which nav overlay is
             # open. Superset of the legacy "## Currently Open File" (which a
             # file-only payload still degrades to). See _render_ui_context_section.
-            context_text += _render_ui_context_section(editor_context)
+            try:
+                ephemeral_text += _render_ui_context_section(editor_context)
 
-            # ── Terminal context injection (P2 — observable terminal) ──
-            # When the user explicitly attaches a terminal's output (a human
-            # action in the terminal panel), the session gets a READ-ONLY view
-            # of that terminal's recent output + cwd, so "why did this build
-            # fail?" works without copy-paste. Single direction: terminal →
-            # session. The session never writes to the terminal (P3 deferred).
-            if terminal_context:
-                buffer_tail = terminal_context.get("buffer_tail", "")
-                term_cwd = terminal_context.get("cwd", "")
-                if buffer_tail:
-                    cwd_note = f" (cwd `{term_cwd}`)" if term_cwd else ""
-                    context_text += (
-                        f"\n\n## Attached Terminal Output{cwd_note}\n"
-                        f"The user attached recent output from an integrated "
-                        f"terminal. Treat it as relevant context (e.g. a build "
-                        f"log or command result) when responding:\n\n"
-                        f"```\n{buffer_tail}\n```"
-                    )
+                # ── Terminal context injection (P2 — observable terminal) ──
+                # When the user explicitly attaches a terminal's output (a human
+                # action in the terminal panel), the session gets a READ-ONLY view
+                # of that terminal's recent output + cwd, so "why did this build
+                # fail?" works without copy-paste. Single direction: terminal →
+                # session. The session never writes to the terminal (P3 deferred).
+                if terminal_context:
+                    buffer_tail = terminal_context.get("buffer_tail", "")
+                    term_cwd = terminal_context.get("cwd", "")
+                    if buffer_tail:
+                        cwd_note = f" (cwd `{term_cwd}`)" if term_cwd else ""
+                        ephemeral_text += (
+                            f"\n\n## Attached Terminal Output{cwd_note}\n"
+                            f"The user attached recent output from an integrated "
+                            f"terminal. Treat it as relevant context (e.g. a build "
+                            f"log or command result) when responding:\n\n"
+                            f"```\n{buffer_tail}\n```"
+                        )
 
-            # ── Deferred MCP list (Lazy MCP Loading) ──
-            _deferred = agent_config.get("_deferred_mcps")
-            if _deferred:
-                deferred_section = self.format_deferred_mcp_section(_deferred)
-                if deferred_section:
-                    context_text += f"\n\n{deferred_section}"
+                # ── Deferred MCP list (Lazy MCP Loading) ──
+                _deferred = agent_config.get("_deferred_mcps")
+                if _deferred:
+                    deferred_section = self.format_deferred_mcp_section(_deferred)
+                    if deferred_section:
+                        ephemeral_text += f"\n\n{deferred_section}"
+            except Exception as exc:
+                logger.warning("UI/terminal/MCP ephemeral injection failed: %s", exc)
 
-            if context_text:
+            # ── COMMIT EPHEMERAL (append to the already-committed core) ────
+            # Core was committed right after load_all above; here the ephemeral
+            # block is appended ONCE. The old single-commit of `context_text`
+            # (core+ephemeral together) is intentionally REMOVED — committing
+            # core early + ephemeral here avoids double-appending core (Gate-1
+            # CHECK5). A failed ephemeral section simply contributes an empty
+            # string; core is untouched.
+            if ephemeral_text:
                 existing = agent_config.get("system_prompt", "") or ""
                 agent_config["system_prompt"] = (
-                    existing + "\n\n" + context_text if existing else context_text
+                    existing + "\n\n" + ephemeral_text if existing else ephemeral_text
                 )
+            if context_text or ephemeral_text:
                 _t_total = time.perf_counter() - _t_total_start
-                _est_tokens = ContextDirectoryLoader.estimate_tokens(context_text)
-                # recall#G: ephemeral = everything appended after the budgeted
-                # loader baseline (briefing/suggestions/digest/editor/MCP; resume
-                # is injected later, separately, and is budget-enforced in
-                # build_resume_context). _loader_tok is set right after load_all();
-                # guard against the rare path where it wasn't (defensive).
-                _ephemeral_tok = max(_est_tokens - locals().get("_loader_tok", 0), 0)
+                # recall#G: ephemeral = the block appended after the budgeted loader
+                # baseline (briefing/suggestions/digest/editor/MCP; resume is injected
+                # later, separately, budget-enforced in build_resume_context). Since
+                # the core/ephemeral split (run_e47c1cfb), ephemeral_text IS exactly
+                # that block, so its token count is measured directly (no subtraction).
+                _ephemeral_tok = ContextDirectoryLoader.estimate_tokens(ephemeral_text)
+                _est_tokens = locals().get("_loader_tok", 0) + _ephemeral_tok
                 logger.info(
                     "Injected centralized context: %d chars, ~%d tokens "
                     "(loader=%d, ephemeral=%d / headroom=%d), "
                     "timing: total=%.2fs (ensure=%.3fs, load=%.3fs, briefing=%.3fs)",
-                    len(context_text), _est_tokens,
+                    len(context_text) + len(ephemeral_text), _est_tokens,
                     locals().get("_loader_tok", 0), _ephemeral_tok, EPHEMERAL_HEADROOM,
                     _t_total, _t_ensure, _t_load, _t_briefing,
                 )
@@ -1097,7 +1181,7 @@ class PromptBuilder:
                     )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
-            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 11 context files (exists + a full
+            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 12 context files (exists + a full
             # read_text each) inside the async body, purely to compute token counts for a
             # DIAGNOSTIC viewer — the most expensive loop-blocker on the session-start
             # path, and duplicate work on top (the loader already read every one of these
@@ -1150,7 +1234,26 @@ class PromptBuilder:
             prompt_metadata["full_text"] = agent_config.get("system_prompt", "") or ""
 
         except Exception as e:
-            logger.warning("ContextDirectoryLoader failed: %s", e)
+            # Fail-loud tri-state (run_e47c1cfb): distinguish "core never made it"
+            # (a real degradation — the agent will boot without its constitution)
+            # from "core committed, a later step (metadata/ephemeral) failed"
+            # (cosmetic — core is intact). The completeness gate below is the
+            # authoritative check; here we classify the log level so a genuine
+            # core loss is LOUD (ERROR + flag), not a swallowed WARNING that hid
+            # 305 silent degradations for 2 days.
+            _core_committed = bool(agent_config.get("system_prompt", "").strip())
+            if _core_committed:
+                logger.warning(
+                    "Context assembly failed AFTER core was committed (core intact, "
+                    "a later ephemeral/metadata step raised): %s", e
+                )
+            else:
+                agent_config["_context_degraded"] = f"core_context_failed: {e}"
+                logger.error(
+                    "CORE CONTEXT FAILED — system prompt degraded to framing-only, "
+                    "the agent's 12 core context files did NOT load: %s",
+                    e, exc_info=True,
+                )
 
         # ── Resume context injection (independent of ContextDirectoryLoader) ──
         # CRITICAL: This MUST run outside the ContextDirectoryLoader try block.
@@ -1207,10 +1310,32 @@ class PromptBuilder:
 
         # ── 3. Combine: SystemPromptBuilder framing + context files ───
         # SystemPromptBuilder provides identity/safety/datetime/runtime
-        # metadata.  Context files (11 files + DailyActivity) were loaded
+        # metadata.  Context files (12 files + DailyActivity) were loaded
         # into agent_config["system_prompt"] by step 1 above.  Both must
         # be returned so ClaudeAgentOptions receives the full prompt.
         context_text_final = agent_config.get("system_prompt", "") or ""
+
+        # ── Completeness gate (fail-loud, run_e47c1cfb) ────────────────
+        # Runs OUTSIDE the assembly try above, so a gate failure is never
+        # swallowed. Assert every CORE section (core_section_names() SSOT)
+        # is present; a missing one means the agent is about to run without
+        # part of its constitution — LOUD (ERROR + _context_degraded flag),
+        # not a silent warning. Channel sessions legitimately exclude some
+        # files, so the gate is scoped to non-channel (full-context) sessions.
+        if channel_context is None:
+            missing = assert_core_sections(context_text_final)
+            if missing:
+                agent_config["_context_degraded"] = (
+                    f"missing_core_sections: {','.join(missing)}"
+                )
+                logger.error(
+                    "SYSTEM PROMPT INCOMPLETE — core context section(s) missing: %s. "
+                    "The agent would run without part of its constitution. "
+                    "This is the fail-loud gate (run_e47c1cfb); investigate context "
+                    "assembly, do NOT ship a degraded prompt silently.",
+                    ", ".join(missing),
+                )
+
         if context_text_final:
             return f"{builder_text}\n\n{context_text_final}"
         return builder_text

@@ -511,3 +511,151 @@ class TestEphemeralBudgetCeiling:
         assert not any(
             "exceeds reserved headroom" in r.message for r in caplog.records
         ), "normal ephemeral content must not trip the ceiling warning"
+
+
+class TestSystemPromptFaultIsolation:
+    """run_e47c1cfb root-fix: a failure in ANY ephemeral section must NEVER drop
+    the 12 core context files, and a core-context failure must be LOUD, not a
+    swallowed warning.
+
+    Regression origin: commit 039c4f32 left `daily_activity_dir` referenced from
+    outer scope (prompt_builder.py:943 NameError) inside the monolithic try that
+    wraps BOTH core assembly AND ephemeral — so on any session with recent daily
+    logs the NameError zeroed out ALL core sections (305 silent degradations/2days).
+    """
+
+    def _make_builder(self):
+        return _make_builder()
+
+    def _run_build(self, workspace, **kwargs):
+        import asyncio
+        import unittest.mock as mock
+        builder = _make_builder()
+        agent_config: dict = {}
+        with mock.patch(
+            "core.proactive_intelligence.get_focus_keywords", return_value="",
+        ):
+            asyncio.run(builder.build_system_prompt(
+                agent_config=agent_config,
+                working_directory=str(workspace),
+                **kwargs,
+            ))
+        return agent_config
+
+    def _full(self, cfg):
+        # The RETURN value is builder_text + system_prompt; but the assembled
+        # context lives in _system_prompt_metadata.full_text (core+ephemeral).
+        return (cfg.get("_system_prompt_metadata") or {}).get("full_text", "") or \
+               (cfg.get("system_prompt") or "")
+
+    _CORE_HEADERS = ["## SwarmAI\n", "## Identity\n", "## Soul\n",
+                     "## Self-Portrait\n", "## Agent Directives\n"]
+
+    def _seed_daily(self, workspace):
+        """Create Knowledge/DailyActivity/<date>.md so the daily for-loop iterates
+        — this is what triggers the L943 NameError path in the buggy code."""
+        da = workspace / "Knowledge" / "DailyActivity"
+        da.mkdir(parents=True, exist_ok=True)
+        (da / "2026-08-11.md").write_text("# Today\nDid some work.\n", encoding="utf-8")
+
+    # ── AC1: the NameError bugfix ────────────────────────────────────────
+    def test_ac1_daily_activity_path_no_nameerror_core_intact(self, tmp_path, caplog):
+        """A session WITH recent DailyActivity files builds a complete prompt —
+        no 'daily_activity_dir is not defined', all 5 core sections present.
+        RED on buggy code: the L943 NameError drops all core into framing-only."""
+        import logging
+        self._seed_daily(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="core.prompt_builder"):
+            cfg = self._run_build(tmp_path)
+        full = self._full(cfg)
+        assert not any("daily_activity_dir" in r.message for r in caplog.records), \
+            "daily_activity_dir NameError still fires (regression 039c4f32 unfixed)"
+        for hdr in self._CORE_HEADERS:
+            assert hdr in full, f"core section {hdr!r} missing after daily-activity path"
+        # The daily section itself should also have made it in.
+        assert "## Daily Activity (2026-08-11)" in full
+
+    # ── AC2: ephemeral fault isolation ──────────────────────────────────
+    def test_ac2_ephemeral_failure_leaves_core_intact(self, tmp_path):
+        """An exception in an ephemeral producer (briefing) must NOT drop core."""
+        import unittest.mock as mock
+        self._seed_daily(tmp_path)
+        with mock.patch(
+            "core.proactive_intelligence.build_session_briefing",
+            side_effect=RuntimeError("boom in ephemeral"),
+        ):
+            cfg = self._run_build(tmp_path)
+        full = self._full(cfg)
+        for hdr in self._CORE_HEADERS:
+            assert hdr in full, (
+                f"core section {hdr!r} lost because an EPHEMERAL section raised — "
+                "core must be committed before ephemeral runs"
+            )
+
+    def test_ac2_digest_failure_leaves_core_intact(self, tmp_path):
+        """A second ephemeral source (active-session digest) failing also spares core."""
+        import unittest.mock as mock
+        cfg_builder = _make_builder()
+        with mock.patch.object(
+            type(cfg_builder), "_build_active_session_digest",
+            side_effect=RuntimeError("digest boom"),
+        ):
+            import asyncio
+            agent_config: dict = {}
+            with mock.patch("core.proactive_intelligence.get_focus_keywords", return_value=""):
+                asyncio.run(cfg_builder.build_system_prompt(
+                    agent_config=agent_config, working_directory=str(tmp_path),
+                ))
+        full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "") or \
+               (agent_config.get("system_prompt") or "")
+        for hdr in self._CORE_HEADERS:
+            assert hdr in full, f"core section {hdr!r} lost on digest failure"
+
+    # ── AC3: completeness gate ──────────────────────────────────────────
+    def test_ac3_completeness_gate_detects_missing_core(self):
+        """assert_core_sections flags a prompt missing a core section (line-anchored)."""
+        from core.prompt_builder import assert_core_sections
+        good = "## SwarmAI\nx\n\n## Identity\ny\n\n## Soul\nz\n\n" \
+               "## Self-Portrait\nw\n\n## Agent Directives\nv"
+        missing = good.replace("## Soul\nz\n\n", "")
+        assert assert_core_sections(good) == [], "complete prompt must report no missing"
+        assert "Soul" in assert_core_sections(missing), \
+            "gate must detect the dropped core section"
+
+    def test_ac3_gate_no_false_pass_on_body_mention(self):
+        """A header string appearing in BODY text must NOT count as the section
+        (line-anchored '\\n## name\\n', not bare substring)."""
+        from core.prompt_builder import assert_core_sections
+        # 'Soul' header present only as inline body text of another section.
+        prompt = ("## SwarmAI\nwe talk about ## Soul here as prose\n\n"
+                  "## Identity\ny\n\n## Self-Portrait\nw\n\n## Agent Directives\nv")
+        missing = assert_core_sections(prompt)
+        assert "Soul" in missing, "body mention of a header must not satisfy the gate"
+
+    # ── AC4: fail-loud ──────────────────────────────────────────────────
+    def test_ac4_core_failure_is_loud(self, tmp_path, caplog):
+        """When core assembly (load_all) raises, the build sets a degraded flag +
+        logs ERROR — NOT a swallowed warning."""
+        import logging
+        import unittest.mock as mock
+        with mock.patch(
+            "core.context_directory_loader.ContextDirectoryLoader.load_all",
+            side_effect=RuntimeError("core load boom"),
+        ), caplog.at_level(logging.ERROR, logger="core.prompt_builder"):
+            cfg = self._run_build(tmp_path)
+        assert cfg.get("_context_degraded"), \
+            "core-context failure must set agent_config['_context_degraded']"
+        assert any(r.levelno >= logging.ERROR for r in caplog.records), \
+            "core-context failure must log at ERROR (fail-loud), not warning"
+
+    # ── AC5: no double-append of core ───────────────────────────────────
+    def test_ac5_core_committed_exactly_once(self, tmp_path):
+        """After early-commit + ephemeral-append refactor, each core header must
+        appear EXACTLY once (Gate-1 CHECK5 double-append regression)."""
+        self._seed_daily(tmp_path)
+        full = self._full(self._run_build(tmp_path))
+        for hdr in self._CORE_HEADERS:
+            assert full.count(hdr) == 1, (
+                f"core section {hdr!r} appears {full.count(hdr)}x — double-append "
+                "(old L1054-1058 re-commit must be removed)"
+            )
