@@ -990,3 +990,65 @@ class TestDeadCodeFalsePositiveFixes:
         ])
         dead = {d["id"] for d in store.find_dead_code()}
         assert "m.py::handler" not in dead, "module-level-referenced symbol must not be dead"
+
+
+class TestConnectionThreadSafety:
+    """R1 (run_071e54c8) — the shared _conn must serialize cross-thread access.
+
+    Root cause: code_intel_hook reads (moved onto asyncio.to_thread by R1) and
+    context_health_hook writes (run_in_executor) share ONE module-cached GraphStore
+    → ONE sqlite3.Connection. sqlite3.Connection is NOT safe for concurrent use
+    across threads even with check_same_thread=False (shared cursor/statement state)
+    → 'Recursive use of cursors not allowed' / SQLITE_MISUSE. The fix serializes all
+    _conn access behind a per-store lock.
+    """
+
+    def test_concurrent_read_write_no_cursor_error(self, store):
+        import threading
+        # Seed some data.
+        for i in range(30):
+            store.upsert_nodes([_make_node(node_id=f"n{i}", file_path=f"src/f{i}.py",
+                                           name=f"fn{i}")])
+        errors = []
+
+        def reader():
+            try:
+                for _ in range(40):
+                    store.get_nodes_by_file("src/f1.py")
+                    store.count_callers_by_file("src/f1.py")
+                    store.get_module_map()
+            except Exception as e:  # noqa: BLE001
+                errors.append(("reader", repr(e)))
+
+        def writer():
+            try:
+                for i in range(40):
+                    store.upsert_nodes([_make_node(node_id=f"w{i}", file_path="src/w.py",
+                                                   name=f"w{i}")])
+                    store.rebuild_fts()
+            except Exception as e:  # noqa: BLE001
+                errors.append(("writer", repr(e)))
+
+        threads = [threading.Thread(target=reader) for _ in range(3)] + \
+                  [threading.Thread(target=writer) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        # Without serialization this raises "Recursive use of cursors not allowed"
+        # or "SQLITE_MISUSE" from at least one thread. With the lock: zero errors.
+        assert errors == [], f"concurrent _conn access raced: {errors}"
+
+    def test_execute_fetch_chain_is_atomic(self, store):
+        # A LockingConnection.execute(...).fetchall() chain must hold the lock across
+        # the fetch — i.e. the returned cursor must already have its rows materialized,
+        # so a concurrent writer cannot interleave between execute() and fetchall().
+        # We assert the proxy exposes the lock and that a plain execute round-trips.
+        store.upsert_nodes([_make_node(node_id="a1", file_path="src/a.py", name="aa")])
+        rows = store._conn.execute(
+            "SELECT id FROM code_nodes WHERE file_path = ?", ("src/a.py",)
+        ).fetchall()
+        assert any(r[0] == "a1" for r in rows)
+        # The connection wrapper must carry a reentrant lock (serialization primitive).
+        assert hasattr(store._conn, "_lock")

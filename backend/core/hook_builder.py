@@ -51,6 +51,31 @@ HOOK_TIMEOUT_SECONDS = 5.0
 HookCallback = Callable[..., Awaitable[dict[str, Any]]]
 
 
+def _make_code_intel_wrapper(ci_hook: Callable[[str, dict], dict]) -> HookCallback:
+    """Wrap the SYNC code_intel hook so it runs OFF the event loop (R1, run_071e54c8).
+
+    ``ci_hook`` is a synchronous callable whose ``_build_context`` does blocking
+    SQLite JOINs that have been measured at tens of seconds. Calling it inline from
+    an ``async def`` (the previous shape) blocked the entire daemon event loop —
+    every tab's SSE stream froze for the duration — and the chain's 5s
+    ``asyncio.wait_for`` guard (``_build_chain``) could NOT interrupt it, because a
+    synchronous call never yields control back to the loop.
+
+    Routing it through ``asyncio.to_thread`` makes the ``await`` a real suspension
+    point: the loop stays responsive, and ``wait_for`` can now abandon the awaited
+    coroutine at the 5s deadline (the worker thread cannot be killed and finishes in
+    the background — acceptable because the R1 file-type gate already skips the
+    common non-source case, and R2 drives the source-file query itself under 5s).
+    """
+    async def _code_intel_wrapper(input_data, tool_use_id, hook_context):
+        data = input_data if isinstance(input_data, dict) else getattr(input_data, "__dict__", {})
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input", {})
+        return await asyncio.to_thread(ci_hook, tool_name, tool_input)
+
+    return _code_intel_wrapper
+
+
 class HookRegistry:
     """Register SDK hooks by event type with chained execution.
 
@@ -380,11 +405,12 @@ async def build_hooks(
 
     # ── PreToolUse: commit-trailer gate (Bash-scoped) ────
     # DENY a `git commit` whose INLINE message lacks `Co-Authored-By: Swarm` (or
-    # carries a forbidden Claude/Anthropic identity). The rule's other enforcers
-    # cannot PREVENT a violation: .git/hooks/prepare-commit-msg never runs
-    # (core.hooksPath = corporate git-defender, which REPLACES .git/hooks), and CI's
+    # carries a forbidden Claude/Anthropic identity). The rule's other three
+    # enforcers cannot PREVENT a violation: .git/hooks/prepare-commit-msg never runs
+    # (core.hooksPath = corporate git-defender, which REPLACES .git/hooks), CI's
     # check_commit_trailers.py fires only at PUSH (days late under commit-on-main,
-    # so the remedy becomes a history rewrite). This catches it while the fix is one
+    # so the remedy becomes a history rewrite), and SKILL.md prose leaves a
+    # mechanical invariant to agent discipline. This catches it while the fix is one
     # re-run. Fails OPEN for any message it cannot read (-F <path>, --amend
     # --no-edit, -C, editor); SWARM_TRAILER_GATE_FORCE=1 is the logged bypass.
     registry.register(
@@ -542,13 +568,11 @@ async def build_hooks(
             from core.code_intel.code_intel_hook import create_code_intel_hook
             ci_hook = create_code_intel_hook()
 
-            async def _code_intel_wrapper(input_data, tool_use_id, hook_context):
-                data = input_data if isinstance(input_data, dict) else getattr(input_data, "__dict__", {})
-                tool_name = data.get("tool_name", "")
-                tool_input = data.get("tool_input", {})
-                return ci_hook(tool_name, tool_input)
-
-            registry.register("PreToolUse", _code_intel_wrapper, "code_intel_context")
+            # Offload the SYNC hook to a thread so its blocking SQLite work never
+            # freezes the event loop (R1). Factory is module-level for testability.
+            registry.register(
+                "PreToolUse", _make_code_intel_wrapper(ci_hook), "code_intel_context"
+            )
             logger.info("Code intelligence hook registered")
         except ImportError:
             logger.debug("code_intel not available — skipping")

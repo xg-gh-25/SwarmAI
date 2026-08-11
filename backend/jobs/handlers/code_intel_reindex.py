@@ -327,34 +327,40 @@ def _resolve_prefixes(graph, repo_root: Path) -> None:
     if not prefix_map:
         return
 
-    # Use graph's own connection (WAL mode + busy_timeout already set)
+    # Go through the store's _LockingConnection (proxy) — NOT a raw cursor — so
+    # this read-modify-write is serialized against any concurrent reader/writer on
+    # the shared connection (R1 race fix, run_071e54c8). Hold the store's RLock
+    # across the whole SELECT→UPDATE*→commit sequence so it is atomic (the proxy
+    # locks each op individually, but the RMW as a whole must not interleave with
+    # a concurrent write). RLock is reentrant, so the proxy's own per-op acquires
+    # nest safely under this hold.
     from core.code_intel.route_parser import _make_route_id
-    conn = graph._conn
-    cur = conn.cursor()
-    cur.execute("SELECT id, method, path, file_path FROM code_routes")
-    rows = cur.fetchall()
+    with graph._conn_lock:
+        rows = graph._conn.execute(
+            "SELECT id, method, path, file_path FROM code_routes"
+        ).fetchall()
 
-    updated = 0
-    for old_id, method, path, file_path in rows:
-        prefix = prefix_map.get(file_path, "")
-        if not prefix or path.startswith(prefix):
-            continue  # Already resolved or no prefix applies
-        # Guard: if route path already contains the prefix as a substring,
-        # it was likely applied inline via APIRouter(prefix=...) — skip
-        if prefix.lstrip("/") in path:
-            continue
+        updated = 0
+        for old_id, method, path, file_path in rows:
+            prefix = prefix_map.get(file_path, "")
+            if not prefix or path.startswith(prefix):
+                continue  # Already resolved or no prefix applies
+            # Guard: if route path already contains the prefix as a substring,
+            # it was likely applied inline via APIRouter(prefix=...) — skip
+            if prefix.lstrip("/") in path:
+                continue
 
-        # Apply prefix
-        new_path = prefix.rstrip("/") + "/" + path.lstrip("/") if path != "/" else prefix
-        new_id = _make_route_id(file_path, method, new_path)
+            # Apply prefix
+            new_path = prefix.rstrip("/") + "/" + path.lstrip("/") if path != "/" else prefix
+            new_id = _make_route_id(file_path, method, new_path)
 
-        cur.execute(
-            "UPDATE code_routes SET path = ?, id = ? WHERE id = ?",
-            (new_path, new_id, old_id)
-        )
-        updated += 1
+            graph._conn.execute(
+                "UPDATE code_routes SET path = ?, id = ? WHERE id = ?",
+                (new_path, new_id, old_id)
+            )
+            updated += 1
 
-    conn.commit()
+        graph._conn.commit()
     if updated:
         logger.info(f"Prefix resolution: updated {updated} routes")
 

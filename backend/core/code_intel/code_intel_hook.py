@@ -19,11 +19,20 @@ from pathlib import Path
 from typing import Any
 
 from . import detect_project_from_path, load_project_graph
+from .parser import LANGUAGE_MAP
 
 logger = logging.getLogger(__name__)
 
 # URL path pattern: starts with /, has at least one segment
 _URL_PATH_RE = re.compile(r"^/[a-zA-Z0-9_\-/{}\.:]+$")
+
+# Source-file extensions the code_intel graph actually indexes (SSOT: parser.LANGUAGE_MAP).
+# A Read/Grep on any OTHER file type (.md/.json/.env/binary/…) has ZERO graph nodes, so
+# running _build_context on it is pure waste — and because _build_context does synchronous
+# SQLite JOINs that can take tens of seconds, on a non-source file that is wasted latency
+# on EVERY tool call (R1, run_071e54c8). Deriving the gate from LANGUAGE_MAP (not a
+# hand-rolled list) keeps it in lockstep with what the parser/graph can actually contain.
+_SOURCE_SUFFIXES = frozenset(LANGUAGE_MAP.keys())
 
 
 def create_code_intel_hook():
@@ -74,6 +83,17 @@ def create_code_intel_hook():
                 return {"decision": "approve"}
 
         if not file_path:
+            return {"decision": "approve"}
+
+        # ── File-type gate (R1): only SOURCE files have graph nodes ─────
+        # The Grep URL-route shortcut above already returned for pattern-only
+        # queries (no file_path), so this gate only governs the file-context
+        # path. A file whose extension is not in LANGUAGE_MAP (README.md,
+        # config.json, .env, Makefile, …) has no nodes in the code graph →
+        # _build_context would do a full SQLite scan only to find nothing.
+        # Short-circuit BEFORE project detection + graph load + _build_context,
+        # so a non-coding session's doc/config reads pay ZERO code_intel cost.
+        if Path(file_path).suffix not in _SOURCE_SUFFIXES:
             return {"decision": "approve"}
 
         # ── Dedup: skip if already injected for this file ──────────────

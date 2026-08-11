@@ -14,6 +14,7 @@ import hashlib
 import logging
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -137,6 +138,128 @@ CREATE TABLE IF NOT EXISTS graph_meta (
 """
 
 
+# ── Thread-safe connection wrapper ─────────────────────────────────────────
+
+
+class _MaterializedCursor:
+    """A cursor whose rows are already fetched into memory.
+
+    Returned by ``_LockingConnection.execute``. Because the rows are materialized
+    UNDER the connection lock (inside ``execute``), the subsequent ``.fetchall()``
+    / ``.fetchone()`` / iteration touch only this in-memory list — they never
+    re-enter the real sqlite3 connection, so an ``execute(...).fetchall()`` chain
+    is atomic w.r.t. a concurrent writer without the caller having to hold the lock
+    across the fetch. ``lastrowid`` / ``rowcount`` are snapshotted for writes.
+    """
+
+    __slots__ = ("_rows", "_i", "lastrowid", "rowcount")
+
+    def __init__(self, rows: list, lastrowid, rowcount):
+        self._rows = rows
+        self._i = 0
+        self.lastrowid = lastrowid
+        self.rowcount = rowcount
+
+    def fetchall(self):
+        rest = self._rows[self._i:]
+        self._i = len(self._rows)
+        return rest
+
+    def fetchone(self):
+        if self._i < len(self._rows):
+            row = self._rows[self._i]
+            self._i += 1
+            return row
+        return None
+
+    def fetchmany(self, size: int = 1):
+        rest = self._rows[self._i:self._i + size]
+        self._i += len(rest)
+        return rest
+
+    def __iter__(self):
+        return iter(self._rows[self._i:])
+
+
+class _LockingConnection:
+    """Serializes ALL access to a single sqlite3.Connection behind one RLock.
+
+    WHY (R1, run_071e54c8 — adversarial Gate-2 HIGH): the GraphStore is cached at
+    module level (``__init__._graph_cache``) and its ONE connection is used from
+    BOTH the code_intel read path (moved onto ``asyncio.to_thread`` by R1) AND the
+    context_health write path (``run_in_executor``) — the SAME default thread pool.
+    A single ``sqlite3.Connection`` is NOT safe for concurrent use across threads
+    even with ``check_same_thread=False``: Python only drops the ownership
+    *assertion*, it adds no locking, so two threads sharing the connection corrupt
+    the shared cursor/statement state → ``Recursive use of cursors not allowed`` /
+    ``SQLITE_MISUSE`` (reproduced by test_graph_store::TestConnectionThreadSafety).
+    WAL mode + busy_timeout do NOT fix this — they solve multi-CONNECTION / multi-
+    PROCESS contention, never two threads on one Connection OBJECT.
+
+    A reentrant lock (RLock) is required because the store's own methods nest
+    (e.g. ``store_file_nodes_edges`` → ``upsert_nodes``), so the same thread must be
+    able to re-acquire. ``execute`` materializes rows under the lock (see
+    ``_MaterializedCursor``) so the ``execute(...).fetchall()`` idiom stays atomic.
+    """
+
+    def __init__(self, conn: "sqlite3.Connection", lock: "threading.RLock") -> None:
+        self._conn = conn
+        self._lock = lock
+
+    def execute(self, sql: str, params=None) -> _MaterializedCursor:
+        with self._lock:
+            cur = self._conn.execute(sql, params) if params is not None \
+                else self._conn.execute(sql)
+            # Materialize under the lock. DDL/DML cursors yield no rows; fetchall()
+            # on them is a cheap no-op ([]), and lastrowid/rowcount are captured.
+            rows = cur.fetchall()
+            return _MaterializedCursor(rows, cur.lastrowid, cur.rowcount)
+
+    def executemany(self, sql: str, seq) -> _MaterializedCursor:
+        with self._lock:
+            cur = self._conn.executemany(sql, seq)
+            return _MaterializedCursor([], cur.lastrowid, cur.rowcount)
+
+    def executescript(self, script: str) -> _MaterializedCursor:
+        with self._lock:
+            cur = self._conn.executescript(script)
+            return _MaterializedCursor([], cur.lastrowid, cur.rowcount)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+    def rollback(self) -> None:
+        with self._lock:
+            self._conn.rollback()
+
+    def cursor(self):
+        """Return a RAW sqlite3 cursor. ⚠️ DANGER: the returned cursor is NOT
+        lock-guarded — any statement run on it bypasses the serialization this
+        proxy exists to provide (R1 race, run_071e54c8). A multi-statement
+        read-modify-write on a raw cursor MUST be wrapped by the caller in
+        ``with graph._conn_lock:`` for the WHOLE sequence (see GraphStore.blast_radius
+        and jobs/handlers/code_intel_reindex._resolve_prefixes — the only two
+        sanctioned callers, both of which hold the lock). Prefer ``.execute()`` on
+        this proxy (locked + row-materialized) for anything that isn't a
+        TEMP-TABLE/RMW sequence. Do NOT add a new raw-cursor caller without the lock.
+        """
+        with self._lock:
+            return self._conn.cursor()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def __getattr__(self, name):
+        # Delegate any OTHER attribute (in_transaction, iterdump, backup, …) to the
+        # real conn. NOTE: SQL-executing methods (execute/executemany/executescript/
+        # commit/rollback/cursor) are ALL overridden above with explicit locking, so
+        # __getattr__ only ever reaches non-executing accessors — it cannot leak an
+        # unlocked SQL path. A property read like in_transaction is benign.
+        return getattr(self._conn, name)
+
+
 # ── GraphStore ───────────────────────────────────────────────────────────
 
 
@@ -155,11 +278,19 @@ class GraphStore:
         """
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: GraphStore is cached at module level and
-        # accessed from both the main asyncio thread (code_intel_hook) and
-        # BackgroundHookExecutor threads (context_health_hook). WAL mode +
-        # busy_timeout handle concurrent access at the SQLite level.
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        # check_same_thread=False: GraphStore is cached at module level and used
+        # from BOTH the code_intel read path (asyncio.to_thread) and the
+        # context_health write path (run_in_executor) — the same default thread
+        # pool. check_same_thread=False only DISABLES sqlite3's ownership assertion;
+        # it adds NO locking, and a single Connection is NOT safe for concurrent
+        # cross-thread use (shared cursor/statement state → SQLITE_MISUSE). WAL +
+        # busy_timeout do NOT cover this (they solve multi-connection/-process
+        # contention, not two threads on one Connection object). So every access
+        # goes through _LockingConnection, which serializes on this RLock and
+        # materializes rows under the lock (keeps execute(...).fetchall() atomic).
+        self._conn_lock = threading.RLock()
+        _raw_conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        self._conn = _LockingConnection(_raw_conn, self._conn_lock)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         # Bound the WAL's auto-reset cadence. NOTE: autocheckpoint (PASSIVE) resets
@@ -610,16 +741,24 @@ class GraphStore:
         if not changed_node_ids:
             return []
 
-        cur = self._conn.cursor()
-        cur.execute("CREATE TEMP TABLE IF NOT EXISTS _seeds (id TEXT PRIMARY KEY)")
-        cur.execute("DELETE FROM _seeds")
-        for start in range(0, len(changed_node_ids), _BATCH_SIZE):
-            batch = changed_node_ids[start : start + _BATCH_SIZE]
-            cur.executemany("INSERT OR IGNORE INTO _seeds VALUES (?)", [(i,) for i in batch])
+        # This is the ONE method that needs a RAW cursor (not the _LockingConnection
+        # proxy): it shares a TEMP TABLE (_seeds) across multiple statements on the
+        # SAME cursor/session, which the row-materializing proxy cannot express. So we
+        # hold the store's connection RLock across the whole cursor lifetime — the
+        # multi-statement TEMP-TABLE sequence must be atomic against a concurrent
+        # writer on the shared connection (R1 race fix, run_071e54c8). RLock is
+        # reentrant, so nesting under an already-locked caller is safe.
+        with self._conn_lock:
+            cur = self._conn.cursor()
+            cur.execute("CREATE TEMP TABLE IF NOT EXISTS _seeds (id TEXT PRIMARY KEY)")
+            cur.execute("DELETE FROM _seeds")
+            for start in range(0, len(changed_node_ids), _BATCH_SIZE):
+                batch = changed_node_ids[start : start + _BATCH_SIZE]
+                cur.executemany("INSERT OR IGNORE INTO _seeds VALUES (?)", [(i,) for i in batch])
 
-        # Forward CTE: follow edges source -> target.
-        # Backward CTE: follow edges target -> source.
-        sql = f"""
+            # Forward CTE: follow edges source -> target.
+            # Backward CTE: follow edges target -> source.
+            sql = f"""
             WITH RECURSIVE
             forward(nid, depth) AS (
                 SELECT id, 0 FROM _seeds
@@ -644,10 +783,10 @@ class GraphStore:
             )
             GROUP BY nid
             ORDER BY depth
-        """
-        rows = cur.execute(sql, (max_depth, max_depth)).fetchall()
-        cur.execute("DROP TABLE IF EXISTS _seeds")
-        return [(r[0], r[1]) for r in rows]
+            """
+            rows = cur.execute(sql, (max_depth, max_depth)).fetchall()
+            cur.execute("DROP TABLE IF EXISTS _seeds")
+            return [(r[0], r[1]) for r in rows]
 
     def find_callers(self, node_id: str, depth: int = 1) -> list[tuple[str, int]]:
         """Find direct and transitive callers of *node_id* up to *depth* hops.
