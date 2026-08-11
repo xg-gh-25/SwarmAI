@@ -1799,7 +1799,14 @@ def _session_has_adversarial_evidence(session_id: str) -> bool:
         return True  # fail open on FS error
 
 
-_GATE_GIT_TIMEOUT = 5  # a gate that shells git must never hang the commit (bash_syntax_guard discipline)
+_GATE_GIT_TIMEOUT = 3  # per git subprocess — a gate that shells git must never hang the commit
+# Outer wall-clock cap on the whole coverage helper. _pending_commit_paths can run up
+# to 4 sequential git subprocesses (2× rev-parse for a -C retarget check + diff --cached
+# + diff for -a), each bounded by _GATE_GIT_TIMEOUT. The outer wait_for MUST exceed the
+# worst-case inner sum, or it fires first and orphans the still-running git children
+# (Gate-2 MED timeout-incoherence). 4×3 + 3 buffer = 15s ceiling; git on a warm repo is
+# ~0.05s/call so this only bites a genuinely wedged/contended repo → fail-open.
+_GATE_COVERAGE_TIMEOUT = _GATE_GIT_TIMEOUT * 4 + 3
 
 
 def _gate_repo_root_for(dir_path: str) -> str | None:
@@ -1821,12 +1828,20 @@ def _gate_repo_root_for(dir_path: str) -> str | None:
         return None
 
 
-def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
-    """The set of ABSOLUTE paths a `git commit` is about to commit, or None if
-    uncomputable (not a repo / git error / timeout → gate fails OPEN). Folds in
-    EVERY sweep form a commit can take (Gate-1 round-2): staged (`--cached`),
-    `-a/--all` (tracked working-tree mods), positional pathspec (`git commit foo.py`),
-    and `-o/--only <path>`. Missing any form is a coverage bypass."""
+# Sentinel: the commit retargets git at another repo via a global option
+# (`git -C <other> commit`); we cannot bind coverage there → the gate DENYs
+# (never fail-open) — Gate-2 HIGH (git -C bypass).
+_PENDING_CROSS_REPO = object()
+
+
+def _pending_commit_paths(dir_path: str, command: str):
+    """The set of ABSOLUTE paths a `git commit` is about to commit; or None if
+    uncomputable (not a repo / git error / timeout → gate fails OPEN); or the
+    _PENDING_CROSS_REPO sentinel if a global option retargets another repo (→ DENY).
+
+    Folds EVERY sweep form: staged (`--cached`), `-a/--all` working-tree, positional
+    pathspec, `-o/--only`. Git-diff paths are repo-root-relative; a positional
+    pathspec / `-o` path is COMMITTER-CWD-relative (git semantics), NOT root-relative."""
     import shlex as _shlex
     root = _gate_repo_root_for(dir_path)
     if root is None:
@@ -1835,6 +1850,30 @@ def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
         tokens = _shlex.split(command)
     except ValueError:
         tokens = command.split()
+
+    # GLOBAL options BEFORE `commit` retarget git: `-C <dir>` / `--git-dir=` /
+    # `--work-tree=` can point at ANOTHER repo → the pending set computed against
+    # dir_path would be wrong (Gate-2 HIGH bypass: `git -C /other commit` unreviewed).
+    # If a retarget resolves to a DIFFERENT root, we cannot bind it → DENY sentinel.
+    try:
+        _ci = tokens.index("commit")
+    except ValueError:
+        _ci = len(tokens)
+    _g = 1  # skip tokens[0] == "git"
+    while _g < _ci:
+        gt = tokens[_g]
+        if gt in ("-C", "--git-dir", "--work-tree") and _g + 1 < _ci:
+            other = _gate_repo_root_for(tokens[_g + 1])
+            if other is not None and other != root:
+                return _PENDING_CROSS_REPO
+            _g += 2; continue
+        if gt.startswith(("--git-dir=", "--work-tree=")):
+            other = _gate_repo_root_for(gt.split("=", 1)[1])
+            if other is not None and other != root:
+                return _PENDING_CROSS_REPO
+        if gt == "-c" and _g + 1 < _ci:
+            _g += 2; continue  # -c key=val consumes a value
+        _g += 1
 
     def _diff(*extra: str) -> list[str] | None:
         try:
@@ -1848,16 +1887,15 @@ def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
         except (OSError, subprocess.SubprocessError):
             return None
 
-    rels: set[str] = set()
+    root_rels: set[str] = set()  # repo-root-relative (git diff output)
+    cwd_paths: list[str] = []     # committer-cwd-relative (positional pathspec / -o)
     staged = _diff("--cached")
     if staged is None:
         return None  # git couldn't answer → uncomputable → caller fails open
-    rels.update(staged)
+    root_rels.update(staged)
 
     # Decode the commit's flags/pathspec. Walk tokens AFTER the `commit` subcommand.
     dash_a = False
-    pathspecs: list[str] = []
-    only_paths: list[str] = []
     try:
         ci = tokens.index("commit")
     except ValueError:
@@ -1866,25 +1904,27 @@ def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
     while i < len(tokens):
         t = tokens[i]
         if t == "--":
-            pathspecs.extend(tokens[i + 1:]); break
+            cwd_paths.extend(tokens[i + 1:]); break
         if t.startswith("--"):
-            if t in ("--all",):
+            name, eq, inline_val = t.partition("=")
+            if name == "--all":
                 dash_a = True
-            elif t in ("--only",):
-                if i + 1 < len(tokens):
-                    only_paths.append(tokens[i + 1]); i += 1
-            elif t in ("--message", "--author", "--date", "--reuse-message",
-                       "--reedit-message", "--fixup", "--squash", "--template",
-                       "--gpg-sign", "--cleanup"):
-                i += 1  # option that consumes the next token
-            # other --flags (e.g. --amend, --no-edit) take no path arg
+            elif name == "--only":
+                if eq:
+                    cwd_paths.append(inline_val)               # --only=path
+                elif i + 1 < len(tokens):
+                    cwd_paths.append(tokens[i + 1]); i += 1    # --only path
+            elif name in ("--message", "--author", "--date", "--reuse-message",
+                          "--reedit-message", "--fixup", "--squash", "--template",
+                          "--cleanup", "--file", "--pathspec-from-file"):
+                if not eq and i + 1 < len(tokens):
+                    i += 1  # space form consumes next token (equals form does not)
+            # --gpg-sign[=keyid] / --amend / --no-edit / --signoff → no path arg
         elif t.startswith("-") and len(t) > 1:
-            # Decode a short-flag cluster char-by-char. VALUE-taking short flags
-            # (git commit): -m message, -C/-c commit (reuse/reedit), -F file, -o only,
-            # -S[keyid] gpg-sign, -t template, -u untracked-mode. A value flag
-            # consumes either the REST OF THE CLUSTER (e.g. -mMSG, -CHEAD) or, if it
-            # is the last char, the NEXT token. Missing this (Gate-2 HIGH: -C HEAD /
-            # -F msgfile) made the value token be read as a pathspec → false-DENY.
+            # Decode a short-flag cluster. VALUE flags whose value is a SEPARATE token
+            # when trailing: -m -C -c -F -o -t -u. NOT -S (its keyid is OPTIONAL and
+            # must be STUCK, -Skey) and NOT -s (--signoff, no value) — consuming a next
+            # token for either would swallow a real pathspec (Gate-2 MED: -S secret.py).
             cluster = t[1:]
             j = 0
             consumed_next = False
@@ -1892,39 +1932,37 @@ def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
                 c = cluster[j]
                 if c == "a":
                     dash_a = True; j += 1; continue
-                if c in ("m", "C", "c", "F", "o", "S", "t", "u"):
+                if c in ("m", "C", "c", "F", "o", "t", "u"):
                     inline = cluster[j + 1:]  # rest of cluster is this flag's value
                     if c == "o":  # -o <path> is a pathspec restriction we must track
                         if inline:
-                            only_paths.append(inline)
+                            cwd_paths.append(inline)
                         elif i + 1 < len(tokens):
-                            only_paths.append(tokens[i + 1]); consumed_next = True
+                            cwd_paths.append(tokens[i + 1]); consumed_next = True
                     else:
-                        # value flag whose value we DON'T track as a path — just make
-                        # sure we don't misread it as a pathspec.
                         if not inline and i + 1 < len(tokens):
-                            consumed_next = True
+                            consumed_next = True  # value is the next token; skip it
                     break  # rest of cluster (if any) was this flag's value
-                # value-less short flag (e.g. -q, -v, -e, -s, -n dry-run-ish) → skip
+                # value-less / optional-stuck-value short flag (-q -v -e -s -S…) → skip
                 j += 1
             if consumed_next:
                 i += 1
         else:
-            pathspecs.append(t)  # positional pathspec
+            cwd_paths.append(t)  # positional pathspec (cwd-relative in git)
         i += 1
 
     if dash_a:
         wt = _diff()  # tracked working-tree modifications -a will sweep
         if wt is None:
             return None
-        rels.update(wt)
-    for p in pathspecs + only_paths:
-        # a pathspec names a committed path directly (bypasses the index)
-        rels.add(p)
+        root_rels.update(wt)
 
     out: set[str] = set()
-    for rel in rels:
+    for rel in root_rels:  # git-diff output → relative to repo ROOT
         ap = rel if os.path.isabs(rel) else os.path.join(root, rel)
+        out.add(os.path.realpath(ap))
+    for p in cwd_paths:    # positional pathspec / -o → relative to committer CWD
+        ap = p if os.path.isabs(p) else os.path.join(dir_path or root, p)
         out.add(os.path.realpath(ap))
     return out
 
@@ -2000,7 +2038,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
         try:
             has_marker, covered, has_unbounded = await asyncio.wait_for(
                 asyncio.to_thread(_session_adversarial_coverage, session_id),
-                timeout=_GATE_GIT_TIMEOUT + 2,
+                timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError; ANY gate-infra failure (even
             return {"decision": "approve"}  # a bug in the helper) fails OPEN by design
@@ -2015,26 +2053,32 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
             try:
                 pending = await asyncio.wait_for(
                     asyncio.to_thread(_pending_commit_paths, cwd, command),
-                    timeout=_GATE_GIT_TIMEOUT + 2,
+                    timeout=_GATE_COVERAGE_TIMEOUT,
                 )
             except Exception:  # incl. asyncio.TimeoutError → fail open (never hang)
                 return {"decision": "approve"}  # fail open on gate-infra failure
-            if pending is None:
+            if pending is _PENDING_CROSS_REPO:
+                # A `git -C <other>` global option retargets a repo we can't bind →
+                # DENY (never fail-open a cross-repo commit) — Gate-2 HIGH bypass.
+                pass  # → DENY below
+            elif pending is None:
                 return {"decision": "approve"}  # uncomputable → fail open
-            if not pending:
+            elif not pending:
                 # Nothing to bind (empty pending, e.g. a no-op/amend with no diff) →
                 # existence-only (Plan B parity), NOT a vacuous all([]) coverage-pass.
                 return {"decision": "approve"}
-            if pending <= covered:  # subset → fully reviewed
+            elif pending <= covered:  # subset → fully reviewed
                 return {"decision": "approve"}
             # else: some pending path was never adversarially reviewed → DENY below
 
         uncovered = ""
         try:
-            if has_marker and not has_unbounded:
-                extra = sorted(p for p in (pending or set()) if p not in covered)
+            if has_marker and not has_unbounded and isinstance(pending, set):
+                extra = sorted(p for p in pending if p not in covered)
                 if extra:
                     uncovered = " Uncovered path(s): " + ", ".join(extra[:5])
+            elif pending is _PENDING_CROSS_REPO:
+                uncovered = " (commit retargets another repo via -C/--git-dir — cannot bind coverage)"
         except Exception:
             uncovered = ""
 

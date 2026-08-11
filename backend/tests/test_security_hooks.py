@@ -963,3 +963,73 @@ class TestGateFlagParsing:
         gate, repo = self._gate(tmp_path, monkeypatch)
         r = await self._run(gate, repo, "git commit -m fixed")
         assert r.get("decision") == "approve"
+
+
+class TestGateFlagParsingGate2:
+    """Gate-2 fixes: git -C cross-repo bypass, -S optional-stuck-value, positional
+    pathspec cwd-relative resolution."""
+
+    def _repo(self, tmp_path, name="repo"):
+        import subprocess, os
+        d = tmp_path / name; d.mkdir()
+        e = {"GIT_AUTHOR_NAME":"t","GIT_AUTHOR_EMAIL":"t@t","GIT_COMMITTER_NAME":"t","GIT_COMMITTER_EMAIL":"t@t","HOME":str(d),"PATH":os.environ.get("PATH","")}
+        subprocess.run(["git","-C",str(d),"init","-q"],env=e,capture_output=True,check=True)
+        (d/"a.py").write_text("1\n")
+        subprocess.run(["git","-C",str(d),"add","-A"],env=e,capture_output=True,check=True)
+        subprocess.run(["git","-C",str(d),"commit","-q","-m","i"],env=e,capture_output=True,check=True)
+        return d, e
+
+    def _mk_marker(self, tmp_path, sid, reviewed):
+        import json, os
+        audit = tmp_path / "audit"
+        audit.mkdir(exist_ok=True)
+        (audit / f"session_{sid}_adv_1.marker").write_text(json.dumps(
+            {"adversarial": True, "session_id": sid, "reviewed_paths": reviewed}))
+        return audit
+
+    def _gate(self, audit, monkeypatch, sid="s"):
+        import core.security_hooks as sh
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
+        return sh.create_adversarial_commit_gate({"sdk_session_id": sid})
+
+    async def _run(self, gate, cwd, cmd):
+        return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)}, None, None)
+
+    @pytest.mark.asyncio
+    async def test_git_C_other_repo_denies(self, tmp_path, monkeypatch):
+        """git -C <other> commit retargets another repo → cannot bind → DENY (not fail-open)."""
+        import subprocess, os
+        repoA, eA = self._repo(tmp_path, "A")   # cwd repo (has an adv marker covering a.py)
+        repoB, eB = self._repo(tmp_path, "B")   # OTHER repo, unreviewed change staged
+        (repoB/"secret.py").write_text("unreviewed\n")
+        subprocess.run(["git","-C",str(repoB),"add","secret.py"],env=eB,capture_output=True,check=True)
+        audit = self._mk_marker(tmp_path, "s", [os.path.realpath(str(repoA/"a.py"))])
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repoA, f"git -C {repoB} commit -m x")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    @pytest.mark.asyncio
+    async def test_dash_S_does_not_swallow_pathspec(self, tmp_path, monkeypatch):
+        """git commit -S secret.py: -S's keyid is optional-stuck, so secret.py is a
+        PATHSPEC that must be counted → uncovered → DENY (not swallowed as -S value)."""
+        import subprocess, os
+        repo, e = self._repo(tmp_path)
+        (repo/"secret.py").write_text("unreviewed\n")
+        subprocess.run(["git","-C",str(repo),"add","secret.py"],env=e,capture_output=True,check=True)
+        audit = self._mk_marker(tmp_path, "s", [os.path.realpath(str(repo/"a.py"))])  # only a.py reviewed
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -S secret.py")
+        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    @pytest.mark.asyncio
+    async def test_positional_pathspec_resolved_cwd_relative(self, tmp_path, monkeypatch):
+        """A positional pathspec is committer-CWD-relative. Reviewing that exact file
+        and committing it by relative path from the repo root → APPROVE (correct join)."""
+        import subprocess, os
+        repo, e = self._repo(tmp_path)
+        (repo/"a.py").write_text("2\n")
+        subprocess.run(["git","-C",str(repo),"add","a.py"],env=e,capture_output=True,check=True)
+        audit = self._mk_marker(tmp_path, "s", [os.path.realpath(str(repo/"a.py"))])
+        gate = self._gate(audit, monkeypatch)
+        r = await self._run(gate, repo, "git commit -m x a.py")  # cwd=repo root, pathspec a.py
+        assert r.get("decision") == "approve"
