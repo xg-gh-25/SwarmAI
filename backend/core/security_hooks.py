@@ -1768,22 +1768,23 @@ def _command_has_git_commit(command: str) -> bool:
     return any(_segment_is_git_commit(seg) for seg in segments)
 
 
-# NOTE: the old _session_has_subagent_evidence (accepted ANY session_<sid>_ marker)
-# was REMOVED in run_df2668b4 — it was the loose check that let an Explore agent
-# satisfy the gate. Do NOT reintroduce it: the gate now requires an ADVERSARIAL
-# marker via _session_has_adversarial_evidence (below). The base marker it read is
-# still written (for pipeline_validator Check 9b), just no longer sufficient to commit.
+# NOTE (run_df2668b4 → run_f4b9ae6f): the old _session_has_subagent_evidence
+# (accepted ANY session_<sid>_ marker) was REMOVED — it let an Explore agent satisfy
+# the gate; do NOT reintroduce it. run_df2668b4 tightened the gate to require an
+# ADVERSARIAL marker (existence). run_f4b9ae6f (Plan A) tightened further: the LIVE
+# GATE now calls _session_adversarial_coverage (below) to bind the review to the
+# committed PATH-SET. `_session_has_adversarial_evidence` is the earlier
+# existence-only predicate — retained ONLY because its unit tests pin the `_adv_`
+# infix + fail-open contract; it is NOT the gate's decision path anymore.
 
 
 def _session_has_adversarial_evidence(session_id: str) -> bool:
-    """True iff an ADVERSARIAL-review marker exists for *session_id* (proof an
-    adversarial sub-agent COMPLETED this session). Matches the `_adv_` infix
-    written by runtime_hooks.create_agent_tool_audit_hook — a base marker
-    (session_<sid>_<numeric ts>) can never contain `_adv_`, so the two are
-    unambiguous. Fail-OPEN on any error / missing session_id (mirrors
-    _session_has_subagent_evidence): a guard that false-blocks a legit commit is
-    worse than the skip it prevents (the threat is the honest reflex, not a
-    malicious bypass — and a local commit is reversible)."""
+    """Existence-only predicate: True iff an ADVERSARIAL-review marker exists for
+    *session_id*. NOTE: NOT the live gate check anymore — the gate uses
+    _session_adversarial_coverage (path-set binding, run_f4b9ae6f). Retained for
+    its unit tests, which pin the `_adv_` infix match (a base marker
+    session_<sid>_<numeric ts> can never contain `_adv_`) + the fail-OPEN contract
+    (missing session_id / FS error → True)."""
     if not session_id:
         return True  # cannot scope → fail open (never block on missing identity)
     try:
@@ -1878,15 +1879,36 @@ def _pending_commit_paths(dir_path: str, command: str) -> set[str] | None:
                 i += 1  # option that consumes the next token
             # other --flags (e.g. --amend, --no-edit) take no path arg
         elif t.startswith("-") and len(t) > 1:
+            # Decode a short-flag cluster char-by-char. VALUE-taking short flags
+            # (git commit): -m message, -C/-c commit (reuse/reedit), -F file, -o only,
+            # -S[keyid] gpg-sign, -t template, -u untracked-mode. A value flag
+            # consumes either the REST OF THE CLUSTER (e.g. -mMSG, -CHEAD) or, if it
+            # is the last char, the NEXT token. Missing this (Gate-2 HIGH: -C HEAD /
+            # -F msgfile) made the value token be read as a pathspec → false-DENY.
             cluster = t[1:]
-            if "a" in cluster:
-                dash_a = True
-            if "o" in cluster and i + 1 < len(tokens):
-                only_paths.append(tokens[i + 1]); i += 1
-            elif "m" in cluster and not cluster.endswith("m"):
-                pass  # -m bundled with value-less flags; value is a separate token only if trailing
-            if cluster.endswith("m") and i + 1 < len(tokens):
-                i += 1  # -m <msg> / -am <msg> — skip the message token
+            j = 0
+            consumed_next = False
+            while j < len(cluster):
+                c = cluster[j]
+                if c == "a":
+                    dash_a = True; j += 1; continue
+                if c in ("m", "C", "c", "F", "o", "S", "t", "u"):
+                    inline = cluster[j + 1:]  # rest of cluster is this flag's value
+                    if c == "o":  # -o <path> is a pathspec restriction we must track
+                        if inline:
+                            only_paths.append(inline)
+                        elif i + 1 < len(tokens):
+                            only_paths.append(tokens[i + 1]); consumed_next = True
+                    else:
+                        # value flag whose value we DON'T track as a path — just make
+                        # sure we don't misread it as a pathspec.
+                        if not inline and i + 1 < len(tokens):
+                            consumed_next = True
+                    break  # rest of cluster (if any) was this flag's value
+                # value-less short flag (e.g. -q, -v, -e, -s, -n dry-run-ish) → skip
+                j += 1
+            if consumed_next:
+                i += 1
         else:
             pathspecs.append(t)  # positional pathspec
         i += 1
@@ -1980,8 +2002,8 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                 asyncio.to_thread(_session_adversarial_coverage, session_id),
                 timeout=_GATE_GIT_TIMEOUT + 2,
             )
-        except (asyncio.TimeoutError, Exception):
-            return {"decision": "approve"}  # can't read evidence → fail open
+        except Exception:  # incl. asyncio.TimeoutError; ANY gate-infra failure (even
+            return {"decision": "approve"}  # a bug in the helper) fails OPEN by design
 
         if not has_marker:
             pass  # → DENY below (Plan B parity: no adversarial review at all)
@@ -1995,7 +2017,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                     asyncio.to_thread(_pending_commit_paths, cwd, command),
                     timeout=_GATE_GIT_TIMEOUT + 2,
                 )
-            except (asyncio.TimeoutError, Exception):
+            except Exception:  # incl. asyncio.TimeoutError → fail open (never hang)
                 return {"decision": "approve"}  # fail open on gate-infra failure
             if pending is None:
                 return {"decision": "approve"}  # uncomputable → fail open

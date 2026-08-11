@@ -913,3 +913,53 @@ class TestAdversarialGateDiffBinding:
         gate = self._gate(audit, monkeypatch)
         r = await self._run(gate, repo, "git commit -m x")
         assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+class TestGateFlagParsing:
+    """Gate-2/REVIEW HIGH-1: value-taking short flags (-C/-c/-F, -m, -o) must not
+    have their VALUE token misread as a pathspec → false-DENY on a covered commit."""
+
+    def _repo(self, tmp_path):
+        import subprocess, os
+        d = tmp_path / "repo"; d.mkdir()
+        e = {"GIT_AUTHOR_NAME":"t","GIT_AUTHOR_EMAIL":"t@t","GIT_COMMITTER_NAME":"t","GIT_COMMITTER_EMAIL":"t@t","HOME":str(d),"PATH":os.environ.get("PATH","")}
+        subprocess.run(["git","-C",str(d),"init","-q"],env=e,capture_output=True,check=True)
+        (d/"a.py").write_text("1\n")
+        subprocess.run(["git","-C",str(d),"add","-A"],env=e,capture_output=True,check=True)
+        subprocess.run(["git","-C",str(d),"commit","-q","-m","i"],env=e,capture_output=True,check=True)
+        (d/"a.py").write_text("2\n")
+        subprocess.run(["git","-C",str(d),"add","a.py"],env=e,capture_output=True,check=True)
+        return d
+
+    def _gate(self, tmp_path, monkeypatch):
+        import core.security_hooks as sh, json, os
+        audit = tmp_path / "audit"; audit.mkdir()
+        repo = self._repo(tmp_path)
+        (audit / "session_s_adv_1.marker").write_text(json.dumps(
+            {"adversarial": True, "session_id": "s",
+             "reviewed_paths": [os.path.realpath(str(repo / "a.py"))]}))
+        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
+        return sh.create_adversarial_commit_gate({"sdk_session_id": "s"}), repo
+
+    async def _run(self, gate, repo, cmd):
+        return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(repo)}, None, None)
+
+    @pytest.mark.asyncio
+    async def test_dash_C_HEAD_not_misread_as_pathspec(self, tmp_path, monkeypatch):
+        """git commit -C HEAD (reuse message) — HEAD must NOT become a pathspec →
+        the covered a.py commit must APPROVE, not false-DENY."""
+        gate, repo = self._gate(tmp_path, monkeypatch)
+        r = await self._run(gate, repo, "git commit -C HEAD")
+        assert r.get("decision") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_dash_F_msgfile_not_misread(self, tmp_path, monkeypatch):
+        gate, repo = self._gate(tmp_path, monkeypatch)
+        r = await self._run(gate, repo, "git commit -F /tmp/msg.txt")
+        assert r.get("decision") == "approve"
+
+    @pytest.mark.asyncio
+    async def test_dash_m_value_not_misread(self, tmp_path, monkeypatch):
+        gate, repo = self._gate(tmp_path, monkeypatch)
+        r = await self._run(gate, repo, "git commit -m fixed")
+        assert r.get("decision") == "approve"
