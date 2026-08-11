@@ -55,11 +55,14 @@ def _engagement_dir():
 
 
 def _tech_md_path():
-    # The canonical DDD doc lives under 2-understanding/ (the root TECH.md is a
-    # symlink to it — same inode, so either resolves; use the canonical path).
+    # The canonical DDD doc lives under 2-understanding/ post-ad7f6623. Route
+    # through the six-section SSOT resolver (strangler-aware: resolves the numbered
+    # layout, falls back to root for an un-migrated DDD) rather than hardcoding the
+    # path — enforced by test_ddd_paths_single_source::test_no_stray_ddd_doc_path_joins.
     from jobs.paths import PROJECTS_DIR
+    from core.ddd_paths import ddd_path
 
-    return PROJECTS_DIR / "GitHub_Community" / "2-understanding" / "TECH.md"
+    return ddd_path(PROJECTS_DIR / "GitHub_Community", "TECH.md")
 
 
 @router.get("/feed")

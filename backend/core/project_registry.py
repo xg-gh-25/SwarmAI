@@ -97,6 +97,28 @@ def get_output_dir(name: str, *, create: bool = True) -> Path:
     return output_dir
 
 
+def _has_any_ddd_doc(d: Path) -> bool:
+    """True if the project dir has at least one canonical DDD doc, in EITHER layout.
+
+    Strangler-aware: the numbered-layout redesign (commit ad7f6623) moved the 4
+    canonical docs under 2-understanding/, so a root-only `(d / f).exists()` probe
+    silently STOPS DISCOVERING every migrated project (live-confirmed: list_projects
+    returned only 1 of N projects — SwarmAI/AIDLC/SecDLC were all invisible). Route
+    through the same resolver everything else uses. LAZY import: core.ddd_paths
+    imports DDD_CANONICAL_DOCS from THIS module, so a top-level import would be
+    circular — import inside the function. Off-host fallback (no SwarmAI core) checks
+    2-understanding/ then root, matching ddd_path's on-host order.
+    """
+    try:  # ddd-six-section-fallback
+        from core.ddd_paths import ddd_path
+        return any(ddd_path(d, f).exists() for f in _DDD_FILES)
+    except ImportError:
+        return any(
+            (d / "2-understanding" / f).exists() or (d / f).exists()
+            for f in _DDD_FILES
+        )
+
+
 def list_projects() -> list[Path]:
     """Discover all DDD projects from filesystem.
 
@@ -115,8 +137,8 @@ def list_projects() -> list[Path]:
     for d in sorted(projects_dir.iterdir()):
         if not d.is_dir() or d.name.startswith("."):
             continue
-        # At least one DDD file must exist
-        if any((d / f).exists() for f in _DDD_FILES):
+        # At least one DDD doc must exist (either layout — see _has_any_ddd_doc).
+        if _has_any_ddd_doc(d):
             result.append(d)
     return result
 
@@ -161,9 +183,7 @@ def _discover_by_prefix(prefix: str, fallback: str) -> str:
     projects_dir = get_projects_dir()
     if projects_dir.is_dir():
         for d in sorted(projects_dir.iterdir()):
-            if d.is_dir() and d.name.startswith(prefix) and any(
-                (d / f).exists() for f in _DDD_FILES
-            ):
+            if d.is_dir() and d.name.startswith(prefix) and _has_any_ddd_doc(d):
                 return d.name
     return fallback
 

@@ -667,11 +667,13 @@ class ContextHealthHook:
         for d in sorted(projects_dir.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
-            docs = [f for f in ddd_files if (d / f).exists()]
-            if not docs:
+            # Resolve via ddd_path — docs live under 2-understanding/ post-ad7f6623.
+            # Cache the resolved paths so we hit the resolver once per doc, not twice.
+            doc_paths = [p for p in (ddd_path(d, f) for f in ddd_files) if p.exists()]
+            if not doc_paths:
                 continue
             # Freshness from most recent DDD doc mtime (this writer's contribution).
-            mtimes = [(d / f).stat().st_mtime for f in docs if (d / f).exists()]
+            mtimes = [p.stat().st_mtime for p in doc_paths]
             days_ago = int((now - max(mtimes)) / 86400) if mtimes else 999
             if days_ago == 0:
                 freshness = "today"
@@ -1840,7 +1842,7 @@ class ContextHealthHook:
         # If no docs were updated (all locked or no maturity states), still mark
         # to avoid re-scanning — but only if at least one doc was attempted.
         if any_doc_updated or not any(
-            (project_path / d).exists() for d in DDD_CANONICAL_DOCS
+            ddd_path(project_path, d).exists() for d in DDD_CANONICAL_DOCS
         ):
             data["maturity_updated"] = True
             try:
@@ -3091,7 +3093,7 @@ class ContextHealthHook:
             for d in sorted(projects_dir.iterdir()):
                 if not d.is_dir() or d.name.startswith("."):
                     continue
-                present = [f for f in DDD_DOCS if (d / f).exists()]
+                present = [f for f in DDD_DOCS if ddd_path(d, f).exists()]
                 if present and len(present) < len(DDD_DOCS):
                     missing = [f for f in DDD_DOCS if f not in present]
                     findings.append(

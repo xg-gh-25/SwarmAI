@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # DDD files to scan (order matters for display priority).
 # Run 0 (run_393e3dc1): single source of truth — see project_registry.DDD_CANONICAL_DOCS.
 from core.project_registry import DDD_CANONICAL_DOCS as _DDD_FILES
+from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 
 # Budget constants
 _MAX_REFS_PER_ENTITY = 3
@@ -144,7 +145,7 @@ def extract_entities_from_ddd(projects_dir: Path) -> list[EntityRef]:
         project_name = candidate.name
 
         for ddd_file in _DDD_FILES:
-            doc_path = candidate / ddd_file
+            doc_path = ddd_path(candidate, ddd_file)  # 2-understanding/ post-ad7f6623
             if not doc_path.exists():
                 continue
 

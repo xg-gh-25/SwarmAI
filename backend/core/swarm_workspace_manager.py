@@ -1638,7 +1638,7 @@ class SwarmWorkspaceManager:
                 ddd_docs = []
                 large_docs_toc: list[dict] = []  # [{doc, size_kb, sections}]
                 for doc in DDD_CANONICAL_DOCS:
-                    doc_path = candidate / doc
+                    doc_path = ddd_path(candidate, doc)  # 2-understanding/ post-ad7f6623
                     if doc_path.exists():
                         doc_size = doc_path.stat().st_size
                         ddd_docs.append(doc.replace(".md", ""))

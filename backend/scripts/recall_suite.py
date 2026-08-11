@@ -246,9 +246,10 @@ def _load_corpora(project: str = "SwarmAI") -> tuple[dict, dict]:
     """Return (ddd_docs, context_docs) as {doc: text}, pinned from live files."""
     import os
     from pathlib import Path
+    from core.ddd_paths import ddd_path  # 2-understanding/ post-ad7f6623
     base = Path(os.path.expanduser(f"~/.swarm-ai/SwarmWS/Projects/{project}"))
     ctx = Path(os.path.expanduser("~/.swarm-ai/SwarmWS/.context"))
-    ddd = {d: (base / d).read_text() for d in _DDD_DOCS if (base / d).exists()}
+    ddd = {d: ddd_path(base, d).read_text() for d in _DDD_DOCS if ddd_path(base, d).exists()}
     cf = {d: (ctx / d).read_text() for d in _CONTEXT_DOCS if (ctx / d).exists()}
     return ddd, cf
 
