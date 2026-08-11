@@ -886,3 +886,33 @@ class TestInverseTruncationCoherence:
         body = truncated.split("]\n\n", 1)[-1]
         est = ContextDirectoryLoader.estimate_tokens(body)
         assert est <= 600, f"section truncation {est} exceeds ~500 target"
+
+
+class TestCoreSectionNames:
+    """core_section_names(): the SSOT-derived set for the completeness gate.
+
+    Root-fix run_e47c1cfb: the completeness gate must key off CONTEXT_FILES
+    programmatically, NOT a hand-typed literal (Gate-1 CHECK2 — a literal already
+    drifted and dropped SELF). Core = system-owned (user_customized=False) OR
+    non-truncatable P0-2 (truncatable=False). This is exactly {SWARMAI, IDENTITY,
+    SOUL, SELF, AGENT} — SELF is user_customized=True but truncatable=False, so a
+    single-predicate key misses it.
+    """
+
+    def test_core_set_is_the_five_system_critical_sections(self):
+        from core.context_directory_loader import core_section_names
+        assert set(core_section_names()) == {
+            "SwarmAI", "Identity", "Soul", "Self-Portrait", "Agent Directives"
+        }
+
+    def test_core_set_derived_from_context_files_not_literal(self):
+        from core.context_directory_loader import CONTEXT_FILES, core_section_names
+        expected = {
+            s.section_name for s in CONTEXT_FILES
+            if (s.user_customized is False) or (s.truncatable is False)
+        }
+        assert set(core_section_names()) == expected
+
+    def test_self_portrait_included_despite_user_customized(self):
+        from core.context_directory_loader import core_section_names
+        assert "Self-Portrait" in core_section_names()

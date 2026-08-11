@@ -260,7 +260,35 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     # EVOLUTION_CHANGELOG.jsonl — agent-managed, seeded on first run via
     #   _AGENT_MANAGED_FILES in ensure_directory().  Not a context file.
 ]
-"""All 11 context source files in ascending priority order (P0-P10)."""
+"""All 12 context source files in ascending priority order across 11 priority
+slots (SOUL.md and SELF.md share priority 2)."""
+
+
+def core_section_names() -> list[str]:
+    """Section names of the CORE (system-critical) context files — the SSOT for
+    the system-prompt completeness gate (prompt_builder.assert_core_sections).
+
+    Root-fix run_e47c1cfb (Gate-1 CHECK2): the gate MUST derive its core set from
+    CONTEXT_FILES programmatically, never a hand-typed literal — a literal already
+    drifted and dropped SELF.md. "Core" = a file whose absence means the agent
+    boots without its identity/directives:
+
+      - ``user_customized is False`` → system-owned (SWARMAI/IDENTITY/SOUL/AGENT),
+        always overwritten from template; these ARE the agent's constitution.
+      - ``truncatable is False``     → priority 0-2 non-truncatable (adds SELF.md,
+        which is user_customized=True but P2 non-truncatable core).
+
+    The union is exactly {SwarmAI, Identity, Soul, Self-Portrait, Agent Directives}.
+    A single-predicate key misses SELF — the union is deliberate. Ephemeral and
+    user/agent-owned lower-priority files (USER/STEERING/TOOLS/MEMORY/EVOLUTION/
+    KNOWLEDGE/PROJECTS) are intentionally NOT in the gate: a legitimately-empty
+    STEERING.md must not fail-loud.
+    """
+    return [
+        spec.section_name
+        for spec in CONTEXT_FILES
+        if (spec.user_customized is False) or (spec.truncatable is False)
+    ]
 
 
 # Fail-closed binding (adversarial LOW, Gate 2 run_20bd4a7b): every name in the
@@ -723,8 +751,8 @@ class ContextDirectoryLoader:
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
-        Reads the 10 source files from the context directory in ascending
-        priority order (0 first, 9 last).  Each non-empty file gets a
+        Reads the 12 source files from the context directory in ascending
+        priority order (0 first, 10 last).  Each non-empty file gets a
         ``## {section_name}`` header.  Empty or missing files are skipped
         entirely — no empty section headers appear in the output.
 
