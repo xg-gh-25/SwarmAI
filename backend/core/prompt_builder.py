@@ -49,8 +49,16 @@ logger = logging.getLogger(__name__)
 def assert_core_sections(prompt_text: str) -> list[str]:
     """Completeness gate for the system prompt (run_e47c1cfb).
 
-    Returns the list of CORE section names (core_section_names() SSOT) that are
-    ABSENT from ``prompt_text``. An empty list means the prompt is complete.
+    Returns the list of REQUIRED section names (required_prompt_sections() SSOT)
+    that are ABSENT from ``prompt_text``. An empty list means the prompt is complete.
+
+    Uses ``required_prompt_sections()`` (the always-materialized system-owned
+    constitution: SWARMAI/IDENTITY/SOUL/AGENT), NOT the broader
+    ``core_section_names()`` — SELF.md is conceptual-core but runtime-owned and can
+    be legitimately empty on a fresh workspace, so the loader may omit it; demanding
+    it here would false-fire. The gate catches the agent booting WITHOUT its
+    constitution (the run_e47c1cfb NameError dropped all of them), not optional
+    self-portrait content.
 
     Matching is LINE-ANCHORED on the exact header form the loader emits —
     ``## {section_name}`` at the start of a line (``## {name}\n`` mid-text, or as
@@ -59,10 +67,10 @@ def assert_core_sections(prompt_text: str) -> list[str]:
     line boundary prevents that. This is a pure function on a string — callers
     decide how loud to be about the result.
     """
-    from .context_directory_loader import core_section_names
+    from .context_directory_loader import required_prompt_sections
 
     missing: list[str] = []
-    for name in core_section_names():
+    for name in required_prompt_sections():
         header = f"## {name}"
         # Line-anchored: header at BOF, or preceded by a newline; and followed by
         # end-of-line (newline or end of string) so "## Soul Extras" != "## Soul".
@@ -820,6 +828,13 @@ class PromptBuilder:
         agent_config["system_prompt"] = ""
         prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         context_text = ""
+        # Explicit core-commit flag (run_e47c1cfb REVIEW MEDIUM#2): the except
+        # handler must distinguish "core never committed" from "core committed, a
+        # later step failed". Inferring that from system_prompt.strip() is
+        # ambiguous — an ephemeral section may have committed non-empty text before
+        # a later exception, making a core-loss look like core-intact. This flag is
+        # set True ONLY at the core commit, so the classification is unambiguous.
+        _core_committed = False
         # Defaults for variables set inside the try block — ensures
         # resume context injection (which runs outside the try) can
         # use them even if ContextDirectoryLoader fails early.
@@ -932,6 +947,7 @@ class PromptBuilder:
                 agent_config["system_prompt"] = (
                     _existing_core + "\n\n" + context_text if _existing_core else context_text
                 )
+                _core_committed = True
 
             # ── Session-type: channel sessions skip heavy ephemeral context ──
             is_channel = channel_context is not None
@@ -989,7 +1005,7 @@ class PromptBuilder:
 
             # ── Ephemeral sections (each isolated) append to `ephemeral_text`,
             #    which is committed to system_prompt ONCE, AFTER core is already
-            #    committed below. A failure in any ephemeral section can never
+            #    committed ABOVE. A failure in any ephemeral section can never
             #    drop the core context files.
             ephemeral_text = ""
             try:
@@ -998,10 +1014,10 @@ class PromptBuilder:
                 )
 
                 if _bootstrap_content:
-                    # Onboarding prepends the (already-committed) core; here it goes
-                    # at the FRONT of the ephemeral block so it still leads the prompt
-                    # tail after core.
-                    ephemeral_text = f"## Onboarding\n{_bootstrap_content}\n\n{ephemeral_text}"
+                    # Onboarding is the FIRST content into the (empty) ephemeral
+                    # buffer, so it leads the ephemeral block; daily/briefing/etc.
+                    # append after it below.
+                    ephemeral_text = f"## Onboarding\n{_bootstrap_content}"
 
                 for _day_stem, _daily_content in _daily_files:
                     token_count = ContextDirectoryLoader.estimate_tokens(_daily_content)
@@ -1241,7 +1257,9 @@ class PromptBuilder:
             # authoritative check; here we classify the log level so a genuine
             # core loss is LOUD (ERROR + flag), not a swallowed WARNING that hid
             # 305 silent degradations for 2 days.
-            _core_committed = bool(agent_config.get("system_prompt", "").strip())
+            # _core_committed is the EXPLICIT flag set only at the core commit —
+            # NOT inferred from system_prompt.strip() (which an ephemeral section
+            # could make non-empty even when core was lost — REVIEW MEDIUM#2).
             if _core_committed:
                 logger.warning(
                     "Context assembly failed AFTER core was committed (core intact, "
@@ -1317,12 +1335,23 @@ class PromptBuilder:
 
         # ── Completeness gate (fail-loud, run_e47c1cfb) ────────────────
         # Runs OUTSIDE the assembly try above, so a gate failure is never
-        # swallowed. Assert every CORE section (core_section_names() SSOT)
-        # is present; a missing one means the agent is about to run without
-        # part of its constitution — LOUD (ERROR + _context_degraded flag),
-        # not a silent warning. Channel sessions legitimately exclude some
-        # files, so the gate is scoped to non-channel (full-context) sessions.
-        if channel_context is None:
+        # swallowed. Assert every REQUIRED section (required_prompt_sections()
+        # SSOT — the system-owned constitution) is present; a missing one means
+        # the agent is about to run without part of its constitution — LOUD
+        # (ERROR + _context_degraded flag), not a silent warning.
+        #
+        # Scoped to (a) non-channel sessions — channel sessions legitimately
+        # exclude files; and (b) the L1/assemble path (model window >=
+        # THRESHOLD_USE_L1), which emits the '## {section_name}' headers the gate
+        # matches. The sub-64K L0 compact cache (REVIEW LOW#5) uses different
+        # headers ('## Core Rules', no '## SwarmAI'), so the gate would false-fire
+        # there — and that path is not where the assembly bug lives.
+        from .context_directory_loader import THRESHOLD_USE_L1
+        _gate_applies = (
+            channel_context is None
+            and locals().get("model_context_window", 0) >= THRESHOLD_USE_L1
+        )
+        if _gate_applies:
             missing = assert_core_sections(context_text_final)
             if missing:
                 agent_config["_context_degraded"] = (

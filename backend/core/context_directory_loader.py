@@ -265,13 +265,9 @@ slots (SOUL.md and SELF.md share priority 2)."""
 
 
 def core_section_names() -> list[str]:
-    """Section names of the CORE (system-critical) context files — the SSOT for
-    the system-prompt completeness gate (prompt_builder.assert_core_sections).
-
-    Root-fix run_e47c1cfb (Gate-1 CHECK2): the gate MUST derive its core set from
-    CONTEXT_FILES programmatically, never a hand-typed literal — a literal already
-    drifted and dropped SELF.md. "Core" = a file whose absence means the agent
-    boots without its identity/directives:
+    """Section names of the CORE (system-critical) context files — the conceptual
+    core set: files whose absence means the agent boots without its identity/
+    directives.
 
       - ``user_customized is False`` → system-owned (SWARMAI/IDENTITY/SOUL/AGENT),
         always overwritten from template; these ARE the agent's constitution.
@@ -279,15 +275,43 @@ def core_section_names() -> list[str]:
         which is user_customized=True but P2 non-truncatable core).
 
     The union is exactly {SwarmAI, Identity, Soul, Self-Portrait, Agent Directives}.
-    A single-predicate key misses SELF — the union is deliberate. Ephemeral and
-    user/agent-owned lower-priority files (USER/STEERING/TOOLS/MEMORY/EVOLUTION/
-    KNOWLEDGE/PROJECTS) are intentionally NOT in the gate: a legitimately-empty
-    STEERING.md must not fail-loud.
+
+    NOTE: this is the CONCEPTUAL core. The completeness GATE uses the narrower
+    ``required_prompt_sections()`` — SELF.md is conceptual-core but runtime-owned
+    and can be legitimately empty (fresh workspace, before the self-knowledge loop
+    populates it), in which case the loader correctly omits it. Demanding it in the
+    gate would false-fire on a clean install. See ``required_prompt_sections``.
     """
     return [
         spec.section_name
         for spec in CONTEXT_FILES
         if (spec.user_customized is False) or (spec.truncatable is False)
+    ]
+
+
+def required_prompt_sections() -> list[str]:
+    """Section names the completeness gate REQUIRES present in every full-context
+    (non-channel) system prompt — the SSOT for prompt_builder.assert_core_sections.
+
+    This is the ALWAYS-MATERIALIZED subset: files that are ``user_customized is
+    False`` = system-owned, always overwritten from the codebase template on every
+    startup, and never skippable as "empty/stub". These are the agent's
+    constitution: SWARMAI / IDENTITY / SOUL / AGENT.
+
+    Deliberately NARROWER than ``core_section_names()``: it EXCLUDES SELF.md
+    (Self-Portrait). SELF is priority-2 non-truncatable *when present*, but it is
+    runtime-owned (human/distill-written) and the loader legitimately skips it when
+    it is empty or a header-only stub (``_assemble_from_sources``: empty-content and
+    empty-stub skips). A completeness gate that demanded Self-Portrait would fire a
+    LOUD false ERROR on a fresh workspace where SELF.md has not been cultivated yet.
+    The gate's job is to catch the agent booting WITHOUT ITS CONSTITUTION (the
+    run_e47c1cfb NameError dropped ALL of these), not to enforce optional
+    self-portrait content — that is not a degradation.
+    """
+    return [
+        spec.section_name
+        for spec in CONTEXT_FILES
+        if spec.user_customized is False
     ]
 
 

@@ -632,6 +632,26 @@ class TestSystemPromptFaultIsolation:
         missing = assert_core_sections(prompt)
         assert "Soul" in missing, "body mention of a header must not satisfy the gate"
 
+    def test_ac3_gate_does_not_require_self_portrait(self):
+        """REVIEW MEDIUM#1: SELF.md (Self-Portrait) is runtime-owned and can be
+        legitimately empty on a fresh workspace — the loader omits it. The gate must
+        NOT demand it, or it false-fires on a clean install. A prompt with the 4
+        system-owned sections but NO Self-Portrait is COMPLETE."""
+        from core.prompt_builder import assert_core_sections
+        prompt = "## SwarmAI\nx\n\n## Identity\ny\n\n## Soul\nz\n\n## Agent Directives\nv"
+        assert assert_core_sections(prompt) == [], (
+            "gate must not require Self-Portrait — an empty SELF.md is legitimate, "
+            "not a degradation"
+        )
+
+    def test_ac3_required_sections_are_system_owned_only(self):
+        """The gate's required set = system-owned constitution (user_customized=False)
+        = {SwarmAI,Identity,Soul,Agent Directives}, excluding runtime-owned SELF."""
+        from core.context_directory_loader import required_prompt_sections
+        assert set(required_prompt_sections()) == {
+            "SwarmAI", "Identity", "Soul", "Agent Directives"
+        }
+
     # ── AC4: fail-loud ──────────────────────────────────────────────────
     def test_ac4_core_failure_is_loud(self, tmp_path, caplog):
         """When core assembly (load_all) raises, the build sets a degraded flag +
