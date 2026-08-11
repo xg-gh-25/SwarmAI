@@ -582,3 +582,76 @@ class TestBuildSurfaceEventsReportAppend:
         assert len(events) == 1, f"just the REPORT event: {events}"
         assert str(events[0]["path"]).endswith("REPORT.md")
         assert events[0]["kind"] == "knowledge"
+
+
+class TestAutoCommitCarriesProjectTrailer:
+    """The auto local-commit is the code path that produced the 2026-08-11 trailer
+    violations, and it is invisible to BOTH other enforcers:
+      • .git/hooks/prepare-commit-msg never runs (core.hooksPath = corporate
+        git-defender, which REPLACES .git/hooks);
+      • security_hooks.create_commit_trailer_gate only sees a `git commit` an AGENT
+        types through the Bash tool — this module shells git out itself.
+    So the trailer must be built into the message, and this test reads the message
+    off a REAL created commit (INV-5: a guard is not trusted until something proves
+    it fires). 3 violations here cost an 18-commit rebase to repair.
+    """
+
+    def _git(self, repo, *a, env=None):
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, timeout=30, env=env)
+
+    def _repo_with_change(self, tmp_path, name):
+        repo = tmp_path / name
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "f.py").write_text("v1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        (repo / "f.py").write_text("v2\n")
+        return repo
+
+    def test_auto_commit_message_ends_with_the_project_trailer(
+        self, workspace, tmp_path, capsys
+    ):
+        repo = self._repo_with_change(tmp_path, "trailerrepo")
+        _write_run(workspace, "run_tr",
+                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_tr")
+        assert json.loads(capsys.readouterr().out)["committed"], "nothing was committed"
+
+        body = self._git(repo, "log", "-1", "--format=%B").stdout
+        assert "Co-Authored-By: Swarm <swarm@swarmai.dev>" in body, (
+            "the auto local-commit message must carry the project identity trailer — "
+            f"nothing else will add it. Got:\n{body}"
+        )
+
+    def test_auto_commit_satisfies_the_ci_trailer_gate(
+        self, workspace, tmp_path, capsys
+    ):
+        """Cross-bind the generator to the CI checker: a drift in EITHER (message
+        builder or REQUIRED_TRAILER) turns this red, instead of surfacing days later
+        at push as a history-rewrite problem."""
+        import importlib.util
+        import pathlib
+
+        repo = self._repo_with_change(tmp_path, "citrailerrepo")
+        _write_run(workspace, "run_ci",
+                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_ci")
+        capsys.readouterr()
+
+        script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "check_commit_trailers.py"
+        spec = importlib.util.spec_from_file_location("cct_gen", script)
+        cct = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cct)
+
+        # classify() reads the BODY (git %b), matching how CI evaluates a commit.
+        body = self._git(repo, "log", "-1", "--format=%b").stdout
+        assert cct.classify(body) == "ok", (
+            f"CI's own classifier rejects the message this code path produces: "
+            f"{cct.classify(body)!r}\n{body}"
+        )

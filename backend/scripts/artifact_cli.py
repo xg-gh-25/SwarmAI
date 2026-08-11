@@ -2259,7 +2259,20 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
             unresolved.append(f)
 
     requirement = run_state.get("requirement", "")[:72] or "pipeline changes"
-    commit_msg = f"{requirement}\n\n(auto local-commit, run {args.run_id}; not pushed)"
+    # Project identity trailer (AGENTS.md: EVERY commit must end with it). It has to
+    # be appended HERE because this code path is invisible to both other enforcers:
+    #   • .git/hooks/prepare-commit-msg never runs — core.hooksPath points at the
+    #     corporate git-defender set, and a hooksPath override REPLACES .git/hooks.
+    #   • security_hooks.create_commit_trailer_gate only sees a `git commit` an AGENT
+    #     types through the Bash tool; this module shells git out itself, so no
+    #     PreToolUse hook fires.
+    # So if the trailer is not built into the message here, it never appears at all.
+    # (2026-08-11: this path emitted 3 trailer-less commits; CI only catches them at
+    # push, by which point the repair was an 18-commit history rewrite.)
+    commit_msg = (
+        f"{requirement}\n\n(auto local-commit, run {args.run_id}; not pushed)"
+        f"\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"
+    )
 
     committed, warnings = [], []
     if unresolved:
