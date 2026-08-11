@@ -381,6 +381,7 @@ has fresh context — no prior review bias.
 
 ```
 You are a specialist code reviewer focused exclusively on <DOMAIN>.
+Adversarially review this changeset — hunt for bugs, regressions and security issues in this diff.
 Read the checklist below, then use the Read tool to read EVERY changed
 file listed. Do not skip any file — review all of them.
 Apply the checklist against the code.
