@@ -300,6 +300,32 @@ class TestSelfAdversarialJudge:
             verdict, _ = self_adversarial_judge("x", "s", [])
         assert verdict == "suspect"
 
+    def test_judge_parses_verdict_first_then_trailing_reason(self):
+        # REGRESSION (2026-08-11): the prompt now demands VERDICT on the FIRST line so a
+        # long REASON can never truncate it away. Even with a multi-line trailing REASON,
+        # the parser must read the leading verdict. (Root cause of a 68% unparseable→
+        # fail-close→silent-discard rate: the old prompt put 4 analysis points BEFORE the
+        # verdict, so a 256-token cap hit max_tokens before VERDICT ever appeared.)
+        from core.ingestion_gate import self_adversarial_judge
+        out = "VERDICT: pass\nREASON: a genuinely reusable load-bearing lesson\nextra rambling"
+        with patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(out)):
+            verdict, reason = self_adversarial_judge("A real lesson.", "What Worked", [])
+        assert verdict == "pass", "VERDICT-first line must parse even with trailing text"
+
+    def test_judge_prompt_orders_verdict_before_reason(self):
+        # CONTRACT guard (weak tripwire — the real behavioral coverage is
+        # test_judge_parses_verdict_first_then_trailing_reason above): the prompt's output
+        # spec must place the VERDICT line BEFORE the REASON line, so a truncated REASON
+        # can never eat the verdict (the 256-token bug root cause). Asserts ORDER, not exact
+        # wording or a magic token number (per adversarial review: those are non-load-bearing
+        # — VERDICT-first alone makes parsing truncation-immune regardless of the cap).
+        import core.ingestion_gate as ig
+        p = ig._JUDGE_PROMPT
+        assert "VERDICT:" in p and "REASON:" in p
+        assert p.index("VERDICT:") < p.index("REASON:"), (
+            "the prompt must instruct VERDICT before REASON so a long/truncated REASON "
+            "cannot push the verdict past the token cap")
+
     def test_judge_fail_closed_on_empty(self):
         from core.ingestion_gate import self_adversarial_judge
         with patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock("")):

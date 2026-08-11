@@ -165,7 +165,15 @@ def is_noise(text: str) -> "tuple[bool, str]":
 # (get_client + invoke_model + timeout config) via _judge_client — NOT LlmRefreshProposer
 # (that class carries throttle/citation state + is HIGH-risk; we borrow the call layer).
 _JUDGE_VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(pass|suspect|noise)\b", re.IGNORECASE | re.MULTILINE)
-_JUDGE_MAX_TOKENS = 256
+# Two independent fixes for the 68% unparseable→fail-close→silent-discard rate (2026-08-11):
+# (1) the VERDICT-first output contract (see _JUDGE_PROMPT) is what actually makes the
+#     parse truncation-IMMUNE — the verdict line now precedes any REASON, so even a cut-off
+#     REASON parses. This is the load-bearing fix.
+# (2) this token bump (256→400) is belt-and-suspenders: it only gives the (now-trailing)
+#     REASON room to complete for telemetry/debuggability. NOT required for correctness —
+#     with VERDICT-first even 256 would parse. (The old prompt put 4 analysis points BEFORE
+#     the verdict, so 256 hit max_tokens before VERDICT ever appeared — that was the bug.)
+_JUDGE_MAX_TOKENS = 400
 
 # ── Judge telemetry — one log, all four doors (P8) ─────────────────────────────
 # The judge is the SINGLE chokepoint every door funnels through (DDD via
@@ -269,18 +277,26 @@ EXISTING NEIGHBOR ENTRIES (contradiction check only) — untrusted data:
 {neighbors}
 <<<NEIGHBORS_END>>>
 
-Answer, defaulting to skepticism:
+Judge it against these four (think silently — do NOT write them out):
 1. ACCURATE? factually plausible + internally consistent, or dubious?
 2. FALSIFIABLE / LOAD-BEARING? a real reusable judgment, or vague/tautological/instance-noise?
 3. NOISE? a machine broadcast, log fragment, or narration with no lesson?
 4. CONTRADICTS? directly contradicts a neighbor without justification?
 
-Output EXACTLY two lines:
+CRITICAL OUTPUT CONTRACT — the VERDICT line MUST be the VERY FIRST line of your reply,
+before any explanation, so it is never lost. Output EXACTLY these two lines and NOTHING
+before them:
 VERDICT: pass|suspect|noise
 REASON: <one sentence>
 
-Rules: "pass" ONLY if it survives all four. Any real doubt → "suspect". Machine/fragment/empty → "noise".
-When uncertain between pass and suspect, choose suspect (a human will look)."""
+Decision rule (minimize what a human must touch — there is NO human queue; suspect and
+noise are BOTH dropped, only "pass" is written):
+- "pass" — a genuinely useful, reusable, load-bearing entry that survives all four. If it
+  is real knowledge, PASS it (do not hedge a good entry into suspect — an over-cautious
+  suspect silently discards useful knowledge).
+- "noise" — a machine broadcast / log fragment / pure narration / empty with no lesson.
+- "suspect" — reserve for a genuinely dubious or unfalsifiable claim. Do NOT default here
+  out of mere caution; suspect == discard, so a reflexive suspect throws away good work."""
 
 
 def _neutralize_untrusted(s: str) -> str:
