@@ -206,7 +206,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
           }}
           className="
             animate-tscc-panel flex flex-col
-            bg-[var(--color-card)] border border-[var(--color-border)]
+            bg-[var(--color-card)] border-2 border-[var(--color-primary)]/70
             rounded-xl shadow-2xl overflow-hidden
           "
         >

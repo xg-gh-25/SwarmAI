@@ -21,6 +21,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type {
   SystemPromptMetadata,
   RecallSnapshot,
@@ -177,16 +178,47 @@ function FlowTab() {
 // ===========================================================================
 
 function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () => void }) {
-  return (
+  // Escape closes the modal ONLY. Registered in the CAPTURE phase with
+  // stopImmediatePropagation so it runs before the popover's own document-level
+  // keydown listener (which would otherwise close the whole popover). Without
+  // this, Escape would tear down the popover, not just the modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKey, true); // capture
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
+  // Rendered via a portal to document.body so `fixed inset-0` resolves against the
+  // viewport. The modal is otherwise a DOM descendant of the popover's
+  // `.animate-tscc-panel` element, whose forwards-filled animation retains a
+  // non-none transform (scale(1)) — a transformed ancestor becomes the containing
+  // block for fixed descendants, which trapped the modal inside the ~720px popover
+  // box (run_4ddaee2c). Portaling also escapes the popover's overflow-hidden clip.
+  return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
+      // stopPropagation on mousedown: the popover installs a document-level
+      // mousedown "click-outside → close" listener (TSCCPopoverButton). Once the
+      // modal is portaled to <body> it is OUTSIDE the popover's ref, so a click on
+      // the modal would be seen as "outside" and close the whole popover. Stopping
+      // mousedown here keeps the underlying panel open so the user backs out of the
+      // modal TO the panel, not out of both.
+      onMouseDown={(e) => e.stopPropagation()}
+      // z above the popover (zIndex 9999): both are fixed siblings under <body>,
+      // so paint order is guaranteed, not left to incidental non-overlap geometry.
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Full system prompt"
     >
       <div
-        className="w-[92vw] max-w-5xl max-h-[90vh] flex flex-col bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden"
+        className="w-[92vw] max-w-5xl max-h-[90vh] flex flex-col bg-[var(--color-card)] border-2 border-[var(--color-primary)]/70 rounded-lg shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
@@ -205,7 +237,8 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
           </pre>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
