@@ -93,10 +93,7 @@ Corollaries (violating any of these breaks Principle 1):
   Principle 1 applied at the intake gate: admission quality serves judgment quality. It is the
   product-level statement of AGENT.md R30#4.)
 
-_(Sedimented 2026-07-20, two XG directives on the same day. (1) "DDD 是你的认知大脑 帮你 judge
-的 knowledge 这是 principle 1 啊 所有 changes 还有改动都不能 break 这个 principle." (2) "dynamic
-并且不能帮你做决策的数字 别让它们进你 DDD or Memory or Knowledge …… 很容易产生 drift" — the
-no-drift-number corollary. I must hold both myself — not wait for XG to re-assert them.)_
+_(Two XG directives, same day: (1) a DDD is your cognitive brain — the knowledge that helps you judge — so no change may ever break Principle 1; (2) dynamic numbers that don't drive a decision must not enter DDD / Memory / Knowledge — they breed drift. I must hold both myself, not wait for XG to re-assert them.)_
 
 ### What a DDD is — the paradigm (product-level decision, 2026-07-19)
 A **DDD is a universal brain** for a product, system, or endeavor. It always has the
@@ -151,10 +148,9 @@ governed **asset `kind`** (the paradigm grows by adding a `kind`, never a sectio
 **Ownership follows the package, not the host** — SwarmAI is merely the first host
 that both cultivates and mounts it; a DDD's skills belong to the DDD, not to SwarmAI.
 
-- **Jobs are DDD assets too (asset kind `job`):** 定时任务也是这个 DDD 的资产,得一起
-  进包。一个能分发的 DDD,应该连驱动它的 job 一起带走,否则拷到 Quick 上只有 skill
-  没有"自动跑"的调度。 A job that depends on a DDD's domain skill belongs to that DDD
-  and distributes with it.
+- **Jobs are DDD assets too (asset kind `job`):** a job that depends on a DDD's domain
+  skill belongs to that DDD and distributes with it — a distributable DDD carries the
+  scheduling that drives it, not just its skills.
 - **Two skill classes (govern differently — do NOT mount both blindly):**
   - **Enablement** (SwarmAI-provided, e.g. `s_ddd-*`, `s_repo-to-ddd`) — platform
     capabilities *lent* to the DDD. On SwarmAI the **official built-in version wins**
