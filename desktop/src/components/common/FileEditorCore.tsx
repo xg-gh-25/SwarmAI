@@ -36,6 +36,11 @@ import type { SearchMatch } from './FileEditorModal';
 import { useReviewMode } from '../../hooks/useReviewMode';
 import type { DiffContext, ReviewComment } from '../../hooks/useReviewMode';
 import ReviewModeGutter from './ReviewModeGutter';
+import {
+  computeGutterWindow,
+  GUTTER_LINE_HEIGHT,
+  GUTTER_VIRTUALIZE_MIN_LINES,
+} from './gutterVirtualization';
 import CommentPopover from './CommentPopover';
 import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
 
@@ -147,40 +152,6 @@ function BreadcrumbBar({ filePath }: { filePath: string }) {
 /* ------------------------------------------------------------------ */
 /*  LineGutter                                                          */
 /* ------------------------------------------------------------------ */
-
-/** Editor line height in px — matches the textarea's leading-6 (24px). */
-const GUTTER_LINE_HEIGHT = 24;
-/** Above this line count, gutters virtualize (render only the visible window).
- *  Below it, they render every line — the un-virtualized path is byte-for-byte
- *  unchanged, so normal-sized files (the common case) have zero behavior change. */
-export const GUTTER_VIRTUALIZE_MIN_LINES = 2_000;
-/** Extra lines rendered above+below the viewport so fast scroll shows no gap. */
-const GUTTER_OVERSCAN = 40;
-/** Viewport-height fallback when the real height is unavailable (initial mount,
- *  or jsdom where clientHeight is 0) — renders a sensible first window. */
-const GUTTER_FALLBACK_VIEWPORT_PX = 1_200;
-
-/**
- * Compute the visible line-number window [start, end) for a virtualized gutter.
- * Pure — exported for testing. `end` is exclusive. Falls back to a default
- * viewport height when `viewportHeight` is 0 so the first paint is never empty.
- */
-export function computeGutterWindow(
-  lineCount: number,
-  scrollTop: number,
-  viewportHeight: number,
-): { start: number; end: number } {
-  const vh = viewportHeight > 0 ? viewportHeight : GUTTER_FALLBACK_VIEWPORT_PX;
-  const visible = Math.ceil(vh / GUTTER_LINE_HEIGHT) + GUTTER_OVERSCAN * 2;
-  // Clamp start into [0, lineCount] BEFORE computing end. Without the upper
-  // clamp, a scrollTop past the file's end (defensive: shouldn't happen since
-  // the textarea bounds scroll, but a stale scrollTop during a shrink can) makes
-  // start > end → Array.from({length: end-start}) gets a negative length.
-  const rawStart = Math.floor(scrollTop / GUTTER_LINE_HEIGHT) - GUTTER_OVERSCAN;
-  const start = Math.min(Math.max(0, rawStart), lineCount);
-  const end = Math.min(lineCount, start + visible);
-  return { start, end };
-}
 
 function LineGutter({ lineCount, scrollTop, activeLineNumber, viewportHeight = 0 }: {
   lineCount: number;

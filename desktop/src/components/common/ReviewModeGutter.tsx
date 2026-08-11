@@ -11,7 +11,7 @@
 
 import { useCallback, useRef } from 'react';
 import CommentPopover from './CommentPopover';
-import { computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from './FileEditorCore';
+import { computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from './gutterVirtualization';
 import type { ReviewComment } from '../../hooks/useReviewMode';
 
 /** Line height must match the editor textarea (leading-6 = 24px). */

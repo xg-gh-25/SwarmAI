@@ -14,7 +14,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import hljs from 'highlight.js';
 import FileEditorCore from '../FileEditorCore';
-import { HIGHLIGHT_MAX_CHARS, HIGHLIGHT_DEBOUNCE_MS, computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from '../FileEditorCore';
+import { HIGHLIGHT_MAX_CHARS, HIGHLIGHT_DEBOUNCE_MS } from '../FileEditorCore';
+import { computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from '../gutterVirtualization';
 import ReviewModeGutter from '../ReviewModeGutter';
 
 function renderCore(props: Partial<React.ComponentProps<typeof FileEditorCore>> = {}) {
