@@ -1133,6 +1133,35 @@ export interface SystemPromptMetadata {
   fullText: string;
 }
 
+/** Recalled-knowledge snapshot returned by the recall endpoint (read-only). */
+export interface RecallSnapshot {
+  ran: boolean;
+  body: string;
+  tokens: number;
+  latencyMs: number;
+  keywords: string[];
+}
+
+/** A single detector's verdict from the prompt security scan. */
+export interface SecurityFinding {
+  detector: string;
+  severity: 'critical' | 'high' | 'medium' | 'info';
+  status: 'pass' | 'warn';
+  count: number;
+  detail: string;
+}
+
+/** Structured verdict returned by the security-scan endpoint. */
+export interface SecurityScanResult {
+  grade: string;
+  findings: SecurityFinding[];
+  critical: number;
+  high: number;
+  medium: number;
+  info: number;
+  scannedFiles: number;
+}
+
 // ============== Toast Notification Types ==============
 
 export type ToastSeverity = 'success' | 'info' | 'warning' | 'error';

@@ -169,7 +169,12 @@ describe('TSCCPanel', () => {
 
     it('renders truncation indicator for truncated files', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(screen.getByText('truncated')).toBeInTheDocument();
+      // Badge reads "smart" (smart-selected / truncated to fit budget) — the
+      // title carries the full meaning, so assert both label and tooltip.
+      expect(screen.getByText('smart')).toBeInTheDocument();
+      expect(
+        screen.getByTitle('Smart-selected / truncated to fit budget'),
+      ).toBeInTheDocument();
     });
 
     it('renders total token count', () => {

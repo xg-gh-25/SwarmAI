@@ -16,6 +16,8 @@ import type {
   TSCCSource,
   TSCCState,
   SystemPromptMetadata,
+  RecallSnapshot,
+  SecurityScanResult,
 } from '../types';
 import api from './api';
 
@@ -111,6 +113,69 @@ export async function getSystemPromptMetadata(
     };
   } catch (err: unknown) {
     // 404 is expected when session hasn't been initialized yet
+    if (err && typeof err === 'object' && 'response' in err) {
+      const axiosErr = err as { response?: { status?: number } };
+      if (axiosErr.response?.status === 404) {
+        return null;
+      }
+    }
+    throw err;
+  }
+}
+
+/** Fetch the recalled-knowledge snapshot for a session (read-only).
+ *  The backend never triggers recall here — it reads a snapshot captured
+ *  fire-and-forget during the first message. Returns null on 404. */
+export async function getRecallSnapshot(
+  sessionId: string,
+): Promise<RecallSnapshot | null> {
+  try {
+    const response = await api.get(`/chat/${sessionId}/recall`);
+    const data = response.data as Record<string, unknown>;
+    return {
+      ran: (data.ran as boolean) ?? false,
+      body: (data.body as string) ?? '',
+      tokens: (data.tokens as number) ?? 0,
+      latencyMs: (data.latency_ms as number) ?? 0,
+      keywords: (data.keywords as string[]) ?? [],
+    };
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'response' in err) {
+      const axiosErr = err as { response?: { status?: number } };
+      if (axiosErr.response?.status === 404) {
+        return null;
+      }
+    }
+    throw err;
+  }
+}
+
+/** Fetch the prompt security-scan result for a session (read-only).
+ *  Runs the scan server-side only when called (panel open) — never on the
+ *  chat send path. Returns null on 404. */
+export async function getSecurityScan(
+  sessionId: string,
+): Promise<SecurityScanResult | null> {
+  try {
+    const response = await api.get(`/chat/${sessionId}/security-scan`);
+    const data = response.data as Record<string, unknown>;
+    const findings = (data.findings as Record<string, unknown>[]) ?? [];
+    return {
+      grade: (data.grade as string) ?? 'n/a',
+      findings: findings.map((f) => ({
+        detector: f.detector as string,
+        severity: f.severity as SecurityScanResult['findings'][number]['severity'],
+        status: f.status as SecurityScanResult['findings'][number]['status'],
+        count: (f.count as number) ?? 0,
+        detail: (f.detail as string) ?? '',
+      })),
+      critical: (data.critical as number) ?? 0,
+      high: (data.high as number) ?? 0,
+      medium: (data.medium as number) ?? 0,
+      info: (data.info as number) ?? 0,
+      scannedFiles: (data.scanned_files as number) ?? 0,
+    };
+  } catch (err: unknown) {
     if (err && typeof err === 'object' && 'response' in err) {
       const axiosErr = err as { response?: { status?: number } };
       if (axiosErr.response?.status === 404) {

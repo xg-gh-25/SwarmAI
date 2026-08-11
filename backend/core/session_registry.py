@@ -51,6 +51,14 @@ hook_manager: Optional[SessionLifecycleHookManager] = None
 # Cleaned up by delete_session and LifecycleManager TTL kill.
 system_prompt_metadata: dict[str, dict] = {}
 
+# Per-session recalled-knowledge snapshot, keyed by session_id.
+# Populated fire-and-forget by _maybe_inject_recall (the ONE recall leg that
+# already runs on the first user message) — NO new recall computation, just a
+# reference to the already-rendered result. Read by the TSCC recall endpoint.
+# Same one-per-session lifecycle as system_prompt_metadata; cleaned up in the
+# SAME LifecycleManager._release_session_state pop (bounded growth).
+recall_snapshot: dict[str, dict] = {}
+
 _initialized = False
 
 # Shared CredentialValidator — ONE instance for both the spawn pre-flight

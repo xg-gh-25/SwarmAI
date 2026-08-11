@@ -756,6 +756,31 @@ body {
   animation: fade-in 0.15s ease-out forwards;
 }
 
+/* TSCC context panel — flies out from the bottom-right anchor (the TSCC
+   button) toward the top-left. transform-origin is set to bottom-right so the
+   scale+fade reads as "unfolding from the button". Honors reduced-motion. */
+@keyframes tscc-panel-in {
+  from {
+    opacity: 0;
+    transform: translate(12px, 12px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+.animate-tscc-panel {
+  transform-origin: bottom right;
+  animation: tscc-panel-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-tscc-panel {
+    animation: fade-in 0.12s ease-out forwards;
+  }
+}
+
 /* Canvas panel reveal: the panel animates its WIDTH from 0 → target on mount
    (driven by the `entered` flag in FileViewerPanel). As a flex sibling, this
    makes the chat pane ease narrower IN LOCKSTEP with the panel growing — one

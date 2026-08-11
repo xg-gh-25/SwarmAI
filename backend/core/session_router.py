@@ -766,6 +766,23 @@ async def _maybe_inject_recall(
             # system-prompt size the model sees on message #1, and how long the
             # recall leg took (design §2 P2/P3).
             _recall_tok = ContextDirectoryLoader.estimate_tokens(recalled)
+            # TSCC recall snapshot (read-only panel) — fire-and-forget stash of the
+            # ALREADY-rendered result onto the unit. NO new recall computation: every
+            # value here (recalled/_recall_tok/_recall_ms/keywords) is already in hand.
+            # Copied to session_registry.recall_snapshot after this coroutine returns
+            # (mirrors system_prompt_metadata). Must NEVER raise into the recall leg
+            # (same discipline as the metric block above) — a panel-observability stash
+            # cannot be allowed to break the chat hot path.
+            try:
+                unit._recall_snapshot = {
+                    "ran": True,
+                    "body": recalled,
+                    "tokens": _recall_tok,
+                    "latency_ms": _recall_ms or 0.0,
+                    "keywords": list(keywords[:32]),
+                }
+            except Exception:  # noqa: BLE001 — snapshot must never break recall
+                pass
             logger.info(
                 "recall injected: +%d chars (~%d tok) into system prompt | keywords=%s",
                 len(recalled), _recall_tok, keywords[:80],
@@ -2351,6 +2368,16 @@ class SessionRouter:
                 unit=unit,
                 editor_context=editor_context,
             )
+            # Copy the recall snapshot to the registry for the read-only TSCC panel
+            # (mirrors the system_prompt_metadata copy above). Guarded + best-effort:
+            # a panel-observability copy must never perturb the send path.
+            try:
+                _rsnap = getattr(unit, "_recall_snapshot", None)
+                if _rsnap and session_id:
+                    from . import session_registry
+                    session_registry.recall_snapshot[session_id] = _rsnap
+            except Exception:  # noqa: BLE001 — observability copy must never break send
+                pass
 
         # G3 shadow recall REMOVED — recall is already live (wired into
         # prompt assembly via runtime_hooks). Shadow validation data is no

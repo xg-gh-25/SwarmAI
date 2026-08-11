@@ -530,6 +530,11 @@ class SessionUnit:
         # Set True after first-message recall runs (or is skipped).
         # Prevents re-running on subsequent messages in the same session.
         self._recall_injected: bool = False
+        # TSCC recall snapshot (read-only panel). Initialized here for lifecycle
+        # symmetry with _recall_injected so a never-recalled unit has a defined
+        # attribute (a future direct read won't AttributeError); the live read in
+        # session_router uses getattr(..., None) so None == "no snapshot".
+        self._recall_snapshot: Optional[dict] = None
         # Own once-guard for runtime DDD injection (run_91bc0651 M2): separate
         # from _recall_injected so signal-1 (deterministic editor path) fires
         # regardless of the keyword-recall gate.
@@ -4185,6 +4190,11 @@ class SessionUnit:
         # Reset recall injection flag — new subprocess needs fresh recall.
         self._recall_injected = False
         self._ddd_injected = False
+        # Clear the TSCC recall snapshot too: if the post-restart recall MISSES
+        # (no stash on the empty branch), a surviving pre-restart snapshot would be
+        # re-copied to the registry and the panel would show recall body that no
+        # longer matches the current subprocess's prompt (adversarial MED finding).
+        self._recall_snapshot = None
         self._recall_keyword_misses = 0
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)

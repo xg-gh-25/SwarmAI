@@ -990,12 +990,14 @@ class LifecycleManager:
 
         Targets:
         - session_registry.system_prompt_metadata  (prompt text, ~50KB each)
+        - session_registry.recall_snapshot          (recalled block, TSCC panel)
         - permission_manager._approved_commands    (command hashes)
         - permission_manager._session_queues       (asyncio.Queue)
         """
         try:
             from . import session_registry
             session_registry.system_prompt_metadata.pop(session_id, None)
+            session_registry.recall_snapshot.pop(session_id, None)
         except Exception as exc:
             logger.debug("_release_session_state metadata cleanup failed: %s", exc)
         try:

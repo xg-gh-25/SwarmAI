@@ -138,3 +138,59 @@ class SystemPromptMetadata(BaseModel):
     )
     total_tokens: int = Field(0, description="Total estimated tokens across all files")
     full_text: str = Field("", description="Complete assembled system prompt text")
+
+
+class RecallSnapshot(BaseModel):
+    """Recalled-knowledge snapshot for a session, returned by the recall endpoint.
+
+    Populated as a fire-and-forget side effect of the ONE recall leg that already
+    runs on the first user message (``_maybe_inject_recall`` in session_router).
+    The panel reads this snapshot only — it never triggers recall itself, so this
+    endpoint is fully decoupled from the chat send path.
+
+    ``body`` is the already-rendered recall markdown (carries ``[RECALLED]`` /
+    ``[DDD:project]`` provenance tags). ``ran`` distinguishes "recall ran and hit"
+    from "no recall this session" (channel / keyword-miss / turn 2+), so a UI blank
+    is never ambiguous with a dead path.
+    """
+
+    ran: bool = Field(False, description="Whether the recall leg ran and injected this session")
+    body: str = Field("", description="Rendered recall markdown (with [RECALLED]/[DDD] provenance)")
+    tokens: int = Field(0, description="Estimated tokens of the recalled block (estimate_tokens)")
+    latency_ms: float = Field(0.0, description="Recall-leg wall-clock in ms")
+    keywords: list[str] = Field(
+        default_factory=list, description="Query keywords that drove the recall"
+    )
+
+
+class SecurityFinding(BaseModel):
+    """A single detector's verdict from the system-prompt security scan.
+
+    ``detail`` is ALWAYS masked — the raw secret/PII value is never echoed
+    back into the response (first 2 chars + ``***``).
+    """
+
+    detector: str = Field(..., description="Detector name, e.g. 'credentials' or 'pii_email'")
+    severity: str = Field(
+        ..., description='Severity: "critical", "high", "medium", or "info"'
+    )
+    status: str = Field(..., description='Detector result: "pass" or "warn"')
+    count: int = Field(0, description="Number of matches found")
+    detail: str = Field(
+        "",
+        description="Human-readable detail — MUST be masked, never the raw secret",
+    )
+
+
+class SecurityScanResult(BaseModel):
+    """Structured verdict for the read-only security-scan panel."""
+
+    grade: str = Field("n/a", description='Overall grade, e.g. "A", "A-", "B", "C", or "n/a"')
+    findings: list[SecurityFinding] = Field(
+        default_factory=list, description="Per-detector findings"
+    )
+    critical: int = Field(0, description="Count of critical-severity findings")
+    high: int = Field(0, description="Count of high-severity findings")
+    medium: int = Field(0, description="Count of medium-severity findings")
+    info: int = Field(0, description="Count of info-severity findings")
+    scanned_files: int = Field(0, description="Number of context files scanned")
