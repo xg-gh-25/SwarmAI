@@ -397,6 +397,31 @@ velocity = gm.get_velocity()
    - A MISSED / BAD_ENUMERATION / UNJUSTIFIED_CARVEOUT member → the HIGH finding blocks
      COMPLETE. Fix = migrate the member (or declare an honest carve-out) and re-run.
 
+2.6. **Cross-Boundary Layer-4 E2E (MANDATORY when `cross_boundary.value == true` — run_6b709df9):**
+
+   The goal profile has NO standalone `test` stage, so TEST's Layer 4 (cross-boundary E2E,
+   `stages/test.md` § "Layer 4") is otherwise UNREACHABLE under goal — a cross_boundary goal
+   run would skip the real-seam E2E entirely (the run_889af826 miss). Close it HERE: if the
+   evaluation artifact's `cross_boundary.value == true`, this gate is MANDATORY before the
+   stage completes, with the SAME contract as test.md Layer 4 (no new mechanism):
+
+   - **Drive the REAL seam end-to-end** — fire the real event through the real listener/
+     registry; run the real reader against the real writer's output; smoke each subsystem
+     through the real shared path. Do NOT mock the thing-under-change (that is the CLASS-A
+     test-theater Layer 4 exists to prevent).
+   - **Mutation-verify non-vacuous** — revert the one contract line the change added → the
+     E2E MUST go RED. State the mutation you ran + that it went RED.
+   - **Record it in the goal_cycle changeset artifact** (goal_cycle's produced artifact),
+     same field shape as test.md:
+     ```json
+     "cross_boundary_e2e": {"run": true, "test_file": "...", "drives_real": "what real wiring it exercises", "mutation": "reverted X -> RED"}
+     ```
+   - **TEETH (code-enforced, run_6b709df9):** the completion gate (`artifact_cli.py`
+     `run-update --status completed`) scans ALL stage artifacts for a truthy
+     `cross_boundary_e2e.run` whenever `cross_boundary.value == true`, and BLOCKS completion
+     if none is found — profile-agnostically, so goal cannot silently skip it. A
+     `cross_boundary.value == false` (or absent) run is exempt (no ceremony tax).
+
 3. If adversarial finds issues → execute up to 3 more fix cycles
 4. If issues persist after 3 fix cycles → CHECKPOINT with findings
 

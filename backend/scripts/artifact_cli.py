@@ -1505,6 +1505,72 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 # is unchanged (the agent still reads it); only the exit code is fixed.
                 sys.exit(1)
 
+            # ── Cross-Boundary E2E gate (profile-agnostic; run_6b709df9) ──────────
+            # If EVALUATE classified this change as cross_boundary=true, some stage
+            # MUST have recorded a real Layer-4 E2E (cross_boundary_e2e.run truthy in
+            # its artifact) — else the seam was never driven end-to-end (the
+            # run_fdeaead8 class: every unit green, the seam silently severed).
+            #
+            # WHY the completion gate, not the per-stage validator: the goal profile
+            # has NO standalone `test` stage (goal_cycle replaces build+review+test),
+            # so a per-stage `test` schema check never fires for goal — a cross_boundary
+            # goal run would skip Layer 4 entirely (the run_889af826 miss). The
+            # completion gate is the ONE code path every profile passes through.
+            #
+            # The flag + evidence live in ARTIFACT data, not stage records:
+            # EVALUATE's `cross_boundary.value` (evaluation artifact) and the recording
+            # stage's `cross_boundary_e2e.run` (test_report for full/bugfix; the
+            # goal_cycle changeset for goal). We scan ALL completed stages' artifacts.
+            #
+            # FAIL-OPEN by construction: only an EXPLICIT cross_boundary.value is True
+            # blocks. Absent evaluation artifact / unreadable / cross_boundary missing
+            # or not-a-dict / value != True → no block (old runs + non-cross-boundary
+            # runs are never false-blocked). fail-CLOSED only on the one unambiguous
+            # true-flag-without-evidence case.
+            _stages = run_state.get("stages", [])
+            _eval_rec = next(
+                (s for s in _stages
+                 if s.get("stage", s.get("name")) == "evaluate" and s.get("artifact_id")),
+                None,
+            )
+            _eval_data = (
+                _load_artifact_for_metrics(args.project, _eval_rec["artifact_id"])
+                if _eval_rec else None
+            )
+            _cb = _eval_data.get("cross_boundary") if isinstance(_eval_data, dict) else None
+            if isinstance(_cb, dict) and _cb.get("value") is True:
+                # Scan every completed stage's artifact for a truthy cross_boundary_e2e.run.
+                _e2e_found = False
+                for _s in _stages:
+                    if _s.get("status") not in ("completed", "done"):
+                        continue
+                    _aid = _s.get("artifact_id")
+                    if not _aid:
+                        continue
+                    _adata = _load_artifact_for_metrics(args.project, _aid)
+                    if not isinstance(_adata, dict):
+                        continue
+                    _e2e = _adata.get("cross_boundary_e2e")
+                    if isinstance(_e2e, dict) and _e2e.get("run"):
+                        _e2e_found = True
+                        break
+                if not _e2e_found:
+                    print(json.dumps({
+                        "error": "Cannot mark completed: EVALUATE set cross_boundary=true "
+                                 "but NO stage recorded a Layer-4 cross_boundary_e2e (a real "
+                                 "end-to-end drive of the seam). A cross-boundary change whose "
+                                 "units all pass can still silently sever the seam "
+                                 "(run_fdeaead8). Record cross_boundary_e2e={\"run\":true,"
+                                 "\"test_file\":...,\"drives_real\":...,\"mutation\":\"reverted X "
+                                 "-> RED\"} in the TEST artifact (full/bugfix) or the goal_cycle "
+                                 "changeset artifact (goal) — see stages/test.md Layer 4. "
+                                 "(cross_boundary=false runs are exempt; this only fires on an "
+                                 "explicit true flag.)",
+                        "pipeline_id": args.run_id,
+                        "cross_boundary": _cb,
+                    }))
+                    sys.exit(1)  # D7: non-zero on completion BLOCK
+
             # ── REFLECT quality gate: lessons must be substantive ──
             # The whole point of REFLECT is DDD refresh. Empty/trivial lessons = didn't reflect.
             if "reflect" in profile_stages:
