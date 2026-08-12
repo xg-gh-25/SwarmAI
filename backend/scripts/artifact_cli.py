@@ -60,6 +60,54 @@ from core.pipeline_profiles import get_profile_stages
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from completion_gate import completion_surface_verdict
 
+
+def _git_repo_root(path: str) -> "str | None":
+    """The git top-level dir owning `path` (the file's parent for an absolute path,
+    else cwd), or None if not in a repo / git errors. Module-level so both the
+    completion-gate untrackable check AND cmd_run_commit share ONE resolution
+    (extracted from the run-commit closure, run_e0aa14f7)."""
+    import subprocess
+    p = Path(path)
+    cwd = str(p.parent if p.is_absolute() else Path.cwd())
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd, capture_output=True, text=True, timeout=10,
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _compute_untrackable_source(files_touched: "list[str] | None") -> "list[str]":
+    """Return the subset of files_touched that git CANNOT commit because they are
+    gitignored (run_e0aa14f7 — a gitignored project, e.g. CMHK per STEERING #5).
+
+    Runs ``git check-ignore`` per file in that file's OWN repo root (the two-repo
+    case: CMHK files live in the SwarmWS workspace repo, not the swarmai source
+    repo). FAIL-SAFE: if the repo root can't be resolved OR check-ignore errors
+    (rc 128 / OSError / timeout), the file is OMITTED from the result → it counts
+    as trackable → the gate still blocks it (never fail-open, C045)."""
+    import subprocess
+    out: list[str] = []
+    for f in (files_touched or []):
+        if not (isinstance(f, str) and f.strip()):
+            continue
+        root = _git_repo_root(f)
+        if not root:
+            continue  # unresolved root → treat as trackable (fail-safe)
+        try:
+            r = subprocess.run(
+                ["git", "check-ignore", "-q", "--", f],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            # rc 0 = ignored; rc 1 = not ignored; rc 128 = error (fail-safe: skip)
+            if r.returncode == 0:
+                out.append(f)
+        except (subprocess.TimeoutExpired, OSError):
+            continue  # error → treat as trackable (fail-safe)
+    return out
+
 # Fields that `publish --stage` auto-records into a stage stub (see cmd_publish)
 # and that a subsequent `run-update --stage-json` finalize must NOT lose to the
 # full-record replace. ONLY artifact_id: it is the sole publish-set field that a
@@ -1876,10 +1924,15 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # auto-commit, no Canvas). Now: source written + not committed via
             # run-commit -> BLOCK; committed + not surfaced -> BLOCK; docs-only or
             # legacy-unknown files_touched -> never false-block. See completion_gate.py.
+            # Gitignored-project source (run_e0aa14f7): git can't commit these, so
+            # they're excluded from the COMMIT check (still surface-checked). Computed
+            # here (the caller has repo + subprocess) and passed into the pure gate.
+            _untrackable = _compute_untrackable_source(run_state.get("files_touched"))
             _verdict = completion_surface_verdict(
                 files_touched=run_state.get("files_touched"),
                 commits=run_state.get("commits"),
                 deliver_surfaced=_surfaced,
+                untrackable_source=_untrackable,
             )
             if not _verdict.ok:
                 _fix = ('run-commit --project <P> --run-id ' + str(args.run_id)
