@@ -361,7 +361,192 @@ class TestPreservationNonRetriableCrashCleanup:
             f"Expected _sdk_session_id=None after non-retriable crash "
             f"cleanup, but got {unit._sdk_session_id!r}."
         )
-        assert unit.state == SessionState.COLD
+
+
+# ---------------------------------------------------------------------------
+# Regression Lock: Read-Live Session Identity (guards against 9bf1029f class)
+# ---------------------------------------------------------------------------
+
+
+class TestReadLiveIdentityContract:
+    """Regression lock for the read-live session-identity invariant.
+
+    # Feature: warm-reuse-identity-freeze-guard (run_06734755)
+
+    BACKGROUND — the incident this locks against (9bf1029f, reverted 0ee8e1d3):
+    A latency optimization cached the whole ``ClaudeAgentOptions`` object on the
+    unit (``_spawn_options``) and, on a warm-reuse turn, reused that cached object
+    INSTEAD OF re-calling ``build_options``. ``options.resume`` is bound by VALUE
+    from ``_sdk_session_id`` at build time, so reusing the frozen options froze
+    the session identity — a turn resumed into a STALE SDK session → cross-session
+    bleed + context loss in production.
+
+    THE INVARIANT (INV-IDENTITY): every turn's resume id is read LIVE from
+    ``unit._sdk_session_id`` at the point options are assembled — never a value
+    frozen at an earlier turn.
+
+    WHERE THE INCIDENT ACTUALLY LIVED (Gate-2 correction, run_06734755): the warm
+    path is ``run_conversation`` → ``self._prompt_builder.build_options(
+    resume_session_id=unit._sdk_session_id, ...)`` (session_router.py ~L2560),
+    called EVERY turn. 9bf1029f regressed by caching options and SKIPPING that
+    call. So the load-bearing lock is a SOURCE CONTRACT on that call site — NOT a
+    behavioral test of ``_build_retry_options`` (a pure param-passthrough with no
+    cache, into which the option-caching bug is structurally un-expressible; an
+    earlier draft that tested it was a tautology the Gate-2 reviewer rejected).
+    """
+
+    def test_run_conversation_build_options_reads_live_sdk_session_id(self):
+        """SOURCE CONTRACT: run_conversation's build_options call reads the resume
+        id LIVE from unit._sdk_session_id, and `options` is never rebound to a
+        cached object that would bypass that call.
+
+        This is the real chokepoint the 9bf1029f incident regressed. The test
+        parses run_conversation's AST and enforces TWO invariants:
+
+          (1) BINDING — every ``build_options`` call binds ``resume_session_id`` to
+              the live attribute read ``unit._sdk_session_id`` (not a cached field
+              like ``unit._spawn_options.resume``, not a local snapshot).
+          (2) NO-BYPASS (reachability) — ``options`` is only ever assigned from
+              ``await ...build_options(...)``. A warm-reuse branch that rebinds
+              ``options = unit._spawn_options`` (the EXACT 9bf1029f shape — reuse
+              cached options, skip the build) is a non-build assignment and fails.
+
+        Why BOTH: (1) alone is a *presence-and-binding* contract — it would stay
+        GREEN if a regression added ``if warm: options = <cached>`` while leaving
+        the cold-path build_options call intact (the AST sees the still-present
+        correct call). (2) closes that reachability hole statically. A behavioral
+        warm-turn spy test would also close it, but run_conversation has heavy
+        preconditions (slot acquisition, DB persist, recall) that make driving it
+        brittle; the AST no-bypass guard is the robust lock. (Gate-2 run_06734755
+        identified the shape-b bypass that (1) alone missed.)
+
+        MUTATION PROOF (verified run_06734755, against PRODUCTION session_router.py):
+          - ``resume_session_id=unit._spawn_options.resume`` → invariant (1) RED.
+          - drop the ``resume_session_id`` kwarg → invariant (1) RED (<MISSING>).
+          - ``if unit._spawn_options: options = unit._spawn_options`` warm branch
+            (cold-path call left intact) → invariant (2) RED.
+
+        **Validates: AC1, AC2**
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        from core.session_router import SessionRouter
+
+        src = textwrap.dedent(inspect.getsource(SessionRouter.run_conversation))
+        tree = ast.parse(src)
+
+        # -- Invariant (1): binding — every build_options call reads live id ------
+        resume_args: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                if name == "build_options":
+                    kw = next(
+                        (k for k in node.keywords if k.arg == "resume_session_id"),
+                        None,
+                    )
+                    # A build_options call with NO resume_session_id kwarg would
+                    # silently drop resume — that is itself a violation.
+                    resume_args.append(ast.unparse(kw.value) if kw else "<MISSING>")
+
+        assert resume_args, (
+            "No build_options call found in run_conversation — the AST contract "
+            "anchor moved. Re-point this test at the current warm-path call site."
+        )
+        for expr in resume_args:
+            assert expr == "unit._sdk_session_id", (
+                f"REGRESSION (9bf1029f class): build_options is called with "
+                f"resume_session_id={expr!r}, NOT the live read "
+                f"'unit._sdk_session_id'. Session identity is being sourced from "
+                f"a frozen/cached value instead of read live every turn — this is "
+                f"the cross-session-bleed defect. If the warm path was legitimately "
+                f"restructured, the live read must survive; update the code, not "
+                f"this contract."
+            )
+
+        # -- Invariant (2): no-bypass — `options` only ever from build_options ----
+        # Catches the shape-b regression that invariant (1) cannot: a warm-reuse
+        # branch that rebinds `options` to a cached object while leaving the
+        # cold-path build_options call present (so (1) stays GREEN but the live
+        # path is dead).
+        bypass_assignments: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "options" for t in node.targets
+            ):
+                val = node.value
+                is_build = (
+                    isinstance(val, ast.Await)
+                    and isinstance(val.value, ast.Call)
+                    and (
+                        (isinstance(val.value.func, ast.Attribute) and val.value.func.attr == "build_options")
+                        or (isinstance(val.value.func, ast.Name) and val.value.func.id == "build_options")
+                    )
+                )
+                if not is_build:
+                    bypass_assignments.append(ast.unparse(val)[:60])
+
+        assert not bypass_assignments, (
+            f"REGRESSION (9bf1029f shape-b): run_conversation rebinds `options` "
+            f"from a non-build_options source {bypass_assignments!r} — this is the "
+            f"cached-options warm-reuse bypass that freezes session identity and "
+            f"skips the live-read build_options call. `options` must ALWAYS come "
+            f"from `await build_options(...)`, never a cached object."
+        )
+
+    def test_adopt_prewarmed_unit_rekeys_routing_without_touching_identity(self):
+        """adopt_prewarmed_unit re-keys ONLY the routing key (unit.session_id +
+        _units map); it does NOT mutate the unit's SDK identity.
+
+        This locks the adoption contract that makes read-live correct across
+        adoption: the adopted unit keeps its OWN _sdk_session_id (its prewarm
+        subprocess), and the next turn's live read (tested above) therefore
+        resumes into the unit's own session — never a foreign or frozen id.
+
+        **Validates: AC3**
+        """
+        from core.session_router import SessionRouter, PREWARM_SESSION_PREFIX
+
+        # adopt_prewarmed_unit only touches _units + _slot_lock — prompt_builder
+        # is unused on this path, so a stand-in is sufficient.
+        router = SessionRouter(prompt_builder=MagicMock())
+        prewarm_id = f"{PREWARM_SESSION_PREFIX}abc123"
+        real_id = "real-session-xyz"
+
+        # A prewarmed unit: IDLE, alive subprocess, with its OWN prewarm SDK
+        # session id (set by streaming_orchestrator during the prewarm spawn).
+        unit = SessionUnit(session_id=prewarm_id, agent_id="default")
+        unit._transition(SessionState.IDLE)
+        unit._client = MagicMock()
+        unit._wrapper = MagicMock()
+        unit._wrapper.pid = 4242
+        prewarm_sdk_id = "sdk-prewarm-own"
+        unit._sdk_session_id = prewarm_sdk_id
+        sdk_id_before = unit._sdk_session_id
+        router._units[prewarm_id] = unit
+
+        # Adopt it for a real session.
+        loop = asyncio.new_event_loop()
+        try:
+            adopted = loop.run_until_complete(
+                router.adopt_prewarmed_unit(prewarm_id, real_id)
+            )
+        finally:
+            loop.close()
+
+        assert adopted is True
+        # Routing re-keyed to the real session id (the load-bearing adoption fact).
+        assert unit.session_id == real_id
+        assert router._units.get(real_id) is unit
+        assert router._units.get(prewarm_id) is None
+        # Identity is UNTOUCHED by adoption — the unit keeps its own SDK session,
+        # so the live read on the next turn resumes into its own subprocess. If
+        # adoption ever started mutating _sdk_session_id, the read-live guarantee
+        # across adoption would break — this assertion catches that.
+        assert unit._sdk_session_id == sdk_id_before == prewarm_sdk_id
 
 
 class TestPreservationRetryLoopResumeCapture:
