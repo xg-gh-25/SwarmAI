@@ -1967,21 +1967,23 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                         f"CHECKPOINT reason=gate_spawn_blocked instead."
                     )
 
-            # D1 (run_57929039) — DEFERRED. Intent: give the completion-time
-            # adversarial gate real TEETH (require a genuine Agent-tool `_adv_` marker,
-            # not just the hand-set spawned/evidence fields). BLOCKED by an
-            # infrastructure gap two independent gates surfaced:
-            #   • the SubagentStop hook only has `sdk_session_id`, NOT the pipeline
-            #     run_id (`_active_pipeline_run_id` is referenced in runtime_hooks.py
-            #     but never SET anywhere), so a run-id-scoped marker check false-blocks
-            #     EVERY real full/bugfix completion (Gate-2, run_57929039);
-            #   • a ts>run_start session-window scope (Check 9b's fallback) lets a
-            #     CONCURRENT sibling run's marker satisfy this run's gate (Gate-1).
-            # Safe teeth require first plumbing the run_id into the hook's
-            # session_context (or session_id into run.json) — an infrastructure
-            # sub-run, tracked as a follow-up. Until then the COMMIT gate's
-            # session-scoped `_session_has_adversarial_evidence` (security_hooks.py)
-            # remains the real teeth at commit time, and Check 9b stays WARN-level.
+            # D1 (run_57929039 deferred → run_1ce2ca39 REJECTED). Do NOT re-open:
+            # the completion-time honor-system `spawned`/`evidence` fields here are
+            # BY DESIGN, not a hole — the real adversarial teeth live at the COMMIT
+            # layer and are STRONGER than the run-scoped completion check D1 proposed.
+            # The live commit gate `create_adversarial_commit_gate` (security_hooks.py,
+            # wired PreToolUse Bash in hook_builder.py) → `_session_adversarial_coverage`
+            # DENYs `git commit` unless an adversarial `_adv_` marker's reviewed_paths
+            # COVERS every path being committed (DIFF-BOUND, not merely run-scoped). So
+            # un-reviewed code cannot be committed regardless of what this stage's
+            # adversarial_review fields say. Adding run-scoped teeth HERE would be
+            # redundant AND reintroduce a false-block hazard: the SubagentStop hook has
+            # only `sdk_session_id` (`_active_pipeline_run_id` is read but SET nowhere —
+            # dead), and run.json records no session_id, so a run-id-scoped marker check
+            # would false-block EVERY real full/bugfix completion (Gate-2, run_57929039),
+            # while a ts>run_start session-window fallback (Check 9b) lets a CONCURRENT
+            # sibling run's marker satisfy this run (Gate-1). Check 9b stays WARN-level
+            # for the same reason. Net: commit-gate = teeth; this field = audit record.
 
         # completion_audit: MUST exist for full/bugfix profiles
         ca = artifact_data.get("completion_audit")

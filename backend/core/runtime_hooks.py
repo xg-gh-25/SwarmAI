@@ -842,10 +842,12 @@ def create_agent_tool_audit_hook(
        evidence. The validator (Check 9b) accepts either form.
     3. CONDITIONAL: if THIS sub-agent's intent is adversarial-review (classified
        via _is_adversarial_intent on agent_type + the transcript-head spawn
-       prompt), ALSO writes ``session_<session_id>_adv_<ts>.marker``. This is the
-       evidence security_hooks.create_adversarial_commit_gate requires — an
-       investigation/Explore sub-agent writes markers 1–2 but NOT this one, so it
-       cannot satisfy the commit gate.
+       prompt), ALSO writes ``session_<session_id>_adv_<ts>.marker`` carrying a
+       ``reviewed_paths`` key. This is the evidence security_hooks.
+       create_adversarial_commit_gate requires — via _session_adversarial_coverage,
+       which DIFF-BINDS the commit: the committed path-set must be covered by the
+       union of these markers' reviewed_paths. An investigation/Explore sub-agent
+       writes markers 1–2 but NOT this one, so it cannot satisfy the commit gate.
     """
     ctx = session_context if session_context is not None else {}
 
@@ -905,11 +907,12 @@ def create_agent_tool_audit_hook(
                     "run_id": run_id or "unknown",
                 }))
 
-                # DISTINCT adversarial marker — the commit gate's tightened evidence
-                # (_session_has_adversarial_evidence). Written ONLY on adversarial
-                # completion + only when we have a session to scope it to. The `_adv_`
-                # infix is what the gate matches; a base marker (ts is numeric) can
-                # never contain it, so the two are unambiguous.
+                # DISTINCT adversarial marker — consumed by the live commit gate
+                # `_session_adversarial_coverage` (security_hooks.py), which matches the
+                # `_adv_` infix AND reads `reviewed_paths` below to diff-bind coverage.
+                # Written ONLY on adversarial completion + only when we have a session to
+                # scope it to. The `_adv_` infix is what the gate matches; a base marker
+                # (ts is numeric) can never contain it, so the two are unambiguous.
                 if adversarial and session_id:
                     payload = {
                         "ts": ts,
