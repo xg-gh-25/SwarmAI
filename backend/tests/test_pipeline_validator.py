@@ -3325,6 +3325,52 @@ class TestGoalCycleGoverned:
             f"A valid list ac_coverage was wrongly rejected as non-dict: {errs}"
 
 
+class TestAcVerificationAtCompletion:
+    """D9 (run_57929039): ac_verification.status is enforced at PUBLISH (STAGE_DEPTH in
+    validate_artifact_data) but the COMPLETION gate runs _check_depth (not
+    validate_artifact_data) and the completion backstop skips the deliver stage — so
+    ac_verification could be patched away after publish and still pass completion. This
+    pins the completion-time enforcement in _check_depth."""
+
+    def _deliver(self, with_ac=True, ac_value=None):
+        d = {
+            "title": "x",
+            "quality": {"push_ready": True, "tests_pass": True, "regressions": 0},
+            "adversarial_review": {"profile_tier": "full", "spawned": True,
+                                   "evidence": "Agent tool", "findings": []},
+            "completion_audit": {"all_green": True},
+        }
+        if with_ac:
+            d["ac_verification"] = ac_value if ac_value is not None else {"status": "verified"}
+        return d
+
+    def test_completion_blocks_missing_ac_verification(self):
+        """MUTATION: a full deliver artifact WITHOUT ac_verification must BLOCK at
+        completion (_check_depth), even though publish is a separate gate."""
+        from scripts.pipeline_validator import _check_depth
+        errs = _check_depth("deliver", self._deliver(with_ac=False), "full", run_id="run_x")
+        assert any("ac_verification" in e for e in errs), \
+            f"missing ac_verification must block at completion, got: {errs}"
+
+    def test_completion_blocks_empty_status(self):
+        from scripts.pipeline_validator import _check_depth
+        errs = _check_depth("deliver", self._deliver(ac_value={"status": ""}), "full", run_id="run_x")
+        assert any("ac_verification" in e and "status" in e for e in errs), \
+            f"empty ac_verification.status must block, got: {errs}"
+
+    def test_completion_passes_with_verified_status(self):
+        from scripts.pipeline_validator import _check_depth
+        errs = _check_depth("deliver", self._deliver(), "full", run_id="run_x")
+        assert not any("ac_verification" in e for e in errs), \
+            f"a verified ac_verification must pass, got: {[e for e in errs if 'ac_verification' in e]}"
+
+    def test_completion_non_dict_ac_verification_rejected(self):
+        from scripts.pipeline_validator import _check_depth
+        errs = _check_depth("deliver", self._deliver(ac_value=True), "full", run_id="run_x")
+        assert any("ac_verification" in e and "dict" in e for e in errs), \
+            f"a boolean ac_verification must be rejected, got: {errs}"
+
+
 # ---------------------------------------------------------------------------
 # FAILED-vs-ERRORED distinction (run_55710438)
 # A check that CRASHES (raises) must be distinguishable from a check whose
@@ -3570,7 +3616,9 @@ class TestRemainingChecksErrored:
                         "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
                                                "evidence": "Agent tool: correctness + security specialists",
                                                "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []},
-                        "completion_audit": {"all_green": True}, "convergence": {"final_status": "push-ready"},
+                        "completion_audit": {"all_green": True},
+                        "ac_verification": {"status": "verified"},  # D9: now enforced at completion
+                        "convergence": {"final_status": "push-ready"},
                         "push_ready": True})
         import scripts.pipeline_validator as pv
         monkeypatch.setattr(pv, "_check_semantic_depth",
@@ -3614,7 +3662,9 @@ class TestNinebCreditOnCrash:
                         "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
                                                "evidence": "Agent tool: correctness + security specialists",
                                                "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []},
-                        "completion_audit": {"all_green": True}, "convergence": {"final_status": "push-ready"},
+                        "completion_audit": {"all_green": True},
+                        "ac_verification": {"status": "verified"},  # D9: now enforced at completion
+                        "convergence": {"final_status": "push-ready"},
                         "push_ready": True})
         # Force the 9b marker scan to raise mid-block (after checks_total += 1)
         import scripts.pipeline_validator as pv

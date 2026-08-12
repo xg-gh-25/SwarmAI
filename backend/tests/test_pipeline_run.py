@@ -955,3 +955,55 @@ class TestRunResume:
         state = _run_cli(workspace, "run-get",
                          "--project", "TestProject", "--run-id", paused_run)
         assert state["checkpoint"]["resumed_at"] is not None
+
+
+class TestLoadCompletedRunsAnalyticsStatus:
+    """D8 (run_57929039): _load_completed_runs (calibration/history/analytics source)
+    filtered raw status=='completed' only, so a run that DELIVERED (completed
+    reflect/deliver stage) but was later stamped 'abandoned'/'paused' (superseded /
+    crash-after-the-fact) was EXCLUDED from budget calibration — exactly the
+    delivered-but-mislabeled runs _effective_analytics_status exists to recover. Now
+    it buckets via _effective_analytics_status."""
+
+    def _write_run(self, workspace, run_id, status, stages):
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "id": run_id, "project": "TestProject", "status": status, "stages": stages,
+        }))
+
+    def _delivered_stages(self):
+        return [{"stage": "build", "status": "completed", "token_cost": 40000},
+                {"stage": "reflect", "status": "completed", "token_cost": 3000}]
+
+    def _load(self, workspace):
+        import sys as _s
+        from pathlib import Path as _P
+        _d = str(_P(__file__).resolve().parent.parent / "scripts")
+        if _d not in _s.path:
+            _s.path.insert(0, _d)
+        import scripts.artifact_cli as cli
+        from unittest.mock import patch
+        with patch.object(cli, "_get_workspace", return_value=workspace):
+            return cli._load_completed_runs("TestProject", limit=50)
+
+    def test_delivered_but_abandoned_run_included(self, workspace):
+        """A run stamped 'abandoned' but with a completed reflect stage IS counted."""
+        self._write_run(workspace, "run_deliv_aband", "abandoned", self._delivered_stages())
+        ids = [r["id"] for r in self._load(workspace)]
+        assert "run_deliv_aband" in ids, \
+            f"delivered-but-abandoned run must be included for calibration: {ids}"
+
+    def test_plain_completed_still_included(self, workspace):
+        self._write_run(workspace, "run_plain", "completed", self._delivered_stages())
+        ids = [r["id"] for r in self._load(workspace)]
+        assert "run_plain" in ids
+
+    def test_genuinely_abandoned_empty_shell_excluded(self, workspace):
+        """A truly-abandoned run with NO delivery marker stays excluded (not a
+        completed run — must not pollute calibration)."""
+        self._write_run(workspace, "run_empty", "abandoned",
+                        [{"stage": "evaluate", "status": "completed", "token_cost": 5000}])
+        ids = [r["id"] for r in self._load(workspace)]
+        assert "run_empty" not in ids, \
+            f"a non-delivered abandoned run must NOT be counted as completed: {ids}"

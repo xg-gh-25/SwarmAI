@@ -624,11 +624,12 @@ async def ensure_report_for_run(run_id: object) -> bool:
 # The structural fix: the orchestrator OBSERVES the `run-update --status completed`
 # Bash command and auto-fires build_surface_events. This pure function is the cheap
 # PRE-FILTER — it recognizes such a command and extracts its run_id. It is NOT the
-# authority: a BLOCKED completion still `return`s exit 0 from the CLI (artifact_cli
-# gate prints an error and returns, it does NOT sys.exit non-zero), so the command
-# string alone does not prove the run completed. The orchestrator confirms authority
-# by reading run.json status == "completed" before emitting. This parser only decides
-# "is this a completion-attempt worth checking?" — keeping the hot-path regex cheap.
+# authority: the command string is a completion-ATTEMPT, not proof of success — a
+# blocked completion is rejected by the CLI gate (as of D7/run_57929039 it prints the
+# error AND exits non-zero; before D7 it printed and returned exit 0). Either way the
+# command string alone does not prove the run completed. The orchestrator confirms
+# authority by reading run.json status == "completed" before emitting. This parser only
+# decides "is this a completion-attempt worth checking?" — keeping the hot-path regex cheap.
 
 
 def parse_completion_run_id(command: object) -> Optional[str]:
@@ -640,7 +641,8 @@ def parse_completion_run_id(command: object) -> Optional[str]:
     hand-typed variant) — and is flag-order independent. Requires the command to be a
     ``run-update`` subcommand carrying BOTH ``--status completed`` and a ``--run-id``.
 
-    This is a PRE-FILTER, not proof of completion (a blocked completion still exits 0).
+    This is a PRE-FILTER, not proof of completion (a blocked completion is rejected by
+    the CLI gate — post-D7 with a non-zero exit; the command string is an ATTEMPT).
     The orchestrator re-confirms against run.json status before surfacing.
     """
     if not isinstance(command, str) or not command:
@@ -667,9 +669,9 @@ def read_run_status(run_id: object) -> Optional[str]:
     """Return run.json ``status`` for ``run_id`` (the AUTHORITY for "did it actually
     complete?"), or None if the run can't be found / read. Pure, never raises.
 
-    The completion CLI prints an error and ``return``s (exit 0) when a gate BLOCKS —
-    so the ``run-update --status completed`` command string is NOT proof the run
-    completed. The orchestrator reads THIS after the completion command's successful
+    The completion CLI prints an error when a gate BLOCKS (and, as of D7/run_57929039,
+    exits non-zero) — so the ``run-update --status completed`` command string is NOT
+    proof the run completed. The orchestrator reads THIS after the completion command's successful
     tool_result and only surfaces when status == "completed". This is a single
     off-loop stat+read (the orchestrator wraps it in asyncio.to_thread).
     """

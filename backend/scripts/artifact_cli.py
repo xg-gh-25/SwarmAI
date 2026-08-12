@@ -1300,7 +1300,14 @@ def _load_completed_runs(project: str, limit: int = 10) -> list[dict]:
             if run_file.exists():
                 try:
                     state = json.loads(run_file.read_text(encoding="utf-8"))
-                    if state.get("status") == "completed" and state.get("stages"):
+                    # D8 (run_57929039): bucket via _effective_analytics_status, NOT the
+                    # raw status string. A run that DELIVERED (completed reflect/deliver
+                    # stage) but was later stamped 'abandoned'/'paused' (superseded /
+                    # crash-after-the-fact) is a real completed run for CALIBRATION —
+                    # excluding it (the old raw `== "completed"` check) undercounts
+                    # history/analytics/budget calibration and drops exactly the
+                    # delivered-but-mislabeled runs the normalizer exists to recover.
+                    if _effective_analytics_status(state) == "completed" and state.get("stages"):
                         runs.append(state)
                         if len(runs) >= limit:
                             return runs
@@ -1315,7 +1322,8 @@ def _load_completed_runs(project: str, limit: int = 10) -> list[dict]:
                 state = json.loads(f.read_text(encoding="utf-8"))
                 if state["id"] in seen_ids:
                     continue
-                if state.get("status") == "completed" and state.get("stages"):
+                # D8: same analytics-status normalization on the legacy path.
+                if _effective_analytics_status(state) == "completed" and state.get("stages"):
                     runs.append(state)
                     if len(runs) >= limit:
                         return runs
@@ -1490,7 +1498,12 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     "profile": profile,
                     "missing_stages": missing_stages,
                 }))
-                return
+                # D7 (run_57929039): exit NON-ZERO on a completion BLOCK. Sibling gates
+                # (stage_doc, profile-downgrade) already sys.exit(1); a bare `return`
+                # exits 0, so a shell caller (`run-update … && next`) or any exit-code-
+                # keyed orchestrator reads a BLOCK as SUCCESS. The JSON error on stdout
+                # is unchanged (the agent still reads it); only the exit code is fixed.
+                sys.exit(1)
 
             # ── REFLECT quality gate: lessons must be substantive ──
             # The whole point of REFLECT is DDD refresh. Empty/trivial lessons = didn't reflect.
@@ -1516,7 +1529,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                             "pipeline_id": args.run_id,
                             "lessons_found": lessons,
                         }))
-                        return
+                        sys.exit(1)  # D7: non-zero on completion BLOCK
 
             # ── REPORT.md gate: checked later (line ~1078) after validator runs.
             # Removed duplicate early check — single canonical gate is post-validator.
@@ -1588,7 +1601,17 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                             "completion_audit": _audit if _audit else {},
                             "ac_verification": _ac if _ac else {},
                             "confidence_score": deliver_stage_rec.get("confidence_score", 0),
-                            "push_ready": deliver_stage_rec.get("push_ready", True),
+                            # D5 (run_57929039) — default hardened TRUE→FALSE (safe-closed).
+                            # HONEST SCOPE (adversarial-corrected): this top-level artifact
+                            # `push_ready` key is NOT currently read by any backend consumer —
+                            # run-commit reads the deliver STAGE RECORD's push_ready (:2297) and
+                            # the validator's push-ready gate reads `quality.push_ready`; neither
+                            # reads THIS key. So the original audit's "3-way desync" does not
+                            # apply here (this representation is unconsumed). The default is
+                            # still flipped to False purely as safe-closed hygiene: IF a future
+                            # consumer ever reads it, an UNDECLARED push_ready should mean
+                            # "not ready", never a fail-open True. No behavior changes today.
+                            "push_ready": deliver_stage_rec.get("push_ready", False),
                             "auto_aggregated": True,
                         }
                         # Add profile_tier for validator
@@ -1809,7 +1832,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         "pipeline_id": args.run_id,
                         "validator_errors": validator_errors,
                     }))
-                    return
+                    sys.exit(1)  # D7: non-zero on completion BLOCK
             except Exception as exc:
                 # FAIL-CLOSED on validator-gate crash (run_84316b42, reverses
                 # run_55710438 MED-8). This wraps the validator IMPORT + the gate
@@ -1826,7 +1849,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     "pipeline_id": args.run_id,
                     "validator_error": f"{type(exc).__name__}: {exc}",
                 }))
-                return
+                sys.exit(1)  # D7: non-zero on completion BLOCK
 
             # ── GOAL PROFILE: Adversarial Review Gate (BLOCKING) ──
             # Goal profile has no DELIVER stage, so the artifact_id gate above
@@ -1852,7 +1875,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                                '"status":"completed","adversarial_review":true,'
                                '"stage_doc_consumed":true}\'',
                     }))
-                    return
+                    sys.exit(1)  # D7: non-zero on completion BLOCK
 
             # ── REPORT.md Gate (BLOCKING) ──
             # Every completed pipeline MUST have a REPORT.md that documents
@@ -1869,7 +1892,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     "pipeline_id": args.run_id,
                     "expected_path": str(report_path),
                 }))
-                return
+                sys.exit(1)  # D7: non-zero on completion BLOCK
             report_size = report_path.stat().st_size
             if report_size < 500:
                 print(json.dumps({
@@ -1881,7 +1904,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     "report_path": str(report_path),
                     "report_size_bytes": report_size,
                 }))
-                return
+                sys.exit(1)  # D7: non-zero on completion BLOCK
 
             # ── Outputs-Surface Gate (run_608a6217 → run_b8ea6d5c, BLOCKING) ──
             # If this run COMMITTED source (run.json.commits) AND those committed
@@ -1956,7 +1979,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     "fix": _fix,
                     "committed_source_files": _verdict.committed_source_files,
                 }))
-                return
+                sys.exit(1)  # D7: non-zero on completion BLOCK
 
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion

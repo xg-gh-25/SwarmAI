@@ -2013,6 +2013,33 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                     f"cannot be fixed (Rule 17: no premature completion)"
                 )
 
+        # ac_verification: MUST exist with a status for full/bugfix (D9, run_57929039).
+        # STAGE_DEPTH["deliver"] requires ac_verification.status at PUBLISH time
+        # (validate_artifact_data), but the COMPLETION gate runs _check_depth (this
+        # function), NOT validate_artifact_data, and the completion backstop loop skips
+        # the deliver stage — so ac_verification could be PATCHED AWAY after publish and
+        # still pass `run-update --status completed`. Mirror the completion_audit check
+        # here so the field is enforced on EVERY path to status:completed (R27: one
+        # invariant, both gates — no publish-only enforcement hole).
+        av = artifact_data.get("ac_verification")
+        if av is None and profile in ("full", "bugfix", ""):
+            errors.append(
+                "Depth: ac_verification field MISSING from deliver artifact — "
+                "the AC verification step (each acceptance criterion → evidence) was "
+                "not recorded. This is MANDATORY for full/bugfix. Run it before completing."
+            )
+        elif isinstance(av, dict):
+            if not str(av.get("status", "")).strip():
+                errors.append(
+                    "Depth: ac_verification.status missing or empty — record the "
+                    "verification outcome (e.g. 'verified') before delivery."
+                )
+        elif av is not None:
+            errors.append(
+                f"Depth: ac_verification must be a dict carrying 'status', "
+                f"got {type(av).__name__}."
+            )
+
         # confidence_score: must be dict from script, not hand-written number
         cs = artifact_data.get("confidence_score")
         if isinstance(cs, (int, float)):

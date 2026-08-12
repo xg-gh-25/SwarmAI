@@ -967,7 +967,11 @@ class TestAdvanceDriftGuard:
         # bugfix profile = strict for the Understanding gate; gateless evaluate data.
         args = self._c2_run(workspace, reg, "run_c2block", "bugfix",
                             {"recommendation": "GO", "scope": "standard"}, monkeypatch)  # no understanding block
-        cli.cmd_run_update(args, reg)
+        # D7 (run_57929039): a completion BLOCK now exits non-zero (sys.exit(1)) in
+        # addition to printing the JSON error — so a shell/exit-code caller sees the
+        # block. The error JSON is still on stdout.
+        with pytest.raises(SystemExit):
+            cli.cmd_run_update(args, reg)
         out = capsys.readouterr().out
         assert "Cannot mark completed" in out and "valuate" in out, \
             f"gateless strict evaluate must BLOCK completion: {out}"
@@ -1076,7 +1080,9 @@ class TestCompletionFailsClosedOnValidatorCrash:
             return mod
         monkeypatch.setattr(_ilu, "module_from_spec", boom_module)
 
-        cli.cmd_run_update(self._args(), reg)
+        # D7: a completion BLOCK now exits non-zero as well as printing the error.
+        with pytest.raises(SystemExit):
+            cli.cmd_run_update(self._args(), reg)
         out = capsys.readouterr()
         data = _read_run(rf)
         # MUST NOT be completed — the gate failed closed
@@ -1139,7 +1145,8 @@ class TestCompletionFailsClosedOnValidatorCrash:
             return mod
         monkeypatch.setattr(_ilu, "module_from_spec", err_module)
 
-        cli.cmd_run_update(self._args(), reg)
+        with pytest.raises(SystemExit):  # D7: completion BLOCK exits non-zero
+            cli.cmd_run_update(self._args(), reg)
         data = _read_run(rf)
         assert data["status"] != "completed", \
             f"validator content errors must block, got {data['status']}"
@@ -1162,7 +1169,8 @@ class TestCompletionFailsClosedOnValidatorCrash:
             return mod
         monkeypatch.setattr(_ilu, "module_from_spec", fail_load)
 
-        cli.cmd_run_update(self._args(), reg)
+        with pytest.raises(SystemExit):  # D7: completion BLOCK exits non-zero
+            cli.cmd_run_update(self._args(), reg)
         out = capsys.readouterr()
         data = _read_run(rf)
         assert data["status"] != "completed", \
@@ -1193,7 +1201,8 @@ class TestCompletionFailsClosedOnValidatorCrash:
             return mod
         monkeypatch.setattr(_ilu, "module_from_spec", io_module)
 
-        cli.cmd_run_update(self._args(), reg)
+        with pytest.raises(SystemExit):  # D7: completion BLOCK exits non-zero
+            cli.cmd_run_update(self._args(), reg)
         out = capsys.readouterr()
         data = _read_run(rf)
         assert data["status"] != "completed", "transient I/O must still block (fail-closed)"
@@ -1231,7 +1240,8 @@ class TestCompletionFailsClosedOnValidatorCrash:
             return mod
         monkeypatch.setattr(_ilu, "module_from_spec", err_module)
 
-        cli.cmd_run_update(self._args(), reg)
+        with pytest.raises(SystemExit):  # D7: completion BLOCK exits non-zero
+            cli.cmd_run_update(self._args(), reg)
         out = capsys.readouterr()
         data = _read_run(rf)
         # MUST NOT complete — a corrupt deliver artifact is a real verification failure.
@@ -1337,7 +1347,8 @@ class TestCompletionFailsClosedOnValidatorCrash:
             return mod
         monkeypatch.setattr(_ilu, "module_from_spec", err_module)
 
-        cli.cmd_run_update(self._args(), reg)
+        with pytest.raises(SystemExit):  # D7: completion BLOCK exits non-zero
+            cli.cmd_run_update(self._args(), reg)
         out = capsys.readouterr()
         data = _read_run(rf)
         assert data["status"] != "completed", \
