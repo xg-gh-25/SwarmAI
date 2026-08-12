@@ -352,6 +352,54 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
                 if base_ref:
                     ev["baseRef"] = base_ref
                 events.append(ev)
+
+        # ── D2 (run_57929039): gitignored-project fallback ────────────────────
+        # A run in a GITIGNORED project (STEERING #5 — only Projects/SwarmAI/ is
+        # git-trackable) has an EMPTY commits[] because `git add` refuses its files,
+        # so the loop above emitted ZERO source rows. The run STILL wrote real source
+        # (recorded in files_touched, the BUILD ground truth). Without this fallback
+        # the Canvas OUTPUTS rail gets nothing to review, and the completion gate's
+        # surface requirement (completion_gate.completion_surface_verdict) is vacuous
+        # — a blind outputs_surfaced=true with no rows. Emit source rows from
+        # files_touched when — and ONLY when — commits[] produced nothing (a trackable
+        # project's committed rows WIN; the fallback never double-emits). Gitignored
+        # files have no committed sha, so NO baseRef → the row renders working-tree
+        # CONTENT, not a diff (same as REPORT.md, exactly right for uncommitted source).
+        if not events:
+            for f in data.get("files_touched", []) or []:
+                if not isinstance(f, str) or not f or f in seen:
+                    continue
+                # ⚠️ WORKSPACE-CONTAINMENT (Gate-2 MEDIUM, run_57929039): files_touched
+                # is NOT "source the run authored" — it is READ ∪ WRITE ∪ Bash-targets
+                # (runtime_hooks._TRACKED_TOOLS includes "Read"), recorded as ABSOLUTE
+                # paths with no scoping. Surfacing it blindly + auto-fetching into the
+                # Canvas would leak ANY file the agent merely READ, incl. secrets under
+                # $HOME (~/.aws/credentials, ~/.ssh/…). Unlike the commit path (git-
+                # verified, repo-scoped), this input is agent-recorded and unverified.
+                # So surface ONLY files that resolve UNDER the workspace; anything
+                # outside ws is dropped (never surfaced, never fetched). This also
+                # yields the recognizable ws-relative display for free — no absolute
+                # path ever leaks into the row (F3).
+                try:
+                    _resolved = Path(f).resolve()
+                    display = str(_resolved.relative_to(ws))
+                except (ValueError, OSError):
+                    continue  # outside workspace (or unresolvable) → do NOT surface
+                # Skip a since-deleted / non-file path — it would emit a dead row that
+                # 404s on fetch. is_file() also follows symlinks, so a dangling symlink
+                # is dropped too (defense-in-depth on top of the containment check).
+                if not _resolved.is_file():
+                    continue
+                seen.add(f)
+                events.append({
+                    "type": "file_changed",
+                    "path": display,
+                    "absolutePath": f,
+                    "operation": "written",
+                    "relevance": "deliverable",
+                    "kind": "source-final",
+                    # NO baseRef — a gitignored file has no committed parent to diff.
+                })
         # ── Append the run's REPORT.md LAST (run_14e560ed) ────────────────────
         # The pipeline REPORT.md is written by the run-report CLI subprocess, so
         # the SDK never sees a Write tool for it (the live _build_file_write_events
@@ -382,18 +430,18 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
             })
         elif events:
             # LOUD-on-degradation (run_14e560ed + run_f1fbf37d): we emitted source rows
-            # (this IS a committed pipeline run) but REPORT.md is absent. Since the
-            # ordering is now consumer-enforced (ensure_report_for_run awaited before
-            # this on the live path), a fired WARN no longer means "caller surfaced too
-            # early" — it means report GENERATION FAILED (run-report errored, produced a
-            # <500-byte stub, or the report was hand-written and skipped), OR this is a
-            # standalone call that skipped the ensure pre-step. Fail-safe still holds
-            # (source rows auto-open); the report row is lost — make that observable.
+            # but REPORT.md is absent. Fail-safe still holds (source rows auto-open); the
+            # report row is lost — make that observable. D2 (run_57929039): the source
+            # rows may come from commits[] (trackable run) OR from the files_touched
+            # fallback (gitignored run) — distinguish so the log line is not misleading
+            # ("committed" would be false for a gitignored run whose commits[] is empty).
+            _committed = bool(data.get("commits"))
+            _kind = "committed pipeline run" if _committed else "gitignored run (files_touched fallback)"
             logger.warning(
-                "build_surface_events: run %r emitted %d source row(s) but REPORT.md "
+                "build_surface_events: %s %r emitted %d source row(s) but REPORT.md "
                 "is absent at %s — report generation did not produce a healthy report "
                 "(check ensure_report_for_run / run-report), so the report row was skipped",
-                run_id, len(events), report_path,
+                _kind, run_id, len(events), report_path,
             )
         return events
     except Exception as e:  # noqa: BLE001 — hot-path fail-safe

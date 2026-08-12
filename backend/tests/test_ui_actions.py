@@ -495,6 +495,97 @@ class TestReportSurfaceCrossBoundaryContract:
         ), "no source rows → no ordering hazard → must NOT warn"
 
 
+class TestGitignoredSurfaceFromFilesTouched:
+    """D2 (run_57929039): a run in a GITIGNORED project (STEERING #5 — only
+    Projects/SwarmAI/ is git-trackable) has an EMPTY commits[] (git can't commit its
+    files), so build_surface_events emitted ZERO source rows — only REPORT.md. The
+    completion gate's surface requirement was then vacuous (a blind outputs_surfaced
+    flag with nothing on the Canvas to review). Fix: when commits[] produces no source
+    rows AND files_touched is non-empty, emit source rows from files_touched (working-
+    tree render, NO baseRef — a gitignored file has no committed sha to diff against)."""
+
+    def _run(self, tmp_path, run_id, run_data):
+        import json
+        from pathlib import Path
+        run_dir = tmp_path / "Projects" / "CMHK_SalesIntel" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps(run_data))
+        # Materialize each str files_touched path on disk — build_surface_events now
+        # drops non-existent paths (is_file guard), so a test path must actually exist
+        # to be surfaced. (The out-of-ws secret is created too, to prove containment —
+        # not is_file-absence — is what drops it.)
+        for f in run_data.get("files_touched", []) or []:
+            if isinstance(f, str) and f:
+                p = Path(f)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("x")
+        return run_dir
+
+    def test_empty_commits_with_files_touched_emits_source_rows(self, tmp_path):
+        from core.ui_actions import build_surface_events
+        # A real gitignored source file UNDER the workspace (absolute, as BUILD records).
+        f = str(tmp_path / "Projects" / "CMHK_SalesIntel" / "assets" / "data-source"
+                / "scripts" / "queries.py")
+        self._run(tmp_path, "run_gi", {"commits": [], "files_touched": [f]})
+        events = build_surface_events("run_gi", workspace_root=str(tmp_path))
+        src = [e for e in events if e.get("kind") == "source-final"]
+        assert src, f"gitignored run (empty commits, files_touched present) must emit source rows, got {events}"
+        assert any(e.get("absolutePath") == f for e in src), \
+            f"the files_touched path must appear as a source row: {src}"
+        # Display is workspace-relative (no absolute path leaks into the row).
+        assert all(not str(e["path"]).startswith("/") for e in src), \
+            f"row path must be ws-relative, not absolute: {src}"
+        # Gitignored files have no committed sha → NO baseRef (renders content, not a diff).
+        assert all("baseRef" not in e for e in src), \
+            "gitignored source rows must not carry a baseRef (no committed parent)"
+
+    def test_files_touched_OUTSIDE_workspace_NOT_surfaced(self, tmp_path):
+        """Gate-2 MEDIUM (run_57929039): files_touched is READ∪WRITE (Read is tracked),
+        absolute + unscoped. A file the agent merely READ outside the workspace (e.g. a
+        secret under $HOME) must NOT be surfaced/auto-fetched into the Canvas. Only
+        files resolving UNDER ws are emitted."""
+        from core.ui_actions import build_surface_events
+        secret = str(tmp_path.parent / "not_in_ws" / "credentials")  # outside ws
+        inside = str(tmp_path / "Projects" / "P" / "src" / "real.py")
+        self._run(tmp_path, "run_leak", {"commits": [], "files_touched": [secret, inside]})
+        events = build_surface_events("run_leak", workspace_root=str(tmp_path))
+        paths = [e.get("absolutePath") for e in events if e.get("kind") == "source-final"]
+        assert secret not in paths, f"an out-of-workspace file was surfaced (infoleak): {paths}"
+        assert inside in paths, f"the in-workspace file must still surface: {paths}"
+
+    def test_files_touched_non_str_entries_skipped(self, tmp_path):
+        """The isinstance(f, str) guard is load-bearing — a malformed files_touched
+        with non-str entries must not crash or emit garbage rows."""
+        from core.ui_actions import build_surface_events
+        good = str(tmp_path / "Projects" / "P" / "a.py")
+        self._run(tmp_path, "run_junk", {"commits": [], "files_touched": [123, None, {"x": 1}, good]})
+        events = build_surface_events("run_junk", workspace_root=str(tmp_path))
+        src = [e for e in events if e.get("kind") == "source-final"]
+        assert len(src) == 1 and src[0]["absolutePath"] == good, \
+            f"only the valid str path must surface: {src}"
+
+    def test_commits_present_wins_files_touched_not_double_emitted(self, tmp_path):
+        """When commits[] DOES produce source rows (trackable project), the
+        files_touched fallback must NOT fire — no duplicate rows."""
+        from core.ui_actions import build_surface_events
+        self._run(tmp_path, "run_tr", {
+            "commits": [{"repo": "/repo", "sha": "abc1234", "files": ["backend/b.py"]}],
+            "files_touched": [str(tmp_path / "Projects" / "P" / "c.py")]})
+        events = build_surface_events("run_tr", workspace_root=str(tmp_path))
+        src = [e for e in events if e.get("kind") == "source-final"]
+        # Exactly the ONE committed file — the fallback did not fire.
+        assert len(src) == 1 and src[0]["path"] == "backend/b.py", \
+            f"committed rows must win; fallback must not add files_touched rows: {src}"
+
+    def test_empty_commits_no_files_touched_still_empty(self, tmp_path):
+        """No commits AND no files_touched → still [] (the fallback is gated on
+        files_touched presence; a truly empty run surfaces nothing)."""
+        from core.ui_actions import build_surface_events
+        self._run(tmp_path, "run_none", {"commits": [], "files_touched": []})
+        events = build_surface_events("run_none", workspace_root=str(tmp_path))
+        assert [e for e in events if e.get("kind") == "source-final"] == []
+
+
 class TestEnsureReportForRun:
     """ensure_report_for_run — the root-fix for the surface-vs-run-report ordering
     coupling (run_f1fbf37d, method A). The CONSUMER (surface) guarantees its own
