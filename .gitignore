@@ -153,3 +153,9 @@ backend/templates/ddd-gates/
 # Test-leak guard: a mock whose .db_path/.path attr auto-vivifies to a MagicMock
 # gets its repr written as a filename when passed to open()/Path. 0-byte junk.
 *MagicMock name=*
+
+# Agent review artifacts: the semantic_reviewer subagent writes its report here.
+# "Untracked but present" is not a safe resting state in this repo — auto-commit
+# runs `git add -A` roughly every minute, so anything left on disk eventually
+# lands in a commit whether it belongs there or not. Ignore rather than remember.
+semantic-review/
