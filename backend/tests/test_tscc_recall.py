@@ -11,7 +11,35 @@ never triggers recall. These tests seed that dict directly (mirroring the
 security-scan test's approach) and clean up in a ``finally`` block.
 """
 
+import pytest
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _isolate_recall_degraded_counter():
+    """Restore the module-level recall-degradation counter around every test here.
+
+    ``_flatten_recall_hits``'s failure leg records into
+    ``session_router._recall_degraded_count`` — a module-level dict that outlives the
+    test. Left behind, a synthetic ``flatten_exception:AttributeError`` makes the
+    context-health deep check report a REAL recall failure in any suite collected
+    after this file: ``test_context_health_hook::test_passes_when_healthy`` went red
+    purely on collection order (green alphabetically, red in reverse), so it would
+    have shipped past CI and only bitten someone reordering tests.
+
+    Counting a fake failure is the pollution; the health check reporting it is
+    correct behaviour — so isolate the writer here rather than weaken the reader.
+    Autouse and module-wide so a future test that trips another degradation leg is
+    covered without anyone remembering this.
+    """
+    from core import session_router
+
+    saved = dict(session_router._recall_degraded_count)
+    try:
+        yield
+    finally:
+        session_router._recall_degraded_count.clear()
+        session_router._recall_degraded_count.update(saved)
 
 
 def _seed(session_id: str, snap: dict):

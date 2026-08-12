@@ -1647,6 +1647,48 @@ class TestRecallDegradationReader:
             assert (sr._is_ddd_true_failure(o) or o in sr._DDD_KNOWN_INFORMATIONAL), \
                 f"ddd outcome {o!r} is emitted but unclassified — classify it"
 
+    # anti-drift, DYNAMIC half. The literal regex above CANNOT see f-string
+    # reasons — its [^"{] class excludes the brace — and that is exactly the
+    # family most likely to drift, because the classifier must be updated by hand
+    # for each one. "flatten_exception:" duly shipped unclassified and only
+    # surfaced as a cross-suite health failure (review run_abab234c). A dynamic
+    # reason's full string is not knowable statically, so it must be covered by a
+    # *_PREFIXES tuple; probing with a synthetic suffix is how we assert that.
+    def test_all_emitted_dynamic_prefixes_are_classified(self):
+        import re, inspect
+        import core.session_router as sr
+        src = inspect.getsource(sr)
+        # f-string args: capture the LITERAL prefix up to the first brace, e.g.
+        # _record_recall_degraded(f"flatten_exception:{...}") -> "flatten_exception:"
+        recall_pfx = set(re.findall(r'_record_recall_degraded\(\s*f"([^"{]+)\{', src))
+        ddd_pfx = set(re.findall(r'_record_ddd_inject\(\s*f"([^"{]+)\{', src))
+        # Fail loud if the regex itself rots: a silent zero-match would make this
+        # guard pass while covering nothing (the failure mode it exists to stop).
+        assert recall_pfx, "found no dynamic recall reasons — regex has rotted"
+        assert ddd_pfx, "found no dynamic ddd outcomes — regex has rotted"
+
+        # `declined:{signal}` is DELIBERATELY left un-prefixed: see
+        # _DDD_KNOWN_INFORMATIONAL_PREFIXES, which is empty on purpose so a future
+        # "declined:db_broke" surfaces as UNCLASSIFIED instead of being swallowed
+        # as by-design. Its known values are classified individually, by exact
+        # match. Every OTHER dynamic prefix must be covered.
+        deliberately_open = {"declined:"}
+
+        for p in recall_pfx - deliberately_open:
+            probe = f"{p}SyntheticError"
+            assert sr._is_recall_true_failure(probe), (
+                f"dynamic recall reason {p!r}<Type> is emitted but no entry in "
+                f"_RECALL_TRUE_FAILURE_PREFIXES matches it — add the FULL prefix "
+                f"(startswith('exception:') does not match {p!r})"
+            )
+        for p in ddd_pfx - deliberately_open:
+            probe = f"{p}SyntheticError"
+            assert (sr._is_ddd_true_failure(probe)
+                    or probe.startswith(sr._DDD_KNOWN_INFORMATIONAL_PREFIXES)), (
+                f"dynamic ddd outcome {p!r}<Type> is emitted but no prefix tuple "
+                f"matches it — classify it or add it to deliberately_open here"
+            )
+
 
 class TestExpireStaleProposalsArchives:
     """run_419ff7d4 (Debt 1): _expire_stale_proposals must RECLAIM terminal proposals

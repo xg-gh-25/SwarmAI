@@ -150,8 +150,14 @@ _RECALL_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
     "vec_db_unavailable", "leg_failure", "disaster_timeout",
 })
 # exception-family reasons are dynamic ("exception:<Type>") → prefix-matched.
+# Each prefix is listed in FULL: startswith("exception:") does NOT match
+# "inject_exception:Foo", so a new family needs its own entry here.
+# "flatten_exception:" is a TSCC-panel-side break — recall itself was unaffected
+# and the injected block still shipped — but it is a genuine structural defect
+# (BucketedRecall shape drift), so it alarms as a failure rather than being filed
+# as by-design informational. Under-alarming on a real bug is the worse error.
 _RECALL_TRUE_FAILURE_PREFIXES: tuple[str, ...] = (
-    "exception:", "inject_exception:", "unified_exception:",
+    "exception:", "inject_exception:", "unified_exception:", "flatten_exception:",
 )
 # INFORMATIONAL (NOT failures): "empty_with_keywords" (genuine no-match),
 # "unified_empty_fallback_legacy" (strangler-fig fallback to legacy, expected).
