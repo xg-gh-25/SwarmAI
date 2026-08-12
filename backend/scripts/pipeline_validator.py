@@ -1216,13 +1216,24 @@ def validate_artifact_data(
                     errors.append(
                         f"'{parent_field}.{child}' is empty — must contain at least one entry"
                     )
-        else:
-            # Present but NOT a dict (e.g. a bare `adversarial_review: true`).
-            # Without this branch the child-field requirements are silently skipped
-            # for any non-dict parent — a hollow artifact passes depth validation
-            # (D4 adversarial finding, run_57929039: goal_cycle's STAGE_DEPTH
-            # `adversarial_review: [findings]` was defanged by a boolean parent). A
-            # present depth-parent MUST be a dict carrying its declared children.
+        elif child_fields:
+            # Present, NOT a dict, AND has REQUIRED CHILD FIELDS (e.g. a bare
+            # `adversarial_review: true`). Without this branch the child-field
+            # requirements are silently skipped for any non-dict parent — a hollow
+            # artifact passes depth validation (D4 adversarial finding, run_57929039:
+            # goal_cycle's STAGE_DEPTH `adversarial_review: [findings]` was defanged by
+            # a boolean parent). A present depth-parent that declares children MUST be
+            # a dict carrying them.
+            #
+            # ⚠️ GUARDED ON `child_fields` (Gate-2 CRITICAL, run_57929039): a
+            # PRESENCE-ONLY depth entry has an EMPTY child list — notably
+            # STAGE_DEPTH["build"]["ac_coverage"] = [], where `ac_coverage` is
+            # legitimately a LIST, NOT a dict. An unguarded `else` rejected every valid
+            # BUILD publish. Empty child_fields ⇒ presence-only ⇒ the parent's type is
+            # not constrained by THIS branch. `ac_coverage`'s list-shape + non-empty
+            # requirement is instead enforced by Check 8f in validate() (the completion/
+            # advance gate, a DIFFERENT function) — a malformed ac_coverage cannot
+            # advance to REVIEW even though it is not rejected here at publish time.
             errors.append(
                 f"'{parent_field}' must be a dict carrying {child_fields} for depth "
                 f"validation, got {type(parent_val).__name__} — a bare scalar cannot "

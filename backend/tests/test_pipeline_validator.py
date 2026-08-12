@@ -3307,6 +3307,23 @@ class TestGoalCycleGoverned:
         assert any("adversarial_review" in e and "dict" in e for e in errs), \
             f"A boolean adversarial_review on deliver must be rejected, got: {errs}"
 
+    def test_build_list_ac_coverage_NOT_rejected_by_nondict_branch(self):
+        """Gate-2 CRITICAL regression (run_57929039): the non-dict rejection branch is
+        guarded on `child_fields` being non-empty. STAGE_DEPTH['build']['ac_coverage']
+        is [] (presence-only) and ac_coverage is legitimately a LIST — an unguarded
+        else rejected EVERY valid build publish. This asserts a valid build artifact
+        with a list ac_coverage produces NO 'must be a dict' error on ac_coverage."""
+        from scripts.pipeline_validator import validate_artifact_data
+        build_data = {
+            "files_changed": ["a.py"],
+            "tdd": {"green_pass": True, "smoke_tests": 1},
+            "ac_coverage": [
+                {"ac": "AC1", "impl": "a.py::f()", "test": "t.py::test_f", "verified": True}],
+        }
+        errs = validate_artifact_data("build", build_data, "full")
+        assert not any("ac_coverage" in e and "must be a dict" in e for e in errs), \
+            f"A valid list ac_coverage was wrongly rejected as non-dict: {errs}"
+
 
 # ---------------------------------------------------------------------------
 # FAILED-vs-ERRORED distinction (run_55710438)
