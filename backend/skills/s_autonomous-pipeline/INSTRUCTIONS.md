@@ -451,6 +451,16 @@ This checks 8 invariants automatically:
  "checks_passed": 8, "checks_total": 8}
 ```
 
+> ⚠️ **`checks_passed` is NOT a quality score — read `errors`/`warnings`, not the count
+> (F4, run_57929039).** The ADVISORY checks (4 Decision-logged, 5 Budget-recorded, and
+> the other WARN-severity checks) **always credit `checks_passed` whether they pass or
+> fail** — they only ever append a WARNING, never reduce the count. So
+> `checks_passed == checks_total` is the NORMAL state even when advisory checks flagged
+> issues; it means "no BLOCKING (hard) check failed", NOT "everything is clean". The
+> real signals are: `valid: false` OR a non-empty `errors[]` (a hard BLOCK), and the
+> `warnings[]` list (advisory issues to weigh). Never gate on the count itself (P6:
+> the metric is not the outcome).
+
 **IMPORTANT: Write checksums to run.json after EVALUATE.**
 After the EVALUATE stage completes successfully, run `ddd-check` and store the checksums
 in the run state so future staleness detection works:
@@ -1341,19 +1351,52 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     **Detection:** Golden set trajectory case GS021 verifies Agent tool appears
     in the execution trace. Validator enforces evidence field at completion.
 
-24. **Stage-json fields for EVALUATE/THINK/PLAN (report completeness).**
-    The following fields MUST be recorded in stage-json (via `run-update
-    --stage-json`) so that `run-report` can populate Sections 2-3:
+24. **Per-stage REQUIRED fields — the single reference (corrected to validator ground
+    truth, run_57929039/F1).** Two enforcement layers exist and used to disagree with
+    this doc — the fields below are what `pipeline_validator.STAGE_SCHEMAS` /
+    `STAGE_DEPTH` ACTUALLY require (source of truth), not an aspirational list.
 
-    | Stage | Required Fields |
-    |-------|----------------|
-    | evaluate | `scope`, `recommendation`, `acceptance_criteria` |
-    | think | `alternatives`, `approach_chosen`, `key_findings` |
-    | plan | `spec_summary`, `files_planned`, `approach_chosen` |
+    **A. Artifact-schema required fields (BLOCK at publish AND completion):**
 
-    **Why:** Report Sections 2-3 were empty because data lived only in chat
-    output, not in stage-json. `run-report` reads stage-json as PRIMARY
-    source — if the field isn't there, the section is empty.
+    | Stage | REQUIRED (validator BLOCKS if missing) | Recommended (WARN only) |
+    |-------|----------------------------------------|-------------------------|
+    | evaluate | `recommendation`, `scope` (+ `understanding` block on strict profiles; + `ambiguity_scan`; + `working_backwards`/`pre_mortem` on greenfield; + `migration_class` on a migration-keyword requirement) | `acceptance_criteria`, `scores` |
+    | think | `key_findings` | `alternatives`, `sources` |
+    | plan | `acceptance_criteria` | `approach`, `data_model`, `boundaries`, `success_criteria` |
+    | build | `files_changed`, `tdd` (`.green_pass`+`.smoke_tests`), `ac_coverage` (list, non-empty, covers every PLAN AC) | `commits`, `diff_summary` |
+    | review | `approved`, `litmus_gate`, `integration_trace`, `runtime_patterns`, `findings_count` | `findings`, `security_findings`, `ux_review` |
+    | test | `passed`, `layers` (`.ac_driven`) | `failed`, `fixed`, `coverage`, `regressions` |
+    | deliver | `title`, `quality`; + `adversarial_review` (dict: `profile_tier`,`findings`), `completion_audit` (`.all_green`), `ac_verification` (`.status`) via STAGE_DEPTH; + `meta_review`, `convergence` for full/bugfix | `decisions`, `report_path` |
+    | goal_cycle | `dod_met`, `adversarial_review` (dict with `findings`) | `cycles_run`, `progress_path`, `review_cadence` |
+    | reflect | (no artifact schema — but `lessons` must be substantive at completion) | — |
+
+    ⚠️ **Corrections from the OLD Rule 24 (which was WRONG):** evaluate/plan REQUIRE
+    `acceptance_criteria`? — evaluate has it only as RECOMMENDED; **plan REQUIRES it**
+    (BUILD's AC-coverage cross-check reads `plan.acceptance_criteria` — a plan built to
+    the old Rule 24 omitted it and broke BUILD). think does NOT require `alternatives`
+    or `approach_chosen`; plan does NOT require `spec_summary`/`files_planned`. Record
+    the recommended fields for a rich `run-report` (Sections 2-3), but the validator
+    only BLOCKS on the REQUIRED column.
+
+    **B. FLAT completion/commit-time fields (set on the STAGE RECORD via
+    `run-update --stage-json`, NOT in the artifact) — enumerate them so you don't
+    discover each by a failed run:**
+
+    | Flat field | On stage | Gate that reads it |
+    |------------|----------|--------------------|
+    | `stage_doc_consumed: true` | evaluate/build/review/test/deliver/reflect | `run-update` per-stage gate (exit 1 if absent) |
+    | `push_ready: true` | deliver | `run-commit` refuses without it (exit 2) |
+    | `outputs_surfaced: true` (legacy alias `local_pr_surfaced`) | deliver | completion surface gate |
+    | `token_cost: <int>` | every stage | metrics/calibration (WARN if 0) |
+    | `skip_reason` / `notes` | any SKIPPED stage | completion skip gate |
+    | `lessons: [...]` (each >20 chars) | reflect | reflect quality gate |
+
+    **Why this exists:** the fields were split across `STAGE_SCHEMAS`/`STAGE_DEPTH`
+    (artifact) and the `cmd_run_update` flat gates (stage record), with NO single doc
+    listing them — so publishing/finalizing a stage failed and the required field was
+    reverse-engineered from the error. This table is that missing reference. `run-report`
+    reads stage-json as PRIMARY source; a missing recommended field = an empty report
+    section (not a block).
 
 ---
 
