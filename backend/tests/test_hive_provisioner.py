@@ -1025,7 +1025,7 @@ class TestStopBehavioral:
              patch.object(p, "_set_cloudfront_enabled", new_callable=AsyncMock) as mock_cf, \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_event_loop().run_in_executor(None, lambda: fn(*a, **k))):
+             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_running_loop().run_in_executor(None, lambda: fn(*a, **k))):
 
             await p.stop("inst-1")
 
@@ -1065,7 +1065,7 @@ class TestStartBehavioral:
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True), \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_event_loop().run_in_executor(None, lambda: fn(*a, **k))):
+             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_running_loop().run_in_executor(None, lambda: fn(*a, **k))):
 
             await p.start("inst-1")
 
@@ -1085,7 +1085,7 @@ class TestStartBehavioral:
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=False), \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_event_loop().run_in_executor(None, lambda: fn(*a, **k))):
+             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_running_loop().run_in_executor(None, lambda: fn(*a, **k))):
 
             await p.start("inst-1")
 

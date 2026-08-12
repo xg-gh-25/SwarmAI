@@ -39,7 +39,13 @@ def test_pools_are_distinct_from_each_other_and_default():
     sub = executors.get_pool("subprocess")
     assert io is not llm and io is not sub and llm is not sub, "pools must be distinct instances"
     # And distinct from asyncio's default executor (which is None until first to_thread).
-    loop_default = getattr(asyncio.get_event_loop(), "_default_executor", None)
+    # Use a throwaway loop, NOT get_event_loop(): the latter raises "no current event
+    # loop" on Py3.12 once a prior test cleared the thread-default (set_event_loop(None)).
+    _probe_loop = asyncio.new_event_loop()
+    try:
+        loop_default = getattr(_probe_loop, "_default_executor", None)
+    finally:
+        _probe_loop.close()
     assert io is not loop_default
 
 

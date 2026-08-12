@@ -34,7 +34,14 @@ def _make_adapter(bot_token: str = "xoxb-test", app_token: str = "xapp-test"):
     )
     # Wire up a mock WebClient
     adapter._slack_client = MagicMock()
-    adapter._loop = asyncio.get_event_loop()
+    # Every caller is inside an @pytest.mark.asyncio test, so a running loop always
+    # exists — reuse it via get_running_loop(). NOT get_event_loop() (raises on
+    # Py3.12 after a prior test's set_event_loop(None)) and NOT new_event_loop()
+    # (would leak an unclosed loop per call — adversarial HIGH). Production only reads
+    # _loop via call_soon_threadsafe on the WS-error path, which these mock tests never
+    # hit (send_message/update_message use get_running_loop() directly), so any live
+    # loop object satisfies them; reusing the test's own loop leaks nothing.
+    adapter._loop = asyncio.get_running_loop()
     return adapter
 
 

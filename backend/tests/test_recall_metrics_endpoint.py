@@ -23,7 +23,12 @@ def metrics_client(tmp_path, monkeypatch):
     from routers.recall_metrics_api import router
 
     db = SQLiteDatabase(str(tmp_path / "m.db"))
-    asyncio.get_event_loop().run_until_complete(db.initialize())
+    # asyncio.run (fresh loop) — get_event_loop() raises "no current event loop" on
+    # Py3.12 once a prior test clears the thread-default loop (e.g. test_community_api
+    # _run's set_event_loop(None)). Each asyncio.run gets its own loop + its own
+    # (db_path, loop_id)-keyed aiosqlite pool; the WAL db FILE is shared, so the
+    # TestClient route (its own loop) reads what these writes committed. Verified.
+    asyncio.run(db.initialize())
     monkeypatch.setattr(database, "db", db, raising=False)
 
     app = FastAPI()
@@ -35,7 +40,7 @@ class TestMetricsEndpoint:
     def test_returns_shape_and_percentiles(self, metrics_client):
         import asyncio
         client, db = metrics_client
-        asyncio.get_event_loop().run_until_complete(db.bulk_insert_recall_metrics([
+        asyncio.run(db.bulk_insert_recall_metrics([
             {"context": "library_overlay", "domains": "library,codeintel",
              "latency_ms": v, "hit_count": 1} for v in (10.0, 20.0, 30.0, 40.0, 50.0)
         ]))
@@ -52,7 +57,7 @@ class TestMetricsEndpoint:
     def test_context_filter(self, metrics_client):
         import asyncio
         client, db = metrics_client
-        asyncio.get_event_loop().run_until_complete(db.bulk_insert_recall_metrics([
+        asyncio.run(db.bulk_insert_recall_metrics([
             {"context": "session_prompt", "domains": "ddd", "latency_ms": 100.0, "hit_count": 1},
             {"context": "library_overlay", "domains": "library", "latency_ms": 50.0, "hit_count": 1},
         ]))

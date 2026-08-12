@@ -80,6 +80,14 @@ async def adapter(slack_config, on_message):
     ws = a._ws_thread
     if ws and ws.is_alive():
         ws.join(timeout=1)
+    # Close any per-test event loop assigned to adapter._loop, so a test body that
+    # raised before its manual _loop.close() cannot leak the loop into a sibling test.
+    # (Idempotent: closing an already-closed loop is a no-op. Several test bodies set
+    # adapter._loop = new_event_loop() and close it at the END without try/finally —
+    # this teardown is the guaranteed-runs backstop.)
+    _lp = getattr(a, "_loop", None)
+    if _lp is not None and not _lp.is_closed():
+        _lp.close()
 
 
 # ---------------------------------------------------------------------------

@@ -200,7 +200,9 @@ class TestDuplicateApproveClears:
                  _patch.object(cult, "apply_to_ddd", return_value="duplicate"), \
                  _patch.object(cult, "_update_proposal_status",
                                side_effect=lambda pd, pid, st, reason=None: marked.update(status=st, reason=reason)):
-                result = asyncio.get_event_loop().run_until_complete(
+                # asyncio.run (fresh loop) — get_event_loop() raises on Py3.12 once a
+                # prior test cleared the thread-default loop (set_event_loop(None)).
+                result = asyncio.run(
                     cult.approve_proposal("proposal_dup1", project="SwarmAI")
                 )
             assert result["status"] == "cleared"
