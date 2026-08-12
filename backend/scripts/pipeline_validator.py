@@ -489,6 +489,20 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
         "recommended": ["decisions", "attention_flags", "report_path",
                          "meta_review"],
     },
+    # goal_cycle (D4, run_57929039): the goal-profile inner loop (replaces
+    # BUILD+REVIEW+TEST). Before D4 it had NO schema entry, so validate_artifact_data
+    # returned [] and the goal run's inner quality fields (DoD, per-cycle adversarial)
+    # were never validated. Required fields mirror the essentials goal_cycle.md records:
+    # dod_met (did the Definition-of-Done pass) + adversarial_review (the final
+    # cross-path adversarial on the total changeset — its findings[] feed the same
+    # _blocked_findings gate as a fresh deliver adversarial). STAGE_DEPTH enforces the
+    # adversarial_review shape (profile-aware). NOTE: goal_cycle ∈ goal profile ONLY —
+    # _check_profile_respected still rejects it under full/trivial/etc (contract pinned
+    # by test_completion_backstop_skips_off_profile_stage_after_upgrade).
+    "goal_cycle": {
+        "required": ["dod_met", "adversarial_review"],
+        "recommended": ["cycles_run", "progress_path", "review_cadence"],
+    },
     # reflect has no artifact — skip schema check
 }
 
@@ -617,6 +631,16 @@ STAGE_DEPTH: dict[str, dict[str, list[str]]] = {
         "adversarial_review": ["profile_tier", "findings"],
         "completion_audit": ["all_green"],
         "ac_verification": ["status"],  # F8: enforce AC verification step was recorded
+    },
+    # D4: goal_cycle's final cross-path adversarial must be a DICT carrying findings[]
+    # (same shape the deliver adversarial records). This enforces SHAPE + presence at
+    # the goal_cycle stage (a bare `adversarial_review: true` fails — see the non-dict
+    # rejection in validate_artifact_data). NOTE: the _blocked_findings gate (which
+    # rejects an UNRESOLVED finding) runs at the DELIVER stage, NOT here — goal_cycle
+    # carries its findings forward into the DELIVER adversarial_review.findings[], where
+    # they block. So this entry gates the artifact's shape; DELIVER gates the content.
+    "goal_cycle": {
+        "adversarial_review": ["findings"],
     },
 }
 
@@ -1192,6 +1216,18 @@ def validate_artifact_data(
                     errors.append(
                         f"'{parent_field}.{child}' is empty — must contain at least one entry"
                     )
+        else:
+            # Present but NOT a dict (e.g. a bare `adversarial_review: true`).
+            # Without this branch the child-field requirements are silently skipped
+            # for any non-dict parent — a hollow artifact passes depth validation
+            # (D4 adversarial finding, run_57929039: goal_cycle's STAGE_DEPTH
+            # `adversarial_review: [findings]` was defanged by a boolean parent). A
+            # present depth-parent MUST be a dict carrying its declared children.
+            errors.append(
+                f"'{parent_field}' must be a dict carrying {child_fields} for depth "
+                f"validation, got {type(parent_val).__name__} — a bare scalar cannot "
+                f"carry the required sub-fields (record the object, not a boolean)."
+            )
 
     # Stage-specific invariants (subset of _check_depth for fast feedback)
     if stage == "deliver":
@@ -1429,6 +1465,14 @@ STAGE_ROUTING: dict[str, dict[str, list[str]]] = {
         "consumes": ["changeset", "review", "test_report"],
         "produces": ["delivery"],
         "optional_produces": ["report"],
+    },
+    # goal_cycle (D4): replaces BUILD+REVIEW+TEST in the goal profile — consumes the
+    # design_doc, produces the changeset the goal cycles accumulate. deliver then
+    # consumes that changeset (goal profile skips the standalone build/review/test).
+    "goal_cycle": {
+        "consumes": ["design_doc"],
+        "produces": ["changeset"],
+        "optional_produces": ["review", "test_report"],
     },
     "reflect": {
         "consumes": ["test_report", "delivery"],
@@ -1911,6 +1955,22 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                         f"Self-review after a rejected spawn is the CLASS A bypass — "
                         f"CHECKPOINT reason=gate_spawn_blocked instead."
                     )
+
+            # D1 (run_57929039) — DEFERRED. Intent: give the completion-time
+            # adversarial gate real TEETH (require a genuine Agent-tool `_adv_` marker,
+            # not just the hand-set spawned/evidence fields). BLOCKED by an
+            # infrastructure gap two independent gates surfaced:
+            #   • the SubagentStop hook only has `sdk_session_id`, NOT the pipeline
+            #     run_id (`_active_pipeline_run_id` is referenced in runtime_hooks.py
+            #     but never SET anywhere), so a run-id-scoped marker check false-blocks
+            #     EVERY real full/bugfix completion (Gate-2, run_57929039);
+            #   • a ts>run_start session-window scope (Check 9b's fallback) lets a
+            #     CONCURRENT sibling run's marker satisfy this run's gate (Gate-1).
+            # Safe teeth require first plumbing the run_id into the hook's
+            # session_context (or session_id into run.json) — an infrastructure
+            # sub-run, tracked as a follow-up. Until then the COMMIT gate's
+            # session-scoped `_session_has_adversarial_evidence` (security_hooks.py)
+            # remains the real teeth at commit time, and Check 9b stays WARN-level.
 
         # completion_audit: MUST exist for full/bugfix profiles
         ca = artifact_data.get("completion_audit")

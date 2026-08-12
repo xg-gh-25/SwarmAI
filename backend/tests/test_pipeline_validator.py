@@ -2380,8 +2380,11 @@ class TestOutputRouting:
     """Tests for _check_output_routing and STAGE_ROUTING (Check 13)."""
 
     def test_routing_defined_for_all_stages(self):
-        """AC3: STAGE_ROUTING has entries for all 8 pipeline stages."""
-        expected = {"evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"}
+        """AC3: STAGE_ROUTING has entries for all pipeline stages, incl. goal_cycle
+        (D4, run_57929039 — goal_cycle is now governed: routing consumes design_doc,
+        produces changeset, mirroring the BUILD+REVIEW+TEST it replaces in goal)."""
+        expected = {"evaluate", "think", "plan", "build", "review", "test", "deliver",
+                    "reflect", "goal_cycle"}
         assert set(STAGE_ROUTING.keys()) == expected
 
     def test_evaluate_no_consumes(self):
@@ -3243,6 +3246,66 @@ class TestAgentToolAudit:
         audit_msgs = [e for e in result["errors"] + result["warnings"]
                      if "agent tool" in e.lower() or "audit marker" in e.lower()]
         assert not audit_msgs, f"Trivial should skip audit: {audit_msgs}"
+
+
+class TestGoalCycleGoverned:
+    """D4 (run_57929039): the goal_cycle stage must be GOVERNED by the validator —
+    before D4 it had no STAGE_SCHEMAS/STAGE_DEPTH/STAGE_ROUTING entry, so
+    validate_artifact_data returned [] and the goal run's inner quality fields were
+    never validated."""
+
+    def test_goal_cycle_has_schema_entry(self):
+        from scripts.pipeline_validator import STAGE_SCHEMAS
+        assert "goal_cycle" in STAGE_SCHEMAS, \
+            "goal_cycle must have a STAGE_SCHEMAS entry (D4)"
+        assert STAGE_SCHEMAS["goal_cycle"].get("required"), \
+            "goal_cycle schema must declare required fields"
+
+    def test_goal_cycle_schema_blocks_missing_required(self):
+        """A goal_cycle artifact missing a required field is rejected (has teeth)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errs = validate_artifact_data("goal_cycle", {}, "goal")
+        assert errs, "Empty goal_cycle artifact under goal profile must produce errors"
+
+    def test_goal_cycle_schema_passes_complete(self):
+        """A complete goal_cycle artifact under goal profile passes schema check."""
+        from scripts.pipeline_validator import validate_artifact_data, STAGE_SCHEMAS
+        data = {f: (True if f in ("dod_met",) else [{"x": 1}] if f in ("adversarial_review",) else 1)
+                for f in STAGE_SCHEMAS["goal_cycle"]["required"]}
+        # adversarial_review must be a dict for the goal-cycle final gate
+        if "adversarial_review" in data:
+            data["adversarial_review"] = {"spawned": True, "evidence": "Agent tool", "findings": []}
+        errs = validate_artifact_data("goal_cycle", data, "goal")
+        assert not errs, f"Complete goal_cycle artifact should pass, got: {errs}"
+
+    def test_goal_cycle_in_routing(self):
+        from scripts.pipeline_validator import STAGE_ROUTING
+        assert "goal_cycle" in STAGE_ROUTING, \
+            "goal_cycle must have a STAGE_ROUTING entry (D4)"
+
+    def test_goal_cycle_boolean_adversarial_review_REJECTED(self):
+        """Adversarial finding (run_57929039): a bare `adversarial_review: true` must
+        FAIL depth validation — a scalar cannot carry the required findings[]. Before
+        the non-dict rejection this silently passed (STAGE_DEPTH skipped non-dict
+        parents), defanging the goal_cycle adversarial-shape gate."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errs = validate_artifact_data(
+            "goal_cycle", {"dod_met": True, "adversarial_review": True}, "goal")
+        assert any("adversarial_review" in e and "dict" in e for e in errs), \
+            f"A boolean adversarial_review must be rejected, got: {errs}"
+
+    def test_deliver_boolean_adversarial_review_also_REJECTED(self):
+        """Same non-dict rejection hardens DELIVER: a boolean adversarial_review on a
+        full deliver artifact fails depth validation (not silently skipped)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errs = validate_artifact_data(
+            "deliver",
+            {"title": "x", "quality": {"push_ready": True},
+             "adversarial_review": True, "completion_audit": {"all_green": True},
+             "ac_verification": {"status": "verified"}},
+            "full")
+        assert any("adversarial_review" in e and "dict" in e for e in errs), \
+            f"A boolean adversarial_review on deliver must be rejected, got: {errs}"
 
 
 # ---------------------------------------------------------------------------

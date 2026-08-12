@@ -400,8 +400,19 @@ velocity = gm.get_velocity()
 3. If adversarial finds issues → execute up to 3 more fix cycles
 4. If issues persist after 3 fix cycles → CHECKPOINT with findings
 
-**After final adversarial passes:** Mark goal_cycle stage as completed
-(with `adversarial_review: true` — required by the completion gate).
+**After final adversarial passes:** Mark goal_cycle stage as completed with an
+`adversarial_review` **object** (NOT a bare `true`) carrying its `findings[]` — the
+same dict shape the DELIVER adversarial records (see steps above, and
+`adversarial_review["findings"].append(finding)`). The validator's STAGE_SCHEMAS +
+STAGE_DEPTH for `goal_cycle` (D4, run_57929039) require `dod_met` plus an
+`adversarial_review` **dict** with a `findings` key — a bare `adversarial_review: true`
+FAILS depth validation (a scalar cannot carry `findings`). This governs the goal_cycle
+artifact's SHAPE. **Where the findings actually BLOCK:** the unresolved-finding gate
+(`_blocked_findings`) runs at the DELIVER stage — so the final cross-path findings must
+also be carried into the DELIVER `adversarial_review.findings[]` (steps above), where an
+unresolved HIGH/blocking finding blocks completion exactly like a fresh deliver
+adversarial. (goal_cycle's own schema enforces shape + presence; DELIVER enforces the
+block — do not expect goal_cycle-stage validation alone to reject an unresolved finding.)
 The pipeline then proceeds to DELIVER → REFLECT as normal stages.
 
 ### EXIT with CHECKPOINT
