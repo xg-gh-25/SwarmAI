@@ -1082,6 +1082,7 @@ def _format_ttft_line(
     recall_ms: Optional[float],
     recall_ran_this_turn: bool,
     retry_count: int,
+    sw_overhead_ms: Optional[float] = None,
 ) -> Optional[str]:
     """Pure decision + formatter for the end-to-end TTFT probe (observability-only).
 
@@ -1095,8 +1096,22 @@ def _format_ttft_line(
       - ``slot_ms``  — time spent in slot-acquire/queue (0 when a slot was free)
       - ``recall_ms``— the recall leg IF it ran THIS turn (else labelled ``n/a``:
         recall runs once per session + never for channels, so turn-2+ has no fresh
-        recall — showing a stale/0 value would make the residual math lie, Gate-1).
-      - ``spawn+infer`` residual = ttft − slot − recall (only when recall ran).
+        recall — showing a stale/0 value would mislead, Gate-1). When present it is
+        a SUB-annotation *inside* ``pre_send`` (recall is one of the pre-send legs),
+        NOT a peer residual.
+      - ``pre_send_ms`` / ``send+infer`` — the router/model boundary split
+        (run_332ccfd1). ``sw_overhead_ms`` is the DIRECTLY MEASURED wall time from
+        t0 to just before ``unit.send()`` — i.e. ALL router-side per-turn work:
+        slot-acquire, user-message DB persist, cold-resume DB reads, prompt
+        assembly (``build_options``), multimodal conversion, and recall injection.
+        ``send+infer = ttft − pre_send`` is then the SDK-send + spawn (cold turns)
+        + Bedrock first-token span. Emitted on EVERY turn (incl. warm ``recall=n/a``)
+        whenever ``sw_overhead_ms`` was measured — the case the old recall-only
+        residual left opaque. It is a DIRECT measurement, not the old
+        ``ttft − slot − recall`` computed residual (that lumped prompt-build+DB into
+        the model span and contradicted itself on recall-ran turns — Gate-1 BLOCK).
+        ``sw_overhead_ms=None`` (not measured) → the split is omitted (legacy shape,
+        backward-compatible with callers that don't pass it).
       - ``retries``  — surfaced ONLY when >0: a retried turn's ttft_ms includes
         5-15s backoff + ``--resume`` respawn, so the raw number is meaningless
         without this note (Gate-1).
@@ -1104,16 +1119,23 @@ def _format_ttft_line(
     if already_recorded or event_type not in _TTFT_FIRST_CONTENT_TYPES:
         return None
     if recall_ran_this_turn and recall_ms is not None:
-        recall_seg = f"recall={recall_ms:.0f}ms"
-        residual = ttft_ms - slot_ms - recall_ms
-        residual_seg = f" spawn+infer={residual:.0f}ms"
+        recall_seg = f"recall={recall_ms:.0f}ms"  # sub-leg inside pre_send
     else:
         recall_seg = "recall=n/a"  # did not run this turn — NOT a real 0ms
-        residual_seg = ""
+    if sw_overhead_ms is not None:
+        # Direct-measured router/model split. send+infer is the residual of a
+        # SINGLE measured boundary (pre_send), so there is exactly one residual —
+        # nothing can contradict it.
+        split_seg = (
+            f" pre_send={sw_overhead_ms:.0f}ms"
+            f" send+infer={ttft_ms - sw_overhead_ms:.0f}ms"
+        )
+    else:
+        split_seg = ""
     retry_seg = f" retries={retry_count}" if retry_count else ""
     return (
         f"TTFT={ttft_ms:.0f}ms (first-token={event_type}) | "
-        f"slot={slot_ms:.0f}ms {recall_seg}{residual_seg}{retry_seg}"
+        f"slot={slot_ms:.0f}ms {recall_seg}{split_seg}{retry_seg}"
     )
 
 
@@ -2671,6 +2693,14 @@ class SessionRouter:
         #   as it arrives, we guarantee crash recovery up to the last emitted
         #   message.  The cost is one small DB write per assistant turn — a
         #   typical conversation has 5-15 of these, each <10KB.
+        # ── TTFT: mark the router/model boundary (run_332ccfd1) ──
+        # Everything from t0 to HERE is router-side per-turn overhead (slot,
+        # user-msg DB persist, cold-resume reads, build_options prompt assembly,
+        # multimodal conversion, recall injection). Measured DIRECTLY so the TTFT
+        # line can split pre_send vs send+infer on EVERY turn — including warm
+        # (recall=n/a) turns the old recall-only residual left opaque. Pure local,
+        # no control-flow effect (observability-only, same contract as _ttft_t0).
+        _ttft_presend_ms = (time.perf_counter() - _ttft_t0) * 1000.0
         try:
             async for event in unit.send(
                 query_content=query_content,
@@ -2722,6 +2752,7 @@ class SessionRouter:
                             recall_ms=_ttft_recall_ms,
                             recall_ran_this_turn=_ttft_recall_ms is not None,
                             retry_count=getattr(unit, "_retry_count", 0) or 0,
+                            sw_overhead_ms=_ttft_presend_ms,
                         )
                         if _ttft_line is not None:
                             _ttft_recorded = True

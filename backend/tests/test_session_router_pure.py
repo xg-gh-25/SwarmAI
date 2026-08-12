@@ -469,3 +469,55 @@ class TestFormatTtftLine:
         """Clean turn (retry_count=0): no retry noise in the line."""
         line = self._call(ttft_ms=900.0, retry_count=0)
         assert line is not None
+
+    # ── pre_send split (run_332ccfd1) — the router/model boundary breakdown ──
+    # Gate-1-refined design: measure the pre-send window DIRECTLY (perf_counter at
+    # the unit.send() boundary), not as a computed ttft-slot-recall residual. The
+    # window includes build_options (prompt assembly), DB persist, multimodal +
+    # recall — i.e. ALL router-side per-turn overhead, the segment the latency
+    # suspects live in. Emitted on EVERY turn (incl warm recall=n/a), which the
+    # old recall-only spawn+infer residual never did.
+
+    def test_pre_send_split_present_on_warm_turn(self):
+        """AC1: on a WARM turn (recall=n/a), when sw_overhead_ms is measured the
+        line MUST carry both a pre_send= segment AND a send+infer= segment — the
+        exact case the old probe left opaque."""
+        line = self._call(
+            event_type="text_delta", ttft_ms=10000.0, slot_ms=0.0,
+            recall_ms=None, recall_ran_this_turn=False, sw_overhead_ms=300.0,
+        )
+        assert line is not None
+        assert "pre_send=300" in line, f"pre_send segment must appear: {line}"
+        assert "send+infer=" in line, f"send+infer segment must appear: {line}"
+
+    def test_pre_send_and_send_infer_reconcile_to_ttft(self):
+        """AC2: send+infer == ttft - pre_send (both DIRECTLY measured, not inferred).
+        ttft=2000, pre_send=300 → send+infer=1700."""
+        line = self._call(ttft_ms=2000.0, sw_overhead_ms=300.0)
+        assert "pre_send=300ms" in line, line
+        assert "send+infer=1700ms" in line, f"2000-300=1700 must appear: {line}"
+
+    def test_sw_overhead_none_is_backward_compatible(self):
+        """AC4: sw_overhead_ms=None (not measured) → NO pre_send/send+infer segment;
+        the line is exactly the legacy shape. Guarantees the signature change does
+        not perturb any caller that omits the new arg."""
+        line = self._call(ttft_ms=1234.0, sw_overhead_ms=None)
+        assert line is not None
+        assert "pre_send=" not in line, f"no pre_send when unmeasured: {line}"
+        assert "send+infer=" not in line, f"no send+infer when unmeasured: {line}"
+
+    def test_pre_send_split_on_recall_ran_turn_no_contradiction(self):
+        """AC4: when recall ran, recall= stays as a SUB-annotation within pre_send,
+        and pre_send is the DIRECT measurement (not ttft-slot-recall). The old
+        contradictory 'spawn+infer = ttft-slot-recall' residual must be GONE — there
+        is exactly one residual (send+infer = ttft - pre_send), so no two numbers
+        can disagree. recall(500) <= pre_send(800) since recall is inside it."""
+        line = self._call(
+            ttft_ms=3000.0, slot_ms=0.0, recall_ms=500.0,
+            recall_ran_this_turn=True, sw_overhead_ms=800.0,
+        )
+        assert "recall=500ms" in line, f"recall stays visible: {line}"
+        assert "pre_send=800ms" in line, f"pre_send is the direct measure: {line}"
+        assert "send+infer=2200ms" in line, f"3000-800=2200: {line}"
+        # The old misleading residual (ttft-slot-recall = 2500) must NOT appear.
+        assert "spawn+infer" not in line, f"old contradictory residual removed: {line}"
