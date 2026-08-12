@@ -595,60 +595,110 @@ def test_build_feed_md_default_show_unchanged(tmp_path: Path) -> None:
     assert "2026-08-01-openworker-research.md" in names
 
 
-# ── Hot Topics (gap2 — parse TECH.md ## GitHub Hot Topics) ───────────────────
+# ── Hot Topics — parse the LIVE signals.json hot_topics feed (run_ced271e8) ──────
+# Was: parse a hand-maintained TECH.md Rankings table (went 2 months stale). Now:
+# read the weekly monitor's signals.json, the same artifact backing daily signals.
 
-_TECH_MD_FIXTURE = """# TECH
-
-## Something Before
-
-blah blah
-
-## GitHub Hot Topics (DEMAND — what the community wants to discuss)
-<!-- maturity: sparse -->
-
-### Rankings (Updated 2026-06-14, from W23 scan activity)
-
-| Rank | Topic | Evidence (threads + engagement) | Trend |
-|------|-------|--------------------------------|-------|
-| 1 | **Memory for agents** (persistence, sovereignty) | MemPalace #1784 (2💬), crewAI #6050 (18💬) | 🔥🔥🔥 Dominant |
-| 2 | **Production agent operations** (monitoring) | crewAI #4232 (36💬) | 🔥🔥🔥 Steady |
-| 3 | **Context compression & token budget** | [claude-code #67297](https://github.com/x/y) | 🔥🔥🔥 NEW — Exploding |
-
-### Top Movers (W23 — 2026-06-14)
-
-| Direction | Topic | Signal |
-|-----------|-------|--------|
-| ⬆️ NEW | Context compression | headroom exploding |
-
-## Another Section After
-"""
+import json as _json
 
 
-def test_parse_hot_topics_extracts_rankings(tmp_path: Path) -> None:
+def _write_signals(tmp_path: Path, payload: dict) -> Path:
+    p = tmp_path / "signals.json"
+    p.write_text(_json.dumps(payload))
+    return p
+
+
+# A realistic signals.json shaped exactly like the live producer (compute_hot_topics):
+# hot_topics[] = {id, total_comments, thread_count, top_thread{repo,number,title,...}}.
+# Deliberately NOT pre-sorted by total_comments, to prove the parser sorts (H1).
+_SIGNALS_FIXTURE = {
+    "scanned_at": "2026-08-11T17:50:56.037632",
+    "hot_topics": [
+        {"id": "HT-COORDINATION", "total_comments": 7, "thread_count": 8,
+         "top_thread": {"repo": "anthropics/claude-code-action", "number": 1367,
+                        "title": "Workflow keyword trigger collides", "category": "General"}},
+        {"id": "HT-SKILL-ARCH", "total_comments": 15, "thread_count": 18,
+         "top_thread": {"repo": "danielmiessler/Personal_AI_Infrastructure", "number": 1613,
+                        "title": "Surviving upgrades with a local delta", "category": "Ideas"}},
+        {"id": "HT-MEMORY", "total_comments": 13, "thread_count": 4,
+         "top_thread": {"repo": "MemPalace/mempalace", "number": 759,
+                        "title": "MemPalace needs to be able to forget", "category": "Ideas"}},
+    ],
+}
+
+
+def test_parse_hot_topics_reads_signals_and_ranks_by_comments(tmp_path: Path) -> None:
     from core.community_data import parse_hot_topics
-    p = tmp_path / "TECH.md"
-    p.write_text(_TECH_MD_FIXTURE)
-    result = parse_hot_topics(p)
-    assert result["updated"] == "2026-06-14"
+    result = parse_hot_topics(_write_signals(tmp_path, _SIGNALS_FIXTURE))
+    assert result["scanned_at"] == "2026-08-11T17:50:56.037632"
     topics = result["topics"]
-    assert len(topics) == 3, "must parse exactly the 3 Rankings rows, NOT bleed into Top Movers"
-    assert topics[0]["rank"] == 1
-    # markdown bold stripped from the topic cell
-    assert topics[0]["topic"].startswith("Memory for agents")
-    assert "**" not in topics[0]["topic"]
-    assert topics[0]["trend"]  # non-empty
+    assert len(topics) == 3
+    # H1: sorted by comments DESC + rank assigned from that order (fixture was unsorted).
+    assert [t["comments"] for t in topics] == [15, 13, 7]
+    assert [t["rank"] for t in topics] == [1, 2, 3]
+    assert topics[0]["id"] == "HT-SKILL-ARCH"
+    # id → human label (closed-set map), NOT the raw id.
+    assert topics[0]["topic"] == "Skill / capability architecture"
+    assert topics[0]["threads"] == 18
+    assert topics[0]["top_repo"] == "danielmiessler/Personal_AI_Infrastructure"
+    assert topics[0]["top_number"] == 1613
 
 
-def test_parse_hot_topics_stops_before_top_movers(tmp_path: Path) -> None:
-    # The Top Movers table sits right below Rankings with a DIFFERENT schema
-    # (Direction|Topic|Signal). The parser must stop at the next ### header.
+def test_parse_hot_topics_builds_discussions_url_not_issues(tmp_path: Path) -> None:
+    # H2: hot_topics top_thread is a DISCUSSION (fetch_hot_discussions feeds
+    # compute_hot_topics), so the URL path is /discussions/<n>, NEVER /issues/<n>.
     from core.community_data import parse_hot_topics
-    p = tmp_path / "TECH.md"
-    p.write_text(_TECH_MD_FIXTURE)
-    topics = parse_hot_topics(p)["topics"]
-    for t in topics:
-        assert "headroom exploding" not in (t.get("evidence", "") + t.get("topic", "")), \
-            "parser bled into Top Movers table"
+    topics = parse_hot_topics(_write_signals(tmp_path, _SIGNALS_FIXTURE))["topics"]
+    top = topics[0]
+    assert top["url"] == "https://github.com/danielmiessler/Personal_AI_Infrastructure/discussions/1613"
+    assert "/issues/" not in top["url"]
+
+
+def test_parse_hot_topics_accepts_github_explicit_url_and_guards_missing(tmp_path: Path) -> None:
+    from core.community_data import parse_hot_topics
+    payload = {"scanned_at": "2026-08-11T00:00:00", "hot_topics": [
+        {"id": "HT-MEMORY", "total_comments": 5, "thread_count": 1,
+         "top_thread": {"repo": "a/b", "number": 9,
+                        "url": "https://github.com/a/b/discussions/9"}},  # valid github explicit → kept
+        {"id": "HT-STREAMING", "total_comments": 2, "thread_count": 1,
+         "top_thread": {"title": "no repo/number here"}},  # → empty url, still renders
+    ]}
+    topics = parse_hot_topics(_write_signals(tmp_path, payload))["topics"]
+    by_id = {t["id"]: t for t in topics}
+    assert by_id["HT-MEMORY"]["url"] == "https://github.com/a/b/discussions/9"  # github explicit preferred
+    assert by_id["HT-STREAMING"]["url"] == ""                                    # missing repo/number → empty
+    assert by_id["HT-STREAMING"]["topic"]                                        # row still has a label
+
+
+def test_parse_hot_topics_url_is_hardened_against_injection(tmp_path: Path) -> None:
+    # SECURITY (Gate-2): the URL is handed to the system browser. signals.json is a
+    # local file a future producer / local edit could taint. A non-github explicit
+    # url, a javascript:/file: scheme, or a path-traversal repo must NEVER reach the
+    # browser as-is: drop the tainted explicit + reject a malformed repo → empty url.
+    from core.community_data import parse_hot_topics
+    payload = {"scanned_at": "2026-08-11T00:00:00", "hot_topics": [
+        {"id": "HT-A", "total_comments": 9, "thread_count": 1,
+         "top_thread": {"repo": "a/b", "number": 1, "url": "https://evil.com/phish"}},   # non-github explicit → drop, reconstruct
+        {"id": "HT-B", "total_comments": 8, "thread_count": 1,
+         "top_thread": {"repo": "a/b", "number": 2, "url": "javascript:alert(1)"}},      # dangerous scheme → drop, reconstruct
+        {"id": "HT-C", "total_comments": 7, "thread_count": 1,
+         "top_thread": {"repo": "../evil.com", "number": 3}},                            # path-traversal repo → empty
+        {"id": "HT-D", "total_comments": 6, "thread_count": 1,
+         "top_thread": {"repo": "a/b", "number": "3; rm -rf"}},                          # non-int number → empty
+        {"id": "HT-E", "total_comments": 5, "thread_count": 1,
+         "top_thread": {"repo": "a/b", "number": 5,
+                        "url": "https://github.com/@evil/discussions/1"}},               # @-userinfo-ish path → drop explicit, reconstruct
+        {"id": "HT-F", "total_comments": 4, "thread_count": 1,
+         "top_thread": {"repo": "a/b", "number": 6,
+                        "url": "https://github.com.evil.com/x/discussions/1"}},          # look-alike host → drop explicit, reconstruct
+    ]}
+    by_id = {t["id"]: t for t in parse_hot_topics(_write_signals(tmp_path, payload))["topics"]}
+    assert by_id["HT-A"]["url"] == "https://github.com/a/b/discussions/1"  # tainted explicit dropped, safe reconstruct
+    assert by_id["HT-B"]["url"] == "https://github.com/a/b/discussions/2"  # javascript: dropped, safe reconstruct
+    assert by_id["HT-C"]["url"] == ""                                       # path-traversal repo (..) rejected
+    assert by_id["HT-D"]["url"] == ""                                       # non-int number rejected
+    assert by_id["HT-E"]["url"] == "https://github.com/a/b/discussions/5"  # @-path explicit dropped, safe reconstruct
+    assert by_id["HT-F"]["url"] == "https://github.com/a/b/discussions/6"  # look-alike host dropped, safe reconstruct
 
 
 def test_build_feed_html_prefix_leak_guard(tmp_path: Path) -> None:
@@ -682,34 +732,41 @@ def test_build_feed_html_meta_audience_reversed_order(tmp_path: Path) -> None:
     assert "2026-08-09-weekly.html" not in names, "reversed-order audience:internal must exclude"
 
 
-def test_parse_hot_topics_no_updated_clause_still_parses(tmp_path: Path) -> None:
-    # Gate-2 MED: a `### Rankings` header WITHOUT the "(Updated …)" clause must still
-    # parse the table (updated=None), not silently drop it.
+def test_parse_hot_topics_missing_hot_topics_key_fail_soft(tmp_path: Path) -> None:
+    # A valid signals.json that has no hot_topics list (e.g. an old scan) → empty
+    # topics but still surface scanned_at (never silently drop the freshness).
     from core.community_data import parse_hot_topics
-    p = tmp_path / "TECH.md"
-    p.write_text(
-        "## GitHub Hot Topics\n\n### Rankings\n\n"
-        "| Rank | Topic | Evidence | Trend |\n|--|--|--|--|\n"
-        "| 1 | **Memory** | crewAI #1 | 🔥 |\n\n## Next\n"
-    )
-    result = parse_hot_topics(p)
-    assert result["updated"] is None
-    assert len(result["topics"]) == 1
-    assert result["topics"][0]["topic"] == "Memory"
-
-
-def test_parse_hot_topics_missing_section_fail_soft(tmp_path: Path) -> None:
-    from core.community_data import parse_hot_topics
-    p = tmp_path / "TECH.md"
-    p.write_text("# TECH\n\n## No Hot Topics Here\n\nnothing.")
-    result = parse_hot_topics(p)
-    assert result == {"updated": None, "topics": []}
+    result = parse_hot_topics(_write_signals(tmp_path, {"scanned_at": "2026-08-11T00:00:00", "signals": []}))
+    assert result == {"scanned_at": "2026-08-11T00:00:00", "topics": []}
 
 
 def test_parse_hot_topics_missing_file_fail_soft(tmp_path: Path) -> None:
     from core.community_data import parse_hot_topics
-    result = parse_hot_topics(tmp_path / "nope.md")
-    assert result == {"updated": None, "topics": []}
+    result = parse_hot_topics(tmp_path / "nope.json")
+    assert result == {"scanned_at": None, "topics": []}
+
+
+def test_parse_hot_topics_malformed_json_fail_soft(tmp_path: Path) -> None:
+    # A corrupt/half-written signals.json must not 500 the endpoint.
+    from core.community_data import parse_hot_topics
+    p = tmp_path / "signals.json"
+    p.write_text("{not valid json,,,")
+    result = parse_hot_topics(p)
+    assert result == {"scanned_at": None, "topics": []}
+
+
+def test_parse_hot_topics_skips_malformed_entries(tmp_path: Path) -> None:
+    # A malformed row (missing id, not a dict) is skipped, never fatal.
+    from core.community_data import parse_hot_topics
+    payload = {"scanned_at": "2026-08-11T00:00:00", "hot_topics": [
+        "not a dict",
+        {"total_comments": 9},  # no id → skip
+        {"id": "HT-MEMORY", "total_comments": 4, "thread_count": 2,
+         "top_thread": {"repo": "a/b", "number": 1}},
+    ]}
+    topics = parse_hot_topics(_write_signals(tmp_path, payload))["topics"]
+    assert len(topics) == 1
+    assert topics[0]["id"] == "HT-MEMORY"
 
 
 def test_build_feed_drops_symlink_escaping_knowledge(tmp_path: Path) -> None:
@@ -1284,7 +1341,8 @@ def test_router_handlers_return_real_shapes() -> None:
 
         hot = loop.run_until_complete(community_hot_topics())
         assert "topics" in hot and isinstance(hot["topics"], list)
-        assert "updated" in hot  # the freshness label (may be None on a machine w/o the table)
+        assert "scanned_at" in hot  # freshness anchor (ISO scan time; None if no signals.json)
+        assert "updated" not in hot  # old TECH.md-date field is gone (migrated to scanned_at)
         assert hot["count"] == len(hot["topics"])
     finally:
         loop.close()

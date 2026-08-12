@@ -54,15 +54,14 @@ def _engagement_dir():
     return PROJECTS_DIR / "GitHub_Community" / ".artifacts"
 
 
-def _tech_md_path():
-    # The canonical DDD doc lives under 2-understanding/ post-ad7f6623. Route
-    # through the six-section SSOT resolver (strangler-aware: resolves the numbered
-    # layout, falls back to root for an un-migrated DDD) rather than hardcoding the
-    # path — enforced by test_ddd_paths_single_source::test_no_stray_ddd_doc_path_joins.
+def _signals_path():
+    # Hot Topics reads the LIVE community-demand feed the weekly monitor job writes
+    # (run_ced271e8) — the same signals.json that backs the daily-signals scan — NOT
+    # the hand-maintained TECH.md Rankings table (which nobody refreshed → 2-month
+    # stale). Sibling of _engagement_dir(): same GitHub_Community/.artifacts dir.
     from jobs.paths import PROJECTS_DIR
-    from core.ddd_paths import ddd_path
 
-    return ddd_path(PROJECTS_DIR / "GitHub_Community", "TECH.md")
+    return PROJECTS_DIR / "GitHub_Community" / ".artifacts" / "signals.json"
 
 
 @router.get("/feed")
@@ -83,18 +82,22 @@ async def community_feed() -> dict:
 
 @router.get("/hot-topics")
 async def community_hot_topics() -> dict:
-    """GitHub Hot Topics (community DEMAND) parsed from the GitHub_Community DDD's
-    TECH.md `## GitHub Hot Topics` → Rankings table.
+    """GitHub Hot Topics (community DEMAND) read LIVE from the GitHub_Community
+    monitor's signals.json `hot_topics` feed (run_ced271e8 — was the stale
+    hand-maintained TECH.md Rankings table).
 
-    Returns {updated, topics:[{rank,topic,evidence,trend}], count}. `updated` is the
-    table's own snapshot date (the source is a manual scan snapshot, NOT live) — the
-    frontend surfaces it as a freshness label. Fail-soft: a missing doc/section → an
-    empty topics list (never 500 on a doc edit). Read-only; blocking file read runs
-    off the event loop.
+    Returns {scanned_at, topics:[{rank,id,topic,comments,threads,top_repo,
+    top_number,top_title,url}], count}. `scanned_at` is the feed's real scan
+    timestamp (ISO) — the frontend derives a freshness label from it, so a
+    weekly-refreshed feed reads as fresh (and a >21d gap now signals the SCAN is
+    down, not human neglect). Each topic's `url` is the top discussion thread on
+    GitHub (opened in the system browser). Fail-soft: a missing/unreadable
+    signals.json → empty topics list (never 500). Read-only; blocking file read
+    runs off the event loop.
     """
-    result = await asyncio.to_thread(parse_hot_topics, _tech_md_path())
+    result = await asyncio.to_thread(parse_hot_topics, _signals_path())
     return {
-        "updated": result["updated"],
+        "scanned_at": result["scanned_at"],
         "topics": result["topics"],
         "count": len(result["topics"]),
     }

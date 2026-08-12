@@ -1,29 +1,27 @@
 /**
  * CommunityOverlay — SwarmAI's two-way membrane with the outside world.
  *
- * Design: Knowledge/Designs/2026-08-08-community-overlay-mockup.html (approved),
- * built by run_5165013e. Three tabs = the two hands of the flywheel + reports:
- *   📥 Feed              — inbound: recent signal digests + community reports (click → Canvas)
- *   🔗 Sources           — inbound: configured feeds — add/toggle/tier/delete a feed AND
- *                          add/delete a feed's internal members (urls/keywords/queries)
- *   📤 Engagement        — outbound: GitHub community metrics (data-backed only)
+ * Design: Knowledge/Designs/2026-08-12-community-overlay-redesign-mockup.html (approved),
+ * rebuilt by run_ced271e8. Three tabs = the two hands of the flywheel + reports:
+ *   📥 Inbound   — recent signal digests + community reports (local files → Canvas) + Hot Topics
+ *   🔗 Watching  — configured feeds — add/toggle/tier/delete a feed AND members
+ *   📤 Outbound  — GitHub community engagement (needs-followup hero + collapsed handled)
  *
- * The Feed's Reports section is community-scoped: internal governance reports
- * (ddd-weekly/pipeline-weekly/swarmai-monthly/validator-audit) are excluded by the
- * backend classifier (community_data._is_community_report). All Sources writes —
- * feed-level AND member-level — go through the shared config lock (managed_by:user,
- * coexisting with self_tune) so a UI edit and a scheduled tune never clobber.
+ * UI craft (KNOWLEDGE.md 5-check + s_frontend-design/data/design-judgment.md):
+ *   - NO per-row border box-wall — whitespace + hover-highlight groups (Tufte data-ink,
+ *     Refactoring UI "fewer borders").
+ *   - ONE focus per tab (Von Restorff): Inbound = latest-report hero + demand ranking;
+ *     Outbound = needs-followup accent rows, "Posted/handled" DEMOTED to a collapsed count.
  *
- * Honesty rules enforced here (Gate-1, run_5165013e):
- *   - No fabricated data. Feed shows real files; Sources shows real config.yaml
- *     feeds; Engagement shows only metrics with backing data (no invented quality
- *     score — there is none on disk).
- *   - Every tab has loading / error / empty branches (the 5-overlay fetch pattern,
- *     TECH.md § recurring-overlay-bug) so a failed OR empty fetch never renders a
- *     permanent spinner or a false-zero.
+ * Link routing (run_ced271e8):
+ *   - LOCAL synthesis files (our Signals/Reports .md) → Canvas via swarm:open-file.
+ *   - EXTERNAL github links (Hot Topics top thread, Outbound comment) → the SYSTEM
+ *     browser via openExternal(). A raw window.open is SILENTLY IGNORED by the Tauri v2
+ *     WKWebview (see openExternal.ts / ToDoOverlay.tsx) — never use it for external URLs.
  *
- * Clone lineage: NeedYouOverlay (fetch+list shape) + BrainHub.openFile (close-then
- * -dispatch swarm:open-file). Chrome/geometry owned by OverlayHost.
+ * Honesty rules (Gate-1, run_5165013e): no fabricated data; every tab has loading/error/
+ * empty branches (the 5-overlay fetch pattern). Clone lineage: NeedYouOverlay + BrainHub.
+ * Chrome/geometry owned by OverlayHost.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -33,7 +31,9 @@ import {
   type CommunityEngagement,
   type CommunityEngagementItem,
   type CommunityHotTopics,
+  type CommunityHotTopic,
 } from '../../services/community';
+import { openExternal } from '../../utils/openExternal';
 
 interface CommunityContentProps {
   /** Close the overlay (host-owned) — called before opening a file in Canvas. */
@@ -162,11 +162,20 @@ function StateBanner({ loading, error, empty, emptyMsg }: {
   return null;
 }
 
-// ── 📥 Inbound tab — Hot Topics + weekly-report card + Signals-only daily flow ──
-// IA split (run_edcd9672): Reports and Signals are DIFFERENT artifacts (weekly
-// synthesis vs daily raw log) — no longer interleaved in one mtime list. The latest
-// Report is a hero card; Signals are the daily stream below. Reports are separated
-// by `category === 'Reports'`, so a future report type surfaces automatically.
+// A small section label — uppercase, muted (mockup .lbl). ONE representation; used to
+// chunk a tab into whitespace-separated groups instead of boxing every row.
+function SectionLabel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className={`text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] font-semibold ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+// ── 📥 Inbound tab — latest-report hero + Hot Topics demand ranking + daily signals ──
+// IA (run_edcd9672 + redesign run_ced271e8): the latest weekly Report is the ONE hero;
+// Hot Topics is the live demand ranking (heat bar); daily Signals are a plain list below.
+// De-boxed: no per-row borders — whitespace + hover-highlight (Tufte / Refactoring UI).
 
 function InboundTab({ close }: { close: () => void }) {
   const { data, loading, error } = useFetch<CommunityFeed>(communityService.fetchFeed);
@@ -179,7 +188,7 @@ function InboundTab({ close }: { close: () => void }) {
     [close],
   );
 
-  // Split by category: Reports → card(s), everything else (Signals) → daily list.
+  // Split by category: Reports → hero card, everything else (Signals) → daily list.
   // Backend already returns newest-first, so [0] is the latest of each kind.
   const { latestReport, pastReports, signals } = useMemo(() => {
     const items = data?.items ?? [];
@@ -189,66 +198,60 @@ function InboundTab({ close }: { close: () => void }) {
   }, [data]);
 
   // Honest cap disclosure: the backend caps the WHOLE feed (Signals + Reports) at
-  // feed_cap and flags `truncated`. Surface it instead of dropping it (was silent).
-  // NOTE: the cap is on the whole feed, so the disclosed number is `data.count` (the
-  // total capped items fetched) — NOT signals.length, which is only the post-split
-  // signal subset and would misstate the cap (adversarial-review finding).
+  // feed_cap and flags `truncated`. Surface it instead of dropping it. The disclosed
+  // number is `data.count` (the total capped items fetched) — NOT signals.length.
   const truncated = data?.truncated === true;
   const fetchedCount = data?.count ?? 0;
 
   // Hot Topics renders ABOVE as an independent SIBLING — never gated by the feed's
   // own loading/empty state (an empty file feed must not hide hot topics).
   return (
-    <div className="flex flex-col gap-4 max-w-[860px]">
-      <HotTopicsSection />
-
-      {/* Weekly report — the latest synthesis, as a hero card (not buried in the flow) */}
+    <div className="flex flex-col gap-6 max-w-[760px]">
+      {/* Latest weekly report — the ONE hero (Von Restorff): accent bar, no tile-wall */}
       {latestReport && (
         <div>
-          <div className="text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)] font-semibold mb-1.5">
-            Latest report
-          </div>
+          <SectionLabel className="mb-2">Latest — read this first</SectionLabel>
           <button
             type="button"
             onClick={() => openFile(latestReport.path)}
             data-testid="community-report-card"
-            className="group w-full text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-hover)]/40 hover:border-[var(--color-border-strong)] transition-colors px-4 py-3 flex items-center gap-3"
+            className="group relative w-full text-left rounded-[10px] bg-[var(--color-hover)]/50 hover:bg-[var(--color-hover)] transition-colors pl-[18px] pr-4 py-3.5 flex items-center gap-3
+                       before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-[var(--panel-accent,var(--color-primary))]"
           >
             <span className="text-[18px]">📊</span>
             <span className="flex-1 min-w-0">
-              <span className="block text-[13px] font-medium text-[var(--color-text)] truncate">{latestReport.name}</span>
-              <span className="block text-[11px] text-[var(--color-text-dim)]">Weekly community report</span>
+              <span className="block text-[14px] font-semibold text-[var(--color-text)] truncate">{latestReport.name}</span>
+              <span className="block text-[11.5px] text-[var(--color-text-dim)]">Weekly community report</span>
             </span>
             {pastReports.length > 0 && (
-              <span className="text-[10.5px] text-[var(--color-text-faint)] shrink-0">
-                +{pastReports.length} past
-              </span>
+              <span className="text-[10.5px] text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
             )}
             <span className="text-[12px] text-[var(--panel-accent,var(--color-primary))] shrink-0">open ↗</span>
           </button>
         </div>
       )}
 
-      {/* Daily signals — Signals only, newest-first, click → Canvas */}
+      {/* Hot Topics — live community demand ranking (heat bar + thread count) */}
+      <HotTopicsSection />
+
+      {/* Daily signals — Signals only, newest-first, click → Canvas (LOCAL files) */}
       <div>
-        <div className="text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)] font-semibold mb-1.5">
-          Daily signals
-        </div>
+        <SectionLabel className="mb-2">Today's signals</SectionLabel>
         {loading || error || signals.length === 0 ? (
           <StateBanner loading={loading} error={error} empty={signals.length === 0}
             emptyMsg="No recent signals." />
         ) : (
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-0.5">
             {signals.map((it) => (
               <button
                 key={it.path}
                 type="button"
                 onClick={() => openFile(it.path)}
                 data-testid="community-feed-item"
-                className="group w-full text-left rounded-lg px-3 py-2 border border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
+                className="group w-full text-left rounded-lg px-2 py-2 hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3"
               >
                 <span className="flex-1 text-[13px] text-[var(--color-text)] truncate">{it.name}</span>
-                <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">
+                <span className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100">
                   open_in_new
                 </span>
               </button>
@@ -256,7 +259,7 @@ function InboundTab({ close }: { close: () => void }) {
             {truncated && (
               <div
                 data-testid="community-feed-truncated"
-                className="px-3 py-1.5 text-[11px] text-[var(--color-text-faint)]"
+                className="px-2 py-1.5 text-[11px] text-[var(--color-text-faint)]"
               >
                 Showing the newest {fetchedCount} {fetchedCount === 1 ? 'item' : 'items'} — more on disk.
               </div>
@@ -268,55 +271,105 @@ function InboundTab({ close }: { close: () => void }) {
   );
 }
 
-// ── Hot Topics section (gap2) — community DEMAND from TECH.md, read-only ──────
-// Freshness-honest: the source is a MANUAL scan snapshot (not live). The `updated`
-// date is surfaced prominently; if it's stale (>21d) the label warns, so a 2-month-old
-// snapshot never reads as current demand (Gate-1 finding #5).
+// ── Hot Topics section — live community DEMAND from signals.json, read-only ──────
+// Freshness-honest: the label reflects the feed's real scan time (scanned_at). Because
+// the feed auto-refreshes weekly, a >21d gap now signals the SCAN may be DOWN (not human
+// neglect). Each row's external GitHub thread opens in the system browser (openExternal).
 const _STALE_DAYS = 21;
 
-function _freshnessLabel(updated: string | null): { text: string; stale: boolean } {
-  if (!updated) return { text: 'snapshot date unknown', stale: true };
-  const then = new Date(updated + 'T00:00:00Z').getTime();
-  if (Number.isNaN(then)) return { text: `last scan ${updated}`, stale: true };
+/** Derive a freshness label from an ISO scan timestamp. Defensive parse (H3): the
+ *  timestamp is a full ISO string with microseconds and no 'Z' (e.g.
+ *  "2026-08-11T17:50:56.037632"). The backend writes it from Python's naive
+ *  datetime.isoformat() (UTC, no offset) — and `new Date("...T...")` WITHOUT a
+ *  timezone is parsed as LOCAL time by the JS engine, which would skew the age by
+ *  the machine's UTC offset (e.g. read 8h newer in UTC-8, under-reporting
+ *  staleness). So append 'Z' to force UTC (matching BottomBar.tsx's fix) unless an
+ *  offset is already present. A NaN result still degrades to "unknown", never
+ *  crashes. For an auto-refreshed feed, >21d stale means the weekly scan may be
+ *  down (H4), not that a human forgot. */
+function _freshnessLabel(scannedAt: string | null): { text: string; stale: boolean } {
+  if (!scannedAt) return { text: 'scan time unknown', stale: true };
+  const normalized = scannedAt.includes('Z') || scannedAt.includes('+') ? scannedAt : scannedAt + 'Z';
+  const then = new Date(normalized).getTime();
+  if (Number.isNaN(then)) return { text: 'scan time unknown', stale: true };
   const days = Math.floor((Date.now() - then) / 86_400_000);
-  if (days > _STALE_DAYS) return { text: `⚠ stale — last scanned ${updated} (${days}d ago)`, stale: true };
-  return { text: `last scanned ${updated}`, stale: false };
+  if (days > _STALE_DAYS) {
+    return { text: `⚠ scan may be down — last ${days}d ago`, stale: true };
+  }
+  if (days <= 0) return { text: 'synced today · auto weekly', stale: false };
+  return { text: `synced ${days}d ago · auto weekly`, stale: false };
 }
 
 function HotTopicsSection() {
   const { data, loading, error } = useFetch<CommunityHotTopics>(communityService.fetchHotTopics);
-  // Fail-quiet: hot topics is a secondary panel — on load-fail or empty, render NOTHING
-  // (don't push a red error banner above the primary feed). It's additive context.
+  // Fail-quiet: hot topics is secondary — on load-fail or empty, render NOTHING
+  // (don't push a red error banner above the primary content). It's additive context.
   if (loading || error) return null;
   const topics = data?.topics ?? [];
   if (topics.length === 0) return null;
-  const fresh = _freshnessLabel(data?.updated ?? null);
+  const fresh = _freshnessLabel(data?.scannedAt ?? null);
+  // Heat bar is scaled to the top topic's comment count (small-multiples on a shared
+  // scale — Tufte). Guard div-by-zero when the leader has 0 comments.
+  const maxComments = Math.max(...topics.map((t) => t.comments), 1);
 
   return (
-    <div data-testid="community-hot-topics" className="rounded-lg border border-[var(--color-border)] px-3 py-2.5">
-      <div className="flex items-baseline justify-between mb-1.5">
-        <span className="text-[12px] font-semibold text-[var(--color-text)]">🔥 Hot Topics · community demand</span>
+    <div data-testid="community-hot-topics">
+      <div className="flex items-baseline justify-between mb-2">
+        <SectionLabel>This week the community is discussing</SectionLabel>
         <span
           data-testid="hot-topics-freshness"
-          className={`text-[10px] ${fresh.stale ? 'text-amber-500' : 'text-[var(--color-text-faint)]'}`}
+          className={`text-[10.5px] flex items-center gap-1.5 ${fresh.stale ? 'text-amber-500' : 'text-emerald-500'}`}
         >
+          <span className={`w-[5px] h-[5px] rounded-full ${fresh.stale ? 'bg-amber-500' : 'bg-emerald-500'}`} aria-hidden />
           {fresh.text}
         </span>
       </div>
-      <ol className="flex flex-col gap-0.5">
+      <div className="flex flex-col gap-0.5">
         {topics.map((t) => (
-          <li key={t.rank} data-testid="hot-topic-row" className="flex items-baseline gap-2 text-[12px] py-0.5" title={t.evidence}>
-            <span className="font-mono text-[10.5px] text-[var(--color-text-faint)] w-4 shrink-0">{t.rank}</span>
-            <span className="flex-1 text-[var(--color-text)] truncate">{t.topic}</span>
-            <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{t.trend}</span>
-          </li>
+          <HotTopicRow key={t.id} topic={t} widthPct={Math.round((t.comments / maxComments) * 100)} />
         ))}
-      </ol>
+      </div>
     </div>
   );
 }
 
-// ── 🔗 Sources tab — configured feeds (add/toggle/tier/delete + member editing) ──
+function HotTopicRow({ topic, widthPct }: { topic: CommunityHotTopic; widthPct: number }) {
+  const hasUrl = !!topic.url.trim();
+  const open = useCallback(() => {
+    // External GitHub discussion → SYSTEM browser (openExternal), NOT window.open
+    // (dead in the Tauri v2 WKWebview). No-op when the URL couldn't be built.
+    // openExternal already falls back internally + never throws meaningfully, but
+    // attach a .catch so a rejected promise is logged, not an unhandled rejection.
+    if (hasUrl) openExternal(topic.url).catch((e) => console.warn('openExternal failed:', topic.url, e));
+  }, [topic.url, hasUrl]);
+
+  return (
+    <button
+      type="button"
+      onClick={open}
+      disabled={!hasUrl}
+      data-testid="hot-topic-row"
+      title={topic.topTitle || topic.topic}
+      className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+    >
+      <span className="font-mono text-[11px] text-[var(--color-text-faint)] w-3.5 text-right shrink-0">{topic.rank}</span>
+      <span className="flex-1 min-w-0 text-[13px] text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
+        {topic.topic}
+        {topic.threads > 0 && (
+          <span className="ml-2 text-[11px] text-[var(--color-text-faint)]">{topic.threads} threads</span>
+        )}
+      </span>
+      <span className="w-16 h-1 rounded-full bg-[var(--color-border)] shrink-0 overflow-hidden" aria-hidden>
+        <span className="block h-full rounded-full bg-[var(--panel-accent,var(--color-primary))]" style={{ width: `${widthPct}%` }} />
+      </span>
+      <span className="text-[10.5px] text-[var(--color-text-dim)] w-8 text-right shrink-0">{topic.comments}</span>
+    </button>
+  );
+}
+
+// ── 🔗 Watching tab — configured feeds (add/toggle/tier/delete + member editing) ──
+// De-boxed (run_ced271e8): rows separated by hover-highlight, not per-row borders. It's
+// a config surface, so it keeps its inline row editor (tier select / toggle / delete).
 
 function SourcesTab() {
   const { data, loading, error, reload } = useFetch<CommunitySource[]>(communityService.fetchSources);
@@ -361,15 +414,16 @@ function SourcesTab() {
   if (loading || error) return banner;
 
   return (
-    <div className="max-w-[860px]">
+    <div className="max-w-[760px]">
+      <SectionLabel className="mb-2">Subscribed sources · your edits are never auto-disabled</SectionLabel>
       {actionErr && (
         <div className="mb-2 text-[11.5px] text-red-400">{actionErr}</div>
       )}
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-0.5">
         {sources.map((s) => (
           <div key={s.id} data-testid="community-source-row">
           <div
-            className="rounded-lg px-3 py-2 hover:bg-[var(--color-hover)] transition-colors grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-3"
+            className="rounded-lg px-2 py-2 hover:bg-[var(--color-hover)] transition-colors grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-3"
           >
             {/* expand toggle — only for feeds that HAVE editable members */}
             {s.memberKind !== null ? (
@@ -632,14 +686,14 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
   );
 }
 
-// ── 📤 Outbound tab — demoted KPI strip + the actionable engagement LIST ─────
-// The KPI strip is DEMOTED (small, muted) — it's context, not the answer. The
-// answer is the list: what we posted, what came back, what needs a reply. Rows the
-// backend marks needs_followup (a reply / maintainer reply) sort first; row click
-// opens the comment on GitHub; replies expand inline. (run_edcd9672)
+// ── 📤 Outbound tab — demoted KPI strip + needs-followup HERO + collapsed handled ──
+// The answer is "who is waiting on me": needs-followup rows are the accent hero. The
+// KPI strip is one muted line (context, not the answer). "Posted / handled" is DEMOTED
+// to a collapsed expandable count — not a wall of stacked boxes (run_ced271e8 redesign).
 
 function OutboundTab() {
   const { data, loading, error } = useFetch<CommunityEngagement>(communityService.fetchEngagement);
+  const [showHandled, setShowHandled] = useState(false); // Posted/handled default COLLAPSED
 
   if (loading || error) return <StateBanner loading={loading} error={error} empty={false} emptyMsg="" />;
   const e = data!;
@@ -655,12 +709,11 @@ function OutboundTab() {
   const followups = items.filter((it) => it.needsFollowup);
   const posted = items.filter((it) => !it.needsFollowup);
   // Honest cap disclosure: the KPI count is the TRUE total (e.g. 216) but the list is
-  // capped, so a user counting rows must not think the number lies. Show it only when
-  // the list is actually shorter than the posted-comments total.
+  // capped. Show it only when the list is actually shorter than the posted total.
   const capped = e.kpis.commentsPosted > items.length;
 
   return (
-    <div className="max-w-[860px] flex flex-col gap-4">
+    <div className="max-w-[760px] flex flex-col gap-5">
       {/* Demoted KPI strip — one muted line, not a wall of big numbers */}
       <div data-testid="community-kpi-strip" className="text-[11.5px] text-[var(--color-text-muted)]">
         {kpiParts.join('  ·  ')}
@@ -671,18 +724,46 @@ function OutboundTab() {
         <StateBanner loading={false} error={false} empty emptyMsg="No engagements yet." />
       ) : (
         <>
+          {/* HERO: needs-your-reply — the one thing that stands out */}
           {followups.length > 0 && (
-            <EngagementGroup
-              hint={`⬤ Needs follow-up — someone else replied last, awaiting your response (${followups.length})`}
-              items={followups}
-            />
+            <div>
+              <SectionLabel className="mb-2 !text-amber-500/90">
+                Needs your reply — someone answered last, waiting on you ({followups.length})
+              </SectionLabel>
+              <div className="flex flex-col gap-2">
+                {followups.map((it) => (
+                  <FollowupRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
+                ))}
+              </div>
+            </div>
           )}
+
+          {/* DEMOTED: posted / handled — collapsed to a count, expand on demand */}
           {posted.length > 0 && (
-            <EngagementGroup hint="⬤ Posted / handled" items={posted} muted />
-          )}
-          {capped && (
-            <div data-testid="community-list-cap" className="text-[10.5px] text-[var(--color-text-faint)] italic">
-              Showing the {items.length} most recent of {e.kpis.commentsPosted} posted comments.
+            <div>
+              <button
+                type="button"
+                data-testid="handled-toggle"
+                onClick={() => setShowHandled((v) => !v)}
+                aria-expanded={showHandled}
+                className="flex items-center gap-2 text-[12px] text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)] px-1 py-1.5 rounded"
+              >
+                <span className="w-[7px] h-[7px] rounded-full bg-[var(--color-text-faint)]" aria-hidden />
+                Posted · handled ({posted.length}{capped ? ` shown of ${e.kpis.commentsPosted}` : ''})
+                <span className="material-symbols-outlined text-[16px]">{showHandled ? 'expand_more' : 'chevron_right'}</span>
+              </button>
+              {showHandled && (
+                <div data-testid="handled-list" className="mt-1 flex flex-col gap-0.5">
+                  {posted.map((it) => (
+                    <PostedRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
+                  ))}
+                  {capped && (
+                    <div data-testid="community-list-cap" className="mt-1 px-2 text-[10.5px] text-[var(--color-text-faint)] italic">
+                      Showing the {items.length} most recent of {e.kpis.commentsPosted} posted comments.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </>
@@ -691,85 +772,83 @@ function OutboundTab() {
   );
 }
 
-function EngagementGroup({ hint, items, muted }: { hint: string; items: CommunityEngagementItem[]; muted?: boolean }) {
+/** Open an engagement's GitHub comment in the SYSTEM browser (openExternal — a raw
+ *  window.open is silently ignored by the Tauri v2 WKWebview). Shared by both row
+ *  variants. Returns {hasUrl, open}. */
+function useOpenComment(commentUrl: string) {
+  const hasUrl = !!commentUrl.trim();
+  const open = useCallback(() => {
+    // .catch: openExternal falls back internally, but log a rejection rather than
+    // leak an unhandled promise rejection.
+    if (hasUrl) openExternal(commentUrl).catch((e) => console.warn('openExternal failed:', commentUrl, e));
+  }, [commentUrl, hasUrl]);
+  return { hasUrl, open };
+}
+
+// A needs-followup row — the accent hero: shows the latest reply inline so the user
+// knows WHAT they're being asked, without expanding.
+function FollowupRow({ item }: { item: CommunityEngagementItem }) {
+  const { hasUrl, open } = useOpenComment(item.commentUrl);
+  const latest = item.replies.length > 0 ? item.replies[item.replies.length - 1] : null;
+
   return (
-    <div>
-      <div className={`text-[11px] mb-1.5 ${muted ? 'text-[var(--color-text-faint)]' : 'text-[var(--color-text-muted)]'}`}>
-        {hint}
+    <button
+      type="button"
+      onClick={open}
+      disabled={!hasUrl}
+      data-testid="engagement-followup-row"
+      title={item.commentUrl || 'no comment URL'}
+      className="group relative w-full text-left rounded-[10px] bg-amber-500/[0.06] hover:bg-amber-500/[0.11] transition-colors pl-4 pr-3.5 py-3 disabled:cursor-default disabled:opacity-50
+                 before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-amber-500"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="flex-1 min-w-0 text-[13px] font-semibold text-[var(--color-text)] truncate">
+          {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
+        </span>
+        {item.hasMaintainerReply && (
+          <span className="text-[9px] uppercase tracking-wide text-amber-500 border border-amber-500/40 rounded px-1.5 py-0.5 shrink-0">
+            maintainer
+          </span>
+        )}
+        <span className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)] shrink-0">open_in_new</span>
       </div>
-      <div className="flex flex-col gap-1.5">
-        {items.map((it) => (
-          <EngagementRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
-        ))}
+      {latest && (
+        <div className="mt-1.5 flex items-baseline gap-2 text-[12px]">
+          <span className="text-[var(--color-text)] font-medium shrink-0">{latest.author}</span>
+          <span className="text-[var(--color-text-dim)] truncate">{latest.body}</span>
+        </div>
+      )}
+      <div className="mt-1 text-[10.5px] text-[var(--color-text-faint)]">
+        {item.topic && <span className="font-mono">{item.topic}</span>}
+        {item.postedAt && <span> · posted {item.postedAt.slice(0, 10)}</span>}
+        {item.confidence != null && <span> · conf {item.confidence}</span>}
       </div>
-    </div>
+    </button>
   );
 }
 
-function EngagementRow({ item }: { item: CommunityEngagementItem }) {
-  const [open, setOpen] = useState(false);
-  const dotClass = item.hasMaintainerReply
-    ? 'bg-[var(--panel-accent,var(--color-primary))]'
-    : item.needsFollowup
-      ? 'bg-emerald-500'
-      : 'bg-[var(--color-text-faint)]';
-
-  const hasUrl = !!item.commentUrl.trim();
-  const openComment = useCallback(() => {
-    // Guard the empty-URL case: window.open('') opens a blank about:blank tab.
-    if (hasUrl) window.open(item.commentUrl, '_blank', 'noopener,noreferrer');
-  }, [item.commentUrl, hasUrl]);
-
+// A posted/handled row — demoted, compact, one line. Reply count shown as a subtle badge.
+function PostedRow({ item }: { item: CommunityEngagementItem }) {
+  const { hasUrl, open } = useOpenComment(item.commentUrl);
   return (
-    <div data-testid="community-engagement-row" className="rounded-lg border border-[var(--color-border)] overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2.5">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} aria-hidden />
-        <button
-          type="button"
-          onClick={openComment}
-          disabled={!hasUrl}
-          data-testid="engagement-open-github"
-          className="group flex-1 min-w-0 text-left disabled:cursor-default"
-          title={item.commentUrl || 'no comment URL'}
-        >
-          <span className="block text-[13px] text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
-            {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
-          </span>
-          <span className="block text-[11px] text-[var(--color-text-dim)] truncate">
-            {item.topic && <span className="font-mono">{item.topic}</span>}
-            {item.postedAt && <span> · {item.postedAt.slice(0, 10)}</span>}
-            {item.confidence != null && <span> · conf {item.confidence}</span>}
-          </span>
-        </button>
-        {item.replyCount > 0 && (
-          <button
-            type="button"
-            onClick={() => setOpen((o) => !o)}
-            data-testid="engagement-toggle-replies"
-            className={`text-[11px] px-2 py-0.5 rounded shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-emerald-500'}`}
-            aria-expanded={open}
-          >
-            {item.hasMaintainerReply ? '● maintainer ' : '● '}{item.replyCount} {open ? '▾' : '▸'}
-          </button>
-        )}
-        <span className="material-symbols-outlined text-[15px] text-[var(--color-text-muted)] shrink-0">open_in_new</span>
-      </div>
-      {open && item.replies.length > 0 && (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-hover)]/40 px-3 py-2 flex flex-col gap-2">
-          {item.replies.map((r, i) => (
-            <div key={`${r.author}-${r.createdAt}-${i}`} className="text-[12px]">
-              <span className="text-[var(--color-text)] font-medium">{r.author}</span>
-              {r.isMaintainer && (
-                <span className="ml-1.5 text-[9px] uppercase text-[var(--panel-accent,var(--color-primary))] border border-[var(--panel-accent,var(--color-primary))] rounded px-1 py-0.5">
-                  maintainer
-                </span>
-              )}
-              {r.createdAt && <span className="ml-1.5 text-[10.5px] text-[var(--color-text-faint)]">{r.createdAt.slice(0, 10)}</span>}
-              <p className="mt-0.5 text-[var(--color-text-dim)] leading-snug">{r.body}</p>
-            </div>
-          ))}
-        </div>
+    <button
+      type="button"
+      onClick={open}
+      disabled={!hasUrl}
+      data-testid="engagement-posted-row"
+      title={item.commentUrl || 'no comment URL'}
+      className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+    >
+      <span className="w-[6px] h-[6px] rounded-full bg-[var(--color-text-faint)] shrink-0" aria-hidden />
+      <span className="flex-1 min-w-0 text-[12.5px] text-[var(--color-text-dim)] truncate group-hover:text-[var(--color-text)]">
+        {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
+      </span>
+      {item.replyCount > 0 && (
+        <span className={`text-[10.5px] shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-emerald-500'}`}>
+          ● {item.replyCount}
+        </span>
       )}
-    </div>
+      <span className="material-symbols-outlined text-[14px] text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 shrink-0">open_in_new</span>
+    </button>
   );
 }

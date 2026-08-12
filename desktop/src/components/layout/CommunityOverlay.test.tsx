@@ -11,9 +11,19 @@
  *
  * The community service is mocked at the boundary (system boundary = HTTP).
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
 import { CommunityContent } from './CommunityOverlay';
+
+// openExternal is the Tauri system-browser helper. External links (Outbound comment,
+// Hot Topics thread) route through it — a raw window.open is dead in the WKWebview.
+// Mock at the module boundary so we can assert the URL it's called with.
+// openExternal is async (Promise<void>) — the component now attaches .catch(), so the
+// mock MUST return a promise (a bare undefined would throw "Cannot read .catch").
+const openExternal = vi.fn((_url: string) => Promise.resolve());
+vi.mock('../../utils/openExternal', () => ({
+  openExternal: (url: string) => openExternal(url),
+}));
 
 const fetchFeed = vi.fn();
 const fetchSources = vi.fn();
@@ -60,6 +70,13 @@ function srcWithMembers(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+// HotTopicsSection fetches on Inbound mount; default it to empty so tests that don't
+// care about hot topics don't hit an undefined return. Individual hot-topics tests
+// override this.
+beforeEach(() => {
+  fetchHotTopics.mockResolvedValue({ scannedAt: null, topics: [] });
+});
 
 afterEach(() => {
   cleanup();
@@ -400,23 +417,25 @@ describe('CommunityOverlay — Outbound tab', () => {
     expect((document.body.textContent ?? '').toLowerCase()).not.toContain('quality');
   });
 
-  it('renders the engagement LIST with a clickable GitHub comment link', async () => {
+  it('opens a posted engagement in the SYSTEM browser via openExternal (NOT window.open)', async () => {
+    // The bug this fixes: EngagementRow used window.open, silently ignored by the
+    // Tauri v2 WKWebview. It must call openExternal(commentUrl) instead.
     fetchFeed.mockResolvedValue([]);
     fetchEngagement.mockResolvedValue(engWith([item()]));
     setup();
     fireEvent.click(screen.getByTestId('community-tab-outbound'));
-    const row = await screen.findByTestId('community-engagement-row');
+    // one posted (handled) row — expand the collapsed group first
+    fireEvent.click(await screen.findByTestId('handled-toggle'));
+    const row = await screen.findByTestId('engagement-posted-row');
     expect(row.textContent).toContain('a/b #1');
-    expect(row.textContent).toContain('T-MEM');
-    // The row's GitHub-open control carries the real comment URL.
-    const opener = within(row).getByTestId('engagement-open-github');
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-    fireEvent.click(opener);
-    expect(openSpy).toHaveBeenCalledWith('https://github.com/a/b/issues/1#c1', '_blank', 'noopener,noreferrer');
+    fireEvent.click(row);
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/a/b/issues/1#c1');
+    expect(openSpy).not.toHaveBeenCalled(); // window.open is dead in Tauri — must not be used
     openSpy.mockRestore();
   });
 
-  it('surfaces needs-followup rows FIRST and expands replies on click', async () => {
+  it('surfaces needs-followup rows as the hero (with the latest reply inline) and collapses handled', async () => {
     fetchFeed.mockResolvedValue([]);
     fetchEngagement.mockResolvedValue(engWith([
       item({ repo: 'c/d', issueNumber: 2, needsFollowup: false }),
@@ -427,14 +446,28 @@ describe('CommunityOverlay — Outbound tab', () => {
     ]));
     setup();
     fireEvent.click(screen.getByTestId('community-tab-outbound'));
-    const rows = await screen.findAllByTestId('community-engagement-row');
-    // needs-followup (a/b) sorts before posted-only (c/d)
-    expect(rows[0].textContent).toContain('a/b #1');
-    expect(rows[1].textContent).toContain('c/d #2');
-    // reply body hidden until toggled
-    expect(within(rows[0]).queryByText(/merged, thanks/)).toBeNull();
-    fireEvent.click(within(rows[0]).getByTestId('engagement-toggle-replies'));
-    await waitFor(() => expect(within(rows[0]).getByText(/merged, thanks/)).toBeTruthy());
+    // needs-followup row is the hero, shown expanded with the latest reply body inline
+    const followup = await screen.findByTestId('engagement-followup-row');
+    expect(followup.textContent).toContain('a/b #1');
+    expect(followup.textContent).toContain('maintainer1');
+    expect(followup.textContent).toContain('merged, thanks');
+    // posted/handled (c/d) is DEMOTED — collapsed by default (not visible until toggled)
+    expect(screen.queryByTestId('engagement-posted-row')).toBeNull();
+    fireEvent.click(screen.getByTestId('handled-toggle'));
+    const posted = await screen.findByTestId('engagement-posted-row');
+    expect(posted.textContent).toContain('c/d #2');
+  });
+
+  it('opens a needs-followup row via openExternal on click', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchEngagement.mockResolvedValue(engWith([
+      item({ repo: 'a/b', issueNumber: 1, needsFollowup: true, replyCount: 1,
+        replies: [{ author: 'user9', body: 'ping?', isMaintainer: false, createdAt: '2026-08-02T10:00:00Z' }] }),
+    ]));
+    setup();
+    fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    fireEvent.click(await screen.findByTestId('engagement-followup-row'));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/a/b/issues/1#c1');
   });
 
   it('shows empty state when there are no engagements', async () => {
@@ -453,15 +486,19 @@ describe('CommunityOverlay — Outbound tab', () => {
     await waitFor(() => expect(screen.getByText(/Couldn't load/i)).toBeTruthy());
   });
 
-  it('discloses the list cap when KPI total exceeds shown rows (no silent truncation)', async () => {
+  it('discloses the list cap inside the expanded handled group (no silent truncation)', async () => {
     fetchFeed.mockResolvedValue([]);
-    // 216 posted total, but only 2 items in the list → must say "showing 2 of 216"
+    // 216 posted total, but only 2 items in the list → must say "2 most recent of 216"
     fetchEngagement.mockResolvedValue(engWith(
       [item({ repo: 'a/b', issueNumber: 1 }), item({ repo: 'c/d', issueNumber: 2 })],
       { commentsPosted: 216, repliesReceived: 100, maintainerReplies: 5, stars: null },
     ));
     setup();
     fireEvent.click(screen.getByTestId('community-tab-outbound'));
+    // the collapsed toggle discloses the shown-of-total up front
+    const toggle = await screen.findByTestId('handled-toggle');
+    expect(toggle.textContent).toContain('shown of 216');
+    fireEvent.click(toggle);
     await waitFor(() => expect(screen.getByTestId('community-list-cap')).toBeTruthy());
     expect(screen.getByTestId('community-list-cap').textContent).toContain('2 most recent of 216');
   });
@@ -474,8 +511,91 @@ describe('CommunityOverlay — Outbound tab', () => {
     ));
     setup();
     fireEvent.click(screen.getByTestId('community-tab-outbound'));
-    await screen.findByTestId('community-engagement-row');
+    fireEvent.click(await screen.findByTestId('handled-toggle'));
+    await screen.findByTestId('engagement-posted-row');
     expect(screen.queryByTestId('community-list-cap')).toBeNull();
+  });
+});
+
+describe('CommunityOverlay — Hot Topics (live signals.json feed)', () => {
+  const topic = (over: Record<string, unknown> = {}) => ({
+    rank: 1, id: 'HT-SKILL-ARCH', topic: 'Skill / capability architecture',
+    comments: 15, threads: 18, topRepo: 'danielmiessler/Personal_AI_Infrastructure',
+    topNumber: 1613, topTitle: 'Surviving upgrades',
+    url: 'https://github.com/danielmiessler/Personal_AI_Infrastructure/discussions/1613',
+    ...over,
+  });
+
+  it('renders ranked topics with comment count + thread count', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchHotTopics.mockResolvedValue({
+      scannedAt: new Date().toISOString(),
+      topics: [topic(), topic({ rank: 2, id: 'HT-MEMORY', topic: 'Memory & retrieval', comments: 13, threads: 4, url: 'https://github.com/MemPalace/mempalace/discussions/759' })],
+    });
+    setup();
+    const rows = await screen.findAllByTestId('hot-topic-row');
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain('Skill / capability architecture');
+    expect(rows[0].textContent).toContain('18 threads');
+    expect(rows[0].textContent).toContain('15');
+  });
+
+  it('opens a hot topic thread in the system browser via openExternal (discussions URL)', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchHotTopics.mockResolvedValue({ scannedAt: new Date().toISOString(), topics: [topic()] });
+    setup();
+    const row = await screen.findByTestId('hot-topic-row');
+    fireEvent.click(row);
+    expect(openExternal).toHaveBeenCalledWith(
+      'https://github.com/danielmiessler/Personal_AI_Infrastructure/discussions/1613',
+    );
+  });
+
+  it('shows a fresh (green) freshness label for a recent scan', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchHotTopics.mockResolvedValue({ scannedAt: new Date().toISOString(), topics: [topic()] });
+    setup();
+    const label = await screen.findByTestId('hot-topics-freshness');
+    expect(label.textContent).toMatch(/synced/i);
+    expect(label.className).toContain('emerald');
+  });
+
+  it('shows a scan-may-be-down (amber) label when the feed is > 21 days old', async () => {
+    fetchFeed.mockResolvedValue([]);
+    const old = new Date(Date.now() - 40 * 86_400_000).toISOString();
+    fetchHotTopics.mockResolvedValue({ scannedAt: old, topics: [topic()] });
+    setup();
+    const label = await screen.findByTestId('hot-topics-freshness');
+    expect(label.textContent).toMatch(/scan may be down/i);
+    expect(label.className).toContain('amber');
+  });
+
+  it('renders nothing when there are no hot topics (fail-quiet, no error banner)', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchHotTopics.mockResolvedValue({ scannedAt: null, topics: [] });
+    setup();
+    // Inbound still renders (the signals empty-state), but hot-topics section is absent
+    await waitFor(() => expect(screen.getByText(/No recent signals/i)).toBeTruthy());
+    expect(screen.queryByTestId('community-hot-topics')).toBeNull();
+  });
+
+  it('disables the row (no openExternal) when a topic has no url', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchHotTopics.mockResolvedValue({ scannedAt: new Date().toISOString(), topics: [topic({ url: '' })] });
+    setup();
+    const row = await screen.findByTestId('hot-topic-row');
+    expect(row).toHaveProperty('disabled', true); // the disabled logic itself is under test, not just the no-call
+    fireEvent.click(row);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('shows "scan time unknown" (amber) when scannedAt is null but topics exist', async () => {
+    fetchFeed.mockResolvedValue([]);
+    fetchHotTopics.mockResolvedValue({ scannedAt: null, topics: [topic()] });
+    setup();
+    const label = await screen.findByTestId('hot-topics-freshness');
+    expect(label.textContent).toMatch(/scan time unknown/i);
+    expect(label.className).toContain('amber');
   });
 });
 
@@ -510,8 +630,11 @@ describe('CommunityOverlay — mock completeness contract', () => {
     expect(used.length, 'no communityService references found — the scan regex broke')
       .toBeGreaterThan(0);
 
-    // The mock factory body: everything between `communityService: {` and its closing.
-    const factory = self.slice(self.indexOf('vi.mock('), self.indexOf('}));'));
+    // The mock factory body: from the `communityService: {` marker to the next `}));`.
+    // Anchor on `communityService:` (NOT the first `vi.mock(` — there are now two mock
+    // calls in this file, and the openExternal one comes first).
+    const csStart = self.indexOf('communityService: {');
+    const factory = self.slice(csStart, self.indexOf('}));', csStart));
     const missing = [...new Set(used)].filter(
       (m) => !new RegExp(`\\b${m}\\s*:`).test(factory),
     );

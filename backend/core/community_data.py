@@ -11,8 +11,9 @@ Data sources (all verified live on-disk during the pipeline's PLAN stage):
   - Inbound tab  ← Knowledge/{Signals,Reports}/*.{md,html} (recent, newest-first;
                    HTML reports are fail-closed — see _is_community_html_report;
                    build_feed — the overlay splits Reports vs Signals by category)
-  - Hot Topics   ← Projects/GitHub_Community/2-understanding/TECH.md
-                   `## GitHub Hot Topics` Rankings table (parse_hot_topics)
+  - Hot Topics   ← Projects/GitHub_Community/.artifacts/signals.json `hot_topics`
+                   (parse_hot_topics — the LIVE weekly-refreshed monitor feed, was
+                   a hand-maintained TECH.md Rankings table that went stale)
   - Outbound tab ← Projects/GitHub_Community/.artifacts/{engagement_log,
                    reply_archive,star_log}.jsonl — aggregate_engagement (scalar
                    KPIs) + engagement_items (the per-engagement list, joined
@@ -547,77 +548,161 @@ def build_feed(knowledge_dir: Path) -> list[dict]:
     return items[:_FEED_CAP]
 
 
-# ── Hot Topics (gap2) — parse TECH.md "## GitHub Hot Topics" → Rankings table ──
+# ── Hot Topics — LIVE community DEMAND from signals.json (the weekly-refreshed feed) ──
+#
+# Source migration (run_ced271e8): Hot Topics used to parse a HAND-MAINTAINED
+# `### Rankings` table in the GitHub_Community DDD's TECH.md — nobody refreshed it,
+# so the overlay showed a 2-month-stale snapshot while the weekly monitor job kept
+# `signals.json` current. We now read `signals.json`'s `hot_topics` array directly:
+# it is the SAME artifact the monitor produces (compute_hot_topics), so the overlay's
+# freshness now tracks the real scan time (scanned_at), not a human's edit cadence.
+#
+# hot_topics[] shape (from monitor.compute_hot_topics): {id, total_comments,
+# thread_count, top_thread{repo, number, title, comments, updated_at, category}, repos[]}.
+# The top_thread is always a GitHub *Discussion* (fetch_hot_discussions feeds
+# compute_hot_topics) — so its canonical URL is /discussions/<number>, NOT /issues/.
 
-_HOT_TOPICS_HEADER = "## GitHub Hot Topics"
-# Enter Rankings on ANY `### Rankings` header (do NOT couple to the freshness
-# clause — a doc edit dropping "(Updated …)" must not silently empty Hot Topics;
-# Gate-2 MED, run_03b5d04f). The date is captured SEPARATELY, optionally.
-_RANKINGS_HEADER_RE = re.compile(r"^###\s+Rankings\b", re.IGNORECASE)
-_RANKINGS_DATE_RE = re.compile(r"\(Updated\s+([0-9]{4}-[0-9]{2}-[0-9]{2})", re.IGNORECASE)
-_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+# The 8 hot-topic ids are a CLOSED set (monitor.HOT_TOPIC_KEYWORDS). An explicit
+# label map beats munging "HT-SKILL-ARCH" → "Skill Arch" (fragile, ugly). A future
+# id not in this map falls back to the humanizer below (never crashes, just less pretty).
+_HOT_TOPIC_LABELS = {
+    "HT-PROD-OPS": "Production ops & deployment",
+    "HT-MEMORY": "Memory & retrieval",
+    "HT-COORDINATION": "Multi-agent coordination",
+    "HT-SKILL-ARCH": "Skill / capability architecture",
+    "HT-AUTONOMY": "Autonomy & guardrails",
+    "HT-CHUNKING": "Chunking & retrieval strategy",
+    "HT-STREAMING": "Streaming & real-time",
+    "HT-API-COST": "API / token cost",
+}
 
 
-def _strip_md(cell: str) -> str:
-    """Strip markdown bold from a table cell (links/emoji are kept — they carry
-    meaning in the evidence/trend columns). Bold → plain so the UI renders text,
-    not literal asterisks."""
-    return _MD_BOLD_RE.sub(r"\1", cell).strip()
+def _humanize_topic_id(topic_id: str) -> str:
+    """Fallback label for a hot-topic id not in _HOT_TOPIC_LABELS. Strips a leading
+    'HT-' and title-cases the hyphen-separated remainder ('HT-FOO-BAR' → 'Foo Bar').
+    Kept simple + total — a new id must degrade to a readable label, never a KeyError."""
+    stem = topic_id[3:] if topic_id.upper().startswith("HT-") else topic_id
+    words = [w for w in stem.replace("_", "-").split("-") if w]
+    return " ".join(w.capitalize() for w in words) or topic_id
 
 
-def parse_hot_topics(tech_md_path: Path) -> dict:
-    """Parse the ## GitHub Hot Topics → ### Rankings pipe table from a project's
-    TECH.md into {updated: <YYYY-MM-DD|None>, topics: [{rank,topic,evidence,trend}]}.
+# owner/repo: each segment is alnum with interior . _ - (GitHub's own rule), and
+# CANNOT start or end with a separator. This is deliberately stricter than a bare
+# [A-Za-z0-9._-]+ — that class ADMITS "..", so `repo="../evil"` would pass and build
+# "https://github.com/../evil/discussions/N" which a browser path-normalizes to a
+# DIFFERENT github path (Gate-2 MULTI-SPECIALIST finding: correctness HIGH + security
+# MED). Anchoring the ends to an alnum char blocks a leading/trailing/solo "." → no ".."
+# segment can survive. A segment is: alnum, then optionally (interior [._-] or alnum)*
+# ending in alnum.
+_SEG = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+_REPO_RE = re.compile(rf"^{_SEG}/{_SEG}$")
+# Path shape of a valid github discussions URL, for validating an explicit url:
+# /owner/repo/discussions/<int> (owner/repo per _SEG, no .. — blocks
+# "https://github.com/@evil/discussions/1" and "https://github.com/../x/discussions/1").
+_DISCUSSION_PATH_RE = re.compile(rf"^/{_SEG}/{_SEG}/discussions/[0-9]+/?$")
 
-    FAIL-SOFT: a missing file / missing section / missing table → {updated:None,
-    topics:[]} (never raises — the endpoint must not 500 on a doc edit). Scoped to
-    the Rankings table ONLY: parsing stops at the next `###`/`##` header so it never
-    bleeds into the sibling `### Top Movers` table (different schema). No LLM — the
-    table is fixed-column pipe markdown."""
-    empty = {"updated": None, "topics": []}
+
+def _hot_topic_url(top_thread: dict) -> str:
+    """Canonical GitHub URL for a hot-topic's top thread. These are DISCUSSIONS
+    (compute_hot_topics is fed by fetch_hot_discussions), so the path is
+    /discussions/<number>, NOT /issues/. Empty string when repo/number is missing
+    or malformed (the row still renders — just without a clickable link).
+
+    SECURITY (Gate-2): this URL is handed to the system browser (openExternal), and
+    signals.json is a local file a future producer / a local edit could taint. So we
+    NEVER trust it blindly:
+      - an explicit top_thread['url'] is accepted ONLY if it is an https://github.com
+        discussions URL (forward-compat for a producer that pre-builds it) — anything
+        else (javascript:, file:, a non-github host, a phishing link) is DROPPED, and
+        we fall through to constructing the URL ourselves.
+      - the constructed URL's `repo` must match the strict `owner/repo` shape (single
+        slash, safe chars) — this rejects a path-traversal `repo` like `a/b/../evil.com`
+        that would normalize to an off-github host, and `number` must be an int."""
+    explicit = top_thread.get("url")
+    if isinstance(explicit, str) and explicit.strip():
+        u = explicit.strip()
+        # Accept ONLY a github.com discussions https URL, validated by PARSING (not a
+        # loose startswith+substring — that let "https://github.com/@evil/discussions/1"
+        # and "https://github.com/../x/discussions/1" through, Gate-2 security finding).
+        # Require scheme=https, host EXACTLY github.com (no userinfo/port/subdomain), and
+        # a /owner/repo/discussions/<int> path with no ".." segment. Else drop + reconstruct.
+        from urllib.parse import urlparse
+
+        p = urlparse(u)
+        if p.scheme == "https" and p.netloc == "github.com" and _DISCUSSION_PATH_RE.match(p.path or ""):
+            return u
+        # fall through — do NOT return an unvalidated external URL
+    repo = top_thread.get("repo")
+    number = top_thread.get("number")
+    # number must be an int (a str "1" or a float would slip a bad path segment).
+    if not isinstance(repo, str) or not _REPO_RE.match(repo) or not isinstance(number, int) or isinstance(number, bool):
+        return ""
+    return f"https://github.com/{repo}/discussions/{number}"
+
+
+def parse_hot_topics(signals_path: Path) -> dict:
+    """Read LIVE Hot Topics (community DEMAND) from a GitHub_Community signals.json.
+
+    Returns {scanned_at: <ISO str|None>, topics: [{rank, id, topic, comments,
+    threads, top_repo, top_number, top_title, url}]}. `topics` is sorted by
+    `comments` (total_comments) DESCENDING and `rank` is assigned 1-based from that
+    order — we sort explicitly rather than trusting the producer's order (H1).
+
+    FAIL-SOFT: a missing / unreadable / non-JSON file, or a payload with no
+    `hot_topics` list → {scanned_at:None, topics:[]} (never raises — the endpoint
+    must not 500 on a missing scan). A malformed individual entry is skipped, not fatal."""
+    empty: dict = {"scanned_at": None, "topics": []}
     try:
-        text = tech_md_path.read_text(encoding="utf-8", errors="replace")
+        # Bound the read (defense-in-depth, mirrors _read_jsonl's _MAX_JSONL_BYTES):
+        # this parses on every overlay open; a runaway signals.json should fail-soft,
+        # not OOM the daemon. The producer is trusted, so this is a backstop.
+        if signals_path.stat().st_size > _MAX_JSONL_BYTES:
+            logger.warning("community_data: %s exceeds %d bytes — skipping hot topics", signals_path, _MAX_JSONL_BYTES)
+            return empty
+        raw = signals_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return empty
-
-    # Locate the ## GitHub Hot Topics section (bound the search to it).
-    sec_start = text.find(_HOT_TOPICS_HEADER)
-    if sec_start == -1:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
         return empty
-    section = text[sec_start:]
+    if not isinstance(data, dict):
+        return empty
 
-    updated: str | None = None
-    topics: list[dict] = []
-    in_rankings = False
-    for line in section.splitlines():
-        stripped = line.strip()
-        # A new ###/## header AFTER we entered Rankings ends the table scope
-        # (stops before ### Top Movers). The section's own ## header is the first
-        # line, so only treat a header as a terminator once we're in Rankings.
-        if in_rankings and (stripped.startswith("### ") or stripped.startswith("## ")):
-            break
-        if _RANKINGS_HEADER_RE.match(stripped):
-            in_rankings = True
-            dm = _RANKINGS_DATE_RE.search(stripped)  # date is OPTIONAL
-            if dm:
-                updated = dm.group(1)
+    scanned_at = data.get("scanned_at")
+    if not isinstance(scanned_at, str) or not scanned_at.strip():
+        scanned_at = None
+
+    hot = data.get("hot_topics")
+    if not isinstance(hot, list):
+        return {"scanned_at": scanned_at, "topics": []}
+
+    parsed: list[dict] = []
+    for entry in hot:
+        if not isinstance(entry, dict):
+            continue  # malformed row — skip, never fatal
+        topic_id = entry.get("id")
+        if not isinstance(topic_id, str) or not topic_id:
             continue
-        if not in_rankings:
-            continue
-        # Inside Rankings: parse pipe rows. Skip the header row (| Rank | Topic |…)
-        # and the separator row (|------|). A data row starts with an int rank.
-        if not stripped.startswith("|"):
-            continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
-        if len(cells) < 4:
-            continue
-        rank_raw = cells[0].strip()
-        if not rank_raw.isdigit():
-            continue  # header row ("Rank") or separator row ("------")
-        topics.append({
-            "rank": int(rank_raw),
-            "topic": _strip_md(cells[1]),
-            "evidence": _strip_md(cells[2]),
-            "trend": _strip_md(cells[3]),
+        top_thread = entry.get("top_thread")
+        if not isinstance(top_thread, dict):
+            top_thread = {}
+        comments = entry.get("total_comments") or 0
+        threads = entry.get("thread_count") or 0
+        parsed.append({
+            "id": topic_id,
+            "topic": _HOT_TOPIC_LABELS.get(topic_id) or _humanize_topic_id(topic_id),
+            "comments": int(comments) if isinstance(comments, (int, float)) else 0,
+            "threads": int(threads) if isinstance(threads, (int, float)) else 0,
+            "top_repo": top_thread.get("repo") or "",
+            "top_number": top_thread.get("number"),
+            "top_title": top_thread.get("title") or "",
+            "url": _hot_topic_url(top_thread),
         })
-    return {"updated": updated, "topics": topics}
+
+    # H1: sort by comments desc, then assign rank — do NOT trust producer order.
+    parsed.sort(key=lambda t: t["comments"], reverse=True)
+    for i, t in enumerate(parsed, start=1):
+        t["rank"] = i
+
+    return {"scanned_at": scanned_at, "topics": parsed}

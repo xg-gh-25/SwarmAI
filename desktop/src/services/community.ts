@@ -8,7 +8,7 @@
  *   GET /api/community/feed        → recent signal digests + reports (files)
  *   GET /api/community/sources     → configured feeds (read-only)
  *   GET /api/community/engagement  → GitHub community metrics (data-backed only)
- *   GET /api/community/hot-topics  → community DEMAND (TECH.md Rankings, read-only)
+ *   GET /api/community/hot-topics  → community DEMAND (live signals.json feed, read-only)
  *
  * Backend is snake_case (FastAPI); this layer normalizes to the shapes the
  * overlay renders. All numbers come from the backend (never frontend .length).
@@ -53,18 +53,34 @@ export interface CommunitySource {
   tags: string[];
 }
 
-/** One GitHub Hot Topic row (community DEMAND) — parsed from TECH.md Rankings. */
+/** One GitHub Hot Topic row (community DEMAND) — read LIVE from signals.json. */
 export interface CommunityHotTopic {
+  /** 1-based rank by comment volume (backend sorts by comments desc). */
   rank: number;
+  /** Stable hot-topic id (e.g. "HT-MEMORY") — used as a React key. */
+  id: string;
+  /** Human label for the topic (backend maps the id → a readable name). */
   topic: string;
-  evidence: string;
-  trend: string;
+  /** Total comments across all threads in this topic (the heat metric). */
+  comments: number;
+  /** Number of distinct discussion threads in this topic. */
+  threads: number;
+  /** The hottest thread's repo (owner/name), or "". */
+  topRepo: string;
+  /** The hottest thread's number, or null. */
+  topNumber: number | null;
+  /** The hottest thread's title, or "". */
+  topTitle: string;
+  /** GitHub URL for the hottest thread (a Discussion) — "" when unbuildable.
+   *  Opened in the SYSTEM browser via openExternal (external link). */
+  url: string;
 }
 
-/** Hot Topics payload — the snapshot + its own freshness date. */
+/** Hot Topics payload — the live topics + the feed's real scan timestamp. */
 export interface CommunityHotTopics {
-  /** The table's snapshot date (YYYY-MM-DD) — a manual scan, NOT live. null if absent. */
-  updated: string | null;
+  /** ISO timestamp of the last scan (from signals.json scanned_at). null if no feed.
+   *  The overlay derives a freshness label from this — a weekly feed reads fresh. */
+  scannedAt: string | null;
   topics: CommunityHotTopic[];
 }
 
@@ -126,6 +142,18 @@ interface RawEngagementItem {
   replies?: RawReply[];
 }
 
+interface RawHotTopic {
+  rank?: number;
+  id?: string;
+  topic?: string;
+  comments?: number;
+  threads?: number;
+  top_repo?: string;
+  top_number?: number | null;
+  top_title?: string;
+  url?: string;
+}
+
 interface RawSource {
   id: string;
   name: string;
@@ -174,13 +202,24 @@ export const communityService = {
   },
 
   async fetchHotTopics(): Promise<CommunityHotTopics> {
-    // Backend returns {updated, topics:[{rank,topic,evidence,trend}], count}.
-    // Single-word lowercase keys → no snake→camel mapping needed. NOT an array
-    // (unlike fetchFeed) — carries both the topics AND the freshness date.
+    // Backend returns {scanned_at, topics:[{rank,id,topic,comments,threads,
+    // top_repo,top_number,top_title,url}], count}. Map the snake_case topic
+    // fields → camelCase (top_repo→topRepo etc.); scanned_at→scannedAt.
     const res = await api.get('/community/hot-topics');
+    const raw = (res.data?.topics ?? []) as RawHotTopic[];
     return {
-      updated: res.data?.updated ?? null,
-      topics: (res.data?.topics ?? []) as CommunityHotTopic[],
+      scannedAt: res.data?.scanned_at ?? null,
+      topics: raw.map((t) => ({
+        rank: t.rank ?? 0,
+        id: t.id ?? '',
+        topic: t.topic ?? '',
+        comments: t.comments ?? 0,
+        threads: t.threads ?? 0,
+        topRepo: t.top_repo ?? '',
+        topNumber: t.top_number ?? null,
+        topTitle: t.top_title ?? '',
+        url: t.url ?? '',
+      })),
     };
   },
 
