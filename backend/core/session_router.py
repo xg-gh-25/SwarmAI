@@ -1074,6 +1074,48 @@ async def _maybe_inject_recall_inner(
 _TTFT_FIRST_CONTENT_TYPES = ("text_delta", "thinking_delta")
 
 
+def _is_warm_reuse(
+    state: "SessionState",
+    has_client: bool,
+    last_turn_clean: bool,
+    has_cached_options: bool,
+) -> bool:
+    """Pure predicate: can THIS turn reuse the live subprocess + its cached
+    spawn-options, skipping the expensive per-turn ``build_options`` /
+    ``build_system_prompt`` assembly?
+
+    ``system_prompt`` is a spawn-time-once input — it reaches the CLI only at
+    ``SessionUnit._spawn`` (session_unit.py). A warm-reuse turn (state IDLE, live
+    client, last turn clean) NEVER re-spawns, so re-assembling the ~91K prompt on
+    that turn is pure waste (the product is discarded). This predicate gates the
+    build-skip: warm turns reuse ``unit._spawn_options`` (the options the live
+    client was actually spawned with) instead of rebuilding.
+
+    ALL four conditions are required — missing any one routes to the cold/rebuild
+    path (which builds full options AND re-caches them):
+
+    - ``state == IDLE`` — a protected active state (STREAMING/WAITING_INPUT) or
+      COLD/DEAD is never a warm-reuse entry.
+    - ``has_client`` — an IDLE unit whose client died (CLI exited after
+      error_max_turns) must respawn, so it must rebuild.
+    - ``last_turn_clean`` — the LOAD-BEARING safety gate: a not-clean turn triggers
+      the poison-guard recycle→COLD→respawn (session_unit.py), which needs a FRESH
+      full build, never a stale cached prompt.
+    - ``has_cached_options`` — turn-1 (before any spawn cached its options) has
+      nothing to reuse, so it must build.
+
+    Recall is unaffected by this gate: it runs once-per-session on turn-1, which is
+    always COLD (no live client) → takes the build path → appends to a real
+    assembled prompt exactly as before.
+    """
+    return (
+        state == SessionState.IDLE  # module-level import (L32)
+        and has_client
+        and last_turn_clean
+        and has_cached_options
+    )
+
+
 def _format_ttft_line(
     event_type: str,
     already_recorded: bool,
@@ -2557,17 +2599,43 @@ class SessionRouter:
         else:
             unit._hook_session_context["sdk_session_id"] = session_id
 
-        options = await self._prompt_builder.build_options(
-            agent_config=agent_config,
-            enable_skills=enable_skills,
-            enable_mcp=enable_mcp,
-            resume_session_id=unit._sdk_session_id,
-            session_context=unit._hook_session_context,
-            channel_context=channel_context,
-            editor_context=editor_context,
-            terminal_context=terminal_context,
-            extra_mcps=unit._extra_mcps or None,
-        )
+        # ── WARM-REUSE fast path: skip the expensive build (run_f8c3ddd4) ──
+        # build_options → build_system_prompt reads 12 context files + token-budgets
+        # + assembles ~91K, and (memory_smart=True) deliberately BYPASSES the L1
+        # cache — so it is expensive EVERY call. But system_prompt reaches the CLI
+        # ONLY at SessionUnit._spawn; a warm-reuse turn (IDLE + live client +
+        # last-turn-clean) never re-spawns, so the rebuilt prompt is DISCARDED.
+        # Structural fix: on warm-reuse, REUSE the options the live client was
+        # actually spawned with (unit._spawn_options) instead of rebuilding. This
+        # eliminates the per-turn assembly at the source (not defers it).
+        #   • Cold / dead-client / not-clean (poison-guard recycle) / turn-1
+        #     (no cached options) → _is_warm_reuse False → BUILD full, and _spawn
+        #     re-caches on the resulting spawn.
+        #   • Recall is untouched: it runs once-per-session on turn-1, always COLD
+        #     (no live client) → takes the build path → appends to a real prompt.
+        #   • send() reads only options.model + needs a valid options for the
+        #     crash-recovery signature on a warm turn; the cached options carries
+        #     both. editor/UI state rides query_content on warm turns, not the
+        #     system_prompt (see _prepend_ui_state_to_query below).
+        if _is_warm_reuse(
+            state=unit.state,
+            has_client=unit._client is not None,
+            last_turn_clean=unit._last_turn_clean,
+            has_cached_options=unit._spawn_options is not None,
+        ):
+            options = unit._spawn_options
+        else:
+            options = await self._prompt_builder.build_options(
+                agent_config=agent_config,
+                enable_skills=enable_skills,
+                enable_mcp=enable_mcp,
+                resume_session_id=unit._sdk_session_id,
+                session_context=unit._hook_session_context,
+                channel_context=channel_context,
+                editor_context=editor_context,
+                terminal_context=terminal_context,
+                extra_mcps=unit._extra_mcps or None,
+            )
 
         # System prompt metadata for the TSCC viewer. This metadata describes the
         # prompt we just BUILT — which is not necessarily the prompt that gets

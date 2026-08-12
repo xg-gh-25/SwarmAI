@@ -398,6 +398,54 @@ class TestEnvSpawnLockScoping:
         assert not _spawn_lock.locked()
 
 
+class TestSpawnOptionsCache:
+    """run_f8c3ddd4 refactor: _spawn caches the options it used on the unit
+    (unit._spawn_options), so a subsequent WARM-reuse turn can reuse them and
+    skip the expensive per-turn build_options/build_system_prompt (~91K assembly).
+
+    The cache is the wiring counterpart to the pure _is_warm_reuse predicate:
+    _is_warm_reuse(has_cached_options=unit._spawn_options is not None) gates the
+    router's build-skip. This test proves _spawn actually populates it.
+    """
+
+    def test_spawn_options_none_before_first_spawn(self):
+        """A fresh unit has no cached spawn-options (turn-1 must build)."""
+        unit = SessionUnit(session_id="cache-fresh", agent_id="default")
+        assert unit._spawn_options is None
+
+    @pytest.mark.asyncio
+    async def test_spawn_caches_the_options_it_used(self):
+        """After a successful _spawn, unit._spawn_options IS the exact options
+        object passed to _spawn — so a warm-reuse turn reuses the SAME options
+        the live client was built with (cache↔subprocess always agree)."""
+        unit = SessionUnit(session_id="cache-set", agent_id="default")
+        sentinel_options = MagicMock(name="spawn_options")
+        sentinel_options.system_prompt = "ASSEMBLED PROMPT"
+        sentinel_options.model = "claude-opus-4-8"
+
+        with patch("core.session_unit._spawn_lock") as mock_lock:
+            mock_lock.__aenter__ = AsyncMock()
+            mock_lock.__aexit__ = AsyncMock(return_value=False)
+            with patch("core.claude_environment._env_lock") as mock_env_lock:
+                mock_env_lock.__aenter__ = AsyncMock()
+                mock_env_lock.__aexit__ = AsyncMock(return_value=False)
+                with patch("core.claude_environment._ClaudeClientWrapper") as mock_wrapper_cls:
+                    mock_wrapper = MagicMock()
+                    mock_wrapper.__aenter__ = AsyncMock(return_value=MagicMock())
+                    mock_wrapper.pid = 22222
+                    mock_wrapper_cls.return_value = mock_wrapper
+                    with patch("core.claude_environment._configure_claude_environment"):
+                        # Bypass the pre-spawn RAM gate so the cache line is reached.
+                        with patch("core.resource_monitor.resource_monitor.spawn_budget") as mock_budget:
+                            mock_budget.return_value = MagicMock(can_spawn=True)
+                            await unit._spawn(sentinel_options, config=MagicMock())
+
+        assert unit._spawn_options is sentinel_options, (
+            "_spawn must cache the exact options object it spawned with, so a "
+            "warm-reuse turn reuses what the live client actually got"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Property: Retry slot guard (COE 2026-04-12)
 # ---------------------------------------------------------------------------

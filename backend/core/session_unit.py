@@ -499,6 +499,10 @@ class SessionUnit:
         # ── Internal — not part of public interface ──────────────
         self._client: Optional[ClaudeSDKClient] = None
         self._wrapper: Optional[_ClaudeClientWrapper] = None
+        # Options the live client was last spawned with — enables WARM-reuse
+        # turns to skip build_options (see _is_warm_reuse / _spawn). None until
+        # the first real spawn caches it (run_f8c3ddd4).
+        self._spawn_options: Optional["ClaudeAgentOptions"] = None
         self._lock: asyncio.Lock = asyncio.Lock()
         # Subprocess-IO serialization lock (run_4b74b764). SEPARATE from
         # ``self._lock`` (which is the kill/recovery transaction lock — see
@@ -2996,12 +3000,22 @@ class SessionUnit:
         self._wrapper = wrapper
         self._client = client
         self.last_used = time.time()
+        # Cache the options this live client was spawned with, so a subsequent
+        # WARM-reuse turn (IDLE + this client + last-turn-clean) can reuse them
+        # and SKIP the expensive per-turn build_options/build_system_prompt
+        # (~91K assembly, 12-file read) — whose product (system_prompt) a warm
+        # turn never consumes (it only reaches the CLI HERE, at spawn). The
+        # router reads this via _is_warm_reuse(has_cached_options=...). Refreshed
+        # on every real spawn (cold/retry/recycle), so it always matches the
+        # subprocess actually running (run_f8c3ddd4).
+        self._spawn_options = options
 
         # ── Publish TSCC prompt metadata AT DELIVERY ──────────────────
-        # This is the ONLY place options.system_prompt reaches the CLI: send()
-        # rebuilds options every turn, but a warm reuse never passes them here.
-        # So this is the only point where "the prompt the panel shows" and "the
-        # prompt the model got" are guaranteed to be the same string.
+        # This is the ONLY place options.system_prompt reaches the CLI. A warm
+        # reuse turn never reaches _spawn at all (run_f8c3ddd4: it reuses the
+        # cached _spawn_options and skips even build_options), so publishing HERE
+        # — the spawn point — is the only place where "the prompt the panel shows"
+        # and "the prompt the model got" are guaranteed to be the same string.
         # full_text is read off the options we just handed over, which is why it
         # includes the "## Recalled Knowledge" block the router appends AFTER
         # build_options, and any --resume rewrite from _build_retry_options.
