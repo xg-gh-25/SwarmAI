@@ -29,10 +29,10 @@ class TestUnifiedRecallCfull:
         from core.session_router import _unified_recall_body
         # 2nd arg is now editor_file_path (project detected inside, off-loop).
         # Returns (body_str, structured_hits|None) — unpack the body.
-        s, _structured = _unified_recall_body(
-            "session resume timeout",
-            "/x/SwarmWS/Projects/SwarmAI/TECH.md",
-        )
+        from core.session_router import _resolve_active_project
+        _ap = _resolve_active_project("/x/SwarmWS/Projects/SwarmAI/TECH.md",
+                                      "session resume timeout")
+        s, _structured = _unified_recall_body("session resume timeout", _ap)
         assert "Code Symbols" in s, "codeintel is the net-new runtime domain"
         assert "[DDD:" not in s, "ddd must NOT be in unified path (own leg)"
 
@@ -41,7 +41,7 @@ class TestUnifiedRecallCfull:
         codeintel empty, but the other domains still recall (recall never
         degrades to empty just because there's no active project)."""
         from core.session_router import _unified_recall_body
-        s, _structured = _unified_recall_body("resume cold start latency", None)
+        s, _structured = _unified_recall_body("resume cold start latency", (None, "no_signal"))
         assert "Code Symbols" not in s and len(s) > 100
 
     def test_unified_exception_returns_empty_for_fallback(self):
@@ -53,7 +53,7 @@ class TestUnifiedRecallCfull:
         orig = rm.recall_all
         rm.recall_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
         try:
-            _body, _structured = _unified_recall_body("test query", None)
+            _body, _structured = _unified_recall_body("test query", (None, "no_signal"))
             assert _body == "", \
                 "unified exception must return '' body so caller falls back to legacy"
             assert _structured is None, "exception path yields no structured hits"
@@ -73,7 +73,7 @@ class TestUnifiedRecallCfull:
             return orig(*a, **k)
         rm._recall_library = spy
         try:
-            _unified_recall_body("session resume", None)   # runtime path
+            _unified_recall_body("session resume", (None, "no_signal"))   # runtime path
             rm.recall_all("session resume", domains=("library",))  # CLI path
         finally:
             rm._recall_library = orig
@@ -133,10 +133,12 @@ class TestDddRuntimeInjection:
         (assert the PROVENANCE token, NOT string length — L2 anti-vacuity)."""
         from core.session_router import _inject_ddd_for_active_project
         o = _FakeOpts()
-        _inject_ddd_for_active_project(
-            o, "weekly revenue forecast baseline",
+        from core.session_router import _resolve_active_project
+        _ap = _resolve_active_project(
             f"/x/SwarmWS/Projects/{self._ACTIVE}/TECH.md",
+            "weekly revenue forecast baseline",
         )
+        _inject_ddd_for_active_project(o, "weekly revenue forecast baseline", _ap)
         assert f"[DDD:{self._ACTIVE}]" in o.system_prompt, o.system_prompt
         assert o.system_prompt.startswith("BASE PROMPT"), "base must be preserved"
 
@@ -154,7 +156,10 @@ class TestDddRuntimeInjection:
         )
         _ddd_inject_count.clear()
         o = _FakeOpts()
-        _inject_ddd_for_active_project(o, "hello how are you", None)
+        from core.session_router import _resolve_active_project
+        _inject_ddd_for_active_project(
+            o, "hello how are you",
+            _resolve_active_project(None, "hello how are you"))
         assert "[DDD:" not in o.system_prompt
         assert o.system_prompt == "BASE PROMPT"
         # teeth: decline must be at the DETECTION stage, not a downstream gate.
@@ -170,7 +175,10 @@ class TestDddRuntimeInjection:
         o = _FakeOpts()
         # Mentions a distinctive whole-word token of BOTH synthetic projects
         # (acme + beacon) → 2 matches → fail-closed at detection.
-        _inject_ddd_for_active_project(o, "compare acme and beacon rollout", None)
+        from core.session_router import _resolve_active_project
+        _inject_ddd_for_active_project(
+            o, "compare acme and beacon rollout",
+            _resolve_active_project(None, "compare acme and beacon rollout"))
         assert "[DDD:" not in o.system_prompt
         assert _ddd_inject_count.get("declined:ambiguous", 0) == 1, \
             f"expected fail-closed on ambiguity; got {dict(_ddd_inject_count)}"
@@ -184,11 +192,13 @@ class TestDddRuntimeInjection:
         )
         _ddd_inject_count.clear()
         # one injected (signal-1) + one declined (no signal)
+        from core.session_router import _resolve_active_project
         _inject_ddd_for_active_project(
             _FakeOpts(), "weekly revenue",
-            f"/x/SwarmWS/Projects/{self._ACTIVE}/TECH.md",
-        )
-        _inject_ddd_for_active_project(_FakeOpts(), "hi", None)
+            _resolve_active_project(
+                f"/x/SwarmWS/Projects/{self._ACTIVE}/TECH.md", "weekly revenue"))
+        _inject_ddd_for_active_project(
+            _FakeOpts(), "hi", _resolve_active_project(None, "hi"))
         assert _ddd_inject_count.get("injected", 0) >= 1, _ddd_inject_count
         assert any(k.startswith("declined:") for k in _ddd_inject_count), \
             f"no declined outcome recorded — counter can't detect silent-death: {dict(_ddd_inject_count)}"

@@ -559,6 +559,12 @@ class SessionUnit:
         # session that NEVER produces keywords doesn't pay the regex cost every turn
         # forever. After this many keyword-less turns, latch the guard closed.
         self._recall_keyword_misses: int = 0
+        # Shared active-project detection cache (run_6ebf6479): resolved ONCE per
+        # recall by _maybe_inject_recall and read by BOTH recall legs, so detection
+        # (a blocking iterdir) runs once and both legs agree on the same project.
+        # Reset with the other recall guards in _cleanup_internal (fresh subprocess
+        # = fresh detection). (project, signal) tuple or None.
+        self._active_project: Optional[tuple[Optional[str], str]] = None
         # NOTE: the M2 background-vector-task fields (run_e9b15722) were removed in
         # run_4d06640b — recall now runs both legs synchronously to completion, so
         # there is no background task / pending-result / teardown-cancel to track.
@@ -4259,6 +4265,9 @@ class SessionUnit:
         except Exception:  # noqa: BLE001 — teardown must never raise on cleanup
             pass
         self._recall_keyword_misses = 0
+        # Reset shared active-project cache (run_6ebf6479) — a new subprocess must
+        # re-detect (the editor/project context may have changed across the restart).
+        self._active_project = None
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)
 

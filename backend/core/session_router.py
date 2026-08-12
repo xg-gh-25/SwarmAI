@@ -552,7 +552,7 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
 
 
 def _unified_recall_body(
-    query: str, editor_file_path: Optional[str] = None,
+    query: str, active_project: Optional[tuple[Optional[str], str]] = None,
 ) -> tuple[str, Optional[list[dict]]]:
     """Returns (rendered_body_str, structured_hits | None).
 
@@ -595,13 +595,12 @@ def _unified_recall_body(
     # breaking the "recall NEVER degrades to empty because the new path broke"
     # invariant the whole strangler-fig leans on. (Gate-2 C1, run_ccd1b6c5.)
     try:
-        from .recall_multi import (
-            recall_all, render_recall_body, detect_active_project, DOMAINS,
-        )
-        # Detect active project INSIDE the thread (blocking iterdir off the loop).
-        project, _sig = detect_active_project(
-            editor_file_path=editor_file_path, query=query,
-        )
+        from .recall_multi import recall_all, render_recall_body, DOMAINS
+        # Active project is RESOLVED ONCE by the caller (_maybe_inject_recall via
+        # _resolve_active_project, run_6ebf6479) and passed in — this leg no longer
+        # re-detects (was: a second blocking iterdir with a DIFFERENT query =
+        # extracted keywords, which could disagree with the DDD leg's project).
+        project = active_project[0] if active_project else None
         non_ddd = tuple(d for d in DOMAINS if d != "ddd")
         result = recall_all(query, project=project, domains=non_ddd, allow_embed=False)
         graph_context = _graph_enrich_recall(query)
@@ -665,7 +664,68 @@ def _graph_enrich_recall(query: str) -> str:
         return ""
 
 
+def _resolve_active_project(
+    editor_file_path: Optional[str], user_message: str,
+) -> tuple[Optional[str], str]:
+    """Detect the active project ONCE, using the FULL user_message (strongest signal).
+
+    Shared by both recall legs (DDD-inject + unified) so detection — a blocking
+    Path.iterdir via list_project_names — runs ONCE per recall instead of twice, and
+    both legs agree on the SAME project. Before this, the DDD leg detected from
+    ``user_message`` and the unified leg from the extracted ``keywords``: two blocking
+    detections per turn that could resolve DIFFERENT projects (DDD injecting project
+    A's docs while the codeintel/unified leg scoped to project B). Using the full
+    user_message is strictly the stronger signal for signal-3 keyword matching (the
+    project name survives; keyword-extraction can strip it). Runs off the event loop
+    (caller wraps in ``executors.run_in`` — the iterdir must not block the loop,
+    Gate-2 M1). Pure: caches nothing itself; the caller records the result on
+    ``unit._active_project``.
+    """
+    from .recall_multi import detect_active_project
+    return detect_active_project(editor_file_path=editor_file_path, query=user_message)
+
+
 async def _maybe_inject_recall(
+    user_message: str,
+    options: Any,
+    unit: SessionUnit,
+    editor_context: Optional[dict] = None,
+) -> Optional[float]:
+    """Top-level FAULT-ISOLATION wrapper (A): recall can NEVER crash the builder.
+
+    The system-prompt builder commits the core context files BEFORE the router
+    appends recall (prompt_builder core-commit-first, run_e47c1cfb), so a recall
+    failure must degrade to "no recall block", NEVER propagate to the send path.
+    The inner body guards its DDD block and its recall leg individually, but the
+    BETWEEN-block code (shared detection, keyword extraction, base-token estimate)
+    was unguarded — an exception there escaped to send(). This wrapper closes that:
+    ANY escape → loud log + degraded metric + LATCH the once-per-session guard (so
+    the broken path is not re-run every turn, A2) + return None (recall reported as
+    "did not run"; core context untouched). Loud-on-catch preserves W5 (never a
+    silent dead recall).
+    """
+    try:
+        return await _maybe_inject_recall_inner(
+            user_message=user_message, options=options, unit=unit,
+            editor_context=editor_context,
+        )
+    except Exception as exc:  # noqa: BLE001 — recall must never reach the send path
+        _record_recall_degraded(f"toplevel_exception:{type(exc).__name__}")
+        logger.warning(
+            "Recall injection TOP-LEVEL failure (proceeding without recall, core "
+            "context intact): %s: %s", type(exc).__name__, exc,
+        )
+        # Latch so a systematically-failing path (e.g. a broken keyword extractor)
+        # is not re-run every single turn. Best-effort — a MagicMock/None unit in a
+        # degenerate call must not turn a recall failure into a wrapper failure.
+        try:
+            unit._recall_injected = True
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+async def _maybe_inject_recall_inner(
     user_message: str,
     options: Any,
     unit: SessionUnit,
@@ -718,12 +778,44 @@ async def _maybe_inject_recall(
     # multi-session burst cannot starve the readiness sampler → false offline.
     from core import executors
 
+    _editor_fp = editor_context.get("file_path") if editor_context else None
+
+    # ── Shared active-project detection (B, run_6ebf6479) — resolve ONCE ──────────
+    # Both recall legs need the active project. Historically each detected it
+    # SEPARATELY and with DIFFERENT inputs (DDD leg: full user_message; unified leg:
+    # extracted keywords) → two blocking iterdirs per turn that could resolve
+    # DIFFERENT projects. Resolve it ONCE here (full user_message = strongest
+    # signal), off the event loop, and cache on unit._active_project so both legs
+    # read the SAME (project, signal). Reset with the other recall guards in
+    # SessionUnit._cleanup_internal. Fail-soft: on any detection error, fall back to
+    # (None, "detect_error") — recall degrades to no-project, never crashes.
+    try:
+        _active_project = await asyncio.wait_for(
+            executors.run_in("io", _resolve_active_project, _editor_fp, user_message),
+            timeout=_RECALL_DISASTER_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _record_ddd_inject("declined:disaster_timeout")
+        logger.error("active-project detection DISASTER TIMEOUT (>%.0fs) — no project",
+                     _RECALL_DISASTER_TIMEOUT_S)
+        _active_project = (None, "detect_timeout")
+    except Exception as exc:  # noqa: BLE001 — detection must never break recall
+        logger.warning("active-project detection failed (proceeding, no project): %s: %s",
+                        type(exc).__name__, exc)
+        _active_project = (None, "detect_error")
+    try:
+        unit._active_project = _active_project
+    except Exception:  # noqa: BLE001 — cache write must never break recall
+        pass
+
     # ── DDD runtime injection (run_91bc0651 M2) — runs BEFORE the keyword gate ──
     # signal-1 (editor file path) is DETERMINISTIC and needs NO query keywords, so
     # it must NOT be gated behind the keyword-miss early-return below (Gate-2 HIGH:
     # a user editing Projects/<X>/ who opens with "继续"/"hi" yields no keywords →
     # the old placement skipped DDD entirely, defeating the headline use case).
     # Own once-guard (_ddd_injected) so a sub-cap keyword-miss doesn't re-run it.
+    # It consumes the SHARED detection above (no re-detect) — trigger TIMING is
+    # unchanged (still pre-keyword-gate); only the redundant detect CALL is removed.
     if not getattr(unit, "_ddd_injected", False):
         try:
             await asyncio.wait_for(
@@ -738,7 +830,7 @@ async def _maybe_inject_recall(
                     _inject_ddd_for_active_project,
                     options,
                     user_message,
-                    editor_context.get("file_path") if editor_context else None,
+                    _active_project,
                 ),
                 timeout=_RECALL_DISASTER_TIMEOUT_S,
             )
@@ -787,15 +879,14 @@ async def _maybe_inject_recall(
     _t_recall_start = time.perf_counter()
     _recall_ms: Optional[float] = None  # set once the recall leg completes (any outcome)
 
-    _editor_fp = editor_context.get("file_path") if editor_context else None
-
     try:
         # C-full (run_ccd1b6c5): try the UNIFIED 5-domain path first. STRANGLER-
         # FIG — on empty/failure we fall back to the legacy 3-leg _recall_for_query
         # so recall NEVER degrades to empty because the new path broke.
         # keyword/FTS5-only (allow_embed=False); disaster cap only fires on a hang.
-        # active-project detection (blocking iterdir) runs INSIDE the thread
-        # (_unified_recall_body), off the event loop (Gate-2 M1).
+        # The unified leg consumes the SHARED (project, signal) resolved once at the
+        # top of this function (run_6ebf6479) — it no longer re-detects; that removes
+        # the redundant iterdir AND the DDD-leg/unified-leg project-disagreement.
         # _unified_recall_body now returns (body_str, structured_hits|None). The
         # empty→fallback strangler-fig check stays on the BODY string (unchanged
         # semantics); structured is additive for the TSCC panel (None on fallback).
@@ -803,7 +894,7 @@ async def _maybe_inject_recall(
             # 'io' pool, not the default one (run_c8ad52f8): FTS5/sqlite recall on
             # the session-init hot path — must not compete for a default-pool worker
             # with bulk work (which would starve the readiness sampler → false offline).
-            executors.run_in("io", _unified_recall_body, keywords, _editor_fp),
+            executors.run_in("io", _unified_recall_body, keywords, _active_project),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         recalled, _structured_hits = _unified_out
@@ -1029,19 +1120,22 @@ def _format_ttft_line(
 def _inject_ddd_for_active_project(
     options: Any,
     user_message: str,
-    editor_file_path: Optional[str],
+    active_project: Optional[tuple[Optional[str], str]],
 ) -> None:
-    """Detect active project + inject its top DDD sections. FAIL-CLOSED.
+    """Inject the active project's top DDD sections. FAIL-CLOSED.
 
-    Runs in a thread (recall_all does blocking fs reads). On any non-confident
-    detection, records a declined-reason and injects NOTHING (Gate-2 L1: the
-    counter distinguishes 'correctly declined' from 'detector broken').
+    The active project is RESOLVED ONCE by the caller (_maybe_inject_recall via
+    _resolve_active_project, run_6ebf6479) and passed in as (project, signal) — this
+    leg no longer re-detects (was: its own detect_active_project(query=user_message),
+    a second blocking iterdir that could resolve a DIFFERENT project than the unified
+    leg's keyword-based detection). Runs in a thread (recall_all does blocking fs
+    reads). On a non-confident detection, records a declined-reason and injects
+    NOTHING (Gate-2 L1: the counter distinguishes 'correctly declined' from 'detector
+    broken').
     """
-    from .recall_multi import detect_active_project, recall_all
+    from .recall_multi import recall_all
 
-    project, signal = detect_active_project(
-        editor_file_path=editor_file_path, query=user_message,
-    )
+    project, signal = active_project if active_project else (None, "no_detection")
     if not project:
         _record_ddd_inject(f"declined:{signal}")
         return
