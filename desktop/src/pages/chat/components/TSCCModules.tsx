@@ -59,7 +59,8 @@ const OWNER: Record<string, Owner> = {
   'IDENTITY.md': { label: 'sys', color: '#6ea8fe' },
   'SOUL.md': { label: 'sys', color: '#6ea8fe' },
   'AGENT.md': { label: 'sys', color: '#6ea8fe' },
-  'SELF.md': { label: 'agent', color: '#a78bfa' },
+  // system(runtime)-owned per SWARMAI.md (priority-2, same slot as SOUL.md) — sys, not agent.
+  'SELF.md': { label: 'sys', color: '#6ea8fe' },
   'USER.md': { label: 'user', color: '#4ade80' },
   'STEERING.md': { label: 'user', color: '#4ade80' },
   'TOOLS.md': { label: 'user', color: '#4ade80' },
@@ -68,7 +69,7 @@ const OWNER: Record<string, Owner> = {
   'KNOWLEDGE.md': { label: 'gen', color: '#38d9c4' },
   'PROJECTS.md': { label: 'gen', color: '#38d9c4' },
 };
-function ownerOf(filename: string): Owner {
+export function ownerOf(filename: string): Owner {
   return OWNER[filename] ?? { label: 'gen', color: '#8b93a7' };
 }
 
