@@ -852,6 +852,12 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         # exhausted: (project_name, run_id, resume_executions) — collapsed into
         # one line below. resume_executions drives the delivery-vs-pipeline diagnosis.
         exhausted: list[tuple[str, str, int]] = []
+        # awaiting: (mtime, line) for DELIBERATE pauses (Gate BLOCK / awaiting a human
+        # decision, D3). Kept SEPARATE from `candidates` so it is NEVER crowded out of
+        # the max_items directive cap by a burst of fresh pauses (Gate-2 MEDIUM,
+        # run_57929039): a run awaiting a human call must never be hidden, same
+        # principle as `exhausted`. Appended after the capped directives.
+        awaiting: list[tuple[float, str]] = []
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
@@ -1122,8 +1128,40 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 completed_stages = [s.get("stage", "?") for s in stages
                                     if s.get("status") == "completed"]
                 last_stage = completed_stages[-1] if completed_stages else "init"
-                next_stage = run_data.get("checkpoint", {}).get("next_stage", "")
+                # run-checkpoint writes the resume stage into run.json under
+                # checkpoint.stage (artifact_cli.py); only the published checkpoint
+                # ARTIFACT uses `next_stage`. Read `stage` first (the run.json truth),
+                # fall back to the legacy `next_stage` key, then to last_stage — the old
+                # code read only `next_stage`, which is absent in run.json, so it always
+                # fell back to last_stage (an off-by-one stage label). (D3-adjacent, run_57929039)
+                _cp = run_data.get("checkpoint", {}) or {}
+                next_stage = _cp.get("stage") or _cp.get("next_stage", "")
                 resume_stage = next_stage or last_stage
+
+                # D3 (run_57929039): a DELIBERATE pause (Gate BLOCK / FALSIFIED — a
+                # checkpoint.reason that is a true-trigger, per _is_deliberate computed
+                # above) is a run stopped ON PURPOSE, awaiting a human decision. It must
+                # NOT be surfaced as an AUTO-RESUME candidate (auto-resuming would blow
+                # past the very decision it stopped for) and must NOT burn the
+                # resume_attempts budget (that budget is for crash recovery). Surface it
+                # as AWAITING DECISION instead — visible, but never auto-resumed.
+                # (_is_deliberate is re-read from the current checkpoint.reason at :1040;
+                # the running→paused orphan transition above sets a CRASH reason, not a
+                # true-trigger, so a freshly-crashed run correctly falls through to
+                # auto-resume below, not here.)
+                if _is_deliberate:
+                    _reason_short = _reason[:60]
+                    # SEPARATE bucket (not `candidates`) so it can't be crowded out of
+                    # the max_items directive cap (Gate-2 MEDIUM, run_57929039).
+                    awaiting.append((
+                        _file_mtime,
+                        f"  - AWAITING DECISION: [{project_name}] \"{requirement}\" "
+                        f"paused at {resume_stage} — reason: {_reason_short}. This run "
+                        f"stopped ON PURPOSE for a human call (not a crash); resume it "
+                        f"only after deciding, with `artifact_cli.py run-resume "
+                        f"--project {project_name} --run-id {run_id}`.",
+                    ))
+                    continue
 
                 # Check resume attempts with file lock to prevent race conditions
                 resume_attempts = run_data.get("resume_attempts", 0)
@@ -1216,6 +1254,21 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         # always appended (even at max_items=0) — stale runs must never be hidden.
         candidates.sort(key=lambda x: -x[0])
         lines = [line for _, line in candidates[:max_items]]
+
+        # AWAITING DECISION (D3): always shown, newest first, NOT subject to the
+        # max_items directive cap (Gate-2 MEDIUM) — a run stopped on purpose for a
+        # human call must never be hidden by a flood of other directives. Bounded by
+        # its own cap so the briefing line-count can't grow unbounded either.
+        if awaiting:
+            awaiting.sort(key=lambda x: -x[0])
+            _AWAIT_CAP = 10
+            lines.extend(line for _, line in awaiting[:_AWAIT_CAP])
+            _await_overflow = len(awaiting) - _AWAIT_CAP
+            if _await_overflow > 0:
+                lines.append(
+                    f"  - …and {_await_overflow} more run(s) AWAITING DECISION "
+                    f"(run `artifact_cli.py run-status` to see all)."
+                )
 
         # Exhausted: ONE collapsed summary line. The COUNT is always exact; the id
         # list is bounded (first N) so the briefing line can't grow unbounded as

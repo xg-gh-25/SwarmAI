@@ -1572,6 +1572,35 @@ class TestCrashZombieAbandon:
         assert _read_run(f)["status"] == "paused", \
             "crash-paused WITH work done (tokens>0) must be preserved"
 
+    def test_running_with_work_done_preserved(self, workspace):
+        """D6 (run_57929039): SYMMETRY — a stale RUNNING run that DID work (tokens>0)
+        must be preserved, exactly like the paused crash-zombie-with-work case above.
+        Before D6 the `running` branch reaped unconditionally, so a running run with
+        real work + no completed deliver/reflect marker yet (stalled >2h across session
+        refreshes) was marked abandoned purely by wall-clock — asymmetric with paused
+        (which preserves tokens>0). A run that did real work is not an empty-shell
+        orphan."""
+        from scripts.artifact_cli import cleanup_orphans
+        f = _create_run(workspace, "TestProject", "run_running_worked", "running",
+                        hours_ago=72,
+                        stages=[{"stage": "build", "token_cost": 42000}])
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            cleanup_orphans()
+        assert _read_run(f)["status"] == "running", \
+            "stale RUNNING with work done (tokens>0) must be preserved (D6 symmetry)"
+
+    def test_running_empty_shell_STILL_abandoned(self, workspace):
+        """Regression guard: a stale RUNNING orphan with ZERO tokens (a genuine
+        empty-shell crash — spawn died before any stage recorded work) is STILL
+        reaped. D6 only spares runs that did real work."""
+        from scripts.artifact_cli import cleanup_orphans
+        f = _create_run(workspace, "TestProject", "run_empty_orphan", "running",
+                        hours_ago=72)  # no stages → 0 tokens
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            cleanup_orphans()
+        assert _read_run(f)["status"] == "abandoned", \
+            "an empty-shell (0-token) running orphan must still be reaped"
+
     def test_fresh_crash_zombie_preserved(self, workspace):
         """A just-crashed paused run (<2h) is NOT reaped instantly — age gate."""
         from scripts.artifact_cli import cleanup_orphans

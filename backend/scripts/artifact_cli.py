@@ -946,6 +946,14 @@ def _abandon_verdict(data: dict, threshold) -> tuple[bool, str | None]:
         return (False, None)
 
     if status == "running":
+        # D6 (run_57929039): SYMMETRY with the paused crash-zombie branch below — a
+        # running run that DID real work (tokens>0) is NOT an empty-shell orphan; it
+        # may be a run that stalled mid-work across session refreshes (>2h) before its
+        # deliver/reflect marker landed. Reaping it by wall-clock alone loses real work
+        # and is asymmetric with paused (which preserves tokens>0). Only an EMPTY-SHELL
+        # orphan (0 tokens — a spawn that died before any stage recorded work) is reaped.
+        if _run_tokens(data) > 0:
+            return (False, None)
         return (True, "orphaned_no_resume")
 
     # status == "paused": ONLY a crash-zombie qualifies. An intentional pause

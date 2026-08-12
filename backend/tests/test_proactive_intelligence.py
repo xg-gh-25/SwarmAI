@@ -977,7 +977,12 @@ class TestPipelineAutoResume:
                 {"stage": "evaluate", "status": "completed"},
                 {"stage": "think", "status": "completed"},
             ],
-            "checkpoint": {"next_stage": next_stage, "reason": "session crash"},
+            # Use the REAL production crash reason (session_crash_auto_detected —
+            # underscored, so it escapes the whole-word `crash` true-trigger and is
+            # treated as a crash → auto-resume, per D3). The old fixture used the loose
+            # "session crash" (space), which `\bcrash\b` matches as a deliberate
+            # true-trigger — that would now (correctly) be suppressed from auto-resume.
+            "checkpoint": {"next_stage": next_stage, "reason": "session_crash_auto_detected"},
         }
         run_file = runs_dir / "run.json"
         run_file.write_text(json.dumps(run_data, indent=2))
@@ -999,6 +1004,84 @@ class TestPipelineAutoResume:
         # Re-read the file — should now be 2
         updated = json.loads(run_file.read_text())
         assert updated["resume_attempts"] == 2
+
+    def _make_run_reason(self, workspace, reason, run_id="run_del",
+                         project="TestProj", resume_attempts=0):
+        """Helper: a paused run with a specific checkpoint.reason."""
+        from datetime import datetime, timezone, timedelta
+        runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        run_data = {
+            "id": run_id, "status": "paused", "requirement": "Fix bug",
+            "resume_attempts": resume_attempts,
+            "updated_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "stages": [{"stage": "evaluate", "status": "completed"},
+                       {"stage": "plan", "status": "completed"}],
+            "checkpoint": {"next_stage": "build", "reason": reason},
+        }
+        run_file = runs_dir / "run.json"
+        run_file.write_text(json.dumps(run_data, indent=2))
+        return run_file
+
+    def test_deliberate_pause_NOT_auto_resumed(self, tmp_path):
+        """D3 (run_57929039): a run paused ON PURPOSE (Gate BLOCK / FALSIFIED — a
+        true-trigger reason) must NOT be surfaced as an AUTO-RESUME candidate. It is
+        awaiting a human decision; auto-resuming would blow past the very decision it
+        stopped for."""
+        self._make_run_reason(tmp_path, reason="Gate 1 BLOCK: plan targets a symptom")
+        result = _get_paused_pipeline_highlights(tmp_path)
+        joined = "\n".join(result)
+        assert "AUTO-RESUME" not in joined, \
+            f"a deliberate Gate-BLOCK pause must not be an auto-resume candidate: {result}"
+
+    def test_deliberate_pause_does_NOT_increment_resume_attempts(self, tmp_path):
+        """A deliberate pause must NOT burn the run's resume_attempts budget — that
+        budget is for crash recovery, not for a run deliberately awaiting a decision."""
+        run_file = self._make_run_reason(
+            tmp_path, reason="Gate 1 BLOCK: awaiting a decision", resume_attempts=0)
+        _get_paused_pipeline_highlights(tmp_path)
+        after = json.loads(run_file.read_text())
+        assert after["resume_attempts"] == 0, \
+            f"deliberate pause wrongly incremented resume_attempts to {after['resume_attempts']}"
+
+    def test_deliberate_pause_surfaces_awaiting_decision(self, tmp_path):
+        """A deliberate pause should still be VISIBLE — surfaced as AWAITING DECISION
+        (not silently dropped), so the user knows a run needs them."""
+        self._make_run_reason(tmp_path, reason="Gate 2 BLOCK: adversarial found a HIGH")
+        result = _get_paused_pipeline_highlights(tmp_path)
+        joined = "\n".join(result)
+        assert "AWAITING DECISION" in joined or "awaiting" in joined.lower(), \
+            f"a deliberate pause must surface as awaiting-decision, got: {result}"
+
+    def test_crash_pause_STILL_auto_resumes(self, tmp_path):
+        """Regression guard: a genuine crash (session_crash_auto_detected — NOT a
+        true-trigger) must STILL auto-resume. D3 only suppresses DELIBERATE pauses."""
+        self._make_run_reason(tmp_path, reason="session_crash_auto_detected")
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            f"a real crash must still auto-resume: {result}"
+
+    def test_awaiting_decision_does_NOT_crowd_out_auto_resume(self, tmp_path):
+        """Gate-2 MEDIUM (run_57929039): AWAITING-DECISION lines live in a SEPARATE
+        always-shown bucket, so a flood of fresh deliberate pauses cannot crowd a
+        genuine crash-recovery AUTO-RESUME directive out of the max_items cap. Create
+        several fresh deliberate pauses + one crash orphan; the AUTO-RESUME directive
+        must STILL appear (default max_items=3 would otherwise be filled by the pauses)."""
+        # Create the crash orphan FIRST (oldest mtime) so assertion #1 is load-bearing:
+        # if awaiting shared the recency-sorted directive cap, the 5 fresher deliberate
+        # pauses would sort ahead and evict the older crash directive from max_items=3.
+        self._make_run_reason(tmp_path, reason="session_crash_auto_detected",
+                              run_id="run_crash", project="CrashProj")
+        for i in range(5):
+            self._make_run_reason(tmp_path, reason=f"Gate 1 BLOCK: decision {i}",
+                                  run_id=f"run_del{i}", project=f"Del{i}")
+        result = _get_paused_pipeline_highlights(tmp_path)
+        joined = "\n".join(result)
+        assert any("AUTO-RESUME" in ln and "run_crash" in ln for ln in result), \
+            f"the crash-recovery AUTO-RESUME directive was crowded out: {result}"
+        # And the deliberate pauses are still all visible (separate bucket, own cap).
+        assert joined.count("AWAITING DECISION") == 5, \
+            f"all 5 deliberate pauses must surface as awaiting-decision: {result}"
 
     def test_exhausted_attempts_shows_informational(self, tmp_path):
         """After 3 attempts, shows informational warning, not directive."""
