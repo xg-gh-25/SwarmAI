@@ -403,6 +403,18 @@ Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
 After reading, execute the stage behavior inline in this session.
 DO NOT invoke sibling skills via slash commands — you ARE the pipeline.
 
+**⚡ Schema-first — publish once, not thrice (do this BEFORE the first publish of any stage artifact).**
+Before you build a stage artifact's `--data`, run `python backend/scripts/artifact_cli.py schema --stage <stage>`
+and fill your payload FROM its template — it returns the full shape: the `required` top-level fields
+(e.g. build's `ac_coverage`, goal_cycle's `dod_met`+`adversarial_review`), the `depth` sub-fields those
+required objects must carry (deliver's `adversarial_review.{profile_tier,findings}`, review's dict-shaped
+`litmus_gate`/`integration_trace`/`runtime_patterns`, build's `tdd.{green_pass,smoke_tests}`,
+goal_cycle's `adversarial_review.{findings}`), and a ready `template`. Do NOT hand-assemble a payload from
+memory and let the publish validator reject it — that is a send→reject→refix round-trip PER stage (O028:
+run the tool, don't hand-craft what automation already emits). This note is at the decision point on
+purpose (O003) — the fuller recovery guidance in § Artifact Operations Reference is the FALLBACK, not the
+first move.
+
 ### 3d. Classify Decisions
 
 **Every non-trivial decision during stage execution MUST be classified:**
