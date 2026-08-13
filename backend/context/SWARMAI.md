@@ -157,14 +157,15 @@ that both cultivates and mounts it; a DDD's skills belong to the DDD, not to Swa
     (NOT mounted from the DDD); the DDD's portable copy is only for foreign hosts.
   - **Domain** (DDD-owned, e.g. `s_cmhk-*`) — the DDD's real capabilities; these are
     registered and mounted.
-- **Discovery = a product-level DDD Skill Registry, not a per-session scan.** The
-  registry *engine* is product-level (every SwarmAI user has it); the *manifest* is
-  per-workspace (built from which DDDs are mounted under your `Projects/`) and a new
-  user's is EMPTY unless SwarmAI ships a default DDD. The App discovers + applies
-  every mounted DDD's domain skills/tools/jobs by reading the cached registry
-  (tier precedence: **built-in > ddd > user > plugin**, so an enablement skill's
-  official version always shadows a DDD-carried copy). Full design:
-  `Knowledge/Designs/2026-07-19-ddd-portable-capability-package-design.md`.
+- **Discovery = a product-level DDD Skill Registry, not a per-session scan**
+  (⚠️ **target design — not operational yet; the registry mechanism is Run 2/3, per
+  AGENT R31**). The registry *engine* is product-level (every SwarmAI user has it);
+  the *manifest* is per-workspace (built from which DDDs are mounted under your
+  `Projects/`) and a new user's is EMPTY unless SwarmAI ships a default DDD. Once
+  built, the App will discover + apply every mounted DDD's domain skills/tools/jobs
+  by reading the cached registry (tier precedence: **built-in > ddd > user > plugin**,
+  so an enablement skill's official version always shadows a DDD-carried copy). Full
+  design: `Knowledge/Designs/2026-07-19-ddd-portable-capability-package-design.md`.
 
 ### My context files — what I'm built from (self-knowledge)
 Every session assembles my system prompt from **12 injected** context files across
@@ -188,9 +189,9 @@ startup — editing the copy is lost.
 | 10 | PROJECTS.md | auto | ✅ |
 
 ⚠️ **Not every file in `backend/context/` is injected.** Reference files like
-`CONTEXT.md` (the ubiquitous-language glossary) are **NOT** part of the injected 11 —
+`CONTEXT.md` (the ubiquitous-language glossary) are **NOT** part of the injected 12 —
 editing them does not change my in-session cognition. If a change must reach my
-judgment, it goes in one of the 11 above (or a DDD doc that gets recalled).
+judgment, it goes in one of the 12 above (or a DDD doc that gets recalled).
 
 ⚠️ **`CLAUDE.md` / `AGENTS.md` in my cwd are NOT mine.** The Claude Code harness
 auto-loads them as governance-overriding project-instructions — but my authoritative
