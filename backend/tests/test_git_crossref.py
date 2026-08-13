@@ -17,6 +17,20 @@ from unittest.mock import patch
 
 import pytest
 
+import core.ingestion_gate as _ig
+
+# The distillation write path runs an LLM-based self-adversarial noise-filter
+# (core.ingestion_gate.self_adversarial_judge, reached via admit_memory_lesson)
+# BETWEEN git-verify tagging and the MEMORY write. It correctly rejects weak
+# narrative fixtures as noise — but these tests target the git-verify [UNVERIFIED]
+# tagging behavior, NOT the judge (which has its own tests + is environment/Bedrock
+# dependent). The three tests below that drive _distill_files bypass the judge to
+# 'pass' so the REAL admit_memory_lesson (floors + section routing) runs and tagged
+# entries reach MEMORY deterministically offline. This is the suite's canonical
+# offline-judge pattern (see test_distillation_admission.py). Tagging itself is NOT
+# mocked, so a break in _tag_unverified_claims still turns these tests RED.
+_JUDGE_PASS = lambda *a, **k: ("pass", "test-bypass")  # noqa: E731
+
 
 # ---------------------------------------------------------------------------
 # Fixture: minimal git repo for testing
@@ -259,11 +273,13 @@ class TestGitVerifiedDistillation:
             "- Always test under memory pressure\n"
         )
 
-        # Distill with git verification against our test repo
+        # Distill with git verification against our test repo. Bypass the LLM
+        # noise-filter judge (its own concern) so the git-verify-tagged entry
+        # reaches MEMORY deterministically offline — see module header.
         with patch.object(
             DistillationTriggerHook, '_get_source_repo_path',
             return_value=git_repo,
-        ):
+        ), patch.object(_ig, "self_adversarial_judge", _JUDGE_PASS):
             hook._distill_files([da_file], workspace)
 
         memory = (workspace / ".context" / "MEMORY.md").read_text()
@@ -291,7 +307,7 @@ class TestGitVerifiedDistillation:
         with patch.object(
             DistillationTriggerHook, '_get_source_repo_path',
             return_value=git_repo,
-        ):
+        ), patch.object(_ig, "self_adversarial_judge", _JUDGE_PASS):
             hook._distill_files([da_file], workspace)
 
         memory = (workspace / ".context" / "MEMORY.md").read_text()
@@ -399,11 +415,13 @@ class TestDistillationRegression:
             "- Design principle: keep it simple\n\n"
         )
 
-        # Distill — non-implementation claim, no git needed
+        # Distill — non-implementation claim, no git needed. Mock the judge so no
+        # live Bedrock call is made (determinism/hygiene); the distilled-marking
+        # assertion is independent of the judge verdict.
         with patch.object(
             DistillationTriggerHook, '_get_source_repo_path',
             return_value=None,
-        ):
+        ), patch.object(_ig, "self_adversarial_judge", _JUDGE_PASS):
             hook._distill_files([da_file], workspace)
 
         content = da_file.read_text()
