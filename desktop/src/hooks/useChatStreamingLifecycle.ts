@@ -2634,6 +2634,17 @@ export function useChatStreamingLifecycle(
                 // never lands in the foreground rail. tabId is stable (no unresolved
                 // window), so the stamp is reliable for every multi-tab turn.
                 tabId: _stampTab,
+                // Owning SESSION id (run_c014a4f3, distinct from tabId): the backend
+                // emit gate attaches it ONLY for an EXTERNAL (outside-SwarmWS) surfaced
+                // file so the render fetch can prove "this session surfaced this path"
+                // to GET /workspace/file (which then renders it read-only). MUST be
+                // carried through this whitelist — a prior run threaded sessionId
+                // through every OTHER hop (event type → ReferencedFile → openDetail →
+                // useCanvasHost → FileViewer GET) but this SSE→CustomEvent bridge
+                // silently DROPPED it (whitelist omission, GUI53/PIT44 class), so the
+                // render fetch never sent session_id → external files 400'd. Absent for
+                // SwarmWS-internal files (they render via the home-only guard).
+                sessionId: (e.sessionId as string) ?? undefined,
               },
             }));
           }
