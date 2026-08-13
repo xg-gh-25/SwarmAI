@@ -6,7 +6,7 @@ Guidance for AI coding assistants working with this repository.
 
 ## Project Overview
 
-SwarmAI is a desktop AI command center — Tauri 2.0 + React 19 + Python FastAPI backend. Large codebase with ~80 backend core modules, ~80 skills, 100+ React components, and an extensive test suite.
+SwarmAI is a desktop AI command center — Tauri 2.0 + React 19 + Python FastAPI backend. A large codebase: many backend core modules, a broad skill library, a React component tree, and an extensive test suite. (Measure any count live — e.g. `git ls-files | grep …` — never trust a frozen number in docs.)
 
 **For development rules, anti-patterns, and invariants → see `.kiro/steering/swarmai-dev-rules.md`** (loaded automatically by Kiro on every interaction).
 
@@ -35,7 +35,7 @@ User → React Frontend → FastAPI Backend → SessionRouter → SessionUnit �
 backend/
 ├── main.py                    # FastAPI entry, startup lifespan, health endpoint
 ├── config.py                  # Settings from ~/.swarm-ai/config.json
-├── core/                      # ~80 modules: session management, prompt building, lifecycle
+├── core/                      # session management, prompt building, lifecycle, DDD, evolution
 │   ├── session_router.py      # Multi-session routing, dynamic slot management (1-4 tabs via RAM)
 │   ├── session_unit.py        # 5-state machine: COLD→IDLE→STREAMING→WAITING_INPUT→DEAD
 │   ├── prompt_builder.py      # System prompt assembly from 11 context files + MCP tier loading
@@ -47,7 +47,7 @@ backend/
 ├── hooks/                     # 11 post-session hooks (context health, evolution, distillation, etc.)
 ├── routers/                   # API endpoints
 ├── channels/                  # Slack adapter, channel gateway
-├── skills/                    # ~80 built-in skills (SKILL.md + INSTRUCTIONS.md each)
+├── skills/                    # built-in skills (SKILL.md + INSTRUCTIONS.md each)
 ├── jobs/                      # Background job scheduler + handlers
 └── scripts/                   # CLI tools (locked_write.py, verify_build.py, etc.)
 ```
@@ -81,8 +81,8 @@ desktop/src/
 
 All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, no DB.
 
-11 source files (P0-P10) assembled into the system prompt on every session start:
-- P0–P2 (SWARMAI, IDENTITY, SOUL): system defaults, never truncated, readonly (0o444)
+12 source files across 11 priority slots (SOUL and SELF share P2) assembled into the system prompt on every session start:
+- P0–P2 (SWARMAI, IDENTITY, SOUL, SELF): system defaults, never truncated, readonly (0o444); SELF is the runtime-owned resident self-portrait
 - P3 (AGENT): system default, truncatable
 - P4–P6 (USER, STEERING, TOOLS): user-customized, copy-only-if-missing (0o644)
 - P7–P8 (MEMORY, EVOLUTION): agent-owned, copy-only-if-missing (0o644)
@@ -169,7 +169,7 @@ Two consumers, two formats. **Never cross the streams.**
 
 **L3+ interactive HTML must have an Export button** (Copy as Markdown/JSON/CSV) — otherwise it's a dead end.
 
-See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
+See `Projects/SwarmAI/2-understanding/TECH.md` → "Output Format Protocol" for full spec.
 
 ## Active Engines (auto-refreshed)
 
