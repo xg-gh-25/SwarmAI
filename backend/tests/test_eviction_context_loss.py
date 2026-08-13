@@ -29,6 +29,8 @@ def _kill_after_sigkill(pid, sig):
     if sig == 0:
         raise ProcessLookupError("No such process")
 
+from claude_agent_sdk import ClaudeAgentOptions
+
 from core.session_unit import SessionState, SessionUnit
 from core.session_router import SessionRouter
 from tests.helpers import PROPERTY_SETTINGS
@@ -192,9 +194,19 @@ class TestPreservationAliveSubprocessReuse:
     def test_idle_unit_reuses_subprocess_no_new_spawn(self, session_id_value: str):
         """IDLE unit with alive subprocess reuses it on send() — no spawn.
 
-        When a SessionUnit is IDLE with ``_client`` set (subprocess alive),
-        calling ``send()`` transitions directly to STREAMING without
-        calling ``_spawn()``.
+        When a SessionUnit is IDLE with ``_client`` set (subprocess alive) AND
+        the previous turn completed cleanly, calling ``send()`` transitions
+        directly to STREAMING without calling ``_spawn()``.
+
+        ``_last_turn_clean=True`` is a LOAD-BEARING precondition, not setup
+        noise: ``send()``'s poison-guard recycles a warm IDLE unit whose last
+        turn did NOT complete via a result (session_unit.py — it recycles to
+        COLD to avoid a zombie first-send). ``SessionUnit.__init__`` defaults the
+        flag to False, so a freshly constructed unit is "not clean" and would
+        take the recycle→COLD→respawn path — which is CORRECT behavior but the
+        opposite of the warm reuse this test exists to lock. Without the flag
+        this test asserted reuse against a unit the production code is supposed
+        to recycle.
 
         **Validates: Requirements 3.1**
         """
@@ -207,6 +219,9 @@ class TestPreservationAliveSubprocessReuse:
         unit._wrapper = MagicMock()
         unit._wrapper.pid = 99999
         unit._sdk_session_id = session_id_value
+        # Last turn ended via a real result → warm reuse is legitimate (see
+        # docstring: otherwise the poison-guard correctly recycles to COLD).
+        unit._last_turn_clean = True
 
         # Verify preconditions: unit is alive and IDLE
         assert unit.is_alive is True
@@ -235,8 +250,14 @@ class TestPreservationAliveSubprocessReuse:
 
         unit._streaming_orchestrator._stream_response = mock_stream_response
 
-        # Build minimal options mock
-        mock_options = MagicMock()
+        # REAL options, not a MagicMock. ``_build_retry_options`` shallow-copies
+        # via ``dict(vars(options))`` and re-constructs ``ClaudeAgentOptions``, so
+        # a MagicMock leaks its own internals (``_mock_return_value``) into that
+        # constructor and dies with a TypeError before any assertion runs — the
+        # failure masks whatever the test was actually checking. A real dataclass
+        # round-trips cleanly, and on the warm path options is only read for
+        # ``.model`` anyway.
+        options = ClaudeAgentOptions()
 
         loop = asyncio.new_event_loop()
         try:
@@ -244,7 +265,7 @@ class TestPreservationAliveSubprocessReuse:
                 events = []
                 async for event in unit.send(
                     query_content="test message",
-                    options=mock_options,
+                    options=options,
                     config=None,
                 ):
                     events.append(event)
@@ -407,7 +428,8 @@ class TestReadLiveIdentityContract:
               the live attribute read ``unit._sdk_session_id`` (not a cached field
               like ``unit._spawn_options.resume``, not a local snapshot).
           (2) NO-BYPASS (reachability) — ``options`` is only ever assigned from
-              ``await ...build_options(...)``. A warm-reuse branch that rebinds
+              ``await ...build_options(...)``, in ANY binding form (plain assign,
+              annotated assign, or walrus). A warm-reuse branch that rebinds
               ``options = unit._spawn_options`` (the EXACT 9bf1029f shape — reuse
               cached options, skip the build) is a non-build assignment and fails.
 
@@ -425,6 +447,10 @@ class TestReadLiveIdentityContract:
           - drop the ``resume_session_id`` kwarg → invariant (1) RED (<MISSING>).
           - ``if unit._spawn_options: options = unit._spawn_options`` warm branch
             (cold-path call left intact) → invariant (2) RED.
+          - ``options: ClaudeAgentOptions = unit._spawn_options`` (annotated
+            assign, cold-path call left intact) → invariant (2) RED.
+          - ``if (options := unit._spawn_options):`` (walrus, cold-path call left
+            intact) → invariant (2) RED.
 
         **Validates: AC1, AC2**
         """
@@ -472,22 +498,40 @@ class TestReadLiveIdentityContract:
         # branch that rebinds `options` to a cached object while leaving the
         # cold-path build_options call present (so (1) stays GREEN but the live
         # path is dead).
+        # ALL THREE name-binding forms are scanned. An earlier version of this
+        # guard scanned only ``ast.Assign``, which left two silent holes: both
+        # ``options: T = <cached>`` (AnnAssign) and ``if (options := <cached>)``
+        # (NamedExpr / walrus) rebind the name WITHOUT ever appearing in
+        # ``.targets``, so the exact 9bf1029f bypass written in either form
+        # sailed through a GREEN test. Both are mutation-proven RED (see
+        # MUTATION PROOF above). If Python ever grows another binding form that
+        # can produce ``options``, add it here — the guard is only as complete as
+        # this dispatch.
         bypass_assignments: list[str] = []
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "options" for t in node.targets
-            ):
-                val = node.value
-                is_build = (
-                    isinstance(val, ast.Await)
-                    and isinstance(val.value, ast.Call)
-                    and (
-                        (isinstance(val.value.func, ast.Attribute) and val.value.func.attr == "build_options")
-                        or (isinstance(val.value.func, ast.Name) and val.value.func.id == "build_options")
-                    )
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+                targets = [node.target]  # single-target forms
+            else:
+                continue
+            if not any(isinstance(t, ast.Name) and t.id == "options" for t in targets):
+                continue
+            val = node.value
+            if val is None:
+                # Bare annotation (``options: ClaudeAgentOptions`` with no RHS)
+                # declares a type but binds no value — nothing to police.
+                continue
+            is_build = (
+                isinstance(val, ast.Await)
+                and isinstance(val.value, ast.Call)
+                and (
+                    (isinstance(val.value.func, ast.Attribute) and val.value.func.attr == "build_options")
+                    or (isinstance(val.value.func, ast.Name) and val.value.func.id == "build_options")
                 )
-                if not is_build:
-                    bypass_assignments.append(ast.unparse(val)[:60])
+            )
+            if not is_build:
+                bypass_assignments.append(ast.unparse(val)[:60])
 
         assert not bypass_assignments, (
             f"REGRESSION (9bf1029f shape-b): run_conversation rebinds `options` "
