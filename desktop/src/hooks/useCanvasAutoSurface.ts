@@ -28,6 +28,8 @@
  * @exports useCanvasAutoSurface
  */
 import { useEffect, useRef } from 'react';
+import { samePath } from './railSsot';
+import { subscribeFileChanged } from './fileChangedBroker';
 import { OPEN_FILE_EVENT } from '../components/common/MarkdownRenderer';
 
 export interface CanvasAutoSurfaceOptions {
@@ -140,7 +142,10 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
       // `source` = a MID-run coding edit — still never pops (noise while working).
       // `process` is machine noise. Undefined kind (older backend) → fall through to
       // the legacy `relevance` gate below (no regression).
-      if (kind !== undefined && kind !== 'content' && kind !== 'knowledge' && kind !== 'source-final') return;
+      // external-diff/external-nodiff (run_5d9178bf) = a session-touched file OUTSIDE
+      // SwarmWS → auto-pop like content/knowledge (it IS a produced/reviewable output).
+      const AUTO_POP_KINDS = ['content', 'knowledge', 'source-final', 'external-diff', 'external-nodiff'];
+      if (kind !== undefined && !AUTO_POP_KINDS.includes(kind)) return;
       // WHITELIST gate (run_e626e121) — LEGACY FALLBACK ONLY, gated on `kind===undefined`
       // (run_1e39d21e regression fix). When `kind` is present (the CURRENT backend —
       // _build_file_write_events sends kind, never relevance), the kind gate above is
@@ -197,15 +202,15 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
         // Gentle: user pin / session mute always win.
         if (pinnedRef.current || mutedRef.current) return;
         // Yield only if the user is viewing a file THEY opened — i.e. the panel
-        // is open showing something other than what we last auto-surfaced.
-        // (basename compare: the open handler resolves the path, so the echoed
-        //  current file may differ from the raw dispatched path by prefix.)
+        // is open showing something OTHER than what we last auto-surfaced. The open
+        // handler resolves the path, so `cur` may be the absolute form while `mine`
+        // is the raw dispatched (relative) form → use samePath (SSOT, railSsot.ts):
+        // segment-anchored, NEVER bare basename (the D3 bug — basename false-matched
+        // a same-named file in a different repo, wrongly suppressing a real auto-pop).
         if (panelOpenRef.current) {
           const cur = currentFileRef.current;
           const mine = lastAutoOpenedRef.current;
-          const curBase = cur ? cur.split('/').pop() : null;
-          const mineBase = mine ? mine.split('/').pop() : null;
-          const viewingUserChoice = !!cur && curBase !== mineBase;
+          const viewingUserChoice = !!cur && !samePath(cur, mine);
           if (viewingUserChoice) return;
         }
         lastAutoOpenedRef.current = target;
@@ -218,9 +223,11 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
       }, debounceMs);
     };
 
-    window.addEventListener('swarm:file-changed', onWritten);
+    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker (was a raw
+    // window listener). onWritten signature unchanged — broker forwards the event.
+    const unsub = subscribeFileChanged(onWritten);
     return () => {
-      window.removeEventListener('swarm:file-changed', onWritten);
+      unsub();
       if (timer) clearTimeout(timer);
     };
   }, [debounceMs]);

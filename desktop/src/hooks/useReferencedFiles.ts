@@ -15,6 +15,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { isRailKind, matchesPath } from './railSsot';
+import { subscribeFileChanged } from './fileChangedBroker';
 
 // The backend emits ONLY write operations (streaming_orchestrator._build_file_change_events
 // hardcodes operation:"written"; detection is scoped to write SOURCES — Write/Edit/
@@ -35,8 +37,19 @@ export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
  *    files a run committed, emitted once at COMPLETE via surface_run_outputs.
  *    ACCEPTED into the rail (persistent rows) but does NOT auto-pop (a finish batch
  *    of N files must not hijack the Canvas — the user clicks a row to review it).
+ *  - external-diff → a file the session touched OUTSIDE SwarmWS that lives in a git
+ *    repo (run_5d9178bf): surfaced with a per-file diff (baseRef=<sha>^).
+ *  - external-nodiff → a session-touched file outside SwarmWS with NO owning git
+ *    repo (plain FS): LISTED only, Show-Changes disabled (no diff to show).
  *  - process → never (dropped server-side). */
-export type ReviewKind = 'content' | 'knowledge' | 'source' | 'source-final' | 'process';
+export type ReviewKind =
+  | 'content'
+  | 'knowledge'
+  | 'source'
+  | 'source-final'
+  | 'external-diff'
+  | 'external-nodiff'
+  | 'process';
 
 export interface ReferencedFile {
   /** File path as emitted (workspace-relative for display) */
@@ -58,6 +71,10 @@ export interface ReferencedFile {
    *  the OUTPUTS row opens on the this-run diff, not an empty HEAD-vs-working-tree one.
    *  Absent for content/knowledge rows → they diff against HEAD (correct, uncommitted). */
   baseRef?: string;
+  /** run_5d9178bf: the file was DELETED this session. The row PERSISTS (struck-through,
+   *  Show-Changes disabled) instead of being removed — "the user should see what I
+   *  deleted" (XG). Undefined/false = a live written row. */
+  deleted?: boolean;
 }
 
 /** Detail shape of the unified `swarm:file-changed` event (from the SSE bridge). */
@@ -90,20 +107,22 @@ export interface FileChangedDetail {
  *  owner (useCanvasHost) can type the value it lifts + passes down to the rail. */
 export type GroupedReferencedFiles = Record<FileOperation, ReferencedFile[]>;
 
-/** SSOT for "which referenced files count as OUTPUTS" — the rail's visible rows and
- *  the ChatHeader output-count pill MUST agree, so both derive from THIS one predicate
- *  (mirrors CanvasOutputRail's `outputs` filter): drop process/source machine-noise +
- *  mid-run coding edits; keep content/knowledge/source-final (and undefined kind from an
- *  older backend → keep, no regression). A single definition prevents the pill count and
- *  the rail row count from drifting apart. */
+/** SSOT for the ChatHeader output-count PILL = the count of LIVE outputs the user
+ *  hasn't reviewed. Drops process/source machine-noise + mid-run coding edits (via
+ *  isRailKind); keeps content/knowledge/source-final/external-* (+ undefined kind from
+ *  an older backend → keep, no regression). run_5d9178bf: ALSO excludes `deleted` rows
+ *  — a struck-through deleted row PERSISTS in the rail as activity history, but it is
+ *  NOT a pending output to nag about, so the pill (an "unseen new outputs" badge) must
+ *  not count it. The rail's VISIBLE rows (CanvasOutputRail `outputs`) still INCLUDE the
+ *  deleted rows (the ledger) — so the pill count and the rail row count legitimately
+ *  differ by the number of deleted rows; both derive their kind-filter from isRailKind. */
 export function countOutputs(grouped: GroupedReferencedFiles | undefined): number {
   if (!grouped) return 0;
-  return (grouped.written ?? []).filter((f) => f.kind !== 'process' && f.kind !== 'source').length;
+  return (grouped.written ?? []).filter((f) => isRailKind(f.kind) && !f.deleted).length;
 }
 
 const MAX_FILES = 100;
 const STORAGE_PREFIX = 'swarm:referenced-files:';
-const EVENT_NAME = 'swarm:file-changed';
 
 // run_26aa6caa: the rail is keyed by the owning TAB id, not the volatile session
 // id. tabId is stable from tab creation and never has an "unresolved" window, so
@@ -165,8 +184,12 @@ export function applyWrite(
   if (existing) {
     // Dedup: bump count + refresh the resolved absolutePath/kind/baseRef if a later
     // event carried one the first lacked. operation is always 'written'.
+    // run_5d9178bf (Gate-2 HIGH): a WRITE is proof the file is live again, so it
+    // CLEARS a prior `deleted` mark — else a delete-then-recreate row would stay
+    // struck-through + non-clickable + omitted from the pill forever.
     next.set(e.path, {
       ...existing,
+      deleted: false,
       absolutePath: e.absolutePath || existing.absolutePath,
       count: existing.count + 1,
       kind: e.kind ?? existing.kind,
@@ -199,11 +222,12 @@ export function applyWrite(
   return next;
 }
 
-/** PURE delete-anchored-match logic (SSOT, run_9dd59523). Returns the new map + whether
- *  anything was removed (`hit`) so the caller can no-op on a miss (avoid churn). Match
- *  CONSERVATIVELY/anchored — exact display path, exact absolutePath, or an absolute
- *  delete-path ending with the stored relative path (resolved-vs-raw asymmetry). NEVER
- *  bare-basename (would false-remove an unrelated same-named file). */
+/** PURE delete-anchored-match logic (SSOT, run_9dd59523; run_5d9178bf: MARK not remove).
+ *  The matched row is now MARKED `deleted:true` (persistent struck-through) instead of
+ *  removed — "the user should see what I deleted" (XG). Returns the new map + whether
+ *  anything matched (`hit`) so the caller can no-op on a miss (avoid churn). Match
+ *  CONSERVATIVELY/anchored via railSsot.matchesPath — exact display/absolute path, or a
+ *  '/'+relative segment-anchored suffix; NEVER bare-basename (the D3 bug). */
 export function applyDelete(
   prev: Map<string, ReferencedFile>,
   e: { path: string; absolutePath?: string },
@@ -211,12 +235,13 @@ export function applyDelete(
   let hit = false;
   const next = new Map<string, ReferencedFile>();
   for (const [key, f] of prev) {
-    const match =
-      f.path === e.path ||
-      f.absolutePath === e.path ||
-      (e.absolutePath !== undefined && f.absolutePath === e.absolutePath) ||
-      e.path.endsWith(`/${f.path}`);
-    if (match) { hit = true; continue; } // drop it
+    // SSOT anchored match — exact display/abs path or a '/'+relative segment-anchored
+    // suffix; NEVER bare basename (the D3 bug).
+    if (matchesPath(f, e)) {
+      hit = true;
+      next.set(key, { ...f, deleted: true }); // MARK, persist (struck-through)
+      continue;
+    }
     next.set(key, f);
   }
   return { map: next, hit };
@@ -249,6 +274,12 @@ export function useReferencedFiles(tabId: string | undefined) {
       const { path, absolutePath, operation, relevance, kind, baseRef, tabId: evtTabId } =
         (e as CustomEvent<FileChangedDetail>).detail ?? ({} as FileChangedDetail);
       if (!path) return;
+      // AC5 read-only structural backstop (run_5d9178bf, §0′): the rail admits ONLY
+      // write/delete operations. The server-side emit gate already never emits a
+      // read/grep (its pending map is keyed on write tools), but this frontend
+      // allowlist makes "read-only never surfaces" true by CONSTRUCTION here too —
+      // a stray non-write/delete event can never add a row.
+      if (operation !== 'written' && operation !== 'deleted') return;
       // Bookkeeping is dropped server-side, but guard defensively (an older
       // backend without relevance fails open → treated as listable).
       if (relevance === 'bookkeeping') return;
@@ -261,7 +292,9 @@ export function useReferencedFiles(tabId: string | undefined) {
       //  - source-final → the pipeline-finish coding batch → RAIL (via surface_run_outputs).
       //  - content|knowledge (or undefined from an older backend) → rail.
       // Undefined kind falls through to the rail (migration: relevance still gates pop).
-      if (kind === 'process' || kind === 'source') return;
+      // SSOT: isRailKind drops process/source; keeps content/knowledge/source-final/
+      // external-diff/external-nodiff/undefined (railSsot.ts, run_5d9178bf).
+      if (!isRailKind(kind)) return;
 
       // ── Active vs BACKGROUND routing (run_9dd59523) ──────────────────────────
       // The event is stamped with its OWNING tabId (capturedTabId). Previously a
@@ -315,8 +348,10 @@ export function useReferencedFiles(tabId: string | undefined) {
       });
     };
 
-    window.addEventListener(EVENT_NAME, handler);
-    return () => window.removeEventListener(EVENT_NAME, handler);
+    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker instead of a
+    // raw window listener (was the 5th of 5 duplicate listeners). handler signature
+    // unchanged — the broker forwards the raw CustomEvent.
+    return subscribeFileChanged(handler);
   }, [tabId]);
 
   // Group files by operation (memoized to avoid unnecessary re-renders).

@@ -341,6 +341,7 @@ class StreamingOrchestrator:
         resolved deliverable still surfaces (mirrors the pre-regression fallback).
         """
         from core.needs_human_review import needs_human_review
+        from core.canvas_surface import is_canvas_surfaceable
         from core.project_registry import get_swarmws
         from routers.workspace_api import resolve_path_to_physical
 
@@ -370,7 +371,27 @@ class StreamingOrchestrator:
                     needs_human_review, resolved["absolute"], "written"
                 )
                 if not verdict.review_worthy:
-                    return None  # machine noise / gitignored → never surface
+                    # SwarmWS/bound-worktree machine-noise → never surface. BUT a file
+                    # the session touched OUTSIDE every known tree (an external repo or
+                    # plain FS) is declined by needs_human_review only because it's not
+                    # git-commit material — it IS a Canvas-review-worthy activity
+                    # (run_5d9178bf). Consult the Canvas-only predicate (a gitignored
+                    # external secret still declines). off-loop (git subprocesses).
+                    surf = await asyncio.to_thread(
+                        is_canvas_surfaceable, resolved["absolute"]
+                    )
+                    if not surf.surfaceable:
+                        return None  # machine noise / gitignored / inside-tree → never surface
+                    ev: dict = {
+                        "type": "file_changed",
+                        "path": resolved["relative"],
+                        "absolutePath": resolved["absolute"],
+                        "kind": surf.kind,
+                        "operation": "written",
+                    }
+                    if surf.base_ref:
+                        ev["baseRef"] = surf.base_ref
+                    return ev
                 kind = verdict.kind
             except Exception as _verdict_err:  # noqa: BLE001
                 # Fail-safe to kind="content" (a resolved deliverable still surfaces),
@@ -425,6 +446,7 @@ class StreamingOrchestrator:
         stale rail row); machine noise never had a row to drop.
         """
         from core.needs_human_review import needs_human_review
+        from core.canvas_surface import is_canvas_surfaceable
         from core.project_registry import get_swarmws
         from routers.workspace_api import resolve_path_to_physical
 
@@ -443,8 +465,10 @@ class StreamingOrchestrator:
                 )).review_worthy
             except Exception:  # noqa: BLE001 — fail-safe: emit the delete (drop the row)
                 _worthy = True
-            if not _worthy:
-                continue
+            # Resolve to a physical absolute path FIRST (shared with the emit below +
+            # symmetric with the write gate, which consults is_canvas_surfaceable on
+            # resolved["absolute"], not the raw path). A deleted file is usually gone,
+            # so resolve often returns None — fall back to the raw path.
             if raw in resolve_cache:
                 resolved = resolve_cache[raw]
             else:
@@ -453,6 +477,23 @@ class StreamingOrchestrator:
                 except Exception:
                     resolved = None
                 resolve_cache[raw] = resolved
+            if not _worthy:
+                # An OUTSIDE-tree file (external repo / plain FS) is declined by
+                # needs_human_review, but if it WAS surfaced as an external row, its
+                # delete must still mark that row (run_5d9178bf). Consult the Canvas
+                # predicate on the RESOLVED ABSOLUTE path (symmetric with the write
+                # gate) — a relative `rm notes.txt` in an external repo resolves to an
+                # absolute path whose parent dir git-probes correctly. A gitignored
+                # external secret never had a row → declines → nothing to mark.
+                _ext_probe = resolved["absolute"] if resolved else raw
+                try:
+                    _ext_surf = (await asyncio.to_thread(
+                        is_canvas_surfaceable, _ext_probe
+                    )).surfaceable
+                except Exception:  # noqa: BLE001 — fail-safe: don't emit a phantom delete
+                    _ext_surf = False
+                if not _ext_surf:
+                    continue
             path = resolved["relative"] if resolved else raw
             abs_path = resolved["absolute"] if resolved else raw
             events.append({

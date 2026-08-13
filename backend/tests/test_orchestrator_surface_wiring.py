@@ -564,10 +564,14 @@ def test_layer4_frontend_gate_accepts_the_emitted_kind():
     from pathlib import Path as _P
     ts = (_P(__file__).resolve().parents[2] / "desktop" / "src" / "hooks"
           / "useCanvasAutoSurface.ts").read_text()
-    kind_line = next(l for l in ts.splitlines()
-                     if "kind !== undefined" in l and "return" in l)
-    accepted = set(_re.findall(r"kind !== '([a-z-]+)'", kind_line))
+    # run_5d9178bf: the auto-pop whitelist moved from an inline chain of
+    # `kind !== 'x'` comparisons to a named `AUTO_POP_KINDS = [...]` array (so the
+    # external-diff/external-nodiff kinds could join without a 5-clause line). Parse
+    # that array — still binds to the REAL frontend source, still goes RED if the
+    # gate ever drops 'knowledge' (the completion-path emit).
+    arr_line = next(l for l in ts.splitlines() if "AUTO_POP_KINDS" in l and "[" in l)
+    accepted = set(_re.findall(r"'([a-z-]+)'", arr_line))
     assert "knowledge" in accepted, (
-        f"the completion path emits kind=knowledge; frontend accepted kinds are "
+        f"the completion path emits kind=knowledge; frontend AUTO_POP_KINDS are "
         f"{accepted} — if 'knowledge' is missing, Canvas would never auto-open on "
         f"pipeline completion (the whole point of this fix)")

@@ -33,6 +33,7 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
+import { subscribeFileChanged } from './fileChangedBroker';
 
 export type ChangeStatus = 'new' | 'upd';
 
@@ -131,8 +132,9 @@ export function useChangeStatus(paths: string[]): Map<string, ChangeStatus> {
       // lands back in `unresolved` and gets re-fetched.
       setHealTick((t) => t + 1);
     };
-    window.addEventListener('swarm:file-changed', handler);
-    return () => window.removeEventListener('swarm:file-changed', handler);
+    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker (was a raw
+    // window listener). handler signature unchanged — broker forwards the event.
+    return subscribeFileChanged(handler);
   }, []);
 
   useEffect(() => {

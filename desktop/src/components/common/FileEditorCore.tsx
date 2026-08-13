@@ -30,6 +30,7 @@ import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal, openInSystemApp } from '../../utils/openExternal';
+import { subscribeFileChanged } from '../../hooks/fileChangedBroker';
 import MarkdownRenderer from './MarkdownRenderer';
 import { detectLanguage, isDirtyState, findAllMatches } from './FileEditorModal';
 import type { SearchMatch } from './FileEditorModal';
@@ -786,8 +787,10 @@ export default function FileEditorCore({
         // Silently ignore — file may have been deleted
       }
     };
-    window.addEventListener('swarm:file-changed', handler);
-    return () => { window.removeEventListener('swarm:file-changed', handler); clearTimeout(highlightTimerRef.current); };
+    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker (was a raw
+    // window listener). handler signature unchanged — broker forwards the event.
+    const unsub = subscribeFileChanged(handler);
+    return () => { unsub(); clearTimeout(highlightTimerRef.current); };
   }, [filePath]);
 
   // ── Visibility-based refetch: reload when app/tab becomes visible if >3s idle ──

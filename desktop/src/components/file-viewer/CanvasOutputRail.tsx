@@ -28,6 +28,7 @@
  */
 import { memo, useCallback, useMemo, useEffect, useRef } from 'react';
 import { type ReferencedFile, type GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
+import { isRailKind } from '../../hooks/railSsot';
 import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -117,13 +118,16 @@ const OutputRow = memo(function OutputRow({
   fresh: boolean;
 }) {
   const handleClick = useCallback(() => {
+    // A DELETED row (run_5d9178bf) has no file on disk → opening would 404. The row
+    // persists to show WHAT was deleted, but it is not clickable-to-open.
+    if (file.deleted) return;
     // Open the row on its CONTENT (run_d3cc1f2c — autoDiff:false; diff is a toggle).
     // Pass absolutePath as the resolve anchor so a source-final row (repo-relative
     // display path, repo ≠ workspace) still resolves + opens.
     document.dispatchEvent(
       new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge, file.absolutePath, file.baseRef) }),
     );
-  }, [file.path, file.absolutePath, file.baseRef, badge]);
+  }, [file.path, file.absolutePath, file.baseRef, badge, file.deleted]);
 
   const handleCopy = useCallback(
     async (e: React.MouseEvent) => {
@@ -146,16 +150,19 @@ const OutputRow = memo(function OutputRow({
   // The A/M chip carries only the git SEMANTIC color (green/yellow).
   return (
     <li
-      className={`group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors list-none ${
+      className={`group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 rounded-md text-[12px] transition-colors list-none ${
+        file.deleted ? 'cursor-default opacity-60 ' : 'cursor-pointer '
+      }${
         fresh ? 'canvas-output-fresh ' : ''
       }${
         selected
           ? 'bg-[var(--color-border)]'
-          : 'hover:bg-[var(--color-hover)]'
+          : file.deleted ? '' : 'hover:bg-[var(--color-hover)]'
       }`}
       onClick={handleClick}
-      title={file.path}
+      title={file.deleted ? `${file.path} (deleted)` : file.path}
       data-selected={selected || undefined}
+      data-deleted={file.deleted || undefined}
       data-testid="canvas-output-row"
     >
       {selected && (
@@ -174,6 +181,7 @@ const OutputRow = memo(function OutputRow({
       </span>
       <span
         className={`shrink-0 truncate ${
+          file.deleted ? 'line-through text-[var(--color-text-muted)]' :
           selected ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text)]'
         }`}
       >
@@ -244,7 +252,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
     // `grouped?.written` — defensive against a caller passing an undefined files prop
     // (O023: runtime-guard a boundary value; TS requires it, but a stubbed/legacy
     // caller could still omit it — fail to empty, never crash).
-    () => (grouped?.written ?? []).filter((f) => f.kind !== 'process' && f.kind !== 'source'),
+    () => (grouped?.written ?? []).filter((f) => isRailKind(f.kind)),
     [grouped?.written],
   );
 

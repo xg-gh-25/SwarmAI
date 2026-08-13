@@ -37,6 +37,7 @@ import FileViewerStatusBar from './FileViewerStatusBar';
 import FileEditorCore from '../common/FileEditorCore';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 import api from '../../services/api';
+import { subscribeFileChanged } from '../../hooks/fileChangedBroker';
 
 /* ------------------------------------------------------------------ */
 /*  Lazy-loaded renderers (code-split per type)                        */
@@ -486,8 +487,9 @@ function FileViewerImpl({
         setRefetchNonce((n) => n + 1);
       }
     };
-    window.addEventListener('swarm:file-changed', handler);
-    return () => window.removeEventListener('swarm:file-changed', handler);
+    // D1 (run_5d9178bf): subscribe via the single fileChangedBroker (was a raw
+    // window listener). handler signature unchanged — broker forwards the event.
+    return subscribeFileChanged(handler);
   }, [activeTab?.filePath, activeTab?.viewType]);
 
   /* -------------------------------------------------------------- */

@@ -71,23 +71,26 @@ describe('applyWrite (pure SSOT helper)', () => {
 });
 
 describe('applyDelete (pure SSOT helper)', () => {
-  it('removes an anchored match and reports hit', () => {
+  it('MARKS an anchored match deleted (persists) and reports hit (run_5d9178bf)', () => {
     const m = new Map([['a.py', mk('a.py', 1)], ['b.py', mk('b.py', 2)]]);
     const { map, hit } = applyDelete(m, { path: 'a.py' });
     expect(hit).toBe(true);
-    expect(map.has('a.py')).toBe(false);
-    expect(map.has('b.py')).toBe(true);
+    // Row PERSISTS, marked deleted — not removed.
+    expect(map.has('a.py')).toBe(true);
+    expect(map.get('a.py')!.deleted).toBe(true);
+    expect(map.get('b.py')!.deleted).toBeFalsy();
   });
   it('reports hit=false on no match (caller can no-op)', () => {
     const m = new Map([['a.py', mk('a.py', 1)]]);
     const { hit } = applyDelete(m, { path: 'zzz.py' });
     expect(hit).toBe(false);
   });
-  it('matches an absolute delete-path ending with a stored relative path', () => {
+  it('matches an absolute delete-path ending with a stored relative path (marks it)', () => {
     const m = new Map([['src/a.py', mk('src/a.py', 1)]]);
     const { map, hit } = applyDelete(m, { path: '/ws/src/a.py' });
     expect(hit).toBe(true);
-    expect(map.size).toBe(0);
+    expect(map.size).toBe(1); // row persists
+    expect(map.get('src/a.py')!.deleted).toBe(true);
   });
 });
 
@@ -119,12 +122,14 @@ describe('useReferencedFiles — BACKGROUND-tab capture (the core fix)', () => {
     expect(b.find((f) => f.path === 'x.py')!.count).toBe(2);
   });
 
-  it('a background DELETE prunes the owning tab storage (Gate-1 #6)', () => {
+  it('a background DELETE marks the owning tab storage row deleted (persists, run_5d9178bf)', () => {
     renderHook(() => useReferencedFiles('A'));
     act(() => { fileChanged('gone.py', 'B'); });
     expect(bucket('B')).toHaveLength(1);
     act(() => { fileChanged('gone.py', 'B', { operation: 'deleted' }); });
-    expect(bucket('B')).toHaveLength(0); // deleted from background storage, not accumulated
+    const b = bucket('B');
+    expect(b).toHaveLength(1); // row PERSISTS in background storage
+    expect(b[0].deleted).toBe(true); // marked deleted, not removed
   });
 
   it('switching TO a tab that received background writes loads its populated store', () => {
