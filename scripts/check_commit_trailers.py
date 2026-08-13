@@ -59,7 +59,15 @@ FORBIDDEN_MARKERS = ("claude", "anthropic")
 # Enforcement cutoff: the last commit of the un-enforced era. Everything AFTER this
 # must carry the trailer. Bump it ONLY to record a deliberate, explained amnesty —
 # never to paper over a fresh violation (fix the commit message instead).
-ENFORCED_FROM = "bcec9d4f"
+#
+# 2026-08-13 amnesty: bumped bcec9d4f → 2a5d465b. A single residual trailer-less
+# commit (2a5d465b "fix(pipeline): completion gate credits per-cycle commits") sat
+# in bcec9d4f..HEAD — a leftover of the artifact_cli trailer-injection bug that is
+# now fixed at the source (artifact_cli.py builds the trailer into every message).
+# It is ~45 commits deep and unpushed; rewriting it is barred (no interactive rebase
+# + parallel sessions share this tree, R29). Amnestying the one residual is exactly
+# what this ratchet is for; every commit AFTER 2a5d465b is still enforced.
+ENFORCED_FROM = "2a5d465b"
 
 _REC = "\x1e"
 _FLD = "\x1f"

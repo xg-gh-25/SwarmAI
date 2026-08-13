@@ -163,7 +163,7 @@ class TestNoProtectedZoneAutonomyFirst:
 class TestNoArchiProposal:
     def test_generate_proposals_writes_nothing_for_arch_change(self):
         """A new-module arch change writes 0 CultivationProposal (code_intel captures it)."""
-        from backend.hooks.code_change_feed import CodeChangeFeed
+        from hooks.code_change_feed import CodeChangeFeed
         feed = CodeChangeFeed()
         with tempfile.TemporaryDirectory() as tmpdir:
             ws = Path(tmpdir)
@@ -183,7 +183,7 @@ class TestDuplicateApproveClears:
         """Approving a duplicate proposal terminates it (rejected), does not 500-leave-pending."""
         import asyncio
         from unittest.mock import patch as _patch
-        import backend.routers.cultivation as cult
+        import routers.cultivation as cult
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
