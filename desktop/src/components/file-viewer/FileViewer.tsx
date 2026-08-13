@@ -361,16 +361,35 @@ function FileViewerImpl({
         }
       } catch (err) {
         if (cancelled) return;
+        // The api-service interceptor throws an ApiError carrying `.statusCode`
+        // (NOT `.response.status` — axios's shape is normalized away before it
+        // reaches here). Read statusCode so status-specific handling actually
+        // fires (the old `.response?.status` was always undefined for an
+        // ApiError → the 413 branch below was dead, run_7f6539b5).
+        const status =
+          (err as { statusCode?: number })?.statusCode ??
+          (err as { response?: { status?: number } })?.response?.status;
         // #4: the backend stat-gates at 50 MB and returns HTTP 413 BEFORE reading
         // the file (workspace_api.get_workspace_file) — so an oversized binary never
         // streams a huge base64 into memory. Surface that as a helpful "open locally"
-        // message rather than a raw axios error string. The absolutePath needed for
-        // an OS open is not in the 413 body, so we point the user at the copy/reveal
-        // affordance already available for the file.
-        const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response?.status;
+        // message rather than a raw axios error string.
         if (status === 413) {
-          const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+          // ApiError exposes the backend detail via a `.detail` getter
+          // (response.detail) — NOT `.response.data.detail` (axios's shape is
+          // gone by here, so the old read was always undefined → generic
+          // fallback only, run_7f6539b5 Gate-2 MED).
+          const detail = (err as { detail?: string })?.detail;
           setContentError(detail || 'File too large to preview here. Open it in a local app instead.');
+          return;
+        }
+        // 404: the file is gone (deleted on disk / moved). A filesystem/CLI delete
+        // does NOT emit a swarm:file-changed event, so the friendly deleted-notice
+        // (see the swarm:file-changed listener below) never fires — the fetch just
+        // 404s and the raw interceptor string ("Resource not found") is useless to
+        // the user. Show a friendly, actionable notice locally (NOT by editing the
+        // shared api.ts 404 interceptor, which 9 other callers depend on).
+        if (status === 404) {
+          setContentError('This file is no longer available — it may have been moved or deleted. Close this tab.');
           return;
         }
         const msg = err instanceof Error ? err.message : 'Failed to load file';
@@ -420,6 +439,11 @@ function FileViewerImpl({
         }
         if (isActiveMatch) {
           setContentError('This file was deleted. Close this tab or open another file.');
+          // Clear the dirty flag: the file is gone from disk, so its unsaved buffer
+          // can't be saved anywhere. Without this, closeTab no-ops on the dirty guard
+          // and a multi-tab panel leaves the dead tab stuck open (run_7f6539b5 Gate-2
+          // LOW; single-tab was masked by the tabs.length<=1 → onClose fallback).
+          markDirty(activeTab.id, false);
         }
         return;
       }
@@ -691,9 +715,16 @@ function FileViewerImpl({
   // The ONE close affordance (run_f49d3ff3 R2, panel variant). Editor type → delegate
   // to FileEditorCore's guarded close via closeSignal; non-editor → close directly.
   const handleUnifiedClose = useCallback(() => {
-    if (isEditorType) setCloseSignal((n) => n + 1);
+    // Editor types delegate to FileEditorCore's guarded close via closeSignal —
+    // BUT only when FileEditorCore is actually mounted. In the contentError state
+    // renderActiveContent() returns an error placeholder and does NOT mount
+    // FileEditorCore, so the sole closeSignal consumer is absent and the bump is a
+    // no-op → the dead tab could never be closed (run_7f6539b5). A tab in
+    // contentError has no live editor and thus no unsaved edits to guard, so close
+    // it DIRECTLY. Non-error editor tab → keep the guarded path (unsaved dialog).
+    if (isEditorType && !contentError) setCloseSignal((n) => n + 1);
     else handleCloseActive();
-  }, [isEditorType, handleCloseActive]);
+  }, [isEditorType, contentError, handleCloseActive]);
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]">
