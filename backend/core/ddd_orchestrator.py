@@ -1090,9 +1090,13 @@ class DddCultivationOrchestrator:
                                 if t.new_state == "archived":
                                     to_archive.append(t.entry)
 
-                            # Archive entries that transitioned to archived state
+                            # Archive entries that transitioned to archived state.
+                            # source_path=imp_path so the archive lands NEXT TO the
+                            # resolved live doc (2-understanding/), not the raw root
+                            # — the split-brain that grew a 17MB orphan (run_f71e5920).
                             if to_archive:
-                                archive_entries(project_dir, to_archive)
+                                archive_entries(project_dir, to_archive,
+                                                source_path=imp_path)
 
                         # Write updated metadata back — covers BOTH ref bumps (F1)
                         # and decay transitions. Only write if content actually changed.

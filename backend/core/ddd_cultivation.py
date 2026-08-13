@@ -1456,12 +1456,11 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
 
     # Six-section resolver (READ, strangler-aware) — see apply_to_ddd note. The
     # resolved path is also passed as retire_entry(source_path=...) below, so the
-    # STRIP (the write-back that removes the entry) lands on the SAME doc we read.
-    # NOTE: the retire ARCHIVE (<stem>-archive.md) is written by ddd_entry_lifecycle
-    # at the project ROOT, NOT co-located with a migrated 2-understanding/ doc — this
-    # is intentional (an archive is cold storage outside the ①→⑥ tree, and FTS5
-    # rglob-indexes it wherever it lives, so recall is unaffected). Do not "fix" the
-    # strip/archive to the same dir on that assumption.
+    # STRIP (the write-back that removes the entry) lands on the SAME doc we read —
+    # AND the archive (<stem>-archive.md) is now co-located with that resolved doc
+    # (source_path.parent), not the raw project root (run_f71e5920: the old root
+    # placement created a read/write split-brain that regenerated a 17MB orphan
+    # every decay tick under the pre-migration path).
     doc_path = ddd_path(project_dir, proposal.target_doc)
     if not doc_path.exists():
         return "doc_missing"

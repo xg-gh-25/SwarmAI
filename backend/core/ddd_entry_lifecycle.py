@@ -894,9 +894,39 @@ def assess_decay(
     return transitions
 
 
+def _resolve_archive_path(
+    project_dir: Path, archive_name: str, source_path: "Path | None",
+) -> Path:
+    """Resolve where an archive file must live: NEXT TO its source doc.
+
+    The archive is cold storage for entries stripped from a specific doc, so it
+    must be a sibling of that doc — else reads (the live doc under 2-understanding/)
+    and writes (the archive) diverge into a split-brain, which is exactly the bug
+    that grew a 17MB orphan at the pre-migration project root (run_f71e5920).
+
+    - source_path given (the normal path — every live caller has it): archive is
+      source_path.parent / archive_name. Correct for BOTH a migrated six-section
+      doc (2-understanding/IMPROVEMENT.md → 2-understanding/) AND MEMORY.md
+      (.context/MEMORY.md → .context/, unchanged).
+    - source_path absent (fallback): derive the doc from archive_name
+      ("TECH-archive.md" → "TECH.md") and resolve its WRITE dir via ddd_write_path.
+      Must NOT hardcode IMPROVEMENT.md — TECH/PRODUCT/PROJECT archives exist.
+    """
+    if source_path is not None:
+        return Path(source_path).parent / archive_name
+    # Fallback: derive the owning doc name from the archive name, then resolve
+    # its canonical (new-layout) directory. ddd_write_path knows the six-section
+    # map; a non-canonical stem (e.g. MEMORY) passes through to project_dir root.
+    from core.ddd_paths import ddd_write_path
+    doc_name = archive_name.replace("-archive.md", ".md")
+    doc_dir = ddd_write_path(project_dir, doc_name).parent
+    return doc_dir / archive_name
+
+
 def archive_entries(
     project_dir: Path, entries: list[EntryMetadata],
     archive_name: str = "IMPROVEMENT-archive.md",
+    source_path: "Path | None" = None,
 ) -> int:
     """Move entries to an archive file and return count archived.
 
@@ -908,6 +938,12 @@ def archive_entries(
         entries: Entries to archive (should be dormant or otherwise marked)
         archive_name: Archive filename (default IMPROVEMENT-archive.md;
             MEMORY.md lifecycle passes "MEMORY-archive.md").
+        source_path: The resolved path of the doc these entries came from. When
+            given, the archive lands as its SIBLING (source_path.parent) — the
+            correct co-location. When omitted, the doc dir is derived from
+            archive_name via ddd_write_path (see _resolve_archive_path). Callers
+            SHOULD pass it (they hold the resolved doc path) so the hot decay path
+            never relies on the fallback.
 
     Returns:
         Number of entries successfully archived.
@@ -915,7 +951,8 @@ def archive_entries(
     if not entries:
         return 0
 
-    archive_path = Path(project_dir) / archive_name
+    archive_path = _resolve_archive_path(project_dir, archive_name, source_path)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build archive content to append
     archive_lines: list[str] = []
@@ -1394,7 +1431,8 @@ def reclaim_duplicate_entries(
     # no-op (every real signature-dup is same-title). The correct identity for
     # dedup is the entry's own line span. archive the non-survivors, then strip
     # ONLY their blocks by line_number, leaving the survivor untouched.
-    archived = archive_entries(project_dir, selected, archive_name=archive_name)
+    archived = archive_entries(project_dir, selected, archive_name=archive_name,
+                               source_path=source_path)
     report.archived = archived
     # Strip by the entry's own 0-based line index. parse_entries ALWAYS assigns a
     # real index (0 is valid — an entry at the very first line), so do NOT filter
@@ -1442,7 +1480,8 @@ def _archive_and_strip(
     across DDDs 2026-07-20) — a disaster-recovery copy masquerading as safety
     (Principle 1 / STEERING #2). Removed: archive + git already make recovery robust.
     """
-    archived = archive_entries(project_dir, selected, archive_name=archive_name)
+    archived = archive_entries(project_dir, selected, archive_name=archive_name,
+                               source_path=source_path)
     report.archived = archived
     report.new_content = _strip_entries(
         content, {(e.title, e.section) for e in selected},

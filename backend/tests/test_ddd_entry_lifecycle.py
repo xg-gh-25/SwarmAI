@@ -407,8 +407,10 @@ class TestArchiveEntries:
         archived_count = archive_entries(tmp_path, dormant_entries)
         assert archived_count == 1
 
-        # Archive file should exist with the entry
-        archive_path = tmp_path / "IMPROVEMENT-archive.md"
+        # Archive file should exist with the entry. No source_path passed → the
+        # fallback resolves IMPROVEMENT-archive.md next to the canonical (new-layout)
+        # doc dir, i.e. 2-understanding/ (run_f71e5920: never the raw root).
+        archive_path = tmp_path / "2-understanding" / "IMPROVEMENT-archive.md"
         assert archive_path.exists()
         archive_content = archive_path.read_text()
         assert "Old dormant entry" in archive_content
@@ -417,8 +419,10 @@ class TestArchiveEntries:
     def test_archive_appends_to_existing_archive(self, tmp_path):
         from core.ddd_entry_lifecycle import archive_entries, EntryMetadata
 
-        # Create existing archive
-        archive_path = tmp_path / "IMPROVEMENT-archive.md"
+        # Create existing archive at the resolved (new-layout) location so the
+        # append path (no source_path → fallback → 2-understanding/) targets it.
+        archive_path = tmp_path / "2-understanding" / "IMPROVEMENT-archive.md"
+        archive_path.parent.mkdir(parents=True)
         archive_path.write_text("# Archived Knowledge Entries\n\n- [guideline] **Previous** — old. (2024-01-01)\n  <!-- ref:0 | last:none | decay:archived -->\n")
 
         entry = EntryMetadata(
@@ -435,6 +439,53 @@ class TestArchiveEntries:
         content = archive_path.read_text()
         assert "Previous" in content  # Existing preserved
         assert "New archived entry" in content  # New appended
+
+
+class TestArchiveSiblingPath:
+    """B fix (run_f71e5920): archive_entries must write the archive NEXT TO the
+    resolved source doc, not raw project_dir/archive_name. The old raw-join fed a
+    17MB orphan at the pre-migration root path while the live doc lived under
+    2-understanding/ (read/write split-brain, regenerating every decay tick)."""
+
+    def _dormant(self, title="Sib entry"):
+        from core.ddd_entry_lifecycle import EntryMetadata
+        return EntryMetadata(
+            title=title, entry_type="guideline", ref_count=0, decay_state="dormant",
+            raw_text=f"- [guideline] **{title}** — x. (2025-06-01, run_z)",
+            created_date=date(2025, 6, 1),
+        )
+
+    def test_source_path_places_archive_as_sibling_of_doc(self, tmp_path):
+        # AC1: migrated project — source doc under 2-understanding/ → archive there.
+        from core.ddd_entry_lifecycle import archive_entries
+        doc = tmp_path / "2-understanding" / "IMPROVEMENT.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("# IMPROVEMENT\n")
+        n = archive_entries(tmp_path, [self._dormant()], source_path=doc)
+        assert n == 1
+        assert (tmp_path / "2-understanding" / "IMPROVEMENT-archive.md").exists()
+        assert not (tmp_path / "IMPROVEMENT-archive.md").exists(), "root orphan re-created"
+
+    def test_fallback_derives_doc_dir_from_archive_name_not_hardcoded(self, tmp_path):
+        # AC2: no source_path, archive_name=TECH-archive.md → TECH.md's resolved dir,
+        # NOT a hardcoded IMPROVEMENT.md. ddd_write_path → 2-understanding/ (new layout).
+        from core.ddd_entry_lifecycle import archive_entries
+        n = archive_entries(tmp_path, [self._dormant()], archive_name="TECH-archive.md")
+        assert n == 1
+        assert (tmp_path / "2-understanding" / "TECH-archive.md").exists()
+
+    def test_memory_archive_stays_at_context_root(self, tmp_path):
+        # AC3: MEMORY.md is not a six-section doc — source_path=.context/MEMORY.md
+        # → archive stays at .context/ (regression guard, must NOT move to 2-understanding).
+        from core.ddd_entry_lifecycle import archive_entries
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        mem = ctx / "MEMORY.md"
+        mem.write_text("# MEMORY\n")
+        n = archive_entries(ctx, [self._dormant()], archive_name="MEMORY-archive.md", source_path=mem)
+        assert n == 1
+        assert (ctx / "MEMORY-archive.md").exists()
+        assert not (ctx / "2-understanding" / "MEMORY-archive.md").exists()
 
 
 class TestReclaimNoiseEndToEnd:
@@ -973,8 +1024,8 @@ class TestReclaimNoiseEntries:
         # Protected entries survive.
         assert "Keep this principle" in report.new_content
         assert "COE07 keep me" in report.new_content
-        # Archived to file.
-        archive = (tmp_path / "IMPROVEMENT-archive.md").read_text()
+        # Archived to file. No source_path → fallback resolves to 2-understanding/.
+        archive = (tmp_path / "2-understanding" / "IMPROVEMENT-archive.md").read_text()
         assert "Reclaim this plain lesson" in archive
         # Raw noise metric drops by exactly the reclaimed count. The 2 remaining
         # noisy entries (principle + COE07) are PROTECTED — they stay noisy in

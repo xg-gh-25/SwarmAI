@@ -1058,11 +1058,15 @@ export default function FileEditorCore({
   useEffect(() => {
     if (!highlightRef.current || showDiff) return;
 
-    // Large files: skip synchronous hljs.highlight (O(n), blocks the main
-    // thread on every content change) and render plaintext instead — immediate,
-    // no debounce needed (it's cheap).
+    // Large files: do NOT paint content here at all. This <pre> is the visible
+    // text layer (the textarea is text-transparent), but a full-content text node
+    // is exactly what froze WKWebView on a 17MB file — the old guard skipped hljs
+    // *markup* yet still wrote the whole raw string into this node (the real
+    // freeze, run_f71e5920). Leave it EMPTY; on large files the textarea below is
+    // made visible (see `largeContent` / textarea className) and paints its own
+    // text, which the browser virtualizes internally. No debounce needed.
     if (!shouldProcessSync(content.length)) {
-      highlightRef.current.textContent = content + '\n';
+      highlightRef.current.textContent = '';
       return;
     }
 
@@ -1209,12 +1213,20 @@ export default function FileEditorCore({
 
   // --- Computed ---
 
-  const lineCount = content.split('\n').length;
+  // Memoized: split of a large string is O(n) and this component re-renders on
+  // every scroll/select/keystroke — an un-memoized split re-walked the full 17MB
+  // string per frame (run_f71e5920, Gate-1). Recompute only when content changes.
+  const lineCount = useMemo(() => content.split('\n').length, [content]);
 
   // True when the file is too large for synchronous highlight/diff/search — those
   // features degrade silently, so the UI surfaces this flag as an explicit notice
   // (a matching search otherwise shows a misleading "0 of 0").
   const syncDisabled = !shouldProcessSync(content.length);
+  // On a large file the highlight <pre> is intentionally left EMPTY (it would
+  // otherwise be a freeze-causing full-content node), so the textarea must paint
+  // its own text — flip it from text-transparent to visible. Small files keep the
+  // transparent textarea + highlight-<pre> overlay (syntax colors preserved).
+  const largeContent = syncDisabled;
 
   const searchMatches = useMemo(() => {
     if (!searchQuery) return [];
@@ -1709,6 +1721,7 @@ export default function FileEditorCore({
               <div className="flex-1 relative overflow-hidden">
                 <pre
                   ref={highlightRef}
+                  data-testid="editor-highlight-layer"
                   className={clsx(
                     'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
                     'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
@@ -1719,8 +1732,13 @@ export default function FileEditorCore({
                   style={{ tabSize: 4 }}
                   aria-hidden="true"
                 />
-                {/* Diff highlight overlay — shows green border on changed lines after reload */}
-                {highlightedLines.size > 0 && (
+                {/* Diff highlight overlay — shows green border on changed lines after
+                    reload. Gated on !syncDisabled: on a large file this maps
+                    content.split('\n') into a full-content DOM node (the same freeze
+                    class as the highlight <pre>), so it must not build for big files
+                    (run_f71e5920). highlightedLines only ever populates post-reload
+                    diff, which is itself sync-gated, so this loses nothing on large files. */}
+                {!syncDisabled && highlightedLines.size > 0 && (
                   <>
                     <pre
                       className={clsx(
@@ -1841,7 +1859,11 @@ export default function FileEditorCore({
                   className={clsx(
                     'absolute inset-0 m-0 p-4 resize-none appearance-none',
                     'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
-                    'bg-transparent text-transparent caret-[var(--color-text)]',
+                    'bg-transparent caret-[var(--color-text)]',
+                    // Small files: transparent (the highlight <pre> paints colored
+                    // text underneath). Large files: the <pre> is empty (freeze
+                    // guard), so the textarea itself must show the text.
+                    largeContent ? 'text-[var(--color-text)]' : 'text-transparent',
                     'border-none outline-none',
                     'overflow-y-scroll overflow-x-hidden',
                     '[word-break:break-all]',
