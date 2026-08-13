@@ -98,7 +98,7 @@ def _make_thinking_orchestrator():
         return None
 
     parent._check_rss_and_proactive_restart = _noop_async
-    parent._check_context_soft_compact = _noop_async
+    # (_check_context_soft_compact stub removed — method deleted run_2b1957f8)
 
     async def _kill():
         return None

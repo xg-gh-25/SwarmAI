@@ -1865,18 +1865,13 @@ class StreamingOrchestrator:
                         "(non-fatal): %s", rss_exc,
                     )
 
-                # ── Context-ring soft compaction (Root 2 / AC1) ───
-                # Also in IDLE — if the context ring is large (>SOFT_COMPACT_PCT),
-                # compact BEFORE the next slow turn. Soft-first (compact, no kill).
-                # Skipped automatically if the RSS path above already killed
-                # (state would no longer be IDLE).
-                try:
-                    await self._parent._check_context_soft_compact()
-                except Exception as soft_exc:
-                    logger.debug(
-                        "session_unit.post_turn_soft_compact failed "
-                        "(non-fatal): %s", soft_exc,
-                    )
+                # ── Proactive soft-compaction REMOVED (run_2b1957f8) ──
+                # A post-turn LLM /compact at 60% held _client_io for up to
+                # 300s, blocking the user's next send() at the turn boundary
+                # ("streaming freezes at 60%"). Context is now managed by the
+                # CLI's built-in autocompact (task_budget=800K + per-session
+                # window-% autoCompact) + manual refresh — neither holds our
+                # _client_io lock, so no turn-boundary freeze.
 
                 return
 

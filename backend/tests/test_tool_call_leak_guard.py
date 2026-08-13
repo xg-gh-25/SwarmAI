@@ -214,7 +214,7 @@ def _make_orchestrator():
         return None
 
     parent._check_rss_and_proactive_restart = _noop_async
-    parent._check_context_soft_compact = _noop_async
+    # (_check_context_soft_compact stub removed — method deleted run_2b1957f8)
 
     # Health sensor stub
     parent._health_sensor = types.SimpleNamespace(

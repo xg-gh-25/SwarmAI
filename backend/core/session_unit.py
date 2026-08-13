@@ -88,12 +88,14 @@ rss_executor = ThreadPoolExecutor(
 _rss_executor = rss_executor
 
 # ── Load-amplifier caps (Root 2) ───────────────────────────────────
-# Context-ring SOFT compaction threshold: when measured context% crosses this,
-# proactively compact at the next IDLE — BEFORE the slow turn. Soft-first
-# (compact, never kill). The HARD notice (~85%, "start a new tab") already lives
-# in prompt_builder.build_context_warning (AC2).
-# # assumes: 60% of a 1M window (~600K tokens) is where per-turn latency starts
-# climbing materially; compacting here keeps turns fast. Tune per model window.
+# Context-ring warning threshold (context %). ORIGINALLY the proactive
+# soft-compaction trigger; that path was REMOVED (run_2b1957f8) because holding
+# _client_io for a 300s /compact at 60% froze the user's next send() at the turn
+# boundary. The constant is RETAINED as the log-level boundary for
+# context_ring_debug (WARN at/above this %, INFO below) — a pure observability
+# signal, no compaction. Context is now managed by CLI autocompact + manual
+# refresh. The HARD notice (~85%, "start a new tab") lives in
+# prompt_builder.build_context_warning (AC2).
 SOFT_COMPACT_PCT: int = 60
 
 # Long single-turn heartbeat: emit a "still working" notice every interval once
@@ -112,28 +114,9 @@ SOFT_COMPACT_PCT: int = 60
 # on top of it, not a substitute for it.
 LONG_TURN_HEARTBEAT_S: float = 60.0
 
-# Cooldown between context-ring SOFT compactions (seconds). Prevents back-to-back
-# compaction if context% stays high right after a SUCCESSFUL compact.
-SOFT_COMPACT_COOLDOWN: float = 180.0
-
-# Hang ceiling for the SOFT (never-kill) compaction path (run_37822fae). A real
-# LLM /compact of ~600K tokens (SOFT_COMPACT_PCT=60% of a 1M window) legitimately
-# takes well over 30s — the old 30s bound was COPIED from the proactive-restart
-# KILL path (lifecycle_manager), where "proceed to kill on timeout" justifies a
-# tight bound. On the soft path there is no kill, so a tight bound only abandons
-# a slow-but-progressing compact mid-flight, leaving the in-flight /compact in a
-# half-state. This ceiling exists ONLY to bound a genuine HANG (SDK deadlock), not
-# to guillotine a slow compact. The soft path is awaited in the post-turn IDLE
-# hook (user not blocked), so a generous ceiling is safe.
-SOFT_COMPACT_HANG_S: float = 300.0
-
-# Retry backoff after a FAILED/timed-out soft compaction (seconds). Distinct from
-# SOFT_COMPACT_COOLDOWN (the post-SUCCESS cooldown): on failure we must NOT stamp
-# the full 180s success-cooldown (that was the bug — a timed-out compact marked
-# "handled" and wouldn't retry for 180s while context kept growing). A short
-# backoff retries soon (fail-safe: context left fully intact, try again shortly)
-# without hammering a persistently-failing compact every turn.
-SOFT_COMPACT_FAIL_BACKOFF: float = 30.0
+# SOFT_COMPACT_COOLDOWN / SOFT_COMPACT_HANG_S / SOFT_COMPACT_FAIL_BACKOFF REMOVED
+# (run_2b1957f8) — they only parameterized the deleted proactive soft-compact
+# path. Context is now managed by CLI autocompact + manual refresh.
 
 # Module-level lock that serializes subprocess spawn operations.
 # Held during _configure_claude_environment + wrapper.__aenter__() to
@@ -707,10 +690,7 @@ class SessionUnit:
         # can be < PROACTIVE_COOLDOWN on freshly booted CI runners).
         self._last_proactive_restart: float = float("-inf")
 
-        # Monotonic timestamp of last context-ring SOFT compaction (Root 2 / AC1).
-        # Separate from _last_proactive_restart: AC1 compacts WITHOUT killing,
-        # so it has its own cooldown to avoid back-to-back compactions.
-        self._last_soft_compact: float = float("-inf")
+        # (_last_soft_compact REMOVED, run_2b1957f8 — proactive soft-compact path deleted.)
 
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
@@ -3756,101 +3736,13 @@ class SessionUnit:
 
         self._last_proactive_restart = time.monotonic()
 
-    async def _check_context_soft_compact(self) -> None:
-        """Context-ring soft cap (Root 2 / AC1, G1): compact at IDLE if large.
-
-        Called from the post-turn IDLE hook (alongside the RSS check). When the
-        last measured context% crosses SOFT_COMPACT_PCT, proactively compact the
-        conversation BEFORE the next (slow) turn. Soft-first: compact only, NEVER
-        kill (that distinguishes it from the RSS proactive restart).
-
-        Preconditions enforced here:
-        - state must be IDLE (compact() requires it; the hook runs post-IDLE)
-        - own cooldown (SOFT_COMPACT_COOLDOWN) to avoid back-to-back compactions
-        Non-fatal — any failure is swallowed (must never block the stream).
-        """
-        if self.state != SessionState.IDLE:
-            return
-        # (C) non-blocking yield (run_4b74b764): if a foreground turn holds the
-        # subprocess (its send() barrier or a racing compact owns _client_io),
-        # SKIP this round rather than awaiting compact() — compact() would block
-        # on the same lock and stall the post-turn hook (and the generator that
-        # drives it). soft-compact is best-effort; the next IDLE hook retries.
-        if self._client_io.locked():
-            return
-        tokens = getattr(self, "_last_known_context_tokens", 0) or 0
-        if tokens <= 0:
-            return
-        if time.monotonic() - self._last_soft_compact < SOFT_COMPACT_COOLDOWN:
-            return
-        try:
-            from .prompt_builder import PromptBuilder
-            window = PromptBuilder.get_model_context_window(self._model_name)
-        except Exception as exc:  # noqa: BLE001
-            # Degrade-OBSERVABLE. Returning here disables SOFT COMPACTION for this
-            # session, so context keeps growing until it fails hard at the window
-            # boundary — a late, confusing failure whose actual cause (an unresolvable
-            # model window) happened much earlier and said nothing.
-            logger.warning("session_unit.soft_compact_skipped session_id=%s model=%s — "
-                           "cannot resolve context window: %s",
-                           self.session_id, self._model_name, exc)
-            return
-        if window <= 0:
-            return
-        pct = (tokens / window) * 100
-        if pct < SOFT_COMPACT_PCT:
-            return
-        logger.info(
-            "session_unit.context_soft_compact session_id=%s pct=%.0f%% "
-            "tokens=%d window=%d — compacting (no kill)",
-            self.session_id, pct, tokens, window,
-        )
-        # Re-entrancy stamp BEFORE awaiting (Gate-2 F5, run_37822fae): compact()
-        # stays IDLE for its whole (long) duration and does NOT _transition, so the
-        # state gate above provides NO mutual exclusion. Stamp the cooldown now so a
-        # concurrent post-turn hook (or a racing manual /compact) is cooldown-blocked
-        # and can't fire a second /compact at the same subprocess. Corrected below
-        # to the fail-backoff if this attempt does not succeed.
-        self._last_soft_compact = time.monotonic()
-
-        # Bound a genuine HANG only (run_37822fae). The old 30s was copied from
-        # the proactive-restart KILL path; on this soft (never-kill) path it only
-        # guillotined a slow-but-progressing compact. SOFT_COMPACT_HANG_S is
-        # generous (the post-turn hook isn't user-blocking) so a real LLM summary
-        # of ~600K tokens can COMPLETE — carry task-needed context across.
-        succeeded = False
-        try:
-            result = await asyncio.wait_for(
-                self.compact(), timeout=SOFT_COMPACT_HANG_S
-            )
-            # Gate-2 F1: compact() SWALLOWS failures and returns {"success": False}
-            # (no subprocess / not IDLE / internal SDK error) — it does NOT raise.
-            # "did not raise" ≠ "compacted". Inspect the return value, else a
-            # logical failure would stamp the full success cooldown = the very bug
-            # this run fixes, for the MOST COMMON failure path.
-            succeeded = bool(result and result.get("success"))
-        except asyncio.TimeoutError:
-            logger.warning(
-                "session_unit.context_soft_compact timed out (>%.0fs) session_id=%s",
-                SOFT_COMPACT_HANG_S, self.session_id,
-            )
-        except Exception as exc:
-            logger.warning(
-                "session_unit.context_soft_compact failed session_id=%s: %s",
-                self.session_id, exc,
-            )
-        # Fail-SAFE cooldown (run_37822fae): SUCCESS keeps the full
-        # SOFT_COMPACT_COOLDOWN (already stamped above). On FAILURE/timeout the
-        # context is in an unknown-but-recoverable state (the in-flight /compact may
-        # have completed, partially completed, or not — wait_for cancels the WAIT,
-        # not the subprocess-side command). Stamping the full cooldown was the bug
-        # (marked "handled", no retry for 180s while context grew). Back-date so
-        # only SOFT_COMPACT_FAIL_BACKOFF remains: a near-term retry reconciles the
-        # state without hammering a persistently-failing compact every turn.
-        if not succeeded:
-            self._last_soft_compact = time.monotonic() - max(
-                0.0, SOFT_COMPACT_COOLDOWN - SOFT_COMPACT_FAIL_BACKOFF
-            )
+    # _check_context_soft_compact REMOVED (run_2b1957f8). Proactive soft-compact
+    # held _client_io for up to 300s at 60% context, blocking the user's next
+    # send() at the turn boundary ("streaming freezes at 60%"). Context is now
+    # managed by the CLI's built-in autocompact (task_budget=800K + per-session
+    # window-% autoCompact) + manual refresh — neither holds our _client_io lock.
+    # The RSS proactive-restart path (_check_rss_and_proactive_restart, which owns
+    # its own compact() call above) is INDEPENDENT and unaffected.
 
     def _should_inject_hard_floor_wrap(self) -> bool:
         """AC3 (G2) predicate: should a desktop hard-floor wrap-up be injected?

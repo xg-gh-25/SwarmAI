@@ -208,9 +208,9 @@ class HealthSensor:
         # latency (recent-5 > 2.5x opening-10), with no absolute floor and no
         # resource co-signal. The kill->--resume response made latency WORSE
         # (replays full context, 2x multiplier), and every real cause of rising
-        # latency has a correct owner elsewhere: context-bloat -> soft-compact
-        # (session_unit._check_context_soft_compact, no kill), memory -> RSS
-        # proactive restart (_check_rss_and_proactive_restart) + Signal 2 below,
+        # latency has a correct owner elsewhere: context-bloat -> CLI autocompact
+        # + manual refresh (proactive soft-compact was removed run_2b1957f8),
+        # memory -> RSS proactive restart (_check_rss_and_proactive_restart) + Signal 2 below,
         # legitimately-heavier work -> no action needed. A live+SSE-emitting
         # slow turn is not a hang; hang_detected (Signal 5) + the turn floors
         # are the real safety nets.

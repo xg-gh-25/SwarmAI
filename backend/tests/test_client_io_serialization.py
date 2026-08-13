@@ -1,15 +1,17 @@
 """Tests for _client_io subprocess-access serialization (run_4b74b764).
 
-The bug (root cause, M3-skeptic-confirmed): post-turn maintenance
-`_check_context_soft_compact()` calls `compact()` which drains
-`self._client.receive_response()` for up to SOFT_COMPACT_HANG_S=300s, running
-INSIDE the stream generator AFTER `_transition(IDLE)` — driven by the still-live
-`consume_messages()` background task. Meanwhile a NEW user turn calls `send()`,
-whose IDLE-reuse path drives the SAME `self._client.receive_response()`. Two
-concurrent `receive_response()` consumers iterate the single anyio
-`_message_receive` channel; anyio delivers each message to exactly ONE waiter →
-the two drives split the stream and co-starve → both hit their timeouts → kill +
---resume respawn. User sees a 3-5min freeze.
+The bug (root cause, M3-skeptic-confirmed): a maintenance op calls `compact()`
+which drains `self._client.receive_response()` for a long time. Meanwhile a NEW
+user turn calls `send()`, whose IDLE-reuse path drives the SAME
+`self._client.receive_response()`. Two concurrent `receive_response()` consumers
+iterate the single anyio `_message_receive` channel; anyio delivers each message
+to exactly ONE waiter → the two drives split the stream and co-starve → both hit
+their timeouts → kill + --resume respawn. User sees a freeze.
+
+NOTE (run_2b1957f8): the proactive soft-compact path that ORIGINALLY drove this
+maintenance compact was REMOVED (it held _client_io for 300s at 60% context and
+froze the next send). `compact()` itself lives on (proactive_restart RSS path +
+manual /compact), so the _client_io serialization guarantee below still matters.
 
 Fix (A+C+B, Gate-1-revised):
 - (A) `self._client_io = asyncio.Lock()`, SEPARATE from `self._lock` (the
@@ -17,14 +19,14 @@ Fix (A+C+B, Gate-1-revised):
   foreground turn acquires a SHORT BARRIER at send()'s IDLE-entry (so it waits
   for an in-flight compact, then drives unlocked — NOT held across the body, or
   it would self-deadlock with the in-loop CompactionGuard interrupt + break Stop).
-- (C) background maint ops (`_check_context_soft_compact`, `_check_mcp_health`)
-  probe `_client_io.locked()` and SKIP this round if a turn holds it.
+- (C) background maint ops (`_check_mcp_health`) probe `_client_io.locked()` and
+  SKIP this round if a turn holds it.
 - interrupt() / flush_subprocess_pipe stay LOCK-FREE (control-channel, not
   receive_response — acquiring would deadlock Stop against the turn it stops).
 
-Methodology: forced-execution. We drive the REAL `compact()` and the REAL
-`_check_context_soft_compact()` (mocking ONLY the SDK client boundary), and assert
-mutual exclusion / yield behavior — NOT a "lock object exists" check.
+Methodology: forced-execution. We drive the REAL `compact()` (mocking ONLY the
+SDK client boundary) and assert mutual exclusion / yield behavior — NOT a "lock
+object exists" check.
 """
 
 import asyncio
@@ -45,7 +47,6 @@ def _unit():
     u.session_id = "test-client-io"
     u.state = SessionState.IDLE
     u._model_name = "claude-opus-4-8"
-    u._last_soft_compact = float("-inf")
     u._last_known_context_tokens = 900_000
     u._sdk_session_id = "sdk-abc"
     # The primitive under test. If __init__ doesn't create it, prod code that
@@ -144,9 +145,8 @@ async def test_concurrent_drives_are_serialized_not_interleaved():
     u._client = client
     u._compaction_guard = _StubGuard()
 
-    # Fire two compacts concurrently. Each resets the cooldown so both run.
+    # Fire two compacts concurrently — both must serialize on _client_io.
     async def drive():
-        u._last_soft_compact = float("-inf")  # bypass cooldown for the test
         await u.compact()
 
     await asyncio.gather(drive(), drive())
@@ -159,40 +159,13 @@ async def test_concurrent_drives_are_serialized_not_interleaved():
 
 # ─────────────────────────────────────────────────────────────────────────
 # AC3 — background maintenance YIELDS (skips) when a turn holds the client
+#
+# NOTE (run_2b1957f8): the proactive soft-compact path (_check_context_soft_compact)
+# was REMOVED — its two _client_io-yield tests are gone with it. The _client_io
+# serialization guarantee itself is still exercised by the compact()/interrupt()/
+# _check_mcp_health tests above and below (compact() lives on for proactive_restart
+# + manual /compact).
 # ─────────────────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_soft_compact_skips_when_client_io_held():
-    """AC3 (plan C): if a foreground turn holds _client_io, the post-turn
-    soft-compact must SKIP this round (non-blocking probe), not block the
-    stream generator awaiting compact. RED until the locked() probe is added."""
-    from unittest.mock import AsyncMock
-
-    u = _unit()
-    u.compact = AsyncMock(return_value={"success": True})
-
-    await u._client_io.acquire()  # simulate a turn holding the client
-    try:
-        await u._check_context_soft_compact()
-    finally:
-        u._client_io.release()
-
-    u.compact.assert_not_awaited()  # must have skipped, not blocked
-
-
-@pytest.mark.asyncio
-async def test_soft_compact_runs_when_client_io_free():
-    """AC3 control: when no turn holds the client, soft-compact proceeds
-    normally (proves the skip is conditional, not a permanent disable)."""
-    from unittest.mock import AsyncMock
-
-    u = _unit()
-    u.compact = AsyncMock(return_value={"success": True})
-
-    await u._check_context_soft_compact()
-
-    u.compact.assert_awaited_once()
-
 
 @pytest.mark.asyncio
 async def test_mcp_health_skips_when_client_io_held():

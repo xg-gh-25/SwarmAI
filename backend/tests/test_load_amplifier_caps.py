@@ -5,13 +5,15 @@ change, no new infra). Each gap is verified by a FORCED-execution test —
 "compiles" is not "executes" (STEERING #11 / COE10).
 
 Gaps & ACs:
-- G1 (context-ring): AC1 soft → compact() at next IDLE; AC2 hard notice (already exists, verified).
+- G1 (context-ring): AC1 soft-compact REMOVED (run_2b1957f8 — held _client_io 300s
+  at 60%, froze next send; now CLI autocompact + manual refresh). AC2 hard notice
+  (already exists, verified) is retained.
 - G2 (turn count):   AC3 hard graceful floor at max_turns-5, ONLY reachable when self-heal OFF.
 - G3 (single turn):  AC5 elapsed "still working" heartbeat; AC6 per-turn tool-loop budget.
 - AC4 observability: context_ring_debug WARN near cap + turn_count.
 
 Methodology: unit tests with mocked Claude SDK + forced-execution of each new
-guard path. AC1/AC3/AC6 force the trigger condition and assert the path RUNS
+guard path. AC3/AC6 force the trigger condition and assert the path RUNS
 (not just that the code parses). AC3 forces SWARMAI_SELF_HEAL=0 because the hard
 floor is by-design unreachable when self-heal is ON (turn_approaching at -20
 heals + resets turn_count before -5 is hit).
@@ -19,9 +21,6 @@ heals + resets turn_count before -5 is hit).
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock
-
-import pytest
 
 from core.session_unit import SessionState, SessionUnit
 
@@ -36,66 +35,13 @@ def _make_idle_unit(session_id: str = "test-amplifier") -> SessionUnit:
     return unit
 
 
-# ── AC1: Context-ring soft cap → compact() at next IDLE ─────────────
-
-
-class TestAC1SoftCompact:
-    """G1: crossing the soft context threshold triggers compact() at IDLE."""
-
-    @pytest.mark.asyncio
-    async def test_soft_threshold_triggers_compact(self):
-        """FORCED: context% above SOFT_COMPACT_PCT → compact() is awaited."""
-        unit = _make_idle_unit()
-        # Force a large known context: 70% of a 1M window = above 60% soft cap.
-        unit._last_known_context_tokens = 700_000
-        unit._model_name = "claude-opus-4-8"
-        # Bypass cooldown so the check actually fires.
-        unit._last_soft_compact = float("-inf")
-        unit.compact = AsyncMock(return_value={"success": True})
-
-        await unit._check_context_soft_compact()
-
-        unit.compact.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_below_soft_threshold_does_not_compact(self):
-        """Context% below soft cap → compact() NOT called (no false fire)."""
-        unit = _make_idle_unit()
-        unit._last_known_context_tokens = 100_000  # 10% of 1M — well below 60%
-        unit._model_name = "claude-opus-4-8"
-        unit._last_soft_compact = float("-inf")
-        unit.compact = AsyncMock(return_value={"success": True})
-
-        await unit._check_context_soft_compact()
-
-        unit.compact.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_soft_compact_respects_cooldown(self):
-        """A recent soft-compact suppresses a second one (no thrash)."""
-        unit = _make_idle_unit()
-        unit._last_known_context_tokens = 700_000
-        unit._model_name = "claude-opus-4-8"
-        unit._last_soft_compact = time.monotonic()  # just compacted
-        unit.compact = AsyncMock(return_value={"success": True})
-
-        await unit._check_context_soft_compact()
-
-        unit.compact.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_soft_compact_never_kills(self):
-        """AC1 is compact-only — it must NOT kill the subprocess."""
-        unit = _make_idle_unit()
-        unit._last_known_context_tokens = 700_000
-        unit._model_name = "claude-opus-4-8"
-        unit._last_soft_compact = float("-inf")
-        unit.compact = AsyncMock(return_value={"success": True})
-        unit.kill = AsyncMock()
-
-        await unit._check_context_soft_compact()
-
-        unit.kill.assert_not_awaited()
+# ── AC1: Context-ring soft cap REMOVED (run_2b1957f8) ───────────────
+# The proactive soft-compact path (_check_context_soft_compact) was deleted —
+# it held _client_io for a 300s /compact at 60% context, freezing the user's
+# next send() at the turn boundary. Context is now managed by CLI autocompact
+# (task_budget=800K + per-session window-% autoCompact) + manual refresh. The
+# TestAC1SoftCompact class that exercised the removed method is gone with it.
+# AC2 (the hard notice) and AC3/AC5 below are unaffected.
 
 
 # ── AC2: Context-ring hard notice (already exists — verify) ─────────

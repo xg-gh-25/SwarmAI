@@ -40,8 +40,8 @@ class TestHealthSensorLatency:
     sessions between turns based purely on RELATIVE completed-turn latency
     (recent-5 avg > 2.5x opening-10 avg). Its kill->--resume response made
     latency WORSE (replays full context, 2x multiplier), and every real cause
-    of rising latency already has a correct owner (context-bloat->soft-compact,
-    memory->RSS-restart, legit-heavier-work->no action). See EVOLUTION/DDD.
+    of rising latency already has a correct owner (context-bloat->CLI autocompact
+    + manual refresh, memory->RSS-restart, legit-heavier-work->no action). See EVOLUTION/DDD.
     These tests pin that a latency shape NO LONGER triggers a heal.
     """
 
