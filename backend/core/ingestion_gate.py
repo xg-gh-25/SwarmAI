@@ -183,6 +183,12 @@ _JUDGE_MAX_TOKENS = 400
 # FAIL-OPEN by contract: telemetry is OBSERVATION, never a gate — a logging failure
 # must NEVER change a verdict (the opposite of the judge's own fail-CLOSED stance).
 _JUDGE_TELEMETRY_TEXT_CAP = 1000
+# Byte-cap for judge-telemetry.jsonl: truncate-from-head (keep the tail half) when the
+# file exceeds this, at the single write chokepoint. Clones the house idiom
+# (routers/system.py _rotate_and_append / _FRONTEND_LOG_MAX_BYTES) so append-only logs
+# stay bounded the same way everywhere. 8MB → 8MB//2 = 4MB retained after a truncate =
+# ~12 days at 5x the current rate, comfortably above the weekly report's 7d window.
+_TELEMETRY_MAX_BYTES = 8 * 1024 * 1024
 
 
 def _telemetry_dir():
@@ -216,11 +222,41 @@ def _telemetry_row(text: str, section: str, verdict: str, reason: str,
 
 def _write_telemetry_row(row: dict) -> None:
     """Append one prebuilt row to .context/judge-telemetry.jsonl. Callers wrap this
-    fail-open; kept tiny so both writers share the mkdir+append."""
+    fail-open; kept tiny so both writers share the mkdir + byte-cap + append.
+
+    Byte-cap (clones routers/system.py _rotate_and_append): when the file exceeds
+    _TELEMETRY_MAX_BYTES, keep the most-recent tail half (rows are append-only, so newest
+    = end) and DROP the partial first line the head-cut leaves — the reader
+    (judge_telemetry_report._load_rows) does read_text(utf-8) on the WHOLE file OUTSIDE
+    its per-line try, so a mid-multibyte-char slice would UnicodeDecodeError the entire
+    file, not skip one line. The cap is best-effort (except OSError: pass); the append
+    runs OUTSIDE that try so a rotate failure never drops the row (fail-open ordering)."""
     import json as _json
     d = _telemetry_dir()
     d.mkdir(parents=True, exist_ok=True)
-    with (d / "judge-telemetry.jsonl").open("a", encoding="utf-8") as fh:
+    p = d / "judge-telemetry.jsonl"
+    try:
+        if p.exists() and p.stat().st_size > _TELEMETRY_MAX_BYTES:
+            raw = p.read_bytes()[-(_TELEMETRY_MAX_BYTES // 2):]
+            nl = raw.find(b"\n")
+            # Drop the partial mid-line head so line 1 is a clean row boundary (valid
+            # UTF-8). The nl==-1 fallback (no newline in the whole tail-half) keeps raw
+            # as-is; it is UNREACHABLE today because a row is bounded ~1-2KB (text capped
+            # at _JUDGE_TELEMETRY_TEXT_CAP=1000, reason/section are short labels) << the
+            # 4MB tail — so a newline always lands within the first ~2KB. If a future
+            # change lets a single row exceed the tail-half, this fallback could leave a
+            # mid-char UTF-8 head → guard it then (re-slice to a decodable boundary).
+            raw = raw[nl + 1:] if nl != -1 else raw
+            p.write_bytes(raw)
+            # Leave a trace: this file EXISTS to be analyzed, so a silent truncation
+            # would make a future analyst mistake the retained tail for all history.
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "judge-telemetry.jsonl exceeded %d bytes — truncated from head, "
+                "retained tail ~%d bytes", _TELEMETRY_MAX_BYTES, len(raw))
+    except OSError:
+        pass  # rotation is best-effort — a cap failure must never block the write
+    with p.open("a", encoding="utf-8") as fh:
         fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
 
 

@@ -529,6 +529,100 @@ class TestGateFloorTelemetry:
         assert bare == [], f"bare return GateVerdict bypasses telemetry chokepoint: {bare}"
 
 
+class TestTelemetryByteCap:
+    """judge-telemetry.jsonl had no size cap — it grew unbounded (the gate rows added
+    by the floor-telemetry change accelerate it). _write_telemetry_row now byte-caps the
+    file (truncate-from-head keeping the tail half), cloning the frontend.log idiom
+    (system.py:1371). These lock: the cap fires over the limit, keeps the NEWEST rows,
+    drops the partial mid-line head (so the reader's whole-file read_text(utf-8) can't
+    UnicodeDecodeError), is fail-open (a rotate error never skips the append), and is a
+    no-op under the cap."""
+
+    def _write(self, tmp_path, row):
+        from core.ingestion_gate import _write_telemetry_row
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"):
+            _write_telemetry_row(row)
+
+    def _path(self, tmp_path):
+        return tmp_path / ".context" / "judge-telemetry.jsonl"
+
+    def _seed_over_cap(self, tmp_path, multibyte=False):
+        # Build a file larger than the cap out of valid json rows. If multibyte=True,
+        # pad with a 3-byte UTF-8 char (—) so the -(cap//2) slice point is likely to land
+        # mid-character — the exact wedge Gate-1 caught.
+        import json as _json
+        from core.ingestion_gate import _TELEMETRY_MAX_BYTES
+        d = tmp_path / ".context"; d.mkdir(parents=True, exist_ok=True)
+        p = d / "judge-telemetry.jsonl"
+        pad = ("—" * 200) if multibyte else ("x" * 400)
+        line = _json.dumps({"ts": "2026-08-01T00:00:00+00:00", "verdict": "pass",
+                            "reason": "seed", "text": pad}, ensure_ascii=False) + "\n"
+        n = (_TELEMETRY_MAX_BYTES // len(line.encode("utf-8"))) + 50  # comfortably over cap
+        with p.open("w", encoding="utf-8") as fh:
+            for i in range(n):
+                fh.write(_json.dumps({"ts": f"2026-08-01T00:00:{i%60:02d}+00:00",
+                                      "verdict": "pass", "reason": f"seed{i}", "text": pad},
+                                     ensure_ascii=False) + "\n")
+        return p
+
+    def test_over_cap_truncates_from_head_keeping_newest(self, tmp_path):
+        from core.ingestion_gate import _TELEMETRY_MAX_BYTES
+        p = self._seed_over_cap(tmp_path)
+        before = p.stat().st_size
+        assert before > _TELEMETRY_MAX_BYTES
+        self._write(tmp_path, {"ts": "2026-08-13T12:00:00+00:00", "verdict": "pass",
+                               "reason": "NEWEST_MARKER", "text": "z"})
+        after = p.stat().st_size
+        assert after <= (_TELEMETRY_MAX_BYTES // 2) + 2000  # ~tail-half + the new row
+        body = p.read_text(encoding="utf-8")
+        assert "NEWEST_MARKER" in body            # the just-written row survived
+        assert "seed0" not in body                # the oldest rows were dropped
+        assert '"reason": "seed' in body          # some recent seed rows retained
+
+    def test_partial_head_line_is_dropped_no_unicode_error(self, tmp_path):
+        # The reader read_text(utf-8) is OUTSIDE its per-line try — a mid-char head cut
+        # would UnicodeDecodeError the WHOLE file. The cap must drop the partial head line.
+        import sys
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+        from scripts.judge_telemetry_report import _load_rows
+        self._seed_over_cap(tmp_path, multibyte=True)
+        self._write(tmp_path, {"ts": "2026-08-13T12:00:00+00:00", "verdict": "pass",
+                               "reason": "AFTER_CAP", "text": "z"})
+        p = self._path(tmp_path)
+        # 1) the file is valid UTF-8 as a whole (the reader's read_text won't raise)
+        p.read_text(encoding="utf-8")  # must NOT raise UnicodeDecodeError
+        # 2) the reader parses it cleanly and sees the newest row
+        rows = _load_rows(p, None)
+        assert any(r.get("reason") == "AFTER_CAP" for r in rows)
+
+    def test_rotate_failure_still_appends_fail_open(self, tmp_path):
+        # A rotate (read_bytes/write_bytes) OSError must NOT skip the append — the append
+        # is OUTSIDE the rotate try/except (fail-open ordering, mirrors system.py:1381).
+        import json as _json
+        self._seed_over_cap(tmp_path)
+        p = self._path(tmp_path)
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("pathlib.Path.read_bytes", side_effect=OSError("boom")):
+            from core.ingestion_gate import _write_telemetry_row
+            _write_telemetry_row({"ts": "2026-08-13T12:00:00+00:00", "verdict": "pass",
+                                  "reason": "FAILOPEN_MARKER", "text": "z"})
+        # the row was still appended despite the rotate error
+        last = p.read_text(encoding="utf-8").splitlines()[-1]
+        assert "FAILOPEN_MARKER" in last
+
+    def test_under_cap_is_noop(self, tmp_path):
+        import json as _json
+        d = tmp_path / ".context"; d.mkdir(parents=True, exist_ok=True)
+        p = d / "judge-telemetry.jsonl"
+        p.write_text(_json.dumps({"ts": "2026-08-01T00:00:00+00:00", "verdict": "pass",
+                                  "reason": "OLD_BUT_KEPT", "text": "small"}) + "\n",
+                     encoding="utf-8")
+        self._write(tmp_path, {"ts": "2026-08-13T12:00:00+00:00", "verdict": "pass",
+                               "reason": "NEW", "text": "small"})
+        body = p.read_text(encoding="utf-8")
+        assert "OLD_BUT_KEPT" in body and "NEW" in body   # under cap → nothing dropped
+
+
 class TestKeepTypeHoldback:
     def test_keep_type_holds_back(self):
         # A [principle]/[decision] etc (KEEP_TYPES) → review (permanent write, must not auto).
