@@ -191,14 +191,15 @@ def _telemetry_dir():
     return CONTEXT_DIR
 
 
-def _append_judge_telemetry(text: str, section: str, verdict: str, reason: str) -> None:
-    """Append one judge verdict to .context/judge-telemetry.jsonl. FAIL-OPEN —
-    any error is swallowed so telemetry can never alter/deny a verdict."""
-    import json as _json
+def _telemetry_row(text: str, section: str, verdict: str, reason: str,
+                   source: str | None = None) -> dict:
+    """Build one telemetry row. Shared by the judge writer and the gate writer so the
+    sha/cap/timestamp logic never forks (DRY). ``source`` is omitted for judge rows
+    (back-compat: legacy rows have no source key) and set to 'gate' for the pre-judge
+    floor / fail-closed / judge-less-pass decisions logged by ingestion_gate itself —
+    which lets judge_telemetry_report.analyze() filter gate rows out of the judge gauge."""
     import hashlib as _hashlib
     import datetime as _dt
-    d = _telemetry_dir()
-    d.mkdir(parents=True, exist_ok=True)
     row = {
         "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "section": section,
@@ -208,8 +209,41 @@ def _append_judge_telemetry(text: str, section: str, verdict: str, reason: str) 
         "text_sha": _hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12],
         "text": (text or "")[:_JUDGE_TELEMETRY_TEXT_CAP],
     }
+    if source is not None:
+        row["source"] = source
+    return row
+
+
+def _write_telemetry_row(row: dict) -> None:
+    """Append one prebuilt row to .context/judge-telemetry.jsonl. Callers wrap this
+    fail-open; kept tiny so both writers share the mkdir+append."""
+    import json as _json
+    d = _telemetry_dir()
+    d.mkdir(parents=True, exist_ok=True)
     with (d / "judge-telemetry.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _append_judge_telemetry(text: str, section: str, verdict: str, reason: str) -> None:
+    """Append one judge verdict to .context/judge-telemetry.jsonl. FAIL-OPEN —
+    any error is swallowed here so telemetry can never alter/deny a verdict (the
+    self_adversarial_judge caller also wraps it, but the swallow lives HERE so a future
+    unwrapped caller can't crash a write path either)."""
+    try:
+        _write_telemetry_row(_telemetry_row(text, section, verdict, reason))
+    except Exception:  # noqa: BLE001 — telemetry is observation, NEVER alters a verdict
+        pass
+
+
+def _append_gate_telemetry(text: str, section: str, verdict: str, reason: str) -> None:
+    """Append one ingestion_gate FLOOR/fail-closed decision (source='gate'). FAIL-OPEN
+    by contract — an emit failure must NEVER change the GateVerdict the gate returns
+    (telemetry is observation, not a gate). Distinct source so the judge gauge
+    (judge_telemetry_report.analyze) filters these out."""
+    try:
+        _write_telemetry_row(_telemetry_row(text, section, verdict, reason, source="gate"))
+    except Exception:  # noqa: BLE001 — telemetry is observation, NEVER alters a verdict
+        pass
 
 # ── Judge fan-out budget (fail-closed rolling-window rate limit) ──────────────
 # The judge tier does a SERIAL Bedrock call per candidate. distillation runs on
@@ -580,16 +614,46 @@ def ingestion_gate(
       MEMORY/EVOLUTION: {"section": str}
     """
     context = context or {}
+    # Bind section + ran BEFORE any return so the _emit_and_return chokepoint always has
+    # them in scope. The 3 pre-loop fail-closed returns below precede where these used to
+    # be bound AND sit outside the try — referencing `section` there would NameError and
+    # crash the write path (Gate-1, run_fdeed89a). ran starts empty (pre-loop returns
+    # legitimately ran no tiers).
+    section = context.get("section", "")
+    ran: list[str] = []
+
+    def _emit_and_return(verdict: str, tiers_run: list, reason: str) -> "GateVerdict":
+        """Single telemetry chokepoint for EVERY ingestion_gate return. Emits a
+        source='gate' row (fail-open, never mutates tiers_run) UNLESS the decision was
+        already logged by the judge itself:
+          • judge:noise:* / judge:suspect:* — self_adversarial_judge logged it at its
+            own emit point (double-log guard);
+          • passed_tiers when 'judge' in tiers_run — the judge logged the PASS there.
+        It MUST still emit judge:budget_exhausted (that returns BEFORE the judge is
+        called → untraced today, the load-bearing new signal) and judge-less passed_tiers
+        (memory_persist/evolution_persist have no judge tier → logged by nothing today)."""
+        already_judge_logged = (
+            reason.startswith("judge:noise")
+            or reason.startswith("judge:suspect")
+            or (reason == "passed_tiers" and "judge" in tiers_run)
+        )
+        if not already_judge_logged:
+            try:
+                _append_gate_telemetry(text, section, verdict, reason)
+            except Exception:  # noqa: BLE001 — defense-in-depth: telemetry NEVER alters a verdict
+                pass
+        return GateVerdict(verdict, tiers_run, reason)
+
     tiers = TRIGGER_TIERS.get(trigger)
     if tiers is None:
-        return GateVerdict("review", [], f"unknown_trigger:{trigger}")
+        return _emit_and_return("review", ran, f"unknown_trigger:{trigger}")
     # C7 (run_0d60e04e): the dispatcher SERVES only MEMORY/EVOLUTION triggers. A DDD trigger
     # (served by admission_band) or an orchestrator carve-out (value-refresh, never gated)
     # reaching HERE means a caller wired it to the wrong path — fail-closed to review rather
     # than run a DDD tier-spec through the store-agnostic dispatcher. Makes _DISPATCHER_TRIGGERS
     # a REAL guard (was documentation-only), not just a comment (P7: enforce, don't narrate).
     if trigger not in _DISPATCHER_TRIGGERS:
-        return GateVerdict("review", [], f"non_dispatcher_trigger:{trigger}")
+        return _emit_and_return("review", ran, f"non_dispatcher_trigger:{trigger}")
     # STORE↔TRIGGER consistency (was: `store` accepted but NEVER read — a caller that
     # wired store="MEMORY" onto trigger="evolution_distill" would silently gate an
     # EVOLUTION write with MEMORY intent, undetected). The dispatcher triggers are
@@ -598,11 +662,9 @@ def ingestion_gate(
     # intent (P7: enforce, don't narrate — makes the `store` param a real guard).
     _expected_store = "MEMORY" if trigger.startswith("memory_") else "EVOLUTION"
     if store != _expected_store:
-        return GateVerdict("review", [], f"store_trigger_mismatch:{store}!={_expected_store}")
+        return _emit_and_return("review", ran, f"store_trigger_mismatch:{store}!={_expected_store}")
 
-    section = context.get("section", "")
     neighbors = context.get("neighbors", [])
-    ran: list[str] = []
     try:
         for tier in tiers:
             if tier not in _IMPLEMENTED_TIERS:
@@ -614,38 +676,38 @@ def ingestion_gate(
                 # separate `confident` tier below — so DDD keeps machine-broadcast+floor,
                 # MEMORY keeps only structural (short fragments survive). Gate-1 ⓐ.
                 if structural_noise(text):
-                    return GateVerdict("discard", ran, "noise:structural")
+                    return _emit_and_return("discard", ran, "noise:structural")
 
             elif tier == "confident":
                 # DDD-only value floor (≥5-word + instance-log + narration + machine-broadcast).
                 if ddd_value_floor(text):
-                    return GateVerdict("discard", ran, "noise:ddd_value_floor")
+                    return _emit_and_return("discard", ran, "noise:ddd_value_floor")
 
             elif tier == "thin":
                 # Deterministic HARD-DENY (network-free): too-thin fragment. Restores the
                 # floor 2c8fc37f dropped from MEMORY — holds even if the judge is down.
                 if thin_floor(text):
-                    return GateVerdict("discard", ran, "thin")
+                    return _emit_and_return("discard", ran, "thin")
 
             elif tier == "content_floor":
                 # Deterministic HARD-DENY: volatile/zero-value (confidence<=0.3) OR a
                 # governance rule (belongs to s_self-evolution, not MEMORY). Fail-closed.
                 deny, why = content_floor(text)
                 if deny:
-                    return GateVerdict("discard", ran, why)
+                    return _emit_and_return("discard", ran, why)
 
             elif tier == "episodic":
                 # Deterministic HARD-DENY: a single-run gate war-story ("Gate-2 caught…",
                 # "Nth catch this session") belongs in IMPROVEMENT.md, not the MEMORY hot
                 # path (92-entry decay-archive root cause). Fail-open on detector error.
                 if episodic_warstory(text):
-                    return GateVerdict("discard", ran, "episodic_warstory")
+                    return _emit_and_return("discard", ran, "episodic_warstory")
 
             elif tier == "keep_type_holdback":
                 # KEEP_TYPES (principle/correction/decision/model) → review (permanent write).
                 held, _etype = keep_type_holdback(text)
                 if held:
-                    return GateVerdict("review", ran, "keep_type_holdback")
+                    return _emit_and_return("review", ran, "keep_type_holdback")
 
             elif tier == "judge":
                 # Self-adversarial refute. pass → continue; suspect → review; noise → discard.
@@ -661,7 +723,7 @@ def ingestion_gate(
                 # instead of hundreds. (If a NEW caller ignores this reason, "review" with
                 # no queue would silently discard — every caller MUST branch on it.)
                 if not _judge_budget_available():
-                    return GateVerdict("review", ran, "judge:budget_exhausted")
+                    return _emit_and_return("review", ran, "judge:budget_exhausted")
                 # PROPAGATE jr (judge reason) into the verdict so a judge INFRA failure
                 # ("judge_error:*") is distinguishable downstream from a genuine content
                 # holdback ("judged"). Before, the reason was hardcoded "judge:suspect",
@@ -669,26 +731,26 @@ def ingestion_gate(
                 # the log — the silent-death twin of any fail-closed design.
                 verdict, jr = self_adversarial_judge(text, section, neighbors)
                 if verdict == "noise":
-                    return GateVerdict("discard", ran, f"judge:noise:{jr}")
+                    return _emit_and_return("discard", ran, f"judge:noise:{jr}")
                 if verdict == "suspect":
-                    return GateVerdict("review", ran, f"judge:suspect:{jr}")
+                    return _emit_and_return("review", ran, f"judge:suspect:{jr}")
                 # verdict == "pass" → continue (does NOT bypass downstream tiers)
 
             elif tier == "human":
-                return GateVerdict("review", ran, "human_gated")
+                return _emit_and_return("review", ran, "human_gated")
 
             elif tier == "dedup":
                 if dedup_fn is not None and dedup_fn(text):
-                    return GateVerdict("discard", ran, "duplicate")
+                    return _emit_and_return("discard", ran, "duplicate")
                 # no dedup_fn wired here → pass (dedup also enforced downstream at
                 # apply_to_ddd / locked_write dedup=True, so this is not the sole guard)
 
         # All declared implemented tiers passed. The auto/review split for DDD trust
         # still lives in admission_band until C3; at C1/C2 a fully-passing candidate is
         # provisionally "auto" for the tiers that exist. C3 tightens this.
-        return GateVerdict("auto", ran, "passed_tiers")
+        return _emit_and_return("auto", ran, "passed_tiers")
     except Exception as e:  # noqa: BLE001 — gate must never crash a write path
-        return GateVerdict("review", ran, f"gate_error:{type(e).__name__}")
+        return _emit_and_return("review", ran, f"gate_error:{type(e).__name__}")
 
 
 # ── _distill_entry — the DISTILL pass (capture-vs-distill separation, root-fix B) ──

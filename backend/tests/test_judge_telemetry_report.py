@@ -42,6 +42,40 @@ class TestAnalyze:
         s = analyze(rows)
         assert len(s["discarded"]) == 2
 
+    def test_gate_rows_excluded_from_judge_gauge(self):
+        # source='gate' rows (pre-judge floors / fail-closed / judge-less pass) must NOT
+        # pollute the judge gauge — analyze() over mixed rows == analyze() over judge rows.
+        judge_rows = [_row("pass"), _row("pass"), _row("suspect"), _row("noise")]
+        gate_rows = [
+            {**_row("discard", reason="thin"), "source": "gate"},
+            {**_row("discard", reason="content_floor:low_confidence:0.2"), "source": "gate"},
+            {**_row("review", reason="judge:budget_exhausted"), "source": "gate"},
+            {**_row("auto", reason="passed_tiers"), "source": "gate"},
+        ]
+        judge_only = analyze(judge_rows)
+        mixed = analyze(judge_rows + gate_rows)
+        # every judge-gauge field is identical whether or not gate rows are present
+        for k in ("total", "verdicts", "pass_rate", "discard_rate", "fail_closed"):
+            assert mixed[k] == judge_only[k], f"gate rows polluted {k}"
+        # and the gate signal is captured separately
+        assert mixed["gate_total"] == 4
+        assert mixed["gate_reasons"]["thin"] == 1
+        assert mixed["gate_reasons"]["judge:budget_exhausted"] == 1
+
+    def test_render_shows_gate_floor_section(self):
+        # The floor-drop signal must appear in the HUMAN report, not only in --json —
+        # else the observability goal is unmet in the default output (Gate-2 finding).
+        judge_rows = [_row("pass"), _row("suspect")]
+        gate_rows = [
+            {**_row("discard", reason="thin"), "source": "gate"},
+            {**_row("discard", reason="content_floor:low_confidence:0.2"), "source": "gate"},
+        ]
+        out = render(analyze(judge_rows + gate_rows), days=7)
+        assert "Pre-judge floor decisions (2)" in out
+        assert "content_floor:low_confidence:0.2" in out
+        # and gate rows did NOT inflate the judge total in the header
+        assert "**2** verdicts" in out
+
 
 class TestRenderCalibration:
     def test_high_fail_closed_is_red_and_dominates(self):

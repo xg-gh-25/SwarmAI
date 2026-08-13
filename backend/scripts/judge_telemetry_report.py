@@ -62,6 +62,13 @@ def _load_rows(path: Path, since: datetime | None) -> list[dict]:
 
 
 def analyze(rows: list[dict]) -> dict:
+    # Gate rows (source='gate') are ingestion_gate's OWN pre-judge floor / fail-closed /
+    # judge-less-pass decisions — NOT judge verdicts. Rebind `rows` to judge rows only so
+    # total/by_section/fail_closed/pass_rate/discard_rate all reflect the JUDGE gauge, not
+    # a polluted mix. Legacy rows have no 'source' key (kept). Gate rows are summarized
+    # separately below (gate_total + gate_reasons) so the floor-drop signal stays visible.
+    gate_rows = [r for r in rows if r.get("source") == "gate"]
+    rows = [r for r in rows if r.get("source") != "gate"]
     total = len(rows)
     verdicts = Counter(r.get("verdict", "?") for r in rows)
     by_section = Counter(r.get("section", "?") for r in rows)
@@ -74,6 +81,10 @@ def analyze(rows: list[dict]) -> dict:
     )
     passed = verdicts.get("pass", 0)
     discarded = [r for r in rows if r.get("verdict") in ("suspect", "noise")]
+    # Gate-row summary (pre-judge floor / fail-closed / judge-less pass) — the
+    # observability signal this file gained: a spike in content_floor / thin drops, or
+    # a judge:budget_exhausted backlog, is now visible instead of silently invisible.
+    gate_reasons = Counter(r.get("reason", "?") for r in gate_rows)
     return {
         "total": total,
         "verdicts": dict(verdicts),
@@ -82,6 +93,8 @@ def analyze(rows: list[dict]) -> dict:
         "fail_closed": fail_closed,
         "by_section": dict(by_section.most_common(15)),
         "discarded": discarded,
+        "gate_total": len(gate_rows),
+        "gate_reasons": dict(gate_reasons.most_common(15)),
     }
 
 
@@ -150,6 +163,18 @@ def render(stats: dict, days: int) -> str:
                          f"({r.get('reason','')}) — {preview}")
         if len(disc) > 100:
             lines.append(f"- …and {len(disc)-100} more (see raw jsonl).")
+    # Pre-judge floor drops — the observability signal this gauge gained. These are
+    # decisions the DETERMINISTIC floors (content_floor/thin/episodic/…) or the
+    # budget-exhausted short-circuit made BEFORE the judge — invisible before, so a
+    # floor silently starving high-value knowledge (e.g. content_floor eating long
+    # KEEP-type entries) now shows up here instead of nowhere.
+    gate_total = stats.get("gate_total", 0)
+    gate_reasons = stats.get("gate_reasons", {})
+    if gate_total:
+        lines.append("")
+        lines.append(f"## Pre-judge floor decisions ({gate_total}) — floors act before the judge")
+        for reason, n in gate_reasons.items():
+            lines.append(f"- `{reason}` — {n}")
     return "\n".join(lines)
 
 

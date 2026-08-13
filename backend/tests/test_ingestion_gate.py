@@ -397,6 +397,138 @@ class TestJudgeTelemetry:
         assert verdict == "pass"
 
 
+class TestGateFloorTelemetry:
+    """The pre-judge deterministic floors + fail-closed returns emit NO telemetry
+    today (only self_adversarial_judge does) — so a floor-dropped entry (esp. a long
+    KEEP-type hitting content_floor) is invisible to the very gauge used to audit
+    admission health. These tests lock: every non-judge-logged ingestion_gate decision
+    emits ONE source='gate' row; judge-logged verdicts are NOT double-logged; the emit
+    is fail-open and never mutates the verdict; and the 3 pre-loop fail-closed returns
+    don't NameError (section/ran must be bound before them)."""
+
+    def _rows(self, tmp_path):
+        import json as _json
+        p = tmp_path / ".context" / "judge-telemetry.jsonl"
+        if not p.exists():
+            return []
+        return [_json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+    def _gate_rows(self, tmp_path):
+        return [r for r in self._rows(tmp_path) if r.get("source") == "gate"]
+
+    def test_thin_floor_discard_emits_gate_row(self, tmp_path):
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"):
+            v = ingestion_gate("x", "MEMORY", "memory_distill", {"section": "Pitfalls"})
+        assert v.verdict == "discard" and v.reason == "thin"
+        g = self._gate_rows(tmp_path)
+        assert len(g) == 1
+        assert g[0]["verdict"] == "discard" and g[0]["reason"] == "thin"
+        assert g[0]["source"] == "gate" and g[0]["section"] == "Pitfalls"
+
+    def test_content_floor_discard_emits_gate_row(self, tmp_path):
+        # a governance-rule / low-confidence entry → content_floor discard (the KEEP-type
+        # starvation risk the whole change exists to make visible).
+        from core.ingestion_gate import ingestion_gate, content_floor
+        text = "Always require two-person approval before deploying to production."
+        deny, _why = content_floor(text)
+        if not deny:
+            import pytest as _pt
+            _pt.skip("classifier did not floor this sample; content_floor path unexercised")
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"):
+            v = ingestion_gate(text, "MEMORY", "memory_distill", {"section": "Guidelines"})
+        assert v.verdict == "discard"
+        g = self._gate_rows(tmp_path)
+        assert len(g) == 1 and g[0]["source"] == "gate"
+
+    def test_judge_noise_does_not_double_log(self, tmp_path):
+        # judge tier logs noise itself → NO extra gate row.
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                 "VERDICT: noise\nREASON: frag")):
+            v = ingestion_gate("a specific enough looking rule about widgets",
+                               "MEMORY", "memory_distill", {"section": "Guidelines"})
+        assert v.verdict == "discard" and v.reason.startswith("judge:noise")
+        assert self._gate_rows(tmp_path) == []  # judge already logged; no gate double-log
+        # but the judge's OWN row is present (source absent)
+        judge_rows = [r for r in self._rows(tmp_path) if r.get("source") != "gate"]
+        assert len(judge_rows) == 1 and judge_rows[0]["verdict"] == "noise"
+
+    def test_budget_exhausted_emits_gate_row(self, tmp_path):
+        # judge:budget_exhausted returns BEFORE the judge is called → untraced today.
+        # This is the load-bearing new signal — it MUST emit a gate row.
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("core.ingestion_gate._judge_budget_available", return_value=False):
+            v = ingestion_gate("a genuinely specific and actionable engineering rule about caching",
+                               "MEMORY", "memory_distill", {"section": "Guidelines"})
+        assert v.reason == "judge:budget_exhausted"
+        g = self._gate_rows(tmp_path)
+        assert len(g) == 1 and g[0]["reason"] == "judge:budget_exhausted"
+
+    def test_judge_pass_passed_tiers_not_double_logged(self, tmp_path):
+        # judge PASS → falls through to passed_tiers; judge already logged the pass →
+        # the passed_tiers return must NOT emit a gate row ('judge' in ran).
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("core.ingestion_gate._judge_client", return_value=_mock_bedrock(
+                 "VERDICT: pass\nREASON: real")):
+            v = ingestion_gate("a specific actionable reusable rule about ret/backoff timing",
+                               "MEMORY", "memory_distill", {"section": "Guidelines"})
+        assert v.verdict == "auto" and v.reason == "passed_tiers"
+        assert self._gate_rows(tmp_path) == []  # judge logged the pass; no gate row
+
+    def test_judgeless_passed_tiers_emits_gate_row(self, tmp_path):
+        # memory_persist = [noise, thin, dedup] — NO judge tier. A passing entry is
+        # logged by NOTHING today. With the fix it emits a gate passed_tiers row.
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"):
+            v = ingestion_gate("a specific actionable reusable rule with enough words to clear thin",
+                               "MEMORY", "memory_persist", {"section": "Guidelines"})
+        assert v.verdict == "auto" and v.reason == "passed_tiers"
+        g = self._gate_rows(tmp_path)
+        assert len(g) == 1 and g[0]["reason"] == "passed_tiers"
+
+    def test_preloop_failclosed_returns_do_not_crash(self, tmp_path):
+        # The 3 pre-loop fail-closed returns precede where section/ran were bound —
+        # the emit closure must have them in scope or they NameError-crash the write path.
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"):
+            v1 = ingestion_gate("x", "MEMORY", "bogus_trigger", {})           # unknown_trigger
+            v2 = ingestion_gate("x", "MEMORY", "evolution_distill", {})       # store_trigger_mismatch
+        assert v1.reason.startswith("unknown_trigger")
+        assert v2.reason.startswith("store_trigger_mismatch") or v2.reason.startswith("non_dispatcher")
+        # both emitted gate rows, no exception
+        assert len(self._gate_rows(tmp_path)) == 2
+
+    def test_gate_emit_is_fail_open_and_ran_immutable(self, tmp_path):
+        # A telemetry emit exception must NOT change the verdict, reason, or tiers_run.
+        from core.ingestion_gate import ingestion_gate
+        with patch("core.ingestion_gate._telemetry_dir", return_value=tmp_path / ".context"), \
+             patch("core.ingestion_gate._append_gate_telemetry", side_effect=OSError("disk full")):
+            v = ingestion_gate("x", "MEMORY", "memory_distill", {"section": "Pitfalls"})
+        assert v.verdict == "discard" and v.reason == "thin"
+        assert "judge" not in v.tiers_run  # ran not polluted by the emit path
+
+    def test_no_bare_return_gateverdict_in_ingestion_gate(self):
+        # Structural guard: every return in ingestion_gate() must funnel through the
+        # _emit_and_return chokepoint, else a future return site silently bypasses
+        # telemetry (the exact silence this change removes).
+        import inspect
+        from core.ingestion_gate import ingestion_gate
+        src = inspect.getsource(ingestion_gate)
+        # The ONE legal `return GateVerdict(...)` is inside the _emit_and_return closure
+        # (it constructs the verdict AFTER emitting). Every other return must call
+        # _emit_and_return. The closure's line is exactly `return GateVerdict(verdict,
+        # tiers_run, reason)` — allow that single canonical form; any other bare
+        # `return GateVerdict(` bypasses the telemetry chokepoint.
+        bare = [ln.strip() for ln in src.splitlines()
+                if "return GateVerdict(" in ln
+                and ln.strip() != "return GateVerdict(verdict, tiers_run, reason)"]
+        assert bare == [], f"bare return GateVerdict bypasses telemetry chokepoint: {bare}"
+
+
 class TestKeepTypeHoldback:
     def test_keep_type_holds_back(self):
         # A [principle]/[decision] etc (KEEP_TYPES) → review (permanent write, must not auto).
