@@ -47,6 +47,9 @@ export interface CanvasFile {
    *  tree → empty). FileViewer passes it to /workspace/file/committed?ref=. Absent for
    *  content/knowledge rows → HEAD (correct, still uncommitted). */
   baseRef?: string;
+  /** Owning session id that surfaced this file (run_c014a4f3). Threaded to the render
+   *  fetch so an EXTERNAL surfaced file renders read-only. Absent for internal files. */
+  sessionId?: string;
 }
 
 interface CanvasTabState {
@@ -306,7 +309,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, tabId: stampedTab } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; tabId?: string }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, sessionId: openSessionId, tabId: stampedTab } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; sessionId?: string; tabId?: string }>).detail ?? {};
       if (!filePath) return;
       // Landing tab = the event's STAMPED origin tab if present, else the live active
       // tab. Two distinct origin cases:
@@ -371,7 +374,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       const fileChanged = cur.file?.filePath !== resolvedPath;
       const next = {
         ...cur,
-        file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef },
+        file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId },
         ...(fileChanged ? { railed: false } : {}),
       };
       mapRef.current.set(k, next);

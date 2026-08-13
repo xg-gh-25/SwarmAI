@@ -60,4 +60,13 @@ describe('outputRowOpenDetail (content-default — diff is a toggle, not the ope
     const d = outputRowOpenDetail('Knowledge/foo.md', 'new');
     expect(d.path).toBe('Knowledge/foo.md');
   });
+
+  it('carries sessionId through for an external row (run_c014a4f3 render-gate)', () => {
+    // An external (outside-SwarmWS) surfaced row carries its owning session id so the
+    // render fetch can pass session_id → GET /workspace/file allows the outside-$HOME
+    // path read-only. Internal rows pass no sessionId → undefined → home-only guard.
+    const d = outputRowOpenDetail('extrepo/hello.py', 'new', '/private/tmp/extrepo/hello.py', undefined, 'sess-xyz');
+    expect(d.sessionId).toBe('sess-xyz');
+    expect(outputRowOpenDetail('Knowledge/x.md', 'new').sessionId).toBeUndefined();
+  });
 });

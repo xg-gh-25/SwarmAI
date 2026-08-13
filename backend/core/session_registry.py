@@ -59,6 +59,33 @@ system_prompt_metadata: dict[str, dict] = {}
 # SAME LifecycleManager._release_session_state pop (bounded growth).
 recall_snapshot: dict[str, dict] = {}
 
+# Per-session set of RESOLVED-absolute paths this session SURFACED to the Canvas
+# OUTPUTS rail (run_c014a4f3), keyed by session_id. Populated at the emit gate in
+# streaming_orchestrator._build_file_write_events the moment is_canvas_surfaceable
+# admits a SwarmWS-OUTSIDE path. Read by GET /workspace/file to allow rendering that
+# exact external path (read-only) — so "listed in rail ⇒ renderable" holds WITHOUT
+# a stateless predicate (which would leak /etc/passwd — the Gate-0 hole). Same
+# one-per-session lifecycle as recall_snapshot; cleaned up in the SAME
+# LifecycleManager._release_session_state pop (bounded growth). Membership is the
+# RESOLVED string form (str(Path(abs).resolve())) so it matches the render gate's
+# str(target); the recorder MUST resolve before adding (walk-stage abs is un-resolved).
+surfaced_paths: dict[str, set[str]] = {}
+
+
+def record_surfaced_path(session_id: str | None, absolute_path: str) -> None:
+    """Record a Canvas-surfaced external absolute path for this session (idempotent).
+
+    No-op on a falsy session_id or path. Resolves the path to the canonical string
+    form the render gate compares against. Never raises (hot emit path)."""
+    if not session_id or not absolute_path:
+        return
+    try:
+        from pathlib import Path as _P
+        surfaced_paths.setdefault(session_id, set()).add(str(_P(absolute_path).resolve()))
+    except Exception:  # noqa: BLE001 — hot-path fail-safe
+        pass
+
+
 _initialized = False
 
 # Shared CredentialValidator — ONE instance for both the spawn pre-flight

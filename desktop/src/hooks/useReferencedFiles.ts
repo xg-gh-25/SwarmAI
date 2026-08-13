@@ -71,6 +71,11 @@ export interface ReferencedFile {
    *  the OUTPUTS row opens on the this-run diff, not an empty HEAD-vs-working-tree one.
    *  Absent for content/knowledge rows → they diff against HEAD (correct, uncommitted). */
   baseRef?: string;
+  /** run_c014a4f3: the owning session id that SURFACED this row. Threaded to the
+   *  render fetch (GET /workspace/file?session_id=) so an EXTERNAL (outside-SwarmWS)
+   *  file this session surfaced can render read-only. Absent for SwarmWS-internal
+   *  rows (they render via the home-only guard, no session id needed). */
+  sessionId?: string;
   /** run_5d9178bf: the file was DELETED this session. The row PERSISTS (struck-through,
    *  Show-Changes disabled) instead of being removed — "the user should see what I
    *  deleted" (XG). Undefined/false = a live written row. */
@@ -100,6 +105,11 @@ export interface FileChangedDetail {
    *  turn — the unstamped fail-open window that bled writes across tabs). Absent →
    *  treated as current (fail-open, older-backend migration only). */
   tabId?: string;
+  /** Owning SESSION id (run_c014a4f3, distinct from tabId). Emitted by the backend
+   *  ONLY for an external (outside-SwarmWS) surfaced file, so the render fetch can
+   *  prove "this session surfaced this path" to GET /workspace/file. Absent for
+   *  SwarmWS-internal rows. NOT used for tab-scope filtering (that's tabId). */
+  sessionId?: string;
 }
 
 /** The grouped shape this hook returns (and that CanvasOutputRail consumes). Only
@@ -167,6 +177,7 @@ export interface WriteEvent {
   operation: FileOperation;
   kind?: ReviewKind;
   baseRef?: string;
+  sessionId?: string;
 }
 
 /** PURE add/dedup/cap logic (SSOT, run_9dd59523). Extracted from the setFiles updater
@@ -194,6 +205,7 @@ export function applyWrite(
       count: existing.count + 1,
       kind: e.kind ?? existing.kind,
       baseRef: e.baseRef ?? existing.baseRef,
+      sessionId: e.sessionId ?? existing.sessionId,
     });
   } else {
     // Enforce cap — evict oldest if at limit.
@@ -217,6 +229,7 @@ export function applyWrite(
       count: 1,
       kind: e.kind,
       baseRef: e.baseRef,
+      sessionId: e.sessionId,
     });
   }
   return next;
@@ -271,7 +284,7 @@ export function useReferencedFiles(tabId: string | undefined) {
     if (!tabId) return;
 
     const handler = (e: Event) => {
-      const { path, absolutePath, operation, relevance, kind, baseRef, tabId: evtTabId } =
+      const { path, absolutePath, operation, relevance, kind, baseRef, sessionId, tabId: evtTabId } =
         (e as CustomEvent<FileChangedDetail>).detail ?? ({} as FileChangedDetail);
       if (!path) return;
       // AC5 read-only structural backstop (run_5d9178bf, §0′): the rail admits ONLY
@@ -325,7 +338,7 @@ export function useReferencedFiles(tabId: string | undefined) {
           if (!hit) return; // no-op — don't churn storage
           saveToStorage(ownTab, map);
         } else {
-          saveToStorage(ownTab, applyWrite(base, { path, absolutePath, operation, kind, baseRef }));
+          saveToStorage(ownTab, applyWrite(base, { path, absolutePath, operation, kind, baseRef, sessionId }));
         }
         return;
       }
@@ -342,7 +355,7 @@ export function useReferencedFiles(tabId: string | undefined) {
       }
 
       setFiles((prev) => {
-        const next = applyWrite(prev, { path, absolutePath, operation, kind, baseRef });
+        const next = applyWrite(prev, { path, absolutePath, operation, kind, baseRef, sessionId });
         saveToStorage(tabId, next);
         return next;
       });

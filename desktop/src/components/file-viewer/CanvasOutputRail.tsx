@@ -76,7 +76,8 @@ export function outputRowOpenDetail(
   _badge: ChangeStatus | undefined,
   absolutePath?: string,
   baseRef?: string,
-): { path: string; autoDiff: boolean; baseRef?: string } {
+  sessionId?: string,
+): { path: string; autoDiff: boolean; baseRef?: string; sessionId?: string } {
   // Resolve anchor: prefer the ABSOLUTE path when present. A source-final row
   // (run_b8ea6d5c) carries a repo-relative display `path` (e.g. `backend/foo.py`)
   // for a file whose git repo ≠ the SwarmWS workspace — that bare relative path would
@@ -87,7 +88,10 @@ export function outputRowOpenDetail(
   // baseRef (run_030dc98e): a source-final row's `<sha>^` — the diff baseline so a
   // just-committed file opens on this-run's changes, not an empty HEAD diff. Undefined
   // for content/knowledge rows → they diff against HEAD (correct, still uncommitted).
-  return { path: absolutePath || path, autoDiff: false, baseRef };
+  // sessionId (run_c014a4f3): the owning session that surfaced this row — threaded to
+  // the render fetch so an EXTERNAL (outside-SwarmWS) file can render read-only. Absent
+  // for SwarmWS-internal rows (home-only guard renders them, no session id needed).
+  return { path: absolutePath || path, autoDiff: false, baseRef, sessionId };
 }
 
 /** Directory portion of a path (everything before the basename), for the dim
@@ -125,9 +129,9 @@ const OutputRow = memo(function OutputRow({
     // Pass absolutePath as the resolve anchor so a source-final row (repo-relative
     // display path, repo ≠ workspace) still resolves + opens.
     document.dispatchEvent(
-      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge, file.absolutePath, file.baseRef) }),
+      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge, file.absolutePath, file.baseRef, file.sessionId) }),
     );
-  }, [file.path, file.absolutePath, file.baseRef, badge, file.deleted]);
+  }, [file.path, file.absolutePath, file.baseRef, file.sessionId, badge, file.deleted]);
 
   const handleCopy = useCallback(
     async (e: React.MouseEvent) => {

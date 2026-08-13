@@ -760,7 +760,7 @@ def _is_path_under(child: Path, parent: Path) -> bool:
 
 
 def _resolve_file_path(
-    path: str, workspace_root: Path
+    path: str, workspace_root: Path, *, allowed_external: "set[str] | None" = None
 ) -> tuple[Path, bool]:
     """Resolve a file path to an absolute target with external flag.
 
@@ -770,6 +770,14 @@ def _resolve_file_path(
     Args:
         path: Absolute or workspace-relative file path.
         workspace_root: Resolved workspace root directory.
+        allowed_external: An OPT-IN allowlist of resolved-absolute path strings a
+            READ caller may render even though they live outside ``$HOME`` — the
+            Canvas "surfaced this session" set (run_c014a4f3). ONLY the GET
+            /workspace/file caller passes it; every write/other caller passes
+            ``None`` → the home-only guard is preserved (so this NEVER widens the
+            PUT write path — the Gate-0 arbitrary-write hole stays closed). Membership
+            is compared on the RESOLVED string form (``str(target)``), matching what
+            the emit gate records (``str(Path(abs).resolve())``).
 
     Returns:
         ``(target, is_external)`` — *target* is the resolved absolute path,
@@ -778,15 +786,21 @@ def _resolve_file_path(
 
     Raises:
         HTTPException 400: For relative paths with ``..`` traversal that
-            don't resolve through a trusted workspace symlink.
+            don't resolve through a trusted workspace symlink, or an external
+            absolute path neither under ``$HOME`` nor in ``allowed_external``.
     """
     normalized = os.path.normpath(path)
 
-    # ── Absolute path — allow only under user's home directory ──
+    # ── Absolute path — allow under $HOME, OR (read-only) if surfaced this session ──
     if os.path.isabs(normalized):
         target = Path(normalized).resolve()
         home = Path.home().resolve()
-        if not _is_path_under(target, home):
+        # A Canvas-surfaced external path (recorded at emit time) is renderable even
+        # outside $HOME — this is what makes "listed in rail ⇒ renderable" hold. The
+        # allowlist is per-session + read-only-caller-only, so it cannot be used to
+        # read/write an arbitrary path the session never surfaced (Gate-0 hole).
+        surfaced_ok = allowed_external is not None and str(target) in allowed_external
+        if not _is_path_under(target, home) and not surfaced_ok:
             raise HTTPException(
                 status_code=400,
                 detail=f"Absolute path must be under user home directory: {path}",
@@ -882,6 +896,12 @@ def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
 @router.get("/workspace/file")
 async def get_workspace_file(
     path: str = Query(..., description="Absolute or workspace-relative file path"),
+    session_id: str | None = Query(
+        None,
+        description="Owning session id of a Canvas rail row (run_c014a4f3). When the "
+        "path is an external absolute path surfaced by THIS session, it is rendered "
+        "read-only. Absent → home-only guard (unchanged).",
+    ),
 ):
     """Read a file's content by path.
 
@@ -898,7 +918,22 @@ async def get_workspace_file(
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target, is_external = _resolve_file_path(path, workspace_root)
+    # Canvas render-gate consistency (run_c014a4f3): if this GET carries an owning
+    # session_id, allow rendering the external absolute paths THAT session surfaced
+    # to the rail (read-only). This is the ONLY caller that passes allowed_external —
+    # PUT/write + the other reads keep the home-only guard (no arbitrary read/write).
+    _allowed_external: "set[str] | None" = None
+    if session_id:
+        try:
+            from core import session_registry as _sr
+            _live = _sr.surfaced_paths.get(session_id)
+            # Hand the gate a COPY, never the live session set — the gate only reads it,
+            # but a defensive copy means no future caller can mutate session state
+            # through this reference (frozenset would also work; copy keeps the type).
+            _allowed_external = set(_live) if _live else None
+        except Exception:  # noqa: BLE001 — fail-safe: no allowlist → home-only guard
+            _allowed_external = None
+    target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -939,6 +974,11 @@ async def get_workspace_file(
         path_parts = Path(path).parts
         is_skill_file = len(path_parts) >= 2 and path_parts[0] == ".claude" and path_parts[1] == "skills"
         is_readonly = _is_readonly_context_file(path) or is_skill_file
+    else:
+        # External files (Canvas-surfaced, outside SwarmWS/bound worktrees) render
+        # READ-ONLY (run_c014a4f3): the rail is provenance, not an edit surface, and
+        # PUT keeps the home-only guard — so an external file can never be written back.
+        is_readonly = True
 
     return {
         "content": content,

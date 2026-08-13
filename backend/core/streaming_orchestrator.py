@@ -382,12 +382,23 @@ class StreamingOrchestrator:
                     )
                     if not surf.surfaceable:
                         return None  # machine noise / gitignored / inside-tree → never surface
+                    # Record this external path as SURFACED for THIS session so the
+                    # stateless render endpoint can allow rendering it (read-only)
+                    # WITHOUT re-running the stateless predicate (which would leak
+                    # /etc/passwd — the Gate-0 hole). run_c014a4f3.
+                    from core import session_registry as _sr
+                    _sid = self._parent.session_id
+                    _sr.record_surfaced_path(_sid, resolved["absolute"])
                     ev: dict = {
                         "type": "file_changed",
                         "path": resolved["relative"],
                         "absolutePath": resolved["absolute"],
                         "kind": surf.kind,
                         "operation": "written",
+                        # session_id rides the rail row so the render fetch can pass it
+                        # back (the frontend has NO session_id prop — run_26aa6caa
+                        # removed it; the row-carried id is the stateless carrier).
+                        "sessionId": _sid,
                     }
                     if surf.base_ref:
                         ev["baseRef"] = surf.base_ref

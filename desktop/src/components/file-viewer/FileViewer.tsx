@@ -68,6 +68,9 @@ export interface FileViewerProps {
      *  just-committed file's diff baseline is its pre-run parent, not HEAD (== working
      *  tree → empty). Passed to /workspace/file/committed?ref=. Absent → HEAD. */
     baseRef?: string;
+    /** Owning session id (run_c014a4f3) — passed as session_id to GET /workspace/file
+     *  so an EXTERNAL surfaced file renders read-only. Absent for internal files. */
+    sessionId?: string;
   };
   onClose: () => void;
   onAttachToChat?: (item: FileTreeItem) => void;
@@ -317,9 +320,16 @@ function FileViewerImpl({
             setStatusBarInfo({ fileSize: 0 });
           }
         } else {
-          // Text / markdown / svg / html / csv — text fetch
+          // Text / markdown / svg / html / csv — text fetch. When THIS tab is the
+          // opened file AND it carries a sessionId (run_c014a4f3, an EXTERNAL
+          // Canvas-surfaced row), pass session_id so the render gate allows the
+          // outside-$HOME path (read-only). Internal files omit it → home-only guard.
+          const renderSessionId =
+            initialFile && tab.filePath === initialFile.filePath
+              ? initialFile.sessionId
+              : undefined;
           const resp = await api.get<FileResponse>('/workspace/file', {
-            params: { path: tab.filePath },
+            params: { path: tab.filePath, ...(renderSessionId ? { session_id: renderSessionId } : {}) },
           });
           if (cancelled) return;
 
