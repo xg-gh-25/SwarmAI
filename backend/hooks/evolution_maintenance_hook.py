@@ -515,39 +515,54 @@ class EvolutionMaintenanceHook:
         "DIRECTIVE-OVERRIDE", "META-CORRECTION",
     )
 
-    # A block is CORRECTION-STRUCTURE (hard-protected judgment) if its header is one
-    # of these forms — even with NO evergreen marker. Gate-1 (run_a0ee2b4f) found that
-    # broad ^### bounding would otherwise make marker-less corrections (C039/C027 under
-    # ### Standalone, a bare ### DATA-POINT/### ROOT-CAUSE) evictable = a NEW C046
-    # violation. Corrections are load-bearing judgment regardless of marker presence.
-    _CORRECTION_HEADER_RE = re.compile(
-        r"^###\s+(?:"
-        r"C\d{3}\b"                         # ### C049 | ... (any trailing text)
-        r"|CLASS\b|CLASS[ ]?[AB]['′]?\b"    # ### CLASS ... / CLASS A′
-        r"|ROOT-CAUSE\b|DATA-POINT\b|DATA POINT\b"
-        r"|DIRECTIVE-OVERRIDE\b|META-CORRECTION\b"
-        r"|Standalone\b|Resolved\b"         # grouping sub-headers owning Cxxx bullets
-        r")",
-        re.MULTILINE,
-    )
-    # A bare correction id as a bullet (- **C039** ...) inside a grouping block.
-    _CORRECTION_BULLET_RE = re.compile(r"^\s*-\s*\*\*C\d{3}\*\*", re.MULTILINE)
+    # RECENCY WINDOW (days): a correction dated within this many days is in its
+    # ACTIVE-DEFENSE period → resident regardless of markers. Older corrections whose
+    # judgment is NOT marker-bearing (a Pattern/tell skeleton) are archive-eligible —
+    # recall (the .context/*-archive*.md FTS5 leg) is the safety net, so archiving an
+    # old correction ≠ losing it. XG directive 2026-08-14: the previous "any correction
+    # structure is evergreen" rule made the 15.7K Corrections region un-archivable and
+    # DEFEATED the valve (it could never shrink the file even at natural 20K trigger).
+    _EVERGREEN_RECENCY_DAYS = 14
+
+    # Parse a date embedded in a block for the recency window. Two real forms in the
+    # live file: `### C049 | 2026-08-11 [...]` (Cxxx header) and a trailing bracket
+    # `### ROOT-CAUSE — ... [2026-08-10]` / `### DATA-POINT — ... [2026-08-11]`.
+    _BLOCK_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
     @staticmethod
-    def _is_evergreen(entry_block: str) -> bool:
-        """True if an entry is core judgment → NEVER size-evictable. Protected when
+    def _block_is_recent(entry_block: str, now: "datetime | None" = None) -> bool:
+        """True if the block carries a parseable date within _EVERGREEN_RECENCY_DAYS.
+        NO parseable date → False (a dateless block is NOT kept-by-recency; whether it
+        stays is decided by the marker check alone — so a dateless, marker-less block is
+        archive-eligible, which is the whole point of the fix)."""
+        m = EvolutionMaintenanceHook._BLOCK_DATE_RE.search(entry_block)
+        if not m:
+            return False
+        try:
+            d = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        ref = now or datetime.now(timezone.utc)
+        return (ref - d).days <= EvolutionMaintenanceHook._EVERGREEN_RECENCY_DAYS
+
+    @staticmethod
+    def _is_evergreen(entry_block: str, now: "datetime | None" = None) -> bool:
+        """True if an entry is core judgment → NEVER size-evictable. Resident when
         EITHER (a) it carries a core marker (**Pattern**/**Durable tell**/CAPSTONE/
-        METHOD FIX/DIRECTIVE-OVERRIDE/META-CORRECTION), OR (b) it is correction-
-        STRUCTURE — a `### Cxxx / ### CLASS / ### ROOT-CAUSE / ### DATA-POINT /
-        ### Standalone / ### Resolved` header, or contains a `- **Cxxx**` bullet.
-        (b) is the Gate-1 fix: marker-less corrections are still hard-won judgment and
-        must survive broad ^### bounding (C046 red-line). A plain one-liner (O-Reference,
-        an old capability record) matches neither → evictable low-value."""
+        METHOD FIX/DIRECTIVE-OVERRIDE/META-CORRECTION) — the compiled-judgment skeleton,
+        OR (b) it is a correction dated within _EVERGREEN_RECENCY_DAYS (active-defense
+        window). NEITHER → archive-eligible (recall is the safety net).
+
+        This REPLACES the old blanket "any ### Cxxx / ### CLASS / ### DATA-POINT /
+        ### Standalone structure is evergreen" rule, which protected the entire
+        Corrections region and defeated the valve (XG 2026-08-14). A CLASS母条 stays
+        resident via its **Pattern** skeleton; its FOLDED historical data-points are
+        pruned by _fold_corrections (cap=2) BEFORE the valve runs, so keeping the母条
+        whole is correct — the valve never splits a block. An OLD marker-less individual
+        Cxxx / DATA-POINT / Standalone block is now archive-eligible → recall-backed."""
         if any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS):
             return True
-        if EvolutionMaintenanceHook._CORRECTION_HEADER_RE.search(entry_block):
-            return True
-        if EvolutionMaintenanceHook._CORRECTION_BULLET_RE.search(entry_block):
+        if EvolutionMaintenanceHook._block_is_recent(entry_block, now):
             return True
         return False
 

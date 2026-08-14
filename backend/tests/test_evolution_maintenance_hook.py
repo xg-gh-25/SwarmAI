@@ -298,16 +298,27 @@ class TestSizeValve:
     deletion) so the always-injected core stays bounded. Evergreen core (Pattern/
     Durable tell/CAPSTONE/METHOD FIX/CLASS parent) is HARD-PROTECTED — never moved."""
 
-    def test_is_evergreen_hard_protects_core_markers(self):
+    def test_is_evergreen_resident_by_marker_or_recency(self):
+        # NEW判准 (XG 2026-08-14): resident = marker-bearing OR dated within the recency
+        # window. The OLD blanket "any correction structure is evergreen" rule is GONE —
+        # it made the whole Corrections region un-archivable and defeated the valve.
+        from datetime import datetime, timezone
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
         h = EvolutionMaintenanceHook(context_dir=Path("/tmp/x"))
-        # Entries carrying core judgment markers → evergreen (never evictable).
-        assert h._is_evergreen("### C049 | 2026-08-11\n- **Pattern**: x\n- **Durable tell**: y")
-        assert h._is_evergreen("### CLASS A: Confidence → Skip Process\n- chain...")
-        assert h._is_evergreen("- **METHOD FIX — dive protocol**: observe first")
-        assert h._is_evergreen("- **CAPSTONE (2026-08-06)**: the write-side rule")
+        now = datetime(2026, 8, 20, tzinfo=timezone.utc)
+        # (a) marker-bearing → resident regardless of age.
+        assert h._is_evergreen("### C001 | 2026-03-13\n- **Pattern**: x\n- **Durable tell**: y", now)
+        assert h._is_evergreen("### CLASS A: Confidence\n- **Pattern**: skip-process\n- chain...", now)
+        assert h._is_evergreen("- **METHOD FIX — dive protocol**: observe first", now)
+        assert h._is_evergreen("- **CAPSTONE (2026-08-06)**: the write-side rule", now)
+        # (b) recent (within 14d of 2026-08-20) marker-less correction → resident.
+        assert h._is_evergreen("### C049 | 2026-08-11 [Bias A]\n- **Correction**: recent, no marker", now)
+        # OLD marker-less correction (dated, >14d) → NO LONGER evergreen → archive-eligible.
+        assert not h._is_evergreen("### C001 | 2026-03-13\n- **Correction**: old, no marker", now)
+        # A marker-less ### CLASS with no date → not resident (recall-backed if evicted).
+        assert not h._is_evergreen("### CLASS A: Confidence → Skip Process\n- chain...", now)
         # A plain O-Reference one-liner → NOT evergreen (evictable low-value).
-        assert not h._is_evergreen("- O001 (CDP), O002 (DOM depth), O004 (nc -z > lsof)")
+        assert not h._is_evergreen("- O001 (CDP), O002 (DOM depth), O004 (nc -z > lsof)", now)
 
     def test_valve_noop_under_threshold(self, tmp_path):
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
@@ -439,67 +450,58 @@ class TestSizeValve:
         assert body.count("**Pattern**") == 80, "core corrections must never be evicted"
         assert moved == 0, "valve must move 0 when only core remains over-threshold"
 
-    def test_valve_never_splits_real_correction_headers(self, tmp_path):
-        """REGRESSION (the entry-splitting corruption): real Corrections headers
-        DON'T match the narrow _ENTRY_HEADER_RE (Cxxx+trailing text, ### ROOT-CAUSE,
-        ### DATA-POINT). The valve MUST bound them as whole ### blocks and NEVER
-        evict individual bullets that would split a multi-line entry. Also: a
-        correction WITHOUT an evergreen marker (### Standalone group / a bare
-        ### DATA-POINT) must STILL be protected as correction-structure — Gate-1
-        found broad ^### would otherwise make C039/C027-style entries evictable
-        (a NEW C046 violation)."""
+    def test_valve_never_splits_and_archives_old_marker_less_whole(self, tmp_path):
+        """REGRESSION (entry-splitting) + NEW判准 (XG 2026-08-14): the valve bounds
+        corrections as WHOLE ### blocks and NEVER splits a multi-line entry. Under the
+        NEW rule an OLD marker-less correction is archive-eligible (recall-backed) — but
+        it must be moved as a WHOLE BLOCK (header + all its bullets together), never
+        split. A recent OR marker-bearing correction stays resident. Dates are fixed and
+        far in the past so recency is deterministic (not wall-clock fragile)."""
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
         from core.context_directory_loader import ContextDirectoryLoader
         ctx = tmp_path / ".context"
         ctx.mkdir()
         evo = ctx / "EVOLUTION.md"
-        # A Corrections section with the EXACT real-world header shapes that broke,
-        # padded LARGE ENOUGH that the valve MUST process Corrections to hit target
-        # (no low-value buffer section to absorb the eviction — this is what makes the
-        # per-bullet path actually fire on corrections, the true RED condition).
-        real_headers = (
+        # RESIDENT: a marker-bearing correction (Pattern/tell skeleton) — old date, but
+        # stays because of the marker.
+        resident = (
             "## Corrections Captured\n"
-            # Cxxx with trailing text after the date (fails narrow regex $ anchor):
-            "### C049 | 2026-08-11 [Bias A — improve-before-justify] — 一整个 session 反复\n"
-            "- **Correction**: the full body of C049 that must never be split off.\n"
-            "- **Pattern**: improve-before-justify.\n"
-            "- **Durable tell**: the clarity-excitement IS the signal.\n\n"
-            # Non-Cxxx header, NO evergreen marker — must be protected as correction-structure:
-            "### ROOT-CAUSE — a moved doc dir silently killed the DDD loop [2026-08-10]\n"
-            "- **correction** — DDD docs migrated; 5 engine call sites kept the flat path.\n"
-            "- **LESSON** — an exit-clean silent no-op is the most dangerous failure class.\n\n"
-            # Standalone grouping header + a bare Cxxx correction with NO marker (C039/C027 analog):
-            "### Standalone\n"
-            "- **C027** (05-19): Satisficing — identified flaws, deferred as future work.\n"
-            "- **C039** (06-25): 发现 ≠ 待办 — a load-bearing correction with no marker.\n\n"
+            "### C001 | 2026-03-13 [Bias A] — a marker-bearing correction\n"
+            "- **Correction**: the full body of C001 that must never be split off.\n"
+            "- **Pattern**: keep-me-by-marker.\n"
+            "- **Durable tell**: the marker keeps the skeleton resident.\n\n"
         )
-        # Pad Corrections itself over the threshold (marker-less DATA-POINT entries so
-        # they are only protected by the correction-structure rule, not by a marker):
-        filler = "\n".join(
-            f"### DATA-POINT — observation number {i} [2026-08-10]\n"
+        # ARCHIVE-ELIGIBLE: many OLD (2026-03) marker-less DATA-POINT/Cxxx blocks — under
+        # the OLD blanket rule these were un-archivable; now they archive WHOLE.
+        old_blocks = "\n".join(
+            f"### DATA-POINT — old observation {i} [2026-03-10]\n"
             f"- **correction** — body {i} " + "padding " * 40 + "\n"
-            f"- **Status** — active {i}\n" for i in range(150)
+            f"- **Status** — resolved {i}\n" for i in range(150)
         )
-        evo.write_text("# EVOLUTION\n\n" + real_headers + filler + "\n")
-        assert ContextDirectoryLoader.estimate_tokens(evo.read_text()) > 15000
+        evo.write_text("# EVOLUTION\n\n" + resident + old_blocks + "\n")
+        start = ContextDirectoryLoader.estimate_tokens(evo.read_text())
+        assert start > 15000
         h = EvolutionMaintenanceHook(context_dir=ctx)
         moved = h._size_evict(evo, threshold_tokens=15000)
         body = evo.read_text()
-        # (1) NO correction was split — every correction's body bullets stay with it.
-        assert "the full body of C049 that must never be split off" in body, "C049 body must not be split"
-        assert "DDD docs migrated" in body, "ROOT-CAUSE body must not be split"
-        assert "an exit-clean silent no-op" in body, "ROOT-CAUSE LESSON must not be split"
-        # (2) marker-less corrections (C027/C039 under Standalone) are STILL protected.
-        assert "C027" in body and "C039" in body, "marker-less corrections must be protected (C046)"
-        assert "load-bearing correction with no marker" in body
-        # (3) NO orphaned bullets landed in the shard — corrections are all protected,
-        # so the valve must evict NOTHING (P6: over-threshold but only correction-
-        # structure remains → stop, raise-cap, never split/cut judgment).
+        final = ContextDirectoryLoader.estimate_tokens(body)
+        # (1) The valve ACTUALLY archived (the bug fix: old marker-less blocks ARE evictable now).
+        assert moved > 0, "old marker-less corrections must now be archive-eligible"
+        assert final <= 15000, f"valve must reach target now that Corrections is evictable (got {final})"
+        # (2) The marker-bearing correction stayed resident, WHOLE.
+        assert "the full body of C001 that must never be split off" in body, "marker-bearing stays"
+        assert "keep-me-by-marker" in body
+        # (3) NEVER-SPLIT: evicted blocks went to the shard as WHOLE units — a header and
+        # its bullets travel together; no orphaned bullet is left behind or split off.
         shards = list(ctx.glob("EVOLUTION-archive-*.md"))
-        shard_text = shards[0].read_text() if shards else ""
-        assert "the full body of C049" not in shard_text, "correction body must NOT be evicted"
-        assert "DDD docs migrated" not in shard_text, "ROOT-CAUSE body must NOT be evicted"
-        assert "- **Status**" not in shard_text, "no orphaned Status bullet (no splitting)"
-        assert "- **correction**" not in shard_text, "no orphaned correction bullet"
-        # (4) whole Corrections section is correction-structure → 0 evicted (never split).
-        assert moved == 0, "all-corrections file: valve must move 0, never split an entry"
+        assert shards, "eviction must write a shard"
+        shard_text = shards[0].read_text()
+        # every evicted DATA-POINT header in the shard carries its own body bullet (whole block)
+        import re as _re
+        evicted_ids = _re.findall(r"old observation (\d+)", shard_text)
+        assert evicted_ids, "at least one whole DATA-POINT block archived"
+        for i in evicted_ids:
+            assert f"body {i} " in shard_text, f"block {i} archived WHOLE (header+body together, never split)"
+        # no half-block left in the live file (a header without its body, or vice-versa)
+        for i in evicted_ids:
+            assert f"old observation {i} " not in body, f"evicted block {i} fully removed from live (no split)"
