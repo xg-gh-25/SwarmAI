@@ -37,6 +37,7 @@ from core.ddd_entry_lifecycle import (
 _VALID_TYPES_SET = frozenset(_VALID_TYPES)
 from core.ddd_paths import ddd_path
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
+from core.memory_index import extract_body_without_index
 from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
 
@@ -185,6 +186,36 @@ _COMPETENCE_PATTERNS = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+
+def _write_memory_stripped(memory_path: Path, content: str) -> None:
+    """Single write chokepoint for the distillation direct-writes to MEMORY.md.
+
+    Strips any orphan ``<!-- MEMORY_INDEX_START -->`` block (via the pure
+    ``extract_body_without_index``) BEFORE writing, then writes with the same
+    encoding/errors contract as ``locked_write.py``.
+
+    Why this exists (run_669fa92e — P8 single-door-vs-multi-door): the in-prompt
+    Memory Index generation was retired 2026-08-14, but a ~9K orphan index block
+    survived in live MEMORY.md. ``locked_write.py`` strips it on every write through
+    ITS chokepoint — but the 5 direct ``memory_path.write_text`` sites in this module
+    (``_update_open_threads``, ``_reconcile_open_threads_from_deliverables``,
+    ``_archive_stale_rc_entries``, ``_enforce_section_caps``, ``_enforce_size_valve``)
+    bypassed that chokepoint, so their read-modify-write re-carried the block forward
+    on every cycle. Routing all 5 through this helper makes index-strip a STRUCTURAL
+    property of every MEMORY write in this module, not a per-site discipline.
+
+    Contract (verified against the 5 call sites, run_669fa92e Gate-1):
+    - Callers ALREADY hold their OWN exclusive flock around the read-modify-write.
+      This helper does ONLY the pure string transform + write — it MUST NOT open a
+      new flock (routing through ``locked_write`` would double-lock the same
+      ``.lock`` inode → deadlock).
+    - ``extract_body_without_index`` is idempotent: on content with no index marker
+      it returns the content unchanged, so stripping on every write is a byte-exact
+      no-op for the (common) already-clean case.
+    """
+    content = extract_body_without_index(content)
+    memory_path.write_text(content, encoding="utf-8", errors="surrogateescape")
 
 
 def _extract_repo_paths(tech_md_content: str) -> list[Path]:
@@ -1876,7 +1907,7 @@ class DistillationTriggerHook:
                 content = memory_path.read_text(encoding="utf-8")
                 updated = self._apply_open_thread_updates(content, coe_entries)
                 if updated != content:
-                    memory_path.write_text(updated, encoding="utf-8")
+                    _write_memory_stripped(memory_path, updated)
                     logger.info("Updated Open Threads with %d COE entries", len(coe_entries))
             finally:
                 flock_unlock(fd)
@@ -2029,7 +2060,7 @@ class DistillationTriggerHook:
                 content = memory_path.read_text(encoding="utf-8")
                 updated = self._apply_deliverable_reconciliation(content, deliverables)
                 if updated != content:
-                    memory_path.write_text(updated, encoding="utf-8")
+                    _write_memory_stripped(memory_path, updated)
                     logger.info("Reconciled Open Threads against %d deliverables", len(deliverables))
             finally:
                 flock_unlock(fd)
@@ -2266,7 +2297,7 @@ class DistillationTriggerHook:
             # Rebuild content
             new_section = "\n".join(keep_lines)
             new_content = content[:header_end] + new_section + content[next_header_pos:]
-            memory_path.write_text(new_content, encoding="utf-8")
+            _write_memory_stripped(memory_path, new_content)
 
             # Archive via the single chokepoint → gitignored private .context/
             # (source_path=memory_path makes _resolve_archive_path land the archive
@@ -2463,7 +2494,7 @@ class DistillationTriggerHook:
                     )
 
                 if modified:
-                    memory_path.write_text(content, encoding="utf-8")
+                    _write_memory_stripped(memory_path, content)
 
                 # Write overflow via the single chokepoint → private .context/
                 # (one archive_raw_lines call PER section to preserve the per-section
@@ -2519,7 +2550,8 @@ class DistillationTriggerHook:
         """
         from utils.file_lock import flock_exclusive, flock_unlock
         from scripts.locked_write import _find_section_range
-        from core.memory_index import extract_body_without_index
+        # extract_body_without_index is imported at module top (used by _body_tokens
+        # here and by the _write_memory_stripped chokepoint).
         from core.ddd_entry_lifecycle import (
             MEMORY_SECTIONS, VALID_TYPES, DEFAULT_TYPE,
             _match_entry_line, _META_RE as _DECAY_META_RE,
@@ -2779,7 +2811,7 @@ class DistillationTriggerHook:
                         break
 
                 new_content = _rebuilt_content()
-                memory_path.write_text(new_content, encoding="utf-8")
+                _write_memory_stripped(memory_path, new_content)
 
                 # THE IRON LAW backstop (Gate-2 CRITICAL, run_f6ab7207): after
                 # exhausting every regular-section candidate, the body MUST be at LOW.

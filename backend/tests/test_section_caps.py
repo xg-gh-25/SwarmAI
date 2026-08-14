@@ -20,6 +20,80 @@ def _build_memory_md(sections: dict[str, list[str]]) -> str:
     return "".join(parts)
 
 
+class TestOrphanIndexStripChokepoint:
+    """run_669fa92e — the orphan `<!-- MEMORY_INDEX_START -->` block persisted in live
+    MEMORY.md because the 5 distillation_hook direct write_text sites bypassed the
+    locked_write strip chokepoint. Fix: a module-level `_write_memory_stripped` helper
+    that runs extract_body_without_index before every direct write, routed by all 5
+    sites. These tests lock the invariant (P8 single-chokepoint) + idempotence, and are
+    mutation-proof (removing the strip from the helper → the strip test goes RED)."""
+
+    def _with_orphan_index(self, body: str) -> str:
+        """Prepend a marker-wrapped orphan Memory Index block to a MEMORY body."""
+        from core.memory_index import MEMORY_INDEX_START, MEMORY_INDEX_END
+        index = (
+            f"{MEMORY_INDEX_START}\n## Memory Index\n"
+            "1 principle | 260 guidelines\n\n"
+            "### Permanent\n- [PRI01] some principle — kw1, kw2\n"
+            f"{MEMORY_INDEX_END}\n\n"
+        )
+        return index + body
+
+    def test_helper_strips_orphan_index_before_write(self, tmp_path):
+        """AC2 (direct helper): _write_memory_stripped removes the orphan MEMORY_INDEX
+        block before writing. Mutation-proof: delete the strip line in the helper and
+        this assertion goes RED (the block would round-trip untouched)."""
+        from hooks.distillation_hook import _write_memory_stripped
+        from core.memory_index import MEMORY_INDEX_START
+        memory_path = tmp_path / "MEMORY.md"
+        content = self._with_orphan_index(
+            "# Memory\n\n## Guidelines\n- [guideline] **real entry** — kept\n"
+        )
+        _write_memory_stripped(memory_path, content)
+        written = memory_path.read_text()
+        assert MEMORY_INDEX_START not in written, (
+            "orphan MEMORY_INDEX block survived _write_memory_stripped — the strip "
+            "chokepoint is not applied (this is the bug the helper exists to kill)"
+        )
+        # The real entry must be preserved (strip removes ONLY the index block).
+        assert "real entry" in written
+
+    def test_helper_idempotent_on_clean_content(self, tmp_path):
+        """AC5: on content with NO index block, the helper is a byte-exact no-op — it
+        must not corrupt or reshape ordinary MEMORY content."""
+        from hooks.distillation_hook import _write_memory_stripped
+        memory_path = tmp_path / "MEMORY.md"
+        clean = "# Memory\n\n## Guidelines\n- [guideline] **entry** — no index here\n"
+        _write_memory_stripped(memory_path, clean)
+        assert memory_path.read_text() == clean, (
+            "helper altered clean (index-free) content — strip is not idempotent"
+        )
+
+    def test_section_caps_direct_write_strips_orphan_index(self, tmp_path):
+        """AC1+AC2 (integration through a real direct-write path): _enforce_section_caps
+        is one of the 5 sites. Feeding it a MEMORY that carries an orphan index block +
+        an over-cap section, the rewritten file must have the index block gone — proving
+        the site now routes through the strip chokepoint, not a bare write_text."""
+        from hooks.distillation_hook import DistillationTriggerHook, SECTION_CAPS
+        from core.memory_index import MEMORY_INDEX_START
+        cap = SECTION_CAPS["Guidelines"]
+        body_parts = ["# Memory\n\n## Guidelines\n"]
+        for i in range(cap + 5):
+            body_parts.append(f"- [guideline] **entry {i}** — detail number {i}\n")
+        body_parts.append("\n## Open Threads\n- one\n")
+        content = self._with_orphan_index("".join(body_parts))
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+
+        DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        assert MEMORY_INDEX_START not in result, (
+            "_enforce_section_caps wrote back the orphan MEMORY_INDEX block — this "
+            "direct-write site still bypasses the strip chokepoint"
+        )
+
+
 class TestSectionCapsDecayEviction:
     """run_3cb6b9ae Cycle-1 (#3): _enforce_section_caps must run DECAY-SCORED eviction
     on the LIVE 4-field metadata (`... | source:X -->`), not silently degrade to
