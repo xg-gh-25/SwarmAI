@@ -22,7 +22,7 @@ _Curated long-term memory. Distilled from DailyActivity, not raw logs._
 - **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw daily logs. Written during every session.
 - **MEMORY.md** (this file) — Curated long-term memory. Distilled from DailyActivity.
 
-**Distillation:** When ≥3 unprocessed DailyActivity files exist, I review and promote recurring themes, key decisions, lessons learned, and corrections. One-off observations stay in DailyActivity or get archived.
+**Distillation:** At every session close (UNDISTILLED_THRESHOLD=0), I review and promote recurring themes, key decisions, lessons learned, and corrections. One-off observations stay in DailyActivity or get archived.
 
 ## Recent Context
 

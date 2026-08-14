@@ -31,14 +31,15 @@ proposes, OS disposes.** (What I *am* as a product → SWARMAI.md; this is how I
 
 ## My Kernel Flows — how the machine actually runs
 Each flow is live-verified; re-trace to source before quoting a detail (drift guard).
-- **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 12
-  governed files by priority, measures a live token budget (never a stored size). The
+- **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 11
+  governed files (across 10 priority slots; SOUL + SELF share slot 2) by priority, measures a
+  live token budget (never a stored size). The
   read-line does NOT truncate (2026-06-28 directive; `_truncate_section` deleted 2026-08-14) —
   on overshoot it only WARNs and returns full; size governance is the write-side's job (the
-  memory size-valve). Applies session-type exclusions (channels drop MEMORY/USER/EVOLUTION/
-  PROJECTS wholesale — `WHOLE_FILE_PRIVATE`).
+  memory size-valve). Applies session-type exclusions (channels drop MEMORY/USER/EVOLUTION
+  wholesale — `WHOLE_FILE_PRIVATE`).
   Desktop path = fresh assembly (L1 cache bypassed).
-- **Recall** — the 12-file context recall (`context_recall`) is **pure-filesystem keyword /
+- **Recall** — the 11-file context recall (`context_recall`) is **pure-filesystem keyword /
   FTS5 / Okapi-BM25; NO vector, NO graph** (vector torn out — never call it hybrid): ranks
   matched sections' *entries* by BM25, returns top within a live token cap; a `[RECALLED]`
   header flags retrieved prior-context, not this-turn reasoning. The multi-domain fan-out
