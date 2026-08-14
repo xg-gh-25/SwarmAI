@@ -1311,13 +1311,21 @@ class PromptBuilder:
             channel_context=channel_context,
             add_dirs=sdk_add_dirs,
         )
-        builder_text = prompt_builder.build()
+        # Stable framing ONLY (identity/safety/workspace) — the volatile
+        # datetime/runtime tail is split off and appended AFTER the context
+        # files below, so the ~76K constitution stays a byte-stable cache
+        # prefix instead of being invalidated every minute by the datetime
+        # header. See SystemPromptBuilder.build_volatile_tail() for the full
+        # cache-prefix rationale.
+        builder_text = prompt_builder.build(include_volatile=False)
+        volatile_tail = prompt_builder.build_volatile_tail()
 
-        # ── 3. Combine: SystemPromptBuilder framing + context files ───
-        # SystemPromptBuilder provides identity/safety/datetime/runtime
-        # metadata.  Context files (11 files + DailyActivity) were loaded
-        # into agent_config["system_prompt"] by step 1 above.  Both must
-        # be returned so ClaudeAgentOptions receives the full prompt.
+        # ── 3. Combine: stable framing + context files + volatile tail ─
+        # SystemPromptBuilder provides identity/safety framing (stable) and
+        # a datetime/runtime tail (volatile).  Context files (11 files +
+        # DailyActivity) were loaded into agent_config["system_prompt"] by
+        # step 1 above.  Final byte order (cache-optimal):
+        #   [stable framing] + [76K context files] + [volatile datetime/runtime]
         context_text_final = agent_config.get("system_prompt", "") or ""
 
         # ── Completeness gate (fail-loud, run_e47c1cfb) ────────────────
@@ -1368,9 +1376,14 @@ class PromptBuilder:
         if _degraded:
             prompt_metadata["degraded"] = _degraded
 
+        # Volatile tail (datetime/runtime) goes LAST — after the 76K context
+        # files — so the stable prefix (framing + constitution) is cacheable.
+        _tail = f"\n\n{volatile_tail}" if volatile_tail else ""
         if context_text_final:
-            return f"{builder_text}\n\n{context_text_final}"
-        return builder_text
+            return f"{builder_text}\n\n{context_text_final}{_tail}"
+        # No context files (degraded / channel edge case): still emit the tail
+        # so datetime/runtime are never lost.
+        return f"{builder_text}{_tail}"
 
     # ------------------------------------------------------------------
     # _build_thinking_config

@@ -35,12 +35,20 @@ class SystemPromptBuilder:
     # SDK identity line to strip (injected by Claude Agent SDK at runtime)
     _SDK_IDENTITY_LINE = 'You are a Claude agent, built on Anthropic\'s Claude Agent SDK.'
 
-    def build(self) -> str:
-        """Assemble and return the full system prompt string.
+    def build(self, include_volatile: bool = True) -> str:
+        """Assemble and return the non-file system prompt string.
 
         Post-processes the assembled prompt to strip any SDK-injected
         identity line, avoiding the need for a counter-instruction that
         wastes tokens on every API call.
+
+        Args:
+            include_volatile: When True (default, for standalone callers and
+                tests), append the volatile per-request sections (datetime +
+                runtime) so the returned string is a complete framing block.
+                The production assembly path (``build_system_prompt``) passes
+                False and instead appends ``build_volatile_tail()`` AFTER the
+                ~76K context files — see that method's docstring for why.
         """
         sections = [
             self._section_identity(),
@@ -50,15 +58,35 @@ class SystemPromptBuilder:
             self._section_large_content(),
             self._section_workspace(),
             self._section_selected_dirs(),
-            self._section_datetime(),
-            self._section_runtime(),
         ]
+        if include_volatile:
+            sections.append(self._section_datetime())
+            sections.append(self._section_runtime())
 
         prompt = "\n\n".join(s for s in sections if s)
         # Strip SDK identity injection if present (saves ~30 tokens vs counter-instruction)
         prompt = prompt.replace(self._SDK_IDENTITY_LINE, "").strip()
         logger.debug(f"System prompt built ({len(prompt)} chars)")
         return prompt
+
+    def build_volatile_tail(self) -> str:
+        """Return ONLY the volatile per-request sections (datetime + runtime).
+
+        These are deliberately kept OUT of the stable prefix returned by
+        ``build(include_volatile=False)``. Rationale — Bedrock prompt caching
+        matches on a byte-exact PREFIX: the first differing byte invalidates
+        everything after it. ``_section_datetime`` has minute precision
+        (``%H:%M``), so if it sits BEFORE the ~76K context files, the entire
+        stable constitution (SWARMAI/SOUL/AGENT/... = the biggest cacheable
+        block) is forced to re-``cache_creation`` every minute. Appending this
+        tail AFTER the context files instead lets that 76K prefix stay cached
+        until a context file is actually edited/rebuilt — the minute-level
+        churn now lands next to the already-per-turn-volatile recall/resume
+        content, costing nothing extra. Attention-wise datetime is not a
+        judgment input, so trailing position is fine.
+        """
+        parts = [self._section_datetime(), self._section_runtime()]
+        return "\n\n".join(p for p in parts if p)
 
     def _section_identity(self) -> str:
         name = self.agent_config.get("name", "Assistant")

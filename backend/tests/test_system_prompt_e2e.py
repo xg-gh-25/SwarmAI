@@ -306,18 +306,20 @@ def _simulate_build(
         agent_config=agent_config,
         channel_context=channel_context,
     )
-    builder_output = builder.build()
+    # Mirror the REAL byte order produced by PromptBuilder.build_system_prompt
+    # (prompt_builder.py step 3): stable framing FIRST, then context files, then
+    # the volatile datetime/runtime tail LAST. Keeping this simulation aligned
+    # with the production order is what makes the cache-prefix ordering test
+    # (test_volatile_tail_after_context) meaningful rather than a parallel fiction.
+    stable_framing = builder.build(include_volatile=False)
+    volatile_tail = builder.build_volatile_tail()
 
-    # In the real pipeline, the SDK receives both:
-    # - agent_config["system_prompt"]  → context files + ephemeral injections
-    # - builder.build()                → identity, safety, workspace, datetime, runtime
-    # They're concatenated in the final prompt sent to the model.
     context_part = agent_config.get("system_prompt", "") or ""
-    final_prompt = (
-        context_part + "\n\n" + builder_output
-        if context_part
-        else builder_output
-    )
+    _tail = f"\n\n{volatile_tail}" if volatile_tail else ""
+    if context_part:
+        final_prompt = f"{stable_framing}\n\n{context_part}{_tail}"
+    else:
+        final_prompt = f"{stable_framing}{_tail}"
 
     return final_prompt, prompt_metadata
 
@@ -519,6 +521,42 @@ class TestE2EDirectChannel:
         # Memory (P7) comes before Knowledge (P9, now the lowest-priority file
         # after PROJECTS.md was removed 2026-08-14).
         assert memory_pos < knowledge_pos
+
+    def test_volatile_tail_after_context(self, workspace):
+        """Cache-prefix invariant: the minute-precision datetime/runtime tail
+        MUST come AFTER the ~76K context files, so the stable constitution is a
+        byte-stable Bedrock cache prefix (see build_volatile_tail docstring).
+
+        Mutation check: revert build_system_prompt to prepend datetime and this
+        assertion goes RED (datetime_pos would precede the context sections).
+        """
+        prompt, _ = _simulate_build(workspace)
+        datetime_pos = prompt.find("Current date/time:")
+        runtime_pos = prompt.find("agent=")
+        swarmai_pos = prompt.find("## SwarmAI")
+        knowledge_pos = prompt.find("## Knowledge")
+
+        assert datetime_pos != -1 and swarmai_pos != -1 and knowledge_pos != -1
+        # The whole constitution (first file .. last file) precedes the volatile tail.
+        assert swarmai_pos < datetime_pos, (
+            "datetime must NOT precede context files (cache-prefix killer)"
+        )
+        assert knowledge_pos < datetime_pos, (
+            "datetime must come after the LAST context file"
+        )
+        assert knowledge_pos < runtime_pos, "runtime tail must trail context too"
+
+    def test_stable_framing_has_no_datetime(self, workspace):
+        """build(include_volatile=False) must NOT contain the minute-level
+        datetime — otherwise the 'stable' prefix silently churns every minute."""
+        builder = SystemPromptBuilder(
+            working_directory=str(workspace), agent_config={"name": "SwarmAI"}
+        )
+        stable = builder.build(include_volatile=False)
+        assert "Current date/time:" not in stable
+        # ... but the standalone default build() (tests / non-assembly callers)
+        # still includes it, preserving backward compatibility.
+        assert "Current date/time:" in builder.build()
 
 
 class TestE2EGroupChannel:
