@@ -31,10 +31,9 @@ const TOKEN_BLOCK = {
   per_file: [
     { name: 'SWARMAI.md', tokens: 2000, pct: 2.0, owner: 'system', priority: 0, locked: true, health: 'fresh' },
     { name: 'USER.md', tokens: 3000, pct: 3.0, owner: 'user', priority: 4, locked: false, health: 'idle' },
-    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false, health: 'oversized', has_selective: true, injected_floor: 17000 },
+    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false, health: 'oversized' },
     { name: 'KNOWLEDGE.md', tokens: 47000, pct: 47.0, owner: 'auto', priority: 9, locked: false, health: 'growing' },
   ],
-  injected_estimate: 69000,
 };
 
 // Real-shaped Review proposals (DDD cultivation) — the fields the card renders.
@@ -697,22 +696,19 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     expect(num.textContent).toContain('48');
   });
 
-  // AC3 honesty (run_5f040023): a selective file shows the ✂ cue; the rail shows
-  // the honest "actually injected" estimate, not just the on-disk headline.
-  it('marks a selective file (✂) and shows the honest injected estimate on the rail', async () => {
+  // NEW ARCHITECTURE (2026-08-14): selective injection was DELETED — live memory is
+  // ALWAYS full-injected (disk == prompt load). The ✂ cue + the rail's "actually
+  // injected (selective)" line are GONE. Teeth: re-adding a selective branch fails this.
+  it('shows NO selective cue and NO injected-estimate line (full-injection architecture)', async () => {
     mockHealth();
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-panel-context');
-    // MEMORY.md has_selective=true → the ✂ cue is present
+    // No ✂ selective cue on any row (MEMORY was the selective one under the old arch).
     const memRow = await screen.findByTestId('cm-file-row-MEMORY.md');
-    expect(memRow.querySelector('[data-testid="cm-selective"]')).not.toBeNull();
-    // KNOWLEDGE.md is not selective → no ✂
-    const knowRow = await screen.findByTestId('cm-file-row-KNOWLEDGE.md');
-    expect(knowRow.querySelector('[data-testid="cm-selective"]')).toBeNull();
-    // the rail's honest injected line shows the smaller real load (69K < 100K disk)
-    const injected = await screen.findByTestId('cm-injected');
-    expect(injected.textContent).toMatch(/69/);
+    expect(memRow.querySelector('[data-testid="cm-selective"]')).toBeNull();
+    // No "actually injected (selective)" rail line — disk size IS the prompt load.
+    expect(screen.queryByTestId('cm-injected')).toBeNull();
   });
 });
 

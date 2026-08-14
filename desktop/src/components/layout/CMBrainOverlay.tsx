@@ -32,11 +32,6 @@ interface TokenFileRow {
   priority: number;
   locked: boolean;
   health?: HealthTag;
-  // Selective-injection honesty (run_5f040023): a file ≥30K runs selective, so
-  // its DISK size is NOT what reaches the prompt. injected_floor = the honest
-  // guaranteed-minimum injected tokens; has_selective=false → injected==disk.
-  has_selective?: boolean;
-  injected_floor?: number | null;
   // Knowledge-health counts (run_2816ab1c): null for prose files; the 3
   // lifecycle-governed brain files carry per-entry decay/dedup counts. Surfaced
   // so the user SEES what the auto decay+dedup sweep is cleaning.
@@ -58,8 +53,7 @@ const HEALTH_TINT: Record<HealthTag, string> = {
   oversized: '#d0524a',
 };
 interface TokenBlock {
-  total_tokens: number;         // DISK total (conservative headline)
-  injected_estimate?: number;   // honest lower-bound of actual prompt load
+  total_tokens: number;         // DISK total == prompt load (always full-injected)
   budget: number;
   warning_threshold: number;
   emergency_threshold: number;
@@ -236,14 +230,6 @@ export function CMBrainContent() {
                 / {block ? fmtTokens(block.budget) : '—'} budget
               </span>
             </div>
-            {/* Honest actual-injection line (run_5f040023): total_tokens is the DISK
-                headline; selective injection makes the REAL prompt load smaller. Show
-                it so the number reflects reality (the whole point of this fix). */}
-            {block && typeof block.injected_estimate === 'number' && block.injected_estimate < block.total_tokens && (
-              <div data-testid="cm-injected" className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
-                ≈ {fmtTokens(block.injected_estimate)} actually injected (selective) · {fmtTokens(block.total_tokens)} on disk
-              </div>
-            )}
             {healthErr && !block && (
               <div className="mt-1 text-[11px] text-[#d08a4a]">couldn’t load — not “0”</div>
             )}
@@ -525,7 +511,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
       </div>
       <div className="mb-3 text-[11px] text-[var(--color-text-faint)]">
         🔒 P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
-        bar = share of the on-disk context · ✂ = selective-injected (real prompt load is smaller) ·
+        bar = share of the on-disk context · every file is injected in full (disk size = prompt load) ·
         Health: fresh / idle / growing / oversized
       </div>
       {/* Column header — fixed widths so every row's cells line up (AC4 alignment).
@@ -552,13 +538,9 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         </div>
       )}
       {rows.map((f) => {
-        // Honest injected cue (run_5f040023): a selective file's DISK tokens are
-        // NOT its prompt load. Show disk as the number; when selective, append a
-        // "✂ ≥floor" so the user sees the real (smaller) injected floor, not a lie.
-        const selective = f.has_selective && typeof f.injected_floor === 'number';
-        const tokenTitle = selective
-          ? `${fmtTokens(f.tokens)} on disk · selective injection → ≥${fmtTokens(f.injected_floor as number)} actually injected`
-          : `${fmtTokens(f.tokens)} tokens (full-injected — disk == prompt load)`;
+        // Every file is full-injected (new architecture 2026-08-14): disk size IS the
+        // prompt load — no selective mode, no "injected floor below disk".
+        const tokenTitle = `${fmtTokens(f.tokens)} tokens (full-injected — disk == prompt load)`;
         return (
         // The WHOLE row opens the file in Canvas. Layout is a fixed-column GRID
         // (AC4): every cell aligns across rows — Pri | owner-dot | name(flex) |
@@ -584,9 +566,6 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           <span className="flex min-w-0 flex-col">
             <span className="truncate text-sm font-medium text-[var(--color-text)]">
               {f.name}
-              {selective && (
-                <span data-testid="cm-selective" className="ml-1 text-[10px] text-[var(--color-text-faint)]" title={tokenTitle}>✂</span>
-              )}
             </span>
             {/* AC4: knowledge-health counts for the 3 lifecycle-governed files.
                 Shows what the auto decay+dedup sweep is cleaning — only the
@@ -777,7 +756,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
       </section>
 
       <div className="text-[11px] text-[var(--color-text-faint)]">
-        How it works: every message recalls relevant entries (FTS5/BM25); reflection sediments new ones (confident-only); idle entries decay while load-bearing judgment survives.
+        How it works: live memory is injected in FULL every message; reflection sediments new ones (confident-only); when the file grows past its size cap, the lowest-value entries are ARCHIVED to recall-backed cold storage (moved, not deleted — still retrievable via FTS5/BM25 recall), so load-bearing judgment stays live.
       </div>
     </div>
   );
@@ -815,14 +794,14 @@ function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'm
 // R30: describes MECHANISMS, not counts — NO baked numbers (they'd drift). All
 // content is stable architecture fact, safe to hardcode.
 const LIFECYCLE: Array<{ key: string; icon: string; title: string; desc: string }> = [
-  { key: 'assemble', icon: '📥', title: 'Assemble', desc: 'context files → prompt, by priority' },
-  { key: 'recall', icon: '🔍', title: 'Recall', desc: 'FTS5/BM25 pulls relevant memory' },
+  { key: 'assemble', icon: '📥', title: 'Assemble', desc: 'live memory injected in FULL, by priority' },
+  { key: 'recall', icon: '🔍', title: 'Recall', desc: 'FTS5/BM25 searches the archived cold layer' },
   { key: 'judge', icon: '🧠', title: 'Judge', desc: 'the model reasons on that context' },
   { key: 'sediment', icon: '💧', title: 'Sediment', desc: 'reflect → new entries (confident-only)' },
   { key: 'decay', icon: '🍂', title: 'Decay', desc: 'idle sinks, value survives' },
 ];
 const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
-  { icon: '🔍', name: 'Recall', desc: 'every message, keyword-matched injection', tag: 'hook' },
+  { icon: '🔍', name: 'Recall', desc: 'searches the archived cold layer (FTS5) on demand', tag: 'hook' },
   { icon: '💧', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
   { icon: '🍂', name: 'Decay & archive', desc: 'dormant then archived by idle age', tag: 'job' },
   { icon: '📋', name: 'Session briefing', desc: 'start-of-session cognition inject', tag: 'hook' },
