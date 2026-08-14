@@ -68,7 +68,22 @@ interface ContextHealthLite {
   governance_pending_count?: number;
 }
 
-type TabKey = 'context' | 'memory' | 'guideline';
+type TabKey = 'context' | 'memory' | 'guideline' | 'evolution';
+
+// ── Archive browse types (mirror GET /eval/archive-list + /eval/archive-search) ──
+// Two families share ONE shape (only `source` differs) → one reusable ArchivePanel.
+type ArchiveSource = 'memory' | 'evolution';
+interface ArchiveEntry {
+  title: string;
+  type: string;
+  date: string | null;      // EVOLUTION headers may have no date → null (render '—')
+  status: string;
+  archived_from: string;    // MEMORY carries none ('') ; EVOLUTION may have a section
+  shard: string;
+}
+interface ArchiveListResp { entries: ArchiveEntry[]; total: number; shards: string[]; source: ArchiveSource; }
+interface ArchiveSearchHit { title: string; snippet: string; source_file: string; shard: string; }
+interface ArchiveSearchResp { results: ArchiveSearchHit[]; q: string; source: ArchiveSource; }
 
 // ── Governance source_class → human phrase (R20: never surface a raw CLASS_x token
 // as the subject). Keyed on the canonical class name the backend serves. An unmapped
@@ -274,7 +289,7 @@ export function CMBrainContent() {
             <NeedsList
               kind={needsFilter}
               meta={needsMeta[needsFilter]}
-              backLabel={tab === 'context' ? 'Context' : tab === 'memory' ? 'Memory' : 'Guideline'}
+              backLabel={tab === 'context' ? 'Context' : tab === 'memory' ? 'Memory' : tab === 'evolution' ? 'Evolution' : 'Guideline'}
               onBack={() => setNeedsFilter(null)}
               onDecide={decide}
             />
@@ -283,12 +298,14 @@ export function CMBrainContent() {
               <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
                 <TabBtn testid="cm-tab-context" label="Context" active={tab === 'context'} onClick={() => setTab('context')} badge={block?.per_file.length} />
                 <TabBtn testid="cm-tab-memory" label="Memory" active={tab === 'memory'} onClick={() => setTab('memory')} />
+                <TabBtn testid="cm-tab-evolution" label="Evolution" active={tab === 'evolution'} onClick={() => setTab('evolution')} />
                 <TabBtn testid="cm-tab-guideline" label="Guideline" active={tab === 'guideline'} onClick={() => setTab('guideline')} />
               </div>
 
               <div className="flex-1 min-h-0 overflow-y-auto p-4">
                 {tab === 'context' && <ContextTab block={block} />}
                 {tab === 'memory' && <MemoryTab enabled={tab === 'memory'} />}
+                {tab === 'evolution' && <EvolutionTab enabled={tab === 'evolution'} />}
                 {tab === 'guideline' && <GuidelineTab />}
               </div>
             </>
@@ -638,6 +655,142 @@ const TYPE_TINT: Record<string, string> = {
   pitfall: '#d08a4a', process: '#7c8194', model: '#5f9ec9',
 };
 
+// ── ArchivePanel: the reusable Archived-list + Recall-search surface ─────────
+// ONE component for BOTH families (Memory + Evolution) — only `source` differs
+// (R4/R25: no duplicated list/search UI). Design (s_frontend-design, R15): this is
+// a LIST-with-search (Surface 5 knowledge-view), NOT a tile dashboard — one row per
+// entry, whitespace-separated (no bordered-box wall), the search box demoted until
+// used, honest loading/empty/error states. A live query SWAPS the list for results.
+//
+// Gate-0 REVISE baked in: date can be null (→ '—'), archived_from can be '' (→ hidden).
+function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boolean }) {
+  const [q, setQ] = useState('');
+  const query = q.trim();
+  const searching = query.length > 0;
+
+  // Archived list — the default view (fetched on tab open). Disabled while searching
+  // so we don't hold a stale list query; the results query takes over.
+  const { data: list, isError: listErr, error: listError, refetch: refetchList } = useQuery<ArchiveListResp>({
+    queryKey: ['cm-archive-list', source],
+    queryFn: async () => (await api.get<ArchiveListResp>(`/eval/archive-list?source=${source}`)).data,
+    staleTime: 30_000,
+    enabled: enabled && !searching,
+  });
+  // Recall search — only fires when the query is non-empty (Gate-0 #5 enabled-gating).
+  const { data: hits, isError: hitErr, error: hitError, isFetching: hitFetching } = useQuery<ArchiveSearchResp>({
+    queryKey: ['cm-archive-search', source, query],
+    queryFn: async () => (await api.get<ArchiveSearchResp>(`/eval/archive-search?source=${source}&q=${encodeURIComponent(query)}`)).data,
+    staleTime: 30_000,
+    enabled: enabled && searching,
+  });
+
+  const entries = list?.entries ?? [];
+  const results = hits?.results ?? [];
+
+  return (
+    <section data-testid={`cm-archive-${source}`}>
+      <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        Archived {source} · recall-backed cold storage
+      </div>
+      <div className="mb-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+        Low-value entries the size-valve moved out of live {source} (not deleted — still
+        retrievable via FTS5/BM25 recall). Search pulls them back on demand.
+      </div>
+
+      {/* Search box — one clear input; results replace the list while a query is active */}
+      <div className="relative mb-3 max-w-md">
+        <input
+          data-testid={`cm-archive-search-input-${source}`}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={`Recall from archived ${source}…`}
+          className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] focus:border-[#5fc99a] focus:outline-none"
+        />
+        {searching && (
+          <button
+            data-testid={`cm-archive-search-clear-${source}`}
+            onClick={() => setQ('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
+          >
+            clear ✕
+          </button>
+        )}
+      </div>
+
+      {searching ? (
+        // ── Recall results ──
+        hitErr ? (
+          <ArchiveError what={`recall ${source}`} error={hitError} />
+        ) : hitFetching && results.length === 0 ? (
+          <div data-testid={`cm-archive-searching-${source}`} className="text-[11px] text-[var(--color-text-faint)]">Recalling…</div>
+        ) : results.length === 0 ? (
+          <div className="text-[11px] text-[var(--color-text-faint)]">No archived {source} matches “{query}”.</div>
+        ) : (
+          <div data-testid={`cm-archive-results-${source}`} className="flex flex-col gap-2.5">
+            <div className="text-[11px] text-[var(--color-text-faint)]">{results.length} recall hit{results.length === 1 ? '' : 's'}</div>
+            {results.map((r, i) => (
+              <div key={`${r.shard}-${i}`} className="border-l-2 border-[#5fc99a] pl-2.5">
+                <div className="text-sm font-medium leading-snug text-[var(--color-text)]">{r.title || '(untitled)'}</div>
+                <div className="mt-0.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{r.snippet}</div>
+                <div className="mt-0.5 font-mono text-[10px] text-[var(--color-text-faint)]">{r.shard}</div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        // ── Archived list (default) ──
+        listErr ? (
+          <ArchiveError what={`archived ${source}`} error={listError} onRetry={() => void refetchList()} />
+        ) : list === undefined ? (
+          <div data-testid={`cm-archive-loading-${source}`} className="text-[11px] text-[var(--color-text-faint)]">Loading archived {source}…</div>
+        ) : entries.length === 0 ? (
+          <div data-testid={`cm-archive-empty-${source}`} className="text-[11px] text-[var(--color-text-faint)]">
+            Nothing archived yet — live {source} is fully injected.
+          </div>
+        ) : (
+          <div data-testid={`cm-archive-list-${source}`} className="flex flex-col">
+            <div className="mb-1 text-[11px] text-[var(--color-text-faint)]">
+              {entries.length} archived · {(list?.shards.length ?? 0)} shard{(list?.shards.length ?? 0) === 1 ? '' : 's'}
+            </div>
+            {entries.map((e, i) => {
+              const tint = TYPE_TINT[e.type] ?? '#7c8194';
+              return (
+                <div
+                  key={`${e.shard}-${i}`}
+                  data-testid={`cm-archive-row-${source}`}
+                  className="flex items-baseline gap-2.5 py-1"
+                >
+                  {/* type dot — the one bit of color; kind is on-demand via title */}
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tint }} title={e.type} aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-text)]" title={e.title}>{e.title || '(untitled)'}</span>
+                  {/* provenance (evolution only carries it) — hidden when empty (Gate-0 #3) */}
+                  {e.archived_from && (
+                    <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-faint)]" title="archived from section">{e.archived_from}</span>
+                  )}
+                  {/* date — '—' when the header carried none (Gate-0 #3) */}
+                  <span className="w-20 shrink-0 text-right font-mono text-[10px] text-[var(--color-text-faint)]">{e.date ?? '—'}</span>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+    </section>
+  );
+}
+
+// Shared archive error banner — honest "couldn't load, NOT empty" + optional Retry.
+function ArchiveError({ what, error, onRetry }: { what: string; error: unknown; onRetry?: () => void }) {
+  return (
+    <div className="rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
+      <div>{classifyLoadError(error, what, `Couldn’t load ${what} — the backend may be unavailable. This is NOT “nothing archived”.`)}</div>
+      {onRetry && (
+        <button onClick={onRetry} className="mt-1.5 rounded px-2 py-0.5 text-[10px] font-medium text-white" style={{ background: '#d0524a' }}>Retry</button>
+      )}
+    </div>
+  );
+}
+
 function MemoryTab({ enabled }: { enabled: boolean }) {
   const { data: graph } = useQuery<BrainGraph>({
     queryKey: ['cm-brain-graph'],
@@ -755,8 +908,36 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
         <TrendChart trend={trend} field="memory_bytes" />
       </section>
 
+      {/* Archived list + Recall search — the cold layer the size-valve moved out */}
+      <ArchivePanel source="memory" enabled={enabled} />
+
       <div className="text-[11px] text-[var(--color-text-faint)]">
         How it works: live memory is injected in FULL every message; reflection sediments new ones (confident-only); when the file grows past its size cap, the lowest-value entries are ARCHIVED to recall-backed cold storage (moved, not deleted — still retrievable via FTS5/BM25 recall), so load-bearing judgment stays live.
+      </div>
+    </div>
+  );
+}
+
+// ── Evolution tab: the correction/pattern brain + its archived cold layer ────
+// EVOLUTION.md is a distinct store (corrections, CLASS patterns, data-points) with
+// its OWN size-valve + archive. Graph is DEFERRED (Gate-0 Run B: EVOLUTION's `###`
+// blocks don't fit the 7-type ontology → all-zero nodes); this tab surfaces the
+// teaching text + the Archived list + Recall search (source=evolution).
+function EvolutionTab({ enabled }: { enabled: boolean }) {
+  return (
+    <div data-testid="cm-panel-evolution" className="flex flex-col gap-5 max-w-4xl">
+      <div className="text-sm text-[var(--color-text-muted)]">
+        How I evolve — corrections I've captured, the recurring failure patterns they
+        cluster into, and the judgment sedimented from them. Value (not age) decides
+        survival; the lowest-value entries archive to recall-backed cold storage.
+      </div>
+      <ArchivePanel source="evolution" enabled={enabled} />
+      <div className="text-[11px] text-[var(--color-text-faint)]">
+        How it works: each correction is captured with a bias tag; recurring patterns (3× threshold)
+        surface a governance proposal for your review. Live EVOLUTION.md is injected in FULL; when it
+        grows past its size cap, the lowest-value entries are ARCHIVED (moved, not deleted — recall via
+        FTS5/BM25), so load-bearing patterns stay live. The knowledge graph is deferred — EVOLUTION’s
+        correction/pattern shape doesn’t fit the 7-type ontology.
       </div>
     </div>
   );

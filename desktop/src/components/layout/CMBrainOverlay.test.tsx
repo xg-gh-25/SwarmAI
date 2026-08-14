@@ -72,6 +72,12 @@ function mockHealth(overrides: Record<string, unknown> = {}, opts: { governanceP
     if (url.includes('brain-graph')) {
       return Promise.resolve({ data: { nodes: [], drill: {}, total: 0 } });
     }
+    if (url.includes('archive-list')) {
+      return Promise.resolve({ data: { entries: [], total: 0, shards: [], source: url.includes('evolution') ? 'evolution' : 'memory' } });
+    }
+    if (url.includes('archive-search')) {
+      return Promise.resolve({ data: { results: [], q: '', source: url.includes('evolution') ? 'evolution' : 'memory' } });
+    }
     return Promise.resolve({ data: lite }); // fallback
   });
   (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
@@ -137,6 +143,8 @@ describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
     (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('brain-graph')) return Promise.resolve({ data: GRAPH });
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      if (url.includes('archive-list')) return Promise.resolve({ data: { entries: [], total: 0, shards: [], source: url.includes('evolution') ? 'evolution' : 'memory' } });
+      if (url.includes('archive-search')) return Promise.resolve({ data: { results: [], q: '', source: url.includes('evolution') ? 'evolution' : 'memory' } });
       // lite (default)
       return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
     });
@@ -709,6 +717,115 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     expect(memRow.querySelector('[data-testid="cm-selective"]')).toBeNull();
     // No "actually injected (selective)" rail line — disk size IS the prompt load.
     expect(screen.queryByTestId('cm-injected')).toBeNull();
+  });
+});
+
+describe('CMBrainOverlay — Evolution tab + ArchivePanel (Run C)', () => {
+  const MEM_ENTRIES = [
+    { title: 'stale subprocess reused without liveness check', type: 'pitfall', date: '2026-03-15', status: 'archived', archived_from: '', shard: 'MEMORY-archive-2026-03.md' },
+    { title: 'prevention over recovery', type: 'principle', date: null, status: 'archived', archived_from: '', shard: 'MEMORY-archive-2026-03.md' },
+  ];
+  const EVO_ENTRIES = [
+    { title: 'CLASS A: Confidence → Skip Process', type: 'class', date: null, status: 'archived', archived_from: 'Corrections', shard: 'EVOLUTION-archive-2026-08.md' },
+    { title: 'C037 | 2026-06-17', type: 'correction', date: '2026-06-17', status: 'archived', archived_from: '', shard: 'EVOLUTION-archive-2026-08.md' },
+  ];
+
+  // Mock that answers archive endpoints per-family + query.
+  function mockArchive(opts: { evoEntries?: unknown[]; memEntries?: unknown[]; evoHits?: unknown[] } = {}) {
+    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('archive-list')) {
+        const isEvo = url.includes('evolution');
+        const entries = isEvo ? (opts.evoEntries ?? EVO_ENTRIES) : (opts.memEntries ?? MEM_ENTRIES);
+        return Promise.resolve({ data: { entries, total: (entries as unknown[]).length, shards: ['shard-1.md'], source: isEvo ? 'evolution' : 'memory' } });
+      }
+      if (url.includes('archive-search')) {
+        const isEvo = url.includes('evolution');
+        return Promise.resolve({ data: { results: isEvo ? (opts.evoHits ?? []) : [], q: 'x', source: isEvo ? 'evolution' : 'memory' } });
+      }
+      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      if (url.includes('brain-graph')) return Promise.resolve({ data: { nodes: [], drill: {}, total: 0 } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 0 } });
+    });
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
+  }
+
+  async function openEvolution() {
+    mockArchive();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-brain-overlay');
+    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
+    return screen.findByTestId('cm-panel-evolution');
+  }
+
+  it('adds an Evolution tab that renders its archive panel (source=evolution)', async () => {
+    await openEvolution();
+    expect(screen.getByTestId('cm-tab-evolution')).toBeInTheDocument();
+    // the evolution archive panel is present + fetched its list
+    expect(await screen.findByTestId('cm-archive-evolution')).toBeInTheDocument();
+    await screen.findByTestId('cm-archive-list-evolution');
+  });
+
+  it('renders archived evolution entries from the endpoint, graceful on null date + empty provenance', async () => {
+    await openEvolution();
+    const list = await screen.findByTestId('cm-archive-list-evolution');
+    expect(list.textContent).toMatch(/CLASS A/);
+    expect(list.textContent).toMatch(/Corrections/); // archived_from shown when present
+    // null date renders as '—', never the literal "null"
+    expect(list.textContent).not.toMatch(/null|undefined/);
+    expect(list.textContent).toMatch(/—/);
+  });
+
+  it('Memory tab now also carries an archive panel (source=memory)', async () => {
+    mockArchive();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-brain-overlay');
+    act(() => { screen.getByTestId('cm-tab-memory').click(); });
+    await screen.findByTestId('cm-panel-memory');
+    expect(await screen.findByTestId('cm-archive-memory')).toBeInTheDocument();
+    const list = await screen.findByTestId('cm-archive-list-memory');
+    // memory entries carry NO provenance ('') → nothing renders for archived_from, no "null"
+    expect(list.textContent).toMatch(/stale subprocess/);
+    expect(list.textContent).not.toMatch(/null|undefined/);
+  });
+
+  it('typing a query swaps the list for recall results (archive-only search)', async () => {
+    const { getByTestId } = { getByTestId: screen.getByTestId };
+    void getByTestId;
+    mockArchive({ evoHits: [{ title: 'CLASS A skip', snippet: 'confidence → skip process, the loudest voice…', source_file: '.context/Archives/EVOLUTION-archive-2026-08.md', shard: 'EVOLUTION-archive-2026-08.md' }] });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-brain-overlay');
+    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
+    await screen.findByTestId('cm-panel-evolution');
+    const input = await screen.findByTestId('cm-archive-search-input-evolution') as HTMLInputElement;
+    const { fireEvent } = await import('@testing-library/react');
+    await act(async () => { fireEvent.change(input, { target: { value: 'skip' } }); });
+    // list is replaced by recall results
+    const results = await screen.findByTestId('cm-archive-results-evolution');
+    expect(results.textContent).toMatch(/CLASS A skip/);
+    expect(results.textContent).toMatch(/confidence/);
+    // clearing returns to the LIST with its CONTENT (not a stuck "Loading…"). Teeth
+    // against a search→clear deadlock (Gate-2 #6): the list query fetched on mount
+    // (searching=false initially) and react-query retains its cache across the
+    // enabled-toggle, so the cached entries render immediately on clear — assert the
+    // real content is back, and the loading state is NOT shown.
+    act(() => { screen.getByTestId('cm-archive-search-clear-evolution').click(); });
+    const backToList = await screen.findByTestId('cm-archive-list-evolution');
+    expect(backToList.textContent).toMatch(/CLASS A/);           // content restored
+    expect(screen.queryByTestId('cm-archive-loading-evolution')).toBeNull(); // not stuck loading
+    expect(screen.queryByTestId('cm-archive-results-evolution')).toBeNull(); // results gone
+  });
+
+  it('shows an empty-but-valid state when nothing is archived (never a crash / false content)', async () => {
+    mockArchive({ evoEntries: [] });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-brain-overlay');
+    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
+    await screen.findByTestId('cm-panel-evolution');
+    expect(await screen.findByTestId('cm-archive-empty-evolution')).toBeInTheDocument();
   });
 });
 
