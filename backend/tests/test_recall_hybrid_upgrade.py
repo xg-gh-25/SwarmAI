@@ -17,74 +17,6 @@ import pytest
 
 
 # ===========================================================================
-# Change 3 (tracer bullet): Missing-vector renorm (§3.6.1)
-# ===========================================================================
-
-class TestMissingVectorRenorm:
-    """An un-embedded but keyword-strong entry must NOT be rank-suppressed
-    below embedded peers under the top-k cut. The renorm scores it on the
-    keyword leg alone (hybrid = kw) instead of 0.6*0 + 0.4*kw."""
-
-    def test_unembedded_entry_competes_on_keyword_alone(self):
-        """GS_RCHAIN_MISSING_VECTOR core: un-embedded keyword-strong entry
-        out-ranks an embedded weak-keyword peer once renorm is applied."""
-        from core.memory_embeddings import hybrid_memory_search
-
-        # E1 embedded (has vector), weak keyword. U1 un-embedded, strong keyword.
-        keyword_scores = {"E1": 0.2, "U1": 0.8}
-        vector_scores = {"E1": 0.5}  # only E1 has a vector
-        embedded_keys = {"E1"}       # U1 is NOT embedded
-
-        results = hybrid_memory_search(
-            keyword_scores=keyword_scores,
-            vector_scores=vector_scores,
-            embedded_keys=embedded_keys,
-        )
-        ranked = {r.key: r.hybrid for r in results}
-
-        # E1: 0.6*0.5 + 0.4*0.2 = 0.38  (embedded → normal merge)
-        # U1: renorm → hybrid = kw = 0.8 (NOT 0.6*0 + 0.4*0.8 = 0.32)
-        assert ranked["U1"] == pytest.approx(0.8, abs=0.01)
-        assert ranked["E1"] == pytest.approx(0.38, abs=0.01)
-        assert results[0].key == "U1", "renorm must lift un-embedded entry above embedded peer"
-
-    def test_embedded_key_missing_from_topk_is_not_renormed(self):
-        """Precision guard: an entry that IS embedded but absent from the
-        vector top-k (vs defaults to 0) must keep the 0.6*0+0.4*kw merge —
-        NOT be renorm'd. Renorm is for un-embedded only."""
-        from core.memory_embeddings import hybrid_memory_search
-
-        keyword_scores = {"E2": 0.8}
-        vector_scores = {}            # E2 didn't make vector top-k this query
-        embedded_keys = {"E2"}        # but E2 IS embedded
-
-        results = hybrid_memory_search(
-            keyword_scores=keyword_scores,
-            vector_scores=vector_scores,
-            embedded_keys=embedded_keys,
-        )
-        # E2 is embedded → normal merge: 0.6*0 + 0.4*0.8 = 0.32 (NOT 0.8)
-        assert results[0].hybrid == pytest.approx(0.32, abs=0.01)
-
-    def test_embedded_keys_none_preserves_legacy_behavior(self):
-        """Backward compat: embedded_keys=None (default) → identical to the
-        pre-upgrade merge. Protects the 3 existing test_hybrid_memory.py cases
-        and the sole prod caller."""
-        from core.memory_embeddings import hybrid_memory_search
-
-        keyword_scores = {"RC01": 0.8, "KD01": 0.5}
-        vector_scores = {}  # Bedrock down / no embeddings
-
-        results = hybrid_memory_search(
-            keyword_scores=keyword_scores,
-            vector_scores=vector_scores,
-        )  # no embedded_keys arg
-        # RC01: 0.6*0 + 0.4*0.8 = 0.32 (legacy: NOT renorm'd to 0.8)
-        assert results[0].key == "RC01"
-        assert results[0].hybrid == pytest.approx(0.32, abs=0.01)
-
-
-# ===========================================================================
 # Change 1: Okapi-BM25+IDF keyword scorer (CJK-bigram aware)
 # ===========================================================================
 
@@ -160,42 +92,36 @@ class TestRecallKeywordFirst:
     """recall_context stays keyword-first (no Bedrock on the hot path) and only
     escalates to hybrid when keyword finds nothing."""
 
-    def test_keyword_hit_does_not_invoke_hybrid(self):
-        """A keyword hit must NOT trigger the 2.65s/query embed path."""
-        from unittest.mock import patch
+    def test_keyword_hit_is_pure_fts5(self):
+        """A keyword hit surfaces via pure FTS5+BM25 — no embed path exists.
+        The vector scorer was DELETED 2026-08-14, so it is STRUCTURALLY impossible
+        to embed on a hit (not merely 'not called')."""
+        from core import memory_index
         from core.context_recall import recall_context
 
-        with patch("core.memory_index._hybrid_section_scores") as mock_hybrid:
-            res = recall_context(
-                "MEMORY.md", "exit code sigkill oom",
-                memory_content=_RECALL_MEMORY,
-            )
-            assert res.allowed is True
-            assert "COE Registry" in res.sections
-            mock_hybrid.assert_not_called()  # keyword-first: no embed on hit
+        assert not hasattr(memory_index, "_hybrid_section_scores"), (
+            "vector scorer reappeared — recall must stay pure FTS5+BM25 (PRI11)"
+        )
+        res = recall_context(
+            "MEMORY.md", "exit code sigkill oom",
+            memory_content=_RECALL_MEMORY,
+        )
+        assert res.allowed is True
+        assert "COE Registry" in res.sections
 
-    def test_keyword_miss_no_longer_escalates_to_hybrid(self):
-        """RETIRED→REWRITTEN (pure-filesystem design §3.3/§5.4, 2026-06-28): the
-        hybrid-on-miss escalation was REMOVED — recall is keyword-only, no vector.
-        A keyword miss now simply returns no sections (the agent re-searches with
-        synonyms instead — agentic safety net, §3.4). The vector leg must NEVER
-        fire even on a miss."""
-        from unittest.mock import patch
+    def test_keyword_miss_returns_no_sections(self):
+        """A keyword miss returns no sections — recall is keyword-only (the vector
+        leg was removed; the agent re-searches with synonyms instead, §3.4). No
+        embed/hybrid escalation exists."""
         from core.context_recall import recall_context
 
-        # Zero keyword overlap → keyword miss. With the vector leg gone, _hybrid
-        # is never consulted (it's an inert stub returning {} anyway).
-        with patch("core.memory_index._hybrid_section_scores") as mock_hybrid:
-            mock_hybrid.return_value = {"COE Registry": 0.8}  # would-be vector hit
-            res = recall_context(
-                "MEMORY.md", "application abruptly terminates at boot",
-                memory_content=_RECALL_MEMORY,
-            )
-            # Pure-filesystem: hybrid is NOT called on a keyword miss anymore.
-            mock_hybrid.assert_not_called()
-            assert res.allowed is True
-            # No keyword overlap → no section surfaces (agent re-greps; §3.4).
-            assert res.sections == ()
+        res = recall_context(
+            "MEMORY.md", "application abruptly terminates at boot",
+            memory_content=_RECALL_MEMORY,
+        )
+        assert res.allowed is True
+        # No keyword overlap → no section surfaces (agent re-greps; §3.4).
+        assert res.sections == ()
 
     def test_keyword_only_surfaces_live_sections(self):
         """Replaces the stale-index hybrid guard: keyword scoring only ever ranks
@@ -336,13 +262,12 @@ class TestRecallHitLog:
         assert res.hit_layer == "keyword"
 
     def test_miss_reports_none_layer(self):
-        """A total miss reports hit_layer='none', drilled=False."""
-        from unittest.mock import patch
+        """A total miss reports hit_layer='none', drilled=False (keyword-only recall,
+        no vector leg to escalate to)."""
         from core.context_recall import recall_context
-        with patch("core.memory_index._hybrid_section_scores", return_value={}):
-            res = recall_context(
-                "MEMORY.md", "zzz no match anywhere qqq",
-                memory_content=_RECALL_MEMORY,
-            )
-            assert res.hit_layer == "none"
-            assert res.drilled is False
+        res = recall_context(
+            "MEMORY.md", "zzz no match anywhere qqq",
+            memory_content=_RECALL_MEMORY,
+        )
+        assert res.hit_layer == "none"
+        assert res.drilled is False

@@ -108,19 +108,18 @@ def test_calibrated_tokens_not_bytes(fake_context_dir: Path):
 
 @pytest.fixture
 def big_memory_context_dir(tmp_path: Path) -> Path:
-    """A .context dir whose MEMORY.md EXCEEDS the 30K selective threshold, so
-    selective injection genuinely triggers (the only case with a real floor)."""
-    from core.memory_index import FULL_INJECTION_THRESHOLD
+    """A .context dir whose MEMORY.md is LARGE (>30K tokens). There is no selective
+    mode anymore (2026-08-14) — a large MEMORY.md is still FULL-injected; this
+    fixture just exercises the large-file path of the token-block builder."""
+    # A large-MEMORY target (the former selective threshold, now just "big").
+    BIG_TOKEN_TARGET = 30_000
     ctx = tmp_path / ".context"
     ctx.mkdir()
     (ctx / "SWARMAI.md").write_text("core identity " * 50, encoding="utf-8")
-    # Build a MEMORY.md well above threshold with real ## sections + Open Threads
-    # (an always-load section) so selective has both a floor AND removable body.
     big = ["## Memory Index\n\nindex line\n", "## Open Threads\n\nalways-load thread\n"]
-    # pad with many removable sections to blow WELL past FULL_INJECTION_THRESHOLD.
-    # Build until the estimator confirms we're over — no guessing at char ratios.
+    # Build well past the target — estimator-confirmed, no char-ratio guessing.
     i = 0
-    while ContextDirectoryLoader.estimate_tokens("\n".join(big)) < FULL_INJECTION_THRESHOLD * 1.3:
+    while ContextDirectoryLoader.estimate_tokens("\n".join(big)) < BIG_TOKEN_TARGET * 1.3:
         big.append(f"## Section{i}\n\n" + ("removable body content here " * 40) + "\n")
         i += 1
     (ctx / "MEMORY.md").write_text("\n".join(big), encoding="utf-8")

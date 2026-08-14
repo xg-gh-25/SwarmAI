@@ -895,36 +895,15 @@ class PromptBuilder:
             # token budget) makes the 5K on a 91K/1M budget a worthwhile trade.
             # Channel exclusions below are unchanged (group / non-owner still drop it).
 
-            # Memory injection is always active — auto-selects full injection
-            # (< 30K tokens) or selective mode (≥ 30K).  No config flag needed.
-            #
-            # NO guess-keyword (pure-filesystem recall design §1.3, 2026-06-28):
-            # at prompt-assembly time the user's real message does NOT exist yet,
-            # so the old `get_focus_keywords()` (briefing-focus titles as a query
-            # proxy) was a structural mis-match — selecting MEMORY sections against
-            # a GUESS. We pass NO query here; selective mode falls back to its
-            # rule-based section loading (recent/pinned), and the REAL query-driven
-            # recall happens AFTER the first user message via
-            # session_router._maybe_inject_recall (runtime leg, real query).
-            memory_keyword_hint = ""
-
+            # MEMORY.md is always FULL-injected (2026-08-14): there is no selective
+            # mode / keyword-section-scoring / embedding — recall is pure FTS5+BM25
+            # (PRI11). The REAL query-driven recall happens AFTER the first user
+            # message via session_router._maybe_inject_recall (runtime leg, real
+            # query). Size is governed write-side by the distillation archive valve.
             _t1 = time.perf_counter()
             context_text = loader.load_all(
                 model_context_window=model_context_window,
                 exclude_filenames=exclude_files,
-                memory_smart=True,
-                user_message=memory_keyword_hint,
-                session_signals={
-                    "is_channel": channel_context is not None,
-                    "is_resume": bool(agent_config.get("resume_app_session_id")),
-                    "is_first_session_today": not (
-                        Path(working_directory) / "Knowledge" / "DailyActivity"
-                        / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-                    ).exists() if not (channel_context) else False,
-                },
-                # Adaptive memory budget: 0.0 at session init (full budget),
-                # non-zero when prompt is rebuilt mid-session (e.g. --resume).
-                context_percent_used=context_percent_used,
             )
             _t_load = time.perf_counter() - _t1
 

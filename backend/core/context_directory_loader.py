@@ -250,6 +250,14 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("STEERING.md",          5,  "Steering",           True,  True,  "tail"),
     ContextFileSpec("TOOLS.md",             6,  "Tools",              True,  True,  "tail"),
     # ── Agent-owned (agent writes via hooks, never overwritten) ──────
+    # NOTE (2026-08-14): the `truncatable`/`direction` fields below are LEGACY —
+    # read-line NEVER truncates any file (2026-06-28 directive; _enforce_token_budget
+    # returns full content + a warning, and _truncate_section was deleted 2026-08-14).
+    # `truncatable` is NOT flipped to False here on purpose: core_section_names()
+    # treats `truncatable is False` as "conceptual core" (SWARMAI/IDENTITY/SOUL/SELF/
+    # AGENT), so flipping MEMORY/EVOLUTION would wrongly add them to that set. Size for
+    # MEMORY/EVOLUTION is governed WRITE-SIDE by their archive valves (distillation /
+    # evolution_maintenance _size_evict → move-to-archive), NOT by read-side truncation.
     ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head"),
     ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head"),
     # ── Auto-generated (rebuilt from filesystem, never overwritten) ──
@@ -768,10 +776,6 @@ class ContextDirectoryLoader:
         model_context_window: int = 200_000,
         token_budget: int | None = None,
         exclude_filenames: set[str] | None = None,
-        memory_smart: bool = False,
-        user_message: str = "",
-        session_signals: dict | None = None,
-        context_percent_used: float = 0.0,
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
@@ -850,24 +854,17 @@ class ContextDirectoryLoader:
             # Same Darwinian logic as DDD docs — unused knowledge fades from active context.
             if spec.filename == "MEMORY.md":
                 content = _filter_dormant_entries(content)
-
-            # Smart Memory Injection: auto-selects full injection (<30K)
-            # or selective mode (≥30K) based on MEMORY.md token count.
-            if spec.filename == "MEMORY.md" and memory_smart:
+                # MEMORY.md is ALWAYS full-injected (2026-08-14 rewrite). There is NO
+                # selective mode / keyword-section-scoring / embedding — recall is pure
+                # FTS5+BM25 (PRI11). The former `select_memory_sections` selective
+                # branch was inert (it returned the full body minus any stale index
+                # block) and is removed. Size is governed WRITE-SIDE by the distillation
+                # archive valve, not here. We still strip a legacy in-file index block.
                 try:
-                    from .memory_index import select_memory_sections
-                    content = select_memory_sections(
-                        memory_content=content,
-                        user_message=user_message,
-                        session_signals=session_signals,
-                        context_percent_used=context_percent_used,
-                    )
+                    from .memory_index import extract_body_without_index
+                    content = extract_body_without_index(content)
                 except Exception as exc:
-                    logger.warning(
-                        "Smart memory injection failed, "
-                        "falling back to raw injection: %s", exc
-                    )
-                    # Fall through with original content
+                    logger.warning("index-block strip failed, using raw: %s", exc)
 
             section_tuples.append(
                 (spec.priority, spec.section_name, content, spec.truncatable, spec.truncate_from)
@@ -1136,10 +1133,6 @@ class ContextDirectoryLoader:
         self,
         model_context_window: int = 200_000,
         exclude_filenames: set[str] | None = None,
-        memory_smart: bool = False,
-        user_message: str = "",
-        session_signals: dict | None = None,
-        context_percent_used: float = 0.0,
     ) -> str:
         """Load and assemble context based on model context window.
 
@@ -1181,23 +1174,18 @@ class ContextDirectoryLoader:
                 # shared L0 cache (privacy — fail-closed, run_20bd4a7b).
                 return self._load_l0(model_context_window, exclude_filenames=exclude_filenames)
 
-            # When files are excluded (group channels) or progressive memory
-            # is active, skip L1 cache — both are session-specific.
+            # L1 cache: skip ONLY when files are excluded (group/non-owner channels
+            # produce session-specific content that would poison a shared cache).
             #
-            # ⚠️ INTENTIONAL, NOT DEAD CODE (run_a16d61ad, work-stream H): every
-            # DESKTOP chat session passes memory_smart=True (selective MEMORY
-            # injection), so on the desktop main path the L1 cache is NEITHER read
-            # (here) NOR written (below) — it is effectively bypassed by design.
-            # This is correct, not a regression: selective memory injection picks
-            # MEMORY sections by the session's keyword hint, so the assembled
-            # prompt is SESSION-SPECIFIC and would POISON a shared L1 cache (one
-            # session's recalled sections served to the next). L1 still serves the
-            # non-selective paths (no exclusions AND no smart-memory — e.g. a full
-            # MEMORY < FULL_INJECTION_THRESHOLD, or callers that opt out). The
-            # apparent "every desktop session re-assembles" cost is the price of
-            # correct selective injection; it is NOT a cache that silently stopped
-            # working. (Audited 2026-06-28; Kiro prompt#4 — confirmed by-design.)
-            if not exclude_filenames and not memory_smart:
+            # (2026-08-14) The former `memory_smart` bypass is GONE: selective MEMORY
+            # injection was removed — MEMORY.md is always full-injected and the
+            # assembled prompt is now a PURE FUNCTION of the on-disk context files
+            # (no session-varying input reaches it). So the desktop main path is
+            # cache-SAFE and now shares L1 like every other full-context session
+            # (it previously forfeited the cache hit for a rationale that no longer
+            # holds). The `exclude_filenames` guard is the only real cache-poison
+            # boundary and is preserved.
+            if not exclude_filenames:
                 cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
                 if cached:
                     return cached
@@ -1207,15 +1195,11 @@ class ContextDirectoryLoader:
                 model_context_window=model_context_window,
                 token_budget=dynamic_budget,
                 exclude_filenames=exclude_filenames,
-                memory_smart=memory_smart,
-                user_message=user_message,
-                session_signals=session_signals,
-                context_percent_used=context_percent_used,
             )
 
-            # Only write L1 cache when no exclusions and no progressive memory
-            # (both produce session-specific content that would poison shared cache)
-            if assembled and not exclude_filenames and not memory_smart:
+            # Only write L1 cache when no exclusions (channel-excluded content is
+            # session-specific and would poison the shared cache).
+            if assembled and not exclude_filenames:
                 self._write_l1_cache(assembled, budget=dynamic_budget)
 
             return assembled

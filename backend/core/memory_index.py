@@ -137,15 +137,9 @@ ACTIVE_SECTIONS = MEMORY_ACTIVE_SECTIONS
 ALWAYS_LOAD_SECTIONS = set(MEMORY_EVERGREEN_SECTIONS)
 
 # Keyword relevance threshold for L1 section loading
-KEYWORD_THRESHOLD = 0.15
-
-# Default max tokens for selective injection (only used above threshold)
+# Inert default retained only for select_memory_sections' now-inert max_tokens
+# param (MEMORY.md is ALWAYS full-injected — 2026-08-14; no selective mode).
 DEFAULT_MAX_TOKENS = 50_000
-
-# Full-injection threshold: below this, inject entire MEMORY.md.
-# At 30K tokens (~375 entries), MEMORY.md uses 30% of 100K system prompt budget.
-# Below this, Claude reads everything — no selection needed.
-FULL_INJECTION_THRESHOLD = 30_000
 
 # Reversible Context Recall (run_9de88af9): max excluded section NAMES listed in
 # the selective-injection manifest before collapsing to "+N more". Keeps the
@@ -656,26 +650,6 @@ def _extract_superseded_keys(memory_content: str) -> set[str]:
     return superseded
 
 
-
-
-def _hybrid_section_scores(user_message: str, allow_embed: bool = False) -> dict[str, float]:
-    """REMOVED — vector/hybrid section scoring is gone (pure-filesystem recall
-    design §3.3/§5.4, 2026-06-28).
-
-    The vector leg (memory_vec + Bedrock Titan embed + hybrid_memory_search merge)
-    was deleted: NO recall path embeds anymore. This function is retained as an
-    inert stub that ALWAYS returns ``{}`` so (a) callers that still import it do
-    not ImportError during the transition, and (b) it is structurally impossible
-    for any Titan/embed call to fire from here (the body that called
-    ``embed_text`` no longer exists). All recall scoring is keyword/BM25 via
-    ``_keyword_section_scores``. ``allow_embed`` is kept only for signature
-    compatibility and has no effect.
-
-    The vector golden-case probes (recall_chain_probe.py synonym_guard /
-    missing_vector / stale_index / recall_budget / knowledge_live) that drove the
-    old body are retired via s_golden-case in the same change (design §7/DoD9).
-    """
-    return {}
 
 
 # ── Memory Injection ──────────────────────────────────────────────────

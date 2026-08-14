@@ -21,11 +21,6 @@ Subcommands:
                          lowest-priority first (alive != correct: GS_COST001 only
                          checks the budget NUMBER, never that assembly OUTPUT
                          respects it under truncation)
-  memory_select        — the MEMORY.md SELECTIVE-injection branch (≥30K tokens,
-                         what production runs every session at ~49K) keeps L0
-                         (index + Open Threads), loads keyword-matched sections
-                         within budget, and emits a 'Not loaded' manifest — none
-                         of which the full-injection path does
 """
 import sys
 from pathlib import Path
@@ -254,135 +249,6 @@ def assembly_floor(negative: bool) -> int:
     return _ok(name) if ok else _fail(name, why)
 
 
-def _memory_fixture() -> str:
-    """A >30K-token synthetic MEMORY.md that FORCES the selective branch.
-
-    Section HEADINGS must equal what _key_to_section maps the index keys to
-    (KD/DEC->'Decisions', GUI->'Guidelines', PIT->'Pitfalls') or the matched
-    section silently skips (memory_index.py:1103-1105 — the vacuity trap Gate-0
-    flagged). 'Decisions' is small + keyword-matchable ('caching prefix proxy');
-    'Guidelines'/'Pitfalls' are padded huge so the total comfortably exceeds 30K
-    (~48K, a ~60% margin so an estimate_tokens drift can't silently drop it under
-    threshold — adversarial MEDIUM) and they land in the 'Not loaded' manifest
-    (proving budget-bounded selection)."""
-    def _pad(word: str, n: int) -> str:
-        return (word + " ") * n
-    idx = (
-        "<!-- MEMORY_INDEX_START -->\n"
-        "## Memory Index\n"
-        "- [DEC01] caching prefix proxy decision | caching, prefix, proxy\n"
-        "- [GUI01] widget layout guideline | widget, layout\n"
-        "- [PIT01] resonance drift pitfall | resonance, drift\n"
-        "<!-- MEMORY_INDEX_END -->"
-    )
-    return idx + (
-        "\n\n## Open Threads\n- P0 thread alpha still open\n"
-        "\n## Decisions\n- [DEC01] caching prefix proxy decision — "
-        + _pad("cachingdetail", 300)
-        + "\n\n## Guidelines\n- [GUI01] widget layout guideline — "
-        + _pad("widgetfill", 18000)
-        + "\n\n## Pitfalls\n- [PIT01] resonance drift pitfall — "
-        + _pad("pitfill", 18000) + "\n"
-    )
-
-
-def _memory_select_holds(mem: str) -> tuple[bool, str]:
-    """Run the REAL select_memory_sections on the >30K fixture and check the
-    selective-branch invariants. Pure check (no printing) so the negative path
-    can assert it FAILs on a broken invariant. memory_embeddings=False → no
-    Bedrock; keyword-only is the verified production path (test_memory_wiring).
-
-    Hermetic (adversarial MEDIUM): jobs.paths.DB_PATH is patched to a
-    nonexistent path so the SessionRecall block (memory_index.py:1138-1155,
-    gated on db_path.exists()) is skipped — the probe never pulls live-DB
-    content into its output, regardless of machine DB state."""
-    import jobs.paths as _jp
-    from pathlib import Path as _P
-    from unittest.mock import patch as _patch
-
-    from core.context_directory_loader import ContextDirectoryLoader
-    from core.memory_index import DEFAULT_MAX_TOKENS, select_memory_sections
-
-    est = ContextDirectoryLoader.estimate_tokens
-
-    def _select(**kw):
-        # DB_PATH is imported inside select_memory_sections per-call, so patching
-        # the module attribute is sufficient to neutralise the SessionRecall path.
-        with _patch.object(_jp, "DB_PATH", _P("/nonexistent/eval-probe-no-db.sqlite")):
-            return select_memory_sections(mem, session_signals={},
-                                          memory_embeddings=False, **kw)
-
-    # Matched-query run (drives keyword selection)
-    hit = _select(user_message="caching prefix proxy")
-    # INV1 MODE-SWITCH: selective emits the 'Not loaded' manifest tail; full
-    # injection never does (the discriminator — NOT length, which a huge budget
-    # could make vacuous).
-    if "Not loaded" not in hit:
-        return False, "INV1 mode-switch: no 'Not loaded' manifest → took FULL injection, not selective"
-    # INV2 BUDGET: per-section add is strict (memory_index.py:1110). Exercised
-    # with a TIGHT budget against a query that matches the LARGE 'Guidelines'
-    # section (~16K) — under a 5K cap that section MUST be excluded (lands in
-    # the manifest) and the output MUST stay <= the cap. A default-budget check
-    # would be vacuous (the small matched section never approaches the cap, so
-    # ignoring the budget would still pass — verified). This sub-case forces the
-    # budget to be the binding constraint.
-    TIGHT = 5000
-    tight = _select(user_message="widget layout", max_tokens=TIGHT)
-    tight_tok = est(tight)
-    if tight_tok > TIGHT:
-        return False, f"INV2 budget: output {tight_tok} > tight cap {TIGHT} (budget not enforced)"
-    if "## Guidelines" in tight:
-        return False, "INV2 budget: large 'Guidelines' section (~24K) loaded under a 5K cap (budget bypassed)"
-    # also assert the default-budget run stays within its (larger) bound
-    if est(hit) > DEFAULT_MAX_TOKENS:
-        return False, f"INV2 budget: default-run output {est(hit)} > max {DEFAULT_MAX_TOKENS}"
-    # INV3 L0-ALWAYS (matched case): index markers + the Open Threads SECTION.
-    # Assert the section HEADER '## Open Threads', NOT the bare substring — the
-    # string "Open Threads" also appears in the index block AND the 'Not loaded'
-    # manifest, so a bare-substring check is vacuous (verified: it survives
-    # dropping the real L0 load). The '## ' header only appears when the section
-    # is actually loaded.
-    if "<!-- MEMORY_INDEX_START -->" not in hit or "## Open Threads" not in hit:
-        return False, "INV3 L0: index block or '## Open Threads' section missing in selective output"
-    # INV4 KEYWORD-HIT: the query-matched 'Decisions' section actually loaded
-    # (non-vacuous — heading equals _key_to_section('DEC01')).
-    if "## Decisions" not in hit:
-        return False, "INV4 keyword-hit: matched 'Decisions' section did NOT load"
-    # INV5 NEVER-EMPTY (distinct from INV3): a garbage query with embed off must
-    # STILL yield at least index + Open Threads (recall never returns empty).
-    garbage = _select(user_message="zzz unrelated weather quux")
-    if "<!-- MEMORY_INDEX_START -->" not in garbage or "## Open Threads" not in garbage:
-        return False, "INV5 never-empty: garbage query lost index or '## Open Threads' section"
-    return True, "ok"
-
-
-def memory_select(negative: bool) -> int:
-    """The selective-injection branch (MEMORY.md ≥ 30K) is what PRODUCTION runs
-    every session (live MEMORY ~49K). It keeps the index + Open Threads (L0),
-    loads keyword-matched sections within budget, and emits a 'Not loaded'
-    manifest — none of which the full-injection path does. Guards the 5
-    invariants (mode-switch / budget / L0 / keyword-hit / never-empty)."""
-    import core.memory_index as mi
-    name = "MEMORY_SELECT"
-    mem = _memory_fixture()
-
-    if negative:
-        # Teeth (mirrors the spine module-attr monkeypatch idiom): raise the
-        # threshold so high the fixture can NEVER trip selective → full path →
-        # no manifest tail → the positive check MUST fail. Proves the probe
-        # discriminates a broken mode-switch.
-        saved = mi.FULL_INJECTION_THRESHOLD
-        try:
-            mi.FULL_INJECTION_THRESHOLD = 10 ** 9
-            ok, _why = _memory_select_holds(mem)
-        finally:
-            mi.FULL_INJECTION_THRESHOLD = saved
-        return _teeth(name) if not ok else _fail(
-            name, "negative did not bite: selective invariants held even when "
-                  "the threshold forced full injection")
-
-    ok, why = _memory_select_holds(mem)
-    return _ok(name) if ok else _fail(name, why)
 
 
 _PROBES = {
@@ -391,7 +257,6 @@ _PROBES = {
     "gate_freshness": gate_freshness,
     "prompt_budget": prompt_budget,
     "assembly_floor": assembly_floor,
-    "memory_select": memory_select,
 }
 
 

@@ -2,36 +2,17 @@
 """Deterministic probe harness for the recall-chain GS_RCHAIN_* eval cases.
 
 Each GS_RCHAIN_* case (canary_pass) runs ONE scenario here. Every scenario
-drives the REAL hybrid recall code path — real sqlite-vec DB assembly, real
-Okapi-BM25 + min-max keyword leg, real ``embedded_keys`` merge, real section
-aggregation (design §4.3 / GUI26 prompt-source = answer-source, GUI32 render-
-fidelity must exercise the real assembly path, NOT a mocked scorer).
+drives the REAL recall code path — pure FTS5+BM25 (the sqlite-vec vector leg was
+removed 2026-08-14, PRI11), real section aggregation (design §4.3 / GUI26
+prompt-source = answer-source, GUI32 render-fidelity must exercise the real
+assembly path, NOT a mocked scorer).
 
-The ONLY thing mocked is the network boundary: the Bedrock query embedding
-(``_embedding_client_cache.embed_text``) returns a controlled vector, and the
-on-disk DB path is redirected to a per-scenario temp DB. Entry vectors are
-inserted into a real ``memory_vec`` table; the ranking is produced by the real
-``_hybrid_section_scores`` / ``recall_context`` code, not by a stub.
-
-Determinism: vectors are one-hot 1024-d, so nearest-neighbour is exact and
-metric-agnostic (identical vector → distance 0; orthogonal → larger). The fixed
-in-memory MEMORY string never drifts with the live MEMORY.md.
+Determinism: the fixed in-memory MEMORY string never drifts with the live
+MEMORY.md; the on-disk DB path is redirected to a per-scenario temp DB.
 
 Scenarios (each is non-vacuous — a mutation that disables the guarded behavior
-makes the marker absent → the eval case FAILS):
-  synonym_guard  — keyword-first MISSES a zero-overlap synonym query; the real
-                   hybrid VECTOR leg finds the SPECIFIC COE section. Disabling
-                   the vector leg / mis-renorming the embedded entry drops it
-                   below threshold. Prints SYNONYM_GUARD_OK.
-  stale_index    — real hybrid ranks a section ABSENT from the live string #1
-                   (DB stale); the stale-index guard must skip it and still
-                   surface the live section. Removing the guard surfaces an
-                   empty "Deleted Section". Prints STALE_INDEX_OK.
-  missing_vector — an un-embedded keyword-strong entry must out-rank an embedded
-                   peer that has BOTH a strong vector AND wins the no-renorm
-                   merge. Only the §3.6.1 renorm flips the ranking; disabling it
-                   makes the embedded entry win. Driven through the real
-                   _hybrid_section_scores assembly. Prints MISSING_VECTOR_OK.
+makes the marker absent → the eval case FAILS). See ``_SCENARIOS`` below for the
+live set (codeintel_live / resume_fill / entry_recall).
 
 Usage: python backend/scripts/recall_chain_probe.py <scenario>
 Exit 0 + marker on PASS; exit 1 (no marker) on regression.

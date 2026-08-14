@@ -35,49 +35,19 @@ class TestAntiScopeNoEmbed:
     """AC5 (the negative test): a keyword-MISS must NOT fall through to a
     Bedrock embed when the caller passes allow_embed=False."""
 
-    def test_keyword_miss_with_allow_embed_false_does_not_embed(self, monkeypatch):
-        """The core anti-scope guard: patch the embed boundary, force a keyword
-        miss, assert embed_text is NEVER called when allow_embed=False."""
-        from core import memory_index
+    def test_keyword_miss_returns_no_hybrid_layer(self):
+        """NEW ARCHITECTURE (2026-08-14): the vector leg was removed. A keyword
+        miss returns cleanly with no sections and never escalates to a "hybrid"
+        layer (there is no embed path). ``allow_embed`` is an inert param."""
         from core.context_recall import recall_context
 
-        calls = {"n": 0}
-
-        class _SpyEmbedder:
-            def embed_text(self, text):  # noqa: ARG002
-                calls["n"] += 1
-                return None
-
-        # If anything constructs/uses the embed client, this spy counts it.
-        monkeypatch.setattr(memory_index, "_embedding_client_cache", _SpyEmbedder())
-
-        # Query with zero keyword overlap → guaranteed keyword miss → would
-        # normally escalate to _hybrid_section_scores (which embeds).
+        # Query with zero keyword overlap → guaranteed keyword miss.
         res = recall_context(
             "MEMORY.md", "zzz totally unrelated qqq xyzzy",
             memory_content=_MEMORY_FIXTURE, allow_embed=False,
         )
         assert res.allowed is True
-        assert calls["n"] == 0, "allow_embed=False must NOT trigger a Bedrock embed"
         assert res.hit_layer in ("keyword", "none")  # never "hybrid"
-
-    def test_hybrid_section_scores_allow_embed_false_returns_empty(self, monkeypatch):
-        """_hybrid_section_scores(allow_embed=False) returns {} without embedding,
-        even when a vec DB with data exists."""
-        from core import memory_index
-
-        spy = {"n": 0}
-
-        class _SpyEmbedder:
-            def embed_text(self, text):  # noqa: ARG002
-                spy["n"] += 1
-                return [0.0] * 1024
-
-        monkeypatch.setattr(memory_index, "_embedding_client_cache", _SpyEmbedder())
-
-        out = memory_index._hybrid_section_scores("anything", allow_embed=False)
-        assert out == {}
-        assert spy["n"] == 0, "allow_embed=False must short-circuit before embed_text"
 
     def test_default_allow_embed_true_preserves_existing_behavior(self):
         """Regression guard: recall_context default (allow_embed=True) keeps the
@@ -123,23 +93,6 @@ class TestDDDGenericScorer:
         assert "Runtime Traps" in scores
         # Runtime Traps should outrank Conventions for this query.
         assert scores["Runtime Traps"] > scores.get("Conventions", 0.0)
-
-    def test_ddd_scorer_no_embed(self, monkeypatch):
-        """AC5 extends to DDD: the generic scorer is pure keyword, never embeds."""
-        from core import memory_index
-
-        spy = {"n": 0}
-
-        class _SpyEmbedder:
-            def embed_text(self, text):  # noqa: ARG002
-                spy["n"] += 1
-                return None
-
-        monkeypatch.setattr(memory_index, "_embedding_client_cache", _SpyEmbedder())
-        from core.recall_multi import _ddd_section_scores
-        _ddd_section_scores("anything at all", _DDD_FIXTURE)
-        assert spy["n"] == 0
-
 
 class TestDDDSharedCorpusScorer:
     """run_9092cb25: per-doc BM25 normalization gives EVERY doc's top section
@@ -627,23 +580,6 @@ class TestRecallAll:
         # Live MEMORY.md has a COE Registry section matching this query.
         assert result.buckets["context_files"], \
             "with no exclusion, context_files should return hits (gate is the discriminator)"
-
-    def test_recall_all_embed_free_by_default(self, monkeypatch):
-        """AC5 at the fan-out level: recall_all(allow_embed=False) never embeds."""
-        from core import memory_index, recall_multi
-
-        spy = {"n": 0}
-
-        class _SpyEmbedder:
-            def embed_text(self, text):  # noqa: ARG002
-                spy["n"] += 1
-                return None
-
-        monkeypatch.setattr(memory_index, "_embedding_client_cache", _SpyEmbedder())
-        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
-        recall_multi.recall_all("zzz unrelated qqq", project="SwarmAI", allow_embed=False)
-        assert spy["n"] == 0, "recall_all default must be embed-free (AC5)"
-
 
 # ===========================================================================
 # Run 3 (run_6602eeab) — §8.1 recall read-side wiring: code-intel domains[]
