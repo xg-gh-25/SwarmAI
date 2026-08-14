@@ -2352,10 +2352,14 @@ class ContextHealthHook:
                 )
 
             # CLEAN: archive+strip dormant NON-evergreen (Optimizations Learned only).
+            # Monthly shard (mirrors MEMORY:2126) — unifies all EVOLUTION archive
+            # writers onto EVOLUTION-archive-{YYYY-MM}.md (legacy fixed file is
+            # pre-2026-08 history, never written to again).
+            evo_shard = f"EVOLUTION-archive-{today.strftime('%Y-%m')}.md"
             reclaim_report = reclaim_noise_entries(
                 content, today, evolution_path.parent,
                 evergreen_sections=evergreen,
-                archive_name="EVOLUTION-archive.md",
+                archive_name=evo_shard,
                 source_path=evolution_path,
                 dry_run=False,
             )
@@ -2366,12 +2370,12 @@ class ContextHealthHook:
                     reclaim_report.archived, reclaim_report.kept_protected,
                 )
 
-            # DEDUP: exact-dup sweep, same lock + evergreen guard.
+            # DEDUP: exact-dup sweep, same lock + evergreen guard. Same monthly shard.
             content = evolution_path.read_text(encoding="utf-8")
             dup_report = reclaim_duplicate_entries(
                 content, today, evolution_path.parent,
                 evergreen_sections=evergreen,
-                archive_name="EVOLUTION-archive.md",
+                archive_name=evo_shard,
                 source_path=evolution_path,
                 dry_run=False,
             )
