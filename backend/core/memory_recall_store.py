@@ -8,13 +8,9 @@ Why this exists (run_bbd79e84, Gate-1 finding 3):
     (title + keywords + full_text). For a ~400-entry table this is
     sub-millisecond and is the genuine recall value.
 
-    NOTE (run_2f621986, design 2026-06-28 §3): the vector leg is GONE. This
-    store once also implemented ``vector_search`` over memory_vec, but the
-    pure-filesystem READ-line finalize removed every recall vector path (no
-    recall query embeds). RecallEngine only calls a store's vector_search when
-    query_embedding is not None, and every production caller passes
-    allow_embed=False → embed_fn=None → that branch never fires. Recall is
-    keyword/FTS5 only. fts5_search below is the sole live method.
+    Recall is pure FTS5+BM25 keyword search (the vector leg was removed
+    2026-08-14 — PRI11: FTS5-only, zero-embedding is the intended architecture).
+    ``fts5_search`` below is the sole recall method.
 """
 
 from __future__ import annotations

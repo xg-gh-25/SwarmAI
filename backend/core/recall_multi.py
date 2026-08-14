@@ -1150,10 +1150,11 @@ def _project_matches_query(project_name: str, query_lower: str) -> bool:
     )
 
 
-def _recall_library(query: str, allow_embed: bool) -> tuple[list, str]:
-    """Recall over the Knowledge Library via the existing RecallEngine.
+def _recall_library(query: str, allow_embed: bool = False) -> tuple[list, str]:
+    """Recall over the Knowledge Library via RecallEngine (pure FTS5+BM25).
 
-    FTS5-only when allow_embed=False (embed_fn=None → vector leg skipped).
+    ``allow_embed`` is a dead, inert parameter retained for caller-compat — recall
+    has no vector leg (removed 2026-08-14, PRI11).
     """
     try:
         from core.knowledge_store import KnowledgeStore
@@ -1169,8 +1170,7 @@ def _recall_library(query: str, allow_embed: bool) -> tuple[list, str]:
                 return [], "none"
             store = KnowledgeStore(conn)
             engine = RecallEngine(store)
-            embed_fn = None  # allow_embed=False → FTS5-only; never Bedrock here
-            results = engine.search(query, embed_fn=embed_fn, top_k=8)
+            results = engine.search(query, top_k=8)
     except Exception as exc:  # noqa: BLE001
         logger.debug("library recall failed: %s", exc)
         return [], "none"
@@ -1183,7 +1183,7 @@ def _recall_library(query: str, allow_embed: bool) -> tuple[list, str]:
     # production _recall_for_query which returns full content.
     hits = [{"source": r.get("source_file", ""), "heading": r.get("heading", ""),
              "content": r.get("content", ""),
-             "score": round(r.get("score", 0.0), 4)} for r in results[:8]]
+             "score": round(r.get("recall_score", r.get("fts_score", 0.0)), 4)} for r in results[:8]]
     return hits, "fts"
 
 

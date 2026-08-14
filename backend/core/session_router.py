@@ -93,13 +93,13 @@ PREWARM_SESSION_PREFIX = "prewarm-"
 # empty due to a failure/timeout rather than a genuine no-match. Surfaces silent
 # degradation that the old logger.debug+return"" pattern hid for months. Read for
 # observability (e.g. a health probe); the LOG is the primary signal, this is the
-# aggregate. Reasons: "vec_db_unavailable", "exception:<Type>", "disaster_timeout".
+# aggregate. Reasons: "recall_db_unavailable", "exception:<Type>", "disaster_timeout".
 #
 # ⚠️ NOT ALL KEYS ARE FAILURES. "empty_with_keywords" (recall ran fine but matched
 # nothing — a genuine no-match, expected for novel queries) is INFORMATIONAL, not a
 # failure. A health probe / alarm MUST NOT sum this dict as a failure rate — it would
 # false-alarm on every legitimate empty recall. Aggregate ONLY the true-failure keys
-# (vec_db_unavailable / exception:* / disaster_timeout / leg_failure / inject_exception:*),
+# (recall_db_unavailable / exception:* / disaster_timeout / leg_failure / inject_exception:*),
 # and treat "empty_with_keywords" as a separate signal-quality metric (synonym-miss rate).
 _recall_degraded_count: dict[str, int] = {}
 
@@ -147,7 +147,7 @@ def _record_ddd_inject(outcome: str) -> None:
 # = ran fine but matched nothing / declined by design — NEVER counted as failure
 # (summing them would false-alarm on every legitimate empty recall; see :98).
 _RECALL_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
-    "vec_db_unavailable", "leg_failure", "disaster_timeout",
+    "recall_db_unavailable", "leg_failure", "disaster_timeout",
 })
 # exception-family reasons are dynamic ("exception:<Type>") → prefix-matched.
 # Each prefix is listed in FULL: startswith("exception:") does NOT match
@@ -349,54 +349,25 @@ def _extract_query_keywords(message: str) -> str:
     return " ".join(combined) if combined else ""
 
 
-# Module-level cached embedding function — EmbeddingClient init involves
-# boto3 client setup (~50ms).  Cache it across calls since it's stateless.
-_cached_embed_fn: Any = None  # None = not yet probed, False = unavailable
-_cached_embed_fn_probed: bool = False
-
-
-def _get_cached_embed_fn():
-    """Return cached EmbeddingClient.embed_text or None."""
-    global _cached_embed_fn, _cached_embed_fn_probed
-    if _cached_embed_fn_probed:
-        return _cached_embed_fn if _cached_embed_fn else None
-    try:
-        from .embedding_client import EmbeddingClient
-        client = EmbeddingClient()
-        _cached_embed_fn = client.embed_text
-    except (ImportError, RuntimeError):
-        _cached_embed_fn = False  # Permanently unavailable
-    _cached_embed_fn_probed = True
-    return _cached_embed_fn if _cached_embed_fn else None
-
-
 def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) -> str:
-    """Run keyword/FTS5/BM25 recall across Knowledge + Transcript + Memory.
+    """Run keyword FTS5+BM25 recall across Knowledge + Transcript + Memory.
 
-    Thin wrapper around existing RecallEngine infrastructure.
-    Uses ``open_vec_db()`` context manager for thread-safe connection
-    (this runs in ``asyncio.to_thread``).
+    Thin wrapper around RecallEngine. Uses ``open_vec_db()`` for a thread-safe
+    sqlite3 connection (this runs in ``asyncio.to_thread``).
 
-    PURE-FILESYSTEM (commit 6540970e, 2026-06-28): the vector/Bedrock-Titan leg
-    was torn out. In prod ``allow_embed`` is ALWAYS False (see _maybe_inject_recall),
-    so ``embed_fn`` stays None and only the FTS5/BM25 legs run. The ``allow_embed``
-    param survives for caller-compat and is INERT in the running system — setting it
-    True would re-enable the (now-absent) context_files vector leg, which prod never
-    does. The connection uses a SHORT busy_timeout (_RECALL_DB_BUSY_TIMEOUT_MS) so a
-    sqlite write-lock wait cannot exceed the caller's disaster cap.
+    Recall is PURE FTS5+BM25 (the vector/Bedrock-Titan leg was removed — see PRI11:
+    FTS5-only, zero-embedding is the intended architecture). ``allow_embed`` is a
+    dead, inert parameter retained only for caller-compat; it is ignored. The
+    connection uses a SHORT busy_timeout (_RECALL_DB_BUSY_TIMEOUT_MS) so a sqlite
+    write-lock wait cannot exceed the caller's disaster cap.
 
     Graph enrichment: extracts entities from query, queries knowledge graph
     for related entry IDs/titles, appends them to enrich the recall context.
-    This ensures graph-connected knowledge surfaces even when the keyword
-    match is weak.
 
     Returns formatted recalled content or empty string.
 
-    LOUD-ON-DEGRADATION (run_4d06640b W5): a failure here used to be swallowed by
-    ``logger.debug + return ""`` — silent empty recall, the EXACT dead-path class
-    that left recall dead for months unnoticed. Now an internal failure logs at
-    WARNING with a metric, so a degraded recall (Bedrock auth, sqlite error) is
-    VISIBLE, not silent.
+    LOUD-ON-DEGRADATION (run_4d06640b W5): an internal failure logs at WARNING
+    with a metric, so a degraded recall (sqlite error) is VISIBLE, not silent.
     """
     try:
         from .vec_db import open_vec_db
@@ -407,8 +378,8 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
         # disaster cap (run_4d06640b B3 — makes the cap a real bound).
         with open_vec_db(busy_timeout_ms=_RECALL_DB_BUSY_TIMEOUT_MS) as conn:
             if conn is None:
-                _record_recall_degraded("vec_db_unavailable")
-                logger.warning("_recall_for_query: vec_db unavailable (sqlite-vec not loaded) — recall empty")
+                _record_recall_degraded("recall_db_unavailable")
+                logger.warning("_recall_for_query: recall DB connect failed — recall empty")
                 return ""
 
             store = KnowledgeStore(conn)
@@ -434,12 +405,7 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
 
             engine = RecallEngine(store, additional_stores=additional_stores)
 
-            # Vector leg is INERT in prod: allow_embed is always False here
-            # (pure-filesystem, 6540970e) → embed_fn stays None → FTS5/BM25 only.
-            # The branch survives for caller-compat, not because prod ever embeds.
-            embed_fn = _get_cached_embed_fn() if allow_embed else None
-
-            recalled = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
+            recalled = engine.recall_knowledge(query, max_tokens=max_tokens)
 
             # LOUD one layer down (run_4d06640b Gate-2 HIGH-2): RecallEngine.search
             # swallows per-leg failures to []. An empty result from a LEG FAILURE is
@@ -739,13 +705,10 @@ async def _maybe_inject_recall_inner(
     not a latency-trimmed subset. Priority is accurate + capable, NOT first-token
     speed (user directive). Measured ~1-3s — that latency is ACCEPTED.
 
-    PURE-FILESYSTEM (run_2f621986, design 2026-06-28 §3.3): recall is now
-    keyword/FTS5/BM25 ONLY — the vector/Bedrock-embed leg was retired. The call
-    below passes allow_embed=False. The "right idea, different words" blind spot
-    is covered by AGENTIC re-search (the footer hint nudges the agent to re-grep
-    with synonyms), NOT by an embedding leg. (Prior text here claimed "BOTH legs /
-    allow_embed=True / Bedrock embed cold" — that was a stale lie; the embed leg
-    was already gone. PIT25 stale-comment class.)
+    PURE-FILESYSTEM: recall is keyword/FTS5/BM25 ONLY — the vector/Bedrock-embed
+    leg was fully removed 2026-08-14 (PRI11). The "right idea, different words"
+    blind spot is covered by AGENTIC re-search (the footer hint nudges the agent
+    to re-grep with synonyms), NOT by an embedding leg.
 
     Runs ONCE per session on the first user message (``_recall_injected`` guard).
 

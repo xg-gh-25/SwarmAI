@@ -1,36 +1,30 @@
-"""Recall Engine — hybrid search over Knowledge Library for prompt injection.
+"""Recall Engine — FTS5+BM25 keyword search over Knowledge Library for prompt injection.
 
-Combines FTS5 keyword search + sqlite-vec vector search (0.6/0.4 weights)
-to retrieve relevant knowledge chunks from the indexed Library. Results are
-formatted with provenance (source file + heading) for injection into the
-system prompt as "## Recalled Knowledge".
+Pure keyword recall (the sqlite-vec vector leg was removed 2026-08-14 — see PRI11:
+FTS5-only, zero-embedding is the intended architecture). Retrieves relevant knowledge
+chunks from the indexed Library, formatted with provenance (source file + heading) for
+injection into the system prompt as "## Recalled Knowledge".
 
 Standing principle: **Power over token budget.** Inject everything relevant.
 Only apply budget pressure at >95% context usage.
 
 Public symbols:
 
-- ``RecallEngine``       — Hybrid search + formatting over KnowledgeStore
-- ``VECTOR_WEIGHT``      — Weight for vector score (0.6)
-- ``KEYWORD_WEIGHT``     — Weight for keyword/FTS5 score (0.4)
+- ``RecallEngine``       — FTS5+BM25 search + formatting over KnowledgeStore
 - ``RECALL_THRESHOLD``   — Minimum score to include a result (0.05)
 """
 
 import hashlib
 import logging
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
-VECTOR_WEIGHT = 0.6
-KEYWORD_WEIGHT = 0.4
 RECALL_THRESHOLD = 0.05  # Low — power first
-# Floor for the min-max-normalized FTS5 score. Without it the worst keyword match
-# in a multi-hit set normalizes to 0.0 and, on a keyword-only leg (vec_score=0),
-# hybrid = KEYWORD_WEIGHT*0 = 0 < RECALL_THRESHOLD → the match is silently dropped.
-# 0.3 keeps the weakest real keyword hit above threshold: 0.4*0.3 = 0.12 > 0.05.
+# Floor for the min-max-normalized FTS5/BM25 score. Without it the worst keyword
+# match in a multi-hit set normalizes to 0.0 < RECALL_THRESHOLD → silently dropped.
+# 0.3 keeps the weakest real keyword hit above threshold.
 FTS_SCORE_FLOOR = 0.3
 DEFAULT_MAX_TOKENS = 15_000
 _CHARS_PER_TOKEN = 4  # rough estimate; code-heavy content may be ~2-3 chars/token
@@ -63,64 +57,46 @@ class RecallEngine:
     def search(
         self,
         query: str,
-        embed_fn: Optional[Callable[[str], Optional[list[float]]]] = None,
+        embed_fn=None,  # DEAD param kept for signature compat — recall is FTS5-only
         top_k: int = 20,
         threshold: float = RECALL_THRESHOLD,
     ) -> list[dict]:
-        """Hybrid search: FTS5 + vector, merged and ranked.
+        """Pure FTS5+BM25 keyword search across all stores, merged and ranked.
+
+        Recall is keyword-only (the vector leg was removed 2026-08-14 — see PRI11:
+        FTS5-only, zero-embedding is the intended architecture). ``embed_fn`` is an
+        inert parameter retained only so existing call sites don't break; it is
+        ignored.
 
         Args:
             query: Natural language query string.
-            embed_fn: Optional embedding function (Bedrock Titan).
-                     If None or returns None, falls back to FTS5-only.
-            top_k: Max results per search type.
-            threshold: Minimum hybrid score to include.
+            embed_fn: IGNORED (dead — see above).
+            top_k: Max results per store.
+            threshold: Minimum recall score to include.
 
         Returns:
             List of result dicts with keys: id, source_file, heading,
-            content, hybrid_score, fts_score, vector_score.
+            content, recall_score, fts_score.
         """
         if not query or not query.strip():
             return []
 
         all_stores = [self._store] + self._additional_stores
-
         fts_scored: dict[str, dict] = {}  # keyed by "storeidx:rowid"
-        vec_scored: dict[str, dict] = {}
 
         # Per-leg failure tracking (run_4d06640b Gate-2 HIGH-2): RecallEngine used
-        # to swallow per-leg errors to []/None and return an empty list that was
-        # INDISTINGUISHABLE from a genuine no-match → the caller logged nothing →
-        # silent dead recall, one frame below the loud-on-degradation guard. Now
-        # we count leg failures + expose them via ``last_search_errors`` so the
-        # caller can tell "degraded" (errored) apart from "no match" (clean empty).
+        # to swallow per-leg errors to [] and return an empty list that was
+        # INDISTINGUISHABLE from a genuine no-match → silent dead recall. We count
+        # leg failures + expose them via ``last_search_errors`` so the caller can
+        # tell "degraded" (errored) apart from "no match" (clean empty).
         self.last_search_errors: list[str] = []
-        fts_leg_failures = 0
-        vec_leg_failures = 0
-
-        # Embed the query ONCE, before the per-store loop (run_4d06640b Gate-2
-        # HIGH-1): embed_fn was called once PER STORE (3×) → on a synchronous
-        # critical path that tripled the Bedrock latency the disaster cap must
-        # bound (worst case ~29s ≫ 8s cap = theater). One embed, reused across all
-        # stores' vector_search.
-        query_embedding: Optional[list[float]] = None
-        if embed_fn is not None:
-            try:
-                query_embedding = embed_fn(query)
-            except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
-                query_embedding = None
-                vec_leg_failures += 1
-                self.last_search_errors.append(f"embed:{type(exc).__name__}")
 
         for store_idx, store in enumerate(all_stores):
             prefix = f"s{store_idx}:"
-
-            # 1. FTS5 keyword search
             try:
                 fts_results = store.fts5_search(query, limit=top_k)
             except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
                 fts_results = []
-                fts_leg_failures += 1
                 self.last_search_errors.append(f"fts[{store_idx}]:{type(exc).__name__}")
 
             if fts_results:
@@ -131,73 +107,41 @@ class RecallEngine:
                 for r in fts_results:
                     norm = 1.0 - (r["fts_rank"] - min_rank) / rank_range if rank_range else 1.0
                     # Floor the normalized score so the WORST keyword match is not
-                    # zeroed. With pure min-max, the lowest-ranked hit gets 0.0 →
-                    # on a keyword-only leg (vec_score=0) hybrid = 0.4*0 = 0 <
-                    # RECALL_THRESHOLD → it is silently DROPPED. This bites every
-                    # multi-hit Memory recall (the synchronous path is keyword-only).
-                    # Map [0,1] → [FTS_SCORE_FLOOR,1] so a real match always clears
-                    # the threshold on the keyword leg alone. (run_bbd79e84 Gate-2)
+                    # zeroed. With pure min-max the lowest-ranked hit gets 0.0 <
+                    # RECALL_THRESHOLD → silently DROPPED. Map [0,1] →
+                    # [FTS_SCORE_FLOOR,1] so a real match always clears the
+                    # threshold. (run_bbd79e84 Gate-2)
                     score = FTS_SCORE_FLOOR + (1.0 - FTS_SCORE_FLOOR) * norm
                     key = f"{prefix}{r['id']}"
                     fts_scored[key] = {**r, "fts_score": score}
 
-            # 2. Vector search (graceful fallback — Bedrock down = FTS5-only)
-            if query_embedding is not None:
-                try:
-                    vec_results = store.vector_search(query_embedding, top_k=top_k)
-                except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
-                    vec_results = []
-                    vec_leg_failures += 1
-                    self.last_search_errors.append(f"vec[{store_idx}]:{type(exc).__name__}")
-                else:
-                    for r in vec_results:
-                        key = f"{prefix}{r['id']}"
-                        vec_scored[key] = {**r}
-
-        # 3. Hybrid merge across all stores
-        all_keys = set(fts_scored.keys()) | set(vec_scored.keys())
+        # Merge + dedup across all stores (keyword-only → recall_score == fts_score).
         merged: list[dict] = []
         seen_content: set[str] = set()
-
-        for key in all_keys:
-            fts_entry = fts_scored.get(key, {})
-            vec_entry = vec_scored.get(key, {})
-
-            fts_score = fts_entry.get("fts_score", 0.0)
-            vec_score = vec_entry.get("vector_score", 0.0)
-            hybrid = VECTOR_WEIGHT * vec_score + KEYWORD_WEIGHT * fts_score
-
-            if hybrid < threshold:
+        for key, entry in fts_scored.items():
+            recall_score = entry.get("fts_score", 0.0)
+            if recall_score < threshold:
                 continue
-
-            # Take metadata from whichever source has it
-            base = fts_entry or vec_entry
-            content = base.get("content", "")
-
-            # Deduplicate: skip if identical content already seen (hash-based)
+            content = entry.get("content", "")
             content_key = hashlib.sha256(content.encode()).hexdigest()
             if content_key in seen_content:
                 continue
             seen_content.add(content_key)
-
             merged.append({
-                "id": base.get("id", 0),
-                "source_file": base.get("source_file", ""),
-                "heading": base.get("heading", ""),
+                "id": entry.get("id", 0),
+                "source_file": entry.get("source_file", ""),
+                "heading": entry.get("heading", ""),
                 "content": content,
-                "hybrid_score": hybrid,
-                "fts_score": fts_score,
-                "vector_score": vec_score,
+                "recall_score": recall_score,
+                "fts_score": recall_score,
             })
 
-        # Sort by hybrid score descending
-        merged.sort(key=lambda r: r["hybrid_score"], reverse=True)
+        merged.sort(key=lambda r: r["recall_score"], reverse=True)
         return merged
 
     def recall_knowledge(
         self,
         query: str,
-        embed_fn: Optional[Callable[[str], Optional[list[float]]]] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
         """Search and format results for system prompt injection.
@@ -207,13 +151,12 @@ class RecallEngine:
 
         Args:
             query: Search query (typically focus keywords from proactive briefing).
-            embed_fn: Optional embedding function.
             max_tokens: Token budget for the recalled content.
 
         Returns:
             Formatted string ready for prompt injection, or "".
         """
-        results = self.search(query, embed_fn=embed_fn)
+        results = self.search(query)
 
         if not results:
             return ""

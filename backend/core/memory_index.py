@@ -514,7 +514,6 @@ def _normalize_bm25_scores(raw: dict[str, float]) -> dict[str, float]:
 # ── SessionRecall singleton cache ────────────────────────────────────
 
 _session_recall_cache: dict[str, object] = {}  # db_path_str → SessionRecall
-_embedding_client_cache: object | None = None  # cached EmbeddingClient instance
 
 
 def _get_session_recall(db_path: Path) -> object:

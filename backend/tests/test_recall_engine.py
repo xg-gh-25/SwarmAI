@@ -38,7 +38,6 @@ def _seed_store(conn):
         "Claude CLI uses AWS SSO IdC tokens, boto3 uses credential_process. "
         "These are independent. Validate the chain your code actually uses.",
         "hash1",
-        embedding=[0.5] * 1024,
     )
 
     # Chunk 2: xdist deep dive
@@ -48,7 +47,6 @@ def _seed_store(conn):
         "12 commits, 8 days, 970 lines of conftest to solve a 3-line config problem. "
         "pyproject.toml addopts is the single source of truth for test execution.",
         "hash2",
-        embedding=[0.3] * 1024,
     )
 
     # Chunk 3: memory architecture design
@@ -56,9 +54,8 @@ def _seed_store(conn):
         "Designs/2026-04-01-memory-architecture-v2.md", 0,
         "## Memory Architecture v2",
         "Brain stores wisdom (always full injection), Library stores experience "
-        "(vector on-demand), Recall connects them. 730K dormant knowledge awakened.",
+        "(recall on-demand), Recall connects them.",
         "hash3",
-        embedding=[0.7] * 1024,
     )
 
     return store
@@ -81,8 +78,9 @@ class TestRecallEngine:
         assert len(results) >= 1
         assert any("credential" in r["content"].lower() for r in results)
 
-    def test_hybrid_search_with_embeddings(self):
-        """Hybrid search should combine FTS5 + vector."""
+    def test_embed_fn_arg_is_ignored(self):
+        """embed_fn is a dead, inert param (recall is FTS5-only) — passing one must
+        NOT change results and must NOT be called."""
         from core.recall_engine import RecallEngine
 
         conn = _make_conn()
@@ -90,23 +88,9 @@ class TestRecallEngine:
         engine = RecallEngine(store)
 
         embed_fn = MagicMock(return_value=[0.5] * 1024)
-        results = engine.search("auth problems", embed_fn=embed_fn)
-        # Should still find credential chunk via vector similarity
-        assert len(results) >= 1
-        embed_fn.assert_called_once()
-
-    def test_graceful_fallback_on_embed_failure(self):
-        """If embed_fn returns None, fall back to FTS5 only."""
-        from core.recall_engine import RecallEngine
-
-        conn = _make_conn()
-        store = _seed_store(conn)
-        engine = RecallEngine(store)
-
-        embed_fn = MagicMock(return_value=None)
         results = engine.search("credential chain", embed_fn=embed_fn)
-        # FTS5 should still find it
         assert len(results) >= 1
+        embed_fn.assert_not_called()  # inert — recall never embeds
 
     def test_empty_query_returns_empty(self):
         from core.recall_engine import RecallEngine
@@ -158,7 +142,7 @@ class TestRecallKnowledge:
         store = _seed_store(conn)
         engine = RecallEngine(store)
 
-        text = engine.recall_knowledge("credential chain", embed_fn=None, max_tokens=15000)
+        text = engine.recall_knowledge("credential chain", max_tokens=15000)
         assert isinstance(text, str)
         # Should contain source file reference
         assert "DailyActivity/2026-03-23.md" in text
@@ -171,7 +155,7 @@ class TestRecallKnowledge:
         engine = RecallEngine(store)
 
         # Very small budget
-        text = engine.recall_knowledge("credential", embed_fn=None, max_tokens=50)
+        text = engine.recall_knowledge("credential", max_tokens=50)
         # Should be short or empty
         assert len(text) < 500
 
@@ -182,7 +166,7 @@ class TestRecallKnowledge:
         store = _seed_store(conn)
         engine = RecallEngine(store)
 
-        text = engine.recall_knowledge("quantum physics dark matter", embed_fn=None)
+        text = engine.recall_knowledge("quantum physics dark matter")
         assert text == ""
 
     def test_low_score_results_filtered(self):
@@ -194,7 +178,7 @@ class TestRecallKnowledge:
         engine = RecallEngine(store)
 
         # Search for something very specific — unrelated chunks should be filtered
-        text = engine.recall_knowledge("pytest xdist conftest", embed_fn=None)
+        text = engine.recall_knowledge("pytest xdist conftest")
         if text:
             assert "xdist" in text.lower() or "pytest" in text.lower()
 
@@ -233,96 +217,7 @@ class TestDistillationEnrichment:
         assert "commit" not in entry.lower()
 
 
-# ── FTS_SCORE_FLOOR regression (run_bbd79e84 Gate-2 MEDIUM) ──
-#
-# Min-max rank normalization zeroed the WORST keyword match in a multi-hit set.
-# On a keyword-only leg (vec_score=0) that means hybrid = 0.4*0 = 0 < threshold →
-# the weakest relevant entry is SILENTLY DROPPED. This bit every multi-hit Memory
-# recall once the synchronous recall path went keyword-only. FTS_SCORE_FLOOR keeps
-# the weakest real match above threshold. Mutation-verified: floor=0.0 → B drops.
-
-def test_fts_score_floor_keeps_weakest_keyword_hit():
-    """A multi-hit keyword-only recall must NOT silently drop the worst match."""
-    from core.memory_embeddings import MemoryEmbeddingStore
-    from core.memory_recall_store import MemoryRecallStore
-    from core.recall_engine import (
-        RecallEngine, FTS_SCORE_FLOOR, KEYWORD_WEIGHT, RECALL_THRESHOLD,
-    )
-
-    # The floor must keep the weakest hit above threshold on the keyword leg alone.
-    assert KEYWORD_WEIGHT * FTS_SCORE_FLOOR > RECALL_THRESHOLD, (
-        "FTS_SCORE_FLOOR too low — weakest keyword match would be dropped"
-    )
-
-    conn = _make_conn()
-    store = MemoryEmbeddingStore(conn)
-    store.ensure_tables()
-    # A = strong (3 term matches), B = weak (1 term match — the one that was dropped)
-    store.upsert_entry(key="A", section="COE Registry",
-                       title="sigkill oom crash",
-                       full_text="sigkill oom crash recovery resume",
-                       keywords=["sigkill", "oom", "crash"], embedding=None)
-    store.upsert_entry(key="B", section="Lessons Learned",
-                       title="resume only",
-                       full_text="resume handling notes",
-                       keywords=["resume"], embedding=None)
-
-    engine = RecallEngine(MemoryRecallStore(conn))
-    results = engine.search("sigkill oom crash recovery resume", embed_fn=None)
-    keys = {r["id"] for r in results}
-    assert "A" in keys, "strong keyword match must surface"
-    assert "B" in keys, (
-        "weakest keyword match was silently dropped — FTS_SCORE_FLOOR regression"
-    )
-
-
-# ── Gate-2 HIGH fixes (run_4d06640b) ──
-
-def test_embed_called_once_across_stores():
-    """HIGH-1: the query is embedded ONCE before the per-store loop, not once per
-    store. On the synchronous critical path, 3× embed tripled the Bedrock latency
-    the disaster cap must bound (worst case ~29s ≫ 8s = theater)."""
-    from core.memory_embeddings import MemoryEmbeddingStore
-    from core.memory_recall_store import MemoryRecallStore
-    from core.transcript_indexer import TranscriptStore
-    from core.recall_engine import RecallEngine
-
-    from core.knowledge_store import KnowledgeStore
-    conn = _make_conn()
-    ks = KnowledgeStore(conn)
-    ts = TranscriptStore(conn); ts.ensure_tables()
-    ms = MemoryEmbeddingStore(conn); ms.ensure_tables()
-    ms.upsert_entry(key="K1", section="COE Registry", title="sigkill",
-                    full_text="sigkill oom crash", keywords=["sigkill"], embedding=None)
-
-    calls = {"n": 0}
-    def embed(_q):
-        calls["n"] += 1
-        return [0.0] * 1024
-
-    engine = RecallEngine(ks, additional_stores=[ts, MemoryRecallStore(conn)])  # 3 stores
-    engine.search("sigkill oom crash", embed_fn=embed)
-    assert calls["n"] == 1, f"embed must be called ONCE across stores, got {calls['n']} (HIGH-1)"
-
-
-def test_leg_failure_is_surfaced_not_silent():
-    """HIGH-2: a per-leg failure must be surfaced via last_search_errors, not
-    swallowed to an empty list indistinguishable from a genuine no-match (W5 one
-    frame deeper)."""
-    from core.recall_engine import RecallEngine
-
-    from core.knowledge_store import KnowledgeStore
-    conn = _make_conn()
-    ks = KnowledgeStore(conn)
-    engine = RecallEngine(ks)
-
-    def boom_embed(_q):
-        raise RuntimeError("bedrock down")
-
-    engine.search("anything", embed_fn=boom_embed)
-    assert engine.last_search_errors, "embed failure was NOT surfaced — silent dead-path (HIGH-2)"
-    assert any("embed" in e for e in engine.last_search_errors)
-
+# ── last_search_errors regression ──
 
 def test_clean_search_has_no_errors():
     """Non-vacuous: a clean search leaves last_search_errors empty (so the

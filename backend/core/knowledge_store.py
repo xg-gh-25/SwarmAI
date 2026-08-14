@@ -19,17 +19,12 @@ import hashlib
 import json
 import logging
 import re
-import struct
 import sqlite3
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-# ── Constants ─────────────────────────────────────────────────────────
-
-EMBEDDING_DIM = 1024  # Bedrock Titan v2
 
 # Directories to skip when scanning Knowledge/
 # Archives is NO LONGER skipped (pure-filesystem recall design §3.2/§5.8,
@@ -128,11 +123,12 @@ def chunk_markdown(
 
 
 class KnowledgeStore:
-    """SQLite store for knowledge chunks with FTS5 + sqlite-vec.
+    """SQLite store for knowledge chunks with an FTS5 keyword index.
+
+    Recall is pure FTS5+BM25 (the sqlite-vec vector leg was removed 2026-08-14).
 
     Tables:
     - knowledge_chunks: structured chunk data with content_hash for delta sync
-    - knowledge_vec: sqlite-vec virtual table for vector search
     - knowledge_fts: FTS5 virtual table for keyword search
     """
 
@@ -158,13 +154,10 @@ class KnowledgeStore:
             ON knowledge_chunks(source_file, chunk_index)
         """)
 
-        # sqlite-vec virtual table
-        self._conn.execute(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
-                id INTEGER PRIMARY KEY,
-                embedding float[{EMBEDDING_DIM}]
-            )
-        """)
+        # NOTE: the sqlite-vec `knowledge_vec` virtual table was removed (2026-08-14)
+        # — recall is pure FTS5+BM25, the vector leg is dead. Creating it required the
+        # vec0 module and made ensure_tables crash on any plain sqlite3 conn without
+        # sqlite-vec loaded. FTS5 needs no such dependency.
 
         # FTS5 for keyword search — content-sync'd with knowledge_chunks
         # Using external content table pattern for FTS5
@@ -185,7 +178,6 @@ class KnowledgeStore:
         content: str,
         content_hash: str,
         metadata: Optional[dict] = None,
-        embedding: Optional[list[float]] = None,
     ) -> int:
         """Insert or update a chunk. Returns the chunk rowid."""
         metadata_json = json.dumps(metadata) if metadata else None
@@ -236,51 +228,8 @@ class KnowledgeStore:
             (rowid, content, heading or "", source_file),
         )
 
-        # Optional: store vector embedding
-        if embedding is not None:
-            self._upsert_vec(rowid, embedding)
-
         self._conn.commit()
         return rowid
-
-    def _upsert_vec(self, rowid: int, embedding: list[float]) -> None:
-        """Insert or replace vector embedding for a chunk."""
-        blob = struct.pack(f"{len(embedding)}f", *embedding)
-        self._conn.execute("DELETE FROM knowledge_vec WHERE id = ?", (rowid,))
-        self._conn.execute(
-            "INSERT INTO knowledge_vec (id, embedding) VALUES (?, ?)",
-            (rowid, blob),
-        )
-
-    def backfill_orphan_vectors(self, embed_fn, limit: int = 10) -> int:
-        """Re-embed chunks that have a row but no vector (orphaned by a prior
-        failed embed, e.g. Bedrock down at index time). Returns count healed.
-
-        Without this, the delta-sync content_hash check (sync_knowledge_index)
-        skips an un-embedded chunk forever → it stays permanently keyword-only.
-        Mirrors the memory_vec orphan recovery (context_health_hook.py:1782-1796).
-        MUST be called from the maintenance layer, not the recall read path.
-        Embed failures are tolerated: a chunk whose embed_fn still returns None is
-        left orphaned (uncorrupted) for the next pass — never a partial write.
-        """
-        orphans = self._conn.execute(
-            "SELECT kc.id, kc.content FROM knowledge_chunks kc "
-            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id "
-            "WHERE kv.id IS NULL LIMIT ?",
-            (limit,),
-        ).fetchall()
-        healed = 0
-        for rowid, content in orphans:
-            try:
-                vec = embed_fn(content)
-            except Exception:  # noqa: BLE001 — embed is best-effort; retry next pass
-                vec = None
-            if vec is not None:
-                self._upsert_vec(rowid, vec)
-                healed += 1
-        if healed:
-            self._conn.commit()
-        return healed
 
     def get_existing_hashes(self, source_file: str) -> dict[int, str]:
         """Get content_hash for all chunks of a file. Returns {chunk_index: hash}."""
@@ -306,7 +255,6 @@ class KnowledgeStore:
                     "VALUES('delete', ?, ?, ?, ?)",
                     (rowid, content, heading or "", source_file),
                 )
-                self._conn.execute("DELETE FROM knowledge_vec WHERE id = ?", (rowid,))
                 self._conn.execute("DELETE FROM knowledge_chunks WHERE id = ?", (rowid,))
                 removed += 1
 
@@ -327,7 +275,6 @@ class KnowledgeStore:
                 "VALUES('delete', ?, ?, ?, ?)",
                 (rowid, content, heading or "", source_file),
             )
-            self._conn.execute("DELETE FROM knowledge_vec WHERE id = ?", (rowid,))
 
         self._conn.execute(
             "DELETE FROM knowledge_chunks WHERE source_file = ?",
@@ -510,45 +457,6 @@ class KnowledgeStore:
         except sqlite3.OperationalError:
             return []
 
-    def vector_search(
-        self,
-        query_embedding: Optional[list[float]],
-        top_k: int = 20,
-    ) -> list[dict]:
-        """Vector similarity search. Returns chunks with distance scores."""
-        if query_embedding is None:
-            return []
-
-        blob = struct.pack(f"{len(query_embedding)}f", *query_embedding)
-        try:
-            rows = self._conn.execute(
-                "SELECT id, distance FROM knowledge_vec "
-                "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-                (blob, top_k),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return []
-
-        results = []
-        for vec_id, distance in rows:
-            # Fetch chunk metadata
-            chunk = self._conn.execute(
-                "SELECT source_file, chunk_index, heading, content "
-                "FROM knowledge_chunks WHERE id = ?",
-                (vec_id,),
-            ).fetchone()
-            if chunk:
-                similarity = max(0.0, 1.0 - distance / 2.0)
-                results.append({
-                    "id": vec_id,
-                    "source_file": chunk[0],
-                    "chunk_index": chunk[1],
-                    "heading": chunk[2],
-                    "content": chunk[3],
-                    "vector_score": similarity,
-                })
-        return results
-
     def get_indexed_files(self) -> set[str]:
         """Return the set of source_files currently indexed."""
         rows = self._conn.execute(
@@ -563,18 +471,18 @@ class KnowledgeStore:
 def sync_knowledge_index(
     store: "KnowledgeStore",
     knowledge_dir: Path,
-    embed_fn: Optional[Callable[[str], Optional[list[float]]]] = None,
     deadline: Optional[float] = None,
 ) -> dict:
-    """Scan Knowledge/ directory, chunk, and delta-sync to the store.
+    """Scan Knowledge/ directory, chunk, and delta-sync to the FTS5 store.
+
+    Recall is pure FTS5+BM25 (the vector leg was removed 2026-08-14), so this
+    is keyword-index-only — no embedding step.
 
     Args:
         store: KnowledgeStore instance (tables must be ensured).
         knowledge_dir: Path to Knowledge/ directory.
-        embed_fn: Optional embedding function. If None, skips vector indexing.
-        deadline: Optional ``time.monotonic()`` wall-clock deadline. The
-            heaviest cost here is the per-chunk Bedrock embed; on a large
-            changeset (first full index ~100s) this can overrun the caller's
+        deadline: Optional ``time.monotonic()`` wall-clock deadline. On a large
+            changeset (first full index) this can overrun the caller's
             executor timeout, recording a spurious hook "timeout". When given,
             the per-file loop stops cleanly once the deadline passes, leaving
             the remaining files for the next session — the delta-sync is
@@ -583,7 +491,7 @@ def sync_knowledge_index(
 
     Returns:
         Stats dict: files_scanned, chunks_added, chunks_skipped,
-        chunks_removed, files_removed, embed_calls, deferred.
+        chunks_removed, files_removed, deferred.
     """
     stats = {
         "files_scanned": 0,
@@ -591,7 +499,6 @@ def sync_knowledge_index(
         "chunks_skipped": 0,
         "chunks_removed": 0,
         "files_removed": 0,
-        "embed_calls": 0,
         "deferred": 0,
     }
 
@@ -683,19 +590,12 @@ def sync_knowledge_index(
                 stats["chunks_skipped"] += 1
                 continue
 
-            # Embed if available
-            embedding = None
-            if embed_fn is not None:
-                embedding = embed_fn(chunk["content"])
-                stats["embed_calls"] += 1
-
             store.upsert_chunk(
                 source_file=rel_path,
                 chunk_index=idx,
                 heading=chunk.get("heading"),
                 content=chunk["content"],
                 content_hash=chunk["content_hash"],
-                embedding=embedding,
             )
             stats["chunks_added"] += 1
 

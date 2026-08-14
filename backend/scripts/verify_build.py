@@ -69,9 +69,7 @@ CAPABILITY_MANIFEST = [
     # ── Local modules (must be bundled) ──
     ("vec_db",              "core.vec_db",                   "critical"),
     ("recall_engine",       "core.recall_engine",            "critical"),
-    ("embedding_client",    "core.embedding_client",         "critical"),
     ("knowledge_store",     "core.knowledge_store",          "critical"),
-    ("memory_embeddings",   "core.memory_embeddings",        "critical"),
     ("transcript_indexer",  "core.transcript_indexer",       "critical"),
     ("memory_index",        "core.memory_index",             "critical"),
     ("manifest_loader",     "core.manifest_loader",          "critical"),

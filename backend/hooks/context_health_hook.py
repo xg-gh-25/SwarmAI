@@ -176,7 +176,7 @@ class ContextHealthHook:
     # ------------------------------------------------------------------
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
-        """Refresh KNOWLEDGE.md index, MEMORY.md index, and vector/FTS5 stores."""
+        """Refresh KNOWLEDGE.md index, MEMORY.md index, and FTS5 keyword stores."""
         # PE-4: Shared cultivation deadline (25s total for BOTH passes).
         # BackgroundHookExecutor has 30s timeout — 25s leaves 5s headroom.
         _cultivation_deadline = time.monotonic() + 25.0
@@ -306,7 +306,7 @@ class ContextHealthHook:
                 logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
             self._last_refresh_rev = current_rev
 
-        # Knowledge Library + Transcript vector/FTS5 indexing runs OUTSIDE
+        # Knowledge Library + Transcript FTS5 indexing runs OUTSIDE
         # the git-rev gate.  These stores have their own delta-sync via
         # content_hash — unchanged files are skipped cheaply (~50ms for
         # 160 hash lookups).  Many Knowledge/ files are written by hooks
@@ -2545,10 +2545,10 @@ class ContextHealthHook:
     # gone with it.
 
     def _sync_knowledge_library(self, root: Path, deadline: float | None = None) -> None:
-        """Incremental sync of Knowledge/ files into FTS5 + sqlite-vec.
+        """Incremental sync of Knowledge/ files into the FTS5 keyword index.
 
         Scans Knowledge/ for new/changed .md files, chunks them, and
-        delta-syncs into knowledge_chunks + knowledge_fts + knowledge_vec.
+        delta-syncs into knowledge_chunks + knowledge_fts (FTS5 keyword index).
         Typical: 1-3 file changes, <5s. First full index: ~100s.
 
         ``deadline`` (time.monotonic) bounds the per-file embed loop so a large
@@ -2566,7 +2566,7 @@ class ContextHealthHook:
 
         with open_vec_db() as conn:
             if conn is None:
-                logger.debug("context_health: sqlite-vec not available, skipping library sync")
+                logger.debug("context_health: recall DB connect failed, skipping library sync")
                 return
 
             store = KnowledgeStore(conn)
@@ -2587,15 +2587,11 @@ class ContextHealthHook:
                     logger.error("context_health: knowledge_fts repair failed: %s: %s",
                                  type(exc).__name__, exc)
 
-            # WRITER STOPPED (pure-filesystem recall design §5.5/§5.8/DoD8,
-            # 2026-06-28): the Knowledge Library is now FTS5-ONLY — no embedding.
-            # Library recall退到纯 knowledge_fts (Q4=A); the read side no longer
-            # consumes knowledge_vec, so embedding here would burn Bedrock cost
-            # writing vectors nobody reads. Pass embed_fn=None → sync_knowledge_index
-            # builds the FTS5 index only. This also makes Archives→FTS5 (Run-1 DoD4)
-            # cost-free (no embed on the newly-indexed long-term memory).
+            # FTS5-ONLY (pure-filesystem recall, vector leg removed 2026-08-14 —
+            # see PRI11). sync_knowledge_index builds the keyword index only; there
+            # is no embedding step. Archives→FTS5 (Run-1 DoD4) indexed here too.
             stats = sync_knowledge_index(
-                store, knowledge_dir, embed_fn=None, deadline=deadline,
+                store, knowledge_dir, deadline=deadline,
             )
             if stats.get("deferred", 0) > 0:
                 logger.info(
@@ -2615,7 +2611,7 @@ class ContextHealthHook:
             )
 
     def _sync_transcript_index(self, root: Path) -> None:
-        """Incremental sync of JSONL transcripts into FTS5 + sqlite-vec.
+        """Incremental sync of JSONL transcripts into the FTS5 keyword index.
 
         Indexes Claude Code session transcripts for verbatim recall via
         the Recall Engine (Memory Architecture v2, Phase 5 / P1).
@@ -2678,7 +2674,7 @@ class ContextHealthHook:
 
         with open_vec_db() as conn:
             if conn is None:
-                logger.debug("context_health: sqlite-vec not available, skipping transcript sync")
+                logger.debug("context_health: recall DB connect failed, skipping transcript sync")
                 return
 
             store = TranscriptStore(conn)
@@ -2699,11 +2695,9 @@ class ContextHealthHook:
                                  type(exc).__name__, exc)
 
             # WRITER STOPPED (pure-filesystem recall design §5.5/DoD8, 2026-06-28):
-            # transcript recall is FTS5-only (transcript_fts via messages_fts /
-            # transcript_chunks) — no embedding. The read side dropped the vector
-            # leg, so embedding here writes vectors nobody reads. embed_fn=None →
-            # FTS5 index only; orphan-vector backfill removed (no vector leg).
-            stats = sync_transcript_index(store, transcripts_dir, embed_fn=None)
+            # transcript recall is FTS5-only (vector leg removed 2026-08-14, PRI11) —
+            # no embedding step.
+            stats = sync_transcript_index(store, transcripts_dir)
 
         if stats.get("files_indexed", 0) > 0:
             logger.info(

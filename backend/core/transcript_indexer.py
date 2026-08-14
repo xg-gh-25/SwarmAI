@@ -20,16 +20,14 @@ import hashlib
 import json
 import logging
 import re
-import struct
 import sqlite3
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
-EMBEDDING_DIM = 1024  # Bedrock Titan v2
 DEFAULT_MAX_TOKENS = 500  # tokens per chunk
 _CHARS_PER_TOKEN = 4  # rough estimate
 
@@ -221,13 +219,8 @@ def chunk_transcript(
 # ── TranscriptStore ──────────────────────────────────────────────────
 
 
-def _serialize_f32(vec: list[float]) -> bytes:
-    """Serialize float list to little-endian f32 bytes for sqlite-vec."""
-    return struct.pack(f"<{len(vec)}f", *vec)
-
-
 class TranscriptStore:
-    """SQLite store for transcript chunks with FTS5 + sqlite-vec indexes.
+    """SQLite store for transcript chunks with an FTS5 keyword index.
 
     Follows the same pattern as KnowledgeStore — separate tables for
     chunks, vectors, and full-text search. Delta-sync via content_hash.
@@ -266,16 +259,8 @@ class TranscriptStore:
         except sqlite3.OperationalError:
             logger.debug("transcript_fts already exists or FTS5 unavailable")
 
-        # sqlite-vec virtual table
-        try:
-            self._conn.execute(f"""
-                CREATE VIRTUAL TABLE IF NOT EXISTS transcript_vec USING vec0(
-                    id INTEGER PRIMARY KEY,
-                    embedding float[{EMBEDDING_DIM}]
-                )
-            """)
-        except sqlite3.OperationalError:
-            logger.debug("transcript_vec already exists or sqlite-vec unavailable")
+        # NOTE: the sqlite-vec `transcript_vec` virtual table was removed (2026-08-14)
+        # — transcript recall is pure FTS5, the vector leg is dead.
 
     def upsert_chunk(
         self,
@@ -286,7 +271,6 @@ class TranscriptStore:
         content: str,
         content_hash: str,
         metadata: str = "{}",
-        embedding: Optional[list[float]] = None,
     ) -> int:
         """Insert or update a transcript chunk. Returns the row id."""
         # Check if exists
@@ -349,16 +333,6 @@ class TranscriptStore:
         except sqlite3.OperationalError:
             pass  # FTS5 not available
 
-        # Sync vector
-        if embedding:
-            try:
-                self._conn.execute(
-                    "INSERT OR REPLACE INTO transcript_vec(id, embedding) VALUES (?, ?)",
-                    (row_id, _serialize_f32(embedding)),
-                )
-            except sqlite3.OperationalError:
-                pass  # sqlite-vec not available
-
         return row_id
 
     def commit(self) -> None:
@@ -411,84 +385,12 @@ class TranscriptStore:
 
         return results
 
-    def vector_search(
-        self,
-        query_embedding: list[float],
-        top_k: int = 20,
-    ) -> list[dict]:
-        """Search transcript chunks via sqlite-vec vector similarity."""
-        results: list[dict] = []
-        try:
-            rows = self._conn.execute(
-                "SELECT v.id, v.distance, tc.session_id, tc.source_file, tc.content, tc.metadata "
-                "FROM transcript_vec v "
-                "JOIN transcript_chunks tc ON tc.id = v.id "
-                "WHERE v.embedding MATCH ? AND k = ? "
-                "ORDER BY v.distance",
-                (_serialize_f32(query_embedding), top_k),
-            ).fetchall()
-
-            for row in rows:
-                results.append({
-                    "id": row[0],
-                    "vector_score": 1.0 - row[1],  # distance → similarity
-                    "session_id": row[2],
-                    "source_file": row[3],
-                    "heading": "",  # Transcripts don't have headings
-                    "content": row[4],
-                    "metadata": row[5],
-                })
-        except sqlite3.OperationalError as exc:
-            logger.debug("Vector search failed: %s", exc)
-
-        return results
-
     def get_indexed_sessions(self) -> set[str]:
         """Return set of session_ids already in the index."""
         rows = self._conn.execute(
             "SELECT DISTINCT session_id FROM transcript_chunks"
         ).fetchall()
         return {row[0] for row in rows}
-
-    def backfill_orphan_vectors(self, embed_fn, limit: int = 10) -> int:
-        """Re-embed chunks that have a row but no vector (orphaned by a prior
-        failed embed, e.g. Bedrock down at index time). Returns count healed.
-
-        This is the recovery path for the transcript per-FILE skip: once a
-        session is in the index, `sync_transcript_index` skips its whole file,
-        so an orphaned chunk would otherwise NEVER get its vector. Operating on
-        chunk rows directly (not files) bypasses that skip entirely. Mirrors
-        KnowledgeStore.backfill_orphan_vectors + the memory_vec recovery.
-        Maintenance-layer only. Embed failure → chunk left orphaned (uncorrupted)
-        for the next pass, never a partial write.
-        """
-        try:
-            orphans = self._conn.execute(
-                "SELECT tc.id, tc.content FROM transcript_chunks tc "
-                "LEFT JOIN transcript_vec tv ON tc.id = tv.id "
-                "WHERE tv.id IS NULL LIMIT ?",
-                (limit,),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return 0  # transcript_vec unavailable (sqlite-vec not loaded)
-        healed = 0
-        for rowid, content in orphans:
-            try:
-                vec = embed_fn(content)
-            except Exception:  # noqa: BLE001 — best-effort; retry next pass
-                vec = None
-            if vec is not None:
-                try:
-                    self._conn.execute(
-                        "INSERT OR REPLACE INTO transcript_vec(id, embedding) VALUES (?, ?)",
-                        (rowid, _serialize_f32(vec)),
-                    )
-                    healed += 1
-                except sqlite3.OperationalError:
-                    pass
-        if healed:
-            self._conn.commit()
-        return healed
 
     def remove_session(self, session_id: str) -> None:
         """Remove all chunks for a session from all tables."""
@@ -501,10 +403,6 @@ class TranscriptStore:
         for (row_id,) in rows:
             try:
                 self._conn.execute("DELETE FROM transcript_fts WHERE rowid = ?", (row_id,))
-            except sqlite3.OperationalError:
-                pass
-            try:
-                self._conn.execute("DELETE FROM transcript_vec WHERE id = ?", (row_id,))
             except sqlite3.OperationalError:
                 pass
 
@@ -602,18 +500,17 @@ class TranscriptStore:
 def sync_transcript_index(
     store: TranscriptStore,
     transcripts_dir: Path,
-    embed_fn: Optional[Callable[[str], Optional[list[float]]]] = None,
     max_age_days: int = 180,
 ) -> dict:
-    """Scan transcripts directory and incrementally index new files.
+    """Scan transcripts directory and incrementally index new files (FTS5-only).
 
     Skips sessions that are already indexed (delta-sync by session_id).
-    Only processes files modified within max_age_days.
+    Only processes files modified within max_age_days. Recall is pure FTS5+BM25
+    (vector leg removed 2026-08-14 — PRI11), so there is no embedding step.
 
     Args:
         store: TranscriptStore instance with tables ensured.
         transcripts_dir: Directory containing .jsonl transcript files.
-        embed_fn: Optional embedding function (Bedrock Titan).
         max_age_days: Skip files older than this many days.
 
     Returns:
@@ -674,10 +571,6 @@ def sync_transcript_index(
             store._conn.execute(f"SAVEPOINT {_sp}")
             try:
                 for chunk in chunks:
-                    embedding = None
-                    if embed_fn:
-                        embedding = embed_fn(chunk["content"])
-
                     store.upsert_chunk(
                         session_id=chunk["session_id"],
                         source_file=chunk["source_file"],
@@ -686,7 +579,6 @@ def sync_transcript_index(
                         content=chunk["content"],
                         content_hash=chunk["content_hash"],
                         metadata=chunk.get("metadata", "{}"),
-                        embedding=embedding,
                     )
                     stats["chunks_added"] += 1
 
