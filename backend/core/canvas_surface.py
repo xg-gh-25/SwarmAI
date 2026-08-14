@@ -20,6 +20,12 @@ auto_commit (one of ~70 callers) try to commit external-repo files — a disaste
 
 Called ONLY after ``needs_human_review`` returns a non-surfacing verdict for a
 resolved ABSOLUTE path. Then:
+  - If the path's SHAPE is machine noise (``canvas_noise.is_noise_path``: OS temp,
+    SDK/app state, caches, compiled artifacts) → decline. Checked FIRST: inside the
+    tree this class is killed by ``needs_human_review``'s dot-segment/check-ignore
+    layers, but a plain-FS temp dir has no ``.gitignore``, so outside the tree this
+    is the only thing standing between the rail and every scratch file the agent
+    writes. Noise shapes live ONLY in ``canvas_noise`` — never inline a second copy.
   - If the path is INSIDE a known tree (SwarmWS / bound worktree) → decline
     (``surfaceable=False``) — that's ``needs_human_review``'s job, never double-classify.
   - OUTSIDE every known tree:
@@ -105,6 +111,22 @@ def is_canvas_surfaceable(
         except (OSError, RuntimeError):
             return CanvasSurface(False)
 
+        # 0) MACHINE NOISE by path shape → never surface. Checked FIRST because it is
+        #    pure/cheap and short-circuits the two git subprocesses below for exactly
+        #    the paths that flooded the rail: OS temp scratch (`/private/tmp/p1.diff`),
+        #    SDK/app state (`~/.claude/**`, `~/.swarm-ai/logs`), caches, compiled
+        #    artifacts. INSIDE the tree this class is already killed by
+        #    needs_human_review's dot-segment + check-ignore layers; OUTSIDE it neither
+        #    applies (a plain-FS temp dir has no .gitignore), so it needs this gate.
+        #    Ordering is behavior-preserving for inside-tree paths: they return
+        #    surfaceable=False here and at step 1 alike. canvas_noise is the SOLE copy
+        #    of these shapes — add new ones there, never inline (run_4de279ca's lesson:
+        #    a second denylist drifts).
+        from core.canvas_noise import is_noise_path
+
+        if is_noise_path(p):
+            return CanvasSurface(False)
+
         # 1) INSIDE a known tree → not our job (needs_human_review owns those).
         #    Reuse the SAME owning-tree resolver so the boundary can never drift
         #    between the two predicates (P8: one brain, consistent doors).
@@ -118,6 +140,13 @@ def is_canvas_surfaceable(
         # 2) OUTSIDE every known tree. Find the file's own directory to probe git.
         file_dir = p.parent
         if not file_dir.is_dir():
+            return CanvasSurface(False)
+
+        # A path that EXISTS but is not a regular file (socket/FIFO/device/directory —
+        # e.g. `/private/tmp/dotnet-diagnostic-*-socket`) is never a reviewable
+        # document. Guarded on `exists()` so a GONE path still passes: the delete gate
+        # calls this predicate on an already-removed file to drop its stale rail row.
+        if p.exists() and not p.is_file():
             return CanvasSurface(False)
 
         # In a git repo? (rev-parse from the file's dir)

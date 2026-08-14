@@ -37,6 +37,7 @@ import logging
 from pathlib import Path
 
 from core import surface_injection
+from core.canvas_noise import NOISE_SEGMENTS
 
 logger = logging.getLogger(__name__)
 
@@ -55,16 +56,20 @@ _WATCHED_EXTENSIONS = {
 
 # Path segments that never carry a surfaceable deliverable — skip in the cheap
 # filter so their bulk writes never even reach the (more expensive) batch verdict.
-# Mirrors code_intel/watcher.py:_SKIP_PATH_SEGMENTS + build/cache noise. NOTE:
 # needs_human_review is the authority that ultimately drops noise; this is a
 # performance pre-filter, deliberately a SUPERSET-safe subset (only skip what is
 # unambiguously non-deliverable).
-_SKIP_SEGMENTS = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv",
-    "dist", "build", ".pytest_cache", ".mypy_cache",
+#
+# The GENERIC half (vcs/build/cache dirs) is imported from canvas_noise so it stays
+# byte-identical to the denylist Layer-1 applies to outside-tree paths — the
+# run_4de279ca lesson: a hand-copied second denylist drifts from the real boundary.
+# Only the SwarmWS-SPECIFIC machine dirs are listed here, since they mean nothing
+# outside this workspace.
+_SWARMWS_SKIP_SEGMENTS = {
     "DailyActivity", "JobResults", "Signals", "EvalHistory",
     ".artifacts", "Services",
 }
+_SKIP_SEGMENTS = set(NOISE_SEGMENTS) | _SWARMWS_SKIP_SEGMENTS
 
 
 class WorkspaceSurfaceWatcher:

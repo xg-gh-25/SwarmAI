@@ -65,7 +65,9 @@ describe('outputRowOpenDetail (content-default — diff is a toggle, not the ope
     // An external (outside-SwarmWS) surfaced row carries its owning session id so the
     // render fetch can pass session_id → GET /workspace/file allows the outside-$HOME
     // path read-only. Internal rows pass no sessionId → undefined → home-only guard.
-    const d = outputRowOpenDetail('extrepo/hello.py', 'new', '/private/tmp/extrepo/hello.py', undefined, 'sess-xyz');
+    // Fixture is a real user location, not /private/tmp: canvas_noise now denies OS
+    // temp, so a temp path can no longer produce an external row at all.
+    const d = outputRowOpenDetail('extrepo/hello.py', 'new', '/Users/x/Desktop/extrepo/hello.py', undefined, 'sess-xyz');
     expect(d.sessionId).toBe('sess-xyz');
     expect(outputRowOpenDetail('Knowledge/x.md', 'new').sessionId).toBeUndefined();
   });
