@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Valid archive/brain sources (memory | evolution). Defined at module top so the
+# brain-graph / brain-trend / archive endpoints reference it above their own
+# definitions cleanly (Gate-2 HIGH-2 — was a call-time-safe forward ref; hoisted
+# for legibility). Single source of truth for the source allowlist.
+_ARCHIVE_SOURCES = {"memory", "evolution"}
+
 
 # ─── Request Models ──────────────────────────────────────────────────────────
 
@@ -519,14 +525,16 @@ def _build_learning_dashboard(root) -> dict:
 
 
 @router.get("/brain-trend")
-async def get_brain_trend():
-    """Daily size-snapshot series for the C&M overlay trend charts.
+async def get_brain_trend(source: str = "memory"):
+    """Daily size-snapshot series for the C&M overlay trend charts (Run C: source=).
 
-    Returns the recorded {date, prompt_tokens, memory_bytes} points (per_file
-    omitted from the trend response — it's large and only the totals drive the
-    two line charts). NO backfill: the series starts at the feature's launch date
-    and fills in one point per day. The frontend shows "collecting since launch"
-    until there are >=2 points (never fabricates a baseline — R30).
+    Returns {date, prompt_tokens, memory_bytes} points. The ``memory_bytes`` field is
+    the size the trend chart plots: for ``source=memory`` it's the whole-memory total
+    (as before, back-compat); for ``source=evolution`` it's the per-file EVOLUTION.md
+    byte size — which the daily snapshot ALREADY tracks under per_file["EVOLUTION.md"]
+    (Gate-1 BLOCK#5: no new tracking, no fabrication — real data). Kept under the same
+    ``memory_bytes`` key so the frontend TrendChart component is source-agnostic. NO
+    backfill: <2 points → frontend shows "collecting since launch" (R30 — never fabricates).
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
@@ -536,12 +544,25 @@ async def get_brain_trend():
     if not ws_path:
         return {"points": [], "count": 0, "launch_date": None}
 
+    src = source if source in _ARCHIVE_SOURCES else "memory"
+    is_evo = src == "evolution"
+
     rows = read_series(Path(ws_path) / SERIES_RELPATH)
-    points = [
-        {"date": r.get("date"), "prompt_tokens": r.get("prompt_tokens", 0),
-         "memory_bytes": r.get("memory_bytes", 0)}
-        for r in rows
-    ]
+    points = []
+    for r in rows:
+        if is_evo:
+            # Real EVOLUTION.md size from the already-recorded per_file snapshot.
+            # SKIP a legacy point that predates per_file (Gate-2 MED-1) — charting a
+            # missing value as 0 would draw a false crash-to-zero dip. Omitting it is
+            # honest: the trend simply starts when per_file tracking began.
+            pf = r.get("per_file")
+            if not pf or "EVOLUTION.md" not in pf:
+                continue
+            size = pf["EVOLUTION.md"]
+        else:
+            size = r.get("memory_bytes", 0)
+        points.append({"date": r.get("date"), "prompt_tokens": r.get("prompt_tokens", 0),
+                       "memory_bytes": size})
     return {
         "points": points,
         "count": len(points),
@@ -550,34 +571,44 @@ async def get_brain_trend():
 
 
 @router.get("/brain-graph")
-async def get_brain_graph():
-    """7-type knowledge graph + per-type drill-down for the C&M Memory tab.
+async def get_brain_graph(source: str = "memory"):
+    """Knowledge graph + drill-down for the C&M Memory OR Evolution tab (Run C).
 
-    Node counts + latest-10 drill come from parse_entries(MEMORY.md) by entry_type
-    (VALID_TYPES) — backend-served, frontend invents nothing (R30). Empty-but-valid
-    (all-zero 7 nodes) when MEMORY.md is absent, so the tab always renders a stable
-    graph shape.
+    ``source=memory`` (default, back-compat): the 7-type graph from
+    parse_entries(MEMORY.md) by entry_type, nodes in cognitive display-priority
+    order. ``source=evolution``: the evolution-kind graph from EVOLUTION.md's ``###``
+    blocks (class/correction/data-point/…), count-only (no decay layer). Nodes are
+    backend-served in priority order — the frontend renders in-order, never re-sorts
+    (R30). Empty-but-valid (all-zero nodes) when the file is absent, so both tabs
+    always render a stable graph shape.
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
-    from core.brain_graph import build_brain_graph
-    from core.ddd_entry_lifecycle import VALID_TYPES
+    from core.brain_graph import (
+        build_brain_graph, build_evolution_graph,
+        MEMORY_DISPLAY_ORDER, EVOLUTION_DISPLAY_ORDER,
+    )
+
+    src = source if source in _ARCHIVE_SOURCES else "memory"
+    is_evo = src == "evolution"
+    fname = "EVOLUTION.md" if is_evo else "MEMORY.md"
+    display_order = EVOLUTION_DISPLAY_ORDER if is_evo else MEMORY_DISPLAY_ORDER
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"nodes": [{"type": t, "count": 0, "active": 0, "dormant": 0} for t in VALID_TYPES],
-                "drill": {t: [] for t in VALID_TYPES}, "total": 0}
+        return {"nodes": [{"type": t, "count": 0, "active": 0, "dormant": 0} for t in display_order],
+                "drill": {t: [] for t in display_order}, "total": 0}
 
-    memory_path = Path(ws_path) / ".context" / "MEMORY.md"
+    file_path = Path(ws_path) / ".context" / fname
 
-    def _read_memory() -> str:
+    def _read() -> str:
         try:
-            return memory_path.read_text(encoding="utf-8") if memory_path.is_file() else ""
+            return file_path.read_text(encoding="utf-8") if file_path.is_file() else ""
         except OSError:
             return ""
 
-    content = await asyncio.to_thread(_read_memory)  # MEMORY.md read off the event loop
-    return build_brain_graph(content)
+    content = await asyncio.to_thread(_read)  # read off the event loop
+    return build_evolution_graph(content) if is_evo else build_brain_graph(content)
 
 
 # ─── Archive browse + recall (Run B, run_8f852625) ──────────────────────────
@@ -585,27 +616,26 @@ async def get_brain_graph():
 # size-valve moved out of the always-injected live file (list) + on-demand FTS5
 # recall of it (search). Archive-only scope (XG): live files are full-injected, so
 # searching them is redundant + a privacy concern. Zero LLM (deterministic + FTS5).
-
-_ARCHIVE_SOURCES = {"memory", "evolution"}
+# (_ARCHIVE_SOURCES is defined at module top — Gate-2 HIGH-2.)
 
 
 @router.get("/archive-list")
 async def get_archive_list(source: str = "memory"):
-    """List archived entries from the gitignored .context/*-archive* shards.
-
-    ``source`` = memory (MEMORY-archive-*) | evolution (EVOLUTION-archive*). The two
-    families have different on-disk shapes — archive_browse dispatches the right
-    parser. Empty-but-valid ({entries:[],total:0,shards:[]}) when no shards exist."""
+    """List archived SHARDS as a FILE list (Run C) — name · bytes · period · entry
+    count, one row per shard. NOT a per-entry content dump (nobody reads a wall of
+    archived entries — XG); the user opens a file to read it, and Recall-searches to
+    find one entry. ``source`` = memory (MEMORY-archive-*) | evolution
+    (EVOLUTION-archive*). Empty-but-valid ({files:[],total_files:0}) when no shards."""
     from pathlib import Path
     from core.initialization_manager import initialization_manager
-    from core.archive_browse import list_archive_entries
+    from core.archive_browse import list_archive_files
 
     src = source if source in _ARCHIVE_SOURCES else "memory"
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"entries": [], "total": 0, "shards": [], "source": src}
+        return {"files": [], "total_files": 0, "source": src}
 
-    return await asyncio.to_thread(list_archive_entries, Path(ws_path), src)
+    return await asyncio.to_thread(list_archive_files, Path(ws_path), src)
 
 
 @router.get("/archive-search")

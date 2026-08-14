@@ -91,3 +91,119 @@ def test_empty_content_safe():
     assert all(n["count"] == 0 for n in g["nodes"])
     assert g["drill"] == {t: [] for t in VALID_TYPES}
     assert g["total"] == 0
+
+
+def test_build_evolution_graph_total_equals_sum_of_node_counts():
+    """Gate-2 HIGH-1: total MUST equal sum(node counts). An unknown kind is folded
+    into 'entry' (not setdefault'd into an unrendered node), so no count is ever
+    lost from the node list while still counted in total."""
+    from core.brain_graph import build_evolution_graph
+    g = build_evolution_graph(EVO_SAMPLE)
+    node_total = sum(n["count"] for n in g["nodes"])
+    assert g["total"] == node_total
+
+
+def test_build_evolution_graph_lowercase_header_classifies_by_kind():
+    """Gate-2 MED-2: a lowercase 'class …' header must classify as 'class', not
+    silently fall to 'entry' (is_real_evolution_entry is IGNORECASE, so _evolution_kind
+    must be too)."""
+    from core.brain_graph import build_evolution_graph
+    g = build_evolution_graph("### class foo lowercase\n- x\n")
+    by_kind = {n["type"]: n for n in g["nodes"]}
+    assert by_kind["class"]["count"] == 1
+    assert by_kind["entry"]["count"] == 0
+
+
+# ── Run C: display-priority ordering (Memory) ───────────────────────────────
+EVO_SAMPLE = """# SwarmAI Evolution Registry
+
+## Design Philosophy — What "Evolution" Means
+
+### Evolution Target Hierarchy
+
+Some narrative text that is NOT a real entry.
+
+### Core Principle
+
+More narrative.
+
+## Corrections Captured
+
+### C049 | 2026-08-11 [Bias A]
+- **Pattern**: improve-before-justify
+
+### C048 | 2026-08-11 [Bias]
+- **Pattern**: overconfidence
+
+### CLASS A: Confidence Skip Process
+- pattern text
+
+### DATA-POINT — held the bug-class knowledge
+- data point text
+
+### DIRECTIVE-OVERRIDE — cultivation autonomy
+- directive text
+"""
+
+
+def test_memory_nodes_in_display_priority_order_not_valid_types_order():
+    from core.brain_graph import MEMORY_DISPLAY_ORDER
+    g = build_brain_graph(SAMPLE)
+    order = [n["type"] for n in g["nodes"]]
+    assert order == list(MEMORY_DISPLAY_ORDER)
+    assert order[0] == "principle"
+    assert order[-1] == "process"
+    assert order != list(VALID_TYPES)
+
+
+def test_memory_display_order_is_exactly_the_seven_valid_types():
+    from core.brain_graph import MEMORY_DISPLAY_ORDER
+    assert set(MEMORY_DISPLAY_ORDER) == set(VALID_TYPES)
+    assert len(MEMORY_DISPLAY_ORDER) == len(VALID_TYPES)
+
+
+def test_build_evolution_graph_classifies_real_kinds():
+    from core.brain_graph import build_evolution_graph
+    g = build_evolution_graph(EVO_SAMPLE)
+    by_kind = {n["type"]: n for n in g["nodes"]}
+    assert by_kind["correction"]["count"] == 2
+    assert by_kind["class"]["count"] == 1
+    assert by_kind["data-point"]["count"] == 1
+    assert by_kind["directive"]["count"] == 1
+
+
+def test_build_evolution_graph_filters_structural_headers_no_entry_noise():
+    from core.brain_graph import build_evolution_graph
+    g = build_evolution_graph(EVO_SAMPLE)
+    by_kind = {n["type"]: n for n in g["nodes"]}
+    assert by_kind.get("entry", {"count": 0})["count"] == 0
+    assert g["total"] == 5
+
+
+def test_build_evolution_graph_count_only_no_fabricated_decay():
+    from core.brain_graph import build_evolution_graph
+    g = build_evolution_graph(EVO_SAMPLE)
+    for n in g["nodes"]:
+        assert n["active"] == n["count"]
+        assert n["dormant"] == 0
+
+
+def test_evolution_nodes_in_display_priority_order():
+    from core.brain_graph import build_evolution_graph, EVOLUTION_DISPLAY_ORDER
+    g = build_evolution_graph(EVO_SAMPLE)
+    order = [n["type"] for n in g["nodes"]]
+    assert order == list(EVOLUTION_DISPLAY_ORDER)
+    assert order[0] == "class"
+
+
+def test_build_evolution_graph_empty_safe():
+    from core.brain_graph import build_evolution_graph, EVOLUTION_DISPLAY_ORDER
+    g = build_evolution_graph("")
+    assert [n["type"] for n in g["nodes"]] == list(EVOLUTION_DISPLAY_ORDER)
+    assert all(n["count"] == 0 for n in g["nodes"])
+    assert g["total"] == 0
+
+
+def test_valid_types_tuple_unchanged():
+    assert VALID_TYPES == ("guideline", "pitfall", "decision", "model", "process",
+                           "principle", "correction")

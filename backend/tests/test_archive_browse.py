@@ -133,3 +133,58 @@ def test_search_filters_to_requested_family_prefix(monkeypatch):
     # neither returned the Knowledge/ library doc
     for res in (mem, evo):
         assert all("Knowledge/" not in r["source_file"] for r in res["results"])
+
+
+# ── Run C: list_archive_files — FILE-level summaries (not per-entry) ────────
+def test_list_archive_files_memory_returns_file_summaries(tmp_path: Path):
+    from core.archive_browse import list_archive_files
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    (ctx / "MEMORY-archive-2026-03.md").write_text(
+        "# Memory Archive — 2026-03\n\n"
+        "- [pitfall] **a** — x\n"
+        "- [guideline] **b** — y\n",
+        encoding="utf-8",
+    )
+    (ctx / "MEMORY-archive-2026-07.md").write_text(
+        "# Memory Archive — 2026-07\n\n"
+        "- [decision] **c** — z\n",
+        encoding="utf-8",
+    )
+    out = list_archive_files(tmp_path, "memory")
+    assert out["source"] == "memory"
+    assert out["total_files"] == 2
+    # files carry name/bytes/period/entry_count — NOT a flat entries[] content list
+    assert "entries" not in out
+    files = {f["name"]: f for f in out["files"]}
+    assert files["MEMORY-archive-2026-03.md"]["entry_count"] == 2
+    assert files["MEMORY-archive-2026-07.md"]["entry_count"] == 1
+    assert files["MEMORY-archive-2026-03.md"]["period"] == "2026-03"
+    assert files["MEMORY-archive-2026-03.md"]["bytes"] > 0
+
+
+def test_list_archive_files_evolution_legacy_period(tmp_path: Path):
+    from core.archive_browse import list_archive_files
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    # legacy undated shard + a dated one
+    (ctx / "EVOLUTION-archive.md").write_text(
+        "<!-- size-evicted from Corrections -->\n### C001 | 2026-04-01\n- x\n",
+        encoding="utf-8",
+    )
+    (ctx / "EVOLUTION-archive-2026-08.md").write_text(
+        "<!-- size-evicted from Corrections -->\n### C049 | 2026-08-11\n- y\n",
+        encoding="utf-8",
+    )
+    out = list_archive_files(tmp_path, "evolution")
+    files = {f["name"]: f for f in out["files"]}
+    assert files["EVOLUTION-archive.md"]["period"] == "legacy"   # undated → legacy
+    assert files["EVOLUTION-archive-2026-08.md"]["period"] == "2026-08"
+    assert files["EVOLUTION-archive.md"]["entry_count"] == 1
+
+
+def test_list_archive_files_empty_when_no_shards(tmp_path: Path):
+    from core.archive_browse import list_archive_files
+    (tmp_path / ".context").mkdir()
+    out = list_archive_files(tmp_path, "memory")
+    assert out == {"files": [], "total_files": 0, "source": "memory"}

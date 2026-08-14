@@ -34,7 +34,10 @@ import re
 from pathlib import Path
 from typing import Literal
 
-__all__ = ["list_archive_entries", "search_archive", "ARCHIVE_GLOBS"]
+__all__ = [
+    "list_archive_entries", "list_archive_files", "search_archive",
+    "ARCHIVE_GLOBS", "is_real_evolution_entry",
+]
 
 ArchiveSource = Literal["memory", "evolution"]
 
@@ -54,6 +57,34 @@ _EVO_HEADER_RE = re.compile(r"^###\s+(.+?)\s*$")
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 # Provenance comment written by the size-valve: `<!-- size-evicted from Failed Evolutions -->`
 _PROVENANCE_RE = re.compile(r"<!--\s*size-evicted from\s+(.+?)\s*-->")
+
+# A REAL evolution entry header leads with one of the known entry-token families
+# (Cxxx / Fxxx / CLASS / DATA-POINT / ROOT-CAUSE / META-CORRECTION / DIRECTIVE).
+# Structural `### ` section markers inside the narrative (e.g. "Core Principle",
+# "Evolution Target Hierarchy", "Indicators of Real Evolution") do NOT match, so
+# they are filtered OUT of the graph — Gate-1 BLOCK#2 (they would otherwise pollute
+# the 'entry' bucket as noise). This is the single source of truth for "is this ###
+# a real entry?", reused by both the archive list and the live-EVOLUTION graph.
+_REAL_EVO_ENTRY_RE = re.compile(
+    r"^(?:C\d|F\d|CLASS\b|DATA[- ]POINT\b|ROOT-CAUSE\b|META-CORRECTION\b|DIRECTIVE\b)",
+    re.IGNORECASE,
+)
+
+
+def is_real_evolution_entry(header: str) -> bool:
+    """True if an EVOLUTION `### ` header is a real entry (not a structural section
+    marker). Reused by the live-EVOLUTION graph parser to drop narrative headers."""
+    return bool(_REAL_EVO_ENTRY_RE.match(header.strip()))
+
+
+def _period_from_shard_name(name: str) -> str:
+    """Derive a period label from a shard filename. Dated shards embed YYYY-MM
+    (MEMORY-archive-2026-07.md / EVOLUTION-archive-2026-08.md); the legacy undated
+    EVOLUTION-archive.md has no date → 'legacy' (Gate-1 REVISE#4)."""
+    # Anchor to the date right before .md (Gate-2 LOW-1) so a hypothetical
+    # multi-date filename can't capture the wrong (earlier) YYYY-MM.
+    m = re.search(r"(\d{4}-\d{2})(?=\.md$)", name) or re.search(r"(\d{4}-\d{2})", name)
+    return m.group(1) if m else "legacy"
 
 
 def _context_dir(ws_path: Path) -> Path:
@@ -138,8 +169,11 @@ def _parse_evolution_shard(text: str) -> list[dict]:
 
 def _evolution_kind(header: str) -> str:
     """Descriptive kind from an EVOLUTION header's leading token (NOT the 7-type
-    memory ontology — EVOLUTION has its own vocabulary)."""
-    h = header.strip()
+    memory ontology — EVOLUTION has its own vocabulary). Case-insensitive so it
+    stays consistent with is_real_evolution_entry's IGNORECASE filter (Gate-2 MED-2:
+    a lowercase 'class …' header must classify as 'class', not silently as 'entry').
+    Order: META-CORRECTION before its C-prefix (a 'C\\d' check must not shadow it)."""
+    h = header.strip().upper()
     if h.startswith("CLASS"):
         return "class"
     if h.startswith("DATA-POINT") or h.startswith("DATA POINT"):
@@ -182,6 +216,35 @@ def list_archive_entries(ws_path: Path, source: ArchiveSource) -> dict:
         "shards": [p.name for p in shards],
         "source": source,
     }
+
+
+def list_archive_files(ws_path: Path, source: ArchiveSource) -> dict:
+    """List archived SHARDS as FILE summaries (Run C — the C&M overlay shows the
+    archive as a FILE LIST, not a per-entry content dump; nobody reads a wall of
+    archived entries — XG). One row per shard: name, byte size, period label, and
+    the entry count (reusing the family's native per-entry parser to COUNT).
+
+    Returns {files: [{name, bytes, period, entry_count}], total_files, source},
+    NEWEST shard first. Empty-but-valid when no shards exist."""
+    shards = _shards(ws_path, source)
+    files: list[dict] = []
+    for shard in shards:
+        try:
+            text = shard.read_text(encoding="utf-8")
+            size = shard.stat().st_size
+        except OSError:
+            continue
+        rows = (
+            _parse_memory_shard(text) if source == "memory"
+            else _parse_evolution_shard(text)
+        )
+        files.append({
+            "name": shard.name,
+            "bytes": size,
+            "period": _period_from_shard_name(shard.name),
+            "entry_count": len(rows),
+        })
+    return {"files": files, "total_files": len(files), "source": source}
 
 
 def search_archive(query: str, source: ArchiveSource, limit: int = 30) -> dict:

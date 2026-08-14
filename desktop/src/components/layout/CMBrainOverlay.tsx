@@ -73,15 +73,14 @@ type TabKey = 'context' | 'memory' | 'guideline' | 'evolution';
 // ── Archive browse types (mirror GET /eval/archive-list + /eval/archive-search) ──
 // Two families share ONE shape (only `source` differs) → one reusable ArchivePanel.
 type ArchiveSource = 'memory' | 'evolution';
-interface ArchiveEntry {
-  title: string;
-  type: string;
-  date: string | null;      // EVOLUTION headers may have no date → null (render '—')
-  status: string;
-  archived_from: string;    // MEMORY carries none ('') ; EVOLUTION may have a section
-  shard: string;
+// Run C: archive-list returns a FILE list (one row per shard), NOT a per-entry dump.
+interface ArchiveFile {
+  name: string;          // shard filename, e.g. MEMORY-archive-2026-07.md
+  bytes: number;         // file size on disk
+  period: string;        // 'YYYY-MM' from the name, or 'legacy' for the undated shard
+  entry_count: number;   // parsed entries in the shard
 }
-interface ArchiveListResp { entries: ArchiveEntry[]; total: number; shards: string[]; source: ArchiveSource; }
+interface ArchiveListResp { files: ArchiveFile[]; total_files: number; source: ArchiveSource; }
 interface ArchiveSearchHit { title: string; snippet: string; source_file: string; shard: string; }
 interface ArchiveSearchResp { results: ArchiveSearchHit[]; q: string; source: ArchiveSource; }
 
@@ -649,11 +648,118 @@ interface BrainGraph { nodes: GraphNode[]; drill: Record<string, DrillEntry[]>; 
 interface TrendPoint { date: string; prompt_tokens: number; memory_bytes: number; }
 interface BrainTrend { points: TrendPoint[]; count: number; launch_date: string | null; }
 
-// 7-type tint (aligns to the ontology; stable across renders).
+// 7-type tint (aligns to the ontology; stable across renders). Evolution kinds get
+// their own tints; an unmapped kind falls back to slate in the render (?? '#7c8194').
 const TYPE_TINT: Record<string, string> = {
   principle: '#5fc99a', correction: '#d0524a', decision: '#4a8fb0', guideline: '#b08fd0',
   pitfall: '#d08a4a', process: '#7c8194', model: '#5f9ec9',
+  // evolution kinds
+  class: '#d0524a', 'meta-correction': '#c0607a', 'root-cause': '#4a8fb0',
+  'data-point': '#5f9ec9', directive: '#b08fd0', 'failed-evolution': '#d08a4a', entry: '#7c8194',
 };
+
+/**
+ * KnowledgeGraph — the shared graph+bars+drill surface for BOTH the Memory tab
+ * (7-type ontology) and the Evolution tab (evolution kinds). Backend returns nodes
+ * ALREADY in display-priority order (Run C); this renders them IN-ORDER and NEVER
+ * re-sorts by count (R30 — order is a backend decision). `showDecay` is true for
+ * memory (real active/dormant split) and false for evolution (count-only, no decay
+ * layer — never fabricate a split). One component, two sources = no duplication (R25).
+ */
+function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; showDecay: boolean }) {
+  const [selType, setSelType] = useState<string | null>(null);
+  const nodes = graph?.nodes ?? [];
+  const maxCount = Math.max(1, ...nodes.map((n) => n.count));
+  const drill = (selType && graph?.drill[selType]) || [];
+
+  return (
+    <>
+      {/* type/kind graph — nodes sized by count, rendered in backend priority order */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          Knowledge graph · {showDecay ? '7 types' : 'kinds'} as nodes (click to drill in)
+        </div>
+        <div className="flex flex-wrap gap-3">
+          {nodes.map((n) => {
+            const tint = TYPE_TINT[n.type] ?? '#7c8194';
+            const size = 44 + Math.round((n.count / maxCount) * 40); // 44-84px by count
+            const sel = selType === n.type;
+            return (
+              <button
+                key={n.type}
+                data-testid={`cm-graph-node-${n.type}`}
+                onClick={() => setSelType(sel ? null : n.type)}
+                title={showDecay ? `${n.type}: ${n.count} (${n.active} active · ${n.dormant} dim)` : `${n.type}: ${n.count}`}
+                className="flex flex-col items-center justify-center rounded-full border-2 transition-transform hover:scale-105 shrink-0"
+                style={{
+                  width: size, height: size, borderColor: tint,
+                  background: `color-mix(in srgb, ${tint} ${showDecay && n.dormant > n.active ? 8 : 16}%, transparent)`,
+                  boxShadow: sel ? `0 0 0 3px color-mix(in srgb, ${tint} 40%, transparent)` : 'none',
+                }}
+              >
+                <span className="font-mono text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
+                <span className="font-mono text-[9px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-1.5 text-[10px] text-[var(--color-text-faint)]">
+          node size = entry count{showDecay ? ' · bright = active · dim = dormant/archived' : ''}
+        </div>
+      </section>
+
+      {/* by-type distribution bars (also drill) */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          By-{showDecay ? 'type' : 'kind'} distribution
+        </div>
+        <div className="flex flex-col gap-1">
+          {nodes.map((n) => {
+            const tint = TYPE_TINT[n.type] ?? '#7c8194';
+            return (
+              <button
+                key={n.type}
+                data-testid={`cm-bar-${n.type}`}
+                onClick={() => setSelType(n.type)}
+                className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[var(--color-hover)]"
+              >
+                <span className="w-24 shrink-0 font-mono text-[11px] text-[var(--color-text-muted)]">{n.type}</span>
+                <span className="flex-1 h-2 rounded-full bg-[var(--color-border)] max-w-md">
+                  <span className="block h-2 rounded-full" style={{ width: `${Math.max(3, (n.count / maxCount) * 100)}%`, background: tint }} />
+                </span>
+                <span className="w-8 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{n.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* drill-down list */}
+      <section>
+        <div data-testid="cm-drill-list" className="rounded-lg border border-[var(--color-border)] p-3">
+          {!selType ? (
+            <div className="text-[11px] text-[var(--color-text-faint)]">👆 Click a graph node (or a bar) → latest entries of that {showDecay ? 'type' : 'kind'}</div>
+          ) : drill.length === 0 ? (
+            <div className="text-[11px] text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
+          ) : (
+            <>
+              <div className="mb-1.5 text-[11px] font-semibold text-[var(--color-text)]">Latest {selType} ({drill.length})</div>
+              <div className="flex flex-col gap-1">
+                {drill.map((e, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: e.status === 'active' ? '#5fc99a' : '#7c8194' }} />
+                    <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
+                    {e.meta && <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-faint)]">{e.meta}</span>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
 
 // ── ArchivePanel: the reusable Archived-list + Recall-search surface ─────────
 // ONE component for BOTH families (Memory + Evolution) — only `source` differs
@@ -684,7 +790,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
     enabled: enabled && searching,
   });
 
-  const entries = list?.entries ?? [];
+  const files = list?.files ?? [];
   const results = hits?.results ?? [];
 
   return (
@@ -693,8 +799,8 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
         Archived {source} · recall-backed cold storage
       </div>
       <div className="mb-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-        Low-value entries the size-valve moved out of live {source} (not deleted — still
-        retrievable via FTS5/BM25 recall). Search pulls them back on demand.
+        Shards the size-valve moved out of live {source} (not deleted — open one to read it,
+        or search to recall a single entry).
       </div>
 
       {/* Search box — one clear input; results replace the list while a query is active */}
@@ -738,45 +844,48 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
           </div>
         )
       ) : (
-        // ── Archived list (default) ──
+        // ── Archived FILE list (default) — one row per shard, click to open ──
         listErr ? (
           <ArchiveError what={`archived ${source}`} error={listError} onRetry={() => void refetchList()} />
         ) : list === undefined ? (
           <div data-testid={`cm-archive-loading-${source}`} className="text-[11px] text-[var(--color-text-faint)]">Loading archived {source}…</div>
-        ) : entries.length === 0 ? (
+        ) : files.length === 0 ? (
           <div data-testid={`cm-archive-empty-${source}`} className="text-[11px] text-[var(--color-text-faint)]">
             Nothing archived yet — live {source} is fully injected.
           </div>
         ) : (
-          <div data-testid={`cm-archive-list-${source}`} className="flex flex-col">
-            <div className="mb-1 text-[11px] text-[var(--color-text-faint)]">
-              {entries.length} archived · {(list?.shards.length ?? 0)} shard{(list?.shards.length ?? 0) === 1 ? '' : 's'}
-            </div>
-            {entries.map((e, i) => {
-              const tint = TYPE_TINT[e.type] ?? '#7c8194';
-              return (
-                <div
-                  key={`${e.shard}-${i}`}
-                  data-testid={`cm-archive-row-${source}`}
-                  className="flex items-baseline gap-2.5 py-1"
-                >
-                  {/* type dot — the one bit of color; kind is on-demand via title */}
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tint }} title={e.type} aria-hidden />
-                  <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-text)]" title={e.title}>{e.title || '(untitled)'}</span>
-                  {/* provenance (evolution only carries it) — hidden when empty (Gate-0 #3) */}
-                  {e.archived_from && (
-                    <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-faint)]" title="archived from section">{e.archived_from}</span>
-                  )}
-                  {/* date — '—' when the header carried none (Gate-0 #3) */}
-                  <span className="w-20 shrink-0 text-right font-mono text-[10px] text-[var(--color-text-faint)]">{e.date ?? '—'}</span>
-                </div>
-              );
-            })}
+          <div data-testid={`cm-archive-list-${source}`} className="flex flex-col gap-1">
+            {files.map((f) => (
+              // Whole row opens the shard in Canvas (like the Context-tab file rows).
+              <button
+                key={f.name}
+                type="button"
+                data-testid={`cm-archive-file-${source}`}
+                title={`Open ${f.name} in Canvas`}
+                onClick={() =>
+                  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
+                }
+                className="flex items-baseline gap-3 rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-hover)]"
+              >
+                {/* period is the primary scannable key; filename demoted to mono detail */}
+                <span className="w-16 shrink-0 font-mono text-xs font-medium text-[var(--color-text)]">{f.period}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" title={f.name}>{f.name}</span>
+                <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{f.entry_count} entr{f.entry_count === 1 ? 'y' : 'ies'}</span>
+                <span className="w-14 shrink-0 text-right font-mono text-[10px] text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
+              </button>
+            ))}
           </div>
         )
       )}
     </section>
   );
+}
+
+// Byte-size → compact human string (KB/MB) for the archive file rows.
+function fmtBytes(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}MB`;
+  if (n >= 1000) return `${Math.round(n / 1000)}KB`;
+  return `${n}B`;
 }
 
 // Shared archive error banner — honest "couldn't load, NOT empty" + optional Retry.
@@ -793,20 +902,15 @@ function ArchiveError({ what, error, onRetry }: { what: string; error: unknown; 
 
 function MemoryTab({ enabled }: { enabled: boolean }) {
   const { data: graph } = useQuery<BrainGraph>({
-    queryKey: ['cm-brain-graph'],
-    queryFn: async () => (await api.get<BrainGraph>('/eval/brain-graph')).data,
+    queryKey: ['cm-brain-graph', 'memory'],
+    queryFn: async () => (await api.get<BrainGraph>('/eval/brain-graph?source=memory')).data,
     staleTime: 30_000, enabled,
   });
   const { data: trend } = useQuery<BrainTrend>({
-    queryKey: ['cm-brain-trend'],
-    queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend')).data,
+    queryKey: ['cm-brain-trend', 'memory'],
+    queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend?source=memory')).data,
     staleTime: 30_000, enabled,
   });
-  const [selType, setSelType] = useState<string | null>(null);
-
-  const nodes = graph?.nodes ?? [];
-  const maxCount = Math.max(1, ...nodes.map((n) => n.count));
-  const drill = (selType && graph?.drill[selType]) || [];
 
   return (
     <div data-testid="cm-panel-memory" className="flex flex-col gap-5 max-w-4xl">
@@ -815,90 +919,8 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
         Value (not age) decides survival: idle entries dim, load-bearing ones persist.
       </div>
 
-      {/* 7-type graph — nodes sized by entry count */}
-      <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
-          Knowledge graph · 7 types as nodes (click to drill in)
-        </div>
-        <div className="flex flex-wrap gap-3">
-          {nodes.map((n) => {
-            const tint = TYPE_TINT[n.type] ?? '#7c8194';
-            const size = 44 + Math.round((n.count / maxCount) * 40); // 44-84px by count
-            const sel = selType === n.type;
-            return (
-              <button
-                key={n.type}
-                data-testid={`cm-graph-node-${n.type}`}
-                onClick={() => setSelType(sel ? null : n.type)}
-                title={`${n.type}: ${n.count} (${n.active} active · ${n.dormant} dim)`}
-                className="flex flex-col items-center justify-center rounded-full border-2 transition-transform hover:scale-105 shrink-0"
-                style={{
-                  width: size, height: size,
-                  borderColor: tint,
-                  background: `color-mix(in srgb, ${tint} ${n.dormant > n.active ? 8 : 16}%, transparent)`,
-                  boxShadow: sel ? `0 0 0 3px color-mix(in srgb, ${tint} 40%, transparent)` : 'none',
-                }}
-              >
-                <span className="font-mono text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
-                <span className="font-mono text-[9px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-1.5 text-[10px] text-[var(--color-text-faint)]">
-          node size = entry count · bright = active · dim = dormant/archived
-        </div>
-      </section>
-
-      {/* by-type distribution bars (also drill) */}
-      <section>
-        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
-          By-type distribution
-        </div>
-        <div className="flex flex-col gap-1">
-          {nodes.map((n) => {
-            const tint = TYPE_TINT[n.type] ?? '#7c8194';
-            return (
-              <button
-                key={n.type}
-                data-testid={`cm-bar-${n.type}`}
-                onClick={() => setSelType(n.type)}
-                className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[var(--color-hover)]"
-              >
-                <span className="w-16 shrink-0 font-mono text-[11px] text-[var(--color-text-muted)]">{n.type}</span>
-                <span className="flex-1 h-2 rounded-full bg-[var(--color-border)] max-w-md">
-                  <span className="block h-2 rounded-full" style={{ width: `${Math.max(3, (n.count / maxCount) * 100)}%`, background: tint }} />
-                </span>
-                <span className="w-8 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{n.count}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* drill-down list */}
-      <section>
-        <div data-testid="cm-drill-list" className="rounded-lg border border-[var(--color-border)] p-3">
-          {!selType ? (
-            <div className="text-[11px] text-[var(--color-text-faint)]">👆 Click a graph node (or a bar) → latest entries of that type</div>
-          ) : drill.length === 0 ? (
-            <div className="text-[11px] text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
-          ) : (
-            <>
-              <div className="mb-1.5 text-[11px] font-semibold text-[var(--color-text)]">Latest {selType} ({drill.length})</div>
-              <div className="flex flex-col gap-1">
-                {drill.map((e, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs">
-                    <span className={'w-1.5 h-1.5 rounded-full shrink-0'} style={{ background: e.status === 'active' ? '#5fc99a' : '#7c8194' }} />
-                    <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
-                    <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-faint)]">{e.meta}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </section>
+      {/* graph + bars + drill (shared component; memory shows the active/dormant split) */}
+      <KnowledgeGraph graph={graph} showDecay />
 
       {/* MEMORY.md size trend (from the daily snapshot series) */}
       <section>
@@ -918,26 +940,50 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
   );
 }
 
-// ── Evolution tab: the correction/pattern brain + its archived cold layer ────
-// EVOLUTION.md is a distinct store (corrections, CLASS patterns, data-points) with
-// its OWN size-valve + archive. Graph is DEFERRED (Gate-0 Run B: EVOLUTION's `###`
-// blocks don't fit the 7-type ontology → all-zero nodes); this tab surfaces the
-// teaching text + the Archived list + Recall search (source=evolution).
+// ── Evolution tab: MIRRORS the Memory tab (graph + bars + drill + trend + archive)
+// for EVOLUTION.md's own kinds (class/correction/data-point/directive/…). Structural
+// parity with MemoryTab via the shared KnowledgeGraph — the only differences are
+// honest: source=evolution, and showDecay=false (EVOLUTION.md has no decay layer, so
+// nodes are count-only; never fabricate an active/dormant split).
 function EvolutionTab({ enabled }: { enabled: boolean }) {
+  const { data: graph } = useQuery<BrainGraph>({
+    queryKey: ['cm-brain-graph', 'evolution'],
+    queryFn: async () => (await api.get<BrainGraph>('/eval/brain-graph?source=evolution')).data,
+    staleTime: 30_000, enabled,
+  });
+  const { data: trend } = useQuery<BrainTrend>({
+    queryKey: ['cm-brain-trend', 'evolution'],
+    queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend?source=evolution')).data,
+    staleTime: 30_000, enabled,
+  });
+
   return (
     <div data-testid="cm-panel-evolution" className="flex flex-col gap-5 max-w-4xl">
       <div className="text-sm text-[var(--color-text-muted)]">
-        How I evolve — corrections I've captured, the recurring failure patterns they
-        cluster into, and the judgment sedimented from them. Value (not age) decides
-        survival; the lowest-value entries archive to recall-backed cold storage.
+        How I evolve — the corrections I've captured and the recurring failure patterns
+        they cluster into (class · correction · data-point · directive · …), ordered by
+        which matters most to my judgment.
       </div>
+
+      {/* graph + bars + drill (shared component; evolution is count-only, no decay split) */}
+      <KnowledgeGraph graph={graph} showDecay={false} />
+
+      {/* EVOLUTION.md size trend — real per-file bytes from the daily snapshot series */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          EVOLUTION.md size trend
+        </div>
+        <TrendChart trend={trend} field="memory_bytes" />
+      </section>
+
+      {/* Archived file list + Recall search (source=evolution) */}
       <ArchivePanel source="evolution" enabled={enabled} />
+
       <div className="text-[11px] text-[var(--color-text-faint)]">
         How it works: each correction is captured with a bias tag; recurring patterns (3× threshold)
         surface a governance proposal for your review. Live EVOLUTION.md is injected in FULL; when it
         grows past its size cap, the lowest-value entries are ARCHIVED (moved, not deleted — recall via
-        FTS5/BM25), so load-bearing patterns stay live. The knowledge graph is deferred — EVOLUTION’s
-        correction/pattern shape doesn’t fit the 7-type ontology.
+        FTS5/BM25), so load-bearing patterns stay live.
       </div>
     </div>
   );
