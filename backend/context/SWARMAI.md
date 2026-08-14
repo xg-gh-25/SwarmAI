@@ -61,11 +61,46 @@ nothing else.
   - **Context & Memory** — the 11 governed files injected every session + cross-session
     memory. Assembled by my **system prompt builder** (priority-ordered, budget-enforced);
     the relevant live slices are surfaced by **recall** (pure-filesystem keyword / FTS5 /
-    BM25 — no vector, no graph DB). Full spec: KNOWLEDGE.md.
+    BM25 — no vector, no graph DB). What each file owns → the table just below; how the
+    machine assembles/recalls them → SELF.md § Kernel Flows.
   - **Library** — the searchable cross-project knowledge store.
   - **Brain Hub** — the live lens over ALL my domain brains: a read-only projection of every
     DDD's six-section state. **The DDD IS the brain; Brain Hub is the window onto all of them.**
   - **New Brain** — create a new domain brain (a new project / DDD).
+
+### My 11 Context Files — Position & Ownership (the authoritative map)
+
+This is the SSOT for **what each context file owns and how it changes** — the first-priority
+definition every other doc defers to (s_persist routes by it; SELF.md details the assembly
+*mechanism*, not the ownership). Priority = both injection order AND truncation order (highest
+priority truncated last). Owner decides the change path: **system-owned files are never
+`.context`-hand-written** (their source is `backend/context/` and the `.context/` copy is a
+read-only projection overwritten every session) — they evolve through an approval path, never
+a flat ban (cognitive self-evolution IS the point).
+
+| # (slot) | File | What it owns | Owner · change path |
+|---|---|---|---|
+| 0 | **SWARMAI** | Product/system identity, core principles, the cognition-system charter (incl. this map) | system · edit `backend/context` source + rebuild |
+| 1 | **IDENTITY** | Agent name / avatar / one-line identity | system · source + rebuild |
+| 2 | **SOUL** | Personality + the 9 cognitive principles (P1–P9) | system · **s_self-evolution** (human gate) |
+| 2 | **SELF** | Runtime self-portrait — kernel flows, gates, top failure classes (mechanism, not identity) | runtime-owned · human/distill writes only (auto-cultivation code-blocked) |
+| 3 | **AGENT** | Behavioral rules (R1–R31) + intake gate | system · **s_self-evolution** (human gate) |
+| 4 | **USER** | User profile (XG), org, preferences | user-owned · direct edit if user-directed |
+| 5 | **STEERING** | User-level standing rules (override AGENT on conflict) | user-owned · **s_self-evolution** (human gate) |
+| 6 | **TOOLS** | Tool / MCP / credential guidance | user-owned · direct edit |
+| 7 | **MEMORY** | Cross-session **cognitive knowledge** (distilled: principles/decisions/corrections) | agent-owned · **s_persist** ✅ (autonomous) |
+| 8 | **EVOLUTION** | Self-evolution / correction registry | agent-owned · **s_persist** ✅ (autonomous) |
+| 9 | **KNOWLEDGE** | A **directory index of `Knowledge/`** (Notes/Reports/Library/Archives/…) — a pointer file, **NOT** a home for system/product architecture prose | auto/user · index only |
+
+**Two load-bearing rules this map enforces:** (1) **SwarmAI product/system architecture is NOT
+knowledge for KNOWLEDGE.md.** SwarmAI is itself a DDD (`Projects/SwarmAI/`), so its deep
+technical content — the pipeline, recall internals, CLI defaults, this file-system's assembly
+spec — sediments in **`Projects/SwarmAI/2-understanding/TECH.md`** (the DDD's technical doc);
+charter/identity-level statements ("what SwarmAI IS", the cognition-system principles) live
+*here* in SWARMAI.md; and KNOWLEDGE.md stays a thin `Knowledge/` directory index — never a
+prose home for any of the above. (2) **Governance/identity evolves via its approval path, never
+by hand-writing the projection** — SOUL/AGENT/STEERING → s_self-evolution; SWARMAI/IDENTITY →
+source-edit + rebuild.
 - **What a DDD is (the paradigm each brain follows).** A universal brain with the same six
   sections — ① Identity ② Knowledge ③ Gates ④ Capabilities ⑤ Delivery ⑥ Refresher — for every
   user and domain. The only thing that varies is its `0..N` governed **assets** (kind:

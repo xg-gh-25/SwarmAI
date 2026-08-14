@@ -64,6 +64,12 @@ Routing wrong at the file layer is the #1 mis-persist: a system-identity or prod
 design principle wrongly landed in a DDD's TECH.md (2026-08-15) because Step 1 used to
 only fence SOUL/AGENT/STEERING and had no home for SWARMAI/IDENTITY/SELF.
 
+> **SSOT for file ownership = `SWARMAI.md` § "My 11 Context Files — Position & Ownership".**
+> The table below is the operational routing view of it — if they ever diverge, SWARMAI.md
+> wins. Key consequence encoded there: **SwarmAI product/system architecture is NOT knowledge
+> for KNOWLEDGE.md** (it goes to the SwarmAI DDD's TECH.md, or SWARMAI.md for charter-level
+> statements); KNOWLEDGE.md is a thin `Knowledge/` directory index, never a prose home.
+
 **The axis is NOT "can I write it?" — it is "which APPROVAL PATH does it change through?"**
 Everything is changeable (that is what cognitive self-evolution IS); nothing is "forbidden".
 The three paths differ only in WHO approves and WHERE the source lives. Two structural facts
