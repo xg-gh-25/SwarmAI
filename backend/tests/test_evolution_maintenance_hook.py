@@ -438,3 +438,68 @@ class TestSizeValve:
         # Every evergreen correction still present — none evicted despite over-threshold.
         assert body.count("**Pattern**") == 80, "core corrections must never be evicted"
         assert moved == 0, "valve must move 0 when only core remains over-threshold"
+
+    def test_valve_never_splits_real_correction_headers(self, tmp_path):
+        """REGRESSION (the entry-splitting corruption): real Corrections headers
+        DON'T match the narrow _ENTRY_HEADER_RE (Cxxx+trailing text, ### ROOT-CAUSE,
+        ### DATA-POINT). The valve MUST bound them as whole ### blocks and NEVER
+        evict individual bullets that would split a multi-line entry. Also: a
+        correction WITHOUT an evergreen marker (### Standalone group / a bare
+        ### DATA-POINT) must STILL be protected as correction-structure — Gate-1
+        found broad ^### would otherwise make C039/C027-style entries evictable
+        (a NEW C046 violation)."""
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        from core.context_directory_loader import ContextDirectoryLoader
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        # A Corrections section with the EXACT real-world header shapes that broke,
+        # padded LARGE ENOUGH that the valve MUST process Corrections to hit target
+        # (no low-value buffer section to absorb the eviction — this is what makes the
+        # per-bullet path actually fire on corrections, the true RED condition).
+        real_headers = (
+            "## Corrections Captured\n"
+            # Cxxx with trailing text after the date (fails narrow regex $ anchor):
+            "### C049 | 2026-08-11 [Bias A — improve-before-justify] — 一整个 session 反复\n"
+            "- **Correction**: the full body of C049 that must never be split off.\n"
+            "- **Pattern**: improve-before-justify.\n"
+            "- **Durable tell**: the clarity-excitement IS the signal.\n\n"
+            # Non-Cxxx header, NO evergreen marker — must be protected as correction-structure:
+            "### ROOT-CAUSE — a moved doc dir silently killed the DDD loop [2026-08-10]\n"
+            "- **correction** — DDD docs migrated; 5 engine call sites kept the flat path.\n"
+            "- **LESSON** — an exit-clean silent no-op is the most dangerous failure class.\n\n"
+            # Standalone grouping header + a bare Cxxx correction with NO marker (C039/C027 analog):
+            "### Standalone\n"
+            "- **C027** (05-19): Satisficing — identified flaws, deferred as future work.\n"
+            "- **C039** (06-25): 发现 ≠ 待办 — a load-bearing correction with no marker.\n\n"
+        )
+        # Pad Corrections itself over the threshold (marker-less DATA-POINT entries so
+        # they are only protected by the correction-structure rule, not by a marker):
+        filler = "\n".join(
+            f"### DATA-POINT — observation number {i} [2026-08-10]\n"
+            f"- **correction** — body {i} " + "padding " * 40 + "\n"
+            f"- **Status** — active {i}\n" for i in range(150)
+        )
+        evo.write_text("# EVOLUTION\n\n" + real_headers + filler + "\n")
+        assert ContextDirectoryLoader.estimate_tokens(evo.read_text()) > 15000
+        h = EvolutionMaintenanceHook(context_dir=ctx)
+        moved = h._size_evict(evo, threshold_tokens=15000)
+        body = evo.read_text()
+        # (1) NO correction was split — every correction's body bullets stay with it.
+        assert "the full body of C049 that must never be split off" in body, "C049 body must not be split"
+        assert "DDD docs migrated" in body, "ROOT-CAUSE body must not be split"
+        assert "an exit-clean silent no-op" in body, "ROOT-CAUSE LESSON must not be split"
+        # (2) marker-less corrections (C027/C039 under Standalone) are STILL protected.
+        assert "C027" in body and "C039" in body, "marker-less corrections must be protected (C046)"
+        assert "load-bearing correction with no marker" in body
+        # (3) NO orphaned bullets landed in the shard — corrections are all protected,
+        # so the valve must evict NOTHING (P6: over-threshold but only correction-
+        # structure remains → stop, raise-cap, never split/cut judgment).
+        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
+        shard_text = shards[0].read_text() if shards else ""
+        assert "the full body of C049" not in shard_text, "correction body must NOT be evicted"
+        assert "DDD docs migrated" not in shard_text, "ROOT-CAUSE body must NOT be evicted"
+        assert "- **Status**" not in shard_text, "no orphaned Status bullet (no splitting)"
+        assert "- **correction**" not in shard_text, "no orphaned correction bullet"
+        # (4) whole Corrections section is correction-structure → 0 evicted (never split).
+        assert moved == 0, "all-corrections file: valve must move 0, never split an entry"

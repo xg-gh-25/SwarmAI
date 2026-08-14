@@ -514,18 +514,41 @@ class EvolutionMaintenanceHook:
         "DIRECTIVE-OVERRIDE", "META-CORRECTION",
     )
 
+    # A block is CORRECTION-STRUCTURE (hard-protected judgment) if its header is one
+    # of these forms — even with NO evergreen marker. Gate-1 (run_a0ee2b4f) found that
+    # broad ^### bounding would otherwise make marker-less corrections (C039/C027 under
+    # ### Standalone, a bare ### DATA-POINT/### ROOT-CAUSE) evictable = a NEW C046
+    # violation. Corrections are load-bearing judgment regardless of marker presence.
+    _CORRECTION_HEADER_RE = re.compile(
+        r"^###\s+(?:"
+        r"C\d{3}\b"                         # ### C049 | ... (any trailing text)
+        r"|CLASS\b|CLASS[ ]?[AB]['′]?\b"    # ### CLASS ... / CLASS A′
+        r"|ROOT-CAUSE\b|DATA-POINT\b|DATA POINT\b"
+        r"|DIRECTIVE-OVERRIDE\b|META-CORRECTION\b"
+        r"|Standalone\b|Resolved\b"         # grouping sub-headers owning Cxxx bullets
+        r")",
+        re.MULTILINE,
+    )
+    # A bare correction id as a bullet (- **C039** ...) inside a grouping block.
+    _CORRECTION_BULLET_RE = re.compile(r"^\s*-\s*\*\*C\d{3}\*\*", re.MULTILINE)
+
     @staticmethod
     def _is_evergreen(entry_block: str) -> bool:
-        """True if an entry carries core-judgment markers → never size-evictable.
-        Entry-level (not section-level): a `### CLASS ...` parent header OR any of the
-        core markers (**Pattern**/**Durable tell**/CAPSTONE/METHOD FIX/DIRECTIVE-
-        OVERRIDE/META-CORRECTION) inside the block. A plain one-liner (O-Reference,
-        an old capability record) carries none → evictable low-value."""
-        for line in entry_block.splitlines():
-            stripped = line.lstrip()
-            if stripped.startswith("### CLASS "):
-                return True
-        return any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS)
+        """True if an entry is core judgment → NEVER size-evictable. Protected when
+        EITHER (a) it carries a core marker (**Pattern**/**Durable tell**/CAPSTONE/
+        METHOD FIX/DIRECTIVE-OVERRIDE/META-CORRECTION), OR (b) it is correction-
+        STRUCTURE — a `### Cxxx / ### CLASS / ### ROOT-CAUSE / ### DATA-POINT /
+        ### Standalone / ### Resolved` header, or contains a `- **Cxxx**` bullet.
+        (b) is the Gate-1 fix: marker-less corrections are still hard-won judgment and
+        must survive broad ^### bounding (C046 red-line). A plain one-liner (O-Reference,
+        an old capability record) matches neither → evictable low-value."""
+        if any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS):
+            return True
+        if EvolutionMaintenanceHook._CORRECTION_HEADER_RE.search(entry_block):
+            return True
+        if EvolutionMaintenanceHook._CORRECTION_BULLET_RE.search(entry_block):
+            return True
+        return False
 
     @staticmethod
     def _evolution_archive_shard(today: "date | None" = None) -> str:
@@ -721,65 +744,102 @@ class EvolutionMaintenanceHook:
                 finally:
                     fd.close()
 
+    # Broad block-boundary matcher for the VALVE ONLY (never the shared
+    # _ENTRY_HEADER_RE, which _parse_entries needs with id/date capture groups).
+    # ANY `### ` line is a block boundary → the valve can NEVER split a multi-line
+    # entry by evicting individual bullets (the corruption this fix removes).
+    _BLOCK_BOUNDARY_RE = re.compile(r"^###\s", re.MULTILINE)
+
     def _size_evict_locked(
         self, evo_path, content, threshold, target, ContextDirectoryLoader,
         archive_raw_lines, _find_section_range,
     ) -> int:
         """The size-evict critical section — MUST be called while holding the
-        EVOLUTION.md flock (see _size_evict). Does the read-already-done →
-        evict → write under the caller's lock. Evicts DOWN TO `target` (low
-        watermark), not just under `threshold` (the trigger) — hysteresis headroom."""
+        EVOLUTION.md flock (see _size_evict). Evicts WHOLE ### blocks only, never
+        individual bullets (never splits an entry). Evicts DOWN TO `target` (low
+        watermark), not just under `threshold` — hysteresis headroom.
+
+        Robustness (Gate-1 refinements, run_a0ee2b4f):
+        - Block boundary = broad `^### ` (valve-local), so real correction headers
+          (Cxxx+trailing / ### ROOT-CAUSE / ### DATA-POINT) bound as whole blocks.
+        - A section with NO `### ` header is treated as ONE whole unit — evicted only
+          if the WHOLE unit is non-evergreen; never split into single bullets.
+        - Deletion is SELECT-THEN-DELETE-BOTTOM-UP against absolute offsets so no
+          captured offset goes stale mid-mutation (no content.replace substring race).
+        - All-or-nothing per block; a per-block archive failure skips that block only.
+        """
         moved = 0
         shard = self._evolution_archive_shard()
-        # Walk sections least-valuable-first; within each, evict non-evergreen entries.
+        cur_tokens = ContextDirectoryLoader.estimate_tokens(content)
+
+        # PHASE 1 — SELECT: walk sections least-valuable-first, collect the absolute
+        # (start, end, text) of every block to evict, using a PROJECTED token count so
+        # selection order (priority) is decoupled from physical deletion order.
+        to_evict: list[tuple[int, int, str, str]] = []  # (abs_start, abs_end, text, section)
+        projected = cur_tokens
         for section in self._EVICT_SECTION_ORDER:
-            if ContextDirectoryLoader.estimate_tokens(content) <= target:
+            if projected <= target:
                 break
             rng = _find_section_range(content, section)
             if rng is None:
                 continue
             header_end, next_pos = rng
             section_text = content[header_end:next_pos]
-            headers = list(_ENTRY_HEADER_RE.finditer(section_text))
-            if not headers:
-                # Non-###-structured section (e.g. Optimizations bold-label bullets):
-                # evict individual non-evergreen bullet LINES.
-                content, n = self._evict_bullet_lines(
-                    evo_path, content, section, header_end, next_pos,
-                    shard, target, ContextDirectoryLoader, archive_raw_lines,
-                )
-                moved += n
+            boundaries = list(self._BLOCK_BOUNDARY_RE.finditer(section_text))
+            if not boundaries:
+                # No ### structure → the WHOLE section body is one unit. Evict it whole
+                # ONLY if non-evergreen; NEVER split it into bullets.
+                if section_text.strip() and not self._is_evergreen(section_text):
+                    blk = section_text.rstrip("\n")
+                    if blk:
+                        to_evict.append((header_end, next_pos, blk, section))
+                        projected -= ContextDirectoryLoader.estimate_tokens(blk)
                 continue
-            # ### entry-structured section: evict whole non-evergreen entry blocks.
-            evict_blocks: list[str] = []
-            for i, m in enumerate(headers):
-                start = m.start()
-                end = headers[i + 1].start() if i + 1 < len(headers) else len(section_text)
-                block = section_text[start:end]
-                if not self._is_evergreen(block):
-                    evict_blocks.append(block)
-            for block in evict_blocks:
-                if ContextDirectoryLoader.estimate_tokens(content) <= target:
+            # ### -structured: each block runs from its boundary to the next (or section end).
+            for i, m in enumerate(boundaries):
+                if projected <= target:
                     break
-                # Move to shard (recall-backed) BEFORE stripping from live file.
-                try:
-                    archive_raw_lines(
-                        evo_path.parent, [block.rstrip("\n")], shard,
-                        source_path=evo_path,
-                        block_header=f"<!-- size-evicted from {section} -->",
-                        create_header=(
-                            "# EVOLUTION Archive — size-evicted entries\n\n"
-                            "Lower-value entries moved out of EVOLUTION.md to keep the "
-                            "always-injected file within the system-prompt budget. "
-                            "Recall-backed cold storage — retrievable on demand."
-                        ),
-                        dedup_by_signature=True,
-                    )
-                except (OSError, ValueError) as exc:
-                    logger.warning("size-evict archive append failed (skip block): %s", exc)
+                b_start = header_end + m.start()
+                b_end = (header_end + boundaries[i + 1].start()
+                         if i + 1 < len(boundaries) else next_pos)
+                block = content[b_start:b_end]
+                if self._is_evergreen(block):
                     continue
-                content = content.replace(block, "", 1)
-                moved += 1
+                to_evict.append((b_start, b_end, block.rstrip("\n"), section))
+                projected -= ContextDirectoryLoader.estimate_tokens(block)
+
+        if not to_evict:
+            self._raise_cap_signal_if_over(cur_tokens, threshold)
+            return 0
+
+        # PHASE 2 — ARCHIVE every selected block FIRST (move-not-delete; recall-backed).
+        # Only blocks that archive successfully are eligible for physical deletion.
+        deletable: list[tuple[int, int]] = []
+        for b_start, b_end, text, section in to_evict:
+            try:
+                archive_raw_lines(
+                    evo_path.parent, [text], shard,
+                    source_path=evo_path,
+                    block_header=f"<!-- size-evicted from {section} -->",
+                    create_header=(
+                        "# EVOLUTION Archive — size-evicted entries\n\n"
+                        "Lower-value entries moved out of EVOLUTION.md to keep the "
+                        "always-injected file within the system-prompt budget. "
+                        "Recall-backed cold storage — retrievable on demand."
+                    ),
+                    dedup_by_signature=True,
+                )
+            except (OSError, ValueError) as exc:
+                logger.warning("size-evict archive append failed (skip block): %s", exc)
+                continue
+            deletable.append((b_start, b_end))
+            moved += 1
+
+        # PHASE 3 — DELETE bottom-up (descending start) so earlier offsets stay valid.
+        for b_start, b_end in sorted(deletable, key=lambda p: p[0], reverse=True):
+            content = content[:b_start] + content[b_end:]
+
+        if moved:
             evo_path.write_text(content, encoding="utf-8")
 
         final = ContextDirectoryLoader.estimate_tokens(content)
@@ -789,57 +849,20 @@ class EvolutionMaintenanceHook:
                 "(final ~%d tok, target %d)", moved, "y" if moved == 1 else "ies",
                 shard, final, target,
             )
-        # Raise-the-cap signal (P6): still above the HIGH watermark (the real budget)
-        # after evicting everything non-evergreen → only judgment remains, never cut it.
-        # Compares to `threshold` (not `target`): being in the 12–15K headroom band is
-        # HEALTHY, not over-budget — only >15K with nothing left to evict is the signal.
-        if final > threshold:
+        self._raise_cap_signal_if_over(final, threshold)
+        return moved
+
+    @staticmethod
+    def _raise_cap_signal_if_over(final_tokens: int, threshold: int) -> None:
+        """P6 raise-the-cap signal: over the HIGH watermark but only evergreen core
+        remains → NEVER cut judgment. Compares to `threshold` (not `target`): the
+        12–15K headroom band is HEALTHY, only >15K with nothing evictable is the signal."""
+        if final_tokens > threshold:
             logger.warning(
                 "EVOLUTION over size budget (%d > %d tok) but only evergreen core "
                 "remains — NOT evicting judgment. Raise-the-cap decision needed.",
-                final, threshold,
+                final_tokens, threshold,
             )
-        return moved
-
-    def _evict_bullet_lines(
-        self, evo_path, content, section, header_end, next_pos,
-        shard, target, loader_cls, archive_raw_lines,
-    ) -> "tuple[str, int]":
-        """Evict individual non-evergreen bullet LINES from a non-###-structured
-        section (e.g. Optimizations Learned's O-Reference one-liners) DOWN TO the
-        low-watermark `target`. Returns (new_content, moved_count)."""
-        section_text = content[header_end:next_pos]
-        lines = section_text.splitlines(keepends=True)
-        moved = 0
-        kept: list[str] = []
-        evicted: list[str] = []
-        for line in lines:
-            stripped = line.strip()
-            is_bullet = stripped.startswith("- ")
-            if (is_bullet and not self._is_evergreen(line)
-                    and loader_cls.estimate_tokens(content) > target):
-                evicted.append(line.rstrip("\n"))
-                moved += 1
-                # Re-measure against a projected content (approx): drop from running.
-                content = content.replace(line, "", 1)
-            else:
-                kept.append(line)
-        if evicted:
-            try:
-                archive_raw_lines(
-                    evo_path.parent, evicted, shard, source_path=evo_path,
-                    block_header=f"<!-- size-evicted bullets from {section} -->",
-                    create_header=(
-                        "# EVOLUTION Archive — size-evicted entries\n\n"
-                        "Recall-backed cold storage — retrievable on demand."
-                    ),
-                    dedup_by_signature=True,
-                )
-            except (OSError, ValueError) as exc:
-                logger.warning("size-evict bullet archive failed: %s", exc)
-                return content, 0
-            evo_path.write_text(content, encoding="utf-8")
-        return content, moved
 
     def _deprecate_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
