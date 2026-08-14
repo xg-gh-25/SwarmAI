@@ -1087,32 +1087,27 @@ def _hybrid_section_scores(user_message: str, allow_embed: bool = False) -> dict
 
 
 def _full_injection(memory_content: str) -> str:
-    """Full injection mode: index + entire MEMORY.md body.
+    """Full injection mode: entire MEMORY.md body, NO in-prompt index.
 
     Power-first: Claude reads everything. No selection, no filtering.
-    The index serves as a navigation table of contents.
+
+    Unified-retrieval STEP3 (2026-08-14): the in-prompt navigation index is NO
+    LONGER injected. In full-injection mode the whole body is already present, so
+    a table-of-contents pointing INTO that same body is pure duplication (~15K/turn).
+    Recall selection now scans the ## section BODY directly (STEP1), so the index
+    serves no consumer. It is still GENERATED/maintained on disk (strangler-fig:
+    deleted in STEP5). Guiding principle: SwarmAI TECH.md § Architecture "活/冷二分".
     """
-    index_block = extract_index_from_memory(memory_content)
-    if not index_block:
-        raw = generate_memory_index(memory_content)
-        index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
-
     body = extract_body_without_index(memory_content)
-    if not body.strip():
-        return index_block
-
-    return index_block + "\n\n" + body
+    return body if body.strip() else ""
 
 
 def _channel_minimal(memory_content: str) -> str:
-    """Channel sessions: index + Open Threads only (no personal sections)."""
-    index_block = extract_index_from_memory(memory_content)
-    if not index_block:
-        raw = generate_memory_index(memory_content)
-        index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
+    """Channel sessions: Open Threads only (no personal sections, no in-prompt index).
 
+    STEP3 (2026-08-14): index no longer injected (see _full_injection)."""
     sections = parse_memory_sections(memory_content)
-    parts = [index_block]
+    parts: list[str] = []
 
     ot_content = sections.get("Open Threads", "")
     if ot_content.strip():
@@ -1186,19 +1181,18 @@ def select_memory_sections(
 
     sections = parse_memory_sections(memory_content)
 
-    # ── L0: Always include index ──
-    index_block = extract_index_from_memory(memory_content)
-    if not index_block:
-        raw = generate_memory_index(memory_content)
-        index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
-
-    parts: list[str] = [index_block]
-    # Operational budget accounting starts from the index only. Evergreen is a
-    # FLOOR that sits OUTSIDE this operational cap (see below) — deliberately NOT
+    # ── STEP3 (2026-08-14): the in-prompt index is NO LONGER injected. Section
+    # selection scans the ## section BODY directly (STEP1 body-BM25), so an
+    # in-prompt table-of-contents serves no consumer — injecting it was ~15K/turn
+    # of pure duplication. Index is still generated on disk (strangler-fig; deleted
+    # STEP5). Output = evergreen (always) + operational (budgeted), no index prefix.
+    parts: list[str] = []
+    # Operational budget accounting starts from ZERO (no index prefix). Evergreen is
+    # a FLOOR that sits OUTSIDE this operational cap (see below) — deliberately NOT
     # subtracted from `used_tokens`, so a large evergreen core can never starve the
     # operational keyword-matched sections. `used_tokens` bounds ONLY the
     # operational/ref/recall loop; evergreen is unconditional.
-    used_tokens = ContextDirectoryLoader.estimate_tokens(index_block)
+    used_tokens = 0
 
     # ── Always load: evergreen sections, FIRST + UNCONDITIONALLY (CYCLE 2/7) ──
     # Evergreen (principle/correction/COE/standing-preference/open-threads) is

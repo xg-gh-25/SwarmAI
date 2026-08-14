@@ -411,8 +411,9 @@ class TestSelectMemorySections:
         # Should NOT have a full "## Decisions" section loaded
         assert "## Decisions" not in result
 
-    def test_no_match_returns_index_plus_open_threads(self):
-        """When nothing matches, return index + Open Threads as minimum."""
+    def test_no_match_returns_open_threads_no_index(self):
+        """When nothing matches, Open Threads (evergreen) is the minimum — and the
+        in-prompt index is NEVER injected (STEP3, 2026-08-14)."""
         from core.memory_index import select_memory_sections
 
         result = select_memory_sections(
@@ -420,8 +421,9 @@ class TestSelectMemorySections:
             user_message="completely unrelated query about weather",
             session_signals={},
         )
-        assert "<!-- MEMORY_INDEX_START -->" in result
-        # Open Threads should be present
+        # STEP3: index markers must NOT appear in injected output
+        assert "<!-- MEMORY_INDEX_START -->" not in result
+        # Open Threads (evergreen) should be present
         assert "Signal fetcher" in result or "P0" in result
 
     def test_full_injection_for_small_memory(self):
@@ -439,6 +441,33 @@ class TestSelectMemorySections:
         assert "## Guidelines" in result
         assert "## Principles" in result
         assert "## Open Threads" in result
+
+    def test_no_index_injected_in_any_mode(self):
+        """STEP3 (2026-08-14): the in-prompt index is NEVER injected — not in full
+        mode, not in selective mode, not in channel mode. Section selection scans
+        body directly (STEP1), so the index serves no consumer. Teeth: re-adding
+        `parts=[index_block]` to any injection path makes this go RED."""
+        from core.memory_index import (
+            select_memory_sections, _full_injection, _channel_minimal,
+            MEMORY_INDEX_START, MEMORY_INDEX_END,
+        )
+
+        # full-injection mode (small memory)
+        full = _full_injection(SAMPLE_MEMORY)
+        assert MEMORY_INDEX_START not in full and MEMORY_INDEX_END not in full
+        # channel-minimal mode
+        chan = _channel_minimal(SAMPLE_MEMORY)
+        assert MEMORY_INDEX_START not in chan and MEMORY_INDEX_END not in chan
+        # via the public entrypoint (full path, since SAMPLE_MEMORY is small)
+        via = select_memory_sections(memory_content=SAMPLE_MEMORY, user_message="anything")
+        assert MEMORY_INDEX_START not in via and MEMORY_INDEX_END not in via
+        # channel via entrypoint
+        via_chan = select_memory_sections(
+            memory_content=SAMPLE_MEMORY, user_message="x", session_signals={"is_channel": True}
+        )
+        assert MEMORY_INDEX_START not in via_chan and MEMORY_INDEX_END not in via_chan
+        # body content still present (we removed the index, not the memory)
+        assert "## Open Threads" in full
 
     def test_selective_injection_runs_session_recall(self, monkeypatch, tmp_path):
         """Regression (run_edfad326): SessionRecall MUST be injected in the
