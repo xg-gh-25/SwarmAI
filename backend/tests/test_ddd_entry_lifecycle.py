@@ -564,6 +564,75 @@ class TestArchiveRawLines:
         assert n == 0
         assert not (ctx / "MEMORY-archive-2026-08.md").exists()
 
+    def test_dedup_by_signature_skips_already_archived_block(self, tmp_path):
+        # AC3 (shared dedup chokepoint): with dedup_by_signature=True, a block whose
+        # content_signature already exists in the shard is NOT appended again — this
+        # is what makes fold + size-valve double-move STRUCTURALLY impossible at the
+        # append layer (not reliant on the caller remembering). Format-variant of the
+        # SAME lesson must dedup (content_signature is format-agnostic).
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        evo.write_text("# EVOLUTION\n")
+        shard = "EVOLUTION-archive-2026-08.md"
+        # First archive of a data-point block.
+        n1 = archive_raw_lines(
+            tmp_path, ["- **CLASS A datapoint** — confidence skipped process."],
+            shard, source_path=evo, dedup_by_signature=True,
+        )
+        assert n1 == 1
+        # Second archive of the SAME lesson in a different bullet FORMAT (front-prefix
+        # + attribution) — content_signature normalizes both to the same sig → skipped.
+        n2 = archive_raw_lines(
+            tmp_path,
+            ["- **2026-08-14** (session abc123): **CLASS A datapoint** — "
+             "confidence skipped process. (2026-08-14, run_x)"],
+            shard, source_path=evo, dedup_by_signature=True,
+        )
+        assert n2 == 0, "dup lesson (format-variant) must be skipped by signature dedup"
+        body = (ctx / shard).read_text()
+        assert body.count("confidence skipped process") == 1, "no double-move in archive"
+
+    def test_dedup_by_signature_skips_MULTILINE_block(self, tmp_path):
+        # Gate-2 finding B: content_signature collapses newlines → a multi-line block
+        # reduces to ONE signature. A per-line shard index could never match it, so
+        # dedup was inert for multi-line blocks (fold + size-valve entries). This locks
+        # the fix: a multi-line ### entry archived twice must be written ONCE.
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        evo.write_text("# EVOLUTION\n")
+        shard = "EVOLUTION-archive-2026-08.md"
+        block = (
+            "### (folded from: ### CLASS X: Test)\n"
+            "- **RECURRENCE DATA-POINT (2026-08-02, run_b)**: a multi-line data point\n"
+            "  that wraps across several lines with real judgment content here.\n"
+        )
+        n1 = archive_raw_lines(tmp_path, [block], shard, source_path=evo,
+                               dedup_by_signature=True)
+        assert n1 == 1
+        n2 = archive_raw_lines(tmp_path, [block], shard, source_path=evo,
+                               dedup_by_signature=True)
+        assert n2 == 0, "multi-line block re-archive must be skipped by signature dedup"
+        body = (ctx / shard).read_text()
+        assert body.count("a multi-line data point") == 1, "no double-move of multi-line block"
+
+    def test_dedup_by_signature_off_by_default_preserves_legacy(self, tmp_path):
+        # Regression guard: existing callers (MEMORY reclaim) pass no dedup flag →
+        # default False → behavior UNCHANGED (append even if a dup, as before).
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        mem = ctx / "MEMORY.md"
+        mem.write_text("# MEMORY\n")
+        shard = "MEMORY-archive-2026-08.md"
+        archive_raw_lines(tmp_path, ["- **Dup line** — x."], shard, source_path=mem)
+        archive_raw_lines(tmp_path, ["- **Dup line** — x."], shard, source_path=mem)
+        body = (ctx / shard).read_text()
+        assert body.count("Dup line") == 2, "default (no dedup) must preserve legacy append"
+
 
 class TestReclaimNoiseEndToEnd:
     """E2E proof that the decay→archive mechanism actually SHRINKS the source

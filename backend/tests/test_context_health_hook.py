@@ -1044,8 +1044,13 @@ class TestEvolutionLifecycle:
         content = (ctx / "EVOLUTION.md").read_text()
         # exactly ONE survives (the exact-dup was archived+stripped)
         assert content.count("identical distilled text") == 1
-        archive = ctx / "EVOLUTION-archive.md"
-        assert archive.exists() and "identical distilled text" in archive.read_text()
+        # Archive is now a MONTHLY shard (unified with fold + size-valve), NOT the
+        # legacy fixed EVOLUTION-archive.md. Legacy file must not be (re)created here.
+        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
+        assert shards, "reclaim must write a monthly EVOLUTION-archive-YYYY-MM.md shard"
+        assert "identical distilled text" in shards[0].read_text()
+        assert not (ctx / "EVOLUTION-archive.md").exists(), \
+            "reclaim must not write the legacy fixed-name archive anymore"
 
 
 class TestNoProseBump:

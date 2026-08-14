@@ -870,22 +870,11 @@ class TestInverseTruncationCoherence:
         # Must fit under cap (with small headroom for the inverse rounding)
         assert est <= TOKEN_CAP_PER_DAILY_FILE, f"truncated content {est} > cap {TOKEN_CAP_PER_DAILY_FILE}"
 
-    def test_section_truncation_fits_target(self):
-        """_truncate_section keeps <= target tokens (inverse coherent with forward)."""
-        from core.context_directory_loader import ContextDirectoryLoader
-        loader = ContextDirectoryLoader.__new__(ContextDirectoryLoader)
-        content = " ".join(f"w{i}" for i in range(3000))
-        original = ContextDirectoryLoader.estimate_tokens(content)
-        overshoot = original - 500  # target ~500 tokens
-        truncated = loader._truncate_section(
-            content, "TestSec", original, overshoot,
-            "tail",
-            lambda n, c: ContextDirectoryLoader.estimate_tokens(c),
-        )
-        # the kept body (after the indicator line) must re-estimate <= target+headroom
-        body = truncated.split("]\n\n", 1)[-1]
-        est = ContextDirectoryLoader.estimate_tokens(body)
-        assert est <= 600, f"section truncation {est} exceeds ~500 target"
+    # test_section_truncation_fits_target DELETED 2026-08-14: it exercised the
+    # dead read-line `_truncate_section` (removed — read-line no longer truncates).
+    # The forward/inverse coefficient coherence is still covered by the DailyActivity
+    # truncation test above (prompt_builder._truncate_section_by_tokens, the remaining
+    # inverse path).
 
 
 class TestCoreSectionNames:

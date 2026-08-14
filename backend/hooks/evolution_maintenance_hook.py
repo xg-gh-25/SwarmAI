@@ -222,6 +222,26 @@ class EvolutionMaintenanceHook:
         # structurally blind to). Type-aware + fail-safe; re-reads content after.
         content = self._fold_corrections(evo_path, content, changelog_path)
 
+        # System-prompt size control (AFTER fold has shrunk the Corrections region):
+        # if EVOLUTION.md still exceeds the injection budget, move the lowest-value
+        # NON-evergreen entries to the monthly shard (recall-backed). Evergreen core
+        # is hard-protected. Runs AFTER fold so it measures the already-shrunk size
+        # (avoids over-archiving). dedup vs the reclaim sweep in context_health_hook is
+        # guaranteed by the shared archive_raw_lines content-signature dedup.
+        try:
+            evicted = self._size_evict(evo_path)
+            if evicted:
+                _append_changelog(
+                    changelog_path, "size_evict", f"{evicted} entries",
+                    f"Moved {evicted} low-value entr"
+                    f"{'y' if evicted == 1 else 'ies'} to monthly shard "
+                    f"(system-prompt size control, recall-backed)",
+                    source="size_valve",
+                )
+                content = evo_path.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — size control must never break maintenance
+            logger.warning("EVOLUTION size-evict skipped (error): %s", exc)
+
         deprecated_count = 0
         pruned_count = 0
 
@@ -474,6 +494,45 @@ class EvolutionMaintenanceHook:
     # leanest live file — folded points remain fully traceable in the archive).
     _FOLD_CAP = 2
 
+    # System-prompt size control: EVOLUTION.md is injected in FULL every session.
+    # Over this token budget the size-valve moves the LOWEST-value entries to the
+    # monthly shard (recall-backed cold storage — NOT deletion). The always-injected
+    # core (evergreen judgment) stays bounded. XG directive 2026-08-14: "default 全量
+    # 注入的 evolution 最大 15K token, 保证长青的每次都进, 其它依赖 recall".
+    _ARCHIVE_THRESHOLD_TOKENS = 15_000
+
+    # Markers that make an entry EVERGREEN core — HARD-PROTECTED, never size-evicted
+    # (C046 red-line + O029/L75 lesson: never bury hard-won judgment). Entry-level
+    # (NOT section-level) so the valve can distinguish a load-bearing correction from
+    # a low-value one-liner inside the SAME section (Gate-1-B decidability fix).
+    _EVERGREEN_MARKERS = (
+        "**Pattern**", "**Durable tell**", "CAPSTONE", "METHOD FIX",
+        "DIRECTIVE-OVERRIDE", "META-CORRECTION",
+    )
+
+    @staticmethod
+    def _is_evergreen(entry_block: str) -> bool:
+        """True if an entry carries core-judgment markers → never size-evictable.
+        Entry-level (not section-level): a `### CLASS ...` parent header OR any of the
+        core markers (**Pattern**/**Durable tell**/CAPSTONE/METHOD FIX/DIRECTIVE-
+        OVERRIDE/META-CORRECTION) inside the block. A plain one-liner (O-Reference,
+        an old capability record) carries none → evictable low-value."""
+        for line in entry_block.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("### CLASS "):
+                return True
+        return any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS)
+
+    @staticmethod
+    def _evolution_archive_shard(today: "date | None" = None) -> str:
+        """Monthly archive shard name — mirrors the proven MEMORY pattern
+        (context_health_hook:2126 f'MEMORY-archive-{today:%Y-%m}.md'). ALL EVOLUTION
+        archive writers (fold, reclaim, size-valve) resolve their target through this
+        one helper so the write-month is computed in ONE place, not per-site."""
+        if today is None:
+            today = datetime.now(timezone.utc).date()
+        return f"EVOLUTION-archive-{today.strftime('%Y-%m')}.md"
+
     def _fold_corrections(
         self, evo_path: Path, content: str, changelog_path: Path
     ) -> str:
@@ -525,29 +584,33 @@ class EvolutionMaintenanceHook:
             locked_read_modify_write(
                 evo_path, "Corrections Captured", new_body, mode="replace",
             )
-            # 2) Append folded blocks to the archive (forward-append recovery
-            #    path — NOT a backup copy; STEERING #2 bans backup-copy reflex).
-            archive_path = evo_path.parent / "EVOLUTION-archive.md"
+            # 2) Append folded blocks to the MONTHLY archive shard via the shared
+            #    archive_raw_lines chokepoint (converged with reclaim + size-valve;
+            #    dedup_by_signature=True makes fold+valve double-move structurally
+            #    impossible). Forward-append recovery path — NOT a backup copy
+            #    (STEERING #2 bans backup-copy reflex). Lands in gitignored .context/
+            #    via source_path (private partition).
             if result.archived_blocks:
+                from core.ddd_entry_lifecycle import archive_raw_lines
+                shard = self._evolution_archive_shard()
                 header = (
-                    f"\n<!-- folded {len(result.archived_blocks)} data-point(s) "
-                    f"from Corrections Captured -->\n"
+                    f"<!-- folded {len(result.archived_blocks)} data-point(s) "
+                    f"from Corrections Captured -->"
                 )
-                block_text = header + "\n\n".join(result.archived_blocks) + "\n"
-                if not archive_path.exists():
-                    archive_path.write_text(
-                        "# EVOLUTION Archive — folded data-points\n\n"
-                        "Full text of RECURRENCE/CONTAINMENT DATA-POINTs folded out "
-                        "of EVOLUTION.md's Corrections Captured section to keep the "
-                        "live cognitive file lean. Traceable by run-id.\n",
-                        encoding="utf-8",
-                    )
                 try:
-                    locked_read_modify_write(
-                        archive_path, "EVOLUTION Archive — folded data-points",
-                        block_text, mode="append",
+                    archive_raw_lines(
+                        evo_path.parent, result.archived_blocks, shard,
+                        source_path=evo_path,
+                        block_header=header,
+                        create_header=(
+                            "# EVOLUTION Archive — folded data-points\n\n"
+                            "Full text of RECURRENCE/CONTAINMENT DATA-POINTs folded "
+                            "out of EVOLUTION.md's Corrections Captured section to "
+                            "keep the live cognitive file lean. Traceable by run-id."
+                        ),
+                        dedup_by_signature=True,
                     )
-                except (OSError, LockedWriteError) as arch_exc:
+                except (OSError, ValueError) as arch_exc:
                     # Body already folded+marked; a failed archive append is NOT
                     # data loss (folded text lives in EVOLUTION history) and will
                     # NOT re-fold (marker present). Log and continue.
@@ -571,6 +634,195 @@ class EvolutionMaintenanceHook:
             # Fail-safe on write error: keep original in-memory content.
             logger.warning("Corrections folding write failed: %s", exc)
             return content
+
+    # ── Low-value ordering for the size-valve (least → most valuable) ──
+    # Sections whose entries are relatively low-value are evicted FIRST. Core
+    # judgment sections (Corrections, Design Philosophy) are last-resort and their
+    # evergreen entries are hard-protected regardless. "Optimizations Learned"
+    # O-Reference one-liners are the author-declared "archived for lookup" content.
+    _EVICT_SECTION_ORDER = (
+        "Failed Evolutions",
+        "Competence Learned",
+        "Capabilities Built",
+        "Optimizations Learned",
+        "Corrections Captured",
+    )
+
+    def _size_evict(self, evo_path: Path, threshold_tokens: int | None = None) -> int:
+        """System-prompt size control (runs AFTER fold+dedup have shrunk the file).
+
+        If EVOLUTION.md exceeds the token threshold, move the LOWEST-value NON-evergreen
+        entries to the monthly shard (recall-backed cold storage) until back under
+        threshold OR only evergreen core remains. Evergreen core is NEVER evicted
+        (P6: at that point log a raise-the-cap signal, don't cut judgment). Returns
+        the number of entries moved.
+
+        Move-not-delete: every evicted block is appended to the shard via the shared
+        archive_raw_lines chokepoint (dedup_by_signature=True → no double-move with
+        fold) BEFORE it is stripped from the live file, so nothing is lost.
+        """
+        from core.context_directory_loader import ContextDirectoryLoader
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        from scripts.locked_write import _find_section_range, LOCK_TIMEOUT
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+
+        threshold = threshold_tokens if threshold_tokens is not None else self._ARCHIVE_THRESHOLD_TOKENS
+
+        # Gate-2 finding G (HIGH): the read→evict→write critical section MUST hold the
+        # SAME .md.lock flock every other EVOLUTION writer honors (anti-pattern #5) —
+        # else a concurrent writer between our read and write is a lost-update that
+        # silently clobbers the always-injected cognitive file. Mirror _prune_entry:
+        # acquire the flock, re-read INSIDE the lock, mutate, write, release in finally.
+        lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
+        fd = None
+        try:
+            fd = open(lock_path, "w")
+            deadline = time.monotonic() + LOCK_TIMEOUT
+            while True:
+                try:
+                    flock_exclusive_nb(fd)
+                    break
+                except (BlockingIOError, OSError):
+                    if time.monotonic() >= deadline:
+                        logger.warning("Lock timeout in size-evict — skipping (no clobber)")
+                        return 0
+                    time.sleep(0.1)
+
+            # Fresh read UNDER the lock (never trust a pre-lock read — that is the race).
+            try:
+                content = evo_path.read_text(encoding="utf-8")
+            except OSError:
+                return 0
+            if ContextDirectoryLoader.estimate_tokens(content) <= threshold:
+                return 0
+
+            moved = self._size_evict_locked(
+                evo_path, content, threshold,
+                ContextDirectoryLoader, archive_raw_lines, _find_section_range,
+            )
+            return moved
+        finally:
+            if fd is not None:
+                try:
+                    flock_unlock(fd)
+                finally:
+                    fd.close()
+
+    def _size_evict_locked(
+        self, evo_path, content, threshold, ContextDirectoryLoader,
+        archive_raw_lines, _find_section_range,
+    ) -> int:
+        """The size-evict critical section — MUST be called while holding the
+        EVOLUTION.md flock (see _size_evict). Does the read-already-done →
+        evict → write under the caller's lock."""
+        moved = 0
+        shard = self._evolution_archive_shard()
+        # Walk sections least-valuable-first; within each, evict non-evergreen entries.
+        for section in self._EVICT_SECTION_ORDER:
+            if ContextDirectoryLoader.estimate_tokens(content) <= threshold:
+                break
+            rng = _find_section_range(content, section)
+            if rng is None:
+                continue
+            header_end, next_pos = rng
+            section_text = content[header_end:next_pos]
+            headers = list(_ENTRY_HEADER_RE.finditer(section_text))
+            if not headers:
+                # Non-###-structured section (e.g. Optimizations bold-label bullets):
+                # evict individual non-evergreen bullet LINES.
+                content, n = self._evict_bullet_lines(
+                    evo_path, content, section, header_end, next_pos,
+                    shard, threshold, ContextDirectoryLoader, archive_raw_lines,
+                )
+                moved += n
+                continue
+            # ### entry-structured section: evict whole non-evergreen entry blocks.
+            evict_blocks: list[str] = []
+            for i, m in enumerate(headers):
+                start = m.start()
+                end = headers[i + 1].start() if i + 1 < len(headers) else len(section_text)
+                block = section_text[start:end]
+                if not self._is_evergreen(block):
+                    evict_blocks.append(block)
+            for block in evict_blocks:
+                if ContextDirectoryLoader.estimate_tokens(content) <= threshold:
+                    break
+                # Move to shard (recall-backed) BEFORE stripping from live file.
+                try:
+                    archive_raw_lines(
+                        evo_path.parent, [block.rstrip("\n")], shard,
+                        source_path=evo_path,
+                        block_header=f"<!-- size-evicted from {section} -->",
+                        create_header=(
+                            "# EVOLUTION Archive — size-evicted entries\n\n"
+                            "Lower-value entries moved out of EVOLUTION.md to keep the "
+                            "always-injected file within the system-prompt budget. "
+                            "Recall-backed cold storage — retrievable on demand."
+                        ),
+                        dedup_by_signature=True,
+                    )
+                except (OSError, ValueError) as exc:
+                    logger.warning("size-evict archive append failed (skip block): %s", exc)
+                    continue
+                content = content.replace(block, "", 1)
+                moved += 1
+            evo_path.write_text(content, encoding="utf-8")
+
+        if moved:
+            logger.info(
+                "EVOLUTION size-evict: moved %d low-value entr%s to %s "
+                "(final ~%d tok)", moved, "y" if moved == 1 else "ies", shard,
+                ContextDirectoryLoader.estimate_tokens(content),
+            )
+        elif ContextDirectoryLoader.estimate_tokens(content) > threshold:
+            # Only evergreen core remains and it's STILL over budget → raise-the-cap
+            # signal, never cut judgment (P6). Surface, do not evict.
+            logger.warning(
+                "EVOLUTION over size budget (%d > %d tok) but only evergreen core "
+                "remains — NOT evicting judgment. Raise-the-cap decision needed.",
+                ContextDirectoryLoader.estimate_tokens(content), threshold,
+            )
+        return moved
+
+    def _evict_bullet_lines(
+        self, evo_path, content, section, header_end, next_pos,
+        shard, threshold, loader_cls, archive_raw_lines,
+    ) -> "tuple[str, int]":
+        """Evict individual non-evergreen bullet LINES from a non-###-structured
+        section (e.g. Optimizations Learned's O-Reference one-liners). Returns
+        (new_content, moved_count)."""
+        section_text = content[header_end:next_pos]
+        lines = section_text.splitlines(keepends=True)
+        moved = 0
+        kept: list[str] = []
+        evicted: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            is_bullet = stripped.startswith("- ")
+            if (is_bullet and not self._is_evergreen(line)
+                    and loader_cls.estimate_tokens(content) > threshold):
+                evicted.append(line.rstrip("\n"))
+                moved += 1
+                # Re-measure against a projected content (approx): drop from running.
+                content = content.replace(line, "", 1)
+            else:
+                kept.append(line)
+        if evicted:
+            try:
+                archive_raw_lines(
+                    evo_path.parent, evicted, shard, source_path=evo_path,
+                    block_header=f"<!-- size-evicted bullets from {section} -->",
+                    create_header=(
+                        "# EVOLUTION Archive — size-evicted entries\n\n"
+                        "Recall-backed cold storage — retrievable on demand."
+                    ),
+                    dedup_by_signature=True,
+                )
+            except (OSError, ValueError) as exc:
+                logger.warning("size-evict bullet archive failed: %s", exc)
+                return content, 0
+            evo_path.write_text(content, encoding="utf-8")
+        return content, moved
 
     def _deprecate_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path

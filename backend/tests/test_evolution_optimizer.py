@@ -164,6 +164,52 @@ class TestOptimizationResultDataclass:
         assert len(result.changes) == 1
 
 
+class TestLogToEvolutionGated:
+    """Sub-change 6 (王道① front-door consistency): _log_to_evolution — the last
+    ungated EVOLUTION writer — now routes its write through ingestion_gate
+    (store=EVOLUTION, trigger=evolution_persist). Non-auto verdict → log+skip
+    (best-effort preserved; optimizer never blocks). Consistency/telemetry gate
+    (evolution_persist has no judge), NOT a quality filter — every EVOLUTION door
+    goes through the one admission chokepoint (P8)."""
+
+    def _result(self):
+        return OptimizationResult(
+            skill_name="demo", original_score=0.5, optimized_score=0.8,
+            changes=[TextChange(original="a", replacement="b", reason="tightened wording")],
+            accepted=True, reason="ok",
+        )
+
+    def _evo_via_skills_fallback(self, tmp_path):
+        # optimizer resolves evo_path via skills_dir.parent.parent/.context when
+        # config is absent. skills_dir fixture = tmp_path/skills → .context at tmp_path.
+        ctx = tmp_path / ".context"
+        ctx.mkdir(exist_ok=True)
+        evo = ctx / "EVOLUTION.md"
+        evo.write_text("# E\n\n## Competence Learned\n\n_None._\n")
+        return evo
+
+    def test_log_routes_through_ingestion_gate(self, tmp_path, optimizer):
+        self._evo_via_skills_fallback(tmp_path)
+        from core.ingestion_gate import GateVerdict
+        with patch("core.ingestion_gate.ingestion_gate") as gate:
+            gate.return_value = GateVerdict(verdict="auto", tiers_run=["noise", "thin", "dedup"], reason="")
+            optimizer._log_to_evolution(self._result())
+            assert gate.called, "_log_to_evolution must route the write through ingestion_gate"
+            kwargs = gate.call_args.kwargs
+            args = gate.call_args.args
+            store = kwargs.get("store") or (args[1] if len(args) > 1 else None)
+            assert store == "EVOLUTION"
+
+    def test_non_auto_verdict_skips_write(self, tmp_path, optimizer):
+        evo = self._evo_via_skills_fallback(tmp_path)
+        from core.ingestion_gate import GateVerdict
+        with patch("core.ingestion_gate.ingestion_gate") as gate:
+            gate.return_value = GateVerdict(verdict="discard", tiers_run=["noise"], reason="noise:structural")
+            optimizer._log_to_evolution(self._result())
+            body = evo.read_text()
+            assert "Auto-optimized" not in body, "non-auto verdict must skip the write (log+skip)"
+
+
 class TestRunEvolutionCycle:
     """Tests for the run_evolution_cycle convenience function."""
 

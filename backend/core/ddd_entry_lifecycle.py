@@ -995,6 +995,7 @@ def archive_raw_lines(
     source_path: "Path | None" = None,
     block_header: "str | None" = None,
     create_header: "str | None" = None,
+    dedup_by_signature: bool = False,
 ) -> int:
     """Append pre-formatted raw markdown lines to an archive file (the raw-line
     sibling of archive_entries).
@@ -1028,15 +1029,57 @@ def archive_raw_lines(
             archive_entries' "no references for 90+ days" decay blurb, which is
             factually wrong for RC/OT/section-cap content. None → a neutral
             "# Memory Archive" header.
+        dedup_by_signature: When True, each incoming line whose format-agnostic
+            ``content_signature`` already appears in the existing shard is SKIPPED
+            (not appended). This is the shared append-layer guard that makes
+            fold + size-valve double-move STRUCTURALLY impossible — a lesson already
+            archived (in ANY bullet format) is never written twice, regardless of
+            which writer sends it. Default False preserves the legacy append-always
+            behavior for existing callers (MEMORY reclaim). A block that reduces to
+            an empty signature (no real content) is never treated as a dup.
 
     Returns:
-        Number of lines archived (0 = no-op, nothing written).
+        Number of lines archived (0 = no-op, nothing written; dup-skipped lines
+        do not count).
     """
     if not lines:
         return 0
 
     archive_path = _resolve_archive_path(project_dir, archive_name, source_path)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if dedup_by_signature:
+        # Skip any incoming ITEM whose content_signature already appears in the shard.
+        # An incoming `lines` element may be a MULTI-LINE block (a folded/evicted
+        # entry), and content_signature collapses ALL internal whitespace to single
+        # spaces (ddd_cultivation) — so a block reduces to ONE signature. We must
+        # therefore match that block-signature against a WHOLE-SHARD normalized
+        # haystack (a substring test), NOT against per-line signatures (which could
+        # never reconstruct a multi-line block's sig — the Gate-2 finding B bug).
+        # content_signature is the SSOT for the needle; the haystack applies the SAME
+        # final normalization (drop **, lowercase, collapse whitespace) so the needle,
+        # whose edge markers/attribution are additionally stripped, is a substring.
+        # Function-local import (verified: no cycle — cultivation imports lifecycle).
+        from core.ddd_cultivation import content_signature  # noqa: PLC0415
+        import re as _re  # noqa: PLC0415
+
+        def _normalize_haystack(text: str) -> str:
+            return _re.sub(r"\s+", " ", text.replace("**", " ")).strip().lower()
+
+        haystack = ""
+        if archive_path.exists():
+            haystack = _normalize_haystack(archive_path.read_text(encoding="utf-8"))
+        kept: list[str] = []
+        for item in lines:
+            sig = content_signature(item)
+            if sig and sig in haystack:
+                continue  # already archived (any format) — do not double-move
+            if sig:
+                haystack += " " + sig  # guard intra-batch dups too
+            kept.append(item)
+        lines = kept
+        if not lines:
+            return 0
 
     block_parts: list[str] = []
     if block_header:

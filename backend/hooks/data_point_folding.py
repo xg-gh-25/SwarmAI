@@ -184,7 +184,8 @@ def _summary_line(folded: list[_Bullet]) -> str:
     archived_ids = " ".join(b.owner_run_id for b in folded if b.owner_run_id)
     return (
         f"  - **[{len(folded)} earlier data-points folded to archive]** — "
-        f"traceability preserved (full text in EVOLUTION-archive.md): "
+        f"traceability preserved (full text in the .context/EVOLUTION-archive-*.md "
+        f"monthly shards): "
         f"{', '.join(refs)}. "
         f"<!-- folded archived={archived_ids} -->\n"
     )

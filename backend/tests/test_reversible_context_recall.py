@@ -58,45 +58,9 @@ def _large_memory() -> str:
     return index + "\n" + "\n\n".join(sections)
 
 
-# ── AC5: entropy-token boundary guarantee (characterization lock) ──────────
-
-def _stf(name: str, content: str) -> int:
-    return ContextDirectoryLoader.estimate_tokens(f"## {name}\n{content}")
-
-
-def test_ac5_truncation_never_bisects_entropy_tokens():
-    """_truncate_section is word-level; entropy tokens (no internal whitespace)
-    must never appear sliced. Locks the guarantee against a future regression
-    to character-level truncation."""
-    loader = ContextDirectoryLoader.__new__(ContextDirectoryLoader)
-    ids = [
-        "run_a1b2c3d4e5f6",
-        "9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc",  # 40-hex SHA
-        "/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/x.py",
-    ]
-    words = []
-    for i in range(200):
-        words.append(f"filler{i}")
-        if i % 7 == 0:
-            words.append(ids[i % 3])
-    content = " ".join(words)
-    orig = _stf("Test", content)
-
-    id_set = set(ids)
-    checks = 0
-    for overshoot in range(1, orig, max(1, orig // 40)):
-        for direction in ("tail", "head"):
-            out = loader._truncate_section(content, "Test", orig, overshoot, direction, _stf)
-            checks += 1
-            body = re.sub(r"\[Truncated:.*?tokens\]", "", out)
-            toks = body.split()
-            # Every id that survives must be intact (== full id), never a prefix/suffix slice.
-            for full in ids:
-                for t in toks:
-                    if t != full and (full.startswith(t) or full.endswith(t)) and t not in {f"filler{i}" for i in range(200)}:
-                        # a non-filler partial of an id = bisection
-                        assert t in id_set, f"entropy token bisected: {t!r} from {full!r} (dir={direction}, overshoot={overshoot})"
-    assert checks > 0
+# ── AC5 DELETED 2026-08-14: locked the word-boundary guarantee of the read-line
+# `_truncate_section`, which was removed (read-line no longer truncates — size
+# governance is the write-side line's job). No read-line truncator remains to guard.
 
 
 # ── AC1: zero-exclusion sessions add zero manifest tokens ──────────────────

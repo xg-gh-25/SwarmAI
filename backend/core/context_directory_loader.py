@@ -48,10 +48,11 @@ logger = logging.getLogger(__name__)
 
 # Token-estimation coefficients — CALIBRATED against the real opus-4-8
 # tokenizer (run_3f25a73a, 2026-06-28; bedrock invoke_model usage.input_tokens,
-# baseline-subtracted). These are the SINGLE SOURCE OF TRUTH: both the forward
-# estimate (estimate_tokens) AND the inverse truncation paths
-# (_truncate_section here, prompt_builder DailyActivity truncation) derive from
-# them, so the forward/inverse relationship can never drift (Gate-1 finding A).
+# baseline-subtracted). These are the SINGLE SOURCE OF TRUTH: the forward
+# estimate (estimate_tokens) AND prompt_builder's DailyActivity truncation derive
+# from them, so the forward/inverse relationship can never drift (Gate-1 finding A).
+# (The read-line's own truncator was removed 2026-08-14 — read-line no longer
+# truncates; size governance is the write-side line's job.)
 #
 # Measured: CJK ~1.06-1.11 tok/char, Latin ~2.0-2.5 tok/word (markdown/technical).
 # The OLD values (CJK 0.667, Latin 1.333) under-counted real content ~40-65%.
@@ -402,9 +403,8 @@ class ContextDirectoryLoader:
         content by ~40-65% — they made the system mis-report its own context
         size (self-reported ~44K when real was ~154K). The coefficients now
         live in the module-level constants below so the FORWARD estimate and
-        the INVERSE truncation paths (``_truncate_section`` here,
-        ``prompt_builder._truncate_section_by_tokens``) derive from ONE source
-        and can never drift (Gate-1 finding A).
+        ``prompt_builder._truncate_section_by_tokens`` (the remaining inverse path)
+        derive from ONE source and can never drift (Gate-1 finding A).
 
         This avoids the major underestimation that occurs with pure
         word-split on CJK text (a Chinese paragraph may be 1 "word"
@@ -891,16 +891,16 @@ class ContextDirectoryLoader:
         sections: list[tuple[int, str, str, bool, str]],
         budget: int | None = None,
     ) -> list[tuple[int, str, str, bool, str]]:
-        """Truncate sections from lowest priority to fit token budget.
+        """Budget CHECK — read-line does NOT truncate (2026-06-28 directive).
 
         Processes a list of
         ``(priority, section_name, content, truncatable, truncate_from)``
-        tuples.  When the total token count exceeds the budget, truncatable
-        sections are progressively shortened starting from the lowest
-        priority (highest number) upward.
-
-        Delegates to ``_truncate_section_tail()`` or
-        ``_truncate_section_head()`` based on the ``truncate_from`` field.
+        tuples. On budget overshoot it emits a WARNING and returns the sections
+        UNTRUNCATED — the assembly line's only job is to assemble; size governance
+        is the write-side management line's job (fold + dedup + size-valve in
+        evolution_maintenance_hook). The ``truncatable``/``truncate_from`` fields are
+        retained as budget metadata + conceptual-core classification, NOT as a live
+        truncation trigger (the former ``_truncate_section`` was deleted 2026-08-14).
 
         Args:
             sections: List of section tuples in ascending priority order.
@@ -908,9 +908,7 @@ class ContextDirectoryLoader:
                 ``self.token_budget`` when ``None``.
 
         Returns:
-            The same list structure with truncated content where needed.
-
-        Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 10.2, 16.1, 16.3, 16.4, 16.5
+            The same list structure, UNCHANGED (never truncated).
         """
         if not sections:
             return sections
@@ -953,53 +951,14 @@ class ContextDirectoryLoader:
         )
         return sections
 
-    def _truncate_section(
-        self,
-        content: str,
-        section_name: str,
-        original_tokens: int,
-        overshoot: int,
-        truncate_from: str,
-        section_tokens_fn,
-    ) -> str:
-        """Partially truncate a section's content to save *overshoot* tokens.
-
-        Args:
-            content: Original section content.
-            section_name: Section header name (for token estimation).
-            original_tokens: Token count of the full section.
-            overshoot: How many tokens to save.
-            truncate_from: ``"head"`` keeps end, ``"tail"`` keeps beginning.
-            section_tokens_fn: Callable(section_name, content) → int.
-
-        Returns:
-            Truncated content with ``[Truncated]`` indicator.
-        """
-        target_section_tokens = original_tokens - overshoot
-        header_tokens = self.estimate_tokens(f"## {section_name}\n")
-        target_content_tokens = max(0, target_section_tokens - header_tokens)
-
-        words = content.split()
-        # Inverse of the Latin token coefficient: tokens = words * LATIN_TOKENS_PER_WORD,
-        # so words = tokens / LATIN_TOKENS_PER_WORD. Derived from the SAME constant as
-        # the forward estimate (Gate-1 finding A) — never hardcode the inverse, or it
-        # drifts when the coefficient is recalibrated.
-        words_to_keep = max(0, int(target_content_tokens / LATIN_TOKENS_PER_WORD))
-
-        if truncate_from == "head":
-            truncated = " ".join(words[-words_to_keep:]) if words_to_keep else ""
-            indicator = (
-                f"[Truncated: {original_tokens:,} → "
-                f"{section_tokens_fn(section_name, truncated):,} tokens]\n\n"
-            )
-            return indicator + truncated
-        else:
-            truncated = " ".join(words[:words_to_keep])
-            indicator = (
-                f"\n\n[Truncated: {original_tokens:,} → "
-                f"{section_tokens_fn(section_name, truncated):,} tokens]"
-            )
-            return truncated + indicator
+    # NOTE: the former `_truncate_section` (head/tail word-slicing) was DELETED
+    # 2026-08-14 — it was dead code. Since the 2026-06-28 directive (see
+    # `_enforce_token_budget` above) the read-line NEVER truncates; size governance
+    # is entirely the write-side management line's job (fold + dedup +
+    # size-valve in evolution_maintenance_hook). Do NOT re-add a read-line truncator:
+    # ContextFileSpec.truncatable/truncate_from are retained ONLY as budget-overflow
+    # metadata + the conceptual-core classification (see the field docstring), not as
+    # a live truncation trigger.
 
     # ── L1 Cache ───────────────────────────────────────────────────────
 

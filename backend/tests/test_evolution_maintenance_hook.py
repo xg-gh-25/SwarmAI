@@ -243,3 +243,138 @@ class TestEvolutionWeeklyTriggerRemoved:
     def test_maybe_run_evolution_is_gone(self):
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
         assert not hasattr(EvolutionMaintenanceHook, "_maybe_run_evolution")
+
+
+class TestFoldWritesToMonthlyShard:
+    """Sub-change 2: fold archives to a MONTHLY shard .context/EVOLUTION-archive-{YYYY-MM}.md
+    (mirrors the proven MEMORY pattern context_health_hook:2126), NOT the fixed
+    legacy EVOLUTION-archive.md. Legacy file is left untouched (pre-2026-08 history)."""
+
+    def _evolution_with_foldable_family(self) -> str:
+        # A Corrections family with 3 foldable DATA-POINTs (cap=2 → 1 archived).
+        return (
+            "# SwarmAI Evolution Registry\n\n"
+            "## Corrections Captured\n\n"
+            "### CLASS X: Test Family\n"
+            "- **RECURRENCE DATA-POINT (2026-08-01, run_a)**: first anchor point one.\n"
+            "- **RECURRENCE DATA-POINT (2026-08-02, run_b)**: second point two.\n"
+            "- **RECURRENCE DATA-POINT (2026-08-03, run_c)**: third point three.\n"
+        )
+
+    def test_shard_helper_returns_monthly_name(self):
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        from datetime import date
+        hook = EvolutionMaintenanceHook(context_dir=Path("/tmp/x"))
+        shard = hook._evolution_archive_shard(date(2026, 8, 14))
+        assert shard == "EVOLUTION-archive-2026-08.md"
+
+    def test_fold_writes_monthly_shard_not_legacy(self, tmp_path):
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        evo.write_text(self._evolution_with_foldable_family())
+        changelog = ctx / "EVOLUTION_CHANGELOG.jsonl"
+        hook = EvolutionMaintenanceHook(context_dir=ctx)
+        content = evo.read_text()
+        hook._fold_corrections(evo, content, changelog)
+        # New monthly shard exists and holds the archived data-point.
+        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
+        assert shards, "fold must write a monthly EVOLUTION-archive-YYYY-MM.md shard"
+        shard_body = shards[0].read_text()
+        # fold keeps anchor+recent per cap=2, archives the middle data-point(s) —
+        # assert a real DATA-POINT block landed, not which specific one.
+        assert "RECURRENCE DATA-POINT" in shard_body
+        assert "folded" in shard_body
+        # Legacy fixed-name file must NOT be created by fold anymore.
+        assert not (ctx / "EVOLUTION-archive.md").exists(), \
+            "fold must not write the legacy fixed-name archive"
+
+
+class TestSizeValve:
+    """Sub-change 5: system-prompt size control. EVOLUTION.md is injected in full
+    every session; over EVOLUTION_ARCHIVE_THRESHOLD (15K tok) the valve moves the
+    LOWEST-value entries to the monthly shard (recall-backed cold storage, not
+    deletion) so the always-injected core stays bounded. Evergreen core (Pattern/
+    Durable tell/CAPSTONE/METHOD FIX/CLASS parent) is HARD-PROTECTED — never moved."""
+
+    def test_is_evergreen_hard_protects_core_markers(self):
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        h = EvolutionMaintenanceHook(context_dir=Path("/tmp/x"))
+        # Entries carrying core judgment markers → evergreen (never evictable).
+        assert h._is_evergreen("### C049 | 2026-08-11\n- **Pattern**: x\n- **Durable tell**: y")
+        assert h._is_evergreen("### CLASS A: Confidence → Skip Process\n- chain...")
+        assert h._is_evergreen("- **METHOD FIX — dive protocol**: observe first")
+        assert h._is_evergreen("- **CAPSTONE (2026-08-06)**: the write-side rule")
+        # A plain O-Reference one-liner → NOT evergreen (evictable low-value).
+        assert not h._is_evergreen("- O001 (CDP), O002 (DOM depth), O004 (nc -z > lsof)")
+
+    def test_valve_noop_under_threshold(self, tmp_path):
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        evo.write_text("# EVOLUTION\n\n## Optimizations Learned\n- **O003**: short.\n")
+        h = EvolutionMaintenanceHook(context_dir=ctx)
+        moved = h._size_evict(evo, threshold_tokens=15000)
+        assert moved == 0, "under threshold → no eviction"
+        assert not list(ctx.glob("EVOLUTION-archive-*.md")), "no shard written when under threshold"
+
+    def test_valve_evicts_low_value_preserves_evergreen(self, tmp_path):
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        # Build an over-threshold file: 1 evergreen correction (pattern+tell) that MUST
+        # stay + a large low-value Reference blob that should be evicted first.
+        big_ref = "\n".join(
+            f"- O{100+i} (some occasionally-triggered optimization lesson number {i} "
+            + "padding " * 60 + ")" for i in range(200)
+        )
+        evergreen = (
+            "## Corrections Captured\n"
+            "### C049 | 2026-08-11 [Bias A]\n"
+            "- **Correction**: a load-bearing correction.\n"
+            "- **Pattern**: improve-before-justify.\n"
+            "- **Durable tell**: the clarity-excitement IS the signal.\n\n"
+        )
+        evo.write_text(
+            "# EVOLUTION\n\n" + evergreen
+            + "## Optimizations Learned\n\n"
+            "**Reference (triggered occasionally, archived for lookup):**\n"
+            + big_ref + "\n"
+        )
+        from core.context_directory_loader import ContextDirectoryLoader
+        before = ContextDirectoryLoader.estimate_tokens(evo.read_text())
+        assert before > 15000, f"fixture must exceed threshold (got {before})"
+        h = EvolutionMaintenanceHook(context_dir=ctx)
+        moved = h._size_evict(evo, threshold_tokens=15000)
+        assert moved > 0, "over threshold → evicts low-value"
+        body = evo.read_text()
+        # Evergreen correction + its pattern/tell SURVIVE.
+        assert "load-bearing correction" in body
+        assert "**Pattern**: improve-before-justify" in body
+        assert "**Durable tell**" in body
+        # Low-value Reference content moved to the monthly shard (recall-backed).
+        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
+        assert shards, "evicted content must land in a monthly shard"
+        assert "occasionally-triggered optimization lesson" in shards[0].read_text()
+
+    def test_valve_never_evicts_below_core_even_if_over(self, tmp_path):
+        # If ONLY evergreen core remains and it's still over threshold, the valve
+        # does NOT evict core — it stops (P6: raise-the-cap signal, never cut core).
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        core_blob = "\n".join(
+            f"### C{i:03d} | 2026-08-01\n- **Pattern**: p{i} " + "judgment " * 60 + "\n"
+            f"- **Durable tell**: t{i}\n" for i in range(80)
+        )
+        evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + core_blob)
+        h = EvolutionMaintenanceHook(context_dir=ctx)
+        moved = h._size_evict(evo, threshold_tokens=15000)
+        body = evo.read_text()
+        # Every evergreen correction still present — none evicted despite over-threshold.
+        assert body.count("**Pattern**") == 80, "core corrections must never be evicted"
+        assert moved == 0, "valve must move 0 when only core remains over-threshold"

@@ -973,6 +973,29 @@ class EvolutionOptimizer:
                 f"{changes_summary}\n"
             )
 
+            # Front-door consistency (P8: one brain, many doors): this was the last
+            # EVOLUTION writer bypassing the admission chokepoint. Route through
+            # ingestion_gate(store=EVOLUTION, trigger=evolution_persist) so EVERY
+            # write to EVOLUTION passes the same gate. evolution_persist =
+            # [noise, thin, dedup] (no judge) — for a machine-generated competence
+            # bullet this is a consistency/telemetry gate, not a quality filter, but
+            # it keeps the door uniform and gives observability. Non-auto verdict →
+            # log+skip (best-effort preserved — the optimizer never blocks).
+            try:
+                from core.ingestion_gate import ingestion_gate
+                verdict = ingestion_gate(
+                    entry.strip(), store="EVOLUTION", trigger="evolution_persist",
+                    context={"section": "Competence Learned"},
+                )
+                if verdict.verdict != "auto":
+                    logger.debug(
+                        "Skipping EVOLUTION competence log (gate=%s: %s)",
+                        verdict.verdict, verdict.reason,
+                    )
+                    return
+            except Exception as gate_exc:  # noqa: BLE001 — gate must never block best-effort log
+                logger.debug("ingestion_gate unavailable for optimizer log: %s", gate_exc)
+
             # ALWAYS go through locked_read_modify_write (anti-pattern #5: every
             # MEMORY/EVOLUTION write must be flock-guarded). It appends under
             # "Competence Learned" when present, and when absent lands the entry
