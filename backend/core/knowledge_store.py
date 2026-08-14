@@ -33,13 +33,14 @@ EMBEDDING_DIM = 1024  # Bedrock Titan v2
 
 # Directories to skip when scanning Knowledge/
 # Archives is NO LONGER skipped (pure-filesystem recall design §3.2/§5.8,
-# 2026-06-28): long-term archived memory (MEMORY-archive-*.md) must be reachable
-# by FTS5 recall — it was the real gap (recall could never see archived memory).
+# 2026-06-28): long-term archived cognition (*-archive*.md — MEMORY + EVOLUTION +
+# any future family) must be reachable by FTS5 recall — it was the real gap
+# (recall could never see archived memory).
 _SKIP_DIRS = {"__pycache__", ".git", ".artifacts"}
 
 # Skip job/signal FLOW-LOG dirs — they are time-series dumps (channel-monitor
 # logs, job results), not memory; indexing them floods FTS5 with noise (design
-# §5.8). Memory-class archives (MEMORY-archive-*.md, loose .md) ARE indexed.
+# §5.8). Cognitive archives (*-archive*.md, loose .md) ARE indexed.
 # NOTE: this matches a `JobResults*` dir at ANY level — both the top-level
 # `Knowledge/JobResults/` (131 flow-log files, previously indexed as noise) AND
 # nested `Archives/JobResults-*` — because the part-walk below includes the
@@ -618,12 +619,20 @@ def sync_knowledge_index(
             rel_path = f"{subdir.name}/{rel_to_sub}"
             current_files[rel_path] = md_file
 
-    # ── Privacy-partition coverage (CYCLE 1'): MEMORY archives live in the
-    # gitignored .context/ (a SIBLING of Knowledge/), NOT in git-tracked
-    # Knowledge/Archives/. Index them here so recall still reaches archived memory
-    # after it moves out of Knowledge/. STRICT ALLOWLIST: only MEMORY-archive*.md —
-    # NEVER the ACTIVE private docs (MEMORY.md / USER.md / EVOLUTION.md / STEERING.md
-    # / TOOLS.md), which are already full-injected into the system prompt.
+    # ── Privacy-partition coverage (CYCLE 1' → widened STEP2): ALL cognitive
+    # archives (MEMORY-archive*, EVOLUTION-archive*, …) live in the gitignored
+    # .context/ (a SIBLING of Knowledge/), NOT in git-tracked Knowledge/Archives/.
+    # Index them here so recall still reaches archived cognition after it moves out
+    # of Knowledge/. The guiding principle (SwarmAI TECH.md § Architecture, "活/冷
+    # 二分"): ACTIVE files (MEMORY.md / EVOLUTION.md / USER.md / STEERING.md /
+    # TOOLS.md) are FULL-INJECTED into the system prompt → never FTS5-indexed;
+    # every .context/ *-archive*.md (cold) → recall (FTS5+BM25).
+    #
+    # STRICT ALLOWLIST via the '*-archive*.md' glob: the '-archive' infix
+    # FAIL-CLOSED-excludes the active docs (MEMORY.md/EVOLUTION.md/USER.md have no
+    # '-archive' infix), so no active private doc can ever match. This is a
+    # domain-neutral rule — a new archive family (e.g. a future KNOWLEDGE-archive)
+    # is covered automatically, no code change.
     #
     # rel_path uses a DISTINCT ".context/Archives/" prefix — NOT a bare "Archives/".
     # A bare prefix would COLLIDE with a legacy Knowledge/Archives/MEMORY-archive-
@@ -634,7 +643,7 @@ def sync_knowledge_index(
     # invariant hold, while keeping the two physical files' keys disjoint.
     context_dir = knowledge_dir.parent / ".context"
     if context_dir.is_dir():
-        for arch in sorted(context_dir.glob("MEMORY-archive*.md")):
+        for arch in sorted(context_dir.glob("*-archive*.md")):
             if arch.is_file():
                 current_files[f".context/Archives/{arch.name}"] = arch
 

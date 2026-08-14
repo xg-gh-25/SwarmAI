@@ -411,6 +411,44 @@ class TestSyncKnowledgeIndex:
         # source_file keeps 'Archives' semantics (memory_chain_probe invariant)
         assert any("Archives" in s for s in indexed if "MEMORY-archive-2026-08" in s)
 
+    def test_sync_indexes_all_context_archives_not_just_memory(self, tmp_path):
+        """STEP2 (unified retrieval): the privacy-partition coverage must span ALL
+        .context/ archives — EVOLUTION-archive.md included — not just MEMORY-archive*.
+        A parallel session sediments EVOLUTION-archive.md; recall MUST reach it too.
+        The '*-archive*.md' glob still fail-closed-excludes ACTIVE docs (MEMORY.md /
+        EVOLUTION.md / USER.md have no '-archive' infix)."""
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+
+        knowledge_dir = tmp_path / "Knowledge"
+        (knowledge_dir / "Notes").mkdir(parents=True)
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        # BOTH archive families in .context/ → MUST be indexed (recall coverage)
+        (ctx / "MEMORY-archive-2026-08.md").write_text(
+            "# Memory Archive\n\n### Archived\n\n- axolotl-memory archived phrase."
+        )
+        (ctx / "EVOLUTION-archive.md").write_text(
+            "# Evolution Archive\n\n### Archived Corrections\n\n- axolotl-evolution archived correction phrase."
+        )
+        # ACTIVE private docs → MUST NOT be indexed (full-injected already)
+        (ctx / "MEMORY.md").write_text("# MEMORY\n\n- axolotl-active must NOT be recalled.")
+        (ctx / "EVOLUTION.md").write_text("# EVOLUTION\n\n- axolotl-active must NOT be recalled.")
+        (ctx / "USER.md").write_text("# USER\n\n- axolotl-active must NOT be recalled.")
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+
+        mem = {r["source_file"] for r in store.fts5_search("axolotl-memory", limit=10)}
+        evo = {r["source_file"] for r in store.fts5_search("axolotl-evolution", limit=10)}
+        active = {r["source_file"] for r in store.fts5_search("axolotl-active", limit=10)}
+        assert any("MEMORY-archive-2026-08" in s for s in mem), \
+            ".context/ MEMORY archive must be recall-indexed"
+        assert any("EVOLUTION-archive" in s for s in evo), \
+            ".context/ EVOLUTION archive must be recall-indexed (STEP2 unified coverage)"
+        assert not active, "active private docs (MEMORY/EVOLUTION/USER.md) must NEVER be recall-indexed"
+
     def test_context_and_knowledge_same_month_archive_no_collision(self, tmp_path):
         """Gate-2 HIGH regression: a legacy Knowledge/Archives/MEMORY-archive-
         YYYY-MM.md and a new .context/MEMORY-archive-YYYY-MM.md of the SAME basename
@@ -439,7 +477,7 @@ class TestSyncKnowledgeIndex:
 
         legacy_hits = {r["source_file"] for r in store.fts5_search("legacy-narwhal", limit=10)}
         private_hits = {r["source_file"] for r in store.fts5_search("private-pangolin", limit=10)}
-        assert any("legacy-narwhal" and "MEMORY-archive-2026-08" in s for s in legacy_hits), \
+        assert any("MEMORY-archive-2026-08" in s for s in legacy_hits), \
             "legacy Knowledge/Archives entry dropped (collision) — must survive"
         assert private_hits, ".context/ entry must be indexed"
         # The two must have DISTINCT source_file keys (no overwrite)
