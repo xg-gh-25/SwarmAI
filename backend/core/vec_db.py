@@ -100,8 +100,9 @@ def open_vec_db(
         from core.vec_db import open_vec_db
 
         with open_vec_db() as conn:
-            if conn is None:
-                return  # genuine connect failure (rare)
+            # conn is always a live connection here; a connect/PRAGMA failure
+            # RAISES rather than yielding None. (An `if conn is None` guard is
+            # harmless but now unreachable on this path.)
             # ... use conn with the FTS5 tables ...
 
     Args:
@@ -113,27 +114,34 @@ def open_vec_db(
             cannot cancel a to_thread C-level sqlite block). (run_4d06640b B3)
 
     Yields:
-        A sqlite3.Connection, or None ONLY on a genuine connect failure. Unlike
-        the old sqlite-vec version, a missing optional dependency no longer
-        yields None — recall never silently dies for that reason now.
+        A live sqlite3.Connection. NEVER yields None — a connect or PRAGMA-setup
+        failure RAISES (loud-on-degradation), it is not swallowed into a silent
+        empty-recall. (Callers may still guard ``if conn is None`` defensively;
+        that branch is now unreachable on this path.)
 
     Note:
         For hot paths (session start), prefer ``get_vec_conn()`` which
         reuses a singleton connection.
     """
     path = db_path or _DEFAULT_DB_PATH
+    # All fallible setup happens BEFORE the yield so a failure PROPAGATES (loud —
+    # honoring this module's loud-on-degradation principle) instead of silently
+    # yielding None → empty recall (the silent-dead-path class removed elsewhere).
+    # sqlite3.connect + these PRAGMAs are the only fallible steps; there is no
+    # optional-dependency reason to swallow them (the sqlite-vec leg is gone).
     conn = sqlite3.connect(str(path))
+    # busy_timeout: WAL allows concurrent readers but a SINGLE writer. Writers
+    # (context_health index sync) can overlap; without a timeout the loser gets an
+    # immediate SQLITE_BUSY → OperationalError, aborting a batch mid-sync. Default
+    # 30s waits the lock out; a latency-bounded caller passes a shorter value so a
+    # lock wait cannot exceed its disaster cap (run_4d06640b).
     try:
         conn.execute("PRAGMA journal_mode=WAL")
-        # busy_timeout: WAL allows concurrent readers but a SINGLE writer. Writers
-        # (context_health index sync) can overlap; without a timeout the loser gets
-        # an immediate SQLITE_BUSY → OperationalError, aborting a batch mid-sync.
-        # Default 30s waits the lock out; a latency-bounded caller passes a shorter
-        # value so a lock wait cannot exceed its disaster cap (run_4d06640b).
         conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
-        yield conn
     except Exception:
-        logger.debug("Failed to open recall DB connection")
-        yield None
+        conn.close()  # don't leak the fd on a setup failure — then re-raise (loud)
+        raise
+    try:
+        yield conn
     finally:
         conn.close()
