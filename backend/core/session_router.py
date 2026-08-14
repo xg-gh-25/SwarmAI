@@ -158,6 +158,7 @@ _RECALL_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
 # as by-design informational. Under-alarming on a real bug is the worse error.
 _RECALL_TRUE_FAILURE_PREFIXES: tuple[str, ...] = (
     "exception:", "inject_exception:", "unified_exception:", "flatten_exception:",
+    "toplevel_exception:",
 )
 # INFORMATIONAL (NOT failures): "empty_with_keywords" (genuine no-match),
 # "unified_empty_fallback_legacy" (strangler-fig fallback to legacy, expected).
@@ -508,7 +509,7 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
         # Only real normalized [0,1] scores. context_files/session have none;
         # codeintel `rank` is a raw negative FTS5 rank — NOT comparable to BM25 [0,1],
         # so it is NOT surfaced as a score (return None -> UI omits the number).
-        raw = h.get("hybrid_score", h.get("score", h.get("fts_score")))
+        raw = h.get("recall_score", h.get("score", h.get("fts_score")))
         if raw is None:
             return None
         try:

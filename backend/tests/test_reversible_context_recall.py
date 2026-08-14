@@ -398,6 +398,130 @@ def test_g1_no_entry_match_skips_section_not_head_bias():
     )
 
 
+# ── run_03fc3441 P2: recall pickup NEVER mid-entry truncates ────────────────
+
+def test_valid_entry_types_matches_canonical():
+    """Gate-2 (run_03fc3441): context_recall.VALID_ENTRY_TYPES is a local literal
+    (import-cycle avoidance) and MUST stay equal to the canonical
+    ddd_entry_lifecycle.VALID_TYPES — else recall silently stops recognizing a
+    newly-added type's bare `[newtype]` entries while the valve (which imports the
+    canonical list) keeps recognizing them → the two doors drift (P8 violation)."""
+    from core import context_recall
+    from core.ddd_entry_lifecycle import VALID_TYPES
+    assert tuple(context_recall.VALID_ENTRY_TYPES) == tuple(VALID_TYPES), (
+        "context_recall.VALID_ENTRY_TYPES drifted from ddd_entry_lifecycle.VALID_TYPES "
+        f"— recall={context_recall.VALID_ENTRY_TYPES} canonical={VALID_TYPES}"
+    )
+
+
+def test_p1_recall_boundary_case_insensitive_type_and_no_body_orphan():
+    """Gate-2 (run_03fc3441): recall's entry-boundary rule recognizes a
+    case-insensitive `- [Type]` entry (P8: the valve lowercases before matching),
+    but must NOT split on a PLAIN `- ` bullet inside an entry body (Gate-2 LOW: a
+    col-0 `- ` sub-list would orphan without its header)."""
+    from core import context_recall
+    # A `- [pitfall] **X**` entry whose BODY contains a col-0 `- ` sub-bullet, then a
+    # mixed-case `- [Guideline]` entry. Sub-bullet must stay with its parent; the
+    # mixed-case entry must be recognized as its own entry.
+    body = (
+        "- [pitfall] **Alpha hazard** — deploy status inference is the recurring class\n"
+        "- the beta mechanism triggers only when the observation was skipped this turn\n"
+        "- [Guideline] MixedCase caching prefix strategy for the routing subnet gateway\n"
+    )
+    sliced = context_recall._slice_section_entries(
+        body, "caching prefix strategy routing", budget_tokens=2000,
+    )
+    # mixed-case [Guideline] entry recognized
+    assert "MixedCase caching prefix" in sliced, "mixed-case [Guideline] entry not recognized"
+    # the `- the beta mechanism` body sub-bullet must NEVER surface headerless: if it
+    # appears at all, its parent header must be present too.
+    if "beta mechanism triggers" in sliced:
+        assert "Alpha hazard" in sliced, (
+            "a col-0 `- ` body sub-bullet surfaced ORPHANED without its parent header "
+            "(P1 boundary over-split — Gate-2 LOW regressed)"
+        )
+
+
+def test_p2_cjk_content_not_dropped():
+    """Gate-2 BLOCKER (run_03fc3441): a large CJK free-form section must NOT truncate
+    to empty. The ASCII-only sentence class dropped all Chinese prose (no match →
+    space-less word fallback → empty → section silently skipped)."""
+    from core import context_recall
+    from core.context_directory_loader import ContextDirectoryLoader as C
+
+    body = "这是一段很长的中文自由文本没有空格但有句号。" * 300 + "结尾。"
+    sliced = context_recall._slice_section_entries(
+        body, "中文 自由文本", budget_tokens=200,
+    )
+    assert sliced.strip(), "CJK content truncated to EMPTY — first-class content dropped"
+    assert C.estimate_tokens(sliced) <= 200 * 1.15, f"CJK truncation not bounded: {C.estimate_tokens(sliced)}"
+
+
+def test_p2_normal_entries_moved_whole_no_midword_cut():
+    """P2 (normal path): entries that FIT are returned WHOLE — never mid-entry or
+    mid-word cut. Several small entries, budget fits ~2 of them: each surfaced entry
+    is byte-for-byte intact (no partial entry, no `[…truncated]` on the normal path)."""
+    from core import context_recall
+
+    entries = [
+        f"- [pitfall] **entry {i} title** — a complete self-contained lesson body for entry {i} that ends cleanly here."
+        for i in range(8)
+    ]
+    body = "\n".join(entries)
+    sliced = context_recall._slice_section_entries(
+        body, "complete self-contained lesson entry", budget_tokens=120,
+    )
+    assert "[…truncated]" not in sliced, "normal-path entry was truncated (must move whole)"
+    # Every surfaced entry must appear byte-for-byte (whole block), none partial.
+    surfaced = [e for e in entries if e in sliced]
+    assert surfaced, "no entry surfaced"
+    # No partial fragment of any entry may appear without its whole form.
+    for e in entries:
+        head = e[:40]
+        if head in sliced:
+            assert e in sliced, f"entry surfaced PARTIALLY (severed mid-entry): {head!r}"
+
+
+def test_p2_single_over_budget_entry_bounded_at_sentence_no_midword():
+    """P2 (pathological single-giant-entry): stays BOUNDED (recall must not dump a
+    30K entry) but truncates at a SENTENCE boundary with a marker — never mid-word.
+    The whole-entry ideal yields to bounding here (a single giant entry is a data
+    pathology), but semantics still degrade gracefully at sentence granularity."""
+    from core import context_recall
+    from core.context_directory_loader import ContextDirectoryLoader as C
+
+    body = (
+        "- [pitfall] **giant** — First sentence is short. "
+        + "Second sentence adds detail. " * 400
+        + "Final trailing sentence.\n"
+    )
+    sliced = context_recall._slice_section_entries(
+        body, "giant pitfall sentence detail", budget_tokens=200,
+    )
+    # BOUNDED: must not exceed budget (with small whole-sentence granularity slack).
+    assert C.estimate_tokens(sliced) <= 200 * 1.1, f"not bounded: {C.estimate_tokens(sliced)}"
+    # MARKED so the reader knows more exists.
+    assert "[…truncated]" in sliced
+    # NO mid-word cut: the text before the marker ends at a sentence terminator.
+    core_text = sliced.replace(" […truncated]", "").rstrip()
+    assert core_text[-1] in ".!?", f"truncated mid-clause, not at a sentence boundary: {core_text[-30:]!r}"
+
+
+def test_p2_freeform_section_bounded_at_sentence():
+    """P2 (free-form section, no parseable entries): stays BOUNDED but truncates at
+    a sentence boundary — never a raw word-count cut mid-thought."""
+    from core import context_recall
+    from core.context_directory_loader import ContextDirectoryLoader as C
+
+    body = "This is a long free-form note. " + ("Detail sentence here. " * 400) + "Final."
+    sliced = context_recall._slice_section_entries(
+        body, "free-form note detail", budget_tokens=200,
+    )
+    assert C.estimate_tokens(sliced) <= 200 * 1.1, f"not bounded: {C.estimate_tokens(sliced)}"
+    core_text = sliced.replace(" […truncated]", "").rstrip()
+    assert core_text[-1] in ".!?", f"free-form truncated mid-clause: {core_text[-30:]!r}"
+
+
 # ── STEP5a: recall read-path is INDEX-FREE (body-BM25, unified retrieval) ───
 
 def test_recall_read_path_is_index_free(monkeypatch):

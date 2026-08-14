@@ -2470,9 +2470,27 @@ class DistillationTriggerHook:
         from core.memory_index import (
             extract_body_without_index, parse_memory_sections,
         )
-        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        from core.ddd_entry_lifecycle import (
+            MEMORY_EVERGREEN_SECTIONS, MEMORY_SECTIONS, EVERGREEN_TYPES,
+            VALID_TYPES, DEFAULT_TYPE,
+            _match_entry_line, _META_RE as _DECAY_META_RE,
+        )
         from core.context_directory_loader import ContextDirectoryLoader
-        from core.memory_decay import compute_decay_score, _META_RE as _DECAY_META_RE
+        from core.memory_decay import compute_decay_score
+        # P0 (run_03fc3441): the size-valve MUST parse the metadata format that
+        # live MEMORY.md actually carries. Live entries use the 4-field
+        # `<!-- ref:N | last:D | decay:S | source:X -->` form — matched by
+        # ddd_entry_lifecycle._META_RE (groups: 1=ref, 2=last, 3=decay, ...).
+        # The old import (memory_decay._META_RE) demands a 5-field `sessions:N`
+        # tail that NO live entry has → 0 matches → every entry defaulted to
+        # score=0.5 → the decay sort degenerated to FILE POSITION, not value.
+        # ⚠️ NOTE: ref_count has no live body producer (see ddd_entry_lifecycle
+        # :850 — bump_references writes the index block, which is now deleted),
+        # so this decay score is effectively RECENCY-only. VALUE ordering is
+        # therefore guaranteed by the EVERGREEN_TYPES immunity below (P3), NOT by
+        # this score: only guideline/process entries are ever size-archivable;
+        # every judgment type (decision/model/pitfall + evergreen sections) is
+        # immune, so what remains in live is always the highest-value tier.
 
         if not memory_path.exists():
             return
@@ -2526,6 +2544,50 @@ class DistillationTriggerHook:
                 candidates: list[tuple[float, str, int, int]] = []  # (score, section, start, end_exclusive)
                 # Section name → (header_end, next_header_pos, lines) for rewrite.
                 from core.ddd_entry_lifecycle import MEMORY_SECTION_NAMES
+
+                # P1 (run_03fc3441): entry-boundary detection must tolerate the
+                # legacy no-`- `-prefix entries some historical write paths produced
+                # (a bare `[type] ...` or `[ID] ...` at column 0). Detecting ONLY
+                # `- ` starts would swallow such an entry into the previous entry's
+                # span → wrong entry archived / semantics severed on the block move.
+                # Gate-2 MED (run_03fc3441): the bare form is NARROW — a valid [type]
+                # tag OR an ID-shaped [ABC12] prefix, NOT any `[Word`. A broad
+                # `^\[[A-Za-z]` would false-split a wrapped body line like
+                # `[see also](url) …` into a phantom entry that steals the next
+                # `<!-- ref -->` line (orphaned metadata + severed span on rewrite).
+                _valid_types = {t.lower() for t in VALID_TYPES}
+                _id_lead_re = re.compile(r"^\[[A-Z]{2,4}\d{1,3}\]")  # e.g. [PRI01] [COE8]
+
+                def _bare_entry_type(s: str) -> "str | None":
+                    m = re.match(r"^\[([A-Za-z][\w-]*)\]", s)
+                    if m and m.group(1).lower() in _valid_types:
+                        return m.group(1).lower()
+                    return None
+
+                def _is_entry_start(raw: str) -> bool:
+                    s = raw.strip()
+                    if s.startswith("- "):
+                        return True
+                    return _bare_entry_type(s) is not None or bool(_id_lead_re.match(s))
+
+                def _entry_type_of(raw: str, section_default: str) -> str:
+                    # Prefer the entry's own [type] tag; fall back to the section's
+                    # canonical type. Covers `- [type] **title**`, the bold-less
+                    # `- [type] text` form (Gate-2 MED: _match_entry_line requires a
+                    # bold title, so parse the tag directly as a fallback so a
+                    # bold-less pitfall is never mistyped as guideline and evicted),
+                    # and the bare `[type] …` legacy form.
+                    m = _match_entry_line(raw)
+                    if m and m.group(1):
+                        return m.group(1)
+                    s = raw.strip()
+                    # tolerate an optional leading `- ` before the [type] tag
+                    tag_src = s[2:].lstrip() if s.startswith("- ") else s
+                    bt = _bare_entry_type(tag_src)
+                    if bt:
+                        return bt
+                    return section_default
+
                 operational_sections = [
                     s for s in MEMORY_SECTION_NAMES if s not in MEMORY_EVERGREEN_SECTIONS
                 ]
@@ -2537,34 +2599,48 @@ class DistillationTriggerHook:
                     header_end, next_header_pos = section_range
                     lines = content[header_end:next_header_pos].splitlines()
                     section_meta[section_name] = (header_end, next_header_pos, lines)
+                    section_type = MEMORY_SECTIONS.get(section_name, {}).get("type", DEFAULT_TYPE)
                     entry_idxs = [
                         i for i, ln in enumerate(lines)
-                        if ln.strip().startswith("- ") and not ln.strip().startswith("- [Archived]")
+                        if _is_entry_start(ln) and not ln.strip().startswith("- [Archived]")
                     ]
                     for idx in entry_idxs:
-                        # decay score from the entry's trailing metadata (neutral 0.5 if none)
+                        # P3 (run_03fc3441): VALUE ordering is guaranteed by TYPE
+                        # immunity, not by the (recency-only) decay score. A
+                        # judgment-type entry (EVERGREEN_TYPES = decision/model/
+                        # pitfall/principle/correction) is NEVER size-archived even
+                        # inside an operational section — so only guideline/process
+                        # entries are ever evictable, and the highest-value tier
+                        # always stays in live. (Mirrors the age-decay immunity in
+                        # ddd_entry_lifecycle:843 — same set, same reason.)
+                        if _entry_type_of(lines[idx], section_type) in EVERGREEN_TYPES:
+                            continue
+                        # decay score from the entry's trailing metadata (neutral 0.5
+                        # if none). 4-field live format: g1=ref, g2=last, g3=decay
+                        # (no sessions field → sessions_referenced=0). See the P0 note
+                        # at the import: this is RECENCY-only; value is TYPE-gated above.
                         score = 0.5
                         for offset in range(1, 4):
                             if idx + offset >= len(lines):
                                 break
                             mm = _DECAY_META_RE.match(lines[idx + offset])
                             if mm:
-                                last_str = mm.group(3)
+                                last_str = mm.group(2)
                                 try:
                                     last_ref = date.fromisoformat(last_str) if last_str != "none" else None
                                 except ValueError:
                                     last_ref = None
                                 score = compute_decay_score(
-                                    ref_count=int(mm.group(2)),
-                                    sessions_referenced=int(mm.group(5)),
+                                    ref_count=int(mm.group(1)),
+                                    sessions_referenced=0,
                                     last_referenced=last_ref, created=None, today=today,
                                 )
                                 break
-                            if lines[idx + offset].strip().startswith("- "):
+                            if _is_entry_start(lines[idx + offset]):
                                 break
                         # full span: entry line + continuation lines until next entry
                         end = idx + 1
-                        while end < len(lines) and not lines[end].strip().startswith("- "):
+                        while end < len(lines) and not _is_entry_start(lines[end]):
                             end += 1
                         candidates.append((score, section_name, idx, end))
 
@@ -2587,11 +2663,13 @@ class DistillationTriggerHook:
                         drop = evicted_by_section.get(sec, set())
                         if not drop:
                             continue
-                        # expand each evicted entry to its full span
+                        # expand each evicted entry to its full span (P1: same
+                        # boundary detection as collection — tolerate no-`- `-prefix
+                        # legacy entries so a block move never severs semantics).
                         drop_lines: set[int] = set()
                         for start in drop:
                             end = start + 1
-                            while end < len(lines) and not lines[end].strip().startswith("- "):
+                            while end < len(lines) and not _is_entry_start(lines[end]):
                                 end += 1
                             for k in range(start, end):
                                 drop_lines.add(k)

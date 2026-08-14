@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 # Hard ceiling on a recall response so it can never re-inject a whole file.
 RECALL_MAX_TOKENS = 2000
 
+# Entry-type tags recognized as a NARROW no-`- `-prefix entry start (Gate-2 MED,
+# run_03fc3441) — MUST mirror ddd_entry_lifecycle.VALID_TYPES. Kept as a local
+# literal to avoid an import-time cycle; drift from the canonical list is caught by
+# test_reversible_context_recall.test_valid_entry_types_matches_canonical (a real
+# equality assertion — the earlier "caught by test_p1_*" claim was false).
+VALID_ENTRY_TYPES = ("guideline", "pitfall", "decision", "model", "process",
+                     "principle", "correction")
+
 # A query that is EXACTLY a bare ISO date (optionally surrounded by whitespace).
 # Such a query no longer matches at the index section-selection layer (date
 # aliases were dropped as noise — run_2f4d92da); it falls back to entry-body BM25
@@ -55,6 +63,68 @@ def _basename_key(name: str) -> str:
     return base.casefold()
 
 
+def _truncate_at_sentence(text: str, budget_tokens: int, *, mark: bool = False) -> str:
+    """Bounded truncation that degrades at a SENTENCE boundary, never mid-word.
+
+    The ONLY truncation on the recall read path (run_03fc3441). It fires only on
+    pathological over-budget content (a single giant entry, or a free-form section
+    with no entry boundaries) — normal-sized entries are moved WHOLE. It keeps as
+    many WHOLE sentences as fit the budget, so semantics degrade gracefully (never
+    a half-word / mid-clause cut, honoring "别切断语义" as far as bounding allows).
+    ``mark`` appends a visible ``[…truncated]`` so the reader knows more exists.
+    """
+    if ContextDirectoryLoader.estimate_tokens(text) <= budget_tokens:
+        return text
+    suffix = " […truncated]" if mark else ""
+    budget_for_body = budget_tokens  # suffix accounted per-candidate below
+
+    def _fits(s: str) -> bool:
+        return ContextDirectoryLoader.estimate_tokens(s + suffix) <= budget_for_body
+
+    # Sentence terminators: ASCII AND full-width CJK (。！？；…) + newline. Gate-2
+    # (run_03fc3441): an ASCII-only class silently DROPPED all Chinese prose (no
+    # match → whitespace fallback → space-less CJK → empty), losing a first-class
+    # content type on the read path.
+    _TERM = ".!?\n。！？；…"
+    sentences = re.findall(rf"[^{re.escape(_TERM)}]*[{re.escape(_TERM)}]+|\S[^{re.escape(_TERM)}]*$", text)
+    kept: list[str] = []
+    for s in sentences:
+        if not _fits("".join(kept) + s):
+            break
+        kept.append(s)
+    out = "".join(kept).rstrip()
+    if out:
+        return out + suffix
+
+    # Even the first sentence overflows. Prefer a whole-word cut (never mid-word);
+    # for a space-less run (CJK / one giant token) fall back to a CHARACTER cut so
+    # we still return SOMETHING bounded and non-empty. Binary search on length
+    # (Gate-2: the old one-unit-at-a-time shrink was O(n²) → multi-second stalls on
+    # large punctuation-free sections).
+    units = text.split()
+    if len(units) > 1:
+        # word granularity
+        lo, hi, best = 0, len(units), 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if _fits(" ".join(units[:mid])):
+                best = mid; lo = mid + 1
+            else:
+                hi = mid - 1
+        out = " ".join(units[:best])
+    else:
+        # character granularity (space-less CJK / single giant token)
+        lo, hi, best = 0, len(text), 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if _fits(text[:mid]):
+                best = mid; lo = mid + 1
+            else:
+                hi = mid - 1
+        out = text[:best].rstrip()
+    return (out + suffix) if out else ""
+
+
 def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
     """Return the top query-relevant ENTRIES of a section body, within budget.
 
@@ -68,29 +138,55 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
     regardless of its position. Works purely on the live string (no DB / embed),
     which is why it also revives the ``allow_embed=False`` path.
 
-    Returns the joined top entries (no trailing truncation marker needed — we add
-    whole entries only). If the body has no parseable entries, returns the body
-    front-truncated to budget (degrade to old behavior, never crash).
+    Returns the joined top entries as WHOLE blocks — the normal path never
+    truncates an entry (P2, run_03fc3441): entries accumulate highest-rank-first
+    until the budget, and a matching entry moves whole. The ONLY truncation left is
+    the pathological single-giant-entry / free-form-section case, which stays
+    BOUNDED (recall must not dump 30K into a prompt) but degrades at a SENTENCE
+    boundary via ``_truncate_at_sentence`` — never a mid-word cut (honors
+    "别切断语义" as far as bounding physically allows; O030/P6).
     """
     import re as _re
 
     from core import memory_index
 
-    # Split on line-anchored entry starts ('- [' at column 0). The lookahead
-    # keeps the delimiter, so each chunk is a full entry incl. its metadata line.
-    chunks = _re.split(r"(?m)^(?=- \[)", body)
-    entries = [c.strip() for c in chunks if c.strip().startswith("- [")]
+    # Split on line-anchored entry starts. P1/P8 (run_03fc3441): recall's boundary
+    # rule must AGREE with the size-valve's on the REALISTIC entry shapes, without
+    # over-splitting an entry's own body. An entry start is:
+    #   • a `- [` bullet — the canonical `- [type] **title**` / `- [ID] …` form,
+    #     case-INSENSITIVE on the type (the valve lowercases before matching);
+    #   • a `- ` bullet whose text leads with an emoji/status glyph — curated
+    #     Open-Threads bullets (`- 🔴 **…**`);
+    #   • a bare col-0 `[type]`/`[ID]` legacy entry (no `- ` prefix).
+    # NARROW on the bracket forms (valid [type] OR ID-shaped [ABC12], never any
+    # `[Word`) so a wrapped `[see also](url)` clause cannot false-split. Gate-2 LOW
+    # (run_03fc3441): we deliberately do NOT split on a PLAIN `- ` bullet — a col-0
+    # `- ` sub-list inside an entry body would orphan without its header. (The valve
+    # also splits indented sub-bullets; recall staying col-0-and-typed is strictly
+    # SAFER — it keeps entry bodies whole — so the doors agree on real entries and
+    # recall never emits a headerless fragment.)
+    _id_lead = r"\[[A-Z]{2,4}\d{1,3}\]"
+    _type_lead = r"(?i:\[(?:" + "|".join(VALID_ENTRY_TYPES) + r")\])"
+    _emoji_lead = r"- [\U0001F300-\U0001FAFF←-⯿]"
+    _entry_lead = rf"(?:- (?:{_type_lead}|{_id_lead})|{_emoji_lead}|{_id_lead}|{_type_lead})"
+    _start = rf"(?m)^(?={_entry_lead})"
+    chunks = _re.split(_start, body)
+
+    def _is_entry(chunk: str) -> bool:
+        return bool(_re.match(rf"^{_entry_lead}", chunk.strip()))
+
+    entries = [c.strip() for c in chunks if _is_entry(c)]
 
     if not entries:
-        # No discrete entries (free-form section) — degrade to front-truncation.
-        words = body.split()
-        keep = max(0, int(budget_tokens * 3 / 4))
-        while keep > 0:
-            cand = " ".join(words[:keep])
-            if ContextDirectoryLoader.estimate_tokens(cand) < budget_tokens:
-                return cand
-            keep -= max(1, keep // 10)
-        return ""
+        # No discrete entries (free-form section). Recall MUST stay bounded (never
+        # dump a whole 30K+ section into the prompt — that starves every other
+        # recall), but P2 (run_03fc3441) also forbids severing semantics mid-word.
+        # Reconciliation: truncate at a SENTENCE boundary, not a word count, and
+        # mark it — so what surfaces is whole sentences, never a half-word, and the
+        # reader knows more exists. (A free-form section has no entry boundaries to
+        # move as blocks, so bounded sentence-truncation is the best integrity
+        # available here; discrete entries below are moved WHOLE.)
+        return _truncate_at_sentence(body.strip(), budget_tokens)
 
     # Rank entries by BM25 against the query (same scorer as the hybrid leg).
     docs = {str(i): e for i, e in enumerate(entries)}
@@ -118,16 +214,18 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
         cand_text = "\n".join(docs[ck] for ck in docs if ck in cand_set)
         if ContextDirectoryLoader.estimate_tokens(cand_text) >= budget_tokens:
             if not chosen_keys:
-                # The single top entry alone exceeds budget — front-truncate it
-                # so the most-relevant entry still partially surfaces.
-                words = docs[k].split()
-                keep = max(0, int(budget_tokens * 3 / 4))
-                while keep > 0:
-                    cand = " ".join(words[:keep]) + " […entry truncated]"
-                    if ContextDirectoryLoader.estimate_tokens(cand) <= budget_tokens:
-                        return cand
-                    keep -= max(1, keep // 10)
-                return ""
+                # The single top-ranked entry alone exceeds budget. Two duties
+                # collide: recall must stay BOUNDED (never inject a 30K entry that
+                # starves other recall) AND P2 (run_03fc3441) forbids severing an
+                # entry mid-word. A single entry this large is itself a DATA
+                # pathology (distillation + the size-valve bound real entries to a
+                # few hundred tokens) — so bounding wins, but we degrade gracefully:
+                # truncate at a SENTENCE boundary (whole sentences, never a half-
+                # word) and mark it, rather than a raw word-count cut. This is the
+                # ONLY truncation left on the read path and it fires only on the
+                # pathological single-giant-entry case; every normal-sized entry is
+                # returned WHOLE by the accumulation loop above.
+                return _truncate_at_sentence(docs[k], budget_tokens, mark=True)
             break
         chosen_keys.append(k)
 

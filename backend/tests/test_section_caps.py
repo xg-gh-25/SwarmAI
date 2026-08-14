@@ -343,3 +343,179 @@ class TestSizeValve:
         today = date.today()
         assert not (memory_path.parent / f"MEMORY-archive-{today.strftime('%Y-%m')}.md").exists(), \
             "evergreen-overflow must not archive operational"
+
+
+class TestSizeValveRobustness:
+    """run_03fc3441 — the archive subsystem's THREE hard guarantees:
+      P0  the decay-sort actually RUNS on the metadata format live MEMORY carries
+          (4-field `source:X`, NOT the 5-field `sessions:N` the old fixture used —
+          the mismatch made every entry default to 0.5 and the sort degenerate to
+          FILE POSITION, defeating "keep the highest value in live");
+      P3  VALUE ordering is TYPE-gated — judgment types (pitfall/decision/model)
+          are never size-archived even inside an operational section, so only
+          guideline/process are evictable and the highest-value tier stays live;
+      P1  entry-boundary detection tolerates the legacy no-`- `-prefix form so a
+          block move never severs an entry's semantics.
+    """
+
+    def _live_format_memory(self, n_guidelines: int) -> str:
+        # 4-FIELD metadata (`source:manual`), exactly what live MEMORY.md carries.
+        # If P0 regressed (valve demands `sessions:N`), these won't parse → sort
+        # degenerates to position and the value-ordering guarantee is silently gone.
+        pad = "operational guideline detail lorem ipsum dolor sit amet consectetur " * 12
+        parts = ["# Memory\n\n## Principles\n"]
+        for i in range(3):
+            parts.append(f"- [PRI{i:02d}] **evergreen principle {i}** — load-bearing\n")
+            parts.append("  <!-- ref:0 | last:none | decay:active | source:manual -->\n")
+        parts.append("\n## Guidelines\n")
+        for i in range(n_guidelines):
+            # Vary recency so decay sort has a real gradient: even i = OLD (evict
+            # first), odd i = RECENT (keep). If the 4-field regex parses, the OLD
+            # ones leave first; if it does NOT parse, order is position (i asc).
+            last = "2026-01-01" if i % 2 == 0 else "2026-08-13"
+            parts.append(f"- [GUI{i:04d}] **guideline {i}** — {pad}\n")
+            parts.append(f"  <!-- ref:0 | last:{last} | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- one open thread\n")
+        return "".join(parts)
+
+    def test_p0_decay_sort_runs_on_live_4field_format(self, tmp_path):
+        """P0: with the live 4-field `source:` metadata, the decay sort must run —
+        proven by OLD (even-index) guidelines being evicted before RECENT (odd) ones.
+        A position-only degenerate sort would evict low indices regardless of recency."""
+        from hooks.distillation_hook import DistillationTriggerHook
+        content = self._live_format_memory(260)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        # Count survivors by recency class. If decay sort truly ran, RECENT (odd)
+        # entries survive at a strictly higher rate than OLD (even) ones.
+        import re
+        survivors = set(re.findall(r"\[GUI(\d{4})\]", result))
+        old_alive = sum(1 for s in survivors if int(s) % 2 == 0)
+        recent_alive = sum(1 for s in survivors if int(s) % 2 == 1)
+        assert recent_alive > old_alive, (
+            f"decay sort not running on 4-field format: recent={recent_alive} "
+            f"old={old_alive} (position-degenerate sort would not favor recency)"
+        )
+
+    def test_p3_judgment_types_immune_in_operational_section(self, tmp_path):
+        """P3: a [pitfall]/[decision] entry sitting in an OPERATIONAL section (e.g.
+        Guidelines) must NEVER be size-archived — value is type-gated, not position/
+        recency-gated. Only [guideline]/[process] are evictable."""
+        from hooks.distillation_hook import DistillationTriggerHook
+        pad = "filler detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
+        parts = ["# Memory\n\n## Guidelines\n"]
+        # One high-value judgment entry (pitfall) with the OLDEST possible metadata —
+        # a pure decay/position sort would evict it first; type-immunity must save it.
+        parts.append(f"- [pitfall] **load-bearing judgment must survive** — {pad}\n")
+        parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        for i in range(260):
+            parts.append(f"- [guideline] **evictable guideline {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text("".join(parts))
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        assert "load-bearing judgment must survive" in result, (
+            "a [pitfall] in an operational section was size-archived — type-immunity "
+            "(P3) failed; value ordering is not guaranteed"
+        )
+
+    def test_p1_no_dash_prefix_entry_not_severed(self, tmp_path):
+        """P1: a legacy no-`- `-prefix entry (`[type] ...` at col 0) must be treated
+        as its OWN entry — not swallowed into the previous entry's span on the block
+        move. We assert the malformed entry is either kept whole or archived whole,
+        never split across the live/archive boundary."""
+        from hooks.distillation_hook import DistillationTriggerHook
+        pad = "filler detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
+        parts = ["# Memory\n\n## Guidelines\n"]
+        for i in range(130):
+            parts.append(f"- [guideline] **normal {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        # A legacy no-dash entry wedged in the middle.
+        parts.append("[guideline] LEGACY-NODASH-MARKER a malformed no-dash entry that must not be severed\n")
+        for i in range(130, 260):
+            parts.append(f"- [guideline] **normal {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text("".join(parts))
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        from datetime import date
+        live = memory_path.read_text()
+        archive_path = memory_path.parent / f"MEMORY-archive-{date.today().strftime('%Y-%m')}.md"
+        archive = archive_path.read_text() if archive_path.exists() else ""
+        marker = "LEGACY-NODASH-MARKER"
+        # Exactly one home for the marker — never both (split) nor neither (lost).
+        in_live = marker in live
+        in_arch = marker in archive
+        assert in_live != in_arch, (
+            f"no-dash entry severed or lost: in_live={in_live} in_arch={in_arch} "
+            "(P1 boundary detection must keep it whole in exactly one place)"
+        )
+
+    def test_gate2_bold_less_judgment_type_still_immune(self, tmp_path):
+        """Gate-2 MED (run_03fc3441): a bold-LESS `- [pitfall] text` entry (no
+        `**title**`) must STILL be recognized as a judgment type and be immune —
+        _match_entry_line requires a bold title, so the type-tag fallback must catch
+        it, else a real pitfall is mistyped as guideline and evicted."""
+        from hooks.distillation_hook import DistillationTriggerHook
+        pad = "filler detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
+        parts = ["# Memory\n\n## Guidelines\n"]
+        # bold-LESS pitfall (no **title**), oldest metadata → pure sort would evict it
+        parts.append(f"- [pitfall] a bold-less judgment entry BOLDLESS-MARKER must survive — {pad}\n")
+        parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        for i in range(260):
+            parts.append(f"- [guideline] **evictable {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text("".join(parts))
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        assert "BOLDLESS-MARKER" in memory_path.read_text(), (
+            "a bold-less [pitfall] was size-archived — type-tag fallback failed; "
+            "judgment types must be immune regardless of bold-title presence"
+        )
+
+    def test_gate2_wrapped_bracket_clause_not_phantom_entry(self, tmp_path):
+        """Gate-2 MED (run_03fc3441): a wrapped body line beginning with a bracket
+        that is NOT a valid [type]/[ID] (e.g. `[see also](url) ...`) must NOT be
+        treated as a new entry start — else it false-splits, steals the next
+        metadata line, and severs the real entry's span on rewrite."""
+        from hooks.distillation_hook import DistillationTriggerHook
+        pad = "filler detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
+        parts = ["# Memory\n\n## Guidelines\n"]
+        # A real entry whose body wraps to a col-0 line starting with a NON-type bracket.
+        parts.append(f"- [guideline] **entry with a wrapped bracket clause** — {pad}\n")
+        parts.append("[see also](http://example.com) this is a CONTINUATION not an entry WRAPMARKER\n")
+        parts.append("  <!-- ref:9 | last:2026-08-13 | decay:active | source:manual -->\n")
+        for i in range(260):
+            parts.append(f"- [guideline] **evictable {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text("".join(parts))
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        from datetime import date
+        live = memory_path.read_text()
+        arch_path = memory_path.parent / f"MEMORY-archive-{date.today().strftime('%Y-%m')}.md"
+        arch = arch_path.read_text() if arch_path.exists() else ""
+        # The `[see also]` continuation must never appear as a standalone archived
+        # entry split from its parent. It stays with its parent (live or archived together).
+        if "WRAPMARKER" in arch:
+            assert "entry with a wrapped bracket clause" in arch, (
+                "wrapped `[see also]` clause was split into a phantom entry and "
+                "archived apart from its parent (P1 boundary false-positive)"
+            )
