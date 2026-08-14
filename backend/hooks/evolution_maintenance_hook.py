@@ -499,7 +499,11 @@ class EvolutionMaintenanceHook:
     # monthly shard (recall-backed cold storage — NOT deletion). The always-injected
     # core (evergreen judgment) stays bounded. XG directive 2026-08-14: "default 全量
     # 注入的 evolution 最大 15K token, 保证长青的每次都进, 其它依赖 recall".
-    _ARCHIVE_THRESHOLD_TOKENS = 15_000
+    _ARCHIVE_THRESHOLD_TOKENS = 15_000   # HIGH watermark — valve TRIGGERS above this
+    # LOW watermark — once triggered, evict DOWN TO this (not just under the trigger).
+    # The 12–15K band is deliberate headroom so new entries land without re-triggering
+    # the valve every session (the thrash the single-threshold version caused).
+    _ARCHIVE_TARGET_TOKENS = 12_000
 
     # Markers that make an entry EVERGREEN core — HARD-PROTECTED, never size-evicted
     # (C046 red-line + O029/L75 lesson: never bury hard-won judgment). Entry-level
@@ -648,14 +652,18 @@ class EvolutionMaintenanceHook:
         "Corrections Captured",
     )
 
-    def _size_evict(self, evo_path: Path, threshold_tokens: int | None = None) -> int:
+    def _size_evict(self, evo_path: Path, threshold_tokens: int | None = None,
+                    target_tokens: int | None = None) -> int:
         """System-prompt size control (runs AFTER fold+dedup have shrunk the file).
 
-        If EVOLUTION.md exceeds the token threshold, move the LOWEST-value NON-evergreen
-        entries to the monthly shard (recall-backed cold storage) until back under
-        threshold OR only evergreen core remains. Evergreen core is NEVER evicted
-        (P6: at that point log a raise-the-cap signal, don't cut judgment). Returns
-        the number of entries moved.
+        HIGH/LOW WATERMARK (hysteresis — Gate-1 refined): the valve TRIGGERS only when
+        tokens exceed the HIGH watermark `threshold` (_ARCHIVE_THRESHOLD_TOKENS=15K), but
+        once triggered it evicts the LOWEST-value NON-evergreen entries DOWN TO the LOW
+        watermark `target` (_ARCHIVE_TARGET_TOKENS=12K) — NOT just until it crosses back
+        under the trigger. The 12–15K band is intentional HEADROOM so new entries land
+        without re-triggering the valve every session (the thrash the single-threshold
+        version caused: it stopped ~89 tok under 15K). Evergreen core is NEVER evicted
+        (P6: only-core-over-target → stop + raise-the-cap log, don't cut judgment).
 
         Move-not-delete: every evicted block is appended to the shard via the shared
         archive_raw_lines chokepoint (dedup_by_signature=True → no double-move with
@@ -667,6 +675,11 @@ class EvolutionMaintenanceHook:
         from utils.file_lock import flock_exclusive_nb, flock_unlock
 
         threshold = threshold_tokens if threshold_tokens is not None else self._ARCHIVE_THRESHOLD_TOKENS
+        target = target_tokens if target_tokens is not None else self._ARCHIVE_TARGET_TOKENS
+        # Clamp: the low watermark can never exceed the high one (Gate-1 check 4) — a
+        # threshold override below the default target would otherwise invert the
+        # watermarks (stop-line above trigger-line → evict nothing / instant break).
+        target = min(target, threshold)
 
         # Gate-2 finding G (HIGH): the read→evict→write critical section MUST hold the
         # SAME .md.lock flock every other EVOLUTION writer honors (anti-pattern #5) —
@@ -697,7 +710,7 @@ class EvolutionMaintenanceHook:
                 return 0
 
             moved = self._size_evict_locked(
-                evo_path, content, threshold,
+                evo_path, content, threshold, target,
                 ContextDirectoryLoader, archive_raw_lines, _find_section_range,
             )
             return moved
@@ -709,17 +722,18 @@ class EvolutionMaintenanceHook:
                     fd.close()
 
     def _size_evict_locked(
-        self, evo_path, content, threshold, ContextDirectoryLoader,
+        self, evo_path, content, threshold, target, ContextDirectoryLoader,
         archive_raw_lines, _find_section_range,
     ) -> int:
         """The size-evict critical section — MUST be called while holding the
         EVOLUTION.md flock (see _size_evict). Does the read-already-done →
-        evict → write under the caller's lock."""
+        evict → write under the caller's lock. Evicts DOWN TO `target` (low
+        watermark), not just under `threshold` (the trigger) — hysteresis headroom."""
         moved = 0
         shard = self._evolution_archive_shard()
         # Walk sections least-valuable-first; within each, evict non-evergreen entries.
         for section in self._EVICT_SECTION_ORDER:
-            if ContextDirectoryLoader.estimate_tokens(content) <= threshold:
+            if ContextDirectoryLoader.estimate_tokens(content) <= target:
                 break
             rng = _find_section_range(content, section)
             if rng is None:
@@ -732,7 +746,7 @@ class EvolutionMaintenanceHook:
                 # evict individual non-evergreen bullet LINES.
                 content, n = self._evict_bullet_lines(
                     evo_path, content, section, header_end, next_pos,
-                    shard, threshold, ContextDirectoryLoader, archive_raw_lines,
+                    shard, target, ContextDirectoryLoader, archive_raw_lines,
                 )
                 moved += n
                 continue
@@ -745,7 +759,7 @@ class EvolutionMaintenanceHook:
                 if not self._is_evergreen(block):
                     evict_blocks.append(block)
             for block in evict_blocks:
-                if ContextDirectoryLoader.estimate_tokens(content) <= threshold:
+                if ContextDirectoryLoader.estimate_tokens(content) <= target:
                     break
                 # Move to shard (recall-backed) BEFORE stripping from live file.
                 try:
@@ -768,29 +782,32 @@ class EvolutionMaintenanceHook:
                 moved += 1
             evo_path.write_text(content, encoding="utf-8")
 
+        final = ContextDirectoryLoader.estimate_tokens(content)
         if moved:
             logger.info(
                 "EVOLUTION size-evict: moved %d low-value entr%s to %s "
-                "(final ~%d tok)", moved, "y" if moved == 1 else "ies", shard,
-                ContextDirectoryLoader.estimate_tokens(content),
+                "(final ~%d tok, target %d)", moved, "y" if moved == 1 else "ies",
+                shard, final, target,
             )
-        elif ContextDirectoryLoader.estimate_tokens(content) > threshold:
-            # Only evergreen core remains and it's STILL over budget → raise-the-cap
-            # signal, never cut judgment (P6). Surface, do not evict.
+        # Raise-the-cap signal (P6): still above the HIGH watermark (the real budget)
+        # after evicting everything non-evergreen → only judgment remains, never cut it.
+        # Compares to `threshold` (not `target`): being in the 12–15K headroom band is
+        # HEALTHY, not over-budget — only >15K with nothing left to evict is the signal.
+        if final > threshold:
             logger.warning(
                 "EVOLUTION over size budget (%d > %d tok) but only evergreen core "
                 "remains — NOT evicting judgment. Raise-the-cap decision needed.",
-                ContextDirectoryLoader.estimate_tokens(content), threshold,
+                final, threshold,
             )
         return moved
 
     def _evict_bullet_lines(
         self, evo_path, content, section, header_end, next_pos,
-        shard, threshold, loader_cls, archive_raw_lines,
+        shard, target, loader_cls, archive_raw_lines,
     ) -> "tuple[str, int]":
         """Evict individual non-evergreen bullet LINES from a non-###-structured
-        section (e.g. Optimizations Learned's O-Reference one-liners). Returns
-        (new_content, moved_count)."""
+        section (e.g. Optimizations Learned's O-Reference one-liners) DOWN TO the
+        low-watermark `target`. Returns (new_content, moved_count)."""
         section_text = content[header_end:next_pos]
         lines = section_text.splitlines(keepends=True)
         moved = 0
@@ -800,7 +817,7 @@ class EvolutionMaintenanceHook:
             stripped = line.strip()
             is_bullet = stripped.startswith("- ")
             if (is_bullet and not self._is_evergreen(line)
-                    and loader_cls.estimate_tokens(content) > threshold):
+                    and loader_cls.estimate_tokens(content) > target):
                 evicted.append(line.rstrip("\n"))
                 moved += 1
                 # Re-measure against a projected content (approx): drop from running.
