@@ -49,7 +49,7 @@ _OWNER_BY_FILE: dict[str, str] = {
     "MEMORY.md": "agent",
     "EVOLUTION.md": "agent",
     "KNOWLEDGE.md": "auto",
-    "PROJECTS.md": "auto",
+    # PROJECTS.md removed 2026-08-14 (in-prompt index deleted) — no longer a context file.
 }
 
 
@@ -62,27 +62,10 @@ def _owner_for(filename: str, user_customized: bool) -> str:
     return "user" if user_customized else "system"
 
 
-# NEW ARCHITECTURE (2026-08-14): NO file runs through selective injection anymore
-# — live MEMORY.md is always full-injected (injected size == disk body size). The
-# old _SELECTIVE_FILES set + selective-floor cue are retired; _injected_floor is a
-# None-returning stub (see below).
-
-
-def _injected_floor(filename: str, content: str) -> int | None:
-    """The HONEST lower-bound of tokens a selective file actually injects.
-
-    Telemetry is session-agnostic (no user query), and selective injection is
-    query-dependent — so we CANNOT compute a real point-estimate of injected
-    size.
-
-    NEW ARCHITECTURE (2026-08-14): live MEMORY.md is ALWAYS full-injected (there
-    is no selective mode, no in-prompt index). The injected size therefore EQUALS
-    the disk body size — there is no "floor below disk" to report. Always returns
-    None (injected == disk; the UI shows disk as-is with no selective cue). The
-    body itself is bounded UPSTREAM by the size-valve (archive >30K → 25K), not by
-    a per-injection floor. Retained as a stub so the caller contract is unchanged.
-    """
-    return None
+# NEW ARCHITECTURE (2026-08-14): NO file runs through selective injection anymore —
+# live MEMORY.md is always full-injected (injected size == disk size). The old
+# _SELECTIVE_FILES set, _injected_floor() stub, and the has_selective/injected_floor/
+# injected_estimate token-block fields were always-inert and were removed (run_8f852625).
 
 
 def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:
@@ -204,13 +187,10 @@ def build_context_token_block(context_dir: Path) -> dict:
             continue
         tokens = ContextDirectoryLoader.estimate_tokens(content)
         total += tokens
-        # Selective injection honesty (run_5f040023): for a file that runs
-        # through selective injection, its DISK size (`tokens`) is NOT what
-        # reaches the prompt. `injected_floor` is the HONEST guaranteed-minimum
-        # injected size (always-load part); None for non-selective files (where
-        # injected == disk). The UI shows disk as the headline (conservative) +
-        # "selective → ≥floor" as the honest actual-injection cue.
-        floor = _injected_floor(spec.filename, content)
+        # NEW ARCHITECTURE (2026-08-14): selective injection was deleted — every
+        # file is FULL-injected (disk size == prompt load). There is no "injected
+        # floor below disk" to report, so the old has_selective/injected_floor/
+        # injected_estimate fields were always-inert and are removed (run_8f852625).
         # File age in days from mtime (for the Health tag). Read defensively —
         # a stat failure must not crash the telemetry read (O030).
         try:
@@ -231,25 +211,12 @@ def build_context_token_block(context_dir: Path) -> dict:
                 # (oversized>growing>idle>fresh). Backend-derived so the UI invents
                 # nothing (R30). budget is the same _WARNING_THRESHOLD used below.
                 "health": _health_tag(tokens, _WARNING_THRESHOLD, mtime_days),
-                # Selective-injection honesty fields (run_5f040023):
-                "has_selective": floor is not None,
-                "injected_floor": floor,  # None = injected==disk (tokens)
                 # Knowledge-health counts (run_2816ab1c): None for prose files;
                 # {active,dormant,archived,reclaimable,duplicate} for the 3
                 # lifecycle-governed brain files (MEMORY/EVOLUTION/KNOWLEDGE).
                 "health_counts": _entry_health_counts(spec.filename, content),
             }
         )
-
-    # Honest injected-estimate total (run_5f040023): disk total MINUS the amount
-    # selective files shave off (disk − injected_floor for each selective file).
-    # This is a REAL lower-bound of what reaches the prompt — NOT a fabricated
-    # point-estimate. A selective file injects AT LEAST its floor; a query may add
-    # a few more sections, so the true injected size is in [injected_estimate, total].
-    injected_estimate = total
-    for row in per_file:
-        if row["has_selective"] and row["injected_floor"] is not None:
-            injected_estimate -= (row["tokens"] - row["injected_floor"])
 
     # Composition % over DISK total (headline is the conservative disk size — the
     # pct answers "share of the on-disk context", stable + query-independent).
@@ -261,8 +228,7 @@ def build_context_token_block(context_dir: Path) -> dict:
     per_file.sort(key=lambda r: (r["priority"], r["name"]))
 
     return {
-        "total_tokens": total,           # DISK total (conservative headline)
-        "injected_estimate": injected_estimate,  # honest lower-bound of prompt load
+        "total_tokens": total,           # DISK total == prompt load (full-injected)
         "budget": _WARNING_THRESHOLD,
         "warning_threshold": _WARNING_THRESHOLD,
         "emergency_threshold": _EMERGENCY_THRESHOLD,

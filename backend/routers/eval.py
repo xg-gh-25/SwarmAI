@@ -580,6 +580,48 @@ async def get_brain_graph():
     return build_brain_graph(content)
 
 
+# ─── Archive browse + recall (Run B, run_8f852625) ──────────────────────────
+# The C&M overlay Memory + Evolution tabs surface the COLD archive layer: WHAT the
+# size-valve moved out of the always-injected live file (list) + on-demand FTS5
+# recall of it (search). Archive-only scope (XG): live files are full-injected, so
+# searching them is redundant + a privacy concern. Zero LLM (deterministic + FTS5).
+
+_ARCHIVE_SOURCES = {"memory", "evolution"}
+
+
+@router.get("/archive-list")
+async def get_archive_list(source: str = "memory"):
+    """List archived entries from the gitignored .context/*-archive* shards.
+
+    ``source`` = memory (MEMORY-archive-*) | evolution (EVOLUTION-archive*). The two
+    families have different on-disk shapes — archive_browse dispatches the right
+    parser. Empty-but-valid ({entries:[],total:0,shards:[]}) when no shards exist."""
+    from pathlib import Path
+    from core.initialization_manager import initialization_manager
+    from core.archive_browse import list_archive_entries
+
+    src = source if source in _ARCHIVE_SOURCES else "memory"
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        return {"entries": [], "total": 0, "shards": [], "source": src}
+
+    return await asyncio.to_thread(list_archive_entries, Path(ws_path), src)
+
+
+@router.get("/archive-search")
+async def get_archive_search(q: str = "", source: str = "memory"):
+    """FTS5/BM25 recall over the cold archive layer, ARCHIVE-ONLY.
+
+    Reuses the shared knowledge FTS5 index; results are fail-closed filtered to the
+    requested archive family's ``.context/Archives/<FAMILY>-archive`` source_file
+    prefix, so active files + Knowledge/ library docs never leak in. Pure FTS5, no
+    embedding (PRI11). Empty-but-valid on blank query / no index."""
+    from core.archive_browse import search_archive
+
+    src = source if source in _ARCHIVE_SOURCES else "memory"
+    return await asyncio.to_thread(search_archive, q, src)
+
+
 # ─── Reports (HTML) ───────────────────────────────────────────────────────
 
 
