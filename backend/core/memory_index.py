@@ -922,6 +922,69 @@ def _key_to_section(key: str) -> Optional[str]:
     return None
 
 
+def _strip_superseded_entries(body: str, superseded_keys: set[str]) -> str:
+    """Remove entry blocks whose key ∈ superseded_keys from a section body.
+
+    Unified-retrieval STEP1: body-BM25 scores a whole ## section, so it has no
+    per-entry key to down-weight (unlike the retired index scorer's per-entry
+    SUPERSEDED_WEIGHT). Instead we strip a superseded entry's text from the body
+    BEFORE scoring — a superseded entry then contributes 0 to its section's BM25
+    score (section-body granularity of the same "superseded ≠ recall signal"
+    intent). An entry block = its `- [KEY]` line through the line before the next
+    top-level `- ` (or section end), incl. its metadata comment lines.
+    """
+    if not superseded_keys:
+        return body
+    lines = body.split("\n")
+    out: list[str] = []
+    skip = False
+    for line in lines:
+        m = re.match(r"\s*- \[([A-Z]{1,4}\d+)\]", line)
+        if m:
+            skip = m.group(1) in superseded_keys  # start/stop at each entry boundary
+        if not skip:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _operational_section_scores(
+    user_message: str,
+    sections: dict[str, str],
+    superseded_keys: set[str] | None = None,
+) -> dict[str, float]:
+    """Score MEMORY's OPERATIONAL ## sections against a query by body-BM25.
+
+    Unified-retrieval STEP1 — the replacement for the index-based
+    ``_keyword_section_scores`` on the INJECTION path. Mirrors DDD's
+    ``recall_multi._ddd_section_scores`` (the correct, index-free pattern):
+    ``_bm25_scores({section: body})`` → ``_normalize_bm25_scores``. Reasons this
+    supersedes the index scorer (verified run_a2dffa0d): (1) the index's aliases
+    are ``_extract_keywords(body)``-derived, so the body carries the same recall
+    tokens + more; (2) ``_bm25_tokenize`` emits CJK bigrams → natively
+    cross-language, where the index leg's ``_cjk_match`` (whole-token/prefix)
+    missed reordered CJK.
+
+    Scoped to OPERATIONAL sections only — evergreen (principle/correction/COE/
+    standing-preference/open-threads) is ALWAYS injected (CYCLE 2), never
+    keyword-selected. superseded entries are stripped from each body before
+    scoring (see ``_strip_superseded_entries``).
+
+    Returns ``{section_name: normalized_score in [0,1]}``; empty if none match.
+    """
+    operational = {
+        name: body for name, body in sections.items()
+        if name not in MEMORY_EVERGREEN_SECTIONS and body.strip()
+    }
+    if not operational:
+        return {}
+    _sup = superseded_keys or set()
+    corpus = {name: _strip_superseded_entries(body, _sup) for name, body in operational.items()}
+    raw = _bm25_scores(user_message, corpus)
+    if not raw:
+        return {}
+    return _normalize_bm25_scores(raw)
+
+
 def _extract_superseded_keys(memory_content: str) -> set[str]:
     """Extract set of entry keys that are marked superseded in MEMORY.md.
 
@@ -1170,14 +1233,15 @@ def select_memory_sections(
     # ── Temporal validity: extract superseded keys for scoring ──
     superseded = _extract_superseded_keys(memory_content)
 
-    # ── Section scoring: keyword-only (pure-filesystem, 2026-06-28) ──
-    # The vector/hybrid branch was REMOVED (pure-filesystem recall design §3.3,
-    # §5.1): no Titan embedding on any read path. Scoring is BM25 keyword over the
-    # index block. The ``memory_embeddings`` parameter is RETAINED (default False)
-    # but inert — it is asserted by test_memory_wiring.py (the prod-keyword-only
-    # contract) and removing it would KeyError that guard (Gate-2 HIGH-1). If
-    # ``memory_embeddings=True`` is ever passed, we still do keyword-only and warn,
-    # so no caller silently expects a vector leg that no longer exists.
+    # ── Section scoring: body-BM25 over OPERATIONAL sections (unified-retrieval
+    # STEP1, 2026-08-14). Selection no longer READS the in-prompt index — it scores
+    # the ## section BODY directly (mirrors DDD's _ddd_section_scores), unifying
+    # memory + DDD onto ONE index-free scorer. The index is still GENERATED above
+    # (strangler-fig: old path alive-but-unread until STEP5 deletes it). Evergreen
+    # is always-injected (CYCLE 2), so only operational sections are scored here.
+    # The vector leg was removed 2026-06-28; ``memory_embeddings`` is RETAINED
+    # (default False) but inert — asserted by test_memory_wiring.py; removing it
+    # would KeyError that guard.
     if user_message:
         if memory_embeddings:
             logger.warning(
@@ -1185,7 +1249,7 @@ def select_memory_sections(
                 "the vector leg was removed (pure-filesystem design §3.3); using "
                 "keyword-only scoring."
             )
-        matched_sections = _keyword_section_scores(user_message, index_block, superseded)
+        matched_sections = _operational_section_scores(user_message, sections, superseded)
 
         # Add matched sections (sorted by score, best first)
         for sec_name, _ in sorted(

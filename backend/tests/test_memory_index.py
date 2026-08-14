@@ -625,6 +625,81 @@ class TestEvergreenAlwaysInjected:
         assert "## Principles" not in out, "channel must NOT leak non-OT sections"
 
 
+class TestOperationalBodyBM25:
+    """Unified-retrieval STEP1: memory operational-section selection migrates from
+    index-based (_keyword_section_scores parses the in-prompt index) to body-BM25
+    (mirror _ddd_section_scores) — scoring the ## section BODY directly, no index.
+    Evergreen sections are NEVER scored here (CYCLE 2: always-injected). This closes
+    the two-mechanism split (memory-index vs DDD-body) onto ONE body-BM25 scorer."""
+
+    def test_scores_only_operational_sections(self):
+        import core.memory_index as mi
+        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        sections = {
+            "Principles": "- [PRI01] a principle about deployment.",   # evergreen → NOT scored
+            "Guidelines": "- [GUI01] deployment guideline about proxy fallback.",  # operational
+            "Pitfalls":   "- [PIT01] a pitfall about caching.",         # operational
+        }
+        scores = mi._operational_section_scores("deployment proxy", sections, set())
+        assert "Guidelines" in scores, "operational section must be scoreable"
+        assert "Principles" not in scores, "evergreen must never be body-BM25-scored (always-injected)"
+        assert all(s not in scores for s in MEMORY_EVERGREEN_SECTIONS)
+
+    def test_cjk_query_selects_operational_section(self):
+        """CJK improvement: the bigram tokenizer (_bm25_tokenize) matches a reordered
+        CJK query that the old index leg's _cjk_match (whole-token/prefix) missed."""
+        import core.memory_index as mi
+        sections = {"Processes": "- [PRC01] 状态推断与部署流程的处理步骤说明。"}
+        scores = mi._operational_section_scores("部署状态推断", sections, set())
+        assert "Processes" in scores, "CJK bigram body-BM25 must match reordered CJK query"
+
+    def test_superseded_entry_stripped_before_scoring(self):
+        """A section whose only query-matching entry is superseded must NOT be
+        selected — superseded entries are stripped from the body before BM25."""
+        import core.memory_index as mi
+        sections = {
+            "Guidelines": (
+                "- [GUI01] zebrafish-marker unique term here.\n"
+                "  <!-- superseded_by: GUI99 -->\n"
+            ),
+        }
+        scores = mi._operational_section_scores("zebrafish-marker", sections, {"GUI01"})
+        assert scores.get("Guidelines", 0) == 0 or "Guidelines" not in scores, \
+            "superseded entry must be stripped → its section not selected on its term"
+
+    def test_selective_injection_uses_body_bm25_not_index(self, monkeypatch, tmp_path):
+        """Integration: select_memory_sections selective branch selects operational
+        sections WITHOUT reading the index. Monkeypatch _keyword_section_scores to
+        raise → proves the injection path no longer calls it."""
+        import core.memory_index as mi
+        from core.context_directory_loader import ContextDirectoryLoader
+        # Pad the FILE over the selective threshold via an evergreen section
+        # (always-injected, doesn't compete for the operational budget). Keep the
+        # operational Guidelines section SMALL so it fits and can be selected.
+        filler = ("principle " * 40000).strip()
+        mem = (
+            "<!-- MEMORY_INDEX_START -->\n## Memory Index\n- [GUI01] x | proxy\n"
+            "<!-- MEMORY_INDEX_END -->\n\n"
+            "## Principles\n- [PRI01] a principle — " + filler + "\n\n"
+            "## Open Threads\n- P0 x.\n\n"
+            "## Guidelines\n- [GUI01] proxy fallback guideline detail.\n"
+        )
+        assert ContextDirectoryLoader.estimate_tokens(mem) >= mi.FULL_INJECTION_THRESHOLD
+        db = tmp_path / "d.db"; db.write_text("")
+        monkeypatch.setattr("jobs.paths.DB_PATH", db)
+        monkeypatch.setattr(mi, "_get_session_recall", lambda _p: None)
+        # If injection still reads the index scorer, this raises:
+        def _boom(*a, **k): raise AssertionError("injection still calls _keyword_section_scores")
+        monkeypatch.setattr(mi, "_keyword_section_scores", _boom)
+
+        # The fixture exceeds FULL_INJECTION_THRESHOLD → selective branch runs. If it
+        # still called the (monkeypatched-to-raise) index scorer, select would raise;
+        # reaching here proves injection selects via body-BM25, not the index.
+        out = mi.select_memory_sections(memory_content=mem, user_message="proxy fallback", session_signals={})
+        assert "## Guidelines" in out  # operational section selected via body-BM25
+        assert "## Principles" in out  # evergreen always-injected (CYCLE 2 intact)
+
+
 # ── Integration: Index in MEMORY.md ──────────────────────────────────
 
 
