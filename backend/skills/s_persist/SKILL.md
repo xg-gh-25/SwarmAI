@@ -57,15 +57,48 @@ When in doubt → **SKIP** and say so briefly. Under-persisting costs a re-deriv
 over-persisting poisons recall with stale noise. **If Step 0 says SKIP → stop here, do
 not route.** Only content that passes Step 0 continues to Step 1.
 
-### Step 1: Is this a behavioral rule for SOUL/AGENT/STEERING?
+### Step 1: Locate the FILE LAYER (which file owns this — and via which APPROVAL PATH)
 
-**Governance boundary:** If the content is a behavioral rule, standing rule, or gate that would change how the agent acts across ALL sessions — it's governance, not knowledge.
+**Before choosing a section (Step 2), first decide WHICH FILE this content belongs to.**
+Routing wrong at the file layer is the #1 mis-persist: a system-identity or product-level
+design principle wrongly landed in a DDD's TECH.md (2026-08-15) because Step 1 used to
+only fence SOUL/AGENT/STEERING and had no home for SWARMAI/IDENTITY/SELF.
 
-**Signals:** "new rule for STEERING", "from now on always", "add to AGENT.md", "behavioral gate"
+**The axis is NOT "can I write it?" — it is "which APPROVAL PATH does it change through?"**
+Everything is changeable (that is what cognitive self-evolution IS); nothing is "forbidden".
+The three paths differ only in WHO approves and WHERE the source lives. Two structural facts
+drive this (SSOT: `context_directory_loader.py` `CONTEXT_FILES` + `user_customized` flag):
 
-**If YES → REDIRECT:** Tell the user: "This looks like a governance rule — use `s_self-evolution` PROMOTE operation instead." Do NOT write it here.
+1. **Source vs projection.** SYSTEM-OWNED files (`user_customized=False`, chmod `0o444`)
+   have their SOURCE in `backend/context/<f>.md` and their `.context/<f>.md` is a **read-only
+   PROJECTION overwritten from the source every session** — hand-editing the projection is
+   futile. Editing them = edit the `backend/context/` source **+ rebuild**.
+2. **Governance never auto-writes.** SOUL/AGENT/STEERING change ONLY through
+   `s_self-evolution` PROMOTE, which carries the human-approval gate (model proposes, OS
+   gates, human approves). This is the promotion path, not a ban.
 
-**If NO → Continue to Step 2.**
+| Content it owns | File | Source location | s_persist writes directly? | Approval path |
+|---|---|---|---|---|
+| Product/system-level **design principle** (e.g. Darwinian decay), what SwarmAI IS | **SWARMAI.md** | `backend/context/` (projection is read-only) | ❌ no | edit `backend/context/` source **+ rebuild** — **user approve** (major action) |
+| Agent name / avatar / identity | **IDENTITY.md** | `backend/context/` | ❌ no | edit source + rebuild — user approve |
+| Personality / cognitive **principle** (P-level) — PRESCRIPTIVE: *how the agent must behave* across all sessions | **SOUL.md** | `backend/context/` | ❌ no | **→ `s_self-evolution` PROMOTE** (human-approve gate) |
+| Behavioral **rule** / gate | **AGENT.md** | `backend/context/` | ❌ no | **→ `s_self-evolution` PROMOTE** (human-approve gate) |
+| User standing **rule** / preference-as-rule | **STEERING.md** | `.context/` (live) | ❌ no | **→ `s_self-evolution` PROMOTE** (human-approve gate) |
+| Runtime self-portrait | **SELF.md** | `.context/` (live, runtime-owned) | ❌ no | human/distill writes only (auto-cultivation code-blocked) — do not hand-write |
+| User profile facts | **USER.md** | `.context/` (live) | ⚠️ user-domain — prefer asking | direct edit ok if user-directed |
+| Tool / MCP guidance | **TOOLS.md** | `.context/` (live) | ⚠️ | direct edit ok |
+| **Cross-project** cognitive knowledge / principle — DESCRIPTIVE: *what the agent has learned* (informs, doesn't prescribe) | **MEMORY.md** | `.context/` (live) | ✅ **yes — s_persist home** | agent-autonomous (Step 2 §Principles) |
+| Self-correction / bias | **EVOLUTION.md** | `.context/` (live) | ✅ **yes — s_persist home** | agent-autonomous (Step 2 §Corrections) |
+| (index/cache — never write prose here) | **KNOWLEDGE.md** | auto-rebuilt from fs | ❌ no | write the fact to `Knowledge/Library/` instead |
+| **Project-domain** knowledge | **DDD** PRODUCT/TECH/IMPROVEMENT/PROJECT (`Projects/<X>/2-understanding/`) | project disk | ✅ yes | agent-autonomous (Step 2 table) |
+| Cross-project searchable **reference/fact** | **Knowledge/Library/** | project disk | ✅ yes | agent-autonomous |
+
+**Governance signals** ("new rule for STEERING", "from now on always", "add to AGENT.md",
+"behavioral gate", a P-level principle, a system/product design principle): the content is
+governance/identity, not agent-writable knowledge → route it to the approval path in the table
+above (`s_self-evolution` for SOUL/AGENT/STEERING; `backend/context` source-edit+rebuild for
+SWARMAI/IDENTITY), tell the user which path + why, do NOT hand-write the file. **If the file
+layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** to pick the section.
 
 ### Step 2: Route by content type + project context
 
@@ -184,7 +217,7 @@ Where `[type]` is one of: `guideline`, `pitfall`, `decision`, `principle`, `corr
 - **Always add `source:manual` metadata** — distinguishes from auto-cultivated entries
 - **Newest first** — prepend to section, don't append
 - **Don't duplicate** — check if content already exists (match by title/content)
-- **Governance boundary** — if it's a behavioral rule → redirect to `s_self-evolution`
+- **Governance detection** — if it's a behavioral rule / P-level principle / system-identity or product design principle, it has an APPROVAL PATH (Step 1 table): SOUL/AGENT/STEERING → `s_self-evolution` PROMOTE; SWARMAI/IDENTITY → `backend/context/` source-edit + rebuild. Route it there and tell the user the path — don't hand-write the file, and never frame it as "forbidden" (it evolves, via a gate)
 - **Project detection** — infer from: current file being edited, pipeline context, user mention, or ask
 
 ## Verification
