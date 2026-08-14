@@ -99,7 +99,7 @@ not route.** Only content that passes Step 0 continues to Step 1.
 > always-injected *index/cache* file (one of the 11 context files) — it is a
 > **sibling** of `Knowledge/`, so `sync_knowledge_index` (which scans `Knowledge/`
 > only) never chunks it. Content written to KNOWLEDGE.md is injected-as-context but
-> **invisible to FTS5/vector recall**. Write durable reference material to
+> **invisible to FTS5/BM25 recall**. Write durable reference material to
 > `Knowledge/Library/` so it enters the searchable store; KNOWLEDGE.md stays the
 > curated index the agent reads at session start.
 

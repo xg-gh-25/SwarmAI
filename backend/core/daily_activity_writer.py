@@ -311,6 +311,20 @@ def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -
         "deliverables": summary.deliverables,
         "key_outputs": summary.key_outputs,
         "lessons": summary.lessons,
+        # Bound text+type pairs (single-point binding, Gate-1: parallel arrays are
+        # fragile). Distillation reads THIS to honor the author-time [type] instead
+        # of keyword-guessing. lesson_types is normalized to len(lessons) upstream,
+        # so the zip is exact. Legacy readers ignore this key; `lessons` (plain) is
+        # retained for backward compat + the markdown body (which stays prefix-free).
+        "lessons_typed": [
+            {"text": t, "type": ty}
+            for t, ty in zip(
+                summary.lessons,
+                (summary.lesson_types + ["guideline"] * len(summary.lessons))[
+                    : len(summary.lessons)
+                ],
+            )
+        ],
         "rejected_approaches": summary.rejected_approaches,
         "corrections": summary.corrections,
         "process_reflection": summary.process_reflection,

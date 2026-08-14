@@ -29,6 +29,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+# Single source of truth for the 7-type schema (P8: never hardcode a second copy).
+from core.ddd_entry_lifecycle import VALID_TYPES as _VALID_TYPES
+VALID_TYPE_SET = frozenset(_VALID_TYPES)
+
 logger = logging.getLogger(__name__)
 
 # Threshold: sessions with more messages than this get LLM enrichment
@@ -89,6 +93,14 @@ class StructuredSummary:
     deliverables: list[str] = field(default_factory=list)
     key_outputs: list[str] = field(default_factory=list)
     lessons: list[str] = field(default_factory=list)
+    # Parallel type-label array for lessons (7-type schema: guideline/pitfall/
+    # decision/model/process/principle/correction). LLM-emitted so the
+    # DailyActivity distillation path can HONOR the author-time type instead of
+    # keyword-guessing it (classify_entry_type is ~82% and pitfall-greedy).
+    # INVARIANT: normalized to len(lessons) at parse time (short→pad "guideline",
+    # long→truncate) so index i of lessons and lesson_types always correspond.
+    # Metadata, NOT prose — deliberately excluded from word_count().
+    lesson_types: list[str] = field(default_factory=list)
     rejected_approaches: list[str] = field(default_factory=list)
     continue_from: str = ""
     validation_status: str = ""
@@ -151,6 +163,12 @@ Only include sections with real content. Empty arrays for sections with nothing 
 1. **What was delivered?** (deliverables — concrete outcomes, not "what happened")
 2. **Where are the outputs?** (key_outputs — "file: path → description" or "sent X to person")
 3. **What did we learn?** (lessons — insights, highlights, mistakes, things worth remembering)
+   ALSO output `lesson_types`: a parallel array (SAME length + SAME order as `lessons`), \
+one type label per lesson, using EXACTLY one of these 7 labels — \
+`guideline` (a rule/pattern that works), `pitfall` (a trap/bug/failure mode to avoid), \
+`principle` (a first-principle/philosophy), `correction` (a fix to a wrong belief/behavior), \
+`decision` (a choice made + rationale), `model` (how something is structured/works), \
+`process` (a step-by-step procedure). If unsure for an entry, use `guideline`.
 
 Also assess:
 - Was this a debugging/investigation session? If yes, set coe_signal.
@@ -186,6 +204,7 @@ Empty array if no external signals influenced this session (most sessions are pu
   "deliverables": ["Built X feature", "Fixed Y bug — root cause was Z", "Diagnosed P issue"],
   "key_outputs": ["code: agent_manager.py → StreamEvent handling", "sent: summary email to person@email"],
   "lessons": ["SDK has include_partial_messages flag (default False)", "Never trust char-count estimation for tokens"],
+  "lesson_types": ["model", "pitfall"],
   "rejected_approaches": ["Tried X but rejected because Y"],
   "corrections": ["Agent asked for confirmation on internal action — user said just do it", "Agent repeated user's words back — user said stop repeating"],
   "process_reflection": "Same file edited 4 rounds — each round found a different class of bug (layout, then error handling, then UX). Upfront user-scenario walkthrough would have caught all in round 1.",
@@ -642,6 +661,13 @@ class SummarizationPipeline:
         summary.deliverables = enriched.get("deliverables", [])
         summary.key_outputs = enriched.get("key_outputs", [])
         summary.lessons = enriched.get("lessons", [])
+        # lesson_types is normalized to len(lessons) in _parse_enrichment (bound
+        # as pairs), so index alignment holds. Fallback: if absent (shouldn't be),
+        # pad to guideline so downstream zip never misaligns.
+        _lt = enriched.get("lesson_types", [])
+        if len(_lt) != len(summary.lessons):
+            _lt = (_lt + ["guideline"] * len(summary.lessons))[: len(summary.lessons)]
+        summary.lesson_types = _lt
         summary.rejected_approaches = enriched.get("rejected_approaches", [])
         summary.corrections = enriched.get("corrections", [])
         summary.process_reflection = enriched.get("process_reflection", "")
@@ -815,7 +841,7 @@ class SummarizationPipeline:
             return {}
 
         result: dict[str, Any] = {}
-        for key in ("deliverables", "key_outputs", "lessons",
+        for key in ("deliverables", "key_outputs",
                      "rejected_approaches", "corrections",
                      "actions_taken", "reasoning"):  # legacy
             entries = data.get(key, [])
@@ -823,6 +849,34 @@ class SummarizationPipeline:
                 result[key] = [e for e in entries if isinstance(e, str) and e.strip()]
             else:
                 result[key] = []
+
+        # lessons + lesson_types are BOUND: normalize lesson_types to len(lessons)
+        # and filter empty-lesson entries as PAIRS, so index i always corresponds.
+        # (Filtering lessons alone would shift indices vs a parallel type array —
+        # the exact fragility Gate-1 flagged. Bind here, at the single parse point.)
+        raw_lessons = data.get("lessons", [])
+        raw_lessons = raw_lessons if isinstance(raw_lessons, list) else []
+        raw_types = data.get("lesson_types", [])
+        raw_types = raw_types if isinstance(raw_types, list) else []
+        if len(raw_types) != len(raw_lessons) and raw_types:
+            logger.warning(
+                "enrichment lesson_types/lessons length mismatch: %d types vs %d lessons "
+                "— normalizing (short→pad 'guideline', long→truncate)",
+                len(raw_types), len(raw_lessons),
+            )
+        lessons_out: list[str] = []
+        types_out: list[str] = []
+        for i, les in enumerate(raw_lessons):
+            if not (isinstance(les, str) and les.strip()):
+                continue  # drop empty lesson AND its paired type together
+            t = raw_types[i] if i < len(raw_types) else "guideline"
+            t = t.lower() if isinstance(t, str) else "guideline"
+            if t not in VALID_TYPE_SET:
+                t = "guideline"
+            lessons_out.append(les)
+            types_out.append(t)
+        result["lessons"] = lessons_out
+        result["lesson_types"] = types_out
 
         for key in ("continue_from", "validation_status", "coe_signal", "coe_topic"):
             val = data.get(key, "")

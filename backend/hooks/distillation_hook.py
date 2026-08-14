@@ -31,7 +31,10 @@ from pathlib import Path
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
-from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION, format_memory_entry
+from core.ddd_entry_lifecycle import (
+    MEMORY_TYPE_TO_SECTION, format_memory_entry, VALID_TYPES as _VALID_TYPES,
+)
+_VALID_TYPES_SET = frozenset(_VALID_TYPES)
 from core.ddd_paths import ddd_path
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
 from scripts.locked_write import LockedWriteError
@@ -440,12 +443,31 @@ class DistillationTriggerHook:
 
                     for rec in jsonl_records:
                         decisions.extend(rec.get("decisions", []))
-                        lessons.extend(rec.get("lessons", []))
+                        # Prefer the bound text+type pairs (lessons_typed) so
+                        # route_lesson_type HONORS the author-time [type] instead of
+                        # keyword-guessing (~82%, pitfall-greedy). Each pair is
+                        # emitted as "[type] text" — route strips the tag for the
+                        # body, keeping the stored entry prefix-free. Legacy JSONL
+                        # (no lessons_typed) falls back to the plain `lessons` array
+                        # → keyword classify (zero regression).
+                        typed = rec.get("lessons_typed")
+                        if typed:
+                            for pair in typed:
+                                _txt = (pair.get("text") or "").strip() if isinstance(pair, dict) else ""
+                                if not _txt:
+                                    continue
+                                _ty = (pair.get("type") or "").lower() if isinstance(pair, dict) else ""
+                                lessons.append(f"[{_ty}] {_txt}" if _ty in _VALID_TYPES_SET else _txt)
+                        else:
+                            lessons.extend(rec.get("lessons", []))
                         corrections.extend(rec.get("corrections", []))
-                        # process_reflection → promote as lesson (high-value LLM meta-analysis)
+                        # process_reflection → promote as lesson (high-value LLM
+                        # meta-analysis). It's a meta-cognitive observation → tag
+                        # [correction] explicitly (it has no lesson_types entry;
+                        # tagging here keeps it out of the keyword classifier).
                         pr = rec.get("process_reflection", "")
                         if pr and len(pr) > 20:
-                            lessons.append(pr)
+                            lessons.append(f"[correction] {pr}")
                         # signal_driven_actions → promote as decisions (causal link)
                         for sda in rec.get("signal_driven_actions", []):
                             if sda and len(sda) > 15:
@@ -897,9 +919,18 @@ class DistillationTriggerHook:
             return enriched
         raw = DistillationTriggerHook._raw_lesson_text(enriched)
         # Derive type: prefer route_lesson_type; fall back to the section's type.
+        # route MUST see the leading [type] tag (it honors it), so we route on the
+        # tag-bearing `raw` FIRST...
         _, etype = route_lesson_type(raw)
         if not etype:
             etype = MEMORY_SECTIONS.get(section, {}).get("type", "guideline")
+        # ...THEN strip the leading [type] tag from `raw` before it becomes the
+        # title/body — else the tag would be re-embedded into the entry body,
+        # producing a double/triple `[type]` (AC3). Guarded by VALID_TYPES so a
+        # legitimate `[TODO]`-style bracket lead is NOT stripped.
+        _tm = re.match(r"^\[(\w+)\]\s+", raw)
+        if _tm and _tm.group(1).lower() in _VALID_TYPES_SET:
+            raw = raw[_tm.end():]
         # Extract the date stamp from the original first line (`- YYYY-MM-DD: ...`).
         import re as _re
         dm = _re.search(r"(\d{4}-\d{2}-\d{2})", first)
