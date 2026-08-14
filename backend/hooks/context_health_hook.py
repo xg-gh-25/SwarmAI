@@ -1,8 +1,9 @@
 """Context Health Harness — keeps SwarmAI's brain accurate and current.
 
 Single hook, two modes:
-- **Light** (every session): refresh KNOWLEDGE.md + PROJECTS.md indexes
+- **Light** (every session): refresh the KNOWLEDGE.md index
   if workspace changed since last refresh.
+  (PROJECTS.md in-prompt index was removed 2026-08-14.)
 - **Deep** (once per day): validate all 11 context files, check MEMORY.md
   accuracy vs git, detect DDD staleness, verify git health.
 
@@ -137,10 +138,9 @@ class ContextHealthHook:
 
     def __init__(self) -> None:
         self._last_deep_date: Optional[str] = None
-        # Track last refresh git rev to skip no-op refreshes
+        # Track last refresh git rev to skip no-op refreshes.
         # Dirty flag: set by _light_refresh when cultivation writes to DDD docs.
-        # Consumed at end of _light_refresh to conditionally refresh PROJECTS.md.
-        # Track Projects/ dir mtime to detect create/rename/delete without cultivation.
+        # (The old PROJECTS.md in-prompt index refresh was removed 2026-08-14.)
         # Token budget measurement (populated by _check_token_budget in deep check)
         self._token_measurement: dict = {}
 
@@ -2660,9 +2660,9 @@ class ContextHealthHook:
 
         A DDD project has 4 docs (PRODUCT/TECH/IMPROVEMENT/PROJECT). A project
         with SOME but not ALL is half-created — usually because it was made
-        outside standard `s_project-manager` provisioning. That silently breaks
-        cross-project index refs (PROJECTS.md points at files that don't exist)
-        and leaves the pipeline's EVALUATE stage without a PRODUCT/TECH base.
+        outside standard `s_project-manager` provisioning. That leaves the
+        pipeline's EVALUATE stage without a PRODUCT/TECH base and breaks
+        cross-project references that expect the full doc set.
 
         A dir with 0 DDD docs is NOT a DDD project (skip it). A dir with all 4
         is healthy (skip it). Only the 1-3 range is flagged.
