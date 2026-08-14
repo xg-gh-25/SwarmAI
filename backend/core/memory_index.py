@@ -729,15 +729,27 @@ def extract_body_without_index(content: str) -> str:
     # agent-written duplicate that persists across sessions. Pattern: the heading
     # followed by lines until the next ## header or EOF (.* not .+ consumes blank
     # lines within the section).
-    # run_3cb6b9ae hardening (Gate-2 LOW): anchor to the TOP OF FILE only
-    # (`\A`, optional leading whitespace) — the orphan index block is always at the
-    # top. A bare `## Memory Index` heading appearing INSIDE an entry body lower in
-    # the file must NOT be stripped: the old `^…$/MULTILINE` form matched any line,
-    # so persisting the strip to disk (locked_write #6) could silently delete a real
-    # entry whose body happened to contain that heading line. Top-anchored = the
-    # orphan dies, real content below is untouchable.
+    # run_3cb6b9ae hardening (Gate-2 LOW): anchor to the TOP OF FILE only — the orphan
+    # index block is always at the top. A bare `## Memory Index` heading appearing INSIDE
+    # an entry body lower in the file must NOT be stripped: the old `^…$/MULTILINE` form
+    # matched any line, so persisting the strip to disk (locked_write #6) could silently
+    # delete a real entry whose body happened to contain that heading line.
+    #
+    # run_0f009a75 (Gate-0 fix): the anchor now ALSO allows the index one line below a
+    # DOCUMENT TITLE — `# MEMORY\n\n## Memory Index` — the real shape the pure-`\A\s*`
+    # form missed. The leading alt is deliberately `#[^#\n]` (a SINGLE-`#` document
+    # title), NOT `[^\n]*` (any first line): a `[^\n]*` first-line would also swallow a
+    # real `## Some Real Entry` header sitting above a bare index → catastrophic entry
+    # deletion (the Gate-0 WRONG-FRAME catch). `#[^#\n]` matches `# MEMORY` but never
+    # `## Section`, so a real section header above the index is untouchable. The
+    # `(?!^## )` lookahead (needs re.MULTILINE) still stops the strip at the next
+    # section, so content below the orphan index is never consumed.
+    # CRLF-tolerant (`(?:\r\n|\n)` at every line break): MEMORY.md is written by the
+    # agent via locked_write (always \n) on a macOS daemon, so CRLF is not expected —
+    # but the pre-existing `\n`-only form would silently no-op on a CRLF file, so this
+    # closes that latent gap at zero cost (Gate-2 run_0f009a75).
     result = re.sub(
-        r"\A\s*## Memory Index\n(?:(?!^## ).*\n?)*",
+        r"\A(?:\s*|#[^#\n][^\n]*(?:\r\n|\n)\s*)## Memory Index(?:\r\n|\n)(?:(?!^## ).*(?:\r\n|\n)?)*",
         "",
         result,
         flags=re.MULTILINE,

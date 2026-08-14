@@ -196,3 +196,95 @@ class TestFullInjectionArchitecture:
         ) + "\n\n## Open Threads\n- none\n"
         out = select_memory_sections(memory_content=big, user_message="x")
         assert "[GUI0499]" in out  # the whole body comes through, nothing dropped
+
+
+class TestBareIndexStripBelowTitle:
+    """run_0f009a75 BUG2: extract_body_without_index must strip a bare `## Memory Index`
+    sitting one line below a DOCUMENT TITLE (`# MEMORY\\n\\n## Memory Index`), which the
+    old `\\A\\s*`-only anchor missed — WHILE never destroying a real `## Section` header
+    above a bare index (the Gate-0 WRONG-FRAME catch) and never touching a `## Memory
+    Index` phrase deep inside an entry body (run_3cb6b9ae safety property)."""
+
+    def test_strips_index_below_document_title(self):
+        from core.memory_index import extract_body_without_index
+        content = "# MEMORY\n\n## Memory Index\n15 principles\n- [X] y\n## Active\n- keep me\n"
+        out = extract_body_without_index(content)
+        assert "## Memory Index" not in out
+        assert "15 principles" not in out
+        assert "keep me" in out  # content after the index survives
+
+    def test_strips_index_at_very_top(self):
+        from core.memory_index import extract_body_without_index
+        content = "## Memory Index\n15 principles\n### Perm\n- x\n## Active\n- keep\n"
+        out = extract_body_without_index(content)
+        assert "## Memory Index" not in out
+        assert "keep" in out
+
+    def test_never_strips_real_section_header_above_bare_index(self):
+        # Gate-0 WRONG-FRAME: a `[^\n]*` first-line alt would swallow a real `## Section`
+        # header sitting above a bare index. The `#[^#\n]` (single-#) alt must NOT match
+        # `## Some Real Entry`, so the real entry survives intact.
+        from core.memory_index import extract_body_without_index
+        content = "## Some Real Entry\n\n## Memory Index\nfake\n## Another\n- keep\n"
+        out = extract_body_without_index(content)
+        assert "## Some Real Entry" in out, "a real ## section above a bare index must NEVER be stripped"
+
+    def test_never_strips_index_phrase_deep_in_body(self):
+        # run_3cb6b9ae property: a `## Memory Index` appearing INSIDE an entry body lower
+        # in the file is untouchable (top-anchored strip only).
+        from core.memory_index import extract_body_without_index
+        content = "# MEMORY\n\n## Corrections\n- entry mentions ## Memory Index inline\n## Active\n- keep\n"
+        out = extract_body_without_index(content)
+        assert "## Corrections" in out and "mentions ## Memory Index inline" in out
+
+    def test_plain_non_title_first_line_is_conservative(self):
+        # A first line that is neither whitespace nor a single-# title → do NOT strip
+        # (conservative: better to leave a bare index than risk eating real content).
+        from core.memory_index import extract_body_without_index
+        content = "just some prose\n## Memory Index\nidx\n## Active\n- keep\n"
+        out = extract_body_without_index(content)
+        assert "just some prose" in out and "## Active" in out
+
+    def test_strips_index_with_crlf_line_endings(self):
+        # Gate-2 run_0f009a75: CRLF-tolerant. A CRLF MEMORY.md (Windows / git autocrlf)
+        # must still have its below-title bare index stripped, and content after it kept.
+        from core.memory_index import extract_body_without_index
+        content = "# MEMORY\r\n\r\n## Memory Index\r\n15 principles\r\n## Active\r\n- keep me\r\n"
+        out = extract_body_without_index(content)
+        assert "## Memory Index" not in out
+        assert "15 principles" not in out
+        assert "keep me" in out
+
+
+class TestL1FreshnessGitignoredCognitiveFiles:
+    """run_0f009a75 BUG1: L1 freshness must catch edits to gitignored cognitive files
+    (MEMORY.md/EVOLUTION.md) that `git status` is blind to — via an UNCONDITIONAL mtime
+    leg — while NOT perma-missing on per-session runtime-state noise."""
+
+    def test_mtime_leg_catches_source_edit_after_l1(self, tmp_path):
+        import time
+        from core.context_directory_loader import ContextDirectoryLoader, CONTEXT_FILES, L1_CACHE_FILENAME
+        ctx = tmp_path
+        for spec in CONTEXT_FILES:
+            (ctx / spec.filename).write_text("x")
+        l1 = ctx / L1_CACHE_FILENAME
+        time.sleep(0.02); l1.write_text("cache")  # L1 newest
+        loader = ContextDirectoryLoader(ctx)
+        assert loader._is_l1_fresh_uncached(l1) is True, "clean → fresh"
+        # edit a gitignored cognitive file AFTER L1 → must be stale (git can't see it)
+        time.sleep(0.02); (ctx / "MEMORY.md").write_text("edited")
+        assert loader._is_l1_fresh_uncached(l1) is False, "MEMORY edit after L1 → stale (mtime leg)"
+
+    def test_runtime_state_noise_does_not_perma_miss(self, tmp_path):
+        import time
+        from core.context_directory_loader import ContextDirectoryLoader, CONTEXT_FILES, L1_CACHE_FILENAME
+        ctx = tmp_path
+        for spec in CONTEXT_FILES:
+            (ctx / spec.filename).write_text("x")
+        l1 = ctx / L1_CACHE_FILENAME
+        time.sleep(0.02); l1.write_text("cache")
+        loader = ContextDirectoryLoader(ctx)
+        # a per-session runtime-state file (NOT a context source) touched after L1 must
+        # NOT make L1 stale — else the cache perma-misses every session.
+        time.sleep(0.02); (ctx / ".memory-usage.json").write_text("noise")
+        assert loader._is_l1_fresh_uncached(l1) is True, "runtime-state noise must not invalidate L1"

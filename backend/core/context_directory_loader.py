@@ -991,28 +991,54 @@ class ContextDirectoryLoader:
         return fresh
 
     def _is_l1_fresh_uncached(self, l1_path) -> bool:
-        """Actual freshness check (git-first, mtime fallback)."""
-        # Try git first (preferred — atomic, no TOCTOU)
-        try:
-            result = subprocess.run(
-                ["git", "status", "--porcelain", "--", str(self.context_dir)],
-                cwd=self.context_dir.parent,
-                capture_output=True, text=True, timeout=5,
-            )
-            return not result.stdout.strip()
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            pass
+        """Actual freshness check — git AND mtime, both UNCONDITIONAL (run_0f009a75).
 
-        # Mtime fallback (git unavailable)
+        Two independent staleness signals, ANDed (either reporting dirty → not fresh):
+        - git `status --porcelain`: catches changes to TRACKED files + new untracked.
+        - mtime vs the L1 cache: catches changes to GITIGNORED cognitive files
+          (MEMORY.md / EVOLUTION.md are gitignored, so `git status` is BLIND to their
+          edits — the bug this fix closes: L1 was served stale after any MEMORY/
+          EVOLUTION edit). mtime is the ONLY signal that sees them.
+
+        Both must pass for a fresh verdict. The mtime leg is no longer a git-unavailable
+        FALLBACK — it runs every time, because the gitignored files it guards are exactly
+        the ones git can never report. (L1 is written LAST in load_all, so on a clean
+        assemble its mtime >= every source; and no per-session writer rewrites MEMORY/
+        EVOLUTION unconditionally — the memory lifecycle only writes on a real transition
+        — so this does not degrade into a permanent cache-miss.)
+        """
+        # mtime leg — UNCONDITIONAL (guards gitignored MEMORY/EVOLUTION that git can't see).
         try:
             l1_mtime = l1_path.stat().st_mtime
             for spec in CONTEXT_FILES:
                 src = self.context_dir / spec.filename
                 if src.exists() and src.stat().st_mtime > l1_mtime:
                     return False
-            return True
         except OSError:
             return False
+
+        # git leg — SCOPED to the 12 context source files ONLY, never the whole
+        # .context/ dir. run_0f009a75 root-cause: `.context/` also holds per-session
+        # runtime state files that are TRACKED and dirty EVERY session (.memory-usage.json,
+        # .eval-canary.json, judge-telemetry.jsonl, …). A dir-wide `git status -- .context/`
+        # therefore reported dirty on every session → L1 was a PERMANENT cache-miss (the
+        # latent bug behind the old "memory_smart bypasses L1" note). Scoping to the source
+        # files makes git report only real context-file edits; mtime (above) already covers
+        # the gitignored cognitive files, so together they see every source change and NONE
+        # of the runtime-state noise.
+        try:
+            paths = [str(self.context_dir / spec.filename) for spec in CONTEXT_FILES]
+            result = subprocess.run(
+                ["git", "status", "--porcelain", "--", *paths],
+                cwd=self.context_dir.parent,
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.stdout.strip():
+                return False
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass  # git unavailable → rely on the mtime leg above (already passed).
+
+        return True
 
     def _write_l1_cache(self, content: str, budget: int = DEFAULT_TOKEN_BUDGET) -> None:
         """Write assembled content to L1 cache file with budget header.
