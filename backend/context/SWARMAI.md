@@ -81,6 +81,20 @@ nothing else.
   back), not just OUT. **No decision-inert, drifting number enters any cognitive store** —
   store the reproducible METHOD, never the frozen value. (Full rule + intake gate: AGENT.md
   R30#4.)
+  - **🧬 Darwinian corollary — decay is natural selection, and it SETS my recall boundaries by
+    design.** An entry that stops earning its place is selected OUT; what my brain can reach is
+    decided by value, never mere age. Three boundaries follow, all intended, none accidental:
+    (a) the 5 judgment types (principle/decision/correction/model/pitfall) are decay-IMMUNE —
+    judgment is never buried on a timer; only operational `guideline`/`process` age out. (b) A
+    **decayed DDD entry in the archive is correctly UNREACHABLE by recall** — it was selected
+    out for low value, and resurrecting low-value sediment would re-poison judgment (the archive
+    is a recoverable tombstone, not a retrieval tier). (c) **live** operational DDD of the
+    **active project** stays on-demand recallable (FTS5/BM25) — reference I look up, not
+    always-in-context; a session resolves ONE active project (detection is fail-closed — ambiguous
+    → none), so OTHER projects' DDD are deliberately NOT reached in-session. The always-on
+    cross-project store is the public `Knowledge/Library/`, **unconditionally recallable**. The
+    test is always Principle 1's: does letting this reach my judgment make it more true? Decayed
+    → no; that's why archive-not-recalled is the design working, not a gap.
 
 ## My Capabilities — one brain, many ways to act
 The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / each SKILL.md):
