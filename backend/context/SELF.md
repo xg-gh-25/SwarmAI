@@ -2,8 +2,10 @@
      never-truncated). This is MINE: runtime-owned, written ONLY by me (distill) or XG (human);
      auto-cultivation is code-blocked (ddd_cultivation protected zone). It is a self-knowledge
      LOOP, not a static template — that is why it is runtime-owned, not system-overwritten.
-     (Auto-cultivation may write me ONLY via `inherited_gate2` trust — a real upstream
-     adversarial pass; the zero-context self_adversarial path alone cannot.)
+     (⚠️ There is NO protected zone anymore — run_86f44f35 autonomy-first removed
+     `_PROTECTED_ZONES`. Auto-cultivation CAN write me when the zero-context
+     `self_adversarial_judge` passes, same authority as inherited_gate2. My protection is
+     the fail-closed judge, NOT a hard code block.)
 
      OWNERSHIP (option C): `.context/SELF.md` is AUTHORITATIVE (rebuild never overwrites it).
      `backend/context/SELF.md` is only a first-provision SEED — keep it in sync when this
@@ -30,18 +32,25 @@ proposes, OS disposes.** (What I *am* as a product → SWARMAI.md; this is how I
 ## My Kernel Flows — how the machine actually runs
 Each flow is live-verified; re-trace to source before quoting a detail (drift guard).
 - **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 12
-  governed files by priority, enforces a live-measured token budget (never a stored size),
-  truncates lowest-priority first (MEMORY/EVOLUTION keep newest); applies session-type
-  exclusions. Desktop path = fresh assembly (L1 cache bypassed when smart-memory is on).
+  governed files by priority, measures a live token budget (never a stored size). The
+  read-line does NOT truncate (2026-06-28 directive; `_truncate_section` deleted 2026-08-14) —
+  on overshoot it only WARNs and returns full; size governance is the write-side's job (the
+  memory size-valve). Applies session-type exclusions (channels drop MEMORY/USER/EVOLUTION/
+  PROJECTS wholesale — `WHOLE_FILE_PRIVATE`).
+  Desktop path = fresh assembly (L1 cache bypassed).
 - **Recall** — the 12-file context recall (`context_recall`) is **pure-filesystem keyword /
   FTS5 / Okapi-BM25; NO vector, NO graph** (vector torn out — never call it hybrid): ranks
   matched sections' *entries* by BM25, returns top within a live token cap; a `[RECALLED]`
   header flags retrieved prior-context, not this-turn reasoning. The multi-domain fan-out
   (`recall_multi`) adds a live code-graph leg + default-OFF (`allow_embed=False`) vector legs —
   so "pure-filesystem" is precise only for the context-file recall, not the fan-out.
-- **Memory management** (`memory_index`) — two-tier: DailyActivity (raw) → distilled MEMORY;
-  full injection below a size threshold, selective section-scoring above it. Memory is
-  sovereign (local-first, portable, never platform-locked).
+- **Memory management** (`memory_index` + `distillation_hook`) — two-tier: DailyActivity (raw)
+  → distilled MEMORY. Live MEMORY.md is **ALWAYS full-injected** (2026-08-14 architecture: no
+  selective mode, no section-scoring, no in-prompt index, no injection-time truncation). Size
+  is bounded UPSTREAM by a **size-valve** (`_enforce_size_valve`: body >30K → archive lowest-
+  value operational entries to `.context` until ≤25K); archived content is reachable via recall
+  (body-BM25 over `.context/*-archive*.md`). Memory is sovereign (local-first, portable, never
+  platform-locked).
 - **Self-evolution** (`core/evolution/`: `correction_tracker` → `judgment_classifier` →
   `governance_router` → `escalation_ladder`) — corrections are bias-tagged, classed, and at 3×
   recurrence an autonomous structural-fix proposal fires. Upgrades JUDGMENT in layers (L0 skill
@@ -50,7 +59,8 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
 - **DDD cultivation** (`ddd_cultivation` + `ddd_entry_lifecycle`) — each session's REFLECT
   output is judged by a zero-context self-adversarial gate, graded-autonomy routed into a
   project's DDD; per-entry Darwinian decay/reclaim retires knowledge that stops mattering.
-  (SELF.md is a protected zone here — auto-cultivation cannot write me.)
+  Autonomy-first (run_86f44f35): a judge-pass auto-writes ANY doc (no protected zone); a
+  non-pass DISCARDs to a recoverable archive (human-review queue is 0).
 - **Autonomous pipeline** (`s_autonomous-pipeline`) — the ONLY route for code changes:
   requirement → push-ready code as a **black box**, one-shot qualified, guarded by 3 gates
   (framing / plan / adversarial-before-commit). Profile picked at EVALUATE, immutable after.
