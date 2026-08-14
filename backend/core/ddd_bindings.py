@@ -535,21 +535,36 @@ def _compute_ddd_freshness(project_dir: Path, docs: list[str]) -> str:
 
 
 def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = None) -> str | None:
-    """THE single source of truth for one 'Active Projects & DDD' index line.
+    """Formatter for one 'Active Projects & DDD' index line. NO production caller.
 
-    Remaining callers (the loops-health repair path + the s_repo-to-ddd skill)
-    MUST call this so any regenerated 'Active Projects & DDD' line is BYTE-IDENTICAL
-    (run_99b70b3c: divergent formats once rewrote the section back and forth every
-    cycle). NOTE: the in-prompt auto-writers that shared this helper
-    (context_health_hook + ddd_orchestrator) were removed 2026-08-14; this stays the
-    single formatter for the line wherever a caller still emits it.
+    STATUS (2026-08-14): unreferenced in production, and nothing writes the section
+    it formats. All three writers were deleted when the in-prompt markdown indexes
+    were removed — ``ddd_orchestrator._ch_inject_knowledge``,
+    ``context_health_hook._refresh_knowledge_projects_section``, and
+    ``loops_health_check._fix_ddd_injection`` (finding C3). A repo-wide grep for
+    ``describe_project_ddd_line`` finds only ``TestSpecDetailsIndexRow`` in
+    ``skills/s_repo-to-ddd/scripts/test_ai_ready_helpers.py`` — tests, and ones CI
+    does not collect (``pyproject`` sets ``testpaths = ["tests"]``, so that file
+    never runs). Do NOT restate this as "the single source of truth for remaining
+    callers": there are none, and claiming otherwise is what this docstring is
+    replacing.
+
+    Kept rather than deleted only because the body is not cheaply re-derivable — it
+    encodes two production incidents that a fresh reimplementation would repeat:
+    ``ddd_path`` resolution so a migrated six-section DDD is still found (run_af3dfd9f:
+    a bare ``d / f`` root check made migrated projects vanish from the index) and
+    ``ddd_path(d, "capabilities")`` so a migrated layout does not report "0 skills"
+    (run_cfb0f28f, Gate-2 CRITICAL). If the section is not coming back, this and its
+    three tests are a delete candidate; if a writer IS reintroduced it MUST call this
+    instead of formatting inline (run_99b70b3c: two writers with divergent formats
+    rewrote the section back and forth every cycle).
 
     Format: ``- **Name** `[cls]` — DOC, DOC, … , extra, extra (updated <freshness>)``
       - ``[cls]`` from classify_project (none/external/internal); omitted if unknown.
       - structure extras (N skills / gates / Knowledge/ / bindings) present on disk.
       - ``(updated <freshness>)`` ALWAYS appended — freshness is computed from doc
-        mtime when the caller does not supply it, so BOTH writers emit the suffix
-        identically (a caller passing None no longer produces a divergent line).
+        mtime when the caller does not supply it, so a caller passing None cannot
+        produce a line that diverges from one passing an explicit value.
 
     Returns None if the project has none of the 4 canonical DDD docs (skip it).
     Fail-safe: classify_project errors → no tag, never raises.
