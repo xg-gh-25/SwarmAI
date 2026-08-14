@@ -302,6 +302,50 @@ _META_RE = re.compile(
 _DATE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})")
 
 
+def format_memory_entry(
+    entry_type: str,
+    title: str,
+    body: str,
+    date_str: str,
+    run_id: "str | None" = None,
+    *,
+    source: str = "auto",
+) -> "tuple[str, str]":
+    """THE single source of truth for a MEMORY.md entry's on-disk shape (run_3cb6b9ae).
+
+    Every MEMORY write door MUST route through this so the entry line + metadata are
+    IDENTICAL across doors — the fix for the format-drift bug where distillation's
+    `_format_enriched_entry` wrote a bare ``- {date}: {text}`` (no [type], no **title**,
+    no metadata) while context_health wrote the canonical shape. A divergent shape is
+    invisible to decay/dedup/recall boundary detection (parse_entries._ENTRY_RE requires
+    ``- [type] **title**``), so a malformed entry silently never decays and never dedups.
+
+    Returns ``(entry_line, meta_line)`` — the caller joins them with a newline. Shape:
+
+        - [<type>] **<title>** — <body> (<date>[, <run_id>])
+          <!-- ref:0 | last:<date> | decay:active | source:<source> -->
+
+    IDEMPOTENT / build-time only: this builds a NEW entry from PARTS. It never scans or
+    rewrites existing entries, so the entries already in MEMORY.md are untouched. The
+    caller derives (type, title, body) — e.g. via `route_lesson_type` + a title split —
+    BEFORE calling this; this function does not re-parse, it trusts its args (writer≠parser).
+
+    Args:
+        entry_type: one of VALID_TYPES (falls back to DEFAULT_TYPE if unknown).
+        title: short bold title (no surrounding ``**``; trailing ``.`` stripped here).
+        body: the entry body (the durable rule). May equal or extend the title.
+        date_str: YYYY-MM-DD (the entry's date + the metadata `last:` value).
+        run_id: optional provenance run id, appended as ``(date, run_id)``.
+        source: metadata `source:` value (``auto`` | ``manual`` | ...).
+    """
+    etype = entry_type if entry_type in VALID_TYPES else DEFAULT_TYPE
+    clean_title = title.strip().strip("*").rstrip(".").strip() or body[:60].strip()
+    prov = f"({date_str}, {run_id})" if run_id else f"({date_str})"
+    entry_line = f"- [{etype}] **{clean_title}** — {body} {prov}"
+    meta_line = f"  <!-- ref:0 | last:{date_str} | decay:active | source:{source} -->"
+    return entry_line, meta_line
+
+
 # ── Dataclasses ───────────────────────────────────────────────────────────────
 
 

@@ -31,7 +31,7 @@ from pathlib import Path
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
-from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
+from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION, format_memory_entry
 from core.ddd_paths import ddd_path
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
 from scripts.locked_write import LockedWriteError
@@ -613,9 +613,10 @@ class DistillationTriggerHook:
                     logger.info("distillation: DECISION discarded (%s, archived): %.80s",
                                 reason or "?", raw)
             if gated_decisions:
-                self._run_locked_write(
-                    memory_path, MEMORY_TYPE_TO_SECTION["decision"], "\n".join(gated_decisions)
-                )
+                # Cycle-2 (#1): canonicalize to the SSOT shape at the ON-DISK write.
+                _dsec = MEMORY_TYPE_TO_SECTION["decision"]
+                canon = [self._canonicalize_entry(e, _dsec) for e in gated_decisions]
+                self._run_locked_write(memory_path, _dsec, "\n".join(canon))
         # GAP B (run_fdbc0f08): route each surviving lesson to its TRUE type's
         # section instead of hardcoding Guidelines. classify on the RAW text
         # (route_lesson_type) — a lesson that is really a pitfall lands in
@@ -660,7 +661,9 @@ class DistillationTriggerHook:
                     logger.info("distillation: lesson discarded (%s, archived): %.80s",
                                 reason or "?", raw)
             for section, entries in by_section.items():
-                self._run_locked_write(memory_path, section, "\n".join(entries))
+                # Cycle-2 (#1): canonicalize to the SSOT shape at the ON-DISK write.
+                canon = [self._canonicalize_entry(e, section) for e in entries]
+                self._run_locked_write(memory_path, section, "\n".join(canon))
 
         # Write COE registry entries
         if coe_entries:
@@ -857,6 +860,67 @@ class DistillationTriggerHook:
             logger.warning("distillation: pending drain FAILED (%s)", type(exc).__name__)
             return ([], [])
         return (decisions, lessons)
+
+    @staticmethod
+    def _canonicalize_entry(enriched: str, section: str) -> str:
+        """Convert an enriched distillation entry to the canonical SSOT shape
+        (run_3cb6b9ae Cycle-2 #1). This is the ON-DISK finalizer: it takes the
+        internal enriched routing string (`- {date}: {raw}\\n  Detail: ...\\n
+        <!-- valid_from -->`) and rebuilds the entry line via the shared
+        `format_memory_entry` SSOT so distillation writes the SAME
+        `- [type] **title** — body (date, run)` + 4-field metadata that
+        context_health writes — instead of the bare `- {date}: {text}` that was
+        invisible to decay/dedup/recall boundary detection.
+
+        Preserves the provenance/temporal continuation lines (Detail:, valid_from)
+        that the internal routing form carried — they append AFTER the canonical
+        entry+meta lines, so `parse_entries` reads the entry as one span.
+
+        Idempotent: if the first line is ALREADY canonical (`- [type] **...**`),
+        it is returned unchanged (a re-processed / already-formatted entry is not
+        double-wrapped) — the writer≠parser contract of format_memory_entry.
+        """
+        from core.ddd_entry_lifecycle import (
+            route_lesson_type, format_memory_entry, MEMORY_SECTIONS, _ENTRY_RE,
+        )
+        lines = enriched.split("\n")
+        first = lines[0]
+        # Already canonical → leave untouched (idempotent).
+        if _ENTRY_RE.match(first):
+            return enriched
+        raw = DistillationTriggerHook._raw_lesson_text(enriched)
+        # Derive type: prefer route_lesson_type; fall back to the section's type.
+        _, etype = route_lesson_type(raw)
+        if not etype:
+            etype = MEMORY_SECTIONS.get(section, {}).get("type", "guideline")
+        # Extract the date stamp from the original first line (`- YYYY-MM-DD: ...`).
+        import re as _re
+        dm = _re.search(r"(\d{4}-\d{2}-\d{2})", first)
+        date_str = dm.group(1) if dm else date.today().isoformat()
+        # SPLIT title from body on the em-dash (Gate-2 BUG-1, run_3cb6b9ae): a DA
+        # lesson is normally `**Title** — body`; passing the FULL raw as `body` while
+        # also deriving `title` from it produced a DOUBLED `**Title** — **Title** —
+        # body`. Split ONCE: title = pre-dash, body = post-dash. No dash → the whole
+        # raw is the body and the title is a truncated lead (format_memory_entry
+        # strips the `**`).
+        if "—" in raw:
+            title, body = raw.split("—", 1)
+            title, body = title.strip(), body.strip()
+        else:
+            title, body = raw[:60], raw
+        entry_line, meta_line = format_memory_entry(
+            etype, title, body, date_str, source="auto",
+        )
+        # Keep any continuation lines (Detail:/temporal) the enriched form carried,
+        # EXCEPT a bare pre-existing `<!-- ref -->` meta (we emit the canonical one).
+        from core.memory_decay import _META_RE as _MD_META
+        from core.ddd_entry_lifecycle import _META_RE as _DL_META
+        tail = [
+            ln for ln in lines[1:]
+            if ln.strip() and not _MD_META.match(ln) and not _DL_META.match(ln)
+        ]
+        parts = [entry_line, meta_line, *tail]
+        return "\n".join(parts)
 
     @staticmethod
     def _raw_lesson_text(enriched: str) -> str:
@@ -1729,10 +1793,16 @@ class DistillationTriggerHook:
             has_resolution = any(s == "resolution" for _, s in events)
             status = "✅ Resolved" if has_resolution else "🔍 Investigating"
 
-            blocks.append(
-                f"- {dates[0]}: **{original_topic}** — {status}. "
-                f"Sessions: {', '.join(dates)}"
+            # run_3cb6b9ae Cycle-2 (#1): route through the SSOT formatter so a COE
+            # entry carries the canonical `- [type] **title**` shape + 4-field
+            # metadata (was a bare `- {date}: **topic** — status` with no [type] and
+            # no meta → invisible to decay/dedup/recall). COE entries are the
+            # `pitfall` type (per MEMORY_SECTIONS["COE Registry"].type).
+            body = f"{status}. Sessions: {', '.join(dates)}"
+            entry_line, meta_line = format_memory_entry(
+                "pitfall", original_topic, body, dates[0], source="auto",
             )
+            blocks.append(f"{entry_line}\n{meta_line}")
 
         if blocks:
             self._run_locked_write(
@@ -2281,7 +2351,14 @@ class DistillationTriggerHook:
 
         # Load decay scores for smart eviction (lowest-decay-score first).
         # Falls back to oldest-first if no decay metadata exists in entries.
-        from core.memory_decay import compute_decay_score, _META_RE as _DECAY_META_RE
+        # run_3cb6b9ae Cycle-1 (#3): use the 4-field ddd_entry_lifecycle._META_RE that
+        # matches the metadata live MEMORY.md actually carries (`... | source:X -->`,
+        # groups 1=ref, 2=last). The OLD import (memory_decay._META_RE) demanded a
+        # 5-field `| sessions:N -->` tail that NO live entry has → 0 matches →
+        # decay_available never set → neutral 0.5 → stable-sort → silent oldest-first.
+        # This mirrors _enforce_size_valve (which already uses the 4-field regex).
+        from core.memory_decay import compute_decay_score
+        from core.ddd_entry_lifecycle import _META_RE as _DECAY_META_RE
         today = date.today()
         decay_available = False
 
@@ -2327,16 +2404,17 @@ class DistillationTriggerHook:
                             meta_m = _DECAY_META_RE.match(lines[idx + offset])
                             if meta_m:
                                 decay_available = True
-                                ref_count = int(meta_m.group(2))
-                                last_str = meta_m.group(3)
-                                sessions = int(meta_m.group(5))
+                                # 4-field ddd_entry_lifecycle._META_RE: g1=ref, g2=last,
+                                # g3=decay (no sessions field → sessions_referenced=0).
+                                ref_count = int(meta_m.group(1))
+                                last_str = meta_m.group(2)
                                 try:
                                     last_ref = date.fromisoformat(last_str) if last_str != "none" else None
                                 except ValueError:
                                     last_ref = None
                                 return compute_decay_score(
                                     ref_count=ref_count,
-                                    sessions_referenced=sessions,
+                                    sessions_referenced=0,
                                     last_referenced=last_ref,
                                     created=None,
                                     today=today,

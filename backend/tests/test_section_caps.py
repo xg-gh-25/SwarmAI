@@ -20,6 +20,58 @@ def _build_memory_md(sections: dict[str, list[str]]) -> str:
     return "".join(parts)
 
 
+class TestSectionCapsDecayEviction:
+    """run_3cb6b9ae Cycle-1 (#3): _enforce_section_caps must run DECAY-SCORED eviction
+    on the LIVE 4-field metadata (`... | source:X -->`), not silently degrade to
+    oldest-first. The bug: it imported memory_decay._META_RE (5-field, reads
+    group(5)=sessions) which matches ZERO live 4-field entries → decay_available never
+    set → neutral 0.5 → stable-sort → oldest-first. Fix mirrors _enforce_size_valve:2476
+    (4-field ddd_entry_lifecycle._META_RE)."""
+
+    def test_caps_eviction_is_decay_aware_not_oldest_first(self, tmp_path):
+        """AC1 (negative test): with live 4-field metadata, an OLD low-value entry must
+        be evicted BEFORE a RECENT one — proving decay ran. A position-only (oldest-first)
+        fallback would evict by FILE ORDER regardless of recency, so we place the OLD
+        entry LATER in the file than a RECENT one and assert the OLD one leaves."""
+        from hooks.distillation_hook import DistillationTriggerHook, SECTION_CAPS
+        cap = SECTION_CAPS["Guidelines"]
+        # Build cap+2 Guidelines entries, ALL with 4-field metadata. Make the entries
+        # near the TOP recent, and the LAST-2 (bottom) old. If decay runs, the OLD
+        # bottom-2 evict. If oldest-first-by-position runs, the bottom-2 ALSO evict —
+        # so that alone can't distinguish. The discriminator: put ONE old entry NEAR
+        # THE TOP and recent entries at the bottom; decay evicts the top-old one,
+        # position-fallback evicts bottom entries. We assert the top-placed OLD entry
+        # is gone AND a bottom-placed RECENT entry survives.
+        parts = ["# Memory\n\n## Guidelines\n"]
+        # entry 0: OLD, placed FIRST (position-fallback would KEEP it; decay EVICTS it)
+        parts.append("- [guideline] **OLD_TOP_MARKER evict me** — stale low-value entry\n")
+        parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        # entries 1..cap: RECENT filler
+        for i in range(cap):
+            parts.append(f"- [guideline] **recent {i}** — fresh entry number {i}\n")
+            parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        # entry cap+1: RECENT, placed LAST (position-fallback EVICTS it; decay KEEPS it)
+        parts.append("- [guideline] **RECENT_BOTTOM_MARKER keep me** — fresh valuable entry\n")
+        parts.append("  <!-- ref:0 | last:2026-08-14 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- one\n")
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text("".join(parts))
+
+        DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        # Decorrelate position from recency: decay-aware eviction removes the OLD entry
+        # (regardless of its TOP position) and keeps the RECENT one (regardless of BOTTOM).
+        assert "OLD_TOP_MARKER" not in result, (
+            "the OLD entry (placed at TOP) survived — eviction is position-based "
+            "(oldest-first), NOT decay-aware; the 5-field regex bug is present"
+        )
+        assert "RECENT_BOTTOM_MARKER" in result, (
+            "the RECENT entry (placed at BOTTOM) was evicted — eviction is position-based, "
+            "not decay-aware"
+        )
+
+
 class TestSectionCaps:
     """Test suite for section cap enforcement with archival."""
 
