@@ -2558,8 +2558,11 @@ class DistillationTriggerHook:
                 # `^\[[A-Za-z]` would false-split a wrapped body line like
                 # `[see also](url) …` into a phantom entry that steals the next
                 # `<!-- ref -->` line (orphaned metadata + severed span on rewrite).
+                # Cycle-5 (#5): the ID-lead pattern is the ddd_entry_lifecycle SSOT
+                # (shared with context_recall — one vocabulary, defined once).
+                from core.ddd_entry_lifecycle import _ID_LEAD_PAT
                 _valid_types = {t.lower() for t in VALID_TYPES}
-                _id_lead_re = re.compile(r"^\[[A-Z]{2,4}\d{1,3}\]")  # e.g. [PRI01] [COE8]
+                _id_lead_re = re.compile(rf"^{_ID_LEAD_PAT}")  # e.g. [PRI01] [COE8]
 
                 def _bare_entry_type(s: str) -> "str | None":
                     m = re.match(r"^\[([A-Za-z][\w-]*)\]", s)

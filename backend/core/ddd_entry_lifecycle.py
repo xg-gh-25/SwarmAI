@@ -241,6 +241,26 @@ _ENTRY_RE = re.compile(
     r"^- (?:\[(\w+)\] )?\*\*(.+?)\*\*"
 )
 
+# ── Shared boundary-detection fragments (SSOT, run_3cb6b9ae Cycle-5 #5) ────────
+# The MEMORY entry-boundary detectors deliberately DIFFER in scope (each is tuned
+# to its job — see the note below), but two regex FRAGMENTS were duplicated as
+# string literals across `distillation_hook._is_entry_start` and
+# `context_recall._slice_section_entries`. They are defined ONCE here (the format
+# authority, alongside _ENTRY_RE + VALID_TYPES) and referenced there, so the
+# entry-shape vocabulary drifts in ONE place, not N. This is NOT a merge of the
+# detectors — the deliberate scope differences are preserved:
+#   • ddd_entry_lifecycle._ENTRY_RE — REQUIRES a bold `**title**` (autonomous
+#     parse/decay/reclaim; refuses to touch bold-less curated prose).
+#   • distillation._is_entry_start — BROAD (any `- ` OR a bare typed/ID lead) for
+#     size-valve span detection (must catch every archivable line).
+#   • context_recall entry-lead — NARROW (typed/ID/emoji bullets only, never a
+#     plain `- `) so a body sub-bullet can't orphan on the recall read path.
+# ID-lead = an ID-shaped bare tag like [PRI01]/[COE8] (2-4 upper + 1-3 digits).
+_ID_LEAD_PAT = r"\[[A-Z]{2,4}\d{1,3}\]"
+# Type-lead = a bracketed VALID_TYPES tag, case-insensitive (the valve lowercases
+# before matching, so recall must too — P8 same-vocabulary-both-doors).
+_TYPE_LEAD_PAT = r"(?i:\[(?:" + "|".join(VALID_TYPES) + r")\])"
+
 # Prose-inclusive matcher — OPT-IN, used ONLY by the deliberate, by-name ddd-retire
 # path (parse_entries(include_prose=True) + _strip_entries(..., include_prose=True)).
 # Tolerates an OPTIONAL leading run of EMOJI/STATUS glyphs (🟡🟢🔵✅⚠️… VS16/ZWJ-aware)

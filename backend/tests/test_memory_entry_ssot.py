@@ -99,6 +99,24 @@ def test_canonicalize_entry_bold_title_body_not_doubled():
     assert "always try IAM role then env var" in first
 
 
+def test_boundary_lead_patterns_are_shared_ssot():
+    """run_3cb6b9ae Cycle-5 (#5): the ID-lead + type-lead regex fragments are defined
+    ONCE in ddd_entry_lifecycle and referenced by both the size-valve and recall — so
+    the entry-shape vocabulary drifts in one place, not N. Not a MERGE of the detectors
+    (their scope differs deliberately); a shared FRAGMENT."""
+    import re
+    from core.ddd_entry_lifecycle import _ID_LEAD_PAT, _TYPE_LEAD_PAT, VALID_TYPES
+    # ID-lead matches an ID-shaped tag, not a lowercase type tag.
+    assert re.match(_ID_LEAD_PAT, "[PRI01]") and re.match(_ID_LEAD_PAT, "[COE8]")
+    assert not re.match(_ID_LEAD_PAT, "[guideline]")
+    # Type-lead matches every VALID_TYPE, case-insensitively.
+    for t in VALID_TYPES:
+        assert re.match(_TYPE_LEAD_PAT, f"[{t}]"), f"type-lead misses {t}"
+        assert re.match(_TYPE_LEAD_PAT, f"[{t.capitalize()}]"), f"type-lead not case-insensitive for {t}"
+    # A non-type bracket must NOT match type-lead (no phantom split of `[see also]`).
+    assert not re.match(_TYPE_LEAD_PAT, "[see also]")
+
+
 def test_coe_registry_writes_canonical_entries(tmp_path, monkeypatch):
     """_write_coe_registry must emit `- [pitfall] **topic** — ...` + 4-field meta,
     not the old bare `- {date}: **topic** — status` (no [type], no meta)."""

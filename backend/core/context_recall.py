@@ -1,12 +1,12 @@
 """Reversible Context Recall (run_9de88af9, Approach B).
 
-When context assembly EXCLUDES content — selective MEMORY injection (sections
-dropped above FULL_INJECTION_THRESHOLD), the DailyActivity 2K cap, or budget
-truncation — the agent is told *that* something was excluded (via the named
-manifest emitted by ``memory_index.select_memory_sections``) but not given the
-content. This module is the retrieval half: given a file and a query, it returns
-ONLY the top relevant EXCLUDED sections, reusing the SAME relevance scorer the
-selective-injection path already uses. It never returns the whole file.
+When context assembly EXCLUDES content — channel exclusions (group/non-owner drop
+MEMORY/EVOLUTION), the DailyActivity 2K cap, or budget pressure — the agent can
+retrieve it on demand. (MEMORY.md is now ALWAYS full-injected — the old selective-
+injection exclusion path was removed 2026-08-14; recall is pure FTS5+BM25.) This
+module is the retrieval half: given a file and a query, it returns ONLY the top
+relevant EXCLUDED sections via the FTS5+BM25 relevance scorer. It never returns the
+whole file.
 
 Origin: ``Knowledge/Designs/2026-06-26-reversible-context-recall-design.md`` —
 the CCR (Compressed-Context-with-Retrieval) idea from headroomlabs-ai/headroom,
@@ -165,8 +165,10 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
     # also splits indented sub-bullets; recall staying col-0-and-typed is strictly
     # SAFER — it keeps entry bodies whole — so the doors agree on real entries and
     # recall never emits a headerless fragment.)
-    _id_lead = r"\[[A-Z]{2,4}\d{1,3}\]"
-    _type_lead = r"(?i:\[(?:" + "|".join(VALID_ENTRY_TYPES) + r")\])"
+    # Cycle-5 (#5): the ID-lead + type-lead fragments come from the ddd_entry_lifecycle
+    # SSOT (shared with the size-valve — P8 same-vocabulary-both-doors); the emoji-lead
+    # and the NARROW composition (no plain `- `) are recall-specific and stay local.
+    from core.ddd_entry_lifecycle import _ID_LEAD_PAT as _id_lead, _TYPE_LEAD_PAT as _type_lead
     _emoji_lead = r"- [\U0001F300-\U0001FAFF←-⯿]"
     _entry_lead = rf"(?:- (?:{_type_lead}|{_id_lead})|{_emoji_lead}|{_id_lead}|{_type_lead})"
     _start = rf"(?m)^(?={_entry_lead})"
