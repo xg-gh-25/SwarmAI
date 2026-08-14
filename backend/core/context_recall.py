@@ -14,8 +14,8 @@ adapted to SwarmAI's reality (excluded content is not lost; it lives on disk —
 the gap is LEGIBILITY + a scoped retrieval path, not storage).
 
 Privacy gate (AC4): some files are excluded by *policy*, not budget — group
-channels exclude MEMORY.md/USER.md, non-owner channels exclude EVOLUTION.md/
-PROJECTS.md (see ``context_directory_loader.GROUP_CHANNEL_EXCLUDE`` /
+channels exclude MEMORY.md/USER.md, non-owner channels exclude EVOLUTION.md
+(see ``context_directory_loader.GROUP_CHANNEL_EXCLUDE`` /
 ``CHANNEL_LIGHT_EXCLUDE``). Recall MUST hard-deny those: the data was withheld
 for privacy and recall must never become a bypass. Policy exclusions are passed
 in explicitly by the caller so the gate cannot be circumvented by a tool that

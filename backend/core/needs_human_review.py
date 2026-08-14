@@ -104,7 +104,7 @@ class ReviewVerdict:
 # These SwarmWS docs are the human-facing knowledge store. `.md` here = knowledge;
 # the sibling `.json/.jsonl` machine-state is already killed by the dot-segment /
 # check-ignore layers.
-_KNOWLEDGE_BASENAMES = {"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md"}
+_KNOWLEDGE_BASENAMES = {"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md"}  # PROJECTS.md removed 2026-08-14
 
 
 def _is_surfaceable_knowledge(rel_path: str) -> bool:

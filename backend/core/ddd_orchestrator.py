@@ -279,9 +279,7 @@ class DddCultivationOrchestrator:
     _CHANNEL_BUDGETS: dict[str, float] = {
         "ddd_staleness": 2.0,
         "auto_apply_proposals": 3.0,
-        "ddd_knowledge_injection": 1.0,
         "knowledge_staleness": 1.0,
-        "entity_index_validation": 2.0,
         "signal_ddd_bridge": 3.0,
         "code_intel_drift": 5.0,
         "entry_lifecycle": 3.0,
@@ -308,14 +306,8 @@ class DddCultivationOrchestrator:
             ("auto_apply_proposals", self._ch_auto_apply, {
                 EventType.PROPOSAL_DECIDED, EventType.SESSION_CLOSE,
             }),
-            ("ddd_knowledge_injection", self._ch_inject_knowledge, {
-                EventType.SESSION_CLOSE, EventType.GIT_COMMIT,
-            }),
             ("knowledge_staleness", self._ch_knowledge_staleness, {
                 EventType.GIT_COMMIT, EventType.TIMER_30MIN,
-            }),
-            ("entity_index_validation", self._ch_entity_index, {
-                EventType.SESSION_CLOSE,
             }),
             ("signal_ddd_bridge", self._ch_signal_bridge, {
                 EventType.SIGNAL_DIGEST,
@@ -392,10 +384,10 @@ class DddCultivationOrchestrator:
         for name, channel_fn, subscribed_events in self.channels:
             if event_type in subscribed_events:
                 budget = self._CHANNEL_BUDGETS.get(name, 3.0)
-                # Priority mapping: signal/code_intel/auto_apply = 1, staleness/inject = 2, entity/knowledge = 3
+                # Priority mapping: signal/code_intel/auto_apply = 1, staleness = 2, knowledge = 3
                 if name in ("auto_apply_proposals", "signal_ddd_bridge", "code_intel_drift"):
                     priority = 1
-                elif name in ("ddd_staleness", "ddd_knowledge_injection"):
+                elif name in ("ddd_staleness",):
                     priority = 2
                 else:
                     priority = 3
@@ -752,83 +744,6 @@ class DddCultivationOrchestrator:
                 logger.debug("ddd_orchestrator: auto-commit skipped: %s", exc)
 
     # ── Channel 3: DDD→KNOWLEDGE Injection ─────────────────────────────────
-
-    def _ch_inject_knowledge(self, root: Path, ws_path: str) -> list[str]:
-        """Inject or update Active Projects & DDD section in KNOWLEDGE.md."""
-        projects_dir = root / "Projects"
-        knowledge_path = root / ".context" / "KNOWLEDGE.md"
-        if not projects_dir.is_dir() or not knowledge_path.exists():
-            return []
-
-        # Build DDD summary via THE single-source line builder (run_99b70b3c R25):
-        # context_health_hook._refresh_knowledge_projects_section writes the SAME
-        # section on Projects/ mtime change and MUST produce byte-identical lines,
-        # else the two live writers clobber/churn each other every cycle. Passing
-        # freshness=None makes the helper COMPUTE the "(updated …)" suffix itself, so
-        # this channel and the health-hook emit identical lines (suffix + tag +
-        # structure markers all from the helper — no divergent format here).
-        try:
-            from core.ddd_bindings import describe_project_ddd_line
-        except Exception:  # pragma: no cover - defensive import
-            describe_project_ddd_line = None  # type: ignore[assignment]
-        if describe_project_ddd_line is None:
-            return []
-
-        lines = ["### Active Projects & DDD\n", "\n"]
-        found_any = False
-        for d in sorted(projects_dir.iterdir()):
-            if not d.is_dir() or d.name.startswith("."):
-                continue
-            try:
-                line = describe_project_ddd_line(d, freshness=None)
-            except Exception:
-                line = None
-            if line:
-                lines.append(line + "\n")
-                found_any = True
-
-        if not found_any:
-            return []
-
-        lines.append("\n")
-        new_section = "".join(lines)
-
-        # Under the shared KNOWLEDGE.md.lock: this DDD-section writer must
-        # serialize with the context_health_hook writers (index refresh, Active
-        # Projects refresh, decay reclaim) — all KNOWLEDGE.md writers hold the
-        # same lock, else this read-modify-write clobbers a concurrent strip
-        # (run_a1ec08e7). Blocking + idempotent (byte-identical section builder).
-        from utils.file_lock import md_lock
-        with md_lock(knowledge_path, blocking=True):
-            content = knowledge_path.read_text(encoding="utf-8")
-            section_marker = "### Active Projects & DDD"
-            insert_before = "## The 11 Context Files"
-
-            if section_marker in content:
-                start = content.find(section_marker)
-                rest = content[start + len(section_marker):]
-                end_match = re.search(r"\n#{2,3} ", rest)
-                if end_match:
-                    end_pos = start + len(section_marker) + end_match.start()
-                elif insert_before in rest:
-                    end_pos = start + len(section_marker) + rest.find(insert_before)
-                else:
-                    return []
-                content = content[:start] + new_section + content[end_pos:]
-            elif insert_before in content:
-                content = content.replace(insert_before, new_section + insert_before)
-            else:
-                return []
-
-            knowledge_path.write_text(content, encoding="utf-8")
-        logger.info(
-            "ddd_orchestrator: injected DDD summary into KNOWLEDGE.md (%d projects)",
-            sum(1 for ln in lines if ln.startswith("- ")),
-        )
-        return []
-
-    # ── Channel 4: Knowledge Staleness ─────────────────────────────────────
-
     def _ch_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Detect when backend code changed but KNOWLEDGE.md hasn't been updated."""
         findings = []
@@ -871,81 +786,6 @@ class DddCultivationOrchestrator:
         return findings
 
     # ── Channel 5: Entity Index Validation ─────────────────────────────────
-
-    def _ch_entity_index(self, root: Path, ws_path: str) -> list[str]:
-        """Validate Entity Index references in PROJECTS.md point to real sections."""
-        findings: list[str] = []
-        projects_md = root / ".context" / "PROJECTS.md"
-        if not projects_md.exists():
-            return findings
-
-        try:
-            content = projects_md.read_text(encoding="utf-8")
-        except OSError:
-            return findings
-
-        if "## Cross-Project Knowledge Index" not in content:
-            return findings
-
-        # Only iterate lines within Entity Index section
-        in_entity_section = False
-        entity_lines: list[str] = []
-        for line in content.splitlines():
-            if "## Cross-Project Knowledge Index" in line:
-                in_entity_section = True
-                continue
-            if in_entity_section:
-                if line.startswith("---") or (line.startswith("## ") and "Cross-Project" not in line):
-                    break
-                entity_lines.append(line)
-
-        ref_pattern = re.compile(r"([^/|]+)/([^#|]+)#(.+?)(?:,\s*|$|\s*\|)")
-        stale_count = 0
-        headings_cache: dict[Path, list[str]] = {}
-
-        for line in entity_lines:
-            if not line.startswith("| ") or "References" in line or "---" in line:
-                continue
-
-            for match in ref_pattern.finditer(line):
-                project = match.group(1).strip()
-                doc = match.group(2).strip()
-                section = match.group(3).strip()
-                project_dir = root / "Projects" / project
-                doc_path = ddd_path(project_dir, f"{doc}.md")  # six-section strangler
-
-                if not project_dir.exists() or not doc_path.exists():
-                    stale_count += 1
-                    continue
-
-                if doc_path not in headings_cache:
-                    try:
-                        doc_content = doc_path.read_text(encoding="utf-8")
-                        headings_cache[doc_path] = [
-                            l[3:].strip()
-                            for l in doc_content.splitlines()
-                            if l.startswith("## ") and not l.startswith("### ")
-                        ]
-                    except OSError:
-                        headings_cache[doc_path] = []
-
-                if section not in headings_cache[doc_path]:
-                    stale_count += 1
-
-        if stale_count > 0:
-            findings.append(
-                f"STALE_ENTITY_REFS: {stale_count} entity index reference(s) "
-                f"point to missing sections — will refresh on next startup"
-            )
-            logger.info(
-                "Entity Index has %d stale refs — refresh on next startup",
-                stale_count,
-            )
-
-        return findings
-
-    # ── Channel 6: Signal→DDD Bridge ───────────────────────────────────────
-
     def _ch_signal_bridge(self, root: Path, ws_path: str) -> list[str]:
         """Signal→DDD bridge (high-relevance signals → proposals)."""
         from hooks.signal_ddd_bridge import bridge_signals_to_ddd

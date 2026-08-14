@@ -10,7 +10,7 @@ centralized directory.  It is responsible for:
 - ``ContextFileSpec``           — Frozen dataclass defining a source file's
                                   metadata (filename, priority, section_name,
                                   truncatable, user_customized, truncate_from)
-- ``CONTEXT_FILES``             — Ordered list of all 10 ContextFileSpec entries
+- ``CONTEXT_FILES``             — Ordered list of all 11 ContextFileSpec entries
 - ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (30,000)
 - ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (50,000)
 - ``BUDGET_1M_MODEL``           — Token budget for >= 500K models (100,000)
@@ -18,7 +18,7 @@ centralized directory.  It is responsible for:
 - ``L0_CACHE_FILENAME``         — Filename for the compact L0 cache
 - ``THRESHOLD_USE_L1``          — Context window threshold for L1 usage (64K)
 - ``THRESHOLD_SKIP_LOW_PRIORITY`` — Context window threshold below which
-                                    KNOWLEDGE and PROJECTS are excluded (32K)
+                                    KNOWLEDGE excluded (32K)
 - ``ContextDirectoryLoader``    — Main loader class with load_all(),
                                   ensure_directory(), and estimate_tokens()
 
@@ -75,7 +75,7 @@ THRESHOLD_USE_L1 = 64_000
 """Model context window >= this value uses L1 cache or source files."""
 
 THRESHOLD_SKIP_LOW_PRIORITY = 32_000
-"""Model context window < this value excludes KNOWLEDGE + PROJECTS."""
+"""Model context window < this value excludes KNOWLEDGE."""
 
 BUDGET_LARGE_MODEL = 50_000
 """Token budget for models with >= 200K context window (25% of 200K)."""
@@ -85,7 +85,7 @@ BUDGET_1M_MODEL = 100_000
 
 Claude 4.6 models have 1M context GA on Bedrock. With 5x the room,
 we can afford a richer system prompt (more DailyActivity, fuller
-MEMORY.md, untruncated KNOWLEDGE/PROJECTS) while still leaving 90%
+MEMORY.md, untruncated KNOWLEDGE) while still leaving 90%
 for conversation and tool use."""
 
 # Whole-file-private context files — the single source of truth for the
@@ -94,21 +94,20 @@ for conversation and tool use."""
 #   • USER.md      — org chain, level, manager, personal preferences
 #   • EVOLUTION.md — self-evolution + correction history (internal, no team value)
 #   • MEMORY.md    — cross-session memory incl. personal + correction segments
-#   • PROJECTS.md  — project index (may reference XG-personal work)
 # Fail-closed (C041): a NEW context file added here is excluded for every
-# non-owner path at once. Per-section sharing of MEMORY/PROJECTS is a FUTURE
+# non-owner path at once. Per-section sharing of MEMORY is a FUTURE
 # opt-in (a shared-lane tag scanner that does not yet exist); until it ships,
 # these are excluded wholesale for non-owners. The shared corpus teammates need
 # (DDD project docs, domain skills) loads via a SEPARATE path, not this list —
 # so excluding these does not starve teammate usefulness.
 WHOLE_FILE_PRIVATE: frozenset[str] = frozenset({
-    "USER.md", "EVOLUTION.md", "MEMORY.md", "PROJECTS.md",
+    "USER.md", "EVOLUTION.md", "MEMORY.md",
 })
 
 GROUP_CHANNEL_EXCLUDE: frozenset[str] = WHOLE_FILE_PRIVATE
 """Files excluded from GROUP channel prompts (non-owner context).
 
-Excludes the whole-file-private set (USER/EVOLUTION/MEMORY/PROJECTS) so no
+Excludes the whole-file-private set (USER/EVOLUTION/MEMORY) so no
 personal data, correction history, or project index leaks to a shared channel.
 Previously only dropped {MEMORY, USER}, which leaked EVOLUTION.md — corrected
 2026-07-06 (run_20bd4a7b) to the full private lane."""
@@ -232,7 +231,7 @@ class ContextFileSpec:
 #     Sub-categories (enforced by convention, not code):
 #       - User-owned:  USER.md, STEERING.md, TOOLS.md — user edits freely
 #       - Agent-owned: MEMORY.md, EVOLUTION.md — agent writes via hooks/locked_write
-#       - Auto-generated: KNOWLEDGE.md, PROJECTS.md — agent rebuilds from filesystem scans
+#       - Auto-generated: KNOWLEDGE.md — agent rebuilds from filesystem scans
 #
 CONTEXT_FILES: list[ContextFileSpec] = [
     # ── System-owned (codebase template → always overwrite) ──────────
@@ -262,14 +261,17 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head"),
     # ── Auto-generated (rebuilt from filesystem, never overwritten) ──
     ContextFileSpec("KNOWLEDGE.md",         9,  "Knowledge",          True,  True,  "tail"),
-    ContextFileSpec("PROJECTS.md",         10,  "Projects",           True,  True,  "tail"),
+    # PROJECTS.md removed (2026-08-14) — the auto-generated in-prompt project index
+    #   was a redundant projection of the Projects/ folder (discoverable via recall +
+    #   Glob). All its writers (refresh_projects_index + Entity Index) were deleted;
+    #   PROJECTS.md is no longer injected into the system prompt.
     # GROWTH_PRINCIPLES.md removed (2026-03) — content folded into SOUL.md
     #   Operating Principles and s_self-evolution/SKILL.md Growth Principles
     #   section.  Template file deleted from backend/context/.
     # EVOLUTION_CHANGELOG.jsonl — agent-managed, seeded on first run via
     #   _AGENT_MANAGED_FILES in ensure_directory().  Not a context file.
 ]
-"""All 12 context source files in ascending priority order across 11 priority
+"""All 11 context source files in ascending priority order across 10 priority
 slots (SOUL.md and SELF.md share priority 2)."""
 
 
@@ -779,13 +781,13 @@ class ContextDirectoryLoader:
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
-        Reads the 12 source files from the context directory in ascending
-        priority order (0 first, 10 last).  Each non-empty file gets a
+        Reads the 11 source files from the context directory in ascending
+        priority order (0 first, 9 last).  Each non-empty file gets a
         ``## {section_name}`` header.  Empty or missing files are skipped
         entirely — no empty section headers appear in the output.
 
         For models with a context window below ``THRESHOLD_SKIP_LOW_PRIORITY``
-        (32K), KNOWLEDGE.md and PROJECTS.md are excluded entirely.
+        (32K), KNOWLEDGE.md is excluded entirely.
 
         Files listed in ``exclude_filenames`` are also skipped (used by
         group channels to suppress MEMORY.md and USER.md).
@@ -812,7 +814,7 @@ class ContextDirectoryLoader:
         effective_budget = token_budget if token_budget is not None else self.token_budget
         skip_filenames: set[str] = set(exclude_filenames or ())
         if model_context_window < THRESHOLD_SKIP_LOW_PRIORITY:
-            skip_filenames |= {"KNOWLEDGE.md", "PROJECTS.md"}
+            skip_filenames |= {"KNOWLEDGE.md"}
 
         # Build section tuples: (priority, section_name, content, truncatable, truncate_from)
         section_tuples: list[tuple[int, str, str, bool, str]] = []
@@ -1017,7 +1019,7 @@ class ContextDirectoryLoader:
         except OSError:
             return False
 
-        # git leg — SCOPED to the 12 context source files ONLY, never the whole
+        # git leg — SCOPED to the 11 context source files ONLY, never the whole
         # .context/ dir. run_0f009a75 root-cause: `.context/` also holds per-session
         # runtime state files that are TRACKED and dirty EVERY session (.memory-usage.json,
         # .eval-canary.json, judge-telemetry.jsonl, …). A dir-wide `git status -- .context/`
@@ -1121,7 +1123,7 @@ class ContextDirectoryLoader:
 
         Reads ``L0_SYSTEM_PROMPTS.md`` if it exists.  If missing, falls
         back to ``_assemble_from_sources()`` which will apply token budget
-        truncation and (for models < 32K) exclude KNOWLEDGE + PROJECTS.
+        truncation and (for models < 32K) exclude KNOWLEDGE.
 
         ⚠️ PRIVACY (run_20bd4a7b): when ``exclude_filenames`` is non-empty the
         session is a non-owner channel — the shared pre-baked L0 cache is

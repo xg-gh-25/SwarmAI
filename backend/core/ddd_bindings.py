@@ -537,12 +537,12 @@ def _compute_ddd_freshness(project_dir: Path, docs: list[str]) -> str:
 def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = None) -> str | None:
     """THE single source of truth for one 'Active Projects & DDD' index line.
 
-    Both writers of the KNOWLEDGE.md section — ``context_health_hook.
-    _refresh_knowledge_projects_section`` (per Projects/ mtime change) and
-    ``ddd_orchestrator._ch_inject_knowledge`` (30-min maintenance drain +
-    SESSION_CLOSE) — MUST call this so their output is BYTE-IDENTICAL and cannot
-    clobber/churn each other (run_99b70b3c: two live writers on different cadences
-    with divergent formats rewrote the section back and forth every cycle).
+    Remaining callers (the loops-health repair path + the s_repo-to-ddd skill)
+    MUST call this so any regenerated 'Active Projects & DDD' line is BYTE-IDENTICAL
+    (run_99b70b3c: divergent formats once rewrote the section back and forth every
+    cycle). NOTE: the in-prompt auto-writers that shared this helper
+    (context_health_hook + ddd_orchestrator) were removed 2026-08-14; this stays the
+    single formatter for the line wherever a caller still emits it.
 
     Format: ``- **Name** `[cls]` — DOC, DOC, … , extra, extra (updated <freshness>)``
       - ``[cls]`` from classify_project (none/external/internal); omitted if unknown.

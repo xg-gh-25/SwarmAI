@@ -128,9 +128,7 @@ def test_backward_compat_aliases_track_the_constant():
     import sys
     sys.path.insert(0, str(_BACKEND))
     from core.project_registry import DDD_CANONICAL_DOCS, _DDD_FILES
-    from core.entity_extractor import _DDD_FILES as ee_files
     from core.ddd_bindings import _DDD_DOC_NAMES
 
     assert _DDD_FILES == DDD_CANONICAL_DOCS
-    assert ee_files == DDD_CANONICAL_DOCS
     assert _DDD_DOC_NAMES == DDD_CANONICAL_DOCS

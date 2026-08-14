@@ -52,16 +52,11 @@ logger = logging.getLogger("self-tune")
 # ── Context Extraction ───────────────────────────────────────────────────
 
 def extract_projects() -> list[dict]:
-    """Extract active projects from PROJECTS.md and Projects/ directory."""
+    """Extract active projects from the Projects/ directory."""
     projects = []
 
-    # Read PROJECTS.md for structured project list
-    projects_md = CONTEXT_DIR / "PROJECTS.md"
-    if projects_md.exists():
-        content = projects_md.read_text(encoding="utf-8")
-        # Extract project names from table rows: | **Name** | ...
-        for match in re.finditer(r'\*\*(\w[\w\s-]+)\*\*', content):
-            projects.append({"name": match.group(1).strip()})
+    # Project list comes from the Projects/ directory scan below
+    # (PROJECTS.md in-prompt index was removed 2026-08-14).
 
     # Read TECH.md from each project for tech stack
     if PROJECTS_DIR.exists():

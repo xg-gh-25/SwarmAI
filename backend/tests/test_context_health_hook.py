@@ -32,7 +32,7 @@ def workspace(tmp_path):
     ctx.mkdir()
     for name in ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md",
                  "USER.md", "STEERING.md", "TOOLS.md", "MEMORY.md",
-                 "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md"]:
+                 "EVOLUTION.md", "KNOWLEDGE.md"]:  # PROJECTS.md removed 2026-08-14
         (ctx / name).write_text(f"# {name}\n\nContent for {name}\n")
 
     # Knowledge/ with a note
@@ -80,35 +80,6 @@ def hook_context():
 # --------------------------------------------------------------------------
 
 class TestLightRefresh:
-    def test_skips_when_rev_unchanged(self, hook, workspace):
-        """Light refresh is a no-op if git HEAD hasn't changed."""
-        rev = hook._git_rev(str(workspace))
-        hook._last_refresh_rev = rev  # Pretend we already refreshed
-
-        # Should skip git-gated work — verify by checking no write to KNOWLEDGE.md
-        # (except Active Projects section which is always refreshed on Projects/ mtime change)
-        original = (workspace / ".context" / "KNOWLEDGE.md").read_text()
-        # Stub out Bedrock-dependent methods — they hang in sandbox (no network)
-        with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"), \
-             patch.object(hook, "_refresh_knowledge_projects_section"):
-            hook._light_refresh(workspace, str(workspace))
-        assert (workspace / ".context" / "KNOWLEDGE.md").read_text() == original
-
-    def test_refreshes_knowledge_index(self, hook, workspace):
-        """Light refresh updates KNOWLEDGE.md index section."""
-        # Add the Knowledge Index section marker
-        km = workspace / ".context" / "KNOWLEDGE.md"
-        km.write_text("# Knowledge\n\nDomain knowledge.\n\n## Knowledge Index\n\nOld index.\n")
-
-        # Stub out Bedrock-dependent methods — they hang in sandbox (no network)
-        with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"):
-            hook._light_refresh(workspace, str(workspace))
-
-        content = km.read_text()
-        assert "test-note" in content.lower() or "Test Note" in content
-
     def test_extract_title_from_frontmatter(self, hook, tmp_path):
         """Extract title from YAML frontmatter."""
         f = tmp_path / "test.md"
@@ -124,102 +95,6 @@ class TestLightRefresh:
 
 # --------------------------------------------------------------------------
 # Hot/Cold Knowledge Index
-# --------------------------------------------------------------------------
-
-class TestHotColdKnowledgeIndex:
-    """AC1-AC4: Hot/Cold dual-layer index format."""
-
-    def test_large_dir_shows_hot_5_plus_cold_summary(self, hook, workspace):
-        """AC1: Directories with >10 files show only Hot _HOT_ENTRIES (=5) + summary."""
-        # Create 15 design files
-        designs = workspace / "Knowledge" / "Designs"
-        for i in range(15):
-            date = f"2026-05-{i+1:02d}"
-            (designs / f"{date}-design-{i}.md").write_text(f"# Design {i}\n\nContent.\n")
-
-        km = workspace / ".context" / "KNOWLEDGE.md"
-        km.write_text("# Knowledge\n\nDomain.\n\n## Knowledge Index\n\nOld.\n")
-
-        with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"):
-            hook._light_refresh(workspace, str(workspace))
-
-        content = km.read_text()
-        # Should have Hot _HOT_ENTRIES (=5) most recent dates (run_5f040023: 10→5)
-        assert "2026-05-15" in content  # Most recent
-        assert "2026-05-11" in content  # 5th most recent (Hot tier boundary)
-        # The 6th-most-recent (05-10) and older must NOT be in the Hot table
-        assert "2026-05-10" not in content
-        # Should NOT have the oldest entries
-        assert "design-0.md" not in content or "older files" in content.lower() or "+ " in content
-        # Should have a cold summary line
-        assert "older" in content.lower() or "more" in content.lower()
-
-    def test_small_dir_shows_full_listing(self, hook, workspace):
-        """AC2: Directories with ≤10 files keep full listing."""
-        library = workspace / "Knowledge" / "Library"
-        library.mkdir(parents=True, exist_ok=True)
-        for i in range(5):
-            (library / f"2026-04-{i+1:02d}-lib-{i}.md").write_text(f"# Lib {i}\n")
-
-        km = workspace / ".context" / "KNOWLEDGE.md"
-        km.write_text("# Knowledge\n\n## Knowledge Index\n\nOld.\n")
-
-        with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"):
-            hook._light_refresh(workspace, str(workspace))
-
-        content = km.read_text()
-        # All 5 should be present
-        for i in range(5):
-            assert f"lib-{i}" in content
-
-    def test_compact_dirs_remain_summary_only(self, hook, workspace):
-        """AC3: DailyActivity/JobResults stay as summary line."""
-        da = workspace / "Knowledge" / "DailyActivity"
-        for i in range(20):
-            (da / f"2026-05-{i+1:02d}.md").write_text(f"# Day {i}\n")
-
-        km = workspace / ".context" / "KNOWLEDGE.md"
-        km.write_text("# Knowledge\n\n## Knowledge Index\n\nOld.\n")
-
-        with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"):
-            hook._light_refresh(workspace, str(workspace))
-
-        content = km.read_text()
-        # Should have count + pattern, NOT individual files
-        assert "20 files" in content
-        assert "Pattern:" in content
-        # Should NOT have individual file rows
-        assert "| 2026-05-01" not in content
-
-    def test_index_line_cap(self, hook, workspace):
-        """AC4: Knowledge Index section total ≤120 lines."""
-        # Create many files across directories
-        for subdir in ["Designs", "Notes", "Learned", "Reports"]:
-            d = workspace / "Knowledge" / subdir
-            d.mkdir(parents=True, exist_ok=True)
-            for i in range(30):
-                (d / f"2026-04-{i+1:02d}-item-{i}.md").write_text(f"# Item {i}\n")
-
-        km = workspace / ".context" / "KNOWLEDGE.md"
-        km.write_text("# Knowledge\n\n## Knowledge Index\n\nOld.\n")
-
-        with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"):
-            hook._light_refresh(workspace, str(workspace))
-
-        content = km.read_text()
-        # Count lines in index section only
-        idx_start = content.find("## Knowledge Index")
-        index_section = content[idx_start:]
-        index_lines = [l for l in index_section.split("\n") if l.strip()]
-        assert len(index_lines) <= 120, f"Index has {len(index_lines)} lines, expected ≤120"
-
-
-# --------------------------------------------------------------------------
-# Deep check
 # --------------------------------------------------------------------------
 
 class TestGovernanceBudgets:
@@ -836,83 +711,6 @@ class TestAutoSessionSignalCultivation:
 # PROJECTS.md refresh after cultivation (line number drift fix)
 # --------------------------------------------------------------------------
 
-
-class TestProjectsRefreshAfterCultivation:
-    """Verify PROJECTS.md is refreshed when cultivation modifies DDD docs."""
-
-    @pytest.mark.asyncio
-    async def test_refresh_called_when_cultivation_writes(self, hook, workspace):
-        """When cultivation applies content to DDD docs, refresh_projects_index is called."""
-        # Setup: project with DDD docs (needs TECH.md with Conventions section
-        # because the lesson contains TECH_KEYWORDS like "nc -z")
-        proj = workspace / "Projects" / "SwarmAI"
-        proj.mkdir(parents=True, exist_ok=True)
-        (proj / "IMPROVEMENT.md").write_text(
-            "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
-        )
-        (proj / "TECH.md").write_text(
-            "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
-        )
-
-        # Create a run with uncultivated lessons
-        runs_dir = proj / ".artifacts" / "runs" / "run_drift001"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        run_data = {
-            "id": "run_drift001",
-            "project": "SwarmAI",
-            "status": "completed",
-            "stages": [{"stage": "reflect", "status": "completed",
-                        "lessons": ["Pattern: use nc -z instead of lsof for port checks"]}],
-        }
-        (runs_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
-
-        # Stub the LLM admission judge to a deterministic pass (see the note in
-        # test_cultivates_decisions_from_jsonl): with no Bedrock backend it fails
-        # closed to "discard", so nothing would be written and _ddd_docs_modified
-        # would stay False. This test asserts the refresh-on-write WIRING, not the
-        # judge's semantics. Patch both call sites (DDD cultivation + MEMORY door).
-        import core.ddd_cultivation as _dc
-        import core.ingestion_gate as _ig
-        # Also stub _sync_knowledge_library: _light_refresh drives the full Knowledge-
-        # Library aiosqlite sync, which hangs on the connection worker thread in the
-        # test env (unrelated to this test — it asserts the cultivation→refresh wiring).
-        with patch(
-            "hooks.context_health_hook.ContextHealthHook._refresh_projects_index_sync"
-        ) as mock_refresh, \
-             patch.object(hook, "_sync_knowledge_library", lambda *a, **k: None), \
-             patch.object(_dc, "self_adversarial_judge", lambda *a, **k: ("pass", "t")), \
-             patch.object(_ig, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
-            hook._light_refresh(workspace, str(workspace))
-
-            # Cultivation should have written to DDD docs and set dirty flag
-            assert hook._ddd_docs_modified is True
-            mock_refresh.assert_called_once_with(workspace)
-
-    @pytest.mark.asyncio
-    async def test_refresh_not_called_when_no_cultivation(self, hook, workspace):
-        """When cultivation has nothing to apply, refresh is NOT called."""
-        # Setup: project with DDD docs but no uncultivated runs
-        proj = workspace / "Projects" / "SwarmAI"
-        proj.mkdir(parents=True, exist_ok=True)
-        (proj / "IMPROVEMENT.md").write_text(
-            "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
-        )
-
-        # Pre-set Projects/ mtime so no filesystem change is detected
-        projects_dir = workspace / "Projects"
-        if projects_dir.is_dir():
-            hook._last_projects_mtime = projects_dir.stat().st_mtime
-
-        with patch(
-            "hooks.context_health_hook.ContextHealthHook._refresh_projects_index_sync"
-        ) as mock_refresh:
-            hook._light_refresh(workspace, str(workspace))
-
-            # No cultivation happened AND no Projects/ mtime change — no refresh
-            assert hook._ddd_docs_modified is False
-            mock_refresh.assert_not_called()
-
-
 class TestExtractLessonsNoOrphan:
     """R-1 C2: _extract_lessons_to_memory must not orphan an existing meta.
 
@@ -1383,67 +1181,6 @@ class TestCognitiveAdmissionGate:
              "read the live gauge, do not infer from a stale log string.")
         hook._extract_lessons_to_memory(ws, [g], "run_z", "Proj")
         assert "read the live gauge" in mem.read_text()
-
-
-class TestKnowledgeProjectsSectionClassification:
-    """run_99b70b3c: the LIVE writer of 'Active Projects & DDD' must be
-    classification-aware ([none|external|internal]) + structure-aware (six-section
-    markers), NOT the stale 4-doc-only format that clobbered the index post-deploy.
-    """
-
-    def _make_ws(self, tmp_path):
-        ws = tmp_path / "SwarmWS"
-        (ws / ".context").mkdir(parents=True)
-        (ws / ".context" / "KNOWLEDGE.md").write_text(
-            "# KNOWLEDGE\n\n### Active Projects & DDD\n\n- old\n\n## The 11 Context Files\n\nx\n"
-        )
-        projects = ws / "Projects"
-        # internal project: bindings.yaml kind:internal + six-section extras
-        intp = projects / "IntProj"
-        intp.mkdir(parents=True)
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            (intp / doc).write_text(f"# {doc}\n")
-        (intp / "skills" / "s_internal-brazil").mkdir(parents=True)
-        (intp / "gates").mkdir()
-        (intp / "Knowledge").mkdir()
-        (intp / "bindings.yaml").write_text(
-            'version: 1\nbindings:\n  - repo: P\n    kind: internal\n'
-            '    clone: "brazil ws create --name P"\n'
-            '    delivery_contract:\n      remote_kind: code-amazon-cr\n'
-            '      branch: mainline\n      review_path: cr\n      auto_send: "false"\n'
-        )
-        # none project: pure DDD
-        nonep = projects / "NoneProj"
-        nonep.mkdir(parents=True)
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            (nonep / doc).write_text(f"# {doc}\n")
-        return ws
-
-    def _run(self, hook, ws):
-        hook._refresh_knowledge_projects_section(ws)
-        return (ws / ".context" / "KNOWLEDGE.md").read_text()
-
-    def test_classification_and_structure(self, hook, tmp_path):
-        ws = self._make_ws(tmp_path)
-        content = self._run(hook, ws)
-        int_line = next(ln for ln in content.splitlines() if "**IntProj**" in ln)
-        assert "`[internal]`" in int_line
-        assert "1 skills" in int_line and "gates" in int_line
-        assert "Knowledge/" in int_line and "bindings" in int_line
-        # freshness suffix preserved
-        assert "(updated" in int_line
-
-        none_line = next(ln for ln in content.splitlines() if "**NoneProj**" in ln)
-        assert "`[none]`" in none_line
-        assert "bindings" not in none_line
-
-    def test_all_four_docs_still_listed(self, hook, tmp_path):
-        ws = self._make_ws(tmp_path)
-        content = self._run(hook, ws)
-        int_line = next(ln for ln in content.splitlines() if "**IntProj**" in ln)
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            assert doc in int_line
-
 
 class TestMaturityWritebackResolvesLayout:
     """run_ff06972d: _set_verified_from_pipeline_runs must resolve canonical docs

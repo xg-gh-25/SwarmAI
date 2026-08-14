@@ -56,7 +56,9 @@ class TestHealthCheckSchema:
 
     def test_31_checks(self, health_data):
         data = health_data
-        assert len(data["findings"]) == 31
+        # 29 after 2026-08-14: removed C3 (Active Projects & DDD in KNOWLEDGE) and
+        # K1 (Index completeness) with the in-prompt index deletion.
+        assert len(data["findings"]) == 29
 
     def test_finding_schema(self, health_data):
         data = health_data

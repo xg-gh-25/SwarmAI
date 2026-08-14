@@ -138,12 +138,9 @@ class ContextHealthHook:
     def __init__(self) -> None:
         self._last_deep_date: Optional[str] = None
         # Track last refresh git rev to skip no-op refreshes
-        self._last_refresh_rev: Optional[str] = None
         # Dirty flag: set by _light_refresh when cultivation writes to DDD docs.
         # Consumed at end of _light_refresh to conditionally refresh PROJECTS.md.
-        self._ddd_docs_modified: bool = False
         # Track Projects/ dir mtime to detect create/rename/delete without cultivation.
-        self._last_projects_mtime: float = 0.0
         # Token budget measurement (populated by _check_token_budget in deep check)
         self._token_measurement: dict = {}
 
@@ -196,30 +193,24 @@ class ContextHealthHook:
         # self-healing, and the hook now exits clean instead of "timed out".
         _refresh_deadline = time.monotonic() + 25.0
 
-        # Reset dirty flag — will be set if any cultivation writes to DDD docs.
-        self._ddd_docs_modified = False
-
         # Auto-cultivate pipeline lessons — promote REFLECT output into DDD docs
         # without requiring the agent to remember to run `run-cultivate` manually.
         try:
-            if self._auto_cultivate_pipeline_lessons(root, _deadline=_cultivation_deadline):
-                self._ddd_docs_modified = True
+            self._auto_cultivate_pipeline_lessons(root, _deadline=_cultivation_deadline)
         except Exception as exc:
             logger.debug("context_health: auto-cultivation skipped: %s", exc)
 
         # Auto-cultivate session signals — promote corrections (Ch6) and
         # decisions (Ch5) from DailyActivity JSONL into DDD docs.
         try:
-            if self._auto_cultivate_session_signals(root, _deadline=_cultivation_deadline):
-                self._ddd_docs_modified = True
+            self._auto_cultivate_session_signals(root, _deadline=_cultivation_deadline)
         except Exception as exc:
             logger.debug("context_health: session signal cultivation skipped: %s", exc)
 
         # T4: Maturity evidence update + promotion evaluation.
         # Runs AFTER cultivation so new changelog entries are counted.
         try:
-            if self._update_maturity(root, _deadline=_cultivation_deadline):
-                self._ddd_docs_modified = True
+            self._update_maturity(root, _deadline=_cultivation_deadline)
         except Exception as exc:
             logger.debug("context_health: maturity update skipped: %s", exc)
 
@@ -297,14 +288,6 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: skeleton reclaim skipped: %s", exc)
 
-        # KNOWLEDGE.md text index refresh is git-gated (only reads git-tracked files)
-        current_rev = self._git_rev(ws_path)
-        if not (current_rev and current_rev == self._last_refresh_rev):
-            try:
-                self._refresh_knowledge_sync(root)
-            except Exception as exc:
-                logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
-            self._last_refresh_rev = current_rev
 
         # Knowledge Library + Transcript FTS5 indexing runs OUTSIDE
         # the git-rev gate.  These stores have their own delta-sync via
@@ -345,22 +328,6 @@ class ContextHealthHook:
                 "deferring transcript + code_intel indexing to next session",
             )
 
-        # Refresh PROJECTS.md if: (a) cultivation modified DDD docs, or
-        # (b) Projects/ directory itself changed (create/rename/delete).
-        # This ensures system prompt always reflects current project state.
-        projects_dir = root / "Projects"
-        projects_changed = self._ddd_docs_modified
-        if projects_dir.is_dir():
-            current_mtime = projects_dir.stat().st_mtime
-            if current_mtime != self._last_projects_mtime:
-                projects_changed = True
-                self._last_projects_mtime = current_mtime
-        if projects_changed:
-            try:
-                self._refresh_projects_index_sync(root)
-                self._refresh_knowledge_projects_section(root)
-            except Exception as exc:
-                logger.debug("context_health: PROJECTS.md refresh skipped: %s", exc)
 
         # Auto-update `updated:` date in design doc frontmatter when modified
         try:
@@ -606,111 +573,6 @@ class ContextHealthHook:
             new_content = content[:match.start()] + f"updated: {today_str}" + content[match.end():]
             filepath.write_text(new_content, encoding="utf-8")
             logger.debug("context_health: auto-updated frontmatter date in %s", filepath.name)
-
-    def _refresh_projects_index_sync(self, root: Path) -> None:
-        """Sync wrapper: regenerate PROJECTS.md after cultivation modified DDD docs.
-
-        Called from run_in_executor thread (no active event loop on this thread).
-        Creates a fresh event loop for the async workspace manager call.
-
-        Note: The module-level _cultivation_write_lock (asyncio.Lock) provides no
-        mutual exclusion between this loop and the main FastAPI loop — but both
-        produce identical deterministic output from the same filesystem state, so
-        last-writer-wins is safe (no data loss, just redundant work).
-        """
-        from core.swarm_workspace_manager import swarm_workspace_manager
-
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(
-                swarm_workspace_manager.refresh_projects_index(str(root))
-            )
-            logger.info("context_health: PROJECTS.md refreshed after cultivation")
-        finally:
-            loop.close()
-
-    def _refresh_knowledge_projects_section(self, root: Path) -> None:
-        """Auto-rebuild 'Active Projects & DDD' section in KNOWLEDGE.md.
-
-        Replaces the hand-maintained project list with a filesystem-derived one.
-        This ensures KNOWLEDGE.md always reflects current project names without
-        manual editing on create/rename/delete.
-        """
-        knowledge_file = root / ".context" / "KNOWLEDGE.md"
-        if not knowledge_file.exists():
-            return
-
-        projects_dir = root / "Projects"
-        if not projects_dir.is_dir():
-            return
-
-        # THE single-source line builder lives in ddd_bindings.describe_project_ddd_line
-        # (run_99b70b3c R25 convergence): the SESSION_CLOSE orchestrator channel
-        # (ddd_orchestrator._ch_inject_knowledge) writes the SAME section and MUST
-        # produce byte-identical output, else the two writers clobber/churn each other.
-        # This writer owns the freshness suffix (computed from doc mtime); it passes
-        # the freshness string in, the shared helper handles tag + structure markers.
-        try:
-            from core.ddd_bindings import describe_project_ddd_line
-        except Exception:  # pragma: no cover - defensive import
-            describe_project_ddd_line = None  # type: ignore[assignment]
-        if describe_project_ddd_line is None:
-            return
-
-        ddd_files = DDD_CANONICAL_DOCS
-        project_lines = []
-        now = time.time()
-        for d in sorted(projects_dir.iterdir()):
-            if not d.is_dir() or d.name.startswith("."):
-                continue
-            # Resolve via ddd_path — docs live under 2-understanding/ post-ad7f6623.
-            # Cache the resolved paths so we hit the resolver once per doc, not twice.
-            doc_paths = [p for p in (ddd_path(d, f) for f in ddd_files) if p.exists()]
-            if not doc_paths:
-                continue
-            # Freshness from most recent DDD doc mtime (this writer's contribution).
-            mtimes = [p.stat().st_mtime for p in doc_paths]
-            days_ago = int((now - max(mtimes)) / 86400) if mtimes else 999
-            if days_ago == 0:
-                freshness = "today"
-            elif days_ago <= 7:
-                freshness = f"{days_ago}d ago"
-            else:
-                freshness = f"**{days_ago}d stale**"
-            try:
-                line = describe_project_ddd_line(d, freshness=freshness)
-            except Exception:
-                line = None
-            if line:
-                project_lines.append(line)
-
-        if not project_lines:
-            return
-
-        # Build new section content
-        new_section = "### Active Projects & DDD\n\n" + "\n".join(project_lines) + "\n"
-
-        # Replace existing section in KNOWLEDGE.md — under the shared
-        # KNOWLEDGE.md.lock (run_a1ec08e7: all KNOWLEDGE writers must serialize,
-        # else this read-modify-write clobbers the decay reclaim or the DDD
-        # orchestrator's write of this same section). Blocking, idempotent.
-        from utils.file_lock import md_lock
-        with md_lock(knowledge_file, blocking=True):
-            content = knowledge_file.read_text()
-            # Match from "### Active Projects & DDD" to next ### or ## heading
-            pattern = r"### Active Projects & DDD\n.*?(?=\n###|\n##[^#]|\Z)"
-            if re.search(pattern, content, re.DOTALL):
-                content = re.sub(pattern, new_section.rstrip(), content, count=1, flags=re.DOTALL)
-            else:
-                # Section doesn't exist yet — insert before "## The 11 Context Files" or at end
-                insert_before = "## The 11 Context Files"
-                if insert_before in content:
-                    content = content.replace(insert_before, new_section + "\n\n" + insert_before)
-                else:
-                    content += "\n\n" + new_section
-
-            knowledge_file.write_text(content)
-        logger.info("context_health: KNOWLEDGE.md Active Projects section refreshed")
 
     def _refresh_code_intel(self, root: Path) -> None:
         """Refresh code_intel.db if the indexed commit is behind HEAD."""
@@ -1449,137 +1311,6 @@ class ContextHealthHook:
     # per dir + a cold-count pointer is sufficient. Older files stay reachable
     # via workspace-finder/Glob as the summary line states.)
     _INDEX_LINE_CAP = 90  # Structural cap on Knowledge Index section lines (120→90)
-
-    def _refresh_knowledge_sync(self, root: Path) -> None:
-        """Synchronous KNOWLEDGE.md index refresh — filesystem scan only.
-
-        Three-tier format:
-        - COMPACT (DailyActivity, JobResults, Signals): count + pattern only
-        - HOT/COLD (dirs with >10 files): most recent _HOT_ENTRIES (=5) + "N older files" summary
-        - FULL (dirs with ≤10 files): complete listing
-        """
-        knowledge_dir = root / "Knowledge"
-        context_file = root / ".context" / "KNOWLEDGE.md"
-        if not context_file.exists() or not knowledge_dir.is_dir():
-            return
-
-        # Scan Knowledge/ subdirs for .md files
-        index_lines: list[str] = []
-        subdirs = sorted(
-            d for d in knowledge_dir.iterdir()
-            if d.is_dir() and d.name not in {"Archives", "__pycache__"}
-        )
-
-        for subdir in subdirs:
-            files = sorted(
-                f for f in subdir.iterdir()
-                if f.suffix == ".md" and f.is_file()
-            )
-            if not files:
-                continue
-
-            # Tier 1: COMPACT — summary only (high-volume machine-generated)
-            if subdir.name in self._COMPACT_INDEX_DIRS:
-                first_date = files[0].stem[:10] if len(files[0].stem) > 10 else "unknown"
-                last_date = files[-1].stem[:10] if len(files[-1].stem) > 10 else "unknown"
-                index_lines.append(f"\n### {subdir.name}\n")
-                index_lines.append(
-                    f"{len(files)} files from {first_date} to {last_date}. "
-                    f"Pattern: `Knowledge/{subdir.name}/YYYY-MM-DD-*.md`. Read on demand."
-                )
-                continue
-
-            # Tier 2: HOT/COLD — recent _HOT_ENTRIES (=5) + cold summary (large dirs)
-            if len(files) > self._HOT_COLD_THRESHOLD:
-                hot_files = files[-self._HOT_ENTRIES:]  # Most recent by sort order
-                cold_count = len(files) - self._HOT_ENTRIES
-
-                index_lines.append(f"\n### {subdir.name}\n")
-                index_lines.append(
-                    f"_{len(files)} total, showing {self._HOT_ENTRIES} most recent. "
-                    f"{cold_count} older files available via workspace-finder/Glob._\n"
-                )
-                index_lines.append("| Date | File | Topic |")
-                index_lines.append("|------|------|-------|")
-                for f in hot_files:
-                    name = f.stem
-                    date_str = name[:10] if len(name) > 10 and name[4] == "-" else "unknown"
-                    topic = self._extract_title(f) or name
-                    index_lines.append(
-                        f"| {date_str} | `{subdir.name}/{f.name}` | {topic} |"
-                    )
-                continue
-
-            # Tier 3: FULL — complete listing (small dirs)
-            index_lines.append(f"\n### {subdir.name}\n")
-            index_lines.append("| Date | File | Topic |")
-            index_lines.append("|------|------|-------|")
-            for f in files:
-                # Extract date and title from filename
-                name = f.stem
-                date_str = name[:10] if len(name) > 10 and name[4] == "-" else "unknown"
-                # Try to read first heading for topic
-                topic = self._extract_title(f) or name
-                index_lines.append(
-                    f"| {date_str} | `{subdir.name}/{f.name}` | {topic} |"
-                )
-
-        if not index_lines:
-            return
-
-        # Replace Knowledge Index section in KNOWLEDGE.md — under the shared
-        # KNOWLEDGE.md.lock so this read-modify-write serializes with the decay
-        # reclaim + the DDD-section writers (a file lock protects a doc only if
-        # ALL writers hold it — run_a1ec08e7). Blocking (mirror _refresh_memory_index):
-        # the section refresh is idempotent + must not lose to a racing writer.
-        try:
-            from utils.file_lock import md_lock
-            with md_lock(context_file, blocking=True):
-                content = context_file.read_text(encoding="utf-8")
-                marker = "## Knowledge Index"
-                if marker not in content:
-                    return  # No section to replace
-
-                before = content.split(marker)[0]
-                # Find the next ## section after Knowledge Index
-                after_marker = content.split(marker, 1)[1]
-                next_section_idx = after_marker.find("\n## ")
-                if next_section_idx >= 0:
-                    after = after_marker[next_section_idx:]
-                else:
-                    after = "\n\n---\n\n_Auto-refreshed on startup from Knowledge/ directories._\n"
-
-                # Structural cap: prevent Knowledge Index from growing unboundedly
-                non_empty_lines = [l for l in index_lines if l.strip()]
-                if len(non_empty_lines) > self._INDEX_LINE_CAP:
-                    logger.warning(
-                        "context_health: Knowledge Index has %d lines (cap=%d). "
-                        "Truncating to cap. Consider archiving old knowledge files.",
-                        len(non_empty_lines), self._INDEX_LINE_CAP,
-                    )
-                    # Truncate on a SECTION boundary, not a raw line (Gate-2 LOW-2):
-                    # a raw slice can cut a `### header`+table-header away from its
-                    # rows, leaving broken markdown. Walk to the cap, then back up to
-                    # the last `### ` header so every kept section is whole.
-                    cut = self._INDEX_LINE_CAP * 2
-                    if cut < len(index_lines):
-                        boundary = cut
-                        while boundary > 0 and not index_lines[boundary].startswith("### "):
-                            boundary -= 1
-                        # boundary now sits ON a `### ` header → drop it + everything
-                        # after, keeping only whole preceding sections. Fallback to
-                        # the raw cut if no header found (shouldn't happen).
-                        index_lines = index_lines[:boundary] if boundary > 0 else index_lines[:cut]
-
-                new_content = before + marker + "\n" + "\n".join(index_lines) + "\n" + after
-                context_file.write_text(new_content, encoding="utf-8")
-        except Exception as exc:
-            logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
-
-    # ------------------------------------------------------------------
-    # T4: Maturity evidence update + auto-promotion
-    # ------------------------------------------------------------------
-
     def _update_maturity(self, root: Path, *, _deadline: float = 0) -> bool:
         """Update maturity evidence from changelog and auto-promote eligible sections.
 
@@ -2151,10 +1882,10 @@ class ContextHealthHook:
         arch / pipeline facts would be stripped).
 
         Concurrency: the whole read-modify-write is under md_lock(KNOWLEDGE.md.lock,
-        blocking=False) — a file lock protects a doc ONLY if EVERY writer holds it,
-        so the 3 section-refresh writers (_refresh_knowledge_sync,
-        _refresh_knowledge_projects_section, ddd_orchestrator._ch_inject_knowledge)
-        take the SAME lock (blocking). Non-blocking here (skip-if-busy) mirrors
+        blocking=False) — a file lock protects a doc ONLY if EVERY writer holds it.
+        (The in-prompt index writers that shared this lock were removed 2026-08-14;
+        the lock now only serializes this reclaim against concurrent readers.)
+        Non-blocking here (skip-if-busy) mirrors
         _run_memory_lifecycle: a destructive strip must never wait on a held lock
         inside the <30s hook. (The old prose ref-bump was removed in R2-prime —
         honest ref comes from the id-based producer, so `bumped` is always 0.)
@@ -2213,8 +1944,8 @@ class ContextHealthHook:
 
             # CLEAN: archive+strip dormant NON-evergreen operational entries.
             # source_path gives the dated .bak; no reindex (KNOWLEDGE has no
-            # MEMORY_INDEX block — the ## Knowledge Index nav is rebuilt by
-            # _refresh_knowledge_sync, a separate writer under the same lock).
+            # MEMORY_INDEX block, and the ## Knowledge Index auto-nav was removed
+            # 2026-08-14 — KNOWLEDGE.md is now hand-written above the entry store).
             reclaim_report = reclaim_noise_entries(
                 content, today, knowledge_path.parent,
                 evergreen_sections=evergreen,
@@ -2865,8 +2596,8 @@ class ContextHealthHook:
         # 13. DDD completeness — detect HALF-CREATED projects (≥1 but <4 standard
         #     DDD docs). This is the gap that let CMHK_SalesIntel sit with only
         #     IMPROVEMENT.md (3 missing docs) for >1 month unwarned: cultivation
-        #     checks CONTENT freshness, _refresh_knowledge_projects_section
-        #     silently skips missing docs (`if docs:`), and nothing checked
+        #     checks CONTENT freshness, the (now-removed) project-section
+        #     writer silently skipped missing docs, and nothing checked
         #     EXISTENCE of the standard 4. A half-created project breaks
         #     cross-project index refs + leaves EVALUATE without a PRODUCT/TECH
         #     base. (run_5a29f00c)
@@ -3140,11 +2871,6 @@ class ContextHealthHook:
 
         return findings
 
-    def _inject_ddd_into_knowledge(self, root: Path) -> None:
-        """Thin wrapper for individual channel invocation (used by tests)."""
-        from core.ddd_orchestrator import DddCultivationOrchestrator
-        DddCultivationOrchestrator()._ch_inject_knowledge(root, str(root))
-
     def _detect_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator
@@ -3278,10 +3004,11 @@ class ContextHealthHook:
 
     # ── Context Token Budget Measurement ─────────────────────────────
 
-    # The 9 context files that compose the system prompt (assembly order)
+    # The truncatable context files that compose the system prompt (assembly order).
+    # PROJECTS.md removed 2026-08-14 (in-prompt index deleted).
     _CONTEXT_FILES = (
         "SOUL.md", "AGENT.md", "USER.md", "STEERING.md", "TOOLS.md",
-        "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md",
+        "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md",
     )
     # OBSERVABILITY thresholds (run_3f25a73a). These are NOT gates — the
     # assembly line does NOT truncate (XG directive 2026-06-28, pure-filesystem
@@ -3856,8 +3583,3 @@ class ContextHealthHook:
         except Exception:
             pass
         return None
-
-    def _validate_entity_index(self, root: Path) -> list[str]:
-        """Thin wrapper for individual channel invocation (used by tests)."""
-        from core.ddd_orchestrator import DddCultivationOrchestrator
-        return DddCultivationOrchestrator()._ch_entity_index(root, str(root))

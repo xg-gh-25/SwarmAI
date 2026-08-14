@@ -378,22 +378,12 @@ OR the placeholder version}
 
 **Quality check:** After writing, verify that at least ONE doc has non-placeholder content (if a codebase path was provided). If all 4 docs are still 100% placeholder despite having a codebase path, something went wrong in Step 3 — re-read the key files.
 
-#### Step 5: Immediate PROJECTS.md refresh
+#### Step 5: (No index refresh needed)
 
-Refresh PROJECTS.md immediately so the current session and sibling tabs see the new project:
-
-```bash
-# Regenerate PROJECTS.md inline (read all project dirs, rebuild the index)
-python3 -c "
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path.home() / 'Desktop/SwarmAI-Workspace/swarmai/backend'))
-from core.swarm_workspace_manager import swarm_workspace_manager
-import asyncio
-asyncio.run(swarm_workspace_manager.refresh_projects_index(str(Path.home() / '.swarm-ai/SwarmWS')))
-print('PROJECTS.md refreshed')
-" 2>/dev/null || echo "Auto-refresh unavailable — will update on next session start"
-```
+The project is discoverable the moment its `Projects/<name>/` directory exists —
+recall (FTS5/BM25) and Glob scan the folder directly. The in-prompt PROJECTS.md
+index was removed 2026-08-14, so there is nothing to regenerate; the new project
+is live for the current session and sibling tabs immediately.
 
 #### Step 6: Optional — create .ai-context/ in target repo
 
@@ -654,17 +644,12 @@ Edit `.artifacts/manifest.json` — change `"project": "OldName"` to `"project":
 #### Step 5: Update shared path constant (if applicable)
 If the project is referenced in `backend/skills/_shared/project_paths.py` (e.g., `ClientOrg_PROJECT`), update that constant. Also update `backend/core/project_registry.py` if it has a named constant for this project.
 
-#### Step 6: Trigger refresh
-```python
-# The context_health_hook will auto-detect Projects/ mtime change on next session.
-# For immediate effect in current session, manually refresh:
-from core.swarm_workspace_manager import swarm_workspace_manager
-import asyncio
-asyncio.run(swarm_workspace_manager.refresh_projects_index(str(root)))
-```
+#### Step 6: (No index refresh needed)
+The renamed `Projects/<NewName>/` directory is discoverable immediately via recall +
+Glob. The in-prompt PROJECTS.md index was removed 2026-08-14 — nothing to regenerate.
 
 #### Step 7: Confirm
-> "Renamed **OldName** → **NewName**. DDD docs updated, manifest updated. PROJECTS.md and KNOWLEDGE.md will auto-refresh on next session (or call refresh manually)."
+> "Renamed **OldName** → **NewName**. DDD docs updated, manifest updated. The project is discoverable immediately (no index to refresh)."
 
 **Note:** Historical references in DailyActivity, Signals, Reports, and .artifacts/runs/ are NOT updated (they record what the name was at that time).
 

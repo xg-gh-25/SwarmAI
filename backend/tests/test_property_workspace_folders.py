@@ -157,9 +157,16 @@ class TestWorkspaceFolderCreation:
             expected_folders = (
                 set(REQUIRED_FOLDERS)
                 | set(REQUIRED_KNOWLEDGE_SUBDIRS)
-                # Default SwarmAI project provisioned during folder creation
-                | {"Projects/SwarmAI", "Projects/SwarmAI/.artifacts"}
-                # .context/ created by refresh_projects_index for PROJECTS.md
+                # Default SwarmAI project provisioned during folder creation.
+                # 2-understanding/ is the DDD numbered-tree home for the canonical
+                # docs (redesign 2026-07-21); its knowledge/ recall corpus dir is
+                # what materializes the parent 2-understanding/.
+                | {"Projects/SwarmAI", "Projects/SwarmAI/.artifacts",
+                   "Projects/SwarmAI/2-understanding"}
+                # Job system provisioned during folder creation (_provision_job_system):
+                # Services/swarm-jobs/ (+ logs/) and Services/signals/.
+                | {"Services/signals", "Services/swarm-jobs", "Services/swarm-jobs/logs"}
+                # .context/ created by create_folder_structure (context file store).
                 | {".context"}
             )
 

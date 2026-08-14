@@ -59,10 +59,9 @@ from pathlib import Path
 # routing can never drift from context_directory_loader.py (Gate-1 F1 + R30#1).
 # ─────────────────────────────────────────────────────────────────────────────
 _AUTO_GENERATED = {
-    # regenerated on startup / by context_health_hook — never hand-edit the auto part
-    "PROJECTS.md": "whole file regenerated from Projects/ scan (_refresh_projects_md)",
-    "KNOWLEDGE.md": "bottom 'Knowledge Index' section regenerated from Knowledge/ scan "
-                    "(body ABOVE the index is agent-authored — that part IS editable)",
+    # PROJECTS.md removed 2026-08-14 (in-prompt index deleted — no longer a context file).
+    # KNOWLEDGE.md's auto "Knowledge Index" section was ALSO deleted 2026-08-14; the file
+    # is now fully agent-authored, so it is no longer listed as auto-generated here.
 }
 
 
@@ -112,9 +111,7 @@ def _load_routing() -> tuple[list[dict], str]:
                          "source_of_truth": _AUTO_GENERATED.get(fn, ".context/%s" % fn),
                          "edit_effect": "AUTO-GENERATED — don't hand-edit" if fn in _AUTO_GENERATED
                                         else "edit .context/ directly"})
-        rows.append({"file": "PROJECTS.md", "owner": "auto",
-                     "source_of_truth": _AUTO_GENERATED["PROJECTS.md"],
-                     "edit_effect": "AUTO-GENERATED — don't hand-edit"})
+        # PROJECTS.md row removed 2026-08-14 (no longer a context file).
         return rows, "FALLBACK static map (live import failed: %s)" % type(exc).__name__
 
 

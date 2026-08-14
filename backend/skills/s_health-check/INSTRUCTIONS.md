@@ -106,7 +106,7 @@ python3 << 'PYEOF'
 from pathlib import Path
 ctx = Path.home() / ".swarm-ai/SwarmWS/.context"
 expected = ["SWARMAI.md","IDENTITY.md","SOUL.md","AGENT.md","USER.md",
-            "STEERING.md","TOOLS.md","MEMORY.md","EVOLUTION.md","KNOWLEDGE.md","PROJECTS.md"]
+            "STEERING.md","TOOLS.md","MEMORY.md","EVOLUTION.md","KNOWLEDGE.md"]
 missing = [f for f in expected if not (ctx / f).exists()]
 if missing:
     print(f"FAIL Missing: {', '.join(missing)}")

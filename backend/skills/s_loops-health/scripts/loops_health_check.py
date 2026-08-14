@@ -79,7 +79,11 @@ PROBE_REGISTRY = [
     ("M1/M3", "MEMORY.md", "## Decisions"),
     ("M4", "MEMORY.md", "## Open Threads"),
     ("E3/E4", "EVOLUTION.md", "### CLASS A"),
-    ("X1", "KNOWLEDGE.md", "## Knowledge Index"),
+    # X1 PROBE removed 2026-08-14 — this registry row asserted the "## Knowledge
+    # Index" section EXISTS, but that section was deleted with the in-prompt index.
+    # (The X1 *finding* in _check_coherence still works — it reads capability sync
+    # via _capability_sync_gaps, which falls back to the whole architecture text
+    # when no index boundary is present.)
     # run_3cb6b9ae (#6): the commit-context probe now anchors on ## Decisions
     # (a stable structural section) instead of the removed ## Memory Index block.
     ("commit-context", "MEMORY.md", "## Decisions"),
@@ -173,6 +177,8 @@ class SelfLoopsHealthEngine:
         matches common nouns like 'session'; the full name is too strict —
         rarely verbatim.)"""
         cap_names = re.findall(r"\*\*Capability\*\*:\s*([^—\-\n]+?)(?:\s*[—\-])", evolution)
+        # "## Knowledge Index" was removed 2026-08-14; the fallback (whole file as
+        # architecture text) is now the normal path, kept for graceful degradation.
         arch = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else knowledge
         arch_l = arch.lower()
         sample = [c.strip() for c in cap_names[:6] if c.strip()]
@@ -215,16 +221,17 @@ class SelfLoopsHealthEngine:
 
     def _check_context(self):
         # C1: All 11 context files present
+        # PROJECTS.md removed 2026-08-14 (in-prompt index deleted) — no longer a context file.
         expected = [
             "SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "USER.md",
             "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md",
-            "KNOWLEDGE.md", "PROJECTS.md",
+            "KNOWLEDGE.md",
         ]
         missing = [f for f in expected if not (CONTEXT_DIR / f).exists()]
         self.report.findings.append(Finding(
             id="C1", name="Context files present", dimension="context",
             status="pass" if not missing else "fail",
-            detail=f"{11 - len(missing)}/11" + (f", missing: {missing}" if missing else ""),
+            detail=f"{len(expected) - len(missing)}/{len(expected)}" + (f", missing: {missing}" if missing else ""),
         ))
 
         # C2: Agent-owned freshness
@@ -235,17 +242,6 @@ class SelfLoopsHealthEngine:
             id="C2", name="Agent-owned freshness", dimension="context",
             status="pass" if max_age < 7 else ("warn" if max_age < 14 else "fail"),
             detail=f"MEMORY: {mem_age}d, EVOLUTION: {evo_age}d",
-        ))
-
-        # C3: DDD in KNOWLEDGE
-        knowledge = self._read_safe(CONTEXT_DIR / "KNOWLEDGE.md")
-        has_ddd = "### Active Projects & DDD" in knowledge or "### Active Projects" in knowledge
-        project_count = len(re.findall(r"- \*\*\w+\*\*", knowledge[knowledge.find("Projects & DDD"):] if has_ddd else ""))
-        self.report.findings.append(Finding(
-            id="C3", name="DDD in KNOWLEDGE", dimension="context",
-            status="pass" if has_ddd and project_count >= 4 else ("warn" if has_ddd else "fail"),
-            detail=f"Section: {'yes' if has_ddd else 'no'}, projects listed: {project_count}",
-            auto_fixable=not has_ddd,
         ))
 
         # C4: Uncommitted context
@@ -371,28 +367,10 @@ class SelfLoopsHealthEngine:
     def _check_knowledge(self):
         knowledge = self._read_safe(CONTEXT_DIR / "KNOWLEDGE.md")
 
-        # K1: Index completeness (only checks dirs that SHOULD be indexed —
-        # excludes DailyActivity, Signals, JobResults, Archives, Pollinate which
-        # are intentionally excluded from the Knowledge Index)
-        # Index uses format: `Subdir/YYYY-MM-DD-topic.md` in table rows (| date | `file` | topic |)
-        # Only match inside Knowledge Index tables to avoid false matches from
-        # inline code references in architecture docs.
-        ki_section = self._extract_section(knowledge, "## Knowledge Index", "")
-        indexed_files = set(re.findall(r"`([^`]+\.md)`", ki_section))
-        # Normalize: extract just filename from indexed paths
-        indexed_basenames = {Path(f).name for f in indexed_files}
-        actual_files: set[str] = set()
-        for subdir in ["Designs", "Notes", "Reports", "Library", "Learned", "Meetings", "Handoffs"]:
-            d = KNOWLEDGE_DIR / subdir
-            if d.exists():
-                actual_files.update(f.name for f in d.glob("*.md"))
-        missing_from_index = actual_files - indexed_basenames
-        self.report.findings.append(Finding(
-            id="K1", name="Index completeness", dimension="knowledge",
-            status="pass" if len(missing_from_index) <= 2 else ("warn" if len(missing_from_index) <= 5 else "fail"),
-            detail=f"{len(missing_from_index)} files missing from index",
-            auto_fixable=len(missing_from_index) > 2,
-        ))
+        # K1 removed 2026-08-14 — it checked Knowledge/ subdir files against the
+        # in-prompt "## Knowledge Index" table, which was deleted (files are now
+        # discovered via recall/FTS5 + Glob, not a hand-maintained index). There is
+        # no index to be "complete" against, so the check is obsolete.
 
         # K2: Architecture section currency (git log recency)
         last_change = self._git_cmd(
@@ -431,7 +409,7 @@ class SelfLoopsHealthEngine:
         ))
 
         # K4: Codebase nav valid
-        nav_section = self._extract_section(knowledge, "## Codebase Navigation", "## Knowledge Index")
+        nav_section = self._extract_section(knowledge, "## Codebase Navigation", "")
         entry_points = re.findall(r"`(\w+\.(?:py|tsx?))`", nav_section)
         if entry_points and SWARMAI_DIR.exists():
             found = 0
@@ -705,11 +683,7 @@ class SelfLoopsHealthEngine:
             if not f.auto_fixable or f.status == "pass":
                 continue
             try:
-                if f.id == "C3":
-                    self._fix_ddd_injection()
-                    f.fixed = True
-                    f.fix_action = "Injected DDD section into KNOWLEDGE.md"
-                elif f.id == "C4":
+                if f.id == "C4":
                     if self._fix_commit_context():
                         f.fixed = True
                         f.fix_action = "Auto-committed .context/ files"
@@ -758,52 +732,6 @@ class SelfLoopsHealthEngine:
         self.report.fixes_applied = [
             f.fix_action for f in self.report.findings if f.fixed
         ]
-
-    def _fix_ddd_injection(self):
-        """Repair-only: inject the DDD section into KNOWLEDGE.md if it's MISSING.
-
-        Uses the shared describe_project_ddd_line so a repaired section matches the
-        two live writers' format byte-for-byte (run_99b70b3c R25 — this dormant
-        repair path must not reintroduce the old tag-less/freshness-less format if it
-        ever fires). Falls back to a minimal line only if the helper can't be imported
-        (standalone-script path edge case)."""
-        if not PROJECTS_DIR.is_dir():
-            return
-        try:
-            if str(SWARMAI_DIR / "backend") not in sys.path:
-                sys.path.insert(0, str(SWARMAI_DIR / "backend"))
-            from core.ddd_bindings import describe_project_ddd_line
-            from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source
-        except ImportError:
-            describe_project_ddd_line = None
-            DDD_CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
-
-        ddd_names = set(DDD_CANONICAL_DOCS)
-        lines = ["### Active Projects & DDD\n", "\n"]
-        for d in sorted(PROJECTS_DIR.iterdir()):
-            if not d.is_dir() or d.name.startswith("."):
-                continue
-            line = None
-            if describe_project_ddd_line is not None:
-                try:
-                    line = describe_project_ddd_line(d, freshness=None)
-                except Exception:
-                    line = None
-            if line is None:  # fallback: minimal format (helper unavailable)
-                ddd = sorted(f.name for f in d.iterdir() if f.is_file() and f.name in ddd_names)
-                line = f"- **{d.name}** — {', '.join(ddd)}" if ddd else None
-            if line:
-                lines.append(line + "\n")
-        lines.append("\n")
-        new_section = "".join(lines)
-
-        kp = CONTEXT_DIR / "KNOWLEDGE.md"
-        content = kp.read_text(encoding="utf-8")
-        marker = "## The 11 Context Files"
-        if "### Active Projects & DDD" not in content and marker in content:
-            content = content.replace(marker, new_section + marker)
-            kp.write_text(content, encoding="utf-8")
-
     def _fix_commit_context(self) -> bool:
         """Auto-commit .context/ with integrity check (PE-4)."""
         # Integrity check: MEMORY.md must have expected headers

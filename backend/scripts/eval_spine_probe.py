@@ -12,7 +12,7 @@ broken invariant — structural, no LLM, sub-second.
 
 Subcommands:
   safe_group_exclude   — group-channel context MUST drop MEMORY.md + USER.md
-  safe_nonowner_exclude — non-owner (light) channel MUST drop EVOLUTION.md + PROJECTS.md
+  safe_nonowner_exclude — non-owner (light) channel MUST drop USER/EVOLUTION/MEMORY
   gate_freshness       — ci_eval_gate's code_digest changes when an eval input changes
   prompt_budget        — effective context budget stays within the model window cap
   assembly_floor       — under HARD over-budget, _enforce_token_budget keeps the
@@ -73,18 +73,20 @@ def _check_exclude(name: str, attr: str, required: set, negative: bool) -> int:
 
 def safe_group_exclude(negative: bool) -> int:
     """Group-channel prompts must exclude the whole-file-private set
-    (USER/EVOLUTION/MEMORY/PROJECTS) — widened 2026-07-06 (run_20bd4a7b) from the
-    old {MEMORY, USER}, which leaked EVOLUTION.md into group channels."""
+    (USER/EVOLUTION/MEMORY) — widened 2026-07-06 (run_20bd4a7b) from the
+    old {MEMORY, USER}, which leaked EVOLUTION.md into group channels.
+    (PROJECTS.md dropped 2026-08-14 — no longer a context file.)"""
     return _check_exclude("SAFE_GROUP", "GROUP_CHANNEL_EXCLUDE",
-                          {"USER.md", "EVOLUTION.md", "MEMORY.md", "PROJECTS.md"}, negative)
+                          {"USER.md", "EVOLUTION.md", "MEMORY.md"}, negative)
 
 
 def safe_nonowner_exclude(negative: bool) -> int:
     """Non-owner DM prompts must exclude the whole-file-private set
-    (USER/EVOLUTION/MEMORY/PROJECTS) — widened 2026-07-06 (run_20bd4a7b) from the
-    old {EVOLUTION, PROJECTS}, which leaked USER.md + MEMORY.md to teammates."""
+    (USER/EVOLUTION/MEMORY) — widened 2026-07-06 (run_20bd4a7b) from the
+    old {EVOLUTION, PROJECTS}, which leaked USER.md + MEMORY.md to teammates.
+    (PROJECTS.md dropped 2026-08-14 — no longer a context file.)"""
     return _check_exclude("SAFE_NONOWNER", "CHANNEL_LIGHT_EXCLUDE",
-                          {"USER.md", "EVOLUTION.md", "MEMORY.md", "PROJECTS.md"}, negative)
+                          {"USER.md", "EVOLUTION.md", "MEMORY.md"}, negative)
 
 
 def gate_freshness(negative: bool) -> int:

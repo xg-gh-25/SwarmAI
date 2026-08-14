@@ -272,11 +272,12 @@ class TestOrchestratorSubscriptions:
             name for name, _fn, events in orch.channels
             if EventType.SESSION_CLOSE in events
         ]
-        # Only a subset should fire on session_close (not all 7)
-        assert len(session_close_channels) < 7
+        # Only a subset should fire on session_close (not every channel).
+        # (ddd_knowledge_injection + entity_index_validation were removed
+        # 2026-08-14 with the in-prompt index deletion.)
+        assert len(session_close_channels) < len(orch.channels)
         assert "auto_apply_proposals" in session_close_channels
-        assert "ddd_knowledge_injection" in session_close_channels
-        assert "entity_index_validation" in session_close_channels
+        assert "entry_lifecycle" in session_close_channels
 
     def test_git_commit_subscribers(self):
         from core.ddd_orchestrator import DddCultivationOrchestrator
@@ -286,7 +287,7 @@ class TestOrchestratorSubscriptions:
             if EventType.GIT_COMMIT in events
         ]
         assert "ddd_staleness" in git_channels
-        assert "ddd_knowledge_injection" in git_channels
+        assert "knowledge_staleness" in git_channels
 
     def test_get_tasks_for_event_filters_correctly(self):
         from core.ddd_orchestrator import DddCultivationOrchestrator

@@ -28,7 +28,6 @@ from uuid import uuid4
 import anyio
 import subprocess
 
-from core.entity_extractor import extract_clean_description, extract_entities_from_ddd, format_entity_index, prune_entity_index
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from core.ddd_paths import ddd_path, ddd_write_path  # six-section layout resolver (SSOT)
@@ -1048,14 +1047,20 @@ class SwarmWorkspaceManager:
                 lambda: gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
             )
 
+        # Ensure the .context/ dir exists. ContextDirectoryLoader.ensure_directory()
+        # populates the context FILES in the real startup path, but the directory
+        # itself must exist after folder-structure creation regardless — previously
+        # it was created as a side-effect of refresh_projects_index writing
+        # .context/PROJECTS.md; that writer was removed (in-prompt index deleted
+        # 2026-08-14), so create the dir explicitly here instead of by accident.
+        await anyio.to_thread.run_sync(
+            lambda: (root / ".context").mkdir(parents=True, exist_ok=True)
+        )
+
         # Provision the default SwarmAI project with DDD structure
         await self._ensure_default_project(root)
 
-        # Auto-generate PROJECTS.md index from Projects/ scan
-        await self.refresh_projects_index(expanded_path)
 
-        # Auto-generate Knowledge Index section of KNOWLEDGE.md
-        await self.refresh_knowledge_index(expanded_path)
 
         # Provision job system default config (Services/swarm-jobs/ + signals/).
         # MUST run here too, not only in verify_integrity(): the fresh-create path
@@ -1502,7 +1507,6 @@ class SwarmWorkspaceManager:
         pruned = await anyio.to_thread.run_sync(_prune_legacy_scaffold)
         relocated = await anyio.to_thread.run_sync(_migrate_layout_to_numbered)
         scaffolded = await self.provision_project_ddd(project_name, workspace_path, internal=internal)
-        await self.refresh_projects_index(workspace_path)
         logger.info(
             "Migrated project '%s' to six-section structure (metadata_created=%s, "
             "relocated=%d, pruned=%d, scaffolded=%d items)",
@@ -1699,448 +1703,6 @@ class SwarmWorkspaceManager:
                 logger.info("Auto-populated TECH.md for '%s' from %s", project_name, cb)
 
         return detected
-
-    # ── PROJECTS.md auto-refresh ──────────────────────────────────────
-
-    async def refresh_projects_index(self, workspace_path: str) -> None:
-        """Regenerate ``.context/PROJECTS.md`` by scanning ``Projects/``.
-
-        Produces a lightweight index with one entry per project.  Each entry
-        shows: name, pipeline state, DDD doc status, and a reference link
-        to the project's folder.  The detailed context lives in each
-        project's own DDD documents — PROJECTS.md is just the directory.
-
-        Called automatically during ``verify_integrity()`` and after
-        project CRUD operations.
-        """
-        root = Path(workspace_path)
-        projects_dir = root / "Projects"
-        context_file = root / ".context" / "PROJECTS.md"
-
-        def _generate():
-            entries = []
-            if not projects_dir.exists():
-                return entries
-            for candidate in sorted(projects_dir.iterdir()):
-                if not candidate.is_dir() or candidate.name.startswith("."):
-                    continue
-                name = candidate.name
-
-                # Detect project type
-                is_default = name == DEFAULT_PROJECT_NAME
-                project_type = "Default" if is_default else "User"
-
-                # Read pipeline state from manifest
-                manifest = candidate / ".artifacts" / "manifest.json"
-                pipeline_state = "-"
-                if manifest.exists():
-                    try:
-                        data = json.loads(manifest.read_text(encoding="utf-8"))
-                        pipeline_state = data.get("pipeline_state", "-")
-                    except (json.JSONDecodeError, OSError):
-                        pass
-
-                # Check which DDD docs exist + sizes for progressive loading
-                # F3: 30K threshold — files under 30K are small enough to read fully.
-                # Only 60K+ docs truly benefit from section-level loading.
-                _LARGE_DOC_THRESHOLD = 30_000  # bytes
-                ddd_docs = []
-                large_docs_toc: list[dict] = []  # [{doc, size_kb, sections}]
-                for doc in DDD_CANONICAL_DOCS:
-                    doc_path = ddd_path(candidate, doc)  # 2-understanding/ post-ad7f6623
-                    if doc_path.exists():
-                        doc_size = doc_path.stat().st_size
-                        ddd_docs.append(doc.replace(".md", ""))
-                        # For large docs, extract section headings with line ranges
-                        if doc_size > _LARGE_DOC_THRESHOLD:
-                            sections = []
-                            try:
-                                lines_text = doc_path.read_text(encoding="utf-8").splitlines()
-                                total_lines = len(lines_text)
-                                for i, line in enumerate(lines_text, 1):
-                                    if line.startswith("## ") and not line.startswith("### "):
-                                        sections.append((line[3:].strip(), i))
-                                # F1: compute end line for each section (next section start - 1)
-                                sections_with_range = []
-                                for idx, (sec_name, sec_start) in enumerate(sections):
-                                    sec_end = (sections[idx + 1][1] - 1
-                                               if idx + 1 < len(sections)
-                                               else total_lines)
-                                    sections_with_range.append(
-                                        (sec_name, sec_start, sec_end)
-                                    )
-                                sections = sections_with_range
-                            except OSError:
-                                pass
-                            large_docs_toc.append({
-                                "doc": doc,
-                                "size_kb": round(doc_size / 1024),
-                                "sections": sections,
-                            })
-                ddd_status = ", ".join(ddd_docs) if ddd_docs else "none"
-
-                # Read one-line vision from PRODUCT.md (cleaned)
-                vision = extract_clean_description(ddd_path(candidate, "PRODUCT.md"))
-
-                # Resolver-aware context dir: point readers at wherever the canonical
-                # docs ACTUALLY resolve (migrated → 2-understanding/, un-migrated → root).
-                # Hardcoding "2-understanding/" here would re-create the split-brain the
-                # ddd_paths resolver exists to prevent (a wrong path for un-migrated DDDs).
-                ctx_dir = ddd_path(candidate, "TECH.md").parent
-                try:
-                    ctx_rel = ctx_dir.relative_to(candidate).as_posix()
-                except ValueError:
-                    ctx_rel = ""
-                # "." = docs at project root (un-migrated) → no subdir suffix.
-                if ctx_rel == ".":
-                    ctx_rel = ""
-
-                entries.append({
-                    "name": name,
-                    "type": project_type,
-                    "pipeline": pipeline_state,
-                    "ddd": ddd_status,
-                    "vision": vision,
-                    "ctx_rel": ctx_rel,
-                    "large_docs_toc": large_docs_toc,
-                })
-            return entries
-
-        entries = await anyio.to_thread.run_sync(_generate)
-
-        # Build Entity Index from DDD docs
-        projects_dir_path = root / "Projects"
-        entity_index_lines: list[str] = []
-        if projects_dir_path.exists():
-            raw_entities = await anyio.to_thread.run_sync(
-                lambda: extract_entities_from_ddd(projects_dir_path)
-            )
-            if raw_entities:
-                formatted = format_entity_index(raw_entities)
-                entity_index_lines = prune_entity_index(formatted)
-
-        # Build PROJECTS.md content
-        lines = [
-            "# Projects -- What's In Flight",
-            "",
-            "**AGENT DIRECTIVE:** When working on a task related to any project "
-            "below, READ the project's DDD documents BEFORE starting work. "
-            "Find them at each project's **Context** path shown below "
-            "(migrated DDDs keep the 4 canonical docs under `2-understanding/`): "
-            "use `TECH.md` for coding/testing, "
-            "`PRODUCT.md` for design decisions, `IMPROVEMENT.md` for lessons, "
-            "`PROJECT.md` for current context. Determine the active project "
-            "from file paths being edited, user mentions, or chat thread "
-            "binding. No project context? Skip this -- everything works "
-            "without DDD. After completing work, UPDATE IMPROVEMENT.md "
-            "with lessons and PROJECT.md with decisions/status.\n"
-            "\n"
-            "**Progressive loading:** For docs marked as \"Large\" below, "
-            "DON'T read the full file. Instead: (1) scan the section TOC shown below, "
-            "(2) Read only the section(s) relevant to your current task "
-            "(use offset/limit with the line numbers provided), "
-            "(3) max 3 section pulls per task. "
-            "Never infer from a section heading what the content says — pull it if deciding.",
-            "",
-        ]
-
-        # Inject Entity Index section (before Active Projects table)
-        # L5 fix: only inject if there are actual data rows (not just header)
-        if entity_index_lines and len(entity_index_lines) > 6:
-            lines.extend(entity_index_lines)
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        if entries:
-            lines.append("## Active Projects")
-            lines.append("")
-            lines.append("| Project | Type | Pipeline | DDD Docs |")
-            lines.append("|---------|------|----------|----------|")
-            for e in entries:
-                lines.append(
-                    f"| **{e['name']}** | {e['type']} | {e['pipeline']} "
-                    f"| {e['ddd']} |"
-                )
-            lines.append("")
-
-            # Detailed entries with references
-            for e in entries:
-                lines.append(f"### {e['name']}")
-                if e["vision"]:
-                    lines.append(f"_{e['vision']}_")
-                lines.append(f"- **Pipeline:** {e['pipeline']}")
-                lines.append(f"- **DDD:** {e['ddd']}")
-                ctx_rel = e.get("ctx_rel") or ""
-                ctx_suffix = f"{ctx_rel}/" if ctx_rel else ""
-                lines.append(
-                    f"- **Context:** `Projects/{e['name']}/{ctx_suffix}` "
-                    f"-- read PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md"
-                )
-
-                # T6: Progressive loading — section TOC for large docs
-                if e.get("large_docs_toc"):
-                    lines.append("")
-                    lines.append(
-                        "**Large docs (read sections on demand — "
-                        "don't load the full file):**"
-                    )
-                    for ld in e["large_docs_toc"]:
-                        # F1: show start line + end line so agent can use offset/limit
-                        sections_str = ", ".join(
-                            f"`{s[0]}` (L{s[1]}-L{s[2]})"
-                            if len(s) == 3
-                            else f"`{s[0]}` (L{s[1]})"
-                            for s in ld["sections"]
-                        )
-                        lines.append(
-                            f"- {ld['doc']} ({ld['size_kb']}K): "
-                            f"{sections_str}"
-                        )
-
-                lines.append("")
-        else:
-            lines.append("_No projects yet. Tell Swarm: \"Create project MyApp\"_")
-            lines.append("")
-
-        lines.append("## Project Management")
-        lines.append("")
-        lines.append("- **Create:** \"Create project X\" or \"New project X at /path\"")
-        lines.append("- **Edit:** Edit DDD docs directly or ask Swarm to update them")
-        lines.append("- **Delete:** \"Remove project X\" (SwarmAI project cannot be deleted)")
-        lines.append("- **Guide:** See `Projects/README.md` for DDD structure and usage")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        lines.append("_Auto-refreshed on startup and after project changes._")
-        lines.append("")
-
-        content = "\n".join(lines)
-
-        async with _get_cultivation_lock():
-            def _write():
-                context_file.parent.mkdir(parents=True, exist_ok=True)
-                context_file.write_text(content, encoding="utf-8")
-
-            await anyio.to_thread.run_sync(_write)
-
-        entity_count = len(entity_index_lines) - 6 if entity_index_lines else 0  # subtract header lines
-        logger.info(
-            "Refreshed PROJECTS.md with %d projects, %d entity index entries",
-            len(entries),
-            max(entity_count, 0),
-        )
-
-    async def refresh_knowledge_index(self, workspace_path: str) -> None:
-        """Regenerate the Knowledge Index section of ``.context/KNOWLEDGE.md``.
-
-        Scans ``Knowledge/`` subdirectories (Designs, Notes, Reports,
-        Meetings, Library, Handoffs, Learned, Pollinate) for markdown files.  Extracts
-        the ``title`` from YAML frontmatter or the first ``# heading``,
-        and rebuilds the index tables.
-
-        Preserves everything above the ``## Knowledge Index`` marker
-        (hand-written architecture docs, code reference, etc.).
-
-        Called automatically during ``verify_integrity()`` and after
-        knowledge file operations.
-        """
-        root = Path(workspace_path)
-        context_file = root / ".context" / "KNOWLEDGE.md"
-
-        # Marker that separates hand-written content from auto-generated index
-        INDEX_MARKER = "## Knowledge Index"
-
-        def _extract_topic(filepath: Path) -> str:
-            """Extract topic from frontmatter title or first heading."""
-            try:
-                text = filepath.read_text(encoding="utf-8")
-                lines = text.split("\n", 30)  # Only scan first 30 lines
-
-                # Check YAML frontmatter
-                if lines and lines[0].strip() == "---":
-                    for line in lines[1:]:
-                        if line.strip() == "---":
-                            break
-                        if line.startswith("title:"):
-                            title = line[6:].strip().strip('"').strip("'")
-                            return title
-
-                # Fallback: first # heading
-                for line in lines:
-                    stripped = line.strip()
-                    if stripped.startswith("# ") and not stripped.startswith("# <"):
-                        return stripped[2:].strip()
-
-                return filepath.stem
-            except (OSError, UnicodeDecodeError):
-                return filepath.stem
-
-        def _extract_date(filepath: Path) -> str:
-            """Extract date from filename (YYYY-MM-DD prefix) or frontmatter."""
-            name = filepath.stem
-            # Try YYYY-MM-DD prefix
-            if len(name) >= 10 and name[4] == "-" and name[7] == "-":
-                return name[:10]
-            # Try frontmatter
-            try:
-                text = filepath.read_text(encoding="utf-8")
-                lines = text.split("\n", 20)
-                if lines and lines[0].strip() == "---":
-                    for line in lines[1:]:
-                        if line.strip() == "---":
-                            break
-                        if line.startswith("date:"):
-                            return line[5:].strip().strip('"')[:10]
-            except (OSError, UnicodeDecodeError):
-                pass
-            return "unknown"
-
-        def _scan_section(section_dir: Path, path_prefix: str) -> list[dict]:
-            """Scan a directory for .md files and extract metadata."""
-            if not section_dir.exists():
-                return []
-            entries = []
-            for f in sorted(section_dir.glob("*.md")):
-                if f.name.startswith(".") or f.name.startswith("_"):
-                    continue
-                entries.append({
-                    "date": _extract_date(f),
-                    "file": f"`{path_prefix}{f.name}`",
-                    "topic": _extract_topic(f),
-                })
-            return sorted(entries, key=lambda e: e["date"])
-
-        def _build_index() -> str:
-            """Build the Knowledge Index section content.
-
-            Three-tier format:
-            - COMPACT: DailyActivity, JobResults, Signals → count + pattern only
-            - HOT/COLD: dirs with >10 files → recent 10 + cold summary
-            - FULL: dirs with ≤10 files → complete listing
-            """
-            knowledge_dir = root / "Knowledge"
-
-            _COMPACT_DIRS = {"DailyActivity", "JobResults", "Signals"}
-            _HOT_COLD_THRESHOLD = 10
-            _HOT_ENTRIES = 10
-
-            # Define sections to scan: (display name, directory, path prefix)
-            sections = [
-                ("DailyActivity", knowledge_dir / "DailyActivity", "Knowledge/DailyActivity/"),
-                ("DailyBriefs", knowledge_dir / "DailyBriefs", "Knowledge/DailyBriefs/"),
-                ("Designs", knowledge_dir / "Designs", "Knowledge/Designs/"),
-                ("Handoffs", knowledge_dir / "Handoffs", "Knowledge/Handoffs/"),
-                ("JobResults", knowledge_dir / "JobResults", "Knowledge/JobResults/"),
-                ("Learned", knowledge_dir / "Learned", "Knowledge/Learned/"),
-                ("Library", knowledge_dir / "Library", "Knowledge/Library/"),
-                ("Meetings", knowledge_dir / "Meetings", "Knowledge/Meetings/"),
-                ("Notes", knowledge_dir / "Notes", "Knowledge/Notes/"),
-                ("Reports", knowledge_dir / "Reports", "Knowledge/Reports/"),
-                ("Signals", knowledge_dir / "Signals", "Knowledge/Signals/"),
-            ]
-
-            lines = [INDEX_MARKER, ""]
-            total_files = 0
-
-            for section_name, section_dir, path_prefix in sections:
-                entries = _scan_section(section_dir, path_prefix)
-                if not entries:
-                    continue
-                total_files += len(entries)
-
-                # Tier 1: COMPACT — summary only
-                if section_name in _COMPACT_DIRS:
-                    first_date = entries[0]["date"]
-                    last_date = entries[-1]["date"]
-                    lines.append(f"### {section_name}")
-                    lines.append("")
-                    lines.append(
-                        f"{len(entries)} files from {first_date} to {last_date}. "
-                        f"Pattern: `{path_prefix}YYYY-MM-DD-*.md`. Read on demand."
-                    )
-                    lines.append("")
-                    continue
-
-                # Tier 2: HOT/COLD — recent 10 + cold summary
-                if len(entries) > _HOT_COLD_THRESHOLD:
-                    hot_entries = entries[-_HOT_ENTRIES:]
-                    cold_count = len(entries) - _HOT_ENTRIES
-                    lines.append(f"### {section_name}")
-                    lines.append("")
-                    lines.append(
-                        f"_{len(entries)} total, showing {_HOT_ENTRIES} most recent. "
-                        f"{cold_count} older files available via workspace-finder/Glob._"
-                    )
-                    lines.append("")
-                    lines.append("| Date | File | Topic |")
-                    lines.append("|------|------|-------|")
-                    for e in hot_entries:
-                        lines.append(f"| {e['date']} | {e['file']} | {e['topic']} |")
-                    lines.append("")
-                    continue
-
-                # Tier 3: FULL — complete listing
-                lines.append(f"### {section_name}")
-                lines.append("")
-                lines.append("| Date | File | Topic |")
-                lines.append("|------|------|-------|")
-                for e in entries:
-                    lines.append(f"| {e['date']} | {e['file']} | {e['topic']} |")
-                lines.append("")
-
-            if total_files == 0:
-                lines.append("_No knowledge files yet. Save notes, designs, and reports to Knowledge/._")
-                lines.append("")
-
-            lines.append("---")
-            lines.append("")
-            lines.append("_Auto-refreshed on startup from Knowledge/ directories._")
-            lines.append("")
-
-            return "\n".join(lines), total_files
-
-        def _generate():
-            # Read existing KNOWLEDGE.md
-            if not context_file.exists():
-                return None, 0
-
-            existing = context_file.read_text(encoding="utf-8")
-
-            # Find the marker — everything before it is preserved
-            marker_pos = existing.find(INDEX_MARKER)
-            if marker_pos == -1:
-                # No marker found — append at the end
-                preserved = existing.rstrip() + "\n\n"
-            else:
-                preserved = existing[:marker_pos]
-
-            index_content, total = _build_index()
-            return preserved + index_content, total
-
-        # The read-modify-write (generate reads existing KNOWLEDGE.md to preserve
-        # everything above the index marker; write replaces it) must be ATOMIC
-        # under the shared KNOWLEDGE.md.lock — every KNOWLEDGE.md writer holds it
-        # (run_a1ec08e7), else this provisioning-time index refresh could clobber a
-        # concurrent decay-strip (context_health_hook._run_knowledge_lifecycle) and
-        # resurrect stripped entries. Hold the lock across BOTH generate + write in
-        # one worker thread (blocking — mirror the section-refresh writers).
-        from utils.file_lock import md_lock
-
-        def _locked_rmw():
-            with md_lock(context_file, blocking=True):
-                content, total = _generate()
-                if content is None:
-                    return None
-                context_file.parent.mkdir(parents=True, exist_ok=True)
-                context_file.write_text(content, encoding="utf-8")
-                return total
-
-        total = await anyio.to_thread.run_sync(_locked_rmw)
-        if total is None:
-            logger.debug("KNOWLEDGE.md not found, skipping index refresh")
-            return
-        logger.info("Refreshed KNOWLEDGE.md index with %d files", total)
 
     # ── Git initialization ─────────────────────────────────────────────
 
@@ -2581,11 +2143,7 @@ class SwarmWorkspaceManager:
         # Ensure default SwarmAI project exists with DDD structure
         await self._ensure_default_project(root)
 
-        # Auto-refresh PROJECTS.md from scanning Projects/
-        await self.refresh_projects_index(str(root))
 
-        # Auto-refresh Knowledge Index in KNOWLEDGE.md
-        await self.refresh_knowledge_index(str(root))
 
         # Provision job system default config
         await anyio.to_thread.run_sync(lambda: self._provision_job_system(root))
@@ -3118,8 +2676,6 @@ class SwarmWorkspaceManager:
         # Update in-memory UUID index
         self._uuid_index[project_id] = project_dir
 
-        # Auto-refresh PROJECTS.md index
-        await self.refresh_projects_index(workspace_path)
 
         logger.info("Created project '%s' with id %s", project_name, project_id)
         return metadata
@@ -3374,8 +2930,6 @@ class SwarmWorkspaceManager:
         self._uuid_index.pop(project_id, None)
         self._project_locks.pop(project_id, None)
 
-        # Auto-refresh PROJECTS.md index
-        await self.refresh_projects_index(workspace_path)
 
         logger.info("Deleted project '%s' (id: %s)", deleted_name, project_id)
         return True

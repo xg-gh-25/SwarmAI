@@ -398,9 +398,11 @@ class TestE2EDirectChannel:
     """Full pipeline for a normal direct (1:1) channel session."""
 
     def test_all_context_files_present(self, workspace):
-        """All 12 context files (incl. SELF.md) appear in the assembled prompt."""
+        """All 11 context files (incl. SELF.md) appear in the assembled prompt.
+
+        (Was 12 before 2026-08-14 — PROJECTS.md removed with the in-prompt index.)"""
         prompt, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 12
+        assert len(meta["files"]) == 11
         filenames = {f["filename"] for f in meta["files"]}
         expected = {spec.filename for spec in CONTEXT_FILES}
         assert filenames == expected
@@ -505,17 +507,18 @@ class TestE2EDirectChannel:
         assert "channel=direct" in prompt
 
     def test_priority_order_preserved(self, workspace):
-        """Files are assembled in priority order (P0 first, P9 last)."""
+        """Files are assembled in priority order (P0 first, last-priority last)."""
         prompt, _ = _simulate_build(workspace)
         swarmai_pos = prompt.find("## SwarmAI")
         identity_pos = prompt.find("## Identity")
         soul_pos = prompt.find("## Soul")
         memory_pos = prompt.find("## Memory")
-        projects_pos = prompt.find("## Projects")
+        knowledge_pos = prompt.find("## Knowledge")
 
         assert swarmai_pos < identity_pos < soul_pos
-        # Memory (P7) comes before Projects (P9)
-        assert memory_pos < projects_pos
+        # Memory (P7) comes before Knowledge (P9, now the lowest-priority file
+        # after PROJECTS.md was removed 2026-08-14).
+        assert memory_pos < knowledge_pos
 
 
 class TestE2EGroupChannel:
@@ -553,9 +556,9 @@ class TestE2EGroupChannel:
     def test_other_files_still_present_in_group(self, workspace):
         """Non-excluded files (SWARMAI, SOUL, etc.) still appear in group.
 
-        NOTE (run_20bd4a7b): PROJECTS.md is now whole-file-private (excluded for
-        all non-owner sessions incl. group), so it is no longer a valid "still
-        present" example — use KNOWLEDGE.md, which is neutral/shared."""
+        NOTE (2026-08-14): PROJECTS.md was removed entirely (in-prompt index
+        deleted) — it is no longer a context file, so it never appears in ANY
+        prompt. KNOWLEDGE.md is the neutral/shared "still present" example."""
         prompt, _ = _simulate_build(
             workspace, channel_context=self._group_context()
         )
@@ -564,7 +567,7 @@ class TestE2EGroupChannel:
         assert "## Agent Directives" in prompt
         assert "## Steering" in prompt
         assert "## Knowledge" in prompt
-        # PROJECTS.md is now private — must NOT appear in a group channel.
+        # PROJECTS.md was deleted 2026-08-14 — must NOT appear in ANY prompt.
         assert "## Projects" not in prompt
 
     def test_daily_activity_still_injected_in_group(self, workspace):
@@ -724,9 +727,11 @@ class TestE2ETruncationDetection:
         ctx.mkdir(parents=True)
 
         (ctx / "SWARMAI.md").write_text("Core principles here.")
-        # A massive PROJECTS.md that vastly exceeds the tight budget below.
+        # A massive KNOWLEDGE.md that vastly exceeds the tight budget below.
+        # (Was PROJECTS.md pre-2026-08-14; PROJECTS.md is no longer a context
+        # file, so this uses KNOWLEDGE.md — still a truncatable low-priority file.)
         huge_content = "Project details. " * 5000  # ~10K words
-        (ctx / "PROJECTS.md").write_text(f"# Projects\n\n{huge_content}")
+        (ctx / "KNOWLEDGE.md").write_text(f"# Knowledge\n\n{huge_content}")
         (ctx / "IDENTITY.md").write_text("Identity info.")
         (ctx / "SOUL.md").write_text("Personality.")
 
@@ -861,9 +866,11 @@ class TestE2EMetadataAccuracy:
     """Prompt metadata is accurate and complete."""
 
     def test_metadata_file_count(self, workspace):
-        """Metadata reports all 12 context files (incl. SELF.md)."""
+        """Metadata reports all 11 context files (incl. SELF.md).
+
+        (Was 12 before 2026-08-14 — PROJECTS.md removed with the in-prompt index.)"""
         _, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 12
+        assert len(meta["files"]) == 11
 
     def test_metadata_total_tokens_positive(self, workspace):
         """Total tokens is a positive number."""
