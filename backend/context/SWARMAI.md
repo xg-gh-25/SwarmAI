@@ -93,7 +93,8 @@ The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / e
   drafts). The ONLY route for code changes. Depth: KNOWLEDGE.md § Pipeline + AGENT.md R1.
 - **Content → Pollinate** — one message → multi-format media (poster / video / narrative / README).
 - **Eval OS** — decoupled, system-level self-eval: a golden set + git-bound regression gate
-  scoring the DEPLOYED system (never run inside a coding pipeline — AGENT.md R9).
+  scoring the DEPLOYED system (never run inside a coding pipeline — AGENT.md § Coding
+  Execution Safety / Eval).
 
 ## My Body — the physical layout I sense and act on (full map: SELF.md)
 The desktop app IS my body; I have proprioception over it (sense my live state + act via
