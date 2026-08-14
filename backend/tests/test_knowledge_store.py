@@ -7,7 +7,6 @@ Knowledge/ directory indexing system.
 import hashlib
 import sqlite3
 import textwrap
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -68,6 +67,96 @@ class TestChunkMarkdown:
         assert any("Section One" in h for h in headings)
         assert any("Section Two" in h for h in headings)
 
+    def test_archive_file_chunks_at_bullet_level(self):
+        """run_3cb6b9ae Cycle-4 (#4): a *-archive*.md file's size-archived section
+        (many `- [type] **title**` bullets under one `## Section (size-archived DATE)`
+        heading) must chunk PER-ENTRY, not collapse into one section blob — else an
+        archived entry is recallable only as a coarse section-wide chunk, losing the
+        per-entry precision the live recall slicer provides."""
+        from core.knowledge_store import chunk_markdown
+
+        md = textwrap.dedent("""\
+        # Memory Archive -- 2026-08
+
+        ## Guidelines (size-archived 2026-08-14)
+
+        - [guideline] **First archived rule** — body one about caching prefixes (2026-07-01)
+          <!-- ref:0 | last:2026-07-01 | decay:active | source:auto -->
+        - [guideline] **Second archived rule** — body two about session routing (2026-07-02)
+          <!-- ref:0 | last:2026-07-02 | decay:active | source:auto -->
+        - [guideline] **Third archived rule** — body three about token budgets (2026-07-03)
+          <!-- ref:0 | last:2026-07-03 | decay:active | source:auto -->
+        """)
+        chunks = chunk_markdown(md, ".context/MEMORY-archive-2026-08.md")
+        # Each of the 3 bullet entries should be its own chunk (not 1 section blob).
+        entry_chunks = [c for c in chunks if "archived rule" in c["content"]]
+        assert len(entry_chunks) >= 3, (
+            f"archive not chunked per-entry: got {len(entry_chunks)} entry chunks "
+            f"(collapsed into a section blob?)"
+        )
+        # A specific entry must be recallable as its OWN chunk (content isolated).
+        second = [c for c in chunks if "Second archived rule" in c["content"]]
+        assert len(second) == 1, "the specific entry is not an isolated chunk"
+        assert "First archived rule" not in second[0]["content"], (
+            "entry chunk bleeds into neighbors (not truly per-entry)"
+        )
+        # Each entry chunk carries its metadata line (span kept whole).
+        assert "<!-- ref:" in second[0]["content"], "entry chunk lost its metadata"
+
+    def test_non_archive_file_still_chunks_by_heading(self):
+        """Regression: a NON-archive file must keep section-level chunking (the
+        bullet-level split is archive-only, no ceremony tax elsewhere)."""
+        from core.knowledge_store import chunk_markdown
+        md = textwrap.dedent("""\
+        ## Section One
+        - bullet a
+        - bullet b
+        ## Section Two
+        - bullet c
+        """)
+        chunks = chunk_markdown(md, "Notes/regular.md")
+        # section-level: 2 chunks (one per heading), bullets NOT split out
+        assert len(chunks) == 2, f"non-archive file over-chunked: {len(chunks)}"
+
+    def test_archive_wrapped_bracket_line_not_phantom_chunk(self):
+        """Gate-2 MED (run_3cb6b9ae): a col-0 `[see also](url)` continuation inside an
+        archived entry body must NOT phantom-split into its own chunk — the entry-start
+        bracket rule is narrowed to a lowercase `[type]` tag, not any `[Letter`."""
+        from core.knowledge_store import chunk_markdown
+        md = textwrap.dedent("""\
+        # Memory Archive -- 2026-08
+
+        ## Guidelines (size-archived 2026-08-14)
+
+        - [guideline] **Wrapped rule** — body one, see the reference (2026-07-01)
+        [see also](http://example.com) this is a CONTINUATION not an entry
+          <!-- ref:0 | last:2026-07-01 | decay:active | source:auto -->
+        - [guideline] **Second rule** — body two (2026-07-02)
+          <!-- ref:0 | last:2026-07-02 | decay:active | source:auto -->
+        """)
+        chunks = chunk_markdown(md, ".context/MEMORY-archive-2026-08.md")
+        # The `[see also]` line must stay with its parent entry, not be its own chunk.
+        phantom = [c for c in chunks if c["content"].lstrip().startswith("## ")
+                   and "see also" in c["content"].split("\n", 1)[-1].lstrip()[:12]]
+        assert not phantom, "wrapped [see also] line phantom-split into its own chunk"
+        wrapped = [c for c in chunks if "Wrapped rule" in c["content"]]
+        assert len(wrapped) == 1 and "see also" in wrapped[0]["content"], (
+            "the continuation line was severed from its parent entry"
+        )
+
+    def test_incidental_archive_path_not_bullet_chunked(self):
+        """Gate-2 MED: `-archive` as an incidental path substring (not an archive
+        FILENAME) must NOT trigger bullet-chunking."""
+        from core.knowledge_store import chunk_markdown
+        md = textwrap.dedent("""\
+        ## Tasks
+        - task a
+        - task b
+        """)
+        # incidental "-archive" in a DIR name, not the archive filename pattern
+        chunks = chunk_markdown(md, "Notes/design-archive-notes/live.md")
+        assert len(chunks) == 1, f"incidental -archive path over-chunked: {len(chunks)}"
+
     def test_daily_activity_format(self):
         """DailyActivity files use ## HH:MM | session_id format."""
         from core.knowledge_store import chunk_markdown
@@ -124,7 +213,6 @@ class TestKnowledgeStore:
             "SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table')"
         ).fetchall()}
         assert "knowledge_chunks" in tables
-        assert "knowledge_vec" in tables
         assert "knowledge_fts" in tables
 
     def test_upsert_chunk(self):
@@ -145,84 +233,6 @@ class TestKnowledgeStore:
 
         rows = conn.execute("SELECT * FROM knowledge_chunks").fetchall()
         assert len(rows) == 1
-
-    def test_upsert_chunk_with_embedding(self):
-        from core.knowledge_store import KnowledgeStore
-
-        conn = _make_conn()
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-
-        embedding = [0.1] * 1024
-        store.upsert_chunk(
-            source_file="Notes/test.md",
-            chunk_index=0,
-            heading="## Test",
-            content="Hello world",
-            content_hash="abc123",
-            embedding=embedding,
-        )
-
-        # Verify vector was stored via search (vec0 doesn't expose rowid directly)
-        import struct
-        query_blob = struct.pack(f"{1024}f", *([0.5] * 1024))
-        vec_rows = conn.execute(
-            "SELECT id, distance FROM knowledge_vec WHERE embedding MATCH ? LIMIT 1",
-            (query_blob,),
-        ).fetchall()
-        assert len(vec_rows) == 1
-
-    def test_backfill_orphan_vectors_heals_embed_failure(self):
-        """R4a: a chunk indexed while Bedrock was down (embedding=None) gets its
-        vector backfilled on a later healthy pass. Without this, the delta-sync
-        content_hash check skips it forever → permanently keyword-only. Mirrors
-        the memory_vec orphan recovery (context_health_hook.py:1782)."""
-        from core.knowledge_store import KnowledgeStore
-        import struct
-
-        conn = _make_conn()
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-
-        store.upsert_chunk("Notes/x.md", 0, "## X", "race condition fix", "h1", embedding=None)
-
-        orphans_before = conn.execute(
-            "SELECT kc.id FROM knowledge_chunks kc "
-            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
-        ).fetchall()
-        assert len(orphans_before) == 1, "expected 1 orphaned chunk"
-
-        healed = store.backfill_orphan_vectors(lambda text: [0.2] * 1024, limit=10)
-        assert healed == 1
-
-        query_blob = struct.pack("1024f", *([0.2] * 1024))
-        vec_rows = conn.execute(
-            "SELECT id FROM knowledge_vec WHERE embedding MATCH ? LIMIT 1", (query_blob,)
-        ).fetchall()
-        assert len(vec_rows) == 1
-        orphans_after = conn.execute(
-            "SELECT kc.id FROM knowledge_chunks kc "
-            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
-        ).fetchall()
-        assert orphans_after == []
-
-    def test_backfill_orphan_vectors_skips_on_embed_failure(self):
-        """R4a negative: if the embedder still fails (returns None), backfill
-        does NOT crash and leaves the orphan for the next pass (no partial/bad write)."""
-        from core.knowledge_store import KnowledgeStore
-
-        conn = _make_conn()
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-        store.upsert_chunk("Notes/y.md", 0, "## Y", "still down", "h2", embedding=None)
-
-        healed = store.backfill_orphan_vectors(lambda text: None, limit=10)
-        assert healed == 0
-        orphans = conn.execute(
-            "SELECT kc.id FROM knowledge_chunks kc "
-            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
-        ).fetchall()
-        assert len(orphans) == 1
 
     def test_delta_sync_skips_unchanged(self):
         """Delta sync should skip chunks with same content_hash."""
@@ -282,32 +292,6 @@ class TestKnowledgeStore:
         results = store.fts5_search("nonexistent query xyz")
         assert results == []
 
-    def test_vector_search(self):
-        from core.knowledge_store import KnowledgeStore
-
-        conn = _make_conn()
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-
-        # Insert chunk with embedding
-        emb = [0.5] * 1024
-        store.upsert_chunk("test.md", 0, "## T", "credential chain", "h1", embedding=emb)
-
-        # Search with similar embedding
-        query_emb = [0.5] * 1024
-        results = store.vector_search(query_emb, top_k=5)
-        assert len(results) >= 1
-
-    def test_vector_search_none_embedding_returns_empty(self):
-        from core.knowledge_store import KnowledgeStore
-
-        conn = _make_conn()
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-
-        results = store.vector_search(None, top_k=5)
-        assert results == []
-
     def test_remove_file_entries(self):
         from core.knowledge_store import KnowledgeStore
 
@@ -339,7 +323,7 @@ class TestSyncKnowledgeIndex:
         store = KnowledgeStore(conn)
         store.ensure_tables()
 
-        stats = sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        stats = sync_knowledge_index(store, knowledge_dir)
         assert stats["files_scanned"] >= 1
         assert stats["chunks_added"] >= 1
 
@@ -366,7 +350,7 @@ class TestSyncKnowledgeIndex:
         conn = _make_conn()
         store = KnowledgeStore(conn)
         store.ensure_tables()
-        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        sync_knowledge_index(store, knowledge_dir)
 
         # The archived memory is findable; the job log is not.
         indexed = {r["source_file"] for r in store.fts5_search("zebrafish-marker", limit=10)}
@@ -399,7 +383,7 @@ class TestSyncKnowledgeIndex:
         conn = _make_conn()
         store = KnowledgeStore(conn)
         store.ensure_tables()
-        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        sync_knowledge_index(store, knowledge_dir)
 
         indexed = {r["source_file"] for r in store.fts5_search("quokka-sentinel", limit=10)}
         assert any("MEMORY-archive-2026-08" in s for s in indexed), \
@@ -438,7 +422,7 @@ class TestSyncKnowledgeIndex:
         conn = _make_conn()
         store = KnowledgeStore(conn)
         store.ensure_tables()
-        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        sync_knowledge_index(store, knowledge_dir)
 
         mem = {r["source_file"] for r in store.fts5_search("axolotl-memory", limit=10)}
         evo = {r["source_file"] for r in store.fts5_search("axolotl-evolution", limit=10)}
@@ -473,7 +457,7 @@ class TestSyncKnowledgeIndex:
         conn = _make_conn()
         store = KnowledgeStore(conn)
         store.ensure_tables()
-        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        sync_knowledge_index(store, knowledge_dir)
 
         legacy_hits = {r["source_file"] for r in store.fts5_search("legacy-narwhal", limit=10)}
         private_hits = {r["source_file"] for r in store.fts5_search("private-pangolin", limit=10)}
@@ -498,9 +482,9 @@ class TestSyncKnowledgeIndex:
         store.ensure_tables()
 
         # First sync
-        stats1 = sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        stats1 = sync_knowledge_index(store, knowledge_dir)
         # Second sync (no changes)
-        stats2 = sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        stats2 = sync_knowledge_index(store, knowledge_dir)
         assert stats2["chunks_skipped"] >= stats1["chunks_added"]
         assert stats2["chunks_added"] == 0
 
@@ -517,32 +501,16 @@ class TestSyncKnowledgeIndex:
         store = KnowledgeStore(conn)
         store.ensure_tables()
 
-        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        sync_knowledge_index(store, knowledge_dir)
         # Delete file
         test_file.unlink()
-        stats = sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        stats = sync_knowledge_index(store, knowledge_dir)
         assert stats["files_removed"] >= 1
 
-    def test_sync_calls_embed_fn(self, tmp_path):
-        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
-
-        knowledge_dir = tmp_path / "Knowledge"
-        notes_dir = knowledge_dir / "Notes"
-        notes_dir.mkdir(parents=True)
-        (notes_dir / "test.md").write_text("# Test\n\nContent about embedding.")
-
-        conn = _make_conn()
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-
-        embed_fn = MagicMock(return_value=[0.1] * 1024)
-        sync_knowledge_index(store, knowledge_dir, embed_fn=embed_fn)
-        assert embed_fn.call_count >= 1
-
     def test_deadline_defers_remaining_files(self, tmp_path):
-        """A past deadline stops the per-file loop before any embed, deferring
+        """A past deadline stops the per-file loop before any work, deferring
         the rest to the next session (context_health 30s-timeout false-alarm
-        fix). The defer must happen BEFORE embed_fn is ever called."""
+        fix)."""
         import time
         from core.knowledge_store import KnowledgeStore, sync_knowledge_index
 
@@ -556,16 +524,14 @@ class TestSyncKnowledgeIndex:
         store = KnowledgeStore(conn)
         store.ensure_tables()
 
-        embed_fn = MagicMock(return_value=[0.1] * 1024)
         # Deadline already in the past → loop breaks on the first file.
         stats = sync_knowledge_index(
-            store, knowledge_dir, embed_fn=embed_fn,
+            store, knowledge_dir,
             deadline=time.monotonic() - 1.0,
         )
         assert stats["files_scanned"] == 0
         assert stats["deferred"] == 5
         assert stats["chunks_added"] == 0
-        embed_fn.assert_not_called()
 
     def test_no_deadline_processes_all(self, tmp_path):
         """Regression: deadline=None (default) must process every file —
@@ -582,7 +548,7 @@ class TestSyncKnowledgeIndex:
         store = KnowledgeStore(conn)
         store.ensure_tables()
 
-        stats = sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        stats = sync_knowledge_index(store, knowledge_dir)
         assert stats["files_scanned"] == 4
         assert stats["deferred"] == 0
 

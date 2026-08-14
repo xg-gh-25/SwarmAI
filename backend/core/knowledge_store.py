@@ -47,6 +47,16 @@ _SKIP_NESTED_PREFIXES = ("JobResults",)  # any JobResults* dir = flow log, skip
 # Heading regex: ## or ### (not #, which is the file title)
 _HEADING_RE = re.compile(r"^(#{2,3})\s+(.+)$", re.MULTILINE)
 
+# run_3cb6b9ae Cycle-4 (#4): an ENTRY-START within an archived section body — a
+# canonical `- [type] **title**` bullet (or the legacy `- {date}: ...` / bare
+# `[type]` form). Used ONLY for *-archive*.md files to sub-chunk a size-archived
+# section into per-entry chunks, so an archived entry is recallable by its OWN
+# content (FTS5) instead of collapsing into one coarse section-wide blob.
+# Gate-2 MED (run_3cb6b9ae): the bare-`[` alternative is NARROW — a lowercase
+# `[type]` tag only (entry types are lowercase), NOT any `[Letter`, so a col-0
+# wrapped continuation like `[see also](url)` or `[NOTE] ...` cannot phantom-split.
+_ARCHIVE_ENTRY_RE = re.compile(r"(?m)^(?=- \[|- \d{4}-\d{2}-\d{2}:|\[[a-z]+\])")
+
 
 # ── Chunking ──────────────────────────────────────────────────────────
 
@@ -70,6 +80,15 @@ def chunk_markdown(
     """
     if not content or not content.strip():
         return []
+
+    # run_3cb6b9ae Cycle-4 (#4): archive files (*-archive*.md) sub-chunk each
+    # section's body at ENTRY (bullet) granularity so an archived entry is
+    # recallable by its own content, not only as a coarse section-wide blob.
+    # Gate-2 MED: anchor on the ARCHIVE FILENAME (basename contains `-archive`
+    # AND ends `.md`), not a bare substring — so an incidental path like
+    # `Notes/design-archive-notes.md` or `foo-archived/live.md` does NOT trigger.
+    _base = source_file.rsplit("/", 1)[-1]
+    is_archive = "-archive" in _base and _base.endswith(".md")
 
     # Find all ## and ### headings
     matches = list(_HEADING_RE.finditer(content))
@@ -107,6 +126,29 @@ def chunk_markdown(
         text = content[start:end].strip()
         if not text:
             continue
+
+        if is_archive:
+            # Sub-chunk this section body at entry (bullet) granularity. Split the
+            # body (below the heading line) on entry starts; each entry — with its
+            # trailing metadata/continuation lines — becomes its own chunk, PREFIXED
+            # with the section heading for recall context. A section with no
+            # entry-shaped bullets falls back to one section chunk (below).
+            heading_line = content[start:start + (content[start:].find("\n") + 1
+                                    if "\n" in content[start:] else len(text))]
+            body = content[start + len(heading_line):end]
+            parts = [p for p in _ARCHIVE_ENTRY_RE.split(body) if p.strip()]
+            entry_parts = [p for p in parts if p.lstrip().startswith(("- ", "["))]
+            if entry_parts:
+                for ep in entry_parts:
+                    entry_text = f"{heading_line.strip()}\n{ep.strip()}"
+                    chunks.append({
+                        "source_file": source_file,
+                        "chunk_index": len(chunks),
+                        "heading": heading,
+                        "content": entry_text,
+                        "content_hash": hashlib.sha256(entry_text.encode()).hexdigest(),
+                    })
+                continue  # entries emitted; skip the whole-section chunk
 
         chunks.append({
             "source_file": source_file,
