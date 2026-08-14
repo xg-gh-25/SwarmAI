@@ -1,11 +1,11 @@
 <!-- 🧠 SELF-PORTRAIT — my resident self-knowledge artifact (priority-2, always-injected,
-     never-truncated). This is MINE: runtime-owned, written ONLY by me (distill) or XG (human);
-     auto-cultivation is code-blocked (ddd_cultivation protected zone). It is a self-knowledge
-     LOOP, not a static template — that is why it is runtime-owned, not system-overwritten.
-     (⚠️ There is NO protected zone anymore — run_86f44f35 autonomy-first removed
-     `_PROTECTED_ZONES`. Auto-cultivation CAN write me when the zero-context
-     `self_adversarial_judge` passes, same authority as inherited_gate2. My protection is
-     the fail-closed judge, NOT a hard code block.)
+     never-truncated). This is MINE: runtime-owned, primarily written by me (distill) or XG
+     (human). It is a self-knowledge LOOP, not a static template — that is why it is
+     runtime-owned, not system-overwritten.
+     (⚠️ Auto-cultivation is NOT hard-blocked from me — run_86f44f35 autonomy-first removed
+     `_PROTECTED_ZONES`. It CAN write me when the zero-context `self_adversarial_judge` passes
+     (same authority as inherited_gate2); a non-pass discards. My protection is the fail-closed
+     judge, NOT a code block.)
 
      OWNERSHIP (option C): `.context/SELF.md` is AUTHORITATIVE (rebuild never overwrites it).
      `backend/context/SELF.md` is only a first-provision SEED — keep it in sync when this
