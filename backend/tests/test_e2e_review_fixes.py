@@ -236,23 +236,10 @@ class TestF7SessionRecallAlwaysOn:
 # ── F8: EntryRefs 1-hop loading ──────────────────────────────────────
 
 
-class TestF8EntryRefs1Hop:
-    """select_memory_sections should do 1-hop ref loading."""
-
-    def test_refs_pull_in_additional_sections(self):
-        """Sections referenced by selected entries should be loaded."""
-        from core.memory_index import _extract_refs
-
-        # Verify ref extraction works
-        entry = "- [KD01] Decision about [COE02] and [RC15]"
-        refs = _extract_refs(entry, "KD01")
-        assert "COE02" in refs
-        assert "RC15" in refs
-        assert "KD01" not in refs  # self-ref excluded
-
-    # test_1hop_loading_function_exists RETIRED (2026-08-14): EntryRefs 1-hop
-    # loading (_load_referenced_sections) was part of selective injection, which
-    # was deleted — live MEMORY is now full-injected (all refs present anyway).
+# TestF8EntryRefs1Hop RETIRED (2026-08-14): EntryRefs 1-hop loading + _extract_refs
+# were part of the deleted selective-injection / in-prompt-index system. Live MEMORY
+# is now full-injected (all referenced sections are present anyway), so there is no
+# 1-hop ref loading to test.
 
 
 # ── F9: SkillMetrics candidates wired ────────────────────────────────

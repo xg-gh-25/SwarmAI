@@ -1,31 +1,27 @@
-"""Progressive Memory Disclosure — index generation and section selection.
+"""MEMORY.md parsing + BM25 keyword scoring for recall.
 
-Implements the 3-layer memory system for 100% recall coverage:
+ARCHITECTURE (2026-08-14): live MEMORY.md is ALWAYS fully injected — there is
+NO in-prompt index, NO selective/section-scored injection, NO L0/L1 tiering.
+The old 3-layer "L0 Compact Index / L1 Section Selection" system and its
+generator functions (generate_memory_index / keyword_relevance /
+inject_index_into_memory / extract_index_from_memory) were DELETED. Size is
+bounded on the WRITE side (distillation caps + the size-valve archiver), not by
+injection-time section dropping. Recall is pure FTS5+BM25 over the body +
+`.context/*-archive*.md` (the vector leg was removed the same day).
 
-- **L0 Compact Index**: Machine-generated index block with value-based tiers
-  (Permanent/Active/Archived) and keyword aliases per entry.  Always injected
-  into the system prompt (~300-500 tokens).
-
-- **L1 Section Selection**: Topic-triggered loading of 0-3 MEMORY.md sections
-  based on keyword matching (against user's first message) and rule-based
-  session signals.  Budget-capped at a configurable token limit.
-
-- **L2 On-Demand**: Agent uses Read tool to load specific sections.  No code
-  needed — behavioral directive in AGENT.md.
-
-North star: **any memory entry, regardless of age, can be recalled when relevant.**
+This module now provides the surviving parse/score utilities used by that
+recall path.
 
 Public symbols:
 
-- ``generate_memory_index``        — Parse MEMORY.md, produce compact index block
-- ``keyword_relevance``            — Score relevance of an index entry to a message
-- ``select_memory_sections``       — Select sections for L1 injection
-- ``inject_index_into_memory``     — Insert/replace index block in MEMORY.md
-- ``extract_index_from_memory``    — Pull out the index block
-- ``extract_body_without_index``   — Get MEMORY.md content minus the index block
 - ``parse_memory_sections``        — Split MEMORY.md into named sections
-- ``MEMORY_INDEX_START``           — Start marker constant
-- ``MEMORY_INDEX_END``             — End marker constant
+- ``extract_body_without_index``   — Strip a legacy index block (still stripped
+                                      on read; no longer generated)
+- ``select_memory_sections``       — DEGRADED pass-through (returns the full
+                                      body; kept as a contract-lock guard so a
+                                      selective-mode regression is caught by tests)
+- ``MEMORY_INDEX_START`` / ``MEMORY_INDEX_END`` — legacy block markers (used only
+                                      to strip a legacy block, not to generate one)
 """
 
 import re
@@ -38,77 +34,11 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────
 
+# The index-block markers survive: the in-prompt index is no longer GENERATED
+# (2026-08-14), but MEMORY.md files may still carry a legacy block, so
+# extract_body_without_index() strips it on every recall/injection read.
 MEMORY_INDEX_START = "<!-- MEMORY_INDEX_START -->"
 MEMORY_INDEX_END = "<!-- MEMORY_INDEX_END -->"
-
-# D1 (run_4341fc50): the index block is injected verbatim on every cold start
-# (select_memory_sections L0). Long-prose entry titles duplicated the body
-# entry they point to (avg 159, max 478 chars/line). The index is a NAVIGATION
-# layer — a pointer ([ID] + short title + keyword aliases) is all section
-# selection needs; the full prose lives in the body. Cap the title SUMMARY to a
-# word boundary at/under this length; the '| aliases' tail is ALWAYS kept (it is
-# the 1.5x-weighted keyword_relevance recall signal — see _keyword_section_scores).
-MEMORY_INDEX_TITLE_CAP = 70
-
-
-def _cap_index_title(title: str, cap: int = MEMORY_INDEX_TITLE_CAP) -> str:
-    """Cap an index title to <= `cap` chars at a word boundary.
-
-    Operates on str codepoints (never bytes) so a CJK char is never split
-    mid-sequence. Trims at the last whitespace within the cap; if there is no
-    whitespace (one long token / CJK run), hard-slices at `cap` codepoints.
-    Appends an ellipsis only when content was dropped, so callers/tests can see
-    the title was truncated without inflating it past the cap meaningfully.
-    """
-    if len(title) <= cap:
-        return title
-    # Reserve 1 codepoint for the ellipsis so the result is ALWAYS <= cap.
-    budget = cap - 1
-    head = title[:budget]
-    cut = head.rsplit(" ", 1)[0]
-    # Guard the over-aggressive rsplit (Gate-2 F2): only trim at the last space
-    # if it RETAINS at least half the budget; otherwise the single early space
-    # (e.g. "Note: <200 chars>") would collapse the title to almost nothing.
-    # Fall back to the hard codepoint slice (still CJK-safe — str, not bytes).
-    if len(cut) < budget // 2:
-        cut = head
-    return cut.rstrip() + "…"
-
-
-def _recall_safe_aliases(full_title: str, capped_title: str,
-                         aliases: list[str]) -> list[str]:
-    """Preserve section-selection recall when a title is capped (Gate-2 F1).
-
-    `_keyword_section_scores` scores a query against the index line's
-    summary + aliases. The FULL prose title used to be the match surface;
-    capping it would silently drop the matchable tokens beyond the cap (e.g.
-    generic words like "subprocess"/"linux" that `_extract_keywords` does not
-    rank into the top-6 distinctive aliases). To keep selection lossless, append
-    those LOST content tokens (stopword/short-filtered, deduped) to the aliases.
-
-    Content tokens are far fewer bytes than the dropped prose (filler/stopwords
-    are excluded), so the index still shrinks — it just keeps the keyword
-    surface. No-op when the title was not capped.
-    """
-    if full_title == capped_title:
-        return aliases
-    full_tokens = _tokenize_lower(full_title)
-    kept_tokens = set(_tokenize_lower(capped_title))
-    have = {a.lower() for a in aliases}
-    lost: list[str] = []
-    seen: set[str] = set()
-    for tok in full_tokens:
-        if tok in kept_tokens or tok in have or tok in seen:
-            continue
-        seen.add(tok)
-        lost.append(tok)
-    return aliases + lost
-
-
-# Pure ISO date (YYYY-MM-DD). Anchored: only a token that IS a bare date, never
-# a date embedded in a longer token (e.g. a hypothetical "2026-06-27-fix" stays).
-_PURE_DATE_RE = re.compile(r"^20\d\d-\d\d-\d\d$")
-
 
 
 # ── Section definitions: imported from single source of truth ─────────
@@ -136,19 +66,11 @@ ACTIVE_SECTIONS = MEMORY_ACTIVE_SECTIONS
 # English body silently omitted the whole Principles section).
 ALWAYS_LOAD_SECTIONS = set(MEMORY_EVERGREEN_SECTIONS)
 
-# Keyword relevance threshold for L1 section loading
-# Inert default retained only for select_memory_sections' now-inert max_tokens
-# param (MEMORY.md is ALWAYS full-injected — 2026-08-14; no selective mode).
+# Inert default retained only as select_memory_sections' now-inert max_tokens
+# param default (MEMORY.md is ALWAYS full-injected — 2026-08-14; no selective
+# mode). Kept because that function is a live contract-lock guard (its tests
+# assert it returns the full body); its signature default must resolve.
 DEFAULT_MAX_TOKENS = 50_000
-
-# Reversible Context Recall (run_9de88af9): max excluded section NAMES listed in
-# the selective-injection manifest before collapsing to "+N more". Keeps the
-# manifest to a single cache-friendly tail line.
-MANIFEST_MAX_NAMES = 8
-
-# Maximum additional sections to load via EntryRefs 1-hop expansion.
-# Scale up as MEMORY.md grows and token budget allows.
-MAX_REF_SECTIONS = 3
 
 # Prefix patterns: derived from single source of truth
 SECTION_KEY_PREFIX = {
@@ -197,133 +119,6 @@ def _tokenize_lower(text: str) -> list[str]:
     return [t for t in tokens if t not in _STOP_WORDS and (
         len(t) > 2 or _CJK_RE.search(t)
     )]
-
-
-# ── Entry Parsing ─────────────────────────────────────────────────────
-
-
-def _parse_entries(section_content: str) -> list[dict]:
-    """Parse bullet-point entries from a MEMORY.md section.
-
-    Each entry is a ``- YYYY-MM-DD: **title** — description`` line.
-    Returns list of dicts with keys: date_str, title, full_text, date.
-    """
-    entries = []
-    # Match entries: - YYYY-MM-DD: **title** — rest
-    # Also match: - 🔵 **title** — rest (Open Threads format)
-    # Only process top-level bullets (column 0). Any leading whitespace
-    # means indented sub-bullet — skip to avoid polluting the index.
-    for raw_line in section_content.split("\n"):
-        if not raw_line or raw_line[0] in (" ", "\t"):
-            continue
-        line = raw_line.strip()
-        if not line.startswith("- "):
-            continue
-
-        entry: dict = {"full_text": line[2:].strip()}  # strip "- "
-
-        # Try date-prefixed format: 2026-03-30: **title** ...
-        date_match = re.match(
-            r"(\d{4}-\d{2}-\d{2}):\s*\*\*(.+?)\*\*",
-            entry["full_text"],
-        )
-        if date_match:
-            entry["date_str"] = date_match.group(1)
-            entry["title"] = date_match.group(2).strip()
-            try:
-                entry["date"] = datetime.strptime(
-                    entry["date_str"], "%Y-%m-%d"
-                ).date()
-            except ValueError:
-                entry["date"] = None
-        else:
-            # Try emoji/bullet format: 🔵 **title** — rest
-            title_match = re.match(r"[^\*]*\*\*(.+?)\*\*", entry["full_text"])
-            if title_match:
-                entry["title"] = title_match.group(1).strip()
-            else:
-                entry["title"] = entry["full_text"][:60]
-            entry["date_str"] = None
-            entry["date"] = None
-
-        entries.append(entry)
-
-    return entries
-
-
-def _extract_keywords(entry_text: str) -> list[str]:
-    """Extract 3-6 keyword aliases from an entry's full text.
-
-    Focuses on technical terms, proper nouns, and distinctive tokens
-    that would help with recall.  Unicode-aware so CJK entries produce
-    meaningful keywords.
-    """
-    tokens = re.findall(r"[\w\-]+", entry_text, re.UNICODE)
-
-    # Score tokens by distinctiveness
-    scored: dict[str, float] = {}
-    for token in tokens:
-        t_lower = token.lower()
-        is_cjk = bool(_CJK_RE.search(token))
-
-        # Length filter: 2-char CJK words (竞品, 测试) are meaningful;
-        # 2-char English tokens (is, at, to) are noise.
-        min_len = 2 if is_cjk else 3
-        if len(t_lower) < min_len or t_lower in _STOP_WORDS:
-            continue
-
-        score = 0.0
-        # CJK tokens are inherently distinctive — boost them
-        if is_cjk:
-            score += 2.0
-        # Technical terms (contains underscore, hyphen, or ALL_CAPS)
-        if "_" in token or "-" in token:
-            score += 2.0
-        if token.isupper() and len(token) > 2:
-            score += 2.0
-        # CamelCase or mixed case
-        if any(c.isupper() for c in token[1:]) and any(c.islower() for c in token):
-            score += 1.5
-        # Longer tokens are more distinctive
-        if len(token) > 6:
-            score += 1.0
-        # Numbers mixed with text (e.g., "v7", "5428", "200K")
-        if any(c.isdigit() for c in token):
-            score += 0.5
-        # Base score for all tokens
-        score += 0.5
-
-        key = t_lower
-        if key not in scored or score > scored[key]:
-            scored[key] = score
-
-    # Return top 6 by score
-    sorted_tokens = sorted(scored.items(), key=lambda x: x[1], reverse=True)
-    return [t for t, _ in sorted_tokens[:6]]
-
-
-# ── Cross-Reference Extraction ───────────────────────────────────────
-
-def _extract_refs(entry_text: str, self_key: str) -> list[str]:
-    """Extract cross-reference IDs from an entry's full text.
-
-    Scans for patterns like [COE02], [KD01], [RC15] etc.
-    Excludes self-references (where the ref matches the entry's own key).
-
-    Args:
-        entry_text: The full text of the memory entry.
-        self_key: The entry's own key (e.g. "KD01") to exclude self-refs.
-
-    Returns:
-        Sorted list of unique reference IDs (e.g. ["COE02", "RC15"]).
-    """
-    # Extract full reference IDs (e.g. "COE02", "KD01", "PRI03") from bracketed refs
-    full_refs = re.findall(
-        r"\[(COE\d+|KD\d+|RC\d+|LL\d+|OT\d+|PRI\d+|COR\d+|DEC\d+|GUI\d+|PIT\d+|PRC\d+|MOD\d+|SP\d+)\]",
-        entry_text,
-    )
-    unique = sorted(set(full_refs) - {self_key})
-    return unique
 
 
 # Mapping from ref prefix → MEMORY.md section name (from single source)
@@ -583,14 +378,14 @@ def _section_body_scores(
 ) -> dict[str, float]:
     """Score MEMORY ## sections against a query by body-BM25 (index-free).
 
-    Unified-retrieval — the replacement for the index-based
-    ``_keyword_section_scores``. Mirrors DDD's ``recall_multi._ddd_section_scores``
-    (the correct, index-free pattern): ``_bm25_scores({section: body})`` →
-    ``_normalize_bm25_scores``. Reasons this supersedes the index scorer (verified
-    run_a2dffa0d): (1) the index's aliases are ``_extract_keywords(body)``-derived,
-    so the body carries the same recall tokens + more; (2) ``_bm25_tokenize`` emits
-    CJK bigrams → natively cross-language, where the index leg's ``_cjk_match``
-    (whole-token/prefix) missed reordered CJK.
+    Unified-retrieval — the replacement for the old index-based section scorer
+    (both it and the in-prompt index were deleted 2026-08-14). Mirrors DDD's
+    ``recall_multi._ddd_section_scores`` (the correct, index-free pattern):
+    ``_bm25_scores({section: body})`` → ``_normalize_bm25_scores``. Why body-BM25
+    superseded the old index scorer (verified run_a2dffa0d): (1) the index's
+    aliases were body-keyword-derived, so the body carries the same recall tokens
+    + more; (2) ``_bm25_tokenize`` emits CJK bigrams → natively cross-language,
+    where the old index leg's whole-token/prefix CJK match missed reordered CJK.
 
     ``include_evergreen`` selects the two callers' different section scopes — the
     ONE seam where injection and recall legitimately differ:
