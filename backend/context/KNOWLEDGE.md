@@ -3,6 +3,14 @@
 
 # Knowledge — Directory Index
 
+> **What this file is:** KNOWLEDGE.md is one of SwarmAI's governed context files —
+> its job is to be a lightweight **index of your `SwarmWS/Knowledge/` directory**, a
+> map of what lives where so recall can find it. It is **NOT** a home for prose
+> knowledge: cross-session lessons belong in MEMORY.md, project/domain knowledge in a
+> project's DDD docs, and durable reference material in `Knowledge/Library/` (the
+> searchable store). Keep this a thin index — if an entry grows into an essay, move the
+> body to Library and leave a one-line pointer here.
+
 _This file indexes the contents of `SwarmWS/Knowledge/`. When you create a new file in any Knowledge subfolder, add a brief entry here so I can find it later._
 
 ## Notes (`Knowledge/Notes/`)

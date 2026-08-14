@@ -35,8 +35,15 @@ logger = logging.getLogger(__name__)
 _WARNING_THRESHOLD = 91_000
 _EMERGENCY_THRESHOLD = 130_000
 
-# filename → 4-way owner category. The KNOWLEDGE.md "11 Context Files" ownership
-# column, made machine-readable HERE (not on ContextFileSpec — Gate-1).
+# filename → 4-way owner category (rail display only — NO logic consumes it; a file's
+# editability/lock comes from `truncatable`, not owner). This is the coarse display
+# bucket for the authoritative ownership column in SWARMAI.md § "My 11 Context Files"
+# (the SSOT — NOT KNOWLEDGE.md, which is now just a directory index).
+# NOTE: SELF.md is authoritatively "runtime-owned" in that table (a write-PATH
+# distinction: human/distill writes only), but is INTENTIONALLY bucketed to "system"
+# here — on the rail it behaves like a system file (non-editable/locked). This is NOT
+# a bug (XG-confirmed 2026-08-15); the 4-way rail model deliberately does not surface
+# the finer runtime/system write-path split.
 _OWNER_BY_FILE: dict[str, str] = {
     "SWARMAI.md": "system",
     "IDENTITY.md": "system",
