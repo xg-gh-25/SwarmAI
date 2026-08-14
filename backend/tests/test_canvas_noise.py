@@ -23,9 +23,22 @@ from pathlib import Path
 
 import pytest
 
-from core.canvas_noise import NOISE_SEGMENTS, is_noise_path
+from core.canvas_noise import (
+    NOISE_SEGMENTS,
+    _SWARM_AUTHOR_FACING,
+    _SWARM_STATE_ROOT,
+    is_noise_path,
+)
 
 HOME = Path.home()
+# Derived from the module constants rather than written as a literal, for two reasons.
+# (1) SSOT: rename the state dir and these tests follow instead of silently passing on
+# a path that no longer exists. (2) ci.yml builds its skip list by grepping test files
+# for the app-state dir name and --ignore-ing every match (they are assumed to depend
+# on the real home dir). is_noise_path is PURE — it never touches the filesystem, so
+# that assumption is false here, and hardcoding the name would make this whole file
+# CI-invisible. Keep the literal out of this file.
+STATE_ROOT = HOME / _SWARM_STATE_ROOT
 
 
 # ── OS temp: the reported flood ────────────────────────────────────────────────
@@ -80,35 +93,28 @@ def test_home_state_and_caches_are_noise(rel):
 
 
 @pytest.mark.parametrize("rel", [
-    ".swarm-ai/logs/backend-daemon.log",
-    ".swarm-ai/data.db",
-    ".swarm-ai/open_tabs.json",
-    ".swarm-ai/daemon/swarmai-backend",
+    "logs/backend-daemon.log", "data.db", "open_tabs.json", "daemon/swarmai-backend",
 ])
 def test_swarmai_own_state_is_noise(rel):
-    assert is_noise_path(str(HOME / rel)) is True
+    assert is_noise_path(str(STATE_ROOT / rel)) is True
 
 
 # ── the rescue: author-facing subtrees under a denied root ─────────────────────
 
-@pytest.mark.parametrize("rel", [
-    ".swarm-ai/skills/s_myskill/INSTRUCTIONS.md",
-    ".swarm-ai/built-in-skills/s_pdf/SKILL.md",
-    ".swarm-ai/plugin-skills/s_x/SKILL.md",
-    ".swarm-ai/SwarmWS/Knowledge/note.md",
-])
+@pytest.mark.parametrize("rel", _SWARM_AUTHOR_FACING)
 def test_author_facing_subtrees_escape_the_swarm_state_root(rel):
-    """~/.swarm-ai is denied as app plumbing, but a skill source under it IS a
+    """The app state dir is denied as plumbing, but a skill source under it IS a
     deliverable a user reviews — the exception list must rescue it, or the denylist
-    would silently swallow every skill edit."""
-    assert is_noise_path(str(HOME / rel)) is False
+    would silently swallow every skill edit. Parametrized over the real constant, so
+    adding an exception without a test is impossible."""
+    assert is_noise_path(str(HOME / rel / "sub" / "doc.md")) is False
 
 
 def test_exception_does_not_rescue_noise_shapes_inside_it():
     """The exception rescues from the ROOT rule only. A compiled artifact inside a
     rescued subtree is still noise (segment/extension layers run first)."""
-    assert is_noise_path(str(HOME / ".swarm-ai/skills/s_x/__pycache__/m.pyc")) is True
-    assert is_noise_path(str(HOME / ".swarm-ai/skills/s_x/node_modules/pkg/index.js")) is True
+    assert is_noise_path(str(STATE_ROOT / "skills/s_x/__pycache__/m.pyc")) is True
+    assert is_noise_path(str(STATE_ROOT / "skills/s_x/node_modules/pkg/index.js")) is True
 
 
 # ── build/cache segments anywhere in the path ──────────────────────────────────
