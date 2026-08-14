@@ -1,9 +1,10 @@
 """Multi-domain READ-recall closure — unify recall across all knowledge domains.
 
 SwarmAI has three pre-existing single-domain recall engines:
-- ``context_recall.recall_context`` — the 11 context files (MEMORY.md etc), BM25+vector
-- ``recall_engine.RecallEngine``     — the Knowledge Library (Notes/Learned/Signals), FTS5+vector
+- ``context_recall.recall_context`` — the 11 context files (MEMORY.md etc), BM25 keyword
+- ``recall_engine.RecallEngine``     — the Knowledge Library (Notes/Learned/Signals), FTS5+BM25
 - ``session_recall.SessionRecall``   — past sessions, FTS5
+(All three are keyword-only — the vector leg was removed 2026-08-14; recall is pure FTS5+BM25.)
 
 Two domains had NO recall reader, and the three engines were invoked at three
 scattered sites with no unified fan-out. This module closes that gap (READ-only):
@@ -62,9 +63,9 @@ class BucketedRecall:
 
     ``buckets`` maps each domain key to its hit list (shape varies per domain:
     text domains carry section/content dicts, codeintel carries symbol dicts).
-    ``hit_layers`` maps each domain to how it matched ("keyword"/"hybrid"/
-    "fts"/"graph"/"none") for observability — the multi-domain analogue of
-    RecallResult.hit_layer.
+    ``hit_layers`` maps each domain to how it matched ("keyword"/"fts"/
+    "graph"/"none") for observability — the multi-domain analogue of
+    RecallResult.hit_layer. (No "hybrid"/vector — recall is FTS5+BM25 only.)
     """
 
     query: str
@@ -379,10 +380,11 @@ def recall_all(
         query: natural-language recall query.
         project: project name for the DDD + codeintel domains (e.g. "SwarmAI").
         domains: subset of DOMAINS to fan across (default: all 5).
-        allow_embed: when True, the context_files vector leg is enabled (Bedrock).
-            Default False keeps the call provably embed-free (anti-scope). NOTE:
-            the ddd/library/session legs are keyword/FTS-only and have no vector
-            path — only context_files honors this flag.
+        allow_embed: INERT — retained for caller-compat only. The context_files
+            vector leg was removed 2026-08-14 (recall is pure FTS5+BM25), so this
+            flag no longer enables anything; every prod caller passes False. Kept
+            in the signature so existing callers don't break. All legs are
+            keyword/FTS-only; none honors this flag anymore.
         max_sections: per-text-domain section cap.
         policy_excluded_files: files the current session excludes by POLICY
             (privacy), passed through to the file-reading legs so multi-domain

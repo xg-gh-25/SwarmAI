@@ -1,16 +1,17 @@
 """Knowledge Library Indexing — scan, chunk, and index Knowledge/ files.
 
-Provides searchable FTS5 + sqlite-vec index over the entire Knowledge/ directory
+Provides a searchable FTS5 keyword index over the entire Knowledge/ directory
 (DailyActivity, Designs, Notes, Signals, Library, etc.). Delta-sync via
-content_hash ensures only changed chunks are re-embedded.
+content_hash ensures only changed chunks are re-indexed. Recall is pure
+FTS5+BM25 — the sqlite-vec vector leg was removed 2026-08-14 (see ensure_tables).
 
 This module is the Phase 1 foundation for the Recall Engine (Phase 2).
-MEMORY.md (Brain) stays source of truth for semantic memory — this indexes
-the 730K tokens of episodic memory in Knowledge/ (Library).
+MEMORY.md (Brain) stays source of truth for curated memory — this indexes
+the episodic memory in Knowledge/ (Library) for keyword recall.
 
 Public symbols:
 
-- ``KnowledgeStore``          — SQLite store for chunks + FTS5 + vec
+- ``KnowledgeStore``          — SQLite store for chunks + FTS5 (keyword index)
 - ``chunk_markdown``          — Split markdown by heading into chunks
 - ``sync_knowledge_index``    — Top-level: scan dir, chunk, delta-sync
 """

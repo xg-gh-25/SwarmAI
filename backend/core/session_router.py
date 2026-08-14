@@ -305,8 +305,8 @@ def _extract_query_keywords(message: str) -> str:
     """Extract searchable keywords from user message.  Pure NLP, no LLM.
 
     Returns a space-separated string of up to 18 terms suitable for
-    FTS5 + vector search.  Returns empty string for messages too short
-    to produce meaningful recall.
+    FTS5+BM25 keyword recall (the vector leg was removed 2026-08-14).
+    Returns empty string for messages too short to produce meaningful recall.
     """
     if not message or len(message.strip()) < 3:
         return ""

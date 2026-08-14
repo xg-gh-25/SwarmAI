@@ -133,7 +133,7 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
     The old behavior returned the whole body front-truncated at the token ceiling,
     which silently dropped a matching entry that sat below the cliff in a large
     section (Guidelines 12K / Pitfalls 14K tok). This ranks the entries against
-    the query with the SAME Okapi-BM25 scorer the hybrid leg uses and emits them
+    the query with the SAME Okapi-BM25 scorer the FTS5 recall leg uses and emits them
     highest-first until the budget is hit — so the matching entry surfaces
     regardless of its position. Works purely on the live string (no DB / embed),
     which is why it also revives the ``allow_embed=False`` path.
@@ -190,7 +190,7 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
         # available here; discrete entries below are moved WHOLE.)
         return _truncate_at_sentence(body.strip(), budget_tokens)
 
-    # Rank entries by BM25 against the query (same scorer as the hybrid leg).
+    # Rank entries by BM25 against the query (same scorer as the FTS5 recall leg).
     docs = {str(i): e for i, e in enumerate(entries)}
     scores = memory_index._bm25_scores(query, docs)
     if not scores:
@@ -251,7 +251,7 @@ class RecallResult:
     sections: tuple[str, ...] = ()
     # Hit-log surface (run_1e2e663b, §6c) — recall PRODUCES these; ingestion's
     # Darwinian promotion CONSUMES them. recall itself never reads them.
-    hit_layer: str = "none"  # "keyword" | "hybrid" | "none"
+    hit_layer: str = "none"  # "keyword" | "date_body_fallback" | "none" (no vector/hybrid — FTS5+BM25 only)
     drilled: bool = False    # True once a section body was sliced out
 
 

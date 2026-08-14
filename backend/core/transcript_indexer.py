@@ -1,16 +1,17 @@
-"""Transcript Semantic Indexing — parse, chunk, index JSONL transcripts.
+"""Transcript Keyword Indexing — parse, chunk, index JSONL transcripts.
 
-Provides searchable FTS5 + sqlite-vec index over Claude Code session
+Provides a searchable FTS5 keyword index over Claude Code session
 transcripts (JSONL). Delta-sync via content_hash ensures only new
 sessions are indexed. Follows the same pattern as knowledge_store.py.
+Recall is pure FTS5+BM25 — the sqlite-vec vector leg was removed 2026-08-14.
 
-Core insight (MemPalace, April 2026): raw verbatim storage + semantic search
+Core insight (MemPalace, April 2026): raw verbatim storage + keyword search
 scores 96.6% on LongMemEval R@5 — 12.4% higher than LLM-summarized storage.
 "Intelligence at read time, not write time."
 
 Public symbols:
 
-- ``TranscriptStore``          — SQLite store for transcript chunks + FTS5 + vec
+- ``TranscriptStore``          — SQLite store for transcript chunks + FTS5 (keyword index)
 - ``chunk_transcript``         — Split JSONL turns into conversation-pair chunks
 - ``parse_transcript``         — Parse JSONL file into turn records
 - ``sync_transcript_index``    — Top-level: scan dir, chunk, delta-sync

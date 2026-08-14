@@ -34,11 +34,11 @@ _CHARS_PER_TOKEN = 4  # rough estimate; code-heavy content may be ~2-3 chars/tok
 
 
 class RecallEngine:
-    """Hybrid search engine over the Knowledge Library + optional stores.
+    """Keyword search engine over the Knowledge Library + optional stores.
 
-    Combines FTS5 (keyword) and sqlite-vec (vector) search results
-    with configurable weights. Formats output with provenance for
-    system prompt injection.
+    Pure FTS5+BM25 keyword search (the sqlite-vec vector leg was removed
+    2026-08-14 — see the module docstring). Formats output with provenance
+    for system prompt injection.
 
     Supports additional stores (e.g. TranscriptStore) for unified search.
     """
@@ -48,8 +48,8 @@ class RecallEngine:
         Args:
             store: KnowledgeStore instance with tables already ensured.
             additional_stores: Optional list of additional stores (e.g.
-                TranscriptStore) that implement fts5_search() and
-                vector_search() with the same return format.
+                TranscriptStore) that implement fts5_search() with the same
+                return format (recall is FTS5-only; no vector_search).
         """
         self._store = store
         self._additional_stores = additional_stores or []
