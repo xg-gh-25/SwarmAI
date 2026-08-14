@@ -947,42 +947,63 @@ def _strip_superseded_entries(body: str, superseded_keys: set[str]) -> str:
     return "\n".join(out)
 
 
+def _section_body_scores(
+    user_message: str,
+    sections: dict[str, str],
+    superseded_keys: set[str] | None = None,
+    *,
+    include_evergreen: bool = False,
+) -> dict[str, float]:
+    """Score MEMORY ## sections against a query by body-BM25 (index-free).
+
+    Unified-retrieval — the replacement for the index-based
+    ``_keyword_section_scores``. Mirrors DDD's ``recall_multi._ddd_section_scores``
+    (the correct, index-free pattern): ``_bm25_scores({section: body})`` →
+    ``_normalize_bm25_scores``. Reasons this supersedes the index scorer (verified
+    run_a2dffa0d): (1) the index's aliases are ``_extract_keywords(body)``-derived,
+    so the body carries the same recall tokens + more; (2) ``_bm25_tokenize`` emits
+    CJK bigrams → natively cross-language, where the index leg's ``_cjk_match``
+    (whole-token/prefix) missed reordered CJK.
+
+    ``include_evergreen`` selects the two callers' different section scopes — the
+    ONE seam where injection and recall legitimately differ:
+      • INJECTION (STEP1, default False): evergreen (principle/correction/COE/
+        standing-preference/open-threads) is ALWAYS injected in full (CYCLE 2), so
+        it is NOT keyword-selected — only OPERATIONAL sections are scored.
+      • RECALL (STEP5a, True): recall returns SCOPED sections by query (not full
+        injection), so evergreen MUST be reachable by a matching query too — score
+        ALL sections.
+
+    superseded entries are stripped from each body before scoring (see
+    ``_strip_superseded_entries``).
+
+    Returns ``{section_name: normalized_score in [0,1]}``; empty if none match.
+    """
+    corpus_sections = {
+        name: body for name, body in sections.items()
+        if body.strip() and (include_evergreen or name not in MEMORY_EVERGREEN_SECTIONS)
+    }
+    if not corpus_sections:
+        return {}
+    _sup = superseded_keys or set()
+    corpus = {name: _strip_superseded_entries(body, _sup) for name, body in corpus_sections.items()}
+    raw = _bm25_scores(user_message, corpus)
+    if not raw:
+        return {}
+    return _normalize_bm25_scores(raw)
+
+
+# Back-compat alias: the injection path (STEP1) calls the operational-only scorer.
 def _operational_section_scores(
     user_message: str,
     sections: dict[str, str],
     superseded_keys: set[str] | None = None,
 ) -> dict[str, float]:
-    """Score MEMORY's OPERATIONAL ## sections against a query by body-BM25.
+    """Injection-path scorer: operational sections only (evergreen always-injected).
 
-    Unified-retrieval STEP1 — the replacement for the index-based
-    ``_keyword_section_scores`` on the INJECTION path. Mirrors DDD's
-    ``recall_multi._ddd_section_scores`` (the correct, index-free pattern):
-    ``_bm25_scores({section: body})`` → ``_normalize_bm25_scores``. Reasons this
-    supersedes the index scorer (verified run_a2dffa0d): (1) the index's aliases
-    are ``_extract_keywords(body)``-derived, so the body carries the same recall
-    tokens + more; (2) ``_bm25_tokenize`` emits CJK bigrams → natively
-    cross-language, where the index leg's ``_cjk_match`` (whole-token/prefix)
-    missed reordered CJK.
-
-    Scoped to OPERATIONAL sections only — evergreen (principle/correction/COE/
-    standing-preference/open-threads) is ALWAYS injected (CYCLE 2), never
-    keyword-selected. superseded entries are stripped from each body before
-    scoring (see ``_strip_superseded_entries``).
-
-    Returns ``{section_name: normalized_score in [0,1]}``; empty if none match.
-    """
-    operational = {
-        name: body for name, body in sections.items()
-        if name not in MEMORY_EVERGREEN_SECTIONS and body.strip()
-    }
-    if not operational:
-        return {}
-    _sup = superseded_keys or set()
-    corpus = {name: _strip_superseded_entries(body, _sup) for name, body in operational.items()}
-    raw = _bm25_scores(user_message, corpus)
-    if not raw:
-        return {}
-    return _normalize_bm25_scores(raw)
+    Thin wrapper over ``_section_body_scores(include_evergreen=False)`` — kept as a
+    named entry point so the injection call site + its tests read intently."""
+    return _section_body_scores(user_message, sections, superseded_keys, include_evergreen=False)
 
 
 def _extract_superseded_keys(memory_content: str) -> set[str]:

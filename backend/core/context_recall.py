@@ -210,31 +210,31 @@ def recall_context(
         if not sections:
             return RecallResult(allowed=True, content="", reason="no sections parsed")
 
-        index_block = memory_index.extract_index_from_memory(memory_content)
-        if not index_block:
-            index_block = (
-                memory_index.MEMORY_INDEX_START
-                + "\n"
-                + memory_index.generate_memory_index(memory_content)
-                + "\n"
-                + memory_index.MEMORY_INDEX_END
-            )
-
         superseded = memory_index._extract_superseded_keys(memory_content)
 
-        # Pure keyword (pure-filesystem recall design §3.3/§5.4, 2026-06-28): the
-        # vector/hybrid-on-miss leg was REMOVED — no Bedrock/Titan on any recall
-        # path. Reuse the EXACT selective-injection BM25 scorer. The synonym blind
-        # spot (keyword-miss on a semantically-related entry) is covered by
-        # AGENTIC re-search (the caller nudges the agent to re-grep with synonyms),
-        # not by a vector leg. ``allow_embed`` is retained in the signature for
-        # caller compatibility but is now INERT (no embed path exists to gate).
-        # section_name_signal=True: the RECALL read path benefits from a query
-        # naming a category (run_94e602ad). SAFE here (unlike injection): recall
-        # returns scoped sections to a deliberate recall query, it does not inject
-        # into every session's system prompt on an incidental category noun.
-        scores = memory_index._keyword_section_scores(
-            query, index_block, superseded, section_name_signal=True)
+        # Index-free body-BM25 (unified-retrieval STEP5a, 2026-08-14): section
+        # selection scores the ## section BODY directly — the recall read path no
+        # longer touches the in-prompt index (which STEP3 stopped injecting and
+        # STEP5b deletes). Same scorer as the injection path (STEP1) but
+        # include_evergreen=True: recall returns SCOPED sections by query, so an
+        # evergreen section (Principles/Corrections/COE) matching the query MUST be
+        # reachable — unlike injection, where evergreen is always-injected in full
+        # and thus operational-only-scored. body-BM25 is natively cross-language
+        # (``_bm25_tokenize`` CJK bigrams), which the old index ``_cjk_match``
+        # missed. Pure keyword (pure-filesystem design §3.3/§5.4): the vector leg
+        # was removed; the synonym blind spot is covered by AGENTIC re-search, not a
+        # vector leg. ``allow_embed`` is retained in the signature but INERT.
+        #
+        # ACCEPTED TRADEOFF (STEP5a, reverses the run_94e602ad section_name_signal
+        # fix ON PURPOSE): body-BM25 has NO section-name boost, so a query naming a
+        # category whose token never appears in any entry body (e.g. "what decisions
+        # are recorded") now scores 0 where the index-alias path once matched the
+        # section name. This is deliberate — index-free unification + cross-language
+        # correctness outweigh the narrow category-noun case, which agentic
+        # re-search (re-grep with content synonyms) covers. Do NOT re-litigate as a
+        # bug: it is the designed cost of retiring the index.
+        scores = memory_index._section_body_scores(
+            query, sections, superseded, include_evergreen=True)
         hit_layer = "keyword" if scores else "none"
 
         # Bare-date fallback (run_2f4d92da): date aliases were dropped from the
