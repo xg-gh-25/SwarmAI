@@ -909,7 +909,7 @@ class PromptBuilder:
             _t_load = time.perf_counter() - _t1
 
             # recall#G ephemeral-budget observability (run_a16d61ad, design §G):
-            # the 12 context files are token-budgeted inside load_all(), but the
+            # the 11 context files are token-budgeted inside load_all(), but the
             # EPHEMERAL sections appended below (DailyActivity, briefing, user
             # suggestions, sibling digest, editor, deferred-MCP) are NOT — they
             # just `+=` onto ephemeral_text against a fixed EPHEMERAL_HEADROOM
@@ -1184,7 +1184,7 @@ class PromptBuilder:
                     )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
-            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 12 context files (exists + a full
+            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 11 context files (exists + a full
             # read_text each) inside the async body, purely to compute token counts for a
             # DIAGNOSTIC viewer — the most expensive loop-blocker on the session-start
             # path, and duplicate work on top (the loader already read every one of these
@@ -1315,7 +1315,7 @@ class PromptBuilder:
 
         # ── 3. Combine: SystemPromptBuilder framing + context files ───
         # SystemPromptBuilder provides identity/safety/datetime/runtime
-        # metadata.  Context files (12 files + DailyActivity) were loaded
+        # metadata.  Context files (11 files + DailyActivity) were loaded
         # into agent_config["system_prompt"] by step 1 above.  Both must
         # be returned so ClaudeAgentOptions receives the full prompt.
         context_text_final = agent_config.get("system_prompt", "") or ""

@@ -177,12 +177,16 @@ describe('TSCCPanel', () => {
     it('renders truncation indicator for truncated files', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
       openFilesTab();
-      // The badge label is terse ("smart"), so the tooltip has to carry the
+      // The badge label is terse ("trunc"), so the tooltip has to carry the
       // meaning — assert both, or a future rename could leave the badge
-      // unexplained.
-      expect(screen.getByText('smart')).toBeInTheDocument();
+      // unexplained. (Relabeled from the old "smart"/"Smart-selected" wording
+      // when selective MEMORY injection was removed 2026-08-14 — the field now
+      // means budget truncation, which only fires on sub-500K-window models.)
+      expect(screen.getByText('trunc')).toBeInTheDocument();
       expect(
-        screen.getByTitle('Smart-selected to fit budget'),
+        screen.getByTitle(
+          'Marked truncated to fit budget — the read path is warn-only (context-file truncation was removed 2026-08-14), so this effectively never fires',
+        ),
       ).toBeInTheDocument();
     });
 

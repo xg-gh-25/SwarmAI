@@ -67,7 +67,8 @@ const OWNER: Record<string, Owner> = {
   'MEMORY.md': { label: 'agent', color: '#a78bfa' },
   'EVOLUTION.md': { label: 'agent', color: '#a78bfa' },
   'KNOWLEDGE.md': { label: 'gen', color: '#38d9c4' },
-  'PROJECTS.md': { label: 'gen', color: '#38d9c4' },
+  // PROJECTS.md removed 2026-08-14 — the auto-generated in-prompt project index was
+  // deleted; project discovery is now Projects/ folder + FTS5 recall + Glob. 11 files.
 };
 export function ownerOf(filename: string): Owner {
   return OWNER[filename] ?? { label: 'gen', color: '#8b93a7' };
@@ -102,14 +103,14 @@ const FLOW_STAGES: FlowStage[] = [
     desc: "Set the context-file budget ceiling from the model's context window.",
     chips: [{ t: '≥500K → 100K', tone: 'b' }, { t: '≥200K → 50K', tone: '' }, { t: '≥64K → 30K', tone: '' }, { t: '<64K → L0 cache', tone: 'a' }] },
   { n: 2, title: 'L1 cache check', fn: '_load_l1_if_fresh()',
-    desc: 'Models ≥64K try the full L1_SYSTEM_PROMPTS.md cache: reused only if git status (15s TTL) + budget header match.',
-    chips: [{ t: 'hit → jump to 8', tone: '' }, { t: 'memory_smart/privacy → bypass', tone: 'a' }] },
-  { n: 3, title: 'Read 12 context files in order', fn: '_assemble_from_sources()',
-    desc: 'P0→P10 sequential read, each _clean_content() (strip comments, redundant H1), filter dormant/archived MEMORY entries.',
-    chips: [{ t: 'SWARMAI', tone: 'b' }, { t: 'IDENTITY', tone: 'b' }, { t: 'SOUL', tone: 'b' }, { t: 'SELF', tone: '' }, { t: 'AGENT', tone: '' }, { t: 'USER', tone: 'g' }, { t: 'STEERING', tone: 'g' }, { t: 'TOOLS', tone: 'g' }, { t: 'MEMORY', tone: 'p' }, { t: 'EVOLUTION', tone: 'p' }, { t: 'KNOWLEDGE', tone: '' }, { t: 'PROJECTS', tone: '' }] },
-  { n: 4, title: 'Smart memory selection', fn: 'select_memory_sections()', accent: 'recall',
-    desc: 'When MEMORY.md > 30K → inject the L0 compact index (~300–500 tok) + BM25-score the top 0–3 sections (not the full file). Excluded sections stay recallable.',
-    chips: [{ t: 'L0 index always on', tone: 'p' }, { t: 'L1 section BM25', tone: 'p' }, { t: 'THRESHOLD 0.15', tone: '' }] },
+    desc: 'Models ≥64K try the full L1_SYSTEM_PROMPTS.md cache: reused only if git status (15s TTL) + budget header match. The desktop main path is cache-safe (the prompt is now a pure function of the on-disk files); only excluded-file sessions bypass to avoid poisoning the shared cache.',
+    chips: [{ t: 'hit → jump to 8', tone: '' }, { t: 'excluded-files → bypass', tone: 'a' }] },
+  { n: 3, title: 'Read 11 context files in order', fn: '_assemble_from_sources()',
+    desc: 'P0→P9 sequential read, each _clean_content() (strip comments, redundant H1), filter dormant/archived MEMORY entries. (PROJECTS.md was removed 2026-08-14.)',
+    chips: [{ t: 'SWARMAI', tone: 'b' }, { t: 'IDENTITY', tone: 'b' }, { t: 'SOUL', tone: 'b' }, { t: 'SELF', tone: '' }, { t: 'AGENT', tone: '' }, { t: 'USER', tone: 'g' }, { t: 'STEERING', tone: 'g' }, { t: 'TOOLS', tone: 'g' }, { t: 'MEMORY', tone: 'p' }, { t: 'EVOLUTION', tone: 'p' }, { t: 'KNOWLEDGE', tone: '' }] },
+  { n: 4, title: 'Filter MEMORY, always full-inject', fn: '_filter_dormant_entries()', accent: 'recall',
+    desc: 'MEMORY.md is ALWAYS fully injected (2026-08-14 — no selective mode / section-scoring / in-prompt index). The loader only skips dormant/archived entries and strips a legacy index block. Size is bounded UPSTREAM on the write side by the distillation size-valve (body >30K → archive lowest-value entries to .context/*-archive*, recall-only), never at injection time.',
+    chips: [{ t: 'always full-inject', tone: 'p' }, { t: 'skip dormant/archived', tone: '' }, { t: 'size-valve write-side', tone: '' }] },
   { n: 5, title: 'Multi-domain recall fusion', fn: 'recall_all() → render', accent: 'recall',
     desc: 'Pure-filesystem keyword search (allow_embed=False, vector infra off). 5 domains serial, injected with [RECALLED] provenance tags.',
     chips: [{ t: 'context_files', tone: 'p' }, { t: 'ddd', tone: 'p' }, { t: 'library', tone: 'p' }, { t: 'session', tone: '' }, { t: 'codeintel', tone: '' }] },
@@ -336,7 +337,7 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
                   <span className="font-mono">{f.filename}</span>
                   <span className="text-[9px] px-1 rounded" style={{ background: `${o.color}22`, color: o.color }}>{o.label}</span>
                   {f.truncated && (
-                    <span className="text-[9px] px-1 rounded bg-amber-500/20 text-amber-500" title="Smart-selected to fit budget">smart</span>
+                    <span className="text-[9px] px-1 rounded bg-amber-500/20 text-amber-500" title="Marked truncated to fit budget — the read path is warn-only (context-file truncation was removed 2026-08-14), so this effectively never fires">trunc</span>
                   )}
                 </span>
                 <span className="text-[11px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
