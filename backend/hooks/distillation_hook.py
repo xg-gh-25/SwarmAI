@@ -89,6 +89,23 @@ SECTION_CAPS = {  # section name → max entries (count, NOT token — R3-8)
 # to bulk-relocate by position. Smart (decay-ranked) eviction is uncapped.
 BULK_EVICT_LIMIT = 20
 
+# ── Size-driven archive (hysteresis, 2026-08-14) ────────────────────────────
+# NEW ARCHITECTURE (XG): live MEMORY.md is ALWAYS full-injected into the system
+# prompt regardless of size (there is no selective injection); archived content is
+# recall-only (body-BM25 over .context/*-archive*.md). So the ONLY lever that keeps
+# the always-injected prompt bounded is archiving by TOKEN SIZE — count-caps +
+# time-decay proved too weak (entries stay in-cap + active, so MEMORY grew to ~44K).
+#
+# Two water-marks (hysteresis) so archiving does NOT thrash: trigger only when the
+# live BODY (index-block excluded — the index is not injected and is being deleted)
+# exceeds HIGH, and evict down to LOW, leaving HIGH-LOW of runway for new entries.
+# Target=trigger (a single threshold) would re-fire on the very next appended entry.
+# Evict lowest-decay-value OPERATIONAL entries first; evergreen (principle/
+# correction/COE/open-threads/standing-pref) is NEVER size-archived — its value is
+# query-independent and it is always-injected by design (PRI13 power-over-budget).
+SIZE_ARCHIVE_HIGH_WATER = 30_000  # tokens of live BODY → trigger size-archive
+SIZE_ARCHIVE_LOW_WATER = 25_000   # archive down to this; 5K runway avoids thrash
+
 # Fail-loud guard: every cap key must be a real current section. A dead key
 # means the section is silently uncapped (the bug R3 fixes). logger.error
 # (not raise) — a bad key must surface in logs/health, not crash distillation.
@@ -684,6 +701,10 @@ class DistillationTriggerHook:
         # Always run — caps must be enforced even when no new entries were added
         # this cycle (prior runs may have accumulated entries past the cap).
         self._enforce_section_caps(memory_path, ws_path)
+        # Size-driven archive (hysteresis): after count-caps, trim by TOKEN SIZE so
+        # the always-injected live MEMORY.md stays bounded (>30K body → archive to
+        # 25K). The only size lever in the new full-inject/recall-archive architecture.
+        self._enforce_size_valve(memory_path, ws_path)
 
         # Mark files as distilled AFTER all writes succeed.
         # Previous ordering (mark inside loop, write after) could lose entries:
@@ -2422,6 +2443,201 @@ class DistillationTriggerHook:
                 flock_unlock(fd)
         except Exception as exc:
             logger.warning("Section cap enforcement failed: %s", exc)
+        finally:
+            if fd is not None:
+                fd.close()
+
+    @staticmethod
+    def _enforce_size_valve(memory_path: Path, ws_path: Path | None = None) -> None:
+        """Size-driven archive with hysteresis — the NEW-architecture size lever.
+
+        live MEMORY.md is ALWAYS full-injected (no selective mode); archived content
+        is recall-only. So the ONLY thing bounding the always-injected prompt is
+        archiving by TOKEN SIZE. When the live BODY (index-block excluded — it is not
+        injected and is being deleted) exceeds ``SIZE_ARCHIVE_HIGH_WATER``, evict the
+        lowest-decay-value OPERATIONAL entries to the ``.context`` archive (via the
+        ``archive_raw_lines`` chokepoint) until the body falls to
+        ``SIZE_ARCHIVE_LOW_WATER`` — leaving HIGH-LOW of runway so a single new entry
+        cannot re-trigger it (hysteresis; target==trigger would thrash).
+
+        Evergreen sections (principle/correction/COE/open-threads/standing-pref) are
+        NEVER size-archived: their value is query-independent and always-injected
+        (PRI13 power-over-budget). Runs AFTER ``_enforce_section_caps`` (count-caps
+        first, then size trims whatever still overshoots). No-op under high-water.
+        """
+        from utils.file_lock import flock_exclusive, flock_unlock
+        from scripts.locked_write import _find_section_range
+        from core.memory_index import (
+            extract_body_without_index, parse_memory_sections,
+        )
+        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        from core.context_directory_loader import ContextDirectoryLoader
+        from core.memory_decay import compute_decay_score, _META_RE as _DECAY_META_RE
+
+        if not memory_path.exists():
+            return
+
+        today = date.today()
+
+        def _body_tokens(text: str) -> int:
+            return ContextDirectoryLoader.estimate_tokens(extract_body_without_index(text))
+
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")  # noqa: SIM115 — matches locked_write.py
+            flock_exclusive(fd)
+            try:
+                content = memory_path.read_text(encoding="utf-8")
+                if _body_tokens(content) <= SIZE_ARCHIVE_HIGH_WATER:
+                    return  # under high-water → no-op (hysteresis: don't thrash)
+
+                # Gate-2 HIGH (evergreen-overflow guard): the trigger measures the
+                # WHOLE body (incl. evergreen, which is never size-archived). If the
+                # evergreen sections ALONE already exceed the low-water mark, evicting
+                # every operational entry still cannot reach LOW — so mass-archiving
+                # operational would strip-mine the file for ~zero benefit AND re-fire
+                # every cycle. That is NOT a size-valve problem; it is an evergreen
+                # overflow that needs human ratcheting (a principle/correction section
+                # grown too large), so surface it LOUDLY and do NOT strip-mine.
+                _all_sections = parse_memory_sections(content)
+                evergreen_only = "\n".join(
+                    f"## {s}\n{_all_sections.get(s, '')}"
+                    for s in MEMORY_EVERGREEN_SECTIONS
+                    if _all_sections.get(s, "").strip()
+                )
+                if ContextDirectoryLoader.estimate_tokens(evergreen_only) >= SIZE_ARCHIVE_LOW_WATER:
+                    logger.warning(
+                        "Size-valve: evergreen sections alone (%d tok) exceed the "
+                        "%d-tok low-water — evicting operational cannot reach target. "
+                        "NOT strip-mining operational. This is an EVERGREEN OVERFLOW "
+                        "(principle/correction grown too large) needing human review, "
+                        "not a size-valve trim.",
+                        ContextDirectoryLoader.estimate_tokens(evergreen_only),
+                        SIZE_ARCHIVE_LOW_WATER,
+                    )
+                    return
+
+                # Collect all OPERATIONAL entries across sections, each with its
+                # decay score + full line-span (entry line + trailing metadata/detail
+                # lines, so no orphaned <!-- ref --> comments). Evergreen sections are
+                # skipped entirely — never size-archived.
+                candidates: list[tuple[float, str, int, int]] = []  # (score, section, start, end_exclusive)
+                # Section name → (header_end, next_header_pos, lines) for rewrite.
+                from core.ddd_entry_lifecycle import MEMORY_SECTION_NAMES
+                operational_sections = [
+                    s for s in MEMORY_SECTION_NAMES if s not in MEMORY_EVERGREEN_SECTIONS
+                ]
+                section_meta: dict[str, tuple[int, int, list[str]]] = {}
+                for section_name in operational_sections:
+                    section_range = _find_section_range(content, section_name)
+                    if section_range is None:
+                        continue
+                    header_end, next_header_pos = section_range
+                    lines = content[header_end:next_header_pos].splitlines()
+                    section_meta[section_name] = (header_end, next_header_pos, lines)
+                    entry_idxs = [
+                        i for i, ln in enumerate(lines)
+                        if ln.strip().startswith("- ") and not ln.strip().startswith("- [Archived]")
+                    ]
+                    for idx in entry_idxs:
+                        # decay score from the entry's trailing metadata (neutral 0.5 if none)
+                        score = 0.5
+                        for offset in range(1, 4):
+                            if idx + offset >= len(lines):
+                                break
+                            mm = _DECAY_META_RE.match(lines[idx + offset])
+                            if mm:
+                                last_str = mm.group(3)
+                                try:
+                                    last_ref = date.fromisoformat(last_str) if last_str != "none" else None
+                                except ValueError:
+                                    last_ref = None
+                                score = compute_decay_score(
+                                    ref_count=int(mm.group(2)),
+                                    sessions_referenced=int(mm.group(5)),
+                                    last_referenced=last_ref, created=None, today=today,
+                                )
+                                break
+                            if lines[idx + offset].strip().startswith("- "):
+                                break
+                        # full span: entry line + continuation lines until next entry
+                        end = idx + 1
+                        while end < len(lines) and not lines[end].strip().startswith("- "):
+                            end += 1
+                        candidates.append((score, section_name, idx, end))
+
+                if not candidates:
+                    return
+
+                # Evict lowest-decay first until body <= low-water. Estimate the
+                # savings per candidate; re-measure the true body after building the
+                # evicted set (estimate_tokens is not additive across joins).
+                candidates.sort(key=lambda c: c[0])  # ascending: lowest value first
+                evicted_by_section: dict[str, set[int]] = {}
+                archived_by_section: dict[str, list[str]] = {}
+
+                def _rebuilt_content() -> str:
+                    out = content
+                    # Rebuild each touched section from the bottom up (positions from
+                    # the ORIGINAL content are stable only if we splice right-to-left).
+                    for sec in sorted(section_meta, key=lambda s: section_meta[s][0], reverse=True):
+                        header_end, next_header_pos, lines = section_meta[sec]
+                        drop = evicted_by_section.get(sec, set())
+                        if not drop:
+                            continue
+                        # expand each evicted entry to its full span
+                        drop_lines: set[int] = set()
+                        for start in drop:
+                            end = start + 1
+                            while end < len(lines) and not lines[end].strip().startswith("- "):
+                                end += 1
+                            for k in range(start, end):
+                                drop_lines.add(k)
+                        kept = [ln for i, ln in enumerate(lines) if i not in drop_lines]
+                        if not any("[Archived]" in ln for ln in kept):
+                            kept.append(f"- [Archived] See .context/MEMORY-archive-{today.strftime('%Y-%m')}.md")
+                        new_section = "\n".join(kept)
+                        if content[header_end:next_header_pos].endswith("\n"):
+                            new_section += "\n"
+                        out = out[:header_end] + new_section + out[next_header_pos:]
+                    return out
+
+                for score, sec, start, end in candidates:
+                    evicted_by_section.setdefault(sec, set()).add(start)
+                    _, _, lines = section_meta[sec]
+                    archived_by_section.setdefault(sec, []).append(
+                        "\n".join(lines[start:end])
+                    )
+                    if _body_tokens(_rebuilt_content()) <= SIZE_ARCHIVE_LOW_WATER:
+                        break
+
+                new_content = _rebuilt_content()
+                memory_path.write_text(new_content, encoding="utf-8")
+
+                # Archive evicted lines via the chokepoint → private .context/.
+                if archived_by_section and ws_path is not None:
+                    from core.ddd_entry_lifecycle import archive_raw_lines
+                    archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
+                    create_header = f"# Memory Archive -- {today.strftime('%Y-%m')}"
+                    for sec_name, entries in archived_by_section.items():
+                        archive_raw_lines(
+                            ws_path, entries, archive_name,
+                            source_path=memory_path,
+                            block_header=f"## {sec_name} (size-archived {today.isoformat()})",
+                            create_header=create_header,
+                        )
+                    logger.info(
+                        "Size-valve: archived %d operational entries to .context/%s "
+                        "(body over %d-tok high-water → trimmed toward %d-tok low-water)",
+                        sum(len(v) for v in archived_by_section.values()), archive_name,
+                        SIZE_ARCHIVE_HIGH_WATER, SIZE_ARCHIVE_LOW_WATER,
+                    )
+            finally:
+                flock_unlock(fd)
+        except Exception as exc:
+            logger.warning("Size-valve enforcement failed: %s", exc)
         finally:
             if fd is not None:
                 fd.close()

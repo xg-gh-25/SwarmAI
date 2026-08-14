@@ -218,3 +218,128 @@ class TestSectionCaps:
             if in_coe and line.strip().startswith("- ") and not line.strip().startswith("- [Archived]"):
                 count += 1
         assert count <= SECTION_CAPS["COE Registry"]
+
+
+class TestSizeValve:
+    """Size-driven archive (hysteresis) — the NEW-architecture lever that keeps the
+    always-injected live MEMORY.md bounded by TOKEN SIZE, evicting lowest-value
+    OPERATIONAL entries to .context archive until the body is under the low-water
+    mark. Evergreen sections are never size-archived."""
+
+    def _big_memory(self, n_ops: int) -> str:
+        # Each operational entry carries decay metadata so smart (decay-ranked)
+        # eviction is exercised (not the position-only fallback). Older last-ref +
+        # ref_count 0 => lowest decay score => evicted first.
+        parts = ["# Memory\n\n## Principles\n"]
+        # Evergreen: a few principle entries that must NEVER be size-archived.
+        for i in range(5):
+            parts.append(f"- [PRI{i:02d}] evergreen principle {i} — load-bearing judgment kept always\n")
+            parts.append(f"  <!-- ref:3 | last:2026-08-01 | decay:active | sessions:4 -->\n")
+        parts.append("\n## Guidelines\n")
+        pad = "operational guideline detail lorem ipsum dolor sit amet consectetur " * 12
+        for i in range(n_ops):
+            parts.append(f"- [GUI{i:04d}] operational guideline {i} — {pad}\n")
+            # low value: never referenced, old
+            parts.append(f"  <!-- ref:0 | last:none | decay:active | sessions:0 -->\n")
+        parts.append("\n## Open Threads\n- one open thread\n")
+        return "".join(parts)
+
+    def test_size_valve_trims_body_to_low_water(self, tmp_path):
+        from hooks.distillation_hook import (
+            DistillationTriggerHook, SIZE_ARCHIVE_LOW_WATER, SIZE_ARCHIVE_HIGH_WATER,
+        )
+        from core.memory_index import extract_body_without_index
+        from core.context_directory_loader import ContextDirectoryLoader as C
+
+        # Build a body that exceeds the high-water mark.
+        content = self._big_memory(260)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        before = C.estimate_tokens(extract_body_without_index(memory_path.read_text()))
+        assert before > SIZE_ARCHIVE_HIGH_WATER, f"fixture too small: {before}"
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        after = C.estimate_tokens(extract_body_without_index(memory_path.read_text()))
+        # Body must fall to <= low-water (with a small tolerance for whole-entry granularity)
+        assert after <= SIZE_ARCHIVE_LOW_WATER * 1.05, f"body not trimmed to low-water: {after}"
+        assert after < before
+
+    def test_size_valve_never_evicts_evergreen(self, tmp_path):
+        from hooks.distillation_hook import DistillationTriggerHook
+        content = self._big_memory(260)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        # All 5 evergreen principles must survive.
+        for i in range(5):
+            assert f"[PRI{i:02d}]" in result, f"evergreen principle PRI{i:02d} was size-archived (must never happen)"
+
+    def test_size_valve_archives_evicted_operational(self, tmp_path):
+        from hooks.distillation_hook import DistillationTriggerHook
+        from datetime import date
+        content = self._big_memory(260)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        today = date.today()
+        archive_path = memory_path.parent / f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
+        assert archive_path.exists(), "size-archived operational entries must land in .context archive"
+        arch = archive_path.read_text()
+        assert "[GUI" in arch, "evicted operational entries must be in the archive"
+        # Must NOT land in git-tracked Knowledge/Archives/
+        assert not (tmp_path / "Knowledge" / "Archives" / archive_path.name).exists()
+
+    def test_size_valve_noop_under_high_water(self, tmp_path):
+        from hooks.distillation_hook import DistillationTriggerHook
+        # Small body, well under high-water → no archiving, file unchanged.
+        content = "# Memory\n\n## Guidelines\n- [GUI01] tiny\n\n## Open Threads\n- none\n"
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        before = memory_path.read_text()
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        assert memory_path.read_text() == before, "size-valve must be a no-op under high-water"
+
+    def test_size_valve_evergreen_overflow_does_not_stripmine(self, tmp_path):
+        """Gate-2 HIGH (D): when evergreen sections ALONE exceed the low-water mark,
+        evicting operational can never reach LOW — so the valve must NOT strip-mine
+        operational for zero benefit. It logs an EVERGREEN OVERFLOW warning and
+        leaves operational intact (human ratcheting needed, not a size trim)."""
+        from hooks.distillation_hook import DistillationTriggerHook, SIZE_ARCHIVE_LOW_WATER
+        from core.context_directory_loader import ContextDirectoryLoader as C
+
+        # Principles (evergreen) alone > LOW_WATER; plus a few operational entries.
+        pad = "evergreen principle detail lorem ipsum dolor sit amet consectetur " * 12
+        parts = ["# Memory\n\n## Principles\n"]
+        for i in range(400):
+            parts.append(f"- [PRI{i:04d}] evergreen principle {i} — {pad}\n")
+        parts.append("\n## Guidelines\n")
+        for i in range(6):
+            parts.append(f"- [GUI{i:04d}] operational guideline {i} — small\n")
+            parts.append(f"  <!-- ref:0 | last:none | decay:active | sessions:0 -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        content = "".join(parts)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        # sanity: evergreen alone exceeds LOW
+        assert C.estimate_tokens("## Principles\n" + "".join(
+            p for p in parts if p.startswith("- [PRI"))) >= SIZE_ARCHIVE_LOW_WATER
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        # ALL operational guidelines survive — NOT strip-mined.
+        for i in range(6):
+            assert f"[GUI{i:04d}]" in result, f"operational GUI{i:04d} strip-mined despite evergreen overflow"
+        # No archive was produced (nothing evicted).
+        from datetime import date
+        today = date.today()
+        assert not (memory_path.parent / f"MEMORY-archive-{today.strftime('%Y-%m')}.md").exists(), \
+            "evergreen-overflow must not archive operational"

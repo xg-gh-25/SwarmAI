@@ -2879,6 +2879,10 @@ class ContextHealthHook:
             try:
                 from hooks.distillation_hook import DistillationTriggerHook
                 DistillationTriggerHook._enforce_section_caps(memory_path, root)
+                # Size-driven archive (hysteresis) after count-caps: the token-size
+                # lever that keeps the always-injected live MEMORY.md bounded
+                # (>30K body → archive lowest-value operational to 25K). Runs daily.
+                DistillationTriggerHook._enforce_size_valve(memory_path, root)
             except Exception as exc:
                 logger.warning("context_health: section cap enforcement failed: %s", exc)
 
