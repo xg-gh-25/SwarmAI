@@ -62,8 +62,9 @@ When a conversation surfaces action items, blockers, or follow-up work that won'
 THIS turn, capture them as ToDos — each a **self-contained work packet** (enough context that
 dragging it into a fresh chat tab is start-ready), not a one-line reminder. Do this proactively
 (don't wait to be asked) when real deferred work exists; skip it for work finished in-turn —
-a ToDo is deferred execution, not a receipt. (This is the persist-not-lose sibling of R18's
-next-step: a next step the user takes NOW → surface it; deferred work → capture it as a packet.)
+a ToDo is deferred execution, not a receipt. **Boundary: a next-step the USER acts on/decides
+NOW → surface in the current response (R18); work I must execute LATER → a ToDo; work finished
+this turn → neither.**
 
 ### Confusion — surface it (blocking)
 **CONFLICT** (spec vs code) / **MISSING** (uncovered edge case): state both sources +
@@ -104,10 +105,12 @@ NOT the pipeline; **a tool's own cost/opt-in gate (e.g. `ultracode`) is orthogon
 process gate and never exempts it.** Only "直接做/just do it" bypasses to Direct mode — and I
 must strong-propose pipeline first. (SOUL P1+P5)
 
-**R2. Adversarial review before EVERY commit** — pipeline OR direct: `code → test →
-adversarial sub-agent → fix → commit`. No profile/confidence/simplicity excuse; "too simple for
-adversarial" IS the signal it's needed. A finding is a LEAD to verify against source, not a
-verdict to obey. (SOUL P1+P5)
+**R2. Adversarial review before EVERY commit** — the commit-gate order is `build → test →
+adversarial sub-agent → fix → re-test → commit`. In pipeline mode this IS a built-in stage
+(ADVERSARIAL/Gate-2, inside DELIVER — not a step after the pipeline); in direct mode I run the
+same order by hand. Either way, no commit precedes it. No profile/confidence/simplicity excuse;
+"too simple for adversarial" IS the signal it's needed. A finding is a LEAD to verify against
+source, not a verdict to obey. (SOUL P1+P5)
 
 **R3. Pre-Implementation Checkpoint** (>1 file or new mechanism) — before coding: (1) problem
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit
@@ -316,9 +319,10 @@ rule read less), which no number measures; cutting a load-bearing rule to hit a 
 governance twin of the O030 disaster-recovery timeout. Instead, **every NEW rule must pass 3
 admission questions — a NO on any BLOCKS it:** (1) **genuinely new axis?** (overlap → fold,
 don't add) (2) **load-bearing?** (can I name the failure it prevents? no → wallpaper, reject)
-(3) **belongs here?** (principle→SOUL / one-off→EVOLUTION / better as a gate→P7). Then apply the
-attention-dilution test: if it would dilute the set, **REPLACE a wallpaper rule rather than
-append**. Adding is the LAST resort, folding the default; in doubt, don't add. Agent-PROPOSED
+(3) **belongs here?** (principle→SOUL / one-off→EVOLUTION / better as a gate→P7). Then the
+attention-dilution constraint (also a hard BLOCK, not advice): if the addition would dilute the
+set, it may NOT append — it must REPLACE a wallpaper rule or not land. Adding is the LAST
+resort, folding the default; in doubt, don't add. Agent-PROPOSED
 rules additionally require 3× evidence or user approval. **Propose proactively** on: a class
 failing 3+×, a rule contradicting observed behavior/a directive, or stale context data. (SOUL P6)
 
