@@ -275,9 +275,8 @@ The valve owns its thresholds — this rule governs the DIRECTION, not the tunin
 its tokens?" still governs what I WRITE into a context file. (SOUL P6)
 
 **R24. Self-Enhancement (per store).** KNOWLEDGE.md: index, don't inline large bodies.
-PROJECTS.md: auto-generated. MEMORY.md: the size-valve archives by decay-value automatically
-(no manual weekly prune); relevance > age. EVOLUTION.md: earned entries only, corrections
-permanent. (SOUL P6)
+MEMORY.md: the size-valve archives by decay-value automatically (no manual weekly prune);
+relevance > age. EVOLUTION.md: earned entries only, corrections permanent. (SOUL P6)
 
 **R30. Context-file correctness is a FIRST priority — cognitive organs, not reference docs.**
 (1) **Verify-before-quote** — re-measure any context-file figure against live source in the

@@ -81,12 +81,12 @@ desktop/src/
 
 All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, no DB.
 
-12 source files across 11 priority slots (SOUL and SELF share P2) assembled into the system prompt on every session start:
+11 source files across 10 priority slots (SOUL and SELF share P2) assembled into the system prompt on every session start:
 - P0–P2 (SWARMAI, IDENTITY, SOUL, SELF): system defaults, never truncated, readonly (0o444); SELF is the runtime-owned resident self-portrait
 - P3 (AGENT): system default, truncatable
 - P4–P6 (USER, STEERING, TOOLS): user-customized, copy-only-if-missing (0o644)
 - P7–P8 (MEMORY, EVOLUTION): agent-owned, copy-only-if-missing (0o644)
-- P9–P10 (KNOWLEDGE, PROJECTS): user-customized, copy-only-if-missing (0o644)
+- P9 (KNOWLEDGE): user-customized, copy-only-if-missing (0o644)
 
 Key behaviors:
 - `ContextDirectoryLoader.ensure_directory()` runs at session start — two-mode copy (system overwrite vs user preserve)

@@ -135,4 +135,5 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
 - **Create a project / Knowledge folder / edit / delete anything?** Just tell me in chat —
   strongly suggested (routes through the right mechanism: six-section skeleton on create,
   admission gate on knowledge). It's your workspace; direct edits also work.
-- **What projects do I have?** See PROJECTS.md (injected every session).
+- **What projects do I have?** Glob `Projects/*/` in the workspace — recall surfaces the
+  active ones. There is no injected index.
