@@ -252,17 +252,22 @@ class TestUsageBasedEviction:
         from datetime import date, timedelta
         today = date.today()
         recent_date = (today - timedelta(days=2)).isoformat()
+        # run_3cb6b9ae Cycle-1: 4-field live metadata (`... | source:X -->`) — the
+        # format _enforce_section_caps now reads (the old 5-field `| sessions:N -->`
+        # matched nothing → silent oldest-first). Decay score is recency-driven:
+        # recent last: → high score (survives); old last: → low (evicted).
+        old_date = "2026-04-01"
         entries = (
             "- [RC01] 2026-04-01: Old but heavily used entry\n"
-            f"  <!-- ref:10 | last:{recent_date} | decay:low | sessions:8 -->\n"
+            f"  <!-- ref:10 | last:{recent_date} | decay:active | source:auto -->\n"
             "- [RC02] 2026-04-02: Never used entry A\n"
-            "  <!-- ref:0 | last:none | decay:critical | sessions:0 -->\n"
+            f"  <!-- ref:0 | last:{old_date} | decay:active | source:auto -->\n"
             "- [RC03] 2026-04-03: Moderately used entry\n"
-            f"  <!-- ref:5 | last:{recent_date} | decay:low | sessions:5 -->\n"
+            f"  <!-- ref:5 | last:{recent_date} | decay:active | source:auto -->\n"
             "- [RC04] 2026-04-04: Never used entry B\n"
-            "  <!-- ref:0 | last:none | decay:critical | sessions:0 -->\n"
+            f"  <!-- ref:0 | last:{old_date} | decay:active | source:auto -->\n"
             "- [RC05] 2026-04-05: Recently used entry\n"
-            f"  <!-- ref:5 | last:{recent_date} | decay:low | sessions:5 -->\n"
+            f"  <!-- ref:5 | last:{recent_date} | decay:active | source:auto -->\n"
         )
         memory_path.write_text(
             "## Recent Context\n\n" + entries,

@@ -17,9 +17,13 @@ Public API:
     EntryDecayInfo          — Dataclass for per-entry decay state
     compute_decay_score     — Ebbinghaus decay with stability modifier
     compute_stability       — Stability from ref count + spacing
-    get_archive_candidates  — Filter entries below threshold + min age
-    scan_session_for_memory_refs — Detect MEMORY IDs in session messages
-    bump_entry_references   — Update inline metadata comments
+    decay_usage_counts      — Write-time exponential decay of .memory-usage.json
+
+    (run_3cb6b9ae Cycle-3 #2 removed the numeric-ID usage→ref bridge —
+    get_archive_candidates / scan_session_for_memory_refs / bump_entry_references /
+    build_usage_ref_map + the 5-field _META_RE + index-ID regexes — dead once the
+    in-prompt index block was removed. The .memory-usage.json PRODUCER lives in
+    context_health_hook._track_memory_usage and is KEPT.)
 """
 
 from __future__ import annotations
@@ -46,21 +50,18 @@ MAX_STABILITY = 10.0        # Cap so no entry becomes immortal
 # {Principles, Corrections, COE Registry, Open Threads, Standing Preferences}.
 from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS as PERMANENT_SECTIONS
 
-# Regex for MEMORY entry IDs (KD01, LL03, RC15, COE02, OT01)
-_ENTRY_ID_RE = re.compile(r"\b((?:KD|LL|RC|COE|OT)\d{2,3})\b")
-
-# Metadata comment format (extends ddd_entry_lifecycle convention)
-_META_RE = re.compile(
-    r"^(\s*)<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+) \| sessions:(\d+) -->$",
-    re.MULTILINE,
-)
-
-# Entry header pattern (matches MEMORY.md bullet format)
-# Aligned with _ENTRY_ID_RE to prevent asymmetric matching
-_ENTRY_HEADER_RE = re.compile(
-    r"^- \[((?:KD|LL|RC|COE|OT)\d{2,3})\]",
-    re.MULTILINE,
-)
+# run_3cb6b9ae Cycle-3 (#2): the numeric-ID usage→ref BRIDGE was removed. It keyed
+# off `- [KD01]`/`- [PRI01]`-shape lines that ONLY the deleted in-prompt index block
+# carried (#6). With the index gone, the bridge (scan_session_for_memory_refs →
+# bump_entry_references → build_usage_ref_map) matched zero body entries and returned
+# {} permanently — dead by starvation. Removed: `_ENTRY_ID_RE`, 5-field `_META_RE`,
+# `_ENTRY_HEADER_RE`, `scan_session_for_memory_refs`, `bump_entry_references`,
+# `build_usage_ref_map`, `_INDEX_ID_TITLE_RE`, `USAGE_REF_THRESHOLD`,
+# `get_archive_candidates` (0 callers). KEPT: `compute_decay_score` (live, used by
+# the caps + size-valve eviction), `compute_stability` (called BY compute_decay_score),
+# and `decay_usage_counts` + `.memory-usage.json` producer
+# `context_health._track_memory_usage` (live — feeds the loops-health
+# `memory_precision` signal; NOT part of the dead bridge).
 
 
 # ── Data Structures ──────────────────────────────────────────────────────────
@@ -128,205 +129,6 @@ def compute_decay_score(
     return max(STRENGTH_FLOOR, score)
 
 
-# ── Archive Candidates ───────────────────────────────────────────────────────
-
-
-def get_archive_candidates(
-    entries: list[EntryDecayInfo],
-    today: date,
-    score_threshold: float = 0.1,
-    min_age_days: int = 60,
-) -> list[EntryDecayInfo]:
-    """Return entries that are archive candidates.
-
-    Criteria (ALL must be true):
-    1. Decay score < score_threshold
-    2. Entry age > min_age_days
-    3. Entry NOT in a PERMANENT section
-    """
-    candidates = []
-    for entry in entries:
-        # Permanent sections are immune
-        if entry.section in PERMANENT_SECTIONS:
-            continue
-
-        # Check age
-        if entry.created is not None:
-            age_days = (today - entry.created).days
-            if age_days < min_age_days:
-                continue
-        # If no creation date, can't verify age → skip (conservative)
-        else:
-            continue
-
-        # Compute decay score
-        score = compute_decay_score(
-            ref_count=entry.ref_count,
-            sessions_referenced=entry.sessions_referenced,
-            last_referenced=entry.last_referenced,
-            created=entry.created,
-            today=today,
-        )
-
-        if score < score_threshold:
-            candidates.append(entry)
-
-    return candidates
-
-
-# ── Session Scanning ─────────────────────────────────────────────────────────
-
-
-def scan_session_for_memory_refs(
-    messages: list[dict],
-    entry_ids: set[str],
-) -> set[str]:
-    """Scan session messages for MEMORY entry identifiers.
-
-    Looks for patterns like KD01, LL08, RC03, COE05, OT01 in message content.
-    Only returns IDs that exist in the provided entry_ids set.
-    """
-    found: set[str] = set()
-    for msg in messages:
-        content = msg.get("content", "")
-        # Handle list-type content blocks (Anthropic Messages API format)
-        if isinstance(content, list):
-            content = " ".join(
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-        if not content or not isinstance(content, str):
-            continue
-        matches = _ENTRY_ID_RE.findall(content)
-        for match in matches:
-            if match in entry_ids:
-                found.add(match)
-    return found
-
-
-# ── Metadata Bumping ─────────────────────────────────────────────────────────
-
-
-def bump_entry_references(
-    memory_content: str,
-    referenced_ids: set[str],
-    today: date,
-) -> str:
-    """Update ref:N, last:date, sessions:N metadata for referenced entries.
-
-    For each referenced entry:
-    1. If metadata comment exists anywhere after header → update it in place
-    2. If no metadata comment → insert one directly after the header line
-
-    Bumping always resets decay state to 'active' (referenced = alive).
-
-    Note: Callers must serialize access to MEMORY.md (e.g., via locked_write)
-    to prevent concurrent bump_entry_references calls from losing updates.
-    """
-    if not referenced_ids:
-        return memory_content
-
-    lines = memory_content.split("\n")
-    result_lines: list[str] = []
-    today_str = today.isoformat()
-
-    # Track which entries we've seen headers for but haven't found metadata yet
-    pending_entry: str | None = None
-    pending_header_idx: int = -1
-
-    for i, line in enumerate(lines):
-        # Check if this line is a MEMORY entry header with an ID we care about
-        header_match = _ENTRY_HEADER_RE.match(line)
-        if header_match and header_match.group(1) in referenced_ids:
-            # If we had a pending entry without metadata, insert metadata now
-            if pending_entry is not None:
-                # Insert after the header (at pending_header_idx + 1)
-                result_lines.insert(
-                    pending_header_idx + 1,
-                    f"  <!-- ref:1 | last:{today_str} | decay:active | sessions:1 -->",
-                )
-                pending_entry = None
-
-            result_lines.append(line)
-            pending_entry = header_match.group(1)
-            pending_header_idx = len(result_lines) - 1
-            continue
-
-        # Check if this line is a metadata comment for the pending entry
-        if pending_entry is not None:
-            meta_match = _META_RE.match(line)
-            if meta_match:
-                # Update existing metadata in place
-                indent = meta_match.group(1)
-                ref_count = int(meta_match.group(2)) + 1
-                old_last = meta_match.group(3)  # previous last-referenced date
-                # Only increment sessions if last_referenced date differs (Cepeda dedup)
-                old_sessions = int(meta_match.group(5))
-                sessions = old_sessions + (1 if old_last != today_str else 0)
-                result_lines.append(
-                    f"{indent}<!-- ref:{ref_count} | last:{today_str} "
-                    f"| decay:active | sessions:{sessions} -->"
-                )
-                pending_entry = None
-                continue
-
-            # If we hit another entry header, the previous entry had no metadata
-            next_header = _ENTRY_HEADER_RE.match(line)
-            if next_header:
-                # Insert metadata for the pending entry
-                result_lines.insert(
-                    pending_header_idx + 1,
-                    f"  <!-- ref:1 | last:{today_str} | decay:active | sessions:1 -->",
-                )
-                pending_entry = None
-                # Now handle this line — re-check if it's a header we care about
-                if next_header.group(1) in referenced_ids:
-                    result_lines.append(line)
-                    pending_entry = next_header.group(1)
-                    pending_header_idx = len(result_lines) - 1
-                    continue
-
-        result_lines.append(line)
-
-    # Handle trailing pending entry (entry at end of file without metadata)
-    if pending_entry is not None:
-        result_lines.insert(
-            pending_header_idx + 1,
-            f"  <!-- ref:1 | last:{today_str} | decay:active | sessions:1 -->",
-        )
-
-    return "\n".join(result_lines)
-
-
-# ── R2-real usage→ref bridge (run_77504e11) ──────────────────────────────────
-# Connects the LIVE per-entry usage signal (.memory-usage.json, written by
-# context_health_hook._track_memory_usage from real transcript [ID] citations)
-# to body-entry ref_count. ref is consumed by ddd_entry_lifecycle's
-# _is_reclaimable_noise (ref!=0 → protected from physical strip). So a
-# genuinely-used entry survives reclaim — the honest replacement for the
-# removed toxic prose-bump. NOT wired to assess_decay (which no longer
-# reads ref — see ddd_entry_lifecycle R2-prime).
-#
-# Join: usage is keyed by INDEX-ID; the index block carries `- [ID] Title | ...`.
-# The ID prefix (SP/GUI/PIT/...) maps deterministically to a SECTION via
-# MEMORY_PREFIX_TO_SECTION, so we key the result by (section, title) — NOT title
-# alone. This kills the cross-section title-collision false-protect Gate-2 found:
-# "Customer/Account output" exists in BOTH evergreen Standing Preferences (SP01,
-# heavy usage) AND non-evergreen Guidelines (GUI165, light usage); a bare-title
-# join lent SP01's usage to the reclaimable GUI165 entry. (section, title) keeps
-# them distinct, and the lifecycle's evergreen-skip drops the SP01 copy anyway.
-# Threshold: only usage >= threshold earns a ref, so reclaim is NOT neutered for
-# the long tail. Damping: log2 so a 142-use entry → ref ~7, never a raw monopoly.
-# KNOWN follow-up (Gate-2 Finding 2): _track_memory_usage is all-time cumulative,
-# so ref is a one-way ratchet — recency-windowing the usage signal is a separate
-# signal-quality epic. The (section,title) fix removes the acute risk (generic
-# titles like "Correction"/"DISCUSSION" now resolve to their OWN section, not a
-# collision), but a once-hot-now-cold entry stays protected until that lands.
-
-_INDEX_ID_TITLE_RE = re.compile(r"^- \[([A-Z]{2,3}\d{2,3})\]\s+(.+)$", re.MULTILINE)
-USAGE_REF_THRESHOLD = 10  # min cumulative usage to earn reclaim-protection
-
 # ── Write-time decay of the usage signal (run_81f6d20c) ──────────────────────
 # .memory-usage.json counted every [ID] citation cumulatively and NEVER
 # decremented — a one-way ratchet, so a once-hot-now-cold entry stayed
@@ -372,57 +174,3 @@ def decay_usage_counts(
         if new_value >= epsilon:
             decayed[key] = new_value
     return decayed
-
-
-def build_usage_ref_map(
-    memory_content: str,
-    usage_counts: "dict[str, int]",
-    threshold: int = USAGE_REF_THRESHOLD,
-) -> "dict[tuple[str, str], int]":
-    """Map (section, title) → log-damped ref, for entries whose ID-keyed usage
-    (from .memory-usage.json) is >= threshold. Only genuinely-used entries are
-    returned (others stay ref:0 → reclaim-eligible), keyed by (section, title) via
-    the ID-prefix→section map so same-titled entries in different sections never
-    cross-assign (Gate-2 Finding 1/3). Same (section,title) keeps the max ref.
-
-    ⚠️ ID-DEPENDENT — degrades to {} in the no-index architecture (2026-08-14).
-    This bridge maps `.memory-usage.json` counts (keyed by numeric entry IDs like
-    `PRI01`, produced by _track_memory_usage scanning transcripts for `[ID]`
-    citations) onto body entries. It matches `- [PRI01] title` lines — the shape
-    the DELETED in-prompt index used. The live BODY entries are `- [principle]
-    **title**` (TYPE-tagged, no numeric ID), so once the index block is gone this
-    finds no matches and returns {} — reclaim protection for cited entries lapses.
-    This whole usage→ref bridge (and _track_memory_usage that feeds it) presumes an
-    ID-keyed index + agents citing `[ID]`, both retired with the index. Retained as
-    a graceful no-op (best-effort caller) pending a decision to either retire the
-    usage-tracking subsystem or re-anchor it on a body-stable key (title/content
-    signature). It still works on a legacy file that carries an index block.
-    """
-    import math
-    from core.ddd_entry_lifecycle import MEMORY_PREFIX_TO_SECTION
-
-    def _prefix(eid: str) -> str:
-        m = re.match(r"^([A-Z]{2,3})", eid)
-        return m.group(1) if m else ""
-
-    ref_map: dict[tuple[str, str], int] = {}
-    # Scan whole content: MULTILINE matches any surviving `- [ID] title` line
-    # (legacy index block or ID-formatted body). No index + TYPE-tagged body → {}.
-    for m in _INDEX_ID_TITLE_RE.finditer(memory_content):
-        entry_id, rest = m.group(1), m.group(2)
-        usage = usage_counts.get(entry_id, 0)
-        if usage < threshold:
-            continue
-        # Title is everything before the first ' | ' (alias delimiter).
-        title = rest.split(" | ", 1)[0].strip()
-        if not title:
-            continue
-        section = MEMORY_PREFIX_TO_SECTION.get(_prefix(entry_id))
-        if not section:
-            continue  # unknown prefix → cannot place safely, skip
-        damped = round(math.log2(usage + 1))
-        if damped < 1:
-            continue
-        key = (section, title)
-        ref_map[key] = max(ref_map.get(key, 0), damped)
-    return ref_map

@@ -2017,34 +2017,16 @@ class ContextHealthHook:
 
             today = date.today()
 
-            # ── Usage→ref bridge (R2-real, run_77504e11). The toxic DailyActivity
-            # prose-substring bump was removed (R2-prime); THIS is its honest
-            # replacement. Real per-entry usage lives in .memory-usage.json
-            # (_track_memory_usage scans transcripts for [ID] citations). Bridge it
-            # to body ref_count via index-ID→title→body, log-damped, only for
-            # usage >= threshold (so reclaim is NOT neutered for the long tail).
-            # ref is consumed by _is_reclaimable_noise (protect used entries from
-            # physical strip) — NOT by assess_decay (which no longer reads ref,
-            # R2-prime). So a genuinely-used entry survives reclaim. Setting
-            # ref BEFORE inject means the existing inject_entry_metadata persists it
-            # (ref is already a field it writes) — single canonical writer, no
-            # clobber, no new format.
+            # run_3cb6b9ae Cycle-3 (#2): the usage→ref bridge was REMOVED. It mapped
+            # `.memory-usage.json` numeric-ID counts onto body entries via the
+            # `- [KD01] title` index shape — a shape ONLY the deleted in-prompt index
+            # carried (#6). With the index gone, build_usage_ref_map returned {}
+            # permanently (dead by starvation), so no entry was ever bumped. The
+            # producer (_track_memory_usage → .memory-usage.json) is KEPT — it still
+            # feeds the loops-health `memory_precision` signal — only the dead
+            # index-ID→body-ref bridge is gone. ref_count for reclaim protection now
+            # comes solely from the metadata already on each entry.
             bumped = 0
-            try:
-                from core.memory_decay import build_usage_ref_map
-                usage_path = root / ".context" / ".memory-usage.json"
-                if usage_path.exists():
-                    usage_counts = json.loads(usage_path.read_text(encoding="utf-8"))
-                    ref_map = build_usage_ref_map(content, usage_counts)
-                    for e in entries:
-                        if e.section in evergreen:
-                            continue  # evergreen never reclaimed; ranking moot
-                        damped = ref_map.get((e.section, e.title))
-                        if damped and damped > e.ref_count:
-                            e.ref_count = damped
-                            bumped += 1
-            except Exception as exc:  # noqa: BLE001 — bridge is best-effort
-                logger.warning("context_health: usage→ref bridge failed: %s", exc)
 
             # ── Decay: assess state transitions ──
             # A2 (run_55cb38d6): MEMORY.md uses a FASTER 45d dormant threshold.

@@ -279,15 +279,10 @@ class DistillationTriggerHook:
             )
             self._write_flag(da_dir, len(undistilled_files))
 
-        # Bump MEMORY entry reference counts based on session messages (non-blocking)
-        try:
-            await asyncio.to_thread(
-                self._bump_memory_refs_from_session,
-                context.session_id,
-                Path(ws_path) / ".context" / "MEMORY.md",
-            )
-        except Exception as exc:
-            logger.debug("Memory ref bumping failed (non-blocking): %s", exc)
+        # run_3cb6b9ae Cycle-3 (#2): the MEMORY entry-ref bump was REMOVED. It scanned
+        # session messages for numeric `[KD01]`/`[LL03]` citations, a shape only the
+        # deleted in-prompt index carried (#6) and that agents no longer emit — so it
+        # matched zero body entries. Dead by starvation; removed with its bridge.
 
         # Archive stale Recent Context entries from MEMORY.md (non-blocking)
         try:
@@ -913,11 +908,12 @@ class DistillationTriggerHook:
         )
         # Keep any continuation lines (Detail:/temporal) the enriched form carried,
         # EXCEPT a bare pre-existing `<!-- ref -->` meta (we emit the canonical one).
-        from core.memory_decay import _META_RE as _MD_META
+        # Only the 4-field ddd_entry_lifecycle._META_RE remains (Cycle-3 #2 removed
+        # the dead 5-field memory_decay._META_RE).
         from core.ddd_entry_lifecycle import _META_RE as _DL_META
         tail = [
             ln for ln in lines[1:]
-            if ln.strip() and not _MD_META.match(ln) and not _DL_META.match(ln)
+            if ln.strip() and not _DL_META.match(ln)
         ]
         parts = [entry_line, meta_line, *tail]
         return "\n".join(parts)
@@ -2142,77 +2138,6 @@ class DistillationTriggerHook:
     # Protected keywords — entries containing these are never archived
     _RC_PROTECTED_KEYWORDS = ("Birthday", "GitHub", "repo", "architecture", "re-architecture")
     _RC_STALE_DAYS = 30
-
-    def _bump_memory_refs_from_session(
-        self, session_id: str, memory_path: Path
-    ) -> None:
-        """Scan session messages for MEMORY entry IDs and bump ref metadata.
-
-        E2E flow: DB messages → scan for entry IDs → update MEMORY.md metadata.
-        This enables Ebbinghaus decay scoring to know which entries are "alive."
-        """
-        import sqlite3
-        from core.memory_decay import (
-            scan_session_for_memory_refs,
-            bump_entry_references,
-            _ENTRY_ID_RE,
-        )
-        from utils.file_lock import flock_exclusive, flock_unlock
-        from jobs.paths import DB_PATH
-
-        if not memory_path.exists():
-            return
-
-        # 1. Read MEMORY.md to extract all entry IDs
-        content = memory_path.read_text(encoding="utf-8")
-        all_ids = set(_ENTRY_ID_RE.findall(content))
-        if not all_ids:
-            return
-
-        # 2. Fetch recent messages from this session (last 50, enough to detect refs)
-        #    Use direct sqlite3 (this runs in a thread via asyncio.to_thread)
-        if not DB_PATH.exists():
-            return
-        conn = sqlite3.connect(str(DB_PATH), timeout=5)
-        try:
-            rows = conn.execute(
-                "SELECT content FROM messages WHERE session_id = ? "
-                "ORDER BY created_at DESC LIMIT 50",
-                (session_id,),
-            ).fetchall()
-        finally:
-            conn.close()
-        messages = [{"content": row[0]} for row in rows if row[0]]
-
-        if not messages:
-            return
-
-        # 3. Scan messages for entry ID mentions
-        referenced = scan_session_for_memory_refs(messages, all_ids)
-        if not referenced:
-            return
-
-        # 4. Bump metadata in MEMORY.md (under file lock)
-        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = None
-        try:
-            fd = open(lock_path, "w")
-            flock_exclusive(fd)
-            # Re-read under lock to avoid TOCTOU
-            content = memory_path.read_text(encoding="utf-8")
-            updated = bump_entry_references(content, referenced, date.today())
-            if updated != content:
-                memory_path.write_text(updated, encoding="utf-8")
-                logger.info(
-                    "Bumped decay refs for %d MEMORY entries: %s",
-                    len(referenced),
-                    ", ".join(sorted(referenced)),
-                )
-        finally:
-            if fd:
-                flock_unlock(fd)
-                fd.close()
 
     def _archive_stale_rc_entries(self, memory_path: Path, ws_path: Path) -> None:
         """Archive stale RC entries from MEMORY.md Recent Context section.

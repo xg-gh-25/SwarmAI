@@ -1093,45 +1093,6 @@ class TestNoProseBump:
         )
 
 
-class TestUsageRefBridge:
-    """R2-real (run_77504e11): _run_memory_lifecycle bridges .memory-usage.json
-    to body ref_count (reclaim-protection + injection-priority), log-damped,
-    threshold-gated, survives the inject round-trip."""
-
-    def test_usage_bridge_sets_body_ref_and_survives_roundtrip(self, hook, tmp_path):
-        import json as _json
-        from core.ddd_entry_lifecycle import parse_entries
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        # RECENT dates: an old title date would age past the 45-day dormant
-        # threshold and let reclaim STRIP the ref:0 "Rarely used note" entry —
-        # which would then satisfy `entries.get(..., 0) == 0` by DELETION rather
-        # than by the behavior under test (below-threshold entry not bridged).
-        # Recent dates keep both entries present so the assertions are non-vacuous.
-        recent = date.today().isoformat()
-        (ctx / "MEMORY.md").write_text(
-            "<!-- MEMORY_INDEX_START -->\n"
-            "- [PIT07] Gate caught a real bug | gate, adversarial\n"
-            "- [GUI99] Rarely used note | x\n"
-            "<!-- MEMORY_INDEX_END -->\n"
-            "## Pitfalls\n"
-            "_lessons_\n\n"
-            f"- [pitfall] **Gate caught a real bug** — body ({recent})\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n"
-            f"- [guideline] **Rarely used note** — body ({recent})\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n"
-        )
-        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40, "GUI99": 2}))
-
-        hook._run_memory_lifecycle(ws)
-        content = (ctx / "MEMORY.md").read_text()
-
-        entries = {e.title: e.ref_count for e in parse_entries(content)}
-        assert entries.get("Gate caught a real bug", 0) > 0, f"used entry not bridged:\n{content}"
-        assert entries.get("Rarely used note", 0) == 0, "below-threshold entry wrongly protected"
-
-
 class TestUsageDecayGate:
     """run_81f6d20c: _track_memory_usage applies write-time decay ONCE per calendar
     day, gated by a sidecar .memory-usage-meta.json last_decay date. Legacy flat-int
