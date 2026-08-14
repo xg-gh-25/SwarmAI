@@ -567,6 +567,24 @@ class EvolutionMaintenanceHook:
         return False
 
     @staticmethod
+    def _evict_priority(entry_block: str, now: "datetime | None" = None) -> int:
+        """Eviction PRIORITY (value tier) — lower is evicted FIRST. XG directive
+        2026-08-14: no block is exempt; the valve MUST reach ~15K every run. This
+        REPLACES `_is_evergreen`-as-veto — a skeleton is not un-evictable, only
+        evicted LAST (and recall-backed, so it is retrievable after archiving).
+          0 = non-evergreen (old, marker-less) — least valuable, goes first
+          1 = recent (≤_EVERGREEN_RECENCY_DAYS) but no marker — active-defense window
+          2 = marker-bearing skeleton (Pattern/Durable tell/CAPSTONE/METHOD FIX/
+              DIRECTIVE-OVERRIDE/META-CORRECTION) — most valuable, evicted only if
+              tiers 0+1 didn't free enough to reach target.
+        A block can be both recent AND marker-bearing → tier 2 (highest wins)."""
+        if any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS):
+            return 2
+        if EvolutionMaintenanceHook._block_is_recent(entry_block, now):
+            return 1
+        return 0
+
+    @staticmethod
     def _evolution_archive_shard(today: "date | None" = None) -> str:
         """Monthly archive shard name — mirrors the proven MEMORY pattern
         (context_health_hook:2126 f'MEMORY-archive-{today:%Y-%m}.md'). ALL EVOLUTION
@@ -788,14 +806,22 @@ class EvolutionMaintenanceHook:
         shard = self._evolution_archive_shard()
         cur_tokens = ContextDirectoryLoader.estimate_tokens(content)
 
-        # PHASE 1 — SELECT: walk sections least-valuable-first, collect the absolute
-        # (start, end, text) of every block to evict, using a PROJECTED token count so
-        # selection order (priority) is decoupled from physical deletion order.
-        to_evict: list[tuple[int, int, str, str]] = []  # (abs_start, abs_end, text, section)
-        projected = cur_tokens
-        for section in self._EVICT_SECTION_ORDER:
-            if projected <= target:
-                break
+        # PHASE 1 — COLLECT every ### block across all evictable sections, tag each with
+        # an EVICTION PRIORITY (value tier). XG directive 2026-08-14: the valve MUST
+        # always reach `target` (~15K) — no block is EXEMPT. `_is_evergreen` is NO LONGER
+        # a VETO (the old bug: it skipped evergreen blocks, so the file could never shrink
+        # past the evergreen floor). It is now only a PRIORITY signal: evergreen skeletons
+        # are evicted LAST, never NEVER. Archive is recall-backed cold storage (the
+        # .context/*-archive*.md FTS5 leg), so an archived Pattern skeleton is retrievable
+        # — moving it out ≠ losing it. Priority tiers (lower = evicted first):
+        #   0 = non-evergreen (old, marker-less)      — least valuable, evict first
+        #   1 = recent (≤_EVERGREEN_RECENCY_DAYS), no marker — active-defense window
+        #   2 = marker-bearing skeleton (Pattern/tell/CAPSTONE/…) — most valuable, evict last
+        # Ties broken by section rank (_EVICT_SECTION_ORDER: least-valuable section first)
+        # then document position — so what SURVIVES is the highest-value ~15K.
+        candidates: list[tuple[int, int, int, int, str, str]] = []
+        # (priority, section_rank, abs_start, abs_end, text, section)
+        for section_rank, section in enumerate(self._EVICT_SECTION_ORDER):
             rng = _find_section_range(content, section)
             if rng is None:
                 continue
@@ -803,29 +829,44 @@ class EvolutionMaintenanceHook:
             section_text = content[header_end:next_pos]
             boundaries = list(self._BLOCK_BOUNDARY_RE.finditer(section_text))
             if not boundaries:
-                # No ### structure → the WHOLE section body is one unit. Evict it whole
-                # ONLY if non-evergreen; NEVER split it into bullets.
-                if section_text.strip() and not self._is_evergreen(section_text):
+                # No ### structure → the WHOLE section body is one unit (never split).
+                if section_text.strip():
                     blk = section_text.rstrip("\n")
                     if blk:
-                        to_evict.append((header_end, next_pos, blk, section))
-                        projected -= ContextDirectoryLoader.estimate_tokens(blk)
+                        candidates.append((
+                            self._evict_priority(blk), section_rank,
+                            header_end, next_pos, blk, section,
+                        ))
                 continue
             # ### -structured: each block runs from its boundary to the next (or section end).
             for i, m in enumerate(boundaries):
-                if projected <= target:
-                    break
                 b_start = header_end + m.start()
                 b_end = (header_end + boundaries[i + 1].start()
                          if i + 1 < len(boundaries) else next_pos)
                 block = content[b_start:b_end]
-                if self._is_evergreen(block):
-                    continue
-                to_evict.append((b_start, b_end, block.rstrip("\n"), section))
-                projected -= ContextDirectoryLoader.estimate_tokens(block)
+                candidates.append((
+                    self._evict_priority(block), section_rank,
+                    b_start, b_end, block.rstrip("\n"), section,
+                ))
+
+        # SELECT least-valuable-first until projected <= target. No exemption: if tiers
+        # 0+1 don't free enough, tier-2 skeletons are evicted too (recall-backed) — the
+        # target is non-negotiable (XG: "降不到就是 bug").
+        candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+        to_evict: list[tuple[int, int, str, str]] = []
+        projected = cur_tokens
+        for _prio, _rank, b_start, b_end, text, section in candidates:
+            if projected <= target:
+                break
+            to_evict.append((b_start, b_end, text, section))
+            projected -= ContextDirectoryLoader.estimate_tokens(text)
 
         if not to_evict:
-            self._raise_cap_signal_if_over(cur_tokens, threshold)
+            # Zero candidates while over threshold (an evictable section is empty of
+            # blocks). Alarm against `target` (Gate-2 #7): we only reach here when
+            # cur_tokens > threshold >= target, so an exhausted-candidates state IS the
+            # genuine bug the alarm reports (nothing left to evict yet still over target).
+            self._raise_cap_signal_if_over(cur_tokens, target, exhausted=True)
             return 0
 
         # PHASE 2 — ARCHIVE every selected block FIRST (move-not-delete; recall-backed).
@@ -861,23 +902,34 @@ class EvolutionMaintenanceHook:
         final = ContextDirectoryLoader.estimate_tokens(content)
         if moved:
             logger.info(
-                "EVOLUTION size-evict: moved %d low-value entr%s to %s "
-                "(final ~%d tok, target %d)", moved, "y" if moved == 1 else "ies",
-                shard, final, target,
+                "EVOLUTION size-evict: moved %d entr%s to %s (final ~%d tok, target %d)",
+                moved, "y" if moved == 1 else "ies", shard, final, target,
             )
-        self._raise_cap_signal_if_over(final, threshold)
+        # XG directive 2026-08-14: every run MUST land ~target. If we still exceed
+        # target after evicting everything we selected, that is a genuine BUG (a block
+        # we couldn't archive, a projection/estimation gap) — alarm on `target`, not
+        # `threshold`. No block is exempt, so "only evergreen remains" is no longer a
+        # valid resting state.
+        self._raise_cap_signal_if_over(final, target)
         return moved
 
     @staticmethod
-    def _raise_cap_signal_if_over(final_tokens: int, threshold: int) -> None:
-        """P6 raise-the-cap signal: over the HIGH watermark but only evergreen core
-        remains → NEVER cut judgment. Compares to `threshold` (not `target`): the
-        15–20K headroom band is HEALTHY, only >20K with nothing evictable is the signal."""
-        if final_tokens > threshold:
+    def _raise_cap_signal_if_over(
+        final_tokens: int, target: int, exhausted: bool = False
+    ) -> None:
+        """BUG alarm (XG 2026-08-14): the valve MUST always reach ~target. If it stops
+        ABOVE target, something is wrong — a block failed to archive, a projection gap,
+        or (if `exhausted`) zero candidates existed while still over target. This is NO
+        LONGER the P6 'raise the cap, don't cut judgment' path — every block is now
+        evictable (recall-backed), so landing over target is a defect to investigate,
+        not a healthy headroom state. A small overshoot (last whole block straddles the
+        target line — we never split a block) is tolerated within one block's worth."""
+        if final_tokens > target:
             logger.warning(
-                "EVOLUTION over size budget (%d > %d tok) but only evergreen core "
-                "remains — NOT evicting judgment. Raise-the-cap decision needed.",
-                final_tokens, threshold,
+                "EVOLUTION size-valve did NOT reach target (%d > %d tok, exhausted=%s) "
+                "— every block is evictable, so this is a BUG (un-archivable block / "
+                "projection gap), not a headroom state. Investigate.",
+                final_tokens, target, exhausted,
             )
 
     def _deprecate_entry(

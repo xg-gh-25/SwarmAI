@@ -431,24 +431,64 @@ class TestSizeValve:
         assert shards, "evicted content must land in a monthly shard"
         assert "occasionally-triggered optimization lesson" in shards[0].read_text()
 
-    def test_valve_never_evicts_below_core_even_if_over(self, tmp_path):
-        # If ONLY evergreen core remains and it's still over threshold, the valve
-        # does NOT evict core — it stops (P6: raise-the-cap signal, never cut core).
+    def test_valve_reaches_target_NO_EXEMPTION_even_all_evergreen(self, tmp_path):
+        # XG directive 2026-08-14: NO block is exempt. Every archive run MUST land ~target
+        # — if it stops above, that is a BUG. This REPLACES the old "never evict core →
+        # moved==0" contract (which let the file grow unbounded past the evergreen floor).
+        # A file of ONLY marker-bearing (tier-2) skeletons, over threshold, MUST still be
+        # evicted down to target — archive is recall-backed, so a skeleton moved out is
+        # retrievable, NOT lost.
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        from core.context_directory_loader import ContextDirectoryLoader
         ctx = tmp_path / ".context"
         ctx.mkdir()
         evo = ctx / "EVOLUTION.md"
         core_blob = "\n".join(
             f"### C{i:03d} | 2026-08-01\n- **Pattern**: p{i} " + "judgment " * 60 + "\n"
-            f"- **Durable tell**: t{i}\n" for i in range(80)
+            f"- **Durable tell**: t{i}\n" for i in range(140)
         )
         evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + core_blob)
+        before = ContextDirectoryLoader.estimate_tokens(evo.read_text())
+        assert before > 15000, f"fixture must exceed target (got {before})"
+        h = EvolutionMaintenanceHook(context_dir=ctx)
+        moved = h._size_evict(evo, threshold_tokens=15000)
+        final = ContextDirectoryLoader.estimate_tokens(evo.read_text())
+        # NO EXEMPTION: even an all-tier-2 file reaches target.
+        assert moved > 0, "all-evergreen over-target file MUST still evict (no exemption)"
+        assert final <= 15000, f"valve must reach target regardless of value tier (final {final})"
+        # The evicted skeletons went to the recall-backed shard (moved, not deleted).
+        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
+        assert shards, "evicted skeletons must land in a recall-backed shard"
+        assert "**Pattern**" in shards[0].read_text(), "tier-2 skeletons ARE evictable (recall-backed)"
+
+    def test_valve_evicts_lowest_value_tier_first(self, tmp_path):
+        # PRIORITY ORDER: with a mix of tiers over target, the valve evicts tier-0
+        # (old marker-less) BEFORE tier-2 (marker skeleton). What SURVIVES is the
+        # highest-value content — the skeleton stays when tier-0 alone frees enough.
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        from core.context_directory_loader import ContextDirectoryLoader
+        ctx = tmp_path / ".context"; ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        # One tier-2 skeleton (small) + a large pile of tier-0 old marker-less blocks.
+        skeleton = (
+            "### C049 | 2026-08-11 [Bias A]\n- **Pattern**: keep-me-by-marker.\n"
+            "- **Durable tell**: the marker keeps it resident until tier-0 is exhausted.\n\n"
+        )
+        tier0 = "\n".join(
+            f"### DATA-POINT — old obs {i} [2026-03-10]\n- **note** — body {i} " + "pad " * 40 + "\n"
+            for i in range(150)
+        )
+        evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + skeleton + tier0 + "\n")
+        assert ContextDirectoryLoader.estimate_tokens(evo.read_text()) > 15000
         h = EvolutionMaintenanceHook(context_dir=ctx)
         moved = h._size_evict(evo, threshold_tokens=15000)
         body = evo.read_text()
-        # Every evergreen correction still present — none evicted despite over-threshold.
-        assert body.count("**Pattern**") == 80, "core corrections must never be evicted"
-        assert moved == 0, "valve must move 0 when only core remains over-threshold"
+        assert moved > 0 and ContextDirectoryLoader.estimate_tokens(body) <= 15000
+        # tier-2 skeleton SURVIVES because tier-0 alone freed enough (priority order).
+        assert "keep-me-by-marker" in body, "tier-2 skeleton must survive when tier-0 suffices"
+        # the shard holds tier-0 blocks, NOT the skeleton.
+        shard_text = list(ctx.glob("EVOLUTION-archive-*.md"))[0].read_text()
+        assert "old obs" in shard_text and "keep-me-by-marker" not in shard_text
 
     def test_valve_never_splits_and_archives_old_marker_less_whole(self, tmp_path):
         """REGRESSION (entry-splitting) + NEW判准 (XG 2026-08-14): the valve bounds
@@ -505,3 +545,42 @@ class TestSizeValve:
         # no half-block left in the live file (a header without its body, or vice-versa)
         for i in evicted_ids:
             assert f"old observation {i} " not in body, f"evicted block {i} fully removed from live (no split)"
+
+    def test_valve_archive_failure_degrades_gracefully(self, tmp_path):
+        """Gate-2 #1/#3: if archive_raw_lines FAILS for some blocks (disk/OSError), the
+        valve must (a) NOT crash, (b) NOT delete a block it failed to archive (no data
+        loss — move-not-delete), (c) count only successfully-moved blocks in `moved`.
+        The final may then exceed target — which correctly triggers the bug-alarm (a
+        genuinely un-archivable block IS a real failure to report, not wolf-cry)."""
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        from core.context_directory_loader import ContextDirectoryLoader
+        from scripts.locked_write import _find_section_range
+        ctx = tmp_path / ".context"; ctx.mkdir()
+        evo = ctx / "EVOLUTION.md"
+        blocks = "\n".join(
+            f"### DATA-POINT — obs {i} [2026-03-10]\n- **note** — body {i} " + "pad " * 40 + "\n"
+            for i in range(150)
+        )
+        evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + blocks + "\n")
+        content = evo.read_text()
+        h = EvolutionMaintenanceHook(context_dir=ctx)
+        # Stub archive that FAILS every other block (OSError) — the rest succeed.
+        calls = {"n": 0}
+        moved_texts = []
+        def flaky_archive(parent, texts, shard, **kw):
+            calls["n"] += 1
+            if calls["n"] % 2 == 0:
+                raise OSError("simulated disk full")
+            moved_texts.extend(texts)  # record what actually archived
+        moved = h._size_evict_locked(
+            evo, content, 15000, 15000,
+            ContextDirectoryLoader, flaky_archive, _find_section_range,
+        )
+        body = evo.read_text()
+        # (a) no crash (we got here). (b) every block that FAILED to archive is STILL in
+        # the live file (not deleted → no data loss). (c) moved counts only successes.
+        assert moved == len(moved_texts), "moved counts only successfully-archived blocks"
+        assert moved > 0, "the successful half must still be archived+deleted"
+        for t in moved_texts:
+            key = t.split("\n")[0]  # the ### header line
+            assert key not in body, "a successfully-archived block IS removed from live"
