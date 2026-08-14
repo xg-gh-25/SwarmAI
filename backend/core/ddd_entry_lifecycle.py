@@ -241,6 +241,13 @@ _ENTRY_RE = re.compile(
     r"^- (?:\[(\w+)\] )?\*\*(.+?)\*\*"
 )
 
+# Leading author-declared "[type] " prefix on a RAW lesson string (NOT a bullet).
+# Used by route_lesson_type to honor an author-declared type over a keyword guess
+# (run_4ad5a44b). Anchored at start; group(1)=type. Defined locally (mirrors
+# persist_routing._DECLARED_TYPE_RE) to keep ddd_entry_lifecycle free of a reverse
+# import dependency on persist_routing (which already imports this module).
+_DECLARED_TYPE_RE = re.compile(r"^\[(\w+)\]\s+")
+
 # ── Shared boundary-detection fragments (SSOT, run_3cb6b9ae Cycle-5 #5) ────────
 # The MEMORY entry-boundary detectors deliberately DIFFER in scope (each is tuned
 # to its job — see the note below), but two regex FRAGMENTS were duplicated as
@@ -1344,7 +1351,8 @@ def route_lesson_type(lesson: str) -> "tuple[str | None, str]":
     so the KEEP_TYPES hold-back rule can never drift between the two writers.
 
     Returns ``(section, entry_type)``:
-      • ``entry_type`` — the classify_entry_type guess (one of the 7 types).
+      • ``entry_type`` — the author-declared leading [type] tag if valid (one of
+        the 7 VALID_TYPES), else the classify_entry_type keyword guess.
       • ``section`` — the target MEMORY.md section for auto-write, OR ``None``
         when the type is a KEEP_TYPE (principle/correction/decision/model).
 
@@ -1361,7 +1369,21 @@ def route_lesson_type(lesson: str) -> "tuple[str | None, str]":
     PERMANENT auto-commit of protected knowledge", not "no protected lesson is
     ever auto-written".
     """
-    etype = classify_entry_type(lesson)
+    # run_4ad5a44b: HONOR an author-declared leading [type] tag as the PRIMARY
+    # signal — the type was KNOWN at author-time (REFLECT lessons carry a
+    # "[pitfall]"/"[principle]" prefix), so re-guessing it from prose keywords
+    # is strictly worse (measured 82% keyword accuracy, with a systematic skew
+    # that demotes principle/correction -> pitfall/guideline because the pitfall
+    # signal words bug/wrong/failed are greedy). Both route call-sites
+    # (ingestion_gate.admit_memory_lesson + context_health REFLECT path) receive
+    # tag-bearing input, so honoring HERE makes both consistent (P8) with no
+    # caller change. classify_entry_type stays the fallback for untagged lessons
+    # (the DailyActivity distillation path, which has no author tag).
+    # Local regex (NOT persist_routing._DECLARED_TYPE_RE) to avoid a reverse
+    # import dep — persist_routing already imports THIS module.
+    _m = _DECLARED_TYPE_RE.match(lesson)
+    declared = _m.group(1).lower() if _m else None
+    etype = declared if (declared in VALID_TYPES) else classify_entry_type(lesson)
     if etype in _KEEP_TYPES:
         return (None, etype)
     return (MEMORY_TYPE_TO_SECTION.get(etype, "Guidelines"), etype)

@@ -1109,7 +1109,7 @@ class ContextHealthHook:
         from collections import defaultdict
         by_section: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
-        from core.ddd_entry_lifecycle import route_lesson_type
+        from core.ddd_entry_lifecycle import route_lesson_type, _DECLARED_TYPE_RE, VALID_TYPES
         for lesson in lessons[:3]:
             # JUDGE GATE (run_04fd397c, XG decision A): this reflection→MEMORY path
             # was a BACKDOOR — it used _admit_lesson_to_memory (a code-side Step-0
@@ -1151,11 +1151,27 @@ class ContextHealthHook:
             # ROOT-FIX (capture-vs-distill): write the DISTILLED rule when the gate
             # rewrote a shape-dirty lesson; fail-open → distilled=None keeps original.
             lesson = distilled or lesson
-            # entry_type from the type router (section already came from the judge helper).
+            # entry_type from the type router. route_lesson_type now HONORS an
+            # author-declared leading [type] tag (run_4ad5a44b), so pass the
+            # tag-bearing lesson — the declared type wins over a keyword guess.
             _, entry_type = route_lesson_type(lesson)
-            title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
+            # Strip the leading [type] prefix from the BODY before embedding, or it
+            # is written THREE times (auto [entry_type] + in title-split + in body)
+            # — the triple-tag pollution that produced malformed "- [guideline]
+            # **[pitfall] X** — [pitfall] X" entries (run_4ad5a44b bug b).
+            # Strip ONLY a VALID type tag (same guard as route_lesson_type's honor):
+            # an unconditional .sub() would corrupt a lesson whose body legitimately
+            # opens with a non-type bracket like "[TODO] ..." or "[2026] ..."
+            # (Gate-2 CRITICAL, run_4ad5a44b).
+            _dm = _DECLARED_TYPE_RE.match(lesson)
+            lesson_body = (
+                _DECLARED_TYPE_RE.sub("", lesson, count=1)
+                if _dm and _dm.group(1).lower() in VALID_TYPES
+                else lesson
+            )
+            title = lesson_body.split("—")[0].strip() if "—" in lesson_body else lesson_body[:60]
             title = title.rstrip(".")
-            entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})"
+            entry_line = f"- [{entry_type}] **{title}** — {lesson_body} ({today}, {run_id})"
             meta_line = f"  <!-- ref:0 | last:{today} | decay:active -->"
             by_section[target_section].append((title, f"{entry_line}\n{meta_line}"))
 
