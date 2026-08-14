@@ -489,6 +489,142 @@ class TestSelectMemorySections:
             "SessionRecall was NOT injected — the block is dead (dead import regressed?)"
 
 
+class TestEvergreenAlwaysInjected:
+    """CYCLE 2/7 — core-vs-archival INJECTION guarantee. Evergreen sections
+    (Principles / Corrections / COE Registry / Standing Preferences / Open Threads)
+    are query-INDEPENDENT judgment — they must be injected in FULL every turn,
+    never subject to keyword-match or budget-skip in selective mode. This closes
+    the cross-language recall gap: a CJK query whose tokens don't match a
+    principle's English body used to drop the whole Principles section."""
+
+    # Evergreen set derives from the SSOT — NOT a hand-list (P8 one-brain drift).
+    def test_always_load_equals_evergreen_ssot(self):
+        import core.memory_index as mi
+        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        assert set(mi.ALWAYS_LOAD_SECTIONS) == set(MEMORY_EVERGREEN_SECTIONS), (
+            "ALWAYS_LOAD_SECTIONS must equal the MEMORY_EVERGREEN_SECTIONS SSOT so "
+            "adding an evergreen section to the schema auto-updates injection"
+        )
+
+    def _big_memory_with_evergreen(self):
+        """A >30K MEMORY with all 5 evergreen sections + a big operational one."""
+        from core.context_directory_loader import ContextDirectoryLoader
+        import core.memory_index as mi
+        filler = ("word " * 40000).strip()
+        mem = (
+            "<!-- MEMORY_INDEX_START -->\n## Memory Index\n"
+            "- [GUI01] fallback proxy guideline | fallback, proxy\n"
+            "<!-- MEMORY_INDEX_END -->\n\n"
+            "## Principles\n- [PRI01] Verify dont infer — a load-bearing principle.\n\n"
+            "## Corrections\n- [COR01] Confidence is a counter-signal correction.\n\n"
+            "## Decisions\n- [DEC01] some decision — d.\n\n"
+            "## COE Registry\n- [COE01] a permanent post-mortem entry.\n\n"
+            "## Standing Preferences\n- [SP01] a standing preference entry.\n\n"
+            "## Open Threads\n- P0 alpha open thread.\n\n"
+            "## Guidelines\n- [GUI01] fallback proxy guideline — " + filler + "\n"
+        )
+        assert ContextDirectoryLoader.estimate_tokens(mem) >= mi.FULL_INJECTION_THRESHOLD, \
+            "fixture must exceed threshold to exercise selective branch"
+        return mem
+
+    def test_evergreen_present_on_cjk_keyword_miss(self, monkeypatch, tmp_path):
+        """THE cross-language gap: a CJK query matching NONE of the evergreen
+        sections' English tokens must STILL inject all 5 evergreen sections."""
+        import core.memory_index as mi
+        mem = self._big_memory_with_evergreen()
+        db = tmp_path / "d.db"; db.write_text("")
+        monkeypatch.setattr("jobs.paths.DB_PATH", db)
+        monkeypatch.setattr(mi, "_get_session_recall", lambda _p: None)
+
+        out = mi.select_memory_sections(
+            memory_content=mem,
+            user_message="请分析一下部署延迟的根因",  # CJK, matches no evergreen token
+            session_signals={},
+        )
+        assert "Not loaded" in out, "fixture must take the selective branch"
+        for header in ("## Principles", "## Corrections", "## COE Registry",
+                       "## Standing Preferences", "## Open Threads"):
+            assert header in out, f"evergreen {header} dropped on CJK keyword-miss"
+
+    def test_evergreen_not_dropped_for_budget_while_operational_loads(self, monkeypatch, tmp_path):
+        """Evergreen loads FIRST and is never budget-skipped."""
+        import core.memory_index as mi
+        mem = self._big_memory_with_evergreen()
+        db = tmp_path / "d.db"; db.write_text("")
+        monkeypatch.setattr("jobs.paths.DB_PATH", db)
+        monkeypatch.setattr(mi, "_get_session_recall", lambda _p: None)
+
+        out = mi.select_memory_sections(
+            memory_content=mem,
+            user_message="fallback proxy",  # matches the operational Guidelines section
+            session_signals={},
+        )
+        # All evergreen present regardless of the operational match competing for budget
+        assert "## Principles" in out and "## Corrections" in out
+
+    def test_evergreen_does_not_starve_operational_at_emergency_tier(self, monkeypatch, tmp_path):
+        """Gate-2 D regression: when evergreen alone exceeds the emergency 5K budget
+        (context_percent_used>=95), it must NOT zero out operational keyword-matched
+        sections. Evergreen and operational are DECOUPLED floors — evergreen's size
+        does not consume the operational budget. Before the fix, a ~6K evergreen core
+        made used_tokens overflow so every operational section was budget-skipped."""
+        import core.memory_index as mi
+        from core.context_directory_loader import ContextDirectoryLoader
+        # Evergreen core deliberately LARGER than the 5K emergency budget so that,
+        # if the two budgets were coupled, evergreen would consume the whole 5K and
+        # starve operational. The operational Guidelines section is SMALL (fits well
+        # within 5K) — so its absence would be pure starvation, not a genuine
+        # doesn't-fit. The file crosses the 30K selective threshold via evergreen.
+        big_pri = ("principle " * 15000).strip()  # ~22K tok — dwarfs the 5K budget
+        op = ("fallback proxy detail " * 30).strip()  # ~small, fits in 5K
+        mem = (
+            "<!-- MEMORY_INDEX_START -->\n## Memory Index\n"
+            "- [GUI01] fallback proxy guideline | fallback, proxy\n"
+            "<!-- MEMORY_INDEX_END -->\n\n"
+            "## Principles\n- [PRI01] " + big_pri + "\n\n"
+            "## Open Threads\n- P0 alpha.\n\n"
+            "## Guidelines\n- [GUI01] fallback proxy — " + op + "\n"
+        )
+        assert ContextDirectoryLoader.estimate_tokens(mem) >= mi.FULL_INJECTION_THRESHOLD
+        db = tmp_path / "d.db"; db.write_text("")
+        monkeypatch.setattr("jobs.paths.DB_PATH", db)
+        monkeypatch.setattr(mi, "_get_session_recall", lambda _p: None)
+
+        out = mi.select_memory_sections(
+            memory_content=mem,
+            user_message="fallback proxy",   # matches operational Guidelines
+            session_signals={},
+            context_percent_used=99.0,        # → 5K emergency budget
+        )
+        # Evergreen present (unconditional) AND operational NOT starved despite the
+        # oversized evergreen core.
+        assert "## Principles" in out, "evergreen must survive the emergency tier"
+        assert "## Guidelines" in out, (
+            "operational keyword-matched section was starved by evergreen — the "
+            "two budgets are not decoupled (Gate-2 D regression)"
+        )
+
+    def test_full_injection_mode_unchanged(self):
+        """Sub-threshold content → full injection still contains evergreen (in body)."""
+        from core.memory_index import select_memory_sections
+        small = (
+            "## Principles\n- [PRI01] a principle.\n\n"
+            "## Open Threads\n- P0 x.\n"
+        )
+        out = select_memory_sections(memory_content=small, user_message="anything", session_signals={})
+        assert "PRI01" in out  # full body injected
+
+    def test_channel_minimal_boundary_unchanged(self):
+        """Channel privacy boundary intact: index + Open Threads only, no other section."""
+        import core.memory_index as mi
+        mem = self._big_memory_with_evergreen()
+        out = mi.select_memory_sections(
+            memory_content=mem, user_message="hi", session_signals={"is_channel": True},
+        )
+        assert "Open Threads" in out
+        assert "## Principles" not in out, "channel must NOT leak non-OT sections"
+
+
 # ── Integration: Index in MEMORY.md ──────────────────────────────────
 
 

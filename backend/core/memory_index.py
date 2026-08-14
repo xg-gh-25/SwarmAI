@@ -157,6 +157,8 @@ def _compress_aliases(aliases: list[str]) -> list[str]:
 from .ddd_entry_lifecycle import (
     MEMORY_PERMANENT_SECTIONS,
     MEMORY_ACTIVE_SECTIONS,
+    MEMORY_EVERGREEN_SECTIONS,
+    MEMORY_SECTION_NAMES,
     MEMORY_PREFIX_MAP,
     MEMORY_PREFIX_TO_SECTION,
 )
@@ -165,8 +167,16 @@ from .ddd_entry_lifecycle import (
 PERMANENT_SECTIONS = MEMORY_PERMANENT_SECTIONS
 ACTIVE_SECTIONS = MEMORY_ACTIVE_SECTIONS
 
-# Section always loaded in L1 regardless of matching
-ALWAYS_LOAD_SECTIONS = {"Open Threads"}
+# Sections always loaded in L1 regardless of keyword matching (CYCLE 2/7).
+# = the MEMORY_EVERGREEN_SECTIONS SSOT (Principles / Corrections / COE Registry /
+# Standing Preferences / Open Threads): query-INDEPENDENT judgment that shapes
+# every turn, so it is injected in FULL every turn — never keyword-gated or
+# budget-skipped. Derived from the schema (NOT a hand-list) so adding an evergreen
+# section to MEMORY_SECTIONS auto-updates injection (P8 one-brain consistency).
+# Was {"Open Threads"} only — which dropped Principles/Corrections on a keyword
+# miss (the cross-language recall gap: a CJK query not matching a principle's
+# English body silently omitted the whole Principles section).
+ALWAYS_LOAD_SECTIONS = set(MEMORY_EVERGREEN_SECTIONS)
 
 # Keyword relevance threshold for L1 section loading
 KEYWORD_THRESHOLD = 0.15
@@ -1120,32 +1130,42 @@ def select_memory_sections(
         index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
 
     parts: list[str] = [index_block]
+    # Operational budget accounting starts from the index only. Evergreen is a
+    # FLOOR that sits OUTSIDE this operational cap (see below) — deliberately NOT
+    # subtracted from `used_tokens`, so a large evergreen core can never starve the
+    # operational keyword-matched sections. `used_tokens` bounds ONLY the
+    # operational/ref/recall loop; evergreen is unconditional.
     used_tokens = ContextDirectoryLoader.estimate_tokens(index_block)
 
-    # ── Always load: Open Threads ──
-    ot_content = sections.get("Open Threads", "")
-    if ot_content.strip():
-        ot_section = f"## Open Threads\n{ot_content}"
-        ot_tokens = ContextDirectoryLoader.estimate_tokens(ot_section)
-        if used_tokens + ot_tokens <= max_tokens:
-            parts.append(ot_section)
-            used_tokens += ot_tokens
+    # ── Always load: evergreen sections, FIRST + UNCONDITIONALLY (CYCLE 2/7) ──
+    # Evergreen (principle/correction/COE/standing-preference/open-threads) is
+    # query-INDEPENDENT judgment — it shapes every turn, so it is injected in FULL
+    # regardless of keyword match AND is NOT budget-gated (a token cap must never
+    # drop a load-bearing principle; that was the cross-language recall gap, and
+    # capping it would violate PRI13 "power over token budget" + O030 "no
+    # truncating-容灾"). It loads FIRST, in schema order (MEMORY_SECTION_NAMES) for a
+    # stable, cache-friendly prefix. CRUCIALLY its size does NOT consume the
+    # operational budget below — the two are decoupled floors (Gate-2 D fix:
+    # otherwise a ~6K evergreen core at the 5K emergency tier zeroed out every
+    # operational section). Evergreen overshooting the emergency cap is BY DESIGN
+    # (power-first); the downstream loader does not truncate cognition (PRI08).
+    for sec_name in MEMORY_SECTION_NAMES:
+        if sec_name not in ALWAYS_LOAD_SECTIONS:
+            continue
+        sec_content = sections.get(sec_name, "")
+        if not sec_content.strip():
+            continue
+        parts.append(f"## {sec_name}\n{sec_content}")
 
     # ── Rule-based section loading ──
     sections_to_load: set[str] = set()
 
-    # Section names are current (post-PRI01): Recent Context→Open Threads,
-    # Lessons Learned→Guidelines. The old literals silently no-op'd because the
-    # sections no longer exist (R3 write-governance drift fix).
-    if signals.get("is_resume"):
-        sections_to_load.add("Open Threads")
-
+    # NOTE: COE Registry + Open Threads are now always-loaded (evergreen), so the
+    # is_resume / is_first_session_today / has_coe→COE adds would be redundant
+    # (harmlessly skipped by the ALWAYS_LOAD guard below). Only has_coe→Guidelines
+    # (an OPERATIONAL section) still does real work here.
     if signals.get("has_coe"):
-        sections_to_load.add("COE Registry")
         sections_to_load.add("Guidelines")
-
-    if signals.get("is_first_session_today"):
-        sections_to_load.add("Open Threads")
 
     # ── Temporal validity: extract superseded keys for scoring ──
     superseded = _extract_superseded_keys(memory_content)
