@@ -725,12 +725,19 @@ def extract_body_without_index(content: str) -> str:
         before_index = content[:start]
         result = before_index + after_index
 
-    # Also strip any bare '## Memory Index' sections (not marker-wrapped).
-    # These are agent-written duplicates that persist across sessions.
-    # Pattern: '## Memory Index' followed by lines until the next ## header or EOF.
-    # Uses .* (not .+) so blank lines within the index section are consumed.
+    # Also strip a bare '## Memory Index' section (not marker-wrapped) — an
+    # agent-written duplicate that persists across sessions. Pattern: the heading
+    # followed by lines until the next ## header or EOF (.* not .+ consumes blank
+    # lines within the section).
+    # run_3cb6b9ae hardening (Gate-2 LOW): anchor to the TOP OF FILE only
+    # (`\A`, optional leading whitespace) — the orphan index block is always at the
+    # top. A bare `## Memory Index` heading appearing INSIDE an entry body lower in
+    # the file must NOT be stripped: the old `^…$/MULTILINE` form matched any line,
+    # so persisting the strip to disk (locked_write #6) could silently delete a real
+    # entry whose body happened to contain that heading line. Top-anchored = the
+    # orphan dies, real content below is untouchable.
     result = re.sub(
-        r"^## Memory Index\n(?:(?!^## ).*\n?)*",
+        r"\A\s*## Memory Index\n(?:(?!^## ).*\n?)*",
         "",
         result,
         flags=re.MULTILINE,

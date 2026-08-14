@@ -260,3 +260,49 @@ class TestDistillationDedupParity:
         assert out == existing  # no-op — OLD would have injected a blank line
 
 
+class TestMemoryIndexStrippedOnWrite:
+    """run_3cb6b9ae (#6): the write chokepoint strips the orphan `## Memory Index`
+    block from MEMORY.md on write-back — the DURABLE removal (a one-time data edit
+    reverted because this read-modify-write path re-carried the block the live daemon
+    read forward). Strips only for MEMORY.md; other files untouched."""
+
+    def _write(self, tmp_path, existing: str, section: str, text: str, name: str = "MEMORY.md") -> str:
+        from scripts.locked_write import locked_read_modify_write
+        f = tmp_path / name
+        f.write_text(existing, encoding="utf-8")
+        locked_read_modify_write(f, section, text, mode="prepend", dedup=True)
+        return f.read_text(encoding="utf-8")
+
+    def test_index_block_stripped_on_memory_write(self, tmp_path):
+        existing = (
+            "<!-- MEMORY_INDEX_START -->\n## Memory Index\n- [PRI01] stale | x\n"
+            "<!-- MEMORY_INDEX_END -->\n\n"
+            "## Decisions\n- [decision] **old** — body (2026-01-01)\n\n"
+            "## Open Threads\n- one\n"
+        )
+        out = self._write(tmp_path, existing, "Decisions",
+                          "- [decision] **new** — fresh (2026-08-14)")
+        assert "MEMORY_INDEX_START" not in out and "## Memory Index" not in out
+        assert "**new**" in out          # the write landed
+        assert "**old**" in out          # existing entry preserved
+        assert "## Decisions" in out and "## Open Threads" in out
+
+    def test_non_memory_file_index_block_untouched(self, tmp_path):
+        """A non-MEMORY.md file with a look-alike block is NOT stripped (scoped to MEMORY.md)."""
+        existing = (
+            "<!-- MEMORY_INDEX_START -->\n## Memory Index\n- x\n<!-- MEMORY_INDEX_END -->\n\n"
+            "## Guidelines\n- [guideline] **old** — body (2026-01-01)\n"
+        )
+        out = self._write(tmp_path, existing, "Guidelines",
+                          "- [guideline] **new** — body (2026-08-14)", name="OTHER.md")
+        assert "MEMORY_INDEX_START" in out  # NOT stripped for a non-MEMORY file
+
+    def test_no_block_write_unaffected(self, tmp_path):
+        """A MEMORY.md with NO index block writes normally (strip is a no-op)."""
+        existing = "## Decisions\n- [decision] **old** — body (2026-01-01)\n\n## Open Threads\n- one\n"
+        out = self._write(tmp_path, existing, "Decisions",
+                          "- [decision] **new** — fresh (2026-08-14)")
+        assert "**new**" in out and "**old**" in out
+        assert "MEMORY_INDEX" not in out
+
+
