@@ -80,6 +80,13 @@ SECTION_CAPS = {  # section name → max entries (count, NOT token — R3-8)
     "Processes": 30,
     "COE Registry": 15,
     "Open Threads": 20,
+    # Standing Preferences: capped so no WORKLIST section is unbounded. The size-valve
+    # does NOT per-entry archive worklist sections (unsafe ### /emoji/footer shape), so
+    # an uncapped worklist could grow past LOW and pin the body above target (the iron
+    # law backstop in _enforce_size_valve would then fire CRITICAL). Capping all three
+    # worklist sections by COUNT makes the "worklist << 25K" guarantee STRUCTURAL, not
+    # incidental (run_f6ab7207 Gate-2 HIGH).
+    "Standing Preferences": 25,
 }
 
 # Backstop for the position-only eviction fallback (Gate-2 F1): when decay
@@ -100,9 +107,14 @@ BULK_EVICT_LIMIT = 20
 # live BODY (index-block excluded — the index is not injected and is being deleted)
 # exceeds HIGH, and evict down to LOW, leaving HIGH-LOW of runway for new entries.
 # Target=trigger (a single threshold) would re-fire on the very next appended entry.
-# Evict lowest-decay-value OPERATIONAL entries first; evergreen (principle/
-# correction/COE/open-threads/standing-pref) is NEVER size-archived — its value is
-# query-independent and it is always-injected by design (PRI13 power-over-budget).
+# THE IRON LAW (run_f6ab7207): the reduction to LOW is UNCONDITIONAL — type sets
+# eviction PRIORITY (tier 0 guideline/process → 1 pitfall/model/decision → 2
+# principle/correction), NEVER a floor. Every regular-shape entry is evictable;
+# archive != delete (evicted → recall-backed .context/*-archive*.md; age-decay's
+# never-DELETE is a separate mechanism, untouched). Only the WORKLIST sections
+# (COE Registry/Open Threads/Standing Preferences) are excluded from per-entry
+# size-archiving — by their unsafe ### /emoji/footer SHAPE, and they are all
+# count-capped so they stay far below LOW (the "worklist << 25K" guarantee).
 SIZE_ARCHIVE_HIGH_WATER = 30_000  # tokens of live BODY → trigger size-archive
 SIZE_ARCHIVE_LOW_WATER = 25_000   # archive down to this; 5K runway avoids thrash
 
@@ -2463,19 +2475,22 @@ class DistillationTriggerHook:
         ``SIZE_ARCHIVE_LOW_WATER`` — leaving HIGH-LOW of runway so a single new entry
         cannot re-trigger it (hysteresis; target==trigger would thrash).
 
-        Evergreen sections (principle/correction/COE/open-threads/standing-pref) are
-        NEVER size-archived: their value is query-independent and always-injected
-        (PRI13 power-over-budget). Runs AFTER ``_enforce_section_caps`` (count-caps
-        first, then size trims whatever still overshoots). No-op under high-water.
+        THE IRON LAW (run_f6ab7207): the reduction to LOW is UNCONDITIONAL — type sets
+        eviction PRIORITY (tier 0 guideline/process → 1 pitfall/model/decision → 2
+        principle/correction), never a FLOOR. Every regular-shape entry is evictable;
+        higher tiers just go last so the highest-value content stays live whenever a
+        lower tier can absorb the overshoot. archive != delete (evicted entries land in
+        recall-backed .context/*-archive*.md; age-decay's never-DELETE is separate).
+        WORKLIST sections (COE Registry/Open Threads/Standing Preferences) are the only
+        exclusion — by SHAPE (### /emoji/footer, unsafe to per-entry archive) + MATH
+        (~4K << 25K, so the ~21K regular tiers always suffice), NOT by value. Runs AFTER
+        ``_enforce_section_caps`` (count-caps first, then size trims). No-op under high-water.
         """
         from utils.file_lock import flock_exclusive, flock_unlock
         from scripts.locked_write import _find_section_range
-        from core.memory_index import (
-            extract_body_without_index, parse_memory_sections,
-        )
+        from core.memory_index import extract_body_without_index
         from core.ddd_entry_lifecycle import (
-            MEMORY_EVERGREEN_SECTIONS, MEMORY_SECTIONS, EVERGREEN_TYPES,
-            VALID_TYPES, DEFAULT_TYPE,
+            MEMORY_SECTIONS, VALID_TYPES, DEFAULT_TYPE,
             _match_entry_line, _META_RE as _DECAY_META_RE,
         )
         from core.context_directory_loader import ContextDirectoryLoader
@@ -2487,13 +2502,10 @@ class DistillationTriggerHook:
         # The old import (memory_decay._META_RE) demands a 5-field `sessions:N`
         # tail that NO live entry has → 0 matches → every entry defaulted to
         # score=0.5 → the decay sort degenerated to FILE POSITION, not value.
-        # ⚠️ NOTE: ref_count has no live body producer (see ddd_entry_lifecycle
-        # :850 — bump_references writes the index block, which is now deleted),
-        # so this decay score is effectively RECENCY-only. VALUE ordering is
-        # therefore guaranteed by the EVERGREEN_TYPES immunity below (P3), NOT by
-        # this score: only guideline/process entries are ever size-archivable;
-        # every judgment type (decision/model/pitfall + evergreen sections) is
-        # immune, so what remains in live is always the highest-value tier.
+        # ⚠️ NOTE: ref_count has no live body producer, so this decay score is
+        # effectively RECENCY-only — which is why the PRIORITY TIER (below) is the
+        # PRIMARY sort key and this score is only the intra-tier tiebreaker (iron
+        # law run_f6ab7207: type sets priority, never a floor).
 
         if not memory_path.exists():
             return
@@ -2514,39 +2526,54 @@ class DistillationTriggerHook:
                 if _body_tokens(content) <= SIZE_ARCHIVE_HIGH_WATER:
                     return  # under high-water → no-op (hysteresis: don't thrash)
 
-                # Gate-2 HIGH (evergreen-overflow guard): the trigger measures the
-                # WHOLE body (incl. evergreen, which is never size-archived). If the
-                # evergreen sections ALONE already exceed the low-water mark, evicting
-                # every operational entry still cannot reach LOW — so mass-archiving
-                # operational would strip-mine the file for ~zero benefit AND re-fire
-                # every cycle. That is NOT a size-valve problem; it is an evergreen
-                # overflow that needs human ratcheting (a principle/correction section
-                # grown too large), so surface it LOUDLY and do NOT strip-mine.
-                _all_sections = parse_memory_sections(content)
-                evergreen_only = "\n".join(
-                    f"## {s}\n{_all_sections.get(s, '')}"
-                    for s in MEMORY_EVERGREEN_SECTIONS
-                    if _all_sections.get(s, "").strip()
-                )
-                if ContextDirectoryLoader.estimate_tokens(evergreen_only) >= SIZE_ARCHIVE_LOW_WATER:
-                    logger.warning(
-                        "Size-valve: evergreen sections alone (%d tok) exceed the "
-                        "%d-tok low-water — evicting operational cannot reach target. "
-                        "NOT strip-mining operational. This is an EVERGREEN OVERFLOW "
-                        "(principle/correction grown too large) needing human review, "
-                        "not a size-valve trim.",
-                        ContextDirectoryLoader.estimate_tokens(evergreen_only),
-                        SIZE_ARCHIVE_LOW_WATER,
-                    )
-                    return
+                # THE IRON LAW (run_f6ab7207): every archive run MUST reduce the body
+                # to LOW unconditionally — NO type is a floor, only a PRIORITY. The old
+                # evergreen-overflow early-return (which abandoned the trim when
+                # evergreen sections alone exceeded LOW) is DELETED: it was the exact
+                # "immune content is a floor" bug. archive != delete — evicted entries
+                # land in .context/*-archive*.md, fully covered by recall (FTS5+BM25);
+                # age-decay's never-DELETE immunity (assess_decay) is a SEPARATE
+                # mechanism and is untouched. So archiving a principle here does not
+                # lose it and does not delete it — it moves it to recall-backed cold
+                # storage so the always-injected live body stays bounded.
 
-                # Collect all OPERATIONAL entries across sections, each with its
-                # decay score + full line-span (entry line + trailing metadata/detail
-                # lines, so no orphaned <!-- ref --> comments). Evergreen sections are
-                # skipped entirely — never size-archived.
-                candidates: list[tuple[float, str, int, int]] = []  # (score, section, start, end_exclusive)
+                # Collect entries across all REGULAR-SHAPE sections, each with its
+                # priority tier + decay score + full line-span (entry line + trailing
+                # metadata/detail lines, so no orphaned <!-- ref --> comments).
+                #
+                # WORKLIST sections (COE Registry / Open Threads / Standing
+                # Preferences) are EXCLUDED — NOT as a floor, but because their
+                # `### Pn` sub-headers / emoji bullets / prose footers are not the
+                # uniform `- [type] **title**` shape the span-detector + archive
+                # chunker safely handle, AND they are only ~4K total (<< the 25K
+                # target). The ~21K of regular sections mathematically always suffices
+                # to reach LOW without touching them (verified run_f6ab7207). If a
+                # worklist section ever grows past LOW on its own, that is a distinct
+                # bug (it needs its own count-cap), not a floor exception here.
+                candidates: list[tuple[int, float, str, int, int]] = []  # (tier, score, section, start, end_exclusive)
                 # Section name → (header_end, next_header_pos, lines) for rewrite.
                 from core.ddd_entry_lifecycle import MEMORY_SECTION_NAMES
+
+                # Worklist sections have `### Pn` sub-headers / emoji bullets / prose
+                # footers — NOT the uniform `- [type] **title**` shape the span-detector
+                # + archive chunker handle. Excluded from per-entry archiving (see the
+                # IRON LAW note above: exclusion by shape+math, never a value floor).
+                WORKLIST_SECTIONS = frozenset({
+                    "COE Registry", "Open Threads", "Standing Preferences",
+                })
+
+                def _priority_tier(entry_type: str) -> int:
+                    # Lower tier = evicted FIRST (lowest value). This is PRIORITY, not
+                    # a floor: every tier is evictable; higher tiers just go last so the
+                    # highest-value content stays in live whenever a lower tier can
+                    # absorb the overshoot.
+                    if entry_type in ("guideline", "process"):
+                        return 0
+                    if entry_type in ("pitfall", "model", "decision"):
+                        return 1
+                    if entry_type in ("principle", "correction"):
+                        return 2
+                    return 1  # unknown/default: middle tier
 
                 # P1 (run_03fc3441): entry-boundary detection must tolerate the
                 # legacy no-`- `-prefix entries some historical write paths produced
@@ -2594,11 +2621,11 @@ class DistillationTriggerHook:
                         return bt
                     return section_default
 
-                operational_sections = [
-                    s for s in MEMORY_SECTION_NAMES if s not in MEMORY_EVERGREEN_SECTIONS
+                regular_sections = [
+                    s for s in MEMORY_SECTION_NAMES if s not in WORKLIST_SECTIONS
                 ]
                 section_meta: dict[str, tuple[int, int, list[str]]] = {}
-                for section_name in operational_sections:
+                for section_name in regular_sections:
                     section_range = _find_section_range(content, section_name)
                     if section_range is None:
                         continue
@@ -2611,20 +2638,19 @@ class DistillationTriggerHook:
                         if _is_entry_start(ln) and not ln.strip().startswith("- [Archived]")
                     ]
                     for idx in entry_idxs:
-                        # P3 (run_03fc3441): VALUE ordering is guaranteed by TYPE
-                        # immunity, not by the (recency-only) decay score. A
-                        # judgment-type entry (EVERGREEN_TYPES = decision/model/
-                        # pitfall/principle/correction) is NEVER size-archived even
-                        # inside an operational section — so only guideline/process
-                        # entries are ever evictable, and the highest-value tier
-                        # always stays in live. (Mirrors the age-decay immunity in
-                        # ddd_entry_lifecycle:843 — same set, same reason.)
-                        if _entry_type_of(lines[idx], section_type) in EVERGREEN_TYPES:
-                            continue
+                        # THE IRON LAW (run_f6ab7207): VALUE ordering is a PRIORITY
+                        # TIER, never a floor. Every entry (incl. principle/correction/
+                        # pitfall) is a candidate; its type maps to a tier so lower-value
+                        # tiers evict first and the highest-value content survives
+                        # whenever a lower tier can absorb the overshoot — but nothing is
+                        # skip-immune. The old `if type in EVERGREEN_TYPES: continue`
+                        # (an unconditional floor) is DELETED. Since decay score is
+                        # RECENCY-only (ref_count has no live producer), tier is the
+                        # PRIMARY sort key, score the tiebreaker within a tier.
+                        tier = _priority_tier(_entry_type_of(lines[idx], section_type))
                         # decay score from the entry's trailing metadata (neutral 0.5
                         # if none). 4-field live format: g1=ref, g2=last, g3=decay
-                        # (no sessions field → sessions_referenced=0). See the P0 note
-                        # at the import: this is RECENCY-only; value is TYPE-gated above.
+                        # (no sessions field → sessions_referenced=0).
                         score = 0.5
                         for offset in range(1, 4):
                             if idx + offset >= len(lines):
@@ -2648,15 +2674,17 @@ class DistillationTriggerHook:
                         end = idx + 1
                         while end < len(lines) and not _is_entry_start(lines[end]):
                             end += 1
-                        candidates.append((score, section_name, idx, end))
+                        candidates.append((tier, score, section_name, idx, end))
 
                 if not candidates:
                     return
 
-                # Evict lowest-decay first until body <= low-water. Estimate the
-                # savings per candidate; re-measure the true body after building the
-                # evicted set (estimate_tokens is not additive across joins).
-                candidates.sort(key=lambda c: c[0])  # ascending: lowest value first
+                # Evict lowest (tier, score) first until body <= low-water. Tier is
+                # PRIMARY (guideline/process → pitfall/model/decision →
+                # principle/correction), score the intra-tier tiebreaker. Re-measure
+                # the true body after building each evicted set (estimate_tokens is not
+                # additive across joins).
+                candidates.sort(key=lambda c: (c[0], c[1]))  # (tier asc, score asc)
                 evicted_by_section: dict[str, set[int]] = {}
                 archived_by_section: dict[str, list[str]] = {}
 
@@ -2680,7 +2708,13 @@ class DistillationTriggerHook:
                             for k in range(start, end):
                                 drop_lines.add(k)
                         kept = [ln for i, ln in enumerate(lines) if i not in drop_lines]
-                        if not any("[Archived]" in ln for ln in kept):
+                        # Gate-2 MED (run_f6ab7207): only append the [Archived] pointer
+                        # if real entries REMAIN. A section emptied to header+marker-only
+                        # is malformed (a marker is not an entry) — leave a fully-drained
+                        # section as just its (blank) body so parse_memory_sections stays
+                        # valid. The archive file still holds the evicted content.
+                        _has_entry = any(_is_entry_start(ln) for ln in kept)
+                        if _has_entry and not any("[Archived]" in ln for ln in kept):
                             kept.append(f"- [Archived] See .context/MEMORY-archive-{today.strftime('%Y-%m')}.md")
                         new_section = "\n".join(kept)
                         if content[header_end:next_header_pos].endswith("\n"):
@@ -2688,7 +2722,23 @@ class DistillationTriggerHook:
                         out = out[:header_end] + new_section + out[next_header_pos:]
                     return out
 
-                for score, sec, start, end in candidates:
+                _warned_tier2 = False
+                for tier, score, sec, start, end in candidates:
+                    if tier >= 2 and not _warned_tier2:
+                        # LOUD, last-resort: we are now archiving principle/correction
+                        # (tier-2) because lower tiers were insufficient to reach LOW.
+                        # This is legal under the iron law (no floor) but rare and
+                        # worth surfacing — it means the regular judgment tiers have
+                        # grown large enough that even they must shed to bound the body.
+                        logger.warning(
+                            "Size-valve: reached tier-2 (principle/correction) eviction "
+                            "to hit the %d-tok low-water — lower tiers were insufficient. "
+                            "Highest-value content is being archived (recall-backed, not "
+                            "deleted). This is legal (priority, not floor) but signals the "
+                            "judgment tiers themselves have grown large.",
+                            SIZE_ARCHIVE_LOW_WATER,
+                        )
+                        _warned_tier2 = True
                     evicted_by_section.setdefault(sec, set()).add(start)
                     _, _, lines = section_meta[sec]
                     archived_by_section.setdefault(sec, []).append(
@@ -2699,6 +2749,26 @@ class DistillationTriggerHook:
 
                 new_content = _rebuilt_content()
                 memory_path.write_text(new_content, encoding="utf-8")
+
+                # THE IRON LAW backstop (Gate-2 CRITICAL, run_f6ab7207): after
+                # exhausting every regular-section candidate, the body MUST be at LOW.
+                # If it is NOT, the only content left is the WORKLIST sections (COE/
+                # Open Threads/Standing Preferences), which we do not per-entry archive.
+                # This can happen ONLY if a worklist section grew past LOW on its own —
+                # a distinct bug (worklist needs its own count-cap). NEVER fail silently
+                # here: emit CRITICAL so it is caught, not hidden. (COE Registry cap=15,
+                # Open Threads cap=20, Standing Preferences cap=25 all bound this
+                # structurally; this backstop catches any future regression of a cap.)
+                final_body = _body_tokens(new_content)
+                if final_body > SIZE_ARCHIVE_LOW_WATER * 1.05:
+                    logger.critical(
+                        "Size-valve IRON-LAW VIOLATION: exhausted all regular-section "
+                        "candidates but body is still %d tok (> %d LOW). The residue is "
+                        "worklist sections (COE/Open Threads/Standing Preferences), which "
+                        "are not per-entry archived. A worklist section has grown past "
+                        "LOW — it needs a count-cap. Body NOT bounded; investigate now.",
+                        final_body, SIZE_ARCHIVE_LOW_WATER,
+                    )
 
                 # Archive evicted lines via the chokepoint → private .context/.
                 if archived_by_section and ws_path is not None:

@@ -317,18 +317,29 @@ class TestSizeValve:
         assert after <= SIZE_ARCHIVE_LOW_WATER * 1.05, f"body not trimmed to low-water: {after}"
         assert after < before
 
-    def test_size_valve_never_evicts_evergreen(self, tmp_path):
+    def test_size_valve_keeps_evergreen_when_operational_suffices(self, tmp_path):
+        """NEW CONTRACT (iron law: priority, not floor): evergreen principles are the
+        LAST tier evicted. When there is enough lower-tier (guideline) content to reach
+        LOW, the evergreen principles are PRESERVED — priority ordering keeps highest
+        value in live. This is NOT absolute immunity (see
+        test_size_valve_reaches_low_even_when_only_immune_types_remain): if guidelines
+        are insufficient, evergreen CAN be archived. Here guidelines suffice, so they go
+        first and every principle survives."""
         from hooks.distillation_hook import DistillationTriggerHook
-        content = self._big_memory(260)
+        content = self._big_memory(260)  # 260 fat guidelines >> the ~5K overshoot
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
 
         DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
 
         result = memory_path.read_text()
-        # All 5 evergreen principles must survive.
+        # Guidelines are tier-0 (lowest) → evicted first → the 5 tier-2 principles
+        # survive because guideline eviction alone reaches LOW.
         for i in range(5):
-            assert f"[PRI{i:02d}]" in result, f"evergreen principle PRI{i:02d} was size-archived (must never happen)"
+            assert f"[PRI{i:02d}]" in result, (
+                f"evergreen principle PRI{i:02d} was archived while lower-tier "
+                "guidelines were still available to evict — priority ordering broken"
+            )
 
     def test_size_valve_archives_evicted_operational(self, tmp_path):
         from hooks.distillation_hook import DistillationTriggerHook
@@ -359,42 +370,53 @@ class TestSizeValve:
 
         assert memory_path.read_text() == before, "size-valve must be a no-op under high-water"
 
-    def test_size_valve_evergreen_overflow_does_not_stripmine(self, tmp_path):
-        """Gate-2 HIGH (D): when evergreen sections ALONE exceed the low-water mark,
-        evicting operational can never reach LOW — so the valve must NOT strip-mine
-        operational for zero benefit. It logs an EVERGREEN OVERFLOW warning and
-        leaves operational intact (human ratcheting needed, not a size trim)."""
+    def test_size_valve_reaches_low_even_when_only_immune_types_remain(self, tmp_path):
+        """AC1 — THE IRON LAW (reversal of the old evergreen-overflow guard): when the
+        body is dominated by immune-type content (principles/pitfalls) so that lower
+        tiers ALONE cannot reach LOW, the valve MUST STILL archive the immune content
+        (in priority order, evergreen last) until body <= LOW. 'Cannot reach LOW' is a
+        BUG, not an acceptable early-return. archive != delete (recall covers it).
+
+        This is the exact case the OLD code refused (early-return strip-mine guard);
+        the iron law forbids any floor. Restoring that early-return → this test RED."""
         from hooks.distillation_hook import DistillationTriggerHook, SIZE_ARCHIVE_LOW_WATER
         from core.context_directory_loader import ContextDirectoryLoader as C
+        from core.memory_index import extract_body_without_index
 
-        # Principles (evergreen) alone > LOW_WATER; plus a few operational entries.
+        # Principles (tier-2) ALONE > LOW_WATER — the old floor case. Use the LIVE
+        # TYPE-tag shape (`- [principle]`) so tiering derives principle→tier2 (an
+        # ID-tag fixture would mis-tier to the default and a tier-2 floor mutation
+        # wouldn't bite — PIT57 fixture-shape discipline).
         pad = "evergreen principle detail lorem ipsum dolor sit amet consectetur " * 12
         parts = ["# Memory\n\n## Principles\n"]
         for i in range(400):
-            parts.append(f"- [PRI{i:04d}] evergreen principle {i} — {pad}\n")
+            parts.append(f"- [principle] **evergreen principle PRIMARK{i:04d}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
         parts.append("\n## Guidelines\n")
         for i in range(6):
-            parts.append(f"- [GUI{i:04d}] operational guideline {i} — small\n")
-            parts.append(f"  <!-- ref:0 | last:none | decay:active | sessions:0 -->\n")
-        parts.append("\n## Open Threads\n- none\n")
+            parts.append(f"- [guideline] **operational guideline GUIMARK{i:04d}** — small\n")
+            parts.append("  <!-- ref:0 | last:none | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- one open thread\n")
         content = "".join(parts)
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
-        # sanity: evergreen alone exceeds LOW
+        # sanity: principles (tier-2 immune-ish) alone exceed LOW → old code gave up
         assert C.estimate_tokens("## Principles\n" + "".join(
-            p for p in parts if p.startswith("- [PRI"))) >= SIZE_ARCHIVE_LOW_WATER
+            p for p in parts if "PRIMARK" in p)) >= SIZE_ARCHIVE_LOW_WATER
 
         DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
 
-        result = memory_path.read_text()
-        # ALL operational guidelines survive — NOT strip-mined.
-        for i in range(6):
-            assert f"[GUI{i:04d}]" in result, f"operational GUI{i:04d} strip-mined despite evergreen overflow"
-        # No archive was produced (nothing evicted).
+        # THE LAW: body reduced to <= LOW regardless of type. No floor.
+        after = C.estimate_tokens(extract_body_without_index(memory_path.read_text()))
+        assert after <= SIZE_ARCHIVE_LOW_WATER * 1.05, (
+            f"body not reduced to LOW ({after} tok) — a type floor still pins it above "
+            "target; the iron law requires unconditional reduction to ~25K"
+        )
+        # And the archive received the evicted (incl. tier-2 principle) content.
         from datetime import date
         today = date.today()
-        assert not (memory_path.parent / f"MEMORY-archive-{today.strftime('%Y-%m')}.md").exists(), \
-            "evergreen-overflow must not archive operational"
+        archive_path = memory_path.parent / f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
+        assert archive_path.exists(), "immune-type overflow must be archived, not abandoned"
 
 
 class TestSizeValveRobustness:
@@ -453,10 +475,14 @@ class TestSizeValveRobustness:
             f"old={old_alive} (position-degenerate sort would not favor recency)"
         )
 
-    def test_p3_judgment_types_immune_in_operational_section(self, tmp_path):
-        """P3: a [pitfall]/[decision] entry sitting in an OPERATIONAL section (e.g.
-        Guidelines) must NEVER be size-archived — value is type-gated, not position/
-        recency-gated. Only [guideline]/[process] are evictable."""
+    def test_p3_judgment_types_kept_when_guidelines_suffice(self, tmp_path):
+        """P3 (NEW CONTRACT — priority, not absolute immunity): a [pitfall] entry is
+        tier-1; [guideline] is tier-0 (evicted first). When guidelines ALONE suffice to
+        reach LOW (260 fat guidelines here vs one pitfall), the pitfall is PRESERVED by
+        priority ordering — highest value stays live. This is no longer 'never archived'
+        (the iron law forbids floors — see
+        test_size_valve_reaches_low_even_when_only_immune_types_remain); it is 'archived
+        LAST, so it survives whenever a lower tier can absorb the overshoot'."""
         from hooks.distillation_hook import DistillationTriggerHook
         pad = "filler detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
         parts = ["# Memory\n\n## Guidelines\n"]
@@ -475,8 +501,9 @@ class TestSizeValveRobustness:
 
         result = memory_path.read_text()
         assert "load-bearing judgment must survive" in result, (
-            "a [pitfall] in an operational section was size-archived — type-immunity "
-            "(P3) failed; value ordering is not guaranteed"
+            "a [pitfall] (tier-1) was archived while tier-0 guidelines were still "
+            "available to evict — priority ordering broken (pitfall must be kept when "
+            "guidelines alone can reach LOW)"
         )
 
     def test_p1_no_dash_prefix_entry_not_severed(self, tmp_path):
@@ -514,11 +541,13 @@ class TestSizeValveRobustness:
             "(P1 boundary detection must keep it whole in exactly one place)"
         )
 
-    def test_gate2_bold_less_judgment_type_still_immune(self, tmp_path):
-        """Gate-2 MED (run_03fc3441): a bold-LESS `- [pitfall] text` entry (no
-        `**title**`) must STILL be recognized as a judgment type and be immune —
-        _match_entry_line requires a bold title, so the type-tag fallback must catch
-        it, else a real pitfall is mistyped as guideline and evicted."""
+    def test_gate2_bold_less_judgment_type_correctly_tiered(self, tmp_path):
+        """Gate-2 MED (run_03fc3441), NEW CONTRACT: a bold-LESS `- [pitfall] text`
+        entry (no `**title**`) must STILL be recognized as a [pitfall] (tier-1) via the
+        type-tag fallback, NOT mistyped as [guideline] (tier-0). Correct tiering means
+        it is preserved when tier-0 guidelines alone suffice to reach LOW (as here) —
+        the mistype would wrongly evict it as guideline. This checks TIER CLASSIFICATION
+        correctness, not absolute immunity."""
         from hooks.distillation_hook import DistillationTriggerHook
         pad = "filler detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
         parts = ["# Memory\n\n## Guidelines\n"]
@@ -535,8 +564,9 @@ class TestSizeValveRobustness:
         DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
 
         assert "BOLDLESS-MARKER" in memory_path.read_text(), (
-            "a bold-less [pitfall] was size-archived — type-tag fallback failed; "
-            "judgment types must be immune regardless of bold-title presence"
+            "a bold-less [pitfall] was archived while tier-0 guidelines remained — the "
+            "type-tag fallback mistyped it as tier-0 guideline (tiering bug); a correctly "
+            "tiered pitfall is kept when guidelines alone can reach LOW"
         )
 
     def test_gate2_wrapped_bracket_clause_not_phantom_entry(self, tmp_path):
@@ -570,4 +600,165 @@ class TestSizeValveRobustness:
             assert "entry with a wrapped bracket clause" in arch, (
                 "wrapped `[see also]` clause was split into a phantom entry and "
                 "archived apart from its parent (P1 boundary false-positive)"
+            )
+
+
+class TestSizeValveIronLaw:
+    """run_f6ab7207 — THE IRON LAW: every archive run unconditionally reduces the live
+    body to ~LOW (25K). Gates set PRIORITY (which tier goes first), never a FLOOR (a
+    type that can never go). Priority tiers: 0=guideline/process, 1=pitfall/model/
+    decision, 2=principle/correction. Worklist sections (COE Registry / Open Threads /
+    Standing Preferences — `### `/emoji/footer shapes) are NOT per-entry archived
+    (structurally unsafe) but are only ~4K so the ~21K regular tiers always suffice."""
+
+    def _memory_of_type(self, section: str, tag: str, n: int, worklist: bool = False) -> str:
+        pad = "detail lorem ipsum dolor sit amet consectetur adipiscing elit " * 12
+        parts = [f"# Memory\n\n## {section}\n"]
+        for i in range(n):
+            parts.append(f"- [{tag}] **{tag} entry {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        if worklist:
+            parts.append("\n## Open Threads\n### P0 — Blocking\n- 🔴 **a live P0 worklist item WORKLIST-OT** — must never be corrupted\n  Status: open\n")
+            parts.append("\n## COE Registry\n- 2026-08-14: **a COE entry WORKLIST-COE** — ✅ Resolved. Sessions: 2026-08-14\n_Post-mortems. Never decays._\n")
+        else:
+            parts.append("\n## Open Threads\n- none\n")
+        return "".join(parts)
+
+    def test_ac3_eviction_priority_guideline_before_pitfall_before_principle(self, tmp_path):
+        """AC3: with a mix of tier-0 (guideline), tier-1 (pitfall), tier-2 (principle)
+        all oversized, eviction consumes tier-0 first, then tier-1, then tier-2 — the
+        higher tiers survive at a strictly higher rate. Priority ordering, not floor."""
+        from hooks.distillation_hook import DistillationTriggerHook, SIZE_ARCHIVE_HIGH_WATER
+        from core.context_directory_loader import ContextDirectoryLoader as C
+        from core.memory_index import extract_body_without_index
+        import re
+        pad = "detail lorem ipsum dolor sit amet consectetur adipiscing elit " * 12
+        # Use the LIVE entry shape — TYPE tags (`- [principle]`), not ID tags — so
+        # _entry_type_of derives the real type (PIT57: fixture must match the real
+        # corpus shape; an ID-tag fixture would collapse all types to one tier).
+        # A unique marker per entry lets us count survivors by type.
+        parts = ["# Memory\n\n## Principles\n"]
+        for i in range(120):
+            parts.append(f"- [principle] **principle PRIMARK{i:04d}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        parts.append("\n## Pitfalls\n")
+        for i in range(120):
+            parts.append(f"- [pitfall] **pitfall PITMARK{i:04d}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        parts.append("\n## Guidelines\n")
+        for i in range(120):
+            parts.append(f"- [guideline] **guideline GUIMARK{i:04d}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        content = "".join(parts)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        assert C.estimate_tokens(extract_body_without_index(content)) > SIZE_ARCHIVE_HIGH_WATER
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        gui = len(set(re.findall(r"GUIMARK\d{4}", result)))
+        pit = len(set(re.findall(r"PITMARK\d{4}", result)))
+        pri = len(set(re.findall(r"PRIMARK\d{4}", result)))
+        # Higher tier survives at a >= rate: guidelines evicted most, principles least.
+        assert gui <= pit <= pri, (
+            f"priority order broken: survivors GUI={gui} PIT={pit} PRI={pri} "
+            "(expected guideline evicted before pitfall before principle)"
+        )
+        # And nothing is an absolute floor: at least SOME guidelines were evicted.
+        assert gui < 120, "no guideline evicted — valve did not run / floor still present"
+
+    def test_ac5_worklist_sections_untouched(self, tmp_path):
+        """AC5: the worklist sections (Open Threads with `### Pn` + emoji bullets, COE
+        Registry with `- date:` + prose footer) are NEVER per-entry archived — they are
+        byte-preserved. The oversized REGULAR sections carry the whole trim."""
+        from hooks.distillation_hook import DistillationTriggerHook, SIZE_ARCHIVE_HIGH_WATER
+        from core.context_directory_loader import ContextDirectoryLoader as C
+        from core.memory_index import extract_body_without_index
+        # Oversized Guidelines (regular) + populated worklist sections.
+        content = self._memory_of_type("Guidelines", "GUI", 260, worklist=True)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        assert C.estimate_tokens(extract_body_without_index(content)) > SIZE_ARCHIVE_HIGH_WATER
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        # Worklist markers + structure survive intact.
+        assert "WORKLIST-OT" in result, "Open Threads entry was archived (worklist must be untouched)"
+        assert "WORKLIST-COE" in result, "COE Registry entry was archived (worklist must be untouched)"
+        assert "### P0 — Blocking" in result, "Open Threads `### Pn` sub-header corrupted"
+        assert "_Post-mortems. Never decays._" in result, "COE prose footer corrupted"
+        # No orphaned [Archived] marker injected into a worklist section.
+        assert "## Open Threads\n### P0" in result or "### P0 — Blocking" in result
+
+    def test_gate2_fully_drained_section_not_marker_only_corrupt(self, tmp_path):
+        """Gate-2 MED (run_f6ab7207): if a whole regular section is evicted, it must NOT
+        be left as `## Section\\n- [Archived] ...` (a marker is not an entry → malformed).
+        The [Archived] pointer is appended ONLY when real entries remain; a fully-drained
+        section is left entry-free and still parses."""
+        from hooks.distillation_hook import DistillationTriggerHook, SIZE_ARCHIVE_HIGH_WATER
+        from core.context_directory_loader import ContextDirectoryLoader as C
+        from core.memory_index import extract_body_without_index, parse_memory_sections
+        pad = "detail lorem ipsum dolor sit amet consectetur adipiscing elit " * 12
+        # A big evictable Guidelines section + a small Pitfalls that survives.
+        parts = ["# Memory\n\n## Guidelines\n"]
+        for i in range(300):
+            parts.append(f"- [guideline] **guideline {i}** — {pad}\n")
+            parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        parts.append("\n## Pitfalls\n- [pitfall] **survivor pitfall** — small\n")
+        parts.append("  <!-- ref:0 | last:2026-08-13 | decay:active | source:manual -->\n")
+        parts.append("\n## Open Threads\n- none\n")
+        content = "".join(parts)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        assert C.estimate_tokens(extract_body_without_index(content)) > SIZE_ARCHIVE_HIGH_WATER
+
+        DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        # Still parses into sections (no structural corruption).
+        secs = parse_memory_sections(result)
+        assert "Guidelines" in secs
+        # A drained Guidelines section must not be a bare header + marker-only line.
+        gl = secs["Guidelines"].strip()
+        if gl:  # if anything survived it must be a real entry or the archived pointer beside real entries
+            has_real = any(ln.strip().startswith("- [") and "[Archived]" not in ln
+                           for ln in gl.splitlines())
+            only_marker = gl.count("\n") == 0 and "[Archived]" in gl
+            assert not only_marker, (
+                f"Guidelines drained to a marker-only section (corrupt): {gl!r}"
+            )
+
+    def test_ironlaw_backstop_fires_loud_not_silent_on_worklist_residue(self, tmp_path, caplog):
+        """Gate-2 CRITICAL (run_f6ab7207): if regular sections are exhausted and the body
+        is STILL > LOW because a worklist section is oversized, the valve must NOT return
+        silently — it emits logger.critical. (Structurally this needs an uncapped worklist;
+        we simulate by making Open Threads huge while regular content is tiny.)"""
+        import logging
+        from hooks.distillation_hook import DistillationTriggerHook, SIZE_ARCHIVE_HIGH_WATER, SIZE_ARCHIVE_LOW_WATER
+        from core.context_directory_loader import ContextDirectoryLoader as C
+        from core.memory_index import extract_body_without_index
+        pad = "worklist bloat detail lorem ipsum dolor sit amet consectetur adipiscing " * 12
+        parts = ["# Memory\n\n## Guidelines\n- [guideline] **tiny** — small\n"]
+        parts.append("  <!-- ref:0 | last:2026-01-01 | decay:active | source:manual -->\n")
+        # Oversized Open Threads (worklist — never per-entry archived) pushes body > LOW.
+        parts.append("\n## Open Threads\n### P0 — Blocking\n")
+        for i in range(500):
+            parts.append(f"- 🔴 **huge worklist item {i}** — {pad}\n")
+        content = "".join(parts)
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        body = C.estimate_tokens(extract_body_without_index(content))
+        assert body > SIZE_ARCHIVE_HIGH_WATER, f"fixture too small: {body}"
+
+        with caplog.at_level(logging.CRITICAL):
+            DistillationTriggerHook._enforce_size_valve(memory_path, tmp_path)
+
+        # Body genuinely cannot reach LOW (worklist residue) → must be LOUD, not silent.
+        after = C.estimate_tokens(extract_body_without_index(memory_path.read_text()))
+        if after > SIZE_ARCHIVE_LOW_WATER * 1.05:
+            assert any("IRON-LAW VIOLATION" in r.message for r in caplog.records), (
+                "body left above LOW with NO critical log — silent iron-law failure"
             )
