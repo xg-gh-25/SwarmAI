@@ -293,7 +293,7 @@ class TestFoldWritesToMonthlyShard:
 
 class TestSizeValve:
     """Sub-change 5: system-prompt size control. EVOLUTION.md is injected in full
-    every session; over EVOLUTION_ARCHIVE_THRESHOLD (15K tok) the valve moves the
+    every session; over EVOLUTION_ARCHIVE_THRESHOLD (20K tok) the valve moves the
     LOWEST-value entries to the monthly shard (recall-backed cold storage, not
     deletion) so the always-injected core stays bounded. Evergreen core (Pattern/
     Durable tell/CAPSTONE/METHOD FIX/CLASS parent) is HARD-PROTECTED — never moved."""
@@ -321,15 +321,15 @@ class TestSizeValve:
         assert not list(ctx.glob("EVOLUTION-archive-*.md")), "no shard written when under threshold"
 
     def test_hysteresis_evicts_down_to_target_not_just_under_trigger(self, tmp_path):
-        # Hysteresis: valve triggers >15K but evicts DOWN TO the 12K low watermark,
-        # leaving a 3K headroom band — NOT stopping the moment it crosses under 15K
-        # (that left ~89 tok headroom → thrash). Build an >15K file dominated by a
-        # large low-value Reference blob; assert final <= target(12K), not ~15K.
+        # Hysteresis: valve triggers >20K but evicts DOWN TO the 15K low watermark,
+        # leaving a 5K headroom band — NOT stopping the moment it crosses under 20K
+        # (that left ~89 tok headroom → thrash). Build an >20K file dominated by a
+        # large low-value Reference blob; assert final <= target(15K), not ~20K.
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
         from core.context_directory_loader import ContextDirectoryLoader
         ctx = tmp_path / ".context"; ctx.mkdir()
         evo = ctx / "EVOLUTION.md"
-        big = "\n".join(f"- O{200+i} occasionally-used opt {i} " + "pad " * 50 for i in range(260))
+        big = "\n".join(f"- O{200+i} occasionally-used opt {i} " + "pad " * 50 for i in range(360))
         evo.write_text(
             "# EVOLUTION\n\n## Corrections Captured\n"
             "### C1 | 2026-08-01\n- **Pattern**: keep me\n- **Durable tell**: keep me too\n\n"
@@ -337,28 +337,28 @@ class TestSizeValve:
             "**Reference (triggered occasionally, archived for lookup):**\n" + big + "\n"
         )
         start = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert start > 15000, f"fixture must exceed trigger (got {start})"
+        assert start > 20000, f"fixture must exceed trigger (got {start})"
         h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo)  # default watermarks: trigger 15K / target 12K
+        moved = h._size_evict(evo)  # default watermarks: trigger 20K / target 15K
         final = ContextDirectoryLoader.estimate_tokens(evo.read_text())
         assert moved > 0
-        assert final <= 12000, f"must evict down to target 12K, not stop ~15K (final {final})"
+        assert final <= 15000, f"must evict down to target 15K, not stop ~20K (final {final})"
         # evergreen correction + pattern/tell survive
         body = evo.read_text()
         assert "**Pattern**: keep me" in body and "**Durable tell**" in body
 
     def test_hysteresis_no_evict_in_headroom_band(self, tmp_path):
-        # A file sitting in the 12–15K headroom band on entry must be a NO-OP — the
-        # valve triggers only ABOVE 15K, so new entries have room to land without
+        # A file sitting in the 15–20K headroom band on entry must be a NO-OP — the
+        # valve triggers only ABOVE 20K, so new entries have room to land without
         # re-triggering every session (the anti-thrash guarantee).
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
         from core.context_directory_loader import ContextDirectoryLoader
         ctx = tmp_path / ".context"; ctx.mkdir()
         evo = ctx / "EVOLUTION.md"
-        band = "\n".join(f"- O{300+i} opt {i} " + "pad " * 50 for i in range(108))
+        band = "\n".join(f"- O{300+i} opt {i} " + "pad " * 50 for i in range(150))
         evo.write_text("# EVOLUTION\n\n## Optimizations Learned\n- **Active:**\n" + band + "\n")
         tok = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert 12000 < tok <= 15000, f"fixture must sit in 12-15K band (got {tok})"
+        assert 15000 < tok <= 20000, f"fixture must sit in 15-20K band (got {tok})"
         h = EvolutionMaintenanceHook(context_dir=ctx)
         moved = h._size_evict(evo)
         assert moved == 0, "in-band file must NOT be evicted (headroom preserved, no thrash)"
@@ -374,8 +374,8 @@ class TestSizeValve:
         blob = "\n".join(f"- O{400+i} opt {i} " + "pad " * 30 for i in range(120))
         evo.write_text("# EVOLUTION\n\n## Optimizations Learned\n- **Active:**\n" + blob + "\n")
         h = EvolutionMaintenanceHook(context_dir=ctx)
-        # Small override threshold=6000 (< default target 12000): must clamp target to 6000
-        # and evict down to <=6000, NOT try to reach 12000 (which would invert → no-op).
+        # Small override threshold=6000 (< default target 15000): must clamp target to 6000
+        # and evict down to <=6000, NOT try to reach 15000 (which would invert → no-op).
         moved = h._size_evict(evo, threshold_tokens=6000)
         final = ContextDirectoryLoader.estimate_tokens(evo.read_text())
         assert moved > 0 and final <= 6000, f"clamped target must drive eviction to <=6K (final {final})"

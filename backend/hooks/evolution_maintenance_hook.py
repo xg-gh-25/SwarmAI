@@ -497,13 +497,14 @@ class EvolutionMaintenanceHook:
     # System-prompt size control: EVOLUTION.md is injected in FULL every session.
     # Over this token budget the size-valve moves the LOWEST-value entries to the
     # monthly shard (recall-backed cold storage — NOT deletion). The always-injected
-    # core (evergreen judgment) stays bounded. XG directive 2026-08-14: "default 全量
-    # 注入的 evolution 最大 15K token, 保证长青的每次都进, 其它依赖 recall".
-    _ARCHIVE_THRESHOLD_TOKENS = 15_000   # HIGH watermark — valve TRIGGERS above this
+    # core (evergreen judgment) stays bounded. XG directive 2026-08-14: raised to 20K/15K
+    # because restored EVOLUTION.md is ~19.5K of dense PROTECTED judgment (C049: file size
+    # = judgment density, not fat); the valve correctly cannot cut it, so the cap rises.
+    _ARCHIVE_THRESHOLD_TOKENS = 20_000   # HIGH watermark — valve TRIGGERS above this
     # LOW watermark — once triggered, evict DOWN TO this (not just under the trigger).
-    # The 12–15K band is deliberate headroom so new entries land without re-triggering
+    # The 15–20K band is deliberate headroom (5K) so new entries land without re-triggering
     # the valve every session (the thrash the single-threshold version caused).
-    _ARCHIVE_TARGET_TOKENS = 12_000
+    _ARCHIVE_TARGET_TOKENS = 15_000
 
     # Markers that make an entry EVERGREEN core — HARD-PROTECTED, never size-evicted
     # (C046 red-line + O029/L75 lesson: never bury hard-won judgment). Entry-level
@@ -680,10 +681,10 @@ class EvolutionMaintenanceHook:
         """System-prompt size control (runs AFTER fold+dedup have shrunk the file).
 
         HIGH/LOW WATERMARK (hysteresis — Gate-1 refined): the valve TRIGGERS only when
-        tokens exceed the HIGH watermark `threshold` (_ARCHIVE_THRESHOLD_TOKENS=15K), but
+        tokens exceed the HIGH watermark `threshold` (_ARCHIVE_THRESHOLD_TOKENS=20K), but
         once triggered it evicts the LOWEST-value NON-evergreen entries DOWN TO the LOW
-        watermark `target` (_ARCHIVE_TARGET_TOKENS=12K) — NOT just until it crosses back
-        under the trigger. The 12–15K band is intentional HEADROOM so new entries land
+        watermark `target` (_ARCHIVE_TARGET_TOKENS=15K) — NOT just until it crosses back
+        under the trigger. The 15–20K band is intentional HEADROOM so new entries land
         without re-triggering the valve every session (the thrash the single-threshold
         version caused: it stopped ~89 tok under 15K). Evergreen core is NEVER evicted
         (P6: only-core-over-target → stop + raise-the-cap log, don't cut judgment).
@@ -856,7 +857,7 @@ class EvolutionMaintenanceHook:
     def _raise_cap_signal_if_over(final_tokens: int, threshold: int) -> None:
         """P6 raise-the-cap signal: over the HIGH watermark but only evergreen core
         remains → NEVER cut judgment. Compares to `threshold` (not `target`): the
-        12–15K headroom band is HEALTHY, only >15K with nothing evictable is the signal."""
+        15–20K headroom band is HEALTHY, only >20K with nothing evictable is the signal."""
         if final_tokens > threshold:
             logger.warning(
                 "EVOLUTION over size budget (%d > %d tok) but only evergreen core "
