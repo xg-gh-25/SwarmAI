@@ -3,8 +3,11 @@
 Testing methodology: FastAPI TestClient (same pattern as test_hook_health_endpoint.py).
 The lite endpoint exists so the C&M Global Brain overlay's first paint is instant: it
 returns ONLY the calibrated token_block + the pending_proposals list + a governance
-count, and MUST NOT run the 5 heavy ops the full /context-health endpoint does
-(read_refresh_log / _ch_ddd_staleness / get_semantic_drift / _build_learning_dashboard).
+count, and MUST NOT run the heavy ops the full /context-health endpoint does
+(_ch_ddd_staleness / get_semantic_drift / _build_learning_dashboard). NOTE: the
+refresh_log key still exists in the full payload (default []) but its read op was
+removed with the auto_refresh module (run_781ffbd9); it remains in HEAVY_KEYS
+because the lite endpoint must still never surface it.
 
 Key properties verified:
   - lite returns exactly {token_block, pending_proposals, governance_pending_count} (AC1)

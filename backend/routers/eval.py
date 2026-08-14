@@ -284,9 +284,10 @@ async def get_context_health_lite():
     Returns ONLY the three things the overlay needs on open — the calibrated
     token_block (Context tab + load rail), the pending_proposals list (Review),
     and a governance-pending count (Approve). It deliberately does NOT run the
-    five heavy read ops the full endpoint does (read_refresh_log 56d,
-    _ch_ddd_staleness, get_semantic_drift, _build_learning_dashboard) — those
-    feed EvalDashboard, not the overlay, and stay on GET /context-health.
+    heavy read ops the full endpoint does (_ch_ddd_staleness, get_semantic_drift,
+    _build_learning_dashboard) — those feed EvalDashboard, not the overlay, and
+    stay on GET /context-health. (The old read_refresh_log op was removed with
+    the auto_refresh module, run_781ffbd9.)
 
     ⚠️ DISTINCT schema from /context-health (3 keys, not 7). Fail-soft: any read
     error / missing workspace → 200 with safe defaults (token_block null,
@@ -354,25 +355,11 @@ async def get_context_health():
         "semantic_drift": _empty_drift,
     }
 
-    # 1. Read auto-refresh log (last 8 weeks)
-    try:
-        from core.auto_refresh import read_refresh_log
-        log_path = root / ".context" / ".auto_refresh_log.jsonl"
-        result["refresh_log"] = read_refresh_log(log_path, since_days=56)
-        # Count distinct weeks
-        weeks = set()
-        for entry in result["refresh_log"]:
-            ts = entry.get("timestamp", "")[:10]  # YYYY-MM-DD
-            if ts:
-                from datetime import datetime
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    weeks.add(dt.isocalendar()[:2])  # (year, week)
-                except ValueError:
-                    pass
-        result["weeks_available"] = len(weeks)
-    except Exception as exc:
-        logger.debug("context-health: refresh log read failed: %s", exc)
+    # 1. auto-refresh log READ REMOVED (run_781ffbd9): the auto_refresh module was
+    # deleted (zero output in production, superseded by R30#4). The refresh_log /
+    # weeks_available keys stay in the payload (default [] / 0 above) so the
+    # EvalDashboard frontend, which treats refresh_log as required (.length), is
+    # unaffected — the panel simply renders empty.
 
     # 2. DDD staleness signals
     try:

@@ -3,7 +3,6 @@
   "channels/gateway.py": 8,
   "channels/streaming.py": 6,
   "core/attention_authority.py": 1,
-  "core/auto_refresh.py": 1,
   "core/backup_manager.py": 1,
   "core/brain_graph.py": 1,
   "core/claude_environment.py": 1,

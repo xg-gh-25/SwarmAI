@@ -205,7 +205,13 @@ class TestOrchestratorExists:
 
         orch = DddCultivationOrchestrator()
         assert hasattr(orch, "channels")
-        assert len(orch.channels) == 11  # 8 original + mechanical_refresh + memory_refresh + llm_refresh
+        names = {c[0] for c in orch.channels}
+        # The 3 auto_refresh channels were REMOVED (run_781ffbd9). Assert by
+        # membership, not a brittle count: the refresh channels must be GONE and
+        # the load-bearing channels must remain.
+        assert {"mechanical_refresh", "memory_refresh", "llm_refresh"}.isdisjoint(names)
+        assert {"ddd_staleness", "entry_lifecycle", "code_intel_drift",
+                "signal_ddd_bridge"}.issubset(names)
 
 
 class TestChannelIsolation:

@@ -245,8 +245,8 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
 
     Reuses the same pre-resolved credentials as get_client (the default chain
     fails under launchd), but does NOT touch the module cache (`_client`) or
-    participate in evict_client — it is created, used, and discarded per call.
-    Mirrors the sanctioned pattern in core/auto_refresh.py.
+    participate in evict_client — it is created, used, and discarded per call
+    (a fresh per-call client with shared resolved creds).
 
     Args:
         read_timeout: socket read timeout in seconds (the anti-hang lever).
