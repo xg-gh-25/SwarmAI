@@ -41,7 +41,7 @@ The three classes (read out of `user_customized` + the auto-gen set):
 - `backend/core/context_directory_loader.py` seeding block (~L490-526): `spec.user_customized`
   True → copy-if-missing + `chmod 0644`; False → always-overwrite + `chmod 0444`.
 - `backend/core/context_brain.py` tier map: `system` / `auto`.
-- `_refresh_projects_md` (regenerates PROJECTS.md) + `context_health_hook` (KNOWLEDGE Index).
+- `context_health_hook` autonomous cleanup (decay/dedup/archive). (The in-prompt PROJECTS.md index + KNOWLEDGE "## Knowledge Index" auto-nav were removed 2026-08-14 — no longer auto-generated.)
 
 **Gotchas that bit me:**
 - `SELF.md` is `user_customized=True` (runtime-owned, edit `.context/`) even though it
@@ -131,8 +131,7 @@ pattern+tell / principle kernel (§4); git is the recovery net (delete noise, do
 deleting anything borderline (not clearly noise/drift).
 
 **Never:** auto-fix / batch-delete (scan.py is read-only by iron law); rebuild
-`context_health_hook`'s autonomous cleanup (C042); hand-edit PROJECTS.md or the
-KNOWLEDGE Index (auto-gen); cut a pattern+tell or principle kernel (C046); the C041
+`context_health_hook`'s autonomous cleanup (C042); cut a pattern+tell or principle kernel (C046); the C041
 irreversible-destructive-op gate still applies (this is about noise in git-tracked
 files — recoverable; it does NOT relax the gate on repo-visibility/force-push/deleting
 non-gitignored user data).

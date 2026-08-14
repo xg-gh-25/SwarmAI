@@ -40,7 +40,7 @@ T = TypeVar("T")
 # self_tune's write). mutate_config writes it on every save so it's never lost.
 CONFIG_HEADER = (
     "# Swarm Signal Pipeline — Feed Configuration\n"
-    "# Auto-tuned by self_tune.py based on MEMORY.md + PROJECTS.md + DailyActivity.\n"
+    "# Auto-tuned by self_tune.py based on MEMORY.md + Projects/ + DailyActivity.\n"
     "# Manual edits are preserved; self-tune only modifies user_context and\n"
     "# auto-managed feeds.\n\n"
 )

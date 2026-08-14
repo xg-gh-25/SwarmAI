@@ -308,11 +308,12 @@ Before executing, check:
 Read the listed DDD docs from `Projects/<PROJECT>/`. Skip any that don't exist
 or contain only template placeholders.
 
-**Progressive loading (T6):** For docs marked as "Large" in PROJECTS.md (with
-section TOC), DON'T read the full file. Instead: read only the section(s)
-relevant to THIS stage's task using `offset/limit` with the line ranges shown
-in PROJECTS.md. Example: BUILD stage working on session code → read TECH.md
-`Key Subsystems` section (L118-L958), not the full 1223-line file.
+**Progressive loading (T6):** For a large DDD doc (>~30K), DON'T read the full
+file. Grep its `## ` headings first to get a section map, then read only the
+section(s) relevant to THIS stage's task using `offset/limit`. Example: BUILD
+stage working on session code → read TECH.md `Key Subsystems` section, not the
+full file. (The old auto-generated PROJECTS.md section-TOC was removed 2026-08-14;
+derive the map with a heading grep instead.)
 
 **Upstream artifacts (Output Routing — BLOCKING):**
 

@@ -34,7 +34,7 @@ from core.ddd_paths import ddd_path, ddd_write_path  # six-section layout resolv
 
 logger = logging.getLogger(__name__)
 
-# Write lock for PROJECTS.md / DDD file modifications.
+# Write lock for DDD file modifications.
 # Prevents interleaved writes from concurrent refresh triggers.
 # Lazily initialized to avoid binding to wrong event loop in tests.
 _cultivation_write_lock: asyncio.Lock | None = None

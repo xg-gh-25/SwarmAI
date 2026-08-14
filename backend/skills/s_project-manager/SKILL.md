@@ -400,7 +400,7 @@ If the user didn't mention it: skip this step silently (don't ask every time).
 > "Created project **{ProjectName}** with DDD structure.
 > {populated_summary: e.g., "Pre-filled from README.md (vision), package.json (TypeScript + React + FastAPI), and 3 session decisions."}
 > Remaining TODOs: {list any sections still placeholder}
-> PROJECTS.md updated — visible to all tabs."
+> Discoverable immediately in all tabs (via recall + Glob over Projects/)."
 
 ---
 
@@ -682,7 +682,7 @@ mv "Projects/ProjectName" ~/.Trash/ 2>/dev/null || rm -rf "Projects/ProjectName"
 - **Project names** — PascalCase preferred, no spaces (use hyphens if needed). Non-PascalCase accepted with informational note.
 - **Read, don't ls** — when codebase path is provided, READ key files (README, package.json, docs/). Don't just check if they exist.
 - **No secrets in DDD** — never copy credentials, API keys, passwords, or tokens from codebase files into DDD docs. If a file appears to contain secrets (AWS_SECRET, API_KEY, PASSWORD, TOKEN patterns), skip that content.
-- **Immediate refresh** — after create/rename/delete, refresh PROJECTS.md immediately. Don't say "next session."
+- **No index refresh** — the in-prompt PROJECTS.md index was removed 2026-08-14; a project is discoverable the moment its `Projects/<name>/` dir exists (recall + Glob). Nothing to refresh; never tell the user to "wait for next session."
 - **Don't overwrite existing .ai-context/** — if `--with-ai-context` and `.ai-context/` already exists in the target repo, warn and skip (don't overwrite).
 
 ## Verification
@@ -693,5 +693,5 @@ Before marking this task complete, show evidence for each:
 - [ ] **DDD docs present AND populated** — all four files exist. If codebase path provided: at least one doc has non-placeholder content extracted from repo files
 - [ ] **Artifacts directory initialized** — `.artifacts/manifest.json` exists with correct project name and pipeline state
 - [ ] **TECH.md populated** — if a codebase path was provided, stack auto-detection results (actual deps from package.json/pyproject.toml) are written to TECH.md
-- [ ] **PROJECTS.md refreshed** — the new project appears in PROJECTS.md (not deferred to "next session")
+- [ ] **Project discoverable** — `Projects/<Name>/` exists, so recall + Glob surface it immediately (no PROJECTS.md index to refresh — removed 2026-08-14)
 - [ ] **Confirmation shown** — user received the creation confirmation with pre-fill summary and remaining TODOs
