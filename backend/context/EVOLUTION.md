@@ -4,6 +4,12 @@
 
 # SwarmAI Evolution Registry
 
+> **What this file is:** EVOLUTION.md is context-file slot 8 — the self-evolution /
+> correction registry: my captured biases, recurring-error classes, and the structural
+> fixes that stop them recurring. AGENT-OWNED (Evolution Engine): I maintain it, you
+> direct it ("log correction" / "record optimization"). Cross-session cognitive facts go
+> in MEMORY.md; governance rule/principle changes route through s_self-evolution.
+
 ## Evolution Rules
 
 1. **Agent-owned, user-directed.** I maintain structure and entries. Users trigger updates; I decide placement and clarity.

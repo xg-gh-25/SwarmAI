@@ -1,6 +1,11 @@
 <!-- ✏️ YOUR FILE — This file is yours to edit. SwarmAI will never overwrite your changes. -->
 # Tools — Environment Config
 
+> **What this file is:** TOOLS.md is context-file slot 6 — your environment & tooling
+> config (devices, SSH hosts, CLI preferences, network paths, credentials guidance) so I
+> act correctly on your setup. It's YOURS to edit. Keep it to environment facts;
+> behavioral rules go in STEERING.md, personal profile in USER.md.
+
 ## Device Names
 <!-- Your machines so the agent knows context. Example:
 - MacBook Pro M3 → "dev-laptop" (primary)

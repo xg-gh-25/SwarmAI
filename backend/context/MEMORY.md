@@ -4,6 +4,12 @@
 
 # Memory — What I Remember
 
+> **What this file is:** MEMORY.md is context-file slot 7 — my cross-session cognitive
+> memory (distilled principles, decisions, corrections, lessons). AGENT-OWNED: I maintain
+> it, you direct it ("remember X" / "forget X" / "correct memory"). It's curated, not raw
+> — session detail lives in DailyActivity; my self-corrections/bias in EVOLUTION.md;
+> domain knowledge in a project's DDD docs.
+
 _Curated long-term memory. Distilled from DailyActivity, not raw logs._
 
 ## Memory Rules

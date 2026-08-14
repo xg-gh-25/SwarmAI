@@ -4,6 +4,13 @@
 
 # Steering — Session Overrides & Standing Rules
 
+> **What this file is:** STEERING.md is context-file slot 5 — your standing rules and
+> session overrides, and the highest-authority user layer: on conflict it OVERRIDES my
+> built-in behavioral rules (AGENT.md). Put "how I want you to work" here (facts about
+> you → USER.md; tool/environment setup → TOOLS.md). Temporary rules go in "Current
+> Focus"; permanent ones in "Standing Rules". For a big governance change, it's better to
+> ask me to add a rule (routes through the proper gate) than to hand-edit.
+
 _Rules that apply across all sessions. Edit anytime to change behavior. Temporary rules go in "Current Focus"; permanent rules go in the standing sections._
 
 ## Current Focus
