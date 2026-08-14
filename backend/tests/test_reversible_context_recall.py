@@ -5,8 +5,10 @@ Covers:
 - AC2: selective injection emits a NAMED manifest at the tail of MEMORY
 - AC3: recall_context returns scoped excluded sections only (<2K tok)
 - AC4: recall_context HARD-DENIES policy-excluded files (privacy gate)
-- AC5: truncation never bisects entropy tokens (run_/SHA/path) — characterization
-       lock proving the word-boundary guarantee of _truncate_section.
+
+(AC5 removed 2026-08-14: it locked the word-boundary guarantee of the read-line
+truncator, which was deleted — the read-line no longer truncates; size governance
+is the write-side management line's job.)
 """
 from __future__ import annotations
 
@@ -115,43 +117,33 @@ def test_ac3_recall_returns_scoped_section_not_whole_file():
     assert len(res.content) < len(mem)
 
 
-def test_bare_date_query_falls_back_to_body_bm25():
-    """run_2f4d92da (B + Gate-2 F1 fix): date aliases are dropped from the index
-    as section-selection noise, so a PURE bare-date query scores 0 at the section
-    layer. recall_context must FALL BACK to entry-body BM25 (where the date lives)
-    rather than return nothing. Simulates the post-refresh index (no date aliases)
-    with the date present only in the body."""
+def test_bare_date_query_surfaces_date_entry():
+    """A PURE bare-date query must surface the date-stamped entry. STEP5a
+    (2026-08-14): recall now scores the section BODY directly (body-BM25), and the
+    date lives in the body — so a bare date is matched at the normal `keyword`
+    layer, NOT via the old `date_body_fallback` (which only existed because the
+    index carried no date aliases). The date fallback is now redundant (body-BM25
+    reaches the date natively) but harmless (only fires when scores are empty).
+    The load-bearing contract — a bare date surfaces the right entry, scoped, and a
+    non-date miss returns nothing — is unchanged."""
     from core.context_recall import recall_context
 
     pad = ("lorem ipsum dolor sit amet " * 80 + "\n")
-    # Index with NO date aliases (the post-compression shape).
-    index = (
-        "## Memory Index\n"
-        "<!-- MEMORY_INDEX_START -->\n"
-        "- [COE05] exit code sigkill oom | sigkill, oom, exit-code\n"
-        "- [DEC01] a decision about caching | cache, prefix\n"
-        "<!-- MEMORY_INDEX_END -->\n"
-    )
-    # Body carries the date stamp (as real MEMORY entries do).
-    mem = index + "\n" + "\n\n".join([
+    # No index block at all — recall is index-free now (STEP5a).
+    mem = "\n\n".join([
         "## COE Registry\n- 2026-03-17: **COE05 exit code -9** — sigkill oom\n" + pad * 40,
         "## Decisions\n- 2026-05-01: **caching decision** — prefix cache\n" + pad * 40,
         "## Open Threads\n- one open thread\n",
     ])
 
-    # Pure bare-date query: section-selection scores 0 (no date aliases) → fallback.
+    # Pure bare-date query: body-BM25 matches the date directly (keyword layer).
     res = recall_context("MEMORY.md", "2026-03-17", memory_content=mem, max_sections=3)
     assert res.allowed is True
-    assert res.hit_layer == "date_body_fallback"
+    assert res.hit_layer in ("keyword", "date_body_fallback")  # either reaches it
     assert "2026-03-17" in res.content  # the date-stamped entry surfaced
     assert ContextDirectoryLoader.estimate_tokens(res.content) < 2000  # still scoped
 
-    # Mixed date+content query must NOT trip the fallback — content tokens drive
-    # normal section-selection.
-    mixed = recall_context("MEMORY.md", "caching 2026-05-01", memory_content=mem)
-    assert mixed.hit_layer != "date_body_fallback"
-
-    # A non-date miss must NOT trip the fallback (stays empty, no dump).
+    # A non-date miss must return nothing (no dump).
     miss = recall_context("MEMORY.md", "zzz_no_such_token_xyz", memory_content=mem)
     assert miss.hit_layer == "none"
     assert miss.content == ""
@@ -413,3 +405,56 @@ def test_g1_no_entry_match_skips_section_not_head_bias():
         "slicer emitted head entries for a zero-overlap query — head-position "
         f"bias re-introduced: {sliced[:160]!r}"
     )
+
+
+# ── STEP5a: recall read-path is INDEX-FREE (body-BM25, unified retrieval) ───
+
+def test_recall_read_path_is_index_free(monkeypatch):
+    """STEP5a (2026-08-14): the recall read path must NOT touch the in-prompt index
+    machinery at all. Teeth: monkeypatch every index function to raise — recall must
+    STILL score sections by body-BM25 and surface the match. Before the migration,
+    recall called extract_index_from_memory/generate_memory_index/
+    _keyword_section_scores, so any of these raising would kill recall."""
+    from core import context_recall
+
+    # Any recall touch of the index machinery now blows up loudly.
+    for fn in ("extract_index_from_memory", "generate_memory_index",
+               "_keyword_section_scores", "_parse_index_entries"):
+        monkeypatch.setattr(memory_index, fn,
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"index fn {fn} touched")))
+
+    pad = ("lorem ipsum dolor sit amet consectetur " * 60 + "\n")
+    mem = "\n\n".join([
+        "## Pitfalls\n- [pitfall] **exit code -9 sigkill oom** — COE05 cascading kill\n" + pad * 40,
+        "## Decisions\n- [decision] **caching prefix** — cache warm reuse\n" + pad * 40,
+        "## Open Threads\n- one open thread\n",
+    ])
+    res = context_recall.recall_context(
+        "MEMORY.md", "exit code sigkill oom", memory_content=mem,
+        policy_excluded_files=frozenset(), max_sections=3,
+    )
+    assert res.allowed is True
+    assert res.hit_layer != "none", "recall dead without index — read path still depends on it"
+    assert "sigkill" in res.content or "COE05" in res.content
+    assert ContextDirectoryLoader.estimate_tokens(res.content) < 2000
+
+
+def test_recall_reaches_evergreen_section_by_query():
+    """STEP5a: recall must be able to return an EVERGREEN section (Principles/
+    Corrections/COE) when the query matches it. Injection always-injects evergreen,
+    but recall returns scoped sections by query — so the recall scorer must NOT
+    exclude evergreen (unlike the injection-side operational-only scorer)."""
+    from core import context_recall
+
+    pad = ("filler tokens here " * 60 + "\n")
+    mem = "\n\n".join([
+        "## Principles\n- [principle] **verify dont infer** — confidence is a counter-signal xyzzy-principle\n" + pad * 40,
+        "## Guidelines\n- [guideline] **unrelated** — networking dns routing subnet\n" + pad * 40,
+        "## Open Threads\n- none\n",
+    ])
+    res = context_recall.recall_context(
+        "MEMORY.md", "xyzzy-principle verify infer confidence", memory_content=mem,
+        policy_excluded_files=frozenset(), max_sections=3,
+    )
+    assert res.allowed is True
+    assert "Principles" in res.sections, f"evergreen section not recallable: {res.sections}"

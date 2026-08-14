@@ -474,6 +474,18 @@ class TestArchiveSiblingPath:
         assert n == 1
         assert (tmp_path / "2-understanding" / "TECH-archive.md").exists()
 
+    def test_fallback_handles_monthly_shard_name(self, tmp_path):
+        # AC2': the fallback stem-derivation must handle a MONTHLY shard name
+        # ("IMPROVEMENT-archive-2026-08.md" → owning doc IMPROVEMENT.md), not just
+        # the fixed form. A plain replace("-archive.md",".md") would leave the shard
+        # suffix and mis-resolve the doc dir (the monthly-shard landmine I introduced).
+        from core.ddd_entry_lifecycle import archive_entries
+        n = archive_entries(tmp_path, [self._dormant()],
+                            archive_name="IMPROVEMENT-archive-2026-08.md")
+        assert n == 1
+        # Resolves to IMPROVEMENT.md's dir (2-understanding/), NOT project root.
+        assert (tmp_path / "2-understanding" / "IMPROVEMENT-archive-2026-08.md").exists()
+
     def test_memory_archive_stays_at_context_root(self, tmp_path):
         # AC3: MEMORY.md is not a six-section doc — source_path=.context/MEMORY.md
         # → archive stays at .context/ (regression guard, must NOT move to 2-understanding).

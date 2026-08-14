@@ -918,7 +918,13 @@ def _resolve_archive_path(
     # its canonical (new-layout) directory. ddd_write_path knows the six-section
     # map; a non-canonical stem (e.g. MEMORY) passes through to project_dir root.
     from core.ddd_paths import ddd_write_path
-    doc_name = archive_name.replace("-archive.md", ".md")
+    # Derive the owning doc stem from the archive name. Handle BOTH the fixed form
+    # ("TECH-archive.md" → "TECH.md") AND the monthly-shard form
+    # ("EVOLUTION-archive-2026-08.md" → "EVOLUTION.md") — a plain replace() would
+    # leave the shard suffix and mis-resolve the doc dir. Strip from "-archive"
+    # onward, then re-add ".md".
+    stem = re.sub(r"-archive.*$", "", archive_name)
+    doc_name = f"{stem}.md"
     doc_dir = ddd_write_path(project_dir, doc_name).parent
     return doc_dir / archive_name
 
