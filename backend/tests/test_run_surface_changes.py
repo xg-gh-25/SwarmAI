@@ -14,9 +14,15 @@ returns {content, knowledge, source, process} buckets:
 F1 (the Gate-1 critical fix this test exists to lock): git status returns paths
 RELATIVE to each repo root. needs_human_review joins a non-absolute path against
 SwarmWS root, so a source-repo-relative path ("backend/foo.py") would resolve to
-~/.swarm-ai/SwarmWS/backend/foo.py → owning-tree=SwarmWS → misclassified as CONTENT
+<SwarmWS-root>/backend/foo.py → owning-tree=SwarmWS → misclassified as CONTENT
 (popped per-file) instead of SOURCE (aggregated). The sweep MUST absolutize each
 porcelain path against ITS OWN repo root before classifying.
+
+NOTE (do not reintroduce the app-state dir name here): ci.yml --ignore-s any test
+file mentioning it, assuming real-home dependence. This file has none — it drives
+everything through tmp_path + a patched _get_workspace, and passes with an empty
+HOME — but while the name sat in this docstring the whole file was invisible to CI,
+which is how two stale fixtures here stayed red unnoticed. Write <SwarmWS-root>.
 """
 import subprocess
 from pathlib import Path
@@ -244,12 +250,27 @@ class TestGitErrorObservability:
 
 
 class TestCompletionGateSourceAck:
-    """AC4 — cmd_run_update --status completed BLOCKS when this run committed
-    source (run.json.commits non-empty) AND its committed files intersect
-    files_touched (run-scoped, F3) AND deliver lacks local_pr_surfaced=true.
-    Does NOT block a knowledge-only run, NOR a run whose commits are all sibling
-    files not in files_touched. Self-attestation (the CLI can't observe the
-    frontend dispatch — the flag is agent-set)."""
+    """AC4 — cmd_run_update --status completed BLOCKS when this run wrote source but
+    delivery is incomplete. Two distinct block_reasons, and the DISTINCTION is what
+    most of these tests pin (completion_gate.completion_surface_verdict):
+
+      - ``uncommitted_source`` — files_touched is non-empty but NO committed file
+        is run-scoped to it (nothing committed, or only sibling-session commits).
+      - ``unsurfaced_source`` — a run-scoped commit exists but deliver lacks
+        outputs_surfaced/local_pr_surfaced=true. Self-attestation: the CLI cannot
+        observe the frontend dispatch, so the flag is agent-set.
+
+    Never blocks when this run wrote no source: ``files_touched: []`` (explicitly
+    none) or the field absent (legacy/in-flight → UNKNOWN, warn-only, resume-safe).
+
+    NOTE on run-scoping (the reason two tests below assert a BLOCK rather than
+    completion): every non-empty entry in files_touched counts as source — there is
+    no docs/source split — so a run that declares source it never committed is
+    blocked by ``uncommitted_source`` BEFORE the surface gate is ever reached. Those
+    tests were originally written against an earlier gate that let a sibling-only
+    commit fall through to completion; the C045 hardening made that a deliberate
+    block ("Also fires when commits exist but none intersect THIS run's source"),
+    so the run-scoping property is now proven BY the block_reason."""
 
     def _completed(self, workspace, run_id, stage_json=None):
         """Attempt run-update --status completed; return (exit_code_or_None, printed_json)."""
@@ -337,32 +358,79 @@ class TestCompletionGateSourceAck:
         data = json.loads((tmp_path / "Projects/TP/.artifacts/runs/run_c/run.json").read_text())
         assert data["status"] == "completed", "knowledge-only run false-blocked"
 
-    def test_sibling_session_source_not_in_files_touched_COMPLETES(self, tmp_path):
+    def _assert_blocked_as_uncommitted(self, tmp_path, run_id, out, why):
+        """Assert the run was blocked as `uncommitted_source` and NOT `unsurfaced_source`.
+
+        This pair is what discriminates a run-scoping regression. Both fixtures below
+        have deliver_surfaced=False, so IF the committed file were wrongly credited to
+        files_touched the commit check would pass and the gate would fall through to
+        `unsurfaced_source` instead. Asserting the reason — not merely "blocked" —
+        is therefore what pins the anchored match; a bare `!= "completed"` would stay
+        green through exactly the regression this exists to catch."""
+        import json
+        assert "uncommitted_source" in out, f"{why}: expected uncommitted_source, got {out}"
+        assert "unsurfaced_source" not in out, (
+            f"{why}: committed file was CREDITED to files_touched (run-scoping "
+            f"regression — the gate reached the surface check): {out}")
+        data = json.loads((tmp_path / f"Projects/TP/.artifacts/runs/{run_id}/run.json").read_text())
+        assert data["status"] != "completed", f"{why}: run completed despite a block"
+
+    def test_sibling_only_commits_do_NOT_satisfy_this_runs_commit_requirement(self, tmp_path):
+        # F3 run-scoping: commits exist but belong to a SIBLING session — none is
+        # run-scoped to this run's files_touched. So this run declared source
+        # (backend/mine.py) it never committed → uncommitted_source, and the sibling
+        # commit must not be credited to it.
         (tmp_path / "Projects" / "TP" / ".artifacts" / "runs").mkdir(parents=True)
-        # F3: commits exist but the committed files are NOT in THIS run's
-        # files_touched (they belong to a sibling session) → run-scoped source is
-        # empty → no block.
         self._write_run(tmp_path, "run_d",
                         commits=[{"repo": "swarmai", "sha": "abc", "files": ["sibling/other.py"]}],
                         files_touched=["backend/mine.py"],
                         local_pr_surfaced=None)
-        self._completed(tmp_path, "run_d")
+        _, out = self._completed(tmp_path, "run_d")
+        self._assert_blocked_as_uncommitted(tmp_path, "run_d", out, "sibling-only commit")
+
+    def test_explicit_no_source_with_sibling_commits_COMPLETES(self, tmp_path):
+        # The still-true half of the old F3 case: THIS run wrote no source at all
+        # (files_touched: [] — explicitly none, distinct from the field being absent),
+        # while a sibling session's commits are recorded on the run. Nothing to commit
+        # or surface → must complete. Pins the `[]` branch, which no other test covers
+        # (test_knowledge_only_run_COMPLETES_no_false_block exercises the absent/None
+        # UNKNOWN branch instead).
+        (tmp_path / "Projects" / "TP" / ".artifacts" / "runs").mkdir(parents=True)
+        self._write_run(tmp_path, "run_d2",
+                        commits=[{"repo": "swarmai", "sha": "abc", "files": ["sibling/other.py"]}],
+                        files_touched=[],
+                        local_pr_surfaced=None)
+        self._completed(tmp_path, "run_d2")
         import json
-        data = json.loads((tmp_path / "Projects/TP/.artifacts/runs/run_d/run.json").read_text())
-        assert data["status"] == "completed", "sibling-only source false-blocked this run"
+        data = json.loads((tmp_path / "Projects/TP/.artifacts/runs/run_d2/run.json").read_text())
+        assert data["status"] == "completed", "a no-source run was false-blocked by sibling commits"
 
     def test_bare_basename_does_NOT_falsematch_deep_path(self, tmp_path):
         # Gate-2 LOW 1: a committed deep path "sub/config.py" must NOT be considered
-        # run-scoped just because files_touched has an UNRELATED bare "config.py".
+        # run-scoped just because files_touched has an UNRELATED bare "config.py"
+        # (_tail_match is DIRECTORY-anchored, never a bare basename). The block itself
+        # is the proof: a false match would reach unsurfaced_source instead.
         (tmp_path / "Projects" / "TP" / ".artifacts" / "runs").mkdir(parents=True)
         self._write_run(tmp_path, "run_e",
                         commits=[{"repo": "swarmai", "sha": "abc", "files": ["sub/config.py"]}],
                         files_touched=["config.py"],  # bare basename, different file
                         local_pr_surfaced=None)
-        self._completed(tmp_path, "run_e")
-        import json
-        data = json.loads((tmp_path / "Projects/TP/.artifacts/runs/run_e/run.json").read_text())
-        assert data["status"] == "completed", "bare basename false-matched a deep path (LOW 1 regression)"
+        _, out = self._completed(tmp_path, "run_e")
+        self._assert_blocked_as_uncommitted(tmp_path, "run_e", out, "bare basename vs deep path")
+
+    def test_dir_anchored_suffix_DOES_match_a_repo_relative_commit(self, tmp_path):
+        # The other side of _tail_match: a repo-relative committed "backend/foo.py"
+        # MUST match an absolute files_touched entry ending in "/backend/foo.py", or
+        # every real run would false-block. Reaching unsurfaced_source (not
+        # uncommitted_source) proves the commit check credited it.
+        (tmp_path / "Projects" / "TP" / ".artifacts" / "runs").mkdir(parents=True)
+        self._write_run(tmp_path, "run_e2",
+                        commits=[{"repo": "swarmai", "sha": "abc", "files": ["backend/foo.py"]}],
+                        files_touched=["/Users/x/repo/backend/foo.py"],
+                        local_pr_surfaced=None)
+        _, out = self._completed(tmp_path, "run_e2")
+        assert "unsurfaced_source" in out, f"dir-anchored suffix failed to match: {out}"
+        assert "uncommitted_source" not in out, out
 
     def test_same_call_status_and_ack_stagejson_COMPLETES(self, tmp_path):
         # Gate-2 MEDIUM 1: a SINGLE call `--status completed --stage-json
