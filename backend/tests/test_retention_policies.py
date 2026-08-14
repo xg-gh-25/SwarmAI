@@ -126,10 +126,13 @@ class TestArchiveResolvedOpenThreads:
         assert "Resolved task" not in content
         # Active entry should remain
         assert "Active task" in content
-        # Archived entry should be in archive file
-        archive_dir = ws / "Knowledge" / "Archives"
-        archive_files = list(archive_dir.glob("MEMORY-archive-*.md"))
-        assert len(archive_files) >= 1
+        # CYCLE 1': archived OT entry lands in the private, gitignored .context/
+        # (sibling of MEMORY.md, via the archive_raw_lines chokepoint) — NOT the
+        # git-tracked Knowledge/Archives/.
+        archive_files = list((ws / ".context").glob("MEMORY-archive-*.md"))
+        assert len(archive_files) >= 1, "OT archive should be created in .context/"
+        assert not list((ws / "Knowledge" / "Archives").glob("MEMORY-archive-*.md")), \
+            "OT archive must NOT land in git-tracked Knowledge/Archives/"
         archive_content = archive_files[0].read_text()
         assert "Resolved task" in archive_content
 

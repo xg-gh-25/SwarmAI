@@ -375,6 +375,78 @@ class TestSyncKnowledgeIndex:
         assert not any("JobResults" in s for s in indexed), \
             "JobResults flow-logs must be excluded (design §5.8 noise filter)"
 
+    def test_sync_indexes_context_memory_archives_but_not_active_memory(self, tmp_path):
+        """CYCLE 1' (privacy partition): MEMORY archives now live in the gitignored
+        .context/ (a SIBLING of Knowledge/), not the git-tracked Knowledge/Archives/.
+        Recall MUST reach them (else the 'recall can't see archived memory' gap
+        reopens the moment archives move) — AND must NEVER index the ACTIVE private
+        docs (MEMORY.md/USER.md/EVOLUTION.md), which are already full-injected."""
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+
+        knowledge_dir = tmp_path / "Knowledge"
+        (knowledge_dir / "Notes").mkdir(parents=True)
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        # A memory archive in .context/ → MUST be indexed (recall coverage)
+        (ctx / "MEMORY-archive-2026-08.md").write_text(
+            "# Memory Archive\n\n### Archived Recent Context\n\n- quokka-sentinel archived-memory phrase."
+        )
+        # ACTIVE private docs → MUST NOT be indexed (they're full-injected already)
+        (ctx / "MEMORY.md").write_text("# MEMORY\n\n- quokka-sentinel active memory (must NOT be recalled).")
+        (ctx / "USER.md").write_text("# USER\n\n- quokka-sentinel user profile (must NOT be recalled).")
+        (ctx / "EVOLUTION.md").write_text("# EVOLUTION\n\n- quokka-sentinel evolution (must NOT be recalled).")
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+
+        indexed = {r["source_file"] for r in store.fts5_search("quokka-sentinel", limit=10)}
+        assert any("MEMORY-archive-2026-08" in s for s in indexed), \
+            ".context/ memory archive must be recall-indexed (privacy-partition coverage)"
+        assert not any(
+            s.endswith("MEMORY.md") or s.endswith("USER.md") or s.endswith("EVOLUTION.md")
+            for s in indexed
+        ), "active private docs must NEVER be recall-indexed"
+        # source_file keeps 'Archives' semantics (memory_chain_probe invariant)
+        assert any("Archives" in s for s in indexed if "MEMORY-archive-2026-08" in s)
+
+    def test_context_and_knowledge_same_month_archive_no_collision(self, tmp_path):
+        """Gate-2 HIGH regression: a legacy Knowledge/Archives/MEMORY-archive-
+        YYYY-MM.md and a new .context/MEMORY-archive-YYYY-MM.md of the SAME basename
+        must BOTH be indexed — they must NOT collide on one current_files key (which
+        would silently drop one from recall + thrash chunks). The private partition
+        uses a distinct '.context/Archives/' rel_path prefix to keep them disjoint."""
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+
+        knowledge_dir = tmp_path / "Knowledge"
+        legacy = knowledge_dir / "Archives"
+        legacy.mkdir(parents=True)
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        # SAME basename in both dirs, distinct content
+        (legacy / "MEMORY-archive-2026-08.md").write_text(
+            "# Archive\n\n- legacy-narwhal phrase in the git-tracked archive."
+        )
+        (ctx / "MEMORY-archive-2026-08.md").write_text(
+            "# Memory Archive\n\n- private-pangolin phrase in the .context archive."
+        )
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+
+        legacy_hits = {r["source_file"] for r in store.fts5_search("legacy-narwhal", limit=10)}
+        private_hits = {r["source_file"] for r in store.fts5_search("private-pangolin", limit=10)}
+        assert any("legacy-narwhal" and "MEMORY-archive-2026-08" in s for s in legacy_hits), \
+            "legacy Knowledge/Archives entry dropped (collision) — must survive"
+        assert private_hits, ".context/ entry must be indexed"
+        # The two must have DISTINCT source_file keys (no overwrite)
+        assert legacy_hits != private_hits
+        assert all("Archives" in s for s in (legacy_hits | private_hits)), \
+            "both keep 'Archives' in source_file (memory_chain_probe invariant)"
+
     def test_sync_delta_skips_unchanged(self, tmp_path):
         from core.knowledge_store import KnowledgeStore, sync_knowledge_index
 

@@ -102,25 +102,33 @@ class TestMemoryLifecycleClosesLoop:
         )
 
     def test_old_unused_entry_archived(self, hook, ws):
-        """AC2: stripped entry is preserved in the archive (reversible)."""
+        """AC2: stripped entry is preserved in the archive (reversible).
+
+        CYCLE 1': the archive is the dated MEMORY-archive-YYYY-MM.md in the private
+        .context/ (single naming scheme; reclaim migrated off the undated name)."""
         hook._run_memory_lifecycle(ws)
-        archive = ws / ".context" / "MEMORY-archive.md"
-        assert archive.exists(), "archive file should be created"
-        assert "old unused probe entry" in archive.read_text(encoding="utf-8")
+        archives = list((ws / ".context").glob("MEMORY-archive-*.md"))
+        assert archives, "dated .context/ archive file should be created"
+        assert any(
+            "old unused probe entry" in a.read_text(encoding="utf-8") for a in archives
+        )
 
     def test_no_double_archive(self, hook, ws):
         """Adversarial (Gate-2): reclaim is the SINGLE archive authority. An
-        entry must appear EXACTLY ONCE in the archive — not twice from a
+        entry must appear EXACTLY ONCE across the archive — not twice from a
         redundant apply-loop archive_entries + reclaim archive. Regression guard
         for the double-archive the active_entries filter was wrongly meant to
         prevent (inject_entry_metadata never strips, so a separate pre-archive
         would be re-archived by reclaim)."""
         hook._run_memory_lifecycle(ws)
-        archive = (ws / ".context" / "MEMORY-archive.md").read_text(encoding="utf-8")
-        # The stripped entry's title must occur exactly once in the archive.
-        assert archive.count("old unused probe entry") == 1, (
-            f"double-archive: 'old unused probe entry' appears "
-            f"{archive.count('old unused probe entry')} times in archive (want 1)"
+        archives = list((ws / ".context").glob("MEMORY-archive-*.md"))
+        total = sum(
+            a.read_text(encoding="utf-8").count("old unused probe entry") for a in archives
+        )
+        # The stripped entry's title must occur exactly once across all archives.
+        assert total == 1, (
+            f"double-archive: 'old unused probe entry' appears {total} times "
+            f"across .context/ archives (want 1)"
         )
 
     def test_evergreen_never_stripped(self, hook, ws):

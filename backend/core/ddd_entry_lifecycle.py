@@ -990,6 +990,72 @@ def archive_entries(
     return len(entries)
 
 
+def archive_raw_lines(
+    project_dir: Path, lines: list[str], archive_name: str,
+    source_path: "Path | None" = None,
+    block_header: "str | None" = None,
+    create_header: "str | None" = None,
+) -> int:
+    """Append pre-formatted raw markdown lines to an archive file (the raw-line
+    sibling of archive_entries).
+
+    THE convergence point for MEMORY-archive writers that operate on raw stripped
+    markdown lines rather than EntryMetadata (distillation RC-archival + section-cap,
+    context_health open-threads). Those writers used to each hardcode
+    ``ws_path/"Knowledge"/"Archives"`` + their own create/append ``write_text`` — a
+    split, git-tracked (public-repo) destination. This routes them ALL through the
+    single ``_resolve_archive_path`` resolver, so passing ``source_path`` =
+    ``.context/MEMORY.md`` lands the archive as its sibling in the gitignored,
+    private ``.context/`` (the privacy partition), never in a tracked dir.
+
+    Unlike archive_entries, this does NOT reconstruct entries from EntryMetadata —
+    it takes the caller's already-stripped lines verbatim (no lossy
+    line→EntryMetadata→line round-trip that would re-run the classifier the wider
+    refactor is fixing).
+
+    Args:
+        project_dir: Project dir (used ONLY by the _resolve_archive_path fallback
+            when source_path is None; ignored when source_path is given).
+        lines: Pre-formatted markdown lines to archive (verbatim).
+        archive_name: Archive filename (e.g. "MEMORY-archive-2026-08.md").
+        source_path: The resolved path of the doc these lines came from. When given,
+            the archive lands as its SIBLING — pass the .context/MEMORY.md path so
+            the archive stays private.
+        block_header: Optional header line prepended before this block (e.g.
+            "### Archived Recent Context (2026-08-14)"). None → no block header.
+        create_header: Optional file header used ONLY when creating the archive.
+            MUST be supplied by the caller for MEMORY archives — do NOT fall back to
+            archive_entries' "no references for 90+ days" decay blurb, which is
+            factually wrong for RC/OT/section-cap content. None → a neutral
+            "# Memory Archive" header.
+
+    Returns:
+        Number of lines archived (0 = no-op, nothing written).
+    """
+    if not lines:
+        return 0
+
+    archive_path = _resolve_archive_path(project_dir, archive_name, source_path)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    block_parts: list[str] = []
+    if block_header:
+        block_parts.append(block_header)
+    block_parts.extend(lines)
+    block = "\n".join(block_parts)
+
+    if archive_path.exists():
+        existing = archive_path.read_text(encoding="utf-8")
+        if not existing.endswith("\n"):
+            existing += "\n"
+        archive_path.write_text(existing + "\n" + block + "\n", encoding="utf-8")
+    else:
+        header = (create_header or "# Memory Archive").rstrip("\n") + "\n\n"
+        archive_path.write_text(header + block + "\n", encoding="utf-8")
+
+    return len(lines)
+
+
 # ── Entry Noise Metric (read-only diagnostic) ─────────────────────────────────
 
 

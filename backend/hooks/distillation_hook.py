@@ -2129,8 +2129,9 @@ class DistillationTriggerHook:
         For each entry starting with ``- YYYY-MM-DD:``:
         - If age > 30 days AND key prefix is RC (not KD, LL, COE):
           - Skip if "protected" (contains Birthday, GitHub, repo, architecture, re-architecture)
-          - Otherwise: append to Knowledge/Archives/MEMORY-archive-YYYY-MM.md,
-            remove from MEMORY.md body
+          - Otherwise: append to .context/MEMORY-archive-YYYY-MM.md (via the
+            archive_raw_lines chokepoint — private, gitignored), remove from
+            MEMORY.md body
 
         Uses cross-platform file locking when writing to MEMORY.md.
         """
@@ -2208,23 +2209,17 @@ class DistillationTriggerHook:
             new_content = content[:header_end] + new_section + content[next_header_pos:]
             memory_path.write_text(new_content, encoding="utf-8")
 
-            # Write to archive file
-            archive_dir = ws_path / "Knowledge" / "Archives"
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-            archive_path = archive_dir / archive_name
-
-            archive_block = f"\n### Archived Recent Context ({today.isoformat()})\n"
-            archive_block += "\n".join(archived_lines) + "\n"
-
-            if archive_path.exists():
-                existing = archive_path.read_text(encoding="utf-8")
-                archive_path.write_text(existing + archive_block, encoding="utf-8")
-            else:
-                archive_path.write_text(
-                    f"# Memory Archive -- {today.strftime('%Y-%m')}\n" + archive_block,
-                    encoding="utf-8",
-                )
+            # Archive via the single chokepoint → gitignored private .context/
+            # (source_path=memory_path makes _resolve_archive_path land the archive
+            # as its sibling; NEVER the git-tracked Knowledge/Archives/).
+            from core.ddd_entry_lifecycle import archive_raw_lines
+            archive_raw_lines(
+                ws_path, archived_lines,
+                f"MEMORY-archive-{today.strftime('%Y-%m')}.md",
+                source_path=memory_path,
+                block_header=f"### Archived Recent Context ({today.isoformat()})",
+                create_header=f"# Memory Archive -- {today.strftime('%Y-%m')}",
+            )
 
             logger.info(
                 "Archived %d stale RC entries from MEMORY.md",
@@ -2246,7 +2241,8 @@ class DistillationTriggerHook:
 
         Reads the file, finds each capped section, counts ``- `` prefixed
         lines, and archives the oldest (bottom) entries that exceed the cap
-        to ``Knowledge/Archives/MEMORY-archive-YYYY-MM.md``.
+        to ``.context/MEMORY-archive-YYYY-MM.md`` (via the archive_raw_lines
+        chokepoint — private, gitignored, one call per section).
 
         This runs after distillation writes, so the newest entries are at
         the top of each section (prepend mode).  Oldest = bottom = trimmed.
@@ -2375,9 +2371,10 @@ class DistillationTriggerHook:
                         line for i, line in enumerate(lines)
                         if i not in overflow_indices
                     ]
-                    # Add archive reference
+                    # Add archive reference (points at the private .context/ archive,
+                    # NOT the old git-tracked Knowledge/Archives/ — CYCLE 1').
                     today = date.today()
-                    archive_ref = f"- [Archived] See Knowledge/Archives/MEMORY-archive-{today.strftime('%Y-%m')}.md"
+                    archive_ref = f"- [Archived] See .context/MEMORY-archive-{today.strftime('%Y-%m')}.md"
                     # Check if reference already exists
                     if not any("[Archived]" in l for l in trimmed_lines):
                         trimmed_lines.append(archive_ref)
@@ -2401,29 +2398,24 @@ class DistillationTriggerHook:
                 if modified:
                     memory_path.write_text(content, encoding="utf-8")
 
-                # Write overflow to archive file
+                # Write overflow via the single chokepoint → private .context/
+                # (one archive_raw_lines call PER section to preserve the per-section
+                # header). source_path=memory_path lands it as MEMORY.md's sibling.
                 if archived_sections and ws_path is not None:
+                    from core.ddd_entry_lifecycle import archive_raw_lines
                     today = date.today()
-                    archive_dir = ws_path / "Knowledge" / "Archives"
-                    archive_dir.mkdir(parents=True, exist_ok=True)
                     archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-                    archive_path = archive_dir / archive_name
-
-                    # Append to existing archive or create new
-                    archive_content = ""
-                    if archive_path.exists():
-                        archive_content = archive_path.read_text(encoding="utf-8")
-
-                    new_blocks: list[str] = []
+                    create_header = f"# Memory Archive -- {today.strftime('%Y-%m')}"
                     for sec_name, entries in archived_sections.items():
-                        new_blocks.append(f"\n## {sec_name} (archived {today.isoformat()})\n")
-                        for entry in entries:
-                            new_blocks.append(entry + "\n")
-
-                    archive_content += "".join(new_blocks)
-                    archive_path.write_text(archive_content, encoding="utf-8")
+                        archive_raw_lines(
+                            ws_path, entries, archive_name,
+                            source_path=memory_path,
+                            block_header=f"## {sec_name} (archived {today.isoformat()})",
+                            create_header=create_header,
+                        )
                     logger.info(
-                        "Archived overflow entries to %s", archive_path,
+                        "Archived overflow entries from %d section(s) to .context/%s",
+                        len(archived_sections), archive_name,
                     )
 
             finally:

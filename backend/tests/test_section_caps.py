@@ -64,16 +64,17 @@ class TestSectionCaps:
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
 
-        archives_dir = tmp_path / "Knowledge" / "Archives"
-        archives_dir.mkdir(parents=True)
-
         DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
 
-        # Check that archive file was created
+        # CYCLE 1': archive lands as a SIBLING of MEMORY.md (private .context/ in
+        # prod; here tmp_path), via the archive_raw_lines chokepoint — NEVER the
+        # git-tracked Knowledge/Archives/.
         today = date.today()
         archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-        archive_path = archives_dir / archive_name
+        archive_path = memory_path.parent / archive_name
         assert archive_path.exists(), f"Archive file {archive_name} should exist"
+        assert not (tmp_path / "Knowledge" / "Archives" / archive_name).exists(), \
+            "archive must NOT land in git-tracked Knowledge/Archives/"
         archive_content = archive_path.read_text()
         assert "Guidelines" in archive_content
 
@@ -86,14 +87,11 @@ class TestSectionCaps:
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
 
-        archives_dir = tmp_path / "Knowledge" / "Archives"
-        archives_dir.mkdir(parents=True)
-
         DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
 
         today = date.today()
         archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-        archive_path = archives_dir / archive_name
+        archive_path = memory_path.parent / archive_name  # sibling of MEMORY.md (CYCLE 1')
         assert archive_path.exists()
         archive_content = archive_path.read_text()
         # Should have a section heading

@@ -125,7 +125,6 @@ class TestStaleRCArchiveAppearsInArchive:
         ws = tmp_path / "ws"
         ctx = ws / ".context"
         ctx.mkdir(parents=True)
-        archive_dir = ws / "Knowledge" / "Archives"
 
         memory_path = ctx / "MEMORY.md"
         old_date = _days_ago_str(35)
@@ -136,10 +135,15 @@ class TestStaleRCArchiveAppearsInArchive:
         hook = DistillationTriggerHook()
         hook._archive_stale_rc_entries(memory_path, ws)
 
+        # CYCLE 1': archive lands as a SIBLING of MEMORY.md in the private,
+        # gitignored .context/ (via the archive_raw_lines chokepoint) — NOT the
+        # git-tracked Knowledge/Archives/.
         today = date.today()
         archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-        archive_path = archive_dir / archive_name
-        assert archive_path.exists(), "Archive file should be created"
+        archive_path = ctx / archive_name
+        assert archive_path.exists(), "Archive file should be created in .context/"
+        assert not (ws / "Knowledge" / "Archives" / archive_name).exists(), \
+            "archive must NOT land in git-tracked Knowledge/Archives/"
         archive_content = archive_path.read_text()
         assert "RC01" in archive_content, "Archived entry should appear in archive file"
 

@@ -2116,14 +2116,14 @@ class ContextHealthHook:
                     )
 
             # ── CLEAN (M0 ②): reclaim stale operational noise from MEMORY.md ──
-            # Archive to .context/MEMORY-archive.md and physically strip (decay +
+            # Archive to .context/MEMORY-archive-YYYY-MM.md and physically strip (decay +
             # inject_entry_metadata never remove bullets). Evergreen sections
             # (Principles/Corrections/COE Registry/...) AND keep-class types are
             # protected — only plain dormant operational entries are reclaimed.
             reclaim_report = reclaim_noise_entries(
                 content, today, memory_path.parent,
                 evergreen_sections=evergreen,
-                archive_name="MEMORY-archive.md",
+                archive_name=f"MEMORY-archive-{today.strftime('%Y-%m')}.md",
                 source_path=memory_path,
                 dry_run=False,
             )
@@ -2154,7 +2154,7 @@ class ContextHealthHook:
             dup_report = reclaim_duplicate_entries(
                 content, today, memory_path.parent,
                 evergreen_sections=evergreen,
-                archive_name="MEMORY-archive.md",
+                archive_name=f"MEMORY-archive-{today.strftime('%Y-%m')}.md",
                 source_path=memory_path,
                 dry_run=False,
             )
@@ -3869,26 +3869,20 @@ class ContextHealthHook:
                     )
                 memory_path.write_text(new_content, encoding="utf-8")
 
-                # Append archived entries to MEMORY-archive-YYYY-MM.md
-                archive_dir = root / "Knowledge" / "Archives"
-                archive_dir.mkdir(parents=True, exist_ok=True)
+                # Archive via the single chokepoint → gitignored private .context/
+                # (source_path=memory_path lands it as MEMORY.md's sibling, NEVER the
+                # git-tracked Knowledge/Archives/ — CYCLE 1').
+                from core.ddd_entry_lifecycle import archive_raw_lines
                 today = date.today()
                 archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-                archive_path = archive_dir / archive_name
-
-                archive_block = f"\n### Archived Open Threads ({today.isoformat()})\n"
-                archive_block += "\n".join(archived_lines) + "\n"
-
-                if archive_path.exists():
-                    existing = archive_path.read_text(encoding="utf-8")
-                    archive_path.write_text(existing + archive_block, encoding="utf-8")
-                else:
-                    archive_path.write_text(
-                        f"# Memory Archive — {today.strftime('%Y-%m')}\n" + archive_block,
-                        encoding="utf-8",
-                    )
+                archive_raw_lines(
+                    root, archived_lines, archive_name,
+                    source_path=memory_path,
+                    block_header=f"### Archived Open Threads ({today.isoformat()})",
+                    create_header=f"# Memory Archive — {today.strftime('%Y-%m')}",
+                )
                 logger.info(
-                    "context_health: archived %d resolved OT entries to %s",
+                    "context_health: archived %d resolved OT entries to .context/%s",
                     len(archived_lines), archive_name,
                 )
             finally:

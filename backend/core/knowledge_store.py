@@ -618,6 +618,26 @@ def sync_knowledge_index(
             rel_path = f"{subdir.name}/{rel_to_sub}"
             current_files[rel_path] = md_file
 
+    # ── Privacy-partition coverage (CYCLE 1'): MEMORY archives live in the
+    # gitignored .context/ (a SIBLING of Knowledge/), NOT in git-tracked
+    # Knowledge/Archives/. Index them here so recall still reaches archived memory
+    # after it moves out of Knowledge/. STRICT ALLOWLIST: only MEMORY-archive*.md —
+    # NEVER the ACTIVE private docs (MEMORY.md / USER.md / EVOLUTION.md / STEERING.md
+    # / TOOLS.md), which are already full-injected into the system prompt.
+    #
+    # rel_path uses a DISTINCT ".context/Archives/" prefix — NOT a bare "Archives/".
+    # A bare prefix would COLLIDE with a legacy Knowledge/Archives/MEMORY-archive-
+    # YYYY-MM.md of the same basename (both map to the same current_files key → the
+    # second insert silently drops the first from the index + causes chunk-thrash).
+    # The synthetic prefix still contains the literal "Archives" so recall
+    # source_file semantics + the memory_chain_probe "Archives in source_file"
+    # invariant hold, while keeping the two physical files' keys disjoint.
+    context_dir = knowledge_dir.parent / ".context"
+    if context_dir.is_dir():
+        for arch in sorted(context_dir.glob("MEMORY-archive*.md")):
+            if arch.is_file():
+                current_files[f".context/Archives/{arch.name}"] = arch
+
     # Remove entries for deleted files
     indexed_files = store.get_indexed_files()
     for old_file in indexed_files - set(current_files.keys()):

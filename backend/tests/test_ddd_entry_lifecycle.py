@@ -488,6 +488,83 @@ class TestArchiveSiblingPath:
         assert not (ctx / "2-understanding" / "MEMORY-archive.md").exists()
 
 
+class TestArchiveRawLines:
+    """CYCLE 1' — the raw-line sibling of archive_entries(). The 3 MEMORY-archive
+    bypasses (distillation RC-archival + section-cap, context_health open-threads)
+    do RAW-LINE text surgery, not EntryMetadata flow. archive_raw_lines() converges
+    them onto the SAME chokepoint (shares _resolve_archive_path + append/create body)
+    WITHOUT a lossy line→EntryMetadata→line round-trip. source_path=.context/MEMORY.md
+    lands the archive in gitignored .context/ (the privacy partition)."""
+
+    def test_raw_lines_land_in_context_via_source_path(self, tmp_path):
+        # AC1: source_path=<ctx>/MEMORY.md → archive at <ctx>/MEMORY-archive-*.md
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        mem = ctx / "MEMORY.md"
+        mem.write_text("# MEMORY\n")
+        lines = [
+            "- [guideline] **Raw entry one** — x. (2026-08-01, run_a)",
+            "- [pitfall] **Raw entry two** — y. (2026-08-02, run_b)",
+        ]
+        n = archive_raw_lines(
+            tmp_path, lines, "MEMORY-archive-2026-08.md",
+            source_path=mem,
+            block_header="### Archived Recent Context (2026-08-14)",
+        )
+        assert n == 2
+        archive = ctx / "MEMORY-archive-2026-08.md"
+        assert archive.exists()
+        body = archive.read_text()
+        assert "Raw entry one" in body
+        assert "Raw entry two" in body
+        assert "### Archived Recent Context (2026-08-14)" in body
+
+    def test_create_header_is_caller_supplied_not_decay_blurb(self, tmp_path):
+        # AC1: MUST NOT reuse archive_entries' "no references for 90+ days" decay
+        # blurb — that is factually wrong for RC/OT/section-cap content.
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        mem = ctx / "MEMORY.md"
+        mem.write_text("# MEMORY\n")
+        n = archive_raw_lines(
+            tmp_path, ["- [pitfall] **X** — z. (2026-08-01, run_c)"],
+            "MEMORY-archive-2026-08.md", source_path=mem,
+            create_header="# Memory Archive -- 2026-08",
+        )
+        assert n == 1
+        body = (ctx / "MEMORY-archive-2026-08.md").read_text()
+        assert "# Memory Archive -- 2026-08" in body
+        assert "90+ days" not in body
+        assert "Knowledge Lifecycle decay engine" not in body
+
+    def test_raw_lines_appends_to_existing_archive(self, tmp_path):
+        # AC1: second call appends, preserving prior content (no clobber).
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        mem = ctx / "MEMORY.md"
+        mem.write_text("# MEMORY\n")
+        archive_raw_lines(tmp_path, ["- **First** — a."], "MEMORY-archive-2026-08.md",
+                          source_path=mem, block_header="### Block one")
+        archive_raw_lines(tmp_path, ["- **Second** — b."], "MEMORY-archive-2026-08.md",
+                          source_path=mem, block_header="### Block two")
+        body = (ctx / "MEMORY-archive-2026-08.md").read_text()
+        assert "First" in body and "Second" in body
+        assert body.index("First") < body.index("Second")
+
+    def test_empty_lines_is_noop(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_raw_lines
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        mem = ctx / "MEMORY.md"
+        mem.write_text("# MEMORY\n")
+        n = archive_raw_lines(tmp_path, [], "MEMORY-archive-2026-08.md", source_path=mem)
+        assert n == 0
+        assert not (ctx / "MEMORY-archive-2026-08.md").exists()
+
+
 class TestReclaimNoiseEndToEnd:
     """E2E proof that the decay→archive mechanism actually SHRINKS the source
     file by moving a stale entry OUT to the archive (not just relabeling it
