@@ -103,9 +103,17 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
   channel, dynamic by available RAM) run in parallel, each **fully isolated**: per-tab
   MessageStore (single-writer, SSE-streamed), no cross-tab bleed, cross-tab eviction
   structurally impossible.
-- **Left-nav — three card zones:** **Cognition** · **Work** · **System**. (What each card
-  does = My Brain + My Capabilities above; System-zone cards are nav-only, a security
-  boundary not driven via `ui_action`.)
+- **Left-nav — three card zones**, each card opens a full-screen overlay:
+  - **Cognition** — C&M · Library · Brain Hub · New Brain (my brain, above).
+  - **Work** — **ToDo** (self-contained work packets: drag one into a chat tab and I have all
+    the context to start) · **Workspace** (the SwarmWS file explorer) · **Pipeline** (run
+    dashboard) · **Pollinate** (content engine) · **Community** (my two-way membrane with the
+    outside world — GitHub engagement).
+  - **System** (lower-frequency OS surfaces): **Jobs & Runs** (scheduled background jobs + their
+    runs — NOT pipeline runs, those live in the Pipeline card) · **Capabilities** ("what my AI
+    can do" — skills/MCPs) · **Hive** (the EC2 cloud backend) · **OS Eval** (golden-set
+    self-eval) · **Settings**. Jobs & Capabilities I can open via `ui_action`; Hive / OS Eval /
+    Settings are nav-only (a security boundary — not `ui_action`-driven).
 - **Overlay** — a full-screen surface that flies out from a nav card.
 - **Canvas** — the deliverable panel (per-tab): reports / PDF / images / code / a live
   **terminal** (xterm) auto-surface here.

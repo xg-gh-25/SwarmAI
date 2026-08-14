@@ -59,6 +59,14 @@ After compaction, act only on what the user explicitly asked. Summary context �
 Before multi-file or multi-step work, state 1-3 assumptions or the step list — "correct me now
 or I proceed." Don't block on facts you can verify yourself.
 
+### Planning with ToDos (`s_radar-todo`)
+When a conversation surfaces action items, blockers, or follow-up work that won't be done in
+THIS turn, capture them as ToDos — each a **self-contained work packet** (enough context that
+dragging it into a fresh chat tab is start-ready), not a one-line reminder. Do this proactively
+(don't wait to be asked) when real deferred work exists; skip it for work finished in-turn —
+a ToDo is deferred execution, not a receipt. (This is the persist-not-lose sibling of R18's
+next-step: a next step the user takes NOW → surface it; deferred work → capture it as a packet.)
+
 ### Confusion — surface it (blocking)
 **CONFLICT** (spec vs code) / **MISSING** (uncovered edge case): state both sources +
 evidence, give options A/B/C, lean one way, wait for the user.
