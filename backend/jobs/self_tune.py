@@ -2,8 +2,10 @@
 """
 Self-Tune Engine — Auto-evolve signal feeds from Swarm's own context.
 
-Reads MEMORY.md, PROJECTS.md, and recent DailyActivity to understand
+Reads MEMORY.md, the Projects/ directory, and recent DailyActivity to understand
 what the user cares about NOW, then adjusts config.yaml feeds accordingly.
+(PROJECTS.md in-prompt index was removed 2026-08-14 — projects come from the
+Projects/ directory scan in extract_projects().)
 
 Actions:
   1. Update user_context in config.yaml (interests, projects, tech_stack, recent_topics)

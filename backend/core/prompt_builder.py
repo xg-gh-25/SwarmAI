@@ -873,9 +873,10 @@ class PromptBuilder:
             model_context_window = self.get_model_context_window(model)
 
             # Session-type-aware context exclusion (L3):
-            # - Group channels: exclude personal files (MEMORY, USER)
+            # - Group + non-owner channel DMs: exclude the private set
+            #   (WHOLE_FILE_PRIVATE = USER, EVOLUTION, MEMORY) so a teammate's turn
+            #   never carries XG's private files (PROJECTS.md was removed 2026-08-14).
             # - Owner DM: full context (same as chat tab — full Brain)
-            # - Non-owner channel DMs: exclude heavy low-value files (EVOLUTION, PROJECTS)
             # - Chat tabs: full context (no exclusion)
             exclude_files: set[str] | None = None
             if channel_context and channel_context.get("is_group"):
