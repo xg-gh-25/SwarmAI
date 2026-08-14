@@ -46,24 +46,6 @@ class TestF1MemoryGuardBypass:
         assert "AKIAIOSFODNN7EXAMPLE" not in content
         assert "[REDACTED" in content
 
-    def test_context_health_refresh_memory_index_sanitizes(self, tmp_path):
-        """_refresh_memory_index should not write unsanitized content."""
-        # This tests that the index regeneration path doesn't introduce
-        # unsanitized content. The index is generated from existing content
-        # so sanitization is less critical here, but the write path should
-        # still be protected.
-        from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        memory_file = ctx_dir / "MEMORY.md"
-        memory_file.write_text(
-            "# Memory\n\n## Key Decisions\n- Normal entry\n",
-            encoding="utf-8",
-        )
-        # Should not raise
-        hook._refresh_memory_index(tmp_path)
 
     def test_context_health_archive_ot_sanitizes(self, tmp_path):
         """_archive_resolved_open_threads should sanitize before writing."""
@@ -268,13 +250,9 @@ class TestF8EntryRefs1Hop:
         assert "RC15" in refs
         assert "KD01" not in refs  # self-ref excluded
 
-    def test_1hop_loading_function_exists(self):
-        """select_memory_sections should have ref-based loading logic."""
-        from core import memory_index
-        source = Path(memory_index.__file__).read_text(encoding="utf-8")
-        # Should contain ref-loading logic (either _extract_refs call
-        # in select_memory_sections or a dedicated helper)
-        assert "_load_referenced_sections" in source or "refs:" in source.split("select_memory_sections")[1] if "select_memory_sections" in source else True
+    # test_1hop_loading_function_exists RETIRED (2026-08-14): EntryRefs 1-hop
+    # loading (_load_referenced_sections) was part of selective injection, which
+    # was deleted — live MEMORY is now full-injected (all refs present anyway).
 
 
 # ── F9: SkillMetrics candidates wired ────────────────────────────────

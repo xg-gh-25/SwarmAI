@@ -75,30 +75,21 @@ def test_ac1_full_injection_has_no_manifest():
     assert "recall_context" not in out
 
 
-# ── AC2: selective injection emits a NAMED manifest at the tail ────────────
+# ── NEW ARCHITECTURE (2026-08-14): large MEMORY is ALSO full-injected ───────
 
-def test_ac2_selective_injection_emits_named_manifest():
-    """Large MEMORY → selective injection → manifest lists excluded section NAMES
-    (not just a count) and names the recall path, at the tail of the output."""
+def test_large_memory_is_fully_injected_no_manifest():
+    """RETIRED test_ac2_selective_injection_emits_named_manifest. NEW ARCHITECTURE:
+    there is no selective mode — a large MEMORY is full-injected just like a small
+    one. So there is NO "[Not loaded …]" manifest to emit (nothing is excluded),
+    and the whole body comes through. Size is bounded upstream by the size-valve,
+    not by dropping sections at injection time."""
     mem = _large_memory()
-    # Sanity: this fixture actually triggers selective mode.
-    total = ContextDirectoryLoader.estimate_tokens(mem)
-    assert total >= memory_index.FULL_INJECTION_THRESHOLD, f"fixture too small: {total}"
-
     out = memory_index.select_memory_sections(mem, user_message="caching prefix")
-    # Manifest must carry NAMES, not only a count.
-    assert "Not loaded" in out, "named manifest marker missing"
-    # At least one excluded section name appears in the manifest line.
-    manifest_line = [ln for ln in out.splitlines() if "Not loaded" in ln]
-    assert manifest_line, "no manifest line found"
-    line = manifest_line[-1]
-    assert any(name in line for name in ("COE Registry", "Lessons Learned", "Key Decisions")), \
-        f"manifest has no section names: {line!r}"
-    # Recall path named so the agent knows how to retrieve.
-    assert "recall_context" in line
-    # Tail position: manifest is the last non-empty line of the assembled output.
-    non_empty = [ln for ln in out.splitlines() if ln.strip()]
-    assert "Not loaded" in non_empty[-1], "manifest is not at the tail"
+    # No selective manifest — nothing is excluded at injection time.
+    assert "Not loaded" not in out
+    assert "sections not loaded" not in out
+    # The whole body is present (all sections), regardless of size or query.
+    assert "COE Registry" in out and "Lessons Learned" in out and "Key Decisions" in out
 
 
 # ── AC3: recall_context returns scoped excluded sections only (<2K tok) ────
@@ -414,14 +405,14 @@ def test_recall_read_path_is_index_free(monkeypatch):
     machinery at all. Teeth: monkeypatch every index function to raise — recall must
     STILL score sections by body-BM25 and surface the match. Before the migration,
     recall called extract_index_from_memory/generate_memory_index/
-    _keyword_section_scores, so any of these raising would kill recall."""
+    _keyword_section_scores. Those functions are now DELETED (unified-retrieval
+    STEP5): assert they no longer exist AND recall still works via body-BM25."""
     from core import context_recall
 
-    # Any recall touch of the index machinery now blows up loudly.
+    # The index machinery is GONE — recall cannot possibly touch it.
     for fn in ("extract_index_from_memory", "generate_memory_index",
-               "_keyword_section_scores", "_parse_index_entries"):
-        monkeypatch.setattr(memory_index, fn,
-                            lambda *a, **k: (_ for _ in ()).throw(AssertionError(f"index fn {fn} touched")))
+               "_keyword_section_scores", "_parse_index_entries", "inject_index_into_memory"):
+        assert not hasattr(memory_index, fn), f"deleted index fn {fn} still present"
 
     pad = ("lorem ipsum dolor sit amet consectetur " * 60 + "\n")
     mem = "\n\n".join([

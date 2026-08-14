@@ -63,20 +63,26 @@ class TestW1TranscriptSyncHook:
 class TestW2TemporalWeightInScoring:
     """Verify _entry_temporal_weight is called during section scoring."""
 
-    def test_keyword_scorer_applies_temporal_downweight(self):
-        """The section scorer must down-weight superseded entries. Post
-        pure-filesystem (§5.4, 2026-06-28) the vector _hybrid_section_scores is
-        removed/stubbed, so the surviving temporal weighting lives on the KEYWORD
-        path: _keyword_section_scores multiplies a superseded entry's score by
-        SUPERSEDED_WEIGHT. This asserts the BEHAVIOR (down-weight applied), not a
-        specific helper symbol — the old assertion looked for _entry_temporal_weight
-        which only ever lived in the now-removed vector path (pre-existing-stale)."""
-        import inspect
-        from core.memory_index import _keyword_section_scores
-        source = inspect.getsource(_keyword_section_scores)
-        # The keyword scorer must reference the superseded down-weight mechanism.
-        assert "SUPERSEDED_WEIGHT" in source and "superseded" in source.lower(), \
-            "_keyword_section_scores must apply the superseded temporal down-weight"
+    def test_body_scorer_strips_superseded_entries(self):
+        """NEW ARCHITECTURE (2026-08-14): the index-based _keyword_section_scores
+        was DELETED. Superseded handling now lives in the body-BM25 scorer
+        (_section_body_scores), which STRIPS superseded entries from each section
+        body BEFORE scoring (via _strip_superseded_entries) — stronger than the old
+        0.1x SUPERSEDED_WEIGHT down-weight. Asserts the BEHAVIOR: a section whose
+        only query-matching entry is superseded scores 0 (stripped)."""
+        from core.memory_index import _section_body_scores
+        sections = {
+            "Guidelines": (
+                "- [GUI01] **zephyr quartz unique-token lesson** — detail\n"
+                "  <!-- ref:0 | last:none | decay:active -->\n"
+            ),
+        }
+        # active: the entry is scored → non-empty
+        active = _section_body_scores("zephyr quartz", sections, superseded_keys=set())
+        assert active.get("Guidelines", 0) > 0
+        # superseded: GUI01 stripped before scoring → section no longer matches
+        stripped = _section_body_scores("zephyr quartz", sections, superseded_keys={"GUI01"})
+        assert stripped.get("Guidelines", 0) == 0
 
     def test_superseded_entry_scores_lower(self):
         """An entry with superseded_by metadata should score lower."""

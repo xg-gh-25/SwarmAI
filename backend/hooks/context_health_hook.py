@@ -232,13 +232,9 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: memory usage tracking skipped: %s", exc)
 
-        # Memory index regen runs unconditionally — it's <10ms and must
-        # catch uncommitted MEMORY.md writes (Edit tool, locked_write)
-        # that happen within the same git rev.
-        try:
-            self._refresh_memory_index(root)
-        except Exception as exc:
-            logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
+        # NEW ARCHITECTURE (2026-08-14): the in-prompt MEMORY index was DELETED
+        # (live MEMORY is full-injected; recall scans body-BM25). No index to
+        # refresh — _refresh_memory_index is gone.
 
         # DDD skill-registry rebuild runs unconditionally here (like the memory
         # index above) — it must catch uncommitted aim.json domain_skills edits +
@@ -1237,24 +1233,9 @@ class ContextHealthHook:
 
             if wrote:
                 # Reindex IN-LOCK via the SAME pure function the facade uses
-                # (run_b356b552) — single source of truth for the MEMORY index
-                # across all three writers. W1 keeps its own title-level lock
-                # transaction (stronger than the facade's line-level dedup, so it
-                # is NOT collapsed into locked_read_modify_write), but its reindex
-                # must not diverge: previously this write relied on an EXTERNAL
-                # later _refresh_memory_index to catch up, leaving a window where
-                # the new entry was absent from the index. inject_index_into_memory
-                # is pure (no lock) so calling it while holding lock_fd cannot
-                # deadlock — unlike _refresh_memory_index, which re-acquires this
-                # same MEMORY.md.lock.
-                try:
-                    from core.memory_index import inject_index_into_memory
-                    content = inject_index_into_memory(content)
-                except Exception as e:  # noqa: BLE001 — reindex non-fatal to the write
-                    logger.warning(
-                        "context_health: in-lock reindex skipped (entries still "
-                        "written): %s", e,
-                    )
+                # NEW ARCHITECTURE (2026-08-14): the in-prompt index was DELETED
+                # (live MEMORY is full-injected; recall scans body-BM25). No index
+                # to maintain — the write persists the entry directly.
                 memory_path.write_text(content, encoding="utf-8")
         finally:
             flock_unlock(lock_fd)
@@ -2128,20 +2109,10 @@ class ContextHealthHook:
                 dry_run=False,
             )
             if reclaim_report.new_content is not None:
-                # reclaim wrote memory_path + dated .bak (source_path given).
-                # REBUILD the Memory Index AFTER the strip so it never references
-                # a stripped/archived entry. _light_refresh runs
-                # _refresh_memory_index BEFORE this lifecycle, so without this
-                # in-loop rebuild the index would point at entries this run just
-                # removed until the NEXT session — a stale-index window. Rebuild
-                # from the in-memory stripped content (reclaim already wrote it to
-                # disk); inject_index_into_memory is a pure content transform, so
-                # this is safe under the lock we already hold. Only write if the
-                # index block actually changed (idempotent no-op otherwise).
-                from core.memory_index import inject_index_into_memory
-                reindexed = inject_index_into_memory(reclaim_report.new_content)
-                if reindexed != reclaim_report.new_content:
-                    memory_path.write_text(reindexed, encoding="utf-8")
+                # reclaim wrote memory_path + dated .bak (source_path given). NEW
+                # ARCHITECTURE (2026-08-14): the in-prompt index was DELETED, so
+                # there is no index to rebuild after the strip — the stripped
+                # content reclaim already wrote to disk IS the final state.
                 logger.info(
                     "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
                     reclaim_report.archived, reclaim_report.kept_protected,
@@ -2159,10 +2130,8 @@ class ContextHealthHook:
                 dry_run=False,
             )
             if dup_report.new_content is not None:
-                from core.memory_index import inject_index_into_memory
-                reindexed = inject_index_into_memory(dup_report.new_content)
-                if reindexed != dup_report.new_content:
-                    memory_path.write_text(reindexed, encoding="utf-8")
+                # NEW ARCHITECTURE: no index to rebuild — reclaim_duplicate_entries
+                # already wrote the stripped content to disk.
                 logger.info(
                     "context_health: MEMORY.md dedup — %d exact-dup archived+stripped",
                     dup_report.archived,
@@ -2566,53 +2535,6 @@ class ContextHealthHook:
             ddd_job_registry.build_manifest_jobs(root)
         except Exception as exc:  # noqa: BLE001 — must never break context-health
             logger.debug("context_health: DDD job registry refresh skipped: %s", exc)
-
-    def _refresh_memory_index(self, root: Path) -> None:
-        """Regenerate the compact index block in MEMORY.md.
-
-        Called after every session to keep the index in sync with MEMORY.md
-        content, regardless of how it was written (Edit tool, locked_write,
-        direct I/O, weekly job).  This is the single reliable regeneration
-        point — all write paths converge here.
-        """
-        memory_file = root / ".context" / "MEMORY.md"
-        if not memory_file.exists():
-            return
-
-        try:
-            from core.memory_index import inject_index_into_memory
-        except ImportError:
-            return  # Module not yet available (first startup)
-
-        # Use flock to avoid racing with locked_write.py (skills, distillation)
-        from utils.file_lock import flock_exclusive, flock_unlock
-        lock_path = memory_file.with_suffix(".md.lock")
-        lock_fd = None
-        try:
-            lock_fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive(lock_fd)
-        except OSError:
-            if lock_fd:
-                lock_fd.close()
-            logger.debug("context_health: MEMORY.md lock failed, skipping index regen")
-            return
-
-        try:
-            content = memory_file.read_text(encoding="utf-8")
-            updated = inject_index_into_memory(content)
-            if updated != content:
-                memory_file.write_text(updated, encoding="utf-8")
-                logger.info("context_health: MEMORY.md index regenerated")
-
-            # WRITER REMOVED (pure-filesystem READ-line finalize, run_2f621986,
-            # design 2026-06-28 §3): the memory_vec embedding sync method
-            # (_sync_memory_embeddings) is physically deleted. The READ side
-            # removed all vector legs (no recall path embeds), so keeping this
-            # writer would burn Bedrock cost writing vectors nobody reads. Memory
-            # recall is now keyword/BM25/FTS5 only.
-        finally:
-            flock_unlock(lock_fd)
-            lock_fd.close()
 
     # _sync_memory_embeddings REMOVED (pure-filesystem READ-line finalize,
     # run_2f621986, design 2026-06-28 §3). It was the memory_vec WRITER and had

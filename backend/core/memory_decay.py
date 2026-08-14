@@ -379,14 +379,24 @@ def build_usage_ref_map(
     usage_counts: "dict[str, int]",
     threshold: int = USAGE_REF_THRESHOLD,
 ) -> "dict[tuple[str, str], int]":
-    """Map (section, title) → log-damped ref, for body entries whose index-ID
-    has usage >= threshold. Returns only the genuinely-used entries (others stay
-    ref:0 → reclaim-eligible).
+    """Map (section, title) → log-damped ref, for entries whose ID-keyed usage
+    (from .memory-usage.json) is >= threshold. Only genuinely-used entries are
+    returned (others stay ref:0 → reclaim-eligible), keyed by (section, title) via
+    the ID-prefix→section map so same-titled entries in different sections never
+    cross-assign (Gate-2 Finding 1/3). Same (section,title) keeps the max ref.
 
-    Keyed by (section, title) via the ID-prefix→section map so two same-titled
-    entries in different sections never cross-assign usage (Gate-2 Finding 1/3).
-    Splits the index line on the FIRST ` | ` only. Same (section,title) keeps the
-    max ref. Idempotent: pure function of current usage (SET semantics).
+    ⚠️ ID-DEPENDENT — degrades to {} in the no-index architecture (2026-08-14).
+    This bridge maps `.memory-usage.json` counts (keyed by numeric entry IDs like
+    `PRI01`, produced by _track_memory_usage scanning transcripts for `[ID]`
+    citations) onto body entries. It matches `- [PRI01] title` lines — the shape
+    the DELETED in-prompt index used. The live BODY entries are `- [principle]
+    **title**` (TYPE-tagged, no numeric ID), so once the index block is gone this
+    finds no matches and returns {} — reclaim protection for cited entries lapses.
+    This whole usage→ref bridge (and _track_memory_usage that feeds it) presumes an
+    ID-keyed index + agents citing `[ID]`, both retired with the index. Retained as
+    a graceful no-op (best-effort caller) pending a decision to either retire the
+    usage-tracking subsystem or re-anchor it on a body-stable key (title/content
+    signature). It still works on a legacy file that carries an index block.
     """
     import math
     from core.ddd_entry_lifecycle import MEMORY_PREFIX_TO_SECTION
@@ -395,15 +405,10 @@ def build_usage_ref_map(
         m = re.match(r"^([A-Z]{2,3})", eid)
         return m.group(1) if m else ""
 
-    # Parse index block ID → title.
-    start = memory_content.find("MEMORY_INDEX_START")
-    end = memory_content.find("MEMORY_INDEX_END")
-    if start == -1 or end == -1 or end < start:
-        return {}
-    index_block = memory_content[start:end]
-
     ref_map: dict[tuple[str, str], int] = {}
-    for m in _INDEX_ID_TITLE_RE.finditer(index_block):
+    # Scan whole content: MULTILINE matches any surviving `- [ID] title` line
+    # (legacy index block or ID-formatted body). No index + TYPE-tagged body → {}.
+    for m in _INDEX_ID_TITLE_RE.finditer(memory_content):
         entry_id, rest = m.group(1), m.group(2)
         usage = usage_counts.get(entry_id, 0)
         if usage < threshold:

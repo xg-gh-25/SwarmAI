@@ -4,12 +4,13 @@ Weekly Memory Health — Deterministic Integrity Checks + LLM-Powered Maintenanc
 Runs weekly (Monday 11am ICT via memory-health job). Two phases:
 
 **Phase 1 — Deterministic integrity checks (no LLM, zero cost):**
-  - Index marker integrity (START/END count == 1 each)
-  - Index round-trip (generate → parse → same entry count)
-  - Required sections present (Recent Context, Key Decisions, etc.)
-  - Recall accuracy against a fixed query set (EN + CJK)
+  - Body size within full-injection budget (≤ size-valve high-water)
+  - Required (evergreen) sections present
   - MemoryGuard injection detection (known payloads blocked)
-  - CJK alias coverage (>0 entries have CJK aliases)
+
+  (The index-marker / index-roundtrip / duplicate-key / CJK-alias / keyword
+  recall-accuracy checks were RETIRED 2026-08-14 — the in-prompt index they
+  probed was deleted; live MEMORY is full-injected, recall scans body-BM25.)
 
 **Phase 2 — LLM-powered maintenance ($0.03/run):**
   - Stale memory entries to prune
@@ -37,139 +38,6 @@ logger = logging.getLogger("swarm.jobs.memory_health")
 
 MAX_OUTPUT_TOKENS = 2048
 
-# ── Fixed recall query set ──────────────────────────────────────────
-# Each entry: (query, list of acceptable SECTION NAMES).
-#
-# ⚠️ SECTION-anchored, NOT key-anchored. The old form hardcoded entry KEYS
-# (LL24/KD06/RC08...) which the 7-type restructure (PRI/GUI/PIT...) turned into
-# permanent false-misses (recall_accuracy reported a bogus 1/10 while the engine
-# was healthy). Section names come from the MEMORY_PREFIX_TO_SECTION SSoT (see
-# _key_section below) — exactly the fix pattern already used by the required_sections
-# check (deriving from MEMORY_SECTIONS instead of a frozen literal). A future key
-# renumber (PRI11→PRI42) no longer breaks this; a prefix RENAME would break the SSoT
-# consumers loudly, which is the correct fail-loud.
-#
-# The expected-section list per query was DERIVED by running keyword_relevance
-# against the real MEMORY.md (not hand-guessed — a hand-guessed prefix re-creates the
-# staleness trap): each query's set = the section(s) its genuinely-relevant top hits
-# fall in. A hit in a section OUTSIDE this set is still a MISS (preserves discriminative
-# power — this is not "any hit passes").
-_RECALL_QUERIES: list[tuple[str, list[str]]] = [
-    # English technical (derived: real top hits land in these sections)
-    ("pipeline confidence", ["Principles", "Pitfalls", "Models", "Open Threads", "COE Registry"]),
-    ("OOM SIGKILL", ["COE Registry"]),
-    ("sovereignty", ["Principles"]),
-    ("release scope", ["Pitfalls", "Guidelines", "Decisions", "COE Registry"]),
-    ("DDD project", ["Pitfalls", "Guidelines", "Principles", "Decisions"]),
-    # CJK precise (this one genuinely hits — the target entry carries a CJK alias)
-    ("测试", ["Open Threads"]),
-]
-
-# ── Known content-coverage GAPS (informational, NOT counted in the threshold) ──
-# These CJK queries score 0 NOT because the engine can't match CJK (it can — 20+
-# entries carry CJK aliases and "测试"→Open Threads hits at 1.0), but because NO
-# current MEMORY entry carries an alias/summary token these phrases overlap with.
-# That is a CONTENT-coverage gap, not an engine limitation. They are reported
-# informationally so a real recall regression is never masked — and if one ever
-# STARTS hitting (content added), _check_recall_accuracy flips to `warn` as a signal
-# to PROMOTE it into the counted _RECALL_QUERIES set (not silently swallow the win).
-# ("竞品分析的结论是什么" was removed entirely — no corresponding MEMORY entry exists,
-#  so it could never be a meaningful probe.)
-_RECALL_KNOWN_GAPS: list[str] = ["单进程", "越用越聪明", "周报怎么做的"]
-
-
-def _key_section(key: str) -> str | None:
-    """Map an entry key (e.g. 'PRI11') to its MEMORY section name via the SSoT.
-
-    Prefix = leading uppercase letters; looked up in MEMORY_PREFIX_TO_SECTION
-    (ddd_entry_lifecycle) — the same 7-type SSoT the required_sections check derives
-    from. Deliberately maps ONLY the current 7-type scheme (PRI/COR/DEC/GUI/PIT/PRC/
-    MOD/COE/OT/SP); it does NOT include the recall engine's legacy KD/RC/LL back-compat
-    aliases (those are dead in the current corpus — 0 legacy keys remain — and a
-    section-anchored golden query only probes current-scheme entries). An unknown
-    prefix returns None → the entry can't satisfy a section match, which is correct:
-    a legacy-keyed entry is not a valid golden-recall target. Narrow `except ImportError`
-    so an unrelated error propagates to the call-site handler instead of silently
-    degrading every lookup to None.
-    """
-    m = re.match(r"([A-Z]+)", key or "")
-    if not m:
-        return None
-    try:
-        from core.ddd_entry_lifecycle import MEMORY_PREFIX_TO_SECTION
-    except ImportError:
-        # SSoT genuinely unavailable → every lookup misses → check fails LOUD
-        # (all-miss → status=fail), which is the correct fail-closed direction.
-        logger.warning("recall_accuracy: MEMORY_PREFIX_TO_SECTION import failed — "
-                       "section anchoring degraded, check will report misses")
-        return None
-    return MEMORY_PREFIX_TO_SECTION.get(m.group(1))
-
-
-def _check_recall_accuracy(
-    entries: list[dict],
-    queries: list[tuple[str, list[str]]] | None = None,
-    known_gaps: list[str] | None = None,
-) -> dict:
-    """Section-anchored golden recall check (pure — testable in isolation).
-
-    For each (query, expected_sections): a query HITS if its highest-scoring
-    keyword_relevance match lands in one of the expected sections. The counted set
-    must ALL hit (threshold = len(queries)) — one regression goes RED. Known-gap
-    queries run separately as informational: 0 hits is expected (content-coverage
-    gap), but if any gap query now hits, the whole check flips to `warn` to signal
-    promotion. Returns a finding dict: {check, status, detail}.
-    """
-    from core.memory_index import keyword_relevance
-
-    queries = _RECALL_QUERIES if queries is None else queries
-    known_gaps = _RECALL_KNOWN_GAPS if known_gaps is None else known_gaps
-
-    def _top_section(query: str) -> str | None:
-        best_score, best_key = 0.0, None
-        for e in entries:
-            s = keyword_relevance(query, e["summary"], e.get("aliases", []))
-            if s > best_score:
-                best_score, best_key = s, e["key"]
-        return _key_section(best_key) if best_key else None
-
-    hits, misses = 0, []
-    for query, expected_sections in queries:
-        top = _top_section(query)
-        if top is not None and top in expected_sections:
-            hits += 1
-        else:
-            misses.append(f"{query}(top={top})")
-
-    # Known gaps: expected 0 hits. A hit = content improved → promotion signal.
-    promoted = [g for g in known_gaps if _top_section(g) is not None]
-
-    threshold = len(queries)  # counted set must fully pass; gaps excluded by design
-    gap_note = f"; known_gaps={len(known_gaps)} informational" if known_gaps else ""
-
-    # ── Verdict order is LOAD-BEARING (Gate-2 MED, run_c77b084d) ──────────
-    # A real recall REGRESSION (counted miss) must NEVER be masked by an
-    # unrelated known-gap starting to hit. So the counted pass/fail verdict is
-    # decided FIRST; the promotion signal is only ever raised on TOP of an
-    # otherwise-passing counted set. A masked fail defeats this check's purpose
-    # (run_memory_health surfaces only status=='fail' as an integrity failure).
-    # Empty counted set is NOT a vacuous pass — an unprobed engine is a `fail`.
-    if not queries:
-        return {"check": "recall_accuracy", "status": "fail",
-                "detail": f"no counted recall queries configured{gap_note}"}
-    if hits < threshold:
-        promo = f"; NOTE known-gap now HITS {promoted}" if promoted else ""
-        return {"check": "recall_accuracy", "status": "fail",
-                "detail": f"{hits}/{threshold} counted (misses: {misses}){gap_note}{promo}"}
-    # counted set fully passes → surface promotion as a (non-fail) signal if any
-    if promoted:
-        return {"check": "recall_accuracy", "status": "warn",
-                "detail": f"{hits}/{threshold} counted OK; known-gap now HITS {promoted} "
-                          f"→ promote into counted set{gap_note}"}
-    return {"check": "recall_accuracy", "status": "pass",
-            "detail": f"{hits}/{threshold} counted queries hit{gap_note}"}
-
-
 def _run_integrity_checks(memory_content: str) -> list[dict]:
     """Phase 1: deterministic integrity checks against real MEMORY.md.
 
@@ -180,60 +48,34 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
     """
     findings: list[dict] = []
 
-    # ── 1. Index marker integrity ──────────────────────────────────
-    starts = len(re.findall(r"<!-- MEMORY_INDEX_START -->", memory_content))
-    ends = len(re.findall(r"<!-- MEMORY_INDEX_END -->", memory_content))
-    if starts == 1 and ends == 1:
-        findings.append({"check": "index_markers", "status": "pass",
-                         "detail": "START=1, END=1"})
-    else:
-        findings.append({"check": "index_markers", "status": "fail",
-                         "detail": f"START={starts}, END={ends} (expected 1 each)"})
+    # NEW ARCHITECTURE (2026-08-14): the in-prompt index was DELETED (live MEMORY is
+    # full-injected; recall scans body-BM25). The index-dependent checks —
+    # index_markers, index_roundtrip, duplicate index keys, CJK-alias coverage, and
+    # keyword_relevance recall_accuracy — are RETIRED (they probed a structure that
+    # no longer exists). Replaced by a body-SIZE check (the new size-valve is what
+    # bounds the always-injected prompt). Retained: required_sections + guard.
 
-    # ── 2. Index round-trip (generate → parse → same count) ────────
+    # ── 1. Body size within full-injection budget (size-valve high-water) ──
     try:
-        from core.memory_index import (
-            generate_memory_index, _parse_index_entries,
-            extract_body_without_index, MEMORY_INDEX_START, MEMORY_INDEX_END,
-        )
-
-        current_entries = _parse_index_entries(memory_content)
+        from core.memory_index import extract_body_without_index
+        from core.context_directory_loader import ContextDirectoryLoader
+        from hooks.distillation_hook import SIZE_ARCHIVE_HIGH_WATER
         body = extract_body_without_index(memory_content)
-        new_index = generate_memory_index(body)
-        # Wrap with markers so _parse_index_entries can scope correctly
-        replaced = (
-            MEMORY_INDEX_START + "\n" + new_index + "\n" + MEMORY_INDEX_END
-            + "\n\n" + body
-        )
-        regen_entries = _parse_index_entries(replaced)
-
-        if len(current_entries) == len(regen_entries):
-            findings.append({"check": "index_roundtrip", "status": "pass",
-                             "detail": f"{len(current_entries)} entries"})
+        body_tok = ContextDirectoryLoader.estimate_tokens(body)
+        if body_tok <= SIZE_ARCHIVE_HIGH_WATER:
+            findings.append({"check": "body_size", "status": "pass",
+                             "detail": f"{body_tok} tok ≤ {SIZE_ARCHIVE_HIGH_WATER} high-water"})
         else:
-            findings.append({"check": "index_roundtrip", "status": "fail",
-                             "detail": f"current={len(current_entries)}, regenerated={len(regen_entries)}"})
+            # over high-water = size-valve should have trimmed it; surface as warn
+            # (the valve runs on maintenance; a transient overshoot is not fatal).
+            findings.append({"check": "body_size", "status": "warn",
+                             "detail": f"{body_tok} tok > {SIZE_ARCHIVE_HIGH_WATER} high-water "
+                                       f"— size-valve should archive to low-water"})
     except Exception as e:
-        findings.append({"check": "index_roundtrip", "status": "fail",
+        findings.append({"check": "body_size", "status": "fail",
                          "detail": f"exception: {e}"})
 
-    # ── 3. Duplicate keys ──────────────────────────────────────────
-    try:
-        # _parse_index_entries now auto-scopes to the marker block
-        entries = _parse_index_entries(memory_content)
-        keys = [e["key"] for e in entries]
-        dupes = [k for k, v in Counter(keys).items() if v > 1 and k != "Archived"]
-        if not dupes:
-            findings.append({"check": "duplicate_keys", "status": "pass",
-                             "detail": f"{len(keys)} unique keys"})
-        else:
-            findings.append({"check": "duplicate_keys", "status": "fail",
-                             "detail": f"duplicates: {dupes[:5]}"})
-    except Exception as e:
-        findings.append({"check": "duplicate_keys", "status": "fail",
-                         "detail": f"exception: {e}"})
-
-    # ── 4. Required sections ───────────────────────────────────────
+    # ── 2. Required sections ───────────────────────────────────────
     # Derive from the MEMORY_SECTIONS SSoT — the old hardcoded list checked for
     # "Recent Context"/"Key Decisions"/"Lessons Learned", sections removed in
     # PRI01, so this check failed every run on the absence of deliberately-gone
@@ -254,31 +96,7 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
         findings.append({"check": "required_sections", "status": "fail",
                          "detail": f"missing: {missing}"})
 
-    # ── 5. CJK alias coverage (uses index-block entries from check 3) ─
-    try:
-        cjk_pat = re.compile(r"[一-鿿]")
-        cjk_entries = [e for e in entries if any(cjk_pat.search(a) for a in e.get("aliases", []))]
-        if len(cjk_entries) >= 5:
-            findings.append({"check": "cjk_aliases", "status": "pass",
-                             "detail": f"{len(cjk_entries)} entries with CJK aliases"})
-        elif len(cjk_entries) > 0:
-            findings.append({"check": "cjk_aliases", "status": "warn",
-                             "detail": f"only {len(cjk_entries)} entries (expected ≥5)"})
-        else:
-            findings.append({"check": "cjk_aliases", "status": "fail",
-                             "detail": "0 entries with CJK aliases — extraction broken"})
-    except Exception:
-        findings.append({"check": "cjk_aliases", "status": "fail",
-                         "detail": "could not check CJK aliases"})
-
-    # ── 6. Recall accuracy (section-anchored — see _check_recall_accuracy) ─
-    try:
-        findings.append(_check_recall_accuracy(entries))
-    except Exception as e:
-        findings.append({"check": "recall_accuracy", "status": "fail",
-                         "detail": f"exception: {e}"})
-
-    # ── 7. MemoryGuard injection detection ─────────────────────────
+    # ── 3. MemoryGuard injection detection ─────────────────────────
     try:
         from core.memory_guard import MemoryGuard
         guard = MemoryGuard()

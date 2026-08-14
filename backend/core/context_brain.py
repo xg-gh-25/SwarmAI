@@ -62,12 +62,10 @@ def _owner_for(filename: str, user_customized: bool) -> str:
     return "user" if user_customized else "system"
 
 
-# Files that run through selective injection in a desktop session — their DISK
-# size is NOT what actually reaches the prompt. MEMORY.md ≥30K → selective
-# (memory_index.select_memory_sections). This is the SoT list for the overlay's
-# "disk vs injected" honesty (run_5f040023): the UI must NOT imply a 64K MEMORY
-# is 64K of prompt when selective cuts it to ~17K.
-_SELECTIVE_FILES: frozenset[str] = frozenset({"MEMORY.md"})
+# NEW ARCHITECTURE (2026-08-14): NO file runs through selective injection anymore
+# — live MEMORY.md is always full-injected (injected size == disk body size). The
+# old _SELECTIVE_FILES set + selective-floor cue are retired; _injected_floor is a
+# None-returning stub (see below).
 
 
 def _injected_floor(filename: str, content: str) -> int | None:
@@ -75,39 +73,16 @@ def _injected_floor(filename: str, content: str) -> int | None:
 
     Telemetry is session-agnostic (no user query), and selective injection is
     query-dependent — so we CANNOT compute a real point-estimate of injected
-    size (Gate-1 #4: a fabricated point-estimate repeats the very "UI number
-    doesn't reflect reality" bug this fix exists to kill). What we CAN compute
-    honestly is the FLOOR: the always-injected part (index + always-load
-    sections), which selective injects regardless of the query. Returns None for
-    non-selective files (their injected size == disk size, no floor needed).
+    size.
+
+    NEW ARCHITECTURE (2026-08-14): live MEMORY.md is ALWAYS full-injected (there
+    is no selective mode, no in-prompt index). The injected size therefore EQUALS
+    the disk body size — there is no "floor below disk" to report. Always returns
+    None (injected == disk; the UI shows disk as-is with no selective cue). The
+    body itself is bounded UPSTREAM by the size-valve (archive >30K → 25K), not by
+    a per-injection floor. Retained as a stub so the caller contract is unchanged.
     """
-    if filename not in _SELECTIVE_FILES:
-        return None
-    try:
-        from core.memory_index import (
-            select_memory_sections, FULL_INJECTION_THRESHOLD,
-        )
-        disk_tokens = ContextDirectoryLoader.estimate_tokens(content)
-        # BELOW the threshold, selective does NOT trigger — the file is
-        # full-injected (and select_* may even ADD an index block, making its
-        # output LARGER than disk). So there is no "floor below disk": injected
-        # == disk. Return None (UI shows disk as-is, no selective cue). Only a
-        # file that ACTUALLY exceeds the threshold has a meaningful floor.
-        if disk_tokens < FULL_INJECTION_THRESHOLD:
-            return None
-        # Empty query → only the always-load floor is selected (no keyword
-        # section hits). This is the guaranteed-minimum injection, a REAL number.
-        floor = select_memory_sections(
-            memory_content=content, user_message="",
-            session_signals={}, context_percent_used=0.0,
-        )
-        floor_tokens = ContextDirectoryLoader.estimate_tokens(floor)
-        # Defensive: floor can never exceed disk (selective only removes). If the
-        # estimator disagrees at the margin, clamp to disk (never report >disk).
-        return min(floor_tokens, disk_tokens)
-    except Exception as exc:  # never crash telemetry (O030)
-        logger.debug("context_brain: injected-floor calc failed for %s: %s", filename, exc)
-        return None
+    return None
 
 
 def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:

@@ -295,52 +295,31 @@ class _FixedEmbedder:
 
 
 class TestTemporalDownweightKeyword:
-    """A superseded entry must score 0.1x so an ACTIVE entry with the same keyword
-    match out-ranks it. Post-pure-filesystem (§5.4) this down-weight lives in the
-    KEYWORD scorer (_keyword_section_scores via superseded_keys) — the vector
-    _hybrid path that used to carry it is removed. This REWRITES the old F4 test
-    to drive the surviving keyword path."""
+    """NEW ARCHITECTURE (2026-08-14): the index-based _keyword_section_scores was
+    DELETED. Superseded handling now lives in the body-BM25 scorer
+    (_section_body_scores), which STRIPS superseded entries from each section body
+    BEFORE scoring (stronger than the old 0.1x down-weight). This REWRITES the F4
+    test to drive the surviving body-BM25 path."""
 
-    def test_superseded_entry_downweighted_vs_active(self):
-        """F4 (keyword path): active entry beats a superseded peer with identical
-        keyword match, via SUPERSEDED_WEIGHT in _keyword_section_scores."""
-        from core.memory_index import (
-            _keyword_section_scores, SUPERSEDED_WEIGHT,
-            MEMORY_INDEX_START, MEMORY_INDEX_END,
-        )
+    def test_superseded_entry_stripped_from_body_scoring(self):
+        """F4 (body path): a section whose only query-matching entry is SUPERSEDED
+        scores 0 (the entry is stripped before BM25); the active peer still scores."""
+        from core.memory_index import _section_body_scores
 
-        # Index block with two entries sharing the discriminative keyword "zephyr",
-        # mapped to distinct sections. SUP is in the superseded set.
-        # Index entry format (per _parse_index_entries): "- [KEY] summary | aliases".
-        # GUI01 → "Guidelines", PIT01 → "Pitfalls" (distinct sections via prefix map);
-        # PIT01 is the superseded peer. Identical keyword "zephyr quartz".
-        index_block = (
-            f"{MEMORY_INDEX_START}\n"
-            "- [GUI01] zephyr quartz active guideline | zephyr, quartz\n"
-            "- [PIT01] zephyr quartz old superseded | zephyr, quartz\n"
-            f"{MEMORY_INDEX_END}"
-        )
-        active = _keyword_section_scores("zephyr quartz", index_block, superseded_keys=set())
-        downweighted = _keyword_section_scores(
-            "zephyr quartz", index_block, superseded_keys={"PIT01"}
-        )
-        # Find PIT01's section score with vs without superseded marking.
-        from core.memory_index import _key_to_section
-        sup_sec = _key_to_section("PIT01")
-        base = active.get(sup_sec, 0.0)
-        marked = downweighted.get(sup_sec, 0.0)
-        assert base > 0.0, "precondition: PIT01 matches the keyword when active"
-        # Superseded marking shrinks the score by SUPERSEDED_WEIGHT (0.1x). If the
-        # ×0.1 result falls below KEYWORD_THRESHOLD it is filtered out entirely
-        # (0.0) — either way the superseded section is strictly suppressed vs its
-        # active value, which is the F4 guarantee.
-        assert marked < base, "superseded entry must be down-weighted vs active"
-        expected = base * SUPERSEDED_WEIGHT
-        from core.memory_index import KEYWORD_THRESHOLD
-        if expected >= KEYWORD_THRESHOLD:
-            assert marked == pytest.approx(expected, rel=0.01)
-        else:
-            assert marked == 0.0, "down-weighted below threshold → filtered out"
+        # Two sections, each a single entry sharing the discriminative keyword.
+        # GUI01 (Guidelines) active; PIT01 (Pitfalls) is the superseded peer.
+        sections = {
+            "Guidelines": "- [GUI01] **zephyr quartz active guideline** — detail\n",
+            "Pitfalls": "- [PIT01] **zephyr quartz old superseded** — detail\n",
+        }
+        active = _section_body_scores("zephyr quartz", sections, superseded_keys=set(),
+                                      include_evergreen=True)
+        stripped = _section_body_scores("zephyr quartz", sections, superseded_keys={"PIT01"},
+                                        include_evergreen=True)
+        assert active.get("Pitfalls", 0.0) > 0.0, "precondition: PIT01 matches when active"
+        # Superseded PIT01 stripped → Pitfalls no longer matches; Guidelines still does.
+        assert stripped.get("Pitfalls", 0.0) == 0.0, "superseded entry must be stripped"
+        assert stripped.get("Guidelines", 0.0) > 0.0, "active peer still scores"
 
 
 class TestRecallHitLog:

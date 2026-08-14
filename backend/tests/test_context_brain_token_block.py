@@ -148,15 +148,16 @@ def test_small_memory_below_threshold_is_not_selective(fake_context_dir: Path):
     assert mem["injected_floor"] is None
 
 
-def test_big_memory_is_selective_with_floor_below_disk(big_memory_context_dir: Path):
-    """MEMORY.md ABOVE the threshold runs selective → has_selective=True and its
-    injected FLOOR is a real number ≤ disk (honest lower-bound, never fabricated,
-    never above disk)."""
+def test_big_memory_is_full_injected_not_selective(big_memory_context_dir: Path):
+    """NEW ARCHITECTURE (2026-08-14): there is no selective mode — even a large
+    MEMORY.md is FULL-injected (injected == disk body), so has_selective=False and
+    injected_floor=None. Size is bounded upstream by the size-valve (archive
+    >30K→25K), not by a selective floor. (Retired: the old
+    test_big_memory_is_selective_with_floor_below_disk asserting deleted behavior.)"""
     block = build_context_token_block(big_memory_context_dir)
     mem = next(r for r in block["per_file"] if r["name"] == "MEMORY.md")
-    assert mem["has_selective"] is True
-    assert mem["injected_floor"] is not None
-    assert mem["injected_floor"] <= mem["tokens"]  # floor never exceeds disk
+    assert mem["has_selective"] is False
+    assert mem["injected_floor"] is None
 
 
 def test_injected_estimate_is_honest_lower_bound(big_memory_context_dir: Path):

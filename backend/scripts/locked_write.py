@@ -640,21 +640,10 @@ def locked_read_modify_write(
         # Modify the content
         new_content = _modify_content(content, section, text, mode)
 
-        # Reindex IN-LOCK (single source of truth for the MEMORY index across
-        # every writer). PURE inject_index_into_memory only — NEVER
-        # _refresh_memory_index, which re-acquires this same MEMORY.md.lock and
-        # would deadlock. Best-effort: an index-rebuild failure must not lose the
-        # entry write we already computed. (run_b356b552)
-        if reindex_memory and file_path.name == "MEMORY.md":
-            try:
-                from core.memory_index import inject_index_into_memory
-                new_content = inject_index_into_memory(new_content)
-            except Exception as e:  # noqa: BLE001 — reindex is non-fatal to the write
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "reindex_memory skipped (write still applied) for %s: %s",
-                    file_path, e,
-                )
+        # NEW ARCHITECTURE (2026-08-14): the in-prompt MEMORY index was DELETED
+        # (live MEMORY is full-injected; recall scans body-BM25). There is no index
+        # to rebuild after a write — the ``reindex_memory`` param is retained inert
+        # for call-site compatibility (no signature change) but is now a no-op.
 
         # Write back (surrogateescape preserves non-UTF-8 bytes on round-trip)
         file_path.parent.mkdir(parents=True, exist_ok=True)

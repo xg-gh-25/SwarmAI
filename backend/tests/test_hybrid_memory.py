@@ -358,29 +358,9 @@ class TestEmbeddingSync:
 class TestRevisedBudgetTiers:
     """Budget tiers are aggressive: inject max memory, cut only at >95%."""
 
-    def test_below_50_percent_unlimited(self):
-        """Context <50% → unlimited budget (returns very large number)."""
-        from core.memory_index import _adaptive_max_tokens
-        budget = _adaptive_max_tokens(30.0)
-        assert budget >= 100_000  # effectively unlimited
 
-    def test_50_to_75_generous(self):
-        """Context 50-75% → 50K tokens (not the old 5K)."""
-        from core.memory_index import _adaptive_max_tokens
-        budget = _adaptive_max_tokens(60.0)
-        assert budget >= 50_000
 
-    def test_75_to_95_still_significant(self):
-        """Context 75-95% → 20K tokens (not the old 2K)."""
-        from core.memory_index import _adaptive_max_tokens
-        budget = _adaptive_max_tokens(85.0)
-        assert budget >= 20_000
 
-    def test_above_95_minimum(self):
-        """Context >=95% → 5K minimum (not the old 0)."""
-        from core.memory_index import _adaptive_max_tokens
-        budget = _adaptive_max_tokens(98.0)
-        assert budget >= 5_000
 
 
 # ===========================================================================
@@ -388,37 +368,35 @@ class TestRevisedBudgetTiers:
 # ===========================================================================
 
 class TestE2EHybridWiring:
-    """select_memory_sections with memory_embeddings returns semantically relevant sections."""
+    """NEW ARCHITECTURE (2026-08-14): the vector/hybrid recall leg AND selective
+    injection were removed — live MEMORY is full-injected. memory_embeddings is an
+    inert param. These tests are rewritten to the full-injection contract; the old
+    _hybrid_section_scores mock-based semantic-match test is retired (that scorer is
+    gone)."""
 
-    def test_select_with_embeddings_flag(self):
-        """select_memory_sections accepts memory_embeddings parameter."""
+    def test_select_with_embeddings_flag_full_injects(self):
+        """select_memory_sections accepts the inert memory_embeddings param and
+        full-injects the body (no index)."""
         from core.memory_index import select_memory_sections
-        # Should not crash with the new parameter
         result = select_memory_sections(
             memory_content=SAMPLE_MEMORY,
             user_message="async cleanup resource leaks",
-            memory_embeddings=False,  # explicit keyword-only
+            memory_embeddings=False,
         )
-        assert "Memory Index" in result
+        # full body present (this fixture's sections) + no in-prompt index
+        assert "## COE Registry" in result or "## Recent Context" in result
+        assert "<!-- MEMORY_INDEX_START -->" not in result
 
-    def test_hybrid_finds_semantic_match_e2e(self):
-        """E2E: semantic query through select_memory_sections finds related section."""
+    def test_full_injection_carries_all_sections_regardless_of_query(self):
+        """Whatever the query, the whole body comes through (no semantic/keyword
+        selection at injection time — that's recall's job now)."""
         from core.memory_index import select_memory_sections
-
-        # "app crashes on startup" should find COE about exit-code-9 SIGKILL
-        # via vector similarity, even though there's zero keyword overlap
-        # We mock the embedding store to return high similarity for COE01
-        with patch("core.memory_index._hybrid_section_scores") as mock_hybrid:
-            mock_hybrid.return_value = {
-                "COE Registry": 0.8,
-                "Lessons Learned": 0.3,
-            }
-            result = select_memory_sections(
-                memory_content=SAMPLE_MEMORY,
-                user_message="app crashes on startup",
-                memory_embeddings=True,
-            )
-            assert "COE Registry" in result or "exit code" in result.lower()
+        result = select_memory_sections(
+            memory_content=SAMPLE_MEMORY,
+            user_message="app crashes on startup",
+            memory_embeddings=True,  # inert
+        )
+        assert "COE Registry" in result or "exit code" in result.lower()
 
 
 # ===========================================================================

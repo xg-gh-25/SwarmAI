@@ -20,8 +20,6 @@ Scenarios (run_2a5ff539, 2026-06-28):
                    comment — reclaim reads decay_state from the markdown, it does
                    NOT call assess_decay; without the comment parse_entries
                    defaults to active → vacuous (Gate-0 finding, run_2a5ff539).
-  index_ot_once  — generate_memory_index lists each Open-Threads OTxx exactly
-                   once (guards the OT double-list fix, run_3f25a73a).
   archive_recall — a synthetic MEMORY-archive entry indexed into an ISOLATED
                    :memory: KnowledgeStore is FTS5-retrievable (proves archived
                    memory is reachable by the library recall leg).
@@ -158,60 +156,9 @@ def _reclaim_shrink(negative: bool = False) -> int:
     return 1
 
 
-# ── index_ot_once ─────────────────────────────────────────────────────────────
-def _index_fixture() -> str:
-    """A MEMORY with two Open-Threads entries. The fixed generate_memory_index
-    emits each exactly once (via the dedicated ot_lines block); the pre-fix bug
-    emitted each twice (Open Threads was also in the active_lines loop)."""
-    return (
-        "# Memory\n\n"
-        "## Principles\n"
-        "- 2026-03-19: **Prevent, don't handle** — prevention first.\n\n"
-        "## Guidelines\n"
-        "- 2026-03-22: **Use a library over hand-rolled parsing** — psutil example.\n\n"
-        "## Open Threads\n\n"
-        "### P1 — Important\n"
-        "- 🟡 **Alpha thread — first open item** — needs work.\n"
-        "- 🔵 **Beta thread — second open item** — also needs work.\n"
-    )
-
-
-def _index_ot_once(negative: bool = False) -> int:
-    """generate_memory_index must list each OTxx id exactly once. Guards the
-    OT double-list fix (run_3f25a73a): Open Threads ∈ MEMORY_ACTIVE_SECTIONS so
-    the old code emitted it in the active_lines loop AND the dedicated ot_lines
-    block. Drives the REAL generate_memory_index.
-
-    POSITIVE: every [OTxx] id count == 1, AND non-OT sections still indexed.
-    Prints INDEX_OT_ONCE_OK.
-    negative (teeth): demand a duplicate (some OTxx count > 1). FALSE on fixed
-    code → withhold OK → exit 1. A reverted build double-lists → teeth fire."""
-    import re
-    from collections import Counter
-    from core.memory_index import generate_memory_index
-
-    idx = generate_memory_index(_index_fixture())
-    ot_ids = re.findall(r"\[(OT\d+)\]", idx)
-    counts = Counter(ot_ids)
-    has_dup = any(v > 1 for v in counts.values())
-    has_ot = len(ot_ids) >= 1
-    non_ot_kept = ("[GUI" in idx) and ("[PRI" in idx)
-
-    if negative:
-        # Teeth: demand a duplicate OT id.
-        if not has_dup:
-            print("INDEX_OT_ONCE_TEETH (no OT duplicate = dedup live; "
-                  "old 'double-listed' invariant false)")
-            return 1
-        print("INDEX_OT_ONCE_OK")  # only on a reverted build (dup present)
-        return 0
-
-    if has_ot and not has_dup and non_ot_kept:
-        print("INDEX_OT_ONCE_OK")
-        return 0
-    print(f"INDEX_OT_ONCE_FAIL (has_ot={has_ot}, dup={dict(counts)}, "
-          f"non_ot_kept={non_ot_kept})")
-    return 1
+# index_ot_once probe RETIRED (2026-08-14): it drove generate_memory_index, which
+# was DELETED with the in-prompt index (live MEMORY is full-injected; recall scans
+# body-BM25). No index to probe.
 
 
 # ── archive_recall ────────────────────────────────────────────────────────────
@@ -290,10 +237,9 @@ def _archive_recall(negative: bool = False) -> int:
 _SCENARIOS = {
     "decay_dormant": _decay_dormant,
     "reclaim_shrink": _reclaim_shrink,
-    "index_ot_once": _index_ot_once,
     "archive_recall": _archive_recall,
 }
-_NEGATIVE_CAPABLE = set(_SCENARIOS)  # all four are teeth-capable
+_NEGATIVE_CAPABLE = set(_SCENARIOS)  # all teeth-capable
 
 
 def main(argv: list[str] | None = None) -> int:
