@@ -219,7 +219,7 @@ jobs:
       # last 80 commits carry no trailer. Enforcement therefore lives HERE, where it
       # actually runs. Ratcheted from a cutoff SHA: published history is not rewritten,
       # new commits must comply. See scripts/check_commit_trailers.py.
-      - name: Commit trailer identity (Co-Authored-By: Swarm)
+      - name: "Commit trailer identity (Co-Authored-By: Swarm)"
         run: python3 scripts/check_commit_trailers.py
 
   # ── Code-security boundary gate (bandit HIGH + detect-secrets) ────────────
