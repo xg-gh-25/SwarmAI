@@ -1242,9 +1242,9 @@ class TestRecallDegradationReader:
     # AC1: getters read live counts
     def test_getters_snapshot_live_counts(self):
         import core.session_router as sr
-        sr._record_recall_degraded("vec_db_unavailable")
+        sr._record_recall_degraded("recall_db_unavailable")
         sr._record_ddd_inject("injected")
-        assert sr.get_recall_degraded_snapshot()["vec_db_unavailable"] == 1
+        assert sr.get_recall_degraded_snapshot()["recall_db_unavailable"] == 1
         assert sr.get_ddd_inject_snapshot()["injected"] == 1
 
     # AC4: getter returns a COPY (mutation doesn't leak into the live counter)
@@ -1258,7 +1258,7 @@ class TestRecallDegradationReader:
     # AC2: true-failure aggregation excludes informational no-match keys
     def test_true_failure_excludes_informational(self):
         import core.session_router as sr
-        sr._record_recall_degraded("vec_db_unavailable")     # failure
+        sr._record_recall_degraded("recall_db_unavailable")  # failure
         sr._record_recall_degraded("disaster_timeout")       # failure
         sr._record_recall_degraded("exception:ValueError")   # failure (prefix)
         sr._record_recall_degraded("empty_with_keywords")    # INFORMATIONAL
@@ -1275,9 +1275,9 @@ class TestRecallDegradationReader:
     # AC3: a true failure surfaces a finding; only-informational surfaces none
     def test_deep_check_finding_on_true_failure(self, hook):
         import core.session_router as sr
-        sr._record_recall_degraded("vec_db_unavailable")
+        sr._record_recall_degraded("recall_db_unavailable")
         findings = hook._check_recall_degradation()
-        assert any("RECALL DEGRADED" in f and "vec_db_unavailable" in f for f in findings)
+        assert any("RECALL DEGRADED" in f and "recall_db_unavailable" in f for f in findings)
 
     def test_no_finding_when_only_informational(self, hook):
         import core.session_router as sr
@@ -1322,7 +1322,7 @@ class TestRecallDegradationReader:
     def test_all_known_reasons_no_unclassified_line(self, hook):
         import core.session_router as sr
         # every string a current writer actually emits — none should be 'unclassified'
-        for r in ("vec_db_unavailable", "leg_failure", "disaster_timeout",
+        for r in ("recall_db_unavailable", "leg_failure", "disaster_timeout",
                   "exception:ValueError", "inject_exception:OSError",
                   "unified_exception:KeyError", "empty_with_keywords",
                   "unified_empty_fallback_legacy"):
