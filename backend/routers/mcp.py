@@ -25,6 +25,7 @@ from core.mcp_config_loader import (
     get_mcp_file_paths,
     read_layer,
     merge_layers,
+    _get_tier,
 )
 from core.exceptions import ValidationException
 from schemas.mcp import (
@@ -77,6 +78,16 @@ def _entry_to_response(entry: dict, layer: str) -> dict:
         "connection_type": entry.get("connection_type", "stdio"),
         "config": entry.get("config", {}),
         "enabled": entry.get("enabled", layer == "dev"),
+        # tier = WHEN a session loads this MCP (always=at spawn / channel=channel
+        # sessions / ondemand=on request), orthogonal to `enabled` (=is it available
+        # at all). Surfaced so the Connections registry can show load-timing honestly
+        # instead of implying a live connection. Route through the loader's _get_tier
+        # (NOT a raw .get) so the API is exactly as LENIENT as the runtime loader: a
+        # config with a MISSING *or INVALID* tier (e.g. a "lazy" typo borrowed from the
+        # skills vocabulary) normalizes to "always" + warns — otherwise the raw bad
+        # value would fail the ConfigEntryResponse Literal and 500 the whole panel while
+        # the session itself loads that same config fine (adversarial MED, run_3989a574).
+        "tier": _get_tier(entry),
         "rejected_tools": entry.get("rejected_tools"),
         "category": entry.get("category"),
         "source": entry.get("source"),

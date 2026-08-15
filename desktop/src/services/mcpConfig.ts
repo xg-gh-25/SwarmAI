@@ -22,6 +22,9 @@ export interface ConfigEntry {
   connectionType: 'stdio' | 'sse' | 'http';
   config: Record<string, unknown>;
   enabled: boolean;
+  /** Load timing (orthogonal to `enabled`): always=loaded at session spawn /
+   *  channel=only in channel sessions / ondemand=loaded when a session requests it. */
+  tier: 'always' | 'channel' | 'ondemand';
   rejectedTools?: string[];
   category?: string;
   source?: string;
@@ -63,6 +66,7 @@ const toCamelCase = (data: Record<string, unknown>): ConfigEntry => ({
   connectionType: data.connection_type as 'stdio' | 'sse' | 'http',
   config: data.config as Record<string, unknown>,
   enabled: data.enabled as boolean,
+  tier: (data.tier as ConfigEntry['tier']) ?? 'always',
   rejectedTools: data.rejected_tools as string[] | undefined,
   category: data.category as string | undefined,
   source: data.source as string | undefined,

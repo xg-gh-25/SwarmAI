@@ -53,6 +53,9 @@ class ConfigEntryResponse(BaseModel):
     connection_type: Literal["stdio", "sse", "http"]
     config: dict[str, Any]
     enabled: bool
+    # Load timing (orthogonal to `enabled`): always=loaded at session spawn /
+    # channel=only in channel sessions / ondemand=loaded when a session requests it.
+    tier: Literal["always", "channel", "ondemand"] = "always"
     rejected_tools: list[str] | None = None
     category: str | None = None
     source: str | None = None

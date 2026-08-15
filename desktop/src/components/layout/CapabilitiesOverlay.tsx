@@ -14,18 +14,23 @@
  *                   backend-filtered (a non-owner runtime never receives internal
  *                   skills — see routers/skills.py) AND rendered only when >=1 internal
  *                   skill is present (empty group renders NOTHING, never a void).
- *   • CONNECTIONS — status-first projection of GET /api/mcp: "Connected" (enabled) vs
- *                   "Available" (disabled catalog), with an in-place toggle. Raw
- *                   connectionType/config JSON is NOT here (it lives in Settings'
- *                   advanced path); this view is about "is this tool on?".
+ *   • CONNECTIONS — a CONFIG REGISTRY projection of GET /api/mcp: "Enabled" (available
+ *                   for a session to use) vs "Off" (disabled), with an in-place toggle
+ *                   and a faint load-timing tier marker (⚡ always / 💤 on-demand / 📡
+ *                   channel). It is NOT a session-liveness view: `enabled` = "a session
+ *                   CAN load this", not "a session IS connected right now" — liveness is
+ *                   out of scope BY DESIGN (per-session runtime state, not this global
+ *                   registry's job — run_3989a574). Raw connectionType/config JSON lives
+ *                   in Settings' advanced path; this view answers "is this tool enabled,
+ *                   and when does a session load it?".
  *
  * SCANNABLE SIGNALS (run_a85e6641): each skill row carries a HEALTH dot (the one standout —
  * 🟢 healthy / 🔴 low_success / 🟡 stale / ⚪️ never_used) and a FAINT tier marker (⚡ always /
  * 💤 lazy, deliberately muted so it never competes with the dot). Health is LAZY-loaded in a
  * SEPARATE effect from the skill list and is FAIL-SAFE: a rejected/slow /api/skills/health
  * leaves rows fully rendered + clickable with NO dot — it never blocks or crashes the list.
- * MCP rows carry an honest connected(enabled)/available(off) dot — NO auth/liveness state is
- * fabricated (ConfigEntry has none). never_used dots surface dead skills as a retire signal.
+ * MCP rows carry an honest enabled/off dot + a faint tier marker — NO auth/liveness state is
+ * fabricated (ConfigEntry has none, by design). never_used dots surface dead skills as a retire signal.
  *
  * DETAIL DRAWER: clicking a skill row opens an absolute right-side drawer (layered,
  * NOT a flex sibling — the list never compresses). It carries the plain description,
@@ -71,6 +76,15 @@ const STATUS_LABEL: Record<SkillHealthStatus, string> = {
 const TIER_MARK: Record<'always' | 'lazy', { icon: string; label: string }> = {
   always: { icon: '⚡', label: 'Always loaded' },
   lazy: { icon: '💤', label: 'Lazy — loaded on use' },
+};
+
+/** MCP load-timing marker (distinct from the skill always/lazy map — MCP tiers are
+ *  always/channel/ondemand). Faint by design: it says WHEN a session loads the MCP, it
+ *  is NOT a live-connection state (this panel is a config registry, not a liveness probe). */
+const MCP_TIER_MARK: Record<'always' | 'channel' | 'ondemand', { icon: string; label: string }> = {
+  always: { icon: '⚡', label: 'Always — loads at session start' },
+  ondemand: { icon: '💤', label: 'On-demand — loads when a session needs it' },
+  channel: { icon: '📡', label: 'Channel — loads in channel sessions' },
 };
 
 export interface CapabilitiesContentProps {
@@ -304,8 +318,11 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
   // Empty until health settles → the strip simply doesn't render (no flash). AC2.
   const topUsed = useMemo(() => mostUsed(visibleSkills, health, 8), [visibleSkills, health]);
 
-  const connected = useMemo(() => mcps.filter((m) => m.enabled), [mcps]);
-  const available = useMemo(() => mcps.filter((m) => !m.enabled && m.layer === 'catalog'), [mcps]);
+  // enabledMcps = registry-enabled (a session CAN load it), NOT "connected now" — this
+  // panel is a config registry, not a liveness view (run_3989a574). offMcps = disabled
+  // catalog entries the user can flip on.
+  const enabledMcps = useMemo(() => mcps.filter((m) => m.enabled), [mcps]);
+  const offMcps = useMemo(() => mcps.filter((m) => !m.enabled && m.layer === 'catalog'), [mcps]);
 
   const toggleMcp = useCallback(async (m: ConfigEntry) => {
     const target = !m.enabled;
@@ -448,9 +465,9 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 
         {!error && view === 'connections' && (
           <div data-testid="cap-connections-view">
-            <ConnGroup title="Connected" tag={`${connected.length} live`} entries={connected} onToggle={toggleMcp} statusLabel="CONNECTED" statusClass="text-[var(--color-primary)]" />
-            <ConnGroup title="Available — one click to connect" tag={`${available.length}`} entries={available} onToggle={toggleMcp} statusLabel="AVAILABLE" statusClass="text-[var(--color-text-muted)]" />
-            {!loading && connected.length === 0 && available.length === 0 && (
+            <ConnGroup title="Enabled" tag={`${enabledMcps.length} available`} entries={enabledMcps} onToggle={toggleMcp} statusLabel="ENABLED" statusClass="text-[var(--color-primary)]" />
+            <ConnGroup title="Off — one click to enable" tag={`${offMcps.length}`} entries={offMcps} onToggle={toggleMcp} statusLabel="OFF" statusClass="text-[var(--color-text-muted)]" />
+            {!loading && enabledMcps.length === 0 && offMcps.length === 0 && (
               <div className="text-sm text-[var(--color-text-faint)] py-8 text-center">No connections configured.</div>
             )}
           </div>
@@ -469,7 +486,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           </button>
         ) : (
           <span className="text-[11px] text-[var(--color-text-faint)]">
-            A greyed connection is turned off — toggle it on to connect. (Auth/liveness is not shown here.)
+            Enabled = available for a session to use. ⚡ loads at session start · 💤 loads on demand · 📡 in channel sessions. Toggle to enable/disable.
           </span>
         )}
       </div>
@@ -531,17 +548,32 @@ function ConnGroup({
       </h2>
       {entries.map((m) => (
         <div key={m.id} className="flex items-center gap-3 px-2 py-3 rounded-md hover:bg-[var(--color-hover)]">
-          {/* Honest status dot: connected(enabled)=green / available(off)=muted. ConfigEntry
-              carries NO live-auth signal, so NO auth/expired state is fabricated (R30#4). */}
+          {/* Honest status dot: enabled=green / off=muted. This is a CONFIG registry —
+              the dot means "enabled (available for a session to use)", NOT a live
+              connection. ConfigEntry carries no runtime/auth signal, so none is
+              fabricated (R30#4); liveness is out of scope by design (XG, run_3989a574). */}
           <span
             data-testid={`cap-conn-dot-${m.id}`}
-            data-status={m.enabled ? 'connected' : 'available'}
-            aria-label={m.enabled ? 'connected' : 'available'}
+            data-status={m.enabled ? 'enabled' : 'off'}
+            aria-label={m.enabled ? 'enabled' : 'off'}
             className="inline-block w-2 h-2 rounded-full shrink-0"
             style={{ background: m.enabled ? 'var(--color-success, #4ade80)' : 'var(--color-border-strong)' }}
           />
           <div className="min-w-0">
-            <div className="text-sm font-medium truncate">{m.name}</div>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-sm font-medium truncate">{m.name}</span>
+              {/* Faint load-timing marker — muted so it never competes with the toggle/name
+                  (design-judgment check 4). Says WHEN a session loads it, not that it is live. */}
+              <span
+                data-testid={`cap-conn-tier-${m.id}`}
+                data-tier={m.tier}
+                title={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
+                aria-label={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
+                className="shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
+              >
+                {MCP_TIER_MARK[m.tier]?.icon ?? ''}
+              </span>
+            </div>
             {m.description && <div className="text-xs text-[var(--color-text-faint)] truncate">{m.description}</div>}
           </div>
           <div className="flex-1" />

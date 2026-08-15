@@ -9,7 +9,7 @@
  *   • Internal is ordered LAST.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { groupSkills, orderedCategories, mostUsed, byFrequencyThenName, CapabilitiesContent } from './CapabilitiesOverlay';
 import type { Skill, SkillHealthMap } from '../../types';
 
@@ -331,5 +331,59 @@ describe('mostUsed — Most-Used strip membership (AC2)', () => {
   it('EMPTY health → empty strip (no flash of dead/mis-ranked skills before health settles)', () => {
     const skills = [sk('s_a'), sk('s_b')];
     expect(mostUsed(skills, {}, 8)).toEqual([]);
+  });
+});
+
+// Connections view — registry-honest labels + tier marker (run_3989a574). This panel
+// is a CONFIG REGISTRY (enabled = available for a session), NOT a session-liveness probe.
+// These lock: (a) the label says ENABLED/available, never CONNECTED/live; (b) each row
+// shows its load-timing tier marker; (c) no session-status is claimed.
+describe('CapabilitiesContent — Connections registry honesty (run_3989a574)', () => {
+  const mcp = (partial: Partial<import('../../services/mcpConfig').ConfigEntry> & { id: string }) => ({
+    name: partial.id,
+    description: 'a tool',
+    connectionType: 'stdio' as const,
+    config: {},
+    enabled: true,
+    tier: 'always' as const,
+    layer: 'dev' as const,
+    ...partial,
+  });
+
+  afterEach(() => { listAllMcp.mockReset(); listAllMcp.mockReturnValue(Promise.resolve([])); });
+
+  async function renderConnections(mcps: unknown[]) {
+    listSkills.mockResolvedValue([]);
+    getHealth.mockResolvedValue({} as SkillHealthMap);
+    listAllMcp.mockReturnValue(Promise.resolve(mcps));
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('cap-view-connections')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('cap-view-connections'));
+    await waitFor(() => expect(screen.getByTestId('cap-connections-view')).toBeTruthy());
+  }
+
+  it('labels an enabled MCP ENABLED (never CONNECTED/live)', async () => {
+    await renderConnections([mcp({ id: 'slack-mcp', enabled: true, tier: 'always' })]);
+    // The honest status word is ENABLED — the old CONNECTED/LIVE claim must be gone.
+    expect(screen.getByText('ENABLED')).toBeTruthy();
+    expect(screen.queryByText('CONNECTED')).toBeNull();
+    expect(screen.queryByText(/\blive\b/i)).toBeNull();
+    // The dot reflects enabled/off, not a connection state.
+    const dot = screen.getByTestId('cap-conn-dot-slack-mcp');
+    expect(dot.getAttribute('data-status')).toBe('enabled');
+  });
+
+  it('shows the load-timing tier marker per row (always ⚡ / ondemand 💤 / channel 📡)', async () => {
+    await renderConnections([
+      mcp({ id: 'always-mcp', tier: 'always' }),
+      mcp({ id: 'ondemand-mcp', tier: 'ondemand' }),
+      mcp({ id: 'channel-mcp', tier: 'channel' }),
+    ]);
+    expect(screen.getByTestId('cap-conn-tier-always-mcp').getAttribute('data-tier')).toBe('always');
+    expect(screen.getByTestId('cap-conn-tier-ondemand-mcp').getAttribute('data-tier')).toBe('ondemand');
+    expect(screen.getByTestId('cap-conn-tier-channel-mcp').getAttribute('data-tier')).toBe('channel');
+    // marker icons render (faint, but present)
+    expect(screen.getByTestId('cap-conn-tier-always-mcp').textContent).toBe('⚡');
+    expect(screen.getByTestId('cap-conn-tier-ondemand-mcp').textContent).toBe('💤');
   });
 });
