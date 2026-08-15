@@ -120,15 +120,23 @@ class TestServiceManager:
     @pytest.mark.asyncio
     async def test_port_file_lifecycle(self, tmp_path):
         """Port file is written on start and removed on stop."""
+        # Read PORT_FILE through the LIVE module attribute, not this test's frozen
+        # `from ... import PORT_FILE` copy. The autouse _isolate_app_data_dir fixture
+        # re-roots core.service_manager.PORT_FILE onto a per-test sandbox (so tests
+        # never write the production ~/.swarm-ai/backend.port), but it cannot rewrite
+        # the separate binding this test module froze at import time. _write_port_file
+        # resolves PORT_FILE from the service_manager module namespace, so the reader
+        # must too — otherwise writer(sandbox) != reader(production) and the assert fails.
+        import core.service_manager as _sm
         mgr = ServiceManager()
         (tmp_path / "Services").mkdir()
 
         await mgr.start_all(str(tmp_path), 12345)
-        assert PORT_FILE.exists()
-        assert PORT_FILE.read_text() == "12345"
+        assert _sm.PORT_FILE.exists()
+        assert _sm.PORT_FILE.read_text() == "12345"
 
         await mgr.stop_all()
-        assert not PORT_FILE.exists()
+        assert not _sm.PORT_FILE.exists()
 
     @pytest.mark.asyncio
     async def test_env_vars_injected(self, tmp_path):

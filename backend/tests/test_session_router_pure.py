@@ -22,24 +22,53 @@ class TestUnifiedRecallCfull:
     """C-full (run_ccd1b6c5): runtime recall unified onto recall_all's 5-domain
     path (minus ddd, which keeps its own pre-gate leg). Strangler-fig fallback."""
 
-    def test_unified_body_covers_four_domains_not_ddd(self):
+    def test_unified_body_covers_four_domains_not_ddd(self, monkeypatch):
         """The unified body surfaces the 4 keyword-gated domains incl codeintel
-        (the net-new one), and NOT ddd (excluded to avoid double-inject). Signal-1
-        editor path resolves the SwarmAI project so codeintel has a graph."""
-        from core.session_router import _unified_recall_body
-        # 2nd arg is now editor_file_path (project detected inside, off-loop).
-        # Returns (body_str, structured_hits|None) — unpack the body.
-        from core.session_router import _resolve_active_project
+        (the net-new one), and NOT ddd (excluded to avoid double-inject).
+
+        This is a WIRING test: does the unified path route codeintel hits into a
+        "Code Symbols" block and keep ddd out. The real code graph (code_intel.db)
+        is unreachable under the autouse _isolate_app_data_dir fixture (it reroots
+        jobs.paths.PROJECTS_DIR onto a per-test sandbox with no db) — so we inject a
+        deterministic codeintel hit rather than depend on a built graph. This gives
+        the wiring assertion real teeth in EVERY environment (local + CI), instead
+        of skipping on a graph the test fixture guarantees is absent."""
+        import core.recall_multi as _rm
+        # Deterministic synthetic hit → renders as "### Code Symbols\n- `...`".
+        monkeypatch.setattr(
+            _rm, "_codeintel_recall",
+            lambda q, project=None, limit=8: [
+                {"id": "core.session_router._unified_recall_body", "name": "_unified_recall_body"}
+            ],
+        )
+        from core.session_router import _unified_recall_body, _resolve_active_project
+        # 2nd arg is editor_file_path (project detected inside, off-loop).
         _ap = _resolve_active_project("/x/SwarmWS/Projects/SwarmAI/TECH.md",
                                       "session resume timeout")
         s, _structured = _unified_recall_body("session resume timeout", _ap)
         assert "Code Symbols" in s, "codeintel is the net-new runtime domain"
+        # Assert the RENDERED symbol ref, not just the header: the "Code Symbols"
+        # label can also appear in the coverage-gap line (render_recall_body) when a
+        # codeintel expect-token is in the query. Asserting the injected symbol's id
+        # makes teeth query-independent — only a NON-EMPTY codeintel bucket renders it.
+        assert "core.session_router._unified_recall_body" in s, \
+            "the codeintel HIT must render, not just the label"
         assert "[DDD:" not in s, "ddd must NOT be in unified path (own leg)"
 
     def test_unified_failclosed_no_project_still_recalls(self):
         """No editor path + a query that resolves to no single project →
         codeintel empty, but the other domains still recall (recall never
         degrades to empty just because there's no active project)."""
+        # The `len(s) > 100` assertion requires the text domains (context_files/
+        # library/session) to actually recall from the LIVE workspace corpus
+        # (~/.swarm-ai/SwarmWS/.context/*.md). Absent in a bare CI checkout → all
+        # domains empty → body ''. The invariant under test is "no project ≠ empty
+        # recall", which is only observable WHEN a corpus exists; skip otherwise.
+        from pathlib import Path
+        mem = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
+        if not mem.exists():
+            import pytest
+            pytest.skip("no live workspace corpus (~/.swarm-ai/SwarmWS absent — e.g. CI)")
         from core.session_router import _unified_recall_body
         s, _structured = _unified_recall_body("resume cold start latency", (None, "no_signal"))
         assert "Code Symbols" not in s and len(s) > 100

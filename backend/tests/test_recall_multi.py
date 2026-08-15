@@ -571,6 +571,18 @@ class TestRecallAll:
         (proves the empty result above is the GATE, not an unrelated break)."""
         from core import recall_multi
 
+        # This asserts a HIT against the LIVE ~/.swarm-ai/SwarmWS/.context/MEMORY.md
+        # (its COE Registry matches "exit code sigkill oom"). That workspace file is
+        # absent in a bare CI checkout → context_files corpus empty → no hit, a
+        # CI-only false failure. Skip when the live MEMORY.md corpus isn't present;
+        # the exclusion-GATE behavior this test contrasts with is covered by its
+        # sibling (the with-exclusion test) which needs no live corpus.
+        from pathlib import Path
+        mem = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
+        if not mem.exists():
+            import pytest
+            pytest.skip("no live MEMORY.md corpus (~/.swarm-ai/SwarmWS absent — e.g. CI)")
+
         monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
         result = recall_multi.recall_all(
             "exit code sigkill oom", project="SwarmAI", allow_embed=False,
