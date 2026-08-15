@@ -185,9 +185,14 @@ class _LockingConnection:
     """Serializes ALL access to a single sqlite3.Connection behind one RLock.
 
     WHY (R1, run_071e54c8 — adversarial Gate-2 HIGH): the GraphStore is cached at
-    module level (``__init__._graph_cache``) and its ONE connection is used from
-    BOTH the code_intel read path (moved onto ``asyncio.to_thread`` by R1) AND the
-    context_health write path (``run_in_executor``) — the SAME default thread pool.
+    module level (``__init__._graph_cache``) so its ONE connection is reached
+    concurrently from SEVERAL threads across DIFFERENT executor pools — code_intel
+    READS (``routers/code_intel.py`` on ``asyncio.to_thread``; ``recall_multi`` on the
+    bounded ``executors "io"`` pool) and WRITES (``context_health_hook`` on the bounded
+    ``executors "subprocess"`` pool; ``code_change_feed`` + the reindex job via
+    ``load_project_graph`` on the anyio/default pool). This is NOT an exhaustive list
+    and the pool a caller uses is IRRELEVANT to the hazard: any 2 threads sharing one
+    ``sqlite3.Connection`` object is the danger, regardless of which pool they came from.
     A single ``sqlite3.Connection`` is NOT safe for concurrent use across threads
     even with ``check_same_thread=False``: Python only drops the ownership
     *assertion*, it adds no locking, so two threads sharing the connection corrupt
@@ -278,10 +283,13 @@ class GraphStore:
         """
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False: GraphStore is cached at module level and used
-        # from BOTH the code_intel read path (asyncio.to_thread) and the
-        # context_health write path (run_in_executor) — the same default thread
-        # pool. check_same_thread=False only DISABLES sqlite3's ownership assertion;
+        # check_same_thread=False: GraphStore is cached at module level, so its one
+        # connection is reached concurrently from several threads across different
+        # executor pools (code_intel reads on to_thread/"io"; writes from
+        # context_health on "subprocess" and code_change_feed/reindex on anyio) —
+        # not an exhaustive list, and the pool is irrelevant: any 2 threads on one
+        # Connection object is the hazard.
+        # check_same_thread=False only DISABLES sqlite3's ownership assertion;
         # it adds NO locking, and a single Connection is NOT safe for concurrent
         # cross-thread use (shared cursor/statement state → SQLITE_MISUSE). WAL +
         # busy_timeout do NOT cover this (they solve multi-connection/-process
