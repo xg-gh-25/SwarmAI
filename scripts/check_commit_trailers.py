@@ -79,7 +79,15 @@ FORBIDDEN_MARKERS = ("claude", "anthropic")
 # commit AFTER 00346142 stays enforced. This gate itself was silently inert until
 # 2026-08-16 (a ci.yml YAML parse error made GitHub reject the whole workflow), which
 # is why the seven accumulated unnoticed.
-ENFORCED_FROM = "00346142"
+#
+# 2026-08-16 amnesty (2): bumped 00346142 → d8c247a3. One more trailer-less commit
+# (d8c247a3 "fix(tests): update recall-degradation test to renamed reason") landed
+# from a direct commit — same shadowed-hook cause: core.hooksPath points git at the
+# corporate git-defender hook set, so the repo-local prepare-commit-msg trailer
+# rewrite never fired. It is already pushed to origin/main (public history), so
+# rewriting it is barred (R29 + no-rewrite-published-history). d8c247a3..HEAD
+# amnesties exactly this one while every commit AFTER it stays enforced.
+ENFORCED_FROM = "d8c247a3"
 
 _REC = "\x1e"
 _FLD = "\x1f"
