@@ -292,8 +292,18 @@ NEVER a point-in-time snapshot. A snapshot drifts to a lie next week AND changes
 judgment → it belongs to git / pipeline-run records, not a cognitive store. Store the METHOD or
 a qualitative fact; a value earns a home only if decision-relevant AND stable. **Touch-it-fix-it
 corollary: a stale STATUS value is DELETED, not updated to its current value — updating only
-resets the drift timer, the class error is that state lives in cognition at all.** (This is the
-`R30#4` cited across files — keep it point (4).) (5) **Cross-door consistency (P8)** — a change
+resets the drift timer, the class error is that state lives in cognition at all.** **AUDIENCE
+test (the decidable form — judge by WHO it helps, not by topic): an entry earns a cognitive home
+ONLY if it helps a DIFFERENT user / a DIFFERENT agent / a DIFFERENT project — a transferable
+product-or-methodology truth. Content useful only to "THIS instance × THIS codebase × THIS one
+time" — a perf number, a complexity/latency tradeoff of one change, one module's specific wiring
+detail, a restatement of an already-held principle — is a self-dev CONSTRUCTION-LOG, not
+cognition; it belongs to the pipeline run record, never DDD/MEMORY. The tell: the same topic
+splits by audience — "verify a registry-registration with a behavior assertion, never the
+discarded name" transfers (KEEP); "removing hook X made gate Y sole-occupy group Z" is
+this-codebase-once (DROP). Guard the ENTRANCE — never submit self-dev noise to the cultivation
+judge and rely on it to discard (P8: a brain's quality is bounded by its weakest unguarded
+door).** (This is the `R30#4` cited across files — keep it point (4).) (5) **Cross-door consistency (P8)** — a change
 to any ingestion/admission mechanism (judge, trust rule, dedup, noise filter) is reasoned
 across ALL four stores at once. (6) **Whole-file contradiction check** — after editing one
 section, re-read the WHOLE file before done (a corrected block contradicting a stale one
