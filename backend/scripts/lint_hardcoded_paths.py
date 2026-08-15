@@ -28,6 +28,7 @@ _ALLOWLIST = {
     "backend/skills/s_loops-health/scripts/loops_health_check.py",
     "backend/skills/s_radar-todo/scripts/todo_db.py",
     "backend/skills/s_notify/notify.py",
+    "backend/skills/s_library/scripts/library.py",
     "backend/scripts/lint_hardcoded_paths.py",  # Self-reference in docstring/pattern
 }
 

@@ -31,7 +31,17 @@ from core.evolution.class_key import canonical_class_key
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_STATE_PATH = Path.home() / ".swarm-ai" / "state" / "correction_tracker.json"
+def _default_state_path() -> Path:
+    """Default state-file path, resolved AT CALL TIME via the single app-data authority.
+
+    Must NOT be a module-level constant: a frozen home-relative default captures the
+    value at import, before a test/sandbox sets SWARM_DATA_DIR — the tracker would then
+    persist into the live production tree under the sandbox guard.
+    """
+    from config import get_app_data_dir
+
+    return get_app_data_dir() / "state" / "correction_tracker.json"
+
 
 _RESOLVE_DAYS = 30  # Days of silence after gate to mark resolved
 _AMBER_THRESHOLD = 1  # post_gate_count for ⚠️
@@ -209,7 +219,7 @@ class CorrectionClassTracker:
     """
 
     def __init__(self, state_path: Path | None = None) -> None:
-        self._state_path = state_path or _DEFAULT_STATE_PATH
+        self._state_path = state_path or _default_state_path()
         self._state: dict[str, dict] = self._load()
 
     def _load(self) -> dict[str, dict]:

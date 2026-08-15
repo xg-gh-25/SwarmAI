@@ -37,7 +37,15 @@ logger = logging.getLogger(__name__)
 
 # Bound repos clone here — OUTSIDE ~/.swarm-ai/SwarmWS (the git-tracked workspace) so a
 # cloned repo never pollutes workspace git. Resolved lazily (test may override worktree_root).
-_DEFAULT_BINDINGS_ROOT = Path.home() / ".swarm-ai" / "bindings"
+def _default_bindings_root() -> Path:
+    """Default bindings clone-root, resolved AT CALL TIME via the single app-data authority.
+
+    Must NOT be a module-level constant: a frozen home-relative default captures the
+    value at import, before a test/sandbox sets SWARM_DATA_DIR.
+    """
+    from config import get_app_data_dir
+
+    return get_app_data_dir() / "bindings"
 
 
 # ── Schema (frozen canonical §2c) ──────────────────────────────────────────
@@ -238,7 +246,7 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
             "deferred to the pre-Run-2 spike (design §7.2.2). Run 1 binds git-clonable targets only."
         )
 
-    root = (Path(worktree_root) if worktree_root is not None else _DEFAULT_BINDINGS_ROOT).resolve()
+    root = (Path(worktree_root) if worktree_root is not None else _default_bindings_root()).resolve()
 
     # binding.repo must ALWAYS be a bare name (no path separators / '..') — it is used
     # BOTH as the default worktree dir AND to build db_path below. Validating it only

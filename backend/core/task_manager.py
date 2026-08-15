@@ -40,8 +40,20 @@ _VALID_STATUSES = {"draft", "wip", "blocked", "completed", "cancelled"}
 
 # Script task configuration
 _MAX_CONCURRENT_SCRIPTS = 2
-_TASKS_DIR = Path.home() / ".swarm-ai" / "tasks"
 _script_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SCRIPTS)
+
+
+def _tasks_dir() -> Path:
+    """Script-task log dir, resolved AT CALL TIME via the single app-data authority.
+
+    Must NOT be a module-level constant: a frozen home-relative default captures the
+    value at import, before a test/sandbox sets SWARM_DATA_DIR — so the daemon would
+    write into the live production tree even under the sandbox guard (the
+    app-data-authority-bypass class this run fixes).
+    """
+    from config import get_app_data_dir
+
+    return get_app_data_dir() / "tasks"
 
 # Dedicated executor for script tasks — reuses same pool sizing as _job_executor
 # in main.py but kept separate to avoid coupling lifecycle
@@ -528,10 +540,11 @@ class TaskManager:
                 )
 
         # Ensure tasks directory exists
-        _TASKS_DIR.mkdir(parents=True, exist_ok=True)
+        tasks_dir = _tasks_dir()
+        tasks_dir.mkdir(parents=True, exist_ok=True)
 
         task_id = f"task_{uuid4().hex[:12]}"
-        log_path = str(_TASKS_DIR / f"{task_id}.log")
+        log_path = str(tasks_dir / f"{task_id}.log")
 
         task = {
             "id": task_id,
