@@ -38,7 +38,7 @@ Everything in SwarmAI serves one of four:
 
 ### 🧬 Self-Evolution — it upgrades its own judgment
 
-Most agent-memory projects pile up entries. SwarmAI separates **cognition** (the OS) from **knowledge** (the disk): one edited line in `SOUL.md` shifts judgment more than a thousand memory rows — and every change is a `git diff`. A recurring mistake doesn't become one more logged lesson; it becomes a **gate** — a path where the wrong move can't happen. Not aspirational: 20+ live guards sit in [`security_hooks.py`](./backend/core/security_hooks.py) (commit gate, pytest guard, dangerous-command gate). Read the file — the wrong move is blocked in code, not in a guideline. Progress isn't a growing correction count; it's an error class that **stops recurring**.
+Most agent-memory projects pile up entries. SwarmAI separates **cognition** (the OS) from **knowledge** (the disk): one edited line in `SOUL.md` shifts judgment more than a thousand memory rows — and every change is a `git diff`. A recurring mistake doesn't become one more logged lesson; it becomes a **gate** — a path where the wrong move can't happen. Not aspirational: a dozen-plus live guards sit in [`security_hooks.py`](./backend/core/security_hooks.py) (commit gate, pytest guard, dangerous-command gate). Read the file — the wrong move is blocked in code, not in a guideline. Progress isn't a growing correction count; it's an error class that **stops recurring**.
 
 ### 🧠 Brain-first — every project is a domain brain
 
