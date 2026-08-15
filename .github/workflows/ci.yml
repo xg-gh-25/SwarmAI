@@ -60,23 +60,22 @@ jobs:
           # Also catch tests that reference ~/.swarm-ai/ paths (filesystem-dependent)
           FS_FILES=$(grep -rl '\.swarm-ai\|swarm_data_dir\|SWARM_DATA' tests/ --include='test_*.py' | sort)
 
-          # Catch tests using DB fixtures from conftest.py (indirect DB dependency).
-          # These tests don't import database modules directly but use fixtures
-          # like db_session, test_db, etc. that are defined in conftest.py.
-          DB_FIXTURES=$(grep -l 'from.*database\|import.*sqlite\|SQLiteDatabase\|aiosqlite' tests/conftest.py >/dev/null 2>&1 && \
-            grep -oP '(?<=def )\w+(?=\()' tests/conftest.py | head -20 || true)
-          FIXTURE_USERS=""
-          if [ -n "$DB_FIXTURES" ]; then
-            for fixture in $DB_FIXTURES; do
-              FIXTURE_USERS="$FIXTURE_USERS $(grep -rl "$fixture" tests/ --include='test_*.py' 2>/dev/null || true)"
-            done
-          fi
+          # Catch tests that USE a real DB fixture as a test/fixture parameter
+          # (indirect DB dependency — they don't import a DB module directly).
+          # Match the fixture name as a whole word ON A `def ...(...)` LINE, so a
+          # test only counts as a DB-user when it actually REQUESTS the fixture as
+          # a parameter — NOT merely mentions the word in a comment/docstring/string.
+          # (History: this step used to `grep -oP '(?<=def )\w+' conftest.py` to
+          # harvest ALL conftest def names, which captured generic tokens like `f`
+          # that match every file, skipping all 493 tests -> pytest exit 5. The
+          # explicit word-boundary whitelist of the 4 real DB fixtures fixes that.)
+          DB_FIXTURE_USERS=$(grep -rlE '^[[:space:]]*(async )?def [a-zA-Z_].*\b(client|async_client|reset_database|_cleanup_test_db)\b' tests/ --include='test_*.py' 2>/dev/null | sort || true)
 
           # Additional skips: macOS-only (launchd), native deps (ffmpeg)
           EXTRA_SKIP="tests/test_daemon_sidecar_robustness.py tests/test_daemon_sidecar_fixes.py tests/test_voice_transcribe.py"
 
           # Build --ignore flags (deduplicated)
-          ALL_SKIP=$(echo $DB_FILES $FS_FILES $FIXTURE_USERS $EXTRA_SKIP | tr ' ' '\n' | sort -u)
+          ALL_SKIP=$(echo $DB_FILES $FS_FILES $DB_FIXTURE_USERS $EXTRA_SKIP | tr ' ' '\n' | sort -u)
           IGNORES=""
           for f in $ALL_SKIP; do
             [ -f "$f" ] && IGNORES="$IGNORES --ignore=$f"

@@ -67,7 +67,19 @@ FORBIDDEN_MARKERS = ("claude", "anthropic")
 # It is ~45 commits deep and unpushed; rewriting it is barred (no interactive rebase
 # + parallel sessions share this tree, R29). Amnestying the one residual is exactly
 # what this ratchet is for; every commit AFTER 2a5d465b is still enforced.
-ENFORCED_FROM = "2a5d465b"
+#
+# 2026-08-16 amnesty: bumped 2a5d465b → 00346142. Seven commits from a parallel
+# session (579d4a7b, ca43daeb, f0f62d65, 0cdbbb7c, 643de6b1, edbfb236, 00346142 —
+# a memory/recall refactor + context-doc edits) carry no trailer: the repo-local
+# prepare-commit-msg hook that stamps it was SHADOWED by the corporate git-defender
+# hook set (core.hooksPath redirects git away from repo-local hooks), so those
+# commits were written without the rewrite firing. All seven are already pushed to
+# origin/main (public history) — rewriting them is barred (R29). 00346142 is the
+# newest of the seven, so 00346142..HEAD amnesties exactly those seven while every
+# commit AFTER 00346142 stays enforced. This gate itself was silently inert until
+# 2026-08-16 (a ci.yml YAML parse error made GitHub reject the whole workflow), which
+# is why the seven accumulated unnoticed.
+ENFORCED_FROM = "00346142"
 
 _REC = "\x1e"
 _FLD = "\x1f"

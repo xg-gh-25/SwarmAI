@@ -11,7 +11,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 from contextlib import contextmanager
@@ -29,6 +28,7 @@ from core.ddd_cultivation import (
     apply_retire_proposal,
     log_application,
 )
+from utils.file_lock import flock_exclusive_nb, flock_unlock
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cultivation", tags=["cultivation"])
@@ -289,7 +289,7 @@ def _proposal_lock(project_dir: Path, proposal_id: str):
     lock_fd = None
     try:
         lock_fd = open(lock_path, "w")  # noqa: SIM115
-        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        flock_exclusive_nb(lock_fd)
     except OSError:
         if lock_fd:
             lock_fd.close()
@@ -301,7 +301,7 @@ def _proposal_lock(project_dir: Path, proposal_id: str):
         yield
     finally:
         try:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            flock_unlock(lock_fd)
         except OSError:
             pass
         lock_fd.close()  # NO unlink — see docstring (inode race)

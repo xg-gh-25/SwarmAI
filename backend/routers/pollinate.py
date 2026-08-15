@@ -272,7 +272,9 @@ def _asset_id(platform: str, fmt: str, file_name: str) -> str:
     labelling will re-hash existing assets and ORPHAN their stored publish-state entries.
     Treat the (platform, format, file_name) → id mapping as a stable contract.
     """
-    return hashlib.sha1(f"{platform}/{fmt}/{file_name}".encode("utf-8")).hexdigest()
+    return hashlib.sha1(
+        f"{platform}/{fmt}/{file_name}".encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
 
 
 def _publish_state_path(run_dir: Path) -> Path:

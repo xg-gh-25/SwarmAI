@@ -38,13 +38,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import fcntl
 import glob
 import json
 import os
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils.file_lock import flock_exclusive, flock_unlock
 
 
 def _default_workspace() -> Path:
@@ -117,7 +119,7 @@ def _strip_under_lock(run_path: str, foreign: list[dict]) -> int:
     fd = None
     try:
         fd = open(lock_path, "w")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock_exclusive(fd)
         # Re-read under lock
         data = json.loads(Path(run_path).read_text(encoding="utf-8"))
         stages = data.get("stages", [])
@@ -136,7 +138,7 @@ def _strip_under_lock(run_path: str, foreign: list[dict]) -> int:
     finally:
         if fd is not None:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                flock_unlock(fd)
                 fd.close()
             except Exception:
                 pass
