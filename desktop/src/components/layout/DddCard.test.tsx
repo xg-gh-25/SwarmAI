@@ -84,6 +84,31 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     expect(screen.queryByTestId('dddcard-briefing')).toBeNull();
   });
 
+  it('isSelf renders the SELF·OS tag + violet top-border; absent by default (run_d0cd4414 AC2)', () => {
+    // The SwarmAI card is the ONLY differentiated card in the flat wall: a violet
+    // top-border + a "SELF·OS" corner tag. Every other card has neither.
+    const { rerender } = render(
+      <DddCard density="compact" name="SwarmAI" kind="code-repo"
+        lifecycleStage="GROW" health={CHEAP_CLEAN} isSelf onOpen={vi.fn()} />,
+    );
+    const selfTag = screen.getByTestId('dddcard-self-tag');
+    expect(selfTag.textContent).toContain('SELF');
+    // the violet top-border rides on the card button itself. It MUST use `!` important
+    // (Gate-2 fix): the needs/calm branch borders set the same border-top-width, so a
+    // non-important border-t-2 loses to CSS source order. Assert the important form so a
+    // regression to the colliding version is caught.
+    expect(screen.getByTestId('dddcard-SwarmAI').className).toContain('!border-t-2');
+    expect(screen.getByTestId('dddcard-SwarmAI').className).toContain('!border-t-[#a371f7]');
+
+    // a non-self card: no tag, no violet border
+    rerender(
+      <DddCard density="compact" name="AIDLC" kind="process"
+        lifecycleStage="GROW" health={CHEAP_CLEAN} onOpen={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('dddcard-self-tag')).toBeNull();
+    expect(screen.getByTestId('dddcard-AIDLC').className).not.toContain('border-t-[#a371f7]');
+  });
+
   it('NEEDS card (pending>0) shows the actionable counts spelled out, NOT the 2×2 grid', () => {
     const onOpen = vi.fn();
     render(

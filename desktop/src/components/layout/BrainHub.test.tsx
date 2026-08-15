@@ -35,6 +35,7 @@ const mockRejectHunk = vi.fn();
 const mockApproveProposal = vi.fn();
 const mockRejectProposal = vi.fn();
 const mockGetDistribution = vi.fn();
+const mockBrainRecall = vi.fn();
 // BrainHub now consumes React Query HOOKS (run_cfb460ac), not raw fetchers. We mock
 // the hooks at the boundary with a tiny useState+useEffect wrapper over the same
 // mock fns — this keeps every existing fixture/assertion working AND exercises the
@@ -74,6 +75,7 @@ vi.mock('../../services/ddd', async () => {
     rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
     approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
     rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
+    brainRecall: (...a: unknown[]) => mockBrainRecall(...a),
     // pure aggregation helper — real impl (no spy needed; contract-new export, R27)
     aggregateTypeCounts: (sections: { entries: { entryType: string }[] }[]) => {
       const c: Record<string, number> = {
@@ -218,6 +220,7 @@ beforeEach(() => {
   mockRejectHunk.mockResolvedValue({ reverted: true });
   mockApproveProposal.mockResolvedValue({});
   mockRejectProposal.mockResolvedValue({});
+  mockBrainRecall.mockResolvedValue([]);  // default: no hits (search idle)
   mockGetDistribution.mockResolvedValue({
     declared_targets: ['open-plugin'], visibility: 'internal',
     distributable: true, declared: true, warnings: [],
@@ -233,17 +236,41 @@ describe('BrainHub — Gallery (AC3)', () => {
     expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy();
   });
 
-  it('partitions non-pinned brains into a NEEDS-YOU zone (pending>0) above a CALM zone (pending==0)', async () => {
-    // flat-grid fallback (no pinned) still splits by pending: AIDLC pending=2 → needs, SwarmAI pending=0 → calm
+  it('renders a FLAT card wall — no needs/calm zones, no pinned hero (run_d0cd4414 AC1)', async () => {
+    // R27 migration: the two-zone partition + hero row are GONE. Every brain is an
+    // equal card in ONE grid; a needs card (pending>0) self-signals via its amber
+    // left-border in-wall, not a separate zone.
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
-    const needs = screen.getByTestId('brainhub-needs-zone');
-    const calm = screen.getByTestId('brainhub-calm-zone');
-    // AIDLC (pending=2) lives in needs; SwarmAI (pending=0) lives in calm
-    expect(needs.querySelector('[data-testid="dddcard-AIDLC"]')).toBeTruthy();
-    expect(calm.querySelector('[data-testid="dddcard-SwarmAI"]')).toBeTruthy();
-    // and NOT vice-versa
-    expect(needs.querySelector('[data-testid="dddcard-SwarmAI"]')).toBeNull();
+    // the flat wall exists; the removed zone/hero surfaces do NOT
+    const wall = screen.getByTestId('brainhub-card-wall');
+    expect(screen.queryByTestId('brainhub-needs-zone')).toBeNull();
+    expect(screen.queryByTestId('brainhub-calm-zone')).toBeNull();
+    expect(screen.queryByTestId('brainhub-pinned-row')).toBeNull();
+    // BOTH brains are direct cards in the one wall (no zone wrapper between)
+    expect(wall.querySelector('[data-testid="dddcard-SwarmAI"]')).toBeTruthy();
+    expect(wall.querySelector('[data-testid="dddcard-AIDLC"]')).toBeTruthy();
+  });
+
+  it('SwarmAI is FIRST + carries the SELF·OS marker; a normal brain does not (AC2)', async () => {
+    mockGetPinned.mockReturnValue(['SwarmAI']);
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    const cards = screen.getAllByTestId(/^dddcard-/);
+    expect(cards[0].getAttribute('data-testid')).toBe('dddcard-SwarmAI');  // hoisted first
+    // self-marker lives on the SwarmAI card only
+    const swarm = screen.getByTestId('dddcard-SwarmAI');
+    expect(swarm.querySelector('[data-testid="dddcard-self-tag"]')).toBeTruthy();
+    const aidlc = screen.getByTestId('dddcard-AIDLC');
+    expect(aidlc.querySelector('[data-testid="dddcard-self-tag"]')).toBeNull();
+  });
+
+  it('a needs card (pending>0) keeps its amber left-border inside the wall — no zone (AC3)', async () => {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
+    // AIDLC pending=2 → amber left accent on the card itself, still a wall child
+    expect(screen.getByTestId('dddcard-AIDLC').className).toContain('border-l-[#f0a500]');
+    expect(screen.queryByTestId('brainhub-needs-zone')).toBeNull();
   });
 
   it('a CALM gallery card no longer shows the redundant-ink widgets (presence / 2×2 cheap grid)', async () => {
@@ -378,15 +405,19 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     document.removeEventListener('swarm:open-file', openFile as EventListener);
   });
 
-  it('AC3: Browse tree is the FULL tree (showAllFiles) in a bounded column', async () => {
+  it('AC6: Browse tree HIDES infra (showAllFiles=false) inside a "Files" card frame (run_d0cd4414)', async () => {
     await openBrowse();
     await screen.findByTestId('library-tree-mock');
-    // The tree is always shown (no Files|Code Graph toggle any more) and receives
-    // showAllFiles (real complete tree, infra dimmed not hidden) + a bounded maxWidth.
+    // run_d0cd4414: infra is now HIDDEN by default — showAllFiles is dropped, so the
+    // tree gets its Library-default filter (isNoiseNode hides .db/.lock/.artifacts/dotfiles).
     const props = mockLibraryTree.mock.calls.at(-1)![0];
-    expect(props.showAllFiles).toBe(true);
-    expect(props.maxWidth).toBeTruthy();   // bounded left column, not full-width
-    expect(screen.queryByTestId('brainhub-view-toggle')).toBeNull();  // 3rd-level toggle removed
+    expect(props.showAllFiles).toBeFalsy();   // infra hidden (was `true`/dimmed)
+    // the tree is now WRAPPED in a card frame with a "Files" header (peer to Code Graph)
+    const frame = screen.getByTestId('brainhub-browse-tree-frame');
+    expect(frame).toBeTruthy();
+    expect(frame.textContent).toContain('Files');
+    expect(frame.querySelector('[data-testid="library-tree-mock"]')).toBeTruthy();  // tree inside the frame
+    expect(screen.queryByTestId('brainhub-view-toggle')).toBeNull();
   });
 
   it('AC4: hasCodeIntel → Code Graph is a COLLAPSED disclosure below the tree; CodeGraph mounts ONLY on expand', async () => {
@@ -416,6 +447,49 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
   it('AC2: the ontology/needs-you health strip is KEPT — relocated into Overview (default)', async () => {
     await openBrain();
     expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy();
+  });
+});
+
+describe('BrainHub — detail search box (run_d0cd4414, AC7)', () => {
+  async function openBrain() {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+  }
+
+  it('typing a query calls brainRecall + renders hits; clicking a hit dispatches swarm:open-file', async () => {
+    mockBrainRecall.mockResolvedValue([
+      { domain: 'ddd', title: 'TECH.md § Recall', source: 'Projects/SwarmAI/2-understanding/TECH.md', content: 'recall is pure-filesystem...' },
+    ]);
+    const openFileSpy = vi.fn();
+    document.addEventListener('swarm:open-file', openFileSpy as EventListener);
+    try {
+      await openBrain();
+      // the search row is present at the shell level (spans all sub-tabs)
+      const input = screen.getByTestId('brainhub-search-input');
+      fireEvent.change(input, { target: { value: 'recall' } });
+      // debounced → brainRecall fires with (name, q) and hits render
+      await waitFor(() => expect(mockBrainRecall).toHaveBeenCalledWith('SwarmAI', 'recall'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-search-results')).toBeTruthy());
+      const hit = screen.getByTestId('brainhub-search-hit');
+      expect(hit.textContent).toContain('TECH.md § Recall');
+      // clicking a hit opens the file via swarm:open-file (shell-local openFile)
+      fireEvent.click(hit);
+      await waitFor(() => expect(openFileSpy).toHaveBeenCalled());
+      const evt = openFileSpy.mock.calls[0][0] as CustomEvent<{ path: string }>;
+      expect(evt.detail.path).toBe('Projects/SwarmAI/2-understanding/TECH.md');
+    } finally {
+      document.removeEventListener('swarm:open-file', openFileSpy as EventListener);
+    }
+  });
+
+  it('empty query renders NO results panel and makes NO recall call', async () => {
+    await openBrain();
+    expect(screen.getByTestId('brainhub-search-input')).toBeTruthy();
+    // idle (empty q): no panel, no fetch
+    expect(screen.queryByTestId('brainhub-search-results')).toBeNull();
+    expect(mockBrainRecall).not.toHaveBeenCalled();
   });
 });
 
@@ -505,13 +579,14 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
   });
 });
 
-describe('BrainHub — Gallery primary hero is clickable (AC6, run_a607f2b0)', () => {
-  it('clicking the FULL-density primary hero opens its brain view', async () => {
-    // AC6: the pinned primary hero (full DddCard) must open the brain, same as a
-    // compact card. Pin SwarmAI so it renders as the full primary (not flat-grid).
+describe('BrainHub — a wall card opens its brain (run_d0cd4414, was AC6 hero)', () => {
+  it('clicking the SwarmAI card (self, first in the wall) opens its brain view', async () => {
+    // R27 migration: the full-density pinned HERO is gone. SwarmAI is now a normal
+    // (self-marked) compact card in the flat wall; clicking it still opens the brain.
     mockGetPinned.mockReturnValue(['SwarmAI']);
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brainhub-pinned-row')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('brainhub-card-wall')).toBeTruthy());
+    expect(screen.queryByTestId('brainhub-pinned-row')).toBeNull();  // hero gone
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   });

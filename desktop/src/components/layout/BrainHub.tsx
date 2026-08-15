@@ -18,15 +18,16 @@
  *
  * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
   approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
+  brainRecall,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail,
-  ReviewData, ReviewHunk, PendingProposal,
+  ReviewData, ReviewHunk, PendingProposal, RecallHit,
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
@@ -114,12 +115,9 @@ export function BrainHub(
   const pinned = useMemo(() => bp?.pinned ?? [], [bp]);
   const error = bpErr ? String((bpErr as { message?: string })?.message ?? bpErr) : null;
 
-  // The pinned primary (SwarmAI) renders as a FULL card → its detail rides the SAME
-  // cached hook the Brain tab uses, so opening that brain later is a 0-network cache
-  // hit (was an eager uncached getBrainDetail on every overlay open). undefined until
-  // loaded → the card degrades to its cheap summary (DddCard guards on metrics).
-  const primaryName = pinned[0] ?? null;
-  const { data: primaryDetail } = useBrainDetail(primaryName);
+  // run_d0cd4414: the gallery is now a flat card wall — no primary hero, so NO second
+  // getBrainDetail fetch here. The gallery makes exactly ONE data call
+  // (useBrainsWithPinned above); a brain's detail is fetched lazily only when opened.
 
   // Enter the detail shell on a specific brain, at a specific view (default Overview).
   const openBrain = useCallback((name: string, view: DetailView = 'overview') => {
@@ -165,7 +163,7 @@ export function BrainHub(
     return (
       <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
         <div className="flex-1 overflow-auto">
-          <Gallery brains={brains} pinned={pinned} primaryDetail={primaryDetail} onOpen={openBrain} />
+          <Gallery brains={brains} pinned={pinned} onOpen={openBrain} />
         </div>
       </div>
     );
@@ -207,6 +205,15 @@ function BrainDetailShell(
   // extra fetch) — surfaces "N awaiting review" right on the tab (wireframe).
   const pending = brains?.find((b) => b.name === name)?.health.pending ?? 0;
 
+  // Shell-local openFile for the search row (Gate-1 fix): openFile is BrainView-local,
+  // so instead of threading it up we rebuild the SAME primitive here — close this
+  // overlay BEFORE dispatching swarm:open-file so the Canvas isn't rendered under the
+  // host (the swarmws z-index precedent, identical to BrainView.openFile).
+  const shellOpenFile = useCallback((workspaceRelPath: string) => {
+    onRequestClose?.();
+    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: workspaceRelPath } }));
+  }, [onRequestClose]);
+
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
       {/* breadcrumb + brain switcher */}
@@ -245,6 +252,12 @@ function BrainDetailShell(
         </TabBtn>
         <TabBtn active={detailView === 'distribute'} onClick={() => onSelectView('distribute')} testid="brainhub-tab-distribute">Distribute</TabBtn>
       </div>
+
+      {/* Search row (AC7): spans all sub-tabs, scoped to this brain. Uses a
+          shell-local openFile built from the onRequestClose the shell already holds
+          (Gate-1: openFile is BrainView-local, so we do NOT thread it up — the shell
+          reconstructs the same close-then-dispatch primitive). */}
+      <BrainSearchRow name={name} onOpenFile={shellOpenFile} />
 
       <div className="flex-1 overflow-auto">
         {detailView === 'overview' && (
@@ -288,117 +301,136 @@ function TabBtn({ active, disabled, onClick, testid, children }: {
   );
 }
 
-// ── Gallery ──────────────────────────────────────────────────────────────────
-
-/** A compact card straight from a BrainSummary (cheap — includes the 3-layer bar
- *  via summary.typeCounts, no detail fetch). */
-function CompactBrain({ b, onOpen }: { b: BrainSummary; onOpen: (n: string) => void }) {
-  return (
-    <DddCard density="compact" name={b.name} kind={b.kind}
-      lifecycleStage={b.lifecycleStage}
-      health={b.health} typeCounts={b.typeCounts} description={b.description} onOpen={onOpen} />
-  );
-}
-
 /**
- * Bento gallery: pinned top row = the primary (SwarmAI) as a FULL ontology card on
- * the left + up to 2 pinned brains as small cards stacked on the right; then the
- * REST of the brains 3-per-row. Pinned order + primary detail come from the parent
- * (backend-driven, existence-guarded). Degrades: if primaryDetail hasn't loaded,
- * the big card shows its cheap summary + fills in (DddCard full-body guards on
- * metrics). If pinned is empty (old daemon), falls back to a flat compact grid.
+ * BrainSearchRow (run_d0cd4414, AC7) — the Brain Hub's search box, wired to the
+ * pre-existing GET /api/ddd/brains/{name}/recall endpoint via brainRecall(). Lives
+ * in the detail shell (scoped to the selected brain, matching the single-brain
+ * endpoint). Self-contained: owns its query/hits state + a debounce so it does NOT
+ * fetch per keystroke. A conditional results panel renders ONLY when q is non-empty
+ * AND hits exist — so it never crowds the view when unused. Clicking a hit calls
+ * onOpenFile (the shell-local opener built from onRequestClose — Gate-1: openFile is
+ * BrainView-local, so the shell builds its own rather than threading it up).
  */
-function Gallery(
-  { brains, pinned, primaryDetail, onOpen }:
-  { brains: BrainSummary[] | null; pinned: string[]; primaryDetail?: BrainDetail; onOpen: (n: string) => void },
-) {
-  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading brains…</div>;
-  if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">No DDD brains found.</div>;
+function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: string) => void }) {
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<RecallHit[]>([]);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const byName = new Map(brains.map((b) => [b.name, b]));
-  const primaryName = pinned[0];
-  const primary = primaryName ? byName.get(primaryName) : undefined;
-  const rightPins = pinned.slice(1).map((n) => byName.get(n)).filter((b): b is BrainSummary => !!b);
-  const pinnedSet = new Set([primaryName, ...rightPins.map((b) => b.name)].filter(Boolean));
-  const rest = brains.filter((b) => !pinnedSet.has(b.name));
+  // Reset when switching brains (the shell remounts on name change via key, but guard
+  // an in-place name change too — stale hits from another brain would mislead).
+  useEffect(() => { setQ(''); setHits([]); }, [name]);
 
-  // Memoize the O(entries) type aggregation so it doesn't re-scan ~1000 entries on
-  // every unrelated re-render (hover/selection) — recompute only when the detail
-  // (or the primary summary fallback) changes. Computed before any early return
-  // (hooks rule). Falls back to the summary's cheap typeCounts until detail loads.
-  const primaryTypeCounts = useMemo(
-    () => (primaryDetail ? aggregateTypeCounts(primaryDetail.sections) : primary?.typeCounts),
-    [primaryDetail, primary?.typeCounts],
-  );
+  // Debounced recall: blank q short-circuits (brainRecall itself also guards, but
+  // clearing hits here removes the panel immediately). A stale-response guard
+  // (`alive`) prevents an out-of-order slow response from overwriting a newer one.
+  // Gate-2 meta-review (MED, operational): recall_all is UNCACHED per call (re-reads
+  // + re-parses the DDD docs + Knowledge corpus + FTS stores). So (a) require ≥2
+  // non-blank chars — a 1-char query scans everything for near-useless results — and
+  // (b) 350ms debounce, to bound the worst-case scan rate for a fast typist on a
+  // large-corpus brain. Fail-soft endpoint means this is throughput-only, not a
+  // correctness gate.
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    if (q.trim().length < 2) { setHits([]); return; }
+    let alive = true;
+    timer.current = setTimeout(() => {
+      void brainRecall(name, q).then((h) => { if (alive) setHits(h); }, () => { if (alive) setHits([]); });
+    }, 350);
+    return () => { alive = false; if (timer.current) clearTimeout(timer.current); };
+  }, [q, name]);
 
-  // Fallback: no pinned resolved → still verdict-first two zones (old flat grid
-  // was the data-dump). Partition ALL brains by pending.
-  if (!primary) {
-    return (
-      <div className="p-4 flex flex-col gap-3" data-testid="brainhub-gallery">
-        <ZonedGrid brains={brains} onOpen={onOpen} />
-      </div>
-    );
-  }
+  const showPanel = q.trim().length >= 2 && hits.length > 0;
 
   return (
-    <div className="p-4 flex flex-col gap-3" data-testid="brainhub-gallery">
-      {/* top row: primary full card (left) + 2 pinned small stacked (right).
-          The primary hero is verdict-first — NO presence/lifecycle/cheap widgets
-          (its FullBody ontology+needs-you+facts IS the signal); metrics is the
-          only detail-derived prop (lazy). */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0, 1fr) 300px' }} data-testid="brainhub-pinned-row">
-        <DddCard density="full" name={primary.name} kind={primary.kind}
-          metrics={primaryDetail?.health}
-          health={primary.health}
-          typeCounts={primaryTypeCounts}
-          onOpen={onOpen} />
-        {rightPins.length > 0 && (
-          <div className="flex flex-col gap-3">
-            {rightPins.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
-          </div>
+    <div className="px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0" data-testid="brainhub-search-row">
+      <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1">
+        <span className="material-symbols-outlined text-[15px] text-[var(--color-text-faint)]">search</span>
+        <input
+          data-testid="brainhub-search-input"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={`Search ${name}'s knowledge…`}
+          className="flex-1 bg-transparent text-[12px] text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
+        />
+        {q && (
+          <button data-testid="brainhub-search-clear" onClick={() => setQ('')}
+            className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]">
+            <span className="material-symbols-outlined text-[15px]">close</span>
+          </button>
         )}
       </div>
-      {/* rest: verdict-first two zones (needs-you above calm) */}
-      {rest.length > 0 && <ZonedGrid brains={rest} onOpen={onOpen} />}
+      {showPanel && (
+        <div className="mt-1.5 flex flex-col gap-1 max-h-[40vh] overflow-auto" data-testid="brainhub-search-results">
+          {hits.map((h, i) => (
+            <button
+              key={`${h.source}-${i}`}
+              data-testid="brainhub-search-hit"
+              onClick={() => onOpenFile(h.source)}
+              className="text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 hover:border-[#3b4552]"
+            >
+              <div className="flex items-baseline gap-2">
+                <span className="text-[12px] font-medium text-[var(--color-text)] truncate">{h.title || h.source}</span>
+                <span className="ml-auto text-[9px] font-mono text-[var(--color-text-faint)] flex-shrink-0">{h.domain}</span>
+              </div>
+              {h.source && <div className="text-[10px] font-mono text-[var(--color-text-faint)] truncate">{h.source}</div>}
+              {h.content && <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2 mt-0.5">{h.content}</div>}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-/**
- * Verdict-first partition of a brain list into a NEEDS-YOU zone (health.pending>0,
- * amber, above) and a CALM zone (pending==0, muted, below). The whole answer to
- * "which brains need me?" is the zone split — pending is the ONLY gate (sinking/
- * uncommitted are facts on the card, never zone gates: gating on them would pull
- * most brains up). Pure O(N) filter on the already-loaded cheap summaries — ZERO
- * getBrainDetail. A zone with no members is omitted (no empty-zone noise).
- */
-function ZonedGrid({ brains, onOpen }: { brains: BrainSummary[]; onOpen: (n: string) => void }) {
-  const needs = brains.filter((b) => b.health.pending > 0);
-  const calm = brains.filter((b) => b.health.pending === 0);
+// ── Gallery ──────────────────────────────────────────────────────────────────
+
+/** A compact card straight from a BrainSummary (cheap — no detail fetch).
+ *  `isSelf` (run_d0cd4414) threads THROUGH this wrapper into DddCard — the Gallery
+ *  renders CompactBrain (not DddCard directly), so the self-marker prop must be
+ *  forwarded here or it silently drops. */
+function CompactBrain({ b, isSelf, onOpen }: { b: BrainSummary; isSelf?: boolean; onOpen: (n: string) => void }) {
   return (
-    <>
-      {needs.length > 0 && (
-        <div data-testid="brainhub-needs-zone">
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-[#f0a500] mb-2">
-            ▲ Needs you · {needs.length} of {brains.length}
-          </div>
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
-            {needs.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
-          </div>
-        </div>
-      )}
-      {calm.length > 0 && (
-        <div data-testid="brainhub-calm-zone" className={needs.length > 0 ? 'mt-3' : ''}>
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-faint)] mb-2">
-            Calm · nothing queued
-          </div>
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
-            {calm.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
-          </div>
-        </div>
-      )}
-    </>
+    <DddCard density="compact" name={b.name} kind={b.kind}
+      lifecycleStage={b.lifecycleStage}
+      health={b.health} typeCounts={b.typeCounts} description={b.description}
+      isSelf={isSelf} onOpen={onOpen} />
+  );
+}
+
+/**
+ * Flat card wall (run_d0cd4414): ONE 3-per-row grid, every brain an equal compact
+ * card — no hero, no needs/calm zones, no second getBrainDetail fetch (the gallery
+ * makes exactly one call: useBrainsWithPinned). SwarmAI is pinned FIRST via
+ * `pinned[0]` (backend get_pinned_projects, always SwarmAI, existence-guarded) and
+ * is the ONLY differentiated card (violet top-border + SELF·OS tag via isSelf).
+ * A needs card (pending>0) still self-signals with its amber left-border inside the
+ * wall. Degrades: pinned empty (old daemon) → SwarmAI simply isn't hoisted/marked,
+ * the wall renders in the brains' natural order.
+ */
+function Gallery(
+  { brains, pinned, onOpen }:
+  { brains: BrainSummary[] | null; pinned: string[]; onOpen: (n: string) => void },
+) {
+  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading brains…</div>;
+  if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">No DDD brains found.</div>;
+
+  // SwarmAI-first ordering, data-driven (pinned[0]), NOT a hardcoded name. The self
+  // card is hoisted to the front; the rest keep their incoming order. If pinned is
+  // empty or its brain isn't in the list (old daemon), selfName is undefined → no
+  // hoist, no marker (graceful degrade).
+  const selfName = pinned[0] && brains.some((b) => b.name === pinned[0]) ? pinned[0] : undefined;
+  const ordered = selfName
+    ? [brains.find((b) => b.name === selfName)!, ...brains.filter((b) => b.name !== selfName)]
+    : brains;
+
+  return (
+    <div className="p-4" data-testid="brainhub-gallery">
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }} data-testid="brainhub-card-wall">
+        {ordered.map((b) => (
+          <CompactBrain key={b.name} b={b} isSelf={b.name === selfName} onOpen={onOpen} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -742,28 +774,33 @@ function BrainBrowse(
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-auto px-4 pb-4" data-testid="brainhub-browse">
-      {/* The REAL, complete Projects/<name> tree (showAllFiles = nothing hidden,
-          infra dimmed) in a BOUNDED left column so it doesn't span the overlay.
-          hugContent (run_4de3103f): the tree takes only its content height so the
-          Code Graph disclosure below hugs it instead of being flex-pushed to the
-          overlay bottom. NO wrapper div here (removed): LibraryTree is a DIRECT
-          child of this flex-1 BrainBrowse container, so its hugContent measure
-          reads THIS container's clientHeight (the real available height) off
-          parentElement — a stable flex-1 ancestor, no intermediate box to collapse.
-          A short tree shrinks (Code Graph follows); a tall tree caps + scrolls. */}
-      <LibraryTree
-        key={`tree-${name}`}
-        rootPath={`Projects/${name}`}
-        onFileOpen={onOpenFile}
-        showAllFiles
-        hugContent
-        // clamp(min, preferred, max): floor 320px so deep DDD paths aren't
-        // truncated, preferred 38% of the overlay, cap 560px so it never spans.
-        // One expression avoids the minWidth>maxWidth conflict on narrow overlays
-        // (REVIEW MED) — on a <842px overlay clamp still honors the 320px floor
-        // without a separate minWidth fighting the cap.
-        maxWidth="clamp(320px, 38%, 560px)"
-      />
+      {/* run_d0cd4414: the tree is now WRAPPED in a card frame (border + bg + a
+          "Files" header) so it reads as a peer of the Code Graph disclosure below —
+          two framed, hierarchy-clear regions instead of a naked tree above a boxed
+          graph. Infra (.artifacts/.db/.lock/dotfiles) is HIDDEN by default
+          (showAllFiles dropped → LibraryTree's isNoiseNode filter applies), so the
+          tree shows only real browsable DDD content.
+          hugContent is KEPT, but the frame carries an explicit maxHeight cap: with a
+          cap, the tree's parent-clientHeight measure converges (short tree → frame
+          hugs content; tall tree → frame caps at maxHeight → tree scrolls inside),
+          so the run_4de3103f feedback ("short tree pins height low forever") can't
+          occur — the cap bounds it. Width clamp moves to the frame. */}
+      <div
+        data-testid="brainhub-browse-tree-frame"
+        className="flex flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden"
+        style={{ maxWidth: 'clamp(320px, 38%, 560px)', maxHeight: '60vh' }}
+      >
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--color-border)] text-[11px] font-medium text-[var(--color-text-muted)] flex-shrink-0">
+          <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">folder_open</span>
+          <span>Files · Projects/{name}</span>
+        </div>
+        <LibraryTree
+          key={`tree-${name}`}
+          rootPath={`Projects/${name}`}
+          onFileOpen={onOpenFile}
+          hugContent
+        />
+      </div>
 
       {/* Code Graph — collapsed disclosure BELOW the tree. Only rendered when a
           code_intel.db exists for this brain; only MOUNTED (→ fetched) on expand. */}

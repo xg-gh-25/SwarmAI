@@ -91,6 +91,11 @@ interface CompactProps extends CommonProps {
    *  and "what is this brain" is the secondary orient. OPTIONAL (daemon-skew / no
    *  aim.json description → no briefing line). */
   description?: string;
+  /** run_d0cd4414 (AC2): the SwarmAI card is the ONLY differentiated card in the
+   *  flat card wall — a violet top-border + a "SELF·OS" corner tag marking "this is
+   *  the OS's own brain". Every other brain card is undifferentiated. Optional +
+   *  default-off so a normal card is untouched. Threaded through CompactBrain. */
+  isSelf?: boolean;
   onOpen: (name: string) => void;
 }
 interface FullProps extends CommonProps {
@@ -209,11 +214,30 @@ export function DddCard(props: DddCardProps) {
     // "全凭绿" wall the user rejected. Freeing green from a status role leaves it to
     // mean exactly ONE thing in the gallery: the operational ontology layer. A needs
     // card still signals via the amber left accent + amber actionable counts.
+    // isSelf (AC2): a violet top-border marks SwarmAI's own brain. It composes with
+    // BOTH border states (needs amber-left / calm plain) — top-2px violet + the
+    // existing side/full borders, so a self card that ALSO needs attention keeps its
+    // amber-left signal AND gains the violet top. The "SELF·OS" corner tag makes it
+    // legible without a legend (the sole card that carries it).
+    // Gate-2 (correctness specialist, run_496c3be7 Tailwind trap): both the needs
+    // branch (`border-y`) and the calm branch (`border`) also set border-top-width /
+    // border-top-color, so a plain `border-t-2 border-t-[#a371f7]` collides on the
+    // SAME properties — the winner is decided by generated-CSS source order, NOT JSX
+    // string order → the violet top could render 1px / wrong-color on the SwarmAI card
+    // (the one card that MUST mark correctly). `!` (important) makes the self top-border
+    // win deterministically regardless of source order.
+    const selfClasses = props.isSelf ? ' !border-t-2 !border-t-[#a371f7]' : '';
     return (
       <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
-        className={`text-left rounded-lg bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full h-full ${
+        className={`relative text-left rounded-lg bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full h-full ${
           needs ? 'border-l-[3px] border-l-[#f0a500] border-y border-r border-[#4a3a12]' : 'border border-[var(--color-border)]'
-        }`}>
+        }${selfClasses}`}>
+        {props.isSelf && (
+          <span data-testid="dddcard-self-tag"
+            className="absolute top-2 right-2 text-[8px] font-bold tracking-wider text-[#a371f7] bg-[#1c1530] border border-[#3a2d55] px-1.5 py-0.5 rounded">
+            SELF·OS
+          </span>
+        )}
         <CardHeader name={name} kind={kind} />
         {needs ? <NeedsActionable health={h} /> : <CalmMeta lifecycleStage={props.lifecycleStage} health={h} />}
         <CardBriefing description={props.description} />

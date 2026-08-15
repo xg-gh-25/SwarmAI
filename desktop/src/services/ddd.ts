@@ -233,6 +233,30 @@ export async function getBrainDetail(name: string): Promise<BrainDetail> {
   return resp.data;
 }
 
+/** One recall hit from the Brain Hub search box (mirrors the backend hit shape
+ *  assembled in ddd_brain.py::brain_recall). `source` is a workspace-relative
+ *  path (Projects/<name>/…) — directly openable via swarm:open-file. */
+export interface RecallHit {
+  domain: string;
+  title: string;
+  source: string;
+  content: string;
+}
+
+/** GET /api/ddd/brains/{name}/recall?q= — the Brain Hub's search box (the endpoint
+ *  docstring names it verbatim). Fail-soft by contract: any backend failure returns
+ *  empty hits, never a 500. A blank/whitespace query short-circuits to [] WITHOUT a
+ *  network call — the debounced input fires per keystroke, and the endpoint already
+ *  returns empty for blank q, so the call would be pure waste. */
+export async function brainRecall(name: string, q: string): Promise<RecallHit[]> {
+  if (!q.trim()) return [];
+  const resp = await api.get<{ query: string; count: number; hits?: RecallHit[] }>(
+    `/ddd/brains/${encodeURIComponent(name)}/recall`,
+    { params: { q } },
+  );
+  return resp.data.hits ?? [];
+}
+
 /** Aggregate a brain's ② knowledge entries into a per-type count for the DddCard
  *  type-mix bar. The CONSUMER computes this (DddCard never touches sections) — it's
  *  the data-plumbing fix for the 7-type×3-layer bar (Gate-1: entries live on
