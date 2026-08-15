@@ -7,43 +7,50 @@
 English | [中文](./README.zh-CN.md)
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20·%20Windows%20·%20Linux-blue.svg?style=flat)](#quick-start)
+[![Built with](https://img.shields.io/badge/built%20with-Claude%20Agent%20SDK-8A2BE2.svg?style=flat)](https://github.com/anthropics/claude-code)
 
 </div>
 
-<!-- MEDIA: hero image / short demo video — to be provided -->
-![SwarmAI](./assets/swarm-2.png)
+![SwarmAI](./assets/swarm-demo.gif)
+
+<div align="center"><sub>▶ <a href="./assets/swarm-demo.mp4">Watch the full 60-second demo</a></sub></div>
 
 ---
 
-**SwarmAI is a self-evolving Agent OS** — every interaction upgrades the system's cognition, not just its templates.
+**SwarmAI is a self-evolving Agent OS** — every interaction sharpens how the system judges, not just what it knows.
 
 ---
 
 ## Why an Agent OS
 
-We finally have software smart enough to reason, write code, and make judgment calls — and it **wakes up with amnesia every morning.** Every session starts from zero. The context you gave it, the mistake it made yesterday, the correction you taught it — gone. Most "AI tools" are **flat**: a brilliant model trapped in Groundhog Day.
+We finally have software smart enough to reason, write code, and make judgment calls — and it **wakes up with amnesia every morning.** Every session starts from zero: the context you gave it, the mistake it made yesterday, the correction you taught it — gone. Most "AI tools" are a brilliant model stuck in Groundhog Day.
 
-SwarmAI is built on the opposite bet — that the value should **compound.** Every interaction should leave the system a little sharper than before, permanently.
+SwarmAI makes the opposite bet: the value should **compound.** Every interaction leaves the system a little sharper, permanently.
 
-That reframes what's being built. A model answers; **a mind persists.** Four things separate the two: it stays **continuous** across time, it **corrects itself**, it **forgets** what stopped mattering, and its **judgment compounds** with use. Conventional software has no analog for any of them — a program doesn't get wiser between runs, and it never rewrites its own rules. SwarmAI is the missing layer: not a bigger model, but the **cognitive operating system around one.**
+A model answers; **a mind persists.** It stays continuous across time, corrects itself, forgets what stopped mattering, and its judgment compounds with use. Ordinary software does none of these — a program doesn't get wiser between runs or rewrite its own rules. SwarmAI is the missing layer: not a bigger model, but the **operating system around one.**
 
 ---
 
-## The Three Ideas
+## The Four Ideas
 
-Everything in SwarmAI serves one of three:
+Everything in SwarmAI serves one of four:
 
 ### 🧬 Self-Evolution — it upgrades its own judgment
 
-Most agent-memory projects pile up entries. SwarmAI separates **cognition** (the OS) from **knowledge** (the disk): one edited line in `SOUL.md` shifts judgment more than a thousand memory rows — and every change is a `git diff`. Corrections aren't logged as more lessons; a recurring error class becomes a **structural gate**, a path where the wrong move physically cannot happen. Humans rely on carefulness; an agent should rely on structure. The measure of progress isn't a growing correction count — it's an error class that **stops recurring**.
+Most agent-memory projects pile up entries. SwarmAI separates **cognition** (the OS) from **knowledge** (the disk): one edited line in `SOUL.md` shifts judgment more than a thousand memory rows — and every change is a `git diff`. A recurring mistake doesn't become one more logged lesson; it becomes a **gate** — a path where the wrong move can't happen. Not aspirational: 20+ live guards sit in [`security_hooks.py`](./backend/core/security_hooks.py) (commit gate, pytest guard, dangerous-command gate). Read the file — the wrong move is blocked in code, not in a guideline. Progress isn't a growing correction count; it's an error class that **stops recurring**.
 
 ### 🧠 Brain-first — every project is a domain brain
 
-A project isn't a folder of files — it's a **brain** with one universal six-section structure (Identity · Knowledge · Gates · Capabilities · Delivery · Refresher), **identical for every user and domain**. The only thing that varies is what it governs: `0..N` assets of an open-ended kind (a code repo, a data source, a document corpus, a process — or nothing at all). A codebase, a research topic, a consultant's client, even "my wedding" all get the *same* brain. Knowledge sediments into it automatically as you work, and knowledge that stops mattering **decays and dies** — accumulation without elimination is how every memory system rots.
+A project isn't a folder of files — it's a **brain** with one six-section structure (Identity · Knowledge · Gates · Capabilities · Delivery · Refresher), the same for every user and domain. Only what it governs varies: `0..N` assets of any kind — a code repo, a data source, a document corpus, a process, or nothing at all. A codebase, a research topic, a consultant's client, even "my wedding" get the *same* brain. Knowledge sediments in as you work; knowledge that stops mattering **decays and dies**. Accumulation without elimination is how every memory system rots.
 
 ### ⚙️ Agent OS — the cognition lives between sessions, not in them
 
-Sessions are discontinuous; intelligence shouldn't be. Hooks fire *between* sessions so the next one starts warm. The system self-heals when a session breaks, cultivates and decays its own knowledge on a schedule, and assembles each session's system prompt fresh from governed context files.
+Sessions are discontinuous; intelligence shouldn't be. Hooks fire *between* sessions so the next one starts warm. The system self-heals when a session breaks, cultivates and decays its knowledge on a schedule, and rebuilds each system prompt fresh from governed context files.
+
+### 🖐️ Proprioception — it inhabits its body, not just answers through it
+
+The desktop app isn't a frontend the agent talks *to* — it's a body it **senses and drives.** SwarmAI reads its own live UI state (which overlay is open, which tab is active, what's on the Canvas) and acts on it: opens its own Brain Hub, pushes a report onto the Canvas, flags a decision to your attention channel. It's inspectable in return — **TSCC** (Thread-Scoped Cognitive Context) shows the real cognition behind a turn: which files loaded, the token budget, every recall hit and its score, the security scan, the full prompt. Most agents are black boxes you send text to; this one has a body you watch move — and inspect while it does.
 
 ---
 
@@ -90,7 +97,7 @@ Each engine is independently useful; together they form the loop that makes the 
 | **Self-Healing** | Invisible recovery: sensors, auto-respawn, the user sees nothing | [code](./backend/core/session_healing.py) |
 | **Multi-Tab + MessageStore** | Concurrent sessions, phase-gated single-writer, cross-tab isolation | [code](./desktop/src/stores/MessageStore.ts) |
 | **Hooks + Jobs** | Between-session hooks + background intelligence. Sessions never cold-start | [code](./backend/core/hook_builder.py) |
-| **Eval (Proprioception)** | Decoupled, system-level: golden set + git-bound regression gate | [docs](./docs/OS-Eval-Function-Design.md) |
+| **Eval** | Decoupled, system-level: golden set + git-bound regression gate | [docs](./docs/OS-Eval-Function-Design.md) |
 
 **The compound loop:** Memory → Pipeline judgment → DDD brains → Evolution → Gates → Memory. Remove one, the rest weaken.
 
@@ -100,14 +107,14 @@ Each engine is independently useful; together they form the loop that makes the 
 
 ## 🤖 For AI Agents
 
-If you're an AI coding assistant working in this repo, start with **[`AGENTS.md`](./AGENTS.md)** — a structured architecture guide: data flow, process topology, conventions, and invariants. It's the agent-facing entry point (this README is the human-facing one).
+Coding in this repo? Start with **[`AGENTS.md`](./AGENTS.md)** — data flow, process topology, conventions, and invariants. It's the agent-facing entry point; this README is the human one.
 
 ---
 
 ## Design Philosophy
 
-1. **One-shot qualified delivery is the real token optimization.** Cheap models iterate 5×, costing more than one correct delivery. Code/content as a black box: input → qualified output.
-2. **Division of labor is a compromise for limited human cognitive bandwidth — not an optimal design.** One agent, many roles, one knowledge layer. (Sub-agents for adversarial verification ≠ division of labor.)
+1. **One-shot qualified delivery is the real token optimization.** Cheap models iterate 5×, costing more than one correct pass. Code and content are a black box: input → qualified output.
+2. **Division of labor is a workaround for limited human bandwidth, not good design.** One agent, many roles, one knowledge layer. (Sub-agents for adversarial checks ≠ division of labor.)
 3. **Knowledge must eliminate itself.** Darwinian decay: unreferenced knowledge retires. A system that can forget beats one that can only remember.
 4. **Evolution is cognitive patching, not data accumulation.** We change rules you can `git diff`. "Thinks differently" ≠ "knows more."
 5. **Quality converges, not just improves.** Error classes decrease monotonically. Carefulness doesn't scale; gates do.
