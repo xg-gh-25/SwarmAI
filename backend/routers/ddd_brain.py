@@ -53,6 +53,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -294,6 +295,47 @@ def _batch_last_commit_iso(project_dirs: list[Path]) -> Optional[dict[str, str]]
             # newest-first: only record the FIRST (= most recent) sighting per project.
             last.setdefault(parts[1], cur_iso)
     return last
+
+
+def _parallel_last_commit_iso(project_dirs: list[Path]) -> Optional[dict[str, str]]:
+    """Last-commit ISO time per project via PARALLEL per-project `git log -1`.
+
+    Replaces the single `git log -n 2000 --name-only` whole-tree walk (measured
+    ~1.98s warm) — that walk streamed ~25K path lines to attribute commits to
+    subtrees. A per-project `git log -1 --format=%cI -- Projects/<name>` is O(1) per
+    project, and running the ~8 of them in a thread pool collapses the wall-clock to
+    ~0.5s while PRESERVING git COMMIT-time semantics (Gate-1 rejected fs-mtime: it
+    would make the calm-card "last change" lie for uncommitted edits / after a
+    `git checkout`). Same fail-soft contract as the batch it replaces: returns None
+    when git can't run at all (→ caller falls back to the per-project fork); a dict
+    where a MISSING key means "no commit for this project" (→ authoritative "never").
+    A never-committed project yields an empty stdout → omitted from the dict."""
+    ws = _workspace_root()
+    if not (ws / ".git").exists():  # .exists(): worktree/submodule has .git as a FILE
+        return None
+
+    def _one(project_dir: Path) -> tuple[str, Optional[str]]:
+        name = project_dir.name
+        try:
+            r = subprocess.run(
+                ["git", "log", "-1", "--format=%cI", "--", f"Projects/{name}"],
+                cwd=str(ws), capture_output=True, text=True, timeout=8,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return name, None
+        if r.returncode != 0:
+            return name, None
+        return name, (r.stdout.strip() or None)
+
+    out: dict[str, str] = {}
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, len(project_dirs) or 1)) as ex:
+            for name, iso in ex.map(_one, project_dirs):
+                if iso:
+                    out[name] = iso
+    except Exception:  # pool/thread failure → signal "batch couldn't run" (per-project fallback)
+        return None
+    return out
 
 
 def _file_git_status(project_dir: Path, file_rel: str) -> str:
@@ -710,6 +752,7 @@ def build_brain_state(
     return {
         "name": name,
         "kind": _read_kind(project_dir),
+        "description": _read_description(project_dir),
         "sectionsPresent": present,
         "lifecycleStage": _lifecycle_stage(project_dir, present, pending, entry_count=entry_count),
         "health": health,
@@ -934,6 +977,26 @@ def _read_kind(project_dir: Path) -> str:
     return "knowledge"
 
 
+def _read_description(project_dir: Path) -> Optional[str]:
+    """A one-line brain briefing, read from aim.json `description` if present
+    (same aim.json file _read_kind reads — one small extra read_text per project, not
+    a tree scan). Returns None when aim.json is absent/unreadable/malformed or the
+    field is missing/non-string, so the gallery card cleanly omits the briefing line
+    (daemon-skew safe)."""
+    aim = project_dir / "aim.json"
+    if aim.exists():
+        try:
+            import json
+
+            data = json.loads(aim.read_text(encoding="utf-8"))
+            desc = data.get("description") if isinstance(data, dict) else None
+            if isinstance(desc, str) and desc.strip():
+                return desc.strip()
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def _brain_summary(project_dir: Path, pending_override: Optional[int] = None,
                    dirty_override: Optional[bool] = None,
                    last_commit_override: Optional[str] = None,
@@ -1082,39 +1145,59 @@ def _knowledge_entries(
 async def list_brains() -> dict:
     """Gallery: one live summary per DDD project (read-only)."""
     dirs = await asyncio.to_thread(_list_project_dirs)
-    # PERF ROOT-FIX (run_cfb460ac): aggregate the Need-You attention channel ONCE,
-    # then partition per-brain — instead of each _brain_summary calling
-    # _pending_count → collect(brain=name), which full-scans the workspace ONCE PER
-    # PROJECT (measured 4.67s × 7 projects ≈ the 7s gallery stall). collect(ws) with
-    # no brain filter does the same disk scan a SINGLE time; we bucket its items by
-    # .brain here. No cache, no mtime key (Gate-1: mtime resets on git checkout) —
-    # just one scan instead of N. Fail-soft: a collect failure degrades every brain
-    # to pending=0 (the same floor _pending_count's own except returns), never a 500.
-    pending_by_brain: dict[str, int] = {}
-    try:
-        from core.attention_authority import collect
 
-        agg = await asyncio.to_thread(collect, _workspace_root())
-        for it in agg.items:
-            if it.brain:  # governance items have brain=None — excluded per-brain (parity with _pending_count)
-                pending_by_brain[it.brain] = pending_by_brain.get(it.brain, 0) + 1
-    except Exception as e:  # never 500 the gallery on an attention-scan hiccup
-        logger.warning("attention aggregate failed, brains show pending=0: %s", e)
+    # PERF (run_3d371424): the 3 producer legs below are INDEPENDENT of each other
+    # (only _brain_summary downstream consumes all three), so run them CONCURRENTLY
+    # with asyncio.gather instead of the old serial await-chain. Warm-measured, the
+    # serial chain was ~3.3s dominated by the last-commit git walk; parallelizing +
+    # the per-project git-log-1 (below) collapses it to ~0.8s. Each leg keeps its own
+    # fail-soft contract (see helpers); `return_exceptions=True` on the gather is the
+    # outer belt so an UNFORESEEN raise in one leg degrades that leg (normalized below),
+    # never 500s the whole gallery.
+    #
+    # Leg 1 — attention pending, aggregated ONCE (run_cfb460ac): collect(ws) with no
+    # brain filter, bucketed per-brain here, instead of a per-project collect(brain=)
+    # scan. Includes escalation + cultivation + paused (the 2026-08-08 per-brain
+    # semantics) — NOT cultivation-only. Fail-soft: any error → every brain pending=0.
+    async def _pending_leg() -> dict[str, int]:
+        by_brain: dict[str, int] = {}
+        try:
+            from core.attention_authority import collect
+
+            agg = await asyncio.to_thread(collect, _workspace_root())
+            for it in agg.items:
+                if it.brain:  # governance items have brain=None — excluded (parity with _pending_count)
+                    by_brain[it.brain] = by_brain.get(it.brain, 0) + 1
+        except Exception as e:  # never 500 the gallery on an attention-scan hiccup
+            logger.warning("attention aggregate failed, brains show pending=0: %s", e)
+        return by_brain
+
+    # Leg 2 — uncommitted-ness for ALL projects in ONE whole-repo git status (N forks
+    # → 1). Fail-soft: None → every project falls back to its own _git_status_dirty.
+    # Leg 3 — last-commit ISO per project via PARALLEL per-project `git log -1`
+    # (_parallel_last_commit_iso), replacing the ~1.98s `git log -n 2000 --name-only`
+    # whole-tree walk while KEEPING git commit-time semantics (Gate-1 rejected fs-mtime).
+    _pending_r, _dirty_r, _commit_r = await asyncio.gather(
+        _pending_leg(),
+        asyncio.to_thread(_batch_dirty_project_dirs, dirs),
+        asyncio.to_thread(_parallel_last_commit_iso, dirs),
+        return_exceptions=True,
+    )
+    # Normalize any leg that raised to its neutral fail-soft value (parity with each
+    # leg's own internal contract): pending→{} (every brain pending=0), dirty→None
+    # (per-project _git_status_dirty fallback), last-commit→{} ("never" per project).
+    pending_by_brain = _pending_r if isinstance(_pending_r, dict) else {}
+    dirty_names = _dirty_r if not isinstance(_dirty_r, BaseException) else None
+    last_commit_map = _commit_r if isinstance(_commit_r, dict) else {}
+    for _leg, _res in (("pending", _pending_r), ("dirty", _dirty_r), ("last_commit", _commit_r)):
+        if isinstance(_res, BaseException):
+            logger.warning("brains list leg %s raised, degraded: %s", _leg, _res)
 
     # return_exceptions=True: one malformed project (e.g. a git/FS transient)
     # degrades to a dropped card, never a 500 on the whole gallery. The per-file
     # parse helpers already swallow UnicodeError/OSError; this is the outer
     # belt-and-suspenders so an unforeseen raise in ONE summary can't take the
     # list down (the resilient-lens contract).
-    # Uncommitted-ness for ALL projects in ONE whole-repo git status, instead of a
-    # `git status` fork PER project inside each _brain_summary (N forks → 1). Off-loop
-    # (subprocess is blocking). Fail-soft: an empty set means every project falls back
-    # to its own _git_status_dirty fork at the call site (identity-preserving).
-    dirty_names = await asyncio.to_thread(_batch_dirty_project_dirs, dirs)
-    # Last-commit time for ALL projects in ONE `git log` walk (the 2nd per-project fork
-    # the dirty-batching left behind). Same fail-soft contract: None → batch couldn't run
-    # → per-project fallback; a dict → authoritative (a missing key = no recent commit).
-    last_commit_map = await asyncio.to_thread(_batch_last_commit_iso, dirs)
 
     def _dirty_for(name: str) -> Optional[bool]:
         # None → batch couldn't run → _brain_summary falls back to a per-project fork.

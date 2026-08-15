@@ -62,12 +62,15 @@ registerOverlay({
   mode: 'BRAIN',
   width: 'xl',
   sourceCardTestId: 'nav-brain-hub',
-  render: ({ close }) => (
+  render: ({ close, dispatchPrompt }) => (
     <div className="flex-1 overflow-hidden" data-testid="brain-hub-overlay">
       {/* onRequestClose=close (run_a607f2b0): opening a DDD doc closes this overlay
           BEFORE dispatching swarm:open-file so the Canvas isn't rendered under the
-          host — the swarmws z-index precedent. */}
-      <BrainHub onRequestClose={close} />
+          host — the swarmws z-index precedent.
+          onDispatch (item 3): the Distribute sub-tab injects + auto-sends the
+          `s_ddd-distribute` command via the ChatPage-owned dispatchPrompt bridge —
+          replacing the old clipboard-copy handoff. Same bridge NewBrain/Jobs use. */}
+      <BrainHub onRequestClose={close} onDispatch={dispatchPrompt ?? (() => false)} />
     </div>
   ),
 });

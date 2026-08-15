@@ -79,8 +79,18 @@ interface CompactProps extends CommonProps {
   lifecycleStage: LifecycleStage;
   health: BrainHealth;
   /** 3-layer proportion bar source — from BrainSummary (cheap, one gallery parse).
-   *  Optional for daemon-skew: an old daemon omits it → no bar. */
+   *  Optional for daemon-skew: an old daemon omits it → no bar.
+   *  NOTE (run_3d371424): NO LONGER rendered on the compact gallery card — the layer
+   *  bar was pure decoration that answered no gallery decision, and with operational
+   *  ~80% on a mature brain it always collapsed into one dominant green line that stole
+   *  the eye (Von Restorff). Kept in the prop for the full-card ontology; the gallery
+   *  card is now name + kind + verdict signals + a bottom briefing. */
   typeCounts?: Record<EntryType, number>;
+  /** One-line "what this DDD is" briefing (item 2, run_3d371424) — rendered at the
+   *  BOTTOM of the card, below the decision signals, so "what needs me" stays primary
+   *  and "what is this brain" is the secondary orient. OPTIONAL (daemon-skew / no
+   *  aim.json description → no briefing line). */
+  description?: string;
   onOpen: (name: string) => void;
 }
 interface FullProps extends CommonProps {
@@ -163,20 +173,21 @@ function CalmMeta({ lifecycleStage, health }: { lifecycleStage: LifecycleStage; 
   );
 }
 
-/** Slim 3-layer proportion bar for the COMPACT card — proportion only, no per-type
- *  breakdown (that's the full card). From summary.typeCounts, no fetch. */
-function CompactLayerBar({ typeCounts }: { typeCounts?: Record<EntryType, number> }) {
-  if (!typeCounts) return null;
-  const t = layerTotals(typeCounts);
-  const total = t.meta + t.cognitive + t.operational;
-  if (total === 0) return null;
-  const tip = LAYERS.map((l) => `${l.label}: ${t[l.key]}`).join(' · ');
+/** Bottom-of-card briefing: one muted line answering "what IS this DDD" (item 2,
+ *  run_3d371424). Rendered LAST (below the decision signals) so the card's primary
+ *  read stays "does this need me?" and the briefing is the secondary orient — the
+ *  layout XG confirmed on the wireframe. A thin top divider separates it from the
+ *  signals above. Omitted entirely when there's no description (daemon-skew /
+ *  no aim.json `description`) — never an empty divider. line-clamp-2 caps the height
+ *  so a long description can't blow out the card. */
+function CardBriefing({ description }: { description?: string }) {
+  if (!description) return null;
   return (
-    <div data-testid="ddd-compact-layerbar" className="flex h-1 rounded-sm overflow-hidden mt-1.5" title={tip}>
-      {LAYERS.map((l) => {
-        const w = (t[l.key] / total) * 100;
-        return w === 0 ? null : <span key={l.key} style={{ width: `${w}%`, background: l.color }} />;
-      })}
+    <div
+      data-testid="dddcard-briefing"
+      className="mt-2 pt-2 border-t border-[var(--color-border)] text-[10px] leading-snug text-[var(--color-text-muted)] line-clamp-2"
+    >
+      {description}
     </div>
   );
 }
@@ -204,8 +215,8 @@ export function DddCard(props: DddCardProps) {
           needs ? 'border-l-[3px] border-l-[#f0a500] border-y border-r border-[#4a3a12]' : 'border border-[var(--color-border)]'
         }`}>
         <CardHeader name={name} kind={kind} />
-        <CompactLayerBar typeCounts={props.typeCounts} />
         {needs ? <NeedsActionable health={h} /> : <CalmMeta lifecycleStage={props.lifecycleStage} health={h} />}
+        <CardBriefing description={props.description} />
       </button>
     );
   }

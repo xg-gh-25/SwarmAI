@@ -88,6 +88,11 @@ export interface BrainSummary {
    *  gallery's existing single parse (zero extra glob). OPTIONAL for daemon skew:
    *  an old daemon omits it → the compact bar just doesn't render. */
   typeCounts?: Record<EntryType, number>;
+  /** One-line "what this DDD is" briefing for the gallery card (item 2, run_3d371424).
+   *  Backend reads it straight from each project's aim.json `description` (ZERO extra
+   *  scan). OPTIONAL for daemon-skew: an old daemon / a brain without a description in
+   *  aim.json omits it → the card simply renders no briefing line. */
+  description?: string;
 }
 
 export interface SectionMember {

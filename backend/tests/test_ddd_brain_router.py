@@ -259,16 +259,18 @@ class TestBrainsList:
             assert isinstance(b["health"]["uncommitted"], bool)
 
     def test_last_commit_batched_not_per_project(self, client, monkeypatch):
-        """Perf (git-fork batching, 2nd half): GET /ddd/brains must resolve last-commit
-        time for all projects in ONE `git log` walk (_batch_last_commit_iso), NOT a
-        per-project _git_last_commit_iso fork. This was the half the dirty-batching left
-        behind (report: '_git_last_commit_iso 仍每项目 fork'). Count per-project
-        invocations during one GET — the batched path calls it ZERO times."""
+        """Perf (run_3d371424): GET /ddd/brains must resolve last-commit time via the
+        SINGLE parallel batch helper (_parallel_last_commit_iso), NOT the serial
+        per-project _git_last_commit_iso fork on the request path. The batch mechanism
+        changed from the old `git log -n 2000 --name-only` whole-tree walk to a
+        per-project `git log -1` run in a thread pool (commit-time semantics preserved;
+        Gate-1 rejected fs-mtime), but the invariant is unchanged: the endpoint invokes
+        the batch ONCE and NEVER the serial per-project fork. Count invocations."""
         import routers.ddd_brain as m
 
         calls = {"per_project": 0, "batch": 0}
         real_last = m._git_last_commit_iso
-        real_batch = m._batch_last_commit_iso
+        real_batch = m._parallel_last_commit_iso
 
         def counting_last(*a, **k):
             calls["per_project"] += 1
@@ -279,16 +281,16 @@ class TestBrainsList:
             return real_batch(*a, **k)
 
         monkeypatch.setattr(m, "_git_last_commit_iso", counting_last)
-        monkeypatch.setattr(m, "_batch_last_commit_iso", counting_batch)
+        monkeypatch.setattr(m, "_parallel_last_commit_iso", counting_batch)
 
         resp = client.get("/api/ddd/brains")
         assert resp.status_code == 200
         n_projects = len(resp.json()["brains"])
         assert n_projects >= 2, "test needs ≥2 projects to distinguish batch-vs-per-project"
-        assert calls["batch"] == 1, f"expected ONE batch git log, got {calls['batch']}"
+        assert calls["batch"] == 1, f"expected ONE parallel batch call, got {calls['batch']}"
         assert calls["per_project"] == 0, (
-            f"_git_last_commit_iso forked {calls['per_project']}× — the batch should have "
-            f"replaced all per-project git-log forks"
+            f"_git_last_commit_iso forked {calls['per_project']}× on the request path — the "
+            f"parallel batch should have replaced all serial per-project git-log forks"
         )
         # lastChangeRelative must still be present for every brain (not dropped).
         for b in resp.json()["brains"]:
@@ -1140,3 +1142,151 @@ class TestBatchDirtyProjectDirs:
         monkeypatch.setattr(m, "_workspace_root", lambda: ws)
         dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
         assert m._batch_dirty_project_dirs(dirs) == set(), "clean repo → empty set (success), not None"
+
+
+class TestBrainDescription:
+    """Item 2: BrainSummary carries a one-line `description` read from aim.json."""
+
+    def test_read_description_from_aim(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        pd.mkdir()
+        (pd / "aim.json").write_text('{"description": "A test brain for X."}', encoding="utf-8")
+        assert m._read_description(pd) == "A test brain for X."
+
+    def test_read_description_absent_aim_is_none(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "NoAim"
+        pd.mkdir()
+        assert m._read_description(pd) is None
+
+    def test_read_description_no_field_is_none(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        pd.mkdir()
+        (pd / "aim.json").write_text('{"kind": "knowledge"}', encoding="utf-8")
+        assert m._read_description(pd) is None
+
+    def test_read_description_malformed_aim_is_none(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        pd.mkdir()
+        (pd / "aim.json").write_text('{not valid json', encoding="utf-8")
+        assert m._read_description(pd) is None
+
+    def test_read_description_non_string_field_is_none(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        pd.mkdir()
+        (pd / "aim.json").write_text('{"description": {"nested": "obj"}}', encoding="utf-8")
+        assert m._read_description(pd) is None
+
+    def test_build_brain_state_includes_description_key(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        pd.mkdir()
+        (pd / "aim.json").write_text('{"description": "Desc here."}', encoding="utf-8")
+        state = m.build_brain_state(pd, with_noise=False)
+        assert state.get("description") == "Desc here."
+
+    def test_build_brain_state_description_none_when_absent(self, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        pd.mkdir()
+        state = m.build_brain_state(pd, with_noise=False)
+        assert "description" in state and state["description"] is None
+
+
+class TestParallelLastCommit:
+    """Item 1 (perf): last-commit time comes from a PARALLEL per-project `git log -1`
+    (preserving git COMMIT-time semantics — NOT fs mtime, which Gate-1 rejected as
+    breaking the calm-card's meaning for uncommitted/checkout), replacing the single
+    slow `git log -n 2000 --name-only` whole-tree walk."""
+
+    def _git_ws(self, tmp_path):
+        import subprocess
+        ws = tmp_path
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
+        for name in ("Alpha", "Beta"):
+            pd = ws / "Projects" / name
+            pd.mkdir(parents=True)
+            (pd / "PRODUCT.md").write_text(f"# {name}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=ws, check=True)
+        return ws
+
+    def test_returns_iso_per_committed_project(self, tmp_path, monkeypatch):
+        import routers.ddd_brain as m
+        ws = self._git_ws(tmp_path)
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Beta"]
+        out = m._parallel_last_commit_iso(dirs)
+        assert out is not None
+        assert out.get("Alpha") and out.get("Beta"), f"both committed projects have an ISO time, got {out}"
+
+    def test_uncommitted_project_absent_from_map(self, tmp_path, monkeypatch):
+        import routers.ddd_brain as m
+        ws = self._git_ws(tmp_path)
+        # a brand-new, never-committed project dir
+        (ws / "Projects" / "Gamma").mkdir(parents=True)
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+        dirs = [ws / "Projects" / "Alpha", ws / "Projects" / "Gamma"]
+        out = m._parallel_last_commit_iso(dirs)
+        assert out is not None
+        assert out.get("Alpha")
+        assert "Gamma" not in out or not out.get("Gamma"), "never-committed project → no commit time (falls to 'never')"
+
+    def test_no_git_returns_none(self, tmp_path, monkeypatch):
+        import routers.ddd_brain as m
+        # no .git → cannot run → None (caller falls back per-project)
+        monkeypatch.setattr(m, "_workspace_root", lambda: tmp_path)
+        (tmp_path / "Projects" / "Alpha").mkdir(parents=True)
+        assert m._parallel_last_commit_iso([tmp_path / "Projects" / "Alpha"]) is None
+
+
+class TestListBrainsLegDegradation:
+    """Item 1 (Gate-2 hardening): list_brains gathers its 3 producer legs with
+    return_exceptions=True — an UNFORESEEN raise in ONE leg must degrade THAT leg to
+    its neutral fail-soft value and LOG, never 500 the whole gallery. Forces the
+    normalization branch (R28: recovery path needs an execution test; gives the new
+    return_exceptions code teeth — mutation-proven: drop the arg → this goes RED)."""
+
+    def _one_brain_ws(self, tmp_path):
+        import subprocess
+        ws = tmp_path
+        pd = ws / "Projects" / "Alpha"
+        pd.mkdir(parents=True)
+        (pd / "PRODUCT.md").write_text("# Alpha\n", encoding="utf-8")
+        (pd / ".project.json").write_text('{"name": "Alpha"}', encoding="utf-8")  # gallery-visible
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=ws, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=ws, check=True)
+        return ws
+
+    def test_last_commit_leg_raise_degrades_not_500(self, tmp_path, monkeypatch, caplog):
+        import asyncio
+        import logging
+        import routers.ddd_brain as m
+        ws = self._one_brain_ws(tmp_path)
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+
+        # Force the last-commit leg to raise an UNFORESEEN error (bypasses its own
+        # internal try/except by raising from the helper entry itself).
+        def _boom(_dirs):
+            raise RuntimeError("git subsystem exploded")
+        monkeypatch.setattr(m, "_parallel_last_commit_iso", _boom)
+
+        with caplog.at_level(logging.WARNING, logger="routers.ddd_brain"):
+            result = asyncio.run(m.list_brains())
+
+        brains = result["brains"] if isinstance(result, dict) else result
+        # no 500: the gallery still lists the brain
+        assert any(b["name"] == "Alpha" for b in brains), "gallery must still render despite a leg raise"
+        # the raised leg is logged (degrade-observable, not silent)
+        assert any("last_commit" in r.message and "degraded" in r.message for r in caplog.records), (
+            "a leg raise must be LOGGED as degraded, not silently swallowed"
+        )

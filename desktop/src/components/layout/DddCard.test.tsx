@@ -56,13 +56,32 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     expect(screen.queryByTestId('presence-X-knowledge')).toBeNull();
     expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('dddcard-cheap-pending')).toBeNull();
-    // calm keeps: the muted meta line + the slim ontology bar + click-to-open
+    // run_3d371424: the 3-layer proportion bar is REMOVED from the gallery card —
+    // it answered no decision and collapsed into a dominant green line (operational
+    // ~80%). Even WITH typeCounts passed, no bar renders.
+    expect(screen.queryByTestId('ddd-compact-layerbar')).toBeNull();
+    // calm keeps: the muted meta line + click-to-open
     expect(screen.getByTestId('dddcard-calm-meta')).toBeTruthy();
-    expect(screen.getByTestId('ddd-compact-layerbar')).toBeTruthy();
     fireEvent.click(screen.getByTestId('dddcard-X'));
     expect(onOpen).toHaveBeenCalledWith('X');
     // compact NEVER shows the full per-type ontology or the full needs-you block
     expect(screen.queryByTestId('ddd-ontology')).toBeNull();
+  });
+
+  it('renders a bottom briefing line when `description` is supplied, omits it otherwise (run_3d371424)', () => {
+    const { rerender } = render(
+      <DddCard density="compact" name="X" kind="knowledge"
+        lifecycleStage="GROW" health={CHEAP_CLEAN}
+        description="A domain brain for testing." onOpen={vi.fn()} />,
+    );
+    const brief = screen.getByTestId('dddcard-briefing');
+    expect(brief.textContent).toContain('A domain brain for testing.');
+    // no description → no briefing line (never an empty divider)
+    rerender(
+      <DddCard density="compact" name="X" kind="knowledge"
+        lifecycleStage="GROW" health={CHEAP_CLEAN} onOpen={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('dddcard-briefing')).toBeNull();
   });
 
   it('NEEDS card (pending>0) shows the actionable counts spelled out, NOT the 2×2 grid', () => {
@@ -85,7 +104,7 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     expect(onOpen).toHaveBeenCalledWith('SwarmAI');
   });
 
-  it('compact with NO typeCounts (daemon skew) still renders, just no bar', () => {
+  it('compact with NO typeCounts (daemon skew) still renders (the 3-layer bar is gone regardless — run_3d371424)', () => {
     render(
       <DddCard density="compact" name="X" kind="knowledge"
         lifecycleStage="CREATE" health={CHEAP_CLEAN} onOpen={vi.fn()} />,

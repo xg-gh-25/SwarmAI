@@ -273,8 +273,9 @@ describe('BrainHub — Gallery (AC3)', () => {
     // fire the deep-link event carrying a target brain
     window.dispatchEvent(new CustomEvent('swarm:show-brain-hub', { detail: { brain: 'AIDLC' } }));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-    // routed to the AIDLC brain view (tab label carries the selected name)
-    expect(screen.getByTestId('brainhub-tab-brain').textContent).toContain('AIDLC');
+    // routed to the AIDLC brain detail (master→detail: the selected name now lives
+    // in the breadcrumb/switcher, not a false-peer top tab).
+    expect(screen.getByTestId('brainhub-breadcrumb').textContent).toContain('AIDLC');
   });
 
   it('deep-link with NO detail.brain leaves Gallery as the default view', async () => {
@@ -295,16 +296,17 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
   // Browse is the SECOND sub-tab now — the tree lives there, not in the default view.
+  // (master→detail: the 4 detail views are unified under brainhub-tab-* peer tabs.)
   async function openBrowse() {
     await openBrain();
-    fireEvent.click(screen.getByTestId('detail-tab-browse'));
+    fireEvent.click(screen.getByTestId('brainhub-tab-browse'));
     await waitFor(() => expect(screen.getByTestId('brainhub-browse')).toBeTruthy());
   }
 
   // ── AC1: fixed layout — Overview is the default, both sub-tabs always present ──
   it('opens on Overview by default; both [Overview|Browse] sub-tabs are present for every brain', async () => {
     await openBrain();
-    expect(screen.getByTestId('brainhub-detail-tabs')).toBeTruthy();
+    expect(screen.getByTestId('brainhub-detail-nav')).toBeTruthy();
     expect(screen.getByTestId('brainhub-overview')).toBeTruthy();      // default
     expect(screen.queryByTestId('brainhub-browse')).toBeNull();        // browse not shown yet
     // the tree is NOT in the default view — it's behind Browse
@@ -366,7 +368,7 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('detail-tab-browse'));
+    fireEvent.click(screen.getByTestId('brainhub-tab-browse'));
     await screen.findByTestId('library-tree-mock');
     fireEvent.click(screen.getByTestId('tree-file-click'));
     expect(onClose).toHaveBeenCalled();

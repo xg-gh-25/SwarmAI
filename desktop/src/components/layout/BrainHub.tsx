@@ -68,18 +68,44 @@ export function hunkSummary(diffText: string): {
   return { adds, dels, startLine, section };
 }
 
-// ── Root ───────────────────────────────────────────────────────────────────────
+// ── Root — MASTER→DETAIL nav model (run_3d371424, item 5) ───────────────────────
+//
+// XG directive (this session): the old 4 top-level tabs (Gallery | Brain·<name> |
+// Review | Distribute) were FALSE PEERS — Gallery selects WHICH brain (a list),
+// the other three are VIEWS of the selected brain (a detail). Mounting them as
+// siblings meant 3 disabled/greyed tabs on open (empty-state anti-pattern), a split
+// grouping (Overview/Browse were sub-tabs under `Brain` while their true siblings
+// Review/Distribute sat at the top level), and no way to switch brain without
+// returning to Gallery. This is the standard master→detail fix:
+//   • TOP LEVEL = just the Gallery (the brain list). No greyed tabs.
+//   • Selecting a brain enters the DETAIL shell: a breadcrumb (← All brains / <name>)
+//     + a brain SWITCHER, and FOUR TRUE-PEER sub-tabs: Overview | Browse | Review |
+//     Distribute. Same tab set + order for every brain (no dynamic layout — "dynamic
+//     makes users lost", the prior fixed-sub-tabs directive, now widened to 4).
+//
+// `mode` is the top-level state: 'gallery' (list) or 'detail' (a brain is selected).
+// `detailTab` (below, on the shell) is which of the 4 peer views is showing.
 
-type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
+type Mode = 'gallery' | 'detail';
+/** The 4 true-peer detail views (item 5). overview/browse were the old inner
+ *  sub-tabs; review/distribute were promoted DOWN from false top-level peers. */
+type DetailView = 'overview' | 'browse' | 'review' | 'distribute';
 
 /** `onRequestClose` — the host overlay's `ctx.close` (overlaySurfaces passes it).
  *  Approach A (run_a607f2b0): opening a DDD doc closes THIS overlay first, then
  *  dispatches `swarm:open-file` so the Canvas/FileViewer isn't rendered UNDER the
  *  host (the SwarmWS-explorer z-index precedent). OPTIONAL: tests / a non-overlay
- *  mount omit it — file-open then just dispatches without a close (still correct). */
-export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {}) {
-  const [tab, setTab] = useState<Tab>('gallery');
+ *  mount omit it — file-open then just dispatches without a close (still correct).
+ *  `onDispatch` (item 3) — the overlay ctx `dispatchPrompt` bridge: injects + sends
+ *  a chat prompt (the Distribute HITL run trigger). OPTIONAL: without it, Distribute
+ *  falls back to clipboard-copy (older webview / non-overlay mount). */
+export function BrainHub(
+  { onRequestClose, onDispatch }:
+  { onRequestClose?: () => void; onDispatch?: (msg: string) => boolean } = {},
+) {
+  const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
+  const [detailView, setDetailView] = useState<DetailView>('overview');
 
   // Cached gallery list (run_cfb460ac): re-opening the overlay within the 30s window
   // is instant instead of paying the ~4s aggregate scan again. `refetch` powers Retry.
@@ -95,10 +121,13 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
   const primaryName = pinned[0] ?? null;
   const { data: primaryDetail } = useBrainDetail(primaryName);
 
-  const openBrain = useCallback((name: string) => {
+  // Enter the detail shell on a specific brain, at a specific view (default Overview).
+  const openBrain = useCallback((name: string, view: DetailView = 'overview') => {
     setSelected(name);
-    setTab('brain');
+    setDetailView(view);
+    setMode('detail');
   }, []);
+  const backToGallery = useCallback(() => { setMode('gallery'); }, []);
 
   // Deep-link: `swarm:show-brain-hub` MAY carry `detail.brain` to open a specific
   // brain's detail view directly (Brain Home calm-card click). No detail → Gallery,
@@ -113,58 +142,130 @@ export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {
     return () => window.removeEventListener('swarm:show-brain-hub', onShow);
   }, [openBrain]);
 
+  if (error) {
+    return (
+      <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
+        <div className="p-4 text-[13px]" data-testid="brainhub-error">
+          <div className="text-[var(--color-error,#ef4444)]">Failed to load brains: {error}</div>
+          <button
+            data-testid="brainhub-retry"
+            onClick={() => void refetch()}
+            className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
+            style={{ background: 'var(--color-error,#ef4444)' }}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // GALLERY (master) — the brain list is the ONLY top-level surface. No greyed tabs.
+  if (mode === 'gallery' || !selected) {
+    return (
+      <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
+        <div className="flex-1 overflow-auto">
+          <Gallery brains={brains} pinned={pinned} primaryDetail={primaryDetail} onOpen={openBrain} />
+        </div>
+      </div>
+    );
+  }
+
+  // DETAIL (a brain is selected) — breadcrumb + switcher + 4 true-peer sub-tabs.
+  // key={selected} remounts the shell on a brain switch so no view-local state
+  // (tree root, graph, review armed-state) leaks across brains.
+  return (
+    <BrainDetailShell
+      key={selected}
+      name={selected}
+      brains={brains}
+      detailView={detailView}
+      onSelectView={setDetailView}
+      onSwitchBrain={(n) => openBrain(n, detailView)}
+      onBack={backToGallery}
+      onRequestClose={onRequestClose}
+      onDispatch={onDispatch}
+      uncommitted={brains?.find((b) => b.name === selected)?.health.uncommitted ?? false}
+    />
+  );
+}
+
+/** The detail shell: breadcrumb (← All brains / <name>) + a brain SWITCHER + the 4
+ *  true-peer sub-tabs (Overview | Browse | Review | Distribute), then the active view.
+ *  Replaces the old top-level TabBtn row + the inner [Overview|Browse] toggle — one
+ *  consistent 4-peer bar for every brain (item 5). */
+function BrainDetailShell(
+  { name, brains, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, uncommitted }:
+  {
+    name: string; brains: BrainSummary[] | null;
+    detailView: DetailView; onSelectView: (v: DetailView) => void;
+    onSwitchBrain: (n: string) => void; onBack: () => void;
+    onRequestClose?: () => void; onDispatch?: (msg: string) => boolean; uncommitted?: boolean;
+  },
+) {
+  // Review sub-tab badge: the pending count from the cheap gallery summary (zero
+  // extra fetch) — surfaces "N awaiting review" right on the tab (wireframe).
+  const pending = brains?.find((b) => b.name === name)?.health.pending ?? 0;
+
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
-      <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-[12px]">
-        <TabBtn active={tab === 'gallery'} onClick={() => setTab('gallery')} testid="brainhub-tab-gallery">Gallery</TabBtn>
-        <TabBtn active={tab === 'brain'} onClick={() => setTab('brain')} disabled={!selected} testid="brainhub-tab-brain">
-          Brain{selected ? ` · ${selected}` : ''}
+      {/* breadcrumb + brain switcher */}
+      <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-[12px]" data-testid="brainhub-breadcrumb">
+        <button
+          data-testid="brainhub-back"
+          onClick={onBack}
+          className="flex items-center gap-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+        >
+          <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+          All brains
+        </button>
+        <span className="text-[var(--color-text-faint)]">/</span>
+        {/* brain switcher — jump to another brain WITHOUT returning to Gallery. A
+            native <select> (accessible, zero extra deps); keeps the current view. */}
+        {brains && brains.length > 1 ? (
+          <select
+            data-testid="brainhub-switcher"
+            value={name}
+            onChange={(e) => onSwitchBrain(e.target.value)}
+            className="bg-[var(--color-card)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[12px] font-semibold text-[var(--color-text)]"
+          >
+            {brains.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
+          </select>
+        ) : (
+          <span className="font-semibold">{name}</span>
+        )}
+      </div>
+
+      {/* 4 true-peer sub-tabs */}
+      <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-[12px]" data-testid="brainhub-detail-nav">
+        <TabBtn active={detailView === 'overview'} onClick={() => onSelectView('overview')} testid="brainhub-tab-overview">Overview</TabBtn>
+        <TabBtn active={detailView === 'browse'} onClick={() => onSelectView('browse')} testid="brainhub-tab-browse">Browse</TabBtn>
+        <TabBtn active={detailView === 'review'} onClick={() => onSelectView('review')} testid="brainhub-tab-review">
+          Review{pending > 0 ? <span data-testid="review-tab-badge" className="ml-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-[#5a4a20] text-[#f0a500] text-[9px] font-semibold">{pending}</span> : null}
         </TabBtn>
-        <TabBtn active={tab === 'review'} onClick={() => setTab('review')} disabled={!selected} testid="brainhub-tab-review">
-          Review
-        </TabBtn>
-        <TabBtn active={tab === 'distribute'} onClick={() => setTab('distribute')} disabled={!selected} testid="brainhub-tab-distribute">
-          Distribute
-        </TabBtn>
+        <TabBtn active={detailView === 'distribute'} onClick={() => onSelectView('distribute')} testid="brainhub-tab-distribute">Distribute</TabBtn>
       </div>
 
       <div className="flex-1 overflow-auto">
-        {error && (
-          <div className="p-4 text-[13px]" data-testid="brainhub-error">
-            <div className="text-[var(--color-error,#ef4444)]">Failed to load brains: {error}</div>
-            <button
-              data-testid="brainhub-retry"
-              onClick={() => void refetch()}
-              className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
-              style={{ background: 'var(--color-error,#ef4444)' }}
-            >
-              Retry
-            </button>
-          </div>
-        )}
-        {!error && tab === 'gallery' && <Gallery brains={brains} pinned={pinned} primaryDetail={primaryDetail} onOpen={openBrain} />}
-        {/* key={selected} ties BrainView's identity to the brain — DEFENSIVE: today
-            every `selected` change is a gallery-card click and the gallery tab only
-            renders when tab==='gallery', so a brain switch is always brain→gallery→brain
-            and this conditional already unmounts BrainView on the gallery step (fresh
-            mount on return). The key guards a FUTURE in-place brain switch (e.g. a
-            "jump to brain" affordance) from surviving a stale view='graph' or a stale
-            Projects/<name> tree root into the new brain. Cheap + intent-clear. */}
-        {!error && tab === 'brain' && selected && (
+        {detailView === 'overview' && (
           <BrainView
-            key={selected}
-            name={selected}
+            name={name}
             onRequestClose={onRequestClose}
-            onGoToReview={() => setTab('review')}
-            /* F3: `uncommitted` lives on the cheap gallery BrainHealth, NOT on the
-               detail DetailHealth (which has escalationPending but no uncommitted).
-               Thread it down from the already-loaded summary so §② Need-You can show
-               it without reading a field that doesn't exist on detail.health. */
-            uncommitted={brains?.find((b) => b.name === selected)?.health.uncommitted ?? false}
+            onGoToReview={() => onSelectView('review')}
+            uncommitted={uncommitted}
           />
         )}
-        {!error && tab === 'review' && selected && <ReviewView name={selected} onRequestClose={onRequestClose} />}
-        {!error && tab === 'distribute' && selected && <DistributeView name={selected} onRequestClose={onRequestClose} />}
+        {detailView === 'browse' && (
+          <BrainView
+            name={name}
+            onRequestClose={onRequestClose}
+            onGoToReview={() => onSelectView('review')}
+            uncommitted={uncommitted}
+            forceBrowse
+          />
+        )}
+        {detailView === 'review' && <ReviewView name={name} onRequestClose={onRequestClose} />}
+        {detailView === 'distribute' && <DistributeView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} />}
       </div>
     </div>
   );
@@ -195,7 +296,7 @@ function CompactBrain({ b, onOpen }: { b: BrainSummary; onOpen: (n: string) => v
   return (
     <DddCard density="compact" name={b.name} kind={b.kind}
       lifecycleStage={b.lifecycleStage}
-      health={b.health} typeCounts={b.typeCounts} onOpen={onOpen} />
+      health={b.health} typeCounts={b.typeCounts} description={b.description} onOpen={onOpen} />
   );
 }
 
@@ -302,52 +403,38 @@ function ZonedGrid({ brains, onOpen }: { brains: BrainSummary[]; onOpen: (n: str
 }
 
 
-// ── Brain view — FIXED [Overview | Browse] sub-tabs (run_6c68088f) ──────────────
+// ── Brain view — Overview / Browse (view switching OWNED by the detail shell) ────
 //
-// XG directive (this session): the Brain-detail view has TWO fixed sub-tabs that
-// separate two mental modes — NEVER a dynamic per-brain layout ("dynamic makes
-// users lost"). Same tab set + same section order for EVERY brain.
-//   • OVERVIEW (default) — "what state is this brain in / what should I do":
-//       §① Ontology (3-layer×7-type) — RELOCATED from the old health-strip (Gate-0
-//          C046: do NOT rebuild — the existing DddCard density=full IS the ontology
-//          + needs-you verdict), fixed FIRST, overall-summary.
-//       §② Need-You — a FIXED-POSITION action block (never removed): pending
-//          proposals → [Go to Review]; uncommitted changes; both zero → a muted
-//          "Nothing queued" line still rendered (its position is a stable anchor).
-//       §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) — the judgment-core
-//          the user periodically reviews; each shows its new-since-review signal +
-//          click→Canvas; a group header sums the signals + hosts [Weekly Report].
-//   • BROWSE — "explore the whole picture": the real Projects/<name> file tree +
-//     [Files | Code Graph] toggle (MOVED verbatim from the old default content —
-//     zero logic change; the tree is the "了解全貌" surface, now second-class).
-//
-// The tree/graph is the "browse detail" mode; Overview is "check state" — the split
-// stops the two from crowding each other vertically (the whole reason for tabs).
-
-type DetailTab = 'overview' | 'browse';
+// run_3d371424 (item 5): the old INNER [Overview | Browse] toggle was REMOVED — view
+// switching moved UP to the BrainDetailShell's 4-peer sub-tab bar (Overview | Browse |
+// Review | Distribute). BrainView now renders ONE view per mount, chosen by the
+// `forceBrowse` prop the shell passes. The two mental modes are unchanged:
+//   • OVERVIEW (forceBrowse=false, default) — "what state / what should I do":
+//       §① Ontology (3-layer×7-type) — the existing DddCard density=full IS the
+//          ontology + verdict (Gate-0 C046: relocated, not rebuilt); fixed FIRST.
+//       §② Need-You — a FIXED-POSITION action block (proposals→[Go to Review];
+//          uncommitted; reclaimable; sinking; all-zero → a muted "Nothing queued").
+//       §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) + [Weekly Report].
+//   • BROWSE (forceBrowse=true) — the real Projects/<name> file tree + Code Graph.
 
 function BrainView(
-  { name, onRequestClose, onGoToReview, uncommitted }:
-  { name: string; onRequestClose?: () => void; onGoToReview?: () => void; uncommitted?: boolean },
+  { name, onRequestClose, onGoToReview, uncommitted, forceBrowse = false }:
+  { name: string; onRequestClose?: () => void; onGoToReview?: () => void;
+    uncommitted?: boolean; forceBrowse?: boolean },
 ) {
-  const [detailTab, setDetailTab] = useState<DetailTab>('overview');  // fixed default
   const [showWeekly, setShowWeekly] = useState(false);
 
-  // Cached fetches (run_cfb460ac): re-opening the same brain or flipping
-  // Overview↔Browse no longer refetches within the 30s staleTime — the old
-  // useEffect+then refetched on every mount. detail drives the view; review is
-  // best-effort (§③ signals + Weekly): a review error must NOT blank the Overview,
-  // so we read only its data (null on error → docSignalMap is null-safe).
+  // Cached fetches (run_cfb460ac): re-opening the same brain no longer refetches
+  // within the 30s staleTime. detail drives the view; review is best-effort (§③
+  // signals + Weekly): a review error must NOT blank the Overview, so we read only
+  // its data (null on error → docSignalMap is null-safe).
   const { data: detail = null, error: detailErr } = useBrainDetail(name);
   const { data: review = null } = useReview(name);
   const error = detailErr ? String((detailErr as { message?: string })?.message ?? detailErr) : null;
 
-  // Reset view-local UI state when switching brains (keyed remount already does this
-  // for a gallery→brain switch; this guards a future in-place name change).
-  useEffect(() => {
-    setDetailTab('overview');
-    setShowWeekly(false);
-  }, [name]);
+  // Reset view-local UI state when switching brains (the shell's keyed remount already
+  // does this for a brain switch; this guards a future in-place name change).
+  useEffect(() => { setShowWeekly(false); }, [name]);
 
   // Open a doc/tree file in the app-level CANVAS. Paths are WORKSPACE-RELATIVE
   // (Projects/<name>/… — the LibraryTree + the ③ card both produce this shape) so
@@ -368,29 +455,13 @@ function BrainView(
 
   return (
     <div className="flex flex-col h-full" data-testid="brainhub-brain">
-      {/* header: brain name + kind, then the fixed [Overview | Browse] sub-tabs */}
-      <div className="flex items-center gap-2 px-4 pt-4 pb-2 flex-shrink-0">
-        <span className="text-[14px] font-semibold">{detail.name}</span>
-        <span className="text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-card)]">{detail.kind}</span>
-        <div className="ml-auto flex items-center rounded-md border border-[var(--color-border)] overflow-hidden text-[11px]" data-testid="brainhub-detail-tabs">
-          <button
-            data-testid="detail-tab-overview"
-            onClick={() => setDetailTab('overview')}
-            className={`flex items-center gap-1 px-2.5 py-0.5 ${detailTab === 'overview' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-          >
-            <span className="material-symbols-outlined text-[14px]">insights</span>Overview
-          </button>
-          <button
-            data-testid="detail-tab-browse"
-            onClick={() => setDetailTab('browse')}
-            className={`flex items-center gap-1 px-2.5 py-0.5 border-l border-[var(--color-border)] ${detailTab === 'browse' ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-          >
-            <span className="material-symbols-outlined text-[14px]">account_tree</span>Browse
-          </button>
-        </div>
-      </div>
-
-      {detailTab === 'overview' ? (
+      {forceBrowse ? (
+        <BrainBrowse
+          name={name}
+          hasCodeIntel={hasCodeIntel}
+          onOpenFile={openFile}
+        />
+      ) : (
         <BrainOverview
           detail={detail}
           review={review}
@@ -399,12 +470,6 @@ function BrainView(
           onOpenFile={openFile}
           showWeekly={showWeekly}
           onToggleWeekly={() => setShowWeekly((v) => !v)}
-        />
-      ) : (
-        <BrainBrowse
-          name={name}
-          hasCodeIntel={hasCodeIntel}
-          onOpenFile={openFile}
         />
       )}
     </div>
@@ -839,30 +904,53 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
   const zoneA = data.hunks.filter((h) => h.tag === 'cultivation·auto-applied');
   const riskyHunks = data.hunks.filter((h) => h.tag === 'risky·staged');
 
+  // Item 6 — de-jargon: the primary header is plain language ("N changes since
+  // your last review · M awaiting approval"). The engineer-facing git details
+  // (watermark SHA → HEAD, scoped path) are FOLDED into a muted <details> below,
+  // still present in the DOM (kept for the power user + the header contract test).
+  const changeCount = data.hunks.length;
+  const pendingCount = riskyHunks.length;
+
   return (
     <div className="p-4" data-testid="brainhub-review">
-      {/* diff header */}
-      <div className="flex items-center gap-2 mb-3 text-[11px] font-mono text-[var(--color-text-muted)]" data-testid="review-diff-header">
-        <span className="material-symbols-outlined text-[15px] text-[#a855f7]">commit</span>
-        diff <span className="text-[var(--color-text)]">Projects/{name}/</span>
-        · last-reviewed <span className="text-[var(--color-text)]">{shortSha(data.last_reviewed_sha)}</span>
-        → HEAD <span className="text-[var(--color-text)]">{shortSha(data.head_sha)}</span>
-        <button
-          onClick={onApproveAll}
-          // F8: NEVER advance the watermark when the diff is incomplete (timed out) —
-          // the empty/partial hunk list would silently mark unreviewed work as seen.
-          disabled={busy || data.hunks.length === 0 || data.diff_incomplete}
-          data-testid="review-approve-all"
-          className={`ml-auto flex items-center gap-1 text-[11px] rounded-md px-2 py-0.5 disabled:opacity-40 ${
-            armed
-              ? 'text-[#f0a500] border border-[#5a4a1f] bg-[#241f10] hover:bg-[#2e2814]'
-              : 'text-[#3fb950] border border-[#1f5a2a] hover:bg-[#132918]'
-          }`}
-          title={armed ? 'This advances the watermark and clears the review queue — click again to confirm' : undefined}
-        >
-          <span className="material-symbols-outlined text-[14px]">{armed ? 'warning' : 'visibility'}</span>
-          {armed ? 'Click again to confirm — advances watermark' : 'Mark all seen → advance watermark'}
-        </button>
+      {/* diff header — plain language first, git internals folded */}
+      <div className="mb-3" data-testid="review-diff-header">
+        <div className="flex items-center gap-2 text-[13px] text-[var(--color-text)]">
+          <span className="material-symbols-outlined text-[16px] text-[#a855f7]">rate_review</span>
+          <span>
+            {changeCount === 0
+              ? 'No changes since your last review'
+              : <>{changeCount} change{changeCount === 1 ? '' : 's'} since your last review
+                  {pendingCount > 0 && <> · <span className="text-[#f0a500]">{pendingCount} awaiting your approval</span></>}</>}
+          </span>
+          <button
+            onClick={onApproveAll}
+            // F8: NEVER advance the watermark when the diff is incomplete (timed out) —
+            // the empty/partial hunk list would silently mark unreviewed work as seen.
+            disabled={busy || data.hunks.length === 0 || data.diff_incomplete}
+            data-testid="review-approve-all"
+            className={`ml-auto flex items-center gap-1 text-[11px] rounded-md px-2 py-0.5 disabled:opacity-40 ${
+              armed
+                ? 'text-[#f0a500] border border-[#5a4a1f] bg-[#241f10] hover:bg-[#2e2814]'
+                : 'text-[#3fb950] border border-[#1f5a2a] hover:bg-[#132918]'
+            }`}
+            title={armed ? 'This clears the review queue and records everything as seen — click again to confirm' : 'Records all changes below as reviewed'}
+          >
+            <span className="material-symbols-outlined text-[14px]">{armed ? 'warning' : 'visibility'}</span>
+            {armed ? 'Click again to confirm' : 'Mark all seen'}
+          </button>
+        </div>
+        {/* engineer detail — folded, muted; kept for power users */}
+        <details className="mt-1">
+          <summary className="text-[10px] text-[var(--color-text-muted)] cursor-pointer select-none opacity-70 hover:opacity-100">
+            git detail
+          </summary>
+          <div className="mt-1 text-[10px] font-mono text-[var(--color-text-muted)]">
+            diff <span className="text-[var(--color-text)]">Projects/{name}/</span>
+            · last-reviewed <span className="text-[var(--color-text)]">{shortSha(data.last_reviewed_sha)}</span>
+            → HEAD <span className="text-[var(--color-text)]">{shortSha(data.head_sha)}</span>
+          </div>
+        </details>
       </div>
 
       {/* F8: loud degraded state — the diff timed out, so the queue below is INCOMPLETE.
@@ -1028,7 +1116,10 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
 
 // ── Distribute view (Run 3) ──────────────────────────────────────────────────
 
-function DistributeView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
+function DistributeView(
+  { name, onRequestClose, onDispatch }:
+  { name: string; onRequestClose?: () => void; onDispatch?: (msg: string) => boolean },
+) {
   // Cached query (run_cfb460ac): re-opening Distribute inside the 30s window is
   // served from cache — the old useEffect+then refetched on every mount.
   const { data = null, error: qErr } = useDistribution(name);
@@ -1045,21 +1136,36 @@ function DistributeView({ name, onRequestClose }: { name: string; onRequestClose
     }));
   }, [name, onRequestClose]);
 
-  // [Distribute a brain] does NOT auto-run — s_ddd-distribute is human-in-the-loop
-  // (confirms targets + content-safety scan + emit≠publish). We surface the exact
-  // chat command; the user invokes it in a chat tab where the HITL gate runs.
+  // [Distribute a brain] — item 3 (run_3d371424): the run is STILL human-in-the-loop
+  // (s_ddd-distribute confirms targets + content-safety scan + emit≠publish). The
+  // change is HOW it's triggered: instead of "copy → paste into a chat tab" (a clunky
+  // clipboard round-trip), the panel-native path INJECTS + AUTO-SENDS the command via
+  // the overlay `dispatchPrompt` bridge (onDispatch) — the same in-app trigger New
+  // Brain / Jobs / Pipeline overlays already use (C042-correct reuse, no new channel).
+  // The HITL gate is UNCHANGED: dispatchPrompt only lands the message in chat, where
+  // s_ddd-distribute's confirm/scan/emit≠publish gates run. Falls back to clipboard
+  // when onDispatch is absent (older webview / non-overlay mount).
   const distributeCmd = `distribute this ddd: ${name}`;
   const [copied, setCopied] = useState(false);
   const onDistribute = useCallback(() => {
-    // Guard BOTH the method (clipboard may be absent in an older webview) AND the
-    // returned promise (?. on .then too) — Gate-2 HIGH: `clipboard?.writeText(x).then`
-    // still throws if clipboard exists but writeText returns undefined.
+    if (onDispatch) {
+      // Inject + auto-send into the active chat tab, then close the overlay so the
+      // user sees the chat pick up the HITL flow (close AFTER dispatch — the message
+      // must be delivered first). dispatchPrompt returns false if it couldn't land
+      // (no active tab) → fall through to clipboard so the action never dead-ends.
+      const sent = onDispatch(distributeCmd);
+      if (sent) { onRequestClose?.(); return; }
+    }
+    // Fallback: copy the command (older webview / no dispatch bridge / no active tab).
+    // Guard BOTH the method (clipboard may be absent) AND the returned promise (?. on
+    // .then) — Gate-2 HIGH: `clipboard?.writeText(x).then` still throws if clipboard
+    // exists but writeText returns undefined.
     const p = navigator.clipboard?.writeText(distributeCmd);
     p?.then(
       () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
       () => {},
     );
-  }, [distributeCmd]);
+  }, [distributeCmd, onDispatch, onRequestClose]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="distribute-error">Failed to load distribution: {error}</div>;
   if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading distribution…</div>;
@@ -1152,8 +1258,10 @@ function DistributeView({ name, onRequestClose }: { name: string; onRequestClose
         </div>
       )}
 
-      {/* Step 3 · run — [Distribute a brain] is guidance, NOT auto-run (HITL):
-          s_ddd-distribute confirms targets + content-safety scan + emit≠publish. */}
+      {/* Step 3 · run — [Distribute this brain]: item 3 (run_3d371424) sends the
+          command straight into chat (HITL gate runs there); clipboard is the fallback.
+          Still NOT auto-run — s_ddd-distribute confirms targets + content-safety scan
+          + emit≠publish once the message lands. */}
       <div className="flex flex-col gap-1.5">
         {data.distributable && (
           <div className="text-[10px] uppercase tracking-wider font-semibold text-[#3fb950]" data-testid="distribute-step" data-step="3">
@@ -1166,10 +1274,16 @@ function DistributeView({ name, onRequestClose }: { name: string; onRequestClose
             disabled={!data.distributable}
             data-testid="distribute-button"
             className="flex items-center gap-1.5 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2.5 py-1 hover:bg-[#132918] disabled:opacity-40 disabled:cursor-not-allowed"
-            title={data.distributable ? 'Copy the chat command to run s_ddd-distribute' : 'Declare a distribution block first'}
+            title={
+              !data.distributable ? 'Declare a distribution block first'
+                : onDispatch ? 'Send the distribute command to chat (runs s_ddd-distribute — you confirm targets there)'
+                : 'Copy the chat command to run s_ddd-distribute'
+            }
           >
-            <span className="material-symbols-outlined text-[14px]">content_copy</span>
-            {copied ? 'Copied — paste into a chat tab' : 'Distribute a brain'}
+            <span className="material-symbols-outlined text-[14px]">{onDispatch ? 'send' : 'content_copy'}</span>
+            {copied ? 'Copied — paste into a chat tab'
+              : onDispatch ? 'Distribute this brain →'
+              : 'Distribute a brain'}
           </button>
           {data.distributable && (
             <span className="text-[10px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
