@@ -293,14 +293,20 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # Set to 180s to match our session_unit.INIT_TIMEOUT.
     os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "180000")
 
-    # 6. MCP connection mode — SDK v0.2.82+ connects MCP servers in the
-    # background by default (non-blocking). This means MCPs report
-    # status="pending" until ready. Set to "0" to restore blocking behavior
-    # where the session waits up to 5s for each MCP before the first query.
-    # Safety net: ensures all MCPs are ready when the first message arrives.
-    # TODO(2026-06): Remove after validating background MCP init works
-    # reliably with our get_mcp_status() health checks.
-    os.environ.setdefault("MCP_CONNECTION_NONBLOCKING", "0")
+    # 6. MCP connection mode — we use the SDK's DEFAULT background (non-blocking)
+    # MCP init: MCPs report status="pending" and connect off the spawn critical
+    # path. We deliberately do NOT set MCP_CONNECTION_NONBLOCKING=0 (blocking).
+    #
+    # History (run_a7b35b68): the blocking mode was a temporary safety net (each
+    # of 4 MCPs blocked spawn up to 5s "so all MCPs are ready before the first
+    # query"). But that ~20s block sat INSIDE the module-level _spawn_lock/_env_lock
+    # critical path, so concurrent tabs serialized and later spawns paid ~3x TTFT
+    # (measured p50 spawn 15.4s / p90 26.3s; 3-tab bursts each +12s queue). Its
+    # removal condition — "background init reliable, validated via get_mcp_status" —
+    # is met: live mcp_health shows configured=4 ok=5, and _check_mcp_health (run
+    # post-first-response) already treats "pending" as non-failed, so a not-yet-
+    # connected MCP never blocks or false-alarms the first query. Reverting to
+    # blocking mode would reintroduce the cold-spawn serialization latency.
 
     # 6b. Bash tool timeout — the CLI already defaults BASH_DEFAULT_TIMEOUT_MS
     # to 120s (max 600s/10min). We re-assert the 120s default explicitly to

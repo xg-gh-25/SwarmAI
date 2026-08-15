@@ -650,6 +650,15 @@ class SessionUnit:
         self._configured_mcps: set[str] = set()
         # Flag: health check runs only ONCE per session (first ResultMessage).
         self._mcp_health_checked: bool = False
+        # Re-probe budget for the health check when a configured MCP is still
+        # "pending" at check time (run_a7b35b68): background MCP init (SDK default,
+        # since NONBLOCKING=0 was removed) means a slow MCP may not have reached a
+        # TERMINAL status (connected/failed) by the first ResultMessage. Consuming
+        # the one-shot on a "pending" would permanently mask a slow-FAILING MCP.
+        # So a check that sees any configured MCP still pending does NOT finalize —
+        # it un-sets the one-shot for a bounded number of later turns until status
+        # is terminal (or the budget is exhausted, then it finalizes on what it has).
+        self._mcp_pending_reprobes_left: int = 3
 
         # ── Sub-agent progress observability ─────────────────────
         # Tracks active sub-agent(s) for progress observability.
@@ -2815,16 +2824,41 @@ class SessionUnit:
         # round is not mistaken for a completed check.
         if self._client_io.locked():
             return None
-        self._mcp_health_checked = True
 
         if not self._configured_mcps or self._client is None:
+            # Nothing to check / no subprocess — finalize (a session with no
+            # configured MCPs has no health question to answer).
+            self._mcp_health_checked = True
             return None
 
+        # Do NOT consume the one-shot until we have a SUCCESSFUL, non-empty status
+        # response (run_a7b35b68): a transient get_mcp_status() exception or an
+        # empty response is "could not determine", NOT "healthy". Consuming the
+        # one-shot on those would permanently mask a genuinely-failing MCP — the
+        # exact bug this feature exists to prevent, widened by the re-probe adding
+        # more turns where a transient status-query failure could burn the flag.
+        # So these two paths return WITHOUT setting the flag → the check re-runs
+        # next turn (same skip-and-retry semantics as the _client_io.locked() path).
+        # Transient-retry is bounded by the SAME re-probe budget as the pending
+        # path, so a PERSISTENTLY broken get_mcp_status (not transient) cannot
+        # re-probe every turn forever (STEERING #2 — no unbounded probe): on
+        # budget exhaustion the flag is consumed and the check stops.
         try:
             status_response = await self._client.get_mcp_status()
         except Exception as exc:
+            if self._mcp_pending_reprobes_left > 0:
+                self._mcp_pending_reprobes_left -= 1
+                logger.debug(
+                    "session_unit.mcp_health_check_failed session_id=%s: %s "
+                    "(transient — retry next turn, reprobes_left=%d)",
+                    self.session_id, exc, self._mcp_pending_reprobes_left,
+                )
+                return None
+            # Budget exhausted → give up probing (consume the one-shot).
+            self._mcp_health_checked = True
             logger.debug(
-                "session_unit.mcp_health_check_failed session_id=%s: %s",
+                "session_unit.mcp_health_check_failed session_id=%s: %s "
+                "(reprobe budget exhausted — giving up)",
                 self.session_id, exc,
             )
             return None
@@ -2832,14 +2866,23 @@ class SessionUnit:
         mcp_servers = status_response.get("mcpServers", [])
 
         # If CLI returned no servers at all, the control command may not be
-        # supported (old SDK version) — skip rather than false-alarm.
+        # supported (old SDK version) — skip rather than false-alarm. Do NOT
+        # consume the one-shot (bounded by the re-probe budget, same as above).
         if not mcp_servers:
-            logger.debug(
-                "session_unit.mcp_health_check_empty session_id=%s "
-                "(CLI returned no MCP status — skipping)",
-                self.session_id,
-            )
+            if self._mcp_pending_reprobes_left > 0:
+                self._mcp_pending_reprobes_left -= 1
+                logger.debug(
+                    "session_unit.mcp_health_check_empty session_id=%s "
+                    "(no MCP status — retry next turn, reprobes_left=%d)",
+                    self.session_id, self._mcp_pending_reprobes_left,
+                )
+                return None
+            self._mcp_health_checked = True
             return None
+
+        # We have a real status response → this IS a completed check. Consume the
+        # one-shot now (the pending-reprobe branch below may un-set it again).
+        self._mcp_health_checked = True
 
         # Build set of non-failed MCP names.
         # "pending" = still initializing (don't alert — not failed yet).
@@ -2847,13 +2890,33 @@ class SessionUnit:
         # Only alert on "failed" or "needs-auth" — definitive failures.
         non_failed: set[str] = set()
         failed_servers: list[dict] = []
+        pending_names: set[str] = set()
         for server in mcp_servers:
             name = server.get("name", "")
             status = server.get("status", "")
             if status in ("connected", "pending", "disabled"):
                 non_failed.add(name)
+                if status == "pending":
+                    pending_names.add(name)
             elif status in ("failed", "needs-auth"):
                 failed_servers.append(server)
+
+        # Re-probe if a CONFIGURED MCP is still "pending" (run_a7b35b68): under
+        # background init a slow MCP may not be terminal yet. Consuming the one-shot
+        # now would mask a slow MCP that ultimately FAILS. Un-set the flag (bounded
+        # by the re-probe budget) so a later turn re-checks once status is terminal.
+        # Budget-exhausted → fall through and finalize on the best info we have
+        # (pending still counts as non-failed, so no false alarm — just stop probing).
+        configured_pending = self._configured_mcps & pending_names
+        if configured_pending and self._mcp_pending_reprobes_left > 0:
+            self._mcp_pending_reprobes_left -= 1
+            self._mcp_health_checked = False  # un-consume the one-shot for a re-probe
+            logger.info(
+                "session_unit.mcp_health_pending session_id=%s pending=%s reprobes_left=%d",
+                self.session_id, sorted(configured_pending),
+                self._mcp_pending_reprobes_left,
+            )
+            return None
 
         # Compare: which configured MCPs are definitively missing/failed?
         missing = self._configured_mcps - non_failed
@@ -3021,6 +3084,7 @@ class SessionUnit:
         if isinstance(options.mcp_servers, dict) and options.mcp_servers:
             self._configured_mcps = set(options.mcp_servers.keys())
             self._mcp_health_checked = False
+            self._mcp_pending_reprobes_left = 3  # fresh re-probe budget per spawn
         else:
             self._configured_mcps = set()
 
