@@ -598,6 +598,28 @@ class ContextHealthHook:
             if not freshness.stale:
                 continue
 
+            # OWNERSHIP GATE (run_864c23b4): a project that owns no resolvable local
+            # repo (resolve_owned_repo_root → None — e.g. a worktree:null data-agent
+            # DDD like IVTHub, which GOVERNs a remote Coral repo but has no local
+            # checkout) can NEVER be legitimately reindexed. Its graph_meta lacks
+            # repo_root, so check_freshness returns suggest_full_rebuild=True forever;
+            # without this gate the emit branch below fired code_intel_full_reindex
+            # every health tick, the reindex handler no-op'd it (unowned_repo), and it
+            # re-emitted next tick — unbounded churn (CPU + log spam + scheduler
+            # pressure). This is the SAME ownership oracle the incremental branch
+            # (below) and the reindex handler already use; hoisting it here makes it
+            # cover the emit branch too (the only previously-unguarded emit site).
+            # NOTE: check_freshness is deliberately left untouched — recall_multi
+            # depends on repo_root-absent → stale=True to stamp hits as needs-verify.
+            from core.code_intel import resolve_owned_repo_root
+            if resolve_owned_repo_root(project_dir) is None:
+                logger.debug(
+                    "code_intel: %s owns no resolvable local repo — skipping "
+                    "freshness-driven reindex (worktree:null / no-checkout DDD)",
+                    project_dir.name,
+                )
+                continue
+
             if freshness.suggest_full_rebuild:
                 logger.info(
                     "code_intel %s: %d commits behind, %d files — triggering background rebuild",
