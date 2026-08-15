@@ -157,3 +157,55 @@ async def test_loop_tick_loop_bumps():
             await task
         except asyncio.CancelledError:
             pass
+
+
+def _reset_starvation_log_state():
+    """Reset the loop_age-log rate-limit globals (the autouse fixture resets
+    _last_loop_tick but not these). Keeps each starvation-log case independent."""
+    heartbeat._last_loop_age_log = 0.0
+    heartbeat._loop_age_was_over = False
+
+
+def test_starvation_log_suppressed_for_startup_sentinel(caplog):
+    """run_32f2cfe6 regression: the never-ticked startup sentinel (loop_age=999,
+    _last_loop_tick==0) must NOT emit the 'event-loop starvation' WARNING — it is a
+    transient every restart, not a real wedge. (The FILE still reports 999 — that is
+    the Tauri watchdog's pre-yield semantics, asserted by test_loop_age_grows_without_bump.)"""
+    _reset_starvation_log_state()
+    heartbeat._last_loop_tick = 0.0  # never ticked → sentinel
+    with caplog.at_level("WARNING", logger="core.heartbeat"):
+        heartbeat._write_heartbeat_once()
+    assert not any("event-loop starvation" in r.getMessage() for r in caplog.records), (
+        "startup sentinel (last==0, loop_age=999) must NOT log starvation — "
+        "reverting the `last > 0` guard makes this RED (the original false-positive)"
+    )
+
+
+def test_starvation_log_fires_for_real_stall(caplog):
+    """A loop that HAS ticked (last>0) and then stalled >= threshold must still log —
+    the fix must not silence genuine starvation."""
+    _reset_starvation_log_state()
+    heartbeat._last_loop_tick = time.monotonic() - (heartbeat._LOOP_AGE_LOG_THRESHOLD_S + 2.0)
+    with caplog.at_level("WARNING", logger="core.heartbeat"):
+        heartbeat._write_heartbeat_once()
+    assert any("event-loop starvation" in r.getMessage() for r in caplog.records), (
+        "a real ticked-then-stalled loop must log starvation"
+    )
+
+
+def test_startup_sentinel_does_not_swallow_first_real_stall(caplog):
+    """The sentinel must not leave rising-edge state set — else the FIRST real
+    post-startup stall would be mis-suppressed. Sequence: sentinel (silent) → real stall (logs)."""
+    _reset_starvation_log_state()
+    # 1. startup sentinel — silent, must reset _loop_age_was_over
+    heartbeat._last_loop_tick = 0.0
+    with caplog.at_level("WARNING", logger="core.heartbeat"):
+        heartbeat._write_heartbeat_once()
+        assert not any("starvation" in r.getMessage() for r in caplog.records)
+        caplog.clear()
+        # 2. now a real stall — rising edge must fire despite the preceding sentinel
+        heartbeat._last_loop_tick = time.monotonic() - (heartbeat._LOOP_AGE_LOG_THRESHOLD_S + 2.0)
+        heartbeat._write_heartbeat_once()
+    assert any("event-loop starvation" in r.getMessage() for r in caplog.records), (
+        "first real stall after a startup sentinel must still fire (rising-edge intact)"
+    )

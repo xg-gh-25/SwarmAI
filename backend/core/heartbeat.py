@@ -164,7 +164,15 @@ def _write_heartbeat_once() -> None:
     # log so it can be timestamp-correlated with an SSE-heartbeat gap / frontend
     # "Stream stalled". Rising-edge + interval-throttled; pure logging, no action.
     global _last_loop_age_log, _loop_age_was_over
-    if loop_age >= _LOOP_AGE_LOG_THRESHOLD_S:
+    # A REAL starvation is a loop that HAS ticked (last>0) and then stalled — NOT
+    # the never-ticked-yet startup sentinel (last==0 → loop_age=999.0), which is a
+    # transient every process restart. Gate the log on last>0 so the sentinel
+    # neither logs nor corrupts the rising-edge state (else a startup 999 would
+    # leave _loop_age_was_over=True and swallow the first REAL post-startup stall).
+    # The file-write payload below still reports loop_age=999 for the sentinel —
+    # the Tauri watchdog's pre-yield "wedged" semantics are deliberately unchanged.
+    is_real_starvation = last > 0 and loop_age >= _LOOP_AGE_LOG_THRESHOLD_S
+    if is_real_starvation:
         rising_edge = not _loop_age_was_over
         _loop_age_was_over = True
         if rising_edge or (now - _last_loop_age_log) >= _LOOP_AGE_LOG_INTERVAL_S:
