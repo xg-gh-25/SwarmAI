@@ -39,7 +39,12 @@ from .paths import (
 )
 from .config_io import mutate_config, read_config
 
-LOG_DIR.mkdir(exist_ok=True)
+# parents=True is load-bearing: LOG_DIR is derived (SwarmWS/Services/swarm-jobs/logs),
+# and this mkdir runs at IMPORT time. A bare exist_ok=True silently relied on the
+# production tree already existing — so importing this module against any fresh root
+# (a test sandbox, a new machine, a relocated SWARM_DATA_DIR) died with
+# FileNotFoundError on the missing parents before any test body could run.
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

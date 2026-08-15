@@ -32,9 +32,16 @@ from utils import bundle_paths
 
 def test_ac1_candidates_include_deployed_daemon_resources():
     """AC1: the deployed-daemon resources dir is always a candidate."""
+    from config import get_app_data_dir
+
     exe_dir = Path("/some/build-output/binaries/python-backend-x/")
     candidates = bundle_paths._get_tauri_bundle_resource_candidates(exe_dir)
-    deployed = Path.home() / ".swarm-ai" / "daemon" / "resources"
+    # Derive the expectation from the SAME authority the code uses. Re-deriving
+    # `Path.home() / ".swarm-ai"` here is exactly what _get_deployed_daemon_resources'
+    # docstring says NOT to do — and it made this test fail the moment the app-data
+    # root became overridable (SWARM_DATA_DIR), which is also how it would fail on any
+    # box whose HOME differs from the run's app-data root.
+    deployed = get_app_data_dir() / "daemon" / "resources"
     assert deployed in candidates, (
         f"deployed-daemon resources dir {deployed} must be a fallback candidate; "
         f"got {candidates}"
@@ -65,6 +72,11 @@ def test_ac2_execution_finds_file_via_deployed_fallback(tmp_path, monkeypatch):
 
     monkeypatch.setattr(bundle_paths.sys, "frozen", True, raising=False)
     monkeypatch.setattr(bundle_paths.sys, "executable", str(fake_exe), raising=False)
+    # Redirect the app-data root the SUPPORTED way. Patching Path.home alone stopped
+    # reaching _get_deployed_daemon_resources once get_app_data_dir() gained the
+    # SWARM_DATA_DIR override (env wins over home). The Path.home patch is kept so the
+    # config-unavailable except-branch is still covered.
+    monkeypatch.setenv("SWARM_DATA_DIR", str(fake_home / ".swarm-ai"))
     monkeypatch.setattr(bundle_paths.Path, "home", classmethod(lambda cls: fake_home))
 
     found = bundle_paths.get_resource_file("default-agent.json", stale_dev)
@@ -88,6 +100,11 @@ def test_ac3_negative_without_deployed_resources_returns_none(tmp_path, monkeypa
 
     monkeypatch.setattr(bundle_paths.sys, "frozen", True, raising=False)
     monkeypatch.setattr(bundle_paths.sys, "executable", str(fake_exe), raising=False)
+    # Redirect the app-data root the SUPPORTED way. Patching Path.home alone stopped
+    # reaching _get_deployed_daemon_resources once get_app_data_dir() gained the
+    # SWARM_DATA_DIR override (env wins over home). The Path.home patch is kept so the
+    # config-unavailable except-branch is still covered.
+    monkeypatch.setenv("SWARM_DATA_DIR", str(fake_home / ".swarm-ai"))
     monkeypatch.setattr(bundle_paths.Path, "home", classmethod(lambda cls: fake_home))
 
     found = bundle_paths.get_resource_file("default-agent.json", stale_dev)
@@ -116,6 +133,11 @@ def test_ac4_execution_get_resources_dir_uses_deployed_fallback(tmp_path, monkey
 
     monkeypatch.setattr(bundle_paths.sys, "frozen", True, raising=False)
     monkeypatch.setattr(bundle_paths.sys, "executable", str(fake_exe), raising=False)
+    # Redirect the app-data root the SUPPORTED way. Patching Path.home alone stopped
+    # reaching _get_deployed_daemon_resources once get_app_data_dir() gained the
+    # SWARM_DATA_DIR override (env wins over home). The Path.home patch is kept so the
+    # config-unavailable except-branch is still covered.
+    monkeypatch.setenv("SWARM_DATA_DIR", str(fake_home / ".swarm-ai"))
     monkeypatch.setattr(bundle_paths.Path, "home", classmethod(lambda cls: fake_home))
 
     resolved = bundle_paths.get_resources_dir(stale_dev)
@@ -134,6 +156,11 @@ def test_ac5_get_resources_dir_prefers_real_dev_path(tmp_path, monkeypatch):
     fake_home = tmp_path / "home"
     (fake_home / ".swarm-ai" / "daemon" / "resources").mkdir(parents=True)
 
+    # Redirect the app-data root the SUPPORTED way. Patching Path.home alone stopped
+    # reaching _get_deployed_daemon_resources once get_app_data_dir() gained the
+    # SWARM_DATA_DIR override (env wins over home). The Path.home patch is kept so the
+    # config-unavailable except-branch is still covered.
+    monkeypatch.setenv("SWARM_DATA_DIR", str(fake_home / ".swarm-ai"))
     monkeypatch.setattr(bundle_paths.Path, "home", classmethod(lambda cls: fake_home))
     resolved = bundle_paths.get_resources_dir(real_dev)
     assert resolved == real_dev, "a real dev_path must take priority over the fallback"

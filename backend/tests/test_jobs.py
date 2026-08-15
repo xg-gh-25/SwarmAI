@@ -668,6 +668,26 @@ class TestJobProvisioning:
 # ── API Router ─────────────────────────────────────────────────────────
 
 class TestJobsAPI:
+    @pytest.fixture(autouse=True)
+    def _seed_jobs_config(self):
+        """Give the jobs API its own config.yaml inside the sandboxed app-data dir.
+
+        POST /api/jobs/run → scheduler.load_config(), which `sys.exit(1)`s when
+        CONFIG_FILE is missing. These tests used to pass only because CONFIG_FILE
+        resolved to the USER'S REAL ~/.swarm-ai/.../swarm-jobs/config.yaml — a hidden
+        dependency on production state that made the result machine-specific (and
+        empty on any fresh checkout / CI box). Now that conftest roots app-data at a
+        sandbox, the file has to be seeded here, explicitly.
+        """
+        import yaml
+        from jobs.paths import CONFIG_FILE
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if not CONFIG_FILE.exists():
+            CONFIG_FILE.write_text(
+                yaml.safe_dump({"feeds": [], "defaults": {}, "user_context": {}}),
+                encoding="utf-8",
+            )
+
     @pytest.fixture
     def client(self):
         from fastapi.testclient import TestClient

@@ -26,7 +26,18 @@ from pathlib import Path
 # ─── Paths ───────────────────────────────────────────────────────────────────
 
 def _get_app_data_dir() -> Path:
-    return Path(os.environ.get("SWARM_APP_DATA_DIR", Path.home() / ".swarm-ai"))
+    """Resolve the app data dir, honoring the SAME escape hatch as backend config.
+
+    ``SWARM_DATA_DIR`` is the single authority (config.get_app_data_dir reads it);
+    a standalone skill script cannot import backend ``config``, so it re-implements
+    the same precedence rather than introducing a second name. ``SWARM_APP_DATA_DIR``
+    stays as a deprecated fallback for anything still exporting the old name.
+    """
+    return Path(
+        os.environ.get("SWARM_DATA_DIR")
+        or os.environ.get("SWARM_APP_DATA_DIR")  # deprecated alias
+        or Path.home() / ".swarm-ai"
+    )
 
 WORKSPACE = Path(os.environ.get("SWARM_WORKSPACE", _get_app_data_dir() / "SwarmWS"))
 CONTEXT_DIR = WORKSPACE / ".context"

@@ -493,19 +493,136 @@ async def reset_database():
 @pytest.fixture(autouse=True)
 def _isolate_app_data_dir(tmp_path_factory, monkeypatch):
     """Point config.get_app_data_dir() at a per-test temp dir for EVERY test (P7:
-    structural guard, not per-test discipline). get_app_data_dir() defaults to the
-    LIVE production ~/.swarm-ai — any test that constructs SQLiteDatabase(db_path=None),
-    or any code that self-opens get_app_data_dir()/"data.db" (skills.py, skill_metrics_hook,
+    structural guard, not per-test discipline). get_app_data_dir() defaults to the LIVE
+    production ~/.swarm-ai — any test that constructs SQLiteDatabase(db_path=None), or
+    any code that self-opens get_app_data_dir()/"data.db" (skills.py, skill_metrics_hook,
     todo_db), would otherwise create/read/write the PRODUCTION store, and sqlite3.connect
     create-if-missing means it silently materializes ~/.swarm-ai/data.db. Setting the
-    SWARM_DATA_DIR escape hatch immunizes ALL callers at the one chokepoint (upstream
+    SWARM_DATA_DIR escape hatch immunizes every CALLER at the one chokepoint (upstream
     mechanism class behind the 8-12 data.db loss; STEERING #20 / #1).
+
+    ⚠️ PER-TEST, NOT SESSION-SCOPED — tried session scope to cut the projection cost
+    and it silently broke DB isolation: an app-data dir that outlives one test keeps
+    the `<sandbox>/data.db` some code path incidentally created, so a LATER test
+    inherits that half-initialized store and dies on `no such table: channel_messages`.
+    A fresh dir per test is what keeps that from being possible. (The cost that
+    motivated session scope is gone anyway: excluding node_modules from the skill
+    projection took a fresh-dir projection from ~630MB to ~15MB.)
 
     A test that DELIBERATELY needs the raw default (e.g. test_config_data_dir asserting
     the unset→home behavior) opts out with `monkeypatch.delenv("SWARM_DATA_DIR")` in its
-    own body — that override is process-global and takes precedence over this setenv."""
+    own body — that override is process-global and takes precedence over this setenv.
+
+    THE ENV VAR ALONE IS NOT ENOUGH — it only reaches CALLERS of get_app_data_dir().
+    Modules that froze a path into a module-level CONSTANT at IMPORT time
+    (jobs.paths.APP_DATA_DIR + everything derived from it, security_hooks._AGENT_AUDIT_DIR,
+    heartbeat.HEARTBEAT_PATH) resolved before any fixture could set the var, so they
+    stayed pinned to the live ~/.swarm-ai and tests kept writing production state
+    (observed: real ~/.swarm-ai/state/pipeline_agent_audit/*.marker). So we ALSO re-root
+    any already-imported production Path constant onto the session root.
+
+    Deliberately done HERE and not by making those constants lazy in production code:
+    ~18 existing tests monkeypatch them AS module attributes
+    (`monkeypatch.setattr(security_hooks, "_AGENT_AUDIT_DIR", ...)` ×11,
+    `heartbeat.HEARTBEAT_PATH` ×3+, `paths.APP_DATA_DIR` ×4). Converting them to
+    accessors would silently defeat every one of those patches — trading a contained
+    test-side gap for a broad, quiet loss of isolation. A test's own function-scoped
+    setattr still wins over ours (same monkeypatch instance, LIFO undo).
+
+    The module list below must be COMPLETE for sibling modules that share a path:
+    re-rooting security_hooks but not runtime_hooks left the two rooted in different
+    test sandboxes and broke the reader==writer invariant test_adversarial_commit_gate
+    defends. Re-rooting BOTH on every test keeps them equal."""
     d = tmp_path_factory.mktemp("app_data")
     monkeypatch.setenv("SWARM_DATA_DIR", str(d))
+    _reroot_frozen_app_data_constants(
+        d, monkeypatch, basetemp=tmp_path_factory.getbasetemp()
+    )
+
+
+# Top-level packages swept for frozen app-data paths. A NAME ALLOWLIST was tried and
+# abandoned: `from .paths import CONFIG_FILE` binds a SEPARATE frozen copy into every
+# importing module, so the leaky set is not "modules that call get_app_data_dir()" but
+# "every module that ever from-imported such a constant" — jobs.paths, jobs.scheduler,
+# jobs.self_tune, core.security_hooks, core.runtime_hooks, core.heartbeat, … An
+# allowlist silently missed each new one (each miss = a desync or a production write),
+# so the sweep is prefix-scoped instead and made safe by the VALUE filter: it only ever
+# rewrites a Path that already lives under the production app-data root or under a test
+# sandbox — never an unrelated path.
+_APP_MODULE_PREFIXES = (
+    "jobs", "core", "routers", "hooks", "database", "channels",
+    "middleware", "utils", "config", "main",
+)
+
+
+def _reroot_frozen_app_data_constants(sandbox, monkeypatch, *, basetemp=None) -> None:
+    """Re-root already-imported app-data Path constants onto the CURRENT *sandbox*.
+
+    Two distinct stale roots have to be caught, and missing either one is a real bug:
+
+    1. THE PRODUCTION ROOT (~/.swarm-ai) — a module imported at collection time froze
+       before any fixture could set SWARM_DATA_DIR, so it points at the live store.
+       This is the pollution the guard exists to stop (observed: real
+       ~/.swarm-ai/state/pipeline_agent_audit/*.marker written by test runs).
+    2. AN EARLIER TEST'S SANDBOX — a module first imported DURING some test resolved
+       correctly for THAT test and then stayed frozen there forever. With a per-test
+       root that silently DESYNCHRONIZES sibling modules: security_hooks (patched and
+       undone every test, so always current) vs runtime_hooks (frozen on the sandbox of
+       whichever test imported it) ended up on different roots, breaking the
+       reader==writer invariant test_adversarial_commit_gate defends. A filter that
+       only recognized the production root skipped case 2 entirely, because such a path
+       is no longer under ~/.swarm-ai.
+
+    Generic by construction: EVERY Path attribute under either stale root is rewritten,
+    so constants DERIVED from APP_DATA_DIR (jobs.paths.SWARMWS, DB_PATH, JOBS_DATA_DIR,
+    STATE_FILE, LOG_DIR, …) are covered without enumerating names — patching only
+    APP_DATA_DIR would leave every derivative behind.
+
+    KNOWN RESIDUAL (not fixable from here): main._BACKEND_JSON_DEFAULT is baked into
+    three `def f(path: str = _BACKEND_JSON_DEFAULT)` signatures, and a default argument
+    is bound at def time — patching the module attribute cannot move it. All three
+    accept an explicit `path`, so a test that cares passes one.
+    """
+    from pathlib import Path, PosixPath  # conftest binds `sys as _sys`, no Path
+
+    sandbox = Path(sandbox)
+    real = Path.home() / ".swarm-ai"
+
+    def _stale_suffix(val):
+        """Path parts BELOW whichever stale root *val* sits under, or None."""
+        try:
+            return val.relative_to(real).parts
+        except ValueError:
+            pass
+        if basetemp is None:
+            return None
+        try:
+            parts = val.relative_to(basetemp).parts
+        except ValueError:
+            return None  # neither production nor a test sandbox — leave it alone
+        # …/<basetemp>/app_dataN/<suffix> → return <suffix>
+        for i, part in enumerate(parts):
+            if part.startswith("app_data"):
+                return parts[i + 1:]
+        return None
+
+    for mod_name, mod in list(_sys.modules.items()):
+        if mod is None or mod_name.split(".", 1)[0] not in _APP_MODULE_PREFIXES:
+            continue
+        try:
+            members = list(vars(mod).items())
+        except TypeError:  # exotic module object without a __dict__
+            continue
+        for attr, val in members:
+            if type(val) is not PosixPath and not isinstance(val, Path):
+                continue
+            suffix = _stale_suffix(val)
+            if suffix is None:
+                continue
+            monkeypatch.setattr(
+                mod, attr, sandbox.joinpath(*suffix) if suffix else sandbox,
+                raising=False,
+            )
 
 
 @pytest.fixture(autouse=True)

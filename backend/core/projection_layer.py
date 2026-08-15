@@ -50,7 +50,28 @@ _FRESHNESS_SKIP_DIRS = {"node_modules", "__pycache__", ".git"}
 # so the two are symmetric and a real source edit still re-projects.
 # PUBLIC (no leading underscore): shared cross-module — plugin_manager imports it
 # for its own skill-install copytree sites, so it carries a stability contract.
-_COPY_IGNORE_PATTERNS = ("__pycache__", "*.pyc", "*.pyo", ".DS_Store")
+#
+# ⚠️ node_modules IS EXCLUDED FROM THE COPY, deliberately and symmetrically with
+# _FRESHNESS_SKIP_DIRS above (which already excludes it from the freshness walk).
+# Without this the two were ASYMMETRIC: freshness ignored node_modules, so an
+# existing projection lacking it was judged "fresh" and never re-copied — but a
+# projection into an EMPTY dir (no dst yet) took the full copytree and dragged the
+# whole tree along. `backend/skills/s_pollinate/templates/remotion/node_modules`
+# alone is ~600MB (incl. a ~150MB chrome-headless-shell), so every projection into
+# a fresh app-data dir cost ~600MB of real bytes — per pytest test, once conftest
+# began handing each test its own empty SWARM_DATA_DIR (2.8GB from a 6-file run,
+# then ENOSPC).
+# SAFE because a projected node_modules is never the runtime one: npm deps are
+# provisioned separately at the destination (see the npm/ManifestLoader block in
+# project_skills), and the one skill that ships a vendored tree (s_pollinate)
+# renders from its OWN studio at SwarmWS/Services/pollinate-studio/, which carries
+# its own node_modules. Proof from the live workspace: the production projection of
+# s_pollinate is ~7MB with NO node_modules and pollinate works — this change simply
+# makes a fresh projection match what production already converged to.
+# Build caches are excluded for the same reason (machine-generated, rebuildable).
+_COPY_IGNORE_PATTERNS = (
+    "__pycache__", "*.pyc", "*.pyo", ".DS_Store", "node_modules", ".cache",
+)
 COPY_IGNORE = shutil.ignore_patterns(*_COPY_IGNORE_PATTERNS)
 
 
