@@ -113,3 +113,58 @@ class TestSystemPromptCacheReuse:
         assert options.system_prompt != "STALE CACHED PROMPT (no resume history)", (
             "resume turn must NOT serve the stale cache"
         )
+
+
+class TestRouterCacheGating:
+    """The router-layer gate (Gate-2 HIGH fix, run_1dc710db): the cache is reused
+    ONLY on a warm-reuse turn — never on a spawn/respawn turn (which would serve
+    turn-1's stale UI-state to a fresh subprocess), and a resume build is never
+    stored (its one-shot history block must not be re-served)."""
+
+    def test_cache_passed_only_on_warm_reuse(self):
+        """A warm turn reuses the cache; a spawn/respawn turn (will_reuse_live=False,
+        e.g. evicted→COLD respawn) does NOT — it rebuilds fresh with current UI-state.
+        Mutation-proof: gating on 'not needs_context_injection' instead of
+        will_reuse_live would return the cache here and fail the respawn assertion."""
+        from core.session_router import _system_prompt_cache_to_pass
+
+        cache = "TURN-1 PROMPT (has turn-1 open-file/UI-state)"
+        # Warm reuse → serve cache (prompt is discarded anyway; saves assembly).
+        assert _system_prompt_cache_to_pass(cache, will_reuse_live=True) == cache
+        # Spawn/respawn (evicted→COLD, crash respawn, cold entry) → MUST rebuild.
+        assert _system_prompt_cache_to_pass(cache, will_reuse_live=False) is None, (
+            "a spawn/respawn turn must NOT reuse the cache (it would serve turn-1's "
+            "stale UI-state to the fresh subprocess — the Gate-2 HIGH)"
+        )
+
+    def test_cache_stored_only_from_fresh_nonresume_build(self):
+        """The cache is seeded only from a fresh, non-resume build."""
+        from core.session_router import _should_store_system_prompt_cache
+
+        P = "A COMPLETE FRESH PROMPT"
+        # Fresh cold build, not resume → store (seeds the cache).
+        assert _should_store_system_prompt_cache(
+            P, will_reuse_live=False, needs_context_injection=False
+        ) is True
+        # Warm turn, non-resume → ALSO store (Gate-2 MED#4 fix): if the cache was
+        # empty (resumed-session case), this warm build is a full history-free
+        # prompt that seeds it; if the cache was reused, this is a harmless no-op
+        # (built_prompt == the cache). Either way, non-resume → safe to store.
+        assert _should_store_system_prompt_cache(
+            P, will_reuse_live=True, needs_context_injection=False
+        ) is True
+        # Resume build (one-shot history block) → NEVER store (Gate-2 MED), regardless
+        # of warm/cold — this is the single hard exclusion.
+        assert _should_store_system_prompt_cache(
+            P, will_reuse_live=False, needs_context_injection=True
+        ) is False
+        assert _should_store_system_prompt_cache(
+            P, will_reuse_live=True, needs_context_injection=True
+        ) is False
+        # Empty/non-str prompt → don't store.
+        assert _should_store_system_prompt_cache(
+            "", will_reuse_live=False, needs_context_injection=False
+        ) is False
+        assert _should_store_system_prompt_cache(
+            None, will_reuse_live=False, needs_context_injection=False
+        ) is False

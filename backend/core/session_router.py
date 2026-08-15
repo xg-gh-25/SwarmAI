@@ -193,6 +193,49 @@ def _is_recall_true_failure(reason: str) -> bool:
             or reason.startswith(_RECALL_TRUE_FAILURE_PREFIXES))
 
 
+def _system_prompt_cache_to_pass(
+    cached: "str | None", *, will_reuse_live: bool
+) -> "str | None":
+    """Decide what cached system prompt (if any) to hand build_options this turn
+    (per-session cache, run_1dc710db).
+
+    Return the cache ONLY on a warm-reuse turn (``will_reuse_live``) — the sole turn
+    where options.system_prompt is DISCARDED (send() reuses the live subprocess via
+    client.query()), so serving a possibly-stale cache is harmless AND saves the
+    ~85K re-assembly. On ANY spawn turn (cold entry / respawn / resume),
+    options.system_prompt IS consumed by _spawn() and MUST be a fresh build carrying
+    this turn's volatile bits (UI-state/open-file snapshot + datetime tail) — so we
+    pass None and build_options assembles fresh. (Gate-2 HIGH run_1dc710db: an
+    evicted→respawn turn keeps _sdk_session_id, so it is NOT a cold_resume and would
+    otherwise wrongly reuse turn-1's stale UI-state.)"""
+    return cached if will_reuse_live else None
+
+
+def _should_store_system_prompt_cache(
+    built_prompt: "object", *, will_reuse_live: bool, needs_context_injection: bool
+) -> bool:
+    """True iff this turn's system prompt should SEED/refresh the per-session cache
+    (run_1dc710db).
+
+    Store any NON-RESUME turn whose prompt is a real non-empty string. The ONE hard
+    exclusion is ``needs_context_injection`` — a resume build carries a ONE-SHOT
+    prior-conversation block that must never be re-served on a later turn (Gate-2 MED
+    run_1dc710db). We deliberately do NOT exclude ``will_reuse_live``: on a warm turn
+    whose cache was still empty (every turn of a session whose turn-1 was a resume,
+    which otherwise never seeds), build_options rebuilt a full history-free prompt —
+    storing THAT seeds the cache so later warm turns finally hit it (closes the
+    "resumed session never caches" perf gap, Gate-2 MED#4 run_1dc710db). When a warm
+    turn actually REUSED the cache, ``built_prompt`` IS the cache, so storing it back
+    is a harmless no-op — and never history-bearing, because the resume exclusion
+    still holds. ``will_reuse_live`` is kept in the signature for call-site symmetry
+    with ``_system_prompt_cache_to_pass`` and documentation, though not gated on."""
+    return (
+        not needs_context_injection
+        and isinstance(built_prompt, str)
+        and bool(built_prompt)
+    )
+
+
 def recall_unclassified_reasons(snapshot: "dict[str, int] | None" = None) -> dict[str, int]:
     """Recall reasons that are NEITHER true-failure NOR known-informational — i.e.
     a reason no one classified. Surfacing these prevents a new writer's reason from
@@ -2523,19 +2566,31 @@ class SessionRouter:
 
         # PER-SESSION SYSTEM-PROMPT CACHE (run_1dc710db): a chat-tab session's
         # system prompt is essentially constant for its life; re-assembling the full
-        # ~85K (build_session_briefing ~1.1s) every user message is waste, because a
-        # warm reuse discards options.system_prompt anyway (its sole consumer is
-        # _spawn()). Reuse the prompt built at this unit's FIRST spawn on every later
-        # turn — EXCEPT a resume turn (needs_context_injection set just above at
-        # ~2493), which must rebuild to inject prior conversation (Mechanism B).
-        # Pass the cache in only when NOT a resume turn; build_options returns the
-        # (cached-or-fresh) prompt in options.system_prompt, which we store back for
-        # next time. The cache is always a real complete prompt, so every spawn path
-        # (entry / mid-stream retry / recovery) that uses `options` gets a valid one.
-        _cache_in = (
-            unit._cached_system_prompt
-            if not agent_config.get("needs_context_injection")
-            else None
+        # ~85K (build_session_briefing ~1.1s) every user message is waste. But the
+        # ONLY turn where the assembled prompt is discarded — and therefore the only
+        # turn where reusing a possibly-stale cache is HARMLESS — is a WARM reuse
+        # (send() reuses the live subprocess via client.query(); options.system_prompt
+        # is never delivered). On ANY turn that SPAWNS (cold entry / respawn after
+        # eviction-or-crash / cold-or-channel resume), options.system_prompt IS
+        # consumed by _spawn(), so it MUST be a FRESH build carrying THIS turn's
+        # volatile bits — the UI-state / open-file snapshot (_render_ui_context_section,
+        # agent SENSE) and the datetime tail — which a turn-1 cache would serve stale
+        # (Gate-2 HIGH, run_1dc710db: an evicted→respawn turn keeps _sdk_session_id so
+        # is_cold_resume is False, and _prepend_ui_state_to_query is skipped for COLD
+        # because it assumes system_prompt carries the fresh UI-state).
+        #
+        # So gate cache-reuse on _will_reuse_live (the exact warm-reuse predicate,
+        # the complement of every spawn path — mirrors _prepend_ui_state_to_query's
+        # gate below) — NOT merely "not a resume turn". And only STORE the cache from
+        # a NON-resume build: a resume build carries a one-shot history block that
+        # must not be re-served on a later turn (Gate-2 MED).
+        _will_reuse_live = (
+            unit.state == SessionState.IDLE
+            and unit._client is not None
+            and unit._last_turn_clean
+        )
+        _cache_in = _system_prompt_cache_to_pass(
+            unit._cached_system_prompt, will_reuse_live=_will_reuse_live
         )
         options = await self._prompt_builder.build_options(
             agent_config=agent_config,
@@ -2549,12 +2604,15 @@ class SessionRouter:
             extra_mcps=unit._extra_mcps or None,
             cached_system_prompt=_cache_in,
         )
-        # Store the built prompt for reuse on subsequent turns. A resume-turn build
-        # produces a prompt WITH injected history — we intentionally cache that too:
-        # it is a valid complete prompt, and the next non-resume turn reuses it
-        # (resume history in the prompt is harmless on a warm reuse where it is
-        # discarded, and correct on a respawn where continuity is desired).
-        if isinstance(options.system_prompt, str) and options.system_prompt:
+        # Seed/refresh the cache ONLY from a fresh, non-resume build — that is a
+        # complete prompt safe to reuse on a later warm turn. Never store a resume
+        # build (its injected history block is one-shot) and never re-store the
+        # cache we just reused (no-op churn).
+        if _should_store_system_prompt_cache(
+            options.system_prompt,
+            will_reuse_live=_will_reuse_live,
+            needs_context_injection=bool(agent_config.get("needs_context_injection")),
+        ):
             unit._cached_system_prompt = options.system_prompt
 
         # System prompt metadata for the TSCC viewer. This metadata describes the
