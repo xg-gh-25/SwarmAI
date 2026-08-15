@@ -459,7 +459,14 @@ async def sse_with_heartbeat(
                         }
                         yield f"data: {json.dumps(progress_event)}\n\n"
                     else:
-                        logger.debug("Sending SSE heartbeat")
+                        # INFO (was DEBUG) — run_69198f8c observability: a 15s SSE
+                        # heartbeat is naturally throttled (fires at most every
+                        # SSE_HEARTBEAT_INTERVAL), so INFO does not flood. Making it
+                        # visible lets a high-TTFT window show the heartbeat cadence
+                        # or its ABSENCE — the latter (paired with a heartbeat.py
+                        # loop_age spike) proves event-loop starvation, vs heartbeats
+                        # logged-as-sent while the client still stalls (buffering).
+                        logger.info("Sending SSE heartbeat")
                         yield create_sse_heartbeat()
             except Exception as unexpected_err:
                 # Catch-all: send structured error to client before closing

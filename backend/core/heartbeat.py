@@ -105,6 +105,29 @@ HEARTBEAT_PATH: Path = get_app_data_dir() / "heartbeat"
 # ---------------------------------------------------------------------------
 _last_loop_tick: float = 0.0
 
+# ---------------------------------------------------------------------------
+# Observability: log a loop-STARVATION event to the daemon log (run_69198f8c).
+#
+# ``loop_age`` is already computed here every tick to feed the heartbeat FILE,
+# but a starvation spike was invisible in the daemon log — so a false-offline /
+# 90s-SSE-stall incident could not be timestamp-correlated with the loop wedge
+# that (hypothesis) caused it. These add ONE rate-limited log line when loop_age
+# crosses the threshold. Pure observability: no timeout/kill/budget/behavior
+# change (STEERING #2 / O030) — the writer thread only reads a clock and logs.
+#
+# Threshold 3.0s: above normal scheduling jitter, below the SSE heartbeat's 15s
+# interval — so a stall long enough to delay a 15s SSE heartbeat is caught while
+# routine sub-second busyness is not. Rate-limit: log on the rising edge, then at
+# most once per _LOOP_AGE_LOG_INTERVAL_S while the wedge is sustained (so a long
+# wedge is one edge line + periodic reminders, never a per-tick flood).
+_LOOP_AGE_LOG_THRESHOLD_S: float = 3.0
+_LOOP_AGE_LOG_INTERVAL_S: float = 5.0
+# Monotonic ts of the last loop_age warning emitted; 0.0 = none yet. Plain float,
+# writer-thread-only read/write → no lock needed.
+_last_loop_age_log: float = 0.0
+# Whether the previous tick was already over threshold (rising-edge detection).
+_loop_age_was_over: bool = False
+
 # Writer-thread handle + stop signal. Module-level so start/stop are idempotent
 # and the thread survives for the process lifetime (daemon/hive).
 _writer_thread: threading.Thread | None = None
@@ -137,6 +160,23 @@ def _write_heartbeat_once() -> None:
     # report a large sentinel so a pre-yield/never-started loop reads as wedged
     # rather than falsely fresh.
     loop_age = (now - last) if last > 0 else 999.0
+    # Observability (run_69198f8c): surface a loop-starvation spike to the daemon
+    # log so it can be timestamp-correlated with an SSE-heartbeat gap / frontend
+    # "Stream stalled". Rising-edge + interval-throttled; pure logging, no action.
+    global _last_loop_age_log, _loop_age_was_over
+    if loop_age >= _LOOP_AGE_LOG_THRESHOLD_S:
+        rising_edge = not _loop_age_was_over
+        _loop_age_was_over = True
+        if rising_edge or (now - _last_loop_age_log) >= _LOOP_AGE_LOG_INTERVAL_S:
+            _last_loop_age_log = now
+            logger.warning(
+                "event-loop starvation: loop_age=%.1fs (>=%.1fs threshold) — "
+                "the asyncio loop has not scheduled for this long; an on-loop SSE "
+                "heartbeat cannot be emitted while this persists (pid=%d)",
+                loop_age, _LOOP_AGE_LOG_THRESHOLD_S, os.getpid(),
+            )
+    else:
+        _loop_age_was_over = False
     payload = {
         "pid": os.getpid(),
         # Wall-clock epoch seconds — the watchdog compares against file mtime /
