@@ -620,6 +620,15 @@ class SessionUnit:
         # across multiple run_conversation() calls.
         self._hook_session_context: Optional[dict] = None
 
+        # ── Per-session system-prompt cache (run_1dc710db) ──────────────
+        # The system prompt built at this unit's FIRST spawn, reused on later turns
+        # to skip the ~85K re-assembly (build_session_briefing ~1.1s) that a warm
+        # reuse discards anyway. The router seeds/reads this; a resume turn
+        # (needs_context_injection) bypasses the cache to rebuild with prior
+        # conversation. Always a real, complete prompt (never a placeholder), so any
+        # spawn path that consumes `options` gets a valid prompt.
+        self._cached_system_prompt: Optional[str] = None
+
         # ── Zombie detection — set True when meaningful content emitted ──
         self._content_emitted: bool = False
 

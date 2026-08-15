@@ -485,63 +485,40 @@ class TestHITLMatcherTimeout:
             assert by_matcher["Read"].timeout is None
 
 
-class TestCodeIntelWrapperAsync:
-    """AC2 (R1, run_071e54c8): the code_intel wrapper must offload its SYNC hook
-    to a thread so it does NOT block the daemon event loop.
+class TestCodeIntelHookNotRegistered:
+    """Regression: the code_intel PreToolUse hook was REMOVED from the hook chain
+    (its per-Read/Grep synchronous SQLite blast_radius query occupied the default
+    thread pool). build_hooks() must NOT register it.
 
-    Root cause: the wrapper was `async def` but called the sync `ci_hook(...)`
-    inline (no await) — a 41s SQLite JOIN then blocked the whole event loop and
-    the 5s asyncio.wait_for guard could not interrupt it (a sync call never
-    yields). The fix routes ci_hook through asyncio.to_thread; this test proves
-    the loop stays responsive while a slow ci_hook runs.
+    Behavioral assertion (Gate-1): build_sdk_hooks() strips the registration NAME,
+    so a string search for 'code_intel_context' in the output is vacuous (never
+    RED). Instead we assert build_hooks() never CONSTRUCTS the hook — patch
+    create_code_intel_hook and assert it is not called. Reverting the removal makes
+    build_hooks call it → this test goes RED.
     """
 
-    @pytest.mark.asyncio
-    async def test_slow_sync_hook_does_not_block_event_loop(self):
-        import time as _time
-        from core.hook_builder import _make_code_intel_wrapper
+    def test_build_hooks_does_not_register_code_intel(self):
+        from unittest.mock import patch
+        from core.hook_builder import build_hooks
+        from core.permission_manager import permission_manager
 
-        started = asyncio.Event()
-
-        def slow_ci_hook(tool_name, tool_input):
-            # Blocking sync work (like the 41s SQLite JOIN), scaled down.
-            started.set()
-            _time.sleep(0.4)
-            return {"decision": "approve", "_slow": True}
-
-        wrapper = _make_code_intel_wrapper(slow_ci_hook)
-
-        # Run the wrapper concurrently with a heartbeat coroutine. If the wrapper
-        # blocks the loop (sync inline call), the heartbeat cannot tick until it
-        # returns. If it offloads to a thread, the heartbeat ticks freely.
-        ticks = 0
-
-        async def heartbeat():
-            nonlocal ticks
-            await started.wait()
-            for _ in range(3):
-                await asyncio.sleep(0.05)
-                ticks += 1
-
-        result, _ = await asyncio.gather(
-            wrapper({"tool_name": "Read", "tool_input": {"file_path": "x.py"}}, None, MagicMock()),
-            heartbeat(),
+        # If build_hooks still registers code_intel, it calls create_code_intel_hook()
+        # (hook_builder.py old line 583). Patch it so any call is observable.
+        with patch(
+            "core.code_intel.code_intel_hook.create_code_intel_hook"
+        ) as mock_factory:
+            asyncio.run(
+                build_hooks(
+                    agent_config={"id": "default", "code_intel_enabled": True},
+                    enable_skills=False,
+                    enable_mcp=False,
+                    resume_session_id="test-sess",
+                    session_context={"sdk_session_id": "test-sess"},
+                    permission_manager=permission_manager,
+                )
+            )
+        assert not mock_factory.called, (
+            "code_intel hook must NOT be registered — build_hooks called "
+            "create_code_intel_hook(), meaning the removed registration block "
+            "was reintroduced (see hook_builder.py)"
         )
-        assert result == {"decision": "approve", "_slow": True}
-        # Loop remained responsive during the blocking hook → ticks advanced.
-        assert ticks == 3, f"event loop was blocked (ticks={ticks}) — hook not offloaded"
-
-    @pytest.mark.asyncio
-    async def test_wrapper_extracts_tool_name_and_input(self):
-        from core.hook_builder import _make_code_intel_wrapper
-        seen = {}
-
-        def capture(tool_name, tool_input):
-            seen["tool_name"] = tool_name
-            seen["tool_input"] = tool_input
-            return {"decision": "approve"}
-
-        wrapper = _make_code_intel_wrapper(capture)
-        await wrapper({"tool_name": "Grep", "tool_input": {"pattern": "/api/x"}}, "tuid", MagicMock())
-        assert seen["tool_name"] == "Grep"
-        assert seen["tool_input"] == {"pattern": "/api/x"}

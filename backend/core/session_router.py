@@ -2521,6 +2521,22 @@ class SessionRouter:
         else:
             unit._hook_session_context["sdk_session_id"] = session_id
 
+        # PER-SESSION SYSTEM-PROMPT CACHE (run_1dc710db): a chat-tab session's
+        # system prompt is essentially constant for its life; re-assembling the full
+        # ~85K (build_session_briefing ~1.1s) every user message is waste, because a
+        # warm reuse discards options.system_prompt anyway (its sole consumer is
+        # _spawn()). Reuse the prompt built at this unit's FIRST spawn on every later
+        # turn — EXCEPT a resume turn (needs_context_injection set just above at
+        # ~2493), which must rebuild to inject prior conversation (Mechanism B).
+        # Pass the cache in only when NOT a resume turn; build_options returns the
+        # (cached-or-fresh) prompt in options.system_prompt, which we store back for
+        # next time. The cache is always a real complete prompt, so every spawn path
+        # (entry / mid-stream retry / recovery) that uses `options` gets a valid one.
+        _cache_in = (
+            unit._cached_system_prompt
+            if not agent_config.get("needs_context_injection")
+            else None
+        )
         options = await self._prompt_builder.build_options(
             agent_config=agent_config,
             enable_skills=enable_skills,
@@ -2531,7 +2547,15 @@ class SessionRouter:
             editor_context=editor_context,
             terminal_context=terminal_context,
             extra_mcps=unit._extra_mcps or None,
+            cached_system_prompt=_cache_in,
         )
+        # Store the built prompt for reuse on subsequent turns. A resume-turn build
+        # produces a prompt WITH injected history — we intentionally cache that too:
+        # it is a valid complete prompt, and the next non-resume turn reuses it
+        # (resume history in the prompt is harmless on a warm reuse where it is
+        # discarded, and correct on a respawn where continuity is desired).
+        if isinstance(options.system_prompt, str) and options.system_prompt:
+            unit._cached_system_prompt = options.system_prompt
 
         # System prompt metadata for the TSCC viewer. This metadata describes the
         # prompt we just BUILT — which is not necessarily the prompt that gets

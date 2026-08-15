@@ -1654,6 +1654,7 @@ class PromptBuilder:
         editor_context: Optional[dict] = None,
         terminal_context: Optional[dict] = None,
         extra_mcps: Optional[set[str]] = None,
+        cached_system_prompt: Optional[str] = None,
     ) -> "ClaudeAgentOptions":
         """Orchestrate helper methods to assemble ClaudeAgentOptions.
 
@@ -1853,11 +1854,33 @@ class PromptBuilder:
         # 7. Resolve model (with Bedrock conversion if needed)
         model = self.resolve_model(agent_config)
 
-        # 8. Build system prompt (reads context files — stays per-session)
-        system_prompt_config = await self.build_system_prompt(
-            agent_config, working_directory, channel_context, editor_context,
-            terminal_context=terminal_context,
-        )
+        # 8. Build system prompt (reads context files — stays per-session).
+        #
+        # PER-SESSION CACHE REUSE (run_1dc710db): a chat-tab session's system
+        # prompt is essentially constant for the session's life. It is built once at
+        # first spawn; on a warm reuse it is DISCARDED anyway (send() reuses the live
+        # subprocess via client.query() with only the user message — options.system_prompt's
+        # sole consumer is _spawn(), state==COLD). So re-assembling the full ~85K
+        # prompt (build_session_briefing ~1.1s) every turn is waste. When the caller
+        # hands us a cached prompt (from this unit's first build) AND this is not a
+        # resume turn, reuse it verbatim and skip the assembly.
+        #
+        # The cache is ALWAYS a real, complete prompt (never a placeholder), so every
+        # spawn path (entry / mid-stream retry / recovery) that uses it gets a valid
+        # prompt — no fragile empty-string signal, no degraded subprocess.
+        #
+        # EXCEPTION — resume turns MUST rebuild: needs_context_injection is set for a
+        # cold/channel resume (Mechanism B), where build_system_prompt injects the
+        # prior conversation into the prompt. A stale cache would drop that history,
+        # so a resume turn always assembles fresh.
+        _needs_resume_build = bool(agent_config.get("needs_context_injection"))
+        if cached_system_prompt is not None and not _needs_resume_build:
+            system_prompt_config = cached_system_prompt
+        else:
+            system_prompt_config = await self.build_system_prompt(
+                agent_config, working_directory, channel_context, editor_context,
+                terminal_context=terminal_context,
+            )
 
         # Assemble final options
         permission_mode = agent_config.get("permission_mode", "bypassPermissions")
