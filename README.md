@@ -2,7 +2,9 @@
 
 # SwarmAI
 
-### Human directs. AI delivers.
+### A self-evolving, brain-first Agent OS — cognition that compounds every session.
+
+#### Human directs. AI delivers.
 
 English | [中文](./README.zh-CN.md)
 
