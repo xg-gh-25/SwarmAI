@@ -115,8 +115,14 @@ async def test_readiness_sampler_sts_leg_uses_dedicated_pool():
         finally:
             ev.set()
             await asyncio.gather(*blockers)
-        assert seen.get("thread", "").lower().startswith("swarm-subprocess"), (
-            f"STS ran on {seen.get('thread')!r}, not the dedicated 'subprocess' pool"
+        # The STS leg was moved from the shared 'subprocess' writer pool to the
+        # dedicated latency-sensitive 'spawn' READER pool (run_e76b3ea5): STS is both
+        # the cold-spawn preflight AND the readiness sampler's auth leg, so it must not
+        # queue behind slow git writers. Either dedicated pool satisfies this test's
+        # real contract (STS is OFF the default pool); the current architecture routes
+        # it to 'spawn' (thread prefix swarm-spawn), so assert that.
+        assert seen.get("thread", "").lower().startswith("swarm-spawn"), (
+            f"STS ran on {seen.get('thread')!r}, not the dedicated 'spawn' pool"
         )
     finally:
         validator._call_sts_typed = orig
