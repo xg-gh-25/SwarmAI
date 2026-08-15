@@ -56,6 +56,27 @@ async def test_is_valid_returns_true_on_success(validator: CredentialValidator):
     assert validator._last_check > 0
 
 
+async def test_sts_dispatched_on_spawn_pool_not_subprocess(validator: CredentialValidator):
+    """run_e76b3ea5: the STS preflight is a LATENCY-SENSITIVE cold-spawn reader — it
+    MUST dispatch on the 'spawn' pool, never 'subprocess' (which hosts a ~100s
+    uncancellable index rebuild + an unbounded plugin clone). Sharing would let a
+    cold-session TTFT queue behind a 100s task. Mutation: revert to 'subprocess' → RED."""
+    captured = {}
+
+    async def _spy_run_in(name, fn, *args):
+        captured["pool"] = name
+        return fn(*args)
+
+    with patch.object(validator, "_call_sts", return_value=FAKE_IDENTITY), \
+         patch("core.executors.run_in", side_effect=_spy_run_in):
+        await validator.is_valid("us-east-1")
+
+    assert captured.get("pool") == "spawn", (
+        f"STS must dispatch on the 'spawn' reader pool, got {captured.get('pool')!r} "
+        "— routing it to 'subprocess' reopens the TTFT-behind-100s-index regression"
+    )
+
+
 async def test_is_valid_returns_false_on_no_credentials(validator: CredentialValidator):
     """NoCredentialsError from boto3 returns False."""
     with patch.object(

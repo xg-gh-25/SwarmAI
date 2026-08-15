@@ -134,12 +134,20 @@ class PluginManager:
             if (market_cache / ".git").exists():
                 # Pull latest
                 logger.info(f"Pulling latest from {git_url} branch {branch}")
+                # timeout= is a genuine HANG-GUARD (STEERING #2): a git fetch/clone
+                # against a network black-hole can NEVER finish and would pin a
+                # subprocess-pool worker forever. On timeout, subprocess.run raises
+                # TimeoutExpired — the worker is freed (subprocess killed) and the
+                # exception propagates out of sync_git_marketplace to the caller
+                # (surfaced as a marketplace-sync failure, NOT a SyncResult). Bounds
+                # a never-finishes call, not a truncation of real work. run_e76b3ea5.
                 result = await executors.run_in(
                     "subprocess",
                     lambda: subprocess.run(
                         ["git", "-C", str(market_cache), "fetch", "origin", branch],
                         capture_output=True,
                         text=True,
+                        timeout=60,
                     ),
                 )
                 if result.returncode != 0:
@@ -151,6 +159,7 @@ class PluginManager:
                         ["git", "-C", str(market_cache), "reset", "--hard", f"origin/{branch}"],
                         capture_output=True,
                         text=True,
+                        timeout=60,
                     ),
                 )
                 if result.returncode != 0:
@@ -165,6 +174,7 @@ class PluginManager:
                         ["git", "clone", "-b", branch, "--depth", "1", git_url, str(market_cache)],
                         capture_output=True,
                         text=True,
+                        timeout=120,  # hang-guard (STEERING #2): clone can never finish on a black-hole
                     ),
                 )
                 if result.returncode != 0:

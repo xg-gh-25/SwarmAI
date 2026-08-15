@@ -35,9 +35,13 @@ Usage:
 Pools (bounded on purpose — a class saturating its OWN pool must not bleed into
 another, and MUST never touch the default pool the event loop schedules on):
   io          — filesystem scans / git status / sqlite reads (medium, frequent)
-  subprocess  — git subprocess, ada/aws CLI probes (slow, can block seconds)
+  subprocess  — git subprocess, ada/aws CLI probes (slow WRITERS: commit, clone,
+                index rebuild — can block many seconds to ~100s)
   llm         — Bedrock inference (memory extract, summarization) (very slow)
   briefing    — Welcome-Screen briefing_data pre-warm (glob + sqlite) (spiky)
+  spawn       — LATENCY-SENSITIVE cold-spawn READERS only (STS preflight, resume
+                git) — isolated from the slow 'subprocess' writers so a 100s index
+                or an unbounded git-clone never delays a cold-session TTFT
 """
 
 from __future__ import annotations
@@ -57,9 +61,16 @@ T = TypeVar("T")
 # core count so the event loop always has CPU/scheduler headroom.
 _POOL_SPECS: dict[str, int] = {
     "io": 6,          # fs/git-status/sqlite — frequent, medium; the widest pool
-    "subprocess": 3,  # git/ada/aws CLI — slow, bursty
+    "subprocess": 3,  # git/ada/aws CLI — slow, bursty (the slow-WRITER pool)
     "llm": 2,         # Bedrock inference — very slow, low concurrency by design
     "briefing": 1,    # Welcome-Screen pre-warm — serialize; at most one recompute
+    "spawn": 2,       # LATENCY-SENSITIVE cold-spawn READERS ONLY (run_e76b3ea5):
+                      # credential STS preflight (blocks _ensure_spawned → TTFT) +
+                      # resume git status/diff. Isolated from 'subprocess' so a
+                      # ~100s uncancellable context_health index rebuild or an
+                      # (formerly unbounded) plugin git-clone can NEVER queue ahead
+                      # of a cold-session TTFT read. cap=2: readers are low-concurrency.
+                      # NEVER route a slow writer here — that defeats the isolation.
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}
@@ -96,7 +107,14 @@ async def run_in(name: str, fn: Callable[..., T], *args: Any) -> T:
 
     Drop-in replacement for ``asyncio.to_thread(fn, *args)`` that routes to a
     class-scoped bounded pool, so slow work never starves the default pool the
-    event loop uses to schedule /health. For kwargs, pass a lambda/partial."""
+    event loop uses to schedule /health. For kwargs, pass a lambda/partial.
+
+    ONE semantic difference from ``to_thread`` (inert today, documented so a future
+    caller isn't surprised): ``to_thread`` copies the current ``contextvars.Context``
+    into the worker thread; this bare ``run_in_executor`` does NOT. Harmless while the
+    backend defines no ``ContextVar`` (verified — zero ContextVar in core/hooks). If a
+    ContextVar is ever introduced AND a pooled ``fn`` must read it, wrap with
+    ``functools.partial(contextvars.copy_context().run, fn, *args)`` at that callsite."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(get_pool(name), fn, *args)
 

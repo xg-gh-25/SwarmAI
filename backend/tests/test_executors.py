@@ -25,11 +25,23 @@ import pytest
 def test_registry_exposes_named_bounded_pools():
     from core import executors
     # Each class of slow work has its own pool.
-    for name in ("io", "subprocess", "llm", "briefing"):
+    for name in ("io", "subprocess", "llm", "briefing", "spawn"):
         pool = executors.get_pool(name)
         assert pool is not None, f"missing dedicated pool: {name}"
         # bounded (not unbounded / not the default)
         assert pool._max_workers >= 1
+
+
+def test_spawn_pool_isolates_latency_sensitive_readers():
+    """run_e76b3ea5: the 'spawn' pool holds latency-sensitive cold-spawn readers
+    (STS preflight, resume git) — it MUST be a distinct pool from 'subprocess'
+    (which hosts slow git writers incl. a ~100s uncancellable index + an unbounded
+    plugin clone). Sharing would let a TTFT-critical STS queue behind a 100s task."""
+    from core import executors
+    spawn = executors.get_pool("spawn")
+    sub = executors.get_pool("subprocess")
+    assert spawn is not sub, "spawn pool must be a DISTINCT instance from subprocess"
+    assert "spawn" in executors._POOL_SPECS, "spawn must be a declared bounded pool"
 
 
 def test_pools_are_distinct_from_each_other_and_default():

@@ -73,6 +73,32 @@ AuthStatus = Literal["valid", "expired", "unknown"]
 _CHECK_CACHE_TTL: int = 90
 
 
+def _sts_timeout_config():
+    """botocore Config bounding an STS GetCallerIdentity — a HANG-GUARD (STEERING #2).
+
+    STS runs on the dedicated cap=2 'spawn' pool (run_e76b3ea5). Without a timeout,
+    botocore defaults to ~60s connect + ~60s read × retries — so a hung STS (network
+    black-hole / dead endpoint) can pin BOTH spawn workers for ~2 min and block every
+    cold-session TTFT preflight. This bounds a call that can otherwise NEVER finish;
+    on timeout it raises a BotoCoreError → check() classifies it 'unknown' (fail-open),
+    NOT a truncation of real work. 5s read is ample for a healthy STS (<300ms).
+
+    ⚠️ ``max_attempts`` in botocore's default LEGACY retry mode is the number of
+    RETRIES, so ``{"max_attempts": 1}`` = 1 retry = 2 TOTAL attempts. Worst-case hang
+    is therefore ~2×(3+5)+backoff ≈ ~16s per call (still ≪ the ~120s default). The one
+    retry is DELIBERATE: it absorbs a single transient blip so a momentary network hiccup
+    doesn't flip auth to 'unknown' — cheap given check() is 90s-cached and the readiness
+    sampler re-checks every 10s. If a strict single-attempt is ever wanted, use
+    ``retries={"mode": "standard", "max_attempts": 1}`` (standard mode counts TOTAL tries).
+    """
+    from botocore.config import Config
+    return Config(
+        connect_timeout=3,
+        read_timeout=5,
+        retries={"max_attempts": 1},  # legacy mode: 1 RETRY → 2 total attempts (~16s cap)
+    )
+
+
 class CredentialValidator:
     """Cached STS-based credential validation.
 
@@ -129,7 +155,7 @@ class CredentialValidator:
             # update).  The default boto3.client() reuses a module-level
             # session that may have cached "no credentials" from startup.
             session = boto3.Session()
-            sts = session.client("sts", region_name=region)
+            sts = session.client("sts", region_name=region, config=_sts_timeout_config())
             response = sts.get_caller_identity()
             return {
                 "Account": response["Account"],
@@ -156,12 +182,15 @@ class CredentialValidator:
 
         logger.debug("Credential cache miss — calling STS in region %s", region)
         try:
-            # Dedicated 'subprocess' pool, NOT the default one (run_b36c7880):
-            # this STS call is on the readiness-sampler path; running it on the
-            # shared default pool means a bulk-work saturation stalls the sampler
-            # → stale readiness → false offline. The dedicated pool insulates it.
+            # Dedicated 'spawn' pool (run_e76b3ea5): this STS call is BOTH the
+            # cold-spawn preflight (blocks _ensure_spawned → TTFT) and the
+            # readiness-sampler auth leg. It must NEVER queue behind slow git
+            # writers (a ~100s context_health index rebuild, a formerly-unbounded
+            # plugin clone) — which is exactly what the shared 'subprocess' pool
+            # allowed. 'spawn' hosts latency-sensitive READERS only, so a bulk-work
+            # saturation on 'subprocess' can no longer stall this preflight/sampler.
             from core import executors
-            identity = await executors.run_in("subprocess", self._call_sts, region)
+            identity = await executors.run_in("spawn", self._call_sts, region)
             self._last_result = True
             self._last_identity = identity
             self._last_check = time.monotonic()
@@ -201,7 +230,7 @@ class CredentialValidator:
 
         # Fresh Session each call to pick up credentials written after startup.
         session = boto3.Session()
-        sts = session.client("sts", region_name=region)
+        sts = session.client("sts", region_name=region, config=_sts_timeout_config())
         response = sts.get_caller_identity()
         return {
             "Account": response["Account"],
@@ -244,11 +273,12 @@ class CredentialValidator:
             return self._check_cache_status
 
         try:
-            # Dedicated 'subprocess' pool (run_b36c7880): check() is the readiness
-            # sampler's auth leg — must not compete for a default-pool worker with
-            # bulk blocking work, or a saturation burst stalls the sampler.
+            # Dedicated 'spawn' pool (run_e76b3ea5): check() is the readiness
+            # sampler's auth leg AND the cold-spawn preflight — it must not queue
+            # behind slow git writers on the 'subprocess' pool (a ~100s index
+            # rebuild would stall the sampler → stale readiness → false offline).
             from core import executors
-            await executors.run_in("subprocess", self._call_sts_typed, region)
+            await executors.run_in("spawn", self._call_sts_typed, region)
             self._check_cache_status = "valid"
             self._check_cache_time = time.monotonic()
             return "valid"

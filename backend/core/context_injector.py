@@ -559,7 +559,7 @@ def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
     """Run a git command synchronously with timeout.  Thread-safe.
 
     Returns stdout as string, or empty string on any failure.
-    Called via ``executors.run_in('subprocess', ...)`` to avoid blocking the event loop.
+    Called via ``executors.run_in('spawn', ...)`` (the latency-sensitive reader pool) to avoid blocking the event loop.
     """
     try:
         result = _subprocess.run(
@@ -580,14 +580,14 @@ def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
 async def _extract_uncommitted_state(working_dir: str | None) -> str:
     """Run ``git status --short`` and ``git diff --stat`` to capture WIP.
 
-    Uses ``executors.run_in('subprocess', ...)`` to avoid blocking the event loop.
+    Uses ``executors.run_in('spawn', ...)`` (the latency-sensitive reader pool) to avoid blocking the event loop.
     Returns empty string on any failure (timeout, not a git repo, etc.).
     """
     if not working_dir:
         return ""
     try:
         status = await executors.run_in(
-            "subprocess",
+            "spawn",
             _run_git_command,
             ["git", "status", "--short"], working_dir, 3.0,
         )
@@ -595,7 +595,7 @@ async def _extract_uncommitted_state(working_dir: str | None) -> str:
             return ""
 
         diff_stat = await executors.run_in(
-            "subprocess",
+            "spawn",
             _run_git_command,
             ["git", "diff", "--stat"], working_dir, 3.0,
         )
