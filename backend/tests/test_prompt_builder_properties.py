@@ -8,6 +8,9 @@ injection, watchdog formula, and context warning thresholds.
 """
 from __future__ import annotations
 
+import threading
+
+import pytest
 from unittest.mock import MagicMock
 
 from hypothesis import given, strategies as st
@@ -740,3 +743,86 @@ class TestSystemPromptFaultIsolation:
                 f"core section {hdr!r} appears {full.count(hdr)}x — double-append "
                 "(old L1054-1058 re-commit must be removed)"
             )
+
+
+class TestContextLoadOffEventLoop:
+    """run_cc397b0d: build_system_prompt must NOT run loader.ensure_directory()
+    or loader.load_all() synchronously on the event loop — both fork/do blocking
+    I/O (load_all forks `git status` on L1-cache-miss), which stalls ALL tabs'
+    SSE streams. They must be dispatched via asyncio.to_thread, exactly like the
+    sibling ephemeral reads. This test proves BOTH run off the main thread and
+    that the load_all kwargs (model_context_window, exclude_filenames) survive
+    the to_thread hand-off.
+    """
+
+    def _run_and_capture_threads(self, tmp_path):
+        """Run build_system_prompt with a spy ContextDirectoryLoader that records
+        the thread each method executed on. Returns (ensure_thread, load_thread,
+        load_kwargs, main_thread_ident)."""
+        import asyncio
+        import unittest.mock as mock
+        import core.context_directory_loader as cdl_mod
+
+        captured: dict = {}
+        RealLoader = cdl_mod.ContextDirectoryLoader
+
+        class _SpyLoader(RealLoader):
+            def ensure_directory(self, *a, **kw):
+                captured["ensure_thread"] = threading.get_ident()
+                return super().ensure_directory(*a, **kw)
+
+            def load_all(self, *a, **kw):
+                captured["load_thread"] = threading.get_ident()
+                captured["load_kwargs"] = dict(kw)
+                return super().load_all(*a, **kw)
+
+        builder = _make_builder()
+        agent_config: dict = {}
+
+        async def _drive():
+            # Record the event-loop thread from INSIDE the coroutine, so the
+            # comparison is against the exact thread build_system_prompt awaits on.
+            captured["main_thread"] = threading.get_ident()
+            # build_system_prompt imports ContextDirectoryLoader locally from
+            # core.context_directory_loader, so patching it on that module is the
+            # binding the function resolves at call time.
+            with mock.patch.object(cdl_mod, "ContextDirectoryLoader", _SpyLoader), \
+                 mock.patch(
+                     "core.proactive_intelligence.get_focus_keywords",
+                     return_value="",
+                 ):
+                await builder.build_system_prompt(
+                    agent_config=agent_config,
+                    working_directory=str(tmp_path),
+                )
+
+        asyncio.run(_drive())
+        return captured
+
+    def test_ensure_and_load_run_off_main_thread(self, tmp_path):
+        """RED on bare synchronous calls (they run on the loop thread); GREEN once
+        both are awaited via asyncio.to_thread (they run on a worker thread)."""
+        cap = self._run_and_capture_threads(tmp_path)
+        assert "load_thread" in cap, "load_all was never called"
+        assert "ensure_thread" in cap, "ensure_directory was never called"
+        main = cap["main_thread"]
+        assert cap["ensure_thread"] != main, (
+            "ensure_directory ran on the event-loop thread — must be to_thread"
+        )
+        assert cap["load_thread"] != main, (
+            "load_all ran on the event-loop thread (forks git status → stalls all "
+            "tabs' SSE) — must be dispatched via asyncio.to_thread"
+        )
+
+    def test_load_all_kwargs_survive_to_thread(self, tmp_path):
+        """The to_thread hand-off must preserve load_all's keyword args — a dropped
+        kwarg would silently change budgeting / exclusion behavior."""
+        cap = self._run_and_capture_threads(tmp_path)
+        kwargs = cap.get("load_kwargs", {})
+        assert "model_context_window" in kwargs, (
+            f"model_context_window kwarg lost through to_thread: {kwargs!r}"
+        )
+        # exclude_filenames is passed on every call (None for a desktop tab).
+        assert "exclude_filenames" in kwargs, (
+            f"exclude_filenames kwarg lost through to_thread: {kwargs!r}"
+        )

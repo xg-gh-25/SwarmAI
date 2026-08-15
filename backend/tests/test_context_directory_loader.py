@@ -472,6 +472,85 @@ class TestWriteL1Cache:
         raw = l1_path.read_text(encoding="utf-8")
         assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET} -->\n")
 
+    def test_no_temp_file_left_behind(self, tmp_dirs):
+        """Atomic write cleans up: only the L1 file exists, no stray temp file.
+
+        The atomic temp-file + os.replace pattern must not litter the .context
+        dir with an unrenamed temp on success.
+        """
+        loader = self._make_loader(tmp_dirs)
+        loader._write_l1_cache("some content", budget=40000)
+        context_dir = tmp_dirs[0]
+        files = sorted(p.name for p in context_dir.iterdir())
+        assert files == ["L1_SYSTEM_PROMPTS.md"], (
+            f"expected only the L1 cache file, found {files}"
+        )
+
+    def test_atomic_write_no_torn_read_under_concurrency(self, tmp_dirs):
+        """AC3/AC5: a concurrent reader NEVER sees a torn (header-present,
+        body-truncated) L1 file while writers overwrite it in parallel.
+
+        This is the regression that the atomic os.replace prevents once
+        load_all() runs in worker threads (build_system_prompt to_thread).
+        Mutation-proof: revert _write_l1_cache to a raw
+        ``l1_path.write_text(header + content)`` and this test goes RED
+        (a reader catches a partial body).
+        """
+        import threading
+
+        loader = self._make_loader(tmp_dirs)
+        l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
+
+        # A large body widens the torn-write window; a sentinel terminator lets
+        # a reader detect truncation deterministically.
+        BODY = "X" * 200_000 + "\n<<<END>>>"
+        loader._write_l1_cache(BODY, budget=40000)  # seed a valid file
+
+        stop = threading.Event()
+        torn = []
+
+        def writer():
+            n = 0
+            while not stop.is_set():
+                # alternate content so the file is genuinely rewritten each pass
+                loader._write_l1_cache(BODY + str(n % 10), budget=40000)
+                n += 1
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    raw = l1_path.read_text(encoding="utf-8")
+                except (OSError, FileNotFoundError):
+                    # os.replace guarantees the path always resolves to a
+                    # complete file; a missing file would itself be a tear.
+                    torn.append("missing")
+                    continue
+                if not raw:
+                    continue
+                # A well-formed file has the budget header AND the sentinel.
+                # Header present but sentinel absent == a torn body.
+                if raw.startswith("<!-- budget:") and "<<<END>>>" not in raw:
+                    torn.append(f"len={len(raw)}")
+
+        writers = [threading.Thread(target=writer) for _ in range(3)]
+        readers = [threading.Thread(target=reader) for _ in range(3)]
+        for t in writers + readers:
+            t.start()
+        # Let them race briefly.
+        time_slept = 0.0
+        import time as _time
+        while time_slept < 0.8:
+            _time.sleep(0.05)
+            time_slept += 0.05
+        stop.set()
+        for t in writers + readers:
+            t.join(timeout=2)
+
+        assert not torn, (
+            f"reader observed {len(torn)} torn L1 reads (first few: {torn[:3]}) "
+            "— _write_l1_cache is not atomic"
+        )
+
 
 class TestLoadL1IfFresh:
     """Tests for _load_l1_if_fresh() budget-tier validation."""

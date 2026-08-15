@@ -41,6 +41,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -963,8 +964,16 @@ class ContextDirectoryLoader:
 
     # Class-level TTL cache for git status freshness check.
     # Prevents forking a subprocess per chat message (~15s TTL).
-    # Thread-safety: not thread-safe, but fine — asyncio runs on a single
-    # thread, so concurrent coroutines never race on dict mutations.
+    # Thread-safety (updated run_cc397b0d): load_all() now runs OFF the event
+    # loop (prompt_builder build_system_prompt to_thread), so two worker threads
+    # CAN reach this cache concurrently — the old "asyncio single thread → no
+    # race" guarantee no longer holds. No lock is needed anyway: single-key dict
+    # get/set with an immutable (float, bool) tuple value is atomic under the
+    # GIL, so the worst concurrent outcome is two threads both missing the TTL
+    # and both forking `git status` (a benign, rare double-fork the 15s TTL
+    # immediately re-bounds) — never corruption. A lock here would be worse: held
+    # across the git subprocess it would re-serialize the very stalls the
+    # to_thread offload removes.
     _git_fresh_cache: dict[str, tuple[float, bool]] = {}
     _GIT_FRESH_TTL: float = 15.0
 
@@ -1062,7 +1071,37 @@ class ContextDirectoryLoader:
         l1_path = self.context_dir / L1_CACHE_FILENAME
         try:
             header = f"<!-- budget:{budget} -->\n"
-            l1_path.write_text(header + content, encoding="utf-8")
+            # ATOMIC WRITE (run_cc397b0d): write to a temp file in the SAME
+            # directory, then os.replace() onto the target. os.replace is atomic
+            # on POSIX (rename within one filesystem) and on Windows — a reader
+            # in _load_l1_if_fresh always sees either the old complete file or
+            # the new complete file, never a torn/half-written body. This matters
+            # because load_all() now runs off the event loop (prompt_builder
+            # build_system_prompt to_thread), so two sessions' load_all — and thus
+            # two _write_l1_cache calls — can execute concurrently in worker
+            # threads on this SHARED cache file. A plain write_text() would expose
+            # a header-present/body-truncated file to a concurrent reader.
+            # mkstemp creates the temp file with 0600 (owner-only) — deliberately
+            # KEPT for the final L1 file: os.replace inherits the temp's perms, so
+            # the cache (which holds the assembled prompt incl. private MEMORY/USER/
+            # EVOLUTION content) ends up owner-only instead of the old write_text
+            # umask-default (~0644, world-readable on a shared box). Stricter is
+            # correct here; the only reader is this same-uid daemon.
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{L1_CACHE_FILENAME}.", suffix=".tmp", dir=str(self.context_dir)
+            )
+            try:
+                # tmp_path bound INSIDE the try so ANY catchable failure from here
+                # on cleans up the temp — no unrenamed-temp litter in .context/.
+                tmp_path = Path(tmp_name)
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                    fh.write(header + content)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp_path, l1_path)
+            except BaseException:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
         except OSError as exc:
             logger.warning("Failed to write L1 cache %s: %s", l1_path, exc)
 

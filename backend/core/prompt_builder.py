@@ -865,8 +865,12 @@ class PromptBuilder:
                 token_budget=max(base_budget - EPHEMERAL_HEADROOM, base_budget // 2),
                 templates_dir=Path(__file__).resolve().parent.parent / "context",
             )
+            # OFF-LOOP (run_cc397b0d): ensure_directory() does blocking filesystem
+            # work (mkdir/write/chmod on .context). Run it via to_thread so it
+            # never stalls the event loop — the perf_counter bracket wraps the
+            # await to keep the timing log (below) measuring real wall time.
             _t0 = time.perf_counter()
-            loader.ensure_directory()
+            await asyncio.to_thread(loader.ensure_directory)
             _t_ensure = time.perf_counter() - _t0
 
             model = self.resolve_model(agent_config)
@@ -901,8 +905,17 @@ class PromptBuilder:
             # (PRI11). The REAL query-driven recall happens AFTER the first user
             # message via session_router._maybe_inject_recall (runtime leg, real
             # query). Size is governed write-side by the distillation archive valve.
+            # OFF-LOOP (run_cc397b0d): load_all() forks `git status --porcelain`
+            # synchronously on an L1-cache-miss (context_directory_loader
+            # _is_l1_fresh_uncached) and reads ~11 context files. On the event
+            # loop that fork stalls EVERY concurrently-streaming tab's SSE, not
+            # just this session. Dispatch via to_thread (kwargs pass through);
+            # _write_l1_cache is now atomic (os.replace) so the shared L1 cache
+            # is tear-free under the parallelism this enables. perf_counter
+            # brackets the await to preserve the timing log.
             _t1 = time.perf_counter()
-            context_text = loader.load_all(
+            context_text = await asyncio.to_thread(
+                loader.load_all,
                 model_context_window=model_context_window,
                 exclude_filenames=exclude_files,
             )
