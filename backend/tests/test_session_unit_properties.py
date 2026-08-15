@@ -398,6 +398,70 @@ class TestEnvSpawnLockScoping:
         assert not _spawn_lock.locked()
 
 
+class TestSpawnPerfInstrumentation:
+    """Run 1 (run_924de37c): _spawn emits a structured cold-start timing line
+    with 4 seams, and the emit happens AFTER the lock is released (never inside
+    the critical section, which would widen the very lock being measured)."""
+
+    async def _drive_spawn(self, caplog, config):
+        """Drive _spawn with the fork + env fully mocked (reuses the
+        TestEnvSpawnLockScoping harness), capturing INFO logs."""
+        import logging
+        from core.session_unit import _spawn_lock
+
+        unit = SessionUnit(session_id="perf-test", agent_id="default")
+        with patch("core.claude_environment._ClaudeClientWrapper") as mock_wrapper_cls:
+            mock_wrapper = MagicMock()
+            mock_wrapper.__aenter__ = AsyncMock(return_value=MagicMock())
+            mock_wrapper.pid = 22222
+            mock_wrapper_cls.return_value = mock_wrapper
+            with patch("core.claude_environment._configure_claude_environment"):
+                with caplog.at_level(logging.INFO, logger="core.session_unit"):
+                    await unit._spawn(MagicMock(), config=config)
+        # lock must be free at the point the timing line is emitted
+        assert not _spawn_lock.locked()
+        return caplog
+
+    @pytest.mark.asyncio
+    async def test_spawn_emits_timing_line_with_four_seams(self, caplog):
+        """AC1/AC4: one timing line carrying all 4 seam fields."""
+        cap = await self._drive_spawn(caplog, config=MagicMock())
+        line = next((r.message for r in cap.records if "spawn_perf" in r.message), None)
+        assert line is not None, "no spawn_perf timing line emitted"
+        for field in ("lock_wait_ms", "configure_ms", "wrapper_aenter_ms", "total_ms"):
+            assert field in line, f"missing timing field {field!r} in: {line}"
+
+    @pytest.mark.asyncio
+    async def test_spawn_timing_handles_config_none(self, caplog):
+        """AC5: config=None → configure_ms present (0.0), no crash, line still emitted."""
+        cap = await self._drive_spawn(caplog, config=None)
+        line = next((r.message for r in cap.records if "spawn_perf" in r.message), None)
+        assert line is not None, "no spawn_perf line on config=None path"
+        assert "configure_ms=0.0" in line, f"expected configure_ms=0.0 for config=None: {line}"
+
+    @pytest.mark.asyncio
+    async def test_spawn_aenter_raises_propagates_no_line(self, caplog):
+        """Gate-2 MED / AGENT R28 (recovery-path execution test): if
+        wrapper.__aenter__ RAISES (the real cold-start failure), the exception
+        propagates UNCHANGED and NO spawn_perf line is emitted — the added
+        instrumentation must neither swallow the error nor crash on the
+        half-assigned timing locals (measure-only: a failed spawn is a different
+        failure class, logged elsewhere)."""
+        import logging
+
+        unit = SessionUnit(session_id="perf-test-exc", agent_id="default")
+        with patch("core.claude_environment._ClaudeClientWrapper") as mock_wrapper_cls:
+            mock_wrapper = MagicMock()
+            mock_wrapper.__aenter__ = AsyncMock(side_effect=RuntimeError("fake spawn error"))
+            mock_wrapper_cls.return_value = mock_wrapper
+            with patch("core.claude_environment._configure_claude_environment"):
+                with caplog.at_level(logging.INFO, logger="core.session_unit"):
+                    with pytest.raises(RuntimeError, match="fake spawn error"):
+                        await unit._spawn(MagicMock(), config=MagicMock())
+        line = next((r.message for r in caplog.records if "spawn_perf" in r.message), None)
+        assert line is None, f"spawn_perf must NOT emit on __aenter__ failure, got: {line}"
+
+
 # ---------------------------------------------------------------------------
 # Property: Retry slot guard (COE 2026-04-12)
 # ---------------------------------------------------------------------------

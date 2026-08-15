@@ -3038,16 +3038,45 @@ class SessionUnit:
             )
             options.system_prompt = options.system_prompt.replace("\x00", "")
 
+        # ── Cold-spawn instrumentation (run_924de37c, measure-only) ──────
+        # Attribute the unexplained pre-model cold-start latency to a real seam.
+        # Timestamps are CAPTURED inside the lock (to bound the right work) but
+        # the log is EMITTED only AFTER both locks release below — formatting a
+        # log line inside the critical section would widen the very _spawn_lock
+        # we are measuring (and serialize every other tab's spawn). Locals are
+        # pre-declared to None so the emit is robust on the config-None path and
+        # so a raising __aenter__ (which propagates before the emit) leaves no
+        # half-referenced local. perf_counter (monotonic) is a ~ns clock read.
+        _t0 = time.perf_counter()
+        _t_lock = _t_cfg0 = _t_cfg1 = _t_w0 = _t_w1 = None
         async with _spawn_lock:
+            _t_lock = time.perf_counter()
             async with _env_lock:
                 if config is not None:
+                    _t_cfg0 = time.perf_counter()
                     _configure_claude_environment(config)
+                    _t_cfg1 = time.perf_counter()
                 wrapper = _ClaudeClientWrapper(options=options)
+                _t_w0 = time.perf_counter()
                 client = await wrapper.__aenter__()
+                _t_w1 = time.perf_counter()
 
         self._wrapper = wrapper
         self._client = client
         self.last_used = time.time()
+
+        # Emit AFTER lock release (see note above). Guarded deltas: config-None
+        # → configure_ms=0.0; a seam never reached → its ms stays 0.0.
+        _lock_wait_ms = (_t_lock - _t0) * 1000 if _t_lock is not None else 0.0
+        _configure_ms = (_t_cfg1 - _t_cfg0) * 1000 if (_t_cfg0 is not None and _t_cfg1 is not None) else 0.0
+        _wrapper_aenter_ms = (_t_w1 - _t_w0) * 1000 if (_t_w0 is not None and _t_w1 is not None) else 0.0
+        _total_ms = (time.perf_counter() - _t0) * 1000
+        logger.info(
+            "spawn_perf session_id=%s lock_wait_ms=%.1f configure_ms=%.1f "
+            "wrapper_aenter_ms=%.1f total_ms=%.1f",
+            self.session_id, _lock_wait_ms, _configure_ms,
+            _wrapper_aenter_ms, _total_ms,
+        )
 
         # ── Publish TSCC prompt metadata AT DELIVERY ──────────────────
         # This is the ONLY place options.system_prompt reaches the CLI: send()
