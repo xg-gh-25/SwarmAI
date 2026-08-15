@@ -1607,3 +1607,98 @@ class TestPipelineSupersedeAndActiveSkip:
 
 
 # --- M3b: Recurrence Radar (zone-gated) (run_123a6530) ---
+
+
+# --- #4: mutation/render separation (run_072d9ef7) ---
+# _get_paused_pipeline_highlights was one function that INTERLEAVED run.json
+# mutation (auto-resume/abandon/orphan-transition) with prompt-line rendering.
+# The split: _advance_pipeline_recovery_state (mutating, returns bucket-keyed
+# records) + _render_pipeline_highlights (PURE, zero IO). The wrapper composes
+# them so the ~35 existing tests above stay green unchanged. These tests pin the
+# split's load-bearing properties (Gate-1 fixes: bucket structure, scalars-only
+# records, under-lock attempt number).
+class TestRecoveryStateRenderSeparation:
+    def _rec_run(self, workspace, project="RProj", run_id="run_rr",
+                 status="paused", resume_attempts=0, updated_at=None):
+        from datetime import datetime, timezone, timedelta
+        d = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+        d.mkdir(parents=True, exist_ok=True)
+        if updated_at is None:
+            updated_at = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        (d / "run.json").write_text(json.dumps({
+            "id": run_id, "status": status, "requirement": "Fix bug",
+            "resume_attempts": resume_attempts, "updated_at": updated_at,
+            "stages": [{"stage": "evaluate", "status": "completed"}],
+            "checkpoint": {"next_stage": "build", "reason": "session_crash_auto_detected"},
+        }, indent=2))
+        return d / "run.json"
+
+    def test_render_is_pure_no_writes(self, tmp_path, monkeypatch):
+        """AC1: _render_pipeline_highlights performs ZERO filesystem writes ANYWHERE.
+
+        Teeth: monkeypatch the write primitives (Path.write_text, Path.write_bytes,
+        and builtins.open in any write mode) to raise — a pure renderer must reach
+        NONE of them, no matter where the write would land. (A prior mtime-snapshot
+        of one file had no teeth: a write to /tmp escaped it — test-theater.)
+        """
+        import builtins
+        from pathlib import Path as _P
+
+        def _boom_write_text(self, *a, **k):
+            raise AssertionError(f"AC1 VIOLATED: _render called Path.write_text on {self}")
+
+        def _boom_write_bytes(self, *a, **k):
+            raise AssertionError(f"AC1 VIOLATED: _render called Path.write_bytes on {self}")
+
+        _real_open = builtins.open
+
+        def _guarded_open(file, mode="r", *a, **k):
+            if any(w in mode for w in ("w", "a", "x", "+")):
+                raise AssertionError(f"AC1 VIOLATED: _render opened {file!r} for write (mode={mode})")
+            return _real_open(file, mode, *a, **k)
+
+        monkeypatch.setattr(_P, "write_text", _boom_write_text)
+        monkeypatch.setattr(_P, "write_bytes", _boom_write_bytes)
+        monkeypatch.setattr(builtins, "open", _guarded_open)
+
+        _render = _mod._render_pipeline_highlights
+        records = {
+            "candidates": [(1.0, {
+                "project": "RProj", "run_id": "run_rr", "requirement": "Fix bug",
+                "resume_stage": "build", "attempt_label": "attempt 1/3",
+            })],
+            "awaiting": [(2.0, {
+                "project": "RProj", "run_id": "run_aw", "requirement": "Decide",
+                "resume_stage": "plan", "reason_short": "Gate BLOCK",
+            })],
+            "exhausted": [("RProj", "run_ex", 0)],
+        }
+        lines = _render(records, max_items=3)  # must NOT trip any write guard
+        assert any("AUTO-RESUME" in ln and "attempt 1/3" in ln for ln in lines), \
+            f"render must build the candidate line from records; got {lines}"
+        assert any("AWAITING DECISION" in ln for ln in lines), "awaiting line missing"
+        assert any("exhausted" in ln for ln in lines), "exhausted line missing"
+
+    def test_advance_still_mutates_and_couples_running_orphan(self, tmp_path):
+        """AC3: a running crash-orphan is flipped paused AND emitted as AUTO-RESUME
+        in ONE advance call (the (c)->(d) coupling must survive the split)."""
+        _advance = _mod._advance_pipeline_recovery_state
+        rf = self._rec_run(tmp_path, status="running", resume_attempts=0)
+        records = _advance(tmp_path)
+        after = json.loads(rf.read_text())
+        assert after["status"] == "paused", \
+            "AC3: running orphan must transition to paused (write side-effect preserved)"
+        # coupling: same call must produce a candidate record for that orphan
+        cands = records.get("candidates", [])
+        assert any(r[1]["run_id"] == "run_rr" for r in cands), \
+            "AC3: (c)->(d) coupling broken — flipped-paused orphan not emitted as candidate"
+
+    def test_attempt_label_reads_post_increment_counter(self, tmp_path):
+        """AC5: emitted attempt-N/3 label matches the POST-increment persisted
+        resume_attempts (no off-by-one drift)."""
+        rf = self._rec_run(tmp_path, resume_attempts=1)
+        lines = _get_paused_pipeline_highlights(tmp_path)  # wrapper: advance+render
+        persisted = json.loads(rf.read_text())["resume_attempts"]
+        assert persisted == 2, "resume_attempts must increment 1->2"
+        assert any("attempt 2/3" in ln for ln in lines), \
+            f"AC5: label must read post-increment counter (2/3); got {lines}"

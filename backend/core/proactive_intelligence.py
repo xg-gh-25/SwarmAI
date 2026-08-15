@@ -813,8 +813,31 @@ def _newest_completed_run(runs_dir: Path) -> "tuple[float, str | None]":
     return newest_ts, newest_id
 
 
-def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list[str]:
-    """Scan for paused/running pipeline runs and produce auto-resume directives.
+def _advance_pipeline_recovery_state(workspace: Path) -> dict[str, list]:
+    """Scan paused/running pipeline runs, ADVANCE recovery state, return records.
+
+    Note: this scan/mutate half takes NO max_items — the cap is a pure
+    output-shaping concern owned entirely by _render_pipeline_highlights (Gate-2
+    LOW, run_072d9ef7). It collects ALL records; the renderer caps at emit time.
+
+    This is the MUTATING half of the auto-resume engine (split from rendering,
+    run_072d9ef7). It performs ALL persisted run.json writes — empty-shell abandon,
+    supersede abandon, running→paused orphan transition, resume_attempts increment —
+    each under its existing `.resume.lock` + re-read-under-lock TOCTOU guard. It does
+    NOT build any line strings; instead it returns a bucket-keyed dict of SCALAR
+    record fields for the pure renderer `_render_pipeline_highlights` to format.
+
+    The mutation MUST stay on the session path (auto-resume needs a session to resume
+    into — a scheduler-tick move was refuted, run_072d9ef7): prompt-STRING assembly is
+    made read-only by moving the string-building into `_render`, not by moving the
+    mutation off the session.
+
+    Returns a dict with 3 buckets, each preserving the sort key needed by the renderer:
+      - "candidates": list[(mtime, {project, run_id, requirement, resume_stage, attempt_label})]
+      - "awaiting":   list[(mtime, {project, run_id, requirement, resume_stage, reason_short})]
+      - "exhausted":  list[(project, run_id, resume_executions)]
+    Records carry EXTRACTED SCALARS ONLY — never a `run_data`/`fresh` dict reference
+    (Gate-1 fix #2) — so the pure renderer cannot read a mutated dict or trigger a write.
 
     Auto-resume strategy (max 3 attempts, with exponential cooldown 30s/60s/120s):
     - If resume_attempts < 3 AND cooldown elapsed: emit DIRECTIVE to auto-resume.
@@ -838,11 +861,24 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         is_terminal_run as _is_terminal_run,
     )
 
-    lines: list[str] = []
+    # Buckets declared BEFORE the try so the tail `return` binds them even if an
+    # early exception fires (run_072d9ef7 — the split moved the return out of the
+    # try body). Each holds SCALAR record dicts, not formatted strings.
+    # candidates: (mtime, {project,run_id,requirement,resume_stage,attempt_label}) — directives.
+    candidates: list[tuple[float, dict]] = []
+    # exhausted: (project_name, run_id, resume_executions) — collapsed into one line
+    # by the renderer. resume_executions drives the delivery-vs-pipeline diagnosis.
+    exhausted: list[tuple[str, str, int]] = []
+    # awaiting: (mtime, {project,run_id,requirement,resume_stage,reason_short}) — DELIBERATE
+    # pauses (Gate BLOCK / awaiting a human decision, D3). Kept SEPARATE from `candidates`
+    # so it is NEVER crowded out of the max_items directive cap by a burst of fresh pauses
+    # (Gate-2 MEDIUM, run_57929039). Appended after the capped directives.
+    awaiting: list[tuple[float, dict]] = []
+
     try:
         projects_dir = workspace / "Projects"
         if not projects_dir.exists():
-            return []
+            return {"candidates": [], "awaiting": [], "exhausted": []}
 
         now = time.time()
         max_age_seconds = 24 * 3600  # Only surface runs from last 24h
@@ -855,21 +891,6 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         # be <24h is always let through to the exact content check. Prod has 343
         # run.json (1.5MB); this avoids reading the ~95% that are long-dead.
         mtime_skip_cutoff = now - 2 * max_age_seconds
-
-        # Directives (auto-resume) are rate-limited via [:max_items] (STEERING #1).
-        # Exhausted runs are NOT — they collapse into one summary line so no stale
-        # run is ever silently dropped from the briefing.
-        # candidates: (mtime, line) for directives only.
-        candidates: list[tuple[float, str]] = []
-        # exhausted: (project_name, run_id, resume_executions) — collapsed into
-        # one line below. resume_executions drives the delivery-vs-pipeline diagnosis.
-        exhausted: list[tuple[str, str, int]] = []
-        # awaiting: (mtime, line) for DELIBERATE pauses (Gate BLOCK / awaiting a human
-        # decision, D3). Kept SEPARATE from `candidates` so it is NEVER crowded out of
-        # the max_items directive cap by a burst of fresh pauses (Gate-2 MEDIUM,
-        # run_57929039): a run awaiting a human call must never be hidden, same
-        # principle as `exhausted`. Appended after the capped directives.
-        awaiting: list[tuple[float, str]] = []
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
@@ -1165,13 +1186,17 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                     _reason_short = _reason[:60]
                     # SEPARATE bucket (not `candidates`) so it can't be crowded out of
                     # the max_items directive cap (Gate-2 MEDIUM, run_57929039).
+                    # Store SCALAR fields only (never run_data/fresh refs) — the pure
+                    # renderer builds the line string (Gate-1 fix #2, run_072d9ef7).
                     awaiting.append((
                         _file_mtime,
-                        f"  - AWAITING DECISION: [{project_name}] \"{requirement}\" "
-                        f"paused at {resume_stage} — reason: {_reason_short}. This run "
-                        f"stopped ON PURPOSE for a human call (not a crash); resume it "
-                        f"only after deciding, with `artifact_cli.py run-resume "
-                        f"--project {project_name} --run-id {run_id}`.",
+                        {
+                            "project": project_name,
+                            "run_id": run_id,
+                            "requirement": requirement,
+                            "resume_stage": resume_stage,
+                            "reason_short": _reason_short,
+                        },
                     ))
                     continue
 
@@ -1228,6 +1253,11 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                                 pass
                         continue
 
+                    # attempt_label reads resume_attempts AS RE-READ UNDER THE LOCK
+                    # (the auto-resume block above rebinds it from the fresh under-lock
+                    # read before incrementing), so the label reflects the POST-increment
+                    # persisted counter — no off-by-one under a concurrent resume
+                    # (Gate-1 fix #3, run_072d9ef7).
                     attempt_label = f"attempt {resume_attempts + 1}/{_MAX_PIPELINE_RESUME_ATTEMPTS}"
                     # INFORMATIONAL awareness, NOT an imperative command (run_f3975b8b,
                     # DoD#5). The briefing has NO session identity (build_session_briefing
@@ -1239,19 +1269,16 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                     # (also a stable substring the briefing reader/tests key off), but
                     # reframe to "resume IF IT IS YOURS" — the reader decides ownership;
                     # the briefing never commands the action.
-                    line = (
-                        f"  - AUTO-RESUME candidate ({attempt_label}): "
-                        f"[{project_name}] \"{requirement}\" paused at {resume_stage}. "
-                        f"If this run is yours, resume with `artifact_cli.py run-resume "
-                        f"--project {project_name} --run-id {run_id}` "
-                        f"then `s_autonomous-pipeline --resume "
-                        f"--run-id {run_id} --project {project_name}`. "
-                        f"If it belongs to another session, leave it for that session."
-                    )
-                    # Reuse the mtime from the pre-filter stat (above) — the
-                    # candidate sort only needs a coarse recency key, and re-stat'ing
-                    # would be a redundant syscall (adversarial LOW, run_885eb466).
-                    candidates.append((_file_mtime, line))
+                    # Store SCALAR fields only (never run_data refs) — the pure renderer
+                    # builds the line string (Gate-1 fix #2). Reuse the pre-filter mtime
+                    # as the coarse recency sort key (adversarial LOW, run_885eb466).
+                    candidates.append((_file_mtime, {
+                        "project": project_name,
+                        "run_id": run_id,
+                        "requirement": requirement,
+                        "resume_stage": resume_stage,
+                        "attempt_label": attempt_label,
+                    }))
                 else:
                     # EXHAUSTED: collapse into one summary line below (NOT capped by
                     # max_items — every stale run must stay visible). Carry the
@@ -1261,76 +1288,133 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                     resume_execs = run_data.get("resume_executions", 0)
                     exhausted.append((project_name, run_id, resume_execs))
 
-        # Directives: rate-limited (STEERING #1), newest first, capped at max_items.
-        # NOTE: max_items caps ONLY directives by design. The exhausted summary is
-        # always appended (even at max_items=0) — stale runs must never be hidden.
-        candidates.sort(key=lambda x: -x[0])
-        lines = [line for _, line in candidates[:max_items]]
-
-        # AWAITING DECISION (D3): always shown, newest first, NOT subject to the
-        # max_items directive cap (Gate-2 MEDIUM) — a run stopped on purpose for a
-        # human call must never be hidden by a flood of other directives. Bounded by
-        # its own cap so the briefing line-count can't grow unbounded either.
-        if awaiting:
-            awaiting.sort(key=lambda x: -x[0])
-            _AWAIT_CAP = 10
-            lines.extend(line for _, line in awaiting[:_AWAIT_CAP])
-            _await_overflow = len(awaiting) - _AWAIT_CAP
-            if _await_overflow > 0:
-                lines.append(
-                    f"  - …and {_await_overflow} more run(s) AWAITING DECISION "
-                    f"(run `artifact_cli.py run-status` to see all)."
-                )
-
-        # Exhausted: ONE collapsed summary line. The COUNT is always exact; the id
-        # list is bounded (first N) so the briefing line can't grow unbounded as
-        # stale runs accumulate. Preserves "exhausted"/"Manual intervention"
-        # substrings the briefing reader (and tests) key off.
-        if exhausted:
-            _ID_CAP = 10
-            shown = exhausted[:_ID_CAP]
-            # R2: per-run ref carries execution count so each run's failure mode
-            # is visible at a glance — "run_x [Proj] (executed 0×)" vs "(executed 3×)".
-            run_refs = ", ".join(
-                f"{rid} [{proj}] (executed {execs}×)" for proj, rid, execs in shown
-            )
-            overflow = len(exhausted) - len(shown)
-            if overflow > 0:
-                run_refs += f", +{overflow} more"
-
-            # Diagnose the dominant failure mode. R2: a run that emitted 3
-            # directives but was NEVER executed (execs==0) is a DELIVERY failure
-            # (the agent never picked up the briefing directive) — a different
-            # problem, with a different fix, than a run that resumed N times and
-            # kept crashing (a PIPELINE failure). Conflating them was the bug.
-            any_executed = any(execs > 0 for _, _, execs in exhausted)
-            all_never_executed = all(execs == 0 for _, _, execs in exhausted)
-            if all_never_executed:
-                diagnosis = (
-                    "directives emitted but NEVER executed (DELIVERY issue — the "
-                    "auto-resume directive is not being picked up; investigate why "
-                    "the briefing directive isn't acted on)"
-                )
-            elif any_executed:
-                diagnosis = (
-                    "resume executed but pipeline kept failing (PIPELINE issue — "
-                    "needs diagnosis of why the run can't progress)"
-                )
-            else:  # pragma: no cover — defensive
-                diagnosis = "mode unknown"
-            # NOTE: "exhausted" + "Manual intervention needed" substrings are a
-            # stable contract the briefing reader and tests key off — keep them.
-            # R2 appends the failure-mode diagnosis; it does not replace them.
-            lines.append(
-                f"  - ⚠️ {len(exhausted)} pipeline(s) exhausted "
-                f"{_MAX_PIPELINE_RESUME_ATTEMPTS} auto-resume attempts — "
-                f"Manual intervention needed [{diagnosis}]: {run_refs}."
-            )
-
     except Exception as exc:
         logger.debug("Paused pipeline scan failed: %s", exc)
 
+    # Return the three raw buckets (with their sort keys) for the pure renderer.
+    # ALL sort/cap/format/diagnosis logic lives in _render_pipeline_highlights so
+    # this function stays "scan + mutate + collect-raw" (Gate-1 fix #1, run_072d9ef7).
+    return {"candidates": candidates, "awaiting": awaiting, "exhausted": exhausted}
+
+
+def _render_pipeline_highlights(
+    records: dict[str, list], max_items: int = 3
+) -> list[str]:
+    """PURE renderer for pipeline auto-resume highlights (zero IO, run_072d9ef7).
+
+    Consumes the bucket-keyed records produced by _advance_pipeline_recovery_state
+    and builds the briefing line strings. Owns ALL output-shaping logic — the three
+    independent caps (max_items / _AWAIT_CAP / _ID_CAP), the mtime sorts, the overflow
+    lines, and the exhausted cross-run failure-mode diagnosis. Performs NO filesystem
+    writes and NO run.json reads (all fields arrive as scalars in `records`), so the
+    prompt-STRING assembly path is provably read-only.
+    """
+    candidates = records.get("candidates", [])
+    awaiting = records.get("awaiting", [])
+    exhausted = records.get("exhausted", [])
+
+    # Directives: rate-limited (STEERING #1), newest first, capped at max_items.
+    # NOTE: max_items caps ONLY directives by design. The exhausted summary is
+    # always appended (even at max_items=0) — stale runs must never be hidden.
+    candidates = sorted(candidates, key=lambda x: -x[0])
+    lines: list[str] = []
+    for _, c in candidates[:max_items]:
+        # INFORMATIONAL awareness, NOT an imperative command (run_f3975b8b, DoD#5):
+        # the briefing has no session identity, so it CANNOT prove a paused run belongs
+        # to the reading session — it may be a SIBLING's. Keep the AUTO-RESUME label +
+        # run-resume command as a COPYABLE hint (a stable substring tests key off), but
+        # frame it "resume IF IT IS YOURS" — the reader decides ownership.
+        lines.append(
+            f"  - AUTO-RESUME candidate ({c['attempt_label']}): "
+            f"[{c['project']}] \"{c['requirement']}\" paused at {c['resume_stage']}. "
+            f"If this run is yours, resume with `artifact_cli.py run-resume "
+            f"--project {c['project']} --run-id {c['run_id']}` "
+            f"then `s_autonomous-pipeline --resume "
+            f"--run-id {c['run_id']} --project {c['project']}`. "
+            f"If it belongs to another session, leave it for that session."
+        )
+
+    # AWAITING DECISION (D3): always shown, newest first, NOT subject to the
+    # max_items directive cap (Gate-2 MEDIUM) — a run stopped on purpose for a
+    # human call must never be hidden by a flood of other directives. Bounded by
+    # its own cap so the briefing line-count can't grow unbounded either.
+    if awaiting:
+        awaiting = sorted(awaiting, key=lambda x: -x[0])
+        _AWAIT_CAP = 10
+        for _, a in awaiting[:_AWAIT_CAP]:
+            lines.append(
+                f"  - AWAITING DECISION: [{a['project']}] \"{a['requirement']}\" "
+                f"paused at {a['resume_stage']} — reason: {a['reason_short']}. This run "
+                f"stopped ON PURPOSE for a human call (not a crash); resume it "
+                f"only after deciding, with `artifact_cli.py run-resume "
+                f"--project {a['project']} --run-id {a['run_id']}`."
+            )
+        _await_overflow = len(awaiting) - _AWAIT_CAP
+        if _await_overflow > 0:
+            lines.append(
+                f"  - …and {_await_overflow} more run(s) AWAITING DECISION "
+                f"(run `artifact_cli.py run-status` to see all)."
+            )
+
+    # Exhausted: ONE collapsed summary line. The COUNT is always exact; the id
+    # list is bounded (first N) so the briefing line can't grow unbounded as
+    # stale runs accumulate. Preserves "exhausted"/"Manual intervention"
+    # substrings the briefing reader (and tests) key off.
+    if exhausted:
+        _ID_CAP = 10
+        shown = exhausted[:_ID_CAP]
+        # R2: per-run ref carries execution count so each run's failure mode
+        # is visible at a glance — "run_x [Proj] (executed 0×)" vs "(executed 3×)".
+        run_refs = ", ".join(
+            f"{rid} [{proj}] (executed {execs}×)" for proj, rid, execs in shown
+        )
+        overflow = len(exhausted) - len(shown)
+        if overflow > 0:
+            run_refs += f", +{overflow} more"
+
+        # Diagnose the dominant failure mode. R2: a run that emitted 3
+        # directives but was NEVER executed (execs==0) is a DELIVERY failure
+        # (the agent never picked up the briefing directive) — a different
+        # problem, with a different fix, than a run that resumed N times and
+        # kept crashing (a PIPELINE failure). Conflating them was the bug.
+        any_executed = any(execs > 0 for _, _, execs in exhausted)
+        all_never_executed = all(execs == 0 for _, _, execs in exhausted)
+        if all_never_executed:
+            diagnosis = (
+                "directives emitted but NEVER executed (DELIVERY issue — the "
+                "auto-resume directive is not being picked up; investigate why "
+                "the briefing directive isn't acted on)"
+            )
+        elif any_executed:
+            diagnosis = (
+                "resume executed but pipeline kept failing (PIPELINE issue — "
+                "needs diagnosis of why the run can't progress)"
+            )
+        else:  # pragma: no cover — defensive
+            diagnosis = "mode unknown"
+        # NOTE: "exhausted" + "Manual intervention needed" substrings are a
+        # stable contract the briefing reader and tests key off — keep them.
+        # R2 appends the failure-mode diagnosis; it does not replace them.
+        lines.append(
+            f"  - ⚠️ {len(exhausted)} pipeline(s) exhausted "
+            f"{_MAX_PIPELINE_RESUME_ATTEMPTS} auto-resume attempts — "
+            f"Manual intervention needed [{diagnosis}]: {run_refs}."
+        )
+
     return lines
+
+
+def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list[str]:
+    """Advance pipeline recovery state, then render the briefing highlight lines.
+
+    Thin composition of the mutating scan (_advance_pipeline_recovery_state) and the
+    pure renderer (_render_pipeline_highlights) — split run_072d9ef7 so prompt-STRING
+    assembly (the renderer) performs zero writes. Public contract is UNCHANGED: same
+    signature, same returned lines, same run.json side-effects (all in _advance).
+    """
+    return _render_pipeline_highlights(
+        _advance_pipeline_recovery_state(workspace), max_items
+    )
 
 
 def build_session_briefing(
