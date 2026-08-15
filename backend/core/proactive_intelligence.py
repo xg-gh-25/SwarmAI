@@ -300,14 +300,21 @@ def _extract_recent_deliverables(daily_dir: Path, max_files: int = 3) -> list[st
 def _filter_completed_threads(
     threads: list[dict],
     daily_dir: Path,
+    deliverables: list[str] | None = None,
 ) -> list[dict]:
     """Remove threads whose topics appear in recent deliverables.
 
     Read-time safety net: even if distillation hasn't resolved the
     thread yet, the briefing won't suggest work that's already done.
     Uses >=50% word overlap matching (same heuristic as distillation).
+
+    ``deliverables`` may be pre-computed by the caller and passed in to avoid
+    re-reading the DailyActivity files (run_b1feca42 — build_session_briefing
+    calls this and _filter_completed_hints back-to-back with the same daily_dir).
+    When None, it is computed here so the function stays usable standalone.
     """
-    deliverables = _extract_recent_deliverables(daily_dir)
+    if deliverables is None:
+        deliverables = _extract_recent_deliverables(daily_dir)
     if not deliverables:
         return threads
 
@@ -335,13 +342,18 @@ def _filter_completed_hints(
     hints: list[str],
     daily_dir: Path,
     dismissed_titles: set[str],
+    deliverables: list[str] | None = None,
 ) -> list[str]:
     """Remove continue hints that match recent deliverables or dismissed items.
 
     Same fuzzy-matching heuristic as _filter_completed_threads — ≥50% word
     overlap or substring match.  Also filters hints the user explicitly dismissed.
+
+    ``deliverables`` may be pre-computed by the caller (run_b1feca42) to avoid a
+    redundant DailyActivity re-read; when None it is computed here (standalone use).
     """
-    deliverables = _extract_recent_deliverables(daily_dir)
+    if deliverables is None:
+        deliverables = _extract_recent_deliverables(daily_dir)
     if not deliverables and not dismissed_titles:
         return hints
 
@@ -1351,7 +1363,10 @@ def build_session_briefing(
         # This is the safety net for when distillation hasn't run yet
         # (e.g. first session after a productive one).  See COE: memory
         # pipeline temporal lag gap (2026-03-19).
-        threads = _filter_completed_threads(threads, daily_dir)
+        # Compute deliverables ONCE (run_b1feca42) — both filters below consumed
+        # it and each re-read the same DailyActivity files before this hoist.
+        deliverables = _extract_recent_deliverables(daily_dir)
+        threads = _filter_completed_threads(threads, daily_dir, deliverables)
 
         # -- L3: Update learning state from previous session --
         learning_state = _load_learning_state(workspace)
@@ -1359,7 +1374,7 @@ def build_session_briefing(
 
         # -- Filter continue hints against deliverables + dismissed items --
         dismissed = _get_dismissed_titles(learning_state)
-        continue_hints = _filter_completed_hints(continue_hints, daily_dir, dismissed)
+        continue_hints = _filter_completed_hints(continue_hints, daily_dir, dismissed, deliverables)
 
         # -- Build briefing (L2: ranked suggestions + L3: learning adjustments) --
         ranked = _build_suggestions(threads, continue_hints, signals)
@@ -1821,7 +1836,9 @@ def build_session_briefing_data(
         threads = _parse_open_threads(memory_text)
         continue_hints = _parse_continue_hints(daily_dir)
         signals = _detect_patterns(threads, daily_dir, memory_text)
-        threads = _filter_completed_threads(threads, daily_dir)
+        # Compute deliverables ONCE (run_b1feca42) — shared by both filters below.
+        deliverables = _extract_recent_deliverables(daily_dir)
+        threads = _filter_completed_threads(threads, daily_dir, deliverables)
 
         # Score and rank
         learning_state = _load_learning_state(workspace)
@@ -1829,7 +1846,7 @@ def build_session_briefing_data(
 
         # Filter continue hints against deliverables + dismissed items
         dismissed = _get_dismissed_titles(learning_state)
-        continue_hints = _filter_completed_hints(continue_hints, daily_dir, dismissed)
+        continue_hints = _filter_completed_hints(continue_hints, daily_dir, dismissed, deliverables)
 
         ranked = _build_suggestions(threads, continue_hints, signals)
         for item in ranked:

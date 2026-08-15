@@ -24,7 +24,7 @@ centralized directory.  It is responsible for:
 
 The ``user_customized`` field drives two-mode copy behavior in
 ``ensure_directory()`` (always-overwrite vs copy-only-if-missing) and
-readonly enforcement (0o444 vs 0o644).  The ``truncate_from`` field
+readonly enforcement (0o444 vs 0o600).  The ``truncate_from`` field
 controls truncation direction in ``_enforce_token_budget()`` — ``"tail"``
 keeps the beginning (default), ``"head"`` keeps the end (newest content).
 
@@ -1109,38 +1109,29 @@ class ContextDirectoryLoader:
         l1_path = self.context_dir / L1_CACHE_FILENAME
         try:
             header = f"<!-- budget:{budget} -->\n"
-            # ATOMIC WRITE (run_cc397b0d): write to a temp file in the SAME
-            # directory, then os.replace() onto the target. os.replace is atomic
-            # on POSIX (rename within one filesystem) and on Windows — a reader
-            # in _load_l1_if_fresh always sees either the old complete file or
-            # the new complete file, never a torn/half-written body. This matters
-            # because load_all() now runs off the event loop (prompt_builder
-            # build_system_prompt to_thread), so two sessions' load_all — and thus
-            # two _write_l1_cache calls — can execute concurrently in worker
-            # threads on this SHARED cache file. A plain write_text() would expose
-            # a header-present/body-truncated file to a concurrent reader.
-            # mkstemp creates the temp file with 0600 (owner-only) — deliberately
-            # KEPT for the final L1 file: os.replace inherits the temp's perms, so
-            # the cache (which holds the assembled prompt incl. private MEMORY/USER/
-            # EVOLUTION content) ends up owner-only instead of the old write_text
-            # umask-default (~0644, world-readable on a shared box). Stricter is
-            # correct here; the only reader is this same-uid daemon.
-            tmp_fd, tmp_name = tempfile.mkstemp(
-                prefix=f".{L1_CACHE_FILENAME}.", suffix=".tmp", dir=str(self.context_dir)
-            )
-            try:
-                # tmp_path bound INSIDE the try so ANY catchable failure from here
-                # on cleans up the temp — no unrenamed-temp litter in .context/.
-                tmp_path = Path(tmp_name)
-                with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-                    fh.write(header + content)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(tmp_path, l1_path)
-            except BaseException:
-                Path(tmp_name).unlink(missing_ok=True)
-                raise
-        except OSError as exc:
+            # ATOMIC WRITE (run_cc397b0d): delegate to the module-level
+            # _atomic_write_bytes helper (run_b1feca42 — unified the two
+            # previously hand-rolled mkstemp/fsync/os.replace blocks). os.replace
+            # is atomic on POSIX + Windows, so a reader in _load_l1_if_fresh always
+            # sees either the OLD complete file or the NEW complete file, never a
+            # torn/half-written body — load_all() runs off the event loop
+            # (build_system_prompt to_thread), so two sessions' _write_l1_cache
+            # calls can execute concurrently in worker threads on this SHARED file.
+            # perm=0o600 is REQUIRED here, NOT the public 0644/0444 the .context
+            # template files get: the L1 cache holds the assembled prompt incl.
+            # private MEMORY/USER/EVOLUTION content, so it MUST stay owner-only
+            # (the only reader is this same-uid daemon). The outer `except OSError`
+            # keeps the write NON-FATAL — _atomic_write_bytes RAISES on failure and
+            # we swallow it here (best-effort cache; must never break build_system_prompt).
+            _atomic_write_bytes(l1_path, (header + content).encode("utf-8"), 0o600)
+        except (OSError, UnicodeEncodeError) as exc:
+            # Non-fatal, best-effort cache: an OSError (disk full, read-only dir)
+            # OR a UnicodeEncodeError (unpaired surrogate in assembled content —
+            # e.g. from a corrupted MEMORY.md) must be logged and swallowed, NEVER
+            # propagated into build_system_prompt. The .encode("utf-8") can raise
+            # UnicodeEncodeError, which is NOT an OSError — the old text-mode
+            # fh.write(header+content) raised the same class at the same logical
+            # point, so this widened guard preserves (and hardens) the contract.
             logger.warning("Failed to write L1 cache %s: %s", l1_path, exc)
 
     # Regex for parsing the budget header from L1 cache files.

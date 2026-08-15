@@ -615,6 +615,62 @@ class TestWriteL1Cache:
         )
 
 
+    def test_l1_cache_file_is_owner_only_0600(self, tmp_dirs):
+        """AC4: the L1 cache (holds assembled MEMORY/USER/EVOLUTION content) ends
+        up owner-only 0600 — delegating to _atomic_write_bytes(..., 0o600) must
+        preserve the perm the hand-rolled mkstemp-inheritance produced.
+
+        Mutation-proof: pass 0o644 to the delegate and this goes RED.
+        """
+        import stat as _stat
+
+        loader = self._make_loader(tmp_dirs)
+        loader._write_l1_cache("owner-only content", budget=40000)
+        l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
+        mode = _stat.S_IMODE(l1_path.stat().st_mode)
+        assert mode == 0o600, f"expected 0o600 owner-only, got {oct(mode)}"
+
+    def test_oserror_is_swallowed_not_raised(self, tmp_dirs, monkeypatch, caplog):
+        """AC5: _write_l1_cache is non-fatal (docstring contract): an OSError from
+        the atomic write is logged as a warning and SWALLOWED, never propagated
+        into build_system_prompt.
+
+        Mutation-proof: narrow the `except (OSError, UnicodeEncodeError)` wrapper
+        so it no longer catches OSError → this goes RED (the OSError propagates).
+        """
+        import logging
+        import core.context_directory_loader as cdl
+
+        loader = self._make_loader(tmp_dirs)
+
+        def _boom(dest, data, perm):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cdl, "_atomic_write_bytes", _boom)
+        with caplog.at_level(logging.WARNING):
+            # Must NOT raise — the contract is best-effort logging + continue.
+            loader._write_l1_cache("content that fails to write", budget=40000)
+        assert "Failed to write L1 cache" in caplog.text
+
+    def test_encode_error_is_swallowed_via_real_path(self, tmp_dirs, caplog):
+        """AC5 (hardened, Gate-2): a UnicodeEncodeError from the REAL .encode('utf-8')
+        path (unpaired surrogate in assembled content, e.g. a corrupted MEMORY.md)
+        must ALSO be swallowed — it is NOT an OSError. No monkeypatch: this drives
+        the actual encode call so the test proves the widened guard.
+
+        Mutation-proof: revert the guard to bare `except OSError` and this goes RED
+        (UnicodeEncodeError escapes into build_system_prompt).
+        """
+        import logging
+
+        loader = self._make_loader(tmp_dirs)
+        with caplog.at_level(logging.WARNING):
+            # \ud800 is an unpaired high surrogate — .encode('utf-8') raises
+            # UnicodeEncodeError, which the OLD text-mode fh.write also raised.
+            loader._write_l1_cache("memory\ud800corrupt", budget=40000)
+        assert "Failed to write L1 cache" in caplog.text
+
+
 class TestLoadL1IfFresh:
     """Tests for _load_l1_if_fresh() budget-tier validation."""
 

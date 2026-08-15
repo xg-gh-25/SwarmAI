@@ -461,6 +461,75 @@ class TestBuildSessionBriefing:
         assert "Tab switching" in briefing  # P0 should be top
 
 
+class TestDeliverablesDedup:
+    """run_b1feca42: deliverables computed ONCE per briefing, shared by both
+    filters (was re-read by each). Behavior preserved; only the redundant read
+    is removed."""
+
+    def _seed(self, tmp_path):
+        context_dir = tmp_path / ".context"
+        context_dir.mkdir()
+        da_dir = tmp_path / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True)
+        (context_dir / "MEMORY.md").write_text(SAMPLE_MEMORY)
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n"
+            "**Deliverables:**\n- shipped the mcp fix\n"
+            "**Next:** Investigate MCP root cause.\n"
+        )
+
+    def test_extract_deliverables_called_once_per_briefing(self, tmp_path):
+        """AC1: _extract_recent_deliverables invoked ONCE per build_session_briefing
+        (was 2×: one per filter). Mutation-proof: revert the hoist so each filter
+        re-reads → count == 2 → RED."""
+        self._seed(tmp_path)
+        calls = {"n": 0}
+        orig = _mod._extract_recent_deliverables
+
+        def _counting(daily_dir, *a, **k):
+            calls["n"] += 1
+            return orig(daily_dir, *a, **k)
+
+        _mod._extract_recent_deliverables = _counting
+        try:
+            build_session_briefing(tmp_path)
+        finally:
+            _mod._extract_recent_deliverables = orig
+        assert calls["n"] == 1, f"expected 1 deliverables read, got {calls['n']}"
+
+    def test_filter_output_identical_precomputed_vs_none(self, tmp_path):
+        """AC2: passing a pre-computed deliverables list yields byte-identical
+        filter output to the None (self-compute) path — behavior preserved."""
+        self._seed(tmp_path)
+        da_dir = tmp_path / "Knowledge" / "DailyActivity"
+        threads = [{"title": "shipped the mcp fix"}, {"title": "unrelated task xyz"}]
+        deliverables = _mod._extract_recent_deliverables(da_dir)
+
+        via_none = _mod._filter_completed_threads(list(threads), da_dir)
+        via_pre = _mod._filter_completed_threads(list(threads), da_dir, deliverables)
+        assert via_none == via_pre
+
+        hints = ["shipped the mcp fix", "brand new idea"]
+        h_none = _mod._filter_completed_hints(list(hints), da_dir, set())
+        h_pre = _mod._filter_completed_hints(list(hints), da_dir, set(), deliverables)
+        assert h_none == h_pre
+
+    def test_hints_dismissed_still_filters_with_empty_deliverables(self, tmp_path):
+        """Gate-2 MEDIUM: when deliverables is an EMPTY list (passed, not None),
+        the dismissed_titles branch of _filter_completed_hints MUST still run —
+        the guard is `if not deliverables and not dismissed_titles`, so a non-empty
+        dismissed set alone keeps filtering alive. Guards against a future
+        `not deliverables OR not dismissed_titles` regression making dismissed dead."""
+        da_dir = tmp_path / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True)
+        hints = ["old dismissed task", "brand new idea"]
+        dismissed = {"old dismissed task"}
+        result = _mod._filter_completed_hints(list(hints), da_dir, dismissed, [])
+        assert result == ["brand new idea"], "dismissed filter must run even with []"
+
+
 # ── Level 3: Cross-Session Learning ──
 
 
