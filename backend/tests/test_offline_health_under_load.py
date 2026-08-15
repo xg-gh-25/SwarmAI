@@ -75,6 +75,7 @@ async def test_dedicated_pool_work_survives_default_pool_saturation():
         await asyncio.gather(*blockers)
 
 
+@pytest.mark.real_credential_check  # needs the REAL check() → _call_sts_typed dispatch
 @pytest.mark.asyncio
 async def test_readiness_sampler_sts_leg_uses_dedicated_pool():
     """DoD: the readiness sampler's credential/STS check must NOT run on the

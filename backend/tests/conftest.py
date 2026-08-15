@@ -173,6 +173,12 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "pbt: property-based tests using Hypothesis")
     config.addinivalue_line("markers", "slow: marks tests as slow-running")
     config.addinivalue_line("markers", "integration: tests requiring external resources")
+    config.addinivalue_line(
+        "markers",
+        "real_credential_check: opt out of the autouse credential-preflight stub "
+        "(_stub_credential_preflight) — for tests that must exercise the real "
+        "CredentialValidator.check() dispatch",
+    )
 
     # Plugins
     config.pluginmanager.register(MemoryWatchdogPlugin(), "memory_watchdog")
@@ -623,6 +629,37 @@ def _reroot_frozen_app_data_constants(sandbox, monkeypatch, *, basetemp=None) ->
                 mod, attr, sandbox.joinpath(*suffix) if suffix else sandbox,
                 raising=False,
             )
+
+
+@pytest.fixture(autouse=True)
+def _stub_credential_preflight(request, monkeypatch):
+    """Force the credential validator's check() to return 'valid' for EVERY test
+    (P7: structural CI-env guard, not per-test discipline). session_unit._ensure_spawned
+    runs a live AWS STS credential pre-flight; on a machine/CI with NO resolvable creds
+    that STS call raises NoCredentialsError → check() returns 'expired' → _ensure_spawned
+    ABORTS before _spawn. So any test that drives _ensure_spawned without mocking the
+    pre-flight passes locally (creds present) but FAILS in CI (no creds) — an
+    environment-dependent landmine (test_proactive_restart AC2 was exactly this: CI-only
+    spawned_options==0). Defaulting the shared singleton's check() to 'valid' immunizes
+    all such tests at one chokepoint.
+
+    OPT-OUT: a test that must exercise the REAL check() (e.g. verifying WHICH executor
+    pool STS runs on) marks itself `@pytest.mark.real_credential_check` — then this stub
+    is skipped and the real method is left intact. Auth-specific tests
+    (test_credential_preflight.py) patch get_credential_validator themselves (local patch
+    wins); test_credential_validator.py uses fresh CredentialValidator() instances
+    (untouched by this singleton stub). Mirrors _isolate_judge_telemetry (P7 pattern)."""
+    if request.node.get_closest_marker("real_credential_check"):
+        return
+    try:
+        from unittest.mock import AsyncMock
+        from core import session_registry
+        validator = session_registry.get_credential_validator()
+        monkeypatch.setattr(
+            validator, "check", AsyncMock(return_value="valid"), raising=False
+        )
+    except Exception:  # noqa: BLE001 — never let the credential stub break a test
+        pass
 
 
 @pytest.fixture(autouse=True)
