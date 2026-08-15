@@ -24,11 +24,7 @@ English | [中文](./README.zh-CN.md)
 
 ## Why an Agent OS
 
-We finally have software smart enough to reason, write code, and make judgment calls — and it **wakes up with amnesia every morning.** Every session starts from zero: the context you gave it, the mistake it made yesterday, the correction you taught it — gone. Most "AI tools" are a brilliant model stuck in Groundhog Day.
-
-SwarmAI makes the opposite bet: the value should **compound.** Every interaction leaves the system a little sharper, permanently.
-
-A model answers; **a mind persists.** It stays continuous across time, corrects itself, forgets what stopped mattering, and its judgment compounds with use. Ordinary software does none of these — a program doesn't get wiser between runs or rewrite its own rules. SwarmAI is the missing layer: not a bigger model, but the **operating system around one.**
+Every other AI tool starts each session from zero. SwarmAI doesn't — **value compounds.** A model answers; **a mind persists**: continuous across sessions, self-correcting, forgetting what stopped mattering, sharpening its judgment with use. Not a bigger model — the **operating system around one.**
 
 ---
 
