@@ -285,8 +285,14 @@ evidence. (2) **Touch-it-fix-it** — a stale value I pass through gets correcte
 reproducible method, not guessed. (3) **Canonical home** — knowledge CONTENT
 (KNOWLEDGE/MEMORY/EVOLUTION/DDD entries) → `s_persist` (governance → s_self-evolution);
 CODE/templates (`backend/**`) → code path. (4) **Don't persist volatile decision-inert
-numbers** (LOC/counts/sizes/"N skills") or raw run/session jargon — store the METHOD or a
-qualitative fact; a number earns a home only if decision-relevant AND stable. (This is the
+numbers** (LOC/counts/sizes/"N skills"), raw run/session/commit jargon, **or STATUS/PROGRESS/
+resolution-flags** (`已修复`/`待做`/`未 push`/`已部署`, deploy-progress, "committed not pushed")
+— cognition is WHY/WHAT/HOW (root cause · failure-class · durable tell · structural fix-shape),
+NEVER a point-in-time snapshot. A snapshot drifts to a lie next week AND changes no future
+judgment → it belongs to git / pipeline-run records, not a cognitive store. Store the METHOD or
+a qualitative fact; a value earns a home only if decision-relevant AND stable. **Touch-it-fix-it
+corollary: a stale STATUS value is DELETED, not updated to its current value — updating only
+resets the drift timer, the class error is that state lives in cognition at all.** (This is the
 `R30#4` cited across files — keep it point (4).) (5) **Cross-door consistency (P8)** — a change
 to any ingestion/admission mechanism (judge, trust rule, dedup, noise filter) is reasoned
 across ALL four stores at once. (6) **Whole-file contradiction check** — after editing one

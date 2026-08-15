@@ -799,13 +799,29 @@ body {
   animation: canvas-content-fade 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+/* ── Canvas frame line (ONE knob) ──────────────────────────────────────────
+   Every solid hairline that outlines the Canvas — the OUTPUTS nav-bar bottom
+   border, the collapsed rail's left border, and the spout's two tinted edges —
+   reads from THIS token, so the frame's brightness is a one-line change instead
+   of three drifting call sites.
+   Why a mix and not an alpha: these hairlines sit on three different surfaces
+   (nav-bar gradient, rail gradient, chat background), and an alpha would render
+   a different brightness on each. Mixing INTO --color-card keeps the line opaque
+   and identical everywhere, and stays theme- + accent-correct automatically
+   (--color-primary follows [data-accent], --color-card follows .dark).
+   Raise the percentage to make the frame louder, lower it to make it quieter. */
+:root {
+  --canvas-edge: color-mix(in srgb, var(--color-primary) 40%, var(--color-card));
+}
+
 /* Canvas ← chat spout: a 45°-rotated square "beak" overhanging the Canvas's
    left edge into the seam — the leftNav-overlay technique (mirrors Modal.tsx
    .modal-spout). Only the left+bottom edges are tinted; a panel-colored fill
    hides the inner two sides, so it reads as a nub GROWING OUT of the Canvas edge
    pointing back at the chat ("this Canvas spouted out of the conversation").
-   Vertically CENTERED on the chat window. Tint via --spout-tint (→ --color-primary).
-   All colors are theme variables — no hardcoded hex. */
+   Vertically CENTERED on the chat window. Edges use --canvas-edge (the shared
+   dimmed frame line) so the beak matches the nav-bar / rail hairlines instead of
+   being a brighter accent stripe. All colors are theme variables — no hardcoded hex. */
 .canvas-spout {
   position: absolute;
   left: -10px;
@@ -814,8 +830,8 @@ body {
   width: 20px;
   height: 20px;
   background: var(--color-bg);
-  border-left: 1px solid var(--spout-tint, var(--color-primary));
-  border-bottom: 1px solid var(--spout-tint, var(--color-primary));
+  border-left: 1px solid var(--canvas-edge);
+  border-bottom: 1px solid var(--canvas-edge);
   border-bottom-left-radius: 5px;
   box-shadow: -3px 3px 8px rgba(0, 0, 0, 0.35);
   z-index: 2;
@@ -823,8 +839,8 @@ body {
 }
 
 /* Canvas OUTPUTS nav-bar: an accent-tinted top bar (gradient from --color-primary)
-   above the accent bottom-border — reads as "belonging to the active tab", the
-   same visual language as the active chat-tab chip. All theme-var driven. */
+   above the --canvas-edge bottom hairline — reads as "belonging to the active tab",
+   the same visual language as the active chat-tab chip. All theme-var driven. */
 .canvas-outputs-navbar {
   background: linear-gradient(
     to bottom,
@@ -886,9 +902,12 @@ body {
     var(--spout-tint, var(--color-primary)) 88%,
     transparent
   );
-  /* Thinner bar (2px, XG: border too thick) → slightly higher opacity so the
-     seam + resize affordance still reads at the reduced width. */
-  opacity: 0.7;
+  /* Thinner bar (2px, XG: border too thick). Dimmed to 0.45 (XG: 线框太亮) to sit
+     in the same quiet register as --canvas-edge — the seam is a boundary, not a
+     highlight. Deliberately LOWER than the ::after grip's 0.55 below: the grip is
+     a control affordance and must stay the brighter of the two, so "you can drag
+     me" still reads once the frame recedes. */
+  opacity: 0.45;
 }
 
 /* Visible GRIP affordance — a centered vertical pill with two grip lines, so the

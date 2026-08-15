@@ -189,10 +189,13 @@ function FileViewerPanelImpl({
   // drag-end (mouseup + cleanup flush), so the drag path has zero synchronous I/O.
   const rafIdRef = useRef<number | null>(null);
   const pendingWidthRef = useRef(0);
-  // Accent tint for the spout + divider = the primary accent. (Earlier this read
-  // navSource, but navSource is only set by nav-CARD clicks — the auto-surface
-  // path never sets it, so it would show a stale, unrelated region color. A
-  // fixed accent is honest; a session-specific tint would need a real prop.)
+  // Accent tint for the divider seam = the primary accent, dimmed by the seam's
+  // own `opacity` in index.css. (Earlier this read navSource, but navSource is only
+  // set by nav-CARD clicks — the auto-surface path never sets it, so it would show
+  // a stale, unrelated region color. A fixed accent is honest; a session-specific
+  // tint would need a real prop.)
+  // The SOLID hairlines (nav-bar bottom, rail left, spout edges) do NOT read this —
+  // they read --canvas-edge, the one shared dimmed frame-line token (index.css).
   const canvasTint = 'var(--color-primary)';
   // Expand/collapse: snap to a wide review width and back. Remembers the
   // pre-expand width so collapse restores exactly what the user had.
@@ -392,7 +395,7 @@ function FileViewerPanelImpl({
         <button
           type="button"
           onClick={expandFromRail}
-          className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l border-[var(--color-primary)]"
+          className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l border-[var(--canvas-edge)]"
           title="Expand Canvas"
           aria-label="Expand Canvas"
           data-testid="canvas-rail"
@@ -507,7 +510,7 @@ function FileViewerPanelImpl({
             occluded on narrow widths (item 3). */}
         {railTabId !== undefined && (
           <div
-            className="flex-shrink-0 border-b border-[var(--color-primary)] canvas-outputs-navbar"
+            className="flex-shrink-0 border-b border-[var(--canvas-edge)] canvas-outputs-navbar"
             data-testid="canvas-region-outputs"
           >
             <div className="flex items-center gap-2 px-2 h-8 text-[11px] text-[var(--color-text-muted)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)]">
