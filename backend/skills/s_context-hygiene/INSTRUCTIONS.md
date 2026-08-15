@@ -1,20 +1,28 @@
-# Context Hygiene — Clean & Compress the 12 Context Files
+# Context Hygiene — Clean & Compress the Context Files
 
 The methodology for cleaning / 瘦身 SwarmAI's context files, so the next session
 doesn't re-derive "which source file, edit where, cut what." Codified from the
-2026-08-11 session that compressed all 12.
+2026-08-11 session that compressed them all.
+
+Two modes: **manual** (§1-§6 — a human-directed semantic sweep of a named file) and
+**sweep** (§7 — a weekly autonomous sweep across ALL cognitive stores with an
+adversarial delete-gate). Both share the same cleaning rules (§2) and red line (§4).
 
 > **What this is NOT (scope-away — read first, avoid the C042 trap):**
 > - **NOT `context_health_hook`** — that hook runs every session and does AUTONOMOUS
->   age-decay + dedup + regen (MEMORY/KNOWLEDGE/EVOLUTION lifecycle, PROJECTS + KNOWLEDGE-Index
+>   age-decay + dedup + regen (MEMORY/KNOWLEDGE/EVOLUTION lifecycle, KNOWLEDGE-Index
 >   regeneration). It does NOT do semantic compression — proof: echoed-titles + dated-pointer
->   fragments + drift numbers survive it for months. This skill is the MANUAL SEMANTIC sweep
+>   fragments + drift numbers survive it for months. This skill is the SEMANTIC sweep
 >   the hook cannot do. **Never rebuild or duplicate the hook's autonomous cleanup.**
 > - **NOT `s_persist`** — that routes NEW knowledge by content-type to the right section.
 >   This skill cleans what's ALREADY there and knows which SOURCE FILE to edit + whether a
 >   rebuild is needed. Orthogonal.
-> - **NOT a scheduled job** — cleaning a curated cognitive store is a READ-and-JUDGE job for
->   the agent (see §3), NOT a batch LLM-judge pass. Do not make this autonomous.
+> - **NOT an UNGATED batch LLM-judge pass.** The原-2026-08-11 rule said "never make this a
+>   scheduled job" — because a naive batch judge over a curated store finds ~0 and mis-deletes
+>   load-bearing content (C046). The §7 sweep is allowed ONLY because it does not delete on a
+>   single judge's say-so: every delete-candidate must survive an ADVERSARIAL review (a skeptic
+>   role that must fail to justify "load-bearing" before the delete lands), and git + a weekly
+>   audit report are the recovery net. Autonomy is earned by the gate, not by the schedule.
 
 ---
 
@@ -143,3 +151,84 @@ non-gitignored user data).
 `scripts/scan.py` — read-only. `--routing` (live table) · `--root DIR` · `--file NAME` ·
 `--detector echoed-title,drift-number,dated-pointer` · `--json`. It has NO `--fix`/`--apply`
 mode and MUST never grow one (§3 + §4). Every hit is a lead for human judgment, not a verdict.
+
+---
+
+## 7. Sweep Mode — the weekly autonomous Darwinian-forgetting sweep
+
+**Philosophy (XG, 2026-08-15): a cognitive store that only grows violates Darwin —
+forgetting (deletion) is a design FEATURE, not a risk.** `value, not age, decides
+survival`; the danger is never "we deleted" but "we deleted a load-bearing entry with
+nobody to challenge it" (C046). So the sweep deletes freely — but every delete must
+first survive an ADVERSARIAL challenge. The gate, not a human-in-the-loop, is what makes
+autonomy safe.
+
+**Runs headless on Sonnet** (`agent_task` hardcodes `--model sonnet`). A weaker judge is
+acceptable *because* the delete-gate defaults to KEEP — a Sonnet skeptic errs toward
+retention, git is the recovery net, and the weekly report is the audit trail.
+
+### 7.1 Two job groups — DIFFERENT delete criteria (never one criterion for both)
+
+| Group | Stores | Delete criterion (candidate-selection) |
+|-------|--------|------------------------------------------|
+| **Job 1 — live cognitive stores** | `.context/KNOWLEDGE.md`, `MEMORY.md`, `EVOLUTION.md`, every `Projects/*/` DDD doc (PRODUCT/TECH/IMPROVEMENT/PROJECT) | CONSERVATIVE — dedupe (semantic near-dupes), de-redundancy (cross-section repeats), de-stale (contradicts live source), + entries at `decay:archived` **and** `ref:0` **and** `last:` long-idle. Bias: when unsure, KEEP. |
+| **Job 2 — archive cold-store** | `.context/*-archive*.md`, `Knowledge/Archives/` | AGGRESSIVE — cross-month duplicates, entries already re-absorbed into a live store, and content the manual read judges genuinely spent. Bias: cold-store is already retired, lean DELETE. |
+
+Why split: live-store criterion asks "is this still load-bearing?" (keep-biased);
+archive criterion asks "does this cold copy still earn recall?" (delete-biased). One
+criterion across both either mis-deletes live load-bearing content or hoards archive junk.
+
+⚠️ **No `recall-never-hit` criterion exists** — recall is a pure READ path and bumps no
+counter (`ref:N` = times mentioned in prose via `bump_references`, NOT recall hits). Do
+NOT select-for-delete on "recall never used it"; that signal is not measured. Use only
+`ref_count` / `last_referenced` / `decay_state` + semantic reading.
+
+### 7.2 The sweep procedure (single-agent role-switch — SOUL standing decision)
+
+Do NOT spawn a sub-agent (headless tool-allowlist can't guarantee Task). Instead ONE
+agent switches roles, per store:
+
+```
+1. JUDGE role  — read the store. Produce a DELETE-CANDIDATE list, GROUPED by
+   store/section (group granularity — XG decision 2026-08-15, not per-item: per-item
+   adversarial is too costly and turns a weekly job into a burden; grouping still closes
+   the "deleted with nobody challenging" risk). Each group = {store, section, candidates[], one-line why-noise each}.
+2. SKEPTIC role — for EACH group, RE-READ only the candidates with a fresh adversarial
+   framing: "prove each of these is load-bearing; DEFAULT TO KEEP if you can name any
+   reader/decision it still serves." Output per candidate: DELETE (skeptic could not
+   justify) | KEEP (skeptic named a live value).
+2.5 SNAPSHOT   — 🔴 MANDATORY BEFORE ANY DELETE. The cognitive stores are ALL gitignored
+   (KNOWLEDGE/MEMORY/EVOLUTION/archive) → git CANNOT restore them; a git commit is NOT a
+   recovery net for these files. So before editing, copy each about-to-be-edited file
+   verbatim to `.context/.sweep-backups/{{date}}/<relative-path>` (full file, not a diff —
+   restore = copy back). This physical snapshot IS the only recovery net. If the snapshot
+   copy fails for a file, SKIP deleting from that file this run (no net → no delete).
+   Then prune `.context/.sweep-backups/` to the most recent 8 dated dirs (this backup dir
+   must not become its own graveyard — Darwinian rule applies to the net too).
+3. APPLY        — delete only DELETE-verdict lines, in place. For git-TRACKED swept files
+   only (e.g. a DDD doc under Projects/SwarmAI/), git add ONLY those specific files (never
+   `-A`; a parallel session may hold other changes — R29) and commit. Gitignored stores
+   need no commit — the §2.5 snapshot is their net. Commit message lists counts per store.
+4. REPORT       — write Knowledge/JobResults/{{date}}-context-sweep.md: per store —
+   candidates found, deleted, KEPT-by-skeptic (with the value the skeptic named), the
+   snapshot dir path, and (for tracked files) the commit hash. This report is the AUDIT
+   trail, not an approval gate.
+```
+
+### 7.3 Red lines inside the sweep (inherit §4, enforced in the SKEPTIC pass)
+
+The skeptic treats these as **presumed load-bearing — KEEP unless overwhelmingly proven dead**:
+- a correction's `pattern` + `durable tell`; a principle/rule kernel (§4)
+- `MEMORY_EVERGREEN` / `KNOWLEDGE_EVERGREEN` sections; DDD evergreen-guarded entries
+- XG-curated prose (Open-Threads, hand-written decisions) — `source:manual`, not `source:auto`
+- a "wrong on purpose" example (R30#4 counter-example, e.g. a stale number kept AS the lesson)
+- SYSTEM files (SWARMAI/IDENTITY/SOUL/AGENT) are OUT OF SCOPE for the sweep entirely —
+  they need build+restart and human sign-off (AGENT R12). Sweep touches runtime + DDD + archive ONLY.
+
+### 7.4 Boundaries specific to sweep
+
+**Always:** group-level adversarial before any delete; **physical snapshot (§2.5) before
+any delete — it is the ONLY recovery net for the gitignored stores, git is not**; weekly
+report as audit. **Never:** delete on the JUDGE pass alone (skeptic is mandatory); delete
+from a file whose snapshot copy failed; `git add -A`; touch a SYSTEM file; select-for-delete
+on unmeasured signals (recall hits); let `.sweep-backups/` grow unbounded (keep last 8).
