@@ -949,6 +949,16 @@ class DistillationTriggerHook:
         if _ENTRY_RE.match(first):
             return enriched
         raw = DistillationTriggerHook._raw_lesson_text(enriched)
+        # Preserve the [UNVERIFIED] git-verify tag. _raw_lesson_text STRIPS it
+        # (line ~1022) because it is routing pollution for keyword type-matching —
+        # but it is ALSO a real memory-quality signal (a claim _tag_unverified_claims
+        # found unsupported by git history), so it must survive into the WRITTEN body,
+        # not just the routing pass. Detect it on the enriched first line (pre-strip)
+        # and re-prepend to the title after the split below. Without this the tag was
+        # silently dropped at the canonical-write step → MEMORY carried the claim with
+        # NO unverified marker (regression: test_unverified_claims_tagged RED, and the
+        # confident-false-memory COE C005 this whole path guards against re-opens).
+        _unverified = "[UNVERIFIED]" in first
         # Derive type: prefer route_lesson_type; fall back to the section's type.
         # route MUST see the leading [type] tag (it honors it), so we route on the
         # tag-bearing `raw` FIRST...
@@ -977,6 +987,11 @@ class DistillationTriggerHook:
             title, body = title.strip(), body.strip()
         else:
             title, body = raw[:60], raw
+        # Re-attach the [UNVERIFIED] quality tag stripped for routing above. Prepend
+        # to the TITLE so it is visible in the entry's bolded lead (and survives any
+        # later body-only reformat). Idempotent: only added when not already present.
+        if _unverified and "[UNVERIFIED]" not in title:
+            title = f"[UNVERIFIED] {title}"
         entry_line, meta_line = format_memory_entry(
             etype, title, body, date_str, source="auto",
         )

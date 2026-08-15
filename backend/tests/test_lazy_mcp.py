@@ -500,6 +500,11 @@ class TestExtraMcpsSurvival:
         unit._retry_count = 0
         unit._model_name = "claude-4.6-opus"
         unit._peak_tree_rss_bytes = 1024
+        # _cleanup_internal READS this field (cancels an outstanding pipe-flush task);
+        # __new__ bypasses __init__, so this white-box mock must set every field the
+        # method touches (mirrors _client/_wrapper above). Added when the pipe-flush
+        # task was introduced to session_unit teardown.
+        unit._pipe_flush_task = None
 
         unit._cleanup_internal()
 
@@ -530,6 +535,9 @@ class TestExtraMcpsSurvival:
         unit._sdk_session_id = "old-session-id"
         unit._lifecycle_response_count = 0
         unit._consecutive_oom_kills = 0
+        # _full_cleanup → _cleanup_internal READS this field; __new__ bypasses
+        # __init__, so this white-box mock must set every field the teardown touches.
+        unit._pipe_flush_task = None
 
         unit._full_cleanup()
 

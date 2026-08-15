@@ -2,22 +2,27 @@
 
 Drives the REAL _run_memory_lifecycle / _run_knowledge_lifecycle (no mock of the
 function under change — GUI32 prompt-source=answer-source) against a temp
-workspace, verifying the full decay→archive→strip→reindex loop closes:
+workspace, verifying the full decay→archive→strip loop closes:
 
   - AC1/AC2: an OLD (created > dormant threshold), unreferenced operational entry
     is transitioned to dormant, PERSISTED, then archived+stripped in the same run.
-  - AC3: an OLD but usage-cited entry (via .memory-usage.json → ref bridge) is
-    NOT stripped (B-protection).
+  - AC3 (RETIRED capability): the .memory-usage.json → ref-count protection BRIDGE
+    was removed 2026-08-14 (commit bfda0179), so a heavily-USED but ref:0 entry is
+    NOT protected from strip. The test pins this current contract (was: "usage-cited
+    entry is protected" — that only passed as a false positive off the orphan index
+    string; see the test's own docstring).
   - AC4: an evergreen (COE Registry) entry is never decayed nor stripped.
-  - AC5: the Memory Index is rebuilt AFTER the strip so no index ID points at a
-    stripped entry (same-session consistency).
+  - AC5 (no-index architecture): the in-prompt Memory Index was retired 2026-08-14;
+    strip no longer REBUILDS an index — the legacy `<!-- MEMORY_INDEX_START -->`
+    block is REMOVED entirely after reclaim, so no index ID can be left orphaned
+    pointing at a stripped entry.
   - AC6: _run_knowledge_lifecycle also persists decay transitions.
   - AC7: assess_decay's default (no dormant_days) behavior is unchanged (60d),
     so ddd_orchestrator IMPROVEMENT.md semantics are preserved.
 
 Mutation contract (verified manually in BUILD):
-  - revert the apply-loop  → AC1 (dormant persist) goes RED.
-  - revert the post-strip reindex → AC5 (index-consistency) goes RED.
+  - revert the apply-loop → AC1 (dormant persist) goes RED.
+  - revert the post-reclaim orphan-index strip → AC5 (index removed) goes RED.
 """
 from __future__ import annotations
 
@@ -143,32 +148,60 @@ class TestMemoryLifecycleClosesLoop:
         content = (ws / ".context" / "MEMORY.md").read_text(encoding="utf-8")
         assert "fresh probe entry" in content
 
-    def test_old_cited_entry_protected(self, hook, ws):
-        """AC3: an old entry with real usage citation is NOT stripped."""
+    def test_usage_citation_no_longer_protects_from_strip(self, hook, ws):
+        """AC3 (RETIRED capability, 2026-08-14): the `.memory-usage.json` → ref-count
+        protection BRIDGE was deliberately removed in commit bfda0179 ("remove … dead
+        usage-ref bridge #2") — it keyed off the `- [ID] title` shape that ONLY the
+        now-retired in-prompt Memory Index carried, so it matched zero body entries and
+        returned {} permanently. ref_count for reclaim protection now comes solely from
+        each entry's on-disk metadata; a heavily-*used* but ref:0 entry is NOT protected.
+
+        (Was `test_old_cited_entry_protected`, which asserted the bridge protects a
+        cited entry. It only PASSED as a FALSE POSITIVE: the orphan index block survived
+        reclaim and still contained the line `- [GUI901] old cited probe entry`, so the
+        substring matched in the INDEX, not a protected body entry. Retiring the orphan
+        index block — the correct no-index-architecture behavior — exposed that the
+        asserted protection no longer exists. This test now pins the real current
+        contract so nobody re-adds the false positive.)"""
         import json
-        # Cite GUI901 heavily via the usage bridge.
+        # A heavy usage count on GUI901 — under the retired bridge this would protect it.
         (ws / ".context" / ".memory-usage.json").write_text(
             json.dumps({"GUI901": 50}), encoding="utf-8"
         )
         hook._run_memory_lifecycle(ws)
         content = (ws / ".context" / "MEMORY.md").read_text(encoding="utf-8")
-        assert "old cited probe entry" in content, (
-            "old-but-cited entry should be protected from strip by ref bridge"
+        # The orphan index block is stripped (no-index architecture), so no false
+        # positive from a surviving index line.
+        assert "MEMORY_INDEX_START" not in content
+        # The old ref:0 entry is stripped despite heavy usage — the bridge is gone.
+        assert "**old cited probe entry**" not in content, (
+            "usage-ref protection was retired (bfda0179) — a ref:0 entry must NOT be "
+            "protected by .memory-usage.json anymore"
         )
 
-    def test_index_rebuilt_no_orphan_ids(self, hook, ws):
-        """AC5: after strip, the Memory Index has no ID pointing at a stripped entry."""
+    def test_no_orphan_index_after_strip(self, hook, ws):
+        """AC5 (no-index architecture, 2026-08-14): the in-prompt Memory Index was
+        RETIRED — strip no longer *rebuilds* an index; instead the legacy
+        `<!-- MEMORY_INDEX_START -->` block is removed ENTIRELY after reclaim, so an
+        index line can never be left orphaned pointing at a stripped body entry.
+
+        (Was `test_index_rebuilt_no_orphan_ids`, which assumed the index survives and
+        is rebuilt — false since the index retirement. The invariant it protected —
+        no orphan index ID for a stripped entry — is now guaranteed structurally by
+        removing the block, verified below.)"""
         hook._run_memory_lifecycle(ws)
         content = (ws / ".context" / "MEMORY.md").read_text(encoding="utf-8")
-        # index block
-        start = content.find("MEMORY_INDEX_START")
-        end = content.find("MEMORY_INDEX_END")
-        assert start != -1 and end != -1, "index markers must survive"
-        index_block = content[start:end]
-        # The stripped entry's index line must be gone too (same-session rebuild).
-        assert "old unused probe entry" not in index_block, (
-            "index still references a stripped entry — reindex did not run after strip"
+        # The legacy index block must be gone entirely — nothing rebuilds it.
+        assert "MEMORY_INDEX_START" not in content, (
+            "legacy Memory Index block survived reclaim — orphan strip did not run"
         )
+        # And therefore no orphan reference to the stripped entry remains anywhere.
+        assert "[GUI900] old unused probe entry" not in content, (
+            "orphan index line for a stripped entry still present"
+        )
+        # The kept entries survive in the body (strip removed only the index block +
+        # the decayed entry, not live content).
+        assert "**fresh probe entry**" in content
 
 
 class TestAssessDecayDefaultUnchanged:

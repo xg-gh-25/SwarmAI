@@ -1887,6 +1887,28 @@ class ContextHealthHook:
                     "context_health: MEMORY.md dedup — %d exact-dup archived+stripped",
                     dup_report.archived,
                 )
+
+            # ── ORPHAN-INDEX STRIP (no-index architecture consistency) ──
+            # reclaim_*_entries write via a bare source_path.write_text (NOT the
+            # locked_write / _write_memory_stripped chokepoint that strips the legacy
+            # `<!-- MEMORY_INDEX_START -->` block), so a stripped BODY entry leaves its
+            # `- [ID] title` line ORPHANED in the retired index block (the in-prompt
+            # Memory Index was retired 2026-08-14 — nothing rebuilds it). Route the
+            # final content through the same extract_body_without_index SSOT that every
+            # recall/injection read uses, so the MEMORY-specific index block never
+            # survives a strip. Idempotent: a no-index file returns byte-identical, so
+            # this is a no-op write we skip entirely. This lives in the MEMORY-specific
+            # method (NOT the shared ddd_entry_lifecycle engine — the index block is a
+            # MEMORY-only concept; KNOWLEDGE/IMPROVEMENT must not be touched, P8/R25).
+            content = memory_path.read_text(encoding="utf-8")
+            from core.memory_index import extract_body_without_index
+            stripped = extract_body_without_index(content)
+            if stripped != content:
+                memory_path.write_text(stripped, encoding="utf-8")
+                logger.info(
+                    "context_health: MEMORY.md — stripped orphan legacy index block "
+                    "after reclaim (no-index architecture)",
+                )
         finally:
             flock_unlock(lock_fd)
             lock_fd.close()
