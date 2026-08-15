@@ -746,13 +746,16 @@ class TestSystemPromptFaultIsolation:
 
 
 class TestContextLoadOffEventLoop:
-    """run_cc397b0d: build_system_prompt must NOT run loader.ensure_directory()
-    or loader.load_all() synchronously on the event loop — both fork/do blocking
-    I/O (load_all forks `git status` on L1-cache-miss), which stalls ALL tabs'
-    SSE streams. They must be dispatched via asyncio.to_thread, exactly like the
-    sibling ephemeral reads. This test proves BOTH run off the main thread and
-    that the load_all kwargs (model_context_window, exclude_filenames) survive
-    the to_thread hand-off.
+    """run_cc397b0d + run_6a7e5a2f: build_system_prompt must NOT run
+    loader.ensure_directory() or loader.load_all() synchronously on the event loop —
+    both fork/do blocking I/O (load_all forks `git status` on L1-cache-miss), which
+    stalls ALL tabs' SSE streams. They are dispatched OFF the event loop — as of
+    run_6a7e5a2f via ``executors.run_in('io', ...)`` (a bounded pool), NOT the bare
+    ``asyncio.to_thread`` default pool. This test proves BOTH run off the main thread
+    and that the load_all kwargs (model_context_window, exclude_filenames) survive
+    the off-loop hand-off (they now ride a lambda wrapper, since run_in is positional).
+    The assertions are MECHANISM-AGNOSTIC (they check the worker-thread + kwargs
+    invariant), so they hold for either dispatch primitive — the point is off-loop.
     """
 
     def _run_and_capture_threads(self, tmp_path):
@@ -801,22 +804,24 @@ class TestContextLoadOffEventLoop:
 
     def test_ensure_and_load_run_off_main_thread(self, tmp_path):
         """RED on bare synchronous calls (they run on the loop thread); GREEN once
-        both are awaited via asyncio.to_thread (they run on a worker thread)."""
+        both are awaited off-loop (executors.run_in('io', ...) → worker thread)."""
         cap = self._run_and_capture_threads(tmp_path)
         assert "load_thread" in cap, "load_all was never called"
         assert "ensure_thread" in cap, "ensure_directory was never called"
         main = cap["main_thread"]
         assert cap["ensure_thread"] != main, (
-            "ensure_directory ran on the event-loop thread — must be to_thread"
+            "ensure_directory ran on the event-loop thread — must be off-loop "
+            "(executors.run_in)"
         )
         assert cap["load_thread"] != main, (
             "load_all ran on the event-loop thread (forks git status → stalls all "
-            "tabs' SSE) — must be dispatched via asyncio.to_thread"
+            "tabs' SSE) — must be dispatched off-loop via executors.run_in"
         )
 
     def test_load_all_kwargs_survive_to_thread(self, tmp_path):
-        """The to_thread hand-off must preserve load_all's keyword args — a dropped
-        kwarg would silently change budgeting / exclusion behavior."""
+        """The off-loop hand-off must preserve load_all's keyword args — a dropped
+        kwarg would silently change budgeting / exclusion behavior. (run_6a7e5a2f:
+        kwargs now ride a lambda wrapper since executors.run_in is positional-only.)"""
         cap = self._run_and_capture_threads(tmp_path)
         kwargs = cap.get("load_kwargs", {})
         assert "model_context_window" in kwargs, (

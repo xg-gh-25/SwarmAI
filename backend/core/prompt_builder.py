@@ -28,7 +28,6 @@ Key public symbols:
 No subprocess lifecycle, routing, or hook logic lives here.
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -38,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
+from core import executors
 from core.ddd_paths import ddd_path
 
 if TYPE_CHECKING:
@@ -870,7 +870,7 @@ class PromptBuilder:
             # never stalls the event loop — the perf_counter bracket wraps the
             # await to keep the timing log (below) measuring real wall time.
             _t0 = time.perf_counter()
-            await asyncio.to_thread(loader.ensure_directory)
+            await executors.run_in("io", loader.ensure_directory)
             _t_ensure = time.perf_counter() - _t0
 
             model = self.resolve_model(agent_config)
@@ -905,19 +905,23 @@ class PromptBuilder:
             # (PRI11). The REAL query-driven recall happens AFTER the first user
             # message via session_router._maybe_inject_recall (runtime leg, real
             # query). Size is governed write-side by the distillation archive valve.
-            # OFF-LOOP (run_cc397b0d): load_all() forks `git status --porcelain`
-            # synchronously on an L1-cache-miss (context_directory_loader
-            # _is_l1_fresh_uncached) and reads ~11 context files. On the event
-            # loop that fork stalls EVERY concurrently-streaming tab's SSE, not
-            # just this session. Dispatch via to_thread (kwargs pass through);
-            # _write_l1_cache is now atomic (os.replace) so the shared L1 cache
-            # is tear-free under the parallelism this enables. perf_counter
-            # brackets the await to preserve the timing log.
+            # OFF-LOOP (run_cc397b0d; pool-scoped run_6a7e5a2f): load_all forks
+            # `git status --porcelain` on an L1-cache-miss (context_directory_loader
+            # _is_l1_fresh_uncached) and reads ~11 context files. On the event loop
+            # that fork stalls EVERY concurrently-streaming tab's SSE. Dispatched via
+            # executors.run_in on the bounded io pool (NOT the default pool) — the git
+            # fork is 2 layers below the benign-named load_all, so default_pool_guard's
+            # lexical scan can't see it; the guard's file-level rule flags this file
+            # instead. _write_l1_cache is atomic (os.replace) so the shared L1 cache
+            # is tear-free. perf_counter brackets the await to preserve the timing log.
             _t1 = time.perf_counter()
-            context_text = await asyncio.to_thread(
-                loader.load_all,
-                model_context_window=model_context_window,
-                exclude_filenames=exclude_files,
+            # executors.run_in is positional-only; load_all uses kwargs → lambda.
+            context_text = await executors.run_in(
+                "io",
+                lambda: loader.load_all(
+                    model_context_window=model_context_window,
+                    exclude_filenames=exclude_files,
+                ),
             )
             _t_load = time.perf_counter() - _t1
 
@@ -1009,8 +1013,8 @@ class PromptBuilder:
             #    drop the core context files.
             ephemeral_text = ""
             try:
-                _bootstrap_content, _daily_files, _distill_flag = await asyncio.to_thread(
-                    _read_ephemeral_files
+                _bootstrap_content, _daily_files, _distill_flag = await executors.run_in(
+                    "io", _read_ephemeral_files
                 )
 
                 if _bootstrap_content:
@@ -1054,7 +1058,12 @@ class PromptBuilder:
                     # are DELETED, not offloaded. The to_thread wrap is kept as cheap
                     # insurance (fs reads are still I/O), but the function no longer
                     # opens a sqlite connection on the assembly path.
-                    briefing = await asyncio.to_thread(build_session_briefing, working_directory)
+                    # io pool (NOT briefing): build_session_briefing is fs-only now
+                    # (sqlite/glob legs deleted); the briefing pool (cap=1) already
+                    # carries the ~28s Welcome-Screen build_session_briefing_data —
+                    # routing this cheap read there would head-of-line stall session
+                    # start (Gate-1, run_6a7e5a2f).
+                    briefing = await executors.run_in("io", build_session_briefing, working_directory)
                     if briefing:
                         ephemeral_text += f"\n\n{briefing}"
                 except Exception as exc:
@@ -1073,7 +1082,7 @@ class PromptBuilder:
                     return suggestions_path.read_text(encoding="utf-8").strip()
 
                 try:
-                    suggestions_text = await asyncio.to_thread(_read_user_suggestions)
+                    suggestions_text = await executors.run_in("io", _read_user_suggestions)
                     if suggestions_text and len(suggestions_text) < 2048:
                         ephemeral_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
                 except Exception as exc:
@@ -1242,7 +1251,7 @@ class PromptBuilder:
                         continue
                 return out
 
-            prompt_metadata["files"].extend(await asyncio.to_thread(_collect_file_metadata))
+            prompt_metadata["files"].extend(await executors.run_in("io", _collect_file_metadata))
 
             total_tokens = sum(f["tokens"] for f in prompt_metadata["files"])
             prompt_metadata["total_tokens"] = total_tokens
@@ -2076,4 +2085,4 @@ class PromptBuilder:
                 return []
             return sorted(paths)
 
-        return await asyncio.to_thread(_scan)
+        return await executors.run_in("io", _scan)

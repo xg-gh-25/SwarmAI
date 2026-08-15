@@ -339,6 +339,43 @@ assert WHOLE_FILE_PRIVATE <= {s.filename for s in CONTEXT_FILES}, (
 )
 
 
+def _atomic_write_bytes(dest: Path, data: bytes, perm: int) -> None:
+    """Atomically write ``data`` to ``dest`` with permission ``perm``.
+
+    mkstemp in the SAME directory → write → fsync → os.replace → chmod. os.replace
+    is atomic on POSIX + Windows, so a concurrent reader on another worker thread
+    always sees either the OLD complete file or the NEW complete file — never a
+    torn/half-written body. This gives ensure_directory's writes parity with
+    _write_l1_cache (run_cc397b0d), now that ensure_directory runs off-loop (a
+    worker thread) concurrently with readers (run_6a7e5a2f).
+
+    ``perm`` is a REQUIRED, per-call argument — NOT the 0600 that _write_l1_cache
+    hardcodes. The .context template files are PUBLIC (0644) or read-only
+    (0444 for the system-default constitution files), never owner-only. mkstemp
+    creates the temp at 0600; the explicit chmod AFTER os.replace sets the true
+    perm (os.replace makes dest inherit the temp's 0600, so this chmod is what
+    establishes 0644/0444 — it is load-bearing, not cosmetic). os.replace onto an
+    existing read-only (0444) dest succeeds: POSIX rename needs write on the
+    containing DIRECTORY, not on the target file.
+
+    Raises OSError on failure AFTER cleaning up the temp (no .tmp litter).
+    """
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=".tmp", dir=str(dest.parent))
+    try:
+        with os.fdopen(tmp_fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, dest)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+    try:
+        os.chmod(dest, perm)
+    except OSError:
+        pass  # Best-effort on non-Unix (Windows)
+
+
 class ContextDirectoryLoader:
     """Loads and assembles context files from ``~/.swarm-ai/.context/``.
 
@@ -456,9 +493,12 @@ class ContextDirectoryLoader:
         ``CONTEXT_FILES`` entries and copies templates using two-mode logic:
 
         - **System defaults** (``user_customized=False``): always overwrite from
-          template, then set ``chmod 0o444`` (readonly).  A byte-comparison
-          skips the write when content is already identical.  Readonly permission
-          is removed before overwriting and re-applied after.
+          template via ``_atomic_write_bytes(..., 0o444)`` (readonly). A byte-
+          comparison skips the write when content is already identical (an
+          unchanged file is still re-chmod'd 0o444). The atomic write replaces the
+          old file wholesale (os.replace works onto a 0o444 dest — POSIX rename
+          needs write on the DIR, not the file), so there is no "unlock before
+          overwrite" step (run_6a7e5a2f).
         - **User-customized** (``user_customized=True``): copy only if the
           destination file does not exist, then set ``chmod 0o644`` (read-write).
           Existing user files are never overwritten.
@@ -504,11 +544,8 @@ class ContextDirectoryLoader:
                     # Copy-only-if-missing: never overwrite user edits
                     if dest.exists():
                         continue
-                    dest.write_bytes(src.read_bytes())
-                    try:
-                        os.chmod(dest, 0o644)
-                    except OSError:
-                        pass  # Best-effort on non-Unix (Windows)
+                    # Atomic write @ 0644 (public) — run_6a7e5a2f.
+                    _atomic_write_bytes(dest, src.read_bytes(), 0o644)
                     created.append(spec.filename)
                 else:
                     # Always-overwrite: system defaults refreshed every startup
@@ -522,19 +559,20 @@ class ContextDirectoryLoader:
                         except OSError:
                             pass  # Can't read dest — overwrite it
                     if needs_write:
-                        # Remove readonly before overwriting
-                        if dest.exists():
-                            try:
-                                os.chmod(dest, 0o644)
-                            except OSError:
-                                pass
-                        dest.write_bytes(src_bytes)
+                        # Atomic write @ 0444 (read-only constitution file). The old
+                        # "chmod 0644 to remove readonly before in-place overwrite" step
+                        # is GONE — os.replace onto a 0444 dest works (POSIX rename needs
+                        # write on the DIR, not the file), so the atomic helper's final
+                        # chmod 0444 establishes the perm directly (run_6a7e5a2f, Gate-1).
+                        _atomic_write_bytes(dest, src_bytes, 0o444)
                         refreshed.append(spec.filename)
-                    # Always ensure readonly permission (whether written or not)
-                    try:
-                        os.chmod(dest, 0o444)
-                    except OSError:
-                        pass  # Best-effort on non-Unix
+                    elif dest.exists():
+                        # No content change — still ensure the readonly perm (a prior
+                        # run may have left it 0644). Cheap chmod, no rewrite.
+                        try:
+                            os.chmod(dest, 0o444)
+                        except OSError:
+                            pass  # Best-effort on non-Unix
             except OSError as exc:
                 logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
 
@@ -553,7 +591,7 @@ class ContextDirectoryLoader:
                 src_bytes = src.read_bytes()
                 if dest.exists() and dest.read_bytes() == src_bytes:
                     continue  # Already current
-                dest.write_bytes(src_bytes)
+                _atomic_write_bytes(dest, src_bytes, 0o644)  # public reference file
                 refreshed.append(filename)
             except OSError as exc:
                 logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
@@ -571,7 +609,7 @@ class ContextDirectoryLoader:
                 src = self.templates_dir / filename
                 if src.is_file():
                     try:
-                        dest.write_bytes(src.read_bytes())
+                        _atomic_write_bytes(dest, src.read_bytes(), 0o644)  # agent-managed, public
                         created.append(filename)
                     except OSError as exc:
                         logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
@@ -579,7 +617,7 @@ class ContextDirectoryLoader:
             # No template available — create an empty seed so the agent can
             # append to it without a file-not-found error.
             try:
-                dest.write_text("")
+                _atomic_write_bytes(dest, b"", 0o644)
                 created.append(filename)
             except OSError as exc:
                 logger.warning("Failed to seed %s: %s", dest, exc)
@@ -672,7 +710,7 @@ class ContextDirectoryLoader:
 
             bootstrap_src = self.templates_dir / "BOOTSTRAP.md"
             if bootstrap_src.is_file():
-                bootstrap_md.write_bytes(bootstrap_src.read_bytes())
+                _atomic_write_bytes(bootstrap_md, bootstrap_src.read_bytes(), 0o644)
         except OSError as exc:
             logger.warning("BOOTSTRAP.md creation failed: %s", exc)
 

@@ -107,6 +107,56 @@ def test_core_to_thread_no_highrisk_callee_is_exempt():
     assert not _warned(d), f"cheap to_thread(json.loads) must NOT warn, got {d}"
 
 
+# ── FILE-LEVEL rule: known indirect-git files (run_6a7e5a2f P2) ───────────────
+
+
+def test_indirect_git_file_benign_callee_warns():
+    """prompt_builder.py's load_all forks git 2 layers down (lexically invisible).
+    The FILE-LEVEL rule warns on ANY to_thread in the known indirect-git files,
+    even a benign-named callee, because the lexical scan structurally can't follow
+    the call chain. This is the exact gap that let load_all ship guard-invisible."""
+    d = _run(
+        "Edit",
+        "backend/core/prompt_builder.py",
+        "context_text = await asyncio.to_thread(loader.load_all, model_context_window=n)",
+    )
+    assert _warned(d), f"indirect-git file (prompt_builder) benign callee must warn, got {d}"
+
+
+def test_indirect_git_loader_file_warns():
+    """context_directory_loader.py is the other known indirect-git file."""
+    d = _run(
+        "Edit",
+        "backend/core/context_directory_loader.py",
+        "x = await asyncio.to_thread(self._some_helper, arg)",
+    )
+    assert _warned(d), f"context_directory_loader benign callee must warn, got {d}"
+
+
+def test_ordinary_core_benign_callee_still_exempt():
+    """The file-rule is SCOPED — an ordinary core/ file with a benign callee still
+    does NOT warn (else the gate would false-fire on every cheap to_thread)."""
+    d = _run(
+        "Edit",
+        "backend/core/some_ordinary_module.py",
+        "x = await asyncio.to_thread(self._some_helper, arg)",
+    )
+    assert not _warned(d), f"ordinary core/ benign callee must NOT warn, got {d}"
+
+
+def test_indirect_git_file_rule_is_load_bearing(monkeypatch):
+    """Mutation-proof: remove the _INDIRECT_GIT_FILES check → the prompt_builder
+    benign-callee case stops warning. Proves the file-rule is the ONLY thing
+    catching it (the lexical scan can't)."""
+    import core.security_hooks as m
+    benign = "context_text = await asyncio.to_thread(loader.load_all, model_context_window=n)"
+    assert _warned(_run("Edit", "backend/core/prompt_builder.py", benign)), \
+        "baseline: file-rule live → prompt_builder benign callee warns"
+    monkeypatch.setattr(m, "_INDIRECT_GIT_FILES", frozenset())
+    assert not _warned(_run("Edit", "backend/core/prompt_builder.py", benign)), \
+        "removing _INDIRECT_GIT_FILES must stop the warn — else the file-rule is dead code"
+
+
 def test_non_write_tool_is_exempt():
     """A Read (or any non-Write/Edit tool) → approve, no scan."""
     d = asyncio.run(

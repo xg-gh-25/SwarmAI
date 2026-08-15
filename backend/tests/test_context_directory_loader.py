@@ -33,7 +33,70 @@ from core.context_directory_loader import (
     BUDGET_LARGE_MODEL,
     ContextDirectoryLoader,
     DEFAULT_TOKEN_BUDGET,
+    _atomic_write_bytes,
 )
+
+
+# ── Atomic write helper (run_6a7e5a2f P3) ──────────────────────────────
+
+
+class TestAtomicWriteBytes:
+    """_atomic_write_bytes: mkstemp(same dir) → fsync → os.replace → chmod perm.
+
+    Provenance: run_6a7e5a2f. ensure_directory writes were bare write_bytes while
+    a reader could touch the same .context file on another thread — same torn-read
+    class the L1 cache got an atomic write for in run_cc397b0d. This helper gives
+    ensure_directory parity, PRESERVING each site's perm (0644 public / 0444 readonly)
+    — NOT L1's 0600 (those are public constitution files).
+    """
+
+    def test_writes_content(self, tmp_path: Path):
+        dest = tmp_path / "f.md"
+        _atomic_write_bytes(dest, b"hello", 0o644)
+        assert dest.read_bytes() == b"hello"
+
+    def test_preserves_0644_perm(self, tmp_path: Path):
+        dest = tmp_path / "pub.md"
+        _atomic_write_bytes(dest, b"x", 0o644)
+        assert (dest.stat().st_mode & 0o777) == 0o644, "public template must end 0644, NOT mkstemp 0600"
+
+    def test_preserves_0444_readonly_perm(self, tmp_path: Path):
+        """System-default files (SWARMAI/SOUL/AGENT) are 0444 read-only."""
+        dest = tmp_path / "ro.md"
+        _atomic_write_bytes(dest, b"x", 0o444)
+        assert (dest.stat().st_mode & 0o777) == 0o444
+
+    def test_replace_over_readonly_dest(self, tmp_path: Path):
+        """os.replace onto an existing 0444 dest must succeed (POSIX: rename needs
+        write on the DIR, not the file). This is the load-bearing correctness case
+        for the system-default refresh path."""
+        dest = tmp_path / "ro.md"
+        dest.write_bytes(b"old")
+        import os as _os
+        _os.chmod(dest, 0o444)
+        _atomic_write_bytes(dest, b"new", 0o444)
+        assert dest.read_bytes() == b"new"
+        assert (dest.stat().st_mode & 0o777) == 0o444
+
+    def test_no_temp_residue_on_success(self, tmp_path: Path):
+        dest = tmp_path / "f.md"
+        _atomic_write_bytes(dest, b"data", 0o644)
+        leftovers = [p for p in tmp_path.iterdir() if p.name != "f.md"]
+        assert not leftovers, f"no temp file must remain, found {leftovers}"
+
+    def test_no_temp_residue_on_error(self, tmp_path: Path, monkeypatch):
+        """If os.replace fails, the temp file is cleaned up (no .tmp litter)."""
+        import os as _os
+        dest = tmp_path / "f.md"
+
+        def _boom(*a, **k):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(_os, "replace", _boom)
+        with pytest.raises(OSError):
+            _atomic_write_bytes(dest, b"data", 0o644)
+        leftovers = list(tmp_path.iterdir())
+        assert not leftovers, f"temp must be cleaned on failure, found {leftovers}"
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────

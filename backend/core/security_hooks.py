@@ -2993,6 +2993,26 @@ def _is_routers_path(file_path: str) -> bool:
     return "/routers/" in norm or norm.startswith("routers/")
 
 
+# KNOWN INDIRECT-GIT FILES (run_6a7e5a2f): the lexical _RE_HIGH_RISK scan matches a
+# callee NAME/args, so it structurally CANNOT follow a call chain — e.g.
+# prompt_builder.py's `to_thread(loader.load_all, ...)` forks git two layers down
+# (load_all → _is_l1_fresh → subprocess.run(["git",...])) with no high-risk token at
+# the callsite, and shipped guard-invisible in run_cc397b0d. This is a fundamental
+# limit of lexical matching, not a fixable regex. The proportionate fix: an allowlist
+# of files KNOWN to offload transitive-git/subprocess work — any to_thread /
+# run_in_executor(None, in one of them is flagged regardless of callee name.
+# ⚠️ ALLOWLIST-SHAPED: it silently UNDER-covers a NEW indirect-git file. Grow it as
+# such files appear (Run 2 tracks the broader default-pool migration).
+_INDIRECT_GIT_FILES = frozenset({"prompt_builder.py", "context_directory_loader.py"})
+
+
+def _is_indirect_git_file(file_path: str) -> bool:
+    """True if the file is a known indirect-git offloader (basename match)."""
+    norm = (file_path or "").replace("\\", "/")
+    base = norm.rsplit("/", 1)[-1]
+    return base in _INDIRECT_GIT_FILES
+
+
 async def default_pool_guard(
     input_data: dict[str, Any],
     tool_use_id: str | None,
@@ -3006,6 +3026,14 @@ async def default_pool_guard(
     run_in_executor(None,) AND the file is not under routers/, an ``additionalContext``
     note points to ``executors.run_in('<class>', ...)`` so the author self-corrects
     BEFORE the pattern reaches a commit.
+
+    TWO detection paths (run_6a7e5a2f): (1) lexical — a high-risk token in the
+    ~200-char window after an offload wrapper; (2) file-level — ANY offload wrapper
+    in a known indirect-git file (``_INDIRECT_GIT_FILES``). Path (2) exists because
+    the lexical scan CANNOT follow a call chain: prompt_builder's
+    ``to_thread(loader.load_all, ...)`` forks git two layers down with no token at
+    the callsite. Path (2) is the proportionate fix for that structural blind spot;
+    it is allowlist-shaped and under-covers NEW indirect-git files by design.
 
     Fail-open by construction: non-target tool, empty/oversized content, routers/ path,
     or malformed input → bare approve. Self-contained try/except (runs solo, outside
@@ -3024,7 +3052,13 @@ async def default_pool_guard(
         text = _extract_written_text(tool_name, tool_input)
         if not text or len(text) > _DEFAULT_POOL_SCAN_MAX_CHARS:
             return {"decision": "approve"}
-        if not _scan_default_pool_offload(text):
+        # Two ways to flag: (1) a lexical high-risk token near an offload wrapper, OR
+        # (2) ANY offload wrapper in a KNOWN indirect-git file (the lexical scan can't
+        # follow the call chain there — run_6a7e5a2f).
+        flagged = _scan_default_pool_offload(text)
+        if not flagged and _is_indirect_git_file(file_path):
+            flagged = bool(_RE_DEFAULT_OFFLOAD.search(text))
+        if not flagged:
             return {"decision": "approve"}
 
         reminder = (
