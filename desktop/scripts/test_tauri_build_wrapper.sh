@@ -21,6 +21,9 @@ cat > "$WORK/stubbin/npm" <<'STUB'
 #!/bin/bash
 : > "$ARGV_OUT"
 for a in "$@"; do printf '%s\n' "$a" >> "$ARGV_OUT"; done
+# Record CI exactly as the wrapper handed it down (for TEST_CI_FORCED_FOR_DMG).
+# `<unset>` distinguishes "never set" from "set to empty".
+[ -n "${CI_OUT:-}" ] && printf '%s' "${CI-<unset>}" > "$CI_OUT"
 exit 0
 STUB
 chmod +x "$WORK/stubbin/npm"
@@ -67,6 +70,34 @@ ARGV_OUT="$WORK/argv4"
   PATH="$WORK/stubbin:$PATH" ARGV_OUT="$WORK/argv4" bash "$HELPER" --target x86_64-apple-darwin >/dev/null 2>&1 )
 grep -qxF -- '--target' "$WORK/argv4" && grep -qxF 'x86_64-apple-darwin' "$WORK/argv4" \
   && _pass "passthrough --target forwarded (key unset, alongside overlay)" || _fail "passthrough --target dropped (key unset)"
+
+# ── Test 4: CI is forced when absent, and NEVER clobbered when present ──
+# WHY: tauri-bundler only passes `--skip-jenkins` to bundle_dmg.sh when CI is set.
+# Without it, the Finder AppleScript runs, Finder holds the mounted RW image, and
+# bundle_dmg.sh's 3-attempt/~6s plain `hdiutil detach` fails with EBUSY(16) →
+# "error running bundle_dmg.sh". Mutation check: delete the `export CI=true` block
+# in tauri-build.sh and TEST_CI_FORCED_FOR_DMG goes RED.
+echo "TEST_CI_FORCED_FOR_DMG"
+ARGV_OUT="$WORK/argv5"
+( unset TAURI_SIGNING_PRIVATE_KEY CI
+  PATH="$WORK/stubbin:$PATH" ARGV_OUT="$WORK/argv5" CI_OUT="$WORK/ci5" \
+    bash "$HELPER" >/dev/null 2>&1 )
+if [ "$(cat "$WORK/ci5" 2>/dev/null)" = "true" ]; then
+  _pass "CI=true exported to the build when CI was unset (bundler skips Finder AppleScript)"
+else
+  _fail "CI NOT forced when unset — DMG detach will hit EBUSY (got: '$(cat "$WORK/ci5" 2>/dev/null)')"
+fi
+
+# An existing CI value must survive verbatim — CI carries meaning to other tooling,
+# and overwriting a real CI value would be a silent environment mutation.
+ARGV_OUT="$WORK/argv6"
+PATH="$WORK/stubbin:$PATH" ARGV_OUT="$WORK/argv6" CI_OUT="$WORK/ci6" \
+  CI="github" TAURI_SIGNING_PRIVATE_KEY="dummy" bash "$HELPER" >/dev/null 2>&1
+if [ "$(cat "$WORK/ci6" 2>/dev/null)" = "github" ]; then
+  _pass "pre-existing CI value preserved (not clobbered)"
+else
+  _fail "pre-existing CI value was overwritten (got: '$(cat "$WORK/ci6" 2>/dev/null)')"
+fi
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$FAILS FAILURE(S)"; exit 1; fi

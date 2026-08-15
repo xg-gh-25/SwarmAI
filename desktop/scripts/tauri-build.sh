@@ -34,6 +34,36 @@
 
 set -e
 
+# DMG RELIABILITY: force the bundler's non-Finder DMG path.
+# ---------------------------------------------------------
+# tauri-bundler's dmg.rs passes `--skip-jenkins` to bundle_dmg.sh when `CI` is set
+# (unless TAURI_BUNDLER_DMG_IGNORE_CI is also set). `--skip-jenkins` skips the
+# "Finder-prettifying" AppleScript that positions icons / sets the window box.
+#
+# WHY WE WANT IT SKIPPED: that AppleScript drives Finder against the mounted RW
+# image, and Finder keeps the volume open afterwards. bundle_dmg.sh then calls
+# hdiutil_detach_retry, which uses a PLAIN `hdiutil detach` (no -force) with
+# MAXIMUM_UNMOUNTING_ATTEMPTS=3 and a 2s/4s backoff — ~6s of patience total. When
+# Finder has not let go yet, all 3 attempts return 16 (EBUSY), the script exits 16,
+# and Tauri reports only:
+#     error running bundle_dmg.sh: `failed to run .../bundle_dmg.sh`
+# The RW image is left MOUNTED (/Volumes/dmg.XXXXXX) plus an orphaned
+# bundle/macos/rw.*.dmg, which then fouls subsequent builds.
+#
+# This was a LOCAL-ONLY failure: GitHub Actions always exports CI=true, so every
+# CI/release DMG has ALWAYS taken the --skip-jenkins path (no workflow sets
+# TAURI_BUNDLER_DMG_IGNORE_CI). Setting CI here makes a local DMG byte-for-byte
+# closer to the shipped one and removes Finder from the critical path entirely —
+# the EBUSY becomes impossible rather than retried-and-hoped-for.
+#
+# COST: the DMG has no custom icon layout/background. Released DMGs already don't
+# (see above) — the app + /Applications drop-link still work normally.
+# To opt back into the Finder cosmetics locally: TAURI_BUNDLER_DMG_IGNORE_CI=1.
+if [ -z "$CI" ]; then
+    echo "  [tauri-build] CI not set — exporting CI=true so the DMG bundler skips the Finder AppleScript (avoids hdiutil detach EBUSY)."
+    export CI=true
+fi
+
 if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
     echo "  [tauri-build] TAURI_SIGNING_PRIVATE_KEY not set — local build, skipping updater-artifact signing (createUpdaterArtifacts=false overlay)."
     npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}' "$@"
