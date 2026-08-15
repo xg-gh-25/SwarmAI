@@ -337,3 +337,54 @@ describe('LibraryOverlay — API path convention (no double /api)', () => {
     expect(src).toMatch(/api\.post\s*<[^>]*>\s*\(\s*\n?\s*`\/library\/mounts\?path=/);
   });
 });
+
+// ── Mounted honesty badge (run_139d7652) ────────────────────────────────────
+// The load-bearing honesty fix: a mount is reachable by recall ONLY once indexed
+// (last_synced set). Until then the row must SAY so, never imply searchability.
+describe('LibraryOverlay — Mounted rows honestly show index state', () => {
+  const MOUNTS_MIXED = {
+    count: 2, registry_ready: true,
+    mounts: [
+      // indexed: a code repo with a sync stamp → recall reaches it
+      { id: 'm-indexed', path: '/Users/x/repos/foo', kind: 'code',
+        health: 'fresh', enabled: true, last_synced: '2026-08-15 10:00:00', index_ref: '/idx/foo' },
+      // registered-not-indexed docs mount → recall can't reach it yet
+      { id: 'm-raw', path: '/Users/x/AI-Native', kind: 'docs',
+        health: 'fresh', enabled: true, last_synced: null, index_ref: null },
+    ],
+  };
+  function mockWithMounts() {
+    mockApi((url: string) => {
+      if (url.includes('/native')) return Promise.resolve({ data: NATIVE_OK });
+      if (url.includes('/recent')) return Promise.resolve({ data: RECENT_OK });
+      if (url.includes('/mounts')) return Promise.resolve({ data: MOUNTS_MIXED });
+      if (url.includes('/health')) return Promise.resolve({ data: HEALTH_OK });
+      return Promise.resolve({ data: {} });
+    });
+  }
+
+  it('an indexed mount reads "recall reaches it"; an unindexed docs mount reads "can’t reach it" + chat hint', async () => {
+    mockWithMounts();
+    renderOverlay();
+    openOverlay();
+    await openBrowse();
+    // indexed row → the green reachable line
+    const indexed = await screen.findByTestId('library-mount-indexed-m-indexed');
+    expect(indexed.textContent).toMatch(/recall reaches it/i);
+    // unindexed docs row → the honest warning + the brief-in-chat hint
+    const raw = await screen.findByTestId('library-mount-unindexed-m-raw');
+    expect(raw.textContent).toMatch(/can’t reach it/i);
+    expect(raw.textContent).toMatch(/brief this folder/i);
+    // and the row is flagged not-indexed at the container (data attr contract)
+    expect(screen.getByTestId('library-mount-m-raw').getAttribute('data-indexed')).toBe('false');
+    expect(screen.getByTestId('library-mount-m-indexed').getAttribute('data-indexed')).toBe('true');
+  });
+
+  it('the RecallDashboard telemetry is GONE from the rail (regression: never re-add)', async () => {
+    mockWithMounts();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('library-overlay');
+    expect(screen.queryByTestId('recall-dashboard')).toBeNull();
+  });
+});

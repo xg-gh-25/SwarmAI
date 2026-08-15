@@ -348,39 +348,89 @@ _mount_graph_cache: dict[str, object] = {}
 _mount_cache_lock = threading.Lock()
 
 
-# Dirs skipped by judge_mount_kind's scan (Gate-2 #3): never descend these — a
-# node_modules-only tree would otherwise be an unbounded walk on every mount.
+# Dirs skipped by judge_mount_kind's scan: never descend these when looking for a
+# repo marker — a marker inside node_modules/vendor belongs to a dependency, not to
+# THIS directory (a vendored `package.json` must not make a docs folder read as code).
 _JUDGE_SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__",
                     "dist", "build", ".next", "target", ".cache", "vendor"}
+
+# Repo markers: the files/dirs a REAL project uses to declare itself a buildable
+# repo. Presence of any of these (at the root or a shallow subdir) means "this is a
+# proper repo worth a code_intel graph". A folder of scattered source FILES with no
+# such marker is NOT a repo — it is docs-with-code-samples, and building a code graph
+# over it is noise (the AI-Native mislabel, run_139d7652). Judge by REPO-NESS, not by
+# "contains any parseable file". `.git` is the strongest single signal; the manifests
+# cover the language ecosystems code_intel can actually parse. requirements.txt is
+# deliberately EXCLUDED — a lone requirements.txt often sits beside notebooks/notes and
+# is too weak a signal alone (it would re-open the over-eager-code bug from the docs side).
+_REPO_MARKERS = {
+    ".git",                                    # any VCS-tracked tree
+    "package.json", "tsconfig.json",           # JS/TS
+    "pyproject.toml", "setup.py", "setup.cfg",  # Python
+    "Cargo.toml",                               # Rust
+    "go.mod",                                   # Go
+    "pom.xml", "build.gradle", "build.gradle.kts",  # JVM
+    "Gemfile",                                  # Ruby
+    "composer.json",                            # PHP
+    "CMakeLists.txt", "Makefile",               # C/C++/make
+}
+# How deep below the mount root we look for a marker. A monorepo often carries its
+# markers at the root; a repo mounted one level up (e.g. ~/repos/foo) has them at
+# depth 0-1. We scan root + immediate children dirs (depth<=2 path-parts below root)
+# so a real repo is found cheaply without an unbounded walk.
+_JUDGE_MARKER_DEPTH = 2
 _JUDGE_SCAN_CAP = 5000  # entries scanned before defaulting to 'docs' (bounded)
 
 
 def judge_mount_kind(path: str) -> str:
-    """Judge a directory's mount kind from its contents: 'code' if it contains any
-    tree-sitter-parseable source file (code_intel LANGUAGE_MAP), else 'docs'.
+    """Judge a directory's mount kind by REPO-NESS: 'code' iff it looks like a real,
+    buildable repository (carries a repo marker — `.git`, `package.json`,
+    `pyproject.toml`, `Cargo.toml`, `go.mod`, … see `_REPO_MARKERS`), else 'docs'.
 
-    Bounded scan (Gate-2 #3): stops at the first source file, skips heavy vendored
-    dirs, and caps total entries so a huge no-source dir can't hang the request.
-    Used by POST /mounts + s_library so a user/agent needn't specify kind. Defaults
-    to 'docs' for an empty/unreadable/huge dir (the lower-risk kind — no code index)."""
+    WHY repo-marker, not "contains any source file" (run_139d7652): the old rule
+    returned 'code' on the FIRST parseable file found, so a docs-majority folder with
+    a stray `.py`/`.ts` sample (e.g. an "AI-Native" notes folder) was mislabeled code
+    and got a mostly-empty code_intel graph. A folder of scattered code FILES is not a
+    repo; only a marker-bearing tree earns a code graph. Everything else is docs (the
+    lower-risk kind — no code index, recall reaches it via docs briefing cards).
+
+    Bounded scan: only root + shallow subdirs (depth <= `_JUDGE_MARKER_DEPTH`),
+    skipping vendored subtrees, capped at `_JUDGE_SCAN_CAP` entries. Defaults to
+    'docs' for an empty / unreadable / huge / marker-less dir."""
     try:
-        from core.code_intel.parser import LANGUAGE_MAP
         root = Path(path).expanduser()
         if not root.is_dir():
             return "docs"
+        # Root-level marker is the cheap common case (git repo / manifest at root).
+        for marker in _REPO_MARKERS:
+            try:
+                if (root / marker).exists():
+                    return "code"
+            except OSError:
+                continue
+        # Shallow walk for a marker in an immediate subdir (mounted-one-level-up case).
         scanned = 0
         for p in root.rglob("*"):
-            # Prune heavy vendored subtrees (rglob can't prune, so skip by path part).
-            if any(part in _JUDGE_SKIP_DIRS for part in p.parts):
+            try:
+                rel_parts = p.relative_to(root).parts
+            except ValueError:
+                continue
+            # Prune by ANCESTOR only (not p itself): a path INSIDE a vendored dir
+            # (node_modules/dep/package.json) is a dependency's marker, skip it. But
+            # `.git` is BOTH a skip-dir (never descend) AND a repo marker — checking
+            # ancestors (rel_parts[:-1]) instead of all parts lets a shallow `.git`
+            # DIR still count as a marker while its CONTENTS stay pruned (Gate-2 LOW,
+            # run_139d7652: a .git-only subdir repo was mislabeled docs).
+            if any(part in _JUDGE_SKIP_DIRS for part in rel_parts[:-1]):
+                continue
+            depth = len(rel_parts)  # # path parts below root
+            if depth > _JUDGE_MARKER_DEPTH:
                 continue
             scanned += 1
             if scanned > _JUDGE_SCAN_CAP:
                 return "docs"  # too big to classify cheaply → safe default
-            try:
-                if p.is_file() and p.suffix in LANGUAGE_MAP:
-                    return "code"
-            except OSError:
-                continue
+            if p.name in _REPO_MARKERS:
+                return "code"
         return "docs"
     except Exception:  # noqa: BLE001 — judgement must never raise into the caller
         return "docs"
@@ -445,7 +495,15 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
 
     Uses code_intel's public parse API + GraphStore public API only — never
     touches the CRITICAL shared _graph_cache or the project reindex loop. Returns
-    {status, symbols?} — status ∈ {indexed, skipped_non_code, unknown, source_missing}.
+    {status, symbols?} — status ∈ {indexed, indexed_empty, skipped_non_code, unknown, source_missing}.
+
+    last_synced honesty (run_139d7652, Gate-2 HIGH): mark_synced is the signal the
+    Library UI reads to claim "indexed — recall reaches it". A marker-bearing repo
+    with ZERO parseable source (e.g. a .git tree of only docs, or all-unknown
+    extensions) yields an EMPTY graph — recall can reach nothing in it. So we
+    mark_synced ONLY when the graph actually has symbols (total > 0); an empty
+    result returns 'indexed_empty' WITHOUT stamping last_synced, so the honesty
+    badge correctly reads it as not-recall-reachable rather than lying "indexed".
     """
     row = store.get_mount(mount_id)
     if row is None:
@@ -474,8 +532,13 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
         total = sum(len(pr.nodes) for pr in parse_out.results)
     with _mount_cache_lock:
         _mount_graph_cache[mount_id] = graph
-    store.mark_synced(mount_id, index_ref=str(db_path))
-    return {"status": "indexed", "symbols": total}
+    if total > 0:
+        # Real symbols indexed → stamp last_synced (the UI's "recall reaches it" signal).
+        store.mark_synced(mount_id, index_ref=str(db_path))
+        return {"status": "indexed", "symbols": total}
+    # Marker present but no parseable source → empty graph, recall reaches nothing.
+    # Do NOT stamp last_synced: the honesty badge must read this as not-indexed.
+    return {"status": "indexed_empty", "symbols": 0}
 
 
 def _card_slug(rel_name: str) -> str:

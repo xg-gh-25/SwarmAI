@@ -100,3 +100,75 @@ def test_add_mount_rejects_bad_kind(tmp_path: Path, store: LibraryMounts) -> Non
     """NEGATIVE: an unknown kind is rejected (CHECK constraint / guard)."""
     with pytest.raises((ValueError, sqlite3.IntegrityError)):
         store.add_mount(scope="SwarmAI", path=str(tmp_path), kind="banana")
+
+
+# ── judge_mount_kind: repo-marker judgement (run_139d7652) ───────────────────
+# The kind judge decides code vs docs by REPO-NESS (a repo marker present), NOT by
+# "contains any parseable source file". These lock the fix for the AI-Native mislabel:
+# a docs-majority folder with a stray code file must NOT be judged code.
+
+from core.library_mounts import judge_mount_kind  # noqa: E402
+
+
+def test_judge_kind_scattered_code_no_marker_is_docs(tmp_path: Path) -> None:
+    """THE FIX (run_139d7652): a folder of scattered code FILES with no repo marker
+    is docs, not code. This is the AI-Native case — a stray .py must not force code."""
+    (tmp_path / "notes.md").write_text("# notes", encoding="utf-8")
+    (tmp_path / "snippet.py").write_text("print('hi')\n", encoding="utf-8")
+    (tmp_path / "example.ts").write_text("const x = 1\n", encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "docs"
+
+
+def test_judge_kind_git_repo_is_code(tmp_path: Path) -> None:
+    """A .git tree is the strongest repo signal -> code."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "main.py").write_text("x = 1\n", encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "code"
+
+
+def test_judge_kind_package_json_is_code(tmp_path: Path) -> None:
+    """A manifest (package.json) marks a real repo -> code."""
+    (tmp_path / "package.json").write_text('{"name":"x"}', encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "code"
+
+
+def test_judge_kind_pyproject_is_code(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "code"
+
+
+def test_judge_kind_marker_in_shallow_subdir_is_code(tmp_path: Path) -> None:
+    """A repo mounted one level up (marker in an immediate subdir) is still code."""
+    sub = tmp_path / "myrepo"
+    sub.mkdir()
+    (sub / "go.mod").write_text("module x\n", encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "code"
+
+
+def test_judge_kind_vendored_marker_ignored(tmp_path: Path) -> None:
+    """A marker inside node_modules belongs to a dependency, not this dir -> docs."""
+    nm = tmp_path / "node_modules" / "dep"
+    nm.mkdir(parents=True)
+    (nm / "package.json").write_text('{"name":"dep"}', encoding="utf-8")
+    (tmp_path / "guide.md").write_text("# guide", encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "docs"
+
+
+def test_judge_kind_empty_dir_is_docs(tmp_path: Path) -> None:
+    assert judge_mount_kind(str(tmp_path)) == "docs"
+
+
+def test_judge_kind_nonexistent_is_docs(tmp_path: Path) -> None:
+    assert judge_mount_kind(str(tmp_path / "nope")) == "docs"
+
+
+def test_judge_kind_git_only_in_subdir_is_code(tmp_path: Path) -> None:
+    """Gate-2 LOW (run_139d7652): a repo mounted one level up whose ONLY marker is a
+    shallow `.git` dir must judge code — `.git` is both a skip-dir (don't descend) AND
+    a marker, so the prune must look at ANCESTORS only, letting the `.git` dir itself
+    still count."""
+    sub = tmp_path / "myrepo"
+    sub.mkdir()
+    (sub / ".git").mkdir()
+    (sub / "main.py").write_text("x = 1\n", encoding="utf-8")
+    assert judge_mount_kind(str(tmp_path)) == "code"

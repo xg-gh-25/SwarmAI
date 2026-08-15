@@ -31,7 +31,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { LibraryTree } from './LibraryTree';
 import { LibraryHealth } from './LibraryHealth';
-import { RecallDashboard } from './RecallDashboard';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
 interface NativeCategory { name: string; file_count: number; total_bytes: number; }
@@ -40,7 +39,10 @@ interface RecentItem { path: string; category: string; mtime: number; size: numb
 interface RecentFeed { window_days: number; count: number; items: RecentItem[]; }
 interface MountRow {
   id: string; path: string; kind: 'code' | 'docs' | 'url';
-  index_ref?: string; last_synced?: number; health: 'fresh' | 'stale' | 'missing'; enabled: boolean;
+  // last_synced is a SQLite datetime('now') TEXT stamp (or null until first index),
+  // as served by GET /mounts — NOT an epoch number. Its presence is the
+  // recall-reachability signal the honesty badge reads (run_139d7652).
+  index_ref?: string | null; last_synced?: string | null; health: 'fresh' | 'stale' | 'missing'; enabled: boolean;
 }
 interface MountsList { count: number; mounts: MountRow[]; registry_ready: boolean; }
 
@@ -107,50 +109,38 @@ export function LibraryContent() {
 
   return (
       <div className="flex h-full min-h-0" data-testid="library-overlay">
-        {/* ── Left overview rail (fixed 264px, tab-independent) ── */}
+        {/* ── Left rail (fixed 240px): real vitals only — what's in here + Add
+            Folder + self-quieting Health. No telemetry, no essay (moved to Guide).
+            Whitespace over dividers (design-judgment Check 3/4). ── */}
         <aside
-          className="w-[264px] shrink-0 flex flex-col gap-4 border-r border-[var(--color-border)] p-4 overflow-y-auto"
+          className="w-[240px] shrink-0 flex flex-col gap-5 border-r border-[var(--color-border)] p-4 overflow-y-auto"
           data-testid="library-rail"
         >
-          <div>
-            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">📚 Native</div>
-            <div className="mt-1 flex items-baseline gap-1.5">
-              <span className="text-2xl font-semibold text-[var(--color-text)]">
-                {native ? nativeFileTotal : '—'}
+          {/* One quiet vitals line — what the library holds. Not a headline grid;
+              a single scannable fact (Native items + Mounted count). */}
+          <div className="flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
+            <div className="flex items-center gap-1.5">
+              <span aria-hidden>📗</span>
+              <span className="text-[var(--color-text)]">{native ? nativeFileTotal : '—'}</span>
+              <span className="text-[var(--color-text-faint)]">
+                items in Knowledge/{native ? ` · ${fmtBytes(nativeByteTotal)}` : ''}
               </span>
-              <span className="text-xs text-[var(--color-text-muted)]">
-                items · {native ? fmtBytes(nativeByteTotal) : '—'}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span aria-hidden>🔗</span>
+              <span className="text-[var(--color-text)]">{mountCount}</span>
+              <span className="text-[var(--color-text-faint)]">
+                mounted {mountCount === 1 ? 'folder' : 'folders'}
               </span>
             </div>
-            <div className="mt-0.5 text-[10px] text-[var(--color-text-faint)]">Knowledge/ — already in recall</div>
-            {/* Health + cleanup actions — sits directly under the NATIVE numbers */}
-            <div className="mt-3 border-t border-[var(--color-border)] pt-3">
-              <LibraryHealth />
-            </div>
           </div>
 
-          <div>
-            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">🔗 Mounted</div>
-            <div className="mt-1 flex items-baseline gap-1.5">
-              <span className="text-2xl font-semibold text-[var(--color-text)]">{mountCount}</span>
-              <span className="text-xs text-[var(--color-text-muted)]">external sources</span>
-            </div>
-            <div className="mt-0.5 text-[10px] text-[var(--color-text-faint)]">
-              {mounts?.registry_ready ? 'indexed in place, never copied' : 'coming soon — index in place, no copy'}
-            </div>
-          </div>
+          {/* Primary entry point — add an external folder. */}
+          <AddFolderButton />
 
-          {/* Unified recall-metrics dashboard — the cross-context view (all recall
-              surfaces: session prompt / DDD / Library / Brain Hub). Sits in the
-              Library rail because Library IS the recall-surface overview (Run 3). */}
-          <div className="mt-3 border-t border-[var(--color-border)] pt-3">
-            <RecallDashboard />
-          </div>
-
-          <div className="mt-auto text-[10px] leading-relaxed text-[var(--color-text-faint)]">
-            Library is an <b>index</b>, not a warehouse. Native = ours (Knowledge/).
-            Mounted = pointers into your disk, read live on recall.
-          </div>
+          {/* Health: self-quieting — renders nothing on a clean store, a one-line
+              healthy note otherwise, or actionable cleanup items when it has them. */}
+          <LibraryHealth />
         </aside>
 
         {/* ── Main area: tabs + panel ── */}
@@ -317,23 +307,41 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
   );
 }
 
-// A mounted-folder row mirrors Quick's shape: path + kind badge + Local + settings
-// + delete + enable-toggle + expand. Run-5 controls are inert (mount cycle wires
-// the mutations); the row shape is the contract the later cycle fills.
+// A mounted-folder row: path + kind badge + HONEST index state. The index-state
+// signal (run_139d7652) is the load-bearing honesty fix — a mount is only reachable
+// by recall once it has been INDEXED (last_synced set: code → graph built; docs →
+// briefing cards written). Until then the UI must NOT imply searchability. We read
+// `last_synced` (already served by GET /mounts) — inventing no data (R30).
 function MountRowView({ m }: { m: MountRow }) {
+  const indexed = !!m.last_synced;
   return (
     <div
       data-testid={`library-mount-${m.id}`}
       data-kind={m.kind}
+      data-indexed={indexed ? 'true' : 'false'}
       className="flex items-center gap-3 rounded-md px-3 py-2 max-w-2xl hover:bg-[var(--color-hover)]"
     >
       <span className="w-1.5 h-4 shrink-0 rounded-full" style={{ background: HEALTH_TINT[m.health] }} aria-hidden title={m.health} />
       <div className="flex-1 min-w-0">
         <div className="truncate text-sm font-medium text-[var(--color-text)]">{m.path.split('/').pop()}</div>
         <div className="truncate text-[11px] text-[var(--color-text-faint)] font-mono">{m.path}</div>
+        {/* Honest recall-reachability line — never let a registered-but-unindexed
+            mount read as searchable. docs kind needs its cards written in chat. */}
+        {indexed ? (
+          <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[10px]" style={{ color: '#5fc99a' }}>
+            <span aria-hidden>✓</span> indexed — recall reaches it
+          </div>
+        ) : (
+          <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[10px]" style={{ color: '#d08a4a' }}>
+            <span aria-hidden>⚠</span>
+            {m.kind === 'docs'
+              ? 'not indexed yet — recall can’t reach it (say “brief this folder” in chat)'
+              : 'not indexed yet — recall can’t reach it'}
+          </div>
+        )}
       </div>
-      <span className="shrink-0 rounded px-1.5 py-[1px] text-[10px] font-mono" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
-      <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-faint)]">Local</span>
+      <span className="shrink-0 rounded px-1.5 py-[1px] text-[10px] font-mono self-start" style={{ background: 'color-mix(in srgb, #4a8fb0 16%, transparent)', color: '#4a8fb0' }}>{m.kind}</span>
+      <span className="shrink-0 text-[10px] font-mono text-[var(--color-text-faint)] self-start">Local</span>
     </div>
   );
 }
@@ -351,12 +359,18 @@ function AddFolderButton() {
       const picked = await openDialog({ directory: true, multiple: false, title: 'Add a folder to mount' });
       if (typeof picked === 'string') {
         try {
-          const res = await api.post<{ kind: string; symbols?: number; next?: string }>(
+          const res = await api.post<{ kind: string; status?: string; symbols?: number; next?: string }>(
             `/library/mounts?path=${encodeURIComponent(picked)}`,
           );
           const d = res.data;
+          // Honesty (run_139d7652): a code mount with zero parseable source is
+          // status 'indexed_empty' — the graph is empty, recall reaches nothing.
+          // Don't repeat the badge's old lie ("recall now reaches it") in the toast.
+          const codeEmpty = d.kind === 'code' && (d.status === 'indexed_empty' || (d.symbols ?? 0) === 0);
           const msg = d.kind === 'code'
-            ? `Mounted (code) — indexed ${d.symbols ?? 0} symbols; recall now reaches it.`
+            ? (codeEmpty
+                ? `Mounted (code) — but no parseable source found; recall can’t reach it yet.`
+                : `Mounted (code) — indexed ${d.symbols ?? 0} symbols; recall now reaches it.`)
             : `Mounted (docs). ${d.next ?? 'Ask chat to brief the folder into cards.'}`;
           document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: msg } }));
           qc.invalidateQueries({ queryKey: ['library-mounts'] });
@@ -478,6 +492,20 @@ const MANAGE_ROWS: Array<{ want: string; say: string; result: string }> = [
 function GuideTab() {
   return (
     <div data-testid="library-panel-guide" className="flex flex-col gap-6 max-w-4xl">
+      {/* What the Library IS — the index-not-warehouse framing (folded here from the
+          rail so there's ONE explainer, not two — run_139d7652). */}
+      <section data-testid="library-guide-what">
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          📚 What the Library is
+        </div>
+        <div className="text-sm text-[var(--color-text-muted)] leading-relaxed">
+          The Library is an <b>index</b>, not a warehouse. <b>Native</b> is ours
+          (<code className="font-mono text-[12px]">Knowledge/</code> — already in recall).
+          <b> Mounted</b> folders are pointers into your disk, indexed in place and read
+          <b> live</b> on a recall hit — never copied.
+        </div>
+      </section>
+
       {/* How recall uses this */}
       <section>
         <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">

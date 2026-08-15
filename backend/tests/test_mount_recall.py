@@ -147,3 +147,37 @@ def test_disable_mount_evicts_graph_cache(tmp_path: Path, store: LibraryMounts, 
     assert mid in lm._mount_graph_cache
     store.set_enabled(mid, False)
     assert mid not in lm._mount_graph_cache
+
+
+def test_empty_code_mount_does_not_stamp_last_synced(tmp_path: Path, store: LibraryMounts, monkeypatch) -> None:
+    """Gate-2 HIGH (run_139d7652): a code mount whose repo has NO parseable source
+    yields an EMPTY graph — recall reaches nothing in it. index_code_mount must
+    return 'indexed_empty' and NOT stamp last_synced, so the Library honesty badge
+    reads it as not-recall-reachable instead of falsely claiming 'indexed'."""
+    # A marker-bearing dir with zero parseable source (only a .txt + a marker file).
+    ext = tmp_path / "empty-repo"
+    ext.mkdir()
+    (ext / "README.txt").write_text("just prose, no code\n")
+    (ext / "go.mod").write_text("module x\n")  # a marker, but .mod isn't parseable source
+    mounts_root = tmp_path / "mounts"
+    monkeypatch.setattr("core.library_mounts._mounts_dir", lambda: mounts_root)
+
+    mid = store.add_mount(scope="SwarmAI", path=str(ext), kind="code")
+    result = index_code_mount(store, mid)
+    assert result["status"] == "indexed_empty"
+    assert result["symbols"] == 0
+    # THE HONESTY CONTRACT: last_synced stays NULL → badge shows "not indexed yet".
+    assert store.get_mount(mid)["last_synced"] is None
+
+
+def test_nonempty_code_mount_stamps_last_synced(tmp_path: Path, store: LibraryMounts, monkeypatch) -> None:
+    """The positive counterpart: a real code repo DOES stamp last_synced (the badge
+    then honestly shows 'indexed — recall reaches it'). Guards against over-correcting
+    the HIGH fix into 'never stamp'."""
+    ext = _make_code_dir(tmp_path)
+    mounts_root = tmp_path / "mounts"
+    monkeypatch.setattr("core.library_mounts._mounts_dir", lambda: mounts_root)
+    mid = store.add_mount(scope="SwarmAI", path=str(ext), kind="code")
+    result = index_code_mount(store, mid)
+    assert result["status"] == "indexed"
+    assert store.get_mount(mid)["last_synced"] is not None
