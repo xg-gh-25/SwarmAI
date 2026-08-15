@@ -279,8 +279,49 @@ def _build_seed_cases(project: str = "SwarmAI") -> list[dict]:
     return cases
 
 
+def run_knockout(project: str = "SwarmAI") -> tuple[bool, str]:
+    """Mutation-proof teeth: prove the recall scorer DISCRIMINATES.
+
+    Scores a real, easy query against a DELIBERATELY WRONG gold section that does
+    not exist. A working scorer MUST return rank 0 (the wrong gold is absent from
+    top-K). Returns (discriminates, message):
+      • discriminates=True  → wrong gold scored rank 0 (scorer has teeth) → the
+        POSITIVE outcome. Prints nothing special; caller exits 0.
+      • discriminates=False → the scorer "found" a nonexistent section (rank>0),
+        i.e. it is vacuous/broken → emits RECALL_TEETH_FAIL, caller exits 1.
+
+    This is the target of a recall case's ``negative_command`` (gate_teeth): a
+    non-vacuous knockout that goes RED (RECALL_TEETH_FAIL) exactly when the
+    measurement stops discriminating — so the gate cannot silently rot into
+    always-green (the DDD 2-tooth eval policy: "a case must WORK, not just PASS").
+    """
+    ddd_docs, _cf = _load_corpora(project)
+    if "TECH.md" not in ddd_docs:
+        return False, (f"RECALL_TEETH_FAIL: cannot load TECH.md corpus for "
+                       f"{project!r} — knockout cannot run")
+    # A real easy query, paired with a gold section that does NOT exist.
+    res = score_recall_case({
+        "domain": "ddd",
+        "query": "how does the autonomous pipeline work — its stages",
+        "gold": ["TECH.md", "This Section Does Not Exist In Any Doc"],
+        "k": 5,
+        "corpus": ddd_docs,
+    })
+    if res["rank"] == 0 and res["status"] == "failed":
+        return True, (f"knockout OK: wrong gold scored rank 0 "
+                      f"(scorer discriminates) — {res['notes']}")
+    return False, (f"RECALL_TEETH_FAIL: wrong gold scored rank={res['rank']} "
+                   f"status={res['status']} — the scorer 'found' a nonexistent "
+                   f"section, so it is NOT discriminating: {res['notes']}")
+
+
 if __name__ == "__main__":  # pragma: no cover — manual/scheduled invocation
     import json
+    import sys as _sys
+    if "--knockout" in _sys.argv[1:]:
+        _ok, _msg = run_knockout()
+        print(_msg)
+        _sys.exit(0 if _ok else 1)
     cases = _build_seed_cases()
     out = run_suite(cases)
     # Per-domain + per-difficulty breakout — a low context_files score must not

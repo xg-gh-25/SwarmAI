@@ -47,7 +47,10 @@ _STAMP_EXCLUDED_FIELDS = frozenset(
 # eval_runner._GATE_ELIGIBLE_EVALUATORS — gate_teeth only applies to these.
 _GATE_ELIGIBLE_EVALUATORS = frozenset(
     {"file_contains", "keyword_match", "trajectory_exact",
-     "trajectory_in_order", "trajectory_any_order", "canary_pass"}
+     "trajectory_in_order", "trajectory_any_order", "canary_pass",
+     # recall_at_k (run_3df6cc61): lockstep with eval_runner — deterministic
+     # gold-in-top-K rank check, makes recall quality gate-eligible.
+     "recall_at_k"}
 )
 
 # EVERY evaluator eval_runner.evaluate_case knows how to run (deterministic +

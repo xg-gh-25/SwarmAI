@@ -122,7 +122,10 @@ _GATE_TIERS = frozenset({"active", "stable"})
 # unified with this constant.
 _GATE_ELIGIBLE_EVALUATORS = frozenset(
     {"file_contains", "keyword_match", "trajectory_exact",
-     "trajectory_in_order", "trajectory_any_order", "canary_pass"}
+     "trajectory_in_order", "trajectory_any_order", "canary_pass",
+     # recall_at_k (run_3df6cc61): deterministic gold-in-top-K rank check over a
+     # live-loaded corpus, no LLM judge — makes recall QUALITY a real BVT red-line.
+     "recall_at_k"}
 )
 
 
@@ -371,9 +374,56 @@ def eval_recall_at_k(case: dict, root: Path | None = None) -> dict:
     Returns the standard {status, notes} contract + extra numeric fields
     (recall_at_k, reciprocal_rank, rank) that downstream consumers ignore
     (compute_scores reads only status).
+
+    Corpus-by-reference (run_3df6cc61): a golden case stored in YAML CANNOT embed
+    the live corpus — MEMORY.md is large + PRIVATE, and a frozen snapshot would
+    drift. So a case carries ``verification.corpus_source`` = {domain, doc,
+    project} instead of an inline ``corpus``; this evaluator live-loads the corpus
+    at eval time via recall_suite._load_corpora (the same loader the standalone
+    seed suite uses — no drift) and injects it before delegating. An embedded
+    ``corpus`` still wins for back-compat with the seed suite. A missing
+    corpus_source doc → fail-LOUD error (never a silent pass — C011 class).
     """
-    from scripts.recall_suite import score_recall_case
-    return score_recall_case(case.get("verification", {}))
+    from scripts.recall_suite import score_recall_case, _load_corpora
+
+    verification = dict(case.get("verification", {}) or {})
+    if "corpus" not in verification and "corpus_source" in verification:
+        src = verification.get("corpus_source") or {}
+        if not isinstance(src, dict):  # fail-LOUD, never crash on malformed YAML
+            return {"status": "error", "recall_at_k": 0, "reciprocal_rank": 0.0,
+                    "rank": 0,
+                    "notes": f"corpus_source must be a dict, got "
+                             f"{type(src).__name__}: {src!r}"}
+        cs_domain = src.get("domain")
+        cs_doc = src.get("doc")
+        project = src.get("project", "SwarmAI")
+        try:
+            ddd_docs, cf_docs = _load_corpora(project)
+        except Exception as e:  # fail-loud: a corpus we cannot load is an error
+            return {"status": "error", "recall_at_k": 0, "reciprocal_rank": 0.0,
+                    "rank": 0,
+                    "notes": f"corpus_source load failed for project {project!r}: "
+                             f"{type(e).__name__}: {e}"}
+        if cs_domain == "ddd":
+            if cs_doc not in ddd_docs:
+                return {"status": "error", "recall_at_k": 0, "reciprocal_rank": 0.0,
+                        "rank": 0,
+                        "notes": f"corpus_source doc {cs_doc!r} not in ddd corpus "
+                                 f"for {project!r} (have {sorted(ddd_docs)})"}
+            verification["corpus"] = ddd_docs  # shared-corpus dict{doc:text}
+        elif cs_domain == "context_files":
+            if cs_doc not in cf_docs:
+                return {"status": "error", "recall_at_k": 0, "reciprocal_rank": 0.0,
+                        "rank": 0,
+                        "notes": f"corpus_source doc {cs_doc!r} not in context_files "
+                                 f"corpus for {project!r} (have {sorted(cf_docs)})"}
+            verification["corpus"] = cf_docs[cs_doc]  # that file's text (str)
+        else:
+            return {"status": "error", "recall_at_k": 0, "reciprocal_rank": 0.0,
+                    "rank": 0,
+                    "notes": f"corpus_source domain {cs_domain!r} not in "
+                             "{ddd, context_files}"}
+    return score_recall_case(verification)
 
 
 def eval_trajectory(case: dict, actual_trajectory: list[str] | None = None) -> dict:
