@@ -220,7 +220,7 @@ class SelfLoopsHealthEngine:
     # ─── Dimension 1: Self-Context ───────────────────────────────────────────
 
     def _check_context(self):
-        # C1: All 11 context files present
+        # C1: All context files present (count derived from `expected` below)
         # PROJECTS.md removed 2026-08-14 (in-prompt index deleted) — no longer a context file.
         expected = [
             "SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "USER.md",
