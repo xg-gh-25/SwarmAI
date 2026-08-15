@@ -6,7 +6,6 @@ and integration with RecallEngine. Follows knowledge_store test patterns.
 import json
 import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -213,7 +212,6 @@ class TestTranscriptStore:
             content="race condition fix with asyncio lock",
             content_hash="abc123",
             metadata='{"tools_used":["Read"]}',
-            embedding=[0.1] * 1024,
         )
 
         row = conn.execute("SELECT content FROM transcript_chunks WHERE session_id='sess1'").fetchone()
@@ -248,21 +246,6 @@ class TestTranscriptStore:
         assert len(results) >= 1
         assert "race condition" in results[0]["content"]
 
-    def test_vector_search(self):
-        from core.transcript_indexer import TranscriptStore
-
-        conn = _make_conn()
-        store = TranscriptStore(conn)
-        store.ensure_tables()
-
-        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "race condition fix", "h1", embedding=[1.0] + [0.0] * 1023)
-        store.upsert_chunk("s2", "b.jsonl", 0, "mixed", "credential error", "h2", embedding=[0.0] * 1023 + [1.0])
-
-        results = store.vector_search([1.0] + [0.0] * 1023, top_k=5)
-        assert len(results) >= 1
-        # First result should be the closer vector
-        assert results[0]["session_id"] == "s1"
-
     def test_delta_sync_skips_unchanged(self):
         from core.transcript_indexer import TranscriptStore
 
@@ -288,49 +271,6 @@ class TestTranscriptStore:
 
         count = conn.execute("SELECT COUNT(*) FROM transcript_chunks").fetchone()[0]
         assert count == 0
-
-    def test_backfill_orphan_vectors_heals_and_bypasses_file_skip(self):
-        """R4b: a chunk indexed while Bedrock was down (no vector) gets backfilled
-        even though sync skips the whole file by session_id. Operating on chunk
-        rows directly is what bypasses the per-file skip."""
-        from core.transcript_indexer import TranscriptStore
-
-        conn = _make_conn()
-        store = TranscriptStore(conn)
-        store.ensure_tables()
-
-        # embed-fail: chunk written without a vector
-        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "race condition fix", "h1", embedding=None)
-        orphans = conn.execute(
-            "SELECT tc.id FROM transcript_chunks tc "
-            "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
-        ).fetchall()
-        assert len(orphans) == 1
-
-        healed = store.backfill_orphan_vectors(lambda t: [0.3] * 1024, limit=10)
-        assert healed == 1
-        orphans_after = conn.execute(
-            "SELECT tc.id FROM transcript_chunks tc "
-            "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
-        ).fetchall()
-        assert orphans_after == []
-
-    def test_backfill_orphan_vectors_safe_on_embed_failure(self):
-        """R4b negative: embedder still down → no crash, orphan preserved."""
-        from core.transcript_indexer import TranscriptStore
-
-        conn = _make_conn()
-        store = TranscriptStore(conn)
-        store.ensure_tables()
-        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "down", "h1", embedding=None)
-
-        healed = store.backfill_orphan_vectors(lambda t: None, limit=10)
-        assert healed == 0
-        orphans = conn.execute(
-            "SELECT tc.id FROM transcript_chunks tc "
-            "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
-        ).fetchall()
-        assert len(orphans) == 1
 
     def test_upsert_update_reverses_old_fts_postings(self):
         """AC1: updating a chunk with CHANGED content must reverse the OLD
@@ -423,20 +363,6 @@ class TestSyncTranscriptIndex:
         # Second sync — should skip
         stats = sync_transcript_index(store, tmp_path)
         assert stats["files_skipped"] >= 1
-
-    def test_sync_with_embed_fn(self, tmp_path):
-        from core.transcript_indexer import TranscriptStore, sync_transcript_index
-
-        conn = _make_conn()
-        store = TranscriptStore(conn)
-        store.ensure_tables()
-
-        _make_jsonl(tmp_path / "sess1.jsonl", _sample_turns()[:2])
-
-        embed_fn = MagicMock(return_value=[0.5] * 1024)
-        sync_transcript_index(store, tmp_path, embed_fn=embed_fn)
-
-        assert embed_fn.called
 
     def test_sync_graceful_on_empty_dir(self, tmp_path):
         from core.transcript_indexer import TranscriptStore, sync_transcript_index
@@ -537,7 +463,7 @@ class TestGracefulDegradation:
         store.ensure_tables()
 
         _make_jsonl(tmp_path / "sess.jsonl", _sample_turns())
-        stats = sync_transcript_index(store, tmp_path, embed_fn=None)
+        stats = sync_transcript_index(store, tmp_path)
         assert stats["files_indexed"] >= 1
 
     def test_search_without_vectors_uses_fts5(self):

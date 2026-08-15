@@ -391,34 +391,47 @@ class TestMaybeInjectRecall:
 # The embed leg is a DELAYED STUB simulating Bedrock latency. Non-creds-dependent.
 
 import contextlib
+import hashlib
+import json
 import sqlite3
 import tempfile
 from pathlib import Path
 
 
 def _seed_memory_db(db_path: Path) -> None:
-    """Create a real memory_entries + memory_vec DB with one keyword-matchable
-    entry, so the keyword(FTS5) floor through MemoryRecallStore has data to find.
-    Mirrors recall_chain_probe._build_db."""
-    import sqlite_vec
-    from core.memory_embeddings import MemoryEmbeddingStore
+    """Create a real memory_entries DB with one keyword-matchable entry, so the
+    keyword leg through MemoryRecallStore has data to find.
 
+    NEW ARCHITECTURE (2026-08-14): the vector leg (memory_vec / sqlite-vec) was
+    removed — recall is pure FTS5+BM25 keyword. This seeds ONLY memory_entries
+    (the LIKE-scan table MemoryRecallStore reads), no embedding, no vec table.
+    """
     conn = sqlite3.connect(str(db_path))
     try:
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        store = MemoryEmbeddingStore(conn)
-        store.ensure_tables()
-        # Un-embedded (vector=None) → exercises the KEYWORD leg specifically,
-        # which is exactly the synchronous floor the fix resurrects.
-        store.upsert_entry(
-            key="COE05", section="COE Registry",
-            title="exit code -9 cascading SIGKILL failure",
-            full_text="exit code -9 cascading SIGKILL OOM crash recovery resume",
-            keywords=["sigkill", "oom", "crash", "recovery", "resume"],
-            embedding=None,
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_entries (
+                key TEXT PRIMARY KEY,
+                section TEXT NOT NULL,
+                title TEXT NOT NULL,
+                full_text TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                keywords TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        full_text = "exit code -9 cascading SIGKILL OOM crash recovery resume"
+        conn.execute(
+            "INSERT INTO memory_entries (key, section, title, full_text, content_hash, keywords) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "COE05", "COE Registry",
+                "exit code -9 cascading SIGKILL failure",
+                full_text,
+                hashlib.sha256(full_text.encode()).hexdigest(),
+                json.dumps(["sigkill", "oom", "crash", "recovery", "resume"]),
+            ),
         )
+        conn.commit()
     finally:
         conn.close()
 
@@ -456,40 +469,23 @@ class TestRealRecallPathBudget:
         return options
 
     @pytest.mark.asyncio
-    async def test_sync_path_is_keyword_only_no_embed(self, mock_unit, mock_options):
+    async def test_sync_path_is_keyword_only(self, mock_unit, mock_options):
         """PURE-FILESYSTEM (design §3.3/§5.2/§5.4, 2026-06-28): the recall path is
-        now KEYWORD-ONLY — the Bedrock VECTOR leg was removed. The embed MUST NOT
-        be called (no Titan on any recall path). This REVERSES the prior
-        'both-legs/correctness-first' invariant: the synonym blind spot is covered
-        by agentic re-search, not by a vector leg. Recall still LANDS (keyword
-        floor through MemoryRecallStore), just without embedding.
+        KEYWORD-ONLY — the Bedrock VECTOR leg was removed entirely (there is no
+        embed function left to spy on). Recall still LANDS through the keyword
+        floor (MemoryRecallStore), just without embedding.
         """
         from core import session_router as sr
 
-        embed_calls = {"n": 0}
-
-        def _counting_embed(_text):
-            embed_calls["n"] += 1
-            return [0.0] * 1024
-
         with _seeded_db():
-            with patch("core.session_router._get_cached_embed_fn",
-                       return_value=_counting_embed):
-                await sr._maybe_inject_recall(
-                    user_message="sigkill oom crash recovery resume",
-                    options=mock_options,
-                    unit=mock_unit,
-                )
+            await sr._maybe_inject_recall(
+                user_message="sigkill oom crash recovery resume",
+                options=mock_options,
+                unit=mock_unit,
+            )
 
         assert mock_unit._recall_injected is True
         assert "Recalled Knowledge" in mock_options.system_prompt
-        # The vector leg MUST NOT run — pure-filesystem removed it. This is the
-        # mutation guard: if allow_embed ever flips back to True, embed_calls > 0
-        # and this RED-s, catching a vector-leg regression.
-        assert embed_calls["n"] == 0, (
-            "Recall path called the vector embed — pure-filesystem design removed "
-            "the vector leg; recall must be keyword/FTS5 only (no Titan)."
-        )
 
     @pytest.mark.asyncio
     async def test_memory_entry_recallable_by_keyword(self, mock_unit, mock_options):
@@ -586,24 +582,17 @@ class TestKeywordOnlyOneTurn:
     KEYWORD leg only — no vector, no next-turn dependency, no embed."""
 
     @pytest.mark.asyncio
-    async def test_keyword_leg_lands_one_turn_no_embed(self, monkeypatch):
+    async def test_keyword_leg_lands_one_turn(self, monkeypatch):
         from core import session_router as sr
 
         unit = MagicMock(); unit._recall_injected = False; unit.is_channel_session = False
         opts = MagicMock(); opts.system_prompt = "## Base"
 
-        embed_calls = {"n": 0}
-        def _embed(_t):
-            embed_calls["n"] += 1
-            return [0.0] * 1024
-
         with _seeded_db():
-            with patch("core.session_router._get_cached_embed_fn", return_value=_embed):
-                await sr._maybe_inject_recall(
-                    user_message="sigkill oom crash recovery resume",
-                    options=opts, unit=unit,
-                )
+            await sr._maybe_inject_recall(
+                user_message="sigkill oom crash recovery resume",
+                options=opts, unit=unit,
+            )
 
-        # Single turn: recall injected via keyword floor; vector leg NEVER runs.
+        # Single turn: recall injected via the keyword floor (no vector leg).
         assert "Recalled Knowledge" in opts.system_prompt
-        assert embed_calls["n"] == 0, "vector leg ran — pure-filesystem removed it"

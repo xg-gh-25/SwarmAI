@@ -69,7 +69,7 @@ class TestStructuredRecall:
             query="tscc context",
             buckets={
                 "library": [
-                    {"source_file": "pure-fs-migration.md", "hybrid_score": 0.63, "text": "two estimators diverge"},
+                    {"source_file": "pure-fs-migration.md", "recall_score": 0.63, "text": "two estimators diverge"},
                     {"source_file": "context-arch.md", "fts_score": 0.38, "content": "SOUL/AGENT behavior"},
                 ],
                 "ddd": [
