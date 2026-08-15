@@ -84,7 +84,7 @@ def fetch_github_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
             resp.raise_for_status()
             html_text = resp.text
     except Exception as e:
-        logger.error(f"GitHub Trending fetch failed: {e}")
+        logger.warning(f"GitHub Trending fetch failed: {e}")
         return []
 
     # Split by Box-row articles

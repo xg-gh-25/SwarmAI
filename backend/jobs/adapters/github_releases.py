@@ -108,7 +108,7 @@ def fetch_github_releases(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
                     ))
 
             except Exception as e:
-                logger.error(f"Error fetching GitHub releases for {repo}: {e}")
+                logger.warning(f"Error fetching GitHub releases for {repo}: {e}")
                 continue
 
     logger.info(f"GitHub adapter '{feed.id}': fetched {len(signals)} releases from {len(repos)} repos")

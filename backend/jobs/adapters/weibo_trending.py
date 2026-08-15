@@ -71,7 +71,7 @@ def fetch_weibo_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]
         hot_signals = _fetch_hot_search(feed.id, keywords, top_n)
         signals.extend(hot_signals)
     except Exception as e:
-        logger.error(f"Weibo hot search failed: {e}")
+        logger.warning(f"Weibo hot search failed: {e}")
 
     # 2. Optional keyword search (uses same keywords list, capped at 5)
     if keyword_search:
@@ -84,7 +84,7 @@ def fetch_weibo_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]
                         seen_urls.add(sig.url)
                         signals.append(sig)
             except Exception as e:
-                logger.error(f"Weibo keyword search '{keyword}' failed: {e}")
+                logger.warning(f"Weibo keyword search '{keyword}' failed: {e}")
                 continue
 
     logger.info(f"Weibo trending: {len(signals)} signals (hot + keyword)")

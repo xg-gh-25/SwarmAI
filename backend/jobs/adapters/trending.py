@@ -117,7 +117,7 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                 )
 
             except Exception as e:
-                logger.error(f"Trending '{platform_id}' failed: {e}")
+                logger.warning(f"Trending '{platform_id}' failed: {e}")
                 continue
 
             # Rate limiting between platforms (skip after last).

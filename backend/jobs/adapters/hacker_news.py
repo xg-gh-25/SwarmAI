@@ -76,7 +76,7 @@ def fetch_hacker_news(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                     ))
 
             except Exception as e:
-                logger.error(f"Error fetching HN for keyword '{keyword}': {e}")
+                logger.warning(f"Error fetching HN for keyword '{keyword}': {e}")
                 continue
 
     # Sort by score (embedded in summary, but we can sort by published recency)

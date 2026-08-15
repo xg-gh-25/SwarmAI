@@ -50,7 +50,7 @@ def fetch_rss(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
             entries = _parse_feed(resp.text, url, feed, cutoff)
             signals.extend(entries)
         except Exception as e:
-            logger.error(f"Error fetching RSS {url}: {e}")
+            logger.warning(f"Error fetching RSS {url}: {e}")
             continue
 
     logger.info(f"RSS adapter '{feed.id}': fetched {len(signals)} signals from {len(urls)} feeds")

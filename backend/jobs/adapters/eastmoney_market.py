@@ -74,7 +74,7 @@ def fetch_eastmoney_market(feed: Feed, max_age_hours: int = 48) -> list[RawSigna
         gainers = _fetch_top_movers(feed.id, hot_stocks_count, descending=True)
         signals.extend(gainers)
     except Exception as e:
-        logger.error(f"East Money top gainers failed: {e}")
+        logger.warning(f"East Money top gainers failed: {e}")
 
     # 2. Top losers (optional)
     if include_losers:
@@ -82,14 +82,14 @@ def fetch_eastmoney_market(feed: Feed, max_age_hours: int = 48) -> list[RawSigna
             losers = _fetch_top_movers(feed.id, hot_stocks_count, descending=False)
             signals.extend(losers)
         except Exception as e:
-            logger.error(f"East Money top losers failed: {e}")
+            logger.warning(f"East Money top losers failed: {e}")
 
     # 3. Hot concept sectors (filtered by keywords)
     try:
         concepts = _fetch_hot_concepts(feed.id, concepts_count, concept_keywords)
         signals.extend(concepts)
     except Exception as e:
-        logger.error(f"East Money concept sectors failed: {e}")
+        logger.warning(f"East Money concept sectors failed: {e}")
 
     logger.info(f"East Money market: {len(signals)} signals")
     return signals
