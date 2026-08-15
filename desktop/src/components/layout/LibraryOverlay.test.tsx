@@ -363,7 +363,7 @@ describe('LibraryOverlay — Mounted rows honestly show index state', () => {
     });
   }
 
-  it('an indexed mount reads "recall reaches it"; an unindexed docs mount reads "can’t reach it" + chat hint', async () => {
+  it('an indexed mount reads "recall reaches it"; an unindexed docs mount reads "can’t reach it" (empty/all-binary)', async () => {
     mockWithMounts();
     renderOverlay();
     openOverlay();
@@ -371,10 +371,13 @@ describe('LibraryOverlay — Mounted rows honestly show index state', () => {
     // indexed row → the green reachable line
     const indexed = await screen.findByTestId('library-mount-indexed-m-indexed');
     expect(indexed.textContent).toMatch(/recall reaches it/i);
-    // unindexed docs row → the honest warning + the brief-in-chat hint
+    // unindexed docs row → honest warning. Docs auto-index at mount now (B1,
+    // run_3f837bdd), so an unindexed docs mount means no text content, NOT "needs
+    // a chat briefing" — the message must not tell the user to brief it.
     const raw = await screen.findByTestId('library-mount-unindexed-m-raw');
     expect(raw.textContent).toMatch(/can’t reach it/i);
-    expect(raw.textContent).toMatch(/brief this folder/i);
+    expect(raw.textContent).toMatch(/no text content/i);
+    expect(raw.textContent).not.toMatch(/brief this folder/i);
     // and the row is flagged not-indexed at the container (data attr contract)
     expect(screen.getByTestId('library-mount-m-raw').getAttribute('data-indexed')).toBe('false');
     expect(screen.getByTestId('library-mount-m-indexed').getAttribute('data-indexed')).toBe('true');

@@ -1,11 +1,12 @@
 """Library mount registry — pointers to external knowledge, never copies.
 
 The mount registry backs the Library overlay's Mounted section. A mount is a
-lightweight row {id, scope, path, kind, briefing, index_ref, last_synced, health,
+lightweight row {id, scope, path, kind, index_ref, last_synced, health,
 enabled, created_at} — a POINTER into the user's disk, indexed IN PLACE by the
-engine best suited to its kind (code → code_intel graph; docs → briefing cards on
-the FTS5 library leg). This module owns ONLY the registry (CRUD + source-exists
-health); indexing + ownership-plan-A live in later cycles.
+engine best suited to its kind (code → per-mount code_intel graph via
+index_code_mount; docs → content chunked into the shared Knowledge FTS5 via
+index_docs_mount, run_3f837bdd option B1). Both index AT MOUNT TIME — no chat, no
+LLM. This module owns the registry (CRUD + source-exists health) + the two indexers.
 
 Design: Knowledge/Designs/2026-08-02-library-mount-points-design.md (Cycle 2).
 
@@ -133,6 +134,11 @@ class LibraryMounts:
         # Gate-2 #4 (HIGH): close+evict any cached GraphStore handle for this mount,
         # else a long-lived daemon leaks the sqlite connection across mount churn.
         _invalidate_mount_graph(mount_id)
+        # B1 (run_3f837bdd): a docs mount indexed its content into the shared
+        # Knowledge FTS5 under mount:<id>/ keys — clear them so recall never hits an
+        # orphan chunk of an unmounted dir. Best-effort: a store-open failure must
+        # not fail the unmount (the registry row is already gone).
+        _remove_mount_knowledge_chunks(mount_id)
         return cur.rowcount > 0
 
     def set_enabled(self, mount_id: str, enabled: bool) -> bool:
@@ -392,7 +398,8 @@ def judge_mount_kind(path: str) -> str:
     a stray `.py`/`.ts` sample (e.g. an "AI-Native" notes folder) was mislabeled code
     and got a mostly-empty code_intel graph. A folder of scattered code FILES is not a
     repo; only a marker-bearing tree earns a code graph. Everything else is docs (the
-    lower-risk kind — no code index, recall reaches it via docs briefing cards).
+    lower-risk kind — no code graph; its text content is chunked into the shared
+    Knowledge FTS5 by index_docs_mount, so recall still reaches it).
 
     Bounded scan: only root + shallow subdirs (depth <= `_JUDGE_MARKER_DEPTH`),
     skipping vendored subtrees, capped at `_JUDGE_SCAN_CAP` entries. Defaults to
@@ -490,6 +497,28 @@ def _invalidate_mount_graph(mount_id: str) -> None:
             pass
 
 
+def _remove_mount_knowledge_chunks(mount_id: str) -> int:
+    """Clear a docs mount's chunks from the shared Knowledge FTS5 (best-effort).
+
+    Called on unmount (B1, run_3f837bdd). A store-open/DB failure is swallowed — the
+    registry row is already deleted, and a leftover chunk self-heals on the next
+    re-index of a same-id mount (ids are uuid4, so collision is not a concern). Kept
+    a free function (not a LibraryMounts method) because LibraryMounts holds the
+    registry connection, not the recall-DB connection — this opens its own."""
+    try:
+        from core.knowledge_store import KnowledgeStore
+        from core.vec_db import open_vec_db
+        with open_vec_db() as conn:
+            if conn is None:
+                return 0
+            kstore = KnowledgeStore(conn)
+            kstore.ensure_tables()
+            return kstore.remove_mount_chunks(mount_id)
+    except Exception as exc:  # noqa: BLE001 — unmount must never fail on chunk cleanup
+        logger.debug("mount %s: knowledge-chunk cleanup skipped: %s", mount_id, exc)
+        return 0
+
+
 def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
     """Index a code-kind mount into its own per-mount graph (repo_root=external).
 
@@ -541,65 +570,116 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
     return {"status": "indexed_empty", "symbols": 0}
 
 
-def _card_slug(rel_name: str) -> str:
-    """Stable, filesystem-safe card filename for a source file (idempotent key).
-    A subdir separator / dot becomes '-', so rewriting the SAME source file always
-    targets the SAME card (delta, never a dup)."""
-    safe = "".join(c if (c.isalnum() or c in "-_") else "-" for c in rel_name.strip("/"))
-    return f"card-{safe}.md"
+# Dirs skipped by the docs-index walk — same vendored/build junk the kind judge
+# skips; indexing a node_modules tree as "docs" would be noise, not knowledge.
+_DOCS_SKIP_DIRS = _JUDGE_SKIP_DIRS
+_DOCS_SCAN_CAP = 5000  # max files walked before stopping (bounded, like the judge)
 
 
-def write_docs_cards(
-    store: "LibraryMounts",
-    mount_id: str,
-    *,
-    briefings: dict,
-    overview: str,
-) -> dict:
-    """Persist file-level briefing cards for a docs-kind mount (Cycle 5).
+def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
+    """Index a docs-kind mount's REAL text content into the shared Knowledge FTS5,
+    at mount time — no LLM, no chat, no briefing step (run_3f837bdd, option B1).
 
-    `briefings` maps a source-relative filename → the agent's briefing text (the
-    agent, chat-native, judges which files are worth a card and writes the text —
-    this function is the mechanical writer). Each card is a plain .md POINTER:
-    it carries the LIVE source path + the briefing, NEVER a copy of the source
-    bytes (index-not-warehouse). Cards land in Knowledge/Library/mounts/<id>/ and
-    are auto-indexed by the existing sync_knowledge_index rglob('*.md') → surface
-    on the library FTS5 recall leg with zero new recall code. Idempotent: the same
-    source file always rewrites the same card. Returns {status, cards?}.
+    This is the docs counterpart of index_code_mount, and the systematic fix for the
+    old gap: docs mounts USED to require a chat-triggered `write_docs_cards` briefing
+    pass before recall could reach them (write_docs_cards deleted this run). Instead
+    we treat a mounted docs dir exactly like our own Knowledge/ — chunk every
+    UTF-8-decodable text file with the SAME pure `chunk_markdown`, and upsert into the
+    SAME `KnowledgeStore` / `knowledge_fts` (`open_vec_db()` → data.db) that
+    `_recall_library` reads. So recall reaches a freshly-mounted docs dir with ZERO
+    new recall code.
+
+    Mechanics:
+    - source_file key = ``mount:<id>/<rel>`` — a distinct namespace from Knowledge/
+      rel keys (the `.context/Archives/` precedent) so mount chunks never collide
+      with / thrash the native index.
+    - UTF-8 gate: a file that `read_text('utf-8')` decodes is indexed; a binary
+      (UnicodeDecodeError) is skipped — content-decodability IS the filter (XG:
+      index any text file, skip binaries), not an extension allowlist.
+    - delta-sync per file (get_existing_hashes / remove_stale_chunks) so a re-index
+      is cheap and idempotent; stale files' chunks are pruned via remove_mount_chunks
+      for keys no longer present.
+    - bounded walk (skip vendored dirs + dotfiles, cap files) so a huge dir can't hang.
+    - mark_synced ONLY when chunks were written (honesty, run_139d7652): an
+      empty/all-binary dir returns 'indexed_empty' WITHOUT stamping last_synced, so
+      the UI badge reads it as not-recall-reachable.
+
+    Returns {status: indexed|indexed_empty|skipped_non_docs|unknown|source_missing, chunks}.
     """
     row = store.get_mount(mount_id)
     if row is None:
         return {"status": "unknown"}
     if row["kind"] != "docs":
         return {"status": "skipped_non_docs"}
-    src_root = Path(row["path"]).expanduser()
-    card_dir = _mounts_dir() / mount_id
-    card_dir.mkdir(parents=True, exist_ok=True)
+    src = Path(row["path"]).expanduser()
+    if not src.is_dir():
+        store.check_health(mount_id)  # persists 'missing'
+        return {"status": "source_missing"}
 
-    written = 0
-    for rel_name, briefing in briefings.items():
-        source_path = src_root / rel_name
-        card_path = card_dir / _card_slug(rel_name)
-        body = (
-            f"# {rel_name}\n\n"
-            f"> Mounted docs briefing — recall lands here, then Read the LIVE source.\n\n"
-            f"- **source:** `{source_path}`\n"
-            f"- **mount:** `{mount_id}` (scope `{row['scope']}`)\n\n"
-            f"## Briefing\n\n{briefing}\n"
-        )
-        card_path.write_text(body, encoding="utf-8")  # rewrite-in-place = idempotent
-        written += 1
+    from core.knowledge_store import KnowledgeStore, chunk_markdown
+    from core.vec_db import open_vec_db
 
-    # Directory-overview card (recall landing spot for a whole-corpus query).
-    (card_dir / "_overview.md").write_text(
-        f"# Mounted docs: {src_root.name}\n\n"
-        f"- **source dir:** `{src_root}`\n"
-        f"- **mount:** `{mount_id}` (scope `{row['scope']}`)\n\n"
-        f"## Overview\n\n{overview}\n",
-        encoding="utf-8",
-    )
-    store.mark_synced(mount_id, index_ref=str(card_dir))
-    return {"status": "written", "cards": written}
+    key_prefix = f"mount:{mount_id}/"
+    total_chunks = 0
+    seen_keys: set[str] = set()
+    with open_vec_db() as conn:
+        if conn is None:
+            return {"status": "indexed_empty", "chunks": 0}
+        kstore = KnowledgeStore(conn)
+        kstore.ensure_tables()
+        walked = 0
+        for p in sorted(src.rglob("*")):
+            if any(part in _DOCS_SKIP_DIRS for part in p.relative_to(src).parts):
+                continue
+            if p.name.startswith("."):
+                continue
+            if not p.is_file():
+                continue
+            walked += 1
+            if walked > _DOCS_SCAN_CAP:
+                break
+            try:
+                content = p.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue  # binary or unreadable → skip (content-decodability is the gate)
+            rel = p.relative_to(src).as_posix()
+            source_file = f"{key_prefix}{rel}"
+            chunks = chunk_markdown(content, source_file)
+            if not chunks:
+                continue  # empty/whitespace-only file → produces NO recallable content
+            # Only content-bearing files count as "seen" — a whitespace-only file must
+            # not make the mount read as indexed (honesty, run_139d7652 badge invariant).
+            seen_keys.add(source_file)
+            existing = kstore.get_existing_hashes(source_file)
+            new_indexes: set[int] = set()
+            for chunk in chunks:
+                idx = chunk["chunk_index"]
+                new_indexes.add(idx)
+                if existing.get(idx) == chunk["content_hash"]:
+                    continue
+                kstore.upsert_chunk(
+                    source_file=source_file,
+                    chunk_index=idx,
+                    heading=chunk.get("heading"),
+                    content=chunk["content"],
+                    content_hash=chunk["content_hash"],
+                )
+                total_chunks += 1
+            kstore.remove_stale_chunks(source_file, new_indexes)
+        # Prune chunks of files that vanished since the last index (delta at the
+        # FILE level): any existing mount:<id>/ key not seen this pass is stale.
+        for old_key in kstore.get_indexed_files():
+            if old_key.startswith(key_prefix) and old_key not in seen_keys:
+                kstore.remove_file_entries(old_key)
+
+    if total_chunks > 0 or seen_keys:
+        # Content-bearing files exist (seen_keys) — even if a delta re-index added 0
+        # NEW chunks, the mount is recall-reachable, so stamp it. An empty/all-binary/
+        # all-whitespace dir has empty seen_keys → falls through to indexed_empty.
+        store.mark_synced(mount_id, index_ref=key_prefix)
+        return {"status": "indexed", "chunks": total_chunks}
+    # No text content at all (empty or all-binary) → recall reaches nothing.
+    return {"status": "indexed_empty", "chunks": 0}
 
 
 def recall_mounts(query: str, *, scope: str, store: "LibraryMounts", limit: int = 8) -> list[dict]:

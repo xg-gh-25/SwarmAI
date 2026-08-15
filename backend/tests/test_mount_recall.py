@@ -181,3 +181,120 @@ def test_nonempty_code_mount_stamps_last_synced(tmp_path: Path, store: LibraryMo
     result = index_code_mount(store, mid)
     assert result["status"] == "indexed"
     assert store.get_mount(mid)["last_synced"] is not None
+
+
+# ── B1 (run_3f837bdd): docs-mount content indexing into the shared Knowledge FTS5 ──
+# index_docs_mount chunks a docs dir's text straight into the KnowledgeStore FTS5 that
+# _recall_library reads, at mount time — no chat, no briefing. These lock: content is
+# indexed + recall-reachable, binaries skipped, empty→indexed_empty (no last_synced),
+# and unmount clears the mount's chunks (no orphans).
+
+import core.vec_db as _vdb  # noqa: E402
+from core.library_mounts import index_docs_mount  # noqa: E402
+from core.knowledge_store import KnowledgeStore  # noqa: E402
+from core.vec_db import open_vec_db  # noqa: E402
+
+
+@pytest.fixture
+def isolated_recall_db(tmp_path, monkeypatch):
+    """Point open_vec_db()'s captured default at a tmp data.db so docs-mount chunks
+    land in an isolated FTS5 (open_vec_db binds _DEFAULT_DB_PATH at import)."""
+    db = tmp_path / "recall.db"
+    monkeypatch.setattr(_vdb, "_DEFAULT_DB_PATH", db, raising=False)
+    return db
+
+
+def _make_docs_dir(root: Path) -> Path:
+    d = root / "ai-native"; d.mkdir()
+    (d / "strategy.md").write_text("# Strategy\n\nThe flywheel compounds adoption over time.\n")
+    (d / "notes.txt").write_text("standup: blocker is the widget scoring latency\n")
+    (d / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x01\x02\x03binary\xff\xfe")  # binary → skip
+    return d
+
+
+def test_index_docs_mount_chunks_content_and_is_recallable(isolated_recall_db, tmp_path, store):
+    ext = _make_docs_dir(tmp_path)
+    mid = store.add_mount(scope="SwarmAI", path=str(ext), kind="docs")
+    result = index_docs_mount(store, mid)
+    assert result["status"] == "indexed"
+    assert result["chunks"] > 0
+    # last_synced stamped (honesty: recall reaches it)
+    assert store.get_mount(mid)["last_synced"] is not None
+    # the content is in the SHARED FTS5 under a mount: key → recall reaches it
+    with open_vec_db() as conn:
+        ks = KnowledgeStore(conn)
+        keys = ks.get_indexed_files()
+    assert any(k.startswith(f"mount:{mid}/") for k in keys)
+    assert any(k.endswith("strategy.md") for k in keys)
+    assert any(k.endswith("notes.txt") for k in keys)  # .txt indexed
+    assert not any(k.endswith("logo.png") for k in keys)  # binary skipped
+
+
+def test_index_docs_mount_empty_dir_is_indexed_empty(isolated_recall_db, tmp_path, store):
+    """An empty / all-binary docs dir → indexed_empty, NO last_synced stamp (honesty)."""
+    d = tmp_path / "binonly"; d.mkdir()
+    (d / "img.png").write_bytes(b"\x89PNG\xff\xfe\x00binary")
+    mid = store.add_mount(scope="SwarmAI", path=str(d), kind="docs")
+    result = index_docs_mount(store, mid)
+    assert result["status"] == "indexed_empty"
+    assert result["chunks"] == 0
+    assert store.get_mount(mid)["last_synced"] is None
+
+
+def test_unmount_clears_docs_chunks(isolated_recall_db, tmp_path, store):
+    """AC6: deleting a docs mount removes its chunks from the shared FTS5 (no orphans)."""
+    ext = _make_docs_dir(tmp_path)
+    mid = store.add_mount(scope="SwarmAI", path=str(ext), kind="docs")
+    index_docs_mount(store, mid)
+    with open_vec_db() as conn:
+        before = {k for k in KnowledgeStore(conn).get_indexed_files() if k.startswith(f"mount:{mid}/")}
+    assert before  # chunks exist
+    assert store.delete_mount(mid) is True
+    with open_vec_db() as conn:
+        after = {k for k in KnowledgeStore(conn).get_indexed_files() if k.startswith(f"mount:{mid}/")}
+    assert after == set()  # orphans cleared
+
+
+def test_index_docs_mount_reindex_prunes_deleted_files(isolated_recall_db, tmp_path, store):
+    """Delta at file level: a file removed from the source is pruned on re-index."""
+    d = tmp_path / "docs"; d.mkdir()
+    (d / "a.md").write_text("# A\n\napple content\n")
+    (d / "b.md").write_text("# B\n\nbanana content\n")
+    mid = store.add_mount(scope="SwarmAI", path=str(d), kind="docs")
+    index_docs_mount(store, mid)
+    (d / "b.md").unlink()  # remove a file
+    index_docs_mount(store, mid)  # re-index
+    with open_vec_db() as conn:
+        keys = {k for k in KnowledgeStore(conn).get_indexed_files() if k.startswith(f"mount:{mid}/")}
+    assert any(k.endswith("a.md") for k in keys)
+    assert not any(k.endswith("b.md") for k in keys)  # pruned
+
+
+def test_knowledge_sync_does_not_wipe_mount_chunks(isolated_recall_db, tmp_path, store):
+    """CRITICAL regression (run_3f837bdd Gate-2): a docs mount indexes into the SHARED
+    Knowledge FTS5. A subsequent sync_knowledge_index over Knowledge/ must NOT treat
+    the mount:<id>/ keys as 'deleted files' and wipe them — else recall silently loses
+    every mounted docs dir on the next session's health hook. The prune is scoped to
+    non-mount keys."""
+    from core.knowledge_store import sync_knowledge_index
+
+    # 1. index a docs mount into the shared store
+    ext = _make_docs_dir(tmp_path)
+    mid = store.add_mount(scope="SwarmAI", path=str(ext), kind="docs")
+    index_docs_mount(store, mid)
+    with open_vec_db() as conn:
+        before = {k for k in KnowledgeStore(conn).get_indexed_files() if k.startswith(f"mount:{mid}/")}
+    assert before, "mount chunks should be indexed"
+
+    # 2. run a Knowledge/ sync over an UNRELATED knowledge dir (mount keys are NOT in it)
+    kdir = tmp_path / "Knowledge"; kdir.mkdir()
+    sub = kdir / "Notes"; sub.mkdir()
+    (sub / "unrelated.md").write_text("# Note\n\nsomething native\n")
+    with open_vec_db() as conn:
+        ks = KnowledgeStore(conn); ks.ensure_tables()
+        sync_knowledge_index(ks, kdir)
+
+    # 3. the mount chunks MUST still be there (the killer this fix prevents)
+    with open_vec_db() as conn:
+        after = {k for k in KnowledgeStore(conn).get_indexed_files() if k.startswith(f"mount:{mid}/")}
+    assert after == before, "sync_knowledge_index wiped the mount chunks — recall lost the mounted docs"

@@ -67,7 +67,7 @@ def test_list_mounts_returns_rows_written_by_the_store(tmp_db: Path) -> None:
     conn.row_factory = sqlite3.Row
     store = LibraryMounts(conn)
     store.ensure_table()
-    store.add_mount(scope="GLOBAL", path="/tmp/alpha", kind="docs", briefing="alpha dir")
+    store.add_mount(scope="GLOBAL", path="/tmp/alpha", kind="docs")
     conn.commit()
     conn.close()
 
@@ -78,9 +78,9 @@ def test_list_mounts_returns_rows_written_by_the_store(tmp_db: Path) -> None:
     assert row["path"] == "/tmp/alpha"
     assert row["kind"] == "docs"
     assert row["enabled"] is True          # coerced to a real bool for the overlay
-    assert row["briefing"] == "alpha dir"
-    assert set(row) == {"id", "path", "kind", "health", "enabled",
-                        "last_synced", "briefing"}
+    # briefing dropped from the response (run_3f837bdd — the briefing concept was
+    # deleted; docs mounts index content directly, no per-mount briefing text).
+    assert set(row) == {"id", "path", "kind", "health", "enabled", "last_synced"}
 
 
 def test_list_mounts_scope_filter_is_passed_through(tmp_db: Path) -> None:
@@ -161,10 +161,14 @@ def test_rejection_guards_run_BEFORE_any_thread_work(tmp_path: Path, tmp_db: Pat
     assert ei.value.status_code == 400
 
 
-def test_register_mount_registers_a_docs_dir_and_hands_off_to_chat(
+def test_register_mount_docs_dir_indexes_content_at_mount_time(
     tmp_path: Path, tmp_db: Path, monkeypatch,
 ) -> None:
-    """Happy path through the worker: judge → sqlite write → docs handoff payload."""
+    """Happy path through the worker: judge → sqlite write → docs CONTENT indexed
+    inline (B1, run_3f837bdd). No chat handoff, no 'next' key — the docs branch runs
+    index_docs_mount and surfaces a chunk count. (Rewritten from the old
+    ...hands_off_to_chat test — that asserted the now-deleted briefing-handoff
+    behavior, so it was the bug, not the fix.)"""
     import core.library_mounts as lm
 
     d = tmp_path / "notes"
@@ -172,11 +176,18 @@ def test_register_mount_registers_a_docs_dir_and_hands_off_to_chat(
     (d / "a.md").write_text("hi", encoding="utf-8")
     monkeypatch.setattr(lm, "is_protected_system_path", lambda p: False, raising=True)
     monkeypatch.setattr(lm, "judge_mount_kind", lambda p: "docs", raising=True)
+    # Mock the indexer (its own tests cover the real chunk→FTS5 path in
+    # test_mount_recall/test_library_wiring); here we assert the WIRING: docs branch
+    # calls it and returns its result, not a chat handoff.
+    monkeypatch.setattr(lm, "index_docs_mount",
+                        lambda store, mid: {"status": "indexed", "chunks": 7},
+                        raising=True)
 
     out = asyncio.run(library_api.register_mount(path=str(d), scope="GLOBAL"))
     assert out["kind"] == "docs"
-    assert out["status"] == "registered"
-    assert "brief the docs dir" in out["next"]      # semantic work handed to chat
+    assert out["status"] == "indexed"
+    assert out["chunks"] == 7
+    assert "next" not in out           # no chat handoff anymore
     assert out["id"]
 
     # …and it is durably in the registry the GET endpoint reads.

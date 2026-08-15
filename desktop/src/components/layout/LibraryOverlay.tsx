@@ -3,8 +3,9 @@
  *
  * The cognition-zone "Library" nav card opens this fullscreen overlay. Purpose
  * (XG, 2026-08-02): a single view + entry point over everything the agent can
- * recall — `Knowledge/` (ours, "Native") + mounted external dirs (theirs, later
- * cycles). It stores pointers + briefings, never copies external content.
+ * recall — `Knowledge/` (ours, "Native") + mounted external dirs (theirs). A mount
+ * is a pointer; its content is indexed in place (code → symbol graph, docs → text
+ * chunked into the shared Knowledge FTS5 at mount time), never copied.
  *
  * Run 5 (overlay-first) scope: the 3-tab shell (Browse / Recent / Guide) + a
  * persistent left-rail of vitals, over the EXISTING Native store. The Mounted
@@ -310,8 +311,9 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
 // A mounted-folder row: path + kind badge + HONEST index state. The index-state
 // signal (run_139d7652) is the load-bearing honesty fix — a mount is only reachable
 // by recall once it has been INDEXED (last_synced set: code → graph built; docs →
-// briefing cards written). Until then the UI must NOT imply searchability. We read
-// `last_synced` (already served by GET /mounts) — inventing no data (R30).
+// text chunked into the shared Knowledge FTS5 at mount time, run_3f837bdd). Until
+// then the UI must NOT imply searchability. We read `last_synced` (served by GET
+// /mounts) — inventing no data (R30).
 function MountRowView({ m }: { m: MountRow }) {
   const indexed = !!m.last_synced;
   return (
@@ -335,7 +337,7 @@ function MountRowView({ m }: { m: MountRow }) {
           <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-[10px]" style={{ color: '#d08a4a' }}>
             <span aria-hidden>⚠</span>
             {m.kind === 'docs'
-              ? 'not indexed yet — recall can’t reach it (say “brief this folder” in chat)'
+              ? 'no text content found (empty or all-binary) — recall can’t reach it'
               : 'not indexed yet — recall can’t reach it'}
           </div>
         )}

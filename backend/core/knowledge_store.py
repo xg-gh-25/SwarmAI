@@ -326,6 +326,36 @@ class KnowledgeStore:
         self._conn.commit()
         return len(rows)
 
+    def remove_mount_chunks(self, mount_id: str) -> int:
+        """Remove ALL chunks belonging to a library mount (source_file prefix
+        ``mount:<id>/``). Returns count removed.
+
+        A docs mount indexes its files under mount-namespaced keys (index_docs_mount,
+        library_mounts.py); on unmount OR re-index this clears them so recall never
+        hits an orphan chunk of a deleted/moved mount. Mirrors remove_file_entries'
+        FTS5 external-content delete, but scoped by LIKE-prefix (one mount → many
+        source_file keys). The prefix is anchored + '/'-terminated so mount 'ab' can
+        never match mount 'abc' (a bare 'mount:ab%' would)."""
+        prefix = f"mount:{mount_id}/"
+        rows = self._conn.execute(
+            "SELECT id, content, heading, source_file FROM knowledge_chunks "
+            "WHERE source_file LIKE ? ESCAPE '\\'",
+            (prefix.replace("%", "\\%").replace("_", "\\_") + "%",),
+        ).fetchall()
+        for rowid, content, heading, source_file in rows:
+            self._conn.execute(
+                "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+                "VALUES('delete', ?, ?, ?, ?)",
+                (rowid, content, heading or "", source_file),
+            )
+        if rows:
+            ids = [r[0] for r in rows]
+            self._conn.executemany(
+                "DELETE FROM knowledge_chunks WHERE id = ?", [(i,) for i in ids]
+            )
+            self._conn.commit()
+        return len(rows)
+
     def _fts_is_healthy(self) -> bool:
         """Probe: does the FTS5 index answer a ranked query without a malformed/
         corrupt error? Returns False on DatabaseError (the corruption signal),
@@ -597,8 +627,15 @@ def sync_knowledge_index(
             if arch.is_file():
                 current_files[f".context/Archives/{arch.name}"] = arch
 
-    # Remove entries for deleted files
-    indexed_files = store.get_indexed_files()
+    # Remove entries for deleted files.
+    # CRITICAL (run_3f837bdd Gate-2): library-MOUNT chunks live in this SAME store
+    # under 'mount:<id>/…' keys (index_docs_mount), but they are NOT in this Knowledge/
+    # scan's current_files — so a naive prune would treat EVERY mount chunk as a
+    # deleted file and wipe it on every session's health-hook sync, silently killing
+    # recall for all mounted docs dirs. Mount keys are owned by index_docs_mount /
+    # delete_mount (their own delta-sync + unmount cleanup); this Knowledge/ sync must
+    # NOT touch them. Scope the prune to non-mount keys.
+    indexed_files = {f for f in store.get_indexed_files() if not f.startswith("mount:")}
     for old_file in indexed_files - set(current_files.keys()):
         store.remove_file_entries(old_file)
         stats["files_removed"] += 1

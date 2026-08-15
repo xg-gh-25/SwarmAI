@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""s_library skill script — mount / brief / search / list the Library.
+"""s_library skill script — mount / search / list the Library.
 
 Thin CLI over the ALREADY-TESTED core.library_mounts engines (add_mount,
-judge_mount_kind, index_code_mount, write_docs_cards, recall_mounts) + recall_all.
+judge_mount_kind, index_code_mount, index_docs_mount, recall_mounts) + recall_all.
 This skill reinvents NOTHING — it is the agent-facing entry to the same functions
-the +Add Folder API uses.
+the +Add Folder API uses. Mounting indexes AT MOUNT TIME (code → graph, docs →
+shared Knowledge FTS5); there is no separate briefing step (B1, run_3f837bdd).
 
 Locates backend/ by walking up (same pattern as s_estimate-tokens) so it works
 from the dev checkout, the projected .claude/skills copy, or the workspace.
@@ -62,7 +63,9 @@ def _open_store():
 
 
 def cmd_mount(args) -> None:
-    from core.library_mounts import judge_mount_kind, index_code_mount  # type: ignore
+    from core.library_mounts import (  # type: ignore
+        judge_mount_kind, index_code_mount, index_docs_mount,
+    )
     src = Path(args.path).expanduser()
     if not src.is_dir():
         print(json.dumps({"error": f"{args.path} is not a directory — a single file "
@@ -78,27 +81,16 @@ def cmd_mount(args) -> None:
                           "message": f"Mounted + indexed {result.get('symbols', 0)} symbols. "
                                      f"Recall now reaches this code dir."}))
     else:
-        files = sorted(str(p.relative_to(src)) for p in src.rglob("*")
-                       if p.is_file() and not p.name.startswith("."))
-        print(json.dumps({"id": mid, "kind": kind, "status": "registered",
-                          "files": files[:200],
-                          "message": "Docs dir registered. Read/judge the files above, then "
-                                     "call: library.py brief --mount-id " + mid + " --overview '...' "
-                                     "--card <file>='<briefing>' for each worthwhile file."}))
-
-
-def cmd_brief(args) -> None:
-    from core.library_mounts import write_docs_cards  # type: ignore
-    store = _open_store()
-    briefings = {}
-    for item in (args.card or []):
-        if "=" not in item:
-            print(json.dumps({"error": f"bad --card {item!r}, expected file=briefing"}))
-            sys.exit(1)
-        name, brief = item.split("=", 1)
-        briefings[name] = brief
-    result = write_docs_cards(store, args.mount_id, briefings=briefings, overview=args.overview)
-    print(json.dumps(result))
+        # docs → chunk its text content into the shared Knowledge FTS5 at mount time
+        # (B1, run_3f837bdd): recall-reachable immediately, no briefing step.
+        result = index_docs_mount(store, mid)
+        chunks = result.get("chunks", 0)
+        msg = (f"Mounted + indexed {chunks} chunks. Recall now reaches this docs dir."
+               if result.get("status") == "indexed"
+               else "Mounted, but no text content found (empty/all-binary); "
+                    "recall can't reach it.")
+        print(json.dumps({"id": mid, "kind": kind, "status": result.get("status"),
+                          "chunks": chunks, "message": msg}))
 
 
 def cmd_search(args) -> None:
@@ -124,16 +116,11 @@ def cmd_list(args) -> None:
 
 def main() -> None:
     _bootstrap_backend()
-    ap = argparse.ArgumentParser(description="s_library — mount/brief/search the Library")
+    ap = argparse.ArgumentParser(description="s_library — mount/search/list the Library")
     sub = ap.add_subparsers(dest="command", required=True)
 
     m = sub.add_parser("mount"); m.add_argument("--path", required=True)
     m.add_argument("--scope", default="GLOBAL"); m.set_defaults(fn=cmd_mount)
-
-    b = sub.add_parser("brief"); b.add_argument("--mount-id", required=True)
-    b.add_argument("--overview", required=True)
-    b.add_argument("--card", action="append", help="file=briefing (repeatable)")
-    b.set_defaults(fn=cmd_brief)
 
     s = sub.add_parser("search"); s.add_argument("--query", required=True)
     s.add_argument("--scope", default="GLOBAL"); s.set_defaults(fn=cmd_search)

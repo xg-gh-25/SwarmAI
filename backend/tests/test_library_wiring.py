@@ -33,6 +33,12 @@ def client(tmp_path, monkeypatch):
     # endpoint imports sees it.
     import jobs.paths as jp
     monkeypatch.setattr(jp, "DB_PATH", db_path, raising=False)
+    # open_vec_db() binds _DEFAULT_DB_PATH at IMPORT (from jobs.paths) — patching
+    # jobs.paths after the fact doesn't reach it, so index_docs_mount + _recall_library
+    # would hit the REAL data.db. Patch the captured default so the docs FTS5 chunks
+    # land in the tmp DB (run_3f837bdd integration isolation).
+    import core.vec_db as vdb
+    monkeypatch.setattr(vdb, "_DEFAULT_DB_PATH", db_path, raising=False)
 
     from routers.library_api import router
     app = FastAPI()
@@ -42,6 +48,10 @@ def client(tmp_path, monkeypatch):
 
 def _make_code_dir(root: Path) -> Path:
     d = root / "ext-repo"; d.mkdir()
+    # A REPO marker (pyproject.toml) — judge_mount_kind judges by repo-ness now
+    # (run_139d7652), not "contains any source file"; a lone .py without a marker
+    # would (correctly) be docs.
+    (d / "pyproject.toml").write_text("[project]\nname='ext-repo'\n")
     (d / "widget.py").write_text(
         "def compute_widget_score(x):\n    return x * 2\n\nclass WidgetEngine:\n    pass\n"
     )
@@ -61,15 +71,36 @@ def test_post_mount_code_registers_and_indexes(client, tmp_path):
     assert body["id"]
 
 
-def test_post_mount_docs_returns_chat_handoff(client, tmp_path):
-    """AC1: a docs dir registers + hands the semantic step to chat (no code index)."""
-    d = tmp_path / "docs"; d.mkdir(); (d / "note.md").write_text("# hi\n")
+def test_post_mount_docs_indexes_content_at_mount_time(client, tmp_path):
+    """AC1+AC2 (B1, run_3f837bdd): a docs dir is CHUNKED into FTS5 at mount time —
+    no chat handoff, no briefing. Returns indexed + a chunk count. (Rewritten from
+    the old test_post_mount_docs_returns_chat_handoff — that fixture encoded the
+    now-deleted briefing-handoff behavior, so it was the bug, not the fix.)"""
+    d = tmp_path / "docs"; d.mkdir()
+    (d / "note.md").write_text("# Widget plan\n\nShip the widget scoring engine in Q3.\n")
     resp = client.post(f"/api/library/mounts?path={d}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["kind"] == "docs"
-    assert body["status"] == "registered"
-    assert "brief" in body.get("next", "").lower()
+    assert body["status"] == "indexed"
+    assert body["chunks"] > 0
+    assert "next" not in body  # no chat handoff anymore
+
+
+def test_mounted_docs_surfaces_in_search(client, tmp_path):
+    """AC4 full loop: mount a docs dir via the endpoint, then GET /search finds its
+    CONTENT through the real recall path — zero new recall code, no briefing."""
+    d = tmp_path / "notes"; d.mkdir()
+    (d / "roadmap.md").write_text("# Roadmap\n\nThe flywheel strategy drives adoption.\n")
+    (d / "raw.txt").write_text("plaintext note: flywheel metrics dashboard\n")
+    r = client.post(f"/api/library/mounts?path={d}&scope=SwarmAI")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "indexed"
+    resp = client.get("/api/library/search?q=flywheel&scope=SwarmAI")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    blob = " ".join((h.get("source", "") + h.get("title", "")).lower() for h in body["hits"])
+    assert "flywheel" in blob or "roadmap" in blob or "mount:" in blob, f"expected a docs hit, got {body}"
 
 
 def test_post_mount_rejects_a_file(client, tmp_path):

@@ -167,7 +167,7 @@ async def list_mounts(scope: Optional[str] = Query(default=None)) -> dict:
                 {
                     "id": r["id"], "path": r["path"], "kind": r["kind"],
                     "health": r["health"], "enabled": bool(r["enabled"]),
-                    "last_synced": r["last_synced"], "briefing": r["briefing"],
+                    "last_synced": r["last_synced"],
                 }
                 for r in rows
             ]
@@ -186,14 +186,14 @@ async def list_mounts(scope: Optional[str] = Query(default=None)) -> dict:
 async def register_mount(path: str = Query(...), scope: str = Query(default="GLOBAL")) -> dict:
     """Register an external directory as a mount AND index it by kind.
 
-    The +Add Folder button lands here. Judges the kind from the dir's contents
-    (code if it has parseable source, else docs), registers it in library_mounts,
-    then dispatches indexing:
-      - code → index_code_mount inline (per-mount graph; returns symbol count)
-      - docs → return a chat-handoff (the agent must WALK + judge which files are
-        worth a briefing card — that's semantic, it belongs in chat via s_library,
-        not a mechanical endpoint).
-    Never copies the directory (index-not-warehouse). 400 if the path isn't a dir.
+    The +Add Folder button lands here. Judges the kind (a repo marker → code, else
+    docs), registers it in library_mounts, then indexes INLINE — recall-reachable at
+    mount time, no chat/LLM (B1, run_3f837bdd):
+      - code → index_code_mount (per-mount code_intel graph; returns symbol count)
+      - docs → index_docs_mount (chunks the dir's UTF-8 text into the shared
+        Knowledge FTS5; returns chunk count)
+    Never copies the directory's bytes into the registry (the FTS5 chunks ARE the
+    searchable index, mirroring how Knowledge/ itself is indexed). 400 if not a dir.
 
     OFF-LOOP (run_a1f4c2d8): this was the heaviest loop-blocker in the file — a
     judge_mount_kind rglob walk, a synchronous sqlite3 session, AND index_code_mount
@@ -220,7 +220,9 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
     def _work() -> dict:
         import sqlite3
         from jobs.paths import DB_PATH
-        from core.library_mounts import LibraryMounts, judge_mount_kind, index_code_mount
+        from core.library_mounts import (
+            LibraryMounts, judge_mount_kind, index_code_mount, index_docs_mount,
+        )
         kind = judge_mount_kind(str(src))
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
@@ -232,10 +234,11 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
                 result = index_code_mount(store, mid)
                 return {"id": mid, "kind": kind, "status": result.get("status"),
                         "symbols": result.get("symbols", 0)}
-            # docs → hand to chat (semantic file-judging is not a mechanical job)
-            return {"id": mid, "kind": kind, "status": "registered",
-                    "next": f"In chat, say: brief the docs dir {src} — the agent will "
-                            f"walk it, judge which files matter, and write briefing cards."}
+            # docs → chunk its text content into the shared Knowledge FTS5 INLINE
+            # (B1, run_3f837bdd): recall-reachable at mount time, no chat/LLM/briefing.
+            result = index_docs_mount(store, mid)
+            return {"id": mid, "kind": kind, "status": result.get("status"),
+                    "chunks": result.get("chunks", 0)}
         finally:
             conn.close()
 
@@ -262,17 +265,61 @@ def _normalize_hit_source(domain: str, source: str) -> str:
     - codeintel hits carry `file_path` (project-relative → resolve Stage-2
       ``Projects/{name}/{path}``) — must NOT be prefixed.
     - mount hits carry `mount_path` (absolute → resolve Stage-0) — must NOT be prefixed.
-    So: only prefix when domain=="library" AND source is non-empty AND not already
-    Knowledge/-prefixed AND not absolute (future docs-mount safety, Gate-1 SSA).
+    - docs-MOUNT library hits carry a synthetic ``mount:<id>/<rel>`` key (a virtual
+      recall key, NOT a Knowledge/-relative path) — prefixing it would yield a bogus
+      ``Knowledge/mount:<id>/…`` that resolves to nothing (run_3f837bdd Gate-2). Leave
+      it untouched; a mount hit is resolved to its live source via mount_path
+      separately.
+    So: only prefix a plain Knowledge/-relative library key — non-empty, NOT already
+    Knowledge/-prefixed, NOT absolute, and NOT a mount: virtual key.
     """
     if (
         domain == "library"
         and source
         and not source.startswith("Knowledge/")
+        and not source.startswith("mount:")
         and not os.path.isabs(source)
     ):
         return f"Knowledge/{source}"
     return source
+
+
+def _docs_mount_paths() -> dict:
+    """{mount_id: absolute source dir} for every docs mount — used to resolve a
+    'mount:<id>/<rel>' recall key back to its LIVE source file. Best-effort: a
+    registry-open failure yields {} (mount hits then fall back to the raw key,
+    never a crash)."""
+    try:
+        import sqlite3
+        from jobs.paths import DB_PATH
+        from core.library_mounts import LibraryMounts
+        if not DB_PATH.exists():
+            return {}
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            store = LibraryMounts(conn)
+            store.ensure_table()
+            return {r["id"]: r["path"] for r in store.list_mounts() if r["kind"] == "docs"}
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _resolve_mount_source(raw_source: str, mount_paths: dict) -> tuple:
+    """Resolve a 'mount:<id>/<rel>' recall key to (absolute_source_path, mount_id).
+    Returns (raw_source, None) for a non-mount key. The absolute path lets the
+    frontend's swarm:open-file → /workspace/file/resolve (Stage-0 absolute) open the
+    LIVE external file the chunk came from."""
+    if not raw_source.startswith("mount:"):
+        return raw_source, None
+    rest = raw_source[len("mount:"):]
+    mid, sep, rel = rest.partition("/")
+    if not sep or mid not in mount_paths:
+        return raw_source, mid or None
+    from pathlib import Path as _P
+    return str(_P(mount_paths[mid]).expanduser() / rel), mid
 
 
 @router.get("/search")
@@ -294,22 +341,27 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
         # "routers/ is STRICT no-blocking" guarantee was only half-true. Offload it.
         result = await asyncio.to_thread(recall_library_hits, q, scope)
         _latency_ms = (time.perf_counter() - _t0) * 1000.0
+        mount_paths = _docs_mount_paths()  # {mount_id: abs source dir} for key resolution
         hits: list[dict] = []
         for domain in LIBRARY_DOMAINS:
             for h in (result.buckets.get(domain) or []):
                 raw_source = h.get("source") or h.get("file_path") or h.get("mount_path") or ""
+                # A docs-mount chunk carries a synthetic 'mount:<id>/<rel>' key. Resolve
+                # it to the LIVE source file (mount dir + rel) so clicking the hit opens
+                # the real file, not a non-existent virtual path (run_3f837bdd Gate-2).
+                resolved, mid = _resolve_mount_source(raw_source, mount_paths)
                 # Normalize the COMPOSED source (post-fallback) ONCE so the frontend's
                 # swarm:open-file → /workspace/file/resolve can locate the file, and so
                 # the title fallback shows the SAME spelling as the source column
                 # (Gate-2 api-contract: a heading-less hit must not show title
                 # "Notes/x.md" beside source "Knowledge/Notes/x.md", run_b4120a78).
-                norm_source = _normalize_hit_source(domain, raw_source)
+                norm_source = resolved if mid else _normalize_hit_source(domain, raw_source)
                 hits.append({
                     "domain": domain,
                     "title": h.get("heading") or h.get("name") or norm_source or "",
                     "source": norm_source,
                     "content": (h.get("content") or "")[:400],
-                    "mount_id": h.get("mount_id"),
+                    "mount_id": h.get("mount_id") or mid,
                 })
         # Recall metrics (run_40091f5c): one sample for this overlay search.
         # Fire-and-forget — never breaks the search.
