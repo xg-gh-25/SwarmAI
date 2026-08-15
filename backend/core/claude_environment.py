@@ -293,20 +293,51 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # Set to 180s to match our session_unit.INIT_TIMEOUT.
     os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "180000")
 
-    # 6. MCP connection mode — we use the SDK's DEFAULT background (non-blocking)
-    # MCP init: MCPs report status="pending" and connect off the spawn critical
-    # path. We deliberately do NOT set MCP_CONNECTION_NONBLOCKING=0 (blocking).
+    # 6. MCP connection mode — PINNED to blocking ("0") deliberately.
     #
-    # History (run_a7b35b68): the blocking mode was a temporary safety net (each
-    # of 4 MCPs blocked spawn up to 5s "so all MCPs are ready before the first
-    # query"). But that ~20s block sat INSIDE the module-level _spawn_lock/_env_lock
-    # critical path, so concurrent tabs serialized and later spawns paid ~3x TTFT
-    # (measured p50 spawn 15.4s / p90 26.3s; 3-tab bursts each +12s queue). Its
-    # removal condition — "background init reliable, validated via get_mcp_status" —
-    # is met: live mcp_health shows configured=4 ok=5, and _check_mcp_health (run
-    # post-first-response) already treats "pending" as non-failed, so a not-yet-
-    # connected MCP never blocks or false-alarms the first query. Reverting to
-    # blocking mode would reintroduce the cold-spawn serialization latency.
+    # Read the CLI before changing this. Verified against the actual CLI bundle
+    # (claude-code 2.1.145, run_2f19c4e1) — the connect path computes:
+    #
+    #   O = lK(env.MCP_CONNECTION_NONBLOCKING)          # "0"/"false"/"no"/"off"
+    #         ? false                                    #   → BLOCKING
+    #         : xH(env.MCP_CONNECTION_NONBLOCKING)       # "1"/"true"/"yes"/"on"
+    #           || (opts.nonBlocking ?? false)           #   → else caller opt, default FALSE
+    #
+    # with lK(undefined) === false and xH(undefined) === false. So:
+    #   env "0"   → BLOCKING
+    #   env UNSET → BLOCKING   (falls through to opts.nonBlocking ?? false)
+    #   env "1"   → non-blocking
+    #
+    # `opts.nonBlocking` is a CLI-caller option the Python SDK NEVER sets (no
+    # occurrence in claude_agent_sdk), so UNSET and "0" are behaviourally
+    # IDENTICAL today. Setting "0" is therefore not a cost — it PINS the
+    # guarantee so a future SDK/CLI that starts passing nonBlocking=true cannot
+    # silently flip us to background init (see the unanswered question below).
+    #
+    # CORRECTION (run_2f19c4e1) — the removal in run_a7b35b68 was reverted here
+    # because BOTH halves of its justification were factually wrong:
+    #   1. "Removing this enables background init." FALSE — unset is blocking
+    #      (above). The removal was a provable NO-OP: the non-blocking branch was
+    #      never taken, and the CLI's own `[MCP] … running fully async` marker
+    #      appears in zero log lines across all daemon logs on this machine.
+    #   2. "Each of 4 MCPs blocks spawn up to 5s (~20s total)." FALSE — the
+    #      blocking wait is ONE batch-level `Promise.race` against a single
+    #      deadline constant (1000ms in this CLI build), after which the CLI
+    #      abandons the wait and proceeds with connect continuing in background.
+    #      Blocking mode's ceiling is ~1s for the whole batch, not ~20s — so it
+    #      was never a plausible cause of the measured p50 15.4s / p90 26.3s
+    #      spawn. That latency is the CLI startup + SDK `initialize` handshake;
+    #      it needs its own root-cause, and MCP mode is not the lever.
+    #      (Servers marked alwaysLoad are awaited unconditionally regardless of
+    #      this flag — we set alwaysLoad on none of ours, so all are in the
+    #      flag-governed batch.)
+    #
+    # UNANSWERED — resolve before ever setting "1": _check_mcp_health treating
+    # "pending" as non-failed only means the health check does not FALSE-ALARM.
+    # It says nothing about whether a first-turn tool call against a not-yet-
+    # connected MCP succeeds. "Health does not false-alarm" ≠ "the tool works".
+    # Blocking mode is what currently makes that question moot.
+    os.environ.setdefault("MCP_CONNECTION_NONBLOCKING", "0")
 
     # 6b. Bash tool timeout — the CLI already defaults BASH_DEFAULT_TIMEOUT_MS
     # to 120s (max 600s/10min). We re-assert the 120s default explicitly to

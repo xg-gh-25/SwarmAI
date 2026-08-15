@@ -2921,10 +2921,19 @@ class SessionUnit:
         # Compare: which configured MCPs are definitively missing/failed?
         missing = self._configured_mcps - non_failed
         if not missing:
+            # `ok` MUST be counted over the SAME set as `configured` (run_2f19c4e1).
+            # It used to be len(non_failed), which counts every non-failed server in
+            # the CLI's whole response — including servers this session did NOT
+            # configure (user/global-scope entries the CLI reports anyway). That made
+            # the pair non-comparable and produced the self-contradictory
+            # "configured=4 ok=5" seen in production, which was then cited as
+            # evidence that background MCP init was healthy. Intersecting with
+            # _configured_mcps makes ok <= configured an invariant, so this line can
+            # only ever read as "N of N configured MCPs are up".
             logger.info(
                 "session_unit.mcp_health_ok session_id=%s configured=%d ok=%d",
                 self.session_id, len(self._configured_mcps),
-                len(non_failed),
+                len(self._configured_mcps & non_failed),
             )
             return None
 
