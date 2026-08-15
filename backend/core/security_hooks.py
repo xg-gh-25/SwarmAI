@@ -473,11 +473,84 @@ def _targets_irreplaceable_store(command: str) -> bool:
         # fall through: judge find's path operands below (verb handled as store-scan)
     elif verb not in _DESTRUCTIVE_VERBS:
         return False
-    # Operands only (drop flags). For `mv src... dst`, the LAST operand is the
-    # destination — a store being OVERWRITTEN as a dst is also destruction, so we
-    # judge every operand.
-    operands = [t for t in tokens[1:] if not (t.startswith("-") and t != "-")]
-    for op in operands:
+    # Split operands (values) from flags. `-t DEST` / `--target-directory=DEST`
+    # names the destination explicitly and moves it OFF the last position — parse it
+    # so a `cp -t <store> src` (dest = store, NOT last operand) is not missed.
+    operands: list[str] = []
+    t_dest: str | None = None
+    raw = tokens[1:]
+    i = 0
+    while i < len(raw):
+        tok = raw[i]
+        if tok in ("-t", "--target-directory"):
+            if i + 1 < len(raw):
+                t_dest = raw[i + 1]
+                i += 2
+                continue
+            i += 1
+            continue
+        if tok.startswith("--target-directory="):
+            t_dest = tok.split("=", 1)[1]
+            i += 1
+            continue
+        # BUNDLED short-flag cluster containing `t` (GNU coreutils: `-rt DEST` ==
+        # `-r -t DEST`, `-rtDEST` == target inline). Without this, `cp -rt <store> src`
+        # slips the gate (the cluster is dropped as a valueless flag → t_dest never set
+        # → store treated as a source = fail-open, the exact hole the -t parse closes).
+        if (
+            tok.startswith("-")
+            and not tok.startswith("--")
+            and tok != "-"
+            and "t" in tok[1:]
+        ):
+            after_t = tok[tok.index("t", 1) + 1:]
+            if after_t:
+                t_dest = after_t  # inline target: -rtDEST
+                i += 1
+                continue
+            if i + 1 < len(raw):
+                t_dest = raw[i + 1]  # -rt DEST → next token is the target dir
+                i += 2
+                continue
+            i += 1
+            continue
+        if tok.startswith("-") and tok != "-":
+            i += 1  # a flag with no value we track (e.g. -r, -f, -s0)
+            continue
+        operands.append(tok)
+        i += 1
+
+    # PER-VERB operand ROLE (AC3, run_d47d3e5e): only the operand(s) a verb DESTROYS
+    # are gated. A store as a READ SOURCE (a backup) must NOT be gated — the 8-12
+    # incident's core harm was the absence of a backup; gating the backup is the
+    # wrong fix.
+    #   • cp / tee : destroy only the DESTINATION. `-t DEST` if present, else the LAST
+    #     operand (cp/tee copy sources → dest). Source operands are reads → not gated.
+    #   • dd       : destroys only `of=<path>`. `if=<store>` is a read → not gated.
+    #   • rm/mv/truncate/shred/find : every path operand is a target (mv RELOCATES the
+    #     store away = destruction of the original location too), so gate them all.
+    _DEST_ONLY = {"cp", "tee"}
+    if verb in _DEST_ONLY:
+        if t_dest is not None:
+            gated_operands = [t_dest]
+        elif operands:
+            gated_operands = [operands[-1]]  # last = destination
+        else:
+            gated_operands = []
+    elif verb == "dd":
+        # dd names its destructive target ONLY via of=; if= is a read source.
+        gated_operands = []
+        for tok in tokens[1:]:
+            if tok.startswith("of="):
+                gated_operands.append(tok.split("=", 1)[1])
+    else:
+        # rm / mv / truncate / shred / find → every path operand is destroyed/relocated.
+        # (mv also honors -t DEST as a target — include it.)
+        gated_operands = list(operands)
+        if t_dest is not None:
+            gated_operands.append(t_dest)
+
+    for op in gated_operands:
         # `dd of=<path>` / `if=<path>` — the path rides in a key=value operand.
         # Strip a leading `key=` so the store-path is seen (dd is the one verb
         # here that names its target this way).

@@ -27,6 +27,7 @@ from core.data_safety import (
     isolate_store,
     guard_destructive,
     DestructionBlocked,
+    IsolationError,
     is_corruption_error,
     write_recovery_marker,
     read_recovery_marker,
@@ -112,6 +113,102 @@ def test_isolate_moves_wal_shm_sidecars_together(tmp_path):
     assert not wal.exists() and not shm.exists(), "sidecars must not be orphaned"
     assert (moved.parent / (moved.name + "-wal")).exists()
     assert (moved.parent / (moved.name + "-shm")).exists()
+
+
+# ---------------------------------------------------------------------------
+# isolate_store — rename-failure handling (AC4): rename() can raise OSError on a
+# read-only fs, cross-device (EXDEV), or a Windows open handle. A bare rename that
+# propagates would crash boot (main.py:_purge_corrupt_db → lifespan → crash-loop).
+# EXDEV is recoverable (shutil.move copies across devices, still PRESERVES); an
+# un-preservable OSError must raise IsolationError so the caller NEVER reseeds over
+# a store that was not successfully isolated (that would be a 2nd data-wipe).
+# ---------------------------------------------------------------------------
+
+def test_isolate_exdev_falls_back_to_move_preserving_data(tmp_path, monkeypatch):
+    """AC4: cross-device rename (EXDEV) → shutil.move fallback, data preserved."""
+    import errno as _errno
+    target = tmp_path / "data.db"
+    target.write_text("real user data")
+    orig_rename = Path.rename
+    calls = {"rename": 0}
+
+    def fake_rename(self, dst):
+        # Only the primary target rename raises EXDEV; sidecars (none here) unaffected.
+        if self == target:
+            calls["rename"] += 1
+            raise OSError(_errno.EXDEV, "Invalid cross-device link")
+        return orig_rename(self, dst)
+
+    monkeypatch.setattr(Path, "rename", fake_rename)
+    moved = isolate_store(target)
+    assert calls["rename"] == 1, "rename must have been attempted (and raised EXDEV)"
+    assert not target.exists(), "original gone (moved away)"
+    assert moved.exists() and moved.read_text() == "real user data", "data preserved via move"
+
+
+def test_isolate_unpreservable_oserror_raises_isolation_error(tmp_path, monkeypatch):
+    """AC4: a non-EXDEV OSError (read-only fs / open handle) → IsolationError (NOT a bare
+    OSError, NOT a silent swallow) so the boot caller can skip reseed + re-raise."""
+    import errno as _errno
+    target = tmp_path / "data.db"
+    target.write_text("real user data")
+
+    def fake_rename(self, dst):
+        raise OSError(_errno.EROFS, "Read-only file system")
+
+    monkeypatch.setattr(Path, "rename", fake_rename)
+    with pytest.raises(IsolationError):
+        isolate_store(target)
+    # data must still be on disk (never destroyed on a failed isolate)
+    assert target.exists() and target.read_text() == "real user data"
+
+
+def test_isolate_exdev_copy_failure_raises_isolation_error(tmp_path, monkeypatch):
+    """AC4: if rename→EXDEV falls back to shutil.move and the CROSS-DEVICE COPY itself
+    fails (ENOSPC on a full dest, EROFS mid-copy), it MUST raise IsolationError — never a
+    bare OSError. The boot caller relies on IsolationError to skip reseed (a bare OSError
+    would still skip reseed by propagating, but guard_destructive relies on IsolationError
+    to raise DestructionBlocked, and the marker/no-reseed contract is keyed on it)."""
+    import errno as _errno
+    target = tmp_path / "data.db"
+    target.write_text("real user data")
+
+    def fake_rename(self, dst):
+        raise OSError(_errno.EXDEV, "Invalid cross-device link")
+
+    def fake_move(src, dst):
+        raise OSError(_errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Path, "rename", fake_rename)
+    monkeypatch.setattr("core.data_safety.shutil.move", fake_move)
+    with pytest.raises(IsolationError):
+        isolate_store(target)
+    # store must still be on disk (a failed cross-device copy must not destroy the original)
+    assert target.exists() and target.read_text() == "real user data"
+
+
+def test_isolate_deletes_orphan_sidecar_when_it_cannot_relocate(tmp_path, monkeypatch):
+    """A sidecar that can't move must be DELETED, not left behind: the primary is
+    already gone from `target`, so a leftover -wal beside where reseed writes a fresh
+    data.db → foreign-WAL-replay re-corruption (COE run_2d3417d9). Orphan is
+    reconstructable → delete it."""
+    import errno as _errno
+    target = tmp_path / "data.db"
+    target.write_text("real user data")
+    wal = tmp_path / "data.db-wal"
+    wal.write_text("stale wal")
+    orig_rename = Path.rename
+
+    def fake_rename(self, dst):
+        # primary moves fine; the -wal sidecar hits an un-preservable OSError
+        if self == wal:
+            raise OSError(_errno.EROFS, "Read-only file system")
+        return orig_rename(self, dst)
+
+    monkeypatch.setattr(Path, "rename", fake_rename)
+    moved = isolate_store(target)  # must NOT raise (sidecar failure is non-fatal)
+    assert moved.exists() and moved.read_text() == "real user data", "primary preserved"
+    assert not wal.exists(), "orphan sidecar must be deleted, never left to replay into a fresh db"
 
 
 # ---------------------------------------------------------------------------

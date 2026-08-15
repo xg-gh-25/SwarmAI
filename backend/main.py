@@ -463,8 +463,10 @@ def _purge_corrupt_db(db_path: Path, reason: str) -> "Path | None":
     ⚠️ RENAMED SEMANTICS (run_a456640f, STEERING #20 + COE run_2d3417d9): this
     used to ``unlink()`` the db + sidecars — an IRREVERSIBLE destroy of an
     irreplaceable user store, triggered by nothing stronger than a boot-time
-    exception. That is exactly the act that wiped months of chat/channel/agent
-    data on 2026-08-12 (no backup, no approval). It now PRESERVES: it renames
+    exception. That is the destroy-user-data anti-pattern behind STEERING #20 —
+    though log evidence shows this purge path did NOT fire for the 2026-08-12 loss
+    (that was a different, upstream path; see data_safety.py module docstring).
+    It now PRESERVES: it renames
     the db AND its ``-wal``/``-shm`` sidecars together to ``<name>.corrupt-<ts>``
     via ``isolate_store``, so a leftover foreign WAL is never replayed into a
     fresh seed (the original re-corruption concern) AND the data survives,

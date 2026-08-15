@@ -1,4 +1,5 @@
 """Application configuration settings."""
+import os
 import secrets
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,11 +43,22 @@ def get_app_data_dir() -> Path:
     """Get the application data directory.
 
     Returns:
-        All platforms: ~/.swarm-ai/
-        
-    Uses a consistent hidden directory in the user's home folder across
-    all platforms for simplicity and easy access.
+        SWARM_DATA_DIR (if set + non-empty) → Path(that value);
+        otherwise all platforms: ~/.swarm-ai/
+
+    The SWARM_DATA_DIR env var is an ESCAPE HATCH so a test/sandbox/CI process can
+    point at a scratch dir instead of the live production store. Without it, ANY app
+    code run outside the daemon defaulted to ~/.swarm-ai/data.db and created it on
+    miss — the upstream mechanism class behind the 8-12 data.db loss (SWARM_DATA_DIR
+    lets `conftest` pin every test off the production path; see STEERING #20 / #1).
+
+    UNSET (or empty) is byte-identical to the pre-override behavior, so all existing
+    callers see zero change. Uses a consistent hidden directory in the user's home
+    folder across all platforms for simplicity and easy access.
     """
+    override = os.environ.get("SWARM_DATA_DIR")
+    if override:
+        return Path(override)
     return Path.home() / ".swarm-ai"
 
 

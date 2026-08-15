@@ -1,12 +1,24 @@
 """Unified pre-action destruction guard for irreplaceable data stores.
 
-WHY THIS EXISTS (COE data.db-autowipe, 2026-08-12): destructive operations on
-irreplaceable stores were scattered across code paths (main.py `_purge_corrupt_db`
-hard-unlinked data.db, `swarm_workspace_manager.delete_project` rmtree'd a whole
-DDD, etc.) with NO pre-action human authorization and NO isolation. A single
-`sqlite3.DatabaseError` at boot triggered a full-DB purge + empty-seed overwrite —
-months of user data gone, no backup, no approval. That is the heaviest irreversible
-action gated by the weakest judge (STEERING #20, SOUL P4).
+WHY THIS EXISTS (COE data.db loss, 2026-08-12): the entire user data.db was wiped
+(months of chat/channel/agent data, no backup) and destructive operations were
+scattered across code paths (main.py `_purge_corrupt_db` hard-unlinked data.db,
+`swarm_workspace_manager.delete_project` rmtree'd a whole DDD, etc.) with NO
+pre-action human authorization and NO isolation — the heaviest irreversible action
+gated by the weakest judge (STEERING #20, SOUL P4).
+
+⚠️ CAUSAL NOTE (do NOT cite the purge path as the 8-12 trigger — log-falsified):
+A `DatabaseError → _purge_corrupt_db(unlink) → _reseed_from_seed(empty)` recovery
+path DID exist (introduced 7-18) and is exactly this destroy-user-data anti-pattern,
+which is WHY this module guards it. But daemon-log evidence shows it NEVER FIRED for
+the 8-12 loss: the purge/reseed signature is absent from all logs (incl. the window
+covering 8-12), and the 8-12 boot was `Using existing user database / Fast startup`.
+The actual 8-12 mechanism was DIFFERENT — a daemon-external process defaulting to the
+live production DB and full-init'ing a fresh one (the upstream `get_app_data_dir` /
+`SQLiteDatabase(db_path=None)` / create-if-missing class, addressed separately by the
+`SWARM_DATA_DIR` escape hatch). SAME failure CLASS (irreplaceable user data destroyed,
+no approval/backup), DIFFERENT path. This module hardens the anti-pattern regardless
+of which path fired; the lesson holds either way.
 
 THE FIX — a shared PRESERVE-not-DESTROY primitive (`isolate_store`) plus a
 full pre-action-approval chokepoint (`guard_destructive`) for the destroy sites
@@ -59,8 +71,10 @@ DESIGN INVARIANTS (run_a456640f — do NOT regress):
 """
 from __future__ import annotations
 
+import errno
 import json
 import logging
+import shutil
 import sqlite3
 from datetime import datetime
 from enum import Enum
@@ -205,6 +219,19 @@ class DestructionBlocked(Exception):
     """
 
 
+class IsolationError(Exception):
+    """Raised when isolate_store() COULD NOT preserve the store (rename failed and
+    no recovery was possible — e.g. a read-only filesystem or a Windows open handle).
+
+    This is DISTINCT from `isolate_store` returning normally: it means the store is
+    STILL AT ITS ORIGINAL PATH, untouched. The boot caller MUST let this propagate
+    (a bounded launchd restart with the data intact) and MUST NOT proceed to reseed —
+    reseeding over a store that was never moved away would be a 2nd data-wipe
+    (STEERING #20). A cross-device rename (EXDEV) is NOT this error: it is recovered
+    via shutil.move (still preserves), so isolate_store returns normally there.
+    """
+
+
 # --- classification tables (declarative; edit here, not in the guard logic) ---
 #
 # ⚠️ ORDER OF PRECEDENCE (adversarial HIGH, run_a456640f): a GOVERNED STORE DIR
@@ -299,10 +326,65 @@ def isolate_store(target: Path | str) -> Path:
     # two isolations land in the same second).
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
     isolated = target.with_name(f"{target.name}.corrupt-{stamp}")
-    target.rename(isolated)
+    # rename() can raise on a read-only fs, a Windows open handle, or a cross-device
+    # move (EXDEV). A bare rename that propagated would crash the boot caller
+    # (main.py:_purge_corrupt_db → lifespan) into a KeepAlive crash-loop. Handle it:
+    #   - EXDEV → the destination is on another filesystem; shutil.move copies+unlinks
+    #     across devices, still PRESERVING the data (returns normally).
+    #   - any other OSError (read-only fs, held handle) → we CANNOT preserve here;
+    #     raise IsolationError so the boot caller skips reseed + re-raises (the store
+    #     is untouched at its original path — a bounded restart, never a 2nd wipe).
+    def _relocate(src: Path, dst: Path) -> None:
+        try:
+            src.rename(dst)
+        except OSError as exc:
+            if exc.errno == errno.EXDEV:
+                # cross-device: shutil.move copies+unlinks, still PRESERVING the data.
+                # But the copy itself can fail mid-way (ENOSPC on a full dest, EROFS,
+                # a shutil.Error) — that failure MUST surface as IsolationError too,
+                # never a bare OSError: the boot caller relies on IsolationError to skip
+                # reseed (else it would os.replace over the un-moved live store = 2nd
+                # wipe), and guard_destructive relies on it to raise DestructionBlocked.
+                try:
+                    shutil.move(str(src), str(dst))
+                except (OSError, shutil.Error) as move_exc:
+                    raise IsolationError(
+                        f"could not isolate {src} → {dst} (cross-device copy failed): "
+                        f"{type(move_exc).__name__}: {move_exc} "
+                        f"(store left in place, NOT destroyed)"
+                    ) from move_exc
+            else:
+                raise IsolationError(
+                    f"could not isolate {src} → {dst}: {type(exc).__name__}: {exc} "
+                    f"(store left in place, NOT destroyed)"
+                ) from exc
+
+    _relocate(target, isolated)
     for sidecar in _sidecars(target):
         if sidecar.exists():
-            sidecar.rename(isolated.with_name(isolated.name + sidecar.name[len(target.name):]))
+            sidecar_dst = isolated.with_name(isolated.name + sidecar.name[len(target.name):])
+            # A sidecar (-wal/-shm) is reconstructable; never fail the whole isolation
+            # (primary data already preserved) on a sidecar relocation hiccup.
+            # BUT: the primary is now gone from `target`, so a sidecar LEFT BEHIND is
+            # an orphan WAL beside where reseed will write a FRESH data.db → SQLite
+            # replays the foreign WAL → re-corruption (COE run_2d3417d9, the exact
+            # failure this run exists to prevent). So if relocation fails, DELETE the
+            # orphan (it is reconstructable and now references a db that no longer
+            # exists at this path) — never leave it.
+            try:
+                _relocate(sidecar, sidecar_dst)
+            except IsolationError as _sc_exc:
+                logger.warning(
+                    "data_safety: sidecar not relocated (%s); deleting orphan to prevent "
+                    "foreign-WAL-replay re-corruption", _sc_exc,
+                )
+                try:
+                    sidecar.unlink()
+                except OSError as _rm_exc:
+                    logger.error(
+                        "data_safety: orphan sidecar %s could NOT be removed (%s) — "
+                        "reseed target may replay foreign WAL", sidecar, _rm_exc,
+                    )
     logger.warning(
         "data_safety: ISOLATED %s -> %s (preserved, not destroyed; awaiting authorization)",
         target, isolated,
@@ -342,7 +424,20 @@ async def guard_destructive(
         return
 
     # PRESERVE first: isolate before anything can go wrong (and before any await).
-    isolate_store(target)
+    # If isolation itself CANNOT preserve (read-only fs / held handle), that is still
+    # a "do not destroy" outcome — surface it as DestructionBlocked (never let the
+    # caller proceed to destroy an un-preservable store). EXDEV is already recovered
+    # inside isolate_store (shutil.move), so it does not reach here.
+    try:
+        isolate_store(target)
+    except IsolationError as exc:
+        logger.error(
+            "data_safety: destroy of %s (%s) BLOCKED — isolation failed, store left "
+            "in place (NOT destroyed): %s", target, action, exc,
+        )
+        raise DestructionBlocked(
+            f"{action} of {target} blocked: could not isolate ({exc}); store preserved in place"
+        ) from exc
 
     # DEGRADED branch — no live session or a cold boot: never await, never enqueue.
     if cold_start or session_id is None:

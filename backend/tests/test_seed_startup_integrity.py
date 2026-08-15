@@ -176,6 +176,55 @@ def test_malformed_db_migration_catch_reseeds(temp_app_data_dir, seed_db_path, m
     )
 
 
+def test_isolation_failure_never_reseeds_over_unisolated_store(
+    temp_app_data_dir, seed_db_path, monkeypatch
+):
+    """AC4-boot (run_d47d3e5e): if isolate_store CANNOT preserve (rename fails on a
+    read-only fs / held handle → IsolationError), _init_db_bounded MUST NOT reseed —
+    reseeding would os.replace() OVER a store that was never moved away = a 2nd wipe
+    (STEERING #20). The IsolationError must propagate (bounded restart, data in place).
+
+    Mutation check: if IsolationError were swallowed / _purge returned None-then-reseed,
+    _reseed_from_seed WOULD be called → this test's call-count assertion goes RED.
+    """
+    import main
+    user_db = _point_singleton_at(monkeypatch, temp_app_data_dir, seed_db_path)
+    _write_garbage_db(user_db)
+    assert user_db.stat().st_size > 0
+
+    from core.data_safety import IsolationError
+
+    # Force isolation to fail as if the fs were read-only / the file held open.
+    def _isolate_fails(target):
+        raise IsolationError(f"read-only fs: cannot isolate {target}")
+
+    monkeypatch.setattr("core.data_safety.isolate_store", _isolate_fails)
+
+    reseed_calls = {"n": 0}
+    real_reseed = main._reseed_from_seed
+
+    def _spy_reseed(path):
+        reseed_calls["n"] += 1
+        return real_reseed(path)
+
+    monkeypatch.setattr(main, "_reseed_from_seed", _spy_reseed)
+
+    from main import _init_db_bounded
+
+    # The IsolationError must propagate AS IsolationError — NOT be swallowed, NOT be
+    # silently converted to another exception before reseed. (A broad matcher would let
+    # an unrelated bug pass; this enforces the actual propagation contract.)
+    with pytest.raises(IsolationError):
+        asyncio.run(_init_db_bounded(skip_schema=True))
+
+    assert reseed_calls["n"] == 0, (
+        "CRITICAL: _reseed_from_seed was called after isolation FAILED — this would "
+        "os.replace() over the un-isolated live store = a 2nd data wipe (STEERING #20)"
+    )
+    # The original (un-isolated) file must still be on disk.
+    assert user_db.exists(), "un-isolated store must remain in place, never destroyed"
+
+
 def test_valid_db_migration_no_reseed(temp_app_data_dir, seed_db_path, monkeypatch):
     """A valid existing db must survive _init_db_bounded (migrations run, no
     re-seed): its distinct user marker must remain (proves no purge happened)."""

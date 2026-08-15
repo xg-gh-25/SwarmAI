@@ -198,6 +198,37 @@ class TestIrreplaceableStoreTargets:
         from core.security_hooks import _targets_irreplaceable_store
         assert _targets_irreplaceable_store("find Projects/CMHK -name '*.md'") is False
 
+    def test_cp_dd_backup_from_store_source_is_allowed(self):
+        """AC3 (run_d47d3e5e): cp/tee/dd DESTROY only their DESTINATION — a store as
+        the SOURCE is a BACKUP and must NOT be gated. The 8-12 incident's core harm was
+        the ABSENCE of a backup; gating the backup command itself is the wrong fix.
+        Per-verb operand roles: cp/tee → last operand (or -t value) is dest; dd → of=."""
+        from core.security_hooks import _targets_irreplaceable_store
+        for cmd in [
+            "cp .context/MEMORY.md /tmp/backup.md",          # store is SOURCE → backup
+            "cp ~/.swarm-ai/data.db /tmp/data.db.bak",       # backup the live DB
+            "cp -r Projects/CMHK /tmp/snapshot",             # dir backup
+            "dd if=.context/MEMORY.md of=/tmp/mem.bak",       # dd read store → /tmp
+        ]:
+            assert _targets_irreplaceable_store(cmd) is False, f"backup wrongly gated: {cmd}"
+
+    def test_cp_dd_destroy_to_store_dest_still_gated(self):
+        """AC3: the DESTINATION side must stay gated — cp/dd writing INTO a store
+        (overwrite/zero) is destruction. Includes the `cp -t <store>` form where the
+        destination is NOT the last operand (naive last-operand gating would fail-open)."""
+        from core.security_hooks import _targets_irreplaceable_store
+        for cmd in [
+            "cp /dev/null .context/MEMORY.md",               # zero-out (dest = store)
+            "cp -t .context /dev/null",                      # -t: dest is .context (NOT last operand)
+            "cp -t Projects/SwarmAI evil.db",                # -t dir form
+            "cp -rt .context evil.db",                       # BUNDLED short flags: -r + -t, dest=.context
+            "cp -ft .context evil",                          # bundled -f + -t
+            "dd if=/dev/zero of=.context/EVOLUTION.md",       # dd write → store
+            "mv .context/USER.md /tmp/x",                    # mv relocates store away = destroy (all-operand)
+            "mv /tmp/evil .context/USER.md",                 # mv overwrites store = destroy (dest)
+        ]:
+            assert _targets_irreplaceable_store(cmd) is True, f"destroy wrongly allowed: {cmd}"
+
     def test_boundary_matching_no_false_positives(self):
         """Path-segment matching must not false-gate look-alike names."""
         from core.security_hooks import _targets_irreplaceable_store

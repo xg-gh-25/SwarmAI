@@ -491,6 +491,24 @@ async def reset_database():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_app_data_dir(tmp_path_factory, monkeypatch):
+    """Point config.get_app_data_dir() at a per-test temp dir for EVERY test (P7:
+    structural guard, not per-test discipline). get_app_data_dir() defaults to the
+    LIVE production ~/.swarm-ai — any test that constructs SQLiteDatabase(db_path=None),
+    or any code that self-opens get_app_data_dir()/"data.db" (skills.py, skill_metrics_hook,
+    todo_db), would otherwise create/read/write the PRODUCTION store, and sqlite3.connect
+    create-if-missing means it silently materializes ~/.swarm-ai/data.db. Setting the
+    SWARM_DATA_DIR escape hatch immunizes ALL callers at the one chokepoint (upstream
+    mechanism class behind the 8-12 data.db loss; STEERING #20 / #1).
+
+    A test that DELIBERATELY needs the raw default (e.g. test_config_data_dir asserting
+    the unset→home behavior) opts out with `monkeypatch.delenv("SWARM_DATA_DIR")` in its
+    own body — that override is process-global and takes precedence over this setenv."""
+    d = tmp_path_factory.mktemp("app_data")
+    monkeypatch.setenv("SWARM_DATA_DIR", str(d))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
     """Redirect judge telemetry to a temp dir for EVERY test (P7: structural guard,
     not per-test discipline). self_adversarial_judge logs each verdict to
