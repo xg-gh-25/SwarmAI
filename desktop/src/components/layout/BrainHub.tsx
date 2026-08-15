@@ -1153,6 +1153,23 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
 
 // ── Distribute view (Run 3) ──────────────────────────────────────────────────
 
+// run_8d2ec26c: the target→repo mapping is a READ-ONLY derivation, NOT a stored
+// field. aim.json's distribution block carries ONLY {targets, visibility} — the
+// "target host" concept was deliberately never added to the backend (IMPROVEMENT
+// run_3a657ca6). So the panel DERIVES the where-it-lands label in-UI from the two
+// KNOWN_TARGETS (ddd_distribution_policy.py) + visibility; it never fabricates a repo URL.
+// SINGLE SOURCE OF TRUTH for the target→repo mapping. BOTH the per-target row label
+// AND the guideline legend render from this — never restate the mapping in prose (a
+// second copy would drift from this one; Gate-2 meta-review caught exactly that).
+const TARGET_REPO_MAP: Record<string, { label: string; install: string }> = {
+  'aim-capabilities': { label: 'internal AIM package', install: 'CR/PR → aim plugins install' },
+  'open-plugin': { label: 'public code host', install: 'git push → install.sh' },
+};
+function repoForTarget(target: string): { label: string; install: string } {
+  // Unknown target (vocab drift) → passthrough: show the raw name, no fabricated repo.
+  return TARGET_REPO_MAP[target] ?? { label: target, install: '' };
+}
+
 function DistributeView(
   { name, onRequestClose, onDispatch }:
   { name: string; onRequestClose?: () => void; onDispatch?: (msg: string) => boolean },
@@ -1184,6 +1201,9 @@ function DistributeView(
   // when onDispatch is absent (older webview / non-overlay mount).
   const distributeCmd = `distribute this ddd: ${name}`;
   const [copied, setCopied] = useState(false);
+  // AC3 (run_8d2ec26c): collapsed-by-default guideline (reuses the graphOpen disclosure
+  // pattern — own local state, not a shared name). Progressive disclosure: no noise until asked.
+  const [guidelineOpen, setGuidelineOpen] = useState(false);
   const onDistribute = useCallback(() => {
     if (onDispatch) {
       // Inject + auto-send into the active chat tab, then close the overlay so the
@@ -1227,6 +1247,10 @@ function DistributeView(
               <div key={t} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
                 <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">deployed_code</span>
                 <span className="font-mono text-[11px] text-[var(--color-text)]">{t}</span>
+                {/* AC1 (run_8d2ec26c): where it lands — derived read-only from target+visibility. */}
+                <span className="text-[10px] text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
+                  → {repoForTarget(t).label}
+                </span>
                 {/* F2 TRISTATE — three EXPLICIT branches. `null` (freshness unknown,
                     uncommitted output) must NOT fall into "up to date" (the old
                     `!source_changed_since` did exactly that, re-burying staleness). */}
@@ -1247,6 +1271,19 @@ function DistributeView(
               last output: {data.output_path} {data.last_distribute_time ? `· ${data.last_distribute_time.slice(0, 10)}` : ''}
             </div>
           )}
+          {/* AC2 (run_8d2ec26c): [Edit aim.json] on the DISTRIBUTABLE branch too — reach
+              is declared in aim.json (the SSOT); editing it is a deliberate owner action,
+              so the panel offers a one-click deep-link to it (never an in-panel form).
+              Distinct testid from the not-distributable [Open aim.json] (declare vs edit). */}
+          <button
+            onClick={openAimJson}
+            data-testid="distribute-edit-aim"
+            className="mb-4 flex items-center gap-1.5 text-[10px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-1 hover:bg-[#12233a]"
+            title="Open aim.json in the Canvas to edit the declared reach (targets / visibility)"
+          >
+            <span className="material-symbols-outlined text-[13px]">edit</span>
+            Edit aim.json
+          </button>
         </>
       ) : (
         <div className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-3 mb-4" data-testid="distribute-not-distributable">
@@ -1326,6 +1363,48 @@ function DistributeView(
             <span className="text-[10px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
           )}
         </div>
+      </div>
+
+      {/* AC3 (run_8d2ec26c): "How distribution works" — collapsed disclosure (reuses the
+          BrainBrowse graphOpen pattern). Explains the 3-step HITL flow, git code-package
+          management, emit≠publish, and the target→repo mapping legend. Collapsed by default
+          so it never competes with the Step 2/3 primary flow (progressive disclosure). */}
+      <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden">
+        <button
+          data-testid="distribute-guideline-toggle"
+          aria-expanded={guidelineOpen}
+          onClick={() => setGuidelineOpen((v) => !v)}
+          className="w-full flex items-center gap-2 px-3 py-2 text-[12px] hover:bg-[var(--color-hover)]"
+        >
+          <span className="material-symbols-outlined text-[15px] text-[#58a6ff]">help</span>
+          <span className="font-medium">How distribution works</span>
+          <span className="material-symbols-outlined text-[16px] text-[var(--color-text-faint)] ml-auto">
+            {guidelineOpen ? 'expand_less' : 'expand_more'}
+          </span>
+        </button>
+        {guidelineOpen && (
+          <div className="border-t border-[var(--color-border)] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-muted)] flex flex-col gap-2" data-testid="distribute-guideline-body">
+            <div>
+              <span className="font-semibold text-[var(--color-text)]">The 3-step flow (human-in-the-loop):</span>
+              <div className="mt-0.5">Step 1 · declare a reach in <span className="font-mono">aim.json</span> (targets + visibility — the SSOT, the ceiling).
+              Step 2 · confirm which declared target(s) to emit + check freshness.
+              Step 3 · run — the command lands in chat, where <span className="font-mono">s_ddd-distribute</span> confirms the subset, runs a content-safety scan, and renders the code package.</div>
+            </div>
+            <div>
+              <span className="font-semibold text-[var(--color-text)]">🎯 Target → where it lands (git code-package management):</span>
+              {/* Rendered FROM TARGET_REPO_MAP — the SAME source the per-row label uses,
+                  so the legend can never drift from the rows (Gate-2 cross-fix fix). */}
+              <div className="mt-0.5 flex flex-col gap-0.5">
+                {Object.entries(TARGET_REPO_MAP).map(([t, { label, install }]) => (
+                  <div key={t}><span className="font-mono">{t}</span> → <b>{label}</b> (<span className="font-mono">{install}</span>).</div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <span className="font-semibold text-[var(--color-text)]">🔒 emit ≠ publish:</span> an <span className="font-mono">internal</span> DDD can EMIT a package for a private install, but public publish is refused until <span className="font-mono">visibility</span> is explicitly <span className="font-mono">external</span> — a deliberate owner edit in <span className="font-mono">aim.json</span>, never a UI toggle.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -816,6 +816,23 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     expect(rows[0].textContent).toContain('open-plugin');
   });
 
+  // ── run_8d2ec26c AC1: per-target repo-TYPE mapping (read-only, derived in-UI) ──
+  it('AC1: each target row shows its repo-TYPE label derived from (target, visibility)', async () => {
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: ['aim-capabilities', 'open-plugin'], visibility: 'internal',
+      distributable: true, declared: true, warnings: [],
+      has_output: false, output_path: null, last_distribute_time: null,
+      source_changed_since: false,
+    });
+    await openDistribute();
+    const rows = screen.getAllByTestId('distribute-target-row');
+    expect(rows.length).toBe(2);
+    const all = rows.map((r) => r.textContent ?? '').join(' | ');
+    // aim-capabilities → internal AIM package; open-plugin → public code host
+    expect(all).toContain('internal AIM package');
+    expect(all).toContain('public code host');
+  });
+
   it('F2: null source_changed_since renders "freshness unknown", NOT "up to date"', async () => {
     // The tristate null (uncommitted output) must never fall into the "up to date"
     // branch — that was the exact re-buried-bug Gate-1 flagged. Spec-review gap-fix.
@@ -917,9 +934,74 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     }
   });
 
-  it('AC5-simplicity: the DISTRIBUTABLE branch has NO [Open aim.json] button (Gate-1: block already valid, next action is run)', async () => {
+  // ── run_8d2ec26c AC2: [Edit aim.json] on the DISTRIBUTABLE branch ──────────────
+  // R27 migration: the old test below asserted the distributable branch had NO edit
+  // affordance. Plan A adds one (distinct testid distribute-edit-aim) so an owner can
+  // tweak declared reach without leaving the panel. distribute-open-aim STAYS exclusive
+  // to the not-distributable branch (its label/purpose differs: "declare" vs "edit").
+  it('AC2: the DISTRIBUTABLE branch has [Edit aim.json] (distribute-edit-aim), NOT distribute-open-aim', async () => {
     await openDistribute();  // distributable fixture
-    expect(screen.queryByTestId('distribute-open-aim')).toBeNull();
+    expect(screen.getByTestId('distribute-edit-aim')).toBeTruthy();
+    expect(screen.queryByTestId('distribute-open-aim')).toBeNull();  // that id stays not-distributable-only
+  });
+
+  it('AC2: [Edit aim.json] on distributable closes overlay THEN opens Projects/<name>/aim.json', async () => {
+    const seq: string[] = [];
+    const onRequestClose = vi.fn(() => seq.push('close'));
+    const openEvents: CustomEvent[] = [];
+    const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
+    document.addEventListener('swarm:open-file', onOpen);
+    try {
+      render(<BrainHub onRequestClose={onRequestClose} />);  // default fixture = distributable
+      await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
+      await waitFor(() => expect(screen.getByTestId('distribute-edit-aim')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('distribute-edit-aim'));
+      await waitFor(() => expect(openEvents.length).toBe(1));
+      expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/aim.json');
+      expect(seq).toEqual(['close', 'open']);
+    } finally {
+      document.removeEventListener('swarm:open-file', onOpen);
+    }
+  });
+
+  // ── run_8d2ec26c AC3: collapsed "How distribution works" guideline ────────────
+  it('AC3: guideline is collapsed by default and expands on click (flow + emit≠publish + mapping)', async () => {
+    await openDistribute();
+    const toggle = screen.getByTestId('distribute-guideline-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('distribute-guideline-body')).toBeNull();  // collapsed → no body
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getByTestId('distribute-guideline-body')).toBeTruthy());
+    const body = screen.getByTestId('distribute-guideline-body').textContent ?? '';
+    expect(body).toContain('emit');       // emit ≠ publish rule
+    expect(body).toContain('internal AIM package');  // target→repo mapping legend
+    expect(body.toLowerCase()).toContain('step');     // the 3-step flow
+  });
+
+  // Gate-2 meta-review MED: the guideline legend must be RENDERED FROM the same
+  // TARGET_REPO_MAP the per-row label uses — no drift between the two. Assert the
+  // legend row for a known target carries the SAME label the row does (single source).
+  it('AC3: guideline mapping legend is derived from the same source as the row label (no drift)', async () => {
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: ['aim-capabilities'], visibility: 'internal',
+      distributable: true, declared: true, warnings: [],
+      has_output: false, output_path: null, last_distribute_time: null,
+      source_changed_since: false,
+    });
+    await openDistribute();
+    const rowLabel = screen.getByTestId('distribute-target-row').textContent ?? '';
+    fireEvent.click(screen.getByTestId('distribute-guideline-toggle'));
+    await waitFor(() => expect(screen.getByTestId('distribute-guideline-body')).toBeTruthy());
+    const legend = screen.getByTestId('distribute-guideline-body').textContent ?? '';
+    // both the row and the legend say "internal AIM package" for aim-capabilities —
+    // if TARGET_REPO_MAP changes, BOTH move together (they read the same map).
+    expect(rowLabel).toContain('internal AIM package');
+    expect(legend).toContain('internal AIM package');
+    expect(legend).toContain('aim-capabilities');
+    expect(legend).toContain('open-plugin');  // legend lists ALL known targets, not just declared
   });
 });
 
