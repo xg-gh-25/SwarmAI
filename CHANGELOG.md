@@ -1,29 +1,60 @@
 # Changelog
 ## [Unreleased]
 
-### 🤖 Autonomous Pipeline — coding-task execution (2026-06-24 → 06-28)
-Focus of this arc: make the pipeline **waste less work and stall less**, not lower per-turn latency. Changes cluster at the front of the pipeline (think-before-build), profile selection, escalation delivery, and run management.
+_Nothing pending._
 
-#### Added
-- **Universal Understanding Gate at EVALUATE→THINK** — fail-closed profile gate forces the run to confirm it understands the task before coding (2479fed2, 58923b50).
-- **Self-Socratic ambiguity scan in EVALUATE + THINK** — clarification layer surfaces ambiguity before build instead of discovering it half-way (5389c2ca, 00636aa7).
-- **Greenfield-only Working-Backwards lens in EVALUATE** — applies the WB lens only to greenfield goals (78d3ce91, 8d54802e).
-- **REPRO gate + diagnostic-challenge for bug tasks** — diagnose/reproduce before building a bug-class fix (58bb0287, a4ad5c4d).
-- **In-band L2 escalation via AskUserQuestion** — pipeline escalates to the human in-band instead of emitting directives that never execute; closes the auto-resume "DELIVERY gap" (run_6c482b10 / f0da3a72) (8952cbe7, a00ae461, c48de62b).
-- **`schema` subcommand + `--quiet` document publish** — removes GUI03 publishing friction (87540fb4).
+## [2.0.0] - 2026-08-16
 
-#### Fixed
-- **Profile-selection ordering** — `goal` profile was over-selected; reordered selection + auto-record document publish (53dd788c).
-- **M1 solution-language false positives** — `i'll`/`ill`, `we-can`, imperative forms, and the verb `lets` no longer trip the intent guard (6434a597, 8a966789).
-- **Goal-cycle multi-goal runs** — C3 contraction-bypass + M1 strips quoted spans (citations ≠ plan intent); C4 routing auto-resolves `consumed_artifacts` from completed producers; Gate 0 surfaced in COMPLETE summary (8c5e0449, 535c97cb, 44f87428, 650dbfb4).
-- **`--quiet` failure footgun** — silent publish failure now caught, with contract test (26faf691).
-- **Run management** — deliberately-paused runs no longer auto-archived; `orphan` vs `superseded` abandon_reason split; REPORT.md reflect-lessons stale-freeze fixed (b3907935, 25956c9e, b38ce417).
+The agent stopped being something you talk *to* and became something that inhabits
+its own system — it senses and drives its UI, inspects its own cognition, and evolves
+its judgment in code you can `git diff`. **690 commits since v1.28.1 (119 features,
+221 fixes), including a 317-commit systemic UI overhaul.**
 
-#### Changed / Docs
-- **Skill docs aligned to reality** — 3-gate / 10-stage / 2-mode model, version, and INIT briefing (f6b0a039, 650dbfb4).
-- **REFLECT anti-patterns captured** — RP42 sample-encoded discriminator, RP43 destructive op keyed by non-unique field, RP44 identity-gate, RP45 injected-deps-leave-wiring-untested (b236d69b, 3994523f, bbd069f0, aed4904f).
+> Changelog note: `[Unreleased]` and the published history had drifted (last recorded
+> entry was 1.16.2 while GitHub had shipped through 1.28.1). v2.0.0 is a clean reset —
+> the total of everything worth naming since. Intermediate 1.17–1.28 tags are on GitHub
+> but not retro-documented here.
 
-> Note: the perceived **speed** improvement comes mostly from non-pipeline changes in the same window — `perf(cultivation)` git-call batching + context_health budget gate (7452e410), watchdog false-kill fixes, and the single-branch consolidation that finally ships all accumulated fixes in one build.
+### 🖐️ Proprioception (new) — the agent senses and drives its own body
+- **ACT channel** — `ui_action` tool + fail-closed allowlist lets the agent drive its own UI (open Brain Hub, push a report to the Canvas, flag a decision to the attention channel).
+- **SENSE channel** — the agent reads its own live UI state (active overlay/tab, Canvas contents); delivered to live sessions via the query channel, with a send-time snapshot that closes the ACT→SENSE race.
+- **TSCC** (Thread-Scoped Cognitive Context) — inspect the real cognition behind any turn: files loaded, token budget, recall hits + scores, security scan, full prompt.
+- **OverlayHost** — the legacy overlay trio + 4 workbench overlays unified onto one fullscreen system.
+
+### 🎨 Systemic UI overhaul (317 frontend commits)
+Nearly every workbench overlay was rebuilt — unified onto OverlayHost, de-jargoned, one focus per screen:
+- **Brain Hub** — master-detail navigation, gallery card-wall home, real full knowledge tree, Distribute panel (package a brain to Kiro / Claude Code / plugins), Review tab with decision-framed diffs.
+- **C&M (Context & Memory)** — Memory + Evolution archive features (full-stack), realigned to the full-injection memory architecture.
+- **Library** — live expandable `Knowledge/` file tree, Health section + one-click cleanup.
+- **ToDo** — complete overhaul: single sortable flat table, attachments, pure user-planning surface (removed 7 system auto-writers).
+- **Community** — Inbound / Watching / Outbound tabs, editable Sources, GitHub-people watching.
+- **Pipeline overlay** — conclusion-first detail drawer, explicit time window, status pills, report→Canvas, Needs-You region.
+- **Canvas** — backend auto-surface on pipeline completion; large-file DOM-blowup / crash fixes; paint isolation kills keystroke-repaint lag.
+- **Capabilities / Pollinate / Welcome / Explorer / left-nav** — all redesigned.
+
+### 🧬 Cognition & knowledge integrity
+- **Unified ingestion gate** — one store-agnostic admission gate for MEMORY / EVOLUTION / DDD / writeback; a trust-stamp replaces the doc-whitelist; per-channel calibration.
+- **Distill-at-chokepoint** — the writer is no longer the finalizer (root-fix).
+- **Darwinian decay** tightened (150→90d); EVOLUTION corrections landfill fixed via type-aware family-folding; golden-set TTL reclaim.
+- **SOUL P9** ("Justify the Thing Before You Improve") + a self-architecture inference trap.
+- **Memory** — size-driven archive with hysteresis (30K→25K); retired selective injection + the in-prompt index (MEMORY is now always full-injected).
+- **Pipeline** (folding the June arc) — Universal Understanding Gate at EVALUATE→THINK, self-Socratic ambiguity scan, REPRO gate for bug tasks, in-band L2 escalation via AskUserQuestion, goal-cycle class-completeness gate.
+
+### 🔒 Data safety (COE — the 2026-08-12 data.db wipe)
+- **Every destructive / overwrite path (code + Bash) now routes through an irreplaceable-data guard** — isolate + back up + in-band approval before any destroy; a user store is never unlinked or reseeded on inference.
+
+### ⚙️ Reliability & performance
+- **Cold-spawn latency root-fix** — dedicated `spawn` executor pool, hang-guards, removed the MCP-connection serialization bottleneck.
+- **Dedicated executor pools** — high-risk blocking work moved off the default asyncio pool (+ a `default_pool_guard` ratchet so nothing regresses).
+- **Recall** — startup pre-warm, shared parse across the DDD legs, indexed retention prune.
+- **First-paint** — reconcile fetches the newest-50 tail (not full history); evolution-marker regex off the per-token hot path; Welcome no longer scans all runs.
+
+### 🛡️ Structural gates (self-evolution in code)
+- **Adversarial-commit gate** (R1 backstop, diff-bound) + **commit-trailer gate** — prevent the violation, don't just detect it.
+- Async-blocking class frozen with a ratchet — nothing in `core/` is left unscanned.
+
+### 📖 Docs
+- README rewritten around the **Four Ideas** (added Proprioception); new 60-second demo (GIF + MP4).
 
 ## [1.16.2] - 2026-05-20
 
