@@ -52,6 +52,9 @@ def patched_sources(monkeypatch):
     # R3 6th source: default-empty in the aggregation fixture so the existing
     # count assertions (6 items) stay valid; exercised in isolation below.
     monkeypatch.setattr(aa, "_collect_community_digests", mk("digests", []))
+    # db_recovery: default-empty in the aggregation fixture so the existing count
+    # assertions (6 items) stay valid; its own behavior is covered in isolation.
+    monkeypatch.setattr(aa, "_collect_db_recovery", mk("db_recovery", []))
     return state
 
 
@@ -144,6 +147,61 @@ def test_paused_run_carries_real_run_id(monkeypatch):
     assert it.tier == TIER_BLOCKING
     assert it.dispatch["context"]["run_id"] == "run_realid123"
     assert "run_realid123" in it.dispatch["message"]
+
+
+def test_db_recovery_collector_surfaces_pending_marker(tmp_path, monkeypatch):
+    """run_a456640f (option B): a boot-time DB-recovery marker must surface as a
+    BLOCKING attention item so the recover-vs-discard decision reaches the user
+    in-band at the next session (STEERING #20 'reach the human')."""
+    from core.data_safety import write_recovery_marker
+    isolated = tmp_path / "data.db.corrupt-x"
+    isolated.write_text("preserved data")  # pending: isolated file still present
+    write_recovery_marker(tmp_path, isolated_path=isolated,
+                          reason="Corrupt data.db isolated at boot; fresh store seeded")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    items = aa._collect_db_recovery()
+    assert len(items) == 1
+    it = items[0]
+    assert it.source == "db_recovery"
+    assert it.tier == TIER_BLOCKING
+    assert it.brain is None  # OS-level, not a single brain
+    assert "recover" in it.dispatch["message"].lower()
+    assert it.dispatch["context"]["kind"] == "db_recovery"
+
+
+def test_db_recovery_collector_empty_when_no_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    assert aa._collect_db_recovery() == []
+
+
+def test_db_recovery_surfaces_while_isolated_file_exists(tmp_path, monkeypatch):
+    """Pending decision: isolated file present → surfaces + marker kept."""
+    from core.data_safety import write_recovery_marker, read_recovery_marker
+    isolated = tmp_path / "data.db.corrupt-x"
+    isolated.write_text("preserved data")
+    write_recovery_marker(tmp_path, isolated_path=isolated, reason="corrupt at boot")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    assert len(aa._collect_db_recovery()) == 1
+    assert read_recovery_marker(tmp_path) is not None, "marker kept while pending"
+
+
+def test_db_recovery_self_clears_when_decision_resolved(tmp_path, monkeypatch):
+    """Anti-nag (MEDIUM review finding): once the user resolves (isolated file gone
+    — recovered back into place OR discarded), the collector auto-clears the marker
+    and stops surfacing. Keyed on observable state, not agent discipline."""
+    from core.data_safety import write_recovery_marker, read_recovery_marker
+    isolated = tmp_path / "data.db.corrupt-x"  # NOTE: never created → "resolved"
+    write_recovery_marker(tmp_path, isolated_path=isolated, reason="corrupt at boot")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    assert aa._collect_db_recovery() == [], "resolved → no longer surfaces"
+    assert read_recovery_marker(tmp_path) is None, "marker auto-cleared on resolution"
+
+
+def test_db_recovery_collector_failsoft(monkeypatch):
+    """A broken app-data-dir resolver must not blank the channel — returns []."""
+    monkeypatch.setattr(aa, "get_app_data_dir",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert aa._collect_db_recovery() == []
 
 
 def test_item_to_dict_shape(patched_sources):

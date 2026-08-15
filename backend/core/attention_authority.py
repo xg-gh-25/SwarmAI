@@ -39,6 +39,8 @@ from typing import Any, Optional
 import logging
 import math
 
+from config import get_app_data_dir
+
 logger = logging.getLogger(__name__)
 
 # Circuit-breaker threshold — a job enters BLOCKING only when it has failed this
@@ -369,6 +371,75 @@ def _collect_jobs() -> list[AttentionItem]:
     return items
 
 
+def _collect_db_recovery() -> list[AttentionItem]:
+    """A boot-time DB-recovery marker (run_a456640f, option B) → a BLOCKING item.
+
+    When a suspected-corrupt ``data.db`` was isolated (preserved) + a fresh store
+    re-seeded at boot, ``_init_db_bounded`` drops a marker in the app data dir.
+    Its presence means the daemon is running on a FRESH store while the user's
+    prior data sits preserved in a ``.corrupt-<ts>`` file, awaiting a
+    recover-vs-discard decision. Surfacing it here is what makes option B
+    NON-SILENT — the decision reaches the user IN their chat at the next session
+    open (STEERING #20 'reach the human'), not just a passive log line.
+
+    OS-level (brain=None, like governance). Fail-soft: any error → [].
+    """
+    items: list[AttentionItem] = []
+    try:
+        from pathlib import Path as _Path
+        from core.data_safety import read_recovery_marker, clear_recovery_marker
+        app_dir = get_app_data_dir()
+        marker = read_recovery_marker(app_dir)
+        if not marker:
+            return items
+        # ONE item per STILL-PENDING isolate (adversarial MED: a 2nd corruption
+        # accrues into the marker's `pending` list, so multiple isolated stores are
+        # each surfaced, never orphaned). SELF-LIMITING (not a nag loop): an entry
+        # surfaces WHILE its decision is pending and drops WHEN resolved — RECOVER
+        # moves the isolated file back to data.db, DISCARD deletes it, so a recorded
+        # isolated path that no longer exists == the user decided. When EVERY entry
+        # is resolved, clear the whole marker. Keyed on observable state, not agent
+        # discipline (which MEMORY warns does not hold).
+        pending = marker.get("pending") or [marker]  # legacy flat marker → single entry
+        any_live = False
+        for entry in pending:
+            isolated = entry.get("isolated_path", "")
+            reason = entry.get("reason", "A corrupt database was isolated at boot.")
+            if not isolated or isolated == "<already-absent>" or not _Path(isolated).exists():
+                continue  # resolved (or nothing to recover) → don't surface
+            any_live = True
+            items.append(AttentionItem(
+                id=f"db_recovery:{isolated}",
+                source="db_recovery",
+                tier=TIER_BLOCKING,
+                brain=None,
+                title="Database recovery pending — recover or discard your prior data?",
+                detail=reason,
+                dispatch={
+                    "message": (
+                        "A suspected-corrupt data.db was isolated at boot to PRESERVE it "
+                        "(the app may be running on a fresh store). Your prior data is "
+                        f"preserved (not deleted) at: {isolated}\n\n{reason}\n\n"
+                        "Decide: RECOVER or DISCARD.\n"
+                        "⚠️ RECOVER SAFELY — do NOT `mv` the isolated file over data.db while "
+                        "the daemon is running (it holds an open connection pool on data.db; "
+                        "an in-place swap under the open pool causes torn reads / re-corruption). "
+                        "Instead: STOP the daemon first, then replace data.db (and remove any "
+                        "stale -wal/-shm), then restart — or copy the isolated db to a staging "
+                        "path and restart the daemon to adopt it.\n"
+                        "DISCARD = delete the isolated file. Do NOT delete it until you decide."
+                    ),
+                    "context": {"kind": "db_recovery", "isolated_path": isolated},
+                },
+            ))
+        if not any_live:
+            # All pending isolates resolved → stop surfacing, clear the marker.
+            clear_recovery_marker(app_dir)
+    except Exception as exc:
+        logger.warning("attention: db_recovery source failed: %s", exc)
+    return items
+
+
 def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
     """A fresh, SUCCESSFUL community daily-digest / weekly-report → a REVIEW item
     whose dispatch.message tells the agent to LEARN + s_persist from it (R3 闭环).
@@ -483,6 +554,7 @@ def collect(
     items += _collect_paused_runs(pipeline_runs)
     items += _collect_jobs()
     items += _collect_community_digests(workspace_root)
+    items += _collect_db_recovery()  # OS-level (brain=None), like governance
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

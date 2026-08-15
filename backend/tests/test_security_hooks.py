@@ -129,6 +129,85 @@ class TestDangerousRmPredicate:
         assert _is_dangerous_rm("rm -rf $TMPDIR/x") is True   # unknown until expanded
         assert _is_dangerous_rm("rm -rf ~/anything") is True
 
+
+class TestIrreplaceableStoreTargets:
+    """run_a456640f (order 4): a raw rm/mv against an irreplaceable store —
+    a DDD project tree, Knowledge/Library, or a .context cognition file — is
+    dangerous even without -rf (a plain `rm .context/MEMORY.md` destroys memory).
+    Routes through the existing dangerous_command_gate approval flow."""
+
+    def test_rm_or_mv_against_stores_is_dangerous(self):
+        from core.security_hooks import _targets_irreplaceable_store
+        for cmd in [
+            "rm .context/MEMORY.md",
+            "rm -f .context/EVOLUTION.md",
+            "rm -rf Projects/SwarmAI",
+            "rm -rf ~/.swarm-ai/SwarmWS/Projects/CMHK",
+            "mv .context/USER.md /tmp/x",
+            "rm -rf Knowledge/Library",
+            "rm Knowledge/Library/aws-gcr-org-chart.md",
+        ]:
+            assert _targets_irreplaceable_store(cmd) is True, f"expected dangerous: {cmd}"
+
+    def test_ordinary_commands_and_safe_targets_not_flagged(self):
+        from core.security_hooks import _targets_irreplaceable_store
+        for cmd in [
+            "rm /tmp/scratch.txt",
+            "rm -rf /tmp/build",
+            "ls Projects/SwarmAI",
+            "cat .context/MEMORY.md",          # read, not destroy
+            "grep -r foo Projects/",           # read
+            "rm build/artifact.o",
+            "git status",
+        ]:
+            assert _targets_irreplaceable_store(cmd) is False, f"expected safe: {cmd}"
+
+    def test_replaceable_cache_outside_governed_dir_not_flagged(self):
+        """A rebuildable cache OUTSIDE a governed store dir is not gated (no over-ask)."""
+        from core.security_hooks import _targets_irreplaceable_store
+        assert _targets_irreplaceable_store("rm /tmp/L1_SYSTEM_PROMPTS.md") is False
+        assert _targets_irreplaceable_store("rm build/knowledge_fts.db") is False
+
+    def test_governed_dir_file_gated_regardless_of_basename(self):
+        """Adversarial HIGH (run_a456640f): a file INSIDE .context / Projects is gated
+        even if its basename looks rebuildable — closing the classify_store fail-OPEN.
+        Gating a rebuildable cache that lives in a governed dir is a deliberate, safe
+        over-ask (approval prompt) vs the destroy-evasion hole it prevents."""
+        from core.security_hooks import _targets_irreplaceable_store
+        assert _targets_irreplaceable_store("rm .context/L1_SYSTEM_PROMPTS.md") is True
+        assert _targets_irreplaceable_store("rm .context/knowledge_fts_notes.md") is True
+
+    def test_in_place_obliterators_are_dangerous(self):
+        """Verb-scope expansion (security review): truncate/dd/shred/tee/cp/find can
+        destroy a store without being rm/mv — they must also be gated."""
+        from core.security_hooks import _targets_irreplaceable_store
+        for cmd in [
+            "truncate -s0 .context/MEMORY.md",
+            "dd if=/dev/null of=.context/EVOLUTION.md",
+            "dd of=Projects/SwarmAI/data.db",
+            "shred .context/USER.md",
+            "tee .context/MEMORY.md",
+            "cp /dev/null .context/MEMORY.md",            # zero-out via cp (adv review MED)
+            "find Projects/CMHK -name '*.md' -delete",    # tree delete via find (adv review MED)
+            "find .context -delete",
+        ]:
+            assert _targets_irreplaceable_store(cmd) is True, f"expected dangerous: {cmd}"
+
+    def test_find_without_delete_not_flagged(self):
+        """A read-only `find` over a store (no -delete/-exec) is not destruction."""
+        from core.security_hooks import _targets_irreplaceable_store
+        assert _targets_irreplaceable_store("find Projects/CMHK -name '*.md'") is False
+
+    def test_boundary_matching_no_false_positives(self):
+        """Path-segment matching must not false-gate look-alike names."""
+        from core.security_hooks import _targets_irreplaceable_store
+        for cmd in [
+            "rm /var/log/metadata.dbx",     # 'data.db' not a segment
+            "rm -rf my-projects/notes",     # 'projects' not a segment
+            "truncate -s0 /tmp/mydata.db",  # 'mydata.db' != 'data.db'
+        ]:
+            assert _targets_irreplaceable_store(cmd) is False, f"expected safe: {cmd}"
+
     def test_non_rm_commands_not_classified_dangerous_by_predicate(self):
         """The predicate only judges rm commands; non-rm is not its concern."""
         from core.security_hooks import _is_dangerous_rm

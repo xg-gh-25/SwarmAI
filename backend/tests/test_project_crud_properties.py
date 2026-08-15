@@ -264,6 +264,45 @@ class TestProjectCRUDRoundTrip:
             await manager.get_project(project_id, workspace_path=ws)
 
 
+class TestDeleteProjectPreserves:
+    """run_a456640f (STEERING #20 + SOUL safety 'trash > rm'): a user-initiated
+    project delete must PRESERVE the DDD (move to a recoverable .trash/), NEVER
+    hard ``rmtree`` an irreplaceable knowledge tree. It still returns True and
+    the project disappears from listings — but the bytes survive, recoverable."""
+
+    @pytest.mark.asyncio
+    async def test_delete_moves_to_trash_not_rmtree(self, tmp_path: Path):
+        ws = tmp_path / "ws"
+        (ws / "Projects").mkdir(parents=True)
+        manager = SwarmWorkspaceManager()
+        created = await manager.create_project(project_name="Precious", workspace_path=str(ws))
+        pid = created["id"]
+        pdir = ws / "Projects" / "Precious"
+        # drop a unique sentinel so we can prove the bytes survived
+        (pdir / "PRODUCT.md").write_text("DO_NOT_LOSE_THIS_KNOWLEDGE")
+
+        deleted = await manager.delete_project(pid, workspace_path=str(ws))
+        assert deleted is True
+
+        # GONE from the live tree + listings
+        assert not pdir.exists(), "project dir removed from the live Projects/ tree"
+        with pytest.raises(ValueError):
+            await manager.get_project(pid, workspace_path=str(ws))
+
+        # PRESERVED in .trash — the knowledge is recoverable, not destroyed
+        trash_root = ws / "Projects" / ".trash"
+        survivors = list(trash_root.glob("Precious*/PRODUCT.md")) if trash_root.exists() else []
+        assert survivors, "deleted DDD must be preserved under Projects/.trash/, not rmtree'd"
+        assert survivors[0].read_text() == "DO_NOT_LOSE_THIS_KNOWLEDGE", "bytes preserved intact"
+
+    @pytest.mark.asyncio
+    async def test_default_project_still_cannot_be_deleted(self, tmp_path: Path):
+        """The preserve-refactor must not weaken the existing default-project guard."""
+        manager = SwarmWorkspaceManager()
+        with pytest.raises(ValueError):
+            await manager.delete_project("swarmai-default", workspace_path=str(tmp_path / "ws"))
+
+
 # ---------------------------------------------------------------------------
 # Six-section canonical DDD structure (DDD-agent-brain spec §3.6) — physical
 # scaffold. Fixed project name (NOT Hypothesis) to keep the path-assertion

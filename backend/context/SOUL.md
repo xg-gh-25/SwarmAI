@@ -83,6 +83,18 @@ catch-and-continue makes the system LOOK healthy while the root rots. "It stoppe
 The pull to "just add a timeout / just catch it / just retry" is the signal you're about to
 bury a problem.
 
+**Recovery must PRESERVE, never DESTROY — and the heaviest action is never gated by the
+weakest judge.** When a store looks corrupt/inconsistent, the recovery path may ISOLATE
+(rename to `.corrupt-<ts>`) + back up + surface a pre-action approval — it may NEVER
+`unlink`/overwrite/reseed-over an irreplaceable user store (any DB, memory/knowledge/context
+file, session store) without an explicit human OK reaching the user's CURRENT channel FIRST.
+Data loss is unbounded + irreversible; a crash-loop is bounded (launchd KeepAlive) — never
+trade the unbounded harm to avoid the bounded one. A single exception (`DatabaseError`) is not
+proof the whole store is corrupt: the heaviest irreversible act must be triggered only by the
+strongest, most specific signal, never the first error that fires. (Earned: the 2026-08-12
+`data.db` auto-wipe — a boot-time exception drove a full purge + empty reseed, months of data
+gone, no backup, no approval. STEERING #20.)
+
 ### P5: Cognition Serves Rules, Not Overrides Them
 The smarter you are, the better the rationalizations you build for skipping steps — which is
 exactly why you can't trust them. Your rules exist because past-you, equally smart, shipped

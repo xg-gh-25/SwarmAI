@@ -321,3 +321,92 @@ def test_reseed_succeeds_but_fresh_db_also_bad_propagates(
     assert reseed_calls["n"] == 1, (
         f"retry must be bounded to a single re-seed, got {reseed_calls['n']}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# run_a456640f (option B): boot-path corruption recovery must PRESERVE (isolate,
+# not unlink), reseed fresh to keep the daemon reachable, and drop a recovery
+# marker so the recover-vs-discard decision reaches the user at the next session.
+# --------------------------------------------------------------------------- #
+
+
+def test_boot_corruption_isolates_not_deletes_and_marks(
+    temp_app_data_dir, seed_db_path, monkeypatch
+):
+    """A malformed data.db at boot → the ORIGINAL is preserved (renamed to
+    .corrupt-<ts>, never unlinked) AND a recovery marker is written. This is the
+    core anti-COE guarantee: no irreplaceable store is destroyed on the boot path.
+    """
+    from core.data_safety import read_recovery_marker
+
+    user_db = _point_singleton_at(monkeypatch, temp_app_data_dir, seed_db_path)
+    _write_garbage_db(user_db)
+    original_bytes = user_db.read_bytes()
+
+    from main import _init_db_bounded
+
+    # Corruption is a known signature ("file is not a database") → recover.
+    # Reseed from the real seed makes the retry migration succeed → no raise.
+    asyncio.run(_init_db_bounded(skip_schema=True))
+
+    # PRESERVED: an isolated copy of the original corrupt db exists on disk.
+    isolated = list(temp_app_data_dir.glob("data.db.corrupt-*"))
+    assert isolated, "corrupt db must be isolated (renamed), not deleted"
+    assert isolated[0].read_bytes() == original_bytes, "isolated copy is the original data"
+
+    # NON-SILENT: a recovery marker names the isolated file + reason.
+    marker = read_recovery_marker(temp_app_data_dir)
+    assert marker is not None, "a recovery marker must be written for in-band surfacing"
+    assert marker["isolated_path"] == str(isolated[0])
+
+    # REACHABLE: a fresh valid db is live so the daemon boots (B, not A).
+    conn = sqlite3.connect(str(user_db))
+    try:
+        assert conn.execute(
+            "SELECT initialization_complete FROM app_settings WHERE id='default'"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def test_boot_non_corruption_databaseerror_does_not_destroy(
+    temp_app_data_dir, seed_db_path, monkeypatch
+):
+    """AC5 verdict tightened: a DatabaseError that is NOT a corruption signature
+    (e.g. 'database or disk is full') must PROPAGATE as a bounded restart —
+    NEVER isolate/reseed a possibly-valid db. This is the exact false-positive
+    the COE (a bare DatabaseError → whole-store destroy) is about.
+    """
+    import database
+    from config import settings
+
+    user_db = _point_singleton_at(monkeypatch, temp_app_data_dir, seed_db_path)
+    # A real, VALID db must survive — build a minimal valid one.
+    conn = sqlite3.connect(str(user_db))
+    conn.execute("CREATE TABLE keep (v TEXT)")
+    conn.execute("INSERT INTO keep VALUES ('PRECIOUS')")
+    conn.commit()
+    conn.close()
+    valid_bytes = user_db.read_bytes()
+
+    # Force initialize_database to raise a NON-signature DatabaseError.
+    async def _raise_disk_full(skip_schema=False):
+        raise sqlite3.DatabaseError("database or disk is full")
+
+    monkeypatch.setattr("main.initialize_database", _raise_disk_full)
+
+    reseed_spy = {"n": 0}
+    monkeypatch.setattr(
+        "main._reseed_from_seed",
+        lambda p: (reseed_spy.__setitem__("n", reseed_spy["n"] + 1) or True),
+    )
+
+    from main import _init_db_bounded
+
+    with pytest.raises(sqlite3.DatabaseError):
+        asyncio.run(_init_db_bounded(skip_schema=True))
+
+    # The valid db is UNTOUCHED — not isolated, not reseeded.
+    assert user_db.exists() and user_db.read_bytes() == valid_bytes, "valid db preserved intact"
+    assert list(temp_app_data_dir.glob("data.db.corrupt-*")) == [], "must NOT isolate a non-corrupt db"
+    assert reseed_spy["n"] == 0, "must NOT reseed on a non-corruption error"

@@ -457,18 +457,42 @@ def _get_seed_database_path() -> Path | None:
     return get_resource_file("seed.db", dev_seed_path)
 
 
-def _purge_corrupt_db(db_path: Path, reason: str) -> None:
-    """Remove a corrupt data.db AND its -wal/-shm sidecars, so a fresh seed
-    copy is not re-corrupted by a leftover foreign WAL replay.
+def _purge_corrupt_db(db_path: Path, reason: str) -> "Path | None":
+    """ISOLATE a suspect data.db (rename to .corrupt-<ts>), NEVER delete it.
 
-    A malformed DB from a crash mid-write is EXACTLY when a hot -wal exists; a
-    leftover -wal beside the fresh seed copy would be replayed into it →
-    re-corruption (adversarial-caught HIGH, run_2d3417d9). So purge all three.
+    ⚠️ RENAMED SEMANTICS (run_a456640f, STEERING #20 + COE run_2d3417d9): this
+    used to ``unlink()`` the db + sidecars — an IRREVERSIBLE destroy of an
+    irreplaceable user store, triggered by nothing stronger than a boot-time
+    exception. That is exactly the act that wiped months of chat/channel/agent
+    data on 2026-08-12 (no backup, no approval). It now PRESERVES: it renames
+    the db AND its ``-wal``/``-shm`` sidecars together to ``<name>.corrupt-<ts>``
+    via ``isolate_store``, so a leftover foreign WAL is never replayed into a
+    fresh seed (the original re-corruption concern) AND the data survives,
+    recoverable.
+
+    Returns the isolated path (or ``None`` if the file was already gone). The
+    caller re-seeds a FRESH store beside it and drops a recovery marker so the
+    user is asked — at the next session — whether to recover from the isolated
+    copy (option B: reachable daemon + non-silent + never-destroy).
     """
-    logger.warning("%s at %s — removing (incl. -wal/-shm) and re-seeding", reason, db_path)
-    db_path.unlink(missing_ok=True)
-    for suffix in ("-wal", "-shm"):
-        Path(str(db_path) + suffix).unlink(missing_ok=True)
+    from core.data_safety import isolate_store
+    if not db_path.exists():
+        return None
+    # A 0-byte file holds NO data to preserve (an interrupted create). Isolating it
+    # would only litter ~/.swarm-ai with junk `.corrupt-*` files that no marker
+    # references and nothing reaps (adversarial LOW, run_a456640f). Deleting an empty
+    # file is not destruction of user data — so unlink the empties, preserve the rest.
+    try:
+        if db_path.stat().st_size == 0:
+            logger.warning("%s at %s — 0-byte (no data to preserve); removing + re-seeding", reason, db_path)
+            db_path.unlink(missing_ok=True)
+            for suffix in ("-wal", "-shm"):
+                Path(str(db_path) + suffix).unlink(missing_ok=True)
+            return None
+    except OSError:
+        pass  # stat failed — fall through to the preserve path (never risk data)
+    logger.warning("%s at %s — ISOLATING (rename, not delete) + re-seeding fresh", reason, db_path)
+    return isolate_store(db_path)
 
 
 def _reseed_from_seed(user_db_path: Path) -> bool:
@@ -550,19 +574,63 @@ async def _init_db_bounded(skip_schema: bool, timeout: float = 45.0) -> None:
         # (Subclass of DatabaseError → MUST be caught before the clause below.)
         raise
     except sqlite3.DatabaseError as e:
-        # Malformed / not-a-database / torn page → the migration query raised.
-        # This is the crash-loop trigger. Only the fast path can recover (a seed
-        # exists); full-init has no seed to fall back to, so re-raise there.
+        # A migration query raised a DatabaseError. Two guards, in order:
+        #
+        # (1) VERDICT (AC5, STEERING #20): only a GENUINE corruption signature
+        #     ("database disk image is malformed" / "file is not a database" /
+        #     encrypted / bad schema) justifies touching the store. A bare
+        #     DatabaseError is NOT proof of corruption — a full disk, a novel
+        #     sqlite message, etc. must NOT trigger the heavy path. The COE was
+        #     precisely "weakest judge (any DatabaseError) → heaviest act (destroy
+        #     the store)". is_corruption_error is fail-CLOSED for the destructive
+        #     action: unrecognized → NOT corruption → propagate (bounded restart).
+        from core.data_safety import is_corruption_error, write_recovery_marker
+        if not is_corruption_error(e):
+            logger.error(
+                "Database migration raised non-corruption %s: %s — NOT touching the "
+                "store; propagating as a bounded restart (never destroy a maybe-valid db)",
+                type(e).__name__, e,
+            )
+            raise
+        # (2) RECOVERY (option B): only the fast path can recover (a seed exists);
+        #     full-init has no seed, so re-raise there.
         if not skip_schema:
             raise
         user_db_path = get_app_data_dir() / "data.db"
         logger.warning(
-            "Database migration raised %s: %s — corrupt data.db; purging + re-seeding, retry once",
+            "Database migration raised %s: %s — CORRUPT data.db; isolating (preserve) "
+            "+ re-seeding fresh + marking for user recovery, retry once",
             type(e).__name__, e,
         )
-        _purge_corrupt_db(user_db_path, "Malformed database (migration raised, prevents crash-loop)")
+        # PRESERVE the corrupt store (rename, never delete).
+        isolated = _purge_corrupt_db(
+            user_db_path, "Malformed database (migration raised, prevents crash-loop)"
+        )
+        # NON-SILENT — write the recovery marker IMMEDIATELY after isolate, BEFORE
+        # the reseed (adversarial MED, run_a456640f): if there is NO seed to recover
+        # from, the reseed fails and we re-raise into a bounded restart — but the
+        # user's data has ALREADY been renamed away, so the marker MUST already be on
+        # disk or the isolated location is silently lost (data preserved but the user
+        # never told where). Writing it here guarantees the recover-vs-discard
+        # decision is recorded on EVERY path, seed-or-no-seed. Best-effort — a marker
+        # failure must never block boot; the corrupt store is preserved regardless.
+        try:
+            write_recovery_marker(
+                get_app_data_dir(),
+                isolated_path=(isolated or "<already-absent>"),
+                reason=f"Corrupt data.db isolated at boot ({type(e).__name__}: {e}). "
+                       f"Your prior data is preserved in the isolated file — decide "
+                       f"recover vs discard. (A fresh store may have been seeded so the "
+                       f"app could start; if boot is looping, no seed was available.)",
+            )
+        except Exception as _mk_exc:  # noqa: BLE001 — surfacing is best-effort, never blocks boot
+            logger.error("Failed to write DB recovery marker (non-blocking): %s", _mk_exc)
+        # Now re-seed a FRESH store beside the isolated copy so the daemon stays
+        # reachable (option B, not a hard-down).
         if not _reseed_from_seed(user_db_path):
-            # No seed to recover from — re-raise (bounded restart, not a silent hang).
+            # No seed to recover from — re-raise (bounded restart). The marker above
+            # already recorded the isolated location, so recovery is surfaceable even
+            # though this boot can't come up.
             raise
         # Reset the DB INSTANCE's init flag so the retry actually re-runs
         # migrations on the FRESH db. SQLiteDatabase.initialize() short-circuits

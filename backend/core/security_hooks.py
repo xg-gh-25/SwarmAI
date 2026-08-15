@@ -427,6 +427,88 @@ def _segment_is_irreversible(tokens: list[str]) -> bool:
     return False
 
 
+def _targets_irreplaceable_store(command: str) -> bool:
+    """Fail-closed predicate: does this command DESTROY/TRUNCATE an irreplaceable store?
+
+    run_a456640f (order 4, STEERING #20): the Bash face of the destruction guard.
+    ``_is_dangerous_rm`` only fires on the catastrophic ``rm -rf`` *root* shape;
+    it misses a plain ``rm .context/MEMORY.md`` or ``mv Projects/CMHK /tmp`` — each
+    destroys/relocates an irreplaceable cognition/knowledge store with no undo. This
+    flags a destructive verb whose target classifies as IRREPLACEABLE, so the SAME
+    dangerous_command_gate approval flow blocks it.
+
+    Destructive verbs covered (security-review run_a456640f, verb-scope expansion):
+    ``rm``/``mv`` (delete/relocate); the in-place OBLITERATORS ``truncate``, ``dd``,
+    ``shred``, ``tee``, ``cp`` (``cp /dev/null <store>`` zeroes a file); and
+    ``find <store> … -delete``/``-exec`` (tree delete while the verb is ``find``).
+    Reuses ``data_safety.classify_store`` as the SINGLE classification authority
+    (P8): a REPLACEABLE artifact (L1 cache, FTS index) is NOT gated.
+
+    ACCEPTED RESIDUALS (documented, not hidden — same posture as the sibling
+    predicates): a ``$VAR``-prefixed operand whose var holds the store segment,
+    a symlink INTO a store, and a store-destroy hidden in a subshell / pipeline /
+    ``sh -c`` (``tokens[0]`` is ``sh``) EVADE this predicate — they need a real
+    shell parser. This is a defense-in-depth layer atop ``_is_dangerous_rm`` +
+    ``dangerous_command_gate``; the PRIMARY incident vectors (boot DB corruption,
+    HTTP project-delete) are covered structurally by ``isolate_store`` / trash-move,
+    not by this text gate. Redirection truncation (``> store``) is also not seen
+    (no verb token). Unparseable → False (fallback regex path covers that class).
+    """
+    from core.data_safety import classify_store, StoreClass
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    # Delete/relocate/obliterate verbs + cp (cp /dev/null <store> zeroes a file).
+    _DESTRUCTIVE_VERBS = ("rm", "mv", "truncate", "dd", "shred", "tee", "cp")
+    if not tokens:
+        return False
+    verb = tokens[0]
+    # `find <store> ... -delete` / `-exec rm` deletes a store TREE while the verb
+    # is `find`. Gate it when a store operand co-occurs with a delete action.
+    if verb == "find":
+        has_delete = "-delete" in tokens or "-exec" in tokens or "-execdir" in tokens
+        if not has_delete:
+            return False
+        # fall through: judge find's path operands below (verb handled as store-scan)
+    elif verb not in _DESTRUCTIVE_VERBS:
+        return False
+    # Operands only (drop flags). For `mv src... dst`, the LAST operand is the
+    # destination — a store being OVERWRITTEN as a dst is also destruction, so we
+    # judge every operand.
+    operands = [t for t in tokens[1:] if not (t.startswith("-") and t != "-")]
+    for op in operands:
+        # `dd of=<path>` / `if=<path>` — the path rides in a key=value operand.
+        # Strip a leading `key=` so the store-path is seen (dd is the one verb
+        # here that names its target this way).
+        if "=" in op and op.split("=", 1)[0].isalpha():
+            op = op.split("=", 1)[1]
+        # Only a path that names a known irreplaceable store counts. classify_store
+        # is fail-closed (unknown → IRREPLACEABLE), but we must NOT gate every rm of
+        # an unknown scratch path — so restrict to operands that actually reference
+        # a governed store marker (.context / Projects/ / Knowledge/Library).
+        low = op.lower().replace("\\", "/")
+        # Path-boundary matches (not loose substrings) so `mydata.db`, `my-projects/`,
+        # `metadata.dbx` don't false-gate. Each marker must sit at a path segment
+        # boundary (string start or after a '/').
+        segs = low.split("/")
+        kn_lib_adjacent = any(
+            segs[i] == "knowledge" and i + 1 < len(segs) and segs[i + 1] == "library"
+            for i in range(len(segs))
+        )
+        names_a_store = (
+            ".context" in segs
+            or "projects" in segs
+            or kn_lib_adjacent
+            or low == "data.db" or low.endswith("/data.db")
+        )
+        if not names_a_store:
+            continue
+        if classify_store(op) in (StoreClass.IRREPLACEABLE, StoreClass.RECOVERABLE):
+            return True
+    return False
+
+
 def _is_tag_ref(ref: str) -> bool:
     """True iff *ref* is an explicit, well-formed tag ref (``refs/tags/<name>``).
 
@@ -805,6 +887,7 @@ def create_dangerous_command_gate(
             any(fnmatch.fnmatch(command, p) for p in patterns)
             or _is_dangerous_rm(command)
             or _is_irreversible_external_op(command)
+            or _targets_irreplaceable_store(command)  # rm/mv of DDD/Library/.context (run_a456640f)
         )
         # DoD1: local history-rewrite (rebase / reset --hard / commit --amend /
         # filter-*) is dangerous ONLY when a SIBLING live session could lose work

@@ -2921,7 +2921,19 @@ class SwarmWorkspaceManager:
                         f"The '{DEFAULT_PROJECT_NAME}' project is the default "
                         "project and cannot be deleted."
                     )
-                shutil.rmtree(project_dir)
+                # PRESERVE, don't destroy (run_a456640f, STEERING #20 + SOUL
+                # safety "trash > rm, back up before delete"): a DDD is an
+                # irreplaceable knowledge tree. A user-initiated delete MOVES it
+                # to a recoverable Projects/.trash/<name>-<ts>/ instead of an
+                # irreversible rmtree — it still vanishes from the live tree +
+                # listings (.trash has no .project.json scan root), but the bytes
+                # survive and can be restored. This preserve-not-destroy stance is
+                # the SAME invariant as data_safety.isolate_store (rename, never
+                # unlink); a trash-move IS that invariant for a directory tree.
+                trash_root = project_dir.parent / ".trash"
+                trash_root.mkdir(exist_ok=True)
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
+                shutil.move(str(project_dir), str(trash_root / f"{name}-{stamp}"))
                 return name
 
             deleted_name = await anyio.to_thread.run_sync(_find_and_delete)
