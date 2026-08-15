@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from core import executors
 from core.initialization_manager import initialization_manager
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
@@ -155,17 +156,16 @@ class ContextHealthHook:
 
         # Both _light_refresh and _deep_check are sync-heavy: git
         # subprocesses (5-10s timeouts each), Bedrock embedding calls
-        # (3s timeout per chunk), file I/O.  Run in thread pool so the
-        # asyncio event loop stays responsive for FastAPI/SSE.
-        loop = asyncio.get_running_loop()
-
+        # (3s timeout per chunk), file I/O.  Run on the dedicated 'subprocess'
+        # pool (NOT the default pool) so a slow refresh never starves the event
+        # loop's /health scheduling (COE run_b36c7880, run_d72047b0).
         # ── Light: refresh indexes if workspace changed ──────────────
-        await loop.run_in_executor(None, self._light_refresh, root, ws_path)
+        await executors.run_in("subprocess", self._light_refresh, root, ws_path)
 
         # ── Deep: once per calendar day ──────────────────────────────
         today = date.today().isoformat()
         if self._last_deep_date != today:
-            await loop.run_in_executor(None, self._deep_check, root, ws_path)
+            await executors.run_in("subprocess", self._deep_check, root, ws_path)
             self._last_deep_date = today
 
     # ------------------------------------------------------------------

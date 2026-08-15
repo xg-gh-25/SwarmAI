@@ -22,6 +22,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from core import executors
+
 logger = logging.getLogger(__name__)
 
 
@@ -249,7 +251,7 @@ class ChannelExecutor:
             start = time.monotonic()
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(task.fn, task.root, task.ws_path),
+                    executors.run_in("io", task.fn, task.root, task.ws_path),
                     timeout=task.budget,
                 )
                 if result:

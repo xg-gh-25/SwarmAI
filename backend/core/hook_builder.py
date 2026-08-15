@@ -33,6 +33,7 @@ from .security_hooks import (
     create_commit_trailer_gate,
     bash_syntax_guard,
     inclusive_term_guard,
+    default_pool_guard,
     create_image_read_dedup_guard,
     create_ask_question_gate,
     create_governance_file_gate,
@@ -349,6 +350,19 @@ async def build_hooks(
     registry.register(
         "PreToolUse", inclusive_term_guard,
         "inclusive_term_guard", matcher="Write|Edit|MultiEdit",
+    )
+
+    # ── PreToolUse: default-pool offload guard (Write|Edit|MultiEdit) ─────
+    # WARN when new code offloads high-risk blocking work (git/subprocess/Bedrock/
+    # clone) to the DEFAULT asyncio pool via to_thread / run_in_executor(None,)
+    # instead of a bounded core.executors class pool. P7 structural prevention for
+    # the "/health starvation → false backend-offline" class (COE run_b36c7880,
+    # O006/O020). Advisory only (STEERING #2); self-guarded so a scan error can never
+    # block a write; routers/-exempt (those short-fs handlers legitimately use the
+    # default pool). run_d72047b0.
+    registry.register(
+        "PreToolUse", default_pool_guard,
+        "default_pool_guard", matcher="Write|Edit|MultiEdit",
     )
 
     # ── PreToolUse: image-read dedup guard (Read-scoped) ─────

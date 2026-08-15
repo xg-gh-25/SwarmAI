@@ -6,9 +6,8 @@ Handles:
 - Git operations (add, commit, push) with timeouts
 
 All subprocess calls use shell=False and 30s timeout.
-DB I/O runs in a thread via asyncio.to_thread to avoid blocking the event loop.
+DB I/O runs off the event loop via executors.run_in('io', ...) to avoid blocking it.
 """
-import asyncio
 import gzip
 import logging
 import os
@@ -16,6 +15,8 @@ import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
+
+from core import executors
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def _format_sql_value(v) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sync helpers (run in thread via asyncio.to_thread)
+# Sync helpers (run off-loop via executors.run_in('io', ...))
 # ---------------------------------------------------------------------------
 
 def _export_tables_sync(db_path: Path, export_dir: Path, tables: list[str]) -> int:
@@ -287,8 +288,8 @@ class GitSyncEngine:
         tables: list[str],
     ) -> int:
         """Export DB tables to gzipped SQL dumps. Returns count exported."""
-        return await asyncio.to_thread(
-            _export_tables_sync, db_path, export_dir, tables
+        return await executors.run_in(
+            "io", _export_tables_sync, db_path, export_dir, tables
         )
 
     # -- DB Import (async wrapper) ------------------------------------------
@@ -304,8 +305,8 @@ class GitSyncEngine:
             from core.backup_manager import L2_TABLES
             allowed_tables = L2_TABLES
 
-        return await asyncio.to_thread(
-            _import_tables_sync, db_path, export_dir, allowed_tables
+        return await executors.run_in(
+            "io", _import_tables_sync, db_path, export_dir, allowed_tables
         )
 
     # -- Git Clone ----------------------------------------------------------
@@ -325,7 +326,7 @@ class GitSyncEngine:
             logger.warning("git clone timed out after 120s")
             return False
 
-    # -- Git Operations (all sync, called via to_thread from backup()) ------
+    # -- Git Operations (all sync, called via executors.run_in('subprocess') from backup()) --
 
     def git_add_all(self) -> bool:
         """Stage all changes. Returns True on success."""

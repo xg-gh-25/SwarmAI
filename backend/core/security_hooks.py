@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 from config import get_app_data_dir
+from . import executors
 from .ask_question_manager import (
     TIMEOUT_SENTINEL as ASK_TIMEOUT_SENTINEL,
     ASK_ANSWER_TIMEOUT_SECONDS,
@@ -2203,7 +2204,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
         # discipline). Order of the fail-OPEN branches is load-bearing.
         try:
             has_marker, covered, has_unbounded = await asyncio.wait_for(
-                asyncio.to_thread(_session_adversarial_coverage, session_id),
+                executors.run_in("subprocess", _session_adversarial_coverage, session_id),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError; ANY gate-infra failure (even
@@ -2218,7 +2219,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
             # uncomputable (not a repo / git error / timeout) → fail OPEN.
             try:
                 pending = await asyncio.wait_for(
-                    asyncio.to_thread(_pending_commit_paths, cwd, command),
+                    executors.run_in("subprocess", _pending_commit_paths, cwd, command),
                     timeout=_GATE_COVERAGE_TIMEOUT,
                 )
             except Exception:  # incl. asyncio.TimeoutError → fail open (never hang)
@@ -2919,6 +2920,130 @@ async def inclusive_term_guard(
         return {"decision": "approve", "additionalContext": reminder}
     except Exception:  # noqa: BLE001 — a WARN nudge must NEVER crash the write path
         logger.exception("inclusive_term_guard raised — failing open (approve)")
+        return {"decision": "approve"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# default_pool_guard — WARN when high-risk blocking work is offloaded to the
+# DEFAULT asyncio thread pool via asyncio.to_thread / run_in_executor(None,)
+# instead of a dedicated core.executors class pool.
+#
+# WHY (COE run_b36c7880, EVOLUTION O006/O020): the backend runs a single asyncio
+# event loop; asyncio.to_thread(fn) and loop.run_in_executor(None, fn) BOTH offload
+# to that loop's ONE default ThreadPoolExecutor (16 workers). When blocking work
+# (git subprocess, Bedrock, heavy fs/index, git clone) saturates that pool, the loop
+# can no longer promptly schedule the zero-I/O /health handler → the Rust watchdog's
+# 3s budget is missed → the frontend falsely declares the daemon "backend offline".
+# The fix is core/executors.run_in('<class>', fn, *args) — a bounded class-scoped pool
+# (io/subprocess/llm/briefing). This gate is the P7 structural prevention against
+# NEW code re-drifting onto the default pool (prose rules failed — the migration's own
+# author reintroduced the pattern, run_d72047b0).
+#
+# Advisory WARN, NEVER a block (STEERING #2: this is a nudge, not security). Fail-open
+# by construction — any error/malformed input → bare approve. routers/-exempt (those
+# ~100 to_thread callsites are request-scoped short fs ops, <1s, legitimately fine).
+#
+# Detection covers TWO forms (the 2nd is the one that fooled the author's own grep):
+#   1. to_thread(<high_risk_named_callee>, ...) / run_in_executor(None, <callee>, ...)
+#      — callee NAME contains a high-risk token (git/subprocess/bedrock/clone/…).
+#   2. to_thread(subprocess.run, [..., "git", ...]) / run_in_executor(None, subprocess.run, …)
+#      — callee is subprocess.run itself; the high-risk token is in the ARGS.
+# Missing form #2 is the exact blind spot that hid plugin_manager.py's git clone/fetch.
+_DEFAULT_POOL_SCAN_MAX_CHARS = 1_000_000
+
+# The offload wrappers that route to the DEFAULT pool.
+_RE_DEFAULT_OFFLOAD = re.compile(
+    r"(?:asyncio\.)?to_thread\s*\(|run_in_executor\s*\(\s*None\s*,",
+)
+# High-risk tokens: a callee/arg naming subprocess-fork / git / Bedrock / heavy work.
+# Word-ish match, case-insensitive. Kept broad on purpose (WARN, not block).
+_RE_HIGH_RISK = re.compile(
+    r"subprocess\.run|subprocess\.Popen|check_output|"
+    r"\bgit\b|check[_-]?ignore|clone|fetch|reset|_smart_commit|_capture_git|_git_ops|"
+    r"git_clone|bedrock|invoke_model|embed|reindex|incremental_update|_extract_routes|"
+    r"needs_human_review|is_canvas_surfaceable|_light_refresh|_deep_check|"
+    r"_session_adversarial|_pending_commit|_run_git|_clear_stale_git",
+    re.IGNORECASE,
+)
+
+
+def _scan_default_pool_offload(text: str) -> bool:
+    """True if ``text`` offloads high-risk work to the DEFAULT pool.
+
+    A hit requires BOTH an offload wrapper (to_thread / run_in_executor(None,)) AND
+    a high-risk token within ~200 chars AFTER the wrapper opening (so the callee/args
+    of THIS call qualify — a high-risk word elsewhere in the diff doesn't false-fire).
+    Pure; never raises on str input.
+    """
+    for m in _RE_DEFAULT_OFFLOAD.finditer(text):
+        window = text[m.end():m.end() + 200]
+        if _RE_HIGH_RISK.search(window):
+            return True
+    return False
+
+
+def _is_routers_path(file_path: str) -> bool:
+    """True if the file lives under a ``routers/`` package (HTTP handlers — exempt).
+
+    The routers/ exemption is LOAD-BEARING: those ~100 to_thread callsites are
+    request-scoped short fs ops (<1s) that legitimately use the default pool. Without
+    this exemption the gate would false-positive storm and be ignored. Normalized to
+    forward slashes so it matches on any OS."""
+    norm = (file_path or "").replace("\\", "/")
+    return "/routers/" in norm or norm.startswith("routers/")
+
+
+async def default_pool_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Write|Edit|MultiEdit): WARN on high-risk blocking work offloaded
+    to the DEFAULT asyncio pool.
+
+    ALWAYS approves — advisory nudge, never a block. When the text about to be written
+    offloads a high-risk callee (git/subprocess/Bedrock/clone) via to_thread /
+    run_in_executor(None,) AND the file is not under routers/, an ``additionalContext``
+    note points to ``executors.run_in('<class>', ...)`` so the author self-corrects
+    BEFORE the pattern reaches a commit.
+
+    Fail-open by construction: non-target tool, empty/oversized content, routers/ path,
+    or malformed input → bare approve. Self-contained try/except (runs solo, outside
+    _build_chain's try/except) guarantees a scan error can never crash the write path.
+    """
+    try:
+        tool_name = input_data.get("tool_name", "")
+        if tool_name not in ("Write", "Edit", "MultiEdit"):
+            return {"decision": "approve"}
+        tool_input = input_data.get("tool_input") or {}
+        if not isinstance(tool_input, dict):
+            return {"decision": "approve"}
+        file_path = tool_input.get("file_path") or tool_input.get("path", "")
+        if _is_routers_path(file_path):
+            return {"decision": "approve"}
+        text = _extract_written_text(tool_name, tool_input)
+        if not text or len(text) > _DEFAULT_POOL_SCAN_MAX_CHARS:
+            return {"decision": "approve"}
+        if not _scan_default_pool_offload(text):
+            return {"decision": "approve"}
+
+        reminder = (
+            "⚙️ DEFAULT-POOL NUDGE (advisory — not a block): this write offloads "
+            "high-risk blocking work (git/subprocess/Bedrock/clone) via "
+            "`asyncio.to_thread(...)` or `run_in_executor(None, ...)`, which lands on "
+            "the SINGLE default thread pool (16 workers). Saturating it starves the "
+            "event loop's /health scheduling → false 'backend offline' (COE "
+            "run_b36c7880, O006/O020). Prefer a bounded class pool:\n"
+            "  from core import executors\n"
+            "  await executors.run_in('subprocess', fn, *args)  # git/CLI/clone\n"
+            "  await executors.run_in('io', fn, *args)          # fs/git-check-ignore/index\n"
+            "  await executors.run_in('llm', fn, *args)         # Bedrock\n"
+            "If this is a genuinely cheap op (<1s, no fork/Bedrock) or a routers/ HTTP "
+            "handler, the default pool is fine — this is a nudge, not a rule."
+        )
+        return {"decision": "approve", "additionalContext": reminder}
+    except Exception:  # noqa: BLE001 — a WARN nudge must NEVER crash the write path
+        logger.exception("default_pool_guard raised — failing open (approve)")
         return {"decision": "approve"}
 
 

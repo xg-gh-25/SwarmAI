@@ -17,6 +17,7 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from core import executors
 from core.session_hooks import HookContext
 from core.summarization import SummarizationPipeline
 from core.daily_activity_writer import write_daily_activity
@@ -212,8 +213,8 @@ class DailyActivityExtractionHook:
 
         # 2b. Capture git ground truth — actual commits during session
         # This prevents COE C005: DailyActivity text claims vs git reality diverging.
-        summary.git_commits = await asyncio.to_thread(
-            self._capture_git_activity, context.session_start_time
+        summary.git_commits = await executors.run_in(
+            "subprocess", self._capture_git_activity, context.session_start_time
         )
 
         # 2c. Quality filter — skip noise entries that add no insight

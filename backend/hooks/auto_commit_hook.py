@@ -23,6 +23,7 @@ import os
 import subprocess
 import time
 
+from core import executors
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
 
@@ -119,9 +120,9 @@ class WorkspaceAutoCommitHook:
         session_id = context.session_id
         if self._git_lock:
             async with self._git_lock:
-                await asyncio.to_thread(self._smart_commit, ws_path, exclude, session_id)
+                await executors.run_in("subprocess", self._smart_commit, ws_path, exclude, session_id)
         else:
-            await asyncio.to_thread(self._smart_commit, ws_path, exclude, session_id)
+            await executors.run_in("subprocess", self._smart_commit, ws_path, exclude, session_id)
 
     @staticmethod
     def _uncovered_code_paths(ws_path: str, session_id: str) -> set[str]:

@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core import executors
+
 if TYPE_CHECKING:
     from .graph_store import GraphStore
 
@@ -152,7 +154,8 @@ class CodeIntelWatcher:
                 return
 
             # Phase 1: Single graph update (one FTS rebuild, not per-chunk)
-            await asyncio.to_thread(
+            await executors.run_in(
+                "io",
                 self._graph.incremental_update,
                 self._root,
                 relative_files,
@@ -164,7 +167,8 @@ class CodeIntelWatcher:
                     break
                 chunk_rel = relative_files[i:i + _CHUNK_SIZE]
                 chunk_abs = abs_files_valid[i:i + _CHUNK_SIZE]
-                await asyncio.to_thread(
+                await executors.run_in(
+                    "io",
                     self._extract_routes_only,
                     chunk_rel,
                     chunk_abs,

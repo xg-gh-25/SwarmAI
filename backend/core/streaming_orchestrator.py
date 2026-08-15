@@ -23,6 +23,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
+from . import executors
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
 from .ui_actions import (
@@ -351,7 +352,7 @@ class StreamingOrchestrator:
             if raw in resolve_cache:
                 return resolve_cache[raw]
             try:
-                r = await asyncio.to_thread(resolve_path_to_physical, raw, ws_root)
+                r = await executors.run_in("io", resolve_path_to_physical, raw, ws_root)
             except Exception:  # noqa: BLE001 — fail-safe: unresolvable → dropped below
                 r = None
             resolve_cache[raw] = r
@@ -367,8 +368,8 @@ class StreamingOrchestrator:
             # via to_thread. Fail-safe: on error, fall back to kind="content" (still
             # review-worthy) so a resolved deliverable is not silently dropped.
             try:
-                verdict = await asyncio.to_thread(
-                    needs_human_review, resolved["absolute"], "written"
+                verdict = await executors.run_in(
+                    "io", needs_human_review, resolved["absolute"], "written"
                 )
                 if not verdict.review_worthy:
                     # SwarmWS/bound-worktree machine-noise → never surface. BUT a file
@@ -377,8 +378,8 @@ class StreamingOrchestrator:
                     # git-commit material — it IS a Canvas-review-worthy activity
                     # (run_5d9178bf). Consult the Canvas-only predicate (a gitignored
                     # external secret still declines). off-loop (git subprocesses).
-                    surf = await asyncio.to_thread(
-                        is_canvas_surfaceable, resolved["absolute"]
+                    surf = await executors.run_in(
+                        "io", is_canvas_surfaceable, resolved["absolute"]
                     )
                     if not surf.surfaceable:
                         return None  # machine noise / gitignored / inside-tree → never surface
@@ -471,8 +472,8 @@ class StreamingOrchestrator:
             # verdict error fails-safe to "surface it" (a stale row lingering ==
             # pre-G1 behavior, the safe direction for a DELETE).
             try:
-                _worthy = (await asyncio.to_thread(
-                    needs_human_review, raw, "written"
+                _worthy = (await executors.run_in(
+                    "io", needs_human_review, raw, "written"
                 )).review_worthy
             except Exception:  # noqa: BLE001 — fail-safe: emit the delete (drop the row)
                 _worthy = True
@@ -484,7 +485,7 @@ class StreamingOrchestrator:
                 resolved = resolve_cache[raw]
             else:
                 try:
-                    resolved = await asyncio.to_thread(resolve_path_to_physical, raw, ws_root)
+                    resolved = await executors.run_in("io", resolve_path_to_physical, raw, ws_root)
                 except Exception:
                     resolved = None
                 resolve_cache[raw] = resolved
@@ -498,8 +499,8 @@ class StreamingOrchestrator:
                 # external secret never had a row → declines → nothing to mark.
                 _ext_probe = resolved["absolute"] if resolved else raw
                 try:
-                    _ext_surf = (await asyncio.to_thread(
-                        is_canvas_surfaceable, _ext_probe
+                    _ext_surf = (await executors.run_in(
+                        "io", is_canvas_surfaceable, _ext_probe
                     )).surfaceable
                 except Exception:  # noqa: BLE001 — fail-safe: don't emit a phantom delete
                     _ext_surf = False

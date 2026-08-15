@@ -17,7 +17,7 @@ DESIGN (mirrors code_intel/watcher.py, the proven in-production pattern)
   path-segment only — NO git subprocess in the filter; that would be one
   check-ignore per event = a flood).
 - On a debounced batch, the review verdict runs ONCE via
-  ``needs_human_review_batch`` OFF-LOOP (asyncio.to_thread) — one check-ignore
+  ``needs_human_review_batch`` OFF-LOOP (executors.run_in('io')) — one check-ignore
   subprocess per owning tree, not per file.
 - Only ``content``/``knowledge`` verdicts are surfaced (matches the frontend
   Canvas gate: useReferencedFiles drops process/source from the rail,
@@ -36,7 +36,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from core import surface_injection
+from core import executors, surface_injection
 from core.canvas_noise import NOISE_SEGMENTS
 
 logger = logging.getLogger(__name__)
@@ -164,9 +164,12 @@ class WorkspaceSurfaceWatcher:
         """
         from core.needs_human_review import needs_human_review_batch
 
-        verdicts = await asyncio.to_thread(
-            needs_human_review_batch, paths, "written",
-            swarmws_root=str(self._root),
+        # executors.run_in is positional-only; wrap the kwarg call in a lambda.
+        verdicts = await executors.run_in(
+            "io",
+            lambda: needs_human_review_batch(
+                paths, "written", swarmws_root=str(self._root)
+            ),
         )
         for raw_path, verdict in verdicts.items():
             if not verdict.review_worthy:

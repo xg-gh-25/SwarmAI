@@ -16,7 +16,6 @@ Public API (unchanged):
 - ``build_resume_context(app_session_id, ...)`` → str
 """
 
-import asyncio
 import json
 import logging
 import re
@@ -24,6 +23,8 @@ import subprocess as _subprocess
 from datetime import datetime
 from collections import OrderedDict
 from pathlib import Path
+
+from core import executors
 
 logger = logging.getLogger(__name__)
 
@@ -558,7 +559,7 @@ def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
     """Run a git command synchronously with timeout.  Thread-safe.
 
     Returns stdout as string, or empty string on any failure.
-    Called via ``asyncio.to_thread()`` to avoid blocking the event loop.
+    Called via ``executors.run_in('subprocess', ...)`` to avoid blocking the event loop.
     """
     try:
         result = _subprocess.run(
@@ -579,20 +580,22 @@ def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
 async def _extract_uncommitted_state(working_dir: str | None) -> str:
     """Run ``git status --short`` and ``git diff --stat`` to capture WIP.
 
-    Uses ``asyncio.to_thread()`` to avoid blocking the event loop.
+    Uses ``executors.run_in('subprocess', ...)`` to avoid blocking the event loop.
     Returns empty string on any failure (timeout, not a git repo, etc.).
     """
     if not working_dir:
         return ""
     try:
-        status = await asyncio.to_thread(
+        status = await executors.run_in(
+            "subprocess",
             _run_git_command,
             ["git", "status", "--short"], working_dir, 3.0,
         )
         if not status:
             return ""
 
-        diff_stat = await asyncio.to_thread(
+        diff_stat = await executors.run_in(
+            "subprocess",
             _run_git_command,
             ["git", "diff", "--stat"], working_dir, 3.0,
         )

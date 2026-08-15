@@ -1,5 +1,4 @@
 """Plugin installation and management."""
-import asyncio
 import json
 import shutil
 import subprocess
@@ -7,6 +6,8 @@ import logging
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
+
+from core import executors
 
 # Skill-install copy filter. Plugins are UNTRUSTED (marketplace/git), so use the
 # escaping-symlink-dropping variant (run_0e5f1969): it excludes bytecode (Q3.2
@@ -133,20 +134,24 @@ class PluginManager:
             if (market_cache / ".git").exists():
                 # Pull latest
                 logger.info(f"Pulling latest from {git_url} branch {branch}")
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["git", "-C", str(market_cache), "fetch", "origin", branch],
-                    capture_output=True,
-                    text=True
+                result = await executors.run_in(
+                    "subprocess",
+                    lambda: subprocess.run(
+                        ["git", "-C", str(market_cache), "fetch", "origin", branch],
+                        capture_output=True,
+                        text=True,
+                    ),
                 )
                 if result.returncode != 0:
                     logger.warning(f"Git fetch failed: {result.stderr}")
 
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["git", "-C", str(market_cache), "reset", "--hard", f"origin/{branch}"],
-                    capture_output=True,
-                    text=True
+                result = await executors.run_in(
+                    "subprocess",
+                    lambda: subprocess.run(
+                        ["git", "-C", str(market_cache), "reset", "--hard", f"origin/{branch}"],
+                        capture_output=True,
+                        text=True,
+                    ),
                 )
                 if result.returncode != 0:
                     logger.warning(f"Git reset failed: {result.stderr}")
@@ -154,11 +159,13 @@ class PluginManager:
                 # Clone fresh
                 logger.info(f"Cloning {git_url} branch {branch}")
                 market_cache.mkdir(parents=True, exist_ok=True)
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["git", "clone", "-b", branch, "--depth", "1", git_url, str(market_cache)],
-                    capture_output=True,
-                    text=True
+                result = await executors.run_in(
+                    "subprocess",
+                    lambda: subprocess.run(
+                        ["git", "clone", "-b", branch, "--depth", "1", git_url, str(market_cache)],
+                        capture_output=True,
+                        text=True,
+                    ),
                 )
                 if result.returncode != 0:
                     raise RuntimeError(f"Git clone failed: {result.stderr}")

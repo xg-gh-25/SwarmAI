@@ -22,6 +22,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from core import executors
 from core.git_sync_engine import GitSyncEngine
 
 logger = logging.getLogger(__name__)
@@ -318,7 +319,7 @@ class BackupManager:
             pushed = self.engine.git_push() if sha else False
             return sha, pushed
 
-        commit_sha, pushed = await asyncio.to_thread(_git_ops)
+        commit_sha, pushed = await executors.run_in("subprocess", _git_ops)
         result["commit"] = commit_sha
         if commit_sha:
             result["push_status"] = "ok" if pushed else "failed"
@@ -386,8 +387,8 @@ class BackupManager:
         try:
             # Stage 1: CLONE
             yield {"stage": "clone", "progress": 10, "detail": "Cloning backup repository..."}
-            cloned = await asyncio.to_thread(
-                self.engine.git_clone, _sanitize_repo_url(repo_url) or repo_url, self.workspace_dir
+            cloned = await executors.run_in(
+                "subprocess", self.engine.git_clone, _sanitize_repo_url(repo_url) or repo_url, self.workspace_dir
             )
             if not cloned:
                 # Clone failed BEFORE we stored the token (AC4: don't persist an

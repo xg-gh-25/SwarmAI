@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Callable, TypeVar, Optional
 
+from core import executors
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -384,7 +385,7 @@ class InitializationManager:
             return True
 
         try:
-            if await asyncio.to_thread(_clear_stale_git_lock):
+            if await executors.run_in("subprocess", _clear_stale_git_lock):
                 logger.warning(
                     "Removed stale .git/index.lock from %s (left by previous crash)",
                     workspace_path,
