@@ -55,23 +55,14 @@ class TestUnifiedRecallCfull:
             "the codeintel HIT must render, not just the label"
         assert "[DDD:" not in s, "ddd must NOT be in unified path (own leg)"
 
-    def test_unified_failclosed_no_project_still_recalls(self):
-        """No editor path + a query that resolves to no single project →
-        codeintel empty, but the other domains still recall (recall never
-        degrades to empty just because there's no active project)."""
-        # The `len(s) > 100` assertion requires the text domains (context_files/
-        # library/session) to actually recall from the LIVE workspace corpus
-        # (~/.swarm-ai/SwarmWS/.context/*.md). Absent in a bare CI checkout → all
-        # domains empty → body ''. The invariant under test is "no project ≠ empty
-        # recall", which is only observable WHEN a corpus exists; skip otherwise.
-        from pathlib import Path
-        mem = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
-        if not mem.exists():
-            import pytest
-            pytest.skip("no live workspace corpus (~/.swarm-ai/SwarmWS absent — e.g. CI)")
-        from core.session_router import _unified_recall_body
-        s, _structured = _unified_recall_body("resume cold start latency", (None, "no_signal"))
-        assert "Code Symbols" not in s and len(s) > 100
+    # test_unified_failclosed_no_project_still_recalls REMOVED 2026-08-16 (CI = BVT).
+    # Its `len(s) > 100` assertion required the text domains to recall from the LIVE
+    # workspace corpus (~/.swarm-ai/SwarmWS/.context/*.md), absent in a clean CI
+    # checkout → could only SKIP = zero signal. The fail-closed CONTRACT (an exception
+    # in the unified path returns "" so the caller falls back) is BVT-covered by
+    # test_unified_exception_returns_empty_for_fallback below, which fault-injects and
+    # needs no corpus. "Do the text domains actually return content" is a deployed-
+    # system quality property → eval OS.
 
     def test_unified_exception_returns_empty_for_fallback(self):
         """Gate-2 C1: an EXCEPTION in the unified path (not just empty result)

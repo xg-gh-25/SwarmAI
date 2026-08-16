@@ -13,7 +13,6 @@ READ-only: only the Bedrock network boundary is ever patched; no embed/write.
 """
 
 import json
-import pytest
 
 
 # ===========================================================================
@@ -180,40 +179,13 @@ class TestMultiWordFTSRecall:
     code_intel quoted each token = implicit AND. Fix = OR-join per-quoted-term,
     keeping BM25 rank-order + single-term identity + injection safety."""
 
-    def _live_graph(self):
-        """The live SwarmAI code graph (read-only). External-content FTS5 is
-        awkward to populate in a tmp fixture, and the value here is the OR-join
-        QUERY semantics over a real populated index — so drive the real graph,
-        skip if unbuilt (CI without code-intel)."""
-        from core.code_intel import load_project_graph
-        g = load_project_graph("SwarmAI")
-        if g is None or not g.search_symbols("recall", limit=1):
-            pytest.skip("SwarmAI code graph not built in this environment")
-        return g
-
-    def test_codeintel_multiword_returns_hits(self):
-        """AC2: a multi-word query where NO single symbol contains all terms
-        still returns hits (OR), ranked. Under the old implicit-AND this was ~0.
-        Mutation-checked: with space-join (AND), 'recall hybrid section score'
-        returns 0/1; with OR it returns many."""
-        g = self._live_graph()
-        hits = g.search_symbols("recall hybrid section score", limit=10)
-        assert len(hits) >= 2, "multi-word query must return multiple hits via OR-join"
-
-    def test_codeintel_singleterm_unchanged(self):
-        """AC3 regression: single-term query still works (OR-of-one = the term)."""
-        g = self._live_graph()
-        hits = g.search_symbols("recall", limit=10)
-        assert len(hits) >= 1
-        assert all("name" in h and "file_path" in h for h in hits)
-
-    def test_codeintel_injection_safe_with_or(self):
-        """AC3: FTS5 keyword terms (OR/NEAR/NOT) stay quoted phrase-literals,
-        never operators — no raise (the OR-join only adds OR BETWEEN quoted terms)."""
-        g = self._live_graph()
-        # Must not raise; these are quoted literals after _sanitize_name + quoting.
-        g.search_symbols("OR NEAR drop", limit=5)
-        g.search_symbols("NOT match", limit=5)
+    # The 3 code-graph cases (_live_graph → test_codeintel_multiword_returns_hits /
+    # _singleterm_unchanged / _injection_safe_with_or) were REMOVED 2026-08-16 (CI =
+    # BVT). They drove the LIVE SwarmAI code graph (load_project_graph), unbuilt in a
+    # clean CI checkout → could only SKIP = zero signal. The OR-join QUERY-CONSTRUCTION
+    # semantics (the actual code under change) are BVT-covered by the MagicMock case
+    # below, which asserts the built MATCH string with no live index; whether the real
+    # graph returns ranked hits is a deployed-system quality property → eval OS.
 
     def test_session_multiword_query_construction(self):
         """AC1: SessionRecall builds an OR query for multi-word input (each term
@@ -566,32 +538,12 @@ class TestRecallAll:
             "policy-excluded MEMORY must NOT leak through multi-domain recall"
         assert result.hit_layers["context_files"] == "none"
 
-    def test_no_exclusion_allows_context_files(self, monkeypatch):
-        """Counterpart: with NO exclusion, context_files recall works normally
-        (proves the empty result above is the GATE, not an unrelated break)."""
-        from core import recall_multi
-
-        # This asserts a HIT against the LIVE ~/.swarm-ai/SwarmWS/.context/MEMORY.md
-        # (its COE Registry matches "exit code sigkill oom"). That workspace file is
-        # absent in a bare CI checkout → context_files corpus empty → no hit, a
-        # CI-only false failure. Skip when the live MEMORY.md corpus isn't present;
-        # the exclusion-GATE behavior this test contrasts with is covered by its
-        # sibling (the with-exclusion test) which needs no live corpus.
-        from pathlib import Path
-        mem = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
-        if not mem.exists():
-            import pytest
-            pytest.skip("no live MEMORY.md corpus (~/.swarm-ai/SwarmWS absent — e.g. CI)")
-
-        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
-        result = recall_multi.recall_all(
-            "exit code sigkill oom", project="SwarmAI", allow_embed=False,
-            domains=("context_files",),
-            policy_excluded_files=frozenset(),  # nothing excluded
-        )
-        # Live MEMORY.md has a COE Registry section matching this query.
-        assert result.buckets["context_files"], \
-            "with no exclusion, context_files should return hits (gate is the discriminator)"
+    # test_no_exclusion_allows_context_files REMOVED 2026-08-16 (CI = BVT only).
+    # It asserted a HIT against the live ~/.swarm-ai/SwarmWS/.context/MEMORY.md, absent
+    # in a clean CI checkout → could only SKIP = zero signal. The PRIVACY GATE it
+    # contrasted with (test_policy_excluded_context_files_returns_empty, above) is the
+    # real BVT and needs no live corpus; "does the corpus actually return hits" is a
+    # deployed-system quality property → eval OS, not CI.
 
 # ===========================================================================
 # Run 3 (run_6602eeab) — §8.1 recall read-side wiring: code-intel domains[]
