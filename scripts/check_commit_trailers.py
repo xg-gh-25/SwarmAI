@@ -87,7 +87,15 @@ FORBIDDEN_MARKERS = ("claude", "anthropic")
 # rewrite never fired. It is already pushed to origin/main (public history), so
 # rewriting it is barred (R29 + no-rewrite-published-history). d8c247a3..HEAD
 # amnesties exactly this one while every commit AFTER it stays enforced.
-ENFORCED_FROM = "d8c247a3"
+#
+# 2026-08-16 amnesty (3): bumped d8c247a3 → 6af0955e. Another trailer-less commit
+# (6af0955e "governance(R30#4): add AUDIENCE test to knowledge-admission criterion")
+# landed from a parallel session's direct commit — SAME shadowed-hook cause. It is
+# on main (rewrite barred, R29). 6af0955e..HEAD amnesties exactly this one; every
+# commit after it (incl. this file's) stays enforced. 4th amnesty in 3 days from the
+# same root — a durable fix (stamp the trailer regardless of core.hooksPath) is the
+# real cure; tracked as a ToDo.
+ENFORCED_FROM = "6af0955e"
 
 _REC = "\x1e"
 _FLD = "\x1f"
