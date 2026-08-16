@@ -2,24 +2,26 @@
 
 WHY THIS FILE EXISTS
 --------------------
-The gate exists because ``.git/hooks/prepare-commit-msg`` — which rewrites an SDK
-``Co-Authored-By: Claude`` trailer into the project's ``Swarm`` identity — NEVER RUNS:
-``core.hooksPath`` points at the corporate git-defender hook set, and a hooksPath
+The trailer rule exists because ``.git/hooks/prepare-commit-msg`` — which rewrites an
+SDK ``Co-Authored-By: Claude`` trailer into the project's ``Swarm`` identity — NEVER
+RUNS: ``core.hooksPath`` points at the corporate git-defender hook set, and a hooksPath
 override REPLACES ``.git/hooks`` rather than merging with it. So the trailer rule was
 unenforced (22 of the last 80 commits carry none).
 
-Enforcement moved to CI. Which means the gate itself now needs the treatment this repo
-applies to every guard: a test that ACTUALLY ENTERS it (INV-5). Six guards in this
-codebase shipped without executing (``_get_session_router`` NameError, ``self._pid``,
-the inert reconciliation endpoint, the eslint rule that was in no CI step...), so a
-gate is not trusted here until something proves it fires.
+Enforcement is at COMMIT time via the ``create_commit_trailer_gate()`` PreToolUse hook
+(PREVENTION). The CI DETECTION half (scripts/check_commit_trailers.py wired into ci.yml)
+was REMOVED 2026-08-16: it enforced a cosmetic signature, could not self-enforce (the
+shadowed hook above), and required 4 manual amnesties in 3 days — recurring toil for
+zero quality signal. This file therefore no longer tests CI wiring; it tests the live
+PreToolUse gate, which per INV-5 needs a test that ACTUALLY ENTERS it (six guards in
+this codebase shipped without ever executing).
 
 Covered:
   - classify() on each real shape (ok / missing / wrong-identity), including the
-    Claude/Anthropic identity the project rule names explicitly;
-  - the CI wiring — that ci.yml RUNS the script (a gate nobody invokes is prose), and
-    that the job checks out full history (a depth-1 clone makes the script SKIP, which
-    would look green while enforcing nothing — the subtlest way for this to go inert).
+    Claude/Anthropic identity the project rule names explicitly — retained because the
+    script is kept for optional local/manual use;
+  - the PreToolUse gate (prevention) firing on every inline-commit shape and failing
+    OPEN on every opaque message source.
 """
 from __future__ import annotations
 
@@ -77,42 +79,12 @@ def test_required_trailer_matches_the_documented_rule(cct):
     assert cct.REQUIRED_TRAILER == "Co-Authored-By: Swarm <swarm@swarmai.dev>"
 
 
-def test_gate_is_wired_into_ci_and_actually_invoked():
-    """A gate that no CI step runs is prose (the eslint-rule failure mode, 4 rounds)."""
-    ci = (_REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "run: python3 scripts/check_commit_trailers.py" in ci, (
-        "ci.yml no longer RUNS scripts/check_commit_trailers.py — the trailer gate is "
-        "inert. Matching the `run:` line specifically (not just the filename) so a "
-        "mere comment mentioning it cannot satisfy this assertion."
-    )
-
-
-def test_ci_job_fetches_full_history_or_the_gate_silently_skips():
-    """The script SKIPs when its cutoff SHA is absent, which a depth-1 checkout
-    guarantees. Green-but-enforcing-nothing is the worst outcome, so pin fetch-depth."""
-    ci = (_REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    job = ci[ci.index("  version-check:"):]
-    job = job[: job.index("\n  # ")] if "\n  # " in job else job
-    # Match the real YAML KEY, not the bare token. Mutation-testing caught the naive
-    # `"fetch-depth: 0" in job` version being BLIND: the step's own explanatory COMMENT
-    # contains the literal string, so deleting the actual `with: fetch-depth: 0` left
-    # the assertion green. Second occurrence of that exact class in one session (the
-    # other was `ci.includes('lint:contract')` matching its own comment) — an assertion
-    # must not be satisfiable by prose describing its subject.
-    key = re.compile(r"^[ \t]*fetch-depth:[ \t]*0[ \t]*$", re.MULTILINE)
-    assert key.search(job), (
-        "the version-check job no longer checks out full history — "
-        "check_commit_trailers.py will not find its cutoff SHA and will SKIP, "
-        "reporting success while enforcing nothing"
-    )
-
 # ---------------------------------------------------------------------------
-# PreToolUse commit-trailer gate — PREVENTION (the CI check above is DETECTION)
+# PreToolUse commit-trailer gate — PREVENTION (the CI DETECTION half was removed
+# 2026-08-16; see module docstring). This is now the sole live enforcer.
 # ---------------------------------------------------------------------------
-# The CI gate fires at push, i.e. days late under this repo's commit-on-main
-# workflow — 2026-08-11 let 3 violations accumulate in 4h and cost an 18-commit
-# rebase to repair. create_commit_trailer_gate() denies at commit time, when the
-# fix is one re-run. Per INV-5 every test below ACTUALLY INVOKES the gate.
+# create_commit_trailer_gate() denies a trailer-less commit at commit time, when
+# the fix is one re-run. Per INV-5 every test below ACTUALLY INVOKES the gate.
 import asyncio
 
 

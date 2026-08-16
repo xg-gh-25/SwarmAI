@@ -628,12 +628,13 @@ class TestAutoCommitCarriesProjectTrailer:
             f"nothing else will add it. Got:\n{body}"
         )
 
-    def test_auto_commit_satisfies_the_ci_trailer_gate(
+    def test_auto_commit_satisfies_the_trailer_classifier(
         self, workspace, tmp_path, capsys
     ):
-        """Cross-bind the generator to the CI checker: a drift in EITHER (message
-        builder or REQUIRED_TRAILER) turns this red, instead of surfacing days later
-        at push as a history-rewrite problem."""
+        """Cross-bind the generator to check_commit_trailers.classify(): a drift in
+        EITHER (message builder or REQUIRED_TRAILER) turns this red. The classifier is
+        retained for local use; the PreToolUse commit_trailer_gate is what enforces at
+        commit time (the CI trailer step was removed 2026-08-16)."""
         import importlib.util
         import pathlib
 

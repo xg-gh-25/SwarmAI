@@ -2438,10 +2438,11 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
 #     instead of merging, so every repo-local hook is inert. It also only REWROTE a
 #     Claude trailer into Swarm — it never ADDED a missing one, so even un-shadowed
 #     it could not fix the `missing` class (which is 3/3 of the real violations).
-#   • scripts/check_commit_trailers.py — real, tested, CI-wired, but it fires at
-#     PUSH. Under this repo's commit-on-main-for-days workflow that is hours-to-days
-#     late, and by then the only remedy is rewriting history: 2026-08-11 accumulated
-#     3 violations in 4h, costing an 18-commit rebase to repair.
+#   • scripts/check_commit_trailers.py — was CI-wired (detection at PUSH), but the CI
+#     step was REMOVED 2026-08-16: it fired days-late under commit-on-main (2026-08-11
+#     accumulated 3 violations in 4h → an 18-commit rebase) AND could not self-enforce
+#     (the shadowed hook above), needing 4 manual amnesties in 3 days. The script is
+#     kept for optional local/manual use; it is no longer a gate.
 #   • prose (s_workspace-git/SKILL.md "Always include Co-Authored-By"). Leaving a
 #     mechanical invariant to agent discipline is this repo's documented recurring
 #     CLASS-A failure — the same shape as complete.md's surface_run_outputs prose,
@@ -2535,8 +2536,8 @@ def create_commit_trailer_gate():
                     "FIX: re-run the same command with that line appended to the commit "
                     "message. Fixing it NOW is free — no repo-local git hook will add it "
                     "for you (core.hooksPath is the corporate git-defender set, which "
-                    "shadows .git/hooks), and CI's check_commit_trailers.py only catches "
-                    "it at PUSH, by which point the repair is a history rewrite. "
+                    "shadows .git/hooks), and this gate is the only enforcer (the CI "
+                    "check was removed), so an un-fixed commit stays wrong. "
                     "(Deliberate exception: set SWARM_TRAILER_GATE_FORCE=1 for that one "
                     "command.)"
                 ),

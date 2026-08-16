@@ -394,14 +394,13 @@ async def build_hooks(
 
     # ── PreToolUse: commit-trailer gate (Bash-scoped) ────
     # DENY a `git commit` whose INLINE message lacks `Co-Authored-By: Swarm` (or
-    # carries a forbidden Claude/Anthropic identity). The rule's other three
-    # enforcers cannot PREVENT a violation: .git/hooks/prepare-commit-msg never runs
-    # (core.hooksPath = corporate git-defender, which REPLACES .git/hooks), CI's
-    # check_commit_trailers.py fires only at PUSH (days late under commit-on-main,
-    # so the remedy becomes a history rewrite), and SKILL.md prose leaves a
-    # mechanical invariant to agent discipline. This catches it while the fix is one
-    # re-run. Fails OPEN for any message it cannot read (-F <path>, --amend
-    # --no-edit, -C, editor); SWARM_TRAILER_GATE_FORCE=1 is the logged bypass.
+    # carries a forbidden Claude/Anthropic identity). This is now the SOLE enforcer:
+    # .git/hooks/prepare-commit-msg never runs (core.hooksPath = corporate
+    # git-defender, which REPLACES .git/hooks), the CI check was REMOVED 2026-08-16
+    # (cosmetic + non-self-enforcing → 4 amnesties in 3 days), and SKILL.md prose
+    # leaves a mechanical invariant to agent discipline. This catches it at commit
+    # time while the fix is one re-run. Fails OPEN for any message it cannot read
+    # (-F <path>, --amend --no-edit, -C, editor); SWARM_TRAILER_GATE_FORCE=1 bypass.
     registry.register(
         "PreToolUse", create_commit_trailer_gate(),
         "commit_trailer_gate", matcher="Bash",
