@@ -1,0 +1,64 @@
+# SwarmAI CI Build-Verification-Test (BVT) manifest — the CI pytest ALLOWLIST.
+#
+# WHY an allowlist (not the old denylist):
+#   CI is a BARE git checkout on a Linux runner — NO ~/.swarm-ai workspace, NO
+#   AWS creds, NO built code-graph, NO live corpus. A test belongs here ONLY if it
+#   SELF-VERIFIES in that environment: pure OS-layer logic — guards, classifiers,
+#   validators, parsers, scorers, routing/admission rules. These are the invariants
+#   that must never silently break at push.
+#
+#   The prior "run every test file MINUS a grep blacklist" model was wrong: it grew
+#   to ~4000 tests as new (fs/async/subprocess) test files landed, any of which HANG
+#   on the runner and ride the per-test --timeout until the 10-min job wall kills the
+#   whole run. A denylist can never bound runtime — every new heavy file silently
+#   re-breaks CI. An allowlist bounds it by construction.
+#
+# WHAT is NOT here (by design — these are the eval OS / local-suite's job):
+#   - anything needing tmp_path/fs writes, async event loops, subprocess, network,
+#     Bedrock/STS, a live workspace, or a built code-graph.
+#   - DEPLOYED-SYSTEM QUALITY properties (does live recall rank the gold, does the
+#     real graph return hits) → the eval OS (golden set + post-deploy scoring).
+#   Module import/syntax/circular-dep breakage is already covered by smoke_import.py.
+#
+# ADMISSION RULE (before adding a line): the test must PASS in a bare checkout with
+#   an empty $HOME and no AWS creds. If it can only SKIP there, it is NOT a BVT —
+#   delete it or route it to the eval OS; never skip-guard it alive (a skip verifies
+#   nothing). Run:  HOME=$(mktemp -d) AWS_PROFILE=none python -m pytest tests/<file>
+#
+# Format: one test file per line (relative to backend/), '#' comments ignored.
+
+test_adaptive_timeout.py
+test_admission_is_noise.py
+test_admission_trust_stamp.py
+test_bvt_admission.py
+test_class_key.py
+test_coe_parsing.py
+test_completion_gate.py
+test_context_brain_health.py
+test_context_templates.py
+test_data_point_folding.py
+test_ddd_canonical_docs_single_source.py
+test_diff_parser.py
+test_distill_write_targets.py
+test_entry_refs.py
+test_escalation_ladder.py
+test_executor_ram_gate.py
+test_file_change_classifier.py
+test_frontmatter.py
+test_golden_case_stamp.py
+test_judgment_classifier.py
+test_load_amplifier_caps.py
+test_mcp_response_tier.py
+test_memory_decay.py
+test_memory_guard.py
+test_memory_wiring.py
+test_merge_assistant_messages.py
+test_oom_detection.py
+test_oom_governance.py
+test_persist_routing_declared_type.py
+test_phase_wiring.py
+test_pipeline_profiles.py
+test_pipeline_validator_repro_gate.py
+test_redline_gate.py
+test_tool_risk.py
+test_tscc_security_scan.py
