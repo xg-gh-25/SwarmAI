@@ -821,37 +821,61 @@ If `git rev-parse origin/main >/dev/null 2>&1` fails, skip doc-sync check
 entirely and note "WARN: origin/main not available, doc-sync check skipped"
 in the report. This handles fresh clones and shallow checkouts.
 
-**Run these checks against the changeset:**
+**Project-neutral by design.** This check must NOT assume the developed project
+uses SwarmAI's directory layout (`backend/core/`, `docs/`, `docs/post-mortems/`).
+It reads the project's OWN declared conventions from its TECH.md and gracefully
+WARN-skips any sub-check the project doesn't declare — a Go/Java/frontend-only
+project produces NO false GAP. The `backend/core/` etc. below are SwarmAI's own
+values, shown as a concrete reference; substitute the project's.
+
+**STEP 0 — resolve the project's core-code convention (before any grep):**
+Read the project's TECH.md and look for a **`## Key Subsystems`** section (the
+DDD convention for "these are the core code areas that must be documented").
+- **Present** → the project declares a core-code convention. Run the checks
+  below against the directories/patterns that section describes.
+- **Absent** → the project declares no core-subsystem convention. Emit
+  `"N/A: project declares no core-subsystem convention"` and SKIP sub-check #1
+  (do NOT grep a SwarmAI-specific path against it). Same for `docs/` — only
+  check it if the project's TECH.md `## Codebase Location`/`## Conventions`
+  declares a docs directory.
 
 ```bash
 # 0. Pre-flight
 git rev-parse origin/main >/dev/null 2>&1 || { echo "WARN: origin/main unavailable"; exit 0; }
 
-# 1. New files in backend/core/ → must have TECH.md Key Subsystems entry
-NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '^backend/core/' | grep -v '__pycache__\|test')
+# 1. New core-code files → must have a TECH.md Key Subsystems entry.
+#    <CORE_PATH> comes from the project's ## Key Subsystems convention (STEP 0).
+#    SwarmAI's value = '^backend/core/' (shown as reference). If the project
+#    declared no such convention, SKIP this sub-check (N/A, not GAP).
+CORE_PATH='<from TECH.md ## Key Subsystems — SwarmAI: ^backend/core/>'
+NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep "$CORE_PATH" | grep -v '__pycache__\|test')
 
-# 2. Feat commits → docs/ should have been updated in this branch
+# 2. Feat commits → the project's declared docs dir should have been updated.
+#    <DOCS_DIR> from TECH.md (SwarmAI: docs/). Skip if project declares none.
 FEAT_COMMITS=$(git log --oneline origin/main...HEAD | grep -iE "^[a-f0-9]+ feat")
-DOCS_IN_BRANCH=$(git diff --name-only origin/main...HEAD -- docs/ | wc -l)
+DOCS_IN_BRANCH=$(git diff --name-only origin/main...HEAD -- '<DOCS_DIR — SwarmAI: docs/>' | wc -l)
 
-# 3. COE/P0 fix → docs/post-mortems/ should have new file
+# 3. COE/P0 fix → the project's declared post-mortem dir should have a new file.
+#    <PM_DIR> from TECH.md (SwarmAI: docs/post-mortems/). Skip if none declared.
 COE_FIX=$(git log --oneline origin/main...HEAD | grep -iE "COE|P0|bilateral|deadlock|crash.*all")
-PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '^docs/post-mortems/' | wc -l)
+PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '<PM_DIR — SwarmAI: ^docs/post-mortems/>' | wc -l)
 ```
 
-**TECH.md location note:** TECH.md is in the SwarmWS workspace, NOT in the
-swarmai repo. Use an absolute path Read:
-`~/.swarm-ai/SwarmWS/Projects/<PROJECT>/TECH.md`
-Do NOT use git grep — use the Read tool to search for the filename stem.
+**TECH.md location note:** TECH.md lives at the project's registered DDD path
+(for SwarmAI-self that is `~/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding/TECH.md`;
+the generic form is `<project DDD root>/2-understanding/TECH.md`). Use the Read
+tool to search for the filename stem — do NOT use git grep.
 
-**Evaluation rules:**
+**Evaluation rules** (each row runs ONLY if the project declares the relevant
+convention in STEP 0; otherwise the row is `N/A`, never a GAP — the concrete
+paths are SwarmAI's, shown as reference):
 
 | Condition | Check | Gap? |
 |-----------|-------|:---:|
-| New `.py` in `backend/core/` (not test) | Read `~/.swarm-ai/SwarmWS/Projects/<PROJECT>/TECH.md`, search for filename stem | If not found → GAP |
-| Any `feat` commit in changeset | `docs/` has ≥1 file changed in branch (`git diff ... -- docs/`) | If 0 → GAP |
-| Commit message mentions COE/P0/crash | `docs/post-mortems/` has new file in changeset | If 0 → GAP |
-| New skill created (`backend/skills/s_*`) | Skill appears in `docs/README.md` or relevant design doc | If not → GAP |
+| New core-code file (per `## Key Subsystems`; SwarmAI: `.py` in `backend/core/`, not test) | Read the project's TECH.md, search for filename stem | If declared-convention exists AND not found → GAP; no convention → N/A |
+| Any `feat` commit in changeset | Project's declared docs dir (SwarmAI: `docs/`) has ≥1 file changed in branch | If declared AND 0 → GAP; no docs dir declared → N/A |
+| Commit message mentions COE/P0/crash | Project's declared post-mortem dir (SwarmAI: `docs/post-mortems/`) has new file | If declared AND 0 → GAP; none declared → N/A |
+| New skill/module created (SwarmAI: `backend/skills/s_*`) | Appears in the project's index/README or a design doc | If declared convention AND not → GAP; else N/A |
 
 **Output:**
 

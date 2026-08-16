@@ -77,10 +77,16 @@ Live-registered PreToolUse guards (`hook_builder`): `adversarial_commit_gate` (D
 unless an adversarial marker's `reviewed_paths` covers EVERY committed path — diff-bound; fails
 OPEN on git-uncomputable diff / path-less marker / `SWARM_ADVERSARIAL_GATE_FORCE`, so it binds
 only real computable diffs),
-`pytest_command_guard`, `background_command_guard`, `bash_syntax_guard`, `eval_command_guard`,
-`dangerous_command_gate`, `external_approval_gate`, `governance_file_gate`, `commit_trailer_gate`,
-`release_publish_guard`, `inclusive_term_guard`, `ask_question_gate`, `image_read_dedup_guard`.
-These are SOUL P7 in the flesh: prose failed, the gate holds.
+`pytest_command_guard`, `background_command_guard`, `bash_syntax_guard`,
+`dangerous_command_gate`, `external_approval_gate`, `governance_file_gate`,
+`inclusive_term_guard`, `ask_question_gate`, `image_read_dedup_guard`.
+These are SOUL P7 in the flesh: prose failed, the gate holds. (Four SwarmAI-self-dev
+guards — commit-trailer / release-publish / eval-in-pipeline / default-pool-offload —
+were removed run_d613bb27: a product-wide per-command hook is the wrong layer for this
+project's OWN dev discipline. Successors vary by check: release-publish → the
+`release-gate --verify` step in s_swarm-release Stage 7c; commit-trailer → the trailer
+is built into the message by the auto-commit path itself; eval-in-pipeline → prose
+(AGENT.md); default-pool-offload → retired (it was an advisory nudge, no successor).)
 
 ## My Body — runtime contract (surfaces + full map: SWARMAI.md § My Body / DDD TECH.md)
 The desktop app IS my body; proprioception is two-way. What's SELF-specific (not restated from

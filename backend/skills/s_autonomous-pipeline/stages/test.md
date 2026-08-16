@@ -41,8 +41,11 @@ python backend/scripts/artifact_cli.py discover --project <PROJECT> --types chan
 For each ac_coverage entry, execute its declared test:
 
 ```bash
-# Extract test functions from ac_coverage and run them explicitly
+# Extract test functions from ac_coverage and run them explicitly, using the
+# project's test runner (read TECH.md ## Dev Commands). SwarmAI-self reference:
 pytest -xvs -k "test_login_email or test_handle_error or test_rate_limit"
+# Other stacks: go test -run 'TestLoginEmail|TestHandleError'; cargo test <names>;
+# mvn -Dtest=... ; npx vitest run -t "login email".
 ```
 
 **Why this layer:** BUILD claims "AC1 is tested by test_foo." This layer
@@ -78,16 +81,24 @@ imports auth. AC-driven tests only verify what was explicitly declared;
 dependency-scoped tests catch collateral damage.
 
 **Scope limit:** Only tests that directly import changed modules. NOT the full
-suite (STEERING R9: full suite needs user approval + xdist deadlock risk).
+suite. *(SwarmAI-SELF note: SwarmAI's full suite needs user approval + has a
+pytest-xdist deadlock risk — STEERING R9. Other projects: read their TECH.md/
+STEERING for the full-suite policy; the xdist hazard is SwarmAI-specific.)*
 
-#### Layer 3: Import Smoke (Zero-Infrastructure E2E Proxy)
+#### Layer 3: Build/Import Smoke (Zero-Infrastructure E2E Proxy)
 
-For each new `.py` file in `files_changed`, verify it can be imported without crash:
+Verify each new/changed file loads without crashing, using the project's stack.
+**Python projects** — import each new module:
 
 ```bash
-# For each new/changed python file:
+# SwarmAI-self (Python): for each new/changed python file
 python -c "import sys; sys.path.insert(0, '.'); import module_name"
 ```
+
+**Other stacks — use the equivalent load/compile check, or WARN-skip Layer 3
+if none applies** (read TECH.md ## Stack): Go `go build ./...`; Rust `cargo check`;
+TypeScript `tsc --noEmit`; Java compile the changed sources. If the project has
+no cheap load-check, record `"import_smoke": {"run": false, "reason": "<stack> has no import-smoke equivalent"}`.
 
 **Why this layer:** Catches wiring bugs (circular imports, missing dependencies,
 wrong relative paths) that unit tests miss because they import individual

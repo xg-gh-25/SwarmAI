@@ -172,7 +172,8 @@ coverage = P0 gap. (SOUL P1)
   `pytest_command_guard` enforces this.
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
   system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
-  deploy / scheduled only. `eval_command_guard` enforces. (SOUL P1+P7)
+  deploy / scheduled only. Prose-enforced (the `eval_command_guard` hook was removed
+  run_d613bb27 — a SwarmAI-self-dev concern that didn't belong in the product-wide hook layer). (SOUL P1+P7)
 
 ### Pipeline Profile IS the Planning Unit
 Coding work is scoped in PIPELINE RUNS, never sprints/story-points/milestones. The pipeline

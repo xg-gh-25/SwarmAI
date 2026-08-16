@@ -53,8 +53,18 @@ def _has_frontend_files(files_changed: list[str]) -> bool:
 
 
 def _has_backend_files(files_changed: list[str]) -> bool:
-    """Check if changeset includes backend files."""
-    backend_exts = {".py", ".go", ".rs", ".java"}
+    """Check if changeset includes backend files.
+
+    Heuristic classification, NOT exhaustive: covers the common server-side
+    languages a project (any project — not just SwarmAI's Python stack) may
+    use. `.ts` is included because Node/Deno backends are TypeScript; a file
+    can therefore match BOTH sets (that is fine — the score only uses these
+    as coarse presence signals, not mutually-exclusive buckets).
+    """
+    backend_exts = {
+        ".py", ".go", ".rs", ".java", ".cpp", ".cc", ".c", ".cs",
+        ".rb", ".kt", ".scala", ".php", ".ts", ".swift",
+    }
     return any(os.path.splitext(f)[1] in backend_exts for f in files_changed)
 
 

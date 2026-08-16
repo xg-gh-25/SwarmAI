@@ -317,14 +317,17 @@ Two things gate the flip to published: (1) CI green on the current HEAD, (2) the
 draft carries all-platform assets from THIS HEAD.
 
 **CI-green marker** (run_9fec1fb1): `release-gate --poll` is the only thing that writes
-the CI-green marker; 7b is how you EARN it. The marker's *code enforcement* (the
-`release_publish_guard` hook) DOES cover **both** publish verbs — the legacy `gh release
-create` AND the `gh release edit --draft=false` flip that 7c runs (run_900bb839). So a
-premature flip IS structurally blocked, not just runbook-discouraged.
+the CI-green marker; 7b is how you EARN it. Enforcement is the **explicit `release-gate
+--verify` step 7c runs immediately before the publish** (run_d613bb27) — it authorizes
+the flip IFF the marker attests the commit being released, fail-CLOSED (exit≠0 → do NOT
+publish). This REPLACES the old `release_publish_guard` PreToolUse hook: a per-command
+product-wide hook was the wrong layer for SwarmAI's OWN release discipline, so the check
+moved into this release flow as a one-time gate. (`--verify` covers the same publish the
+flip performs — `gh release edit --draft=false`; run 7c's `--verify` before it.)
 
 > **✅ Tag-aware gate (run_81ad1cfe):** when you poll with `--ref v${VERSION}` (below),
 > the gate verifies CI on the **commit the tag points at**, not the moving `main` HEAD,
-> and records the tag in the marker. The publish hook then confirms the tag you're
+> and records the tag in the marker. The `--verify` step then confirms the tag you're
 > flipping derefs to that same CI-verified commit — LOCALLY, fail-CLOSED. This is what
 > makes a **re-pointed tag** (tag commit ≠ branch tip) releasable: without `--ref` the
 > gate would WAIT forever on unrelated parallel commits that landed on main after the
@@ -421,6 +424,16 @@ all-platform assets). 7c does NOT create a release and does NOT upload a local D
 ```bash
 cd $SWARMAI_ROOT
 VERSION=$(cat VERSION)
+
+# ★ PUBLISH GATE (fail-closed, replaces the old release_publish_guard hook, run_d613bb27):
+# authorize the flip IFF the CI-green marker attests the commit this tag ships. exit≠0 →
+# CI not green on the published commit → STOP, do NOT flip. (Legit manual re-publish of an
+# already-green tag: SWARM_RELEASE_GATE_FORCE is gone with the hook — instead re-poll, or
+# only proceed when --verify is PASS.)
+python backend/scripts/artifact_cli.py release-gate --verify --ref "v${VERSION}" --project SwarmAI || {
+  echo "release-gate --verify BLOCKED the publish — CI is not green on v${VERSION}'s commit. STOP."
+  exit 1
+}
 
 # Flip the CI-built draft to published + mark latest (assets already attached by CI).
 # NOTE: this uses `gh release edit --draft=false`, NOT `gh release create`. There is

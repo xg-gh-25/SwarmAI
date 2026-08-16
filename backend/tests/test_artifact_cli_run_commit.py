@@ -586,11 +586,11 @@ class TestBuildSurfaceEventsReportAppend:
 
 class TestAutoCommitCarriesProjectTrailer:
     """The auto local-commit is the code path that produced the 2026-08-11 trailer
-    violations, and it is invisible to BOTH other enforcers:
+    violations, and it has no automatic enforcer of its own:
       • .git/hooks/prepare-commit-msg never runs (core.hooksPath = corporate
         git-defender, which REPLACES .git/hooks);
-      • security_hooks.create_commit_trailer_gate only sees a `git commit` an AGENT
-        types through the Bash tool — this module shells git out itself.
+      • no PreToolUse commit hook fires — this module shells git out itself rather
+        than an agent typing `git commit` through the Bash tool.
     So the trailer must be built into the message, and this test reads the message
     off a REAL created commit (INV-5: a guard is not trusted until something proves
     it fires). 3 violations here cost an 18-commit rebase to repair.
@@ -633,8 +633,10 @@ class TestAutoCommitCarriesProjectTrailer:
     ):
         """Cross-bind the generator to check_commit_trailers.classify(): a drift in
         EITHER (message builder or REQUIRED_TRAILER) turns this red. The classifier is
-        retained for local use; the PreToolUse commit_trailer_gate is what enforces at
-        commit time (the CI trailer step was removed 2026-08-16)."""
+        retained for local use; for THIS auto-commit path the trailer is built into the
+        message by the generator itself (the PreToolUse commit_trailer_gate was removed
+        run_d613bb27, and the CI trailer step was removed 2026-08-16) — so this test is
+        the sole guard that the generated message stays trailer-correct."""
         import importlib.util
         import pathlib
 

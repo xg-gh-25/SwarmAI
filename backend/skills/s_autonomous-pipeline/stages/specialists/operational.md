@@ -39,9 +39,14 @@ Every finding MUST include confidence (1-10):
 
 **Where does this code actually run?** (daemon 24/7, subprocess, CLI, hook, cron job)
 
-Check each assumption that differs between dev and production:
+Check each assumption that differs between dev and production. *(The rows below are
+**Python/PyInstaller examples** — SwarmAI's runtime. The dev-vs-prod-context RISK is
+language-neutral; translate each row to the project's stack from TECH.md `## Stack`:
+`sys.executable`→ Go `os.Executable()` / Rust `std::env::current_exe()`; `Path(__file__)`→
+the language's "path to my own source/bundle"; `$HOME`/`$USER` env assumptions apply to
+any language. The daemon/Hive columns are SwarmAI's deploy targets — use the project's.)*
 
-| Assumption | Dev | Daemon | Hive | Why It Breaks |
+| Assumption (SwarmAI-self: Python) | Dev | Daemon | Hive | Why It Breaks |
 |-----------|-----|--------|------|---------------|
 | `sys.executable` | Python binary | Frozen PyInstaller | Frozen | `-c` flag crashes frozen binary |
 | `Path(__file__)` | Source tree | `_internal/` dir | Same | Wrong paths for bundled resources |

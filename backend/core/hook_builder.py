@@ -27,13 +27,9 @@ from .security_hooks import (
     create_external_approval_gate,
     background_command_guard,
     pytest_command_guard,
-    eval_command_guard,
-    release_publish_guard,
     create_adversarial_commit_gate,
-    create_commit_trailer_gate,
     bash_syntax_guard,
     inclusive_term_guard,
-    default_pool_guard,
     create_image_read_dedup_guard,
     create_ask_question_gate,
     create_governance_file_gate,
@@ -278,29 +274,6 @@ async def build_hooks(
         "pytest_command_guard", matcher="Bash",
     )
 
-    # ── PreToolUse: eval-in-pipeline guard (Bash-scoped) ─────
-    # Deny running eval (eval_runner / ci_eval_gate / eval_service run) from the
-    # agent's Bash path. Eval is a system-level decoupled subsystem (DEC05/PIT179)
-    # that scores the DEPLOYED system via CI/deploy/scheduled — running it on
-    # un-deployed changes tests the OLD binary and hung the judge's Bedrock call
-    # (2026-06-28). R6/R9/STEERING #5 in prose; this is the structural backstop.
-    registry.register(
-        "PreToolUse", eval_command_guard,
-        "eval_command_guard", matcher="Bash",
-    )
-
-    # ── PreToolUse: release-publish guard (Bash-scoped) ──────
-    # Deny `gh release create` unless CI is green on the CURRENT HEAD (marker
-    # written by `artifact_cli.py release-gate --poll`). Code-enforced half of
-    # s_swarm-release Stage 7b (run_9fec1fb1) — prevents publishing a GitHub
-    # Release on an unvalidated HEAD (the v1.24.0 miss; CLASS A skip-verification).
-    # All-local (reads marker + git HEAD, no network — cannot hang). Fail-closed;
-    # SWARM_RELEASE_GATE_FORCE=1 escapes for a legit manual re-publish.
-    registry.register(
-        "PreToolUse", release_publish_guard,
-        "release_publish_guard", matcher="Bash",
-    )
-
     # ── PreToolUse: bash-syntax guard (Bash-scoped) ──────────
     # Run `bash -n` (parse-only, no execution) before each command. A
     # syntactically incomplete command (unterminated quote/backtick, unclosed
@@ -325,19 +298,6 @@ async def build_hooks(
     registry.register(
         "PreToolUse", inclusive_term_guard,
         "inclusive_term_guard", matcher="Write|Edit|MultiEdit",
-    )
-
-    # ── PreToolUse: default-pool offload guard (Write|Edit|MultiEdit) ─────
-    # WARN when new code offloads high-risk blocking work (git/subprocess/Bedrock/
-    # clone) to the DEFAULT asyncio pool via to_thread / run_in_executor(None,)
-    # instead of a bounded core.executors class pool. P7 structural prevention for
-    # the "/health starvation → false backend-offline" class (COE run_b36c7880,
-    # O006/O020). Advisory only (STEERING #2); self-guarded so a scan error can never
-    # block a write; routers/-exempt (those short-fs handlers legitimately use the
-    # default pool). run_d72047b0.
-    registry.register(
-        "PreToolUse", default_pool_guard,
-        "default_pool_guard", matcher="Write|Edit|MultiEdit",
     )
 
     # ── PreToolUse: image-read dedup guard (Read-scoped) ─────
@@ -390,20 +350,6 @@ async def build_hooks(
     registry.register(
         "PreToolUse", create_adversarial_commit_gate(hook_session_context),
         "adversarial_commit_gate", matcher="Bash",
-    )
-
-    # ── PreToolUse: commit-trailer gate (Bash-scoped) ────
-    # DENY a `git commit` whose INLINE message lacks `Co-Authored-By: Swarm` (or
-    # carries a forbidden Claude/Anthropic identity). This is now the SOLE enforcer:
-    # .git/hooks/prepare-commit-msg never runs (core.hooksPath = corporate
-    # git-defender, which REPLACES .git/hooks), the CI check was REMOVED 2026-08-16
-    # (cosmetic + non-self-enforcing → 4 amnesties in 3 days), and SKILL.md prose
-    # leaves a mechanical invariant to agent discipline. This catches it at commit
-    # time while the fix is one re-run. Fails OPEN for any message it cannot read
-    # (-F <path>, --amend --no-edit, -C, editor); SWARM_TRAILER_GATE_FORCE=1 bypass.
-    registry.register(
-        "PreToolUse", create_commit_trailer_gate(),
-        "commit_trailer_gate", matcher="Bash",
     )
 
     # ── PreToolUse: AskUserQuestion gate (AskUserQuestion-scoped) ──

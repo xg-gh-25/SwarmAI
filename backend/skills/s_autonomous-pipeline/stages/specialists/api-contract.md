@@ -1,8 +1,15 @@
 # API Contract Specialist Review
 <!-- version: 2026-07-21 | synced with: REVIEW_PATTERNS.md RP1-RP52 -->
 
-Scope: When changeset touches router files, endpoint handlers, Pydantic models,
-response schemas, or API-facing interfaces.
+Scope: When changeset touches router files, endpoint handlers, request/response
+models, response schemas, or API-facing interfaces.
+
+> **Protocol-neutral.** The examples below use REST/HTTP + FastAPI/Pydantic (SwarmAI's
+> stack), but the contract checks apply to ANY API surface — adapt to the project's
+> protocol from TECH.md `## Stack`: gRPC (proto field numbers, required→optional,
+> backward compat), GraphQL (schema field removal, nullability), WebSocket/event
+> messages (payload shape), or a plain library's public function signatures. "Endpoint"
+> = whatever the project exposes; "Pydantic model" = whatever it (de)serializes with.
 
 **Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
 RP14 (cross-service parameter mismatch), RP24 (cross-language serialization format),

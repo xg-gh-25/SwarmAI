@@ -1780,12 +1780,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
 
     requirement = run_state.get("requirement", "")[:72] or "pipeline changes"
     # Project identity trailer (AGENTS.md: EVERY commit must end with it). It has to
-    # be appended HERE because this code path is invisible to both other enforcers:
+    # be appended HERE because this code path has no other automatic enforcer:
     #   • .git/hooks/prepare-commit-msg never runs — core.hooksPath points at the
     #     corporate git-defender set, and a hooksPath override REPLACES .git/hooks.
-    #   • security_hooks.create_commit_trailer_gate only sees a `git commit` an AGENT
-    #     types through the Bash tool; this module shells git out itself, so no
-    #     PreToolUse hook fires.
+    #   • no PreToolUse commit hook fires for this path — this module shells git out
+    #     itself rather than an agent typing `git commit` through the Bash tool.
     # So if the trailer is not built into the message here, it never appears at all.
     commit_msg = (
         f"{requirement}\n\n(auto local-commit, run {args.run_id}; not pushed)"
@@ -1859,14 +1858,12 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
 
 # ── release-gate: the code-enforced CI-green gate for s_swarm-release 7b ──────
 #
-# Design A (run_9fec1fb1, 2026-07-04): the ONLY writer of the CI-green marker that
-# `release_publish_guard` (security_hooks.py) reads to allow `gh release create`.
-# This is the "check CI" half; the hook is the "enforce" half. Splitting it this
-# way keeps ALL network I/O (the `gh run list` call, which can hang) OUT of the
-# <5s PreToolUse hook — the hook only reads a local file + compares HEAD. That is
-# the whole point of the marker design: we do NOT reintroduce the foreground-timeout
-# hang trap (the exact bug the 7b runbook poll had, and that `gh run watch` has)
-# inside the hook path.
+# Design A (run_9fec1fb1, 2026-07-04): `--poll` is the ONLY writer of the CI-green
+# marker; the release flow reads it (via a `--verify` step) to authorize a publish.
+# Keeping ALL network I/O (the `gh run list` call, which can hang) in this explicit
+# CLI call — never in a runtime hook — is the whole point of the marker design: we do
+# NOT reintroduce the foreground-timeout hang trap (the bug the 7b runbook poll had,
+# and that `gh run watch` has).
 #
 # Marker: Projects/<project>/.artifacts/.release-ci-green.json
 #   {"head_sha": "<40-char>", "run_id": <int>, "conclusion": "success", "ts": "<iso>"}

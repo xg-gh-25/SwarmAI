@@ -568,7 +568,7 @@ never override explicit user intent.
 {
   "goal_mode": true,
   "dod_criteria": [
-    {"type": "command", "check": "pytest --cov-fail-under=90 src/", "desc": "Coverage >90%"},
+    {"type": "command", "check": "<project's coverage command from TECH.md — SwarmAI-self example: pytest --cov-fail-under=90 src/; Go: go test -cover ./...; JS: vitest run --coverage>", "desc": "Coverage >90%"},
     {"type": "rubric", "check": "Read each error msg. PASS if: states problem, suggests fix, no stack traces.", "desc": "User-friendly errors"}
   ],
   "max_cycles": 10,

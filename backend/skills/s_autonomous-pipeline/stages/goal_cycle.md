@@ -167,9 +167,11 @@ Standard TDD discipline within the step:
 
 ### 7. Test
 
-Run targeted tests for files changed in this cycle:
+Run targeted tests for files changed in this cycle, using the project's test
+command (read TECH.md `## Dev Commands`). SwarmAI-self reference:
 ```bash
 pytest tests/test_<module>.py -v --timeout=60
+# Other stacks: go test ./<pkg>/... ; cargo test <module> ; mvn -Dtest=<Class> test ; npx vitest run <file>
 ```
 
 If tests fail → Regression Protocol (see below).

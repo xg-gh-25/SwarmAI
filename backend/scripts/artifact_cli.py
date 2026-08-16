@@ -2410,15 +2410,13 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
 
     requirement = run_state.get("requirement", "")[:72] or "pipeline changes"
     # Project identity trailer (AGENTS.md: EVERY commit must end with it). It has to
-    # be appended HERE because this code path is invisible to both other enforcers:
-    #   • .git/hooks/prepare-commit-msg never runs — core.hooksPath points at the
-    #     corporate git-defender set, and a hooksPath override REPLACES .git/hooks.
-    #   • security_hooks.create_commit_trailer_gate only sees a `git commit` an AGENT
-    #     types through the Bash tool; this module shells git out itself, so no
-    #     PreToolUse hook fires.
-    # So if the trailer is not built into the message here, it never appears at all.
-    # (2026-08-11: this path emitted 3 trailer-less commits; CI only catches them at
-    # push, by which point the repair was an 18-commit history rewrite.)
+    # be appended HERE because there is NO other automatic enforcer for a commit this
+    # module makes: .git/hooks/prepare-commit-msg never runs (core.hooksPath points at
+    # the corporate git-defender set, and a hooksPath override REPLACES .git/hooks),
+    # the CI trailer check was removed 2026-08-16, and the commit-trailer PreToolUse
+    # hook was removed run_d613bb27 (a SwarmAI-self-dev concern, wrong layer for a
+    # product-wide hook). So if the trailer is not built into the message here, it
+    # never appears at all — this path is now the sole guarantor for its own commits.
     commit_msg = (
         f"{requirement}\n\n(auto local-commit, run {args.run_id}; not pushed)"
         f"\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"
@@ -2587,25 +2585,91 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
 # → orchestrator observe-emit). run-commit records commits; it no longer writes a doc.
 
 
-# ── release-gate: the code-enforced CI-green gate for s_swarm-release 7b ──────
+# ── release-gate: the code-enforced CI-green gate for s_swarm-release 7b/7c ──────
 #
-# Design A (run_9fec1fb1, 2026-07-04): the ONLY writer of the CI-green marker that
-# `release_publish_guard` (security_hooks.py) reads to allow `gh release create`.
-# This is the "check CI" half; the hook is the "enforce" half. Splitting it this
-# way keeps ALL network I/O (the `gh run list` call, which can hang) OUT of the
-# <5s PreToolUse hook — the hook only reads a local file + compares HEAD. That is
-# the whole point of the marker design: we do NOT reintroduce the foreground-timeout
-# hang trap (the exact bug the 7b runbook poll had, and that `gh run watch` has)
-# inside the hook path.
+# Design A (run_9fec1fb1, 2026-07-04; hook→flow-step run_d613bb27): `--poll` is the
+# ONLY writer of the CI-green marker; `--verify` is the fail-closed reader that
+# authorizes the publish (the "check CI" half + the "enforce" half, both in this CLI).
+# `--verify` REPLACES the old `release_publish_guard` PreToolUse hook — a per-command
+# product-wide hook was the wrong layer for SwarmAI's OWN release discipline, so the
+# enforce step moved into the release flow (s_swarm-release 7c calls `--verify` before
+# `gh release edit --draft=false`). Both `--poll` (network `gh run list`) and `--verify`
+# (local marker read + `git rev-parse`) run as explicit one-time CLI calls, so neither
+# reintroduces the foreground-timeout hang trap that lived in the 7b runbook poll.
 #
 # Marker: Projects/<project>/.artifacts/.release-ci-green.json
-#   {"head_sha": "<40-char>", "run_id": <int>, "conclusion": "success", "ts": "<iso>"}
-# The guard allows publish IFF marker.head_sha == current git HEAD. A stale marker
-# (previous release's HEAD) therefore authorizes nothing on a new HEAD — fail-closed.
+#   {"head_sha": "<40-char>", "repo_root": "<abs>", "run_id": <int>, "tag": "<opt>",
+#    "conclusion": "success", "ts": "<iso>"}
+# --verify authorizes publish IFF the marker attests the commit being released (tag-anchored
+# via the marker's `tag`, else HEAD-anchored). A stale marker authorizes nothing — fail-closed.
 
 def _release_marker_path(project: str) -> Path:
     return (_get_workspace() / "Projects" / project / ".artifacts"
             / ".release-ci-green.json")
+
+
+def _release_marker_authorizes_head(
+    marker: Path, repo_root: str | None, published_tag: str | None = None,
+) -> tuple[bool, str]:
+    """(authorized, reason). True IFF the CI-green marker attests the commit BEING
+    PUBLISHED. Moved from security_hooks.release_publish_guard (run_d613bb27) — the
+    pre-publish check is now a one-time gate in the release flow, not a per-command
+    hook. Fail-CLOSED on any failure.
+
+    Two modes, chosen by whether the marker records a `tag`:
+    - **Tag-anchored** (marker has `tag`): resolve the PUBLISHED tag to its commit
+      LOCALLY and require it == marker.head_sha (CI green on the exact shipped commit).
+    - **HEAD-anchored** (legacy, no `tag`): require marker.head_sha == current HEAD.
+    """
+    import subprocess
+    if not marker.exists():
+        return False, "no CI-green marker (run `artifact_cli.py release-gate --poll` until PASS)"
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return False, f"marker unreadable: {type(e).__name__}"
+    marker_head = data.get("head_sha") or ""
+    # fail-CLOSED: the marker MUST record its own repo_root (--poll always writes it).
+    # Do NOT fall back to the caller's cwd — a marker missing repo_root is a stale/
+    # malformed marker and must BLOCK, exactly as the original release_publish_guard did.
+    marker_repo = data.get("repo_root") or ""
+    marker_tag = data.get("tag") or ""
+    if not marker_head or not marker_repo:
+        return False, "marker missing head_sha/repo_root (stale format — re-poll release-gate)"
+
+    def _rev_parse(spec: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "-C", marker_repo, "rev-parse", spec],
+                               capture_output=True, text=True, timeout=10)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+
+    if marker_tag:
+        if not published_tag:
+            return (False,
+                    f"marker is tag-anchored (tag {marker_tag}) but the publish names no "
+                    "tag to verify — fail-closed (pass --ref <tag>, or re-poll release-gate)")
+        published_commit = _rev_parse(f"{published_tag}^{{commit}}")
+        if not published_commit:
+            return (False,
+                    f"cannot resolve published tag '{published_tag}' in {marker_repo} "
+                    "(local tag missing?) — fail-closed")
+        if published_commit != marker_head:
+            return (False,
+                    f"published tag {published_tag} → {published_commit[:8]} != CI-verified "
+                    f"commit {marker_head[:8]} (marker tag {marker_tag}) — CI not green on the "
+                    "commit being published")
+        return (True,
+                f"CI green on {marker_head[:8]} — published tag {published_tag} matches "
+                f"marker tag {marker_tag} (run {data.get('run_id')})")
+
+    head = _rev_parse("HEAD")
+    if not head:
+        return False, f"git HEAD unresolved in marker repo_root {marker_repo}"
+    if marker_head != head:
+        return False, f"marker HEAD {marker_head[:8]} != current HEAD {head[:8]} (stale — CI not green on THIS HEAD)"
+    return True, f"CI green on HEAD {head[:8]} (run {data.get('run_id')})"
 
 
 def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
@@ -2678,6 +2742,22 @@ def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
         matches = bool(cur and cur.get("head_sha") == head)
         print(json.dumps({"head": head, "marker": cur, "authorizes_current_head": matches}))
         return
+
+    if getattr(args, "verify", False):
+        # --verify: the PRE-PUBLISH gate. Formerly the `release_publish_guard`
+        # PreToolUse hook; moved into the release flow (s_swarm-release Stage 7b)
+        # as a one-time check instead of a per-command runtime hook (a self-dev
+        # concern does not belong in the product-wide hook layer). Fail-CLOSED:
+        # authorizes the publish IFF the CI-green marker attests the commit being
+        # released. Prints the verdict; exit 0 = authorized, exit 1 = blocked.
+        # All-local (marker read + `git -C <repo_root> rev-parse`), never network.
+        ok, reason = _release_marker_authorizes_head(
+            marker, repo_root, published_tag=ref,
+        )
+        print(json.dumps({"state": "PASS" if ok else "BLOCK", "reason": reason,
+                          "head": head, "published_ref": ref}),
+              file=sys.stdout if ok else sys.stderr)
+        sys.exit(0 if ok else 1)
 
     # --poll (default): one gh check for the CI run on the target commit.
     # With --ref, query by the resolved COMMIT (`gh run list --commit <sha>`), NOT
@@ -4970,6 +5050,7 @@ def main() -> None:
     p_rel_gate.add_argument("--project", default="SwarmAI", help="Project owning the marker (default SwarmAI)")
     p_rel_gate.add_argument("--poll", action="store_true", help="One gh run list check for HEAD; green→write marker (exit 0), red→exit 1, not-done→exit 3")
     p_rel_gate.add_argument("--status", action="store_true", help="Print marker vs HEAD (does it authorize current HEAD?) without touching CI")
+    p_rel_gate.add_argument("--verify", action="store_true", help="PRE-PUBLISH gate (fail-closed): authorize the publish IFF the CI-green marker attests the commit being released. exit 0=authorized, 1=blocked. All-local, no network. Call in s_swarm-release Stage 7b BEFORE `gh release create/edit`. (Replaces the release_publish_guard hook.)")
     p_rel_gate.add_argument("--clear", action="store_true", help="Delete the marker (call after publish, or to reset)")
     p_rel_gate.add_argument("--ref", default=None, help="Tag or sha of the commit BEING RELEASED (e.g. v1.26.0). Resolves <ref>^{commit}, polls CI for THAT commit, records it (+the tag) in the marker. Omit for a branch-tip release (legacy HEAD behavior).")
 

@@ -500,7 +500,10 @@ Include checklist results in the review artifact under `"runtime_patterns"`.
 > end-to-end". Both can apply to one run. The exit-evidence checklist (check 15) gates
 > that the Layer-4 test EXISTS when `cross_boundary` is set.
 
-For each frontend-to-backend boundary in the changeset, explicitly answer:
+For each frontend-to-backend boundary in the changeset, explicitly answer.
+*(The examples use a REST/HTTP + FastAPI/Axios shape — SwarmAI's stack. The same
+contract checks apply to any boundary protocol: gRPC field/proto match, GraphQL
+schema, WebSocket message shape. Translate the columns to the project's protocol.)*
 
 | # | Question | How to verify | Example failure |
 |---|----------|--------------|-----------------|
@@ -534,9 +537,13 @@ Infer execution context from file paths in the changeset, then apply the
 matching checklist. This catches bugs that are invisible in dev but fatal in
 production — the class that pipeline REVIEW + adversarial structurally miss.
 
-**Context detection (automatic, based on file path):**
+**Context detection (automatic, based on file path).** *(The `*.py` patterns are
+SwarmAI-self examples — match the project's own paths/extensions from TECH.md
+`## Codebase Location`; the CONTEXT categories and their checklists are
+language-neutral: a Go cron handler or a Rust CLI needs the CRON/SCRIPT checklist
+just as much as a Python one.)*
 
-| File path pattern | Context | Checklist |
+| File path pattern (SwarmAI-self example) | Context | Checklist |
 |-------------------|---------|-----------|
 | `hooks/*.py` | Per-session recurring | HOOK checklist |
 | `jobs/*.py`, `scheduler.py` | Cron/background | CRON checklist |
@@ -842,9 +849,14 @@ operations, process lifecycle, or any code that could behave differently across
 deployment targets.
 
 **Process:** Read TECH.md for the declared platform list. For each platform,
-verify the changeset works:
+verify the changeset works. *(The worked example below is SwarmAI-self — its
+platforms and absolute paths are SwarmAI's own; a different project has its own
+platform matrix and paths declared in ITS TECH.md. Never treat
+`~/Desktop/SwarmAI-Workspace/swarmai` as a universal path — it is SwarmAI's local
+checkout, shown only to illustrate the candidate-list technique.)*
 
 ```
+# SwarmAI-self example
 TECH.md declares platforms: daemon (macOS), subprocess (Win/Linux), hive (EC2 Linux), dev
 This change touches: path resolution
 

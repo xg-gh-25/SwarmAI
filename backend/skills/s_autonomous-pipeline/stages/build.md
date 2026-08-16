@@ -331,7 +331,7 @@ at the end of BUILD, or after each cluster of edits):
 
 ```bash
 python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
-  --files-touched '["backend/foo.py","desktop/src/Bar.tsx","backend/tests/test_foo.py"]'
+  --files-touched '["src/foo.py","ui/Bar.tsx","tests/test_foo.py"]'   # example paths — use your project's actual changed files
 ```
 
 - Record **WRITTEN files only** (Edit/Write targets + new test files) — NOT files
@@ -353,7 +353,10 @@ the override was justified (plan succeeded despite BLOCK) or the BLOCK was corre
 ## Step 1: RED→GREEN Tracer Bullet
 
 1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)
-2. Read TECH.md for test framework (pytest, vitest) and conventions
+2. **Read the project's TECH.md `## Dev Commands` + `## Stack` → this is THE
+   source for the test framework and conventions for THIS project.** Use whatever
+   it declares (`pytest`, `vitest`, `go test`, `cargo test`, `mvn test`, `jest`…).
+   `pytest`/`vitest` are SwarmAI's own stack — do NOT default to them for another project.
 3. Pick the **single most important acceptance criterion** — the one that proves
    the core path works end-to-end
 4. Write ONE test for it (it MUST fail — nothing implemented yet)
@@ -508,23 +511,31 @@ It takes 30 seconds and catches the #1 class of "works on happy path, breaks on 
 
 ## Step 3: VERIFY -- Targeted tests, zero regressions
 
+**STEP: resolve THIS project's test command first.** Read the project's TECH.md
+`## Dev Commands` (and `## Stack`) → use THAT as your test runner. The `pytest`
+invocations below are **SwarmAI's own value, shown for reference** — substitute
+the project's (`go test ./...`, `mvn test`, `cargo test`, `npm test`, etc.).
+
 **VERIFY rules (BLOCKING):**
-- Run **changed test files + test files that import changed modules**.
+- Run **changed test files + test files that import changed modules**, using the
+  project's test command. *(SwarmAI-self reference:)*
   ```
   pytest tests/test_foo.py tests/test_bar.py --timeout=60
   ```
-- **For widely-imported modules** (database/sqlite.py, core/prompt_builder.py,
-  session_router.py, etc.), find ALL dependent test files via grep:
+- **For widely-imported modules**, find ALL dependent test files via grep, then
+  run exactly those files (catches interaction bugs without the full suite).
+  *(SwarmAI-self reference — adapt the import pattern + runner to the project:)*
   ```
   grep -rl "from database\|import database\|SQLiteDatabase" tests/ --include="*.py" | sort -u
   ```
-  Then run exactly those files. This catches interaction bugs without running
-  the full 700+ test suite (which hangs with xdist --maxfail).
-  **NEVER run the full suite (`SWARMAI_SUITE=1`) as an agent** — it has known
-  xdist deadlock issues that cause infinite hangs. Full suite is human-only.
-- If you're unsure which tests to run, use `pytest --lf --timeout=60` (last-failed).
-- **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.
-- **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.
+  - **SwarmAI-SELF note:** **NEVER run SwarmAI's full suite (`SWARMAI_SUITE=1`)
+    as an agent** — SwarmAI has known pytest-xdist deadlock issues that cause
+    infinite hangs; full suite is human-only. This is a SwarmAI-specific hazard
+    (`SWARMAI_SUITE` is a SwarmAI env flag) — other projects have their own
+    full-suite policy; read TECH.md/STEERING for it, don't assume xdist.
+- If unsure which tests to run and the project uses pytest, `pytest --lf --timeout=60`
+  (last-failed). For other runners, use the equivalent (e.g. `go test -run`, `cargo test <name>`).
+- **NEVER** pipe the test runner through `| tail` -- it hides pass/fail status.
 - If all tests pass -- proceed to Step 4. Done.
 - If tests fail -- fix code, re-run **only failing tests**.
 - **Max 2 VERIFY re-runs total.** After 2 runs, if still failing:
@@ -657,12 +668,21 @@ within ±50 lines, or change is adding a new function (nothing pre-existing to g
 
 14. For each modified file that has new branches (if/else, try/except,
     config-gated paths), write a minimal inline smoke test that forces
-    execution through the new path. The goal is to catch AttributeError,
-    NameError, and other runtime crashes that unit tests miss because
-    they mock the surrounding context.
+    execution through the new path. The goal is to catch runtime crashes
+    (AttributeError/NameError in Python, nil-panics in Go, unwrap panics in
+    Rust, NPEs in Java…) that unit tests miss because they mock the context.
+
+    > **Stack note:** the code snippets in this section (Python imports,
+    > `vitest`/`jsdom`, React/Tauri) are **SwarmAI's own stack, shown as
+    > concrete illustration**. The *technique* (force-execute new branches
+    > in-process before trusting a slow subprocess/e2e) is language-neutral —
+    > translate each snippet to the project's stack from TECH.md `## Stack`:
+    > Python `import` smoke → Go `go build ./... && go run`, Rust `cargo check`,
+    > TS `tsc --noEmit` + node import, Java compile + main. Do NOT skip the
+    > technique because the example is in a language you're not using.
 
     ```python
-    # Example: new config-gated code in prompt_builder.py
+    # Example (SwarmAI-self): new config-gated code in prompt_builder.py
     from core.prompt_builder import PromptBuilder
     pb = PromptBuilder(config={"memory_progressive_disclosure": True})
     # Call the method that contains the new branch -- don't assert output,

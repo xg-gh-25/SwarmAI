@@ -909,11 +909,10 @@ class PromptBuilder:
             # `git status --porcelain` on an L1-cache-miss (context_directory_loader
             # _is_l1_fresh_uncached) and reads ~11 context files. On the event loop
             # that fork stalls EVERY concurrently-streaming tab's SSE. Dispatched via
-            # executors.run_in on the bounded io pool (NOT the default pool) — the git
-            # fork is 2 layers below the benign-named load_all, so default_pool_guard's
-            # lexical scan can't see it; the guard's file-level rule flags this file
-            # instead. _write_l1_cache is atomic (os.replace) so the shared L1 cache
-            # is tear-free. perf_counter brackets the await to preserve the timing log.
+            # executors.run_in on the bounded io pool (NOT the default pool) so a
+            # blocking fork never saturates the shared default executor (O006/O020).
+            # _write_l1_cache is atomic (os.replace) so the shared L1 cache is
+            # tear-free. perf_counter brackets the await to preserve the timing log.
             _t1 = time.perf_counter()
             # executors.run_in is positional-only; load_all uses kwargs → lambda.
             context_text = await executors.run_in(

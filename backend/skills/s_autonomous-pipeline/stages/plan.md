@@ -84,7 +84,9 @@ locations, naming conventions, or architectural patterns. Every sub-change
 must be executable by reading ONLY this spec — no ambient knowledge assumed.
 If BUILD has to grep to find a file you referenced, the spec is incomplete.
 
-**Format:**
+**Format** *(the paths/commands below are illustrative — they use SwarmAI's own
+Python/FastAPI/Tauri stack; for another project substitute its real paths and its
+test/build commands from TECH.md `## Dev Commands`/`## Stack`)*:
 ```markdown
 ## Change Spec (ordered)
 1. `backend/routers/chat.py` → Add `POST /api/chat/transcribe` endpoint
@@ -180,7 +182,9 @@ with valid JSON body containing `transcript` field" is.
 BEFORE BUILD starts. Without this, BUILD spends half its time figuring out
 test setup instead of writing implementation.
 
-For each acceptance criterion, specify:
+For each acceptance criterion, specify *(the harness/mock cells below use SwarmAI's
+Python stack — httpx/pytest/ASGI — as illustration; use the project's own test
+harness from TECH.md `## Stack`, e.g. Go `httptest`, JUnit `MockMvc`, vitest)*:
 
 ```markdown
 ## Test Strategy
