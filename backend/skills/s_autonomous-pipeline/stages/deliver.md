@@ -320,8 +320,11 @@ specialist prompts as priority focus: `"REVIEW litmus flagged weak areas:
 Analyze the changeset to determine which specialists to dispatch:
 
 ```bash
-# Get changed files
-git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1
+# Get changed files. Resolve the default branch (NOT hardcoded main); fall back
+# to HEAD~1 if no base ref resolves (works for master/develop/any-branch projects).
+BASE_REF=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
+  || for _b in origin/main origin/master origin/develop; do git rev-parse --verify "$_b" >/dev/null 2>&1 && { echo "$_b"; break; }; done)
+git diff --name-only "${BASE_REF:-HEAD~1}"...HEAD 2>/dev/null || git diff --name-only HEAD~1
 ```
 
 **Dispatch rules:**
@@ -348,7 +351,7 @@ work_type-driven rather than relying only on the line-count proxy below.
 **🚨 MECHANICAL OVERRIDE: diff > 100 lines = full tier, regardless of profile.**
 
 ```bash
-DIFF_LINES=$(git diff --stat origin/main...HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
+DIFF_LINES=$(git diff --stat "${BASE_REF:-HEAD~1}"...HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
 DIFF_LINES=${DIFF_LINES:-0}
 if [ "$DIFF_LINES" -gt 100 ]; then
   echo "TIER OVERRIDE: $DIFF_LINES insertions > 100 → forcing FULL adversarial (all specialists)"
@@ -816,10 +819,13 @@ destroys credibility for all future outputs.
 has corresponding documentation updates. Catches "code shipped, docs forgot"
 drift that accumulates silently.
 
-**Pre-flight: verify origin/main exists.**
-If `git rev-parse origin/main >/dev/null 2>&1` fails, skip doc-sync check
-entirely and note "WARN: origin/main not available, doc-sync check skipped"
-in the report. This handles fresh clones and shallow checkouts.
+**Pre-flight: the DEFAULT BRANCH is resolved (do NOT assume `main`).**
+The project's base branch may be `main`, `master`, `develop`, or anything else —
+never hardcode `main`. It is resolved into `$BASE_REF` at the TOP of the single
+doc-sync bash block below (not a separate block — a shell variable does NOT
+survive across separate Bash tool invocations, so resolution and use MUST live in
+ONE block). If no base ref resolves (fresh clone, shallow, no remote), the block
+skips with "WARN: base branch not resolvable, doc-sync skipped".
 
 **Project-neutral by design.** This check must NOT assume the developed project
 uses SwarmAI's directory layout (`backend/core/`, `docs/`, `docs/post-mortems/`).
@@ -854,28 +860,37 @@ CORE_PATH='^backend/core/'      # ## Key Subsystems core-code pattern; ""=skip
 DOCS_DIR='docs/'                # declared docs dir;                    ""=skip
 PM_DIR='^docs/post-mortems/'    # declared post-mortem dir;             ""=skip
 
-# 0. Pre-flight
-git rev-parse origin/main >/dev/null 2>&1 || { echo "WARN: origin/main unavailable"; exit 0; }
+# 0. Resolve default branch INTO $BASE_REF — project-neutral, NOT hardcoded main.
+#    Resolved HERE (same block as its use) because a shell var does not survive
+#    across separate Bash invocations. Order: remote HEAD symref (yields the full
+#    'origin/<name>' form) → common names. Empty → skip (can't diff without a base).
+BASE_REF=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+if [ -z "$BASE_REF" ]; then
+  for _b in origin/main origin/master origin/develop; do
+    git rev-parse --verify "$_b" >/dev/null 2>&1 && { BASE_REF="$_b"; break; }
+  done
+fi
+[ -z "$BASE_REF" ] && { echo "WARN: base branch not resolvable, doc-sync skipped"; exit 0; }
 
 # 1. New core-code files → must have a TECH.md Key Subsystems entry (skip if CORE_PATH empty)
 if [ -n "$CORE_PATH" ]; then
-  NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep "$CORE_PATH" | grep -v '__pycache__\|test')
+  NEW_CORE_FILES=$(git diff --name-only --diff-filter=A "$BASE_REF"...HEAD | grep "$CORE_PATH" | grep -v '__pycache__\|test')
 else
   echo "N/A: project declares no core-subsystem convention"
 fi
 
 # 2. Feat commits → the project's declared docs dir should have been updated (skip if DOCS_DIR empty)
-FEAT_COMMITS=$(git log --oneline origin/main...HEAD | grep -iE "^[a-f0-9]+ feat")
+FEAT_COMMITS=$(git log --oneline "$BASE_REF"...HEAD | grep -iE "^[a-f0-9]+ feat")
 if [ -n "$DOCS_DIR" ]; then
-  DOCS_IN_BRANCH=$(git diff --name-only origin/main...HEAD -- "$DOCS_DIR" | wc -l)
+  DOCS_IN_BRANCH=$(git diff --name-only "$BASE_REF"...HEAD -- "$DOCS_DIR" | wc -l)
 else
   echo "N/A: project declares no docs directory"
 fi
 
 # 3. COE/P0 fix → the project's declared post-mortem dir should have a new file (skip if PM_DIR empty)
-COE_FIX=$(git log --oneline origin/main...HEAD | grep -iE "COE|P0|bilateral|deadlock|crash.*all")
+COE_FIX=$(git log --oneline "$BASE_REF"...HEAD | grep -iE "COE|P0|bilateral|deadlock|crash.*all")
 if [ -n "$PM_DIR" ]; then
-  PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep "$PM_DIR" | wc -l)
+  PM_COUNT=$(git diff --name-only --diff-filter=A "$BASE_REF"...HEAD | grep "$PM_DIR" | wc -l)
 else
   echo "N/A: project declares no post-mortem directory"
 fi

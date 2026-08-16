@@ -601,10 +601,21 @@ no separate inline implementation needed.
 
 ## Scheduled Mode (Job System)
 
-For goals spanning multiple sessions, create a job after EVALUATE+PLAN:
+> **⚠️ SwarmAI-SELF feature — NOT available to other projects.** Scheduled mode
+> depends on SwarmAI's own job scheduler (`Services/swarm-jobs/`), which a
+> non-SwarmAI project does not have. **If you are developing another project:** use
+> **inline mode** (run the goal loop in-session), or wire the resume-cycle prompt
+> below into YOUR OWN scheduler — an external `cron` entry, a CI cron trigger, a
+> systemd timer, GitHub Actions `schedule:`, etc. — pointing at your own runner.
+> The cross-session state carrier (the progress file) is portable; only the
+> SwarmAI `user-jobs.yaml` mechanism below is SwarmAI-specific. Do NOT write to the
+> SwarmAI path from another project — it won't be picked up.
+
+For goals spanning multiple sessions (SwarmAI-self), create a job after EVALUATE+PLAN:
 
 ```yaml
-# Append to ~/.swarm-ai/SwarmWS/Services/swarm-jobs/user-jobs.yaml
+# SwarmAI-self ONLY — append to ~/.swarm-ai/SwarmWS/Services/swarm-jobs/user-jobs.yaml
+# (other projects: use external cron / CI schedule / systemd timer instead)
 jobs:
   - id: goal-<slug>
     name: "<goal description>"

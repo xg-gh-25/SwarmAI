@@ -197,6 +197,38 @@ def _get_current_branch() -> str:
         return "unknown"
 
 
+def _get_default_branch() -> str | None:
+    """Resolve the repo's DEFAULT branch — never assume 'main'.
+
+    A project's base branch may be main/master/develop/anything. Order:
+    remote HEAD symref (authoritative) → first existing of common names.
+    Returns None if none resolves (so the caller can let `gh` fall back to
+    its own default rather than forcing a wrong `--base`).
+    """
+    try:
+        r = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        ref = r.stdout.strip()
+        if ref:
+            # "origin/main" → "main"
+            return ref.split("/", 1)[1] if "/" in ref else ref
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    for cand in ("main", "master", "develop"):
+        try:
+            v = subprocess.run(
+                ["git", "rev-parse", "--verify", f"origin/{cand}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if v.returncode == 0:
+                return cand
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+    return None
+
+
 def create_pr(run_dir: str, dry_run: bool = False) -> dict:
     """Create a PR from pipeline run artifacts.
 
@@ -258,9 +290,13 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
     if not auth_ok:
         return {"success": False, "error": f"gh auth failed: {auth_err}"}
 
-    # Branch handling (AC5): if on main, create a feature branch first
+    # Branch handling (AC5): if on the base branch, create a feature branch first.
+    # base_branch = what the PR should target. NEVER hardcode 'main': if we're on
+    # a mainline (main/master), the PR base IS that branch; otherwise resolve the
+    # repo's default branch (may be develop/master/etc). None → let gh default.
     branch = _get_current_branch()
     if branch in ("main", "master"):
+        base_branch = branch  # PR targets the mainline we branched off
         run_id = run_data.get("id", "pipeline")
         # PE-1: validate run_id before using in branch name
         if not _RUN_ID_PATTERN.match(run_id):
@@ -280,6 +316,9 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
             subprocess.run(["git", "checkout", branch], capture_output=True, timeout=5)
             return {"success": False, "error": f"Branch creation failed: {e}"}
     else:
+        # Already on a feature branch → PR targets the repo's default branch
+        # (resolved, not assumed main). None → omit --base, let gh choose.
+        base_branch = _get_default_branch()
         # Push current branch to remote
         try:
             subprocess.run(
@@ -299,6 +338,10 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
         body_file.close()
 
         gh_cmd = ["gh", "pr", "create", "--title", title, "--body-file", body_file.name, "--auto"]
+        # Target the resolved base branch explicitly (never let gh silently pick
+        # the repo default when we KNOW the base — e.g. we branched off master).
+        if base_branch:
+            gh_cmd += ["--base", base_branch]
         result = subprocess.run(
             gh_cmd,
             capture_output=True,
