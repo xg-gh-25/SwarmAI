@@ -1865,8 +1865,16 @@ def _session_adversarial_coverage(session_id: str):
     reviewed_paths KEY (git-unavailable at review time = unbounded, back-compat).
     A marker with reviewed_paths == [] contributes the EMPTY set to `covered` and
     does NOT set has_unbounded — the []-vs-key-absent distinction is by KEY
-    PRESENCE, never truthiness (Gate-1 round-2 #3). Fail-open signalled by the
-    caller; this returns (True, set(), True) on OSError so the gate approves."""
+    PRESENCE, never truthiness (Gate-1 round-2 #3).
+
+    C2: `has_unbounded` is NO LONGER a blanket approve signal. The gate now binds
+    the diff FIRST (covered ⊇ pending → approve); an unbounded marker only serves
+    as a LOUD (WARN) fail-open fallback when covered does not cover pending AND git
+    genuinely couldn't compute coverage at review time. So a single path-less marker
+    can no longer unlock every commit in the session — a real, coverable-but-uncovered
+    path is still DENIED. Fail-open on THIS helper's own failure is still signalled by
+    returning (True, set(), True) on OSError (the caller then hits the unbounded
+    fallback + WARN)."""
     covered: set[str] = set()
     has_marker = False
     has_unbounded = False
@@ -1937,9 +1945,20 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
 
         if not has_marker:
             pass  # → DENY below (Plan B parity: no adversarial review at all)
-        elif has_unbounded:
-            return {"decision": "approve"}  # a path-less marker = unbounded (back-compat)
         else:
+            # C2: an unbounded (path-less) marker no longer SHORT-CIRCUITS to approve.
+            # A missing reviewed_paths key means "git was unavailable at review time"
+            # (legit back-compat degrade) — but it must NOT be a blanket pass that
+            # lets a path NO review covered ride through. So: always try to bind the
+            # diff first (covered ⊇ pending → approve). ONLY if binding is impossible
+            # OR pending is not covered do we fall back to the unbounded fail-open —
+            # and then loudly (WARN), never silently. This preserves the legit-degrade
+            # path (a real review whose marker lost its paths still approves when its
+            # covered set — from OTHER bounded markers — suffices, or when nothing can
+            # be computed) while closing the "one path-less marker unlocks every commit"
+            # hole (a real, uncovered path is now DENIED even with an unbounded marker
+            # present, unless git genuinely can't compute the pending set).
+            #
             # Bind to the diff: every pending path must be covered. Pending set
             # uncomputable (not a repo / git error / timeout) → fail OPEN.
             try:
@@ -1960,6 +1979,19 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                 # existence-only (Plan B parity), NOT a vacuous all([]) coverage-pass.
                 return {"decision": "approve"}
             elif pending <= covered:  # subset → fully reviewed
+                return {"decision": "approve"}
+            elif has_unbounded:
+                # Covered set (from bounded markers) does NOT cover pending, but an
+                # unbounded marker exists → fall back to the back-compat fail-open,
+                # but LOUDLY: git was unavailable at review time, so we cannot prove
+                # coverage. This is observable (unlike the old silent short-circuit)
+                # so a persistent unbounded-marker pattern surfaces instead of hiding.
+                logger.warning(
+                    "[adversarial-gate] UNBOUNDED fail-open — a path-less adversarial "
+                    "marker (git unavailable at review time) does not cover pending "
+                    "path(s) %s; approving on back-compat degrade (session=%s)",
+                    sorted(p for p in pending if p not in covered)[:5], session_id,
+                )
                 return {"decision": "approve"}
             # else: some pending path was never adversarially reviewed → DENY below
 

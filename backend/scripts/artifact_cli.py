@@ -54,7 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.artifact_registry import ArtifactRegistry
-from core.pipeline_profiles import get_profile_stages
+from core.pipeline_profiles import get_profile_stages, normalize_profile
 
 # Sibling module in backend/scripts/ — pure completion commit+surface gate logic.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -775,6 +775,16 @@ def _run_tokens(data: dict) -> int:
 # FALSIFIED"). This string is the primary zombie discriminator.
 _CRASH_ZOMBIE_REASON = "session_crash_auto_detected"
 
+# C1: the terminal status set — a run in one of these has FINISHED. Single source
+# of truth shared by is_terminal_run() (liveness) AND the run-update transition guard
+# (revival protection), so the two can never drift on what "terminal" means.
+_TERMINAL_STATUSES = ("completed", "complete", "abandoned", "failed", "cancelled")
+# The live statuses a terminal run must NOT be silently flipped back into (revival).
+_REVIVAL_STATUSES = ("running", "paused")
+# All legal status values run-update accepts (argparse choices) — rejects typos/junk.
+_VALID_STATUSES = ("running", "paused", "completed", "complete", "failed",
+                   "cancelled", "abandoned")
+
 
 def is_terminal_run(data: dict) -> bool:
     """Single source of truth: has this run reached a TERMINAL (finished) state,
@@ -806,7 +816,7 @@ def is_terminal_run(data: dict) -> bool:
     if not isinstance(data, dict):
         return False
     status = data.get("status")
-    if status in ("completed", "complete", "abandoned", "failed", "cancelled"):
+    if status in _TERMINAL_STATUSES:
         return True
     # End-of-run stage markers ONLY (see _delivered_by_stages): a completed
     # reflect/deliver means the run produced its deliverable. (Do NOT infer
@@ -1377,7 +1387,9 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         "id": run_id,
         "project": args.project,
         "requirement": args.requirement,
-        "profile": args.profile or None,
+        # C3: store canonical profile if given; None stays None (profile is classified
+        # after EVALUATE — "not yet set" is meaningful and must not become "full").
+        "profile": normalize_profile(args.profile) if args.profile else None,
         "status": "running",
         "stages": [],
         "taste_decisions": [],
@@ -1410,6 +1422,50 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     if args.status:
+        # ── C1: Terminal-state revival guard (transition matrix) ──────────────
+        # A run in a TERMINAL status (completed/complete/abandoned/failed/cancelled)
+        # has FINISHED. Silently flipping it back to running/paused creates a split
+        # state (status=running but stages terminal) that every liveness check
+        # mis-reads as a resumable crash-zombie. Blindly overwriting status here (the
+        # historical behavior) let completed→running, cancelled→running all pass.
+        # Revival now requires an explicit, auditable override: --force AND --reason.
+        # SCOPE (deliberate): this guard covers only terminal→{running,paused}
+        # (REVIVAL — the split-state hazard). A terminal→other-terminal write (e.g.
+        # failed→completed) is NOT caught here — it still passes through the
+        # Completion Gate below, which independently verifies stage completeness, so
+        # it is not a free bypass. Legal LIVE transitions (running→terminal,
+        # paused→running resume, terminal→same idempotent) are untouched. (run-resume
+        # is a SEPARATE command with its own paused-only gate, so normal resume never
+        # reaches here.)
+        _old_status = run_state.get("status")
+        _reviving = (
+            _old_status in _TERMINAL_STATUSES
+            and args.status in _REVIVAL_STATUSES
+            and args.status != _old_status
+        )
+        if _reviving and not (getattr(args, "force", False) and getattr(args, "reason", None)):
+            print(json.dumps({
+                "blocked": True,
+                "error": (
+                    f"REVIVAL REFUSED: run is terminal (status='{_old_status}') and "
+                    f"cannot be flipped to '{args.status}'. A terminal run has finished; "
+                    f"reviving it produces a split state every liveness check mis-reads. "
+                    f"If this is a deliberate ops recovery, pass BOTH --force AND "
+                    f"--reason '<why>' (auditable override)."
+                ),
+                "current_status": _old_status,
+                "attempted_status": args.status,
+                "pipeline_id": args.run_id,
+            }), file=sys.stderr)
+            sys.exit(2)
+        if _reviving:
+            # Auditable override taken — record it on the run so OS Eval / a human
+            # can later assess whether the revival was justified.
+            run_state.setdefault("status_overrides", []).append({
+                "from": _old_status, "to": args.status,
+                "reason": args.reason, "at": now,
+            })
+
         # ── Single choke-point for the paused transition (COE10 dual-write guard) ──
         # run-update --status paused is the OTHER door to a pause; it must honor the
         # same confabulation gate as run-checkpoint, or the gate is trivially bypassed
@@ -1443,7 +1499,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         if args.status == "completed":
             # ── Completion Gate: ALL profile stages must be done or explicitly skipped ──
             # Every stage in the DDD+pipeline loop has purpose. No silent skips.
-            profile = run_state.get("profile", "full")
+            # C3: normalize so a variant/alias ("Full"/"standard") resolves to the
+            # same non-skippable set + stage list — never slips the completion gate.
+            profile = normalize_profile(run_state.get("profile"))
             profile_stages = _get_profile_stages(profile)
 
             stage_status_map: dict[str, str] = {}
@@ -1745,7 +1803,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 # adversarial review in DELIVER, so no artifact_id is expected.
                 # Goal profile is also exempt here — its adversarial runs inside
                 # goal_cycle, enforced by the adversarial_review gate below.)
-                _profile = run_state.get("profile", "full")
+                _profile = normalize_profile(run_state.get("profile"))  # C3: canonical
                 if deliver_rec and not deliver_rec.get("artifact_id"):
                     if _profile in ("full", "bugfix"):
                         validator_errors.append(
@@ -1922,7 +1980,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # doesn't fire. This parallel gate ensures adversarial review ran
             # before goal completion. Without it, agent can rationalize skip
             # (CLASS A pattern: "DoD passed, adversarial is redundant").
-            _goal_profile = run_state.get("profile")
+            # C3: normalize before the literal comparison — a variant/alias 'Goal'
+            # would otherwise skip this mandatory goal-cycle adversarial gate (the
+            # same fail-open the C3 fix closes everywhere else; caught by Gate-2).
+            _goal_profile = normalize_profile(run_state.get("profile"))
             if _goal_profile == "goal":
                 goal_cycle_rec = next(
                     (s for s in run_state.get("stages", [])
@@ -2137,8 +2198,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # "standard" kept as backwards-compat alias for "full" (legacy run.json files may use it)
         _PROFILE_RANK = {"trivial": 1, "docs": 2, "research": 2, "bugfix": 3, "full": 4, "standard": 4, "goal": 4}
         current_profile = run_state.get("profile")
-        new_rank = _PROFILE_RANK.get(args.profile, 3)
-        current_rank = _PROFILE_RANK.get(current_profile, 3)
+        # C3: normalize before rank lookup — a variant ("Full") would otherwise miss
+        # the table and default to rank 3, mis-ordering the downgrade guard (C036).
+        new_rank = _PROFILE_RANK.get(normalize_profile(args.profile), 3)
+        current_rank = _PROFILE_RANK.get(normalize_profile(current_profile), 3)
 
         # Check if any stage beyond evaluate is completed
         post_evaluate_stages = [
@@ -2160,7 +2223,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             }))
             sys.exit(1)
         # ─────────────────────────────────────────────────────────────────────────
-        run_state["profile"] = args.profile
+        # C3: store the CANONICAL profile (write-side normalization) so a variant
+        # ("Full"/"standard") never lands in run.json to drift a downstream gate.
+        run_state["profile"] = normalize_profile(args.profile)
 
     if args.ddd_checksums:
         run_state["ddd_checksums"] = json.loads(args.ddd_checksums)
@@ -3420,7 +3485,7 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     stages = run_state.get("stages", [])
-    profile = run_state.get("profile", "full")
+    profile = normalize_profile(run_state.get("profile"))  # C3: label consistency
     requirement = run_state.get("requirement", "")
 
     # ── Load artifact data strictly from this run ──────────────────────
@@ -4903,13 +4968,20 @@ def main() -> None:
     p_run_update = sub.add_parser("run-update", help="Update a pipeline run")
     p_run_update.add_argument("--project", required=True)
     p_run_update.add_argument("--run-id", required=True, help="Pipeline run ID")
-    p_run_update.add_argument("--status", default=None, help="New status: running/paused/completed/failed/cancelled")
+    # C1: choices rejects typos/junk status values (was a free-form string → any junk
+    # landed in run.json). Keep the full legal set incl. the 'complete' spelling variant.
+    p_run_update.add_argument("--status", default=None, choices=_VALID_STATUSES,
+                              help="New status (one of: " + "/".join(_VALID_STATUSES) + ")")
     p_run_update.add_argument("--stage-json", default=None, help="Stage record JSON to add/update")
     p_run_update.add_argument("--taste-decision", default=None, help="Taste decision JSON to append")
     p_run_update.add_argument("--profile", default=None, help="Pipeline profile override")
     p_run_update.add_argument("--ddd-checksums", default=None, help="DDD doc checksums JSON (from ddd-check)")
     p_run_update.add_argument("--files-touched", default=None, help="JSON array of source file paths THIS run wrote (dedup-appended to run.json files_touched; consumed by run-commit)")
     p_run_update.add_argument("--force-checkpoint", action="store_true", help="Override the confabulation guard when setting --status paused")
+    # C1: revive a TERMINAL run (completed/failed/cancelled/abandoned) back to
+    # running/paused — requires BOTH --force and --reason (auditable override).
+    p_run_update.add_argument("--force", action="store_true", help="Override the C1 terminal-revival guard (requires --reason)")
+    p_run_update.add_argument("--reason", default=None, help="Audit reason for a --force terminal revival")
 
     # run-get
     p_run_get = sub.add_parser("run-get", help="Get pipeline run state")

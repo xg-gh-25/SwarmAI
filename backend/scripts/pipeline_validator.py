@@ -57,7 +57,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.ddd_paths import ddd_path
-from core.pipeline_profiles import get_profile_stages
+from core.pipeline_profiles import get_profile_stages, normalize_profile, is_relaxed_profile
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 
 # ---------------------------------------------------------------------------
@@ -1160,6 +1160,12 @@ def validate_artifact_data(
     """
     errors: list[str] = []
 
+    # C3: canonicalize the profile ONCE at entry so every strict/relaxed decision
+    # below compares against the SSOT value — a variant ("Full") or alias ("standard")
+    # can no longer slip past the adversarial-enforcement gates (which used raw
+    # `profile in ("full","bugfix","")` literals, fail-OPEN on any unknown value).
+    profile = normalize_profile(profile)
+
     # Check 6 at PUBLISH time (Run A, run_7627f63c): reject an off-profile stage
     # BEFORE any schema work. This MUST precede the `if not schema: return []`
     # early-return below — else an artifactless off-profile stage (goal_cycle /
@@ -1193,8 +1199,8 @@ def validate_artifact_data(
         if parent_val is None:
             # Parent field entirely absent — this IS the violation
             # Exception: trivial/research/docs profiles can skip adversarial
-            _skip_profiles = ("trivial", "research", "docs")
-            if profile not in _skip_profiles:
+            # (C3: strict = fail-closed via SSOT — unknown/variant profile is strict)
+            if not is_relaxed_profile(profile):
                 errors.append(
                     f"Missing required field '{parent_field}' — "
                     f"depth validation requires this for {stage} stage "
@@ -1247,15 +1253,17 @@ def validate_artifact_data(
             tier = ar.get("profile_tier", "")
             # Tier=skipped on full/bugfix → BLOCK (C026 fix)
             # Relaxed profiles (trivial/research/docs) can skip adversarial
-            _strict_profiles = ("full", "bugfix", "")
-            if tier in ("skipped", "lite") and profile in _strict_profiles:
+            # (C3: strict = fail-closed via SSOT — a variant/unknown profile is
+            # STRICT, so it can no longer skip adversarial enforcement.)
+            _strict = not is_relaxed_profile(profile)
+            if tier in ("skipped", "lite") and _strict:
                 errors.append(
                     f"adversarial_review.profile_tier='{tier}' but profile='{profile}' "
                     f"requires full adversarial review. Only trivial/research/docs exempt."
                 )
             # spawned=true enforcement: adversarial sub-agent must actually run (not just tier declared)
             spawned = ar.get("spawned")
-            if profile in _strict_profiles:
+            if _strict:
                 if spawned is True or spawned == "true" or spawned == 1:
                     # Two-field enforcement (Rule 23): spawned=true alone is insufficient.
                     # Agent must also provide 'evidence' field describing HOW it was spawned.
@@ -1307,8 +1315,8 @@ def validate_artifact_data(
         # This prevents the C028 pattern: running adversarial but skipping
         # completion audit, meta-review, and convergence loop.
         # Profile-aware relaxation: trivial/research/docs skip meta_review + convergence.
-        _relaxed_profiles = ("trivial", "research", "docs")
-        if profile in _relaxed_profiles:
+        # (C3: SSOT predicate — strict is the fail-closed default for unknown/variant.)
+        if is_relaxed_profile(profile):
             # Relaxed validation: only need completion_audit (basic AC check)
             ca = data.get("completion_audit")
             if not isinstance(ca, dict):
@@ -1317,7 +1325,7 @@ def validate_artifact_data(
                     "Even trivial profiles need basic AC verification."
                 )
             # meta_review, convergence: NOT required for relaxed profiles
-        elif profile in ("full", "bugfix", ""):
+        else:
             # Check: completion_audit must exist and be all_green
             ca = data.get("completion_audit")
             if not isinstance(ca, dict):
@@ -1377,10 +1385,10 @@ def validate_artifact_data(
         # Relaxed profiles (trivial/research/docs) skip REPRO — matches the
         # depth-check relaxation pattern above; a doc-typo "bugfix" shouldn't
         # demand ps/log forensics. Adversarial LOW (run_688b6487).
-        _repro_skip = ("trivial", "research", "docs")
+        # (C3: SSOT predicate — strict is fail-closed for unknown/variant.)
         _is_bug = (
             (data.get("scope") == "bugfix") or (data.get("bug_class") is True)
-        ) and profile not in _repro_skip
+        ) and not is_relaxed_profile(profile)
         if _is_bug:
             # Resolve via the shared alias resolver: a bug-class eval may carry its
             # observation either in the legacy observation_evidence field OR in the
@@ -1864,6 +1872,10 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
     """
     errors: list[str] = []
 
+    # C3: canonicalize once at entry (SSOT) so the adversarial-enforcement gates
+    # below can't be skipped by a variant/alias profile value.
+    profile = normalize_profile(profile)
+
     if stage == "review":
         # runtime_patterns: must be dict with checked > 0 and patterns list
         rp = artifact_data.get("runtime_patterns")
@@ -1889,7 +1901,8 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
         ar = artifact_data.get("adversarial_review")
         if ar is None:
             # Absent field = adversarial review was never run
-            if profile in ("full", "bugfix", ""):
+            # (C3: fail-closed via SSOT — strict for any non-relaxed profile.)
+            if not is_relaxed_profile(profile):
                 errors.append(
                     "Depth: adversarial_review field MISSING from deliver artifact — "
                     "adversarial sub-agent was never spawned. This is MANDATORY for "
@@ -1906,7 +1919,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                     "Depth: adversarial_review.profile_tier missing — "
                     "was the sub-agent actually spawned?"
                 )
-            elif tier in ("skipped", "lite") and profile in ("full", "bugfix"):
+            elif tier in ("skipped", "lite") and not is_relaxed_profile(profile):
                 errors.append(
                     f"Depth: adversarial_review.profile_tier='{tier}' but profile='{profile}' "
                     f"requires full adversarial review (independent sub-agent). "
@@ -1949,7 +1962,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
             # completion. This makes the gate_spawn_blocked guarantee structural
             # on EVERY path to status:completed, not just `publish --stage deliver`.
             # (C037/CLASS-A fail-open-at-last-gate pattern.)
-            if isinstance(ar, dict) and profile in ("full", "bugfix", ""):
+            if isinstance(ar, dict) and not is_relaxed_profile(profile):
                 spawned = ar.get("spawned")
                 if spawned is True or spawned == "true" or spawned == 1:
                     evidence = ar.get("evidence", "")
@@ -1987,7 +2000,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
 
         # completion_audit: MUST exist for full/bugfix profiles
         ca = artifact_data.get("completion_audit")
-        if ca is None and profile in ("full", "bugfix", ""):
+        if ca is None and not is_relaxed_profile(profile):
             errors.append(
                 "Depth: completion_audit field MISSING from deliver artifact — "
                 "was the Completion Audit (AC → evidence verification) actually run? "
@@ -2024,7 +2037,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
         # here so the field is enforced on EVERY path to status:completed (R27: one
         # invariant, both gates — no publish-only enforcement hole).
         av = artifact_data.get("ac_verification")
-        if av is None and profile in ("full", "bugfix", ""):
+        if av is None and not is_relaxed_profile(profile):
             errors.append(
                 "Depth: ac_verification field MISSING from deliver artifact — "
                 "the AC verification step (each acceptance criterion → evidence) was "
@@ -2496,7 +2509,10 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             "checks_total": checks_total,
         }
 
-    profile = run.get("profile") or "full"
+    # C3: canonicalize the run's profile ONCE (SSOT) — every strict/relaxed check
+    # in validate() and the helpers it calls compares against this normalized value,
+    # so a variant/alias stored in run.json ("Full"/"standard") gates identically.
+    profile = normalize_profile(run.get("profile"))
     stages_list = run.get("stages", [])
 
     # Find the stage record for the stage being validated
@@ -3035,9 +3051,10 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             # Check 8g: TEST layers must have ac_driven.run=true for non-trivial profiles
             checks_total += 1
             test_layers_ok = True
-            _skip_profiles = ("trivial", "research", "docs")
+            # C3: relaxed skip via SSOT (fail-closed — unknown/variant is strict, checked).
+            # _block_profiles stays an explicit tier: full/bugfix BLOCK, goal (also strict) WARNs.
             _block_profiles = ("full", "bugfix")  # F11: BLOCK not WARN for quality profiles
-            if artifact_data and profile not in _skip_profiles:
+            if artifact_data and not is_relaxed_profile(profile):
                 layers = artifact_data.get("layers", {})
                 if not isinstance(layers, dict) or not layers:
                     test_layers_ok = False

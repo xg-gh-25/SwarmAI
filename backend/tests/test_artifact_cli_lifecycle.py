@@ -2056,3 +2056,150 @@ class TestPurgeFailClosed:
         plain.mkdir(parents=True)
         # NOTE: relies on tmp_path having no .git ancestor (pytest tmp dirs don't).
         assert _has_git_dir(plain) is False
+
+
+class TestTerminalStatusTransitionGuard:
+    """C1: run-update --status had NO transition validation for running/failed/
+    cancelled — `run_state['status']=args.status` overwrote blindly, never reading
+    the old status. So completed→running, cancelled→running, failed→completed all
+    passed, reviving a terminal run into a split state (status=running but stages
+    terminal) that every liveness check mis-reads. Fix: a terminal run cannot be
+    revived to running/paused without an explicit --force + --reason."""
+
+    def _args(self, workspace, run_id, status, force=False, reason=None):
+        import argparse
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated files_touched fixed force force_checkpoint "
+                 "frontend full indicators lessons limit modules outcome overlap partial "
+                 "probes producer profile project reason requirement resolved retries "
+                 "review_count rp_violations run_id scope stage stage_json state status "
+                 "summary taste_decision timestamp tokens_consumed topic type types "
+                 "user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = run_id
+        ns.status = status
+        ns.force = force
+        ns.reason = reason
+        return ns
+
+    def _run_update(self, workspace, monkeypatch, args):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        return cli.cmd_run_update(args, ArtifactRegistry(workspace))
+
+    # ── terminal → running/paused: BLOCKED without --force ──
+    @pytest.mark.parametrize("terminal", ["completed", "cancelled", "failed", "abandoned", "complete"])
+    def test_terminal_to_running_blocked(self, workspace, monkeypatch, terminal):
+        _create_run(workspace, "TestProject", "run_t1", terminal)
+        with pytest.raises(SystemExit) as exc:
+            self._run_update(workspace, monkeypatch, self._args(workspace, "run_t1", "running"))
+        assert exc.value.code != 0
+        # status must NOT have changed on disk
+        assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
+                         / "run_t1" / "run.json")["status"] == terminal
+
+    def test_abandoned_to_running_blocked_without_force(self, workspace, monkeypatch):
+        """The realistic ops case: a run auto-abandoned as stale, operator wants it back."""
+        _create_run(workspace, "TestProject", "run_t2", "abandoned")
+        with pytest.raises(SystemExit) as exc:
+            self._run_update(workspace, monkeypatch, self._args(workspace, "run_t2", "running"))
+        assert exc.value.code != 0
+
+    # ── terminal → running WITH --force + --reason: ALLOWED ──
+    def test_terminal_to_running_allowed_with_force_and_reason(self, workspace, monkeypatch):
+        _create_run(workspace, "TestProject", "run_t3", "abandoned")
+        self._run_update(workspace, monkeypatch,
+                         self._args(workspace, "run_t3", "running", force=True,
+                                    reason="ops: run was mis-flagged stale, resuming"))
+        assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
+                         / "run_t3" / "run.json")["status"] == "running"
+
+    def test_force_without_reason_blocked(self, workspace, monkeypatch):
+        """--force alone is not enough — must carry --reason (auditable override)."""
+        _create_run(workspace, "TestProject", "run_t4", "completed")
+        with pytest.raises(SystemExit) as exc:
+            self._run_update(workspace, monkeypatch,
+                             self._args(workspace, "run_t4", "running", force=True, reason=None))
+        assert exc.value.code != 0
+
+    # ── legitimate LIVE transitions: never touched by the guard ──
+    def test_running_to_completed_allowed(self, workspace, monkeypatch):
+        """A normal finish: running→completed is NOT a revival, must pass (the
+        completion gate handles its own checks; the transition guard must not block)."""
+        # minimal run that will fail the completion gate is fine — we assert the
+        # TRANSITION guard specifically doesn't fire (SystemExit from completion gate
+        # would be a different code path; use a terminal-source check instead):
+        _create_run(workspace, "TestProject", "run_t5", "running")
+        # running→failed is a terminal transition FROM a live run → always allowed
+        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t5", "failed"))
+        assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
+                         / "run_t5" / "run.json")["status"] == "failed"
+
+    def test_running_to_cancelled_allowed(self, workspace, monkeypatch):
+        _create_run(workspace, "TestProject", "run_t6", "running")
+        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t6", "cancelled"))
+        assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
+                         / "run_t6" / "run.json")["status"] == "cancelled"
+
+    def test_paused_to_running_allowed(self, workspace, monkeypatch):
+        """paused is NOT terminal — resume (paused→running) must pass freely."""
+        _create_run(workspace, "TestProject", "run_t7", "paused")
+        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t7", "running"))
+        assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
+                         / "run_t7" / "run.json")["status"] == "running"
+
+    def test_terminal_to_same_terminal_is_noop_allowed(self, workspace, monkeypatch):
+        """completed→completed (idempotent re-write) is not a revival — allowed.
+        Guard only blocks terminal→{running,paused} (revival), not terminal→same."""
+        _create_run(workspace, "TestProject", "run_t8", "cancelled")
+        # cancelled→cancelled must not raise the transition guard
+        self._run_update(workspace, monkeypatch, self._args(workspace, "run_t8", "cancelled"))
+        assert _read_run(workspace / "Projects" / "TestProject" / ".artifacts" / "runs"
+                         / "run_t8" / "run.json")["status"] == "cancelled"
+
+
+class TestGoalProfileVariantGate:
+    """C3 (Gate-2 finding): the goal-cycle adversarial completion gate compared a
+    raw un-normalized `run_state['profile'] == 'goal'`. A variant/alias-cased profile
+    ('Goal'/' goal ') made it False → the mandatory Final Adversarial Review gate was
+    silently skipped (fail-OPEN). Fixed by normalizing before the comparison. This
+    test is mutation-proof: it drives a variant-cased goal run whose goal_cycle stage
+    LACKS adversarial_review → completion MUST be blocked."""
+
+    def _args(self, run_id, status):
+        import argparse
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated files_touched fixed force force_checkpoint "
+                 "frontend full indicators lessons limit modules outcome overlap partial "
+                 "probes producer profile project reason requirement resolved retries "
+                 "review_count rp_violations run_id scope stage stage_json state status "
+                 "summary taste_decision timestamp tokens_consumed topic type types "
+                 "user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = run_id
+        ns.status = status
+        return ns
+
+    @pytest.mark.parametrize("goal_variant", ["goal", "Goal", "GOAL", "  goal  "])
+    def test_variant_goal_still_enforces_adversarial_gate(self, workspace, monkeypatch, goal_variant):
+        """A goal run (any casing) with a completed goal_cycle but NO adversarial_review
+        must be BLOCKED from completion — the gate must fire regardless of profile casing."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_gv"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        # goal_cycle completed but adversarial_review absent → gate MUST block.
+        (run_dir / "run.json").write_text(json.dumps({
+            "id": "run_gv", "project": "TestProject", "requirement": "x",
+            "profile": goal_variant, "status": "running",
+            "stages": [{"stage": "goal_cycle", "status": "completed"}],
+        }))
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_run_update(self._args("run_gv", "completed"), ArtifactRegistry(workspace))
+        assert exc.value.code != 0, f"variant '{goal_variant}' must still hit the goal adversarial gate"

@@ -1173,14 +1173,56 @@ class TestAdversarialGateDiffBinding:
         assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
 
     @pytest.mark.asyncio
-    async def test_pathless_marker_is_unbounded(self, tmp_path, monkeypatch):
-        """A key-absent (path-less) marker = unbounded coverage (back-compat)."""
+    async def test_pathless_marker_failopen_is_now_observable(self, tmp_path, monkeypatch, caplog):
+        """C2: a key-absent (path-less/unbounded) marker no longer SHORT-CIRCUITS to
+        approve BEFORE binding the diff. It still fail-opens (a path-less marker means
+        an adversarial review ran but git was unavailable at review time — a legit
+        degrade from an empty hook_cwd; DENYing it would false-block real reviews on
+        CI/multi-cwd — Gate-1). The C2 fix: coverage is bound FIRST (so a bounded
+        review approves on MERIT, not on the unbounded free pass), and the residual
+        unbounded fail-open is now OBSERVABLE (WARN) instead of silent. Fully closing
+        it needs write-side path recording (out of scope — REFLECT note)."""
+        import logging
         repo = self._repo(tmp_path)
         (repo / "c.py").write_text("new\n"); self._git(repo, "add", "c.py")
         audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", None)  # no reviewed_paths key
+        self._adv_marker(audit, "s", None)  # no reviewed_paths key = unbounded
+        gate = self._gate(audit, monkeypatch)
+        with caplog.at_level(logging.WARNING, logger="core.security_hooks"):
+            r = await self._run(gate, repo, "git commit -m x")
+        assert self._approved(r) is True  # legit degrade → fail-open (not false-block)
+        # ...but now LOUD: the unbounded fallback must emit an observable WARN.
+        assert any("UNBOUNDED fail-open" in rec.message for rec in caplog.records), \
+            "unbounded fail-open must be observable (WARN), not silent"
+
+    @pytest.mark.asyncio
+    async def test_pathless_marker_approves_when_other_marker_covers(self, tmp_path, monkeypatch):
+        """C2 no-false-block: an unbounded marker coexisting with a BOUNDED marker
+        that covers the pending path → still approves (covered ⊇ pending wins; the
+        unbounded marker is harmless noise, not a blocker). Proves the fix does not
+        over-DENY a legitimately-reviewed commit."""
+        import os, json
+        repo = self._repo(tmp_path)
+        (repo / "a.py").write_text("999\n"); self._git(repo, "add", "a.py")
+        audit = tmp_path / "audit"; audit.mkdir(parents=True)
+        # marker 1: unbounded (no key). marker 2: bounded, covers a.py.
+        (audit / "session_s_adv_1.marker").write_text(json.dumps({"adversarial": True, "session_id": "s"}))
+        (audit / "session_s_adv_2.marker").write_text(json.dumps(
+            {"adversarial": True, "session_id": "s", "reviewed_paths": [os.path.realpath(str(repo / "a.py"))]}))
         gate = self._gate(audit, monkeypatch)
         assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
+
+    @pytest.mark.asyncio
+    async def test_pathless_marker_failopen_when_pending_uncomputable(self, tmp_path, monkeypatch):
+        """C2 preserves the legit degrade: when git genuinely cannot compute pending
+        (non-git cwd) AND a marker exists, still fail-open approve. The unbounded
+        fallback is only removed for COMPUTABLE-but-uncovered paths, not for the
+        can't-compute case."""
+        nongit = tmp_path / "plain"; nongit.mkdir()
+        audit = tmp_path / "audit"
+        self._adv_marker(audit, "s", None)  # unbounded marker
+        gate = self._gate(audit, monkeypatch)
+        assert self._approved(await self._run(gate, nongit, "git commit -m x")) is True
 
     @pytest.mark.asyncio
     async def test_non_git_cwd_fail_open(self, tmp_path, monkeypatch):
