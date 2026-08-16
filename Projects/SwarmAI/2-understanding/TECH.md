@@ -1756,7 +1756,20 @@ Cloud deployment of SwarmAI on EC2. Same Python backend + React frontend, no Tau
 
 Two-layer hook system: SDK-integrated hooks (during agent session) and post-session lifecycle hooks (after session close).
 
-**SDK hooks** — registered via `HookRegistry` in `hook_builder.py`. Sequential chaining, per-hook timeout 5.0s, first-block-wins short-circuit.
+**⛔ Hook admission gate (the load-bearing rule, run_d613bb27):** a PreToolUse/PostToolUse
+hook fires for EVERY user on EVERY matching command — it is **product-wide infrastructure,
+not a place for one project's conventions**. A new hook MUST pass all three: **(1) UNIVERSAL**
+— a general coding/safety principle helping ANY user on ANY project (NOT SwarmAI's own dev
+discipline: this repo's identity trailer, release CI marker, internal script names, or
+architecture — those go in the relevant flow/skill as a one-time check); **(2) RIGHT-LAYER**
+— a per-command interception is genuinely needed (a once-per-release/commit check belongs in
+that flow's script, e.g. `release-gate --verify` in s_swarm-release, not a hook every command
+pays); **(3) FAIL-SAFE** — fails OPEN on its own error, never DENIES a normal user's legitimate
+command. "It's a useful check" is not the bar; "every user needs this check" is. The gate lives
+verbatim in `hook_builder.build_hooks`'s docstring (the registration site). run_d613bb27 removed
+4 hooks that failed #1 (commit-trailer / release-publish / eval-in-pipeline / default-pool-offload).
+
+**SDK hooks** — registered via `HookRegistry` in `hook_builder.py`. Sequential chaining, per-hook timeout 5.0s, first-block-wins short-circuit. The live PreToolUse gate set is authoritative in `hook_builder.py` (re-read it, don't trust a copy here): universal safety gates — `pre_tool_logger`, `background_command_guard`, `pytest_command_guard`, `bash_syntax_guard`, `dangerous_command_gate`, `adversarial_commit_gate`, `external_approval_gate`, `governance_file_gate`, `inclusive_term_guard`, `ask_question_gate`, `image_read_dedup_guard`, `skill_access_checker`.
 
 | Hook | Event | Matcher | Blocks | Purpose |
 |------|-------|---------|--------|---------|

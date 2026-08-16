@@ -839,26 +839,46 @@ DDD convention for "these are the core code areas that must be documented").
   check it if the project's TECH.md `## Codebase Location`/`## Conventions`
   declares a docs directory.
 
+**STEP 0.5 — set the three path vars, THEN run the block.** Before running the
+bash below, replace the three `_PATH`/`_DIR` values with what STEP 0 found in the
+project's TECH.md. **Each var has TWO valid states: a real pattern (run the
+sub-check) or the empty string `""` (project declares no such convention → the
+sub-check auto-skips to N/A, never a GAP).** The defaults below are SwarmAI's own
+values — for SwarmAI-self they are already correct (run as-is); for another
+project, substitute or empty them. Do NOT run the block with the descriptive
+placeholders unedited — set concrete values or `""` first.
+
 ```bash
+# ── SET THESE FROM THE PROJECT'S TECH.md (STEP 0) — defaults are SwarmAI-self ──
+CORE_PATH='^backend/core/'      # ## Key Subsystems core-code pattern; ""=skip
+DOCS_DIR='docs/'                # declared docs dir;                    ""=skip
+PM_DIR='^docs/post-mortems/'    # declared post-mortem dir;             ""=skip
+
 # 0. Pre-flight
 git rev-parse origin/main >/dev/null 2>&1 || { echo "WARN: origin/main unavailable"; exit 0; }
 
-# 1. New core-code files → must have a TECH.md Key Subsystems entry.
-#    <CORE_PATH> comes from the project's ## Key Subsystems convention (STEP 0).
-#    SwarmAI's value = '^backend/core/' (shown as reference). If the project
-#    declared no such convention, SKIP this sub-check (N/A, not GAP).
-CORE_PATH='<from TECH.md ## Key Subsystems — SwarmAI: ^backend/core/>'
-NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep "$CORE_PATH" | grep -v '__pycache__\|test')
+# 1. New core-code files → must have a TECH.md Key Subsystems entry (skip if CORE_PATH empty)
+if [ -n "$CORE_PATH" ]; then
+  NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep "$CORE_PATH" | grep -v '__pycache__\|test')
+else
+  echo "N/A: project declares no core-subsystem convention"
+fi
 
-# 2. Feat commits → the project's declared docs dir should have been updated.
-#    <DOCS_DIR> from TECH.md (SwarmAI: docs/). Skip if project declares none.
+# 2. Feat commits → the project's declared docs dir should have been updated (skip if DOCS_DIR empty)
 FEAT_COMMITS=$(git log --oneline origin/main...HEAD | grep -iE "^[a-f0-9]+ feat")
-DOCS_IN_BRANCH=$(git diff --name-only origin/main...HEAD -- '<DOCS_DIR — SwarmAI: docs/>' | wc -l)
+if [ -n "$DOCS_DIR" ]; then
+  DOCS_IN_BRANCH=$(git diff --name-only origin/main...HEAD -- "$DOCS_DIR" | wc -l)
+else
+  echo "N/A: project declares no docs directory"
+fi
 
-# 3. COE/P0 fix → the project's declared post-mortem dir should have a new file.
-#    <PM_DIR> from TECH.md (SwarmAI: docs/post-mortems/). Skip if none declared.
+# 3. COE/P0 fix → the project's declared post-mortem dir should have a new file (skip if PM_DIR empty)
 COE_FIX=$(git log --oneline origin/main...HEAD | grep -iE "COE|P0|bilateral|deadlock|crash.*all")
-PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '<PM_DIR — SwarmAI: ^docs/post-mortems/>' | wc -l)
+if [ -n "$PM_DIR" ]; then
+  PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep "$PM_DIR" | wc -l)
+else
+  echo "N/A: project declares no post-mortem directory"
+fi
 ```
 
 **TECH.md location note:** TECH.md lives at the project's registered DDD path

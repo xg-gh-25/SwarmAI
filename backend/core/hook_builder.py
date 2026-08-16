@@ -239,6 +239,32 @@ async def build_hooks(
     Uses HookRegistry to compose all hooks, then returns the SDK-compatible
     hooks dict along with skill access info.
 
+    ──────────────────────────────────────────────────────────────────────────
+    ⛔ HOOK ADMISSION GATE — read before adding ANY hook here (run_d613bb27).
+
+    A PreToolUse/PostToolUse hook fires for EVERY SwarmAI user on EVERY matching
+    command — it is product-wide infrastructure, not a place for one project's own
+    conventions. Before registering a hook, it MUST pass all three:
+
+      1. UNIVERSAL — it encodes a general coding/safety principle that helps ANY
+         user on ANY project (e.g. "don't background a hang", "don't destroy data
+         without approval", "adversarial-review before commit"). If it enforces
+         SwarmAI's OWN dev discipline (this repo's identity trailer, its release CI
+         marker, its own script names, its internal architecture), it is the WRONG
+         layer — put it in the relevant flow/skill (a one-time check), not a hook.
+      2. RIGHT-LAYER — a per-command runtime interception is actually needed. A
+         once-per-release / once-per-commit check belongs in that flow's script
+         (see release-gate --verify in s_swarm-release), not a hook every command pays.
+      3. FAIL-SAFE — it fails OPEN on its own error (never blocks the user because
+         the guard itself broke), and a normal user's legitimate command is never
+         DENIED by it.
+
+    History: run_d613bb27 removed 4 hooks (commit-trailer / release-publish /
+    eval-in-pipeline / default-pool-offload) that failed #1 — they enforced this
+    project's self-dev rules on every user. "It's a useful check" is NOT sufficient;
+    "every user needs this check" is the bar.
+    ──────────────────────────────────────────────────────────────────────────
+
     Args:
         agent_config: Agent configuration dictionary.
         enable_skills: Whether skills are enabled.

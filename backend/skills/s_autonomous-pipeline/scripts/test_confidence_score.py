@@ -43,3 +43,10 @@ class TestFrontendClassification:
 
     def test_backend_only_not_frontend(self):
         assert not _has_frontend_files(["main.go", "lib.rs", "app.rb"])
+
+    def test_ts_double_classification_ok(self):
+        # .ts is intentionally in BOTH sets (Node/Deno backends) — the scoring
+        # logic uses each as an independent presence signal (AND), so a file
+        # matching both is by design, not a bug. Pin it so a future maintainer
+        # can't silently break the dual-classification.
+        assert _has_frontend_files(["index.ts"]) and _has_backend_files(["index.ts"])
