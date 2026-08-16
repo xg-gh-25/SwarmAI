@@ -55,3 +55,29 @@ class TestGetDefaultBranch:
         calls = [_cp("", 0), _cp("", 1), _cp("", 1), _cp("", 1)]
         with mock.patch.object(pipeline_pr.subprocess, "run", side_effect=calls):
             assert pipeline_pr._get_default_branch() is None
+
+    def test_symref_TIMEOUT_still_falls_through_to_fallback(self):
+        # REGRESSION (run_66d5c01e round-3): a transient symbolic-ref TimeoutExpired
+        # must NOT short-circuit to None — it must fall through to the common-name
+        # fallback. Here symref times out, then origin/master verifies OK.
+        def _side(*a, **k):
+            cmd = a[0]
+            if "symbolic-ref" in cmd:
+                raise pipeline_pr.subprocess.TimeoutExpired(cmd, 5)
+            # rev-parse origin/main → fail (rc=1), origin/master → ok (rc=0)
+            return _cp("", 1) if cmd[-1] == "origin/main" else _cp("abc", 0)
+        with mock.patch.object(pipeline_pr.subprocess, "run", side_effect=_side):
+            assert pipeline_pr._get_default_branch() == "master"
+
+    def test_one_candidate_error_does_not_abort_remaining(self):
+        # A per-candidate rev-parse hiccup (CalledProcessError/timeout) must not
+        # abandon the remaining names — origin/main errors, origin/master resolves.
+        def _side(*a, **k):
+            cmd = a[0]
+            if "symbolic-ref" in cmd:
+                return _cp("", 0)  # empty → go to fallback
+            if cmd[-1] == "origin/main":
+                raise pipeline_pr.subprocess.TimeoutExpired(cmd, 5)
+            return _cp("abc", 0)  # origin/master ok
+        with mock.patch.object(pipeline_pr.subprocess, "run", side_effect=_side):
+            assert pipeline_pr._get_default_branch() == "master"

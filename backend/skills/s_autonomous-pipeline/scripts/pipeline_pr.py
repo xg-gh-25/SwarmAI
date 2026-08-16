@@ -215,7 +215,12 @@ def _get_default_branch() -> str | None:
             # "origin/main" → "main"
             return ref.split("/", 1)[1] if "/" in ref else ref
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+        # Do NOT return here — a transient symbolic-ref timeout must still fall
+        # through to the common-name fallback below (a premature None would skip
+        # it and force gh onto a possibly-wrong default). If git itself is missing
+        # (FileNotFoundError), the fallback's own rev-parse raises the same error
+        # and is caught there, converging to None safely either way.
+        pass
     for cand in ("main", "master", "develop"):
         try:
             v = subprocess.run(
@@ -225,7 +230,10 @@ def _get_default_branch() -> str | None:
             if v.returncode == 0:
                 return cand
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            return None
+            # This candidate can't be verified — try the next name; only after
+            # all fail do we return None (below). A per-candidate return would
+            # abandon the remaining names on the first transient hiccup.
+            continue
     return None
 
 
