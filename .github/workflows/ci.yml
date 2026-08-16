@@ -71,11 +71,30 @@ jobs:
           # explicit word-boundary whitelist of the 4 real DB fixtures fixes that.)
           DB_FIXTURE_USERS=$(grep -rlE '^[[:space:]]*(async )?def [a-zA-Z_].*\b(client|async_client|reset_database|_cleanup_test_db)\b' tests/ --include='test_*.py' 2>/dev/null | sort || true)
 
+          # CI is BVT-only. Two whole classes HANG in a bare CI runner (no AWS
+          # creds, no packaged daemon binary) and must never run here:
+          #
+          #   1. Real subprocess spawns — subprocess.run/Popen, create_subprocess_*.
+          #      In CI they shell out to a binary/CLI that doesn't exist or blocks
+          #      forever waiting on input → each test rides the 120s per-test timeout
+          #      until the 10-min job wall kills the whole run.
+          #   2. Real network / Bedrock / STS — boto3, botocore, bedrock, requests,
+          #      httpx, socket, get_caller_identity. With no creds these retry with
+          #      exponential backoff for minutes (SIGALRM --timeout can't interrupt
+          #      the worker thread) → same 10-min wall.
+          #
+          # These are DEPLOYED-SYSTEM behaviours (belong to the eval OS / a live
+          # runtime), NOT bare-checkout self-verifying BVT. Excluded here by whole
+          # file, same grep style as the DB/FS lists — auto-covers future additions.
+          SUBPROC_FILES=$(grep -rlE 'subprocess\.(run|Popen|call|check_output|check_call)\(|create_subprocess_(exec|shell)|asyncio\.create_subprocess|(^|[^.])Popen\(' tests/ --include='test_*.py' | sort)
+
+          NETWORK_FILES=$(grep -rlE 'boto3|botocore|bedrock|Bedrock|get_caller_identity|invoke_model|requests\.(get|post|put|delete)|httpx|aiohttp|urllib\.request|socket\.' tests/ --include='test_*.py' | sort)
+
           # Additional skips: macOS-only (launchd), native deps (ffmpeg)
           EXTRA_SKIP="tests/test_daemon_sidecar_robustness.py tests/test_daemon_sidecar_fixes.py tests/test_voice_transcribe.py"
 
           # Build --ignore flags (deduplicated)
-          ALL_SKIP=$(echo $DB_FILES $FS_FILES $DB_FIXTURE_USERS $EXTRA_SKIP | tr ' ' '\n' | sort -u)
+          ALL_SKIP=$(echo $DB_FILES $FS_FILES $DB_FIXTURE_USERS $SUBPROC_FILES $NETWORK_FILES $EXTRA_SKIP | tr ' ' '\n' | sort -u)
           IGNORES=""
           for f in $ALL_SKIP; do
             [ -f "$f" ] && IGNORES="$IGNORES --ignore=$f"
