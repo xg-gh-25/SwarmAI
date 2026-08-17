@@ -393,16 +393,27 @@ def _is_warm_reuse(unit: Any) -> bool:
     ``options.system_prompt`` is discarded and per-turn dynamic content (recall +
     UI-SENSE) must ride ``query_content`` instead.
 
-    This is the EXACT COMPLEMENT of the poison-guard recycle at
-    ``session_unit._maybe_recycle_before_reuse`` (IDLE ∧ client ∧ NOT clean →
+    This is the EXACT COMPLEMENT of the poison-guard recycle in
+    ``session_unit.send()`` (IDLE ∧ client ∧ NOT clean ∧ NOT prewarm →
     recycle→COLD→respawn, where system_prompt DOES carry it): within the
-    (IDLE ∧ client-alive) domain, warm-reuse ⟺ last-turn-clean, poison-recycle ⟺
-    last-turn-NOT-clean. Keeping both off this ONE predicate makes the two gates
-    provably non-double-injecting / non-dropping (Gate-1 F1)."""
+    (IDLE ∧ client-alive) domain, warm-reuse ⟺ (last-turn-clean OR prewarm),
+    poison-recycle ⟺ (NOT last-turn-clean AND NOT prewarm). Keeping both off this
+    ONE predicate makes the two gates provably non-double-injecting / non-dropping.
+
+    Gate-1 F1: a fresh PREWARM unit (never streamed → last_turn_clean=False) is
+    warm-reuse-ELIGIBLE — it reuses the pre-spawned live subprocess via query(),
+    and 阶段二 routes its first-message recall/SENSE through query_content (not the
+    discarded system_prompt), so nothing is lost. It is keyed on the `prewarm-`
+    PREFIX, NOT `_sdk_session_id is None`: a first-message SSE-disconnect zombie
+    (recover_from_disconnect) has the identical (clean=False, sdk_session_id=None)
+    shape but a normal id — it must recycle, so the prefix is the only safe signal."""
     return (
         unit.state == SessionState.IDLE
         and unit._client is not None
-        and unit._last_turn_clean
+        and (
+            unit._last_turn_clean
+            or unit.session_id.startswith(PREWARM_SESSION_PREFIX)
+        )
     )
 
 
@@ -2141,6 +2152,35 @@ class SessionRouter:
                 return False
             idle_units = stale_units
 
+        # P-a AC2: DOWNGRADE (not exempt) an unadopted prewarm unit to the
+        # lowest-priority eviction candidate. On a GRACEFUL attempt (force=False)
+        # spare the prewarm whenever a NON-prewarm candidate exists (kill that
+        # instead); if the ONLY candidates are prewarm units, refuse here so the
+        # caller QUEUES — the queue-timeout escalation re-enters with force=True,
+        # which does NOT run this block and CAN kill the prewarm. This preserves
+        # the force=True SOLE anti-starvation guarantee (XG: "B 不能 regression":
+        # a prewarm is a luxury that yields to a real slot demand, but is never
+        # removed from the orphan set — that would let a user's tab starve).
+        # Channel eviction (channel_only) never sees a prewarm unit
+        # (is_channel_session=False), so this is chat-only by construction.
+        if not force:
+            non_prewarm = [
+                u for u in idle_units
+                if not u.session_id.startswith(PREWARM_SESSION_PREFIX)
+            ]
+            if non_prewarm:
+                idle_units = non_prewarm  # spare prewarm, evict a real orphan
+            else:
+                # All remaining candidates are prewarm → refuse graceful eviction
+                # so the caller queues; force=True (which skips this whole block)
+                # will reclaim the prewarm if the slot is truly needed. (idle_units
+                # is guaranteed non-empty here — the empty cases returned above.)
+                logger.info(
+                    "session_router.evict_deferred: only prewarm units evictable "
+                    "on graceful attempt — deferring to queue+force (anti-starvation)",
+                )
+                return False
+
         # Resource-aware eviction: prefer the unit consuming the most
         # memory (RSS) so the freed slot gives maximum headroom for the
         # incoming spawn.  Falls back to oldest-idle when metrics are
@@ -2385,6 +2425,19 @@ class SessionRouter:
         # Resolve session_id — use provided or generate
         if session_id is None:
             session_id = str(uuid4())
+        elif session_id.startswith(PREWARM_SESSION_PREFIX):
+            # SECURITY (Gate-2): the `prewarm-` prefix is a RESERVED trust boundary —
+            # it grants 4 lifecycle exemptions (orphan-reaper skip, TTL skip,
+            # poison_guard skip, warm-reuse eligibility). ONLY prewarm_channel_session
+            # may mint it (server-side uuid4). A client-supplied session_id starting
+            # with it would inherit those exemptions on a NORMAL unit → an un-reapable
+            # subprocess + (turn 2+) a poison_guard zombie-reuse bypass. Reject at the
+            # inbound boundary (mirrors the reserved-prefix guard in core/skills.py),
+            # so the prefix stays authoritative BECAUSE it can only be minted here.
+            raise ValueError(
+                f"session_id must not use the reserved '{PREWARM_SESSION_PREFIX}' "
+                "prefix (server-reserved for pre-warmed sessions)"
+            )
 
         unit = self.get_or_create_unit(session_id, agent_id)
 

@@ -614,21 +614,25 @@ class TestWarmReuseComplement:
     invariant is what makes the recall cold/warm split non-double-injecting."""
 
     class _Unit:
-        def __init__(self, state, client, clean):
+        def __init__(self, state, client, clean, session_id="normal-sess"):
             self.state = state
             self._client = client
             self._last_turn_clean = clean
+            self.session_id = session_id
 
-    def _unit(self, *, state, client, clean):
-        return self._Unit(state, client if client else None, clean)
+    def _unit(self, *, state, client, clean, session_id="normal-sess"):
+        return self._Unit(state, client if client else None, clean, session_id)
 
     def _poison_recycles(self, u):
-        """Mirror of session_unit poison-guard condition (IDLE ∧ client ∧ NOT clean)."""
+        """Faithful mirror of session_unit poison-guard condition (Gate-1 F1):
+        (IDLE ∧ client ∧ NOT clean ∧ NOT prewarm-prefix)."""
         from core.session_unit import SessionState
+        from core.session_router import PREWARM_SESSION_PREFIX
         return (
             u.state == SessionState.IDLE
             and u._client is not None
             and not u._last_turn_clean
+            and not u.session_id.startswith(PREWARM_SESSION_PREFIX)
         )
 
     def test_exact_complement_over_idle_client_domain(self):
@@ -636,7 +640,9 @@ class TestWarmReuseComplement:
         from core.session_unit import SessionState
         client = object()
         # Over the (IDLE ∧ client-alive) domain, warm-reuse and poison-recycle
-        # partition perfectly on last_turn_clean — never both, never neither.
+        # partition perfectly — never both, never neither. Holds for BOTH a
+        # normal unit (partitions on last_turn_clean) AND a prewarm unit
+        # (warm=True via prefix, poison=False via prefix exemption).
         for clean in (True, False):
             u = self._unit(state=SessionState.IDLE, client=client, clean=clean)
             warm = _is_warm_reuse(u)
@@ -645,6 +651,32 @@ class TestWarmReuseComplement:
                 f"warm-reuse and poison-recycle must be exact complements over "
                 f"IDLE∧client (clean={clean}): warm={warm} poison={poison}"
             )
+
+    def test_prewarm_complement_holds(self):
+        """Gate-1 F1: a fresh prewarm unit (clean=False) is warm-reuse-eligible
+        via prefix AND exempt from poison-recycle via prefix — the complement
+        invariant is preserved (warm=True, poison=False)."""
+        from core.session_router import _is_warm_reuse
+        from core.session_unit import SessionState
+        u = self._unit(state=SessionState.IDLE, client=object(), clean=False,
+                       session_id="prewarm-xyz789")
+        warm = _is_warm_reuse(u)
+        poison = self._poison_recycles(u)
+        assert warm is True, "fresh prewarm unit must be warm-reuse-eligible"
+        assert poison is False, "fresh prewarm unit must be poison-exempt"
+        assert warm != poison, "complement must hold for prewarm too"
+
+    def test_disconnect_zombie_is_NOT_warm(self):
+        """Gate-1 F1 regression: a normal (non-prewarm) unit at clean=False —
+        the first-message SSE-disconnect zombie shape — must NOT be classified
+        warm-reuse (it must recycle). Keys on prefix, not _sdk_session_id."""
+        from core.session_router import _is_warm_reuse
+        from core.session_unit import SessionState
+        u = self._unit(state=SessionState.IDLE, client=object(), clean=False,
+                       session_id="normal-sess-zombie")
+        assert _is_warm_reuse(u) is False, (
+            "disconnect zombie (normal id, clean=False) must NOT be warm-reuse"
+        )
 
     def test_not_warm_when_not_idle(self):
         from core.session_router import _is_warm_reuse

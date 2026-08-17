@@ -220,3 +220,99 @@ class TestQueueBeforeForceEviction:
             # Stale session evicted immediately (no queuing needed)
             stale_unit.kill.assert_called_once()
             assert result == "ready"
+
+
+class TestPrewarmEvictionDowngrade:
+    """P-a AC2 (XG: 'B 不能 regression'): a prewarm unit is DOWNGRADED to the
+    lowest-priority orphan in _evict_idle — spared on force=False when a real
+    orphan exists, but STILL killed on force=True (queue-timeout anti-starvation)
+    or as the sole candidate. NOT removed from the orphan set (that would break
+    the force=True SOLE anti-starvation guarantee → user tab starves)."""
+
+    from core.session_router import PREWARM_SESSION_PREFIX as _PFX
+
+    @pytest.mark.asyncio
+    async def test_force_false_spares_prewarm_when_real_orphan_exists(self, router):
+        """force=False + a real orphan present → kill the real orphan, spare prewarm."""
+        prewarm = _make_unit(f"{self._PFX}p1", SessionState.IDLE, idle_seconds=600)
+        real = _make_unit("real-orphan", SessionState.IDLE, idle_seconds=600)
+        requesting = _make_unit("requesting", SessionState.COLD, idle_seconds=0)
+        router._units = {p.session_id: p for p in (prewarm, real, requesting)}
+        evicted = await router._evict_idle(exclude=requesting, force=False)
+        assert evicted is True
+        real.kill.assert_awaited_once()
+        prewarm.kill.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_force_false_keeps_sole_prewarm_and_refuses(self, router):
+        """force=False + prewarm is the ONLY orphan → refuse eviction (return
+        False) so the caller queues; the prewarm is spared, not killed."""
+        prewarm = _make_unit(f"{self._PFX}p2", SessionState.IDLE, idle_seconds=600)
+        requesting = _make_unit("requesting", SessionState.COLD, idle_seconds=0)
+        router._units = {p.session_id: p for p in (prewarm, requesting)}
+        evicted = await router._evict_idle(exclude=requesting, force=False)
+        assert evicted is False, "sole-prewarm force=False must refuse (queue instead)"
+        prewarm.kill.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_force_true_kills_sole_prewarm_anti_starvation(self, router):
+        """force=True (queue-timeout) + prewarm is the only orphan → prewarm IS
+        killed — the SOLE anti-starvation guarantee must not be defeated by the
+        downgrade (XG: B 不能 regression)."""
+        prewarm = _make_unit(f"{self._PFX}p3", SessionState.IDLE, idle_seconds=600)
+        requesting = _make_unit("requesting", SessionState.COLD, idle_seconds=0)
+        router._units = {p.session_id: p for p in (prewarm, requesting)}
+        evicted = await router._evict_idle(exclude=requesting, force=True)
+        assert evicted is True, "force=True must still evict a sole prewarm"
+        prewarm.kill.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_prewarm_behavior_unchanged(self, router):
+        """Regression guard: with no prewarm units, eviction picks the heaviest
+        orphan exactly as before (downgrade is a no-op)."""
+        big = _make_unit("big", SessionState.IDLE, idle_seconds=600, rss_bytes=900_000_000)
+        small = _make_unit("small", SessionState.IDLE, idle_seconds=600, rss_bytes=100_000_000)
+        requesting = _make_unit("requesting", SessionState.COLD, idle_seconds=0)
+        router._units = {p.session_id: p for p in (big, small, requesting)}
+        evicted = await router._evict_idle(exclude=requesting, force=False)
+        assert evicted is True
+        big.kill.assert_awaited_once()  # heaviest RSS first, unchanged
+        small.kill.assert_not_awaited()
+
+
+class TestPrewarmPrefixTrustBoundary:
+    """SECURITY (Gate-2): the `prewarm-` prefix grants 4 lifecycle exemptions.
+    ONLY prewarm_channel_session may mint it (server-side). A client-supplied
+    session_id starting with it must be REJECTED at the run_conversation boundary
+    — else a normal unit inherits the exemptions (un-reapable + poison-bypass)."""
+
+    from core.session_router import PREWARM_SESSION_PREFIX as _PFX
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_prewarm_prefix_is_rejected(self, router):
+        """A client session_id starting with 'prewarm-' raises ValueError before
+        any unit is created (spoofing → exemption-inheritance is blocked)."""
+        with pytest.raises(ValueError, match="reserved"):
+            async for _ in router.run_conversation(
+                agent_id="default",
+                user_message="hi",
+                session_id=f"{self._PFX}attacker-uuid",
+            ):
+                pass
+        # No unit should have been created for the spoofed id.
+        assert f"{self._PFX}attacker-uuid" not in router._units
+
+    @pytest.mark.asyncio
+    async def test_normal_session_id_not_rejected_by_guard(self, router):
+        """Regression: a normal session_id must NOT trip the prefix guard. (It may
+        fail later for unrelated reasons — we assert only that it is NOT the
+        reserved-prefix ValueError.)"""
+        try:
+            async for _ in router.run_conversation(
+                agent_id="default", user_message="hi", session_id="normal-uuid-123",
+            ):
+                break
+        except ValueError as e:
+            assert "reserved" not in str(e), "normal id must not trip the prefix guard"
+        except Exception:
+            pass  # other failures (mocked deps) are fine — not the guard

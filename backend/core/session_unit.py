@@ -1971,10 +1971,22 @@ class SessionUnit:
         # flag MUST NOT be in those reset batches, or every reuse looks poisoned.
         # _force_kill is anchored to self.pid only — it never touches a sibling
         # session's subprocess tree (per-session isolation).
+        # Gate-1 F1: exempt a fresh PREWARM unit by its session-id PREFIX, NOT by
+        # `_sdk_session_id is None`. A first-message SSE disconnect
+        # (recover_from_disconnect) leaves a NORMAL unit at the identical shape
+        # (IDLE + client + _last_turn_clean=False + _sdk_session_id=None) — that
+        # is a real zombie the guard MUST still recycle. Only a `prewarm-` id is a
+        # genuinely never-used, adoptable warm subprocess; recycling it would
+        # defeat the prewarm. The prefix is the ONLY signal that distinguishes the
+        # two, so the exemption keys on it (lazy import avoids the session_router↔
+        # session_unit circular dependency — same pattern as lifecycle_manager).
+        from .session_router import PREWARM_SESSION_PREFIX
+        _is_fresh_prewarm = self.session_id.startswith(PREWARM_SESSION_PREFIX)
         if (
             self.state == SessionState.IDLE
             and self._client is not None
             and not self._last_turn_clean
+            and not _is_fresh_prewarm
         ):
             logger.info(
                 "session_unit.poison_guard_recycle session_id=%s — warm IDLE "

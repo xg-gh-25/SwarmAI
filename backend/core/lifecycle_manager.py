@@ -454,6 +454,11 @@ class LifecycleManager:
             # await loop = SUM(N x 107ms) suspending the maintenance loop; now
             # ~1x). Per-unit compact/kill mutations run AFTER the gather, serially
             # (one kill at a time, semantics preserved).
+            # P-a AC3 — prewarm units are INTENTIONALLY *not* exempt here (unlike
+            # the orphan reaper + TTL). Like Tier-1 memory pressure, this is a RAM
+            # survival path: a heavy prewarm subprocess crossing the RSS threshold
+            # must be reclaimable. Exempting it would let an unadopted prewarm grow
+            # into an unreclaimable memory black hole. Do NOT add a prewarm skip.
             eligible = [
                 unit for unit in self._router.list_units()
                 if unit.state == SessionState.IDLE
@@ -893,6 +898,8 @@ class LifecycleManager:
         subprocess staying alive; TTL-killing them causes context loss on
         follow-up messages.
         """
+        from .session_router import PREWARM_SESSION_PREFIX
+
         now = time.time()
         for unit in self._router.list_units():
             if unit.state == SessionState.IDLE:
@@ -900,6 +907,11 @@ class LifecycleManager:
                 # for the lifetime of the daemon.  Context continuity
                 # is maintained by the long-lived subprocess + --resume.
                 if unit.is_channel_session:
+                    continue
+                # P-a AC1: an unadopted prewarm unit is a warm subprocess
+                # awaiting adoption, not a stale chat — exempt from TTL kill
+                # (same non-competitive-GC exemption as the orphan reaper).
+                if unit.session_id.startswith(PREWARM_SESSION_PREFIX):
                     continue
                 idle_seconds = now - unit.last_used
                 if idle_seconds > self.TTL_SECONDS:
@@ -957,6 +969,8 @@ class LifecycleManager:
           merely between open_tabs writes (or a just-created session whose id has
           not yet been persisted to open_tabs) is never mistaken for an orphan.
         """
+        from .session_router import PREWARM_SESSION_PREFIX
+
         owned = self._owned_session_ids()
         if owned is None:
             return  # ownership unknowable this cycle — fail safe, reap nothing
@@ -967,6 +981,12 @@ class LifecycleManager:
                 continue  # protect STREAMING / WAITING_INPUT / COLD / DEAD
             if unit.is_channel_session:
                 continue  # daemon-owned, no window
+            # P-a AC1: an unadopted prewarm unit is a warm subprocess awaiting
+            # adoption, never in open_tabs (temp id) and non-channel — it would
+            # hit every orphan criterion below, but it is NOT an orphan. This is
+            # the root-cause fix for Slack prewarm adopt=0 (reaped before adopt).
+            if unit.session_id.startswith(PREWARM_SESSION_PREFIX):
+                continue
             if unit.session_id in owned:
                 continue  # a live window holds this tab
             if (now - unit.last_used) <= self.ORPHAN_GRACE_SECONDS:
@@ -1499,6 +1519,12 @@ class LifecycleManager:
             # ── Tier 1: evict IDLE units until headroom restored ────
             # Sort heaviest first, evict in a loop until memory is OK
             # or no IDLE units remain.
+            # P-a AC3 — prewarm units are INTENTIONALLY *not* exempt here (unlike
+            # the orphan reaper + TTL, which exempt `prewarm-`). This is a RAM
+            # SURVIVAL path: a prewarm is a luxury that must yield to real memory
+            # pressure. Exempting it would turn an unadopted prewarm into an
+            # unreclaimable memory black hole (the regression XG's "B" forbids).
+            # Do NOT add a prewarm skip to this loop.
             idle_units = sorted(
                 [u for u in self._router.list_units()
                  if u.state == SessionState.IDLE],

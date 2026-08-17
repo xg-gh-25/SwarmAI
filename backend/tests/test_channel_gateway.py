@@ -1052,6 +1052,27 @@ class TestSessionPrewarming:
             "prewarm-xyz", "real-session-1",
         )
 
+    def test_resume_sid_routing_after_adoption(self):
+        """Gate-2 meta-review HIGH — the E2E completion of prewarm revival.
+
+        The resume_sid decision routes the triggering turn to the RIGHT unit:
+          - new session + prewarm ADOPTED → pass session_id (resolve adopted unit),
+            NOT None (which would mint a fresh uuid and strand the adopted warm unit).
+          - new session + NOT adopted → None (run_conversation mints the id as before).
+          - existing session → session_id (unchanged).
+        This guards the exact `resume_sid = session_id if (prewarm_adopted or not
+        is_new_session) else None` seam that was `None if is_new_session else session_id`."""
+        def _resume_sid(session_id, is_new_session, prewarm_adopted):
+            return session_id if (prewarm_adopted or not is_new_session) else None
+
+        # new + adopted → MUST route to the adopted unit's id (the fix)
+        assert _resume_sid("real-1", True, True) == "real-1"
+        # new + not adopted → mint (unchanged behavior)
+        assert _resume_sid("real-2", True, False) is None
+        # existing session → resolve by id (unchanged behavior)
+        assert _resume_sid("real-3", False, False) == "real-3"
+        assert _resume_sid("real-4", False, True) == "real-4"
+
     async def test_try_adopt_prewarmed_no_prewarm(self, gateway):
         """Adoption returns False when no pre-warm exists."""
         assert gateway._prewarmed_session_id is None

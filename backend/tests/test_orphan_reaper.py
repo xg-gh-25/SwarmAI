@@ -121,6 +121,35 @@ async def test_owned_session_is_never_reaped():
 
 
 @pytest.mark.asyncio
+async def test_prewarm_unit_is_exempt_from_orphan_reap():
+    """P-a AC1: an unadopted prewarm unit (prewarm- prefix) is IDLE, not in
+    open_tabs, non-channel, past grace — it hits every orphan criterion — yet
+    must be EXEMPT: it is a warm subprocess awaiting adoption, not an orphan.
+    This is the root cause of Slack prewarm adopt=0 (reaped before adoption)."""
+    from core.session_router import PREWARM_SESSION_PREFIX
+    prewarm = _make_unit(
+        f"{PREWARM_SESSION_PREFIX}abc123", SessionState.IDLE, idle_age=PAST_GRACE
+    )
+    mgr = _make_manager([prewarm])
+    await _run(mgr, owned=set())
+    prewarm.kill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_unit_is_exempt_from_ttl_kill():
+    """P-a AC1: the 24h TTL reaper must also exempt an unadopted prewarm unit —
+    otherwise a long-lived prewarm pool unit is TTL-killed like a stale chat."""
+    from core.session_router import PREWARM_SESSION_PREFIX
+    prewarm = _make_unit(
+        f"{PREWARM_SESSION_PREFIX}def456", SessionState.IDLE,
+        idle_age=LifecycleManager.TTL_SECONDS + 60,
+    )
+    mgr = _make_manager([prewarm])
+    await mgr._check_ttl()
+    prewarm.kill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_unowned_but_within_grace_survives():
     """Freshly-idle unowned session (id not yet persisted to open_tabs) survives."""
     fresh = _make_unit("fresh-1", SessionState.IDLE, idle_age=WITHIN_GRACE)

@@ -508,3 +508,81 @@ async def _empty_async_iter(*args, **kwargs):
     """A _read_formatted_response stand-in that yields nothing."""
     if False:
         yield {}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AC4 + Gate-1 F1: poison_guard exempts fresh PREWARM units by prefix,
+# NOT by _sdk_session_id (which would misclassify a first-message
+# SSE-disconnect zombie as fresh — recover_from_disconnect leaves a
+# normal unit at IDLE+client+clean=False+sdk_session_id=None).
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestAC4PrewarmPoisonGuard:
+    async def _drive_send_to_recycle_decision(self, unit):
+        """Run send() up to the poison-guard/spawn decision, capturing whether
+        _crash_to_cold_async fired. Returns True if recycle was called."""
+        recycle_calls = []
+
+        async def _recycle(*a, **k):
+            unit._client = None
+            unit.state = SessionState.COLD
+            recycle_calls.append(k)
+
+        async def _spawn_stop(*a, **k):
+            raise _StopAfterDecisionError("stop after recycle+spawn decision")
+            yield {}  # pragma: no cover
+
+        with patch.object(unit, "_crash_to_cold_async", _recycle), \
+             patch.object(unit, "_arm_recovery_checkpoint", AsyncMock()), \
+             patch.object(unit, "_ensure_spawned", _spawn_stop), \
+             patch.object(unit, "_await_streaming_slot", AsyncMock(
+                 side_effect=_StopAfterDecisionError("stop at slot"))):
+            try:
+                async for _ in unit.send("hi", MagicMock(), app_session_id="app-x"):
+                    pass
+            except _StopAfterDecisionError:
+                pass
+        return len(recycle_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_fresh_prewarm_unit_is_NOT_recycled(self):
+        """AC4: a fresh prewarm unit (prewarm- prefix, never streamed:
+        _last_turn_clean=False, _sdk_session_id=None) must NOT be recycled —
+        it is warm and adoptable; recycling defeats the prewarm."""
+        unit = _make_unit(state=SessionState.IDLE, session_id="prewarm-abc123")
+        unit._client = MagicMock()
+        unit._last_turn_clean = False
+        unit._sdk_session_id = None
+        recycled = await self._drive_send_to_recycle_decision(unit)
+        assert recycled is False, (
+            "fresh prewarm unit must be EXEMPT from poison-guard recycle"
+        )
+
+    @pytest.mark.asyncio
+    async def test_disconnect_zombie_normal_id_IS_recycled(self):
+        """Gate-1 F1 (CRITICAL regression guard): a NORMAL (non-prewarm) unit
+        left at IDLE+client+clean=False+sdk_session_id=None by a first-message
+        SSE disconnect (recover_from_disconnect) is a REAL zombie and MUST still
+        be recycled. This is why the exemption keys on the prewarm- prefix, not
+        on _sdk_session_id is None."""
+        unit = _make_unit(state=SessionState.IDLE, session_id="normal-sess-789")
+        unit._client = MagicMock()
+        unit._last_turn_clean = False
+        unit._sdk_session_id = None
+        recycled = await self._drive_send_to_recycle_decision(unit)
+        assert recycled is True, (
+            "disconnect zombie (normal id, no prefix) must STILL recycle — "
+            "_sdk_session_id is None must NOT grant exemption"
+        )
+
+    @pytest.mark.asyncio
+    async def test_streamed_zombie_normal_id_IS_recycled(self):
+        """A normal unit that streamed then went unclean (real zombie,
+        _sdk_session_id set) must still recycle — unchanged behavior."""
+        unit = _make_unit(state=SessionState.IDLE, session_id="normal-sess-000")
+        unit._client = MagicMock()
+        unit._last_turn_clean = False
+        unit._sdk_session_id = "sdk-live-xyz"
+        recycled = await self._drive_send_to_recycle_decision(unit)
+        assert recycled is True, "streamed-unclean zombie must recycle (unchanged)"

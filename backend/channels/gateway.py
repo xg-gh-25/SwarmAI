@@ -1659,8 +1659,9 @@ class ChannelGateway:
         # ── Pre-warm adoption: if the owner's session is new (cold)
         # and we have a pre-warmed IDLE subprocess, adopt it to skip
         # the ~4s CLI spawn latency.
+        prewarm_adopted = False
         if is_new_session and is_owner and self._prewarmed_session_id:
-            await self._try_adopt_prewarmed(session_id)
+            prewarm_adopted = await self._try_adopt_prewarmed(session_id)
 
         # Log inbound message to channel_messages ---------------------------------
         inbound_record_id = str(uuid4())
@@ -1899,7 +1900,16 @@ class ChannelGateway:
         _ttft_start = time.monotonic()
         _ttft_logged = False
         try:
-            resume_sid = None if is_new_session else session_id
+            # A new session normally passes resume_sid=None (run_conversation mints
+            # the id). BUT when a prewarm unit was just ADOPTED, it is already
+            # registered under `session_id` — we MUST pass that id so
+            # run_conversation resolves the adopted warm subprocess instead of
+            # minting a fresh uuid and spawning a new COLD unit (which would strand
+            # the adopted unit → the prewarm work is wasted AND its now-normal id is
+            # reaped in ~3min). This is the E2E completion of the prewarm-revival fix:
+            # the 4-killer + poison-guard changes let the prewarm SURVIVE to adoption;
+            # this routes the triggering turn to the adopted unit. (Gate-2 meta-review HIGH.)
+            resume_sid = session_id if (prewarm_adopted or not is_new_session) else None
             async for event in session_registry.session_router.run_conversation(
                 agent_id=agent_id,
                 user_message=final_text,
