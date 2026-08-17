@@ -161,6 +161,14 @@ class JobSafety(BaseModel):
     allow_write: bool = False
     allow_send: bool = False
     allow_network: bool = True
+    # retryable: opt-in bounded in-tick retry for a transient agent_task failure
+    # (timeout / CLI-exit-nonzero). DEFAULT False for idempotency safety — an
+    # agent_task can produce side effects (post a GitHub comment, send a Slack
+    # message) before it times out, so retrying the WHOLE cycle can double-act
+    # (e.g. publish.py has anti-spam but no per-issue dedup). Only set
+    # retryable=true on a job whose cycle is provably idempotent. auth_failed is
+    # NEVER retried via this path (it has its own next-tick fast-retry). run_d383e9a0.
+    retryable: bool = False
 
 
 class Job(BaseModel):

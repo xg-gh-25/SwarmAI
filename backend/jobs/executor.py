@@ -199,6 +199,45 @@ def execute_job(
                 )
             else:
                 result = _handle_agent_task(job, state)
+                # P0-1 (run_d383e9a0): bounded in-tick retry for a TRANSIENT
+                # failure — ONLY when the job opted in (safety.retryable) AND the
+                # failure is a retryable class (timeout / CLI-exit-nonzero). A
+                # single fresh attempt, never a loop (PIT01: a loop reuses a
+                # poisoned subprocess). Non-retryable jobs (the default) and
+                # auth_failed / skipped / partial are untouched — auth_failed has
+                # its own next-tick fast-retry, and retrying a side-effecting,
+                # non-idempotent cycle risks double-acting.
+                if job.safety.retryable and _is_retryable_failure(result):
+                    # Re-check the SAME admission gates before the retry spawn —
+                    # the retry is a SECOND ~$-and-RAM subprocess, so it must not
+                    # escape the monthly-budget / daily-agent-limit / RAM caps the
+                    # first attempt passed (a retry that bypassed them could double
+                    # a job's spend in one tick — Gate-2 O-1). If a gate now
+                    # declines, skip the retry and keep the original failure.
+                    retry_budget_err = _check_monthly_budget(state, defaults)
+                    retry_daily_err = (
+                        _check_daily_agent_limit(state, defaults)
+                        if not retry_budget_err else None
+                    )
+                    retry_mem_err = (
+                        _check_spawn_ram_budget()
+                        if not (retry_budget_err or retry_daily_err) else None
+                    )
+                    retry_gate_err = retry_budget_err or retry_daily_err or retry_mem_err
+                    if retry_gate_err:
+                        logger.warning(
+                            "Job '%s' failed transiently (%s) but retry gate "
+                            "declined (%s) — keeping original failure.",
+                            job.id, result.error or "failed", retry_gate_err,
+                        )
+                    else:
+                        logger.warning(
+                            "Job '%s' failed transiently (%s) — retrying once "
+                            "(retryable=true).", job.id, result.error or "failed",
+                        )
+                        retry_result = _handle_agent_task(job, state)
+                        if retry_result.status != "failed":
+                            result = retry_result
 
         elif job.type == "self_tune":
             from .self_tune import run_self_tune
@@ -2097,6 +2136,24 @@ def _extract_signals_from_output(job: Job, result_text: str) -> list[RawSignal]:
 _FAILURE_ALERT_THRESHOLD = 3  # alert after N consecutive failures
 
 
+def _is_retryable_failure(result: JobResult) -> bool:
+    """Is this a TRANSIENT agent_task failure worth one bounded retry?
+
+    True ONLY for a plain `failed` whose error is exactly "timeout" — the
+    subprocess was killed at the wall clock (the observed transient class,
+    run_d383e9a0: two community jobs hit ONE timeout each on 2026-08-14).
+
+    Deliberately NARROW — NOT retried:
+    - `auth_failed` — has its own next-tick fast-retry.
+    - `skipped` — a gate (budget/RAM/daily) declined it; a retry hits the same gate.
+    - `partial` — budget exceeded; a retry would burn budget again.
+    - a CLI exit-nonzero `failed` — its `error` is raw stderr (a DETERMINISTIC
+      bug in the agent's own commands, usually); retrying re-runs the same broken
+      cycle. Only a wall-clock timeout is a safe transient-retry signal.
+    """
+    return result.status == "failed" and (result.error or "").lower() == "timeout"
+
+
 def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> None:
     """Update persistent job state after execution.
 
@@ -2120,9 +2177,18 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
         # (was always empty → "failed" with no reason). Prefer error, fall
         # back to summary; truncate to keep state.json small.
         js.last_error = (result.error or result.summary or "")[:500] or None
-        # Alert on streak threshold — writes to JSONL so briefing picks it up.
-        # Only fires once per streak (exactly at threshold, not every failure after).
-        if js.consecutive_failures == _FAILURE_ALERT_THRESHOLD:
+        # Alerting (run_d383e9a0 P0-3): a single true failure is already worth
+        # surfacing — the community-job silence went unnoticed for days precisely
+        # because a lone failure wrote NO alert (only the >=3 streak did). So:
+        #  - first failure (streak just became 1) → single-failure alert (no
+        #    "consecutive"/"cooldown" wording — it is not a streak, not in cooldown).
+        #  - streak reaches the threshold → the existing streak alert (24h cooldown).
+        # Fires once at each of the two boundaries, never on every failure between.
+        # (P0-1's opt-in retry absorbs a genuinely transient blip BEFORE it reaches
+        # here, so a `failed` that lands here is one a retry could not save.)
+        if js.consecutive_failures == 1:
+            _write_failure_streak_alert(job_id, 1, result, single=True)
+        elif js.consecutive_failures == _FAILURE_ALERT_THRESHOLD:
             _write_failure_streak_alert(job_id, js.consecutive_failures, result)
     elif result.status == "auth_failed":
         # Transient by default — don't touch consecutive_failures (would hide real
@@ -2145,20 +2211,26 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
 
 
 def _write_failure_streak_alert(
-    job_id: str, streak: int, last_result: JobResult, is_auth: bool = False
+    job_id: str, streak: int, last_result: JobResult,
+    is_auth: bool = False, single: bool = False,
 ) -> None:
     """Write a high-visibility alert entry to .job-results.jsonl.
 
     This entry appears in the session briefing alongside normal job results,
-    making consecutive failures impossible to miss. Fires once per streak
-    (at exactly _FAILURE_ALERT_THRESHOLD), not on every subsequent failure.
+    making failures impossible to miss. Fires at two boundaries: the FIRST
+    failure (`single=True`, run_d383e9a0 P0-3) and again when a streak hits
+    _FAILURE_ALERT_THRESHOLD — not on every failure between.
+
+    `single`: this is a lone failure, NOT a streak and NOT in 24h cooldown yet.
+    The briefing renders job_name/status verbatim
+    (proactive_intelligence._format_job_result_highlights), so the text must NOT
+    claim "consecutive" or "cooldown" for a single failure — that would be a
+    user-facing lie (the job will just retry on its next scheduled tick).
 
     `is_auth`: the streak is AUTH pre-check failures, not job failures. The two
     have opposite remediation + retry semantics, so the alert text must NOT be
     shared verbatim — an auth streak is not a code bug and is NOT in 24h cooldown
-    (auth-failed jobs retry hourly, not after cooldown). The briefing renders
-    job_name/status verbatim (proactive_intelligence._format_job_result_highlights),
-    so a wrong label here is a user-facing lie.
+    (auth-failed jobs retry hourly, not after cooldown).
     """
     last = (last_result.error or last_result.summary or "unknown")[:150]
     if is_auth:
@@ -2174,6 +2246,20 @@ def _write_failure_streak_alert(
                 f"auth is not self-healing (revoked/expired SSO IdC, wrong region). "
                 f"Restore CLI auth (claude auth login / refresh SSO IdC); it retries "
                 f"automatically (hourly, no cooldown). Last: {last}."
+            ),
+        }
+    elif single:
+        alert_entry = {
+            "job_id": job_id,
+            "job_name": f"⚠️ ALERT: {job_id} failed",
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "status": "failed",
+            "tokens_used": 0,
+            "duration_seconds": 0,
+            "summary": (
+                f"Job '{job_id}' failed. Last error: {last}. "
+                f"It will retry on its next scheduled run; if it keeps failing "
+                f"you'll get an escalated streak alert."
             ),
         }
     else:

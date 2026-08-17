@@ -105,11 +105,13 @@ class TestCrashHandlerPersistence:
             result = execute_job(job, state, feeds=[])
 
         assert result.status == "failed"
-        # The crash should be persisted to JSONL
+        # The crash should be persisted to JSONL. Since run_d383e9a0, a first
+        # failure ALSO writes a single-failure alert row (P0-3), so the file may
+        # hold >1 line — find the crash RESULT row among them (not assume 1 line).
         assert jsonl_path.exists(), "JSONL file should exist after crash"
-        entry = json.loads(jsonl_path.read_text().strip())
-        assert entry["status"] == "failed"
-        assert "boom" in entry["summary"]
+        entries = [json.loads(l) for l in jsonl_path.read_text().splitlines() if l.strip()]
+        crash_rows = [e for e in entries if e.get("status") == "failed" and "boom" in e.get("summary", "")]
+        assert crash_rows, "the crash result row must be persisted to JSONL"
 
 
 # ── AC3: Circuit breaker 24h auto-reset ─────────────────────────────
@@ -691,3 +693,154 @@ class TestMonitorResultStatus:
         from jobs.executor import _monitor_result_status
         # eval_scheduled config: healthy/regression -> success, skipped -> skipped, error -> failed
         assert _monitor_result_status("regression", ok={"healthy", "regression"}, benign={"skipped"}) == "success"
+
+
+# ── run_d383e9a0: Community job P0 fixes (retry / single-failure alert) ──
+
+class TestAgentTaskRetry:
+    """P0-1: bounded in-tick retry for retryable agent_task failures (opt-in via
+    JobSafety.retryable, default False for idempotency safety)."""
+
+    def test_jobsafety_retryable_defaults_false(self):
+        """AC1: retryable is opt-in — a job without it declared is NOT retried."""
+        from jobs.models import JobSafety
+        assert JobSafety().retryable is False
+
+    def test_retryable_job_retries_once_on_timeout(self):
+        """AC1: retryable=True + first attempt timeout → retry once → success."""
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState
+        from datetime import datetime, timezone
+        import jobs.executor as ex
+
+        job = Job(id="rt", name="Retryable", type="agent_task", schedule="0 * * * *",
+                  safety=JobSafety(retryable=True))
+        state = SchedulerState()
+        calls = {"n": 0}
+
+        def fake_handle(j, s):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return JobResult(job_id=j.id, timestamp=datetime.now(timezone.utc),
+                                 status="failed", error="timeout", summary="Timeout after 480s")
+            return JobResult(job_id=j.id, timestamp=datetime.now(timezone.utc),
+                             status="success", summary="ok")
+
+        with patch("jobs.executor._handle_agent_task", side_effect=fake_handle):
+            result = ex.execute_job(job, state, feeds=[])
+        assert calls["n"] == 2, "should have retried exactly once"
+        assert result.status == "success"
+
+    def test_non_retryable_job_not_retried(self):
+        """AC1: retryable=False (default) + timeout → NO retry (handler called once)."""
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState
+        from datetime import datetime, timezone
+        import jobs.executor as ex
+
+        job = Job(id="nrt", name="NonRetryable", type="agent_task", schedule="0 * * * *",
+                  safety=JobSafety(retryable=False))
+        state = SchedulerState()
+        calls = {"n": 0}
+
+        def fake_handle(j, s):
+            calls["n"] += 1
+            return JobResult(job_id=j.id, timestamp=datetime.now(timezone.utc),
+                             status="failed", error="timeout", summary="Timeout after 480s")
+
+        with patch("jobs.executor._handle_agent_task", side_effect=fake_handle):
+            result = ex.execute_job(job, state, feeds=[])
+        assert calls["n"] == 1, "non-retryable must NOT retry"
+        assert result.status == "failed"
+
+    def test_retryable_job_does_not_retry_auth_failed(self):
+        """AC1: auth_failed is NOT a retryable class even when retryable=True
+        (it has its own next-tick fast-retry path)."""
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState
+        from datetime import datetime, timezone
+        import jobs.executor as ex
+
+        job = Job(id="af", name="AuthFail", type="agent_task", schedule="0 * * * *",
+                  safety=JobSafety(retryable=True))
+        state = SchedulerState()
+        calls = {"n": 0}
+
+        def fake_handle(j, s):
+            calls["n"] += 1
+            return JobResult(job_id=j.id, timestamp=datetime.now(timezone.utc),
+                             status="auth_failed", summary="auth pre-check failed")
+
+        with patch("jobs.executor._handle_agent_task", side_effect=fake_handle):
+            result = ex.execute_job(job, state, feeds=[])
+        assert calls["n"] == 1, "auth_failed must NOT go through the timeout-retry path"
+        assert result.status == "auth_failed"
+
+    def test_retry_rechecks_admission_gate(self):
+        """Gate-2 O-1: the retry must re-check the RAM/budget/daily gate before a
+        second spawn — if the gate declines, NO retry (keep original failure)."""
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState
+        from datetime import datetime, timezone
+        import jobs.executor as ex
+
+        job = Job(id="rg", name="RetryGate", type="agent_task", schedule="0 * * * *",
+                  safety=JobSafety(retryable=True))
+        state = SchedulerState()
+        calls = {"n": 0}
+
+        def fake_handle(j, s):
+            calls["n"] += 1
+            return JobResult(job_id=j.id, timestamp=datetime.now(timezone.utc),
+                             status="failed", error="timeout", summary="Timeout after 480s")
+
+        # First attempt runs (gate open on call #1), then the RAM gate declines
+        # the retry (call #2) → the retry must NOT spawn.
+        ram_calls = {"n": 0}
+        def fake_ram():
+            ram_calls["n"] += 1
+            return None if ram_calls["n"] == 1 else "deferred: memory pressure"
+
+        with patch("jobs.executor._handle_agent_task", side_effect=fake_handle), \
+             patch("jobs.executor._check_spawn_ram_budget", side_effect=fake_ram):
+            result = ex.execute_job(job, state, feeds=[])
+        assert calls["n"] == 1, "retry must NOT spawn a second subprocess when the gate declines"
+        assert result.status == "failed"
+
+
+class TestSingleFailureAlert:
+    """P0-3: a single true failure writes an alert immediately (not only at
+    consecutive_failures>=3), with non-streak text (no 'consecutive'/'cooldown')."""
+
+    def test_single_failure_writes_alert(self, tmp_path):
+        """AC2: one failed run → alert entry in JSONL, text does NOT claim a streak."""
+        from jobs.models import JobResult, SchedulerState
+        from datetime import datetime, timezone
+        import jobs.executor as ex
+
+        jsonl = tmp_path / ".job-results.jsonl"
+        state = SchedulerState()
+        result = JobResult(job_id="solo", timestamp=datetime.now(timezone.utc),
+                           status="failed", error="timeout", summary="Timeout after 480s")
+        with patch("jobs.executor.JOB_RESULTS_JSONL", jsonl):
+            ex._update_job_state(state, "solo", result)
+        assert jsonl.exists(), "single failure must write an alert entry"
+        entries = [json.loads(l) for l in jsonl.read_text().splitlines() if l.strip()]
+        alerts = [e for e in entries if "ALERT" in e.get("job_name", "")]
+        assert len(alerts) == 1, "exactly one single-failure alert"
+        summary = alerts[0]["summary"].lower()
+        assert "consecutive" not in summary, "single-failure text must not claim a streak"
+        assert "24h cooldown" not in summary, "single failure is not in cooldown"
+
+    def test_streak_alert_still_fires_at_threshold(self, tmp_path):
+        """AC2 (regression): the >=3 streak alert still uses streak text."""
+        from jobs.models import JobResult, JobState, SchedulerState
+        from datetime import datetime, timezone
+        import jobs.executor as ex
+
+        jsonl = tmp_path / ".job-results.jsonl"
+        state = SchedulerState()
+        state.jobs["strk"] = JobState(consecutive_failures=2)  # this failure makes it 3
+        result = JobResult(job_id="strk", timestamp=datetime.now(timezone.utc),
+                           status="failed", error="boom", summary="crash")
+        with patch("jobs.executor.JOB_RESULTS_JSONL", jsonl):
+            ex._update_job_state(state, "strk", result)
+        entries = [json.loads(l) for l in jsonl.read_text().splitlines() if l.strip()]
+        streak_alerts = [e for e in entries if "consecutive" in e.get("summary", "").lower()]
+        assert len(streak_alerts) == 1, "streak alert at threshold=3 must still fire with streak text"
