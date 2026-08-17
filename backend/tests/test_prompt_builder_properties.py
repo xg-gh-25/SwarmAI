@@ -831,3 +831,90 @@ class TestContextLoadOffEventLoop:
         assert "exclude_filenames" in kwargs, (
             f"exclude_filenames kwarg lost through to_thread: {kwargs!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 阶段二: prompt-builder 两分 (default_builder / dynamic_builder)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultBuilderSplit:
+    """AC1/AC6: build_default_system_prompt produces the input-INDEPENDENT base
+    (context files + safety/datetime/runtime) as a cacheable STRING, EXCLUDING
+    per-turn ephemeral layers (briefing / UI-SENSE / DailyActivity / resume).
+
+    The base must still pass assert_core_sections — the strangler guarantee that
+    extraction did not drop constitution content.
+    """
+
+    def _run_default(self, workspace, *, editor_context=None) -> str:
+        import asyncio
+        import unittest.mock as mock
+
+        builder = _make_builder()
+        agent_config: dict = {}
+        with mock.patch(
+            "core.proactive_intelligence.get_focus_keywords", return_value="",
+        ):
+            out = asyncio.run(builder.build_default_system_prompt(
+                agent_config=agent_config,
+                working_directory=str(workspace),
+                editor_context=editor_context,
+            ))
+        return out
+
+    def test_default_builder_returns_str_with_core_sections(self, tmp_path):
+        """AC1: build_default_system_prompt returns a STRING (never an options
+        object — anti-repetition run_f8c3ddd4) that passes assert_core_sections."""
+        from core.prompt_builder import assert_core_sections
+        out = self._run_default(tmp_path)
+        assert isinstance(out, str), (
+            f"build_default_system_prompt must return str, got {type(out)!r} "
+            "(caching an options object caused cross-session bleed — run_f8c3ddd4)"
+        )
+        missing = assert_core_sections(out)
+        assert not missing, f"default base dropped core section(s): {missing}"
+
+    def test_default_builder_excludes_ephemeral(self, tmp_path):
+        """AC1: the base MUST NOT contain per-turn ephemeral markers. A UI-SENSE
+        block (editor_context) is the cleanest observable — it is per-turn and must
+        NOT ride the cacheable base. Mutation-proof: if the extraction lets
+        ephemeral leak into the base, this goes RED."""
+        ec = {"open_file": {"path": "/tmp/foo.py", "name": "foo.py"}}
+        out = self._run_default(tmp_path, editor_context=ec)
+        assert "Recalled Knowledge" not in out, "recall leaked into cacheable base"
+        assert "Current UI State" not in out and "foo.py" not in out, (
+            "UI-SENSE (per-turn) leaked into the cacheable default base — "
+            "ephemeral must be excluded from build_default_system_prompt"
+        )
+
+    def test_default_builder_excludes_briefing_with_teeth(self, tmp_path):
+        """Gate-2 HIGH (run_f638ebc3): the briefing sub-block is a SEPARATE ephemeral
+        try-block from bootstrap/daily. An empty tmpdir yields an empty briefing, so
+        the plain exclusion test passes even if the skip only covers the FIRST block
+        (the raise-hack bug). Force a NON-EMPTY briefing and assert it is STILL
+        excluded from the base — this has teeth for the per-block-guard fix.
+        Mutation-proof: drop the `include_ephemeral` guard on the briefing block →
+        the marker leaks into the base → RED."""
+        import asyncio
+        import unittest.mock as mock
+        builder = _make_builder()
+        agent_config: dict = {}
+        with mock.patch(
+            "core.proactive_intelligence.get_focus_keywords", return_value="",
+        ), mock.patch(
+            "core.proactive_intelligence.build_session_briefing",
+            return_value="## EPHEMERAL_BRIEFING_MARKER\nlive briefing content",
+        ):
+            out = asyncio.run(builder.build_default_system_prompt(
+                agent_config=agent_config,
+                working_directory=str(tmp_path),
+            ))
+        assert "EPHEMERAL_BRIEFING_MARKER" not in out, (
+            "briefing (a per-turn ephemeral sub-block) leaked into the cacheable "
+            "default base — every ephemeral sub-block must carry its own "
+            "include_ephemeral guard, not just the first"
+        )
+        # And core is still intact (the guard didn't over-skip).
+        from core.prompt_builder import assert_core_sections
+        assert not assert_core_sections(out), "core dropped while excluding briefing"

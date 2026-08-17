@@ -514,6 +514,20 @@ class TestRealRecallPathBudget:
 # silent — silent empty recall is the exact dead-path class that hid for months.
 
 class TestRecallLoudOnDegradation:
+    @pytest.fixture(autouse=True)
+    def _force_recall_fallback_leg(self):
+        """Route recall through the mocked ``_recall_for_query`` leg by forcing the
+        unified leg (tried FIRST, strangler-fig run_ccd1b6c5) empty. Without this a
+        prior real-DB test (TestRealRecallPathBudget / TestMaybeInjectRecall real
+        legs) leaves module/DB state that makes ``_unified_recall_body`` return
+        content here — so ``_recall_for_query`` (the intended hang target) is never
+        reached and the disaster-timeout ERROR never fires. Mirrors the identical
+        autouse fixture on TestMaybeInjectRecall; this class was missing it (a
+        PRE-EXISTING test-isolation gap, independent of 阶段二 — pure-HEAD reproduces
+        the same order-dependent failure)."""
+        with patch("core.session_router._unified_recall_body", return_value=("", None)):
+            yield
+
     @pytest.fixture
     def mock_unit(self):
         unit = MagicMock()
@@ -596,3 +610,190 @@ class TestKeywordOnlyOneTurn:
 
         # Single turn: recall injected via the keyword floor (no vector leg).
         assert "Recalled Knowledge" in opts.system_prompt
+
+
+# ── 阶段二: warm/cold recall injection split ──────────────────────────
+
+
+class TestRecallWarmColdSplit:
+    """阶段二 prompt-builder 两分 (AC3): recall's destination depends on the
+    warm-reuse discriminator. COLD-spawn turn (should_mutate_system_prompt=True) →
+    write options.system_prompt (today's behavior, spawn carries it). WARM-reuse
+    turn (should_mutate_system_prompt=False) → do NOT touch system_prompt (it is
+    discarded on a reused subprocess); instead stash the recall block on
+    unit._recall_query_block for the caller to prefix onto query_content.
+    Recall must be injected EXACTLY ONCE — never both, never neither.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_fallback(self):
+        with patch("core.session_router._unified_recall_body", return_value=("", None)):
+            yield
+
+    def _unit(self):
+        u = MagicMock()
+        u._recall_injected = False
+        u.is_channel_session = False
+        u._recall_keyword_misses = 0
+        u._recall_query_block = None
+        return u
+
+    def _opts(self):
+        o = MagicMock()
+        o.system_prompt = "## Base system prompt content"
+        return o
+
+    @pytest.mark.asyncio
+    async def test_cold_writes_system_prompt(self):
+        """COLD default (should_mutate_system_prompt=True): recall → system_prompt."""
+        from core.session_router import _maybe_inject_recall
+        unit, opts = self._unit(), self._opts()
+        with patch("core.session_router._recall_for_query", return_value="RECALL_BODY"):
+            await _maybe_inject_recall(
+                user_message="how does the evolution pipeline work?",
+                options=opts, unit=unit, should_mutate_system_prompt=True,
+            )
+        assert "RECALL_BODY" in opts.system_prompt, "cold turn must write system_prompt"
+        assert "**[RECALLED]**" in opts.system_prompt
+        assert not unit._recall_query_block, "cold turn must NOT stash a query block"
+
+    @pytest.mark.asyncio
+    async def test_warm_stashes_query_block_not_system_prompt(self):
+        """WARM (should_mutate_system_prompt=False): recall stashed for query, NOT
+        written to the (discarded) system_prompt — no double-inject, no drop."""
+        from core.session_router import _maybe_inject_recall
+        unit, opts = self._unit(), self._opts()
+        base = opts.system_prompt
+        with patch("core.session_router._recall_for_query", return_value="RECALL_BODY"):
+            await _maybe_inject_recall(
+                user_message="how does the evolution pipeline work?",
+                options=opts, unit=unit, should_mutate_system_prompt=False,
+            )
+        assert opts.system_prompt == base, (
+            "warm-reuse turn must NOT mutate system_prompt (it's discarded on a "
+            "reused subprocess → would be a silent drop)"
+        )
+        assert unit._recall_query_block, "warm turn must stash the recall block for query prefix"
+        assert "RECALL_BODY" in unit._recall_query_block
+        assert "**[RECALLED]**" in unit._recall_query_block, "provenance preserved in warm block (AC4)"
+
+    @pytest.mark.asyncio
+    async def test_default_is_cold_behavior(self):
+        """Back-compat: omitting should_mutate_system_prompt = today's cold behavior."""
+        from core.session_router import _maybe_inject_recall
+        unit, opts = self._unit(), self._opts()
+        with patch("core.session_router._recall_for_query", return_value="RECALL_BODY"):
+            await _maybe_inject_recall(
+                user_message="how does the evolution pipeline work?",
+                options=opts, unit=unit,
+            )
+        assert "RECALL_BODY" in opts.system_prompt
+
+
+class TestRecallStashClearedEveryTurn:
+    """阶段二 Gate-2 CRITICAL (run_f638ebc3): unit._recall_query_block must be
+    cleared on EVERY turn, BEFORE the `if _user_text:` guard — not inside it.
+    Recall runs once per session, so if the clear lived inside the guard, a later
+    empty-text WARM turn (multimodal-only) would skip both the clear and recall,
+    leaking turn-1's stashed recall block into this turn's query prefix.
+
+    Source-invariant test (send() is integration-heavy; the bug is a statement
+    ORDER invariant). Mutation-proof: move the clear back inside `if _user_text:`
+    → the clear-line index falls after the guard-line index → RED."""
+
+    def test_recall_stash_cleared_before_user_text_guard(self):
+        import inspect
+        import core.session_router as sr
+        src = inspect.getsource(sr)
+        lines = src.splitlines()
+
+        def _first_code_line(needle: str) -> int:
+            # Match the STATEMENT (line whose stripped code startswith needle), not a
+            # comment/docstring mention — a comment can precede the real statement.
+            for i, ln in enumerate(lines):
+                s = ln.strip()
+                if s.startswith("#"):
+                    continue
+                if s.startswith(needle):
+                    return i
+            return -1
+
+        clear_line = _first_code_line("unit._recall_query_block = None")
+        guard_line = _first_code_line("if _user_text:")
+        assert clear_line != -1, "the per-turn recall-stash clear statement is missing"
+        assert guard_line != -1, "the `if _user_text:` guard moved/renamed — re-verify"
+        assert clear_line < guard_line, (
+            "unit._recall_query_block must be cleared (as a STATEMENT) BEFORE the "
+            "`if _user_text:` guard (阶段二 Gate-2 CRITICAL): an empty-text warm turn "
+            "would otherwise leak a stale recall block into the query prefix"
+        )
+
+
+class TestRecallDynamicSeamE2E:
+    """阶段二 Layer-4 Cross-Boundary E2E (cross_boundary=true): drive the REAL
+    recall→query_content seam end-to-end — _maybe_inject_recall stashes the block
+    on a WARM turn, then the REAL _prepend_dynamic_context_to_query consumes it
+    into the query prefix. NEITHER function is mocked (only the leaf _recall_for_query
+    leg supplies deterministic recall content). Mutation-verified below."""
+
+    @pytest.fixture(autouse=True)
+    def _force_fallback(self):
+        with patch("core.session_router._unified_recall_body", return_value=("", None)):
+            yield
+
+    def _unit(self):
+        u = MagicMock()
+        u._recall_injected = False
+        u.is_channel_session = False
+        u._recall_keyword_misses = 0
+        u._recall_query_block = None
+        return u
+
+    @pytest.mark.asyncio
+    async def test_warm_recall_flows_through_real_seam_to_query(self):
+        """REAL wiring: recall (warm, should_mutate=False) → stash → REAL prefixer →
+        query_content carries the recall block with [RECALLED]; system_prompt is NOT
+        mutated. Drives both real functions, no mock of either."""
+        from core.session_router import _maybe_inject_recall, _prepend_dynamic_context_to_query
+        unit = self._unit()
+        opts = MagicMock(); opts.system_prompt = "## Base"
+        base = opts.system_prompt
+
+        # Real recall leg (warm turn → stash, not system_prompt)
+        with patch("core.session_router._recall_for_query", return_value="SEAM_RECALL_BODY"):
+            await _maybe_inject_recall(
+                user_message="evolution pipeline crash recovery resume",
+                options=opts, unit=unit, should_mutate_system_prompt=False,
+            )
+        assert opts.system_prompt == base, "warm turn must not mutate system_prompt"
+        assert unit._recall_query_block, "recall must stash a block on the warm turn"
+
+        # REAL prefixer consumes the stash (as send() does at the prefix site)
+        out = _prepend_dynamic_context_to_query(
+            "my question", editor_context=None,
+            recall_block=unit._recall_query_block, should_prefix=True,
+        )
+        assert "SEAM_RECALL_BODY" in out, "recall did not flow through the real seam to query"
+        assert "[RECALLED]" in out, "provenance lost crossing the seam"
+        assert out.rstrip().endswith("my question"), "user query preserved after the seam"
+
+    @pytest.mark.asyncio
+    async def test_cold_recall_stays_in_system_prompt_not_query(self):
+        """The complement: cold turn (should_mutate=True) → recall in system_prompt,
+        stash stays empty, prefixer is a no-op for recall."""
+        from core.session_router import _maybe_inject_recall, _prepend_dynamic_context_to_query
+        unit = self._unit()
+        opts = MagicMock(); opts.system_prompt = "## Base"
+        with patch("core.session_router._recall_for_query", return_value="SEAM_RECALL_BODY"):
+            await _maybe_inject_recall(
+                user_message="evolution pipeline crash recovery resume",
+                options=opts, unit=unit, should_mutate_system_prompt=True,
+            )
+        assert "SEAM_RECALL_BODY" in opts.system_prompt, "cold turn must write system_prompt"
+        assert not unit._recall_query_block, "cold turn must not stash a query block"
+        out = _prepend_dynamic_context_to_query(
+            "my question", editor_context=None,
+            recall_block=unit._recall_query_block, should_prefix=True,
+        )
+        assert "SEAM_RECALL_BODY" not in out, "recall must NOT double-inject into query on cold turn"
+        assert out == "my question", "no dynamic block → query unchanged"

@@ -787,12 +787,23 @@ class PromptBuilder:
         editor_context: Optional[dict] = None,
         terminal_context: Optional[dict] = None,
         context_percent_used: float = 0.0,
+        include_ephemeral: bool = True,
     ) -> Any:
         """Build the system prompt with centralized context directory.
 
         Assembly order:
         1. ContextDirectoryLoader — global context from SwarmWS/.context/
         2. SystemPromptBuilder — non-file sections (safety, datetime, runtime)
+
+        ``include_ephemeral`` (阶段二 prompt-builder 两分, default True = old
+        behavior byte-for-byte): when False, the per-turn EPHEMERAL layers
+        (BOOTSTRAP/DailyActivity/briefing/user-suggestions/session-digest/
+        UI-SENSE/terminal/deferred-MCP) AND the resume-context injection are
+        SKIPPED, yielding the input-INDEPENDENT base — the cacheable/warmable
+        "default" half that ``build_default_system_prompt`` returns. The core
+        context files + stable framing + volatile datetime/runtime tail still
+        assemble exactly as usual. This is a pure skip-gate: with the default
+        True, not one byte of the assembled prompt changes (strangler-fig R26).
 
         After loading context files, metadata (file list, token counts,
         truncation status, full prompt text) is stored on ``agent_config``
@@ -1010,11 +1021,22 @@ class PromptBuilder:
             #    which is committed to system_prompt ONCE, AFTER core is already
             #    committed ABOVE. A failure in any ephemeral section can never
             #    drop the core context files.
+            # 阶段二 prompt-builder 两分: `include_ephemeral=False` (default_builder)
+            # skips EVERY per-turn ephemeral sub-block below (bootstrap/daily, briefing,
+            # user-suggestions, session-digest, UI-SENSE/terminal/deferred-MCP), yielding
+            # the input-independent cacheable base. Each of the 5 sub-blocks carries its
+            # own `if include_ephemeral` guard (NOT a single raise — a raise only aborts
+            # the FIRST block and lets briefing/SENSE leak into the base; Gate-2 HIGH
+            # run_f638ebc3). Core context files were committed ABOVE this region, so
+            # skipping here never drops them.
             ephemeral_text = ""
             try:
-                _bootstrap_content, _daily_files, _distill_flag = await executors.run_in(
-                    "io", _read_ephemeral_files
-                )
+                if include_ephemeral:
+                    _bootstrap_content, _daily_files, _distill_flag = await executors.run_in(
+                        "io", _read_ephemeral_files
+                    )
+                else:
+                    _bootstrap_content, _daily_files, _distill_flag = "", [], ""
 
                 if _bootstrap_content:
                     # Onboarding is the FIRST content into the (empty) ephemeral
@@ -1046,7 +1068,7 @@ class PromptBuilder:
             # Skipped for channel sessions: briefing is for session planning,
             # not quick chat exchanges (~2K tokens saved).
             _t_briefing_start = time.perf_counter()
-            if not is_channel:
+            if include_ephemeral and not is_channel:
                 try:
                     from .proactive_intelligence import build_session_briefing
                     # build_session_briefing is now filesystem-ONLY (run_05b42b8b,
@@ -1072,7 +1094,7 @@ class PromptBuilder:
             # ── UserObserver Suggestions ──
             # Inject pending USER.md update suggestions if the file exists
             # and has content. Written by UserObserverHook, consumed here.
-            if not is_channel:
+            if include_ephemeral and not is_channel:
                 # OFF-LOOP (run_a1f4c2d8): a read on the session-start path.
                 def _read_user_suggestions() -> str:
                     suggestions_path = Path(working_directory) / ".context" / "user_suggestions.md"
@@ -1102,14 +1124,15 @@ class PromptBuilder:
             # Inject a brief summary of what other active sessions are doing
             # so Tabs know about Channel activity and vice versa.
             # Lightweight: just last user message per sibling, ~50 tokens each.
-            try:
-                digest = await self._build_active_session_digest(
-                    current_session_id=agent_config.get("resume_app_session_id") or "",
-                )
-                if digest:
-                    ephemeral_text += f"\n\n{digest}"
-            except Exception as exc:
-                logger.debug("Active session digest failed (non-fatal): %s", exc)
+            if include_ephemeral:
+                try:
+                    digest = await self._build_active_session_digest(
+                        current_session_id=agent_config.get("resume_app_session_id") or "",
+                    )
+                    if digest:
+                        ephemeral_text += f"\n\n{digest}"
+                except Exception as exc:
+                    logger.debug("Active session digest failed (non-fatal): %s", exc)
 
             # NOTE: Resume context injection moved OUTSIDE this try block
             # (after the except) so it runs even when ContextDirectoryLoader
@@ -1121,7 +1144,8 @@ class PromptBuilder:
             # open. Superset of the legacy "## Currently Open File" (which a
             # file-only payload still degrades to). See _render_ui_context_section.
             try:
-                ephemeral_text += _render_ui_context_section(editor_context)
+                if include_ephemeral:
+                    ephemeral_text += _render_ui_context_section(editor_context)
 
                 # ── Terminal context injection (P2 — observable terminal) ──
                 # When the user explicitly attaches a terminal's output (a human
@@ -1129,7 +1153,7 @@ class PromptBuilder:
                 # of that terminal's recent output + cwd, so "why did this build
                 # fail?" works without copy-paste. Single direction: terminal →
                 # session. The session never writes to the terminal (P3 deferred).
-                if terminal_context:
+                if include_ephemeral and terminal_context:
                     buffer_tail = terminal_context.get("buffer_tail", "")
                     term_cwd = terminal_context.get("cwd", "")
                     if buffer_tail:
@@ -1144,7 +1168,7 @@ class PromptBuilder:
 
                 # ── Deferred MCP list (Lazy MCP Loading) ──
                 _deferred = agent_config.get("_deferred_mcps")
-                if _deferred:
+                if include_ephemeral and _deferred:
                     deferred_section = self.format_deferred_mcp_section(_deferred)
                     if deferred_section:
                         ephemeral_text += f"\n\n{deferred_section}"
@@ -1288,7 +1312,7 @@ class PromptBuilder:
         # resume context injection — causing total loss of prior conversation
         # on "resume" after retry exhaustion (COE: 2026-04-02).
         try:
-            if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
+            if include_ephemeral and agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
                 from .context_injector import build_resume_context
                 resume_ctx = await build_resume_context(
                     agent_config["resume_app_session_id"],
@@ -1405,6 +1429,38 @@ class PromptBuilder:
         # No context files (degraded / channel edge case): still emit the tail
         # so datetime/runtime are never lost.
         return f"{builder_text}{_tail}"
+
+    async def build_default_system_prompt(
+        self,
+        agent_config: dict,
+        working_directory: str,
+        channel_context: Optional[dict] = None,
+        editor_context: Optional[dict] = None,
+        terminal_context: Optional[dict] = None,
+    ) -> str:
+        """阶段二 prompt-builder 两分 — the input-INDEPENDENT "default" half.
+
+        Returns the cacheable/warmable base system prompt STRING = 11 context
+        files + stable framing + volatile datetime/runtime tail, parameterized
+        ONLY by (session_type × model) via ``channel_context`` and the model in
+        ``agent_config`` — NO per-turn ephemeral (briefing/UI-SENSE/DailyActivity/
+        recall/resume). This is exactly ``build_system_prompt`` with the ephemeral
+        block skipped.
+
+        ⚠️ Returns a STRING, never a ``ClaudeAgentOptions`` object. Caching the
+        whole options object froze session identity → cross-session bleed +
+        context loss (IMPROVEMENT run_f8c3ddd4, reverted 0ee8e1d3). The prewarm
+        path caches ONLY this string; ``resume``/``hooks``/recall rebind live on
+        every turn via a fresh ``build_options``.
+        """
+        return await self.build_system_prompt(
+            agent_config=agent_config,
+            working_directory=working_directory,
+            channel_context=channel_context,
+            editor_context=editor_context,
+            terminal_context=terminal_context,
+            include_ephemeral=False,
+        )
 
     # ------------------------------------------------------------------
     # _build_thinking_config

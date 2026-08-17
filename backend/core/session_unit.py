@@ -518,6 +518,13 @@ class SessionUnit:
         # attribute (a future direct read won't AttributeError); the live read in
         # session_router uses getattr(..., None) so None == "no snapshot".
         self._recall_snapshot: Optional[dict] = None
+        # 阶段二 prompt-builder 两分: on a WARM-reuse turn recall cannot ride the
+        # (discarded) system_prompt, so _maybe_inject_recall stashes the recall
+        # block here for send() to prefix onto query_content via
+        # _prepend_dynamic_context_to_query. None = no warm recall this turn (cold
+        # turn wrote system_prompt instead, or no recall ran). send() clears it at
+        # the top of each turn; the router read uses getattr(..., None) too.
+        self._recall_query_block: Optional[str] = None
         # TSCC system-prompt metadata AWAITING DELIVERY. The router stashes the
         # freshly-built metadata here; _spawn() publishes it to
         # session_registry.system_prompt_metadata at the moment the prompt is

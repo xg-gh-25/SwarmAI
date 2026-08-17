@@ -419,6 +419,69 @@ class TestPrependUiStateToQuery:
         assert out == blocks
 
 
+class TestPrependDynamicContextToQuery:
+    """阶段二 prompt-builder 两分 — _prepend_dynamic_context_to_query generalizes
+    _prepend_ui_state_to_query to carry the per-turn DYNAMIC segment (recall_block
+    + UI-SENSE) as a query_content prefix on a warm-reuse turn. recall_block MUST
+    preserve its [RECALLED] provenance header verbatim.
+    """
+
+    _CANVAS_CTX = {"file_path": "", "file_name": "", "canvas": {"open": True, "output_count": 2, "pinned": False, "muted": False, "collapsed": False}}
+    _RECALL = "## Recalled Knowledge\n> **[RECALLED]** keyword/FTS-retrieved prior context.\n- MEMORY.md: some lesson"
+
+    def test_prefixes_recall_block_with_provenance_preserved(self):
+        """AC2/AC4: recall_block prepended and its [RECALLED] header preserved."""
+        from core.session_router import _prepend_dynamic_context_to_query
+        out = _prepend_dynamic_context_to_query(
+            "what did we learn?", self._CANVAS_CTX, recall_block=self._RECALL, should_prefix=True,
+        )
+        assert isinstance(out, str)
+        assert "[RECALLED]" in out, "recall provenance header dropped in migration"
+        assert "Recalled Knowledge" in out
+        assert "Current UI State" in out, "SENSE must still ride the same dynamic segment"
+        assert out.rstrip().endswith("what did we learn?"), "original query preserved at end"
+
+    def test_no_prefix_when_not_reuse(self):
+        """COLD/spawn path: dynamic segment rides system_prompt → must NOT double-inject."""
+        from core.session_router import _prepend_dynamic_context_to_query
+        out = _prepend_dynamic_context_to_query(
+            "q", self._CANVAS_CTX, recall_block=self._RECALL, should_prefix=False,
+        )
+        assert out == "q", "unchanged when not reusing (cold path carries it in system_prompt)"
+
+    def test_recall_only_no_sense(self):
+        """recall_block present, no editor_context → recall still prefixed."""
+        from core.session_router import _prepend_dynamic_context_to_query
+        out = _prepend_dynamic_context_to_query(
+            "q", None, recall_block=self._RECALL, should_prefix=True,
+        )
+        assert "[RECALLED]" in out and out.rstrip().endswith("q")
+
+    def test_sense_only_no_recall(self):
+        """No recall_block, SENSE present → behaves like the old UI-state prefix."""
+        from core.session_router import _prepend_dynamic_context_to_query
+        out = _prepend_dynamic_context_to_query(
+            "q", self._CANVAS_CTX, recall_block=None, should_prefix=True,
+        )
+        assert "Current UI State" in out and out.rstrip().endswith("q")
+
+    def test_empty_dynamic_is_noop(self):
+        """No recall, no SENSE → clean no-op even on reuse."""
+        from core.session_router import _prepend_dynamic_context_to_query
+        assert _prepend_dynamic_context_to_query("hi", None, recall_block=None, should_prefix=True) == "hi"
+
+    def test_multimodal_list_inserts_leading_text_block(self):
+        from core.session_router import _prepend_dynamic_context_to_query
+        blocks = [{"type": "image", "source": {"x": 1}}, {"type": "text", "text": "look"}]
+        out = _prepend_dynamic_context_to_query(
+            blocks, self._CANVAS_CTX, recall_block=self._RECALL, should_prefix=True,
+        )
+        assert isinstance(out, list)
+        assert out[0]["type"] == "text"
+        assert "[RECALLED]" in out[0]["text"]
+        assert out[1:] == blocks, "original blocks preserved"
+
+
 class TestFormatTtftLine:
     """_format_ttft_line — pure decision + formatter for the end-to-end TTFT probe.
 
@@ -541,3 +604,56 @@ class TestFormatTtftLine:
         assert "send+infer=2200ms" in line, f"3000-800=2200: {line}"
         # The old misleading residual (ttft-slot-recall = 2500) must NOT appear.
         assert "spawn+infer" not in line, f"old contradictory residual removed: {line}"
+
+
+class TestWarmReuseComplement:
+    """阶段二 AC5/AC6: _is_warm_reuse is the single source of the warm-reuse
+    predicate (was duplicated at 2 send() sites) and the EXACT COMPLEMENT of the
+    poison-guard recycle condition (session_unit): within (IDLE ∧ client-alive),
+    warm-reuse ⟺ last_turn_clean, poison-recycle ⟺ NOT last_turn_clean. This
+    invariant is what makes the recall cold/warm split non-double-injecting."""
+
+    class _Unit:
+        def __init__(self, state, client, clean):
+            self.state = state
+            self._client = client
+            self._last_turn_clean = clean
+
+    def _unit(self, *, state, client, clean):
+        return self._Unit(state, client if client else None, clean)
+
+    def _poison_recycles(self, u):
+        """Mirror of session_unit poison-guard condition (IDLE ∧ client ∧ NOT clean)."""
+        from core.session_unit import SessionState
+        return (
+            u.state == SessionState.IDLE
+            and u._client is not None
+            and not u._last_turn_clean
+        )
+
+    def test_exact_complement_over_idle_client_domain(self):
+        from core.session_router import _is_warm_reuse
+        from core.session_unit import SessionState
+        client = object()
+        # Over the (IDLE ∧ client-alive) domain, warm-reuse and poison-recycle
+        # partition perfectly on last_turn_clean — never both, never neither.
+        for clean in (True, False):
+            u = self._unit(state=SessionState.IDLE, client=client, clean=clean)
+            warm = _is_warm_reuse(u)
+            poison = self._poison_recycles(u)
+            assert warm != poison, (
+                f"warm-reuse and poison-recycle must be exact complements over "
+                f"IDLE∧client (clean={clean}): warm={warm} poison={poison}"
+            )
+
+    def test_not_warm_when_not_idle(self):
+        from core.session_router import _is_warm_reuse
+        from core.session_unit import SessionState
+        u = self._unit(state=SessionState.STREAMING, client=object(), clean=True)
+        assert _is_warm_reuse(u) is False
+
+    def test_not_warm_when_no_client(self):
+        from core.session_router import _is_warm_reuse
+        from core.session_unit import SessionState
+        u = self._unit(state=SessionState.IDLE, client=None, clean=True)
+        assert _is_warm_reuse(u) is False
