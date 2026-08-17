@@ -1574,6 +1574,23 @@ def evaluate_case(case: dict, root: Path, *,
 
     start = time.time()
 
+    # UNIVERSAL draft skip (AC8, run_1bfd3cf9): a tier=draft case must NEVER be
+    # graded on ANY evaluator path. The behavior path had this guard inside
+    # eval_trajectory_capture (only the trajectory_capture path), but the LLM
+    # path (eval_llm_judge) and the programmatic path had NO tier filter — so a
+    # GS_HARVEST_ (eval_method=llm, tier=draft) draft reaching run_eval WOULD be
+    # judged and WOULD count toward the headline `overall` (compute_scores counts
+    # any passed/failed). Moving the skip to the evaluate_case ENTRY makes it
+    # cover every path uniformly. A draft is a refine-me to-do, not a graded test.
+    # (Gate-0 skeptic score-pollution finding; supersedes the per-path guard.)
+    if case.get("tier") == "draft":
+        return {
+            "status": "skipped",
+            "evaluator": "none",
+            "notes": "tier=draft — unrefined skeleton, never graded (refine first)",
+            "duration_ms": 0,
+        }
+
     # Phase 1: Try programmatic evaluators (instant, free, deterministic)
     for ev in evaluators:
         if ev == "canary_pass":

@@ -242,7 +242,6 @@ def classify_new_corrections(
             new_records = new_records[:max_records]
 
         max_seen = last_ts
-        seeded_any = False  # batch flush flag (persist golden_set once after loop)
         for rec in new_records:
             max_seen = max(max_seen, float(rec.get("ts", 0.0)))
             jc = classify_correction(
@@ -258,49 +257,23 @@ def classify_new_corrections(
             else:
                 summary["operational"] += 1
 
-            # M5 Part 2 (run_0305426d): auto-grow the eval suite from REAL,
-            # CLASSIFIED failures — the noise gate. Seed a golden-case DRAFT
-            # skeleton ONLY for cognitive CLASS_A/B/C corrections (counter_state
-            # == "pending_confirm"). Operator/transient noise (counter_state ==
-            # "ignored") and low-stakes operational failures ("counted") never
-            # seed — that is what stopped the GS_C_test-ses_* pollution. The
-            # classifier (run above) IS the single noise gate; we route seeding
-            # through it instead of the old blind UNCLASSIFIED hot-path seed.
-            # Idempotent (auto_seed_case skips an existing GS_<id>) + watermark-
-            # gated (each record processed once). Best-effort: a seeding failure
-            # must never break classification/routing (degrade-to-log).
-            if jc.counter_state == "pending_confirm":
-                try:
-                    from core.eval_hooks import seed_from_correction
-
-                    # persist=False: defer the golden_set.yaml write so M seeds in
-                    # this loop do ONE rewrite (flush after the loop), not M serial
-                    # O(cases) rewrites + M flock cycles (adversarial Gate-2 MED).
-                    seed_from_correction(
-                        jc.correction_ref,
-                        jc.evidence[0] if jc.evidence else "",
-                        jc.class_name or "UNCLASSIFIED",
-                        persist=False,
-                    )
-                    seeded_any = True
-                except Exception as exc:  # noqa: BLE001 — seeding must not break routing
-                    logger.debug(
-                        "classify_new_corrections seed degraded: %s: %s",
-                        type(exc).__name__, exc,
-                    )
-
-        # Single golden_set flush for the whole batch (paired with persist=False).
-        # Best-effort: a flush failure loses the in-memory seeds for this run but
-        # the watermark below still advances — they will NOT re-seed (already past
-        # watermark). That is acceptable: a skeleton is a refine-me to-do, not
-        # durable signal; the durable signal (corrections.jsonl) is untouched.
-        if seeded_any:
-            try:
-                from core.eval_hooks import get_eval_service_for_flush
-                get_eval_service_for_flush().flush_golden_set()
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("golden_set batch flush degraded: %s: %s",
-                             type(exc).__name__, exc)
+            # A-pipeline DECOMMISSIONED (run_1bfd3cf9, option-D source governance):
+            # this branch used to seed a tier=draft golden skeleton per cognitive
+            # CLASS_A/B/C correction. Those skeletons were tautologies (rubric =
+            # "PASS if the agent consults AGENT.md" — a competent agent trivially
+            # passes) with NO negative_example, so under the new teeth gate
+            # (eval_service.gate_by_knockout) they are 100% fail-closed — they can
+            # never be admitted. Rather than feed the teeth gate guaranteed-reject
+            # skeletons every session, we stop seeding from corrections entirely.
+            #
+            # The DURABLE signal is untouched: the correction is still recorded to
+            # the tracker (route_classification above) and lives in corrections.jsonl.
+            # Auto-growth of the eval suite now flows ONLY through the B pipeline
+            # (session_harvest), which HAS an LLM boundary to generate a full case +
+            # negative_example that the teeth gate can actually knockout-test.
+            # (auto_seed_case itself is retained for its direct callers/tests but is
+            # no longer wired to the correction hot-path.)
+            _ = jc.counter_state  # (kept: routing/classification above is the live effect)
 
         # Monotonic write: never regress below what's already on disk.
         on_disk = _read_watermark(watermark_path)

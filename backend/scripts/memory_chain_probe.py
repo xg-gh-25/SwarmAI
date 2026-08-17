@@ -208,7 +208,8 @@ def _archive_recall(negative: bool = False) -> int:
             source_file="Knowledge/Archives/MEMORY-archive-2026-05.md",
             chunk_index=0, heading="Decisions", content=content,
             content_hash=hashlib.sha256(content.encode()).hexdigest(),
-            embedding=None,  # FTS5-only, no vector leg
+            # FTS5-only, no vector leg — upsert_chunk dropped its `embedding`
+            # param when the vector leg was torn out (knowledge_store.py:216).
         )
         hits = store.fts5_search(_ARCHIVE_MARKER, limit=5)
     finally:

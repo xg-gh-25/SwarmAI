@@ -1366,10 +1366,11 @@ export function ReportsTab() {
 
 // ─── Session Quality Tab (Layer ②③) ────────────────────────────────────────────
 // Surfaces the weekly real-session quality loop: Layer③ scores real sessions
-// (goal + tool-selection judges), Layer② harvests low-score sessions into golden
-// DRAFTS awaiting human ratification. The SYSTEM never auto-promotes — this tab IS
-// the human-in-the-loop gate (Promote reuses POST/PUT golden-set; Discard deletes).
-// Backend: GET /eval/session-quality (overview+trend) + /eval/session-quality/drafts.
+// (goal + tool-selection judges) and shows low-score attribution. Layer② harvest
+// no longer produces a human-ratification queue — it auto-gates each harvested
+// case through the teeth gate (option D): pass → lands tier=active, fail → discarded
+// to the recoverable archive. There is NO pending-draft queue / Promote / Discard.
+// Backend: GET /eval/session-quality (overview + trend + low detail).
 
 interface SessionQualityLowDetail {
   session_id?: string;
@@ -1382,23 +1383,9 @@ interface SessionQualityOverview {
   scored: number;
   low: number;
   drafts: number;
-  pending_drafts: number;
   last_run: string | null;
   trend: number[];
   low_details?: SessionQualityLowDetail[];
-}
-interface SessionQualityDraft {
-  id: string;
-  title?: string;
-  dimension?: string;
-  eval_method?: string;
-  assertions?: string[];
-  scenario?: Record<string, unknown>;
-  tier?: string;
-}
-interface SessionQualityDraftsResponse {
-  count: number;
-  drafts: SessionQualityDraft[];
 }
 
 function useSessionQuality() {
@@ -1409,36 +1396,16 @@ function useSessionQuality() {
   });
 }
 
-function useSessionQualityDrafts() {
-  return useQuery<SessionQualityDraftsResponse>({
-    queryKey: ['eval-session-quality-drafts'],
-    queryFn: async () => (await api.get<SessionQualityDraftsResponse>('/eval/session-quality/drafts')).data,
-    staleTime: 30_000,
-  });
-}
-
 // Weekly low-rate trend uses the shared Sparkline (defined below) — do NOT
 // redefine it here (R27: reuse the existing symbol, don't duplicate).
 
 export function SessionQualityTab() {
   const { data: overview, isLoading, isError: overviewErr } = useSessionQuality();
-  const { data: draftData, isLoading: draftsLoading, isError: draftsErr } = useSessionQualityDrafts();
-  const updateCase = useUpdateCase();
-  const deleteCase = useDeleteCase();
 
-  if (overviewErr || draftsErr) return <ErrorState message="Failed to load session quality data. Is the backend running?" />;
-  if (isLoading || draftsLoading) return <Loading />;
+  if (overviewErr) return <ErrorState message="Failed to load session quality data. Is the backend running?" />;
+  if (isLoading) return <Loading />;
 
-  const drafts = draftData?.drafts ?? [];
   const lowDetails = overview?.low_details ?? [];
-
-  const promote = (id: string) => {
-    // Human ratification: flip tier draft→active. System NEVER auto-promotes.
-    updateCase.mutate({ id, updates: { tier: 'active' } });
-  };
-  const discard = (id: string) => {
-    deleteCase.mutate(id);
-  };
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
@@ -1452,7 +1419,6 @@ export function SessionQualityTab() {
             { label: 'Scored (last run)', value: overview?.scored ?? 0 },
             { label: 'Low-score', value: overview?.low ?? 0 },
             { label: 'Drafts harvested', value: overview?.drafts ?? 0 },
-            { label: 'Pending review', value: overview?.pending_drafts ?? 0 },
           ].map((s) => (
             <div key={s.label} className="border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-card)]">
               <div className="text-2xl font-semibold">{s.value}</div>
@@ -1465,56 +1431,6 @@ export function SessionQualityTab() {
           <div className="w-[120px]"><Sparkline values={overview?.trend ?? []} height={28} /></div>
           {overview?.last_run && <span className="ml-auto font-mono">last run: {overview.last_run}</span>}
         </div>
-      </div>
-
-      {/* Pending draft queue — the human-in-the-loop gate */}
-      <div>
-        <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
-          Pending Draft Queue ({drafts.length}) — human ratification required
-        </h3>
-        {drafts.length === 0 ? (
-          <p className="text-sm text-[var(--color-text-muted)] border border-[var(--color-border)] rounded-lg p-4">
-            No harvested drafts awaiting review. The weekly session-quality job harvests low-score sessions into golden drafts here.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {drafts.map((d) => (
-              <div key={d.id} className="border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-card)]">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-medium text-sm truncate">{d.title || d.id}</div>
-                    <div className="flex items-center gap-2 mt-1 text-xs text-[var(--color-text-muted)]">
-                      <span className="font-mono">{d.id}</span>
-                      {d.dimension && <span className="px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{d.dimension}</span>}
-                      {d.eval_method && <span className="px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{d.eval_method}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => promote(d.id)}
-                      disabled={updateCase.isPending}
-                      className="text-xs px-3 py-1.5 rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-                    >
-                      Promote
-                    </button>
-                    <button
-                      onClick={() => discard(d.id)}
-                      disabled={deleteCase.isPending}
-                      className="text-xs px-3 py-1.5 rounded-md border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50 transition-colors"
-                    >
-                      Discard
-                    </button>
-                  </div>
-                </div>
-                {d.assertions && d.assertions.length > 0 && (
-                  <ul className="mt-2 pl-4 list-disc text-xs text-[var(--color-text-muted)] space-y-0.5">
-                    {d.assertions.slice(0, 4).map((a, i) => <li key={i}>{a}</li>)}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Low-score session detail (attribution) */}
@@ -1560,8 +1476,8 @@ export function SessionQualityTab() {
 const guideContent = {
   title: { en: 'OS Eval Methodology', zh: 'OS Eval 方法论' },
   subtitle: {
-    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. It spans THREE layers: ① Golden (human-authored exam questions, run programmatically + LLM-judged); ② Real-session harvest (weekly, low-scoring real sessions become golden DRAFTS awaiting human ratification); ③ Online real-session scoring (score what actually happened, no answer key). Proprioception: a living golden set defines "in this scenario I must do X." Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
-    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。它跨三层：① Golden（人工编写的考题，程序化 + LLM judge 跑）；② 真实会话回收（每周，低分真实会话沉淀为 golden 草稿，等人终审）；③ Online 真实会话打分（评真实发生的会话，无标准答案）。Proprioception：一个活的 golden set 定义了"在这个场景下我必须怎样做"。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
+    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. It spans THREE layers: ① Golden (human-authored exam questions, run programmatically + LLM-judged); ② Real-session harvest (weekly, low-scoring real sessions are auto-generated into full golden cases + a negative example, then auto-gated by the teeth gate — pass → lands active, fail → discarded to a recoverable archive, no human step); ③ Online real-session scoring (score what actually happened, no answer key). Proprioception: a living golden set defines "in this scenario I must do X." Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
+    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。它跨三层：① Golden（人工编写的考题，程序化 + LLM judge 跑）；② 真实会话回收（每周，低分真实会话自动生成完整 golden 用例 + 一个负面样本，经 teeth 门自动把关 —— 过则落 active，不过则丢到可恢复 archive，无人介入）；③ Online 真实会话打分（评真实发生的会话，无标准答案）。Proprioception：一个活的 golden set 定义了"在这个场景下我必须怎样做"。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
   },
   overview: {
     en: ['What it evaluates', 'Why it matters', 'How it works'],
@@ -1696,9 +1612,9 @@ const guideContent = {
     zh: '案例生命周期',
   },
   lifecycleStages: [
-    { en: { stage: 'Origin', desc: 'TWO sources: a user correction (C0XX in EVOLUTION.md), OR a low-scoring real session harvested by the weekly Layer② job' }, zh: { stage: '来源', desc: '两个来源：用户纠正（EVOLUTION.md 的 C0XX），或每周层②任务回收的低分真实会话' } },
-    { en: { stage: 'Draft', desc: 'Crystallized into a case (scenario + 3-layer ground truth) at tier=draft. Passes the 4-gate validator. System NEVER auto-promotes.' }, zh: { stage: '草稿', desc: '结晶为 case（场景 + 三层 ground truth），tier=draft。过 4-gate 校验。系统绝不自动 promote。' } },
-    { en: { stage: 'Active', desc: 'Human ratifies the draft (Promote in the Session Quality tab). Now runs on every eval cycle; failures trigger P1 alerts.' }, zh: { stage: '活跃', desc: '人终审草稿（Session Quality tab 里 Promote）。此后每次 eval 周期运行；失败触发 P1 告警。' } },
+    { en: { stage: 'Origin', desc: 'A low-scoring real session harvested by the weekly Layer② job. (User corrections no longer auto-seed cases — that A-pipeline was retired; corrections still record to the tracker.)' }, zh: { stage: '来源', desc: '每周层②任务回收的低分真实会话。（用户纠正不再自动播种用例 —— A 管道已停产；纠正仍记入 tracker。）' } },
+    { en: { stage: 'Gate', desc: 'Auto-generated into a full case + a negative example, then auto-gated by the teeth gate (knockout): the negative must be judged FAIL, else the case is a tautology and is discarded to a recoverable archive. No draft middle-state, no human step.' }, zh: { stage: '把关', desc: '自动生成完整用例 + 一个负面样本，经 teeth 门（knockout）自动把关：负面样本必须被判 FAIL，否则用例是同义反复，丢到可恢复 archive。无草稿中间态，无人介入。' } },
+    { en: { stage: 'Active', desc: 'Passed the teeth gate → lands tier=active. Runs on every eval cycle; failures trigger P1 alerts.' }, zh: { stage: '活跃', desc: '过 teeth 门 → 落 tier=active。每次 eval 周期运行；失败触发 P1 告警。' } },
     { en: { stage: 'Stable', desc: 'Passed 10+ consecutive runs. Moves to monthly cadence.' }, zh: { stage: '稳定', desc: '连续通过 10+ 次运行。移入月度节奏。' } },
     { en: { stage: 'Retired', desc: 'Underlying rule/code removed. Case archived, no longer executed.' }, zh: { stage: '退役', desc: '底层规则/代码已移除。案例归档，不再执行。' } },
   ],

@@ -284,36 +284,13 @@ class EvalService:
             for r in self._runs[:limit]
         ]
 
-    def get_session_quality_drafts(self) -> dict:
-        """Layer② pending-draft queue: harvested golden drafts awaiting human
-        ratification (tier=draft, category=session_harvest). Allowlist-projected
-        (same safe-field set as the private-case detail — these drafts derive from
-        real sessions so treat as private). The frontend Session Quality tab
-        renders these with Promote/Discard. Promote reuses POST /golden-set; the
-        SYSTEM never auto-promotes (kernel-not-shell)."""
-        # Harvested drafts carry a canonical category (`quality`) so promotion
-        # doesn't pollute the taxonomy (Gate-2 F1); their identity is the
-        # deterministic GS_HARVEST_ id prefix (session_harvest._draft_id) — that
-        # is the queue filter, NOT the category.
-        drafts = [
-            c for c in self._cases
-            if c.get("tier") == "draft" and str(c.get("id", "")).startswith("GS_HARVEST_")
-        ]
-        return {
-            "count": len(drafts),
-            "drafts": [
-                {
-                    "id": c.get("id"),
-                    "title": c.get("title"),
-                    "dimension": c.get("dimension"),
-                    "eval_method": c.get("eval_method"),
-                    "assertions": c.get("assertions", []),
-                    "scenario": c.get("scenario", {}),
-                    "tier": c.get("tier"),
-                }
-                for c in drafts
-            ],
-        }
+    # NOTE: the Layer② pending-draft queue (get_session_quality_drafts) was
+    # REMOVED (option D, run_1bfd3cf9). Harvest no longer lands tier=draft —
+    # it generates a full case + negative_example, routes through the
+    # gate_by_knockout teeth gate, and either lands tier=active or discards to
+    # the recoverable archive. There is no human-ratification middle state, so
+    # the pending-draft queue (which surfaced draft cases for Promote/Discard)
+    # no longer has any producer and was deleted along with its endpoint + UI.
 
     @staticmethod
     def _project_low_detail(d: dict) -> dict:
@@ -370,8 +347,6 @@ class EvalService:
                 })
             except (OSError, ValueError):
                 pass
-        # pending-draft count rides along so the tab has it in one call
-        overview["pending_drafts"] = self.get_session_quality_drafts()["count"]
         return overview
 
     def get_golden_set(self, category: Optional[str] = None) -> dict:
@@ -1768,6 +1743,78 @@ def _class_to_affected_by(class_name: str) -> str:
         "UNCLASSIFIED": "AGENT.md",
     }
     return mapping.get(class_name, "AGENT.md")
+
+
+# ── Teeth gate: knockout self-test (option-D 命门, run_1bfd3cf9) ──────────────
+#
+# An auto-generated golden case may enter the set ONLY if it has TEETH — proven
+# by feeding its OWN `negative_example` (an answer that SHOULD fail) to the
+# pinned judge. This replaces the old "seed a tier=draft skeleton and wait for a
+# human to refine it" loop (which never closed — the human step never happened),
+# per the 2026-08-17 source-governance design.
+#
+#   judge FAILs the negative → the case discriminates → ADMIT
+#   judge PASSes the negative → tautology (any answer passes) → DISCARD
+#   judge ERRORs / no negative → verdict unusable → DISCARD (fail-closed)
+#
+# Anti-self-deception (design § 7): the verdict comes from the PINNED judge
+# (eval_runner's _get_judge_model — a different stance from whatever LLM
+# generated the case), NEVER from the generator judging itself.
+
+def _knockout_judge(case: dict, negative_example: str) -> dict:
+    """Route the negative example to the pinned judge for the case's eval_method.
+
+    Returns the judge's standard verdict dict ({status: passed/failed/error/...}).
+    Separated from gate_by_knockout so tests mock THIS boundary (the pinned-judge
+    call) and assert the gate's routing logic without touching Bedrock.
+
+    - behavior (decision_rubric): _judge_decision_direction judges whether the
+      negative answer satisfies the rubric (a teethed rubric → failed).
+    - llm (assertions): eval_llm_judge would judge a HYPOTHETICAL; instead we
+      judge the negative answer directly against the assertions via the same
+      decision-direction judge, treating the assertions as the rubric. This keeps
+      ONE knockout mechanism (the real produced answer judged), not the circular
+      "would a compliant agent" path.
+    """
+    from scripts.eval_runner import _judge_decision_direction
+
+    # Build a rubric the direction-judge can score the negative answer against.
+    if case.get("decision_rubric"):
+        rubric = case["decision_rubric"]
+    else:
+        assertions = case.get("assertions", []) or []
+        rubric = "PASS only if ALL hold: " + " AND ".join(assertions)
+    probe_case = {"decision_rubric": rubric}
+    return _judge_decision_direction(probe_case, negative_example)
+
+
+def gate_by_knockout(case: dict) -> tuple[bool, str]:
+    """The teeth gate. Returns (admit, reason).
+
+    admit=True  → the case discriminates (negative correctly failed) → land it.
+    admit=False → tautology / judge-error / no negative → discard (fail-closed).
+
+    NEVER raises — a background seeding path calls this; any unexpected error is
+    treated as fail-closed (discard), never an admit.
+    """
+    negative = (case.get("negative_example") or "").strip()
+    if not negative:
+        return (False, "no negative_example — cannot knockout-test (fail-closed; "
+                       "the generator must produce a negative answer)")
+    try:
+        verdict = _knockout_judge(case, negative)
+    except Exception as exc:  # noqa: BLE001 — background path; fail-closed on any error
+        return (False, f"knockout judge raised ({type(exc).__name__}: {exc}) — fail-closed")
+
+    status = verdict.get("status")
+    if status == "failed":
+        # The judge correctly REJECTED the wrong answer → the case has teeth.
+        return (True, "teeth: negative correctly failed by pinned judge")
+    if status == "passed":
+        # The wrong answer PASSED → the case cannot discriminate → tautology.
+        return (False, "tautology: negative_example also PASSED the judge — no teeth")
+    # error / skipped / anything else → unusable verdict → fail-closed.
+    return (False, f"knockout verdict unusable (status={status!r}) — fail-closed")
 
 
 # Module-level singleton (initialized lazily, thread-safe)

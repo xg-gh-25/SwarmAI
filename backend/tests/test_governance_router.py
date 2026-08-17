@@ -443,33 +443,34 @@ def _route_one(monkeypatch, jc, tmp_path):
     )
 
 
-def test_noise_gate_pending_confirm_seeds_one(tmp_path, monkeypatch):
+def test_pending_confirm_no_longer_seeds(tmp_path, monkeypatch):
+    """A-pipeline DECOMMISSIONED (run_1bfd3cf9): a classified CLASS_A cognitive
+    correction is still ROUTED/recorded, but NO LONGER seeds a golden skeleton —
+    those skeletons were guaranteed-reject tautologies under the teeth gate.
+    Auto-growth now flows only through the B pipeline (session_harvest)."""
     seeded = _seed_spy(monkeypatch)
     _route_one(monkeypatch, _cognitive("CLASS_A"), tmp_path)
-    assert len(seeded) == 1, "a classified CLASS_A cognitive correction must seed a draft"
-    # seeded with the real class + correction_ref, not UNCLASSIFIED
-    args = seeded[0]
-    assert args[0] == "1781696331.24:e95e5923"  # correction_ref
-    assert args[2] == "CLASS_A"
+    assert seeded == [], "A pipeline decommissioned — corrections must NOT seed golden cases"
 
 
-def test_noise_gate_ignored_seeds_nothing(tmp_path, monkeypatch):
+def test_ignored_seeds_nothing(tmp_path, monkeypatch):
     seeded = _seed_spy(monkeypatch)
     _route_one(monkeypatch, _ignored(), tmp_path)
     assert seeded == [], "operator/transient NOISE (ignored) must NEVER seed a case"
 
 
-def test_noise_gate_operational_seeds_nothing(tmp_path, monkeypatch):
+def test_operational_seeds_nothing(tmp_path, monkeypatch):
     seeded = _seed_spy(monkeypatch)
     _route_one(monkeypatch, _operational(), tmp_path)
     assert seeded == [], "low-stakes operational (counted) must NEVER seed a case"
 
 
-def test_noise_gate_seed_failure_does_not_break_routing(tmp_path, monkeypatch):
-    """A seeding exception is swallowed (degrade-to-log) — routing still completes."""
+def test_routing_completes_without_seeding(tmp_path, monkeypatch):
+    """Routing/classification still completes for a cognitive correction even
+    though the seed path is gone (no seed_from_correction call at all)."""
     import core.eval_hooks as eh
     def _boom(*a, **k):
-        raise RuntimeError("golden_set locked")
+        raise RuntimeError("seed path should never be called now")
     monkeypatch.setattr(eh, "seed_from_correction", _boom)
     s = _route_one(monkeypatch, _cognitive("CLASS_B"), tmp_path)
     assert s["processed"] == 1, "routing must complete even if seeding raises"

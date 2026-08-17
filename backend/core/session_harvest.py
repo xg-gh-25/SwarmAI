@@ -53,8 +53,15 @@ Write an assertion-style case: a short title + 2-4 ASSERTIONS describing the \
 behavior a CORRECT agent MUST exhibit for this kind of request. Assertions are \
 about behavior, not the exact answer text.
 
+ALSO write a `negative_example`: a single concrete WRONG answer that a bad agent \
+would give — one that VIOLATES your assertions. This is the knockout test: the \
+eval judge will be shown this wrong answer, and your assertions MUST be sharp \
+enough that the judge FAILS it. If your assertions are so vague that even this \
+wrong answer would pass, the case has no teeth and will be discarded. So make the \
+assertions discriminating and the negative_example a genuine, plausible failure.
+
 Respond ONLY with this JSON:
-{{"title": "...", "assertions": ["...", "..."]}}"""
+{{"title": "...", "assertions": ["...", "..."], "negative_example": "..."}}"""
 
 
 def _draft_skeleton(*, session_id: str, dimension: str) -> dict:
@@ -69,18 +76,21 @@ def _draft_skeleton(*, session_id: str, dimension: str) -> dict:
     """
     return {
         "id": _draft_id(session_id),
-        # Canonical category (golden_set.yaml `categories:`) — a harvested draft
+        # Canonical category (golden_set.yaml `categories:`) — a harvested case
         # tests a real session's QUALITY. NOT an off-canonical "session_harvest"
-        # value: once a human promotes the draft to `active`, an off-canonical
-        # category would trip _validate_case_taxonomy's WARN on every load forever
-        # (Gate-2 F1). Provenance lives in `source` (set by harvest_draft) + the
-        # deterministic GS_HARVEST_ id prefix, which is the drafts-queue filter key.
+        # value: an off-canonical category would trip _validate_case_taxonomy's
+        # WARN on every load forever (Gate-2 F1). Provenance lives in `source`
+        # (set by harvest_draft) + the deterministic GS_HARVEST_ id prefix.
         "category": "quality",
         "dimension": dimension,
         "eval_method": "llm",
         "affected_by": [],
         "evaluators": ["goal_success"],
-        "tier": "draft",
+        # tier=active: a harvested case now lands ONLY after passing the teeth
+        # gate (gate_by_knockout) — there is no tier=draft middle state anymore
+        # (run_1bfd3cf9, option-D). A case that reaches add_case_fn has EARNED
+        # active; a case that fails the gate is discarded, never landed as draft.
+        "tier": "active",
     }
 
 
@@ -114,9 +124,12 @@ def _parse_draft(text: str) -> Optional[dict]:
         return None
     title = (obj.get("title") or "").strip()
     assertions = [a for a in (obj.get("assertions") or []) if isinstance(a, str) and a.strip()]
-    if not title or not assertions:
+    negative = (obj.get("negative_example") or "").strip()
+    # negative_example is REQUIRED now (the knockout input). No negative → the
+    # teeth gate can't test the case → fail-closed at parse (never land untestable).
+    if not title or not assertions or not negative:
         return None
-    return {"title": title, "assertions": assertions}
+    return {"title": title, "assertions": assertions, "negative_example": negative}
 
 
 def harvest_draft(
@@ -126,18 +139,32 @@ def harvest_draft(
     score: dict,
     invoke_fn: InvokeFn,
     add_case_fn: AddCaseFn,
+    gate_fn: "Optional[Callable[[dict], tuple]]" = None,
+    discard_fn: "Optional[Callable[[dict, str], None]]" = None,
 ) -> Optional[dict]:
-    """Draft a golden case from ONE low-score session and land it as a draft.
+    """Harvest a golden case from ONE low-score session, TEETH-GATE it, and either
+    land it (tier=active) or discard it — NO tier=draft middle state.
+
+    Flow (run_1bfd3cf9, option-D): generate {full case + negative_example} → run
+    the teeth gate (gate_by_knockout: does the pinned judge FAIL the negative?) →
+    PASS → add_case_fn (lands active) / FAIL → discard_fn (recoverable archive).
+    The generator never lands its own output ungated; the gate is the bar.
 
     Args:
-        session_id: the real session this draft derives from (→ deterministic id).
+        session_id: the real session this case derives from (→ deterministic id).
         prompt: the real user prompt that started the session.
         score: session_scorer output — {goal_score, tool_score, dimension, reason}.
         invoke_fn: LLM boundary (prompt→text). Injected; defaults to jobs.bedrock.
-        add_case_fn: sink for the draft (e.g. eval_service.add_case). Injected.
+        add_case_fn: sink for a PASSING case (e.g. eval_service.add_case). Injected.
+        gate_fn: the teeth gate (case)->(admit: bool, reason: str). Injected;
+            defaults to eval_service.gate_by_knockout. The negative is judged by
+            the PINNED judge inside it (anti-self-deception).
+        discard_fn: sink for a FAILING case (case, reason)->None. Injected;
+            defaults to _default_discard (append to discarded-seed-candidates.jsonl,
+            recoverable). Never raises.
 
-    Returns the add_case result on success, or None (fail-closed) when the LLM
-    draft is unparseable/empty. NEVER promotes — lands tier='draft' only.
+    Returns the add_case result if the case PASSED the gate + landed, else None
+    (unparseable draft, gate FAIL→discarded, or add_case reject). NEVER promotes.
     """
     dimension = score.get("dimension", "capability")
     reason = score.get("reason", "(no reason)")
@@ -150,28 +177,77 @@ def harvest_draft(
     try:
         raw = invoke_fn(draft_prompt)
     except Exception as exc:  # noqa: BLE001 — LLM boundary; fail-closed
-        logger.warning("session_harvest: invoke_fn raised (%s) — no draft", exc)
+        logger.warning("session_harvest: invoke_fn raised (%s) — no case", exc)
         return None
 
     body = _parse_draft(raw)
     if body is None:
-        logger.warning("session_harvest: unparseable/empty draft for %s — none landed",
+        logger.warning("session_harvest: unparseable/incomplete draft for %s — none landed",
                        session_id)
         return None
 
     case = _draft_skeleton(session_id=session_id, dimension=dimension)
     case["title"] = body["title"]
     case["assertions"] = body["assertions"]
+    case["negative_example"] = body["negative_example"]
     case["scenario"] = {"turns": [{"input": (prompt or "").strip()}]}
     case["source"] = f"session_harvest: {session_id} (goal={score.get('goal_score')}, tool={score.get('tool_score')})"
+
+    # Resolve boundaries (lazy defaults — kept out of the test path).
+    if gate_fn is None:
+        from core.eval_service import gate_by_knockout as gate_fn  # type: ignore
+    if discard_fn is None:
+        discard_fn = _default_discard
+
+    # THE TEETH GATE: the negative_example must be FAILED by the pinned judge.
+    try:
+        admit, gate_reason = gate_fn(case)
+    except Exception as exc:  # noqa: BLE001 — gate must never crash the harvest job
+        logger.warning("session_harvest: teeth gate raised for %s (%s) — discarding (fail-closed)",
+                       case["id"], exc)
+        _safe_discard(discard_fn, case, f"gate raised: {type(exc).__name__}: {exc}")
+        return None
+
+    if not admit:
+        logger.info("session_harvest: %s FAILED teeth gate (%s) — discarded, not landed",
+                    case["id"], gate_reason)
+        _safe_discard(discard_fn, case, gate_reason)
+        return None
 
     try:
         return add_case_fn(case)
     except Exception as exc:  # noqa: BLE001 — add_case runs the 4-gate; a reject
-        # is expected signal, not a crash. Log + return None (no draft landed).
-        logger.warning("session_harvest: add_case rejected draft %s (%s)",
+        # is expected signal, not a crash. Log + discard (no case landed).
+        logger.warning("session_harvest: add_case rejected %s (%s) — discarded",
                        case["id"], exc)
+        _safe_discard(discard_fn, case, f"add_case rejected: {exc}")
         return None
+
+
+def _safe_discard(discard_fn, case: dict, reason: str) -> None:
+    """Call discard_fn, swallowing any error (a discard-archive failure must never
+    break the harvest job — the durable signal is corrections.jsonl, untouched)."""
+    try:
+        discard_fn(case, reason)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("session_harvest: discard archive failed for %s (%s)",
+                       case.get("id"), exc)
+
+
+def _default_discard(case: dict, reason: str) -> None:
+    """Append a gate-failed case to the recoverable discard archive
+    (discarded-seed-candidates.jsonl), mirroring cultivation's discard semantics
+    (autonomy-first: no human-review queue; recoverable via archive, never unlink).
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    archive = (_Path.home() / ".swarm-ai" / "SwarmWS" / "Eval"
+               / "discarded-seed-candidates.jsonl")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"id": case.get("id"), "reason": reason, "case": case}
+    with open(archive, "a", encoding="utf-8") as f:
+        f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def default_invoke_fn(prompt: str) -> str:
