@@ -45,18 +45,26 @@ def test_llm_draft_is_skipped_not_judged():
     )
 
 
-def test_draft_excluded_from_headline_score():
-    """compute_scores must not count a draft even if a result slips through."""
-    cases = [
-        {"id": "active1", "tier": "active", "dimension": "d"},
-        {"id": "GS_HARVEST_testdraft", "tier": "draft", "dimension": "d"},
-    ]
-    results = [
-        {"id": "active1", "status": "passed"},
-        {"id": "GS_HARVEST_testdraft", "status": "skipped"},  # draft → skipped
-    ]
+def test_draft_excluded_from_headline_score_end_to_end():
+    """The two-layer defense driven through the REAL path (not a pre-set status):
+    the draft's result is DERIVED from evaluate_case (it must itself emit skipped),
+    then compute_scores must exclude it. This is what gives the test teeth — if the
+    entry guard regresses, evaluate_case returns a scored status and this goes RED
+    (draft_result.status != skipped AND scored_count becomes 2). A hardcoded
+    status='skipped' would only prove the trivial 'compute_scores excludes skipped'.
+    """
+    draft_case = _llm_draft_case()
+    # Active case is a pre-set passed result — it is NOT the thing under test; the
+    # draft result below is the load-bearing one (derived from the real evaluator).
+    active_case = {"id": "active1", "tier": "active", "dimension": "d"}
+    draft_result = evaluate_case(draft_case, _ROOT, programmatic_only=False)
+    assert draft_result["status"] == "skipped", (
+        f"entry guard regressed: draft graded as {draft_result['status']}"
+    )
+    cases = [active_case, draft_case]
+    results = [{"id": "active1", "status": "passed"}, draft_result]
     scores = compute_scores(cases, results)
-    # Only the active case counts → 1/1 = 100, draft neither helps nor hurts.
+    # Only the active case counts → draft neither helps nor hurts the headline.
     assert scores["scored_count"] == 1, (
         f"draft leaked into scored set: scored_count={scores['scored_count']}"
     )

@@ -1604,8 +1604,8 @@ const guideContent = {
     zh: '覆盖分布',
   },
   coverageDesc: {
-    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (6), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior).',
-    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（6 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。',
+    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (6), Tier (active→stable, + behavior/canary; draft is retired — cases now land active or are discarded), Eval Method (programmatic / llm / behavior).',
+    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（6 个）、Tier（active→stable，外加 behavior/canary；draft 已停用 —— 用例现在要么落 active 要么被丢弃）、Eval Method（programmatic / llm / behavior）。',
   },
   lifecycle: {
     en: 'Case Lifecycle',
