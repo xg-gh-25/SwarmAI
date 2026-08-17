@@ -168,3 +168,83 @@ class TestRouterCacheGating:
         assert _should_store_system_prompt_cache(
             None, will_reuse_live=False, needs_context_injection=False
         ) is False
+
+
+class TestResumeViaQueryStashAndDegraded:
+    """resume-context-injection去根 (run_d108b914) — drives the REAL build_options
+    resume-injection block. Covers AC1 (strangler stash), AC6 (degraded signal),
+    and the legit-empty no-false-positive case. R28: each forces the code path."""
+
+    _RESUME_CFG = {
+        "model": "claude-opus-4-8",
+        "needs_context_injection": True,
+        "resume_app_session_id": "sess-abc",
+    }
+
+    @pytest.mark.asyncio
+    async def test_flag_on_stashes_resume_not_system_prompt(self, monkeypatch):
+        """AC1: SWARM_RESUME_VIA_QUERY=true → resume block stashed on
+        agent_config['_resume_query_block']; NOT appended to system_prompt."""
+        monkeypatch.setenv("SWARM_RESUME_VIA_QUERY", "true")
+        monkeypatch.setattr(
+            "core.context_injector.build_resume_context",
+            AsyncMock(return_value="PRIOR HISTORY BLOCK"),
+        )
+        builder = _make_builder()
+        ac = dict(self._RESUME_CFG)
+        options = await _build(builder, agent_config=ac)
+        assert ac.get("_resume_query_block") == "PRIOR HISTORY BLOCK", (
+            "flag ON must stash the resume block for the query prefix"
+        )
+        assert "PRIOR HISTORY BLOCK" not in (options.system_prompt or ""), (
+            "flag ON must NOT append resume to system_prompt (keeps it cacheable)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_flag_off_legacy_system_prompt_path(self, monkeypatch):
+        """AC11 strangler: flag OFF (default) → legacy path, resume in system_prompt,
+        nothing stashed. Guarantees the old behavior until integration-verified."""
+        monkeypatch.delenv("SWARM_RESUME_VIA_QUERY", raising=False)
+        monkeypatch.setattr(
+            "core.context_injector.build_resume_context",
+            AsyncMock(return_value="PRIOR HISTORY BLOCK"),
+        )
+        builder = _make_builder()
+        ac = dict(self._RESUME_CFG)
+        options = await _build(builder, agent_config=ac)
+        assert ac.get("_resume_query_block") is None, "flag OFF stashes nothing"
+        assert "PRIOR HISTORY BLOCK" in (options.system_prompt or ""), (
+            "flag OFF keeps the legacy system_prompt injection"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resume_failure_sets_context_degraded(self, monkeypatch):
+        """AC6 (#1b): build_resume_context raising → _context_degraded set (loud),
+        not a silent log. Forces the except branch."""
+        monkeypatch.setenv("SWARM_RESUME_VIA_QUERY", "true")
+        monkeypatch.setattr(
+            "core.context_injector.build_resume_context",
+            AsyncMock(side_effect=RuntimeError("db exploded")),
+        )
+        builder = _make_builder()
+        ac = dict(self._RESUME_CFG)
+        await _build(builder, agent_config=ac)
+        assert "_context_degraded" in ac, "resume failure MUST flag degraded"
+        assert "resume_injection_failed" in ac["_context_degraded"]
+
+    @pytest.mark.asyncio
+    async def test_legit_empty_resume_does_not_flag_degraded(self, monkeypatch):
+        """AC6 no-false-positive: build_resume_context returns None (no injectable
+        prior messages) → NOT a failure → _context_degraded NOT set."""
+        monkeypatch.setenv("SWARM_RESUME_VIA_QUERY", "true")
+        monkeypatch.setattr(
+            "core.context_injector.build_resume_context",
+            AsyncMock(return_value=None),
+        )
+        builder = _make_builder()
+        ac = dict(self._RESUME_CFG)
+        await _build(builder, agent_config=ac)
+        assert ac.get("_context_degraded") is None, (
+            "a legit-empty resume is NOT a failure — must not false-flag degraded"
+        )
+        assert ac.get("_resume_query_block") is None, "nothing to stash when empty"

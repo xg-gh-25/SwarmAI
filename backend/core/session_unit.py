@@ -525,6 +525,17 @@ class SessionUnit:
         # turn wrote system_prompt instead, or no recall ran). send() clears it at
         # the top of each turn; the router read uses getattr(..., None) too.
         self._recall_query_block: Optional[str] = None
+        # resume-context-injection去根 (run_d108b914): on a COLD-resume turn the
+        # resume block (prior conversation summary, up to 150K) is stashed here by
+        # prompt_builder (when SWARM_RESUME_VIA_QUERY is on) instead of appended to
+        # options.system_prompt, so send() can prefix it onto query_content via
+        # _prepend_resume_to_query. Riding the query means the #13/#15 fallback
+        # (session-not-found → strip resume from options → respawn) keeps the block.
+        # None = no resume this turn (steady-state / old system_prompt path). Cleared
+        # per-turn by the ROUTER (session_router.send → the transfer-assign
+        # `unit._resume_query_block = agent_config.get(...)`, which writes None on a
+        # non-cold turn) and on teardown by _cleanup_internal below.
+        self._resume_query_block: Optional[str] = None
         # TSCC system-prompt metadata AWAITING DELIVERY. The router stashes the
         # freshly-built metadata here; _spawn() publishes it to
         # session_registry.system_prompt_metadata at the moment the prompt is
@@ -4269,6 +4280,10 @@ class SessionUnit:
         # Reset recall injection flag — new subprocess needs fresh recall.
         self._recall_injected = False
         self._ddd_injected = False
+        # Reset the per-turn resume query stash (run_d108b914): a stale block must
+        # not leak onto a later turn's query prefix. send() also clears it per-turn,
+        # but reset on teardown too so a recycle mid-send never carries it forward.
+        self._resume_query_block = None
         # Clear the TSCC recall snapshot, on the unit AND in the registry. The
         # subprocess is gone, so no prompt is in force and there is no recall to
         # report; leaving the registry entry behind paired a pre-restart snapshot

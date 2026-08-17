@@ -702,6 +702,31 @@ class RetryManager:
                 self._parent.session_id, len(continuation) // 4,
             )
 
+            # resume-context-injection去根 (run_d108b914, AC8): wrap the continuation
+            # in the SAME provenance header/footer the cold-resume query path uses,
+            # so ALL resume-via-query channels frame history uniformly as background,
+            # not this-turn intent (confabulation guard).
+            #
+            # STRANGLER-GATED by SWARM_RESUME_VIA_QUERY (Gate-2 MED, run_d108b914):
+            # this abandon-continuation path fires on retry timeouts INDEPENDENTLY of
+            # the flag, so wrapping unconditionally would change prod behavior while
+            # the flag is OFF — breaking the "flag OFF = byte-identical" invariant.
+            # Gate it so flag-OFF is a true no-op; the header lands only when the
+            # cold-resume query path is also live. Guarded import (never break the
+            # retry loop on an import hiccup — this path must degrade gracefully).
+            import os as _os
+            if _os.environ.get("SWARM_RESUME_VIA_QUERY", "").lower() == "true":
+                try:
+                    from .session_router import (
+                        _RESUME_QUERY_HEADER, _RESUME_QUERY_FOOTER,
+                    )
+                    continuation = (
+                        f"{_RESUME_QUERY_HEADER}\n\n{continuation}\n\n"
+                        f"{_RESUME_QUERY_FOOTER}"
+                    )
+                except Exception:  # noqa: BLE001 — header is best-effort, never fatal
+                    pass
+
             # Prepend continuation — mirrors _heal_checkpoint shape
             if isinstance(query_content, str):
                 return f"{continuation}{_CONTINUATION_SEPARATOR}{query_content}", True

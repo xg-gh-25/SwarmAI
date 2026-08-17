@@ -689,3 +689,68 @@ class TestWarmReuseComplement:
         from core.session_unit import SessionState
         u = self._unit(state=SessionState.IDLE, client=None, clean=True)
         assert _is_warm_reuse(u) is False
+
+
+class TestPrependResumeToQuery:
+    """resume-context-injection去根 (run_d108b914) — _prepend_resume_to_query is the
+    INDEPENDENT resume-only query prefix path. It is ORTHOGONAL to
+    _prepend_dynamic_context_to_query (recall+SENSE, warm-reuse only): resume rides
+    the query on a COLD-resume turn (state==COLD), recall/SENSE ride it on a
+    WARM-reuse turn (state==IDLE) — the two gates never fire on the same turn, so
+    resume must NOT reuse the dynamic-context function (Gate-1 F: doing so would
+    render SENSE too → double-inject SENSE that is already in system_prompt).
+
+    Invariants: (a) prefixes ONLY the resume block + a provenance header, never
+    SENSE/recall; (b) carries a [RESUMED CONVERSATION HISTORY] header + boundary
+    language so the model treats it as history, not this-turn intent; (c) clean
+    no-op when should_prefix False or block empty; (d) str + multimodal both handled.
+    """
+
+    _RESUME = "User: hi\nAssistant: hello\nUser: what did we discuss?"
+
+    def test_prefixes_str_query_when_cold_resume(self):
+        from core.session_router import _prepend_resume_to_query
+        out = _prepend_resume_to_query("continue", self._RESUME, should_prefix=True)
+        assert isinstance(out, str)
+        assert "RESUMED CONVERSATION HISTORY" in out, "provenance header present"
+        assert self._RESUME in out, "resume block carried verbatim"
+        assert out.rstrip().endswith("continue"), "original query preserved at the end"
+
+    def test_no_prefix_when_should_prefix_false(self):
+        """Not a cold-resume turn: resume already rode system_prompt (old path) or
+        no resume this turn → must NOT prefix (no double-inject)."""
+        from core.session_router import _prepend_resume_to_query
+        out = _prepend_resume_to_query("continue", self._RESUME, should_prefix=False)
+        assert out == "continue", "unchanged when not cold-resume"
+
+    def test_no_prefix_when_block_empty(self):
+        """No resume block this turn → clean no-op even when should_prefix True."""
+        from core.session_router import _prepend_resume_to_query
+        assert _prepend_resume_to_query("hi", None, should_prefix=True) == "hi"
+        assert _prepend_resume_to_query("hi", "", should_prefix=True) == "hi"
+        assert _prepend_resume_to_query("hi", "   ", should_prefix=True) == "hi"
+
+    def test_does_NOT_render_sense_or_recall(self):
+        """Gate-1 core: the resume path is resume-ONLY. It must never emit SENSE
+        (Current UI State) or recall ([RECALLED]) — those are the dynamic-context
+        function's job, and rendering them here would double-inject on a turn that
+        already has them elsewhere."""
+        from core.session_router import _prepend_resume_to_query
+        out = _prepend_resume_to_query("continue", self._RESUME, should_prefix=True)
+        assert "Current UI State" not in out, "must NOT render SENSE"
+        assert "[RECALLED]" not in out, "must NOT render recall"
+
+    def test_multimodal_list_inserts_leading_text_block(self):
+        from core.session_router import _prepend_resume_to_query
+        blocks = [{"type": "image", "source": {"x": 1}}, {"type": "text", "text": "look"}]
+        out = _prepend_resume_to_query(blocks, self._RESUME, should_prefix=True)
+        assert isinstance(out, list)
+        assert out[0]["type"] == "text", "resume text block inserted at index 0"
+        assert "RESUMED CONVERSATION HISTORY" in out[0]["text"]
+        assert out[1:] == blocks, "original blocks preserved after the inserted one"
+
+    def test_multimodal_list_unchanged_when_not_prefix(self):
+        from core.session_router import _prepend_resume_to_query
+        blocks = [{"type": "text", "text": "look"}]
+        out = _prepend_resume_to_query(blocks, self._RESUME, should_prefix=False)
+        assert out == blocks

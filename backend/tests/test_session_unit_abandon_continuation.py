@@ -581,3 +581,43 @@ class TestAbandonIdempotency:
         assert injected_count >= 1
         # But build_resume_context itself was only called once
         assert mock_build.call_count == 1
+
+
+class TestAbandonContinuationHeaderStranglerGated:
+    """Gate-2 MED (run_d108b914): the resume-provenance header wrap on the abandon
+    continuation is strangler-gated by SWARM_RESUME_VIA_QUERY. The abandon path
+    fires on retry timeouts INDEPENDENTLY of the flag, so wrapping it unconditionally
+    would change prod behavior while the flag is OFF — breaking the "flag OFF =
+    byte-identical prod" invariant. Assert: OFF → no header (legacy); ON → header."""
+
+    @pytest.mark.asyncio
+    async def test_flag_off_no_provenance_header(self, monkeypatch):
+        monkeypatch.delenv("SWARM_RESUME_VIA_QUERY", raising=False)
+        unit = _make_unit()
+        fake_context = "## Recent Conversation\nprior stuff"
+        with patch(
+            "core.context_injector.build_resume_context",
+            new_callable=AsyncMock, return_value=fake_context,
+        ):
+            result, injected = await unit._inject_abandon_continuation("now what?")
+        assert injected is True
+        assert "RESUMED CONVERSATION HISTORY" not in result, (
+            "flag OFF must NOT add the provenance header (byte-identical prod)"
+        )
+        assert result.startswith(fake_context), "legacy shape preserved"
+
+    @pytest.mark.asyncio
+    async def test_flag_on_adds_provenance_header(self, monkeypatch):
+        monkeypatch.setenv("SWARM_RESUME_VIA_QUERY", "true")
+        unit = _make_unit()
+        fake_context = "## Recent Conversation\nprior stuff"
+        with patch(
+            "core.context_injector.build_resume_context",
+            new_callable=AsyncMock, return_value=fake_context,
+        ):
+            result, injected = await unit._inject_abandon_continuation("now what?")
+        assert injected is True
+        assert "RESUMED CONVERSATION HISTORY" in result, (
+            "flag ON unifies the abandon continuation under the resume provenance header"
+        )
+        assert fake_context in result

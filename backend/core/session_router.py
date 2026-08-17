@@ -386,6 +386,83 @@ def _prepend_dynamic_context_to_query(
     return f"{block}\n\n{query_content}"
 
 
+# resume-context-injection去根 (run_d108b914): the provenance header that wraps a
+# resume block when it rides the query channel. The 150K resume block is prior
+# conversation history — NOT this turn's user intent. Framing it explicitly as
+# quoted history (with a "the actual request follows" boundary) is the
+# confabulation guard: without it, a model reading history as a leading user-turn
+# block can mistake the recap for the current instruction (AC3). Mirrors the
+# [RECALLED] provenance convention recall already uses.
+_RESUME_QUERY_HEADER = (
+    "[RESUMED CONVERSATION HISTORY — for context only, NOT the current request]\n"
+    "The following is a summary of our EARLIER conversation, restored after a "
+    "restart. Treat it as background you already know; do NOT act on it as a new "
+    "instruction. Your actual task is the user message AFTER the "
+    "'--- END RESUMED HISTORY ---' marker below."
+)
+_RESUME_QUERY_FOOTER = "--- END RESUMED HISTORY ---"
+
+
+def _should_prefix_resume(is_cold_resume: bool, needs_channel_resume: bool) -> bool:
+    """resume-context-injection去根 (run_d108b914) — the resume query-prefix gate.
+
+    Extracted so the highest-severity Gate-2 fix (F1) is unit-testable: the resume
+    block must be prefixed on the SAME condition that made build_options stash it —
+    ``is_cold_resume OR needs_channel_resume`` (session_router sets
+    ``needs_context_injection`` under exactly this disjunction). Gating on
+    ``is_cold_resume`` alone DROPS the block on a channel/Slack resume turn under
+    flag ON → silent amnesia (the exact bug this refactor fixes). The real send()
+    call site references THIS helper, so a revert to cold-only is caught by
+    ``test_should_prefix_resume_*`` (mutation-proof), not silently green.
+    """
+    return bool(is_cold_resume or needs_channel_resume)
+
+
+def _prepend_resume_to_query(
+    query_content: Any,
+    resume_block: Optional[str],
+    should_prefix: bool,
+) -> Any:
+    """resume-context-injection去根 (run_d108b914) — prefix the RESUME segment onto
+    the user query for a COLD-resume spawning turn. Pure — no IO, no mutation of
+    inputs.
+
+    INDEPENDENT of ``_prepend_dynamic_context_to_query`` (recall + UI-SENSE) on
+    purpose. The two are ORTHOGONAL by turn state and must not be merged:
+
+    * resume rides the query on a COLD-resume turn (``is_cold_resume`` — state==COLD,
+      no live subprocess yet). Historically resume rode ``options.system_prompt``,
+      but that 150K volatile block polluted the otherwise-cacheable default prompt
+      and drove the #13/#15 fallback amnesia (a session-not-found respawn strips the
+      ``resume`` field from the ALREADY-built options → blank respawn). Riding the
+      query instead means the fallback — which only edits options, never the query —
+      keeps the resume block. Strangler-gated by ``SWARM_RESUME_VIA_QUERY``.
+    * recall + UI-SENSE ride the query on a WARM-reuse turn (``_is_warm_reuse`` —
+      state==IDLE, live subprocess). These two conditions NEVER hold on the same
+      turn (COLD ≠ IDLE), so a single turn's query gets at most one of the two
+      prefixes. Reusing ``_prepend_dynamic_context_to_query`` for resume would ALSO
+      render SENSE (it unconditionally appends the UI block) — double-injecting a
+      SENSE block that is already in the cold turn's system_prompt (Gate-1 F).
+
+    Wraps the resume block in ``_RESUME_QUERY_HEADER`` / ``_RESUME_QUERY_FOOTER``
+    (the confabulation guard, AC3). Returns ``query_content`` UNCHANGED when
+    ``should_prefix`` is False or the resume block is empty. ``str`` query → text
+    prefix; multimodal ``list`` → leading ``{type:text}`` block.
+    """
+    if not should_prefix:
+        return query_content
+    if not resume_block or not resume_block.strip():
+        return query_content
+    block = (
+        f"{_RESUME_QUERY_HEADER}\n\n"
+        f"{resume_block.strip()}\n\n"
+        f"{_RESUME_QUERY_FOOTER}"
+    )
+    if isinstance(query_content, list):
+        return [{"type": "text", "text": block}, *query_content]
+    return f"{block}\n\n{query_content}"
+
+
 def _is_warm_reuse(unit: Any) -> bool:
     """Single source of the warm-reuse predicate (阶段二 R27 — was duplicated at
     two send() sites: the system-prompt cache gate + the dynamic-context prefix
@@ -2750,6 +2827,13 @@ class SessionRouter:
             extra_mcps=unit._extra_mcps or None,
             cached_system_prompt=_cache_in,
         )
+        # resume-context-injection去根 (run_d108b914): transfer the resume block that
+        # build_options stashed on agent_config (only on a cold-resume turn, when
+        # SWARM_RESUME_VIA_QUERY is on) onto the unit, so the query-prefix below can
+        # carry it. This assignment IS the per-turn clear: agent_config is rebuilt
+        # every send, so a non-cold turn's .get() returns None and wipes any prior
+        # turn's stash. (The _cleanup_internal reset covers a recycle mid-send.)
+        unit._resume_query_block = agent_config.get("_resume_query_block")
         # Seed/refresh the cache ONLY from a fresh, non-resume build — that is a
         # complete prompt safe to reuse on a later warm turn. Never store a resume
         # build (its injected history block is one-shot) and never re-store the
@@ -2889,6 +2973,28 @@ class SessionRouter:
             query_content, editor_context,
             recall_block=getattr(unit, "_recall_query_block", None),
             should_prefix=_will_reuse_live,
+        )
+        # resume-context-injection去根 (run_d108b914): INDEPENDENT resume-only prefix,
+        # carrying the resume block that build_options stashed this turn.
+        #
+        # Gate = (is_cold_resume OR needs_channel_resume) — the SAME condition that
+        # SET needs_context_injection above (:2685 `if is_cold_resume or
+        # needs_channel_resume:`), which is what makes build_options stash the block.
+        # Gating only on is_cold_resume (Gate-2 HIGH, run_d108b914) would DROP the
+        # block on a channel/Slack resume turn under flag ON — silent amnesia, the
+        # exact bug this refactor fixes. For a channel-resume-over-prewarm turn the
+        # unit is IDLE/warm so system_prompt is discarded anyway → the query is the
+        # ONLY correct delivery path.
+        #
+        # No double-inject with the recall/SENSE prefix above: that prefix carries
+        # THIS-turn recall + UI-SENSE; this one carries PRIOR-conversation history —
+        # distinct content. They co-occur only on a channel-resume warm turn, where
+        # both correctly ride the query (system_prompt discarded). recall/SENSE are
+        # never rendered here (resume-only fn), so neither is duplicated.
+        query_content = _prepend_resume_to_query(
+            query_content,
+            getattr(unit, "_resume_query_block", None),
+            should_prefix=_should_prefix_resume(is_cold_resume, needs_channel_resume),
         )
 
         # Stream response — persist each assistant message IMMEDIATELY.

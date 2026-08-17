@@ -1321,17 +1321,41 @@ class PromptBuilder:
                     working_directory=working_directory,
                 )
                 if resume_ctx:
-                    # Inject into system_prompt directly — context_text may
-                    # have been lost if ContextDirectoryLoader failed.
-                    existing = agent_config.get("system_prompt", "") or ""
-                    agent_config["system_prompt"] = (
-                        existing + f"\n\n{resume_ctx}" if existing else resume_ctx
+                    # resume-context-injection去根 (run_d108b914), strangler-gated by
+                    # SWARM_RESUME_VIA_QUERY. Default OFF = the legacy path (append to
+                    # system_prompt). ON = stash the block for send() to prefix onto
+                    # query_content via _prepend_resume_to_query. Riding the query
+                    # (not the cacheable default system_prompt) is the root fix: the
+                    # 150K volatile block leaves the default segment (cacheability),
+                    # AND the #13/#15 session-not-found fallback — which strips the
+                    # `resume` field from the ALREADY-built options and respawns —
+                    # keeps the block, since the query is untouched by that fallback.
+                    _resume_via_query = (
+                        os.environ.get("SWARM_RESUME_VIA_QUERY", "").lower() == "true"
                     )
-                    logger.info(
-                        "Resume context injected: ~%d tokens (independent path)",
-                        len(resume_ctx) // 4,  # rough estimate, no loader dependency
-                    )
+                    if _resume_via_query:
+                        # Stash for the router to prefix onto query_content. Do NOT
+                        # touch system_prompt (keeping the default segment cacheable).
+                        agent_config["_resume_query_block"] = resume_ctx
+                        logger.info(
+                            "Resume context stashed for query prefix: ~%d tokens "
+                            "(SWARM_RESUME_VIA_QUERY)",
+                            len(resume_ctx) // 4,
+                        )
+                    else:
+                        # Legacy: inject into system_prompt directly — context_text
+                        # may have been lost if ContextDirectoryLoader failed.
+                        existing = agent_config.get("system_prompt", "") or ""
+                        agent_config["system_prompt"] = (
+                            existing + f"\n\n{resume_ctx}" if existing else resume_ctx
+                        )
+                        logger.info(
+                            "Resume context injected: ~%d tokens (independent path)",
+                            len(resume_ctx) // 4,  # rough estimate, no loader dependency
+                        )
                 else:
+                    # Legit empty (no injectable prior messages) — NOT a failure,
+                    # so do NOT flag degraded (AC6: no false positive).
                     logger.info("Resume context skipped: no injectable messages")
             else:
                 logger.debug(
@@ -1340,10 +1364,15 @@ class PromptBuilder:
                     bool(agent_config.get("resume_app_session_id")),
                 )
         except Exception as exc:
+            # #1b (AC6): a resume-injection FAILURE is a genuine context loss — flag
+            # _context_degraded (loud, mirrored to the metadata the frontend reads),
+            # not just a log line. A legit-empty resume above does NOT reach here.
             logger.error(
                 "Resume context injection FAILED — user will lose prior context: %s",
                 exc, exc_info=True,
             )
+            if not agent_config.get("_context_degraded"):
+                agent_config["_context_degraded"] = f"resume_injection_failed: {exc}"
 
         # Store metadata on agent_config for later retrieval by session init
         agent_config["_system_prompt_metadata"] = prompt_metadata
