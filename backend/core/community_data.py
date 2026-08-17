@@ -336,8 +336,17 @@ def aggregate_engagement(artifacts_dir: Path) -> dict:
 
 
 # Cap the Outbound engagement list payload (not a silent truncation of value — the
-# KPI counts stay the TRUE totals; this only bounds the rendered rows).
-_ENGAGEMENT_ITEMS_CAP = 200
+# KPI counts stay the TRUE totals; this only bounds the rendered rows). Sized to cover
+# the full published history (~294, incl. all 59 reconcile-backfilled rows) with growth
+# head: a 200 cap silently dropped the ~31 oldest backfilled comments (run_897a4427), so
+# a user expanding the collapsed 'handled' group could not see their own older history.
+# Chose 500 (not higher) deliberately — it covers current history + ~1.5yr growth AND
+# bounds the worst-case render: the handled group is a plain .map() (no virtual scroll),
+# lazily rendered only when the user expands the collapsed group, so 500 rows is a safe
+# one-time mount while 1000+ would risk a low-end-device stall on expand (Gate-2 O-perf).
+# The needs-followup hero rows are always few (they sort first); this cap only governs
+# how far the demoted handled history extends. Revisit if published history nears 500.
+_ENGAGEMENT_ITEMS_CAP = 500
 
 # Our own GitHub identity — a reply BY us is not a reply we owe an answer to. The
 # community engine posts as this login (monitor.py/track.py all query xg-gh-25).

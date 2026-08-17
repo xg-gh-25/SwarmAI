@@ -309,6 +309,30 @@ def test_engagement_items_needs_followup_sorts_first(artifacts_dir: Path) -> Non
     # c/d #2 has no reply → not needs_followup → sorts AFTER a/b #1.
     assert items[0]["needs_followup"] is True
     assert items[1]["repo"] == "c/d" and items[1]["needs_followup"] is False
+
+
+def test_engagement_items_cap_covers_real_history(tmp_path: Path) -> None:
+    """run_897a4427: the item cap must be large enough that the FULL published
+    history (incl. reconcile-backfilled rows) survives into the Outbound list, so a
+    user who expands the 'handled' group sees ALL of it — not just the newest 200.
+    The real corpus is ~294 published; a 200 cap silently dropped the ~31 oldest
+    backfilled rows. This test writes 300 published rows and asserts none are
+    truncated. Mutation-proof: reverting the cap to 200 makes this RED (300 → 200)."""
+    d = tmp_path / ".artifacts"
+    d.mkdir()
+    log = d / "engagement_log.jsonl"
+    with open(log, "w", encoding="utf-8") as f:
+        for i in range(300):
+            f.write(json.dumps({
+                "repo": "o/r", "issue_number": i, "comment_id": 10000 + i,
+                "comment_url": f"https://github.com/o/r/issues/{i}#c{i}",
+                "posted_at": f"2026-{1 + i % 9:02d}-15T00:00:00+00:00",
+                "status": "published", "published": True,
+            }) + "\n")
+    items = engagement_items(d)
+    assert len(items) == 300, (
+        f"cap truncated real history to {len(items)} — backfilled history must "
+        f"stay visible when handled is expanded")
     assert items[1]["replies"] == []
 
 
