@@ -365,6 +365,29 @@ def _prepend_dynamic_context_to_query(
     """
     if not should_prefix:
         return query_content
+    block = _build_dynamic_prefix_block(editor_context, recall_block)
+    if not block:  # nothing dynamic to report → clean no-op
+        return query_content
+    if isinstance(query_content, list):
+        return [{"type": "text", "text": block}, *query_content]
+    return f"{block}\n\n{query_content}"
+
+
+def _build_dynamic_prefix_block(
+    editor_context: Optional[dict],
+    recall_block: Optional[str],
+) -> Optional[str]:
+    """TSCC/security-scan alignment (run_380413c5) — SSoT builder for the
+    recall+UI-SENSE prefix block. Returns the exact block string that
+    ``_prepend_dynamic_context_to_query`` prepends (or ``None`` when empty).
+
+    Extracted so the send-site can capture EXACTLY what was delivered onto the
+    query (for TSCC ``full_text`` + the security-scan panel) without a fragile
+    before/after diff of ``query_content`` — a diff is ambiguous for the
+    multimodal ``list`` shape (Gate-1 P1/P2). One source of truth: this builder
+    is the only place the block text is assembled; both the prefixer and the
+    metadata-capture read it.
+    """
     # Lazy import: prompt_builder imports session-layer types; keep it in-function
     # to avoid an import cycle at module load (matches the existing lazy-import
     # pattern for build_agent_config in this module).
@@ -378,12 +401,9 @@ def _prepend_dynamic_context_to_query(
     if ui_block:
         # _render_ui_context_section returns a leading "\n\n" — strip for a clean join.
         parts.append(ui_block.lstrip("\n"))
-    if not parts:  # nothing dynamic to report → clean no-op
-        return query_content
-    block = "\n\n".join(parts)
-    if isinstance(query_content, list):
-        return [{"type": "text", "text": block}, *query_content]
-    return f"{block}\n\n{query_content}"
+    if not parts:
+        return None
+    return "\n\n".join(parts)
 
 
 # resume-context-injection去根 (run_d108b914): the provenance header that wraps a
@@ -451,16 +471,60 @@ def _prepend_resume_to_query(
     """
     if not should_prefix:
         return query_content
-    if not resume_block or not resume_block.strip():
+    block = _build_resume_prefix_block(resume_block)
+    if not block:
         return query_content
-    block = (
+    if isinstance(query_content, list):
+        return [{"type": "text", "text": block}, *query_content]
+    return f"{block}\n\n{query_content}"
+
+
+def _build_resume_prefix_block(resume_block: Optional[str]) -> Optional[str]:
+    """TSCC/security-scan alignment (run_380413c5) — SSoT builder for the resume
+    prefix block. Returns the exact block ``_prepend_resume_to_query`` prepends
+    (header + resume history + footer), or ``None`` when the resume block is empty.
+
+    Sibling of ``_build_dynamic_prefix_block``: the send-site reads this to capture
+    the delivered resume text for TSCC ``full_text`` / security-scan, instead of
+    diffing ``query_content`` (Gate-1 P1/P2).
+    """
+    if not resume_block or not resume_block.strip():
+        return None
+    return (
         f"{_RESUME_QUERY_HEADER}\n\n"
         f"{resume_block.strip()}\n\n"
         f"{_RESUME_QUERY_FOOTER}"
     )
-    if isinstance(query_content, list):
-        return [{"type": "text", "text": block}, *query_content]
-    return f"{block}\n\n{query_content}"
+
+
+# TSCC/security-scan alignment (run_380413c5): the provenance separator that marks
+# where the per-turn query-channel context (resume / recall / SENSE) begins in the
+# published full_text. TSCC's "System Prompt" modal + the security-scan panel read
+# full_text; before this, full_text = options.system_prompt only, so the
+# query-channel blocks (up to ~150K of resume history — the highest PII-risk
+# content) were invisible to BOTH panels. Composing full_text = base + separator +
+# delivered_prefix makes the actual delivered prompt visible + scannable.
+_FULLTEXT_PREFIX_SEPARATOR = (
+    "\n\n=== TURN QUERY-CHANNEL CONTEXT "
+    "(delivered with the user message this turn) ===\n"
+)
+
+
+def _compose_full_text(base_system_prompt: str, delivered_prefix: Optional[str]) -> str:
+    """TSCC/security-scan alignment (run_380413c5) — compose the published
+    ``full_text`` from the stable base system prompt + this turn's delivered
+    query-channel prefix (resume on a cold-resume turn, recall+SENSE on a warm
+    turn, or nothing).
+
+    ALWAYS recomposed from ``base_system_prompt`` (never from a prior turn's
+    full_text) so consecutive turns do not COMPOUND prefixes. Empty prefix →
+    returns the base VERBATIM (flag-OFF / no-prefix turn is byte-identical to the
+    old behavior — the regression lock).
+    """
+    base = base_system_prompt or ""
+    if not delivered_prefix:
+        return base
+    return f"{base}{_FULLTEXT_PREFIX_SEPARATOR}{delivered_prefix}"
 
 
 def _is_warm_reuse(unit: Any) -> bool:
@@ -2996,6 +3060,29 @@ class SessionRouter:
             getattr(unit, "_resume_query_block", None),
             should_prefix=_should_prefix_resume(is_cold_resume, needs_channel_resume),
         )
+
+        # TSCC/security-scan alignment (run_380413c5): capture the EXACT
+        # query-channel prefix delivered this turn, via the SSoT block-builders (the
+        # same functions the two prefixers use — NOT a fragile before/after diff of
+        # query_content, which is ambiguous for the multimodal list shape; Gate-1
+        # P1/P2). Gates MUST mirror the two prefixers above so the captured block is
+        # exactly what was prepended: dynamic = _will_reuse_live, resume =
+        # _should_prefix_resume(...). On any turn at most one fires (COLD-resume vs
+        # warm-reuse are mutually exclusive; a channel-resume-over-prewarm warm turn
+        # can carry both — join them). Written UNCONDITIONALLY (None when neither
+        # fires) so a stale prior-turn prefix never leaks into full_text (Gate-1 P3).
+        _prefix_parts: list[str] = []
+        if _will_reuse_live:
+            _dyn = _build_dynamic_prefix_block(
+                editor_context, getattr(unit, "_recall_query_block", None),
+            )
+            if _dyn:
+                _prefix_parts.append(_dyn)
+        if _should_prefix_resume(is_cold_resume, needs_channel_resume):
+            _res = _build_resume_prefix_block(getattr(unit, "_resume_query_block", None))
+            if _res:
+                _prefix_parts.append(_res)
+        unit._delivered_query_prefix = "\n\n".join(_prefix_parts) if _prefix_parts else None
 
         # Stream response — persist each assistant message IMMEDIATELY.
         #

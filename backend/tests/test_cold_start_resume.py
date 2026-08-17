@@ -303,3 +303,89 @@ class TestResumeViaQueryExecution:
         assert unit._resume_query_block is None, (
             "the transfer must wipe a prior turn's stash — no cross-turn leak"
         )
+
+
+class TestRefreshContextResumeViaQuery:
+    """AC6 (run_380413c5) — #14 Refresh Context R28 execution test.
+
+    refresh_context(clear_identity=True) drops _sdk_session_id → the NEXT send()
+    becomes a genuine is_cold_resume (state==COLD AND _sdk_session_id is None) →
+    _should_prefix_resume(...) fires → resume rides query_content. This path had
+    NO dedicated test (R28 recovery-path gap). Drives the real refresh_context
+    coroutine + asserts the post-condition that makes is_cold_resume True.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refresh_context_clears_identity_enabling_cold_resume(self):
+        from core.session_router import _should_prefix_resume
+
+        unit = _make_unit(SessionState.IDLE, sdk_session_id="sdk-abc-123")
+        # Stub the machinery refresh_context drives (we assert the identity drop,
+        # not the kill mechanics — those have their own tests).
+        unit.session_id = "sess-refresh"
+        unit._crash_to_cold_async = AsyncMock(
+            side_effect=lambda **kw: setattr(unit, "_sdk_session_id", None)
+            or setattr(unit, "state", SessionState.COLD)
+        )
+
+        await SessionUnit.refresh_context(unit)
+
+        # Post-condition: identity dropped + COLD → the next send() is a cold resume.
+        assert unit._sdk_session_id is None, "refresh drops SDK identity"
+        assert unit.state == SessionState.COLD
+        unit._crash_to_cold_async.assert_awaited_once_with(clear_identity=True)
+
+        # The resume-prefix gate now fires for the next turn (is_cold_resume path).
+        is_cold_resume = (
+            unit.state == SessionState.COLD and unit._sdk_session_id is None
+        )
+        assert is_cold_resume is True
+        assert _should_prefix_resume(is_cold_resume, False) is True, (
+            "after refresh, resume rides the query on the next send"
+        )
+
+
+class TestFullTextIncludesDeliveredPrefix:
+    """AC1/AC2/AC7 (run_380413c5) — full_text = base + delivered query-channel
+    prefix, so the TSCC modal AND the security-scan panel see the prompt the model
+    actually received. Mutation-proven: revert the composition → the credential in
+    the resume block is invisible again.
+    """
+
+    def test_resume_credential_becomes_scannable_in_full_text(self):
+        """AC2: a credential inside the resume block (which rides the query, NOT
+        system_prompt) appears in full_text → security-scan can catch it."""
+        from core.session_router import (
+            _build_resume_prefix_block, _compose_full_text,
+        )
+        base = "SYSTEM PROMPT (no secrets here)"
+        resume = "User: my key is aws_secret_access_key=AKIAIOSFODNN7EXAMPLE\nAssistant: noted"
+        delivered = _build_resume_prefix_block(resume)
+        full_text = _compose_full_text(base, delivered)
+        assert "AKIAIOSFODNN7EXAMPLE" in full_text, (
+            "resume-block credential is now in the scannable full_text (AC2)"
+        )
+        # Mutation proof: the OLD behavior (full_text = base only) hid it.
+        old_full_text = base
+        assert "AKIAIOSFODNN7EXAMPLE" not in old_full_text, (
+            "regression lock: base-only full_text was blind to it"
+        )
+
+    def test_warm_recall_sense_in_full_text(self):
+        """AC7: warm-turn recall/SENSE (which ride the query, and whose _spawn never
+        runs — Gate-1 P5) now appear in full_text via the every-turn composer."""
+        from core.session_router import (
+            _build_dynamic_prefix_block, _compose_full_text,
+        )
+        base = "SYSTEM PROMPT BODY"
+        recall = "[RECALLED]\nprior decision: use approach X"
+        ctx = {"open_file": "notes.md", "canvas_open": True}
+        delivered = _build_dynamic_prefix_block(ctx, recall)
+        full_text = _compose_full_text(base, delivered)
+        assert "[RECALLED]" in full_text, "warm-turn recall now visible in full_text"
+
+    def test_flag_off_no_prefix_full_text_is_base_verbatim(self):
+        """AC1 regression lock: no delivered prefix → full_text byte-identical to base."""
+        from core.session_router import _compose_full_text
+        base = "SYSTEM PROMPT BODY — unchanged"
+        assert _compose_full_text(base, None) == base

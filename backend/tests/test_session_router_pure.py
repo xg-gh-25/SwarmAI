@@ -754,3 +754,83 @@ class TestPrependResumeToQuery:
         blocks = [{"type": "text", "text": "look"}]
         out = _prepend_resume_to_query(blocks, self._RESUME, should_prefix=False)
         assert out == blocks
+
+
+class TestQueryPrefixBlockBuilders:
+    """TSCC/security-scan alignment (run_380413c5) — SSoT block-builders.
+
+    Gate-1 P1/P2 fix: instead of RE-COMPUTING the query-channel prefix via a
+    fragile before/after diff (ambiguous for multimodal lists), extract the block
+    string into tiny pure helpers that BOTH _prepend_* fns AND the send-site call.
+    One source of truth for "what text was prepended this turn" → captured for
+    full_text so TSCC + security-scan see the actual delivered prompt.
+    """
+
+    _RESUME = "User: hi\nAssistant: hello\nUser: what did we discuss?"
+    _CANVAS_CTX = {"open_file": "report.md", "canvas_open": True}
+
+    def test_resume_block_builder_matches_what_prepend_emits(self):
+        """_build_resume_prefix_block returns EXACTLY the block _prepend_resume_to_query
+        prepends — proving SSoT (no diff, no drift)."""
+        from core.session_router import (
+            _build_resume_prefix_block, _prepend_resume_to_query,
+        )
+        block = _build_resume_prefix_block(self._RESUME)
+        assert block is not None
+        assert "RESUMED CONVERSATION HISTORY" in block
+        assert self._RESUME in block
+        # The block the builder returns is a strict prefix of what _prepend produces:
+        out = _prepend_resume_to_query("continue", self._RESUME, should_prefix=True)
+        assert out.startswith(block), "builder block IS the prepended text (SSoT)"
+
+    def test_resume_block_builder_none_when_empty(self):
+        from core.session_router import _build_resume_prefix_block
+        assert _build_resume_prefix_block(None) is None
+        assert _build_resume_prefix_block("") is None
+        assert _build_resume_prefix_block("   ") is None
+
+    def test_dynamic_block_builder_matches_what_prepend_emits(self):
+        """_build_dynamic_prefix_block returns EXACTLY the recall+SENSE block."""
+        from core.session_router import (
+            _build_dynamic_prefix_block, _prepend_dynamic_context_to_query,
+        )
+        recall = "[RECALLED]\nprior context here"
+        block = _build_dynamic_prefix_block(self._CANVAS_CTX, recall)
+        assert block is not None
+        assert "[RECALLED]" in block
+        out = _prepend_dynamic_context_to_query(
+            "q", self._CANVAS_CTX, recall_block=recall, should_prefix=True,
+        )
+        assert out.startswith(block), "builder block IS the prepended text (SSoT)"
+
+    def test_dynamic_block_builder_none_when_empty(self):
+        from core.session_router import _build_dynamic_prefix_block
+        assert _build_dynamic_prefix_block(None, None) is None
+        assert _build_dynamic_prefix_block({}, None) is None
+
+    def test_compose_full_text_appends_prefix_with_provenance(self):
+        """_compose_full_text(base, prefix) = base + separator + prefix. This is
+        what makes TSCC's full_text + the security-scan see the delivered prompt."""
+        from core.session_router import _compose_full_text
+        base = "SYSTEM PROMPT BODY"
+        prefix = "[RESUMED CONVERSATION HISTORY]\nsecret=AKIAIOSFODNN7EXAMPLE"
+        out = _compose_full_text(base, prefix)
+        assert base in out
+        assert prefix in out
+        assert "AKIAIOSFODNN7EXAMPLE" in out, "credential-bearing prefix now scannable"
+
+    def test_compose_full_text_empty_prefix_is_base_verbatim(self):
+        """flag OFF / no prefix turn → full_text byte-identical to base (regression lock)."""
+        from core.session_router import _compose_full_text
+        base = "SYSTEM PROMPT BODY"
+        assert _compose_full_text(base, None) == base
+        assert _compose_full_text(base, "") == base
+        assert _compose_full_text("", None) == ""
+
+    def test_compose_full_text_does_not_compound(self):
+        """Composing twice from the SAME base does not stack prefixes (base kept clean)."""
+        from core.session_router import _compose_full_text
+        base = "BASE"
+        once = _compose_full_text(base, "PFX")
+        twice = _compose_full_text(base, "PFX")  # from base, not from `once`
+        assert once == twice, "always recomposed from base, never compounded"

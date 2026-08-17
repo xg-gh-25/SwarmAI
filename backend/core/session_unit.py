@@ -536,6 +536,19 @@ class SessionUnit:
         # `unit._resume_query_block = agent_config.get(...)`, which writes None on a
         # non-cold turn) and on teardown by _cleanup_internal below.
         self._resume_query_block: Optional[str] = None
+        # TSCC/security-scan alignment (run_380413c5): the ACTUAL query-channel
+        # prefix delivered onto query_content THIS turn — the resume block on a
+        # cold-resume turn, or the recall+SENSE block on a warm-reuse turn, or None.
+        # Set UNCONDITIONALLY every send by the ROUTER (writes None when no prefix,
+        # mirroring _resume_query_block's clear-on-transfer semantics — so a stale
+        # prior-turn prefix can never leak into full_text). Read at the EVERY-TURN
+        # metadata publish (_emit_post_stream_metadata) to compose
+        # full_text = base_system_prompt + separator + this prefix, so the TSCC
+        # "System Prompt" modal AND the security-scan panel see the prompt the model
+        # actually received (previously full_text = options.system_prompt only, so a
+        # query-channel block — up to ~150K resume history, highest PII risk — was
+        # invisible to both). Cleared on teardown by _cleanup_internal.
+        self._delivered_query_prefix: Optional[str] = None
         # TSCC system-prompt metadata AWAITING DELIVERY. The router stashes the
         # freshly-built metadata here; _spawn() publishes it to
         # session_registry.system_prompt_metadata at the moment the prompt is
@@ -2835,6 +2848,28 @@ class SessionUnit:
                 self.session_id
             )
             if spm:
+                # TSCC/security-scan alignment (run_380413c5): recompose full_text
+                # HERE — this runs at the end of EVERY response (cold AND warm),
+                # unlike _spawn() which fires ONLY on a COLD turn (Gate-1 P5). A
+                # warm-reuse turn's recall+SENSE ride the query and _spawn never
+                # runs, so without this the warm-turn query-channel context would
+                # stay invisible to the "System Prompt" modal + the security-scan
+                # panel. Recompose from the STORED base (never from the prior
+                # full_text) so consecutive turns do not compound prefixes; persist
+                # the recomposed value so the two read-only panel endpoints
+                # (which read the registry, not this SSE event) see it too.
+                from .session_router import _compose_full_text
+                _base = spm.get("base_full_text")
+                if _base is None:
+                    # Legacy entry published before this field existed → treat the
+                    # existing full_text as the base (best-effort, no compounding
+                    # because we overwrite base_full_text with it now).
+                    _base = spm.get("full_text", "") or ""
+                    spm["base_full_text"] = _base
+                spm["full_text"] = _compose_full_text(
+                    _base, self._delivered_query_prefix
+                )
+                session_registry.system_prompt_metadata[self.session_id] = spm
                 events.append({"type": "system_prompt_metadata", **spm})
         except Exception:
             pass  # Never block on metadata failure
@@ -3139,7 +3174,18 @@ class SessionUnit:
             from . import session_registry
             _pending = self._pending_prompt_metadata
             if _pending is not None and self.session_id:
-                _pending["full_text"] = options.system_prompt or ""
+                # TSCC/security-scan alignment (run_380413c5): store the BASE prompt
+                # (options.system_prompt — under flag ON the resume block is NOT in
+                # here, it rides the query) so _emit_post_stream_metadata can
+                # recompose full_text = base + this-turn's delivered query-prefix on
+                # EVERY turn (cold AND warm). Compose here too so a spawn-only turn
+                # (no post-stream metadata emit) still publishes the full picture.
+                from .session_router import _compose_full_text
+                _base = options.system_prompt or ""
+                _pending["base_full_text"] = _base
+                _pending["full_text"] = _compose_full_text(
+                    _base, self._delivered_query_prefix
+                )
                 session_registry.system_prompt_metadata[self.session_id] = _pending
                 # One-shot: a later respawn must publish ITS own turn's metadata,
                 # never re-publish this one.
@@ -4284,6 +4330,11 @@ class SessionUnit:
         # not leak onto a later turn's query prefix. send() also clears it per-turn,
         # but reset on teardown too so a recycle mid-send never carries it forward.
         self._resume_query_block = None
+        # TSCC/security-scan alignment (run_380413c5): clear the delivered
+        # query-channel prefix on teardown too (send() writes it every turn, but a
+        # recycle mid-send must not carry a stale prefix into the next turn's
+        # full_text).
+        self._delivered_query_prefix = None
         # Clear the TSCC recall snapshot, on the unit AND in the registry. The
         # subprocess is gone, so no prompt is in force and there is no recall to
         # report; leaving the registry entry behind paired a pre-restart snapshot
