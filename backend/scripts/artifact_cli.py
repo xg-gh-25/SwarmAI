@@ -1413,6 +1413,88 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(result))
 
 
+def _maybe_autoaggregate_test_artifact(run_state, profile, reg, project, run_id):
+    """Auto-publish a test_report artifact from a test stage's INLINE
+    cross_boundary_e2e (symmetric to the deliver auto-aggregate at cmd_run_update).
+
+    WHY this exists (the asymmetry bug it fixes): the completion-time
+    cross_boundary_e2e gate reads the field ONLY from a published artifact
+    (`stage.artifact_id` → `_load_artifact_for_metrics`), with no stage-record
+    fallback. `deliver` already has an auto-aggregate that turns its inline
+    `--stage-json` fields into an artifact, but `test` had NONE — so an agent that
+    records `cross_boundary_e2e` inline on the test stage (the exact shape the gate
+    docstring calls "test_report for full/bugfix") hit a BLOCK and was forced to
+    hand-publish a test_report. This closes that gap symmetrically.
+
+    ⚠️ ORDERING (the trap this guards): the caller MUST invoke this BEFORE the
+    cross_boundary_e2e gate's `sys.exit(1)`. The deliver auto-aggregate lives AFTER
+    that gate and works only because deliver's own check is in the per-stage
+    validator, not this early-exit gate. A test aggregate placed next to deliver's
+    would never run (the gate exits first) — hence this is a separate, earlier call.
+
+    Fires ONLY when ALL hold (never fabricates E2E evidence):
+      - profile in (full, bugfix)   — same scope as deliver auto-aggregate
+      - a COMPLETED test stage exists
+      - that stage has an inline truthy `cross_boundary_e2e.run`
+      - that stage has NO artifact_id yet (normal publish path is untouched — AC2)
+
+    Mutates `run_state` in place (backfills stage.artifact_id) and returns the
+    artifact_id, or None if it did not fire. Publish failure degrades to a stderr
+    warning (never crashes run-update), mirroring the deliver block.
+    """
+    if profile not in ("full", "bugfix"):
+        return None
+    test_rec = next(
+        (s for s in run_state.get("stages", [])
+         if s.get("stage", s.get("name", "")) == "test"
+         and s.get("status") in ("completed", "done")),
+        None,
+    )
+    if not test_rec or test_rec.get("artifact_id"):
+        return None
+    _e2e = test_rec.get("cross_boundary_e2e")
+    if not (isinstance(_e2e, dict) and _e2e.get("run")):
+        return None
+    # Build a schema-valid test_report (passed + layers.ac_driven required) carrying
+    # the inline E2E so the completion gate's artifact scan finds it.
+    _layers = test_rec.get("layers")
+    if not isinstance(_layers, dict) or "ac_driven" not in _layers:
+        _layers = {"ac_driven": {"run": True, "pass": test_rec.get("tests_new", 0)}}
+    auto_test = {
+        "passed": bool(test_rec.get("passed", True)),
+        "tests_new": test_rec.get("tests_new", 0),
+        "tests_total": test_rec.get("tests_total", 0),
+        "regressions": test_rec.get("regressions", 0),
+        "layers": _layers,
+        "cross_boundary_e2e": _e2e,
+        "auto_aggregated": True,
+    }
+    try:
+        art_id = reg.publish(
+            project=project,
+            artifact_type="test_report",
+            producer="s_autonomous-pipeline",
+            summary="[Auto-aggregated] test cross_boundary_e2e",
+            data=auto_test,
+            run_id=run_id,
+        )
+        test_rec["artifact_id"] = art_id
+        import sys as _sys
+        print(json.dumps({
+            "auto_aggregated": True,
+            "artifact_id": art_id,
+            "source": "test stage-json cross_boundary_e2e",
+        }), file=_sys.stderr)
+        return art_id
+    except Exception as _agg_exc:
+        import sys as _sys
+        print(json.dumps({
+            "warning": f"Auto-aggregate test_report failed: {_agg_exc}",
+            "fallback": "Manual publish required",
+        }), file=_sys.stderr)
+        return None
+
+
 def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     """Update a pipeline run's stage record or status."""
     from datetime import datetime, timezone
@@ -1597,6 +1679,14 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             )
             _cb = _eval_data.get("cross_boundary") if isinstance(_eval_data, dict) else None
             if isinstance(_cb, dict) and _cb.get("value") is True:
+                # Symmetric to the deliver auto-aggregate: promote a test stage's INLINE
+                # cross_boundary_e2e (recorded via --stage-json) into a test_report artifact
+                # BEFORE the gate scan below — otherwise the sys.exit(1) at the end of this
+                # block fires first and the promotion (if placed near deliver's, :1683+) would
+                # never run. See _maybe_autoaggregate_test_artifact for the full rationale.
+                _maybe_autoaggregate_test_artifact(
+                    run_state, profile, reg, args.project, args.run_id
+                )
                 # Scan every completed stage's artifact for a truthy cross_boundary_e2e.run.
                 _e2e_found = False
                 for _s in _stages:
