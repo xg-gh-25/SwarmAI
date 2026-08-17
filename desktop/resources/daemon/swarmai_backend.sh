@@ -102,6 +102,19 @@ export SWARMAI_PORT="${DAEMON_PORT}"
 export SWARMAI_MODE="daemon"
 export HOME="${HOME}"
 
+# Desktop tab cold-start prewarm (run_4e881e96 — 6 findings 修复后启用).
+# Both enabled together. The two flags are ORTHOGONAL, not co-dependent:
+#   - DESKTOP_PREWARM: a NEW (no-history) desktop tab adopts a pre-spawned
+#     baseline subprocess (skips the 8-14s cold handshake). A history-bearing
+#     reopened tab NEVER adopts — the CRITICAL #1 history-guard routes it to
+#     cold/--resume (its prior conversation is preserved there).
+#   - RESUME_VIA_QUERY: on that cold/--resume path, the prior-conversation
+#     block rides the query() instead of a rebuilt system_prompt (so a warm
+#     subprocess reuse can't drop it). Enabled to keep resume robust now that
+#     prewarm makes warm-reuse the common case.
+export SWARM_DESKTOP_PREWARM="1"
+export SWARM_RESUME_VIA_QUERY="true"
+
 # Strip proxy vars — daemon manages its own networking
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy 2>/dev/null || true
 
