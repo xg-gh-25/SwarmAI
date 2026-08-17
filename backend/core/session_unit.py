@@ -678,6 +678,20 @@ class SessionUnit:
         # never crosses sessions/tabs.
         self._last_turn_clean: bool = False
 
+        # ── Prewarm-adopt warm-reuse bridge (Gate-1 #5, run_f107f442) ─
+        # TRANSIENT one-shot: True only between adopt_prewarmed_unit() re-keying
+        # this unit's session_id (which DESTROYS the `prewarm-` prefix that both
+        # warm-reuse exemption sites key on) and the first message reaching
+        # STREAMING. Without it, an adopted unit's first message hits
+        # poison_guard recycle (kill+respawn) → the whole prewarm benefit is
+        # lost. Honored at BOTH exemption sites (session_router._is_warm_reuse +
+        # the poison_guard below), CLEARED at STREAMING entry so the SECOND
+        # message sees the normal poison_guard again.
+        # NOT the rejected persistent `is_prewarm` identity field
+        # (IMPROVEMENT.md:1400) — a self-clearing one-turn bridge, not a
+        # replacement for the prefix authority anywhere else.
+        self._adopted_prewarm_fresh: bool = False
+
         # ── Lazy MCP: per-session overrides ──────────────────────────
         # MCP names added via enable_mcp_for_session().  On next spawn,
         # these names are passed to load_mcp_config_tiered(extra_always=...)
@@ -1104,6 +1118,11 @@ class SessionUnit:
             # is what keeps the warm-reuse fast path alive for clean turns
             # while forcing a recycle for interrupted/disconnected ones.
             self._last_turn_clean = False
+            # One-shot prewarm-adopt bridge (Gate-1 #5): a turn has now started,
+            # so the re-key window is over — clear the bridge so the NEXT message
+            # sees the normal poison_guard. Cleared at the SAME chokepoint as
+            # _last_turn_clean for symmetry (both are per-turn STREAMING-entry state).
+            self._adopted_prewarm_fresh = False
             # ONE timestamp for both — the dumb-spawn watchdog discriminates
             # "no event since spawn" by `_last_event_time <= _streaming_start_time`
             # (lifecycle_manager._check_streaming_timeout). Two separate
@@ -1668,6 +1687,33 @@ class SessionUnit:
         kwargs["resume"] = resume_session_id
         return _Opts(**kwargs)
 
+    def _should_poison_guard_recycle(self) -> bool:
+        """The poison_guard predicate (real, testable — extracted so a test can
+        drive it instead of recomputing the boolean inline, which would be
+        vacuous test-theater; Gate-2, run_f107f442).
+
+        Recycle a warm IDLE subprocess before reuse IFF it may be poisoned:
+        IDLE ∧ live client ∧ last-turn-NOT-clean ∧ NOT fresh-prewarm. This is the
+        EXACT COMPLEMENT of session_router._is_warm_reuse.
+
+        `_is_fresh_prewarm` (Gate-1 #5, R27): a fresh `prewarm-` unit OR a
+        just-adopted unit (prefix already re-keyed away, bridged by the one-shot
+        `_adopted_prewarm_fresh` which is cleared at STREAMING entry) has no
+        corrupt turn-state to recycle. A genuine turn-2+ zombie (prefix gone AND
+        bridge cleared) still recycles correctly.
+        """
+        from .session_router import PREWARM_SESSION_PREFIX
+        _is_fresh_prewarm = (
+            self.session_id.startswith(PREWARM_SESSION_PREFIX)
+            or self._adopted_prewarm_fresh
+        )
+        return (
+            self.state == SessionState.IDLE
+            and self._client is not None
+            and not self._last_turn_clean
+            and not _is_fresh_prewarm
+        )
+
     async def send(
         self,
         query_content: Any,
@@ -2004,14 +2050,7 @@ class SessionUnit:
         # defeat the prewarm. The prefix is the ONLY signal that distinguishes the
         # two, so the exemption keys on it (lazy import avoids the session_router↔
         # session_unit circular dependency — same pattern as lifecycle_manager).
-        from .session_router import PREWARM_SESSION_PREFIX
-        _is_fresh_prewarm = self.session_id.startswith(PREWARM_SESSION_PREFIX)
-        if (
-            self.state == SessionState.IDLE
-            and self._client is not None
-            and not self._last_turn_clean
-            and not _is_fresh_prewarm
-        ):
+        if self._should_poison_guard_recycle():
             logger.info(
                 "session_unit.poison_guard_recycle session_id=%s — warm IDLE "
                 "subprocess not clean (last turn did not complete via result); "

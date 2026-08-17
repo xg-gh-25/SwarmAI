@@ -1249,6 +1249,20 @@ async def lifespan(app: FastAPI):
     await session_registry.start_lifecycle()
     logger.info("LifecycleManager started at startup")
 
+    # Desktop prewarm pool (方案A, run_f107f442): warm a depth-2 pool of
+    # baseline-prompt subprocesses off the hot path so a new desktop tab's first
+    # message ADOPTS one (skipping the 8-14s cold __aenter__ handshake). Gated by
+    # SWARM_DESKTOP_PREWARM (default OFF) — a no-op when unset. Fire-and-forget,
+    # best-effort, never blocks startup (mirrors _prewarm_boto3/_prewarm_recall).
+    async def _prewarm_desktop_pool():
+        try:
+            router = session_registry.session_router
+            if router is not None:
+                await router.warm_desktop_pool(depth=2)
+        except Exception:
+            logger.debug("desktop pool pre-warm failed (non-critical)", exc_info=True)
+    asyncio.create_task(_prewarm_desktop_pool())
+
     # Root-1 SSOT: reopen any pending messages left in the 'claimed' phase by a
     # crash (claimed_at set, sent=0) so they re-drain on the next IDLE instead of
     # being stuck forever. Idempotent, DB-only, non-fatal — never blocks startup.

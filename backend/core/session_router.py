@@ -554,6 +554,11 @@ def _is_warm_reuse(unit: Any) -> bool:
         and (
             unit._last_turn_clean
             or unit.session_id.startswith(PREWARM_SESSION_PREFIX)
+            # Gate-1 #5 bridge: an adopted prewarm unit has already LOST the
+            # `prewarm-` prefix (adopt_prewarmed_unit re-keyed it), but its first
+            # message must still warm-reuse the pre-spawned subprocess. The
+            # one-shot flag survives the re-key and is cleared at STREAMING entry.
+            or getattr(unit, "_adopted_prewarm_fresh", False)
         )
     )
 
@@ -1724,6 +1729,26 @@ class SessionRouter:
         self._drain_worker_task: Optional[asyncio.Task] = None
         self._drain_enqueued: set[str] = set()  # de-dupe: at most one pending entry/session
 
+        # ── Desktop prewarm pool (方案A, design v2 §4/§5, run_f107f442) ───────
+        # Maps a bucket key → the prewarm-prefixed session_id of a pre-spawned,
+        # IDLE, baseline-prompt subprocess ready for a desktop tab's first
+        # message to ADOPT (skipping the 8-14s cold __aenter__ handshake).
+        #   bucket key = (session_type, agent_id, model)
+        # Model dim is kept for CORRECTNESS of adopt (wrong model = wrong
+        # persona) but only the MAIN bucket is ever warmed (1M models are
+        # isomorphic — design §HIGH-1: 校验≠分桶). NO is_prewarm field on
+        # SessionUnit — pool MEMBERSHIP is the `prewarm-` prefix, the single
+        # server-mint-only authority (IMPROVEMENT.md:1400 REJECT of the field).
+        # Both dicts are guarded by self._slot_lock (same as _units mutation).
+        # INVARIANT (Gate-1 #4): all desktop tabs in ONE daemon share one
+        # working_directory, so the bucket key can omit it safely — a
+        # multi-workspace daemon would need it added.
+        self._desktop_prewarm_pool: dict[tuple, str] = {}
+        # prewarm_session_id → {"ctx_hash": str, "spawned_monotonic": float}
+        # for staleness (context files changed since spawn) + TTL bound.
+        self._desktop_prewarm_meta: dict[str, dict] = {}
+        self._DESKTOP_PREWARM_TTL_S: float = 60.0  # staleness upper bound
+
         # Load persisted sdk_session_ids for lazy injection at unit creation.
         # Design §2B fix: old restore_session_state() iterated _units which is
         # empty at boot. This caches the mapping; get_or_create_unit() injects.
@@ -1944,11 +1969,159 @@ class SessionRouter:
 
             unit.session_id = real_session_id
             self._units[real_session_id] = unit
+            # Gate-1 #5 bridge: re-keying just DESTROYED the `prewarm-` prefix
+            # that both warm-reuse exemption sites key on. Set the one-shot flag
+            # so this unit's FIRST message still warm-reuses the pre-spawned
+            # subprocess instead of hitting poison_guard recycle (which would
+            # kill+respawn and defeat the entire prewarm). Cleared at STREAMING
+            # entry. This ALSO fixes the latent same-shape bug in the existing
+            # channel adopt path (shared primitive — R25 neighborhood).
+            unit._adopted_prewarm_fresh = True
             logger.info(
                 "session_router.adopt_prewarmed %s → %s",
                 prewarm_session_id, real_session_id,
             )
             return True
+
+    # ── Desktop prewarm pool (方案A, run_f107f442) ──────────────────
+
+    @staticmethod
+    def _now_monotonic() -> float:
+        """Wall-clock-independent clock for TTL (test-overridable)."""
+        return time.monotonic()
+
+    @staticmethod
+    def _desktop_ctx_hash() -> str:
+        """A cheap staleness fingerprint of the context files that
+        build_default_system_prompt reads (the .context/*.md set). If it changes
+        between prewarm-spawn and adopt, the baseline prompt固化 in the pooled
+        subprocess is stale → discard-and-cold. Uses mtime_ns of each governed
+        file (fast, no read); missing dir → empty string (no pool, cold path).
+        """
+        import hashlib
+        try:
+            ctx_dir = Path.home() / ".swarm-ai" / "SwarmWS" / ".context"
+            if not ctx_dir.is_dir():
+                return ""
+            parts = []
+            for p in sorted(ctx_dir.glob("*.md")):
+                try:
+                    parts.append(f"{p.name}:{p.stat().st_mtime_ns}")
+                except OSError:
+                    continue
+            return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+        except Exception:  # noqa: BLE001 — staleness is best-effort, never fatal
+            return ""
+
+    def _desktop_prewarm_enabled(self) -> bool:
+        """Strangler flag — default OFF. Flag-off path is byte-identical to the
+        pre-prewarm cold spawn (empty pool → adopt intercept is a no-op)."""
+        import os
+        return os.environ.get("SWARM_DESKTOP_PREWARM", "").lower() in ("1", "true", "yes")
+
+    async def warm_desktop_pool(self, depth: int = 2) -> None:
+        """Best-effort: warm the MAIN desktop bucket to `depth` IDLE baseline
+        units. No-op unless the strangler flag is on. Never fatal (mirrors
+        _prewarm_boto3). Called from the daemon lifespan.
+
+        Main bucket = (desktop, default_agent, default_model) — design §HIGH-1
+        warms ONLY the main bucket (1M models isomorphic; other buckets go cold).
+        """
+        if not self._desktop_prewarm_enabled():
+            return
+        try:
+            from .agent_defaults import DEFAULT_AGENT_ID, resolve_default_model
+            agent_id = DEFAULT_AGENT_ID
+            model = resolve_default_model() or ""  # global default model
+            key = ("desktop", agent_id, model)
+            while len([1 for v in self._desktop_prewarm_pool.values()]) < depth:
+                have = sum(1 for k in self._desktop_prewarm_pool if k == key)
+                if have >= depth:
+                    break
+                # prewarm_channel_session with channel_context=None → desktop
+                # baseline prompt (no channel security section).
+                pid = await self.prewarm_channel_session(agent_id, channel_context=None)
+                if not pid:
+                    break  # spawn failed/blocked — stop, stay cold
+                async with self._slot_lock:
+                    # Depth-2 pool: allow >1 unit under the same bucket key by
+                    # storing the FIRST free slot; a dict keyed by (bucket, i).
+                    slot = 0
+                    while (key + (slot,)) in self._desktop_prewarm_pool:
+                        slot += 1
+                    if slot >= depth:
+                        # Pool already full for this bucket — release the extra.
+                        break
+                    self._desktop_prewarm_pool[key + (slot,)] = pid
+                    self._desktop_prewarm_meta[pid] = {
+                        "ctx_hash": self._desktop_ctx_hash(),
+                        "spawned_monotonic": self._now_monotonic(),
+                    }
+                logger.info("session_router.desktop_prewarm_ready bucket=%s slot=%d id=%s",
+                            key, slot, pid)
+        except Exception as exc:  # noqa: BLE001 — warm is best-effort
+            logger.warning("session_router.desktop_prewarm_failed: %s", exc)
+
+    async def _try_adopt_desktop_pool(
+        self, session_id: str, agent_id: str, model: str,
+    ) -> bool:
+        """Adopt a pooled unit for a real desktop session if a fresh, non-stale,
+        bucket-matching IDLE unit exists. Returns True on adopt (unit now in
+        _units under session_id), False → caller falls through to cold create.
+
+        Validates bucket = (desktop, agent_id, model) — a mismatch NEVER adopts
+        (wrong model/agent = wrong persona, Gate-1 M2). Validates staleness
+        (ctx_hash unchanged) + TTL. All under _slot_lock (composes with
+        adopt_prewarmed_unit which also takes the lock — see note).
+        """
+        if not self._desktop_prewarm_enabled():
+            return False
+        # Find any slot for this bucket (base key + slot index).
+        base = ("desktop", agent_id, model)
+        current_hash = self._desktop_ctx_hash()
+        now = self._now_monotonic()
+        # Snapshot candidate under lock-free read; validate + adopt under lock.
+        pool_key = None
+        prewarm_id = None
+        for k, pid in list(self._desktop_prewarm_pool.items()):
+            if k[:3] == base:
+                pool_key, prewarm_id = k, pid
+                break
+        if prewarm_id is None:
+            return False
+        # SINGLE critical section (Gate-2 fix): validate staleness + claim the
+        # pool entry atomically under _slot_lock, so no concurrent adopt can
+        # double-claim and no lock-free mutation races the warmer. All pool/meta
+        # MUTATIONS live under the lock (the ONLY exceptions are the read-only
+        # snapshot above and the sync DEAD-sink callback — which is lock-free BY
+        # DESIGN because it runs on the _transition stack that ALREADY holds
+        # _slot_lock via _evict_idle; taking it there would re-entrant-deadlock,
+        # and a no-await sync callback is atomic in the single-loop anyway — same
+        # precedent as enqueue_drain/_slot_available.set()). This method is async
+        # and NOT on that stack, so it CAN and DOES take the lock.
+        # adopt_prewarmed_unit takes _slot_lock itself → claim + drop here, then
+        # call it AFTER releasing (no re-entrancy).
+        stale = False
+        async with self._slot_lock:
+            if self._desktop_prewarm_pool.get(pool_key) != prewarm_id:
+                return False  # raced — another adopt took it
+            meta = self._desktop_prewarm_meta.get(prewarm_id, {})
+            if meta.get("ctx_hash") != current_hash or (
+                now - meta.get("spawned_monotonic", 0.0) > self._DESKTOP_PREWARM_TTL_S
+            ):
+                stale = True
+            # Claim it either way (adopt OR discard-stale) so it can't be
+            # double-claimed; the unadopted unit is reclaimed by the prefix-exempt
+            # kill paths (P-a) — we do NOT block adopt on killing it.
+            self._desktop_prewarm_pool.pop(pool_key, None)
+            self._desktop_prewarm_meta.pop(prewarm_id, None)
+        if stale:
+            logger.info("session_router.desktop_prewarm_stale id=%s → cold", prewarm_id)
+            return False
+        ok = await self.adopt_prewarmed_unit(prewarm_id, session_id)
+        if not ok:
+            logger.info("session_router.desktop_adopt_rejected id=%s (not IDLE)", prewarm_id)
+        return ok
 
     def list_units(self) -> list[SessionUnit]:
         """Return all registered SessionUnits."""
@@ -2362,6 +2535,30 @@ class SessionRouter:
             if new_state in (SessionState.IDLE, SessionState.COLD, SessionState.DEAD):
                 self._slot_available.set()
 
+        # H2 single-sink desktop-pool cleanup (方案A, run_f107f442): EVERY kill
+        # path (evict / TTL / orphan / crash / poison / shutdown) funnels through
+        # _transition(DEAD) → here. Keyed on the `prewarm-` PREFIX (no is_prewarm
+        # field, IMPROVEMENT.md:1400). One point covers all kill paths — an
+        # unadopted pooled unit that dies leaves no dangling pool/meta entry.
+        #
+        # ⚠️ INTENTIONALLY LOCK-FREE (Gate-2 verified, NOT a protocol violation):
+        # this callback fires SYNCHRONOUSLY from SessionUnit._transition, and
+        # _evict_idle calls `await victim.kill()` → _transition(DEAD) → here WHILE
+        # HOLDING _slot_lock. Taking _slot_lock here would be a re-entrant
+        # asyncio-lock DEADLOCK (asyncio.Lock is non-reentrant). It is safe
+        # without the lock because: (a) a no-await sync callback is atomic in the
+        # single-thread event loop — no coroutine (incl. the warmer, which only
+        # yields at its own `await`) can interleave between the snapshot and the
+        # pops; (b) the `list(...)` snapshot prevents dict-changed-during-iteration.
+        # Same lock-free-by-design precedent as `_slot_available.set()` +
+        # `enqueue_drain` above (the F1 no-re-enter-send rule). _transition is
+        # never invoked from a worker thread (only run_in_executor for RSS/kill
+        # subprocess work, never for a transition).
+        if new_state == SessionState.DEAD and session_id.startswith(PREWARM_SESSION_PREFIX):
+            for k in [k for k, v in list(self._desktop_prewarm_pool.items()) if v == session_id]:
+                self._desktop_prewarm_pool.pop(k, None)
+            self._desktop_prewarm_meta.pop(session_id, None)
+
         # Root-1 SSOT Phase 2 (L3): a transition INTO a clean IDLE is the trigger
         # to drain any pending messages that arrived while the session was busy.
         # Enqueue is non-blocking (put_nowait) and takes NO lock — this runs on
@@ -2579,6 +2776,27 @@ class SessionRouter:
                 f"session_id must not use the reserved '{PREWARM_SESSION_PREFIX}' "
                 "prefix (server-reserved for pre-warmed sessions)"
             )
+
+        # ── Desktop prewarm adopt-intercept (方案A, run_f107f442) ────────────
+        # A brand-new DESKTOP tab first message (no channel_context, session_id
+        # not yet a live unit) may ADOPT a pooled baseline subprocess, skipping
+        # the 8-14s cold __aenter__ handshake. Flag-gated + desktop-only +
+        # bucket/staleness-validated; on any miss it falls through to the
+        # unchanged cold get_or_create_unit path (byte-identical, AC8). Done
+        # BEFORE get_or_create_unit so the adopted unit (re-keyed into _units
+        # under session_id) is what get_or_create_unit then returns — one atomic
+        # get-or-adopt-or-create (Gate-1 #2: no TOCTOU double-create).
+        if (
+            self._desktop_prewarm_enabled()
+            and channel_context is None
+            and session_id not in self._units
+        ):
+            try:
+                from .agent_defaults import resolve_default_model
+                _model = (agent_config or {}).get("model") or resolve_default_model() or ""
+                await self._try_adopt_desktop_pool(session_id, agent_id, _model)
+            except Exception as exc:  # noqa: BLE001 — adopt is best-effort, never fatal
+                logger.warning("session_router.desktop_adopt_intercept_failed: %s", exc)
 
         unit = self.get_or_create_unit(session_id, agent_id)
 
