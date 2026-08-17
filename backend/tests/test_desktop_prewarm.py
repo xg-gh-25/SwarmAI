@@ -241,6 +241,185 @@ def test_dead_transition_cleans_pool_entry():
     assert prewarm_id not in router._desktop_prewarm_meta
 
 
+# ── AC1 (CRITICAL): history-bearing session must NEVER adopt ────────────────
+
+def _seed_bucket(router, prewarm_id, model="claude-opus-4-8", agent="agent-default"):
+    key = ("desktop", agent, model)
+    router._desktop_prewarm_pool[key] = prewarm_id
+    router._desktop_prewarm_meta[prewarm_id] = {
+        "ctx_hash": router._desktop_ctx_hash(),
+        "spawned_monotonic": router._now_monotonic(),
+    }
+    return key
+
+
+def _patch_db_count(monkeypatch, count):
+    """monkeypatch database.db.messages.count_by_session → returns `count`."""
+    class _Msgs:
+        async def count_by_session(self, sid):
+            return count
+    class _DB:
+        messages = _Msgs()
+    monkeypatch.setitem(__import__("sys").modules, "database",
+                        type("M", (), {"db": _DB()}))
+
+
+def test_history_bearing_session_never_adopts(flag_on, monkeypatch):
+    """AC1 CRITICAL — a reopened tab WITH history (count_by_session >= 1 at the
+    PRE-persist intercept, i.e. at least one prior row) must NOT adopt a baseline
+    prewarm subprocess: adopt would give it a history-free system_prompt +
+    warm-reuse via query(), and (adopted → IDLE → is_cold_resume False) the resume
+    block would never be built → history silently lost. It must fall through to
+    cold/--resume instead.
+
+    ⚠️ Threshold is >= 1 (NOT > 1): the adopt-intercept runs BEFORE the current
+    message is persisted (session_router :2855), so count here is prior-history
+    rows ONLY. Even a single prior row means "has history".
+
+    Mutation: remove the history guard → this goes RED (adopt succeeds).
+    """
+    import asyncio
+    router = _router()
+    unit = _idle_prewarm_unit()
+    prewarm_id = unit.session_id
+    router._units[prewarm_id] = unit
+    key = _seed_bucket(router, prewarm_id)
+    _patch_db_count(monkeypatch, 1)  # exactly one prior row = has history
+
+    ok = asyncio.run(router._try_adopt_desktop_pool(
+        "real-hist", "agent-default", "claude-opus-4-8"))
+
+    assert ok is False, "history-bearing session must not adopt"
+    assert "real-hist" not in router._units
+    assert key in router._desktop_prewarm_pool, "pool entry must be left for a new tab"
+
+
+def test_fresh_session_still_adopts_with_zero_history(flag_on, monkeypatch):
+    """The complement: a brand-new tab (0 prior rows at pre-persist intercept)
+    still adopts — proves the guard is >=1, not over-broad (doesn't block fresh
+    tabs, which is the whole point of prewarm)."""
+    import asyncio
+    router = _router()
+    unit = _idle_prewarm_unit()
+    prewarm_id = unit.session_id
+    router._units[prewarm_id] = unit
+    _seed_bucket(router, prewarm_id)
+    _patch_db_count(monkeypatch, 0)  # brand-new tab, no prior rows
+
+    ok = asyncio.run(router._try_adopt_desktop_pool(
+        "real-fresh", "agent-default", "claude-opus-4-8"))
+
+    assert ok is True, "fresh session (0 history) must still adopt"
+    assert "real-fresh" in router._units
+
+
+# ── AC3 (HIGH): stale prewarm unit is KILLED, not leaked ────────────────────
+
+def test_stale_prewarm_unit_is_killed(flag_on, monkeypatch):
+    """AC3 — the stale branch of _try_adopt_desktop_pool must KILL the discarded
+    prewarm unit (not just pop the dicts). A prewarm-prefixed unit is exempt from
+    TTL + orphan-reaper, so leaving it in _units leaks a live subprocess until
+    memory pressure.
+
+    Mutation: remove the kill in the stale branch → this goes RED (unit survives).
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+    router = _router()
+    unit = _idle_prewarm_unit()
+    prewarm_id = unit.session_id
+    unit.kill = AsyncMock()  # observe the kill
+    router._units[prewarm_id] = unit
+    _patch_db_count(monkeypatch, 0)  # fresh session (history guard passes)
+    key = ("desktop", "agent-default", "claude-opus-4-8")
+    router._desktop_prewarm_pool[key] = prewarm_id
+    router._desktop_prewarm_meta[prewarm_id] = {
+        "ctx_hash": "STALE-HASH", "spawned_monotonic": router._now_monotonic(),
+    }
+
+    ok = asyncio.run(router._try_adopt_desktop_pool(
+        "real-stale", "agent-default", "claude-opus-4-8"))
+
+    assert ok is False  # stale → cold fallback
+    unit.kill.assert_awaited_once()  # the discarded unit is killed
+    assert prewarm_id not in router._units  # not leaked
+
+
+# ── AC4 (MED): sacred-first-tab count excludes prewarm; budget keeps it ──────
+
+def test_user_chat_alive_count_excludes_prewarm():
+    """AC4 — _user_chat_alive_count (used by the sacred-first-tab check) must
+    EXCLUDE prewarm-prefixed units so a warm pool doesn't disable the sacred
+    first-tab grant. But alive_count (used by spawn_budget) must STILL COUNT
+    them — a prewarm unit is a real subprocess consuming real RAM.
+
+    Mutation: make _user_chat_alive_count == _chat_alive_count → RED here.
+    """
+    router = _router()
+    p = _idle_prewarm_unit()
+    router._units[p.session_id] = p
+
+    # A prewarm unit exists → sacred-check count must read 0 (no USER tab yet),
+    # but budget/alive count must read 1 (RAM is really occupied).
+    assert router._user_chat_alive_count == 0, "sacred count must exclude prewarm"
+    assert router.alive_count == 1, "budget count must INCLUDE prewarm (real RAM)"
+
+
+def test_user_chat_alive_count_counts_real_tab():
+    """The complement: a real (non-prewarm) chat unit IS counted by the sacred
+    count — proves it isn't just always-zero."""
+    router = _router()
+    real = SessionUnit(session_id="real-tab", agent_id="agent-default")
+    real.state = SessionState.IDLE
+    real._client = object()
+    router._units["real-tab"] = real
+    assert router._user_chat_alive_count == 1
+
+
+# ── AC6 (MED): ctx_hash derives from the real workspace path ────────────────
+
+def test_ctx_hash_derives_from_workspace_path(monkeypatch, tmp_path):
+    """AC6 — _desktop_ctx_hash must fingerprint the ACTUAL workspace .context dir
+    (what the prewarm subprocess built its prompt from), not a hardcoded
+    ~/.swarm-ai/SwarmWS/.context. Under a custom workspace (SWARM_DATA_DIR /
+    non-default workspace_path) the hardcode reads the WRONG dir → staleness
+    detection is blind.
+
+    Mutation: revert to the hardcoded Path.home() dir → this goes RED (hash reads
+    the wrong dir, doesn't reflect the tmp .context we created).
+    """
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    (ctx / "SOUL.md").write_text("soul-v1")
+    (ctx / "AGENT.md").write_text("agent-v1")
+
+    from core.initialization_manager import initialization_manager
+    monkeypatch.setattr(
+        initialization_manager, "get_cached_workspace_path",
+        lambda: str(tmp_path), raising=True,
+    )
+    import core.session_router as sr
+    h1 = sr.SessionRouter._desktop_ctx_hash()
+    assert h1, "hash must be non-empty when the derived .context dir exists"
+
+    # Mutating a file in the DERIVED dir must change the hash (proves it reads there).
+    (ctx / "SOUL.md").write_text("soul-v2-changed")
+    h2 = sr.SessionRouter._desktop_ctx_hash()
+    assert h1 != h2, "hash must track the derived workspace .context, not a hardcode"
+
+
+# ── AC2 (HIGH): DE-SCOPED — see IMPROVEMENT note + run summary ──────────────
+# The proposed fix (make graceful _evict_idle reclaim a SOLE prewarm immediately
+# instead of deferring to force=True) would REVERSE an explicit XG-directed
+# anti-starvation contract (run_f107f442: "B 不能 regression — force=True is the
+# SOLE anti-starvation guarantee", guarded by test_eviction_queue_before_force.py
+# ::TestPrewarmEvictionDowngrade). The finding's real cost is a <5-min startup
+# window (after grace, the existing filter already reclaims the aged prewarm), and
+# the skeptic rated #2 REFINE/low-value/borders-redundant. Reversing an XG contract
+# for a narrow latency win is an L2 decision handed back to XG, NOT taken mid-run.
+# Flag-enablement SAFETY does not depend on #2 (that is #1/#3/#4/#5/#6).
+
+
 # ── AC8: flag OFF → no warm, adopt intercept is a no-op (byte-identical) ────
 
 def test_warm_desktop_pool_noop_when_flag_off(monkeypatch):

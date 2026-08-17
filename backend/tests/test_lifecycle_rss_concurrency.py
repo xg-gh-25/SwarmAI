@@ -124,3 +124,45 @@ async def test_sample_tolerates_one_unit_raising():
     assert units[2]._peak_tree_rss_bytes == 500 * 1024 * 1024
     # The raising unit is simply skipped (peak stays 0).
     assert units[1]._peak_tree_rss_bytes == 0
+
+
+# ── AC5 (desktop-prewarm run_4e881e96): Tier-1 mem-pressure re-checks state ──
+
+@pytest.mark.asyncio
+async def test_memory_pressure_tier1_skips_unit_that_left_idle():
+    """A victim that leaves IDLE between the idle_units snapshot and its kill
+    (e.g. a desktop tab ADOPTED it → STREAMING) must NOT be killed by the Tier-1
+    loop. The loop snapshots once, then awaits per victim — a live re-check of
+    victim.state is the TOCTOU guard.
+
+    Mutation: remove the `if victim.state != SessionState.IDLE: continue` guard
+    in _check_memory_pressure Tier-1 → the adopted (now STREAMING) unit IS killed
+    → RED (kill2 asserted-not-called fails).
+    """
+    from unittest.mock import AsyncMock
+
+    u1 = _make_unit("victim-1", 4001, state=SessionState.IDLE)
+    u2 = _make_unit("victim-2", 4002, state=SessionState.IDLE)
+    u1._last_metrics = SimpleNamespace(rss_bytes=900 * 1024 * 1024)  # heaviest first
+    u2._last_metrics = SimpleNamespace(rss_bytes=100 * 1024 * 1024)
+    u1.kill = AsyncMock()
+    u2.kill = AsyncMock()
+
+    # Killing u1 simulates the concurrent adopt: u2 flips IDLE → STREAMING.
+    async def _kill1():
+        u2.state = SessionState.STREAMING
+    u1.kill.side_effect = _kill1
+
+    router = MagicMock()
+    router.list_units.return_value = [u1, u2]
+    lm = LifecycleManager(router=router)
+
+    # Force sustained pressure so the loop would try BOTH victims (never relieved).
+    hi = SimpleNamespace(percent_used=99.0)
+    with patch("core.resource_monitor.resource_monitor.system_memory",
+               return_value=hi), \
+         patch("core.resource_monitor.resource_monitor.invalidate_cache"):
+        await lm._check_memory_pressure()
+
+    u1.kill.assert_awaited_once()          # heaviest idle unit killed
+    u2.kill.assert_not_awaited()           # left IDLE → skipped, NOT killed

@@ -2000,7 +2000,15 @@ class SessionRouter:
         """
         import hashlib
         try:
-            ctx_dir = Path.home() / ".swarm-ai" / "SwarmWS" / ".context"
+            # AC6: derive the .context dir from the ACTUAL workspace path (what the
+            # prewarm subprocess built its baseline prompt from — prompt_builder
+            # reads Path(working_directory)/".context"), NOT a hardcoded
+            # ~/.swarm-ai/SwarmWS/.context. The hardcode ignores the SWARM_DATA_DIR
+            # / non-default workspace_path escape hatch (config.get_app_data_dir),
+            # so under a custom data dir the fingerprint would read the WRONG dir →
+            # staleness detection blind (false-fresh adopt or permanent-stale "").
+            from core.initialization_manager import initialization_manager
+            ctx_dir = Path(initialization_manager.get_cached_workspace_path()) / ".context"
             if not ctx_dir.is_dir():
                 return ""
             parts = []
@@ -2076,6 +2084,26 @@ class SessionRouter:
         """
         if not self._desktop_prewarm_enabled():
             return False
+        # ── AC1 (CRITICAL) history guard: a session that ALREADY HAS history must
+        # NEVER adopt a baseline prewarm subprocess. An adopted unit is IDLE with
+        # _sdk_session_id set → is_cold_resume is False (run_conversation :2978) and
+        # desktop has no channel_context → needs_channel_resume is False → the resume
+        # block is NEVER built → warm-reuse via query() discards the baseline
+        # system_prompt → the reopened tab's prior conversation is silently lost.
+        # A history-bearing session must fall through to the cold/--resume path.
+        # ⚠️ Threshold is >= 1, NOT > 1: this runs at the adopt-intercept, which is
+        # BEFORE the current user message is persisted (session_router :2855). So the
+        # count here is PRIOR-history rows only — even one prior row means "has
+        # history". (The > 1 threshold at :2995/:3034 is for the POST-persist point,
+        # where the current message is already counted.)
+        from database import db
+        if await db.messages.count_by_session(session_id) >= 1:
+            logger.info(
+                "session_router.desktop_adopt_skip_history session_id=%s "
+                "(has prior history → cold/--resume, never adopt)",
+                session_id,
+            )
+            return False
         # Find any slot for this bucket (base key + slot index).
         base = ("desktop", agent_id, model)
         current_hash = self._desktop_ctx_hash()
@@ -2116,7 +2144,20 @@ class SessionRouter:
             self._desktop_prewarm_pool.pop(pool_key, None)
             self._desktop_prewarm_meta.pop(prewarm_id, None)
         if stale:
-            logger.info("session_router.desktop_prewarm_stale id=%s → cold", prewarm_id)
+            # AC3: KILL the discarded prewarm unit — do NOT leak it. A
+            # prewarm-prefixed unit is EXEMPT from the TTL killer and the orphan
+            # reaper (P-a), so the old "reclaimed by the prefix-exempt kill paths"
+            # assumption was wrong: nothing reclaims it until memory pressure. Kill
+            # it here, outside the _slot_lock critical section above (:2125-2137,
+            # released), so kill → _transition → _on_unit_state_change does NOT
+            # re-enter _slot_lock (this method is not on the _transition stack).
+            stale_unit = self._units.get(prewarm_id)
+            if stale_unit is not None:
+                try:
+                    await stale_unit.kill()
+                finally:
+                    self._units.pop(prewarm_id, None)
+            logger.info("session_router.desktop_prewarm_stale id=%s → cold (killed)", prewarm_id)
             return False
         ok = await self.adopt_prewarmed_unit(prewarm_id, session_id)
         if not ok:
@@ -2148,8 +2189,27 @@ class SessionRouter:
 
     @property
     def _chat_alive_count(self) -> int:
-        """Number of alive chat (non-channel) session units."""
+        """Number of alive chat (non-channel) session units.
+
+        NOTE: this INCLUDES unadopted prewarm units — correct for spawn_budget
+        (they are real subprocesses consuming real RAM; excluding them would
+        under-count RAM and re-open the OOM door). For the sacred-first-tab USER
+        check, use `_user_chat_alive_count` instead (AC4)."""
         return sum(1 for u in self._units.values() if u.is_alive and not u.is_channel_session)
+
+    @property
+    def _user_chat_alive_count(self) -> int:
+        """Alive chat units that are a USER's tab — EXCLUDES unadopted prewarm
+        units (AC4). The sacred-first-tab guarantee (":2260") asks "does the user
+        already have a chat tab?"; a warm prewarm pool is NOT a user tab, so
+        counting it there would silently disable the first-tab grant whenever the
+        pool is warm. Budget accounting still uses the prewarm-inclusive counts —
+        this split is UX (whose tab) vs RAM (real subprocess), not one number."""
+        return sum(
+            1 for u in self._units.values()
+            if u.is_alive and not u.is_channel_session
+            and not u.session_id.startswith(PREWARM_SESSION_PREFIX)
+        )
 
     # ── Slot acquisition ─────────────────────────────────────
 
@@ -2257,7 +2317,7 @@ class SessionRouter:
             # silent (adversarial #2). Chat-scoped eviction can't touch the
             # channel, so we never force the user's first tab to wait for RAM it
             # cannot free.
-            if self._chat_alive_count == 0:
+            if self._user_chat_alive_count == 0:
                 budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                 if not budget.can_spawn and self.alive_count > 0:
                     if await self._evict_idle(exclude=requesting_unit):

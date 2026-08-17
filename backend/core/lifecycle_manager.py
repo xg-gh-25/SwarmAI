@@ -1532,6 +1532,14 @@ class LifecycleManager:
             )
             evicted = 0
             for victim in idle_units:
+                # AC5 (TOCTOU): idle_units was snapshotted above; a victim may have
+                # left IDLE since (adopted by a desktop tab → STREAMING, or a drained
+                # pending message started a turn) across the awaits in this loop
+                # (_build_hook_context, a prior victim's kill). Re-read live state and
+                # skip a unit that is no longer IDLE — never kill a now-active turn.
+                # Mirrors the recheck in _proactive_rss_restart (:490).
+                if victim.state != SessionState.IDLE:
+                    continue
                 logger.warning(
                     "lifecycle.memory_pressure_tier1: %.1f%% — evicting "
                     "IDLE session %s (rss=%dMB) [%d/%d]",
