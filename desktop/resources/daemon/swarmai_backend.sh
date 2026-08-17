@@ -102,17 +102,23 @@ export SWARMAI_PORT="${DAEMON_PORT}"
 export SWARMAI_MODE="daemon"
 export HOME="${HOME}"
 
-# Desktop tab cold-start prewarm (run_4e881e96 — 6 findings 修复后启用).
-# Both enabled together. The two flags are ORTHOGONAL, not co-dependent:
-#   - DESKTOP_PREWARM: a NEW (no-history) desktop tab adopts a pre-spawned
-#     baseline subprocess (skips the 8-14s cold handshake). A history-bearing
-#     reopened tab NEVER adopts — the CRITICAL #1 history-guard routes it to
-#     cold/--resume (its prior conversation is preserved there).
-#   - RESUME_VIA_QUERY: on that cold/--resume path, the prior-conversation
-#     block rides the query() instead of a rebuilt system_prompt (so a warm
-#     subprocess reuse can't drop it). Enabled to keep resume robust now that
-#     prewarm makes warm-reuse the common case.
-export SWARM_DESKTOP_PREWARM="1"
+# Desktop tab cold-start prewarm — DISABLED (run_824c437e, 2026-08-18).
+# The two flags are ORTHOGONAL, not co-dependent — one is OFF, one stays ON:
+#   - DESKTOP_PREWARM=0 (OFF): fill-once pool was net-negative in practice —
+#     no replenish (warmed once at daemon start, then drains one-per-adopt to
+#     empty), 60s TTL + ctx_hash invalidation made it near-unhittable at real
+#     open-tab cadence, and stale-eviction only killed the slot it hit, leaking
+#     ~405MB/unit. A maintained-warm-pool redesign (v3 design, DEFERRED) is the
+#     right fix but the ROI didn't justify it now. OFF = all three prewarm
+#     entrypoints (warm_desktop_pool / _try_adopt / adopt-intercept, all gated
+#     on _desktop_prewarm_enabled) short-circuit → byte-identical cold-start,
+#     the default path on every machine that never enabled it.
+#   - RESUME_VIA_QUERY=true (ON, kept): decoupled from prewarm — an independent
+#     resume improvement. On the cold/--resume path the prior-conversation block
+#     rides query() instead of a rebuilt system_prompt (so a warm subprocess
+#     reuse can't drop it), keeping system_prompt cacheable. Not affected by
+#     prewarm being off.
+export SWARM_DESKTOP_PREWARM="0"
 export SWARM_RESUME_VIA_QUERY="true"
 
 # Strip proxy vars — daemon manages its own networking
