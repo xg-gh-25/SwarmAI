@@ -108,10 +108,17 @@ async def test_session_not_found_fallback_bumps_dataloss_counter():
 
 
 @pytest.mark.asyncio
-async def test_session_not_found_fallback_aborts_with_history_dropped_marker():
-    """AC2 (unit half): the terminal event must carry a `history_dropped` marker
-    so the router (which owns persisted_msg_id) can convert the current message
-    to a pending row for the drain worker."""
+async def test_session_not_found_fallback_yields_two_frames_history_on_error_frame():
+    """AC1/AC8 (two-frame contract, run_2d2e3258): the fallback must yield TWO
+    frames — (1) a SESSION_RECOVERING ERROR frame carrying `history_dropped` and
+    NO `_abort`, then (2) a bare `{_abort}` sentinel.
+
+    WHY history_dropped MUST ride the error frame, not the _abort frame: send()'s
+    `if event.get("_abort"): return` (~2099) swallows the _abort frame BEFORE
+    yielding it up, so a combined error+_abort frame never reaches the router →
+    the user never sees SESSION_RECOVERING AND mark_pending never fires (silent
+    data-loss). The error frame (no _abort) is forwarded; history_dropped on it
+    reaches the router's forward-path mark_pending."""
     unit = _unit_with_stale_resume()
     spawn = AsyncMock(side_effect=_session_not_found_exc())
 
@@ -119,10 +126,30 @@ async def test_session_not_found_fallback_aborts_with_history_dropped_marker():
          patch.object(unit, "_crash_to_cold_async", new=AsyncMock()):
         events = await _collect(unit, options=_FakeOpts(), config=None)
 
-    abort_events = [e for e in events if e.get("_abort")]
-    assert abort_events, "fallback must yield a terminal _abort event"
-    assert any(e.get("history_dropped") for e in abort_events), \
-        "the _abort event must flag history_dropped for router-side pending conversion"
+    # Frame 1: the forwarded error frame — carries history_dropped, NO _abort.
+    err_frames = [
+        e for e in events
+        if e.get("type") == "error" and e.get("code") == "SESSION_RECOVERING"
+    ]
+    assert err_frames, "fallback must yield a SESSION_RECOVERING error frame"
+    err = err_frames[0]
+    assert err.get("history_dropped") is True, \
+        "history_dropped MUST ride the ERROR frame (forwarded), not the _abort frame"
+    assert not err.get("_abort"), \
+        "the error frame must NOT carry _abort (else send() swallows it before forwarding)"
+
+    # Frame 2: a bare _abort sentinel, and it must NOT carry history_dropped
+    # (that would strand it — send() swallows _abort frames before the router).
+    abort_frames = [e for e in events if e.get("_abort")]
+    assert abort_frames, "fallback must yield a terminal _abort sentinel"
+    assert not any(e.get("history_dropped") for e in abort_frames), \
+        "the _abort sentinel must NOT carry history_dropped (send() swallows it → mark_pending stranded)"
+
+    # Ordering: the error frame must precede the _abort sentinel.
+    err_idx = next(i for i, e in enumerate(events)
+                   if e.get("code") == "SESSION_RECOVERING")
+    abort_idx = next(i for i, e in enumerate(events) if e.get("_abort"))
+    assert err_idx < abort_idx, "error frame must be yielded BEFORE the _abort sentinel"
 
 
 class _FakeOpts:
@@ -134,29 +161,27 @@ class _FakeOpts:
 
 
 # ── Layer 4: cross-boundary seam (unit→router history_dropped→mark_pending) ──
-# The seam has TWO halves: (a) unit._ensure_spawned emits {_abort, history_dropped}
-# on session-not-found — driven + mutation-proven by the tests above; (b) router
-# run_conversation's _abort consumer converts the current message to pending when
-# history_dropped is set. Half (b) lives deep inside run_conversation (behind DB +
-# slot + spawn), so a full E2E harness would mock so much it becomes theater.
-# Instead this is a SOURCE-INVARIANT contract test: it asserts the router's _abort
-# consumer is actually wired to history_dropped → mark_pending_by_id. If a future
-# edit drops that pairing (the exact silent-regression this fix prevents), this
-# goes RED. Mutation-proven: removing the `history_dropped` gate or the
-# `mark_pending_by_id` call from the _abort consumer flips it RED.
-def test_router_abort_consumer_wires_history_dropped_to_mark_pending():
+# The seam has TWO halves: (a) unit._ensure_spawned emits a SESSION_RECOVERING
+# ERROR frame carrying history_dropped (NO _abort) — driven + mutation-proven by
+# the tests above; (b) router run_conversation, ON THE FORWARD PATH (before
+# `yield event`, NOT in the `_abort` branch — run_2d2e3258), converts the current
+# message to pending when history_dropped is set. Half (b) lives deep inside
+# run_conversation (behind DB + slot + spawn), so a full E2E harness would mock so
+# much it becomes theater. Instead this is a SOURCE-INVARIANT contract test: it
+# asserts the router's forward path is wired to history_dropped → mark_pending_by_id,
+# AND that the pairing sits BEFORE the `_abort` return (so it runs on the forwarded
+# error frame, not the swallowed sentinel). If a future edit drops the pairing or
+# moves it back behind the _abort guard (re-stranding the message), this goes RED.
+def test_router_forward_path_wires_history_dropped_to_mark_pending():
     from pathlib import Path
     # __file__-relative (NOT cwd-relative): resolves regardless of whether pytest
     # runs from repo root or backend/ (the pyproject rootdir) — a cwd-relative
     # open() FileNotFound's under the standard backend/ invocation (Gate-2).
     router_src = Path(__file__).resolve().parents[1] / "core" / "session_router.py"
     src = router_src.read_text(encoding="utf-8")
-    # Locate run_conversation's _abort consumer region.
     assert 'event.get("history_dropped")' in src, \
-        "router _abort consumer must gate on history_dropped (unit→router seam)"
-    # The gate and the pending conversion must co-occur in the same guarded block:
-    # find the history_dropped guard and confirm mark_pending_by_id follows within
-    # a small window (same if-block), not somewhere unrelated.
+        "router forward path must gate on history_dropped (unit→router seam)"
+    # The gate + pending conversion must co-occur in the same guarded block.
     idx = src.index('event.get("history_dropped")')
     window = src[idx: idx + 800]
     assert "mark_pending_by_id" in window, \
@@ -164,3 +189,11 @@ def test_router_abort_consumer_wires_history_dropped_to_mark_pending():
         "message is re-driven by the drain worker (not left sent=1)"
     assert "persisted_msg_id" in window, \
         "pending conversion must target the current turn's persisted_msg_id"
+    # CRITICAL (run_2d2e3258): the mark_pending must run on the FORWARD path,
+    # BEFORE the `_abort` return — else it sits behind the guard that swallows
+    # the sentinel and never fires (the exact silent-data-loss this fixes). The
+    # history_dropped gate must appear BEFORE the `if event.get("_abort"):` line.
+    abort_idx = src.index('if event.get("_abort"):', idx - 2000 if idx > 2000 else 0)
+    assert idx < abort_idx, \
+        "history_dropped→mark_pending must run BEFORE the _abort return (forward " \
+        "path), not inside/after the _abort branch (would strand the message)"

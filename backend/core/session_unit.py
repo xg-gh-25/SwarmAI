@@ -2615,9 +2615,11 @@ class SessionUnit:
                 # NEXT send()'s run_conversation sees `is_cold_resume=True` and
                 # `build_resume_context` re-injects the DB history. Do NOT spawn
                 # a history-less subprocess here. The current turn bails via the
-                # `_abort` sentinel below carrying `history_dropped`, which the
-                # router (owner of `persisted_msg_id`) uses to DURABLY SAVE the
-                # current user message as a pending (sent=0) row.
+                # TWO-FRAME emit below — the ERROR frame carries `history_dropped`
+                # (it is the one that gets FORWARDED), which the router (owner of
+                # `persisted_msg_id`) uses on its forward path to DURABLY SAVE the
+                # current user message as a pending (sent=0) row. A bare `_abort`
+                # sentinel follows only to end the turn (it carries nothing).
                 #
                 # ⚠️ RECOVERY IS NEXT-INTERACTION, NOT AUTONOMOUS (Gate-2, run_af851c26):
                 # the unit is left COLD, and the drain worker only fires on a
@@ -2638,14 +2640,27 @@ class SessionUnit:
                 # clear_identity=True drops _sdk_session_id → next send() is a
                 # true cold resume (is_cold_resume requires id is None).
                 await self._crash_to_cold_async(clear_identity=True)
+                # TWO FRAMES (run_2d2e3258, mirrors CREDENTIALS_EXPIRED ~2560):
+                # a SINGLE dict carrying BOTH error fields AND `_abort` dies in
+                # send()'s `if event.get("_abort"): return` (~2099) BEFORE it is
+                # yielded up — so the frame never reaches run_conversation, the
+                # user never sees the reassurance, AND the router's
+                # history_dropped→mark_pending never fires (silent data-loss).
+                # Fix: frame 1 = the error event carrying `history_dropped` but
+                # NO `_abort` → send() FORWARDS it (its `yield event`) → the
+                # router both renders it to the user AND runs mark_pending on the
+                # forward path. frame 2 = a bare `{_abort}` sentinel → send()
+                # swallows it (return), ending the turn. history_dropped MUST ride
+                # frame 1 (the forwarded one), never frame 2 (the swallowed one),
+                # or mark_pending never runs and the message strands sent=1.
                 event = _build_error_event(
                     "SESSION_RECOVERING",
                     "This conversation's history is being restored — your last "
                     "message is saved and will be sent when you continue.",
                 )
-                event["_abort"] = True
-                event["history_dropped"] = True  # router → mark_pending_by_id
+                event["history_dropped"] = True  # frame1: router → mark_pending_by_id
                 yield event
+                yield {"_abort": True}  # frame2: bare sentinel, send() swallows
                 return
 
         if _is_retriable_error(error_str, spawn_tb_str):

@@ -3456,51 +3456,55 @@ class SessionRouter:
                 if client_id and event.get("type") == "result":
                     event["client_id"] = client_id
 
+                # Restart silent-history-loss fix (run_af851c26; two-frame move
+                # run_2d2e3258). The session-not-found fallback flags
+                # `history_dropped` on its ERROR frame (NOT the `_abort` sentinel
+                # — a combined frame would die in send()'s _abort guard before
+                # reaching here, so history_dropped rides the FORWARDED frame).
+                # This side-effect runs on the forward path (like the
+                # assistant-persist above), BEFORE `yield event`, so the row is
+                # durably saved and THEN the SESSION_RECOVERING frame is delivered
+                # to the user. Convert the already-persisted user row to pending
+                # (sent=0) — not left sent=1, which the drain worker skips → the
+                # message would be stranded. On the user's NEXT send the unit
+                # spawns COLD→IDLE (a true cold resume that re-injects DB history)
+                # and the drain worker — which fires on the transition INTO IDLE —
+                # coalesces this pending row into that turn. ⚠️ NOT autonomous:
+                # the unit is left COLD, nothing drives COLD→IDLE on its own, so
+                # delivery is next-interaction, not immediate. Same save mechanism
+                # as the SessionBusyError path below.
+                if (
+                    event.get("history_dropped")
+                    and user_content
+                    and persisted_msg_id
+                ):
+                    try:
+                        from . import session_pending
+                        _seq = await session_pending.mark_pending_by_id(
+                            session_id, persisted_msg_id,
+                        )
+                        logger.info(
+                            "session_router.resume_recover_pending "
+                            "session_id=%s msg=%s seq=%s",
+                            session_id, persisted_msg_id, _seq,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "session_router.resume_recover_pending_failed "
+                            "session_id=%s msg=%s",
+                            session_id, persisted_msg_id,
+                        )
+
                 # {_abort} is an INTERNAL caller sentinel (send()/_ensure_spawned
                 # emit it to signal "stop consuming" after a clean bail — e.g. the
-                # dead→streaming state-flip guard yields a SESSION_BUSY error event
-                # THEN {_abort}). Every other consumer (prewarm, retry) intercepts
-                # it; this loop must too, or it forwards a typeless
-                # `data: {"_abort": true}` frame down the SSE stream. The
-                # user-facing error was already yielded on the line(s) before the
+                # session-not-found fallback yields its SESSION_RECOVERING error
+                # frame THEN a bare {_abort}). Every other consumer (prewarm,
+                # retry) intercepts it; this loop must too, or it forwards a
+                # typeless `data: {"_abort": true}` frame down the SSE stream. The
+                # user-facing error was already yielded on the frame(s) before the
                 # sentinel, so terminating here delivers the error and drops only
                 # the sentinel. (Gate-2 correctness finding, run_c9fa2382.)
                 if event.get("_abort"):
-                    # Restart silent-history-loss fix (run_af851c26): the
-                    # session-not-found fallback re-armed a cold resume and
-                    # flagged `history_dropped` — the current subprocess could
-                    # not answer this turn (its --resume transcript was gone).
-                    # Convert the already-persisted user row to pending (sent=0)
-                    # so it is DURABLY SAVED (not left sent=1, which the drain
-                    # worker skips → the message would be stranded). On the
-                    # user's NEXT send the unit spawns COLD→IDLE (a true cold
-                    # resume that re-injects DB history) and the drain worker —
-                    # which fires on the transition INTO IDLE — coalesces this
-                    # pending row into that turn. ⚠️ NOT autonomous: the unit is
-                    # left COLD here, and nothing drives COLD→IDLE on its own, so
-                    # delivery is next-interaction, not immediate (Gate-2). Same
-                    # save mechanism as the SessionBusyError path below.
-                    if (
-                        event.get("history_dropped")
-                        and user_content
-                        and persisted_msg_id
-                    ):
-                        try:
-                            from . import session_pending
-                            _seq = await session_pending.mark_pending_by_id(
-                                session_id, persisted_msg_id,
-                            )
-                            logger.info(
-                                "session_router.resume_recover_pending "
-                                "session_id=%s msg=%s seq=%s",
-                                session_id, persisted_msg_id, _seq,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "session_router.resume_recover_pending_failed "
-                                "session_id=%s msg=%s",
-                                session_id, persisted_msg_id,
-                            )
                     return
 
                 yield event
