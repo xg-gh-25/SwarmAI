@@ -3466,6 +3466,41 @@ class SessionRouter:
                 # sentinel, so terminating here delivers the error and drops only
                 # the sentinel. (Gate-2 correctness finding, run_c9fa2382.)
                 if event.get("_abort"):
+                    # Restart silent-history-loss fix (run_af851c26): the
+                    # session-not-found fallback re-armed a cold resume and
+                    # flagged `history_dropped` — the current subprocess could
+                    # not answer this turn (its --resume transcript was gone).
+                    # Convert the already-persisted user row to pending (sent=0)
+                    # so it is DURABLY SAVED (not left sent=1, which the drain
+                    # worker skips → the message would be stranded). On the
+                    # user's NEXT send the unit spawns COLD→IDLE (a true cold
+                    # resume that re-injects DB history) and the drain worker —
+                    # which fires on the transition INTO IDLE — coalesces this
+                    # pending row into that turn. ⚠️ NOT autonomous: the unit is
+                    # left COLD here, and nothing drives COLD→IDLE on its own, so
+                    # delivery is next-interaction, not immediate (Gate-2). Same
+                    # save mechanism as the SessionBusyError path below.
+                    if (
+                        event.get("history_dropped")
+                        and user_content
+                        and persisted_msg_id
+                    ):
+                        try:
+                            from . import session_pending
+                            _seq = await session_pending.mark_pending_by_id(
+                                session_id, persisted_msg_id,
+                            )
+                            logger.info(
+                                "session_router.resume_recover_pending "
+                                "session_id=%s msg=%s seq=%s",
+                                session_id, persisted_msg_id, _seq,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "session_router.resume_recover_pending_failed "
+                                "session_id=%s msg=%s",
+                                session_id, persisted_msg_id,
+                            )
                     return
 
                 yield event

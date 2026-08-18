@@ -126,6 +126,33 @@ LONG_TURN_HEARTBEAT_S: float = 60.0
 # If you need multiple SessionRouter instances (e.g., tests), mock this lock.
 _spawn_lock = asyncio.Lock()
 
+# ── Resume-degrade observability (run_af851c26) ──────────────────────────────
+# The persisted-`_sdk_session_id` fast-resume path can strand a history-bearing
+# tab when the CLI transcript is gone (long downtime / ~/.claude tmp cleanup /
+# host reboot) → --resume fails session-not-found. The OLD fallback silently
+# cold-spawned a HISTORY-LESS subprocess (options built on a non-cold-resume
+# turn) → the entire conversation was lost for that subprocess's life, with NO
+# signal. This counter makes that data-loss-recovery event LOUD (mirrors
+# context_injector._resume_stats). Bumped ONLY in the session-not-found fallback
+# branch of _ensure_spawned — NOT in _crash_to_cold_async (called from ~6
+# unrelated sites; would over-count every refresh/give-up — Gate-1 Check5).
+_resume_degrade_count: dict[str, int] = {
+    # --resume hit session-not-found; we dropped the stale id + re-armed a true
+    # cold-resume so the DB history is re-injected next turn (recovered, not lost).
+    "session_not_found_recovered": 0,
+}
+
+
+def get_resume_degrade_count() -> dict[str, int]:
+    """Read the resume-degrade counters (test/observability)."""
+    return dict(_resume_degrade_count)
+
+
+def reset_resume_degrade_count() -> None:
+    """Reset counters (test isolation)."""
+    for k in _resume_degrade_count:
+        _resume_degrade_count[k] = 0
+
 # Global OOM cooldown: after any session gets OOM-killed, ALL sessions must
 # wait before retrying.  Prevents the death spiral where two sessions retry
 # simultaneously, each spawning ~500MB, and both get killed again.
@@ -2575,23 +2602,51 @@ class SessionUnit:
         if _attempted_resume:
             from .session_utils import is_session_not_found_error
             if is_session_not_found_error(error_str):
+                # ── Restart silent-history-loss fix (run_af851c26) ──────────
+                # A persisted `_sdk_session_id` (re-injected after a graceful
+                # restart, session_router.py:1850) made `is_cold_resume` FALSE
+                # upstream → `options` was built on a NON-cold-resume turn and
+                # carries NO DB history block. The OLD code here cold-spawned
+                # that history-less `options` and landed IDLE+warm → the entire
+                # conversation was silently lost for that subprocess's life.
+                #
+                # Instead: re-arm a TRUE cold resume (reuse refresh_context's
+                # proven pattern) — transition to COLD + clear identity so the
+                # NEXT send()'s run_conversation sees `is_cold_resume=True` and
+                # `build_resume_context` re-injects the DB history. Do NOT spawn
+                # a history-less subprocess here. The current turn bails via the
+                # `_abort` sentinel below carrying `history_dropped`, which the
+                # router (owner of `persisted_msg_id`) uses to DURABLY SAVE the
+                # current user message as a pending (sent=0) row.
+                #
+                # ⚠️ RECOVERY IS NEXT-INTERACTION, NOT AUTONOMOUS (Gate-2, run_af851c26):
+                # the unit is left COLD, and the drain worker only fires on a
+                # transition INTO IDLE (session_router `_on_unit_state_change`) —
+                # nothing drives COLD→IDLE autonomously. So the saved message is
+                # delivered, WITH full DB history re-injected, on the user's NEXT
+                # send (which spawns COLD→IDLE and coalesces the pending row). The
+                # pre-fix DATA LOSS is fixed (message + history both survive in the
+                # DB); what remains is a one-interaction latency, not silent loss.
+                # Do NOT claim "sends automatically". (Gate-1 Check1/Check5.)
                 logger.warning(
-                    "Session %s: --resume failed (session not found), "
-                    "clearing stale sdk_session_id and falling back to cold resume",
+                    "Session %s: --resume failed (session not found) — stale "
+                    "persisted sdk_session_id, re-arming cold resume to recover "
+                    "DB history (was silently lost pre-fix)",
                     self.session_id,
                 )
-                self._sdk_session_id = None
-                # Retry without --resume: strip resume field from options
-                from claude_agent_sdk import ClaudeAgentOptions as _Opts
-                kwargs = dict(vars(options))
-                kwargs.pop("resume", None)
-                options_no_resume = _Opts(**kwargs)
-                try:
-                    await self._spawn(options_no_resume, config)
-                    return  # success — cold resume path
-                except Exception as fallback_exc:
-                    error_str = str(fallback_exc)
-                    spawn_tb_str = traceback.format_exc()
+                _resume_degrade_count["session_not_found_recovered"] += 1
+                # clear_identity=True drops _sdk_session_id → next send() is a
+                # true cold resume (is_cold_resume requires id is None).
+                await self._crash_to_cold_async(clear_identity=True)
+                event = _build_error_event(
+                    "SESSION_RECOVERING",
+                    "This conversation's history is being restored — your last "
+                    "message is saved and will be sent when you continue.",
+                )
+                event["_abort"] = True
+                event["history_dropped"] = True  # router → mark_pending_by_id
+                yield event
+                return
 
         if _is_retriable_error(error_str, spawn_tb_str):
             logger.warning(
