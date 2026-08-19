@@ -110,7 +110,12 @@ async def get_channel(channel_id: str):
 
 @router.post("/", response_model=ChannelResponse, status_code=201)
 async def create_channel(request: ChannelCreateRequest):
-    """Create a new channel."""
+    """Create a channel, or update the existing one of the same channel_type.
+
+    Upserts by channel_type: re-saving a type that already exists updates that
+    row in place (reusing its id, preserving created_at, clearing stale status)
+    rather than inserting a duplicate. See the inline comment below for why.
+    """
     # Validate agent exists by building config (file-based for default, DB for custom)
     agent = await build_agent_config(request.agent_id)
     if not agent:
@@ -132,8 +137,42 @@ async def create_channel(request: ChannelCreateRequest):
         "enable_mcp": request.enable_mcp,
     }
 
+    # Upsert by channel_type: a channel type is a single logical integration
+    # (e.g. Slack Socket Mode allows only ONE connection per app token), so
+    # re-saving the same type must UPDATE the existing row, not INSERT a
+    # duplicate that then fights the first over the connection. Without this,
+    # repeated saves (common after a failed first attempt) accumulate rows.
+    existing = sorted(
+        (c for c in await db.channels.list()
+         if c.get("channel_type") == request.channel_type),
+        key=lambda c: c.get("created_at") or "",
+    )
+    if len(existing) > 1:
+        # Invariant is one row per type; >1 means a pre-fix duplicate survived.
+        # We converge onto the oldest (below); log so the drift is visible.
+        logger.warning(
+            "create_channel found %d existing '%s' channels — converging onto the oldest",
+            len(existing), request.channel_type,
+        )
+    if existing:
+        e = existing[0]
+        # Reuse the existing row's identity so put() routes to UPDATE, and
+        # PRESERVE created_at — put() stamps NOW for any item lacking it, which
+        # would otherwise clobber the original timestamp on the UPDATE path.
+        # Fall back to NOW if the existing row somehow lacks created_at (the
+        # schema is NOT NULL, so this only guards a direct-DB-insert bypass —
+        # passing None would fail the UPDATE against the NOT NULL column).
+        from datetime import datetime as _dt
+        channel_data["id"] = e["id"]
+        channel_data["created_at"] = e.get("created_at") or _dt.now().isoformat()
+        # Re-saving is a reconfigure: clear any stale failure state so the
+        # gateway can (re)start the channel with the new config.
+        channel_data["status"] = "inactive"
+        channel_data["error_message"] = None
+
     channel = await db.channels.put(channel_data)
-    logger.info(f"Created channel '{request.name}' (type={request.channel_type}, agent={request.agent_id})")
+    _verb = "Updated" if existing else "Created"
+    logger.info(f"{_verb} channel '{request.name}' (type={request.channel_type}, agent={request.agent_id})")
     return _channel_to_response(channel, agent_name=agent["name"])
 
 
