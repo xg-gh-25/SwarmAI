@@ -2087,6 +2087,26 @@ class PromptBuilder:
             ],
             mcp_servers=mcp_servers if mcp_servers else None,
             plugins=None,
+            # MCP ISOLATION — half of a two-flag contract (run_e12a3589). The CLI
+            # unconditionally reads user-global config the agent cannot govern:
+            # ~/.claude.json top-level `mcpServers` (github/hs-kmine/pippin/... 8
+            # global MCP). WITHOUT this flag the CLI MERGES those into the session
+            # (same injection class as auto-loading a project CLAUDE.md). strict
+            # forces "only use --mcp-config, ignore all other MCP configurations",
+            # so a SwarmAI session loads ONLY mcp-dev.json/catalog MCP — one more,
+            # one less is a bug. The OTHER half is `setting_sources=["project"]`
+            # (set above), which blocks the plugin agents/MCP from
+            # ~/.claude/settings.json enabledPlugins. Both are required: strict
+            # alone leaves plugin agents; project-only alone leaves global mcpServers
+            # (esp. on the --resume path daemon sessions always take). This is the
+            # only production ctor for LIVE sessions (fault_inject_recovery.py builds
+            # a bare one for testing); retry inherits via _build_retry_options' vars()
+            # shallow-copy, warm-reuse doesn't re-spawn — so this single point covers
+            # all session paths. jobs/eval already set strict via bare-CLI; this closes
+            # the interactive gap. Ondemand MCP unaffected: enabling one respawns the
+            # subprocess with the MCP force-injected into mcp_servers (extra_always),
+            # so --mcp-config carries it and strict permits it.
+            strict_mcp_config=True,
             permission_mode=permission_mode,
             model=model,
             stderr=lambda msg: logger.error(msg),
