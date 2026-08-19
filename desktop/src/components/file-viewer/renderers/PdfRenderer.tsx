@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect, memo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
+import { rawFileUrl } from '../utils/rawFileUrl';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -75,7 +76,7 @@ const PdfRenderer = memo(function PdfRenderer({
   // passes base64 `content` (backward-compat; FileViewer no longer does).
   const fileSource = useMemo(
     () => (content ? (pdfData ? { data: pdfData } : null)
-                   : `/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`),
+                   : rawFileUrl(filePath)),
     [content, pdfData, filePath],
   );
 

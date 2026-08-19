@@ -36,7 +36,7 @@
  */
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { openExternal } from '../../../utils/openExternal';
-import { getApiBaseUrl } from '../../../services/tauri';
+import { rawFileUrl } from '../utils/rawFileUrl';
 
 /** Logical desktop layout width the Fit mode lays the iframe out at, before scaling
  *  down to the panel. 1200 covers the observed report containers (1140/1180/1200). */
@@ -148,7 +148,7 @@ export default function HtmlRenderer({
   // (dev=8000 / desktop=dynamic / Hive=same-origin) — never hardcode host/port —
   // and encode the path (paths contain spaces/CJK). Same URL drives BOTH the inline
   // iframe (src=) and the open-in-browser fallback.
-  const rawUrl = `${getApiBaseUrl()}/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+  const rawUrl = rawFileUrl(filePath);
 
   // Open the fully-isolated system browser (escape hatch for anything needing
   // real same-origin network, which the opaque-origin iframe sandbox blocks).

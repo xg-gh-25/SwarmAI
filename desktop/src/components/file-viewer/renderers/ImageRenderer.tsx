@@ -11,6 +11,7 @@
  *   - Reports natural dimensions via onStatusInfo on load
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { rawFileUrl } from '../utils/rawFileUrl';
 
 interface RendererProps {
   filePath: string;
@@ -132,7 +133,7 @@ export default function ImageRenderer({
   // Video/AudioRenderer. Avoids the +33% base64 bloat + a decoded copy pinned in
   // the JS content cache until tab close. Falls back to a base64 data-URI only if
   // a caller still passes `content` (backward-compat; FileViewer no longer does).
-  const rawUrl = `/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+  const rawUrl = rawFileUrl(filePath);
   const imgSrc = content ? `data:${mimeType};base64,${content}` : rawUrl;
   const showCheckerboard = /png|webp|avif|gif|svg/i.test(mimeType);
   const canPan = scale > 1 || !fitMode;

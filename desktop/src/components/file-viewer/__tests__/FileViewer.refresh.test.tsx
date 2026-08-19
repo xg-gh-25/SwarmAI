@@ -19,7 +19,7 @@
  * owns that); a non-matching path is ignored.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor, act } from '@testing-library/react';
+import { render, waitFor, act, fireEvent } from '@testing-library/react';
 import FileViewer from '../FileViewer';
 
 vi.mock('../../common/FileEditorCore', () => ({
@@ -103,6 +103,17 @@ describe('FileViewer — swarm:file-changed cache invalidation', () => {
     fireFileChanged('other/foo.csv'); // ends with 'foo.csv' but NOT '/ws/deep/foo.csv'
     await new Promise((r) => setTimeout(r, 30));
     expect(contentFetchCount('x')).toBe(before);
+  });
+
+  it('manual refresh button re-fetches a non-editor (csv) file (bug #2)', async () => {
+    const { container, getByTestId } = render(
+      <FileViewer initialFile={{ filePath: '/ws/data.csv', fileName: 'data.csv' }} onClose={vi.fn()} variant="panel" />,
+    );
+    await waitFor(() => expect(container.querySelector('[data-testid="csv-renderer-stub"]')).toBeTruthy());
+    const before = contentFetchCount('/ws/data.csv');
+    // The refresh affordance lives in the panel file-chrome header.
+    fireEvent.click(getByTestId('file-chrome-refresh'));
+    await waitFor(() => expect(contentFetchCount('/ws/data.csv')).toBeGreaterThan(before));
   });
 
   it('shows a helpful "too large" message on a 413 instead of a raw error (#4)', async () => {

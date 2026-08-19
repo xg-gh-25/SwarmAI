@@ -9,6 +9,7 @@
  *   - Reports duration via onStatusInfo on loadedmetadata
  */
 import { useCallback, useRef } from 'react';
+import { rawFileUrl } from '../utils/rawFileUrl';
 
 interface RendererProps {
   filePath: string;
@@ -45,7 +46,7 @@ export default function AudioRenderer({
     onStatusInfo?.({ customInfo: `Duration: ${duration}` });
   }, [onStatusInfo]);
 
-  const src = `/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+  const src = rawFileUrl(filePath);
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full gap-6 p-8">

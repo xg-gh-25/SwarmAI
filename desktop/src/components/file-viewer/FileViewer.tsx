@@ -543,6 +543,20 @@ function FileViewerImpl({
     [closeTab, tabs, onClose],
   );
 
+  /** Manual refresh (bug #2): re-load the active file from disk. Non-editor
+   *  renderers (pdf/html/image/video/audio/csv/unsupported) build their src/file
+   *  from the STABLE filePath, so bumping refetchNonce alone only re-runs the /meta
+   *  fetch effect — the renderer's URL is unchanged and would NOT re-request. So we
+   *  ALSO drop the active tab's contentCache entry and let the reload token (=nonce)
+   *  change the renderer's React key, forcing a remount + re-fetch. FileEditorCore
+   *  types (text/md/svg) have their own Reload button + self-refresh listener and are
+   *  keyed on filePath only (unaffected by the token). */
+  const handleRefreshActive = useCallback(() => {
+    if (!activeTab) return;
+    delete contentCache.current[activeTab.filePath];
+    setRefetchNonce((n) => n + 1);
+  }, [activeTab]);
+
   /** Close the active tab (used by FileEditorCore's onClose). */
   const handleCloseActive = useCallback(() => {
     if (activeTab) {
@@ -673,16 +687,23 @@ function FileViewerImpl({
       absolutePath: cached.absolutePath,
     };
 
+    // Reload token (bug #2): a manual refresh bumps refetchNonce, which we fold into
+    // each non-editor renderer's key so the subtree REMOUNTS and re-requests its raw
+    // URL (the URL is built from the stable filePath, so without a key change a nonce
+    // bump would be a no-op refresh for pdf/html/image/video/audio). Keyed per-file so
+    // a tab switch still remounts cleanly; the `:${refetchNonce}` suffix adds refresh.
+    const rKey = `${filePath}:${refetchNonce}`;
     return (
       <Suspense fallback={<LoadingFallback />}>
-        {viewType === 'image' && <ImageRenderer {...rendererProps} />}
-        {viewType === 'pdf' && <PdfRenderer {...rendererProps} />}
-        {viewType === 'html-preview' && <HtmlRenderer {...rendererProps} />}
-        {viewType === 'video' && <VideoRenderer {...rendererProps} />}
-        {viewType === 'audio' && <AudioRenderer {...rendererProps} />}
-        {viewType === 'csv' && <CsvRenderer {...rendererProps} />}
+        {viewType === 'image' && <ImageRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'pdf' && <PdfRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'html-preview' && <HtmlRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'video' && <VideoRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'audio' && <AudioRenderer key={rKey} {...rendererProps} />}
+        {viewType === 'csv' && <CsvRenderer key={rKey} {...rendererProps} />}
         {viewType === 'unsupported' && (
           <UnsupportedRenderer
+            key={rKey}
             {...rendererProps}
             onAttachToChat={onAttachToChat ? (path: string) => {
               onAttachToChat({
@@ -784,6 +805,18 @@ function FileViewerImpl({
               aria-label="Unsaved changes"
             />
           )}
+          {/* Refresh (bug #2): reload the active file from disk. The ONE refresh
+              affordance for EVERY viewType in the panel — non-editor renderers had
+              none (only FileEditorCore's own Reload covered text/md/svg). */}
+          <button
+            onClick={handleRefreshActive}
+            className="shrink-0 p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            title="Reload this file from disk"
+            aria-label="Refresh file"
+            data-testid="file-chrome-refresh"
+          >
+            <span className="material-symbols-outlined text-[16px] leading-none">refresh</span>
+          </button>
           <button
             onClick={handleUnifiedClose}
             className="shrink-0 p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
