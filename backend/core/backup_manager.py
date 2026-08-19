@@ -41,6 +41,64 @@ def _sanitize_repo_url(url: str | None) -> str | None:
     return re.sub(r"(https?://).*@", r"\1", url)
 
 
+def _normalize_git_url(url: str | None) -> str | None:
+    """Canonicalize a git remote URL for identity comparison (C050 push-guard).
+
+    Two URLs that address the SAME repo must normalize to the SAME string, and
+    two that address DIFFERENT repos must NOT collide. Handles:
+      - embedded credentials (via _sanitize_repo_url)
+      - SSH scp-form  git@host:owner/repo  → https://host/owner/repo
+      - ssh:// scheme  ssh://git@host/owner/repo → https://host/owner/repo
+      - trailing ``.git`` and trailing ``/``
+      - host-part case (github.com == GitHub.com); the PATH stays case-sensitive
+        (normalizing only the host is the conservative choice — never collapse
+        two distinct paths into a false-accept).
+
+    Returns None/empty unchanged (an absent URL is a fail-closed signal upstream,
+    NOT something to coerce into a comparable value).
+
+    ⚠️ Does NOT reuse _sanitize_repo_url's credential strip: that greedy `.*@`
+    matches the LAST `@` and would treat a path-embedded `@` (e.g.
+    ``github.com/org@evil.com/x``) as userinfo → rewrite the HOST to the path's
+    domain = a false-ACCEPT security hole (Gate-2 finding). Here the userinfo
+    strip is anchored to the authority component only (stops at the first `/`).
+    """
+    if not url:
+        return url
+    u = url.strip()
+    # SSH scp-form: [user@]host:owner/repo(.git)  → https://host/owner/repo
+    m = re.match(r"^[\w.+-]+@([^:/]+):(.+)$", u)
+    if m:
+        u = f"https://{m.group(1)}/{m.group(2)}"
+    else:
+        # ssh:// scheme → https:// (strip an ssh user@ here too)
+        u = re.sub(r"^ssh://(?:[\w.+-]+@)?", "https://", u)
+    # Strip query string and fragment — same repo, different decoration
+    # (?token=…, #frag) must not read as a different destination.
+    u = u.split("?", 1)[0].split("#", 1)[0]
+    # For an http(s) URL: strip userinfo from the AUTHORITY ONLY (up to the first
+    # '/'), lowercase the scheme+host, keep the path case-sensitive. Anchoring to
+    # the authority is what prevents the path-@ false-accept above.
+    m2 = re.match(r"^(https?://)([^/]+)(/.*)?$", u)
+    if m2:
+        authority = m2.group(2)
+        if "@" in authority:                      # strip userinfo (first @ in authority)
+            authority = authority.split("@", 1)[1]
+        host = authority.lower()
+        path = m2.group(3) or ""
+        u = f"{m2.group(1).lower()}{host}{path}"
+    # Strip trailing .git and trailing slashes in a loop (order-independent):
+    # handles ``repo.git/``, ``repo.git``, ``repo/`` and any combination.
+    while True:
+        stripped = u.rstrip("/")
+        if stripped.endswith(".git"):
+            stripped = stripped[:-4]
+        if stripped == u:
+            break
+        u = stripped
+    return u
+
+
 # L2 tables to export (irreplaceable data only)
 L2_TABLES = [
     "messages", "sessions", "channel_messages", "channel_sessions",
@@ -284,6 +342,29 @@ class BackupManager:
         async with self._lock:
             return await self._backup_impl()
 
+    def _verify_push_destination(self, state: dict) -> tuple[bool, str]:
+        """Fail-closed check that the actual origin is the user-declared backup repo.
+
+        C050: a bare ``git push`` to whatever ``origin`` happens to be would push
+        the entire workspace (USER/MEMORY/EVOLUTION/private data) to a public repo
+        if origin ever pointed at one. This gate refuses unless the normalized
+        actual origin matches ``state['configured_repo_url']`` — the URL the user
+        EXPLICITLY declared via configure()/restore(). It is compared against the
+        *declared* value, never the post-backup self-populated ``repo_url`` (which
+        is an observation of origin and would make the check circular — HOLE#1).
+
+        Returns (ok, reason). ok=False is fail-closed: any uncertainty → refuse.
+        """
+        expected = _normalize_git_url(state.get("configured_repo_url"))
+        if not expected:
+            return False, "no_configured_destination"
+        actual = _normalize_git_url(self.engine.get_remote_url())
+        if not actual:
+            return False, "no_remote"
+        if actual != expected:
+            return False, "destination_mismatch"
+        return True, "match"
+
     async def _backup_impl(self) -> dict:
         """Internal backup implementation (called under lock)."""
         state = self._load_state()
@@ -293,6 +374,19 @@ class BackupManager:
             "commit": None,
             "push_status": "skipped",
         }
+
+        # 0. Enabled gate (covers BOTH the scheduled path AND the manual /backup
+        # API path — the latter had no enabled check, so a disabled backup could
+        # still run + push on manual trigger). Record last_backup_attempt (NOT
+        # last_backup, which means a *successful* backup) so callers can tell
+        # "ran but declined" from "never ran".
+        if not state.get("enabled", True):
+            result["status"] = "skipped"
+            result["push_status"] = "skipped_disabled"
+            state["last_backup_attempt"] = datetime.now().isoformat()
+            self._save_state(state)
+            logger.info("Backup skipped: disabled in state")
+            return result
 
         # 1. Config snapshot
         config_dir = self.workspace_dir / "config-backup"
@@ -311,7 +405,27 @@ class BackupManager:
         )
         result["tables_exported"] = tables_exported
 
-        # 3. Git add + commit + push (A5 fix: run in thread)
+        # 3. Push-destination guard (C050) — verify BEFORE any git op, in the
+        # async scope (pure-python: reads origin + state, no subprocess needed).
+        # A refuse skips add/commit/push entirely — we never stage/commit data
+        # we won't push, and never push to an unverified destination.
+        # This is an advisory pre-check, NOT an atomic lock: it reads the origin
+        # once here. A manual `git remote set-url` racing the ~ms gap before the
+        # push is out of scope — anyone with that shell access can push directly.
+        dest_ok, dest_reason = self._verify_push_destination(state)
+        if not dest_ok:
+            result["push_status"] = "refused"
+            result["refuse_reason"] = dest_reason
+            state["last_backup_attempt"] = datetime.now().isoformat()
+            self._save_state(state)
+            logger.warning(
+                "Backup push REFUSED (%s): actual origin does not match the "
+                "configured backup destination. Re-run `configure(repo_url=...)` "
+                "with the intended PRIVATE backup repo.", dest_reason,
+            )
+            return result
+
+        # 4. Git add + commit + push (A5 fix: run in thread)
         def _git_ops():
             self.engine.git_add_all()
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -328,6 +442,13 @@ class BackupManager:
 
         # 4. Update state
         state["last_backup"] = datetime.now().isoformat()
+        # Update repo_url (OBSERVED origin) ONLY — never configured_repo_url.
+        # configured_repo_url is the user's DECLARED intent (configure/restore);
+        # the push-guard compares actual-origin against that declared value. If
+        # this self-populate ever also wrote configured_repo_url, the guard would
+        # compare origin against a past snapshot of itself = the circular
+        # validation hole (HOLE#1) the guard exists to prevent. Do NOT "fix" this
+        # by adding configured_repo_url here.
         state["repo_url"] = _sanitize_repo_url(self.engine.get_remote_url())
         self._save_state(state)
 
@@ -457,6 +578,11 @@ class BackupManager:
             # Update state
             state = self._load_state()
             state["repo_url"] = _sanitize_repo_url(repo_url)
+            # C050: restore's repo_url is a USER-SUPPLIED argument (the user pasted
+            # the backup repo URL) → a declaration of intent. Record it as the
+            # configured destination so the push-guard has a trustworthy "expected"
+            # that the post-backup self-populate (repo_url) never pollutes.
+            state["configured_repo_url"] = _sanitize_repo_url(repo_url)
             self._save_state(state)
 
             # Success — remove the in-progress marker LAST (restore is now complete).
@@ -496,6 +622,10 @@ class BackupManager:
         state = self._load_state()
         if repo_url is not None:
             state["repo_url"] = _sanitize_repo_url(repo_url)  # C1 fix: sanitize here too
+            # C050: configure()'s repo_url is the user's EXPLICIT declaration of the
+            # backup destination → record it as configured_repo_url (the push-guard's
+            # trustworthy "expected"). Never written by the post-backup self-populate.
+            state["configured_repo_url"] = _sanitize_repo_url(repo_url)
         if schedule is not None:
             state["schedule"] = schedule
         if token is not None:

@@ -98,6 +98,17 @@ def backup_env(tmp_path):
         capture_output=True,
     )
 
+    # C050: seed backup_state.json declaring this remote as the CONFIGURED backup
+    # destination. Without this, the push-destination guard (fail-closed) correctly
+    # refuses — these round-trip tests exercise the *legitimate configured* path,
+    # so the fixture must reflect a user who has run configure(repo_url=<remote>).
+    import json as _json
+    (swarm_dir / "backup_state.json").write_text(_json.dumps({
+        "enabled": True,
+        "schedule": "daily_3am",
+        "configured_repo_url": str(remote),
+    }))
+
     return {
         "ws": ws,
         "swarm_dir": swarm_dir,
@@ -533,10 +544,16 @@ class TestGitOperationsTimeout:
 
     @pytest.mark.asyncio
     async def test_git_push_failure_is_non_fatal(self, backup_env):
-        """If git push fails, backup() returns error status but doesn't crash."""
+        """If the remote is unusable, backup() returns a non-fatal status (never crashes).
+
+        C050: removing origin means the push-destination guard can no longer confirm
+        the configured destination → it refuses with 'no_remote' BEFORE git_push. The
+        contract under test is 'push problems are non-fatal', which still holds — the
+        LAYER that catches an absent remote is now the fail-closed guard, not git_push.
+        """
         from core.backup_manager import BackupManager
 
-        # Remove the remote to simulate push failure
+        # Remove the remote to simulate an unusable push destination
         subprocess.run(
             ["git", "-C", str(backup_env["ws"]), "remote", "remove", "origin"],
             capture_output=True,
@@ -549,9 +566,12 @@ class TestGitOperationsTimeout:
         )
 
         result = await mgr.backup()
-        # Should still export and commit, just fail on push
+        # Non-fatal: DB export still happened, and the push was declined (not a crash).
         assert result["tables_exported"] > 0
-        assert result["push_status"] == "failed"
+        # No usable remote → guard refuses ('no_remote') rather than a git-layer 'failed'.
+        assert result["push_status"] in ("refused", "failed")
+        if result["push_status"] == "refused":
+            assert result.get("refuse_reason") == "no_remote"
 
 
 class TestRestoreRoundTrip:
@@ -826,3 +846,192 @@ class TestLifecycleManagerTrigger:
 
         await mgr._run_daily_backup()
         mgr._backup_manager.backup.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# C050 fix: push-destination guard + enabled gate + URL normalization
+# ---------------------------------------------------------------------------
+
+
+def _mk_mgr_with_spy_engine(tmp_path, configured_url, origin_url, enabled=True):
+    """Build a BackupManager whose engine is a spy (spec=GitSyncEngine).
+
+    export_db_tables is AsyncMock; git_add_all/commit/push are spies;
+    get_remote_url returns origin_url. State is seeded with configured_repo_url
+    and enabled. Returns (mgr, engine)."""
+    from unittest.mock import AsyncMock, MagicMock
+    import json as _json
+    from core.backup_manager import BackupManager
+    from core.git_sync_engine import GitSyncEngine
+
+    swarm = tmp_path / ".swarm-ai"
+    swarm.mkdir(exist_ok=True)
+    ws = tmp_path / "SwarmWS"
+    ws.mkdir(exist_ok=True)
+    (swarm / "data.db").write_bytes(b"")
+
+    mgr = BackupManager(workspace_dir=ws, swarm_dir=swarm, db_path=swarm / "data.db")
+
+    # Seed state
+    state = {"enabled": enabled, "schedule": "daily_3am"}
+    if configured_url is not None:
+        state["configured_repo_url"] = configured_url
+    mgr.state_path.write_text(_json.dumps(state))
+
+    engine = MagicMock(spec=GitSyncEngine)
+    engine.export_db_tables = AsyncMock(return_value=3)
+    engine.git_add_all = MagicMock(return_value=True)
+    engine.git_commit = MagicMock(return_value="abc1234")
+    engine.git_push = MagicMock(return_value=True)
+    engine.get_remote_url = MagicMock(return_value=origin_url)
+    mgr.engine = engine
+    return mgr, engine
+
+
+class TestUrlNormalization:
+    """AC4: SSH/HTTPS equivalence, no false-accept across different repos."""
+
+    def test_ssh_and_https_same_repo_normalize_equal(self):
+        from core.backup_manager import _normalize_git_url
+        a = _normalize_git_url("git@github.com:xg-gh-25/swarm-brain.git")
+        b = _normalize_git_url("https://github.com/xg-gh-25/swarm-brain")
+        assert a == b, f"SSH and HTTPS of the same repo must match: {a!r} != {b!r}"
+
+    def test_trailing_variations_normalize_equal(self):
+        from core.backup_manager import _normalize_git_url
+        a = _normalize_git_url("https://github.com/x/y.git")
+        b = _normalize_git_url("https://github.com/x/y/")
+        c = _normalize_git_url("https://GitHub.com/x/y")
+        assert a == b == c
+
+    def test_different_repos_do_not_collide(self):
+        from core.backup_manager import _normalize_git_url
+        a = _normalize_git_url("https://github.com/x/y1")
+        b = _normalize_git_url("https://github.com/x/y2")
+        assert a != b, "Different repos must NOT normalize equal (false-accept)"
+
+    def test_none_passthrough(self):
+        from core.backup_manager import _normalize_git_url
+        assert _normalize_git_url(None) is None
+        assert _normalize_git_url("") in (None, "")
+
+    # --- Gate-2 adversarial findings: normalization edge cases ---
+
+    def test_dotgit_with_trailing_slash_normalizes(self):
+        # BUG1 (Gate-2): `repo.git/` must strip BOTH .git and / (order-independent)
+        from core.backup_manager import _normalize_git_url
+        a = _normalize_git_url("https://github.com/u/repo.git/")
+        b = _normalize_git_url("https://github.com/u/repo")
+        assert a == b, f".git/ must normalize like plain repo: {a!r} != {b!r}"
+
+    def test_query_and_fragment_stripped(self):
+        # BUG3 (Gate-2): ?token=/#frag decoration must not read as a different dest
+        from core.backup_manager import _normalize_git_url
+        base = _normalize_git_url("https://github.com/u/repo")
+        assert _normalize_git_url("https://github.com/u/repo?token=xyz") == base
+        assert _normalize_git_url("https://github.com/u/repo#frag") == base
+
+    def test_at_in_path_is_not_treated_as_userinfo(self):
+        # BUG2 (Gate-2, SECURITY false-ACCEPT): a `@` in the PATH must NOT rewrite
+        # the host to the path's domain. `github.com/org@evil.com/x` must keep host
+        # github.com — never collapse to evil.com (which would let a push to
+        # evil.com pass the guard against a configured github.com destination).
+        from core.backup_manager import _normalize_git_url
+        got = _normalize_git_url("https://github.com/org@evil.com/backup")
+        assert got.startswith("https://github.com/"), \
+            f"path-@ must not rewrite host: {got!r}"
+        assert "evil.com" not in got.split("/", 3)[2], \
+            f"evil.com must not become the host: {got!r}"
+        # And it must NOT collide with an actual evil.com origin (false-accept guard)
+        evil = _normalize_git_url("https://evil.com/backup")
+        assert got != evil, "path-@ URL must not normalize to the evil.com host"
+
+    def test_real_userinfo_still_stripped(self):
+        # Genuine credentials in the authority ARE stripped (so a token in the
+        # configured URL still matches the token-less origin).
+        from core.backup_manager import _normalize_git_url
+        a = _normalize_git_url("https://ghp_secret@github.com/u/repo")
+        b = _normalize_git_url("https://github.com/u/repo")
+        assert a == b, f"authority userinfo must be stripped: {a!r} != {b!r}"
+
+
+class TestVerifyPushDestination:
+    """AC2 + AC5: each branch of the fail-closed destination check."""
+
+    def test_match_allows(self, tmp_path):
+        mgr, _ = _mk_mgr_with_spy_engine(
+            tmp_path, "https://github.com/x/priv.git", "https://github.com/x/priv")
+        ok, reason = mgr._verify_push_destination(mgr._load_state())
+        assert ok is True, reason
+
+    def test_mismatch_refuses(self, tmp_path):
+        mgr, _ = _mk_mgr_with_spy_engine(
+            tmp_path, "https://github.com/x/priv.git", "https://github.com/x/PUBLIC")
+        ok, reason = mgr._verify_push_destination(mgr._load_state())
+        assert ok is False and reason == "destination_mismatch"
+
+    def test_no_remote_refuses(self, tmp_path):
+        mgr, _ = _mk_mgr_with_spy_engine(
+            tmp_path, "https://github.com/x/priv.git", None)
+        ok, reason = mgr._verify_push_destination(mgr._load_state())
+        assert ok is False and reason == "no_remote"
+
+    def test_no_configured_destination_refuses(self, tmp_path):
+        # AC5: legacy state with NO configured_repo_url → fail-closed
+        mgr, _ = _mk_mgr_with_spy_engine(
+            tmp_path, None, "https://github.com/x/anything")
+        ok, reason = mgr._verify_push_destination(mgr._load_state())
+        assert ok is False and reason == "no_configured_destination"
+
+
+class TestPushDestinationGuardInBackup:
+    """AC1 + AC4: _backup_impl gates git ops on destination match."""
+
+    async def test_mismatch_refuses_no_git_ops(self, tmp_path):
+        # AC1: origin != configured → git_add/commit/push NONE called, refused
+        mgr, engine = _mk_mgr_with_spy_engine(
+            tmp_path, "https://github.com/x/priv.git", "https://github.com/x/PUBLIC")
+        result = await mgr.backup()
+        assert result["push_status"] == "refused"
+        engine.git_add_all.assert_not_called()
+        engine.git_commit.assert_not_called()
+        engine.git_push.assert_not_called()
+
+    async def test_match_allows_push(self, tmp_path):
+        # AC4: configured private repo matches origin → push proceeds, not refused
+        mgr, engine = _mk_mgr_with_spy_engine(
+            tmp_path,
+            "https://github.com/xg-gh-25/swarm-brain.git",
+            "https://github.com/xg-gh-25/swarm-brain")
+        result = await mgr.backup()
+        assert result["push_status"] != "refused"
+        engine.git_push.assert_called_once()
+
+    async def test_configured_not_polluted_by_backfill(self, tmp_path):
+        # AC2 (HOLE#1): after a successful backup, configured_repo_url must NOT
+        # follow the observed origin. Simulate origin drift and assert refuse.
+        mgr, engine = _mk_mgr_with_spy_engine(
+            tmp_path,
+            "https://github.com/x/A.git",
+            "https://github.com/x/A")
+        r1 = await mgr.backup()
+        assert r1["push_status"] != "refused"
+        # origin drifts to B; configured is still A → must refuse
+        engine.get_remote_url = MagicMock(return_value="https://github.com/x/B")
+        r2 = await mgr.backup()
+        assert r2["push_status"] == "refused", (
+            "configured_repo_url was polluted by backfill — HOLE#1 not closed")
+
+
+class TestEnabledGate:
+    """AC3: disabled backup does NO git ops, on the manual-API code path."""
+
+    async def test_disabled_skips_all_git_ops(self, tmp_path):
+        mgr, engine = _mk_mgr_with_spy_engine(
+            tmp_path, "https://github.com/x/priv.git", "https://github.com/x/priv",
+            enabled=False)
+        result = await mgr.backup()
+        assert result["status"] == "skipped"
+        engine.git_add_all.assert_not_called()
+        engine.git_commit.assert_not_called()
+        engine.git_push.assert_not_called()
