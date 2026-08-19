@@ -16,10 +16,15 @@
  *  'dead' = proven death (terminate); 'unknown' = no verdict yet (bounded). */
 export type StallLiveness = 'alive' | 'dead' | 'unknown';
 
-/** How long an 'unknown'-liveness stream (app boot, no health signal yet) may
- *  re-arm before being treated as dead. MUST exceed cold-start first-token
- *  latency (Bedrock cache-creation of the large injected context ~38-45s), so
- *  ≥60s never kills a slow-but-alive cold start (Gate-1 Finding 4 / AC7). */
+/** Re-arm BUDGET (not a hard deadline) for an 'unknown'-liveness stream (app boot,
+ *  no health signal yet): it keeps re-arming while total silence is < this, then
+ *  cancels on the NEXT fire. Effective cancel time overshoots by up to one stall
+ *  interval — e.g. with a 90s interval, cancel lands at ~180s (the fire where
+ *  silentMs first reaches ≥120s). That is intentional slack: it MUST exceed
+ *  cold-start first-token latency (Bedrock cache-creation of the large injected
+ *  context ~38-45s), so it never kills a slow-but-alive cold start (Gate-1
+ *  Finding 4 / AC7). Heartbeats (every 15s) reset the accumulator anyway, so a
+ *  real cold start never even reaches the first fire. */
 export const UNKNOWN_REARM_BUDGET_MS = 120_000;
 
 /** Turn-liveness cap: daemon-liveness ≠ the SDK subprocess is still producing

@@ -89,3 +89,41 @@ describe('MessageStore watchdog — liveness gate (A2 / Gate-1 Finding 1)', () =
     store.destroy();
   });
 });
+
+describe('MessageStore watchdog — affordance path (Gate-2 HIGH fix)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('alive past the turn-liveness cap → fires onAffordance (visible signal), does NOT force-end', () => {
+    const onAffordance = vi.fn();
+    // Small timeout so the cap (ALIVE_REARM_CAP_MS) is reached in a few fires;
+    // the store uses the real ALIVE_REARM_CAP_MS from stallPolicy.
+    const store = new MessageStore({
+      watchdogTimeoutMs: 60_000,
+      isBackendLive: () => 'alive',
+      onAffordance,
+    });
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+    // Advance well past ALIVE_REARM_CAP_MS (600s) → affordance must fire, phase stays streaming.
+    vi.advanceTimersByTime(660_000);
+    expect(onAffordance).toHaveBeenCalled();
+    expect(store.phase).toBe('streaming'); // never auto-killed a live backend
+    store.destroy();
+  });
+
+  it('affordance fires at most once per silent span (no toast spam)', () => {
+    const onAffordance = vi.fn();
+    const store = new MessageStore({
+      watchdogTimeoutMs: 60_000,
+      isBackendLive: () => 'alive',
+      onAffordance,
+    });
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+    vi.advanceTimersByTime(660_000);      // cross the cap
+    vi.advanceTimersByTime(300_000);      // keep re-arming past it
+    expect(onAffordance).toHaveBeenCalledTimes(1); // latched — not once per fire
+    store.destroy();
+  });
+});

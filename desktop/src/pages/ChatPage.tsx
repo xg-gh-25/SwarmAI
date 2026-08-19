@@ -155,14 +155,31 @@ export default function ChatPage() {
   const healthStatusRef = useRef(health.status);
   healthStatusRef.current = health.status;
   const isBackendLiveRef = useRef(() => deriveBackendLiveness(healthStatusRef.current));
+  // onAffordance (Gate-2 HIGH fix): when an ALIVE backend has been silent past the
+  // turn-liveness cap (ALIVE_REARM_CAP_MS), the terminators re-arm (never auto-kill
+  // a live backend) — but daemon-liveness ≠ the SDK subprocess is still producing.
+  // Without a VISIBLE signal the user is stranded on a silent spinner (the inverse
+  // of the interrupt bug). Surface a keyed, non-dismissing toast pointing at Stop.
+  // addToast via a ref so the callback stays stable (no re-arm churn).
+  const addToastRef = useRef(addToast);
+  addToastRef.current = addToast;
+  const onStreamAffordanceRef = useRef(() => {
+    addToastRef.current({
+      severity: 'info',
+      message: 'Still working — the backend is alive but this turn has been silent for a while. Press Stop if it looks stuck.',
+      id: 'stream-still-working',
+      autoDismiss: true,
+    });
+  });
   const streamLiveness = useMemo(
-    () => ({ isBackendLive: isBackendLiveRef.current }),
+    () => ({ isBackendLive: isBackendLiveRef.current, onAffordance: onStreamAffordanceRef.current }),
     [],
   );
   // Feed the registry once so every per-tab MessageStore watchdog consults the
-  // SAME verdict (AC4). Stable closure → safe to run on every render.
+  // SAME verdict AND surfaces the SAME affordance (AC4/AC8). Stable closures →
+  // safe to run on every render.
   useEffect(() => {
-    messageStoreRegistry.setDefaultLiveness(isBackendLiveRef.current);
+    messageStoreRegistry.setDefaultLiveness(isBackendLiveRef.current, onStreamAffordanceRef.current);
   }, []);
   /** Per-tab draft text storage — NOT serialized to open_tabs.json to avoid large text writes. */
   const inputValueMapRef = useRef<Map<string, string>>(new Map());
