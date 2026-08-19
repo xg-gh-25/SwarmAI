@@ -74,11 +74,23 @@ export type BackendLiveness = 'alive' | 'dead' | 'unknown';
 /** Map a {@link BackendStatus} to a {@link BackendLiveness} verdict. PINNED —
  *  this mapping is the safety story of the no-interrupt-while-alive fix.
  *
- *  🔒 'connected' MUST be 'alive' (Gate-1 Finding 4): the Rust watchdog polls
- *  /health only every ~30s, so during event-loop starvation the status stays
- *  'connected' for up to 30s before flipping to 'degraded'. Treating 'connected'
- *  as 'unknown' would route the common starvation case through the bounded-kill
- *  path → re-creating the exact 158s blind-cancel this fix removes.
+ *  🔒 'connected' MUST be 'alive' (Gate-1 Finding 4): status stays 'connected'
+ *  for a window after the backend goes silent, and treating 'connected' as
+ *  'unknown' would route the common event-loop-starvation case through the
+ *  bounded-kill path → re-creating the exact 158s blind-cancel this fix removes.
+ *  The bound on that "connected-but-actually-dead" window differs by environment,
+ *  and BOTH are acceptable (a dead backend still reaches 'dead' within ~1 stall
+ *  interval, never re-arms forever):
+ *    • Desktop (Tauri): the Rust watchdog reads the loop-independent heartbeat
+ *      FILE and emits 'degraded' (busy-but-proven-alive) / 'disconnected' (dead)
+ *      — so a starved-but-alive loop is provably 'degraded'→alive, and a real
+ *      death flips 'disconnected'→dead. This is the strong path.
+ *    • Hive (production browser, PE-review MEDIUM #2): there is NO Rust watchdog
+ *      and the heartbeat file is inert (Tauri event listeners are guarded by
+ *      isDesktop() below and never register). The sole judge is the JS /health
+ *      poll (30s interval, 2-failure threshold), so a dead backend flips to
+ *      'disconnected'→dead within ~≤65s of death — NOT via any watchdog. Do not
+ *      assume a watchdog exists in Hive.
  *
  *  'degraded' is also 'alive' — it is the STRONGEST proof of life (the watchdog
  *  read a fresh, non-wedged heartbeat from the loop-independent file). Only
