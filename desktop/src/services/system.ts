@@ -1,4 +1,5 @@
 import api from './api';
+import type { ToastSeverity } from '../types';
 
 // ============== Interfaces ==============
 
@@ -524,6 +525,51 @@ export interface BackupResult {
   tablesExported: number;
   commit: string | null;
   pushStatus: string;
+  /** Set by the backend only when pushStatus === 'refused' — the fail-closed
+   *  destination-guard reason (no_configured_destination | destination_mismatch | no_remote). */
+  refuseReason?: string;
+}
+
+/**
+ * Pure decision function: map a BackupResult to the toast to show.
+ *
+ * Extracted from BackupTab so every push_status is unit-testable (the inline
+ * if/else only handled ok/failed and masked 'refused'/'skipped_disabled' as
+ * "No changes to backup." — a fail-closed backup refusal was invisible).
+ *
+ * A 'refused' result is a fail-closed destination-guard refusal: surface it as a
+ * warning with an actionable, reason-specific message (destination_mismatch is NOT
+ * fixed by "configure a target", so it gets its own message).
+ */
+export function backupToastFor(result: BackupResult): { severity: ToastSeverity; message: string } {
+  switch (result.pushStatus) {
+    case 'ok':
+      return {
+        severity: 'success',
+        message: `Backup complete — ${result.tablesExported} tables, commit ${result.commit}`,
+      };
+    case 'failed':
+      return { severity: 'warning', message: 'Backup committed locally but push failed. Check network.' };
+    case 'refused': {
+      const map: Record<string, string> = {
+        no_configured_destination: 'Backup not configured. Set up a backup repository in Settings.',
+        destination_mismatch:
+          'Backup refused — remote mismatch: git origin differs from the configured backup target. Reconfigure in Settings.',
+
+        no_remote: 'Backup refused — no backup remote is configured. Set one up in Settings.',
+      };
+      const message =
+        (result.refuseReason && map[result.refuseReason]) ||
+        'Backup refused: destination not verified. Check your backup settings.';
+      return { severity: 'warning', message };
+    }
+    case 'skipped_disabled':
+    case 'skipped':
+      return { severity: 'info', message: 'Backup is disabled. Enable it in Settings to run backups.' };
+    default:
+      // no_changes and any unknown status → benign no-op
+      return { severity: 'info', message: 'No changes to backup.' };
+  }
 }
 
 export interface RestoreEvent {

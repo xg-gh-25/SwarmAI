@@ -5,7 +5,7 @@
  * manual trigger + configuration. Uses the same patterns as SystemTab.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { systemService, BackupStatus, RestoreEvent } from '../../services/system';
+import { systemService, backupToastFor, BackupStatus, RestoreEvent } from '../../services/system';
 import { useToast } from '../../contexts/ToastContext';
 
 export default function BackupTab() {
@@ -37,13 +37,7 @@ export default function BackupTab() {
     setBacking(true);
     try {
       const result = await systemService.runBackup();
-      if (result.pushStatus === 'ok') {
-        addToast({ severity: 'success', message: `Backup complete — ${result.tablesExported} tables, commit ${result.commit}` });
-      } else if (result.pushStatus === 'failed') {
-        addToast({ severity: 'warning', message: `Backup committed locally but push failed. Check network.` });
-      } else {
-        addToast({ severity: 'info', message: 'No changes to backup.' });
-      }
+      addToast(backupToastFor(result));
       await fetchStatus();
     } catch (e) {
       addToast({ severity: 'error', message: `Backup failed: ${e instanceof Error ? e.message : 'Unknown error'}` });
