@@ -540,11 +540,20 @@ class TestCompletionGateBoolAdversarialReview:
 
 
 class TestPublishBackfillsArtifactIdIntoExistingRecord:
-    """run_b7620c6e (dogfood-surfaced): the REAL stage order is gate-1 writes a
-    stage record (e.g. build + gate1_verdict) via run-update BEFORE publish runs.
-    The old _append_stage_to_run skipped entirely when the stage existed → the
-    artifact_id was never linked → the stage stayed permanently unlinked. Publish
-    must BACK-FILL artifact_id into the existing record instead of skipping."""
+    """publish is the SOLE writer of a stage's artifact_id (artifact_cli.py:213),
+    so _append_stage_to_run must make the existing record reflect the LATEST
+    published artifact. Two facets:
+
+    1. BACK-FILL (run_b7620c6e): the REAL stage order is gate-1 writes a stage
+       record (e.g. build + gate1_verdict) via run-update BEFORE publish runs. The
+       original _append_stage_to_run skipped entirely when the stage existed → the
+       artifact_id was never linked. Publish must BACK-FILL into the existing record.
+    2. RE-POINT (run_59e9e36a / run_05b42b8b): re-publishing the SAME stage must
+       update its artifact_id to the newest. The interim back-fill-ONLY guard
+       (`not _existing.get('artifact_id')`) fixed (1) but left (2) broken — a second
+       publish kept the FIRST id, so the validator read stale ACs from the old
+       artifact → false 'AC not covered'. The condition is now `existing != incoming`
+       (back-fill is the subset where existing is empty), covering BOTH."""
 
     def test_publish_backfills_artifact_id_when_record_preexists(self, workspace, monkeypatch):
         import scripts.artifact_cli as cli
@@ -566,7 +575,20 @@ class TestPublishBackfillsArtifactIdIntoExistingRecord:
         assert builds[0]["artifact_id"] == "art_pub", "artifact_id must be back-filled into the existing record"
         assert builds[0]["gate1_verdict"] == "WARN", "existing fields must be preserved"
 
-    def test_publish_does_not_clobber_existing_artifact_id(self, workspace, monkeypatch):
+    def test_publish_repoints_existing_artifact_id_to_newest(self, workspace, monkeypatch):
+        """Re-publishing the SAME stage RE-POINTS its artifact_id to the newest.
+
+        publish is the SOLE writer of a stage's artifact_id (artifact_cli.py:213),
+        so on a second publish of the same stage the newly-published artifact IS
+        the current one — the stage record must follow it. The old back-fill-ONLY
+        behavior (`not _existing.get('artifact_id')`) left the stage pinned to the
+        FIRST artifact_id, so the validator read stale acceptance-criteria from the
+        old artifact → false 'AC not covered' errors (recurred run_59e9e36a plan+
+        build, run_05b42b8b ~4 republish cycles, IMPROVEMENT.md:1685). Re-pointing
+        is NOT the run_b7620c6e "don't skip an existing record" bug — that is the
+        no-artifact_id back-fill case, covered by
+        test_publish_backfills_artifact_id_when_record_preexists above.
+        """
         import scripts.artifact_cli as cli
         from core.artifact_registry import ArtifactRegistry
         monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
@@ -579,8 +601,77 @@ class TestPublishBackfillsArtifactIdIntoExistingRecord:
             reg,
         )
         run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_bf2" / "run.json"
+        stages = _read_run(run_file)["stages"]
+        builds = [s for s in stages if s["stage"] == "build"]
+        assert len(builds) == 1, "re-point must not duplicate the stage (no-dup)"
+        assert builds[0]["artifact_id"] == "art_second", \
+            "re-publish must RE-POINT the stage to the newest artifact_id"
+
+    def test_repoint_is_idempotent_same_id(self, workspace, monkeypatch):
+        """AC5: re-recording the SAME artifact_id is a no-op (no dup, id unchanged)."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_bf3", "running",
+                    stages=[{"stage": "build", "artifact_id": "art_same"}])
+        cli._append_stage_to_run(
+            "TestProject", "run_bf3",
+            {"stage": "build", "status": "recorded", "artifact_id": "art_same"},
+            reg,
+        )
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_bf3" / "run.json"
+        builds = [s for s in _read_run(run_file)["stages"] if s["stage"] == "build"]
+        assert len(builds) == 1 and builds[0]["artifact_id"] == "art_same"
+
+    def test_republish_then_omit_finalize_carries_newest_not_stale(self, workspace, monkeypatch):
+        """AC4 (composition): the run-update carry-forward path is NOT independently
+        buggy — it mirrors whatever auto-record last wrote. Prove the end-to-end
+        recurring flow yields the NEWEST id, not the stale one, WITHOUT touching
+        cmd_run_update / _CARRY_FORWARD_FIELDS (run_9dd58e76 DEFER protects that path):
+
+          publish#1 (auto-record art_A) → publish#2 (auto-record art_B, RE-POINTS)
+          → run-update --stage-json finalize that OMITS artifact_id (documented
+            non-deliver finalize shape) → carry-forward reads existing → gets art_B.
+        """
+        import sys as _sys
+        from pathlib import Path as _P
+        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
+        if _scripts_dir not in _sys.path:
+            _sys.path.insert(0, _scripts_dir)
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        import pipeline_validator
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        monkeypatch.setattr(pipeline_validator, "validate_artifact_data", lambda *a, **k: [])
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_bf4", "running", stages=[])
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_bf4" / "run.json"
+
+        class _PubArgs:
+            project = "TestProject"; type = "changeset"
+            data = '{"branch":"x","commits":["abc1234"],"files_changed":["f.py"]}'
+            producer = "s_autonomous-pipeline"; summary = "t"; topic = ""
+            stage = "build"; run_id = "run_bf4"; quiet = True
+
+        cli.cmd_publish(_PubArgs(), reg)   # publish#1 → art_A auto-recorded
+        art_a = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")["artifact_id"]
+        cli.cmd_publish(_PubArgs(), reg)   # publish#2 → art_B, must RE-POINT
+        art_b = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")["artifact_id"]
+        assert art_b != art_a, "publish#2 must create + re-point to a new artifact"
+
+        # Finalize OMITTING artifact_id (documented non-deliver shape) → carry-forward.
+        class _UpdArgs:
+            project = "TestProject"; run_id = "run_bf4"
+            stage_json = json.dumps({"stage": "build", "status": "completed",
+                                     "stage_doc_consumed": True})
+            status = None; taste_decision = None; profile = None; ddd_checksums = None
+            files_touched = None; reason = None; force = False; force_checkpoint = False
+        cli.cmd_run_update(_UpdArgs(), reg)
         build = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")
-        assert build["artifact_id"] == "art_first", "an existing artifact_id must NOT be clobbered"
+        assert build["artifact_id"] == art_b, \
+            "carry-forward must serve the NEWEST id (art_B), not the stale art_A"
+        assert build["status"] == "completed", "finalize must upgrade recorded→completed"
 
 
 class TestPublishDataFromFile:

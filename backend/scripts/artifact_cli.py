@@ -209,17 +209,28 @@ def _append_stage_to_run(
     data = json.loads(run_file.read_text())
     stages = data.get("stages", [])
     # If the stage already has a record (e.g. Gate-1 wrote a `build` record with
-    # gate1_verdict BEFORE publish ran), don't drop the artifact link on the floor
-    # — back-fill artifact_id into the existing record. Publish is the ONLY writer
-    # of artifact_id; skipping entirely (the old behavior) left the stage
-    # permanently unlinked whenever any prior run-update created the record first
-    # (run_b7620c6e — surfaced by dogfooding: gate-1-writes-then-publish is the
-    # real order, not the publish-first order the unit fixture assumed). Only
-    # back-fill when the existing record LACKS it (never clobber an explicit one).
+    # gate1_verdict BEFORE publish ran), make the existing record reflect the
+    # LATEST published artifact. Publish is the SOLE writer of a stage's
+    # artifact_id (grep: every other `stage.artifact_id` write —
+    # _CARRY_FORWARD_FIELDS at cmd_run_update, and the test/deliver metrics
+    # backfills — is if-absent only and never originates a competing id), so the
+    # just-published artifact IS the current one and the stage must follow it.
+    # Two facets, both handled by the `!= _incoming_aid` condition below:
+    #   • BACK-FILL (run_b7620c6e): existing record has NO artifact_id (gate-1
+    #     wrote it first) → link it. (`None != art_x` is True.) Skipping entirely
+    #     (the original behavior) left the stage permanently unlinked.
+    #   • RE-POINT (run_59e9e36a / run_05b42b8b): existing record has the FIRST
+    #     publish's id and the SAME stage is published again → update to the new
+    #     id. The interim back-fill-ONLY guard (`not _existing.get(...)`) fixed
+    #     back-fill but pinned re-publish to the stale id, so the validator read
+    #     acceptance-criteria from the OLD artifact → false "AC not covered"
+    #     (~4 manual re-record cycles, IMPROVEMENT.md:1685). Re-pointing is safe
+    #     precisely because publish is the sole writer — there is no "explicit
+    #     value from elsewhere" to clobber. A same-id re-record is a no-op.
     _existing = next((s for s in stages if s.get("stage") == stage_record["stage"]), None)
     if _existing is not None:
         _incoming_aid = stage_record.get("artifact_id")
-        if _incoming_aid and not _existing.get("artifact_id"):
+        if _incoming_aid and _existing.get("artifact_id") != _incoming_aid:
             _existing["artifact_id"] = _incoming_aid
             data["stages"] = stages
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
