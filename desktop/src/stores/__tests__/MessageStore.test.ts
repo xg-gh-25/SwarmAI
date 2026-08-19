@@ -84,7 +84,9 @@ describe('MessageStore', () => {
 
     it('resets watchdog timer', () => {
       vi.useFakeTimers();
-      store = new MessageStore({ watchdogTimeoutMs: 100 });
+      // isBackendLive='dead' → the fire-on-silence mechanic under test still fires
+      // at one timeout (A2 only defers the fire when the backend is alive/unknown).
+      store = new MessageStore({ watchdogTimeoutMs: 100, isBackendLive: () => 'dead' });
       store.append(makeMsg('1', 'assistant'));
       store.startStreaming('1');
 
@@ -223,7 +225,7 @@ describe('MessageStore phase gate', () => {
 
   it('watchdog fire notifies subscribers (the frozen-tab path)', () => {
     vi.useFakeTimers();
-    const s = new MessageStore({ watchdogTimeoutMs: 100 });
+    const s = new MessageStore({ watchdogTimeoutMs: 100, isBackendLive: () => 'dead' });
     s.append(makeMsg('1', 'assistant'));
     s.startStreaming('1');
     s.flush(); // drain the append-notify (else its leaked fallback timer fires
@@ -254,7 +256,7 @@ describe('MessageStore watchdog', () => {
   });
 
   it('watchdog timeout forces endStreaming', () => {
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    const store = new MessageStore({ watchdogTimeoutMs: 100, isBackendLive: () => 'dead' });
     store.append(makeMsg('1', 'assistant'));
     store.startStreaming('1');
 
@@ -266,7 +268,7 @@ describe('MessageStore watchdog', () => {
   });
 
   it('watchdog is reset by updateLast', () => {
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    const store = new MessageStore({ watchdogTimeoutMs: 100, isBackendLive: () => 'dead' });
     store.append(makeMsg('1', 'assistant'));
     store.startStreaming('1');
 
@@ -295,7 +297,9 @@ describe('MessageStore watchdog', () => {
   });
 
   it('touch() resets the watchdog without mutating content (long silent step)', () => {
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    // 'dead' verdict → the final "genuinely dead stream still fires" assertion
+    // holds at one timeout; touch() re-arm behaviour is verdict-independent.
+    const store = new MessageStore({ watchdogTimeoutMs: 100, isBackendLive: () => 'dead' });
     store.append(makeMsg('1', 'assistant'));
     store.startStreaming('1');
     const before = store.messages;
@@ -631,7 +635,7 @@ describe('MessageStore single-writer behavior', () => {
   });
 
   it('append() resets watchdog during streaming', () => {
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    const store = new MessageStore({ watchdogTimeoutMs: 100, isBackendLive: () => 'dead' });
     store.append(makeMsg('a1', 'assistant'));
     store.startStreaming('a1');
 

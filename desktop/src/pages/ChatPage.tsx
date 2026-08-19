@@ -38,6 +38,7 @@ import { tasksService } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
+import { deriveBackendLiveness } from '../hooks/useHealthMonitor';
 import { useSessionMeta } from '../contexts/LayoutContext';
 import { BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
 import { useOverlay } from '../contexts/OverlayContext';
@@ -143,6 +144,26 @@ export default function ChatPage() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [messagesReady, setMessagesReady] = useState(false);
   const mountTimeRef = useRef(performance.now());
+
+  // ── A2 liveness wiring (run_d2f25153) ──────────────────────────────────────
+  // The loop-independent backend-liveness verdict, exposed to the SSE stall timer
+  // (chat.ts) AND the per-tab MessageStore watchdog so NEITHER blind-cancels a
+  // live-but-silent stream (Gate-1 Finding 1, single authority). health.status is
+  // read through a ref so the verdict is LIVE when a timer fires minutes later —
+  // a value captured at send time would be stale. deriveBackendLiveness pins the
+  // mapping (connected/degraded→alive, disconnected→dead, initializing→unknown).
+  const healthStatusRef = useRef(health.status);
+  healthStatusRef.current = health.status;
+  const isBackendLiveRef = useRef(() => deriveBackendLiveness(healthStatusRef.current));
+  const streamLiveness = useMemo(
+    () => ({ isBackendLive: isBackendLiveRef.current }),
+    [],
+  );
+  // Feed the registry once so every per-tab MessageStore watchdog consults the
+  // SAME verdict (AC4). Stable closure → safe to run on every render.
+  useEffect(() => {
+    messageStoreRegistry.setDefaultLiveness(isBackendLiveRef.current);
+  }, []);
   /** Per-tab draft text storage — NOT serialized to open_tabs.json to avoid large text writes. */
   const inputValueMapRef = useRef<Map<string, string>>(new Map());
   /** ToDo Dispatch (A2): append-only pending records whose target tab has no
@@ -2412,6 +2433,7 @@ export default function ChatPage() {
       createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
       createCompleteHandler(activeTabIdRef.current ?? undefined),
       createDisconnectHandler(activeTabIdRef.current ?? undefined),
+      streamLiveness,
     );
 
     // P2 one-shot: an attached terminal rides exactly ONE turn, then clears so
@@ -2451,6 +2473,7 @@ export default function ChatPage() {
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
           createDisconnectHandler(capturedTabIdForRetry),
+          streamLiveness,
         );
       };
 
@@ -2616,6 +2639,7 @@ export default function ChatPage() {
         createErrorHandler(assistantMessageId, tabId),
         createCompleteHandler(tabId),
         createDisconnectHandler(tabId),
+        streamLiveness,
       );
 
       // P2 one-shot: clear attached terminal on the drain path too, so a
@@ -2790,6 +2814,7 @@ export default function ChatPage() {
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId),
       createDisconnectHandler(tabId),
+      streamLiveness,
     );
 
     // Store abort function in the tab map for per-tab stop isolation.
@@ -2806,6 +2831,7 @@ export default function ChatPage() {
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
           createDisconnectHandler(capturedTabIdForRetry),
+          streamLiveness,
         );
       };
       updateTabState(tabId, {
@@ -2872,6 +2898,7 @@ export default function ChatPage() {
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId),
       createDisconnectHandler(tabId),
+      streamLiveness,
     );
 
     // Store abort function
@@ -3026,6 +3053,7 @@ export default function ChatPage() {
       (error) => { createErrorHandler(assistantMessageId, capturedTabId)(error); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
       () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
       createDisconnectHandler(capturedTabId),
+      streamLiveness,
     );
 
     // Store abort function in the tab map for per-tab stop isolation.

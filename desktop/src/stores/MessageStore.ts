@@ -19,6 +19,7 @@
  */
 
 import type { Message, ContentBlock, ChatMessage } from '../types';
+import { decideStallAction, type StallLiveness } from '../services/stallPolicy';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +36,16 @@ export interface MessageStoreOptions {
   fetchMessages?: (sessionId: string) => Promise<ChatMessage[]>;
   /** Convert backend ChatMessage to frontend Message (injected for testability) */
   toDisplayMessage?: (msg: ChatMessage) => Message;
+  /** Loop-independent backend-liveness verdict (A2, run_d2f25153). When provided,
+   *  the watchdog becomes a TRIGGER that never force-ends a live stream — it
+   *  consults this via the shared {@link decideStallAction} policy, exactly like
+   *  the transport stall timer (single authority, Gate-1 Finding 1/AC4). Omitted
+   *  → defaults to bounded 'unknown' (a longer-but-finite version of the legacy
+   *  single 90s force-end; never worse). */
+  isBackendLive?: () => StallLiveness;
+  /** Fired once when an alive stream is silent past the turn-liveness cap
+   *  (surface a 'still working — Stop?' hint) — mirror of chat.ts onAffordance. */
+  onAffordance?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,12 +111,33 @@ export class MessageStore {
   // ─── Injected dependencies ───
   private _fetchMessages: ((sessionId: string) => Promise<ChatMessage[]>) | undefined;
   private _toDisplayMessage: ((msg: ChatMessage) => Message) | undefined;
+  // A2 (run_d2f25153): loop-independent backend-liveness verdict + affordance cb.
+  // Nullable + late-settable (setLiveness) because the verdict source is a live
+  // React ref that outlives the store's construction.
+  private _isBackendLive: (() => StallLiveness) | undefined;
+  private _onAffordance: (() => void) | undefined;
+  // Total silence (ms) accumulated across consecutive watchdog re-arms with no
+  // liveness touch. Reset to 0 by touch()/startStreaming; grows by the timeout
+  // per silent re-arm — the elapsed input to decideStallAction (AC7/AC8 bounds).
+  private _watchdogSilentMs = 0;
+  private _affordanceShown = false;
 
   constructor(options?: MessageStoreOptions) {
     this._sessionId = options?.sessionId;
     this._watchdogTimeoutMs = options?.watchdogTimeoutMs ?? DEFAULT_WATCHDOG_MS;
     this._fetchMessages = options?.fetchMessages;
     this._toDisplayMessage = options?.toDisplayMessage;
+    this._isBackendLive = options?.isBackendLive;
+    this._onAffordance = options?.onAffordance;
+  }
+
+  /** Late-inject the loop-independent liveness verdict + affordance callback
+   *  (A2). The verdict comes from a live React health ref that isn't available
+   *  when the per-tab store is constructed, so the lifecycle hook sets it once
+   *  wired. Idempotent; safe to call with fresh closures on re-render. */
+  setLiveness(isBackendLive: () => StallLiveness, onAffordance?: () => void): void {
+    this._isBackendLive = isBackendLive;
+    this._onAffordance = onAffordance;
   }
 
   // ─── Public Accessors ───
@@ -346,6 +378,8 @@ export class MessageStore {
     this._streamingMessageId = messageId;
     this._phase = 'streaming';
     this._touchCount = 0;  // diagnostic: count liveness touches this session
+    this._watchdogSilentMs = 0;  // fresh turn → reset the A2 silence accumulator
+    this._affordanceShown = false;
     this._resetWatchdog();
   }
 
@@ -620,25 +654,64 @@ export class MessageStore {
   }
 
   /**
-   * Watchdog — forces endStreaming() if no updateLast() for the configured timeout.
-   * Prevents stuck streaming phase when SSE disconnects without close event (R3).
+   * Watchdog RESET — called on real liveness (content write / touch / stream
+   * start). Resets the A2 silence accumulator (a real signal arrived → the
+   * stream is alive right now) and re-arms the timer from zero.
+   *
+   * Prevents a stuck streaming phase when SSE disconnects without a close event
+   * (R3), WITHOUT blind-force-ending a live-but-silent stream (A2, Gate-1
+   * Finding 1): on fire it consults the SAME loop-independent liveness verdict
+   * as the transport stall timer (shared decideStallAction) — it force-ends ONLY
+   * when the backend is proven dead, or 'unknown' past its bounded budget.
    */
   private _resetWatchdog(): void {
+    this._watchdogSilentMs = 0;
+    this._affordanceShown = false;
+    this._armWatchdog();
+  }
+
+  /** Arm (or re-arm) the watchdog timer WITHOUT resetting the silence
+   *  accumulator — used both by _resetWatchdog (after a real-liveness reset to 0)
+   *  and by the fire path's re-arm (accumulated silence preserved). */
+  private _armWatchdog(): void {
     this._clearWatchdog();
-    if (this._phase === 'streaming') {
-      this._watchdogTimer = setTimeout(() => {
-        if (this._phase === 'streaming' && !this._destroyed) {
-          // Template literal (NOT %d) — the frontend.log persister does not do
-          // printf substitution, so %d showed up literally. touchCount makes a
-          // fire conclusive (see _touchCount field doc).
+    if (this._phase !== 'streaming') return;
+    this._watchdogTimer = setTimeout(() => {
+      if (this._phase !== 'streaming' || this._destroyed) return;
+      this._watchdogSilentMs += this._watchdogTimeoutMs;
+      // A2: gate the force-end on the loop-independent liveness verdict. No
+      // verdict wired (older callers / tests) → 'unknown' → bounded behaviour.
+      const liveness: StallLiveness = this._isBackendLive ? this._isBackendLive() : 'unknown';
+      const action = decideStallAction(liveness, this._watchdogSilentMs);
+      if (action === 'rearm') {
+        // Backend alive (or unknown-under-budget): keep the streaming phase, keep
+        // waiting. NEVER force-end a live-but-silent stream — this is the fix.
+        this._armWatchdog();
+        return;
+      }
+      if (action === 'affordance') {
+        // Alive but silent past the turn-liveness cap: surface a Stop hint once,
+        // keep streaming (user decides — no auto force-end of a live backend).
+        if (!this._affordanceShown) {
+          this._affordanceShown = true;
           console.warn(
-            `[MessageStore] Watchdog: no liveness for ${this._watchdogTimeoutMs}ms, `
-            + `forcing endStreaming (touches this session=${this._touchCount})`,
+            `[MessageStore] Long silent turn: backend alive `
+            + `${Math.round(this._watchdogSilentMs / 1000)}s with no content — offering Stop `
+            + `(touches this session=${this._touchCount})`,
           );
-          this.endStreaming();
+          this._onAffordance?.();
         }
-      }, this._watchdogTimeoutMs);
-    }
+        this._armWatchdog();
+        return;
+      }
+      // action === 'cancel' — proven dead, or unknown past budget → force-end.
+      console.warn(
+        `[MessageStore] Watchdog: backend not alive after `
+        + `${Math.round(this._watchdogSilentMs / 1000)}s of silence, forcing endStreaming `
+        + `(touches this session=${this._touchCount})`,
+      );
+      this.endStreaming();
+    }, this._watchdogTimeoutMs);
   }
 
   private _clearWatchdog(): void {
@@ -1192,12 +1265,35 @@ export class MessageStore {
 
 const _registry = new Map<string, MessageStore>();
 
+// A2 (run_d2f25153): a registry-level default liveness verdict, applied to EVERY
+// store (existing + future) via setDefaultLiveness. This is the single wiring
+// point so the ~8 getOrCreate callsites don't each need to pass liveness — the
+// per-tab watchdog gate (Gate-1 Finding 1) is fed from ONE authority (AC4).
+let _defaultIsBackendLive: (() => StallLiveness) | undefined;
+let _defaultOnAffordance: (() => void) | undefined;
+
 export const messageStoreRegistry = {
+  /** Wire the loop-independent liveness verdict once (from ChatPage's health
+   *  ref). Applies to all currently-registered stores AND is inherited by any
+   *  store created afterwards. Idempotent — safe to call on every render with a
+   *  fresh stable closure. */
+  setDefaultLiveness(isBackendLive: () => StallLiveness, onAffordance?: () => void): void {
+    _defaultIsBackendLive = isBackendLive;
+    _defaultOnAffordance = onAffordance;
+    for (const store of _registry.values()) {
+      store.setLiveness(isBackendLive, onAffordance);
+    }
+  },
+
   /** Get or create a MessageStore for a tab. */
   getOrCreate(tabId: string, options?: MessageStoreOptions): MessageStore {
     let store = _registry.get(tabId);
     if (!store) {
       store = new MessageStore(options);
+      // Inherit the registry default liveness unless the caller supplied its own.
+      if (_defaultIsBackendLive && !options?.isBackendLive) {
+        store.setLiveness(_defaultIsBackendLive, _defaultOnAffordance);
+      }
       _registry.set(tabId, store);
     }
     return store;

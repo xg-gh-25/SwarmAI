@@ -63,6 +63,40 @@ export function recoveryToastMessage(kind: RecoveryKind): string {
   return 'Backend reconnected';
 }
 
+/** Loop-independent backend-liveness verdict, derived from {@link BackendStatus}.
+ *  Consumed by the streaming stall/watchdog terminators (chat.ts, MessageStore)
+ *  so they NEVER cancel a live-but-silent stream (run_d2f25153).
+ *  - 'alive'   → the backend is up (steady or busy-but-proven-live). NEVER terminate.
+ *  - 'dead'    → proven death → termination is authorized.
+ *  - 'unknown' → we have no verdict yet (app boot) → bounded re-arm, then treat dead. */
+export type BackendLiveness = 'alive' | 'dead' | 'unknown';
+
+/** Map a {@link BackendStatus} to a {@link BackendLiveness} verdict. PINNED —
+ *  this mapping is the safety story of the no-interrupt-while-alive fix.
+ *
+ *  🔒 'connected' MUST be 'alive' (Gate-1 Finding 4): the Rust watchdog polls
+ *  /health only every ~30s, so during event-loop starvation the status stays
+ *  'connected' for up to 30s before flipping to 'degraded'. Treating 'connected'
+ *  as 'unknown' would route the common starvation case through the bounded-kill
+ *  path → re-creating the exact 158s blind-cancel this fix removes.
+ *
+ *  'degraded' is also 'alive' — it is the STRONGEST proof of life (the watchdog
+ *  read a fresh, non-wedged heartbeat from the loop-independent file). Only
+ *  'initializing' (app boot, before the first health signal) is genuinely
+ *  'unknown'; only 'disconnected' (a proven death / wedge) is 'dead'. Pure +
+ *  exported for tests. */
+export function deriveBackendLiveness(status: BackendStatus): BackendLiveness {
+  switch (status) {
+    case 'connected':
+    case 'degraded':
+      return 'alive';
+    case 'disconnected':
+      return 'dead';
+    case 'initializing':
+      return 'unknown';
+  }
+}
+
 interface UseHealthMonitorOptions {
   /** Polling interval in ms. Default: 30_000 (30 seconds). */
   intervalMs?: number;

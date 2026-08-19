@@ -47,6 +47,26 @@ import { getApiBaseUrl } from './tauri';
  */
 export const STALL_TIMEOUT_MS = 90_000;
 
+// Liveness-gated stall policy lives in the shared, dependency-free stallPolicy
+// module (single authority — the MessageStore watchdog imports the SAME fn, AC4).
+// Re-exported here so existing chat.ts consumers/tests keep their import path.
+import {
+  decideStallAction,
+  UNKNOWN_REARM_BUDGET_MS,
+  ALIVE_REARM_CAP_MS,
+  type StallLiveness,
+} from './stallPolicy';
+export { decideStallAction, UNKNOWN_REARM_BUDGET_MS, ALIVE_REARM_CAP_MS };
+export type { StallLiveness };
+
+/** Optional liveness wiring passed to the streaming methods (A2). The caller
+ *  (useChatStreamingLifecycle) supplies the loop-independent verdict + the
+ *  affordance callback; omitting it preserves legacy bounded behaviour. */
+export interface StreamLivenessOpts {
+  isBackendLive?: () => StallLiveness;
+  onAffordance?: () => void;
+}
+
 // ---------------------------------------------------------------------------
 // Voice transcription
 // ---------------------------------------------------------------------------
@@ -335,12 +355,40 @@ export async function consumeSSEStream(
   }
 }
 
-/** Create stall detection state + helpers for an SSE stream. */
+/** Create stall detection state + helpers for an SSE stream.
+ *
+ *  A2 (run_d2f25153): the stall timer is a TRIGGER, not a cancel authority. When
+ *  it fires (STALL_TIMEOUT_MS of byte-silence, INCLUDING no heartbeat), it does
+ *  NOT unconditionally cancel — it consults the loop-independent backend-liveness
+ *  verdict (`isBackendLive`) via {@link decideStallAction}:
+ *    - alive (under cap)   → re-arm, keep waiting (a live-but-silent long turn /
+ *                            cold-resume prefill is NEVER blind-cancelled).
+ *    - alive (past cap)    → surface a 'still working — Stop?' affordance via
+ *                            onError-adjacent onAffordance; do NOT auto-cancel.
+ *    - dead                → cancel + onError (proven death → authorized).
+ *    - unknown (past budget)→ cancel (bounded; covers app-boot with no verdict yet).
+ *
+ *  `isBackendLive` is optional: when omitted (Hive/browser with no Tauri
+ *  watchdog, or a caller that hasn't wired it), the verdict defaults to 'unknown'
+ *  so behaviour is bounded — it re-arms up to UNKNOWN_REARM_BUDGET_MS then
+ *  cancels, i.e. a longer-but-still-finite version of the legacy single 90s
+ *  cancel (never worse: it only ever waits LONGER before the same cancel). */
 function createStallDetection(
   onError: (error: Error) => void,
   label: string = '',
+  isBackendLive?: () => StallLiveness,
+  onAffordance?: () => void,
 ) {
-  const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
+  const stall = {
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+    cleared: false,
+    // Total silence accumulated across consecutive re-arms WITHOUT any real data.
+    // Reset to 0 each time real data resets the timer (startStallTimer called
+    // fresh); grows by STALL_TIMEOUT_MS per silent re-arm. This is the elapsed
+    // input to decideStallAction's cap/budget checks.
+    silentMs: 0,
+    affordanceShown: false,
+  };
 
   const clearStallTimer = () => {
     stall.cleared = true;
@@ -353,8 +401,42 @@ function createStallDetection(
   const startStallTimer = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
     if (stall.cleared) return;
     if (stall.timer !== undefined) clearTimeout(stall.timer);
+    // Called fresh by consumeSSEStream on EVERY real data chunk (incl. heartbeat)
+    // — that means the stream is alive right now, so reset the silence accumulator
+    // and the affordance latch.
+    stall.silentMs = 0;
+    stall.affordanceShown = false;
+    arm(readerRef);
+  };
+
+  const arm = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
     stall.timer = setTimeout(() => {
-      const msg = `Stream stalled${label ? ` (${label})` : ''}: no data received for ${STALL_TIMEOUT_MS / 1000} seconds`;
+      stall.silentMs += STALL_TIMEOUT_MS;
+      const liveness = isBackendLive ? isBackendLive() : 'unknown';
+      const action = decideStallAction(liveness, stall.silentMs);
+      if (action === 'rearm') {
+        // Backend is alive (or unknown-under-budget): keep waiting. NEVER cancel
+        // a live-but-silent stream — this is the whole fix.
+        arm(readerRef);
+        return;
+      }
+      if (action === 'affordance') {
+        // Alive but silent past the turn-liveness cap: surface "still working —
+        // Stop?" once, then keep re-arming (user decides via Stop; we never
+        // auto-kill a backend that is still proving itself alive).
+        if (!stall.affordanceShown) {
+          stall.affordanceShown = true;
+          console.warn(
+            `[SSE] Long silent turn${label ? ` (${label})` : ''}: backend alive `
+            + `${Math.round(stall.silentMs / 1000)}s with no output — offering Stop.`,
+          );
+          onAffordance?.();
+        }
+        arm(readerRef);
+        return;
+      }
+      // action === 'cancel' — proven dead, or unknown past its budget.
+      const msg = `Stream stalled${label ? ` (${label})` : ''}: backend not alive after ${Math.round(stall.silentMs / 1000)}s of silence`;
       console.warn(`[SSE] ${msg}`);
       readerRef.cancel().catch(() => {});
       onError(new Error(msg));
@@ -384,10 +466,19 @@ function startSSEFetch(opts: {
   onError: (error: Error) => void;
   onComplete: () => void;
   onDisconnect?: () => void;
+  /** Loop-independent backend-liveness verdict (A2). When provided, the stall
+   *  timer becomes a trigger that never cancels a live stream — see
+   *  {@link createStallDetection}. Omitted → defaults to bounded 'unknown'. */
+  isBackendLive?: () => StallLiveness;
+  /** Fired once when an alive stream has been silent past the turn-liveness cap
+   *  (surface a 'still working — Stop?' hint). */
+  onAffordance?: () => void;
 }): () => void {
   const controller = new AbortController();
   const apiBase = getApiBaseUrl();
-  const { clearStallTimer, startStallTimer } = createStallDetection(opts.onError, opts.label);
+  const { clearStallTimer, startStallTimer } = createStallDetection(
+    opts.onError, opts.label, opts.isBackendLive, opts.onAffordance,
+  );
 
   fetch(`${apiBase}${opts.path}`, {
     method: 'POST',
@@ -425,6 +516,7 @@ export const chatService = {
     onError: (error: Error) => void,
     onComplete: () => void,
     onDisconnect?: () => void,
+    liveness?: StreamLivenessOpts,
   ): () => void {
     // Build request body - support both message and content
     const requestBody: Record<string, unknown> = {
@@ -467,6 +559,8 @@ export const chatService = {
       body: requestBody,
       label: 'streamChat',
       onMessage, onError, onComplete, onDisconnect,
+      isBackendLive: liveness?.isBackendLive,
+      onAffordance: liveness?.onAffordance,
     });
   },
 
@@ -697,6 +791,7 @@ export const chatService = {
     onError: (error: Error) => void,
     onComplete: () => void,
     onDisconnect?: () => void,
+    liveness?: StreamLivenessOpts,
   ): () => void {
     // Invalidate ETag — answer continuation produces new assistant messages.
     if (request.sessionId) {
@@ -715,6 +810,8 @@ export const chatService = {
       },
       label: 'answer-question',
       onMessage, onError, onComplete, onDisconnect,
+      isBackendLive: liveness?.isBackendLive,
+      onAffordance: liveness?.onAffordance,
     });
   },
 
@@ -731,6 +828,7 @@ export const chatService = {
     onError: (error: Error) => void,
     onComplete: () => void,
     onDisconnect?: () => void,
+    liveness?: StreamLivenessOpts,
   ): () => void {
     // Invalidate ETag — permission continuation produces new assistant messages.
     if (request.sessionId) {
@@ -749,6 +847,8 @@ export const chatService = {
       },
       label: 'cmd-permission-continue',
       onMessage, onError, onComplete, onDisconnect,
+      isBackendLive: liveness?.isBackendLive,
+      onAffordance: liveness?.onAffordance,
     });
   },
 };
