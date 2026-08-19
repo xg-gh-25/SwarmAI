@@ -20,7 +20,7 @@
     "0f1e862ee88037a106f4dc90b61329609b9ec772fe613a9b24a1baffb8dbb2b5": {
       "test_id": "B602",
       "file": "backend/jobs/executor.py",
-      "line": 980,
+      "line": 1019,
       "text": "subprocess call with shell=True identified, security issue."
     },
     "21d413a75a34424d7ef5c84ec0d963c93d64dcb8f5aa7b2761401448b041cdcd": {
