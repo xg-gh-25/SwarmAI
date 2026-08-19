@@ -530,45 +530,55 @@ export interface BackupResult {
   refuseReason?: string;
 }
 
+/** Toast decision as i18n key + params — the component layer resolves it via t(). */
+export interface BackupToast {
+  severity: ToastSeverity;
+  messageKey: string;
+  messageParams?: Record<string, unknown>;
+}
+
 /**
- * Pure decision function: map a BackupResult to the toast to show.
+ * Pure decision function: map a BackupResult to an i18n toast descriptor.
  *
- * Extracted from BackupTab so every push_status is unit-testable (the inline
- * if/else only handled ok/failed and masked 'refused'/'skipped_disabled' as
- * "No changes to backup." — a fail-closed backup refusal was invisible).
+ * Returns a messageKey (NOT a finished string) so the component layer translates
+ * via t(messageKey, messageParams) — keeping this function pure and unit-testable
+ * without mocking `t`. Every push_status is covered (the old inline if/else masked
+ * 'refused'/'skipped_disabled' as "No changes to backup." — a fail-closed backup
+ * refusal was invisible).
  *
- * A 'refused' result is a fail-closed destination-guard refusal: surface it as a
- * warning with an actionable, reason-specific message (destination_mismatch is NOT
- * fixed by "configure a target", so it gets its own message).
+ * A 'refused' result is a fail-closed destination-guard refusal: each refuse_reason
+ * gets a distinct actionable key (destination_mismatch is NOT fixed by "configure a
+ * target", so it is not collapsed into the generic key).
  */
-export function backupToastFor(result: BackupResult): { severity: ToastSeverity; message: string } {
+export function backupToastFor(result: BackupResult): BackupToast {
+  const K = 'settings.backup.toast';
   switch (result.pushStatus) {
     case 'ok':
       return {
         severity: 'success',
-        message: `Backup complete — ${result.tablesExported} tables, commit ${result.commit}`,
+        messageKey: `${K}.ok`,
+        // commit is `string | null`; backend only sends 'ok' with a real sha, but
+        // guard the type gap so a null never interpolates the literal "null".
+        messageParams: { tablesExported: result.tablesExported, commit: result.commit ?? '—' },
       };
     case 'failed':
-      return { severity: 'warning', message: 'Backup committed locally but push failed. Check network.' };
+      return { severity: 'warning', messageKey: `${K}.failed` };
     case 'refused': {
-      const map: Record<string, string> = {
-        no_configured_destination: 'Backup not configured. Set up a backup repository in Settings.',
-        destination_mismatch:
-          'Backup refused — remote mismatch: git origin differs from the configured backup target. Reconfigure in Settings.',
-
-        no_remote: 'Backup refused — no backup remote is configured. Set one up in Settings.',
+      const reasonKey: Record<string, string> = {
+        no_configured_destination: `${K}.refused.noConfiguredDestination`,
+        destination_mismatch: `${K}.refused.destinationMismatch`,
+        no_remote: `${K}.refused.noRemote`,
       };
-      const message =
-        (result.refuseReason && map[result.refuseReason]) ||
-        'Backup refused: destination not verified. Check your backup settings.';
-      return { severity: 'warning', message };
+      const messageKey =
+        (result.refuseReason && reasonKey[result.refuseReason]) || `${K}.refused.fallback`;
+      return { severity: 'warning', messageKey };
     }
     case 'skipped_disabled':
     case 'skipped':
-      return { severity: 'info', message: 'Backup is disabled. Enable it in Settings to run backups.' };
+      return { severity: 'info', messageKey: `${K}.disabled` };
     default:
       // no_changes and any unknown status → benign no-op
-      return { severity: 'info', message: 'No changes to backup.' };
+      return { severity: 'info', messageKey: `${K}.noChanges` };
   }
 }
 

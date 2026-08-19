@@ -141,7 +141,7 @@
     "title": "对话",
     "placeholder": "输入消息...",
     "streamingPlaceholder": "等待回复中...",
-    "selectAgent": "选择一个 Agent 开始对话",
+    "selectAgent": "选择 Agent",
     "noAgent": "请先选择一个 Agent",
     "loadingAgent": "正在加载 Agent...",
     "agentLoadFailed": "加载 Agent 失败",
@@ -180,7 +180,6 @@
     "workingIn": "工作在：",
     "noAgentsAvailable": "暂无可用 Agent。",
     "createAgentFirst": "请先创建一个",
-    "selectAgent": "选择 Agent",
     "chooseAgent": "选择一个 Agent...",
     "runAsTask": "后台任务",
     "runAsTaskDescription": "在后台运行 - 即使离开页面任务也会继续执行",
@@ -665,6 +664,48 @@
       "restartNow": "立即重启",
       "updateFailed": "更新失败",
       "tryAgain": "重试"
+    },
+    "backup": {
+      "title": "工作区备份",
+      "active": "已启用",
+      "disabled": "已禁用",
+      "lastBackup": "上次备份",
+      "never": "从未",
+      "schedule": "计划",
+      "dailyLabel": "每天 3:00",
+      "repository": "仓库",
+      "notConfigured": "未配置",
+      "backupNow": "立即备份",
+      "backingUp": "备份中...",
+      "configure": "配置",
+      "loading": "正在加载备份状态...",
+      "configTitle": "备份配置",
+      "repoUrlLabel": "GitHub 仓库地址",
+      "tokenLabel": "GitHub Token（存于钥匙串）",
+      "tokenHint": "Token 存储在 macOS 钥匙串中，绝不以明文写入文件。",
+      "saveConfig": "保存配置",
+      "restoreTitle": "从备份恢复",
+      "restoreDesc": "克隆备份仓库并恢复工作区、配置和数据库。仅在全新安装（无现有数据）时可用。",
+      "restore": "从备份恢复",
+      "retryRestore": "重试恢复",
+      "info": "工作区备份会把你的记忆、知识、项目、配置和对话历史导出到一个私有 GitHub 仓库。L3 数据（向量、搜索索引）在恢复时重建。",
+      "toast": {
+        "ok": "备份完成 —— {{tablesExported}} 张表，提交 {{commit}}",
+        "failed": "已在本地提交，但推送失败。请检查网络。",
+        "noChanges": "没有需要备份的改动。",
+        "disabled": "备份已禁用。请在设置中启用后再运行备份。",
+        "configSaved": "备份配置已保存。",
+        "configFailed": "保存配置失败。",
+        "enterRepoFirst": "请先在上方“配置”中填写仓库地址。",
+        "backupFailed": "备份失败：{{error}}",
+        "restoreFailed": "恢复失败：{{error}}",
+        "refused": {
+          "noConfiguredDestination": "备份未配置。请在设置中设置备份仓库。",
+          "destinationMismatch": "备份被拒 —— 目的地不匹配：git origin 与配置的备份目标不一致。请在设置中重新配置。",
+          "noRemote": "备份被拒 —— 未配置备份 remote。请在设置中设置一个。",
+          "fallback": "备份被拒：目的地未验证。请检查备份设置。"
+        }
+      }
     }
   }
 }

@@ -143,7 +143,7 @@
     "title": "Chat",
     "placeholder": "Type a message...",
     "streamingPlaceholder": "Waiting for response...",
-    "selectAgent": "Select an Agent to start chatting",
+    "selectAgent": "Select Agent",
     "noAgent": "Please select an Agent first",
     "loadingAgent": "Loading agent...",
     "agentLoadFailed": "Failed to Load Agent",
@@ -182,7 +182,6 @@
     "workingIn": "Working in:",
     "noAgentsAvailable": "No agents available.",
     "createAgentFirst": "Create one first",
-    "selectAgent": "Select Agent",
     "chooseAgent": "Choose an agent...",
     "runAsTask": "Background Task",
     "runAsTaskDescription": "Run in background - task continues even if you navigate away",
@@ -667,6 +666,48 @@
       "restartNow": "Restart Now",
       "updateFailed": "Update failed",
       "tryAgain": "Try Again"
+    },
+    "backup": {
+      "title": "Workspace Backup",
+      "active": "Active",
+      "disabled": "Disabled",
+      "lastBackup": "Last backup",
+      "never": "Never",
+      "schedule": "Schedule",
+      "dailyLabel": "Daily 3:00 AM",
+      "repository": "Repository",
+      "notConfigured": "Not configured",
+      "backupNow": "Backup Now",
+      "backingUp": "Backing up...",
+      "configure": "Configure",
+      "loading": "Loading backup status...",
+      "configTitle": "Backup Configuration",
+      "repoUrlLabel": "GitHub Repository URL",
+      "tokenLabel": "GitHub Token (stored in Keychain)",
+      "tokenHint": "Token is stored in macOS Keychain, never in plaintext files.",
+      "saveConfig": "Save Configuration",
+      "restoreTitle": "Restore from Backup",
+      "restoreDesc": "Clone a backup repository and restore your workspace, config, and database. Only works on a fresh install (no existing data).",
+      "restore": "Restore from Backup",
+      "retryRestore": "Retry Restore",
+      "info": "Workspace backup exports your memory, knowledge, projects, config, and conversation history to a private GitHub repository. L3 data (embeddings, search indexes) is rebuilt on restore.",
+      "toast": {
+        "ok": "Backup complete — {{tablesExported}} tables, commit {{commit}}",
+        "failed": "Backup committed locally but push failed. Check network.",
+        "noChanges": "No changes to backup.",
+        "disabled": "Backup is disabled. Enable it in Settings to run backups.",
+        "configSaved": "Backup configuration saved.",
+        "configFailed": "Failed to save config.",
+        "enterRepoFirst": "Enter a repo URL first (in Configure above).",
+        "backupFailed": "Backup failed: {{error}}",
+        "restoreFailed": "Restore failed: {{error}}",
+        "refused": {
+          "noConfiguredDestination": "Backup not configured. Set up a backup repository in Settings.",
+          "destinationMismatch": "Backup refused — remote mismatch: git origin differs from the configured backup target. Reconfigure in Settings.",
+          "noRemote": "Backup refused — no backup remote is configured. Set one up in Settings.",
+          "fallback": "Backup refused: destination not verified. Check your backup settings."
+        }
+      }
     }
   }
 }
