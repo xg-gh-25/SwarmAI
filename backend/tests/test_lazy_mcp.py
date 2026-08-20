@@ -375,6 +375,47 @@ class TestDeferredPromptInjection:
         text = PromptBuilder.format_deferred_mcp_section([])
         assert text == ""
 
+    # -- Guidance-quality regression tests (run_7b145d13) ------------------
+    # The section must not merely DESCRIBE the Enable mechanism; it must give
+    # the agent an unambiguous correct action AND forbid the wrong fallbacks
+    # that a real agent took (declare unavailable / new tab / paste / give up).
+
+    def _guidance_text(self):
+        from core.prompt_builder import PromptBuilder
+        return PromptBuilder.format_deferred_mcp_section(
+            [{"name": "builder-mcp", "tier": "ondemand",
+              "description": "Internal search"}]
+        )
+
+    def test_guidance_states_enable_and_resend_action(self):
+        """AC1a: the one-step correct action names both Enable AND resend."""
+        text = self._guidance_text().lower()
+        assert "enable" in text
+        # The resend step is the part agents miss — it must be explicit.
+        assert "resend" in text or "re-send" in text or "send it again" in text
+
+    def test_guidance_clarifies_not_loaded_is_not_unavailable(self):
+        """AC1b: absent handle == not-yet-loaded-this-session, NOT unavailable.
+
+        Pins the load-bearing reframing phrase, not stopwords: an earlier
+        version asserted bare "not"/"session" (present in almost any English
+        guidance incl. the OLD descriptive text) and had no regression teeth
+        (adversarial LOW, run_7b145d13). These substrings only co-occur when
+        the reframing sentence is actually present.
+        """
+        text = self._guidance_text().lower()
+        # The reframe must literally say the absence does NOT MEAN UNAVAILABLE.
+        assert "not mean" in text and "unavailable" in text
+        # And it must tie loading to THIS session (not a generic 'session' mention).
+        assert "this-session" in text or "for the session" in text or "rest of the session" in text
+
+    def test_guidance_forbids_wrong_fallbacks(self):
+        """AC1c: explicitly forbid new-tab / paste / give-up detours."""
+        text = self._guidance_text().lower()
+        assert "new tab" in text or "new chat" in text
+        assert "paste" in text
+        assert "give up" in text or "do not give up" in text or "don't give up" in text
+
 
 # ---------------------------------------------------------------------------
 # AC5: Session respawn with additional MCPs

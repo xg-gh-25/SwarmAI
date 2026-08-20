@@ -489,9 +489,15 @@ class PromptBuilder:
         lines = [
             "\n## Deferred MCPs (available but not loaded)",
             "These MCP tool servers are installed but NOT started (to save memory).",
-            "When you need one of these MCPs, tell the user which MCP you need and why.",
-            "The user's UI will show an 'Enable' button to load it. Once loaded,",
-            "it will be available for all subsequent messages in this session.\n",
+            "An MCP listed here being absent from your current tool handles means it is"
+            " NOT-YET-LOADED-THIS-SESSION — it does NOT mean the MCP is unavailable.",
+            "CORRECT ACTION when you need one: (1) tell the user which MCP you need and"
+            " why, (2) the UI shows an 'Enable' button — ask them to click it, (3) they"
+            " resend the message; the MCP's tools are then loaded for the rest of the"
+            " session. That is the whole path — one click + resend.",
+            "Do NOT do any of these instead: declare the MCP unavailable, ask the user to"
+            " open a new tab/new chat, ask them to paste the content manually, or give up"
+            " the task. Enable + resend is the only correct route.\n",
         ]
         for item in deferred:
             desc = item.get("description", "")
