@@ -39,12 +39,22 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   memory size-valve). Applies session-type exclusions (channels drop MEMORY/USER/EVOLUTION
   wholesale — `WHOLE_FILE_PRIVATE`).
   Desktop path = fresh assembly (L1 cache bypassed).
-- **Recall** — the 11-file context recall (`context_recall`) is **pure-filesystem keyword /
-  FTS5 / Okapi-BM25; NO vector, NO graph** (vector torn out — never call it hybrid): ranks
-  matched sections' *entries* by BM25, returns top within a live token cap; a `[RECALLED]`
-  header flags retrieved prior-context, not this-turn reasoning. The multi-domain fan-out
-  (`recall_multi`) adds a live code-graph leg + default-OFF (`allow_embed=False`) vector legs —
-  so "pure-filesystem" is precise only for the context-file recall, not the fan-out.
+- **Recall — I HAVE it on TWO triggers, and I INVOKE it, not just receive it.** (1) AUTO:
+  session-start + the first keyword-bearing message inject a `[RECALLED]` block. (2) ON-DEMAND:
+  I can run recall MYSELF mid-session over 5 domains — `recall_all` (`core/recall_multi.py`,
+  `DOMAINS = context_files, ddd, library, session, codeintel`), invoked via `context_recall_cli.py`
+  (`--domains <d>` for the fan-out, or `--file` for one context file; full invocation → TOOLS.md).
+  **The load-bearing self-knowledge:
+  DDD / Knowledge-Library / Memory are ALL on-demand recallable during a turn — reach for `--domains`
+  before ever saying "I don't recall / not in context / indexes next session."** Command reference +
+  domain→store map + the `knowledge_fts`≠DDD trap live in TOOLS.md § On-Demand Recall. The context-file
+  recall (`context_recall`) is **pure-filesystem keyword / FTS5 / Okapi-BM25; NO vector, NO graph**
+  (vector torn out — never call it hybrid): ranks matched *entries* by BM25, returns top within a live
+  token cap; the `[RECALLED]` header flags retrieved prior-context, not this-turn reasoning. The
+  fan-out adds a live code-graph leg + inert `allow_embed=False` legs — so "pure-filesystem" is precise
+  for the context-file recall, not the whole fan-out. (Earned as a failure class: an instance that
+  doesn't KNOW it has on-demand recall will use the wrong tool and wrongly conclude "not in my context"
+  — the ability existing in code is worthless if the self-model doesn't carry it.)
 - **Memory management** (`memory_index` + `distillation_hook`) — two-tier: DailyActivity (raw)
   → distilled MEMORY. Live MEMORY.md is **ALWAYS full-injected** (2026-08-14 architecture: no
   selective mode, no section-scoring, no in-prompt index, no injection-time truncation). Size
