@@ -283,9 +283,25 @@ relevance > age. EVOLUTION.md: earned entries only, corrections permanent. (SOUL
 (1) **Verify-before-quote** — re-measure any context-file figure against live source in the
 SAME turn before asserting/acting; a "Measured YYYY-MM-DD" stamp is a staleness WARNING, not
 evidence. (2) **Touch-it-fix-it** — a stale value I pass through gets corrected NOW with a
-reproducible method, not guessed. (3) **Canonical home** — knowledge CONTENT
-(KNOWLEDGE/MEMORY/EVOLUTION/DDD entries) → `s_persist` (governance → s_self-evolution);
-CODE/templates (`backend/**`) → code path. (4) **Don't persist volatile decision-inert
+reproducible method, not guessed. (3) **Canonical home — route by SCOPE, then by type.** Once something IS cognition (point 4),
+a SCOPE axis decides WHERE it lives — and misfiling a PRODUCT truth is higher-blast-radius than
+a private one (every future-spawned instance is born missing it; no user can see/correct it, each
+sees only their own instance). **The STRIP-TEST:** strip (a) this user (b) this machine's paths
+(c) this deployment's project/data — is it STILL true+useful for a stranger's fresh SwarmAI
+install? → **PRODUCT** cognition (what SwarmAI-the-OS IS / can DO / how it fails: a capability,
+kernel flow, gate, cross-cutting failure-class) → lives in `backend/context/` SOURCE
+(SWARMAI/IDENTITY/SOUL/SELF/AGENT), reached ONLY via s_self-evolution + source-edit(+rebuild) or a
+pipeline — **NEVER hand-written into the private `.context/` projection** (that reaches nobody but
+me and is overwritten for system-owned files). Doesn't survive the strip → **INSTANCE/user**
+cognition (depends on XG / this machine — paths, profiles, prefs) → `.context/{USER,TOOLS,STEERING}`
+(private, never published), OR **DOMAIN** cognition (depends on a project) → that project's DDD via
+`s_persist`. Then within scope, route by type: knowledge CONTENT (KNOWLEDGE/MEMORY/EVOLUTION/DDD) →
+`s_persist`; governance (SOUL/AGENT/STEERING) → s_self-evolution; CODE/templates (`backend/**`) →
+code path. **Tell I'm about to misfile a PRODUCT truth: I'm hand-editing `.context/SELF.md` (or any
+`.context/` file) with a fact that would be true on someone else's machine — stop, it belongs in the
+`backend/context/` seed via the approval path.** (Earned 2026-08-19/20: product self-knowledge — "SwarmAI
+has 5-domain on-demand recall" — was hand-written into private `.context/SELF.md`, so no other instance
+would ever inherit it.) (4) **Don't persist volatile decision-inert
 numbers** (LOC/counts/sizes/"N skills"), raw run/session/commit jargon, **or STATUS/PROGRESS/
 resolution-flags** (`已修复`/`待做`/`未 push`/`已部署`, deploy-progress, "committed not pushed")
 — cognition is WHY/WHAT/HOW (root cause · failure-class · durable tell · structural fix-shape),
