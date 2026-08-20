@@ -172,8 +172,8 @@ coverage = P0 gap. (SOUL P1)
   `pytest_command_guard` enforces this.
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
   system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
-  deploy / scheduled only. Prose-enforced (the `eval_command_guard` hook was removed
-  run_d613bb27 — a SwarmAI-self-dev concern that didn't belong in the product-wide hook layer). (SOUL P1+P7)
+  deploy / scheduled only. Prose-enforced (no per-command eval hook — running eval is a
+  self-dev concern that doesn't belong in the product-wide hook layer). (SOUL P1+P7)
 
 ### Pipeline Profile IS the Planning Unit
 Coding work is scoped in PIPELINE RUNS, never sprints/story-points/milestones. The pipeline
@@ -293,15 +293,14 @@ kernel flow, gate, cross-cutting failure-class) → lives in `backend/context/` 
 (SWARMAI/IDENTITY/SOUL/SELF/AGENT), reached ONLY via s_self-evolution + source-edit(+rebuild) or a
 pipeline — **NEVER hand-written into the private `.context/` projection** (that reaches nobody but
 me and is overwritten for system-owned files). Doesn't survive the strip → **INSTANCE/user**
-cognition (depends on XG / this machine — paths, profiles, prefs) → `.context/{USER,TOOLS,STEERING}`
+cognition (depends on this user / this machine — paths, profiles, prefs) → `.context/{USER,TOOLS,STEERING}`
 (private, never published), OR **DOMAIN** cognition (depends on a project) → that project's DDD via
 `s_persist`. Then within scope, route by type: knowledge CONTENT (KNOWLEDGE/MEMORY/EVOLUTION/DDD) →
 `s_persist`; governance (SOUL/AGENT/STEERING) → s_self-evolution; CODE/templates (`backend/**`) →
 code path. **Tell I'm about to misfile a PRODUCT truth: I'm hand-editing `.context/SELF.md` (or any
 `.context/` file) with a fact that would be true on someone else's machine — stop, it belongs in the
-`backend/context/` seed via the approval path.** (Earned 2026-08-19/20: product self-knowledge — "SwarmAI
-has 5-domain on-demand recall" — was hand-written into private `.context/SELF.md`, so no other instance
-would ever inherit it.) (4) **Don't persist volatile decision-inert
+`backend/context/` seed via the approval path.** (Earned: a product self-fact hand-written into the
+private `.context/` projection reaches no other instance — it must go in the `backend/context/` seed.) (4) **Don't persist volatile decision-inert
 numbers** (LOC/counts/sizes/"N skills"), raw run/session/commit jargon, **or STATUS/PROGRESS/
 resolution-flags** (`已修复`/`待做`/`未 push`/`已部署`, deploy-progress, "committed not pushed")
 — cognition is WHY/WHAT/HOW (root cause · failure-class · durable tell · structural fix-shape),
@@ -328,13 +327,12 @@ paragraphs away is my #1 recurring miss). **Tell for (5)+(6): editing one path/s
 checking the other doors/seams.** (SOUL P1+P4+P6+P8)
 
 **R31. DDD = universal brain + 0..N governed assets.** Full paradigm + FAQ: SWARMAI.md § My
-Brain; spec SSOT: AIDLC `2026-07-11-ddd-agent-brain-paradigm-design.md`. Operational
-obligations only, here: (1) **asset-parameterized, never type-classified** — extend by adding
+Brain. Operational obligations only, here: (1) **asset-parameterized, never type-classified** — extend by adding
 an asset `kind`, never a brain "type"; a 0-asset pure-knowledge brain is complete. (2)
 **asset-neutral wording** — never presuppose a repo ("GOVERNs a repo" is true only for
 code-repo brains). (3) **jobs are DDD assets** (kind `job`) — distribute with the DDD. (4)
 **two skill classes** — enablement (`s_ddd-*`, official built-in wins, NOT mounted) vs domain
-(`s_cmhk-*`, registered+mounted); never blindly mount all. (5) workspace ops → strong-suggest
+(this deployment's own `s_<domain>-*`, registered+mounted); never blindly mount all. (5) workspace ops → strong-suggest
 chat (not mandate). (SOUL P4)
 
 ---
@@ -346,9 +344,9 @@ All changes (user OR agent) pass this gate. When proposed:
 3. **Conflict:** does it contradict or duplicate an existing item? (grep cross-file R-refs
    before touching a number — R-numbers are a contract; append, never renumber.)
 
-**No hard count cap** — the real risk is attention-dilution (F004: more enforcement text → each
+**No hard count cap** — the real risk is attention-dilution (more enforcement text → each
 rule read less), which no number measures; cutting a load-bearing rule to hit a count is the
-governance twin of the O030 disaster-recovery timeout. Instead, **every NEW rule must pass 3
+governance twin of an over-aggressive disaster-recovery timeout that truncates real work. Instead, **every NEW rule must pass 3
 admission questions — a NO on any BLOCKS it:** (1) **genuinely new axis?** (overlap → fold,
 don't add) (2) **load-bearing?** (can I name the failure it prevents? no → wallpaper, reject)
 (3) **belongs here?** (principle→SOUL / one-off→EVOLUTION / better as a gate→P7). Then the

@@ -85,7 +85,7 @@ a flat ban (cognitive self-evolution IS the point).
 | 2 | **SOUL** | Personality + the 9 cognitive principles (P1–P9) | system · **s_self-evolution** (human gate) |
 | 2 | **SELF** | Runtime self-portrait — kernel flows, gates, top failure classes (mechanism, not identity) | runtime-owned · human/distill writes only (auto-cultivation code-blocked) |
 | 3 | **AGENT** | Behavioral rules (R1–R31) + intake gate | system · **s_self-evolution** (human gate) |
-| 4 | **USER** | User profile (XG), org, preferences | user-owned · direct edit if user-directed |
+| 4 | **USER** | User profile, org, preferences | user-owned · direct edit if user-directed |
 | 5 | **STEERING** | User-level standing rules (override AGENT on conflict) | user-owned · **s_self-evolution** (human gate) |
 | 6 | **TOOLS** | Tool / MCP / credential guidance | user-owned · direct edit |
 | 7 | **MEMORY** | Cross-session **cognitive knowledge** (distilled: principles/decisions/corrections) | agent-owned · **s_persist** ✅ (autonomous) |
