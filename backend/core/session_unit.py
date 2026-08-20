@@ -771,6 +771,10 @@ class SessionUnit:
         # by the send() success path) so repeated wedged-tool episodes actually
         # accumulate toward a hard-error escalation (AC4).
         self._tool_hang_episodes: int = 0
+        # Tool-FREE deadline extensions used THIS attempt (run_dcd668a6). Reset
+        # per STREAMING entry — bounds total extension per attempt; across
+        # retries the upstream retry cap bounds it. See TOOL_FREE_* constants.
+        self._tool_free_extensions: int = 0
 
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
@@ -1169,6 +1173,8 @@ class SessionUnit:
             # Fresh tool-hang episode for this turn (run_fb6e94a9).
             self._tool_hang_interrupted = False
             self._tool_hang_interrupt_at = None
+            # Fresh tool-free extension budget for this attempt (run_dcd668a6).
+            self._tool_free_extensions = 0
             # Start PID watchdog for out-of-band death detection
             self._start_pid_watchdog()
 
@@ -1377,6 +1383,49 @@ class SessionUnit:
                         # tool is still open (run_fb6e94a9).
                         tool_open = bool(self._open_tool_uses)
                         if silence > timeout and not in_interrupt_grace and not tool_open:
+                            # ── Tool-FREE CPU-liveness gate (run_dcd668a6) ──
+                            # This backstop is the SECOND tool-free kill path
+                            # (the orchestrator wait_for is the first). Both MUST
+                            # consult the SAME liveness authority, or gating only
+                            # one leaves a split-brain door open (a CPU-busy turn
+                            # the orchestrator spared would still be killed here).
+                            # Spare ONLY a PROVABLY-working process; kill on
+                            # WEDGED and UNKNOWN alike, or if past the absolute
+                            # per-attempt hard ceiling (a busy-loop that pegs CPU
+                            # forever is never 'wedged' — the ceiling is its
+                            # last-resort bound). UNKNOWN kills here because this
+                            # backstop is the last resort (the native read the
+                            # orchestrator wait_for cannot cancel) — an
+                            # unmeasurable process must not be spared.
+                            if silence <= self.TOOL_FREE_HARD_CEILING_S:
+                                verdict = await self._tool_free_hang_verdict(pid)
+                                # Post-await state re-check (Gate-2 CRITICAL):
+                                # the verdict await lasts ~SAMPLES×INTERVAL. During
+                                # it the orchestrator (a SEPARATE task) can move the
+                                # session STREAMING → WAITING_INPUT (a permission /
+                                # ask_user_question arrived) or → IDLE/DEAD (turn
+                                # ended). The pre-verdict STREAMING guard is stale
+                                # by now; killing here would destroy a session
+                                # legitimately waiting for user input. If we are no
+                                # longer STREAMING, this backstop has nothing to do.
+                                if self.state != SessionState.STREAMING:
+                                    continue
+                                # Spare ONLY a PROVABLY-working process. 'wedged'
+                                # AND 'unknown' both fall through to the kill —
+                                # this backstop is the last resort (the native
+                                # read the orchestrator wait_for can't cancel), so
+                                # an unmeasurable process must not be spared here.
+                                # This also keeps the two tool-free paths
+                                # symmetric: the orchestrator likewise only
+                                # EXTENDS on 'working' and raises otherwise.
+                                if verdict == "working":
+                                    logger.warning(
+                                        "session_unit.output_liveness_working "
+                                        "session_id=%s pid=%d silence=%.0fs "
+                                        "— subprocess CPU-busy, NOT killing",
+                                        self.session_id, pid, silence,
+                                    )
+                                    continue
                             logger.error(
                                 "session_unit.output_liveness_timeout "
                                 "session_id=%s pid=%d silence=%.0fs "
@@ -1438,6 +1487,28 @@ class SessionUnit:
     # After a SUCCESSFUL warm interrupt, suppress the destructive force-kill
     # backstop this long to let interrupt() end the turn (STREAMING → IDLE).
     TOOL_HANG_INTERRUPT_GRACE_S: float = 60.0
+
+    # ── Tool-FREE hang tier — CPU-liveness gated (run_dcd668a6) ──────
+    # The tool-OPEN tier above only guards a hang WHILE a tool_use is open. A
+    # tool-FREE API hang (no tool open — pure Bedrock inference silent for
+    # MESSAGE_TIMEOUT) was force-killed by a PURE WALL-CLOCK timer with NO
+    # liveness check (streaming_orchestrator wait_for + the _pid_watchdog
+    # output-liveness backstop below). That false-killed a CPU-BUSY-but-slow
+    # turn (long extended-thinking on large context). This tier applies the
+    # SAME tree-CPU discriminator to the tool-free path: at the timeout mark,
+    # if the subprocess tree is burning CPU it is WORKING (extend, bounded),
+    # if it is ~0 CPU across samples it is WEDGED (kill as before). Multi-sample
+    # (not single) so a transient CPU dip during slow streaming is not mistaken
+    # for a wedge. Reuses CPU_PROBE_INTERVAL_S + CPU_LIVE_EPSILON above.
+    TOOL_FREE_VERDICT_SAMPLES: int = 3    # consecutive ~0-CPU windows => wedged
+    TOOL_FREE_MAX_EXTENSIONS: int = 4     # bounded deadline extensions per attempt
+    # Absolute per-ATTEMPT ceiling: a tool-free turn silent this long is
+    # force-killed REGARDLESS of CPU (a busy-loop that pegs CPU forever would
+    # never be flagged 'wedged'). Per-STREAMING-entry (reset each attempt);
+    # total across retries is separately bounded by retry_manager
+    # MAX_RETRY_ATTEMPTS + should_circuit_break_timeout. Generous (> longest
+    # legit tool-free inference) so genuine long thinking is not killed.
+    TOOL_FREE_HARD_CEILING_S: float = 1800.0  # 30 min
 
     # ── Tool-hang helpers (run_fb6e94a9) ─────────────────────────
 
@@ -1633,6 +1704,58 @@ class SessionUnit:
             self._tool_hang_interrupt_at = time.time()
             # Once-per-episode guard (cleared on STREAMING entry + ToolResultBlock).
             self._tool_hang_interrupted = True
+
+    # ── Tool-FREE hang verdict (run_dcd668a6) ────────────────────
+
+    async def _tool_free_hang_verdict(self, pid: int) -> str:
+        """CPU-liveness verdict for a TOOL-FREE streaming hang.
+
+        The tool-free sibling of ``_maybe_escape_wedged_tool``'s CPU probe.
+        Called at the MESSAGE_TIMEOUT/INIT_TIMEOUT mark (from the streaming
+        orchestrator's TimeoutError handler and the ``_pid_watchdog_loop``
+        output-liveness backstop) to decide: is the subprocess genuinely
+        wedged, or alive-but-slow (heavy inference)?
+
+        Samples cumulative tree CPU across ``TOOL_FREE_VERDICT_SAMPLES``
+        windows of ``CPU_PROBE_INTERVAL_S`` each:
+
+        - ANY window with delta >= ``CPU_LIVE_EPSILON`` → return ``'working'``
+          EARLY (the tree is burning CPU — it's inferring, not hung). Multi-
+          sample (not single) so a transient CPU dip during slow streaming is
+          not mistaken for a wedge.
+        - ALL windows < epsilon (and every sample readable) → ``'wedged'``.
+        - ANY sample unreadable (``tree_cpu_seconds`` → None) → ``'unknown'``
+          (FAIL SAFE — the caller treats unknown as "cannot prove alive" and
+          falls back to its current kill/raise behavior; never hang forever on
+          an unmeasurable process).
+
+        Uses ``await asyncio.sleep`` between samples so it NEVER sync-blocks the
+        shared event loop — other sessions' reads and heartbeats proceed during
+        the ~``SAMPLES × INTERVAL`` sampling window. Pure judge: performs no
+        kill/interrupt and mutates no state.
+
+        If the session leaves STREAMING mid-sampling, returns ``'wedged'`` — the
+        turn is no longer live, so the caller's kill/raise path (cleanup) is the
+        correct outcome; returning 'working' there would let a dead session
+        re-extend forever (adversarial round-3 finding).
+        """
+        from .resource_monitor import resource_monitor
+
+        saw_unknown = False
+        for _ in range(max(1, self.TOOL_FREE_VERDICT_SAMPLES)):
+            if self.state != SessionState.STREAMING:
+                return "wedged"
+            cpu0 = resource_monitor.tree_cpu_seconds(pid)
+            await asyncio.sleep(self.CPU_PROBE_INTERVAL_S)
+            if self.state != SessionState.STREAMING:
+                return "wedged"
+            cpu1 = resource_monitor.tree_cpu_seconds(pid)
+            if cpu0 is None or cpu1 is None:
+                saw_unknown = True
+                continue
+            if (cpu1 - cpu0) >= self.CPU_LIVE_EPSILON:
+                return "working"
+        return "unknown" if saw_unknown else "wedged"
 
     # ── Adaptive timeout ─────────────────────────────────────────
 

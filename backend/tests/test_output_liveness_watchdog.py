@@ -64,6 +64,13 @@ def _make_unit(session_id: str = "test-session", pid: int | None = None) -> Sess
     unit._stop_event = asyncio.Event()
     # Mock _force_kill to avoid real process operations
     unit._force_kill = AsyncMock()
+    # Tool-free CPU-liveness gate (run_dcd668a6): the output-liveness backstop
+    # now consults _tool_free_hang_verdict before killing, sparing only a
+    # PROVABLY CPU-busy ('working') process. These watchdog tests simulate a
+    # GENUINELY HUNG process, so the verdict is 'wedged' by default — the kill
+    # must still fire. Tests that specifically exercise the CPU-busy spare path
+    # override this to 'working'.
+    unit._tool_free_hang_verdict = AsyncMock(return_value="wedged")
     return unit
 
 

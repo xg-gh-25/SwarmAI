@@ -815,6 +815,45 @@ class StreamingOrchestrator:
                 is_first_message = False
             except asyncio.TimeoutError:
                 phase = "init" if is_first_message else "streaming"
+                # ── Tool-FREE CPU-liveness gate (run_dcd668a6) ─────────
+                # The wall-clock timeout fired, but that alone does NOT prove a
+                # hang: a long tool-free inference (heavy extended-thinking on
+                # large context) is SDK-silent yet CPU-BUSY. Before killing,
+                # probe the subprocess tree CPU. If it's WORKING, extend the
+                # deadline (bounded per attempt + hard-ceilinged) by looping
+                # again — the next iteration builds a FRESH sdk_task (a NEW
+                # __anext__), NOT a resume of the cancelled read (the SDK
+                # json_buffer lives in a DETACHED reader task, so a fresh
+                # __anext__ re-parks cleanly on the memory stream). WEDGED or
+                # UNKNOWN → raise as before (fail-safe: never hang forever on an
+                # unmeasurable/dead process). Applies to init too — a large-
+                # context cold-resume TTFT is the most common false-timeout.
+                _parent = self._parent
+                _pid = _parent.pid
+                _start = _parent._streaming_start_time
+                _elapsed = (time.time() - _start) if _start else 0.0
+                _ceiling = _parent.TOOL_FREE_HARD_CEILING_S
+                if (
+                    _pid
+                    and _parent._tool_free_extensions < _parent.TOOL_FREE_MAX_EXTENSIONS
+                    and _elapsed < _ceiling
+                ):
+                    verdict = await _parent._tool_free_hang_verdict(_pid)
+                    if verdict == "working":
+                        _parent._tool_free_extensions += 1
+                        logger.warning(
+                            "session_unit.%s_timeout_extended session_id=%s — "
+                            "no SDK message for %.0fs but subprocess CPU-busy "
+                            "(extension %d/%d, elapsed=%.0fs/%.0fs) — extending, "
+                            "NOT killing",
+                            phase, _parent.session_id, current_timeout,
+                            _parent._tool_free_extensions,
+                            _parent.TOOL_FREE_MAX_EXTENSIONS, _elapsed, _ceiling,
+                        )
+                        # Reset the liveness clocks so the watchdog backstop
+                        # doesn't immediately kill on the same stale silence.
+                        _parent._last_event_time = time.time()
+                        continue  # fresh sdk_task next iteration (new __anext__)
                 logger.error(
                     "session_unit.%s_timeout session_id=%s — "
                     "no SDK message for %.0fs (resume=%s), breaking stream",

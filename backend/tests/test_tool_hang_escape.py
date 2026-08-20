@@ -276,16 +276,21 @@ class TestLiveToolNeverInterrupted:
         unit._force_kill.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_open_tool_no_probe(self):
+    async def test_no_open_tool_no_interrupt(self):
+        """No open tool → the tool-OPEN warm-interrupt tier (_maybe_escape_wedged_tool)
+        must NOT fire. (Renamed from test_no_open_tool_no_probe: since
+        run_dcd668a6 the tool-FREE backstop legitimately probes CPU on silence
+        even with no tool open, so 'no probe at all' is no longer the invariant —
+        'no tool-open INTERRUPT' is.) We stub the tool-free verdict to 'working'
+        so the backstop spares the process and the loop keeps running, isolating
+        the assertion to the tool-open interrupt path."""
         unit = _make_unit()
         unit.state = SessionState.STREAMING
         unit._last_event_time = time.time() - 700
         unit._open_tool_uses = {}
+        unit._tool_free_hang_verdict = AsyncMock(return_value="working")
 
-        probe = MagicMock(return_value=5.0)
-        with patch("os.kill", return_value=None), \
-             patch("core.resource_monitor.resource_monitor.tree_cpu_seconds",
-                   probe):
+        with patch("os.kill", return_value=None):
             task = asyncio.create_task(unit._pid_watchdog_loop(12345))
             await asyncio.sleep(0.2)
             task.cancel()
@@ -294,7 +299,10 @@ class TestLiveToolNeverInterrupted:
             except asyncio.CancelledError:
                 pass
 
-        probe.assert_not_called()
+        # The tool-OPEN interrupt tier never fires without an open tool.
+        unit.interrupt.assert_not_called()
+        # And with a 'working' verdict the tool-free backstop spares it (no kill).
+        unit._force_kill.assert_not_called()
         unit.interrupt.assert_not_called()
 
 
