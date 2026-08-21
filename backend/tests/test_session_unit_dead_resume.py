@@ -52,6 +52,10 @@ def _make_unit(state: SessionState = SessionState.DEAD,
     unit._wrapper = None
     unit._content_emitted = False
     unit._last_turn_clean = False
+    # Poison-guard recycle check (_should_poison_guard_recycle, added by the
+    # prewarm run) reads this on the send() auto-recover path; real __init__
+    # defaults it False. Without it a bare-__new__ unit raises AttributeError.
+    unit._adopted_prewarm_fresh = False
     unit._interrupted = False
     unit._user_stopped_current_turn = False
     unit._retry_count = 0
