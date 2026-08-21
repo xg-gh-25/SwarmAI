@@ -50,6 +50,16 @@ def _make_dumb_unit(*, stall: float, sdk_session_id=None, adaptive_timeout: floa
     unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
     unit._compute_message_timeout = MagicMock(return_value=adaptive_timeout)
     unit.force_unstick_streaming = AsyncMock()
+    # Tool-free CPU-liveness gate (run_dcd668a6): _check_streaming_timeout now
+    # reads unit.TOOL_FREE_HARD_CEILING_S and consults _tool_free_hang_verdict
+    # before force_unstick, sparing only a PROVABLY CPU-busy ('working') process.
+    # A dumb spawn (zero SDK events, silent) is a genuine wedge → the default
+    # verdict is 'wedged', so the force-unstick MUST still fire. Mirrors the
+    # sibling test_lifecycle_watchdog.py:786 mock contract (RP45 reuse the
+    # proven driver). Without these two attrs the gate's `stall <= ceiling`
+    # raises TypeError (float <= MagicMock).
+    unit.TOOL_FREE_HARD_CEILING_S = 1800.0
+    unit._tool_free_hang_verdict = AsyncMock(return_value="wedged")
 
     def _stall_prop(_self):
         now = time.time()
