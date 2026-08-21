@@ -303,6 +303,12 @@ class TestLifecycleManagerCircuitBreaker:
         unit._last_event_time = _t.time() - 100
         unit._open_tool_uses = None
         unit._sdk_session_id = None
+        # Tool-free CPU-liveness gate (run_dcd668a6): _check_streaming_timeout
+        # consults the verdict before force_unstick. This test asserts the kill
+        # DOES fire (a genuine stall to recover) → verdict 'wedged'.
+        unit.pid = 99999
+        unit.TOOL_FREE_HARD_CEILING_S = 1800.0
+        unit._tool_free_hang_verdict = AsyncMock(return_value="wedged")
 
         router = MagicMock()
         router.list_units = MagicMock(return_value=[unit])

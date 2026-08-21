@@ -769,6 +769,46 @@ class LifecycleManager:
                         cb_threshold,
                     )
                     continue
+                # ── Tool-FREE CPU-liveness gate (run_dcd668a6) ─────────
+                # THIRD tool-free kill path (orchestrator wait_for + the
+                # in-session _pid_watchdog backstop are the other two). This 60s
+                # loop must consult the SAME liveness authority, or it re-opens
+                # the split-brain the fix closed: a CPU-BUSY slow turn that the
+                # orchestrator + watchdog now SPARE would still be force-unstuck
+                # here on pure wall-clock stall. Spare ONLY a provably-working
+                # process; 'wedged'/'unknown'/past-ceiling fall through to the
+                # kill (this loop, like the watchdog backstop, is a last resort —
+                # an unmeasurable process must not be spared). The open-tool case
+                # already `continue`d above, so this only judges pure-API hangs.
+                # Cost note (adversarial MEDIUM, run_dcd668a6): the verdict awaits
+                # ~SAMPLES×INTERVAL (~6s). It is await-based, so it NEVER blocks the
+                # shared event loop — other sessions' streaming reads + per-session
+                # watchdogs proceed during it (verified: _tool_free_hang_verdict AC8).
+                # It only serializes THIS 60s maintenance loop's own remaining checks,
+                # and ONLY for units already stalled past the streaming timeout (rare;
+                # the common case `continue`s long before here). Those later checks
+                # (TTL/orphan/memory) are periodic + idempotent — a one-tick delay
+                # self-heals next cycle. So a collect-then-asyncio.gather rewrite is
+                # deliberately NOT done (P9: not worth the complexity for a rare edge).
+                pid = getattr(unit, "pid", None)
+                ceiling = getattr(unit, "TOOL_FREE_HARD_CEILING_S", None)
+                verdict_fn = getattr(unit, "_tool_free_hang_verdict", None)
+                if pid and verdict_fn and ceiling and stall <= ceiling:
+                    verdict = await verdict_fn(pid)
+                    # Post-await state re-check (mirrors the watchdog Gate-2 fix):
+                    # the ~SAMPLES×INTERVAL verdict await can race a transition to
+                    # WAITING_INPUT (permission/ask) / IDLE / DEAD — don't unstick
+                    # a session that is no longer STREAMING.
+                    if unit.state != SessionState.STREAMING:
+                        continue
+                    if verdict == "working":
+                        logger.warning(
+                            "lifecycle_manager.streaming_timeout_spared "
+                            "session_id=%s stall=%.0fs — subprocess CPU-busy, "
+                            "NOT force-unsticking",
+                            unit.session_id, stall,
+                        )
+                        continue
                 logger.warning(
                     "lifecycle_manager.streaming_timeout session_id=%s "
                     "stall=%.0fs > timeout=%.0fs — forcing unstick",

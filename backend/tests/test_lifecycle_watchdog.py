@@ -775,6 +775,15 @@ def _make_streaming_unit(
     unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
     unit._compute_message_timeout = MagicMock(return_value=adaptive_timeout)
     unit.force_unstick_streaming = AsyncMock()
+    # Tool-free CPU-liveness gate (run_dcd668a6): _check_streaming_timeout now
+    # consults _tool_free_hang_verdict before force_unstick, sparing only a
+    # PROVABLY CPU-busy ('working') process. A dumb spawn (zero SDK events,
+    # silent) is a genuine wedge, so the default verdict is 'wedged' — the
+    # force-unstick must still fire. Tests exercising the CPU-busy spare path
+    # override this to 'working'.
+    from unittest.mock import AsyncMock as _AM
+    unit.TOOL_FREE_HARD_CEILING_S = 1800.0
+    unit._tool_free_hang_verdict = _AM(return_value="wedged")
 
     # Use the REAL stall computation (bound to our mock's attributes).
     def _stall():
