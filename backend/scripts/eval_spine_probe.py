@@ -73,20 +73,22 @@ def _check_exclude(name: str, attr: str, required: set, negative: bool) -> int:
 
 def safe_group_exclude(negative: bool) -> int:
     """Group-channel prompts must exclude the whole-file-private set
-    (USER/EVOLUTION/MEMORY) — widened 2026-07-06 (run_20bd4a7b) from the
-    old {MEMORY, USER}, which leaked EVOLUTION.md into group channels.
-    (PROJECTS.md dropped 2026-08-14 — no longer a context file.)"""
+    (USER/EVOLUTION/MEMORY/TOOLS) — widened 2026-07-06 (run_20bd4a7b) from the
+    old {MEMORY, USER} (which leaked EVOLUTION.md), then 2026-08-21 to add
+    TOOLS.md (AWS account #s / ADA creds / Midway — egress_redactor does not
+    scrub bare account numbers). (PROJECTS.md dropped 2026-08-14.)"""
     return _check_exclude("SAFE_GROUP", "GROUP_CHANNEL_EXCLUDE",
-                          {"USER.md", "EVOLUTION.md", "MEMORY.md"}, negative)
+                          {"USER.md", "EVOLUTION.md", "MEMORY.md", "TOOLS.md"}, negative)
 
 
 def safe_nonowner_exclude(negative: bool) -> int:
     """Non-owner DM prompts must exclude the whole-file-private set
-    (USER/EVOLUTION/MEMORY) — widened 2026-07-06 (run_20bd4a7b) from the
-    old {EVOLUTION, PROJECTS}, which leaked USER.md + MEMORY.md to teammates.
+    (USER/EVOLUTION/MEMORY/TOOLS) — widened 2026-07-06 (run_20bd4a7b) from the
+    old {EVOLUTION, PROJECTS} (which leaked USER.md + MEMORY.md), then 2026-08-21
+    to add TOOLS.md (owner-machine infra: account #s / ARNs / creds).
     (PROJECTS.md dropped 2026-08-14 — no longer a context file.)"""
     return _check_exclude("SAFE_NONOWNER", "CHANNEL_LIGHT_EXCLUDE",
-                          {"USER.md", "EVOLUTION.md", "MEMORY.md"}, negative)
+                          {"USER.md", "EVOLUTION.md", "MEMORY.md", "TOOLS.md"}, negative)
 
 
 def gate_freshness(negative: bool) -> int:

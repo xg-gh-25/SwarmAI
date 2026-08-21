@@ -899,6 +899,247 @@ class TestExcludeFilenames:
         assert result == "cached content only"
 
 
+# ── Channel-Injection Privacy: TOOLS.md + gitignore/exclusion weld ───────
+#
+# Provenance: SecDLC external-agent-security-landscape §Absorb A + Gate-1 SSA.
+# The .gitignore private-context boundary (6 .md files) and the channel-injection
+# exclusion boundary (WHOLE_FILE_PRIVATE) drifted apart: TOOLS.md (AWS account #s,
+# ADA creds, Midway, ARNs) was gitignored-private yet still injected into a
+# non-owner channel's system prompt, and egress_redactor only scrubs credential
+# SHAPES (AKIA/PEM/prefixed tokens), NOT bare 12-digit account numbers. These
+# tests weld the two boundaries. Mutation-proof: remove "TOOLS.md" from
+# WHOLE_FILE_PRIVATE → the exclusion tests AND the gitignore-sync test go RED.
+
+
+class TestChannelInjectionPrivacy:
+    """TOOLS.md must not reach a non-owner channel prompt; the .gitignore
+    private-context set and the channel-exclusion set must stay welded."""
+
+    _FAKE_ACCOUNT = "850141023576"  # shape egress_redactor does NOT catch
+
+    def _write_context_files(self, context_dir: Path):
+        (context_dir / "SWARMAI.md").write_text("# Core\nYou are SwarmAI.")
+        (context_dir / "TOOLS.md").write_text(
+            f"# Tools\nADA account {self._FAKE_ACCOUNT} Admin isengard Midway."
+        )
+        (context_dir / "STEERING.md").write_text(
+            "# Steering\n### 6. Slack Bot: XG's AI Assistant\nREFUSE source-code changes."
+        )
+        (context_dir / "KNOWLEDGE.md").write_text("# Knowledge\nDomain index.")
+
+    def test_tools_excluded_from_group_channel(self, tmp_path):
+        """A group-channel prompt must NOT carry TOOLS.md content."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+        from core.context_directory_loader import GROUP_CHANNEL_EXCLUDE
+        result = loader._assemble_from_sources(
+            exclude_filenames=set(GROUP_CHANNEL_EXCLUDE)
+        )
+        assert self._FAKE_ACCOUNT not in result  # RED until TOOLS ∈ WHOLE_FILE_PRIVATE
+        assert "SwarmAI" in result  # non-excluded files still present
+
+    def test_tools_excluded_from_nonowner_dm(self, tmp_path):
+        """A non-owner DM prompt must NOT carry TOOLS.md content."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+        from core.context_directory_loader import CHANNEL_LIGHT_EXCLUDE
+        result = loader._assemble_from_sources(
+            exclude_filenames=set(CHANNEL_LIGHT_EXCLUDE)
+        )
+        assert self._FAKE_ACCOUNT not in result
+
+    def test_tools_present_for_owner_no_exclusion(self, tmp_path):
+        """Owner/desktop (exclude=None) MUST still carry TOOLS.md — the fix
+        must not starve the owner's own tooling context."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+        result = loader._assemble_from_sources(exclude_filenames=None)
+        assert self._FAKE_ACCOUNT in result
+
+    def test_tools_in_whole_file_private(self):
+        """TOOLS.md is a member of the channel-injection private set."""
+        from core.context_directory_loader import WHOLE_FILE_PRIVATE
+        assert "TOOLS.md" in WHOLE_FILE_PRIVATE  # RED until the fix lands
+
+    def test_carveouts_are_documented_not_excluded(self):
+        """STEERING/KNOWLEDGE are gitignored-private but deliberately NOT
+        channel-excluded — they must live in the carve-out map WITH a reason,
+        not silently absent (Gate-1: no ungated escape hatch)."""
+        from core.context_directory_loader import (
+            WHOLE_FILE_PRIVATE,
+            CHANNEL_INJECTION_CARVE_OUTS,
+        )
+        for f in ("STEERING.md", "KNOWLEDGE.md"):
+            assert f not in WHOLE_FILE_PRIVATE
+            assert f in CHANNEL_INJECTION_CARVE_OUTS
+            assert len(CHANNEL_INJECTION_CARVE_OUTS[f].strip()) >= 12  # real reason
+
+    def test_steering_carveout_has_real_consumer(self):
+        """The STEERING carve-out is pinned to a real consumer: the channel bot
+        needs its Slack-bot governance section. If that section vanishes, this
+        test goes RED — a carve-out cannot outlive its justification."""
+        import re
+        from core.context_directory_loader import CHANNEL_INJECTION_CARVE_OUTS
+        assert "STEERING.md" in CHANNEL_INJECTION_CARVE_OUTS
+        steering = _runtime_context_file("STEERING.md")
+        if steering is None:
+            pytest.skip("runtime STEERING.md absent (CI without workspace)")
+        # The carve-out reason IS the Slack-bot governance section — assert it
+        # exists. Case-insensitive single anchor (not the fragile .replace('BOT')
+        # half-normalization — adversarial Gate-2 LOW, run_adf5c56a).
+        assert re.search(r"slack[ -]?bot", steering, re.I), (
+            "STEERING carve-out claims the bot needs its Slack-bot governance "
+            "section, but no 'Slack Bot' section found — carve-out lost its consumer"
+        )
+
+    def test_gitignore_private_set_matches_channel_privacy(self):
+        """THE WELD (Gate-1 core fix): the .gitignore .context/*.md private list
+        must equal WHOLE_FILE_PRIVATE ∪ CHANNEL_INJECTION_CARVE_OUTS — a strict
+        two-way equality that catches BOTH drift directions:
+          (a) a private file that fell out of the exclusion set, AND
+          (b) a NEW gitignored private file that never reached the constants.
+        Parses the real SwarmWS .gitignore; skips gracefully when absent (CI)."""
+        from core.context_directory_loader import (
+            WHOLE_FILE_PRIVATE,
+            CHANNEL_INJECTION_CARVE_OUTS,
+        )
+        gitignore_private = _parse_gitignore_private_context_md()
+        if gitignore_private is None:
+            pytest.skip("SwarmWS .gitignore file absent (CI without workspace)")
+        # NOTE: an EMPTY set is NOT skipped — a present-but-gutted private block is
+        # a boundary collapse the equality check below must FAIL on, not skip.
+        accounted = set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
+        assert gitignore_private == accounted, (
+            "PRIVACY-BOUNDARY DRIFT: .gitignore private-context .md set "
+            f"{sorted(gitignore_private)} != WHOLE_FILE_PRIVATE ∪ carve-outs "
+            f"{sorted(accounted)}. Every gitignored-private context file must be "
+            "either channel-excluded (WHOLE_FILE_PRIVATE) or an explicit, "
+            "reason-carrying carve-out. carve-outs="
+            f"{sorted(CHANNEL_INJECTION_CARVE_OUTS)}"
+        )
+
+    def test_gitignore_sync_detects_injected_drift(self, tmp_path):
+        """Meta-test with REAL teeth (rewritten — the old version was a tautology,
+        `drifted = real | {SECRETS.md}` is unconditionally != accounted and never
+        touched the parser; adversarial Gate-2 conf-9, run_adf5c56a). This version
+        writes a synthetic .gitignore carrying a NEW private `.context/SECRETS.md`
+        that reached NEITHER constant, PARSES it through the real parser, and proves
+        the weld's equality assertion goes False — i.e. drift-direction-(b) (a new
+        gitignored private file nobody wired) is actually CAUGHT, not silently
+        dropped by the CONTEXT_FILES filter."""
+        from core.context_directory_loader import (
+            WHOLE_FILE_PRIVATE,
+            CHANNEL_INJECTION_CARVE_OUTS,
+        )
+        gi = tmp_path / ".gitignore"
+        gi.write_text(
+            "# private context\n"
+            ".context/MEMORY.md\n"
+            ".context/USER.md\n"
+            ".context/EVOLUTION.md\n"
+            ".context/STEERING.md\n"
+            ".context/TOOLS.md\n"
+            ".context/KNOWLEDGE.md\n"
+            ".context/SECRETS.md\n"          # ← NEW private file, wired nowhere
+            ".context/L1_SYSTEM_PROMPTS.md\n"  # known derived cache — must be dropped
+            ".context/*-archive*.md\n",        # glob — must be skipped
+            encoding="utf-8",
+        )
+        parsed = _parse_gitignore_private_context_md(gitignore_path=gi)
+        # The parser MUST see SECRETS.md (proves the CONTEXT_FILES filter no longer
+        # masks a new private file) and MUST drop the derived cache + glob.
+        assert "SECRETS.md" in parsed, "parser masked a new private file — drift-(b) hole"
+        assert "L1_SYSTEM_PROMPTS.md" not in parsed  # derived cache dropped
+        accounted = set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
+        # The real weld assertion is `parsed == accounted`; with SECRETS.md unwired
+        # it MUST be unequal → the weld goes RED. Teeth confirmed on the real path.
+        assert parsed != accounted
+        assert parsed - accounted == {"SECRETS.md"}  # exactly the unwired drift
+
+    def test_gitignore_sync_detects_gutted_block(self, tmp_path):
+        """A present-but-GUTTED private block (all `.context/*.md` lines removed)
+        must be CAUGHT, not skipped. Proves the `return out or None` conflation is
+        fixed: an existing .gitignore with no private-context .md lines parses to an
+        EMPTY set (not None), so the weld's `== accounted` FAILS instead of skipping
+        green (adversarial Gate-2 conf-8, run_adf5c56a)."""
+        gi = tmp_path / ".gitignore"
+        gi.write_text("# no private context md lines here\n*.log\n.pids/\n", encoding="utf-8")
+        parsed = _parse_gitignore_private_context_md(gitignore_path=gi)
+        assert parsed == set(), "gutted block must parse to empty set, not None (would skip)"
+        assert parsed is not None  # NOT coerced to None → weld FAILS, not skips
+
+    def test_parser_returns_none_only_when_file_absent(self, tmp_path):
+        """None is reserved for 'file genuinely absent' (→ legit CI skip), never
+        for an empty parse (→ boundary collapse). Distinguishes the two states."""
+        missing = tmp_path / "does_not_exist" / ".gitignore"
+        assert _parse_gitignore_private_context_md(gitignore_path=missing) is None
+
+
+def _runtime_context_file(name: str) -> str | None:
+    """Read a runtime .context file from the live SwarmWS workspace, or None."""
+    p = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / name
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+# Gitignored `.context/*.md` files that are NOT governed context files — derived
+# caches / generated artifacts. These are gitignored for reasons unrelated to the
+# channel-privacy boundary, so the weld's equality comparison excludes exactly this
+# allowlist (NOT "everything not in CONTEXT_FILES" — that broad filter would silently
+# swallow a genuinely NEW private file, defeating drift-direction-(b); adversarial
+# Gate-2 MED, run_adf5c56a). A private .md that is neither a CONTEXT_FILES member nor
+# on this allowlist is UNKNOWN → it must surface in the weld, not be dropped.
+_DERIVED_CACHE_CONTEXT_MD: frozenset[str] = frozenset({
+    "L0_SYSTEM_PROMPTS.md", "L1_SYSTEM_PROMPTS.md", "user_suggestions.md",
+})
+
+
+def _parse_gitignore_private_context_md(
+    gitignore_path: Path | None = None,
+) -> set[str] | None:
+    """Parse a .gitignore for its whole-file `.context/<NAME>.md` private entries.
+    Returns the set of basenames (e.g. {"MEMORY.md", ...}), or None ONLY when the
+    .gitignore file itself is absent/unreadable (CI without the runtime workspace).
+
+    KNOWN derived caches (`_DERIVED_CACHE_CONTEXT_MD`) are subtracted; glob lines
+    (`.context/*.md`, `.context/*-archive*.md`) are skipped. Everything else that
+    matches `.context/<NAME>.md` is returned — INCLUDING a name not yet in
+    CONTEXT_FILES — so a newly-gitignored private file that never reached the
+    exclusion constants surfaces as drift instead of being silently dropped.
+
+    A present-but-empty result is returned as an EMPTY SET, not None — the caller
+    distinguishes 'file absent' (None → legit skip) from 'private block gutted'
+    (empty set → the equality check FAILS, catching a boundary collapse). This is
+    the fix for the `out or None` conflation (adversarial Gate-2 MED, run_adf5c56a)."""
+    gi = gitignore_path or (Path.home() / ".swarm-ai" / "SwarmWS" / ".gitignore")
+    try:
+        lines = gi.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None  # file genuinely absent → legit CI skip
+    out: set[str] = set()
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not line.startswith(".context/") or not line.endswith(".md"):
+            continue
+        base = line[len(".context/"):]
+        if "*" in base or "?" in base:  # skip glob lines (archives etc.)
+            continue
+        if base in _DERIVED_CACHE_CONTEXT_MD:  # skip KNOWN derived caches only
+            continue
+        out.add(base)
+    return out  # may be empty (present-but-gutted) — NOT coerced to None
+
+
 # ── Content Cleaning ─────────────────────────────────────────────────
 
 

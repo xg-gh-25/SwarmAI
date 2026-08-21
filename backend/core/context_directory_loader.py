@@ -103,24 +103,54 @@ for conversation and tool use."""
 # so excluding these does not starve teammate usefulness.
 WHOLE_FILE_PRIVATE: frozenset[str] = frozenset({
     "USER.md", "EVOLUTION.md", "MEMORY.md",
+    # TOOLS.md added 2026-08-21 (SecDLC §Absorb A): it is gitignored-private and
+    # carries AWS account numbers / ADA-cred procedures / Midway internals / cluster
+    # ARNs. It was injected into non-owner channel prompts, and egress_redactor only
+    # scrubs credential SHAPES (AKIA/PEM/prefixed tokens), NOT bare 12-digit account
+    # numbers — so a teammate could ask the channel bot to summarize its tooling and
+    # leak infra. It has zero channel-bot value (the bot's rules live in STEERING #6).
+    "TOOLS.md",
 })
+
+# Channel-injection carve-outs: files that ARE gitignored-private (so they never
+# reach the public git origin) but are DELIBERATELY still injected into a non-owner
+# channel prompt, each with a load-bearing reason. This is NOT an ungated escape
+# hatch — every entry is pinned to a real consumer by a test (see
+# test_steering_carveout_has_real_consumer / test_gitignore_..._matches_channel_privacy).
+# Adding a file here to dodge exclusion is loud: the gitignore-sync test prints this
+# allowlist on failure, and a carve-out with no real consumer fails its pin test.
+CHANNEL_INJECTION_CARVE_OUTS: dict[str, str] = {
+    # The channel bot NEEDS its Slack-bot governance rules (STEERING #6: refuse
+    # source-code changes, no cross-user leakage) in its own prompt to behave
+    # safely. Whole-file excluding STEERING would strip those rules = a behavior
+    # regression. STEERING's genuinely-sensitive infra sections are a section-level
+    # follow-up, NOT a reason to drop the whole file from channel prompts.
+    "STEERING.md": "channel bot needs its Slack-bot governance rules (STEERING #6)",
+    # KNOWLEDGE.md is low-sensitivity for channel exposure (a domain index; its only
+    # local-specific content is the source-repo path, not credentials). Whole-file
+    # excluding it would starve a teammate of genuine domain knowledge for marginal
+    # benefit. Scrubbing the local path is a separate, lower-priority concern.
+    "KNOWLEDGE.md": "low-sensitivity domain index; local paths only, no credentials",
+}
 
 GROUP_CHANNEL_EXCLUDE: frozenset[str] = WHOLE_FILE_PRIVATE
 """Files excluded from GROUP channel prompts (non-owner context).
 
-Excludes the whole-file-private set (USER/EVOLUTION/MEMORY) so no
-personal data, correction history, or project index leaks to a shared channel.
-Previously only dropped {MEMORY, USER}, which leaked EVOLUTION.md — corrected
-2026-07-06 (run_20bd4a7b) to the full private lane."""
+Excludes the whole-file-private set (USER/EVOLUTION/MEMORY/TOOLS) so no
+personal data, correction history, or tooling/credential info leaks to a shared
+channel. Previously dropped {MEMORY, USER} (leaked EVOLUTION.md, corrected
+2026-07-06 run_20bd4a7b); TOOLS.md added 2026-08-21 (SecDLC §Absorb A — held AWS
+account #s / ADA creds that egress_redactor does not scrub)."""
 
 CHANNEL_LIGHT_EXCLUDE: frozenset[str] = WHOLE_FILE_PRIVATE
 """Files excluded from NON-OWNER DM (Slack) sessions.
 
 A non-owner DM is a TRUSTED (allowlisted, non-owner) user — their turn must
 NOT carry XG's private files. Excludes the whole-file-private set so USER.md
-(org chain/level) and MEMORY.md (personal memory) never reach a teammate, and
-so introspection ("summarize your USER.md") cannot leak them (F8: the defense
-is assembly-time exclusion, not a model-judgment refusal).
+(org chain/level), MEMORY.md (personal memory), and TOOLS.md (AWS account #s /
+creds) never reach a teammate, and so introspection ("summarize your USER.md"
+/ "what are your tooling creds") cannot leak them (F8: the defense is
+assembly-time exclusion, not a model-judgment refusal).
 
 ⚠️ Corrected 2026-07-06 (run_20bd4a7b): previously {EVOLUTION, PROJECTS} only,
 with a docstring claiming "MEMORY.md and USER.md ARE included — channel DMs are
@@ -336,6 +366,26 @@ assert WHOLE_FILE_PRIVATE <= {s.filename for s in CONTEXT_FILES}, (
     "WHOLE_FILE_PRIVATE contains a filename with no matching CONTEXT_FILES spec — "
     "a rename would silently un-exclude a private file: "
     f"{WHOLE_FILE_PRIVATE - {s.filename for s in CONTEXT_FILES}}"
+)
+
+# Cheap import-time BACKSTOP for the carve-out map — same rename-drift guard as
+# above (every carve-out must name a real context file). This is NOT the drift
+# weld: the two boundaries (.gitignore private list ↔ WHOLE_FILE_PRIVATE ∪
+# carve-outs) are welded by a TEST-TIME two-way equality check that parses the
+# real SwarmWS .gitignore (test_gitignore_private_set_matches_channel_privacy) —
+# because the authoritative .gitignore lives in the untracked runtime workspace,
+# unreachable from this built module at import time. This assert only catches a
+# carve-out naming a nonexistent spec; the test catches a NEW private file that
+# never reached these constants (the drift a subset assert structurally cannot see).
+assert set(CHANNEL_INJECTION_CARVE_OUTS) <= {s.filename for s in CONTEXT_FILES}, (
+    "CHANNEL_INJECTION_CARVE_OUTS names a file with no matching CONTEXT_FILES spec: "
+    f"{set(CHANNEL_INJECTION_CARVE_OUTS) - {s.filename for s in CONTEXT_FILES}}"
+)
+# A file cannot be BOTH channel-excluded and a channel carve-out (contradiction).
+assert not (WHOLE_FILE_PRIVATE & set(CHANNEL_INJECTION_CARVE_OUTS)), (
+    "A file is both in WHOLE_FILE_PRIVATE and CHANNEL_INJECTION_CARVE_OUTS — "
+    "it cannot be both excluded and deliberately-injected: "
+    f"{WHOLE_FILE_PRIVATE & set(CHANNEL_INJECTION_CARVE_OUTS)}"
 )
 
 

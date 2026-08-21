@@ -895,8 +895,10 @@ class PromptBuilder:
 
             # Session-type-aware context exclusion (L3):
             # - Group + non-owner channel DMs: exclude the private set
-            #   (WHOLE_FILE_PRIVATE = USER, EVOLUTION, MEMORY) so a teammate's turn
-            #   never carries XG's private files (PROJECTS.md was removed 2026-08-14).
+            #   (WHOLE_FILE_PRIVATE = USER, EVOLUTION, MEMORY, TOOLS) so a teammate's
+            #   turn never carries XG's private files. TOOLS added 2026-08-21 (it
+            #   held AWS account #s / creds and egress_redactor doesn't scrub bare
+            #   account numbers). PROJECTS.md was removed 2026-08-14.
             # - Owner DM: full context (same as chat tab — full Brain)
             # - Chat tabs: full context (no exclusion)
             exclude_files: set[str] | None = None
