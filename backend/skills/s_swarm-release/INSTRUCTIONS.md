@@ -533,7 +533,6 @@ evolves. **Single source of truth: `prod.sh build`.**
 ## Relationship to Existing Skills
 
 ```
-s_release        → version bump + tag only (NO build, NO package)
 s_swarm-release  → FULL cycle: bump + build + deploy + tauri + publish (THIS SKILL)
 s_swarm-build    → binary build + deploy only (no version/tag/publish)
 ```
