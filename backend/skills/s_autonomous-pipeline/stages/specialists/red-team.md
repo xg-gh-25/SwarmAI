@@ -1,5 +1,5 @@
 # Red Team Review
-<!-- version: 2026-07-21 | synced with: REVIEW_PATTERNS.md RP1-RP52 -->
+<!-- version: 2026-08-23 | synced with: REVIEW_PATTERNS.md RP1-RP80 (incl. Agent-Safety RP65-RP80) -->
 
 Scope: CONDITIONAL — only dispatch when EITHER:
 - Changeset > 200 lines, OR
@@ -10,9 +10,12 @@ regardless of historical hit rate (insurance policy, not stats-gated).
 
 This runs AFTER other specialists. You receive their merged findings.
 
-**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP52) that
+**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP80) that
 prior specialists missed. Your unique value: patterns that fall between domains
 (e.g., RP25 blast radius, RP35 pool contention, RP36 fix-enables-regression, RP37 process tree lifetime).
+When the changeset is an LLM/agent system, the Agent-Safety patterns (RP65-RP80 —
+tool-composition gadget chains, confused-deputy, cross-agent state poisoning) are
+exactly the between-domain class you exist to catch: run them directly.
 For any endpoint/handler in scope, run the RP52 attack directly: **set an identity field
 (`user_alias`/`login`/`user_id`/`X-Impersonate-User`) to a victim's value in the request
 body/header while authenticated as yourself — expect 403 or the server ignoring the
