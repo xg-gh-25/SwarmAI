@@ -13,6 +13,7 @@ test touches the real workspace.
 
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 
@@ -25,6 +26,12 @@ from core.community_data import (
     engagement_items,
     build_feed,
 )
+
+# A fixed "now" near the fixed-date fixtures below, so staleness (14d demotion in
+# _needs_followup) is deterministic and does NOT drift with wall-clock. The engagement
+# fixtures use 2026-08-02..09 timestamps; pin now to 2026-08-10 so those threads read
+# as FRESH (<14d) — the pre-staleness behaviour the original assertions encode.
+_FIXED_NOW = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
 
 
 # ── Sources (config.yaml feeds) ──────────────────────────────────────────────
@@ -207,6 +214,26 @@ def test_aggregate_engagement_maintainer_case_insensitive(tmp_path: Path) -> Non
     assert agg["maintainer_replies"] == 2  # TRUE + True, not false
 
 
+def test_aggregate_engagement_maintainer_whitespace_padded(tmp_path: Path) -> None:
+    # P8 door-parity (Gate-2 LOW): a whitespace-padded is_maintainer string must count,
+    # matching the skill's _identity.is_external_maintainer which strips. Otherwise the
+    # backend door and the skill door disagree on the SAME datum.
+    d = tmp_path / ".artifacts"
+    d.mkdir()
+    (d / "reply_archive.jsonl").write_text(
+        "\n".join(
+            json.dumps(x)
+            for x in [
+                {"id": "r1", "author": "extmaint", "is_maintainer": " true "},  # padded
+                {"id": "r2", "author": "extmaint2", "is_maintainer": "1 "},      # padded
+            ]
+        )
+        + "\n"
+    )
+    agg = aggregate_engagement(d)
+    assert agg["maintainer_replies"] == 2  # both padded strings coerced true
+
+
 # ── Engagement (GitHub_Community jsonl aggregation) ──────────────────────────
 
 
@@ -290,7 +317,7 @@ def test_aggregate_engagement_skips_bad_jsonl_lines(tmp_path: Path) -> None:
 
 
 def test_engagement_items_shape_and_join(artifacts_dir: Path) -> None:
-    items = engagement_items(artifacts_dir)
+    items = engagement_items(artifacts_dir, now=_FIXED_NOW)
     # 2 published comments become rows; the draft (c3) is KPI-only, not a row.
     assert len(items) == 2
     # a/b #1 received 2 replies (1 maintainer) → surfaced first (needs_followup).
@@ -305,7 +332,7 @@ def test_engagement_items_shape_and_join(artifacts_dir: Path) -> None:
 
 
 def test_engagement_items_needs_followup_sorts_first(artifacts_dir: Path) -> None:
-    items = engagement_items(artifacts_dir)
+    items = engagement_items(artifacts_dir, now=_FIXED_NOW)
     # c/d #2 has no reply → not needs_followup → sorts AFTER a/b #1.
     assert items[0]["needs_followup"] is True
     assert items[1]["repo"] == "c/d" and items[1]["needs_followup"] is False
@@ -364,7 +391,7 @@ def test_needs_followup_false_when_we_replied_last(tmp_path: Path) -> None:
         {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "q"},
         {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our answer"},
     ])
-    items = engagement_items(d)
+    items = engagement_items(d, now=_FIXED_NOW)
     assert items[0]["reply_count"] == 2
     assert items[0]["needs_followup"] is False  # we replied last → handled
 
@@ -374,7 +401,7 @@ def test_needs_followup_true_when_other_replied_last(tmp_path: Path) -> None:
         {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "our comment"},
         {"author": "maintainer1", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "reply to us"},
     ])
-    items = engagement_items(d)
+    items = engagement_items(d, now=_FIXED_NOW)
     assert items[0]["needs_followup"] is True  # they replied last → we owe a response
     assert items[0]["has_maintainer_reply"] is True
 
@@ -394,7 +421,7 @@ def test_needs_followup_ignores_reply_archive_order(tmp_path: Path) -> None:
         {"author": "other", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-09T00:00:00Z", "body": "later"},
         {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "earlier"},
     ])
-    items = engagement_items(d)
+    items = engagement_items(d, now=_FIXED_NOW)
     assert items[0]["needs_followup"] is True  # 'other' at 08-09 is the true last
 
 
@@ -419,6 +446,165 @@ def test_needs_followup_missing_created_at_on_our_last_reply(tmp_path: Path) -> 
     ])
     items = engagement_items(d)
     assert items[0]["needs_followup"] is False  # our untimestamped reply sorts newest
+
+
+# ── Self-login exclusion from the EXTERNAL-maintainer signal (DEFECT1) ────────
+# is_maintainer is stored true for xg-gh-25's own replies on its OWN repo (bot is
+# OWNER there). But every consumer wants the EXTERNAL-maintainer signal — a reply BY
+# us is not an external maintainer's acknowledgment. Exclude self-login at every read.
+
+
+def test_maintainer_replies_excludes_self_login(tmp_path: Path) -> None:
+    # AC2: 3 is_maintainer=true rows, 1 is our own login → external count = 2, not 3.
+    d = tmp_path / ".artifacts"
+    d.mkdir()
+    (d / "reply_archive.jsonl").write_text(
+        "\n".join(
+            json.dumps(x)
+            for x in [
+                {"id": "r1", "author": "danielmiessler", "is_maintainer": True},
+                {"id": "r2", "author": "Panniantong", "is_maintainer": True},
+                {"id": "r3", "author": "xg-gh-25", "is_maintainer": True},  # OUR own reply on our repo
+            ]
+        )
+        + "\n"
+    )
+    agg = aggregate_engagement(d)
+    assert agg["maintainer_replies"] == 2  # xg-gh-25 self-reply excluded (was 3)
+
+
+def test_maintainer_replies_excludes_self_login_case_insensitive(tmp_path: Path) -> None:
+    # AC2: our login casing varies in the archive — must still be excluded.
+    d = tmp_path / ".artifacts"
+    d.mkdir()
+    (d / "reply_archive.jsonl").write_text(
+        "\n".join(
+            json.dumps(x)
+            for x in [
+                {"id": "r1", "author": "external_maint", "is_maintainer": True},
+                {"id": "r2", "author": "XG-GH-25", "is_maintainer": True},  # upper-cased self
+            ]
+        )
+        + "\n"
+    )
+    agg = aggregate_engagement(d)
+    assert agg["maintainer_replies"] == 1  # only the external one
+
+
+def test_has_maintainer_reply_excludes_self_login(tmp_path: Path) -> None:
+    # AC3: a thread whose ONLY is_maintainer reply is our own login must NOT be
+    # flagged has_maintainer_reply — it is not external acknowledgment.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "xg-gh-25", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our own reply on our repo"},
+    ])
+    items = engagement_items(d, now=_FIXED_NOW)
+    assert items[0]["has_maintainer_reply"] is False  # self-maintainer excluded
+
+
+def test_has_maintainer_reply_true_for_external_maintainer(tmp_path: Path) -> None:
+    # AC3 companion: an EXTERNAL maintainer reply still flags has_maintainer_reply.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "danielmiessler", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "merged, thanks"},
+    ])
+    items = engagement_items(d, now=_FIXED_NOW)
+    assert items[0]["has_maintainer_reply"] is True
+
+
+# ── tier-0 uses LAST reply is external maintainer, not ANY (DEFECT2, FLAW-A) ──
+
+
+def test_tier0_requires_last_reply_is_maintainer(tmp_path: Path) -> None:
+    # AC5: an early external maintainer reply, then a later non-maintainer reply.
+    # has_maintainer_reply is True (ANY), but the LAST voice is a non-maintainer, so
+    # this must rank tier-1 (someone waiting), NOT tier-0 (maintainer waiting).
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    d_maintainer_last = _eng_reply_fixture(tmp_path / "a", [
+        {"author": "randomuser", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-04T00:00:00Z", "body": "q"},
+        {"author": "extmaint", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "maintainer replied last"},
+    ])
+    d_other_last = _eng_reply_fixture(tmp_path / "b", [
+        {"author": "extmaint", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-04T00:00:00Z", "body": "maintainer early"},
+        {"author": "randomuser", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "other replied last"},
+    ])
+    # Both are needs_followup (external last, fresh). The maintainer-last one is tier-0,
+    # the other-last one is tier-1 — verified by which sorts first when we build a
+    # combined view is not possible across dirs, so assert the tier signal directly:
+    # a thread whose last reply is a non-maintainer must still be has_maintainer_reply
+    # True but NOT rank as a maintainer-waiting row.
+    items_a = engagement_items(d_maintainer_last, now=_FIXED_NOW)
+    items_b = engagement_items(d_other_last, now=_FIXED_NOW)
+    # both have a maintainer somewhere → has_maintainer_reply True on both
+    assert items_a[0]["has_maintainer_reply"] is True
+    assert items_b[0]["has_maintainer_reply"] is True
+    # the tier-0 discriminator: last reply is an external maintainer
+    assert items_a[0]["maintainer_waiting"] is True   # maintainer replied last
+    assert items_b[0]["maintainer_waiting"] is False  # non-maintainer replied last
+
+
+# ── staleness demotion: a >14d-old external reply is no longer active (DEFECT2) ──
+
+
+def test_needs_followup_false_when_last_reply_stale(tmp_path: Path) -> None:
+    # AC6: last external reply is 20 days before now → demoted (not an active todo).
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-07-21T00:00:00Z", "body": "old question"},
+    ])
+    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)  # 20d later
+    items = engagement_items(d, now=now)
+    assert items[0]["needs_followup"] is False  # stale > 14d → demoted
+
+
+def test_needs_followup_true_when_last_reply_fresh(tmp_path: Path) -> None:
+    # AC6: last external reply is 2 days before now → still active.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-08T00:00:00Z", "body": "recent question"},
+    ])
+    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)  # 2d later
+    items = engagement_items(d, now=now)
+    assert items[0]["needs_followup"] is True  # fresh < 14d → active
+
+
+def test_needs_followup_stale_boundary_exactly_14d(tmp_path: Path) -> None:
+    # AC6 boundary: exactly 14 days is still active (only STRICTLY older demotes).
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-07-27T00:00:00Z", "body": "14 days"},
+    ])
+    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)  # exactly 14d
+    items = engagement_items(d, now=now)
+    assert items[0]["needs_followup"] is True  # 14d is the edge — not yet stale
+
+
+def test_needs_followup_stale_missing_created_at_is_fresh(tmp_path: Path) -> None:
+    # AC7: a last external reply with NO created_at must be treated as FRESH (never
+    # false-demoted) — a just-fetched reply commonly lacks a timestamp.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "body": "no timestamp"},
+    ])
+    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    items = engagement_items(d, now=now)
+    assert items[0]["needs_followup"] is True  # missing created_at → fresh, still active
+
+
+def test_needs_followup_stale_unparseable_created_at_is_fresh(tmp_path: Path) -> None:
+    # AC7: a naive/garbage created_at must NOT crash and must be treated as fresh.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "not-a-date", "body": "garbage ts"},
+    ])
+    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    items = engagement_items(d, now=now)  # must not raise
+    assert items[0]["needs_followup"] is True  # unparseable → fresh
+
+
+def test_needs_followup_stale_naive_created_at_no_crash(tmp_path: Path) -> None:
+    # AC7: a NAIVE (no tz) created_at must not crash the aware-datetime subtraction.
+    d = _eng_reply_fixture(tmp_path, [
+        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-07-21T00:00:00", "body": "naive ts, 20d old"},
+    ])
+    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    items = engagement_items(d, now=now)  # must not raise TypeError
+    # naive is normalized to UTC and IS parseable → 20d old → stale → demoted
+    assert items[0]["needs_followup"] is False
 
 
 def test_engagement_items_none_keys_do_not_false_join(tmp_path: Path) -> None:

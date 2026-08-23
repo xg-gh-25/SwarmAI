@@ -37,6 +37,7 @@ against tmp fixtures and never hard-depend on the live workspace.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import re
@@ -299,8 +300,10 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def _is_true(v: object) -> bool:
     """Truthy for a real bool True OR a stringified 'true'/'1' (jsonl round-trips
-    vary by writer — is_maintainer may be a bool or a string)."""
-    return v is True or (isinstance(v, str) and v.lower() in ("true", "1"))
+    vary by writer — is_maintainer may be a bool or a string). `.strip()` so a
+    whitespace-padded ' true ' matches — keeps this in lockstep with the skill's
+    _identity.is_external_maintainer (P8: every door coerces is_maintainer identically)."""
+    return v is True or (isinstance(v, str) and v.strip().lower() in ("true", "1"))
 
 
 def aggregate_engagement(artifacts_dir: Path) -> dict:
@@ -321,7 +324,13 @@ def aggregate_engagement(artifacts_dir: Path) -> dict:
     # (216 published / 0 posted). Count what the writer actually writes.
     comments_posted = sum(1 for e in eng if e.get("status") == "published")
     replies_received = len(replies)
-    maintainer_replies = sum(1 for r in replies if _is_true(r.get("is_maintainer")))
+    # EXTERNAL-maintainer signal only: exclude our own replies. On xg-gh-25's own repo
+    # our bot is OWNER, so its self-replies are stored is_maintainer=true — but "a
+    # maintainer acknowledged us" means an EXTERNAL maintainer, never ourselves.
+    maintainer_replies = sum(
+        1 for r in replies
+        if _is_true(r.get("is_maintainer")) and not _is_us(r.get("author"))
+    )
     latest_stars = None
     if stars:
         last = stars[-1]
@@ -352,6 +361,22 @@ _ENGAGEMENT_ITEMS_CAP = 500
 # community engine posts as this login (monitor.py/track.py all query xg-gh-25).
 _OUR_GH_LOGIN = "xg-gh-25"
 
+# Staleness horizon for the Outbound follow-up list: an external reply whose last
+# turn is older than this many days is no longer an ACTIVE todo — it has either been
+# closed out or gone cold, so it demotes out of the needs-followup tier (it stays
+# visible in the handled/history list, never deleted). 14d chosen by the owner.
+_STALE_FOLLOWUP_DAYS = 14
+
+
+def _is_us(author: object) -> bool:
+    """True iff `author` is OUR own GitHub login (case-insensitive). A reply BY us —
+    even one GitHub stores as is_maintainer=true because our bot is OWNER of its own
+    repo — is NOT an EXTERNAL maintainer's acknowledgment. Every consumer of the
+    is_maintainer signal wants the external-only meaning, so self-replies are excluded
+    at read time (the write side also excludes going forward; this defends historical
+    reply_archive rows). Mirrors _needs_followup's .lower() comparison."""
+    return isinstance(author, str) and author.lower() == _OUR_GH_LOGIN.lower()
+
 
 def _is_bot_author(author: str) -> bool:
     """A CI/app bot reply (dependabot[bot], github-actions[bot], *-bot) is not a
@@ -360,29 +385,67 @@ def _is_bot_author(author: str) -> bool:
     return a.endswith("[bot]") or a.endswith("-bot")
 
 
-def _needs_followup(reply_rows: list[dict]) -> bool:
-    """A thread needs OUR follow-up iff the LATEST reply is from someone else —
-    not us (_OUR_GH_LOGIN) and not a bot. A thread where WE replied last (or only
-    bots replied) is NOT waiting on us. `reply_rows` are in reply_archive order,
-    which is chronological (track.py appends as it fetches), so the last element is
-    the newest.
+def _parse_reply_dt(created_at: object) -> datetime.datetime | None:
+    """Parse a reply `created_at` (ISO-8601, e.g. '2026-08-03T10:00:00Z') into an
+    AWARE UTC datetime, or None if missing/unparseable. Crash-proof by contract: this
+    feeds the staleness math, and reply_rows carry caller-supplied JSON, so a naive
+    (tz-less) or garbage timestamp must NEVER raise — it degrades to None (treated as
+    fresh, never false-demoted). A naive datetime is normalized to UTC rather than
+    dropped, so it still participates in the age comparison."""
+    if not isinstance(created_at, str) or not created_at.strip():
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:  # naive → assume UTC (avoid aware/naive subtraction TypeError)
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
 
-    This is the fix for the 'needs-followup is 72% noise' bug: the old rule
-    (bool(reply_rows) — ANY reply) flagged every thread we'd already answered, so
-    the highest-priority sort sorted nothing. The signal is the LAST voice in the
-    thread, not the mere existence of replies."""
+
+def _needs_followup(
+    reply_rows: list[dict],
+    now: datetime.datetime | None = None,
+    stale_days: int = _STALE_FOLLOWUP_DAYS,
+) -> bool:
+    """A thread needs OUR follow-up iff the LATEST reply is from someone else —
+    not us (_OUR_GH_LOGIN), not a bot — AND that reply is still FRESH (its created_at
+    is within `stale_days` of `now`). `reply_rows` are chronological (track.py appends
+    as it fetches), so the last element is the newest.
+
+    Two filters, both fixes for the 'needs-followup is noise' problem:
+    - LAST-voice: the old rule (bool(reply_rows) — ANY reply) flagged every thread we'd
+      already answered. The signal is the LAST voice, not the existence of replies.
+    - STALENESS: an external reply older than `stale_days` is no longer an ACTIVE todo
+      (it was closed out or went cold). It demotes here so the active list stays the
+      things genuinely waiting on us. A missing/unparseable created_at is treated as
+      FRESH (never false-demoted) — a just-fetched reply commonly lacks a timestamp."""
     if not reply_rows:
         return False
     last = reply_rows[-1]
     author = (last.get("author") or "").lower()  # case-insensitive (matches _is_bot_author)
     if author == _OUR_GH_LOGIN.lower() or _is_bot_author(author):
         return False
+    # Staleness demotion: only when we can parse the timestamp AND it is strictly older
+    # than the horizon. Unparseable/missing → fresh (fall through to True).
+    dt = _parse_reply_dt(last.get("created_at"))
+    if dt is not None:
+        ref = now or datetime.datetime.now(datetime.timezone.utc)
+        if ref - dt > datetime.timedelta(days=stale_days):
+            return False
     return True
 
 
-def engagement_items(artifacts_dir: Path) -> list[dict]:
+def engagement_items(
+    artifacts_dir: Path,
+    now: datetime.datetime | None = None,
+) -> list[dict]:
     """Join engagement_log × reply_archive into per-engagement rows for the Outbound
     list — the clickable companion to aggregate_engagement's scalar KPIs.
+
+    `now` (aware UTC) is injectable ONLY so staleness (in _needs_followup) is
+    deterministic in tests; production passes nothing and it defaults to the current
+    UTC time.
 
     Each row = one PUBLISHED comment we posted, with any replies it received nested
     under it. The join is EXACT on (repo, issue_number) == (source_repo, source_issue)
@@ -435,10 +498,23 @@ def engagement_items(artifacts_dir: Path) -> list[dict]:
         # it under a timestamped human reply would falsely flag a thread WE answered as
         # needs-followup (adversarial HIGH). "￿" sorts after any real ISO date.
         reply_rows.sort(key=lambda rr: rr.get("created_at") or "￿")
-        has_maintainer = any(rr["is_maintainer"] for rr in reply_rows)
-        # needs_followup = the LATEST reply is from someone else (not us, not a bot) —
-        # i.e. a human is waiting on OUR response. A thread we replied to last is done.
-        needs = _needs_followup(reply_rows)
+        # has_maintainer_reply = an EXTERNAL maintainer replied at some point (ANY turn).
+        # Excludes our own login (is_maintainer=true on our own repo is not external
+        # acknowledgment). This is a published field consumed as "a maintainer engaged".
+        has_maintainer = any(
+            rr["is_maintainer"] and not _is_us(rr["author"]) for rr in reply_rows
+        )
+        # maintainer_waiting = the LAST reply is an EXTERNAL maintainer — the tier-0
+        # discriminator (a maintainer is actively waiting on us), distinct from the
+        # ANY-turn has_maintainer_reply above (FLAW-A: do not conflate the two).
+        last = reply_rows[-1] if reply_rows else None
+        maintainer_waiting = bool(
+            last and last["is_maintainer"] and not _is_us(last["author"])
+        )
+        # needs_followup = the LATEST reply is from someone else (not us, not a bot) AND
+        # is still fresh (< stale horizon) — i.e. a human is actively waiting on OUR
+        # response. A thread we replied to last, or one gone cold, is done.
+        needs = _needs_followup(reply_rows, now=now)
         items.append({
             "repo": repo,
             "issue_number": issue,
@@ -449,6 +525,7 @@ def engagement_items(artifacts_dir: Path) -> list[dict]:
             "confidence": e.get("confidence"),
             "reply_count": len(reply_rows),
             "has_maintainer_reply": has_maintainer,
+            "maintainer_waiting": maintainer_waiting,
             "needs_followup": needs,
             "replies": reply_rows,
         })
@@ -460,7 +537,10 @@ def engagement_items(artifacts_dir: Path) -> list[dict]:
     # within a tier. Missing posted_at ("") sorts oldest = least urgent.
     def _tier(it: dict) -> int:
         if it["needs_followup"]:
-            return 0 if it["has_maintainer_reply"] else 1
+            # tier-0 = an EXTERNAL maintainer is the LAST voice (actively waiting on us),
+            # NOT merely "a maintainer replied somewhere in the thread" (has_maintainer_reply,
+            # which is ANY-turn and stays a published field for the maintainer badge).
+            return 0 if it["maintainer_waiting"] else 1
         return 2
     items.sort(key=lambda it: it.get("posted_at") or "", reverse=True)
     items.sort(key=_tier)
