@@ -196,15 +196,14 @@ LOGROTATE
 # 10. Initialize SwarmWS workspace
 # ---------------------------------------------------------------------------
 
-echo "[10/10] Initializing SwarmWS workspace..."
-sudo -u "${SWARM_USER}" bash -c "
-    cd ${INSTALL_DIR}/backend
-    .venv/bin/python -c '
-from core.swarm_workspace_manager import SwarmWorkspaceManager
-SwarmWorkspaceManager().ensure_workspace()
-print(\"[hive] SwarmWS initialized\")
-' 2>/dev/null || echo '[hive] WARNING: workspace init may need manual review'
-"
+echo "[10/10] SwarmWS workspace init — handled by backend startup."
+# The workspace (folders + default SwarmAI DDD + Hive seed of full DDD/config/
+# public-context) is initialized by the backend lifespan on first boot, via
+# ensure_default_workspace() → create_folder_structure() → _ensure_default_project().
+# The old `SwarmWorkspaceManager().ensure_workspace()` call here was DEAD CODE
+# (no such method — the AttributeError was swallowed by `2>/dev/null`), so it never
+# did anything. Removed (run_ca7f92c1): the real init runs when systemd starts the
+# service, and the Hive seed (SWARMAI_MODE=hive) fires there.
 
 # ---------------------------------------------------------------------------
 # Done

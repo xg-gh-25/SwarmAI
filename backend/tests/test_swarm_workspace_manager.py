@@ -1743,3 +1743,118 @@ class TestSentinelAdversarialPollution:
                 "second file skipped — poisoned first file aborted the loop"
             )
             assert (root / files[0]).read_text(encoding="utf-8") == sentinel
+
+
+class TestHiveSeed:
+    """Hive full-DDD/config/context seed from the packaged hive/seed/ dir
+    (run_ca7f92c1). Verifies: full-DDD dir-guard, config 4-8, public whitelist
+    (no private leak), idempotency (never overwrite user data), desktop no-op."""
+
+    def _build_seed(self, seed_dir: Path):
+        """Construct a fake packaged hive/seed/ dir."""
+        ddd = seed_dir / "Projects" / "SwarmAI" / "2-understanding"
+        ddd.mkdir(parents=True)
+        (ddd / "TECH.md").write_text("FULL TECH content 4597 lines", encoding="utf-8")
+        (seed_dir / "Projects" / "SwarmAI" / "AGENTS.md").write_text("agents", encoding="utf-8")
+        # a runtime artifact that must be defense-in-depth excluded even if packaged
+        art = seed_dir / "Projects" / "SwarmAI" / ".artifacts" / "runs"
+        art.mkdir(parents=True)
+        (art / "run.json").write_text("{}", encoding="utf-8")
+        (seed_dir / "config-hive.json").write_text('{"default_model": "claude-opus-4-8"}', encoding="utf-8")
+        ctx = seed_dir / "context"
+        ctx.mkdir()
+        for f in ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "SELF.md"]:
+            (ctx / f).write_text(f"public {f}", encoding="utf-8")
+        # private files present in seed source must NOT be copied
+        (ctx / "MEMORY.md").write_text("PRIVATE MEMORY", encoding="utf-8")
+        (ctx / "USER.md").write_text("PRIVATE USER", encoding="utf-8")
+
+    def test_hive_seeds_full_ddd_config_and_public_context(self):
+        """AC1-4: hive mode + seed dir → full DDD + config 4-8 + 5 public context."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "SwarmWS"
+            (root / "Projects" / "SwarmAI").mkdir(parents=True)
+            seed = Path(tmp) / "seed"
+            self._build_seed(seed)
+            mgr = SwarmWorkspaceManager()
+            with patch.object(SwarmWorkspaceManager, "_hive_seed_dir", staticmethod(lambda: seed)):
+                mgr._seed_hive_from_package(root, root / "Projects" / "SwarmAI")
+            # full DDD seeded
+            assert (root / "Projects" / "SwarmAI" / "2-understanding" / "TECH.md").read_text() == "FULL TECH content 4597 lines"
+            assert (root / "Projects" / "SwarmAI" / "AGENTS.md").exists()
+            # runtime artifact NOT copied (defense-in-depth)
+            assert not (root / "Projects" / "SwarmAI" / ".artifacts").exists()
+            # config 4-8 seeded
+            assert "claude-opus-4-8" in (root / "config.json").read_text()
+            # 5 public context seeded
+            for f in ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "SELF.md"]:
+                assert (root / ".context" / f).exists(), f"{f} not seeded"
+
+    def test_hive_seed_never_leaks_private_context(self):
+        """AC4: private context (MEMORY/USER/...) present in seed source is NEVER
+        copied onto the shared Hive — explicit whitelist, not glob."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "SwarmWS"
+            (root / "Projects" / "SwarmAI").mkdir(parents=True)
+            seed = Path(tmp) / "seed"
+            self._build_seed(seed)
+            mgr = SwarmWorkspaceManager()
+            with patch.object(SwarmWorkspaceManager, "_hive_seed_dir", staticmethod(lambda: seed)):
+                mgr._seed_hive_from_package(root, root / "Projects" / "SwarmAI")
+            assert not (root / ".context" / "MEMORY.md").exists(), "PRIVATE MEMORY leaked to Hive"
+            assert not (root / ".context" / "USER.md").exists(), "PRIVATE USER leaked to Hive"
+
+    def test_hive_seed_idempotent_preserves_user_data(self):
+        """AC5: never overwrite existing user DDD/config/context (verify_integrity
+        re-runs this every startup)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "SwarmWS"
+            pdir = root / "Projects" / "SwarmAI" / "2-understanding"
+            pdir.mkdir(parents=True)
+            (pdir / "TECH.md").write_text("USER EDITED TECH", encoding="utf-8")  # user's own
+            (root / "config.json").write_text('{"default_model": "user-choice"}', encoding="utf-8")
+            seed = Path(tmp) / "seed"
+            self._build_seed(seed)
+            mgr = SwarmWorkspaceManager()
+            with patch.object(SwarmWorkspaceManager, "_hive_seed_dir", staticmethod(lambda: seed)):
+                mgr._seed_hive_from_package(root, root / "Projects" / "SwarmAI")
+            # user data preserved — dir-guard sees existing 2-understanding, config exists-guard
+            assert (pdir / "TECH.md").read_text() == "USER EDITED TECH"
+            assert "user-choice" in (root / "config.json").read_text()
+
+    def test_hive_seed_no_seed_dir_is_noop(self):
+        """AC6: seed dir absent → graceful no-op (falls back to 4-stub, zero crash)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "SwarmWS"
+            (root / "Projects" / "SwarmAI").mkdir(parents=True)
+            mgr = SwarmWorkspaceManager()
+            with patch.object(SwarmWorkspaceManager, "_hive_seed_dir", staticmethod(lambda: None)):
+                mgr._seed_hive_from_package(root, root / "Projects" / "SwarmAI")  # must not raise
+            assert not (root / "config.json").exists()
+
+    def test_public_context_seed_whitelist_excludes_private(self):
+        """The whitelist constant itself must never contain a private file."""
+        from core.swarm_workspace_manager import _PUBLIC_CONTEXT_SEED, _PRIVATE_CONTEXT_FILES
+        private_names = {p.split("/")[-1] for p in _PRIVATE_CONTEXT_FILES}
+        private_names |= {"KNOWLEDGE.md"}
+        assert not (set(_PUBLIC_CONTEXT_SEED) & private_names), "private file in public seed whitelist"
+        assert set(_PUBLIC_CONTEXT_SEED) == {"SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "SELF.md"}
+
+    def test_release_sh_whitelist_matches_python_constant(self):
+        """R27 two-source drift guard (meta-review HIGH): the public-context
+        whitelist in hive/release.sh (the `for f in ...` loop) MUST stay identical
+        to _PUBLIC_CONTEXT_SEED. If someone adds a 6th public context file to the
+        Python list but forgets the shell loop (or vice-versa), a new Hive boots
+        missing part of its cognition framework (变智障) with no error. Bind them."""
+        import re
+        from core.swarm_workspace_manager import _PUBLIC_CONTEXT_SEED
+        release_sh = Path(__file__).resolve().parent.parent.parent / "hive" / "release.sh"
+        text = release_sh.read_text(encoding="utf-8")
+        # the seed context loop: `for f in SWARMAI.md IDENTITY.md SOUL.md AGENT.md SELF.md; do`
+        m = re.search(r"for f in ((?:\S+\.md\s+)+\S+\.md); do", text)
+        assert m, "could not find the public-context `for f in ...` loop in release.sh"
+        shell_files = set(m.group(1).split())
+        assert shell_files == set(_PUBLIC_CONTEXT_SEED), (
+            f"whitelist drift: release.sh={sorted(shell_files)} vs "
+            f"_PUBLIC_CONTEXT_SEED={sorted(_PUBLIC_CONTEXT_SEED)}"
+        )

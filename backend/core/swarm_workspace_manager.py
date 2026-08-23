@@ -787,6 +787,19 @@ _PRIVATE_CONTEXT_FILES = [
     ".context/TOOLS.md",
 ]
 
+# PUBLIC context files a fresh Hive is seeded with (the system-owned cognition
+# framework — who this AI is + its rules). EXPLICIT WHITELIST, never a glob/blacklist:
+# a Hive is a SHARED instance, so the private six (MEMORY/USER/EVOLUTION/STEERING/
+# TOOLS/KNOWLEDGE — this owner's personal cognition) must NEVER be seeded onto it.
+# Mirrors the system-owned set in context_directory_loader. (Hive seed, run_ca7f92c1)
+_PUBLIC_CONTEXT_SEED = [
+    "SWARMAI.md",
+    "IDENTITY.md",
+    "SOUL.md",
+    "AGENT.md",
+    "SELF.md",
+]
+
 # Marker written after the one-time privacy untrack pass succeeds, so
 # verify_integrity (which runs every startup) does not re-run `git rm --cached`
 # on every provision.
@@ -1091,6 +1104,23 @@ class SwarmWorkspaceManager:
         def _provision():
             project_dir.mkdir(parents=True, exist_ok=True)
 
+            # ── Hive full-DDD seed (SWARMAI_MODE=hive only) ──────────────────
+            # A Hive is a SHARED reference instance: it should ship the COMPLETE
+            # SwarmAI sample DDD + the model-4-8 config + the 5 PUBLIC context
+            # files, not the 4-stub scaffold a desktop gets. The seed material is
+            # packaged into the hive tar under hive/seed/ (see hive/release.sh).
+            # Desktop/dev modes are UNTOUCHED — they fall through to the 4-stub
+            # write below (zero regression). Fail-safe: unknown/unset mode → stub.
+            # Idempotent: full-DDD seed is dir-guarded (only when Projects/SwarmAI
+            # has no six-section content yet), so verify_integrity's every-startup
+            # call never re-copies over a user's accumulated brain.
+            if os.environ.get("SWARMAI_MODE") == "hive":
+                try:
+                    self._seed_hive_from_package(root, project_dir)
+                except Exception as e:  # never block workspace init on seed failure
+                    logger.warning("Hive seed skipped (non-fatal): %s: %s",
+                                   type(e).__name__, e)
+
             # Write DDD docs (only if missing — user edits are preserved). This runs
             # every startup via verify_integrity, so the exists() guard must be
             # strangler-aware in BOTH directions (matches provision_project_ddd's
@@ -1165,6 +1195,94 @@ class SwarmWorkspaceManager:
 
         await anyio.to_thread.run_sync(_provision)
         logger.info("Ensured default project '%s' at %s", DEFAULT_PROJECT_NAME, project_dir)
+
+    @staticmethod
+    def _hive_seed_dir() -> Optional[Path]:
+        """Locate the packaged Hive seed dir (hive/seed/), or None if absent.
+
+        Dev: <repo>/hive/seed/. Production (Hive tar): /opt/swarmai/hive/seed/
+        via get_resource_file's bundle search. Returns None when no seed ships
+        (→ caller falls back to the 4-stub scaffold, zero regression).
+        """
+        # dev/source layout: backend/core/../../hive/seed
+        dev_seed = Path(__file__).resolve().parent.parent.parent / "hive" / "seed"
+        try:
+            from utils.bundle_paths import get_resource_file
+            # get_resource_file returns dev_path if it exists, else searches the
+            # bundle; we pass the dir's marker file to reuse its locator, then
+            # take the parent. Fall back to a plain existence check on dev_seed.
+            found = get_resource_file("hive/seed/config-hive.json", dev_seed / "config-hive.json")
+            if found and found.exists():
+                return found.parent
+        except Exception:
+            pass
+        return dev_seed if dev_seed.exists() else None
+
+    def _seed_hive_from_package(self, root: Path, project_dir: Path) -> None:
+        """Seed a fresh Hive with the FULL SwarmAI DDD + 4-8 config + 5 public
+        context files from the packaged hive/seed/ dir. Idempotent + preserving:
+        every write is guarded (dir-level for the DDD, exists-level for config +
+        each context file), so a user's later edits are never clobbered and
+        verify_integrity's every-startup call is a no-op once seeded.
+
+        MUST run inside _ensure_default_project (before AppConfigManager.load()),
+        so the seeded config.json is the one load() reads — never the DEFAULT_CONFIG
+        (model 4-6) that load() would otherwise write first (Gate-1 CRITICAL).
+        """
+        seed_dir = self._hive_seed_dir()
+        if not seed_dir:
+            logger.info("Hive mode but no packaged seed dir — using 4-stub scaffold")
+            return
+
+        # 1. Full DDD — dir-guarded: only seed when the project has no six-section
+        #    content yet (fresh Hive). rsync-free copytree; NEVER --delete.
+        seed_ddd = seed_dir / "Projects" / DEFAULT_PROJECT_NAME
+        has_content = (project_dir / "2-understanding").exists() or ddd_path(project_dir, "TECH.md").exists()
+        if seed_ddd.is_dir() and not has_content:
+            for src in seed_ddd.rglob("*"):
+                if src.is_dir():
+                    continue
+                rel = src.relative_to(seed_ddd)
+                # defense-in-depth: never seed runtime artifacts even if packaged
+                if ".artifacts" in rel.parts or rel.name.startswith("code_intel.db"):
+                    continue
+                dst = project_dir / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+            logger.info("Hive: seeded full SwarmAI DDD from package")
+
+        # 2. config.json — exists-guarded: write the 4-8 seed only if absent, so
+        #    AppConfigManager.load() reads it instead of writing DEFAULT_CONFIG (4-6).
+        seed_config = seed_dir / "config-hive.json"
+        config_dst = root / "config.json"
+        if seed_config.exists() and not config_dst.exists():
+            shutil.copy2(seed_config, config_dst)
+            logger.info("Hive: seeded config.json (model 4-8) from package")
+
+        # 3. PUBLIC context — explicit whitelist, per-file exists-guard. The private
+        #    six are NEVER in _PUBLIC_CONTEXT_SEED, so they can't leak onto a Hive.
+        seed_ctx = seed_dir / "context"
+        ctx_dst_dir = root / ".context"
+        if seed_ctx.is_dir():
+            ctx_dst_dir.mkdir(parents=True, exist_ok=True)
+            seeded = 0
+            missing = []
+            for name in _PUBLIC_CONTEXT_SEED:
+                src = seed_ctx / name
+                dst = ctx_dst_dir / name
+                if not src.exists():
+                    missing.append(name)  # packaged whitelist incomplete — surface it
+                    continue
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+                    seeded += 1
+            logger.info("Hive: seeded %d public context file(s) from package", seeded)
+            if missing:
+                # A Hive booting without part of its cognition framework is the
+                # "变智障" failure class — never let it pass silently.
+                logger.warning("Hive: %d public context file(s) MISSING from seed package: %s",
+                               len(missing), missing)
 
     async def provision_project_ddd(
         self, project_name: str, workspace_path: str = None,
