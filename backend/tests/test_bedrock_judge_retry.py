@@ -37,7 +37,7 @@ def _auth_error():
     # Mirrors the real nightly failure string (account-assume failure).
     return Exception(
         "Error when retrieving credentials from custom-process: "
-        "unable to assume credentials for account 533267412361"
+        "unable to assume credentials for account 000000000000"
     )
 
 

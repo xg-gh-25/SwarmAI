@@ -2,9 +2,12 @@
 __pycache__/
 *.py[cod]
 
-# Projects — only SwarmAI is public (ships as the sample DDD); all others private.
+# Projects — ALL projects are private, local-only. The live SwarmAI DDD grew from
+# real internal + customer work (CMHK, internal wiki URLs, personnel aliases) and is
+# NOT safely redactable, so it never ships. The public repo gets a hand-authored,
+# clean-from-scratch sample DDD in future — never a derivative of this live tree.
+# (decision 2026-08-23: derive-by-redaction abandoned — leak surface too saturated.)
 Projects/*
-!Projects/SwarmAI/
 # SwarmAI ships as the reference six-section DDD, but its RUNTIME artifacts never
 # leave the laptop — only the structure + authored content is the sample.
 # NOTE: gitignore has NO inline comments — patterns must stand alone on their line.
