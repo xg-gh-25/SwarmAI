@@ -1,6 +1,8 @@
 # SwarmAI -- Current Context
 
-_This document tracks what's actively being worked on. Swarm reads it before every task to stay oriented. Update it as your focus shifts._
+> **This is section ② Knowledge of a six-section DDD** (① Identity ② Knowledge
+> ③ Gates ④ Capabilities ⑤ Delivery ⑥ Refresher). This doc answers *"What now?"* — the
+> live focus, read before every task to stay oriented. Update it as your focus shifts.
 
 ## Current Focus
 

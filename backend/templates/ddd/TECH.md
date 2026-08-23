@@ -1,15 +1,22 @@
 # SwarmAI -- Technical Context
 
+> **This is section ② Knowledge of a six-section DDD** (① Identity ② Knowledge
+> ③ Gates ④ Capabilities ⑤ Delivery ⑥ Refresher). This doc answers *"Can we?"* —
+> architecture, stack, and constraints. Replace with YOUR project's technical context.
+> Keep it at architecture-shape depth; deep subsystem internals belong in the grown
+> DDD, not this starter seed.
+
 ## Architecture
 
-Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeScript), and a Python FastAPI backend running as a launchd daemon (24/7). The backend spawns Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
+Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeScript),
+and a Python FastAPI backend running as a launchd daemon (24/7). The backend spawns
+Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
 
 ```
 +------------------------------------------+
 |  Tauri Shell (Rust)                       |
 |  - Window management, native APIs        |
 |  - Backend lifecycle (start/stop/health) |
-|  - Fixed port 18321 (all platforms)      |
 +------------------------------------------+
          |                    |
          v                    v
@@ -37,19 +44,23 @@ Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeS
 | Layer | Technology |
 |-------|-----------|
 | **Shell** | Tauri 2.0 (Rust) |
-| **Frontend** | React 18, Vite 6, TanStack Query, Tailwind CSS, CodeMirror 6 |
-| **Backend** | Python 3.12, FastAPI, asyncio, Pydantic v2 |
-| **AI** | Claude Agent SDK, Claude 4.6 (Opus/Sonnet) via AWS Bedrock, 1M context window |
+| **Frontend** | React 19, Vite 7, TanStack Query 5, Tailwind CSS 4 |
+| **Backend** | Python 3.11+, FastAPI, asyncio, Pydantic v2 |
+| **AI** | Claude Agent SDK via AWS Bedrock, 1M-context models |
 | **Database** | SQLite (WAL mode) at `~/.swarm-ai/data.db` |
 | **Testing** | pytest + Hypothesis (backend), vitest (frontend) |
 | **Build** | PyInstaller (backend bundle), Tauri CLI (app package) |
 | **License** | MIT |
 
+> **Model choice is a mechanism, not a pinned version.** The active model is resolved at
+> runtime from `config.json` `default_model` (settable in the Settings UI), falling back
+> to the code default in `app_config_manager.py`. Never hardcode a model version in a
+> cognitive store — it drifts (record the resolution mechanism instead).
+
 ## Codebase Location
 
-- **Local:** `$SWARMAI_ROOT/`
+- **Local:** the source repository working tree
 - **GitHub:** https://github.com/xg-gh-25/SwarmAI
-- **Clone:** `git clone https://github.com/xg-gh-25/SwarmAI.git`
 
 ## Dev Commands
 
@@ -72,174 +83,81 @@ cd backend && pytest
 cd desktop && npm run build:all
 ```
 
-## Key Subsystems
+## Key Subsystems (architecture shape)
 
-### Session System (v7)
+### Session System
 
-4-component architecture replacing the original monolithic AgentManager:
+A multi-component architecture (router → per-session unit → lifecycle manager →
+registry) replacing an earlier monolithic manager. Each session is a state machine
+(cold → streaming → idle → waiting-input → dead) that owns its own subprocess spawn,
+retry-with-resume, and streaming. Key invariants:
 
-| Component | File | Responsibility |
-|-----------|------|---------------|
-| **SessionRouter** | `session_router.py` | Slot acquisition, IDLE eviction, queue timeout (60s). Maps session_id to SessionUnit. |
-| **SessionUnit** | `session_unit.py` | 5-state machine (COLD/STREAMING/IDLE/WAITING_INPUT/DEAD). Subprocess spawn, 3x retry with `--resume`, streaming. |
-| **LifecycleManager** | `lifecycle_manager.py` | Background loop (60s). TTL kill (12hr), health check, orphan reaper. |
-| **SessionRegistry** | `session_registry.py` | Module singletons. Wires all components at startup. |
-
-Key invariants: dynamic concurrency via `compute_max_tabs()` (cost=1500MB/session, ceiling=4), protected states (STREAMING, WAITING_INPUT) never evicted, retry uses `--resume` for conversation continuity.
+- **Backend admission is gated by real-RAM spawn budget**, not a fixed tab count — the
+  system admits a new session when memory allows, and applies a concurrent-streaming cap
+  separately. (Any UI "max tabs" number is a frontend affordance, not the backend gate.)
+- **Protected states are never evicted** — a streaming or input-waiting session is never
+  killed to reclaim a slot.
+- **Retry uses `--resume`** to restore conversation context across a respawn.
 
 ### Context System
 
-11 context files (P0-P10) assembled into the system prompt with token budget enforcement:
+The governed context files are assembled into the system prompt with a live token
+budget. The set is an explicit allowlist (a file absent from it is never injected). Slots
+are priority-ordered; the highest-priority identity/personality files are never
+truncated, and size is bounded on the WRITE side (distillation / archival valves) rather
+than by injection-time truncation.
 
-| Priority | File | Domain |
-|----------|------|--------|
-| P0 | SWARMAI.md | Core identity (never truncated) |
-| P1 | IDENTITY.md | Agent name, avatar |
-| P2 | SOUL.md | Personality, tone |
-| P3 | AGENT.md | Behavioral directives |
-| P4 | USER.md | User preferences |
-| P5 | STEERING.md | Session overrides |
-| P6 | TOOLS.md | Tool guidance |
-| P7 | MEMORY.md | Cross-session memory |
-| P8 | EVOLUTION.md | Self-evolution registry |
-| P9 | KNOWLEDGE.md | Domain knowledge |
-| P10 | PROJECTS.md | Active projects index |
+Ownership model:
 
-Pipeline: `ContextDirectoryLoader` (L1 cache, budget tiers) -> `PromptBuilder` (DailyActivity, metadata) -> `SystemPromptBuilder` (identity, safety, datetime).
+| Category | Source of Truth | Write Access |
+|----------|-----------------|--------------|
+| System-owned (identity, personality, rules) | codebase template (`backend/context/`) | code changes only |
+| User-owned (profile, steering, tools) | workspace `.context/` | user edits freely |
+| Agent-owned (memory, evolution) | workspace `.context/` | agent via governed writes |
+| Auto-generated (knowledge index) | workspace `.context/` | rebuilt from filesystem |
 
 ### Autonomous Pipeline (AIDLC)
 
-`s_autonomous-pipeline` -- full lifecycle orchestrator from requirement to delivery:
+`s_autonomous-pipeline` — full lifecycle orchestrator from requirement to delivery.
+Methodology: DDD (*should we?*) → SDD (*what exactly?*) → TDD (*did we?*). The pipeline
+selects a **profile** (full / trivial / research / docs / bugfix / goal) that determines
+the stage set, and runs through **three quality gates**: framing (diagnose-before-build),
+plan (skeptic + structural-vs-symptom), and an adversarial build review before delivery.
+BUILD is test-first: RED (tests from acceptance criteria) → GREEN (code until pass) →
+VERIFY (no regressions). Fix code, not tests.
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **SKILL.md** | `backend/skills/s_autonomous-pipeline/` | 9-stage behavioral loop with TDD, decisions, adversarial review, delivery gate |
-| **artifact_cli.py** | `backend/scripts/` | 13 CLI commands: publish, discover, run-*, status, resume |
-| **pipeline_validator.py** | `backend/scripts/` | 6 structural invariant checks after each stage |
-| **pipeline_profiles.py** | `backend/core/` | 5 profiles: full, trivial, research, docs, bugfix |
-| **pipelines.py** | `backend/routers/` | GET /api/pipelines dashboard endpoint |
+### Self-Growing Intelligence
 
-**Methodology:** DDD (should we?) -> SDD (what exactly?) -> TDD (did we?).
-**TDD in BUILD:** RED (generate tests from acceptance criteria, all fail) -> GREEN (code until pass) -> VERIFY (full suite, 0 regressions). Fix code, not tests.
-
-### Swarm Core Engine (Self-Growing Intelligence)
-
-The Core Engine is six flywheels feeding each other -- the compound loop that makes Swarm grow smarter over time. All product-level code in `backend/`.
-
-```
-Session -> Memory captures -> Evolution detects patterns -> Harness verifies
-   ^       -> Context assembles smarter prompts -> Next session better     |
-   |_______________________________________________________________________|
-```
-
-**Six Flywheels:**
-
-| Flywheel | Key Components | Location |
-|----------|----------------|----------|
-| **Self-Evolution** | EVOLUTION.md, evolution hooks, gap detection, correction registry | `hooks/evolution_*.py`, `skills/s_self-evolution/` |
-| **Self-Memory** | 3-layer distillation, LLM weekly pruning (Haiku), proactive briefing | `hooks/daily_activity_hook.py`, `hooks/distillation_hook.py`, `jobs/handlers/memory_health.py` |
-| **Self-Context** | 11-file P0-P10 chain, token budgets, L0/L1 cache, 4-tier ownership | `core/context_directory_loader.py`, `core/prompt_builder.py` |
-| **Self-Harness** | Context validation (light + deep), DDD staleness, index refresh | `hooks/context_health_hook.py` |
-| **Self-Health** | Service monitoring, auto-restart, resource diagnostics, health alerting | `core/service_manager.py`, `core/resource_monitor.py`, `core/proactive_intelligence.py` |
-| **Self-Jobs** | Scheduler, executor, system jobs, signal pipeline, adapters, self-tune | `jobs/` package (16 modules), `routers/jobs.py` |
-
-**Context file ownership model** (enforced in `context_directory_loader.py`):
-
-| Category | Files | Source of Truth | Write Access |
-|----------|-------|-----------------|--------------|
-| System-owned | SWARMAI, IDENTITY, SOUL, AGENT | `backend/context/` (codebase template) | Code changes only |
-| User-owned | USER, STEERING, TOOLS | `.context/` (workspace) | User edits freely |
-| Agent-owned | MEMORY, EVOLUTION | `.context/` (workspace) | Agent via hooks/locked_write |
-| Auto-generated | KNOWLEDGE, PROJECTS | `.context/` (workspace) | Rebuilt from filesystem |
-
-### Job System (`backend/jobs/`)
-
-Product-level background automation. System jobs in code, user jobs in YAML.
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| **scheduler.py** | Core scheduler | Evaluate due jobs, execute, save state |
-| **executor.py** | Job dispatcher | Routes to handlers: signal_fetch, digest, agent_task, script, maintenance |
-| **system_jobs.py** | System jobs | Code definitions (signal-fetch, digest, self-tune, maintenance, rollup) |
-| **handlers/** | signal_fetch, signal_digest, memory_health | Feed adapters, LLM digest, weekly LLM maintenance |
-| **adapters/** | RSS, HN, GitHub, web search | httpx-based feed fetchers |
-| **paths.py** | Centralized paths | SWARMWS, STATE_FILE, CONFIG_FILE, etc. |
-
-API: `GET /api/jobs/` (list), `POST /api/jobs/run` (force-run), `GET /api/jobs/status` (overview).
-Scheduler: single launchd plist (`com.swarmai.scheduler`), hourly trigger.
-Managed services (e.g. Slack bot): managed by `service_manager.py`, lifecycle tied to backend.
-
-### Skill System
-
-3-tier skill loading: built-in (`backend/skills/`), user (`~/.swarm-ai/skills/`), plugin. Each skill is a directory with a `SKILL.md` file that defines trigger patterns, workflow steps, and tool usage. 50+ skills ship built-in.
-
-### MCP Subsystem
-
-External tool servers via Model Context Protocol (stdio/SSE/HTTP). 2-layer file-based config: `mcp-dev.json` for development, `mcp-config.json` for production. Supports GitHub, Slack, Outlook, Sentral, and custom servers.
-
-### Workspace System
-
-SwarmWS (`~/.swarm-ai/SwarmWS/`) is the agent's working directory. Git-tracked filesystem with:
-- `Knowledge/` -- Notes, Reports, Meetings, Library, Archives, DailyActivity
-- `Projects/` -- DDD-structured project contexts (this directory)
-- `Services/` -- Managed service definitions (hidden from explorer)
-- `Attachments/` -- File uploads and exports
-- `.context/` -- 11 context files loaded into system prompt
-
-## File Structure Quick Reference
-
-```
-backend/
-  main.py                              # FastAPI entry point
-  config.py                            # App configuration
-  core/
-    session_router.py                  # Session routing + slot management
-    session_unit.py                    # Per-session state machine
-    lifecycle_manager.py               # Background health + TTL
-    session_registry.py                # Component wiring
-    context_directory_loader.py        # Context file assembly
-    prompt_builder.py                  # Prompt composition pipeline
-    skill_manager.py                   # Skill discovery + loading
-    service_manager.py                 # Managed service lifecycle
-    mcp_config_loader.py               # MCP server configuration
-    swarm_workspace_manager.py         # Workspace provisioning + project CRUD
-    proactive_intelligence.py          # Session briefings (L0-L4)
-  jobs/                                # Background job system (16 modules)
-  routers/                             # FastAPI route handlers
-  hooks/                               # Post-session lifecycle hooks
-  skills/                              # Built-in skills (50+)
-  templates/ddd/                       # DDD document templates
-  schemas/                             # Pydantic models
-
-desktop/src/
-  pages/ChatPage.tsx                   # Tab orchestration + message rendering
-  hooks/useChatStreamingLifecycle.ts   # SSE event processing
-  hooks/useUnifiedTabState.ts          # Tab CRUD + persistence
-  services/chat.ts                     # SSE connection + backend API
-  contexts/ExplorerContext.tsx          # Workspace tree + polling
-  components/                          # UI components
-```
+The compound loop: a session happens → memory captures it → evolution detects recurring
+patterns → the harness verifies accuracy → context assembles smarter prompts → the next
+session performs better. Background jobs (scheduled, independent of any chat) and
+between-session hooks keep the loop turning without being asked.
 
 ## Conventions
 
-- **Backend (Python):** snake_case for everything. Pydantic models with `model_config = ConfigDict(from_attributes=True)`.
-- **Frontend (TypeScript):** camelCase. Always update `toCamelCase()` in `desktop/src/services/*.ts` when adding API fields.
-- **API boundary:** Backend sends snake_case, frontend receives and converts to camelCase.
-- **Files:** Date-prefixed for sortability: `YYYY-MM-DD-description.md`
-- **Commits:** Conventional format. Co-authored with Swarm.
-- **Testing:** Property-based (Hypothesis/fast-check) preferred over example-based. All new code needs tests.
-- **Modules >500 lines:** Strangler fig pattern for refactoring. No big-bang rewrites.
+- **Backend (Python):** snake_case; Pydantic models with `from_attributes=True`.
+- **Frontend (TypeScript):** camelCase; keep the API-boundary converter in sync when
+  adding fields.
+- **API boundary:** backend sends snake_case, frontend converts to camelCase.
+- **Files:** date-prefixed for sortability: `YYYY-MM-DD-description.md`.
+- **Commits:** conventional format.
+- **Testing:** property-based (Hypothesis / fast-check) preferred; new code needs tests.
+- **Large modules:** strangler-fig for refactoring — no big-bang rewrites.
 
 ## Runtime Traps
 
-_Environment-specific gotchas, non-obvious failure modes, and "it works locally but not X" traps. DDD cultivation routes technical trap/daemon/env/path lessons here — this section MUST exist in the scaffold or cultivation auto-creates it per-project (template drift)._
+_Environment-specific gotchas, non-obvious failure modes, and "it works locally but not
+X" traps. DDD cultivation routes technical trap/daemon/env/path lessons here — this
+section MUST exist in the scaffold or cultivation auto-creates it per-project (template
+drift)._
 
-_No entries yet. Swarm will add entries as runtime traps are discovered._
+_No entries yet. Entries are added as runtime traps are discovered._
 
 ## Environment Notes
 
-- Backend port is **random each launch** (Tauri portpicker). Never hardcode ports.
-- Claude Agent SDK spawns a CLI subprocess per session. Each CLI + its MCPs costs ~500MB RAM.
-- SQLite in WAL mode at `~/.swarm-ai/data.db`. Direct access from agent sandbox is reliable for CRUD.
-- Two independent credential chains may coexist: Claude CLI uses AWS SSO IdC tokens, boto3 may use credential_process. Validate the chain your code actually uses.
-- Claude Code IS the local proxy when running inside the agent sandbox. Strip proxy vars when spawning subprocesses that manage their own networking.
+- The Claude Agent SDK spawns a CLI subprocess per session; each subprocess plus its MCP
+  servers costs on the order of a few hundred MB of RAM — the driver behind the real-RAM
+  spawn budget above.
+- SQLite runs in WAL mode at `~/.swarm-ai/data.db`.
+- Multiple credential chains may coexist (e.g. an SSO/IdC chain for the CLI vs a separate
+  chain for direct SDK calls) — validate the chain your code actually uses.
