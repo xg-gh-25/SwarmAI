@@ -112,6 +112,50 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     if [ -d "$APP_PATH" ]; then
         echo "Application bundle: $(ls -d "$APP_PATH"/*.app 2>/dev/null || echo 'Not found')"
     fi
+
+    # ── Auto-open the installer window (local builds only) ────────────────────
+    # WHY TWO STEPS (attach, then open the mount point) INSTEAD OF `open <dmg>`:
+    # tauri-build.sh forces the bundler's --skip-jenkins path, so the DMG carries
+    # neither a .DS_Store (window geometry / icon layout) nor a bless auto-open
+    # flag — and bundle_dmg.sh defaults BLESS=0 anyway, with the arm64 branch
+    # omitting --openfolder even when blessed. Consequence, verified by repro:
+    # `open <dmg>` DOES mount the volume but Finder never surfaces a window, so
+    # the build looks like it did nothing. Attaching explicitly gives us the mount
+    # point, and opening THAT is what actually raises the Finder window.
+    #
+    # $CI is still unset here: tauri-build.sh sets CI=true for the bundler, but it
+    # runs as a child process (`bash tauri-build.sh`), so that export does not leak
+    # back into this shell. So this check sees real CI only — where `open` has no
+    # GUI session to talk to and must be skipped.
+    #
+    # Opt out locally with SWARMAI_SKIP_DMG_OPEN=1.
+    if [ -z "$CI" ] && [ -z "$SWARMAI_SKIP_DMG_OPEN" ] && [ -d "$DMG_PATH" ]; then
+        dmg_file="$(ls -t "$DMG_PATH"/*.dmg 2>/dev/null | head -1)"
+        if [ -n "$dmg_file" ]; then
+            # Reuse an existing mount of this exact image rather than stacking a
+            # second "SwarmAI 1" volume next to it.
+            mount_point="$(hdiutil info 2>/dev/null | awk -v img="$dmg_file" '
+                /^image-path/ { p = $0; sub(/^image-path[ \t]*:[ \t]*/, "", p); cur = (p == img) }
+                cur && /^\/dev\/disk/ && index($0, "/Volumes/") {
+                    mp = $0; sub(/^.*\/Volumes\//, "/Volumes/", mp); print mp; exit
+                }
+            ')" || mount_point=""
+            if [ -z "$mount_point" ]; then
+                mount_point="$(hdiutil attach "$dmg_file" 2>/dev/null \
+                    | awk -F'\t' '/^\/dev\/disk/ && NF >= 3 { mp = $NF } END { print mp }')" \
+                    || mount_point=""
+            fi
+            echo ""
+            if [ -n "$mount_point" ] && [ -d "$mount_point" ]; then
+                open "$mount_point" 2>/dev/null || true
+                echo "Installer window opened: $mount_point"
+                echo "  → Drag SwarmAI.app onto the Applications shortcut to install."
+            else
+                echo "Could not auto-open the installer. Run manually:"
+                echo "  open \"$dmg_file\""
+            fi
+        fi
+    fi
 elif [[ "$OSTYPE" == "linux"* ]]; then
     DEB_PATH="$PROJECT_ROOT/src-tauri/target/release/bundle/deb"
     APPIMAGE_PATH="$PROJECT_ROOT/src-tauri/target/release/bundle/appimage"
