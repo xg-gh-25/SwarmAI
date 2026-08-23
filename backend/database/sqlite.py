@@ -2391,6 +2391,7 @@ class SQLiteDatabase(BaseDatabase):
                 ("iam_instance_profile_arn", None), ("s3_bucket", None),
                 ("auth_user", "'admin'"), ("auth_password", None),
                 ("seed_data", None), ("shared_content", None),
+                ("custom_ami_id", None),
             ]:
                 try:
                     default_clause = f" DEFAULT {default}" if default else ""

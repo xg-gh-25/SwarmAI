@@ -95,6 +95,37 @@ async def test_create_instance(client):
 
 
 @pytest.mark.asyncio
+async def test_create_instance_with_custom_ami(client):
+    """AC4: custom_ami_id round-trips through create + is returned in response."""
+    acc_resp = await client.post("/api/hive/accounts", json={"account_id": "555666777811"})
+    acc_id = acc_resp.json()["id"]
+
+    resp = await client.post("/api/hive/instances", json={
+        "name": "prebaked-hive",
+        "account_ref": acc_id,
+        "custom_ami_id": "ami-0868a14e13f356561",
+    })
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["custom_ami_id"] == "ami-0868a14e13f356561"
+
+
+@pytest.mark.asyncio
+async def test_create_instance_rejects_bad_custom_ami(client):
+    """AC4: malformed custom_ami_id is rejected by the field validator."""
+    acc_resp = await client.post("/api/hive/accounts", json={"account_id": "555666777822"})
+    acc_id = acc_resp.json()["id"]
+
+    resp = await client.post("/api/hive/instances", json={
+        "name": "bad-ami-hive",
+        "account_ref": acc_id,
+        "custom_ami_id": "not-an-ami",
+    })
+    # middleware error_handler maps pydantic ValidationError → 400
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_create_instance_bad_account(client):
     resp = await client.post("/api/hive/instances", json={
         "name": "orphan-hive",

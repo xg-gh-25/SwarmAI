@@ -45,11 +45,16 @@ _VALID_INSTANCE_COLUMNS = frozenset({
     "ec2_instance_id", "ec2_public_ip", "elastic_ip_alloc_id",
     "security_group_id", "iam_role_name", "iam_instance_profile_arn",
     "cloudfront_dist_id", "cloudfront_domain", "s3_bucket",
-    "auth_user", "auth_password",
+    "auth_user", "auth_password", "custom_ami_id",
 })
 
 # Hive name regex — single source of truth, imported by routers/hive.py
 HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+# Single source of truth for custom AMI id shape — shared by the API validator
+# (routers/hive.py) AND the deploy-time DB re-validation below. Defense-in-depth:
+# the value flows into boto3 run_instances(ImageId=...), so a DB row written outside
+# the API (manual sqlite / migration) must NOT reach AWS unvalidated (Gate-2 security).
+AMI_ID_RE = re.compile(r"^ami-[0-9a-f]{8,}$")
 
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
@@ -459,6 +464,26 @@ class HiveProvisioner:
 
     # ── EC2 ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _validate_custom_ami_id(custom_ami_id: str | None) -> str | None:
+        """Defense-in-depth guard for the pre-baked AMI id read from the DB row.
+
+        The API validates custom_ami_id on write (routers/hive.py), but a row
+        written outside the API (manual sqlite / migration) must NOT reach
+        boto3 run_instances(ImageId=...) unvalidated — an arbitrary/typo'd id
+        would launch the wrong image or emit a cryptic AWS error. Returns the id
+        unchanged when valid; None/empty → None (deploy falls back to base AL2023);
+        malformed → raises ValueError (fail-loud, before any resource is created).
+        """
+        if not custom_ami_id:
+            return None
+        if not AMI_ID_RE.match(custom_ami_id):
+            raise ValueError(
+                f"Invalid custom_ami_id in DB row: {custom_ami_id!r} "
+                f"(must match {AMI_ID_RE.pattern})"
+            )
+        return custom_ami_id
+
     async def _get_latest_ami(self, session, region: str) -> str:
         """Get latest Amazon Linux 2023 ARM64 AMI via SSM parameter."""
         def _lookup():
@@ -480,15 +505,26 @@ class HiveProvisioner:
         instance_type: str,
         region: str,
         version: str,
+        custom_ami_id: str | None = None,
     ) -> str:
-        """Launch EC2 instance. Returns instance ID."""
+        """Launch EC2 instance. Returns instance ID.
+
+        custom_ami_id: when set (a pre-baked AMI), use it as the ImageId and skip
+        the SSM base-AL2023 lookup. When None/empty, fall back to the base AL2023
+        AMI + full on-machine install (existing behavior, zero regression).
+        Explicit truthiness (not ``or``) so an empty string can't silently mask a
+        misconfigured value — it falls back to base, which is the safe default.
+        """
         if instance_type not in ALLOWED_INSTANCE_TYPES:
             raise ValueError(
                 f"Instance type '{instance_type}' not allowed. "
                 f"Permitted: {', '.join(sorted(ALLOWED_INSTANCE_TYPES))}"
             )
 
-        ami_id = await self._get_latest_ami(session, region)
+        if custom_ami_id:
+            ami_id = custom_ami_id
+        else:
+            ami_id = await self._get_latest_ami(session, region)
 
         def _launch():
             ec2 = session.client("ec2", region_name=region)
@@ -794,6 +830,11 @@ class HiveProvisioner:
             region = instance["region"]
             version = await self._resolve_version(instance.get("version"))
             instance_type = instance.get("instance_type", "m7g.xlarge")
+            # Optional pre-baked AMI: when set, ImageId=this AMI + user_data skips
+            # dnf/pip (AMI already固化 them). None/empty → base AL2023 + full install.
+            # Re-validate the DB value before it reaches boto3 (defense-in-depth;
+            # see _validate_custom_ami_id). Empty/NULL → base AL2023 fallback.
+            custom_ami_id = self._validate_custom_ami_id(instance.get("custom_ami_id"))
             # Persist resolved version
             await self._update_instance(instance_id, version=version)
 
@@ -833,6 +874,7 @@ class HiveProvisioner:
                 auth_user="admin",
                 auth_hash=auth_hash,
                 region=region,
+                prebaked=bool(custom_ami_id),
             )
             await self._update_instance(
                 instance_id, auth_user="admin", auth_password=password
@@ -841,7 +883,8 @@ class HiveProvisioner:
             # Step 7: Launch EC2
             await self._update_instance(instance_id, status="installing")
             ec2_id = await self._launch_ec2(
-                session, name, profile_arn, sg_id, user_data, instance_type, region, version
+                session, name, profile_arn, sg_id, user_data, instance_type, region, version,
+                custom_ami_id=custom_ami_id,
             )
             created_resources["ec2_instance"] = ec2_id
             await self._update_instance(instance_id, ec2_instance_id=ec2_id)

@@ -34,6 +34,67 @@ class TestUserData:
         assert "$2a$14$abc123" in result
         assert "us-east-1" in result
 
+    def test_prebaked_skips_dnf_and_pip(self):
+        """AC1: prebaked=True renders a script that SKIPS [1/9] dnf install and
+        [4/9] venv+pip install (the pre-baked AMI already has them)."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket",
+            version="2.0.1",
+            auth_user="admin",
+            auth_hash="$2a$14$abc",
+            region="us-east-1",
+            prebaked=True,
+        )
+        assert "dnf install -y python3.12" not in result
+        assert ".venv/bin/pip install -q -e ." not in result
+        assert "python3.12 -m venv .venv" not in result
+        # steps that MUST still run in prebaked mode:
+        assert "aws s3 cp" in result
+        assert "useradd" in result
+        assert "systemctl start swarmai-hive" in result
+        assert "HiveStatus" in result
+
+    def test_prebaked_script_is_valid_bash(self):
+        """AC1/AC7: the prebaked-rendered script must be syntactically valid bash
+        (the skip-echo replacement must not break quoting). Regression guard for
+        the missing-close-quote bug caught in SMOKE."""
+        import subprocess
+        import shutil
+        from hive.user_data import render_user_data
+
+        if not shutil.which("bash"):
+            pytest.skip("bash not available")
+        script = render_user_data(
+            s3_bucket="b-2361", version="2.0.1", auth_user="admin",
+            auth_hash="$2a$14$abcdefghijklmnopqrstuv", region="us-east-1",
+            prebaked=True,
+        )
+        proc = subprocess.run(
+            ["bash", "-n"], input=script, text=True,
+            capture_output=True, timeout=15,
+        )
+        assert proc.returncode == 0, f"prebaked script has bash syntax error:\n{proc.stderr}"
+
+    def test_prebaked_false_is_byte_identical_to_default(self):
+        """AC6: prebaked=False (and default) renders byte-for-byte the same as
+        the pre-prebaked behavior — zero regression on the existing path."""
+        from hive.user_data import render_user_data
+
+        kwargs = dict(
+            s3_bucket="test-bucket",
+            version="2.0.1",
+            auth_user="admin",
+            auth_hash="$2a$14$abc",
+            region="us-east-1",
+        )
+        default_out = render_user_data(**kwargs)
+        explicit_false = render_user_data(**kwargs, prebaked=False)
+        assert default_out == explicit_false
+        assert "dnf install -y python3.12" in default_out
+        assert ".venv/bin/pip install -q -e ." in default_out
+
     def test_no_hardcoded_values(self):
         """AC10: no hardcoded bucket names, IPs, or versions."""
         from hive.user_data import render_user_data
@@ -271,6 +332,84 @@ class TestProvisionerSG:
         # Verify CloudFront prefix list is used (not 0.0.0.0/0)
         assert ip_perms[0]["PrefixListIds"][0]["PrefixListId"] == "pl-test123"
         assert "IpRanges" not in ip_perms[0] or ip_perms[0].get("IpRanges") == []
+
+
+    def test_ami_id_re_shared_and_correct(self):
+        """AC3/security: AMI_ID_RE is the single source of truth (shared by the
+        API validator and the deploy-time DB re-validation) and matches only
+        well-formed AMI ids."""
+        from hive.provisioner import AMI_ID_RE
+        assert AMI_ID_RE.match("ami-0868a14e13f356561")
+        assert not AMI_ID_RE.match("not-an-ami")
+        assert not AMI_ID_RE.match("ami-XYZ")          # non-hex
+        assert not AMI_ID_RE.match("ami-123; rm -rf")  # injection attempt
+        # router imports the SAME object (no drift)
+        from routers.hive import AMI_ID_RE as ROUTER_RE
+        assert AMI_ID_RE is ROUTER_RE
+
+    def test_validate_custom_ami_id_guards_db_value(self):
+        """Gate-2 security: the deploy-time re-validation guard REJECTS a malformed
+        custom_ami_id (written to the DB outside the API) before it can reach boto3
+        run_instances(ImageId=...); passes valid ids; None/empty → None (base
+        fallback). This is the execution test for the guard path (R28)."""
+        from hive.provisioner import HiveProvisioner
+
+        v = HiveProvisioner._validate_custom_ami_id
+        # valid → returned unchanged
+        assert v("ami-0868a14e13f356561") == "ami-0868a14e13f356561"
+        # None / empty → None (deploy falls back to base AL2023)
+        assert v(None) is None
+        assert v("") is None
+        # malformed (injection / typo / non-hex) → fail-loud raise
+        for bad in ("ami-evil; rm -rf /", "not-an-ami", "ami-XYZ", "ami-"):
+            with pytest.raises(ValueError, match="custom_ami_id"):
+                v(bad)
+
+    @pytest.mark.asyncio
+    async def test_launch_ec2_uses_custom_ami_when_set(self):
+        """AC2: custom_ami_id set → run_instances ImageId uses it, SSM base
+        lookup is NOT called."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.run_instances.return_value = {"Instances": [{"InstanceId": "i-new"}]}
+
+        with patch.object(p, "_get_latest_ami", new=AsyncMock(return_value="ami-base")) as base:
+            ec2_id = await p._launch_ec2(
+                mock_session, "test", "arn:profile", "sg-1", "#!/bin/bash",
+                "m7g.xlarge", "us-east-1", "2.0.1",
+                custom_ami_id="ami-0868a14e13f356561",
+            )
+        assert ec2_id == "i-new"
+        base.assert_not_called()  # SSM base lookup skipped
+        assert mock_ec2.run_instances.call_args[1]["ImageId"] == "ami-0868a14e13f356561"
+
+    @pytest.mark.asyncio
+    async def test_launch_ec2_falls_back_to_base_ami_when_none(self):
+        """AC2/AC6: custom_ami_id None → falls back to base AL2023 via SSM (zero
+        regression on the existing path). Empty string ALSO falls back (explicit
+        truthiness, not `or`-masking)."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.run_instances.return_value = {"Instances": [{"InstanceId": "i-base"}]}
+
+        for ami_arg in (None, ""):
+            mock_ec2.run_instances.reset_mock()
+            with patch.object(p, "_get_latest_ami", new=AsyncMock(return_value="ami-base")) as base:
+                await p._launch_ec2(
+                    mock_session, "test", "arn:profile", "sg-1", "#!/bin/bash",
+                    "m7g.xlarge", "us-east-1", "2.0.1",
+                    custom_ami_id=ami_arg,
+                )
+            base.assert_awaited_once()  # SSM base lookup used
+            assert mock_ec2.run_instances.call_args[1]["ImageId"] == "ami-base"
 
 
 class TestProvisionerHealthCheck:

@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from database import db
-from hive.provisioner import ALLOWED_INSTANCE_TYPES, HiveProvisioner, HIVE_NAME_RE
+from hive.provisioner import ALLOWED_INSTANCE_TYPES, HiveProvisioner, HIVE_NAME_RE, AMI_ID_RE
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,16 @@ class HiveInstanceCreate(BaseModel):
     owner_name: Optional[str] = None
     hive_type: str = "shared"
     version: Optional[str] = None  # if None, uses latest from GitHub
+    custom_ami_id: Optional[str] = None  # pre-baked AMI; None → base AL2023 + full install
+
+    @field_validator("custom_ami_id")
+    @classmethod
+    def validate_custom_ami_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not AMI_ID_RE.match(v):
+            raise ValueError(f"Invalid custom_ami_id: {v!r} (must match {AMI_ID_RE.pattern})")
+        return v
 
     @field_validator("region")
     @classmethod
@@ -175,6 +185,7 @@ class HiveInstanceResponse(BaseModel):
     # auth_password intentionally excluded from list response
     status: str
     version: Optional[str] = None
+    custom_ami_id: Optional[str] = None
     error_message: Optional[str] = None
     created_at: str
     updated_at: str
@@ -419,6 +430,7 @@ async def create_instance(body: HiveInstanceCreate):
         "auth_user": None, "auth_password": None,
         "status": "pending",
         "version": body.version, "error_message": None,
+        "custom_ami_id": body.custom_ami_id,
         "seed_data": None, "shared_content": None,
         "created_at": now, "updated_at": now,
     }

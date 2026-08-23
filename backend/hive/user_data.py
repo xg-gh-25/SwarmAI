@@ -272,12 +272,44 @@ def caddy_hash_password(password: str) -> str:
     return hashed.decode()
 
 
+# ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
+# When a pre-baked custom AMI is used, the heavy on-machine install steps are
+# already固化 in the image, so render_user_data(prebaked=True) strips these two
+# exact segments and replaces them with a skip-echo. They are defined as exact
+# substrings of the template so a drift between here and the template FAILS LOUD
+# (render raises) instead of silently rendering a script that still runs dnf/pip.
+#
+# ⚠️ The prebaked AMI MUST pre-install: python3.12 + a fully-populated
+# /opt/swarmai/backend/.venv (all pyproject deps) + gcc/make/python3.12-devel.
+# gcc/make are required NOT for first boot but because update() (provisioner.py)
+# re-runs `pip install -e .` on tarball updates, which may compile C extensions.
+_DNF_SEGMENT = """# ── 1. System packages ──
+echo "[1/9] Installing system packages..."
+dnf install -y python3.12 python3.12-pip python3.12-devel nodejs20 npm git gcc make 2>&1 | tail -5"""
+
+_DNF_SEGMENT_PREBAKED = """# ── 1. System packages ── (SKIPPED — pre-baked AMI already has them)
+echo "[1/9] System packages pre-installed in AMI — skipping dnf." """
+
+_VENV_SEGMENT = """# ── 4. Python venv + deps ──
+echo "[4/9] Setting up Python environment..."
+cd "$INSTALL_DIR/backend"
+sudo -u "$SWARM_USER" python3.12 -m venv .venv
+sudo -u "$SWARM_USER" .venv/bin/pip install -q --upgrade pip
+sudo -u "$SWARM_USER" .venv/bin/pip install -q -e . 2>&1 | tail -3"""
+
+_VENV_SEGMENT_PREBAKED = """# ── 4. Python venv + deps ── (SKIPPED — pre-baked AMI already has .venv)
+echo "[4/9] Python venv + deps pre-installed in AMI — skipping."
+# The AMI ships a complete /opt/swarmai/backend/.venv; step [3/9] overwrites the
+# source tree (editable install points into it), so no pip step is needed here."""
+
+
 def render_user_data(
     s3_bucket: str,
     version: str,
     auth_user: str,
     auth_hash: str,
     region: str,
+    prebaked: bool = False,
 ) -> str:
     """Render the EC2 user-data bash script with parameters.
 
@@ -287,6 +319,12 @@ def render_user_data(
     Defense-in-depth: all values are validated/sanitized before substitution.
     The Caddyfile heredoc uses single-quotes ('CADDY') so shell doesn't
     expand variables — only Python Template substitution runs.
+
+    prebaked: when True (a pre-baked custom AMI is used), strip the [1/9] dnf
+    install and [4/9] venv+pip segments — the AMI already固化 them, so the
+    instance only pulls the package (step 3) + starts services (steps 5-9),
+    cutting build time from minutes to ~10s. prebaked=False (default) renders
+    byte-for-byte the original full-install script — zero regression.
     """
     import re
     from string import Template
@@ -320,6 +358,21 @@ def render_user_data(
         auth_hash=auth_hash,
         region=region,
     )
+
+    # Prebaked AMI: strip the heavy on-machine install segments. Fail LOUD if a
+    # segment isn't found verbatim (template drifted) — never silently render a
+    # script that still runs dnf/pip on a prebaked image, and never leave the
+    # instance with a broken half-edited script.
+    if prebaked:
+        for old, new in ((_DNF_SEGMENT, _DNF_SEGMENT_PREBAKED),
+                         (_VENV_SEGMENT, _VENV_SEGMENT_PREBAKED)):
+            if old not in result:
+                raise ValueError(
+                    "prebaked render failed: expected install segment not found "
+                    "in template (segment constant drifted from _USER_DATA_TEMPLATE)"
+                )
+            result = result.replace(old, new)
+
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
     # Only check for our 5 known template vars (shell vars like ${i}, ${HASH} are expected).
     _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "region"}
