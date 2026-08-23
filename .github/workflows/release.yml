@@ -173,71 +173,18 @@ jobs:
           path: desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip*
           if-no-files-found: warn
 
-  build-hive:
-    needs: [prepare]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: desktop/package-lock.json
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install frontend dependencies
-        working-directory: ./desktop
-        run: npm ci
-
-      - name: Create backend .env
-        working-directory: ./backend
-        run: cp .env.example .env
-
-      - name: Install backend Python dependencies
-        working-directory: ./backend
-        run: |
-          pip install uv
-          uv venv .venv
-          source .venv/bin/activate
-          uv pip install -e ".[dev]"
-          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
-
-      - name: Update version
-        run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
-
-      - name: Build frontend (shared with Desktop)
-        working-directory: ./desktop
-        run: npm run build
-
-      - name: Package Hive tar.gz
-        run: bash hive/release.sh "${{ needs.prepare.outputs.version }}"
-
-      - name: Verify Hive package
-        run: bash hive/verify_package.sh "dist/swarmai-hive-v${{ needs.prepare.outputs.version }}-linux-arm64.tar.gz"
-
-      - name: Upload Hive package
-        uses: actions/upload-artifact@v4
-        with:
-          name: hive-linux-arm64
-          path: dist/swarmai-hive-*.tar.gz
-          if-no-files-found: error
-
-      - name: Upload checksums
-        uses: actions/upload-artifact@v4
-        with:
-          name: hive-checksums
-          path: dist/checksums.txt
+  # NOTE: the build-hive CI job was REMOVED (run_eb45c28d). Hive packaging is now
+  # LOCAL-ONLY — hive/release.sh sources the full DDD from the daemon workspace
+  # (~/.swarm-ai/SwarmWS), which does not exist on a bare CI runner. The Hive tar
+  # is therefore no longer a published GitHub Release asset; build it locally with
+  # `bash hive/release.sh <version>` on a machine with a populated daemon workspace.
 
   publish:
-    # Run even if Windows fails — macOS + Hive artifacts still ship.
+    # Run even if Windows fails — the macOS artifact still ships.
     # 'always()' runs on any outcome; the 'if' filters to skip only
-    # when ALL builds fail (prepare always succeeds so we need to check builds).
-    if: ${{ always() && (needs.build-macos.result == 'success' || needs.build-hive.result == 'success') }}
-    needs: [prepare, build-macos, build-windows, build-hive]
+    # when the macOS build fails (prepare always succeeds).
+    if: ${{ always() && needs.build-macos.result == 'success' }}
+    needs: [prepare, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for the latest.json generator script)
@@ -268,8 +215,8 @@ jobs:
       # Without this the in-app auto-updater 404s on latest.json (silent no-op).
       # The generator (a) reads each platform's .sig contents into the manifest,
       # (b) points urls at the updater BUNDLE not the installer, (c) fails loud if
-      # macOS built-but-missing, (d) gracefully skips macOS when build-macos did not
-      # succeed (hive-only release still ships), (e) omits Windows if absent.
+      # macOS built-but-missing, (d) omits Windows if absent. (publish now requires
+      # build-macos success — Hive is local-only, no longer a CI-published asset.)
       - name: Generate latest.json (updater manifest)
         run: |
           bash .github/scripts/gen-latest-json.sh \

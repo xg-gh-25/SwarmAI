@@ -106,39 +106,87 @@ echo "[release] Copying VERSION..."
 cp "${VERSION_FILE}" "${STAGING}/VERSION"
 
 # ---------------------------------------------------------------------------
-# Hive seed material (run_ca7f92c1) — a fresh Hive is a SHARED reference
-# instance, so it ships the COMPLETE SwarmAI sample DDD + a model-4-8 config +
-# the 5 PUBLIC context files. SwarmWorkspaceManager._seed_hive_from_package
-# reads this dir on first boot (SWARMAI_MODE=hive). Runtime artifacts + the
-# private context files are DELIBERATELY excluded (see below).
+# Hive seed material (run_ca7f92c1; source-swapped run_eb45c28d) — a fresh Hive
+# is a SHARED reference instance, so it ships the COMPLETE SwarmAI sample DDD +
+# a model-4-8 config + the 5 PUBLIC context files. SwarmWorkspaceManager.
+# _seed_hive_from_package reads this dir on first boot (SWARMAI_MODE=hive).
+# Runtime artifacts + the private context files are DELIBERATELY excluded (below).
+#
+# SOURCE = the SwarmWS LIVE DDD, the single true source (cultivation writes it).
+# The old source (${PROJECT_ROOT}/Projects/SwarmAI) was a manual mirror with NO
+# auto-sync that DRIFTED from the live DDD — that copy is gitignored (Projects/*),
+# lives only on disk, and is no longer read here. Because the live DDD lives in the
+# daemon workspace (~/.swarm-ai/SwarmWS), HIVE PACKAGING IS LOCAL-ONLY: it requires
+# a populated daemon workspace and cannot run on a bare CI checkout (the CI
+# build-hive job was removed for exactly this reason — see .github/workflows/
+# release.yml). Path is resolved via the same SWARM_DATA_DIR escape hatch as
+# backend/config.py get_app_data_dir(), so a sandbox/test can override it.
 # ---------------------------------------------------------------------------
 echo "[release] Building hive seed (full DDD + config-4-8 + public context)..."
 SEED="${STAGING}/hive/seed"
 mkdir -p "${SEED}/Projects" "${SEED}/context"
 
-# 1. Full SwarmAI DDD — exclude runtime artifacts + the code-intel binary
-#    (same boundary as .gitignore: knowledge ships, build noise does not).
-# FAIL-FAST: a Hive MUST ship the full DDD. A silent 4-stub fallback here (the old
-# WARNING-and-continue) ships a degraded Hive that looks healthy — abort instead so
-# the build machine's missing/gitignored Projects/SwarmAI is caught at package time.
-if [ ! -d "${PROJECT_ROOT}/Projects/SwarmAI" ]; then
-    echo "[release] ERROR: Projects/SwarmAI not found at ${PROJECT_ROOT}/Projects/SwarmAI" >&2
-    echo "[release]        A Hive must ship the full SwarmAI DDD sample. Ensure the source" >&2
-    echo "[release]        repo includes Projects/SwarmAI (it's git-tracked, .gitignore keeps" >&2
-    echo "[release]        only SwarmAI public). Aborting rather than shipping a 4-stub Hive." >&2
+# 1. Full SwarmAI DDD — sourced from the SwarmWS LIVE DDD, exclude runtime
+#    artifacts + the code-intel binary (same boundary as .gitignore: knowledge
+#    ships, build noise does not).
+LIVE_DDD="${SWARM_DATA_DIR:-${HOME}/.swarm-ai}/SwarmWS/Projects/SwarmAI"
+
+# CONTENT-FLOOR FAIL-FAST (before rsync): a Hive MUST ship the full, complete,
+# non-torn DDD. Abort rather than ship a silently-degraded Hive. Checks:
+#   (a) the live DDD dir exists,
+#   (b) the canonical TECH.md is present AND non-empty (stub/empty detector — a
+#       low sentinel, NOT a quality gate),
+#   (c) no canonical doc is currently WRITE-LOCKED by cultivation. Detection is a
+#       real held-flock try-lock (flock -n), NEVER lock-FILE presence: md_lock
+#       never unlinks its <doc>.md.lock sidecar (ddd_cultivation.py), so the file
+#       is on disk permanently — presence ≠ in-flight write. flock(1) is util-linux
+#       and ABSENT on macOS, so this sub-check is command-v-gated and simply skips
+#       on macOS (fail-open: the local build machine has no concurrent-writer race
+#       worth bricking a build over; the guard still enforces (a)+(b) everywhere).
+if [ ! -d "${LIVE_DDD}" ]; then
+    echo "[release] ERROR: live SwarmAI DDD not found at ${LIVE_DDD}" >&2
+    echo "[release]        Hive packaging is LOCAL-ONLY — it sources the full DDD from the" >&2
+    echo "[release]        daemon workspace (SWARM_DATA_DIR / ~/.swarm-ai/SwarmWS). Run this on" >&2
+    echo "[release]        a machine with a populated SwarmAI daemon workspace. Aborting." >&2
     exit 1
 fi
+# Stub/torn-content floor across ALL 4 canonical docs (not just TECH.md) — a
+# low sentinel (present + non-empty + >=20 lines), NOT a quality gate.
+for doc in PRODUCT TECH IMPROVEMENT PROJECT; do
+    doc_md="${LIVE_DDD}/2-understanding/${doc}.md"
+    if [ ! -s "${doc_md}" ]; then
+        echo "[release] ERROR: ${doc_md} missing or empty — refusing to ship a stub/degraded DDD." >&2
+        exit 1
+    fi
+    if [ "$(wc -l < "${doc_md}" | tr -d ' ')" -lt 20 ]; then
+        echo "[release] ERROR: ${doc_md} is trivially small (<20 lines) — likely a stub. Aborting." >&2
+        exit 1
+    fi
+done
+if command -v flock >/dev/null 2>&1; then
+    for doc in PRODUCT TECH IMPROVEMENT PROJECT; do
+        lock="${LIVE_DDD}/2-understanding/${doc}.md.lock"
+        [ -e "${lock}" ] || continue
+        if ! flock -n "${lock}" true 2>/dev/null; then
+            echo "[release] ERROR: ${doc}.md is WRITE-LOCKED (cultivation in-flight) — retry after it finishes." >&2
+            exit 1
+        fi
+    done
+fi
+
 rsync -a \
     --exclude='.artifacts/' \
     --exclude='code_intel.db' \
     --exclude='code_intel.db-shm' \
     --exclude='code_intel.db-wal' \
-    --exclude='.*.md.lock' \
+    --exclude='code-intel.json' \
+    --exclude='*-archive.md' \
+    --exclude='*.md.lock' \
     --exclude='.ddd-usage.json' \
     --exclude='.session_cultivated.json' \
     --exclude='.DS_Store' \
-    "${PROJECT_ROOT}/Projects/SwarmAI/" "${SEED}/Projects/SwarmAI/"
-echo "[release]   DDD files: $(find "${SEED}/Projects/SwarmAI" -type f | wc -l | tr -d ' ')"
+    "${LIVE_DDD}/" "${SEED}/Projects/SwarmAI/"
+echo "[release]   DDD files: $(find "${SEED}/Projects/SwarmAI" -type f | wc -l | tr -d ' ') (from live DDD: ${LIVE_DDD})"
 
 # 2. config-hive.json — model 4-8 (a Hive boots on the current flagship, not the
 #    code DEFAULT_CONFIG 4-6). Non-private fields only; no owner_dm_channel, no
