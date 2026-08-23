@@ -102,7 +102,8 @@ def _check_maturity(proposal: "CultivationProposal", project_dir: Path) -> bool:
     Reads the maturity annotation comment from the DDD doc.
     Format: <!-- maturity: growing | sources: N | ... -->
     """
-    doc_path = project_dir / proposal.target_doc
+    from persist_routing import resolve_ddd_doc
+    doc_path = resolve_ddd_doc(project_dir, proposal.target_doc)
     if not doc_path.exists():
         return False
 

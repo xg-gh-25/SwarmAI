@@ -43,6 +43,7 @@ from persist_routing import (
     ROUTING_TABLE,
     classify_content,
     NOISE_PATTERNS,
+    resolve_ddd_doc,
 )
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,62 @@ def _extract_bullet_content(line: str) -> str:
     return text
 
 
+# Leading LEGACY writeback-hook prefix: "**2026-06-08** (session f1f7201b): ".
+# improvement_writeback_hook now routes through apply_to_ddd (cultivation format),
+# so this FRONT-prefix shape is NO LONGER PRODUCED by any live writer — it is
+# retained ONLY to dedup incoming lessons against the ~55K pre-existing archive
+# bullets that were silted before the unification (the two writers' TRAILING-only
+# dedup never matched this front-prefix → 43K dups; Gate-1 killer, run_4c5f81ce).
+# Session-id class is deliberately broad ([0-9a-fA-F-]+): 8-hex covers 100% of the
+# real corpus today, but a future context.session_id[:N] slice (dashed UUID /
+# longer) must not silently survive the strip and break cross-format dedup.
+_WRITEBACK_PREFIX_RE = re.compile(
+    r"^\*\*\d{4}-\d{2}-\d{2}\*\*\s*\(session\s+[0-9a-fA-F-]+\)\s*:\s*", re.IGNORECASE
+)
+# Leading "[type] " classification marker (cultivation form: "- [pitfall] **T**").
+_TYPE_PREFIX_RE = re.compile(r"^\[[a-z]+\]\s*", re.IGNORECASE)
+
+
+def content_signature(line: str) -> str:
+    """Format-AGNOSTIC dedup signature for a knowledge-entry bullet.
+
+    The two IMPROVEMENT.md writers use different bullet shapes:
+      - cultivation:      ``- [type] **Title** — text (YYYY-MM-DD, run_x, label)``
+      - writeback hook:   ``- **YYYY-MM-DD** (session xxxxxxxx): text``
+    Both must reduce to the SAME signature for the same lesson so a lesson
+    written by one writer dedups against the other. This is the single fix that
+    makes cross-writer dedup real (the old ``_extract_bullet_content`` stripped
+    only the TRAILING attribution, so the writeback FRONT-prefix survived and the
+    signatures never collided — a no-op on the 43K-dup corpus).
+
+    Normalization (whole-string, NOT first-N-chars — a prefix cut would
+    false-merge distinct lessons that share an opening stem, Gate-1 #2):
+      1. strip leading ``- `` bullet marker
+      2. strip the writeback ``**date** (session id):`` FRONT prefix
+      3. strip the trailing ``(date, run, label)`` cultivation attribution
+      4. strip a leading ``[type]`` marker
+      5. drop ``**`` bold markers, lowercase, collapse all whitespace to single spaces
+
+    Deterministic + pure. Empty string in → empty string out.
+    """
+    text = line.lstrip()
+    if text.startswith("- "):
+        text = text[2:]
+    text = text.strip()
+    # 2. writeback front-prefix (the load-bearing strip)
+    text = _WRITEBACK_PREFIX_RE.sub("", text)
+    # 3. trailing cultivation attribution (reuse the same pattern as _extract_bullet_content)
+    m = re.search(r"\s*\((?:\d{4}-\d{2}-\d{2}|[0-9a-f]{6,}|run_)[^)]*\)\s*$", text)
+    if m:
+        text = text[: m.start()]
+    # 4. leading [type] marker
+    text = _TYPE_PREFIX_RE.sub("", text)
+    # 5. drop bold markers, lowercase, collapse whitespace
+    text = text.replace("**", " ")
+    text = re.sub(r"\s+", " ", text).strip().lower()
+    return text
+
+
 def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply an additive proposal directly to the target DDD document.
 
@@ -283,7 +340,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
 
     Returns a status string (NOT a bool — callers must compare explicitly):
       - "applied"           — entry written under a pre-existing section heading
-      - "created_section"   — the allowlisted section heading was ABSENT, so it
+      - "created_section"   — the whitelisted section heading was ABSENT, so it
                               was auto-created at end-of-doc and the entry written
                               under it. This makes section-name drift structurally
                               harmless: a lesson is NEVER dropped just because the
@@ -297,14 +354,23 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
       - "doc_missing"       — target document file does not exist
       - "locked"            — another process holds the write lock (retry later)
 
-    Note: "section_not_found" is NO LONGER returned — a missing allowlisted
+    Note: "section_not_found" is NO LONGER returned — a missing whitelisted
     section is auto-created rather than treated as a drop. The drift is still
     observable via the "created_section" status (logged by callers).
     """
     if not proposal.is_safe_append():
         return "not_safe"
 
-    doc_path = project_dir / proposal.target_doc
+    # VALUE FLOOR at the chokepoint (run_e9cb7e2a). apply_to_ddd is the ONE gate
+    # every write path crosses, but the writeback hook reaches it DIRECTLY, bypassing
+    # _classify_lesson where is_quality_lesson/MIN_LESSON_LENGTH lived. Enforce the
+    # SAME floor here so all paths share it. A FLOOR, not a taste judge:
+    # is_quality_lesson errs toward ACCEPT when ambiguous (knowledge-loss > noise).
+    _candidate = proposal.content.strip()
+    if len(_candidate) < MIN_LESSON_LENGTH or not is_quality_lesson(_candidate):
+        return "rejected_low_value"
+
+    doc_path = resolve_ddd_doc(project_dir, proposal.target_doc)
     if not doc_path.exists():
         return "doc_missing"
 
@@ -337,37 +403,38 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         match = section_re.search(content)
 
         if match:
-            # Compute the target section's text span [body_start, body_end) so the
-            # duplicate check is SCOPED to this section, not the whole document.
-            # (Adversarial HIGH: a whole-doc substring match dropped legit lessons
-            # when the same text appeared in a DIFFERENT section, and dropped short
-            # lessons that were substrings of a longer unrelated entry.)
+            # Compute the target section's insert point — used only to place the new
+            # entry newest-first under this heading. Dedup itself is DOC-WIDE.
             line_end = content.find("\n", match.start())
             if line_end == -1:
                 line_end = len(content)
             body_start = line_end + 1
             while body_start < len(content) and content[body_start] == "\n":
                 body_start += 1
-            # Section body ends at the next '## ' heading (or EOF).
-            next_h = re.compile(r"^## ", re.MULTILINE).search(content, body_start)
-            body_end = next_h.start() if next_h else len(content)
-            section_body = content[body_start:body_end]
 
-            # Duplicate detection scoped to THIS section, matched on whole bullet
-            # lines (not raw substring) — a shorter lesson that is a substring of a
-            # longer existing bullet is NOT a duplicate.
-            existing_contents = {
-                _extract_bullet_content(ln)
-                for ln in section_body.splitlines()
+            # DOC-WIDE duplicate detection (root-cause fix, run_e9cb7e2a; measured
+            # 2026-07-20: 170K archived bullets deduped to ~700 unique — 99.6% were
+            # the SAME lesson re-written, many under DIFFERENT sections/dates/session
+            # ids). A section-scoped check let a lesson re-accumulate under a different
+            # heading — the direct source of the silt. So sign EVERY `- ` bullet in
+            # the WHOLE document. content_signature() is FORMAT-AGNOSTIC (normalizes
+            # cultivation / writeback / [type] shapes to one key); whole-STRING (a
+            # genuinely distinct lesson does NOT collide, guarding the old substring
+            # adversarial HIGH). This is the ONE chokepoint every write path crosses,
+            # so doc-wide dedup here covers them all — no per-path patching.
+            existing_sigs = {
+                content_signature(ln)
+                for ln in content.splitlines()
                 if ln.lstrip().startswith("- ")
             }
-            if proposal.content.strip() in existing_contents:
+            existing_sigs.discard("")  # never dedup against empty (blank bullets)
+            if content_signature("- " + proposal.content.strip()) in existing_sigs:
                 return "duplicate"
 
             new_content = content[:body_start] + entry + content[body_start:]
             result_status = "applied"
         else:
-            # Structural drift fix (run_45ab67c7): the allowlisted section is
+            # Structural drift fix (run_45ab67c7): the whitelisted section is
             # absent (doc heading drifted from / never matched the routing table).
             # CREATE it at end-of-doc rather than DROP the lesson. The section
             # name is TRUSTED — is_safe_append() already confirmed the (doc,
@@ -518,7 +585,7 @@ def _cultivate_proposals(
         {"applied": N, "escalated": M, "rejected": K, "drift_errors": [...]}
 
     drift_errors surfaces section-name drift LOUDLY (a config bug where a
-    allowlisted routing section has no matching heading in the doc) instead of
+    whitelisted routing section has no matching heading in the doc) instead of
     silently counting it as a benign "rejected". See apply_to_ddd docstring /
     run_45ab67c7 root cause.
     """
@@ -543,27 +610,42 @@ def _cultivate_proposals(
             escalated += 1
             continue
         if proposal.is_safe_append():
-            # Additional auto-approval gate (maturity, magnitude, circuit breaker)
-            # Gate is advisory: if it blocks, escalate. If it errors, allow (fail-open).
+            # Additional auto-approval gate (maturity, magnitude, circuit breaker).
+            # FAIL-CLOSED (run_e9cb7e2a): a gate that cannot run is NOT a licence to
+            # silent-write. On ANY gate error, ESCALATE to the human proposal queue,
+            # never auto-apply ungated. (Mirrors core; `Exception` subsumes ImportError.)
             try:
                 from ddd_auto_approval import evaluate_auto_approval
                 decision = evaluate_auto_approval(proposal, project_dir)
-                if not decision.approved:
-                    # Only escalate if a HARD gate blocked (not maturity absence)
-                    # Hard gates: safe_target_doc, circuit_breaker_ok
-                    hard_blocked = (
-                        not decision.criteria_met.get("safe_target_doc", True)
-                        or not decision.criteria_met.get("circuit_breaker_ok", True)
-                        or not decision.criteria_met.get("small_magnitude", True)
-                    )
-                    if hard_blocked:
-                        proposal.status = "escalated"
-                        write_proposal(proposal, project_dir)
-                        escalated += 1
-                        continue
-                    # Soft gates (maturity, conflict, precision) — log but allow
-            except (ImportError, Exception):
-                pass  # Auto-approval module unavailable or errored — allow through
+                gate_ok = True
+            except Exception as e:
+                logger.warning(
+                    "auto-approval gate errored (%s: %s) → FAIL-CLOSED, escalating "
+                    "%s § %s instead of silent-writing",
+                    type(e).__name__, e, proposal.target_doc, proposal.target_section,
+                )
+                gate_ok = False
+
+            if not gate_ok:
+                proposal.status = "escalated"
+                write_proposal(proposal, project_dir)
+                escalated += 1
+                continue
+
+            if not decision.approved:
+                # Only escalate if a HARD gate blocked (not maturity absence)
+                # Hard gates: safe_target_doc, circuit_breaker_ok, small_magnitude
+                hard_blocked = (
+                    not decision.criteria_met.get("safe_target_doc", True)
+                    or not decision.criteria_met.get("circuit_breaker_ok", True)
+                    or not decision.criteria_met.get("small_magnitude", True)
+                )
+                if hard_blocked:
+                    proposal.status = "escalated"
+                    write_proposal(proposal, project_dir)
+                    escalated += 1
+                    continue
+                # Soft gates (maturity, conflict, precision) — log but allow
 
             status = apply_to_ddd(proposal, project_dir)
             if status == "applied":
@@ -571,7 +653,7 @@ def _cultivate_proposals(
                 log_application(proposal, project_dir)
                 applied += 1
             elif status == "created_section":
-                # The lesson WAS applied (not dropped) — the allowlisted section
+                # The lesson WAS applied (not dropped) — the whitelisted section
                 # heading was absent so it was auto-created. Count as applied, but
                 # surface the drift as observable (latent doc/table divergence) so
                 # it can be reconciled. NOT an error — the lesson is safe.
@@ -582,7 +664,7 @@ def _cultivate_proposals(
                 def _safe(v: str) -> str:
                     return str(v).replace("\n", "\\n").replace("\r", "\\r")
                 msg = (
-                    f"DDD drift (auto-healed): created missing allowlisted section "
+                    f"DDD drift (auto-healed): created missing whitelisted section "
                     f"'{_safe(proposal.target_doc)} § {_safe(proposal.target_section)}' "
                     f"(run {_safe(proposal.source_run_id)}). Lesson applied to the new "
                     f"section. Reconcile the doc template / ROUTING_TABLE to avoid drift."
@@ -593,7 +675,8 @@ def _cultivate_proposals(
                 log_application(proposal, project_dir, created_section=True)
                 applied += 1
             else:
-                # Benign no-op: "duplicate", "doc_missing", "locked", "not_safe".
+                # Benign no-op: "duplicate", "rejected_low_value", "doc_missing",
+                # "locked", "not_safe" — none landed, count as rejected.
                 rejected += 1
         else:
             proposal.status = "escalated"

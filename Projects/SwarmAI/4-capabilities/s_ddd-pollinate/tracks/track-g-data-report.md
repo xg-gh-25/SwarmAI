@@ -219,7 +219,7 @@ ws.add_chart(chart, "A12")
 ## Step 5: Formula Validation
 
 ```bash
-XLSX_SCRIPT="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_xlsx/recalc.py"
+XLSX_SCRIPT="${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_xlsx/recalc.py"
 python3 "$XLSX_SCRIPT" "content/{name}/tracks/data-report/{topic}.xlsx" --json
 ```
 

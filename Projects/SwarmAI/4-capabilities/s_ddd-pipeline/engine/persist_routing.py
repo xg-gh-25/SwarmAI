@@ -9,12 +9,54 @@ two consumption modes (auto: confidence-gated + safe_auto check; manual: always 
 Public symbols:
     ROUTING_TABLE    — dict mapping route keys to {doc, section, safe_auto}
     classify_content — given text + optional project, returns routing decision
+    resolve_ddd_doc  — given project_dir + doc filename, return the doc's real path
 """
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Optional
+
+# ── DDD document layout (single source of truth for WHERE docs live on disk) ──
+# Project-scoped DDD docs live under the "2-understanding/" subdir of each
+# project (repo layout since the numbered-stage restructure). Cross-project
+# cognitive/reference docs live under the workspace-level ".context/" dir.
+# Callers pass only project_dir; this resolver maps a target_doc filename to its
+# real path so no call site hardcodes the subdir (the root cause of the
+# 2026-05→08 cultivation stall: apply_to_ddd/_check_maturity used
+# project_dir / target_doc and silently hit doc_missing for every proposal).
+_DDD_DOC_SUBDIR = "2-understanding"
+_CROSS_PROJECT_DOCS = frozenset(
+    {"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "AGENT.md", "SOUL.md", "AGENTS.md"}
+)
+
+
+def resolve_ddd_doc(project_dir: "Path", target_doc: str) -> "Path":
+    """Return the on-disk path for a DDD target doc.
+
+    - Cross-project docs (MEMORY/EVOLUTION/KNOWLEDGE/…) → <workspace>/.context/<doc>
+      (workspace is project_dir.parent.parent: <ws>/Projects/<name>).
+    - Project-scoped docs (IMPROVEMENT/TECH/PRODUCT/PROJECT) →
+      <project_dir>/2-understanding/<doc>, with a legacy fallback to
+      <project_dir>/<doc> if a repo still uses the flat layout. Fallback only
+      applies when the flat file actually EXISTS, so a fresh write still lands
+      in the canonical 2-understanding/ location.
+    """
+    project_dir = Path(project_dir)
+    if target_doc in _CROSS_PROJECT_DOCS:
+        # <ws>/Projects/<name> → <ws>/.context/<doc>
+        workspace = project_dir.parent.parent
+        return workspace / ".context" / target_doc
+
+    canonical = project_dir / _DDD_DOC_SUBDIR / target_doc
+    if canonical.exists():
+        return canonical
+    legacy = project_dir / target_doc
+    if legacy.exists():
+        return legacy
+    # Neither exists yet — return the canonical path so new writes land correctly.
+    return canonical
 
 
 # ── Routing Table ────────────────────────────────────────────────────────────
@@ -144,7 +186,13 @@ _IMPROVEMENT_KEYWORDS = re.compile(
 )
 
 _PRODUCT_KEYWORDS = re.compile(
-    r"\b(priority|non-goal|scope|strategic|user.facing|phase|milestone|"
+    # NOTE: 'scope'/'phase'/'milestone' were REMOVED (2026-07-13, run_eba5fc53) —
+    # they are process/pipeline vocabulary, not product-doc vocabulary. Reflect-stage
+    # lessons ("Scope discipline held", "Phase-1-of-3 rollout") tripped the PRODUCT
+    # branch → product_priority catch-all → PRODUCT.md#Strategic Priorities (a protected
+    # zone that can't auto-apply) → escalations piled up. Only genuine product-doc words
+    # (priority/non-goal/strategic/roadmap/vision/defer/user-facing) belong here.
+    r"\b(priority|non-goal|strategic|user.facing|"
     r"defer|roadmap|vision)\b",
     re.IGNORECASE,
 )
@@ -260,7 +308,22 @@ def classify_content(
 
     # Project-scoped classification
     # Priority: PRODUCT (most specific keywords) > TECH > IMPROVEMENT (default)
-    if product_hits > 0 and product_hits >= tech_hits and product_hits >= improvement_hits:
+    #
+    # PRODUCT-branch ENTRY BAR (run_dca69c87): a SINGLE incidental product word
+    # (a lone priority/strategic/roadmap in a process lesson) is NOT strategic content.
+    # Genuine strategy carries >=2 product words OR an explicit-intent phrase
+    # (non-goal/vision/defer/mission/thesis); a lone incidental word falls through to
+    # the IMPROVEMENT/TECH selector below. Prevents the product_priority catch-all from
+    # dumping process lessons into PRODUCT.md#Strategic Priorities (protected zone).
+    # NOTE: 'defer' is deliberately NOT a single-hit intent word (Gate-2 F2, run_dca69c87):
+    # "defer the retry/fix" is a process idiom, not a product Non-Goal. Stays in the
+    # product_non_goal sub-branch so a defer with >=2 product hits still routes correctly.
+    _product_intent = any(
+        w in lower for w in ("non-goal", "not going to", "won't",
+                             "vision", "mission", "thesis")
+    )
+    if (product_hits > 0 and product_hits >= tech_hits and product_hits >= improvement_hits
+            and (product_hits >= 2 or _product_intent)):
         # PRODUCT.md — product keywords are specific (non-goal, vision, strategic)
         if any(w in lower for w in ("non-goal", "not going to", "won't", "defer")):
             route_key = "product_non_goal"

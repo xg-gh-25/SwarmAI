@@ -132,15 +132,15 @@ _Avoid:_ "plugin" (MCP is a protocol, not a plugin system), "extension" (too gen
 
 **Job**
 A scheduled background task. System jobs (in code) or user jobs (in YAML). Runs headless via Claude CLI or script. Types: signal_fetch, digest, agent_task, script, maintenance.
-_Avoid:_ "cron job" (implementation detail — jobs have more lifecycle than cron), "task" (Radar ToDos are tasks).
+_Avoid:_ "cron job" (implementation detail — jobs have more lifecycle than cron), "task" (ToDos are tasks).
 
 **Signal**
 A scored news/update item from the signal pipeline. 13 feeds → dedup → LLM score → digest. Appears in Welcome Screen briefing and Slack.
 _Avoid:_ "notification" (signals are information, not alerts), "news" (too casual).
 
-**Radar Todo**
-A tracked work packet in the sidebar. Self-contained: when dragged into a Tab, the agent has all context to execute immediately. Different from Apple Reminders (time-based) and Tasks (broader scope).
-_Avoid:_ "task" alone (ambiguous with background tasks), "item" (too generic).
+**ToDo** (left-nav ToDo card/overlay)
+A tracked work packet surfaced in the **left-nav ToDo card** (`nav-todo` → `swarm:show-todo` → `ToDoOverlay`, a fullscreen Flow|History workbench) — NOT a right-side "Radar sidebar" (that surface is retired). Self-contained: when dragged into a Tab, the agent has all context to execute immediately. Different from Apple Reminders (time-based) and Tasks (broader scope).
+_Avoid:_ "Radar" / "Radar Todo" (retired surface name — the skill NAME `s_radar-todo` stays as a legacy id, but the surface is the ToDo card), "task" alone (ambiguous with background tasks), "item" (too generic).
 
 ---
 

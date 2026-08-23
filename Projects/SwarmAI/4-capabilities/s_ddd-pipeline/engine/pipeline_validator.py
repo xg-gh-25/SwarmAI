@@ -180,8 +180,8 @@ def _verify_findings_on_disk(
         deliveries run from CI or another machine (Gate-1 Attack-5/6).
 
     ``disk_check.file`` is ABSOLUTE by contract (Gate-1 Attack-3): findings
-    reference SOURCE-repo files, but the validator's workspace root is
-    ``~/.swarm-ai/SwarmWS`` (the C040 source-vs-workspace split). Joining a
+    reference SOURCE-repo files, but the validator's workspace root is a
+    separate host workspace dir (the C040 source-vs-workspace split). Joining a
     relative path against the workspace root would grep the WRONG tree and
     false-block 100% of code-fix deliveries. Absolute paths eliminate the join.
     ``allowed_root``, when set, confines reads to that subtree (defence in depth
@@ -1532,7 +1532,7 @@ def _parse_failed_patterns(improvement_text: str) -> list[str]:
 def _compute_doc_checksum(text: str) -> str:
     """Compute a stable checksum for DDD document content (ignores whitespace variance)."""
     normalized = re.sub(r"\s+", " ", text.strip())
-    return hashlib.md5(normalized.encode()).hexdigest()[:12]
+    return hashlib.md5(normalized.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def check_ddd_consistency(project: str, context_text: str | None = None) -> dict[str, Any]:
@@ -1562,9 +1562,10 @@ def check_ddd_consistency(project: str, context_text: str | None = None) -> dict
     failed_patterns: list[str] = []
 
     # Load DDD docs
+    from persist_routing import resolve_ddd_doc
     ddd_docs: dict[str, str] = {}
     for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-        doc_path = project_dir / doc_name
+        doc_path = resolve_ddd_doc(project_dir, doc_name)
         if doc_path.exists():
             try:
                 content = doc_path.read_text()
@@ -2257,8 +2258,9 @@ def check_artifact_freshness(
     if ddd_checksums:
         ws = _get_workspace()
         project_dir = ws / "Projects" / project
+        from persist_routing import resolve_ddd_doc
         for doc_name, expected_hash in ddd_checksums.items():
-            doc_path = project_dir / doc_name
+            doc_path = resolve_ddd_doc(project_dir, doc_name)
             if doc_path.exists():
                 try:
                     content = doc_path.read_text()

@@ -25,7 +25,7 @@ This verifies: Node.js, npm, ffmpeg, ffprobe, Python dependencies.
 #### Step 5.2: Remotion Bootstrap (first run only)
 
 ```bash
-STUDIO_DIR="$HOME/.swarm-ai/SwarmWS/Services/pollinate-studio"
+STUDIO_DIR="${SWARM_WORKSPACE:-$PWD}/Services/pollinate-studio"
 if [ ! -f "$STUDIO_DIR/package.json" ]; then
   npx create-video@latest "$STUDIO_DIR" --template blank
   cd "$STUDIO_DIR" && npm install
