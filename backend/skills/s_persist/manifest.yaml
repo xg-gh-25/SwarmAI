@@ -1,5 +1,5 @@
-# Auto-generated manifest for save-memory
-name: save-memory
+# Manifest for persist (formerly save-memory)
+name: persist
 version: "1.0.0"
 tier: always
 

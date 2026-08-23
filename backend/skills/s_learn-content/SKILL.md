@@ -1,7 +1,7 @@
 ---
 name: learn-content
 description: "Ingest URLs, articles, or text from any source into structured knowledge cards. Stores source URL + metadata + briefing (NOT full text). On-demand retrieval from source.\n  TRIGGER: \"learn\
-  \ this\", \"save this article\", \"read and remember\", \"ingest this\".\n  NOT FOR: deep-research, summarize, save-memory use cases."
+  \ this\", \"save this article\", \"read and remember\", \"ingest this\".\n  NOT FOR: deep-research, summarize, persist use cases."
 tier: always
 ---
 # Learn Content

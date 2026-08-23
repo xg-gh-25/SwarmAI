@@ -123,7 +123,7 @@ Ask: "What are the 2-3 hardest judgment calls in this domain?"
 
 | Tier | System-Reminder | When to Use |
 |------|-----------------|-------------|
-| **always** | Full description injected at session start | High-frequency skills used in >10% of sessions (save-memory, slack, radar-todo, etc.) |
+| **always** | Full description injected at session start | High-frequency skills used in >10% of sessions (persist, slack, radar-todo, etc.) |
 | **lazy** (default) | Stub only — name + trigger + "call to activate" | Everything else. Full instructions in INSTRUCTIONS.md, loaded on invocation |
 
 **Lazy skill pattern (default for all new skills):**

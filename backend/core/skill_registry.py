@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Category mapping for known skill prefixes/names
 SKILL_CATEGORIES: dict[str, list[str]] = {
-    "Memory": ["save-memory", "save-activity", "save-context", "memory-distill"],
+    "Memory": ["persist", "save-activity", "save-context", "memory-distill"],
     "Development": ["code-review", "qa", "skill-builder", "skill-feedback", "skillify-session", "estimate-tokens"],
     "Research": ["deep-research", "github-research", "consulting-report", "tavily-search", "summarize"],
     "Writing": ["narrative-writing", "humanize", "translate", "pptx", "docx", "xlsx", "pdf"],

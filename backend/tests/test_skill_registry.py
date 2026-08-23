@@ -24,7 +24,7 @@ def skills_dir(tmp_path: Path) -> Path:
     registry testing.
     """
     always_skills = {
-        "s_save-memory": "---\nname: save-memory\ndescription: >\n  Save to memory.\n  TRIGGER: remember.\ntier: always\n---\n# save-memory\nA test skill.",
+        "s_persist": "---\nname: persist\ndescription: >\n  Save to memory.\n  TRIGGER: remember.\ntier: always\n---\n# persist\nA test skill.",
         "s_slack": "---\nname: slack\ndescription: >\n  Slack integration.\n  TRIGGER: slack.\ntier: always\n---\n# slack\nA test skill.",
     }
     lazy_skills = {
@@ -59,7 +59,7 @@ def empty_dir(tmp_path: Path) -> Path:
 def test_discover_skills(registry: SkillRegistry):
     """Finds skills in s_*/SKILL.md pattern."""
     skills = registry._discover_skills()
-    assert "save-memory" in skills
+    assert "persist" in skills
     assert "code-review" in skills
     assert "deep-research" in skills
     assert len(skills) == 6
@@ -71,9 +71,9 @@ def test_discover_skills(registry: SkillRegistry):
 
 def test_categorize_known_skills(registry: SkillRegistry):
     """Known skills placed in correct category."""
-    skills = ["save-memory", "code-review", "deep-research", "slack", "browser-agent"]
+    skills = ["persist", "code-review", "deep-research", "slack", "browser-agent"]
     categories = registry._categorize(skills)
-    assert "save-memory" in categories.get("Memory", [])
+    assert "persist" in categories.get("Memory", [])
     assert "code-review" in categories.get("Development", [])
     assert "deep-research" in categories.get("Research", [])
     assert "slack" in categories.get("Integrations", [])
@@ -96,14 +96,14 @@ def test_compact_format(registry: SkillRegistry):
     output = registry.generate_compact_registry()
     assert "## Available Skills" in output
     # Skills categorized by known categories
-    assert "### Memory" in output  # save-memory
-    assert "save-memory" in output
+    assert "### Memory" in output  # persist
+    assert "persist" in output
     assert "code-review" in output
 
 
 def test_tier_from_frontmatter(registry: SkillRegistry):
     """_read_tier reads tier field from SKILL.md frontmatter."""
-    assert registry._read_tier("save-memory") == "always"
+    assert registry._read_tier("persist") == "always"
     assert registry._read_tier("slack") == "always"
     assert registry._read_tier("code-review") == "lazy"
     assert registry._read_tier("unknown-cool-skill") == "lazy"
