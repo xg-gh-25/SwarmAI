@@ -466,7 +466,7 @@ output_path = resolve_output_path(Path(repo_path), project_name="...", target=us
 # Creates: {output_path}/AGENTS.md + {output_path}/.ai-context/
 ```
 
-Priority: user-specified path > SwarmWS .artifacts/ > alongside repo.
+Priority (portable, no host-specific path): user-specified `target` > `$SWARM_WORKSPACE/.artifacts/ai-ready/` (if the env var is set) > alongside the repo.
 Output is always at a predictable location the user can find.
 
 #### 4.1: AGENTS.md (entry point)

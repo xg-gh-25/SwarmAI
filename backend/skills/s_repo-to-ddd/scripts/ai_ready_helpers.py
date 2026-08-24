@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 from collections import Counter
@@ -2565,9 +2566,11 @@ def resolve_output_path(
 ) -> Path:
     """Resolve where to write AI-Ready output.
 
-    Priority:
+    Priority (portable — no host-specific path):
     1. User-specified target path (if provided)
-    2. SwarmWS .artifacts/ directory (if running inside SwarmAI)
+    2. $SWARM_WORKSPACE/.artifacts/ai-ready/ai-ready-{name} — if the env var is set
+       (honored when present so a governing workspace can collect output centrally;
+       it is NOT auto-set by any host today, so leave it unset for the default path)
     3. Alongside the repo itself ({repo_parent}/ai-ready-{name}/)
 
     Always returns an absolute path. Creates directories if needed.
@@ -2580,14 +2583,16 @@ def resolve_output_path(
     repo_path = Path(repo_path).resolve()
     name = project_name or repo_path.name
 
-    # Check if we're in SwarmAI workspace
-    swarmws = Path.home() / ".swarm-ai" / "SwarmWS"
-    if swarmws.exists():
-        out = swarmws / "Projects" / "ai_ready_repo" / ".artifacts" / f"ai-ready-{name}"
+    # If a governed workspace is declared via env, collect output there.
+    ws = os.environ.get("SWARM_WORKSPACE", "").strip()
+    if ws:
+        # expanduser + resolve so a relative / ~ / whitespace value still yields an
+        # absolute path (matches the target branch's "always absolute" contract).
+        out = (Path(ws).expanduser() / ".artifacts" / "ai-ready" / f"ai-ready-{name}").resolve()
         out.mkdir(parents=True, exist_ok=True)
         return out
 
-    # Fallback: alongside repo
+    # Fallback: alongside repo (fully portable — no SwarmAI dependency)
     out = repo_path.parent / f"ai-ready-{name}"
     out.mkdir(parents=True, exist_ok=True)
     return out

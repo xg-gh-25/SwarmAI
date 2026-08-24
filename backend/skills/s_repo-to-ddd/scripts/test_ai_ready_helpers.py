@@ -1461,36 +1461,57 @@ class TestOutputPathResolution:
         assert result == target
         assert result.exists()
 
-    def test_swarmws_path_when_available(self):
-        """When running inside SwarmAI, output goes to .artifacts/."""
+    def test_swarm_workspace_env_when_set(self, tmp_path, monkeypatch):
+        """When $SWARM_WORKSPACE is set, output goes under it (portable — no
+        host-specific ~/.swarm-ai probe)."""
         from scripts.ai_ready_helpers import resolve_output_path
 
-        swarmws = Path.home() / ".swarm-ai" / "SwarmWS"
-        if not swarmws.exists():
-            pytest.skip("Not in SwarmAI environment")
+        ws = tmp_path / "myworkspace"
+        ws.mkdir()
+        monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
 
         result = resolve_output_path(Path("/tmp/mempalace"), project_name="mempalace")
-        assert ".swarm-ai/SwarmWS/Projects" in str(result)
+        # lands under $SWARM_WORKSPACE, NOT under ~/.swarm-ai/SwarmWS
+        assert str(result).startswith(str(ws)), f"{result} not under $SWARM_WORKSPACE {ws}"
+        assert ".swarm-ai/SwarmWS/Projects" not in str(result), "must not use the old host probe"
         assert "ai-ready-mempalace" in str(result)
 
-    def test_fallback_alongside_repo(self, tmp_path):
-        """Without SwarmAI or target, output goes next to the repo."""
+    def test_fallback_alongside_repo_when_env_unset(self, tmp_path, monkeypatch):
+        """Without $SWARM_WORKSPACE or an explicit target, output goes next to the repo."""
         from scripts.ai_ready_helpers import resolve_output_path
-        import unittest.mock
 
+        monkeypatch.delenv("SWARM_WORKSPACE", raising=False)
         repo = tmp_path / "myrepo"
         repo.mkdir()
-        (repo / ".git").mkdir()  # Make it look like a repo
+        (repo / ".git").mkdir()
 
-        # Mock away SwarmWS existence
-        with unittest.mock.patch("pathlib.Path.exists", side_effect=lambda self: False if "swarm-ai" in str(self) else type(self).exists(self)):
-            # Direct call — can't easily mock Path.exists on specific instance
-            # Just verify the function runs without error
-            pass
-
-        # In practice, if SwarmWS exists it'll use that path
         result = resolve_output_path(repo, project_name="myrepo")
-        assert "ai-ready-myrepo" in str(result)
+        # repo-adjacent: sibling of the repo dir
+        assert result == repo.parent / "ai-ready-myrepo", f"expected repo-adjacent, got {result}"
+        assert ".swarm-ai" not in str(result), "must not use the old host probe"
+
+    def test_swarm_workspace_env_always_absolute(self, tmp_path, monkeypatch):
+        """A relative / whitespace $SWARM_WORKSPACE still yields an absolute path
+        (docstring contract: always absolute)."""
+        from scripts.ai_ready_helpers import resolve_output_path
+
+        # relative + surrounding whitespace — the pathological case
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("SWARM_WORKSPACE", "  relative-ws  ")
+        result = resolve_output_path(Path("/tmp/mempalace"), project_name="mempalace")
+        assert result.is_absolute(), f"must be absolute, got {result}"
+        assert "ai-ready-mempalace" in str(result)
+        # teeth vs the old host-probe: a relative env resolves under CWD, never the
+        # deleted ~/.swarm-ai/SwarmWS bucket (old code goes RED on both asserts here).
+        assert ".swarm-ai" not in str(result), "must not use the old host probe"
+        assert str(result).startswith(str(tmp_path)), f"relative env must resolve under CWD, got {result}"
+
+        # empty-string env must fall through to repo-adjacent, not write to CWD root
+        monkeypatch.setenv("SWARM_WORKSPACE", "")
+        repo = tmp_path / "erepo"
+        repo.mkdir()
+        result2 = resolve_output_path(repo, project_name="erepo")
+        assert result2 == repo.parent / "ai-ready-erepo", f"empty env must fall through, got {result2}"
 
 
 # ─── code-intel v3 incremental merge (Run 2, run_36266b66) ───

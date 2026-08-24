@@ -12,9 +12,9 @@ refresher (the capability), never the projection (derived, gitignored data).
 > **Bundled engine (copied + decoupled, not a stub).** `scripts/ai_ready_helpers.py`
 > (the `extract_import_graph` indexer — pure-regex, zero SwarmAI-core dependency) +
 > `scripts/refresh_code_intel.py` (the runnable ⑥ CLI) ship INSIDE the DDD, so ⑥ runs
-> identically inside Kiro / Claude Code after `aim` export. The only SwarmAI coupling
-> (a `~/.swarm-ai` output path) was decoupled → resolves from `$SWARM_WORKSPACE`, else
-> repo-adjacent.
+> identically inside Kiro / Claude Code after `aim` export. Output has NO host-specific
+> path: `resolve_output_path` resolves to an explicit `target` → `$SWARM_WORKSPACE` (if the
+> env var is set) → repo-adjacent. No `~/.swarm-ai` probe.
 
 ## Run it (the ⑥ refresh)
 
