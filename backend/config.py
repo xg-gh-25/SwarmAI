@@ -125,8 +125,13 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
 
-    # CORS - include Tauri origins for desktop app
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost", "http://tauri.localhost"]
+    # CORS - Tauri origins for the desktop app (production default).
+    # Security (TT V2265734761 — Cataphract Critical, fix 4): dev-only browser
+    # origins (Vite localhost:5173, CRA localhost:3000) are NOT in the production
+    # default — a page served on those origins could otherwise issue cross-origin
+    # PUT/POST to the daemon. They are re-added ONLY under settings.debug (see the
+    # debug block in main.py). localhost:1420 is the Tauri devUrl and stays.
+    cors_origins: list[str] = ["http://localhost:1420", "tauri://localhost", "https://tauri.localhost", "http://tauri.localhost"]
 
     # Database
     database_type: str = "sqlite"

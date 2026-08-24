@@ -119,21 +119,48 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".
 def get_workspace_root(agent_id: str, base_path: str | None = None) -> Path:
     """Get the workspace root directory for an agent.
 
-    All agents use the single SwarmWorkspace path. If a custom base_path
-    is provided (e.g., "work in a folder" feature), that takes precedence.
+    All agents use the single SwarmWorkspace path. If a custom ``base_path`` is
+    provided, it is constrained to the workspace tree (see security note).
 
     Args:
         agent_id: The agent ID
-        base_path: Optional custom base path. If provided, uses this instead of
-                   the default workspace. Used for "work in a folder" feature.
+        base_path: Optional custom base path. If provided, it MUST resolve to the
+                   default workspace root or a descendant of it — see the
+                   allowlist below. Historically this backed a "work in a folder"
+                   feature; the only live caller (frontend ``effectiveBasePath``)
+                   is always the workspace root.
 
     Returns:
         The workspace root path
+
+    Raises:
+        HTTPException(403): If ``base_path`` resolves outside the workspace tree.
+
+    Security (TT V2265734761 — Cataphract Critical, fix 1): ``base_path`` used to
+    be returned verbatim as ``Path(base_path)``, so an (unauthenticated) caller
+    could pass ``base_path=/`` and write anywhere on disk (``~/.aws/credentials``,
+    launchd plists, cross-user files) — the first link of an RCE chain. We now
+    require the RESOLVED ``base_path`` to be the workspace root or a descendant.
+    A workspace-tree allowlist (not a home-tree one) is used deliberately: the
+    workspace lives under ``~/.swarm-ai``, so a home-tree allowlist would still
+    permit ``~/.aws``. An allowlist (never a denylist of sensitive dirs) is used
+    so a path we did not anticipate is denied by default, not allowed.
     """
-    if base_path:
-        return Path(base_path)
     from core.initialization_manager import initialization_manager
-    return Path(initialization_manager.get_cached_workspace_path())
+
+    workspace = Path(initialization_manager.get_cached_workspace_path())
+    if base_path:
+        workspace_resolved = workspace.resolve()
+        requested = Path(base_path).resolve()
+        if requested != workspace_resolved and not requested.is_relative_to(
+            workspace_resolved
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: base_path is outside the workspace",
+            )
+        return Path(base_path)
+    return workspace
 
 
 def validate_path(workspace_root: Path, requested_path: str) -> Path:
@@ -160,35 +187,20 @@ def validate_path(workspace_root: Path, requested_path: str) -> Path:
             status_code=403, detail="Access denied: path traversal detected"
         )
 
-    # Build the full path without resolving symlinks first
+    # Build the full path without resolving symlinks first — this preserves
+    # support for symlinks that live INSIDE the workspace and point elsewhere
+    # (a deliberate feature; do NOT resolve full_path or those files break).
     full_path = workspace_root / normalized
 
-    # Resolve workspace root (but not the full path, to allow symlinks within)
-    workspace_resolved = workspace_root.resolve()
-
-    # For the security check, resolve full_path but handle non-existent paths
-    try:
-        # resolve(strict=False) doesn't require the path to exist
-        full_path_resolved = full_path.resolve()
-    except (OSError, ValueError):
-        # If resolve fails, use the non-resolved path
-        full_path_resolved = full_path
-
-    # Check if the resolved path starts with workspace
-    # Also allow the path if it's directly under workspace (before symlink resolution)
-    full_path_str = str(full_path_resolved)
-    workspace_str = str(workspace_resolved)
-
-    # Path is valid if:
-    # 1. It's within the workspace after resolution, OR
-    # 2. The non-resolved path is within workspace (allows symlinks)
-    is_within_workspace = (
-        full_path_str.startswith(workspace_str + os.sep) or
-        full_path_str == workspace_str or
-        str(full_path).startswith(str(workspace_root))
-    )
-
-    if not is_within_workspace:
+    # Containment check (TT V2265734761 — Cataphract Critical, fix 2): the old
+    # check OR'd `str(full_path).startswith(str(workspace_root))`, which is
+    # trivially true when workspace_root == "/" — every path "starts with" "/".
+    # Combined with an unconstrained base_path (fix 1), that let workspace_root
+    # itself become "/" and pass any path. `is_relative_to` is a purely lexical
+    # containment test on the UN-resolved path — it closes the "/" bypass while
+    # preserving the in-workspace-symlink behavior above (the leading-".."/"/"
+    # traversal guard already fired earlier, so a lexical check is safe here).
+    if not (full_path == workspace_root or full_path.is_relative_to(workspace_root)):
         raise HTTPException(
             status_code=403, detail="Access denied: path traversal detected"
         )
@@ -725,6 +737,18 @@ async def write_file(
 
     # Validate and resolve the path
     file_path = validate_path(workspace_root, request.path)
+
+    # Security (TT V2265734761 — Cataphract Critical, fix 3): deny writing the
+    # job-system control files — the scheduler turns them into shell execution,
+    # so an (unauthenticated) HTTP overwrite is the RCE chain's write link. See
+    # jobs.paths.is_protected_job_file. This same guard MUST run on every write
+    # endpoint (workspace_api.put_workspace_file / create_file too — R27).
+    from jobs.paths import is_protected_job_file
+    if is_protected_job_file(file_path):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: job-system control files are not writable via the workspace API",
+        )
 
     # Check content size (use same limit as text files)
     content_bytes = request.content.encode('utf-8')

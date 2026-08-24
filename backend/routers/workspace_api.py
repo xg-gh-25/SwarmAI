@@ -1470,6 +1470,17 @@ async def put_workspace_file(
     workspace_root = Path(expanded_path)
     target, is_external = _resolve_file_path(path, workspace_root)
 
+    # Security (TT V2265734761 — Cataphract Critical, fix 3): deny overwriting the
+    # job-system control files (RCE chain write link). This endpoint is a SECOND
+    # write path alongside workspace.py::write_file — the guard MUST run here too
+    # (R27: a contract enforced at one writer but not its sibling is not enforced).
+    from jobs.paths import is_protected_job_file
+    if is_protected_job_file(target):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: job-system control files are not writable via the workspace API",
+        )
+
     # Readonly guards only apply to workspace-internal paths
     if not is_external:
         if path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\"):
@@ -1516,6 +1527,18 @@ async def create_file(request: FolderCreateRequest):
     """
     expanded_path = await _get_workspace_path()
     target = _validate_relative_path(request.path, expanded_path)
+
+    # Security (TT V2265734761 — Cataphract Critical, fix 3): deny CREATING a
+    # job-control file too. The exists()→409 below stops overwriting an existing
+    # user-jobs.yaml, but on a fresh install (file absent) create would otherwise
+    # let a caller plant the initial malicious job definition. Third writer of
+    # the same contract — guard here as well (R27).
+    from jobs.paths import is_protected_job_file
+    if is_protected_job_file(target):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: job-system control files are not writable via the workspace API",
+        )
 
     # Note: We intentionally allow file creation inside system-managed folders
     # (Knowledge/, Projects/, etc.).  SYSTEM_MANAGED_FOLDERS protects the

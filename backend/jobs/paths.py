@@ -48,6 +48,33 @@ PORT_FILE = APP_DATA_DIR / "backend.port"
 # Distinct from CONTEXT_DIR (SwarmWS/.context/) which holds git-tracked context files.
 STATE_DIR = APP_DATA_DIR / "state"
 
+def is_protected_job_file(path) -> bool:
+    """True if ``path`` resolves to a job-system control file the scheduler executes.
+
+    Security (TT V2265734761 — Cataphract Critical, fix 3): the workspace write
+    endpoints must NOT overwrite these files, because the scheduler turns them
+    into shell execution — the RCE chain's write link (user-jobs.yaml → a
+    type=script job OR a type=agent_task job's ``config.fallback_script``, both
+    reaching ``subprocess.run(shell=True)``; config.yaml → feeds/defaults).
+
+    Compared against the SAME constants the scheduler reads (USER_JOBS_FILE /
+    CONFIG_FILE / STATE_FILE) via ``.resolve()``, so a write is denied no matter
+    how ``base_path`` is pointed — any path that resolves to the file the
+    scheduler will actually load is caught. Guarding the scheduler's real source
+    (not a caller-supplied workspace root) is what makes this robust to a
+    base_path that points straight at ``Services/swarm-jobs``.
+
+    Args:
+        path: the write target (str or Path); resolved here.
+
+    Returns:
+        True if the write must be denied (403).
+    """
+    from pathlib import Path
+
+    protected = {p.resolve() for p in (USER_JOBS_FILE, CONFIG_FILE, STATE_FILE)}
+    return Path(path).resolve() in protected
+
 
 def _migrate_legacy_state_dir() -> None:
     """One-time migration: move files from ~/.swarm-ai/.context/ to ~/.swarm-ai/state/.
