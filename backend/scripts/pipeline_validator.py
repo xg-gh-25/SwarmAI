@@ -1121,6 +1121,135 @@ def _check_understanding_gate(data: dict, profile: str) -> list[str]:
     return errs
 
 
+def _check_security_boundaries(
+    project: str, run_id: str, plan_data: dict, stages_list: list, repo_root: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Design-time security gate (completion-time, cross-stage).
+
+    When EVALUATE classified the change `cross_boundary.value == true`, the PLAN
+    design_doc must carry a `security_boundaries` block whose every entry either
+    cites a REAL enforcement locus (`path:line` whose source file exists on disk)
+    or is explicitly `escalate: true` (handed to the human). This is the pipeline's
+    ONLY design-level security touchpoint — every other security review is
+    code-level (REVIEW specialist / Gate-2 adversarial), i.e. AFTER code is written.
+
+    It is deliberately assumption-VERIFICATION, not threat-ENUMERATION: enumerating
+    threats against an unwritten design hallucinates; naming a trust assumption and
+    citing the code that enforces it is bounded and catchable. The validator verifies
+    the locus is REAL (fabricated/stale locus → BLOCK); the human architect + the
+    DELIVER security specialist verify it is CORRECT (semantics are beyond a validator).
+
+    Lives here (completion-time `validate()`) and NOT in publish-time
+    `validate_artifact_data`, because only `validate()` has (project, run_id) to
+    read the cross-stage evaluation artifact via `_load_artifact_data`.
+
+    THREE-WAY fail policy (Gate-1 #6 — never a silent escape, never a false-block):
+      • evaluation artifact unreadable OR `cross_boundary` field absent → WARN
+        (surface the un-verifiable case; do NOT block a run whose eval read hiccups)
+      • `cross_boundary.value != true` → no-op (zero ceremony on non-security runs)
+      • `cross_boundary.value == true` → require a well-formed security_boundaries
+        block; otherwise BLOCK.
+
+    Returns (errors, warnings). Errors BLOCK; warnings surface.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # Locate the evaluation stage's artifact and read cross_boundary.
+    eval_stage = next(
+        (s for s in stages_list if s.get("stage", s.get("name")) == "evaluate"), None
+    )
+    eval_art_id = eval_stage.get("artifact_id") if eval_stage else None
+    eval_data = _load_artifact_data(project, run_id, eval_art_id) if eval_art_id else None
+
+    if not eval_data or "cross_boundary" not in eval_data:
+        # Un-verifiable — WARN, do NOT block (fail-visible, not fail-closed, not silent).
+        warnings.append(
+            "Security boundaries: could not read the evaluation artifact's "
+            "cross_boundary classification — cannot verify whether a design-level "
+            "security review is required. (If this change opens an exposure surface, "
+            "add a security_boundaries block to the design_doc.)"
+        )
+        return errors, warnings
+
+    cb = eval_data.get("cross_boundary") or {}
+    if not (isinstance(cb, dict) and cb.get("value") is True):
+        return errors, warnings  # false / malformed-value → no-op by design
+
+    # cross_boundary is TRUE → a security_boundaries block is required.
+    sb = plan_data.get("security_boundaries")
+    if not isinstance(sb, list) or not sb:
+        errors.append(
+            "Security boundaries: this change is cross_boundary=true "
+            f"(kinds={cb.get('kinds')}), so the design_doc MUST carry a non-empty "
+            "`security_boundaries` block. Each entry names a trust boundary the design "
+            "introduces, the trust ASSUMPTION at it, and the enforcing code locus "
+            "(`path:line`) — or `escalate: true` if it needs human review. This is the "
+            "design-level security check; a code-review-only pass ships a design-level "
+            "gap (e.g. an unauthenticated endpoint) undetected until runtime."
+        )
+        return errors, warnings
+
+    src_root = Path(repo_root) if repo_root else None
+    for i, entry in enumerate(sb):
+        if not isinstance(entry, dict):
+            errors.append(f"Security boundaries: entry[{i}] is not an object.")
+            continue
+        # `is True` (not truthiness) on purpose: escalate is a deliberate boolean
+        # opt-out; a stray truthy value (1/"true") should NOT silently bypass the
+        # locus check — it falls through and is validated like any other entry.
+        if entry.get("escalate") is True:
+            continue  # explicitly handed to the human — accepted
+        locus = str(entry.get("enforcement") or "").strip()
+        if not locus:
+            errors.append(
+                f"Security boundaries: entry[{i}] ('{entry.get('boundary','?')}') has "
+                "no enforcement locus and is not escalate:true — a prose assumption with "
+                "no code boundary is theater. Cite the enforcing `path:line`, or set "
+                "escalate:true."
+            )
+            continue
+        # Verify the locus FILE exists (verifies the locus is REAL, not that it is
+        # semantically correct — that is the human's + security specialist's job).
+        # Parse 'path:line' → path. FAIL-OPEN on uncertainty (mirrors deliver.md
+        # disk_check): a locus is BLOCKED as fabricated ONLY when we can DEFINITIVELY
+        # resolve a base root and the file is absent there. When no source root is
+        # known (repo_root=None, the common completion-time case) a RELATIVE locus is
+        # un-verifiable — WARN, never BLOCK — because the design_doc's paths are
+        # relative to the SOURCE repo, which is neither cwd nor the tmp/workspace root.
+        # rsplit(":", 1) drops a trailing ':NN' line number; a Windows drive prefix
+        # (C:\x) has no trailing digit-only segment we depend on — the path branch
+        # below handles it as absolute.
+        locus_path = locus.rsplit(":", 1)[0] if ":" in locus else locus
+        p = Path(locus_path)
+        if p.is_absolute():
+            # Absolute path is definitively checkable.
+            if not p.exists():
+                errors.append(
+                    f"Security boundaries: entry[{i}] ('{entry.get('boundary','?')}') cites "
+                    f"enforcement locus '{locus}' but that file does not exist — a "
+                    "fabricated or stale locus. Cite the real enforcing code, or escalate:true."
+                )
+        elif src_root:
+            # A known source root makes a relative locus definitively checkable.
+            if not (src_root / locus_path).exists():
+                errors.append(
+                    f"Security boundaries: entry[{i}] ('{entry.get('boundary','?')}') cites "
+                    f"enforcement locus '{locus}' but that file does not exist under the "
+                    "source root — a fabricated or stale locus. Cite the real enforcing "
+                    "code, or escalate:true."
+                )
+        else:
+            # No source root — relative locus is un-verifiable. WARN, never false-block.
+            warnings.append(
+                f"Security boundaries: entry[{i}] locus '{locus}' could not be verified "
+                "(no source root available at completion-time). Confirm the enforcing "
+                "code exists at that path (fail-open, not blocking)."
+            )
+
+    return errors, warnings
+
+
 def get_stage_schema(stage: str) -> dict:
     """Public API: return schema + template for a stage.
 
@@ -3096,6 +3225,20 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                                         f"BUILD's coverage claims are not fully verified."
                                     )
             if test_layers_ok:
+                checks_passed += 1
+        elif stage == "plan":
+            # Check 8-plan: design-level security gate. When EVALUATE classified
+            # cross_boundary=true, the design_doc must carry a security_boundaries
+            # block whose entries each cite a real enforcement locus (or escalate).
+            # Three-way fail policy inside the helper (false=no-op / true+incomplete=
+            # BLOCK / eval-unreadable=WARN). Cross-stage: reads the evaluation artifact.
+            checks_total += 1
+            sec_errs, sec_warns = _check_security_boundaries(
+                project, run_id, artifact_data or {}, stages_list, repo_root=None
+            )
+            errors.extend(sec_errs)
+            warnings.extend(sec_warns)
+            if not sec_errs:
                 checks_passed += 1
         else:
             checks_passed += 1  # Auto-pass for other stages

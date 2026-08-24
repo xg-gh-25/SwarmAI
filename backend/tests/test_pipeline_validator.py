@@ -3947,3 +3947,113 @@ class TestDiskCheckVerification:
                 "findings": findings,
             },
         }
+
+
+class TestSecurityBoundaries:
+    """Design-time security: when EVALUATE classified cross_boundary.value==true,
+    the PLAN design_doc must carry a security_boundaries block whose entries each
+    cite a real enforcement locus (or escalate). Completion-time cross-stage check.
+    Three-way fail policy: value=false -> no-op; value=true+incomplete -> BLOCK;
+    eval-unreadable -> WARN (never a silent escape, never a false-block)."""
+
+    def _setup(self, ws, cross_boundary, plan_data, *, with_eval=True):
+        artifacts_dir = ws / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        stages = []
+        if with_eval:
+            eval_data = {"recommendation": "GO", "scope": "standard",
+                         "cross_boundary": cross_boundary}
+            _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation", eval_data)
+            stages.append(_stage_record("evaluate", artifact_id="art_eval"))
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "design_doc", plan_data)
+        stages.append(_stage_record("think", artifact_id="art_think"))
+        stages.append(_stage_record("plan", artifact_id="art_plan"))
+        _make_run(runs_dir, stages=stages)
+        return "TestProject", "run_test1"
+
+    def _plan(self, **extra):
+        base = {"approach": "x", "acceptance_criteria": ["AC1"],
+                "boundaries": {"always": [], "ask_first": [], "never": []},
+                "success_criteria": ["s"], "file_discovery": [],
+                "change_spec": [], "test_strategy": []}
+        base.update(extra)
+        return base
+
+    def test_true_missing_block_BLOCKS(self, workspace):
+        p, r = self._setup(workspace, {"value": True, "kinds": ["frontend-backend-contract"],
+                                       "seam": "s"}, self._plan())
+        res = validate(p, r, "plan")
+        assert any("security" in e.lower() and "boundar" in e.lower()
+                   for e in res["errors"]), f"expected a security-boundaries BLOCK, got {res['errors']}"
+
+    def test_true_wellformed_block_GREEN(self, workspace):
+        # ABSOLUTE locus = definitively checkable, cwd-independent; this test file exists.
+        locus = f"{__file__}:1"
+        sb = [{"boundary": "fe-be", "trust_assumption": "caller authed",
+               "enforcement": locus, "escalate": False}]
+        p, r = self._setup(workspace, {"value": True, "kinds": ["x"], "seam": "s"},
+                           self._plan(security_boundaries=sb))
+        res = validate(p, r, "plan")
+        sec_errs = [e for e in res["errors"] if "boundar" in e.lower() and "security" in e.lower()]
+        assert not sec_errs, f"well-formed block (existing abs locus) should not error, got {sec_errs}"
+
+    def test_true_relative_locus_no_root_WARNS_not_blocks(self, workspace):
+        """No source root at completion-time + a RELATIVE locus -> WARN, never BLOCK
+        (fail-open on uncertainty — the design_doc's paths are relative to the SOURCE
+        repo, which is neither cwd nor the workspace, so it is un-verifiable, not fake)."""
+        sb = [{"boundary": "fe-be", "trust_assumption": "authed",
+               "enforcement": "backend/middleware/hive_auth.py:62", "escalate": False}]
+        p, r = self._setup(workspace, {"value": True, "kinds": ["x"], "seam": "s"},
+                           self._plan(security_boundaries=sb))
+        res = validate(p, r, "plan")
+        sec_errs = [e for e in res["errors"] if "boundar" in e.lower() and "security" in e.lower()]
+        sec_warns = [w for w in res["warnings"] if "boundar" in w.lower() and "security" in w.lower()]
+        assert not sec_errs, f"relative locus w/o root must NOT block, got {sec_errs}"
+        assert sec_warns, "relative locus w/o root must WARN (un-verifiable, not silent)"
+
+    def test_false_no_block_GREEN_no_warn(self, workspace):
+        p, r = self._setup(workspace, {"value": False, "ruled_out": "pure logic"}, self._plan())
+        res = validate(p, r, "plan")
+        assert not any("security" in e.lower() and "boundar" in e.lower() for e in res["errors"])
+        assert not any("security" in w.lower() and "boundar" in w.lower() for w in res["warnings"])
+
+    def test_eval_unreadable_WARNS_not_silent(self, workspace):
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "design_doc", self._plan())
+        stages = [_stage_record("plan", artifact_id="art_plan")]
+        _make_run(runs_dir, stages=stages)
+        res = validate("TestProject", "run_test1", "plan")
+        sec_errs = [e for e in res["errors"] if "boundar" in e.lower() and "security" in e.lower()]
+        sec_warns = [w for w in res["warnings"] if "boundar" in w.lower() and "security" in w.lower()]
+        assert not sec_errs, f"unreadable eval must NOT false-block, got {sec_errs}"
+        assert sec_warns, "unreadable eval must WARN (not silent escape)"
+
+    def test_true_nonexistent_locus_BLOCKS(self, workspace):
+        # ABSOLUTE non-existent path = definitively fabricated -> BLOCK (cwd-independent).
+        sb = [{"boundary": "fe-be", "trust_assumption": "authed",
+               "enforcement": "/nonexistent_zzz/this_file_does_not_exist.py:42", "escalate": False}]
+        p, r = self._setup(workspace, {"value": True, "kinds": ["x"], "seam": "s"},
+                           self._plan(security_boundaries=sb))
+        res = validate(p, r, "plan")
+        assert any("boundar" in e.lower() and "security" in e.lower()
+                   for e in res["errors"]), f"non-existent abs locus should BLOCK, got {res['errors']}"
+
+    def test_true_escalate_GREEN(self, workspace):
+        sb = [{"boundary": "novel", "trust_assumption": "unclear",
+               "escalate": True, "reason": "needs human review"}]
+        p, r = self._setup(workspace, {"value": True, "kinds": ["x"], "seam": "s"},
+                           self._plan(security_boundaries=sb))
+        res = validate(p, r, "plan")
+        sec_errs = [e for e in res["errors"] if "boundar" in e.lower() and "security" in e.lower()]
+        assert not sec_errs, f"escalate:true should be accepted, got {sec_errs}"
+
+    def test_true_entry_no_locus_no_escalate_BLOCKS(self, workspace):
+        """value=true + an entry with neither an enforcement locus nor escalate=true
+        -> BLOCK (a prose assumption with no code boundary is theater)."""
+        sb = [{"boundary": "fe-be", "trust_assumption": "authed"}]  # no enforcement, no escalate
+        p, r = self._setup(workspace, {"value": True, "kinds": ["x"], "seam": "s"},
+                           self._plan(security_boundaries=sb))
+        res = validate(p, r, "plan")
+        assert any("boundar" in e.lower() and "security" in e.lower()
+                   for e in res["errors"]), f"prose-only entry should BLOCK, got {res['errors']}"

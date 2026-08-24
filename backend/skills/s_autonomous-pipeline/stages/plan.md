@@ -160,6 +160,48 @@ made an assumption the user didn't intend.
 - PRODUCT.md non-goals → off-scope becomes "Never" items
 - Pre-mortem risks from EVALUATE → risk mitigations become "Always" items
 
+### Security Boundaries (Required WHEN `cross_boundary.value == true`)
+
+This is the pipeline's ONLY design-level security checkpoint. Every other security
+review is code-level (REVIEW security specialist / Gate-2 adversarial) — i.e. AFTER
+code is written. A design-level miss (e.g. an endpoint whose auth is *assumed* but
+never enforced) sails through those and surfaces only at runtime. This block catches
+it at PLAN.
+
+**When to write it:** ONLY when EVALUATE set `cross_boundary.value == true` (a new
+external input surface / endpoint / auth / credential / tool·delegation / agent
+capability — the same boundary kinds EVALUATE already classifies). When
+`cross_boundary.value == false`, OMIT this section entirely — zero ceremony on
+non-security changes. **The completion-time validator enforces this conditionally**
+(it reads the evaluation artifact's `cross_boundary` and BLOCKS a `true` plan that
+lacks the block; it no-ops on `false`).
+
+**It is assumption-VERIFICATION, NOT threat-ENUMERATION.** Do not brainstorm every
+possible attack against an unwritten design (that hallucinates). Instead, for each
+trust boundary the design introduces: name it → state the trust ASSUMPTION → **cite
+the code locus (`path:line`) that ENFORCES it** — after actually reading/grepping that
+locus to confirm it enforces what you claim. If you cannot verify an assumption is
+code-enforced, set `escalate: true` and hand it to the reviewer. The defense must be a
+DETERMINISTIC boundary in code (allowlist, scoped credential, verified principal,
+egress jail) — never a prompt instruction or a client-side toggle.
+
+```markdown
+## Security Boundaries
+- **Boundary:** frontend↔backend API `POST /api/workspace/write`
+  - **Trust assumption:** caller is authenticated before reaching the handler
+  - **Enforcement:** `backend/middleware/hive_auth.py:62`  ← grep it; if it only fires
+    in one mode/config, the assumption is FALSE and this is the design-level catch
+- **Boundary:** a newly-registered agent tool that writes files
+  - **Trust assumption:** the write path is confined to the workspace tree
+  - **Escalate:** true — reason: no code-enforced confinement exists yet, needs review
+```
+
+**Validator contract (`_check_security_boundaries`, completion-time):** each entry is
+VALID iff it has a real enforcement locus (`path:line` whose file EXISTS on disk) OR
+`escalate: true`. A cited locus whose file does not exist → BLOCK (fabricated/stale
+locus). The validator verifies the locus is REAL; you + the DELIVER security specialist
+verify it is CORRECT (semantics are beyond a validator).
+
 ### Success Criteria (Required)
 
 Reframe vague requirements into specific, testable conditions. These become
@@ -236,12 +278,18 @@ This gives BUILD a testing roadmap beyond just the changed files.
 
 The design_doc artifact MUST include `boundaries`, `success_criteria`, `file_discovery`,
 `change_spec`, and `test_strategy` fields. Pipeline validator will check for their presence.
+**Additionally, when the run's `cross_boundary.value == true`, the artifact MUST include a
+non-empty `security_boundaries` list** (each entry: `boundary`, `trust_assumption`, and
+either `enforcement` = `"path:line"` OR `escalate: true` + `reason`). The completion-time
+validator BLOCKS a cross_boundary=true plan that lacks it or cites a non-existent locus;
+OMIT the field when cross_boundary=false (no-op).
 
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
   --type design_doc --producer s_autonomous-pipeline \
   --summary "Design: <approach> for <requirement>" --stage plan \
-  --data '{"approach":"...","acceptance_criteria":[...],"boundaries":{"always":[...],"ask_first":[...],"never":[...]},"success_criteria":[...],"file_discovery":[{"file":"...","category":"MODIFY|TEST|VERIFY","finding":"..."}],"change_spec":[{"order":1,"file":"...","change":"...","depends_on":[],"ac":"AC1"}],"test_strategy":[{"ac":"...","how":"...","mock_boundary":"...","input":"..."}],"data_model":"...","api_contract":"...","files_to_change":[...]}'
+  --data '{"approach":"...","acceptance_criteria":[...],"boundaries":{"always":[...],"ask_first":[...],"never":[...]},"success_criteria":[...],"file_discovery":[{"file":"...","category":"MODIFY|TEST|VERIFY","finding":"..."}],"change_spec":[{"order":1,"file":"...","change":"...","depends_on":[],"ac":"AC1"}],"test_strategy":[{"ac":"...","how":"...","mock_boundary":"...","input":"..."}],"data_model":"...","api_contract":"...","files_to_change":[...],"security_boundaries":[{"boundary":"...","trust_assumption":"...","enforcement":"path:line"}]}'
+# NOTE: security_boundaries is REQUIRED only when the run's cross_boundary.value==true; OMIT it otherwise.
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state build --run-id <RUN_ID>
 ```
 
