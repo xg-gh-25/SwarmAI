@@ -318,7 +318,7 @@ from core.swarm_workspace_manager import (
     SECTION_SCAFFOLD, SECTION_DIRS, DDD_NATIVE_SKILLS, INTERNAL_DDD_SKILLS,
 )
 
-# The 5 default DDD-native skills — SSOT from the code constant, so the test can
+# The 3 default DDD-native skills — SSOT from the code constant, so the test can
 # never drift from what provisioning actually copies (D3/D6).
 EXPECTED_NATIVE_SKILLS = set(DDD_NATIVE_SKILLS)
 
@@ -372,16 +372,16 @@ class TestSixSectionScaffold:
         assert "SixSecProj" in agents_md, "project name not templated into AGENTS.md"
 
         # ① aim.json VALID JSON after templating (Gate-2 CRITICAL history) + D3:
-        # declares exactly the 5 default DDD-native skills.
+        # declares exactly the 3 default DDD-native skills.
         aim = json.loads((pdir / "aim.json").read_text(encoding="utf-8"))
         assert aim["name"] == "SixSecProj"
         assert aim["ddd_spec_version"] == "1.0"
         declared = set(aim["plugins"]["native_skills"])
         assert declared == EXPECTED_NATIVE_SKILLS, (
-            f"aim.json must declare the 5 native skills (D3), got: {declared}"
+            f"aim.json must declare the 3 native skills (D3), got: {declared}"
         )
 
-        # ★ THE CORE FIX: the 5 native skills must PHYSICALLY EXIST in ④
+        # ★ THE CORE FIX: the 3 native skills must PHYSICALLY EXIST in ④
         # 4-capabilities/ — not merely be declared in aim.json. "declared a name"
         # != "skill exists". This is what makes the DDD self-養成 after `aim`
         # export to Kiro/Claude Code. (Numbered tree, redesign 2026-07-21: was skills/.)
@@ -404,7 +404,7 @@ class TestSixSectionScaffold:
     @pytest.mark.asyncio
     async def test_internal_ddd_gets_internal_skills_and_gate(self, tmp_path: Path):
         """An internal DDD (Brazil/CRUX-bound) gets the 3 internal toolchain skills
-        + the no_git_push gate COPIED IN, on top of the 5 native skills (D5)."""
+        + the no_git_push gate COPIED IN, on top of the 3 native skills (D5)."""
         ws = tmp_path / "ws"
         (ws / "Projects").mkdir(parents=True)
         pdir = ws / "Projects" / "IntProj"
@@ -413,7 +413,7 @@ class TestSixSectionScaffold:
         await manager.migrate_project_to_six_section(
             "IntProj", workspace_path=str(ws), internal=True)
 
-        # 5 native + 3 internal skills all physically present (④ 4-capabilities/)
+        # 3 native + 3 internal skills all physically present (④ 4-capabilities/)
         for skill in DDD_NATIVE_SKILLS + INTERNAL_DDD_SKILLS:
             assert (pdir / "4-capabilities" / skill / "SKILL.md").exists(), (
                 f"internal DDD must carry skill '{skill}'"
@@ -583,74 +583,18 @@ class TestSixSectionScaffold:
 
 class TestDddNativeSkills:
     """D4: the DDD-native skill TEMPLATES (the official maintained source at
-    backend/templates/ddd-skills/) are DECOUPLED (no data.db / artifact_cli
-    hard-dependency) and RETAIN the moat (Gate-2 adversarial + 养成 ladder).
+    backend/templates/ddd-skills/) stay in sync with their SwarmAI-native sources.
     These are the templates copied INTO each DDD's skills/ at provision — NOT
-    SwarmAI-native skills (those live in backend/skills/ and are never touched)."""
+    SwarmAI-native skills (those live in backend/skills/ and are never touched).
+
+    Note (2026-08-24): s_ddd-pipeline + s_ddd-pollinate were REMOVED from the
+    DDD-native set (they were copy-then-adapt derivatives whose dual-maintenance
+    was pure drift-tax; capability expression is a host concern, not a domain-brain
+    one). The retained 3 (s_ddd-manager, s_ddd-persist, s_repo-to-ddd) carry no
+    verbatim runtime copies, so the verbatim manifest is empty — the drift guards
+    below still assert that (empty-manifest-is-clean is the correct steady state)."""
 
     SKILLS_DIR = Path(__file__).resolve().parent.parent / "templates" / "ddd-skills"
-
-    @pytest.mark.parametrize("skill", ["s_ddd-pipeline", "s_ddd-pollinate"])
-    def test_native_skill_exists(self, skill: str):
-        d = self.SKILLS_DIR / skill
-        assert (d / "SKILL.md").exists(), f"{skill}/SKILL.md must exist"
-        assert (d / "INSTRUCTIONS.md").exists() or (d / "SKILL.md").read_text(encoding="utf-8").strip(), (
-            f"{skill} must ship real content"
-        )
-
-    def test_ddd_pipeline_is_decoupled_and_retains_moat(self):
-        """The whole point of s_ddd-pipeline: portable (no SwarmAI backend) yet
-        keeps the adversarial moat. A copy that still imports data.db/artifact_cli
-        would NOT be portable — that failure must be caught."""
-        d = self.SKILLS_DIR / "s_ddd-pipeline"
-        text = (d / "SKILL.md").read_text(encoding="utf-8") + (d / "INSTRUCTIONS.md").read_text(encoding="utf-8")
-        low = text.lower()
-        # Decoupled: it may NAME data.db/artifact_cli to say "no longer uses them",
-        # but must NOT declare a runtime dependency. Assert it uses file-state instead.
-        assert ".artifacts" in low and "run.json" in low, "must use file-based .artifacts/ state"
-        assert "no data.db" in low or "no `data.db`" in low, "must state it drops the data.db coupling"
-        # Moat retained (non-negotiable):
-        assert "adversarial" in low, "must retain Gate-2 adversarial-before-commit"
-        assert "养成" in text or "ladder" in low, "must retain the 养成 ladder"
-        assert ("forbidden" in low or "blocking" in low or "never skip" in low), (
-            "the moat must be BLOCKING, not optional"
-        )
-
-    def test_ddd_pollinate_is_message_first_and_portable(self):
-        d = self.SKILLS_DIR / "s_ddd-pollinate"
-        low = (d / "SKILL.md").read_text(encoding="utf-8").lower()
-        assert "message" in low and "audience" in low, "must retain message-first/audience principle"
-        assert "product.md" in low, "must source value from the DDD's own ② PRODUCT.md (portable)"
-
-    def test_ddd_pollinate_shared_files_track_the_source(self):
-        """EVERY html-deck shared/ runtime file is a copy of the s_pollinate
-        source-of-truth — they carry no DDD-specific adaptation and MUST stay
-        byte-identical. export-pdf.sh silently drifted a full generation behind
-        (base64+page.pdf() vs screenshot+pdf-lib) and nothing caught it for months
-        (run_ff9db326). This guard is DIRECTORY-DRIVEN (not a hardcoded file list) so a
-        NEW shared file is auto-covered, and a file present in one tree but not the
-        other is also caught — both are drift."""
-        src = (Path(__file__).resolve().parent.parent / "skills" / "s_pollinate"
-               / "templates" / "html-deck" / "shared")
-        dst = self.SKILLS_DIR / "s_ddd-pollinate" / "templates" / "html-deck" / "shared"
-        assert src.is_dir(), f"source shared dir missing: {src}"
-        assert dst.is_dir(), f"ddd-pollinate shared dir missing: {dst}"
-        # Union of both trees' files → catches presence-mismatch, not just content drift.
-        src_files = {p.name for p in src.iterdir() if p.is_file()}
-        dst_files = {p.name for p in dst.iterdir() if p.is_file()}
-        assert src_files == dst_files, (
-            "shared/ file SET diverges between the two trees — "
-            f"only in source: {sorted(src_files - dst_files)}; "
-            f"only in ddd-pollinate: {sorted(dst_files - src_files)}. "
-            f"Re-sync the directory: rsync -a '{src}/' '{dst}/'"
-        )
-        assert src_files, "source shared/ is empty — path wrong?"
-        for name in sorted(src_files):
-            s, b = src / name, dst / name
-            assert s.read_bytes() == b.read_bytes(), (
-                f"shared/{name} drifted from the s_pollinate source-of-truth — "
-                f"re-sync: cp '{s}' '{b}' (these files carry no DDD-specific adaptation)"
-            )
 
     # ─── Verbatim-copy drift guard — manifest owned by scripts/ddd_verbatim_sync.py ───
     # UNLIKE shared/ (100% verbatim, dir-driven above), the scripts/ + engine/ dirs are

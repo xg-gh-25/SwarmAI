@@ -50,21 +50,21 @@ sections, not a competing structure. The full canonical shape:
 > **SKELETON vs CONTENT — the distinction that governs provisioning (XG decision
 > 2026-07-12, option A):** CREATE materializes the **skeleton** of ①③④⑥ so the
 > standard is CONCRETE in SwarmWS — SwarmAI-maintenance follows it, and AIM export
-> is low-variance. Two kinds of ④ content differ: the **5 default DDD-native skills
+> is low-variance. Two kinds of ④ content differ: the **3 default DDD-native skills
 > are COPIED IN at create** (official, we maintain them — see below); **project-specific**
 > gates/skills/agent-specs still **ACCRETE** as the project grows. "Provisioned by
 > CREATE?" below distinguishes the two.
 
 | # | Section | OWN/GOVERN | Concrete members | Provisioned by CREATE? |
 |---|---------|-----------|------------------|:---:|
-| ① | **IDENTITY & MANIFEST** | OWN | project dir + `.project.json`, `aim.json` (declares the 5 native skills), `AGENTS.md` (the ONE unified README), `.crux_template.md` | ✅ dir + `.project.json` + the 3 manifests |
+| ① | **IDENTITY & MANIFEST** | OWN | project dir + `.project.json`, `aim.json` (declares the 3 native skills), `AGENTS.md` (the ONE unified README), `.crux_template.md` | ✅ dir + `.project.json` + the 3 manifests |
 | ② | **KNOWLEDGE** | OWN | **the 4 docs (PRODUCT/TECH/IMPROVEMENT/PROJECT.md) + `Knowledge/`** — 冷启动 + judgment BORN here as prose | ✅ the 4 docs |
 | ③ | **GATES** (the moat) | OWN | `gates/<gate>.py|sh` + tests + `gates/context/includes/*denied*.json` — executable terminus of matured judgment | ✅ `gates/` + `context/includes/` empty dir (`.gitkeep`); **content accretes** as judgment matures (养成 ladder) |
-| ④ | **CAPABILITIES** | OWN | `skills/` — the **5 default DDD-native skills COPIED IN** + project-specific skills that accrete | ✅ `skills/` with the **5 native skills copied from `backend/templates/ddd-skills/`**; project-specific capabilities accrete |
+| ④ | **CAPABILITIES** | OWN | `skills/` — the **3 default DDD-native skills COPIED IN** + project-specific skills that accrete | ✅ `skills/` with the **3 native skills copied from `backend/templates/ddd-skills/`**; project-specific capabilities accrete |
 | ⑤ | **DELIVERY CONTRACT** | GOVERN | **`bindings.yaml`** — full delivery 全貌 per repo: build_system · version_set · branch · deploy_pipeline (ref) · review_path · refresh_policy · auto_send (all DATA) | ⬜ by **BIND**, not CREATE (repo shape is unknown at create) |
 | ⑥ | **CODE-INTEL REFRESHER** | GOVERN | a self-contained mechanism that REGENERATES the code-intel projection from code (ship the refresher, not the projection) | ✅ `REFRESHER.md` marker (shape-neutral: states it activates on BIND, no-op for a no-repo project); **live refresher accretes** |
 
-### The 5 default DDD-native skills (copied into every DDD's `skills/` at CREATE)
+### The 3 default DDD-native skills (copied into every DDD's `skills/` at CREATE)
 
 These are the self-養成 / self-propagation set. They are **DDD-native rewrites** of
 SwarmAI's own skills — learned from the originals but re-designed for a DDD (file-based
@@ -77,8 +77,6 @@ DDD at provision time (the same mechanism that copies the 4 DDD docs).
 |------------------|-------------------------------|-----------------|
 | `s_ddd-manager` | `s_project-manager` | provision new spec-compliant DDDs (self-propagation seed) |
 | `s_ddd-persist` | `s_persist` | sediment/refresh THIS DDD's docs (additive, honors human edits) |
-| `s_ddd-pipeline` | `s_autonomous-pipeline` | DDD-native judge→execute→reflect loop (retains Gate-2 adversarial + 养成 moat) |
-| `s_ddd-pollinate` | `s_pollinate` | express this product's value to audiences |
 | `s_repo-to-ddd` | `s_repo-to-ddd` (portable as-is) | the ⑥ refresher — regenerate `code-intel.json` from code |
 
 > **Two distinct namespaces — do not conflate.** SwarmAI-native skills (`s_project-manager`,
@@ -97,7 +95,7 @@ Amazon infra, referenced in ⑤, never executed). **AIM-export-form members** (`
 Sanctioned non-section dirs at project root: `assets/`, `templates/`, `.artifacts/`.
 
 **What CREATE provisions:** ① dir + `.project.json` + 3 manifests; ② the 4 docs + `Knowledge/`;
-③ `gates/` + `gates/context/includes/` empty dirs (`.gitkeep`); ④ `skills/` **with the 5
+③ `gates/` + `gates/context/includes/` empty dirs (`.gitkeep`); ④ `skills/` **with the 3
 DDD-native skills copied in**; ⑥ `REFRESHER.md` marker. **Only ⑤ waits** — `bindings.yaml`
 appears when a repo is BOUND. NOT scaffolded: `agents/`, `agent-sops/` (AIM-export-form).
 Project-specific content then accretes: gates as judgment matures, project skills as bound.
@@ -130,7 +128,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | Phase | Do | Exit-gate (must pass to proceed) |
 |-------|----|----------------------------------|
 | **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
-| **P1 — CREATE** | `create_project` scaffolds the six-section skeleton + copies the 5 native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
+| **P1 — CREATE** | `create_project` scaffolds the six-section skeleton + copies the 3 native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
 | **P2 — KNOWLEDGE (the moat)** | Fill PRODUCT / TECH / IMPROVEMENT / PROJECT.md from the source (spec, code, conversation). This is where domain judgment is born. | All 4 docs substantive — **no placeholders** (P6 ② check FAILs on a stub). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets.** Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
 | **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_repo-to-ddd` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |

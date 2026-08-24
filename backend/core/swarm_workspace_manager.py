@@ -406,7 +406,7 @@ _Nothing currently blocking._
 #
 # TWO layers (why this is not one flat map):
 #   • SECTION_SCAFFOLD — FILES written only-if-absent ({project_name}-templated):
-#       ① aim.json (manifest, declares the 5 default native skills) + AGENTS.md
+#       ① aim.json (manifest, declares the 3 default native skills) + AGENTS.md
 #         (the ONE unified README covering all six sections) + .crux_template.md
 #       ⑥ REFRESHER.md (shape-neutral marker)
 #   • SECTION_DIRS — the ③④ section DIRECTORIES that must exist in the skeleton
@@ -420,17 +420,16 @@ _Nothing currently blocking._
 #       (§555), NOT the SwarmWS-native DDD; they accrete on-demand at export /
 #       when a real agent-spec is authored, never pre-scaffolded empty.
 #   D2: ONE unified AGENTS.md README, NOT five per-section README stubs.
-#   D3: aim.json.plugins declares the 5 default DDD-native skills.
+#   D3: aim.json.plugins declares the 3 default DDD-native skills.
 #
 # ② KNOWLEDGE (4 DDD_TEMPLATES docs + Knowledge/) is handled by the workspace;
 # ⑤ DELIVERY CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE.
 SECTION_SCAFFOLD: dict[str, str] = {
     # ── ① IDENTITY & MANIFEST ────────────────────────────────────────────────
-    # aim.json.plugins declares the 5 default DDD-native skills (D3) — the SAME
+    # aim.json.plugins declares the 3 default DDD-native skills (D3) — the SAME
     # skills that are physically COPIED INTO skills/ at provision (DDD_NATIVE_SKILLS).
     # A DDD is self-propagating + self-養成 because it carries the ability to
-    # create more DDDs (s_ddd-manager), sediment its own docs (s_ddd-persist), run
-    # its own dev-loop (s_ddd-pipeline), express its value (s_ddd-pollinate), and
+    # create more DDDs (s_ddd-manager), sediment its own docs (s_ddd-persist), and
     # refresh its ⑥ code-intel projection (s_repo-to-ddd). On AIM export this
     # becomes the plugin namespace; the skill FILES ship alongside it.
     "aim.json": """{
@@ -441,8 +440,6 @@ SECTION_SCAFFOLD: dict[str, str] = {
     "native_skills": [
       "s_ddd-manager",
       "s_ddd-persist",
-      "s_ddd-pipeline",
-      "s_ddd-pollinate",
       "s_repo-to-ddd"
     ]
   },
@@ -453,7 +450,7 @@ SECTION_SCAFFOLD: dict[str, str] = {
 }
 """,
     # AGENTS.md is the SINGLE unified README (D2) — covers all six sections +
-    # the 5 native skills. No per-section README stubs.
+    # the 3 native skills. No per-section README stubs.
     "AGENTS.md": """# {project_name} — DDD Agent Guide (① Identity & unified README)
 
 The ONE README for **{project_name}**'s DDD. This IS section ① and it explains
@@ -493,8 +490,6 @@ everything else lives under its numbered section dir.
 ## Default native skills (the self-養成 / self-propagation set — ④, copied into `4-capabilities/`)
 - **s_ddd-manager** — provision new spec-compliant DDDs (self-propagation seed).
 - **s_ddd-persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
-- **s_ddd-pipeline** — DDD-native judge→execute→reflect dev loop (file-state, retains the Gate-2 adversarial moat).
-- **s_ddd-pollinate** — express this product's value to audiences.
 - **s_repo-to-ddd** — the ⑥ refresher: regenerate `code-intel.json` from code.
 
 Together they make a DDD **get smarter with use, on any runtime, without SwarmAI**.
@@ -577,8 +572,6 @@ SECTION_DIRS: tuple[str, ...] = (
 DDD_NATIVE_SKILLS: tuple[str, ...] = (
     "s_ddd-manager",     # ← learned from s_project-manager (self-propagation seed)
     "s_ddd-persist",     # ← learned from s_persist (sediment DDD docs)
-    "s_ddd-pipeline",    # ← learned from s_autonomous-pipeline (judge→execute→reflect)
-    "s_ddd-pollinate",   # ← learned from s_pollinate (express value)
     "s_repo-to-ddd",   # ← the ⑥ code-intel refresher (portable as-is)
 )
 
@@ -586,7 +579,7 @@ DDD_NATIVE_SKILLS: tuple[str, ...] = (
 # This repo is PUBLIC. The rule: EXTERNAL provisioning sources are tracked + ship;
 # INTERNAL ones (Amazon CRUX/Brazil) are gitignored + local-only, copied into a DDD
 # ONLY when internal=True. Keep the two source trees separate so internal never leaks:
-#   EXTERNAL (tracked, public):  templates/ddd-skills/s_ddd-*  (the 5 native skills)
+#   EXTERNAL (tracked, public):  templates/ddd-skills/s_ddd-*  (the 3 native skills)
 #   INTERNAL (gitignored, local): backend/skills/s_internal-*/  (.gitignore glob)
 #                                 templates/ddd-gates/          (.gitignore dir — CRUX no-push gate)
 # Provisioning reads external from templates/ddd-skills, internal from the two ignored
@@ -595,7 +588,7 @@ DDD_NATIVE_SKILLS: tuple[str, ...] = (
 # in an already-ignored path, never in templates/ddd-skills.)
 #
 # Internal-DDD extra capabilities (bound to a Brazil/CRUX repo, e.g. AIDLC): the
-# internal toolchain skills + the no-git-push gate. Copied in ADDITION to the 5
+# internal toolchain skills + the no-git-push gate. Copied in ADDITION to the 3
 # native skills when a DDD is internal. Copied FROM the SwarmAI-native (gitignored)
 # backend/skills/s_internal-* (already portable HITL wrappers), not from templates.
 INTERNAL_DDD_SKILLS: tuple[str, ...] = (
@@ -606,7 +599,7 @@ INTERNAL_DDD_SKILLS: tuple[str, ...] = (
 
 
 def _load_ddd_native_skill_templates() -> dict[str, dict[str, str]]:
-    """Load the 5 default DDD-native skill templates from
+    """Load the 3 default DDD-native skill templates from
     backend/templates/ddd-skills/s_ddd-*/. Returns {skill_name: {relpath: content}}.
 
     Mirrors _load_swarmai_ddd_templates: maintained as standalone files for
@@ -1291,7 +1284,7 @@ class SwarmWorkspaceManager:
         """Create DDD document templates + six-section skeleton for a project.
 
         Writes the ② 4 docs, ① manifests, ③④ section dirs, ⑥ marker, and COPIES
-        the 5 default DDD-native skills into ``skills/``.  Only writes files that
+        the 3 default DDD-native skills into ``skills/``.  Only writes files that
         don't already exist (preserves user edits).
 
         Args:
@@ -1357,7 +1350,7 @@ class SwarmWorkspaceManager:
                     keep.write_text("", encoding="utf-8")
                     created.append(f"{reldir}/.gitkeep")
 
-            # ④ COPY the 5 default DDD-native skills into 4-capabilities/ (only-if-
+            # ④ COPY the 3 default DDD-native skills into 4-capabilities/ (only-if-
             # absent). This is the fix for "aim.json declared names but no skill
             # existed": the skills must be PHYSICALLY in the DDD so that after `aim`
             # export they run directly in Kiro / Claude Code. Source of truth is the
@@ -2706,7 +2699,7 @@ class SwarmWorkspaceManager:
         (spec §3.6; option A, XG decision 2026-07-12, refined same day to remove
         the over-build): the project dir + ``.project.json`` (① identity, stamped
         with ``ddd_spec_version``), the ① manifests (``aim.json`` — declaring the
-        5 default native skills — / ``AGENTS.md`` — the SINGLE unified README —
+        3 default native skills — / ``AGENTS.md`` — the SINGLE unified README —
         / ``.crux_template.md``), the 4 DDD docs (② knowledge), the ⑥
         ``REFRESHER.md`` marker, and the ③④ section DIRECTORIES (``gates/``,
         ``gates/context/includes/``, ``skills/`` — created via a ``.gitkeep`` marker,

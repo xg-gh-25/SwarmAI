@@ -6,9 +6,10 @@ tier: lazy
 # DDD Persist (s_ddd-persist) — sediment cognition into the DDD, with discipline
 
 Route knowledge into the correct section of THIS DDD, additively, under a lock. This is
-the WRITE side of the self-養成 loop: what the `s_ddd-pipeline` REFLECT stage learns gets
-sedimented here so the next run is smarter. **But persisting is a judgment, not a reflex**
-— most passing facts should be SKIPPED (see Step 0).
+the WRITE side of the self-養成 loop: what a dev-loop's REFLECT stage learns (whatever
+pipeline the host runtime runs over this DDD) gets sedimented here so the next run is
+smarter. **But persisting is a judgment, not a reflex** — most passing facts should be
+SKIPPED (see Step 0).
 
 > **DDD-native decouple of SwarmAI's `s_persist`.** Same routing discipline + admission
 > philosophy, re-homed to the DDD's own files. The locked read-modify-write engine ships
@@ -125,7 +126,8 @@ bare delete.)
 - **Source-stamp** — every entry carries `(YYYY-MM-DD)` + `source:manual`.
 - **The 养成 ladder** — a recurring pitfall climbs: prose (here, IMPROVEMENT.md) → rule →
   (3× recurrence) an executable ③ `gates/` gate with a knockout test. This skill writes the
-  prose rungs; promotion to a gate is a `s_ddd-pipeline` act.
+  prose rungs; promoting a rung to a gate is a dev-loop act (whatever pipeline the host
+  runtime runs over this DDD).
 
 ## Verification
 

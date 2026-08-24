@@ -52,46 +52,14 @@ _TINY_BYTES = 30
 
 # ─── THE CURATED MANIFEST: ddd-skill file (rel to DDD_ROOT) → source (rel to REPO_ROOT) ───
 # Generated + verified by `discover` (2026-07-15). Keep sorted for stable diffs.
-VERBATIM_PAIRS: dict[str, str] = {
-    # s_ddd-pipeline/engine ← s_autonomous-pipeline/scripts + core
-    "s_ddd-pipeline/engine/__init__.py": "backend/skills/s_autonomous-pipeline/scripts/__init__.py",
-    "s_ddd-pipeline/engine/confidence_score.py": "backend/skills/s_autonomous-pipeline/scripts/confidence_score.py",
-    "s_ddd-pipeline/engine/goal_metrics.py": "backend/skills/s_autonomous-pipeline/scripts/goal_metrics.py",
-    "s_ddd-pipeline/engine/pipeline_pr.py": "backend/skills/s_autonomous-pipeline/scripts/pipeline_pr.py",
-    "s_ddd-pipeline/engine/pipeline_profiles.py": "backend/core/pipeline_profiles.py",
-    "s_ddd-pipeline/engine/wtf_gate.py": "backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py",
-    # s_ddd-pollinate/scripts ← s_pollinate/scripts
-    "s_ddd-pollinate/scripts/brand_chart.py": "backend/skills/s_pollinate/scripts/brand_chart.py",
-    "s_ddd-pollinate/scripts/check_rpv.py": "backend/skills/s_pollinate/scripts/check_rpv.py",
-    "s_ddd-pollinate/scripts/check_specs.py": "backend/skills/s_pollinate/scripts/check_specs.py",
-    "s_ddd-pollinate/scripts/cross_format_check.py": "backend/skills/s_pollinate/scripts/cross_format_check.py",
-    "s_ddd-pollinate/scripts/deck_notes_injector.py": "backend/skills/s_pollinate/scripts/deck_notes_injector.py",
-    "s_ddd-pollinate/scripts/evaluate_topic.py": "backend/skills/s_pollinate/scripts/evaluate_topic.py",
-    "s_ddd-pollinate/scripts/font_link_backfill.py": "backend/skills/s_pollinate/scripts/font_link_backfill.py",
-    "s_ddd-pollinate/scripts/format_recommend.py": "backend/skills/s_pollinate/scripts/format_recommend.py",
-    "s_ddd-pollinate/scripts/generate_tts.py": "backend/skills/s_pollinate/scripts/generate_tts.py",
-    "s_ddd-pollinate/scripts/geo_score.py": "backend/skills/s_pollinate/scripts/geo_score.py",
-    "s_ddd-pollinate/scripts/get_pref.py": "backend/skills/s_pollinate/scripts/get_pref.py",
-    "s_ddd-pollinate/scripts/migrate_prefs.py": "backend/skills/s_pollinate/scripts/migrate_prefs.py",
-    "s_ddd-pollinate/scripts/p2_scan.py": "backend/skills/s_pollinate/scripts/p2_scan.py",
-    "s_ddd-pollinate/scripts/pptx_to_deck.py": "backend/skills/s_pollinate/scripts/pptx_to_deck.py",
-    "s_ddd-pollinate/scripts/publish_dashboard.py": "backend/skills/s_pollinate/scripts/publish_dashboard.py",
-    "s_ddd-pollinate/scripts/resolve_backend.py": "backend/skills/s_pollinate/scripts/resolve_backend.py",
-    "s_ddd-pollinate/scripts/tts/__init__.py": "backend/skills/s_pollinate/scripts/tts/__init__.py",
-    "s_ddd-pollinate/scripts/tts/backends/__init__.py": "backend/skills/s_pollinate/scripts/tts/backends/__init__.py",
-    "s_ddd-pollinate/scripts/tts/backends/azure.py": "backend/skills/s_pollinate/scripts/tts/backends/azure.py",
-    "s_ddd-pollinate/scripts/tts/backends/base.py": "backend/skills/s_pollinate/scripts/tts/backends/base.py",
-    "s_ddd-pollinate/scripts/tts/backends/edge.py": "backend/skills/s_pollinate/scripts/tts/backends/edge.py",
-    "s_ddd-pollinate/scripts/tts/backends/polly.py": "backend/skills/s_pollinate/scripts/tts/backends/polly.py",
-    "s_ddd-pollinate/scripts/tts/phonemes.py": "backend/skills/s_pollinate/scripts/tts/phonemes.py",
-    "s_ddd-pollinate/scripts/tts/sections.py": "backend/skills/s_pollinate/scripts/tts/sections.py",
-    "s_ddd-pollinate/scripts/tts/srt.py": "backend/skills/s_pollinate/scripts/tts/srt.py",
-    "s_ddd-pollinate/scripts/tts/ssml.py": "backend/skills/s_pollinate/scripts/tts/ssml.py",
-    # s_ddd-pollinate/templates/html-deck/shared ← s_pollinate (whole dir is verbatim)
-    "s_ddd-pollinate/templates/html-deck/shared/deck-stage.js": "backend/skills/s_pollinate/templates/html-deck/shared/deck-stage.js",
-    "s_ddd-pollinate/templates/html-deck/shared/export-pdf.sh": "backend/skills/s_pollinate/templates/html-deck/shared/export-pdf.sh",
-    "s_ddd-pollinate/templates/html-deck/shared/viewport-base.css": "backend/skills/s_pollinate/templates/html-deck/shared/viewport-base.css",
-}
+# EMPTY by design (2026-08-24): the only DDD-native skills that carried verbatim
+# copies of a SwarmAI-native source were s_ddd-pipeline (← s_autonomous-pipeline)
+# and s_ddd-pollinate (← s_pollinate), both REMOVED from the DDD-native set. The 3
+# retained skills (s_ddd-manager, s_ddd-persist, s_repo-to-ddd) are adapted forks
+# that DELIBERATELY differ from their sources (they strip the ~/.swarm-ai paths so a
+# DDD runs standalone) — so there is nothing to keep byte-identical. If a future
+# native skill ever ships a verbatim runtime copy, re-populate this manifest.
+VERBATIM_PAIRS: dict[str, str] = {}
 
 # Files that ARE byte-identical to a source right now but are DELIBERATELY excluded
 # from the manifest because they are adapted/coincidental — documented so `discover`

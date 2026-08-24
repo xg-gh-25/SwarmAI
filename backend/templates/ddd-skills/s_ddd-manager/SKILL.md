@@ -1,6 +1,6 @@
 ---
 name: ddd-manager
-description: "Provision and manage DDD projects that conform to the canonical six-section structure — the self-propagation seed. Full lifecycle: CREATE (with context-extraction from a codebase, NOT blank templates), BIND a repo (⑤ delivery contract), LIST / EDIT / RENAME. Pure filesystem, no SwarmAI backend — a DDD carries this so it can create MORE spec-compliant DDDs on Kiro / Claude Code.\n  TRIGGER: \"create ddd\", \"new ddd project\", \"add a domain\", \"bind repo to ddd\", \"provision ddd\".\n  NOT FOR: SwarmAI's own project CRUD (native s_project-manager); code (that's s_ddd-pipeline)."
+description: "Provision and manage DDD projects that conform to the canonical six-section structure — the self-propagation seed. Full lifecycle: CREATE (with context-extraction from a codebase, NOT blank templates), BIND a repo (⑤ delivery contract), LIST / EDIT / RENAME. Pure filesystem, no SwarmAI backend — a DDD carries this so it can create MORE spec-compliant DDDs on Kiro / Claude Code.\n  TRIGGER: \"create ddd\", \"new ddd project\", \"add a domain\", \"bind repo to ddd\", \"provision ddd\".\n  NOT FOR: SwarmAI's own project CRUD (native s_project-manager)."
 tier: lazy
 ---
 # DDD Manager (s_ddd-manager) — the self-propagation seed
@@ -21,13 +21,12 @@ backend**.
 ├── .project.json / aim.json / AGENTS.md / .crux_template.md   # ① Identity & manifest
 ├── PRODUCT/TECH/IMPROVEMENT/PROJECT.md + Knowledge/            # ② Knowledge
 ├── gates/ (+ context/includes/)                               # ③ Gates (accrete)
-├── skills/  ← the 5 DDD-native skills live here                # ④ Capabilities
+├── skills/  ← the 3 DDD-native skills live here                # ④ Capabilities
 ├── bindings.yaml                                              # ⑤ Delivery contract (on BIND)
 └── REFRESHER.md                                              # ⑥ Code-intel refresher
 ```
-The 5 ④ skills: `s_ddd-manager` `s_ddd-persist` `s_ddd-pipeline` `s_ddd-pollinate`
-`s_repo-to-ddd` — copied in at CREATE. Do NOT scaffold `agents/`/`agent-sops/` (AIM-export
-form, generated at export, not native).
+The 3 ④ skills: `s_ddd-manager` `s_ddd-persist` `s_repo-to-ddd` — copied in at CREATE.
+Do NOT scaffold `agents/`/`agent-sops/` (AIM-export form, generated at export, not native).
 
 ## Lifecycle: CREATE → BIND → PULL → DEVELOP → SYNC-BACK
 
@@ -84,9 +83,9 @@ The 4 ② doc skeletons (fill extracted fields, keep the `_italic placeholder_` 
 - **IMPROVEMENT.md** — `## What Worked` · `## What Failed` · `## What to Watch For` · `## Known Issues`
 - **PROJECT.md** — `## Current Focus` · `## Open Items` · `## Recent Decisions` · `## Blocked By`
 
-Then the skeleton: ① `.project.json` (stamp `ddd_spec_version`) + `aim.json` (declares the 5
+Then the skeleton: ① `.project.json` (stamp `ddd_spec_version`) + `aim.json` (declares the 3
 native skills) + `AGENTS.md` (the ONE unified README covering all six sections); ③ `gates/` +
-`gates/context/includes/` (`.gitkeep`); ④ `skills/` with the 5 native skills; ⑥ `REFRESHER.md`.
+`gates/context/includes/` (`.gitkeep`); ④ `skills/` with the 3 native skills; ⑥ `REFRESHER.md`.
 
 ## BIND a repo (⑤ DELIVERY CONTRACT) — turns 4 docs into a DDD that governs a real repo
 

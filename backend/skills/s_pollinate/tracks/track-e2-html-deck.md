@@ -160,12 +160,6 @@ loaded webfonts. It self-validates page-count vs slide-count and link-annotation
 (hard-fails on mismatch), and prints an **ADVISORY text-overlap warning** (see Step 4).
 Playwright runs at export time only.
 
-> **Note:** the DDD-portable copy at
-> `backend/templates/ddd-skills/s_ddd-pollinate/templates/html-deck/shared/export-pdf.sh`
-> is an OLDER generation (base64 `<img>` + `page.pdf()`, which flattens links). It is
-> intentionally NOT kept byte-identical to this copy — a separate full-generation
-> catch-up would be needed to port the modern screenshot+pdf-lib architecture there.
-
 ## Step 4 — Verify (the litmus)
 
 Before declaring done, render the assembled `.html` headless and confirm:
