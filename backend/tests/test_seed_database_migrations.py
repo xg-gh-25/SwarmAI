@@ -464,3 +464,63 @@ class TestUserVersionMigrations:
             cursor = await conn.execute("PRAGMA user_version")
             version = (await cursor.fetchone())[0]
             assert version == CURRENT_SCHEMA_VERSION
+
+    @pytest.mark.asyncio
+    async def test_v9_adds_custom_ami_id_to_hive_instances(self, temp_db_path):
+        """v9 migration adds hive_instances.custom_ami_id to a DB stuck at v8.
+
+        Regression for the 594528a6 bug: custom_ami_id's ALTER was placed in the
+        historical v3 block, so any DB already at user_version >= 3 (all live DBs
+        are at 8) never re-ran v3 and never got the column — create_instance INSERT
+        then failed with 'no column named custom_ami_id' (HTTP 500). The fix moves
+        the ALTER to a new v9 block. This test simulates a v8 DB WITHOUT the column
+        and asserts the migration adds it and bumps to CURRENT_SCHEMA_VERSION.
+
+        Mutation-proof: revert the v9 block (or the CURRENT bump) and this goes RED —
+        a v8 DB short-circuits at `current_version >= CURRENT_SCHEMA_VERSION` and the
+        column is never added.
+        """
+        import sqlite3
+        from database.sqlite import CURRENT_SCHEMA_VERSION
+
+        # Build a REAL, fully-migrated DB (all tables the unconditional data-cleanups
+        # touch), then DOWNGRADE it to reproduce the live-bug state: hive_instances
+        # WITHOUT custom_ami_id + user_version=8. This models a real v8 DB precisely,
+        # instead of a minimal fixture that trips over every cleanup dependency.
+        seed = SQLiteDatabase(db_path=temp_db_path)
+        await seed.initialize()
+
+        conn = sqlite3.connect(str(temp_db_path))
+        cur = conn.cursor()
+        # Drop the column (sqlite 3.35+ supports DROP COLUMN) and rewind the version,
+        # exactly as a pre-594528a6-fix live DB looked: stuck at v8, column absent.
+        cur.execute("ALTER TABLE hive_instances DROP COLUMN custom_ami_id")
+        cur.execute("PRAGMA user_version = 8")
+        conn.commit()
+        conn.close()
+
+        # Sanity: the column really is absent before migration.
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            cursor = await conn.execute("PRAGMA table_info(hive_instances)")
+            cols_before = {row[1] for row in await cursor.fetchall()}
+            assert "custom_ami_id" not in cols_before, \
+                "fixture must start WITHOUT custom_ami_id or the test proves nothing"
+
+        # Run migrations (skip_init=True → seed-sourced fast path, which DOES run
+        # migrations; the fix must fire here, not only on full init).
+        db = SQLiteDatabase(db_path=temp_db_path)
+        db._initialized = False
+        await db.initialize(skip_init=True)
+
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            cursor = await conn.execute("PRAGMA table_info(hive_instances)")
+            cols_after = {row[1] for row in await cursor.fetchall()}
+            assert "custom_ami_id" in cols_after, \
+                "v9 migration must ADD custom_ami_id to a v8 DB"
+
+            cursor = await conn.execute("PRAGMA user_version")
+            version = (await cursor.fetchone())[0]
+            assert version == CURRENT_SCHEMA_VERSION, \
+                f"migration must bump user_version to CURRENT ({CURRENT_SCHEMA_VERSION}), got {version}"
+            assert CURRENT_SCHEMA_VERSION >= 9, \
+                "CURRENT_SCHEMA_VERSION must be bumped to >=9 for the v9 block to fire on a v8 DB"

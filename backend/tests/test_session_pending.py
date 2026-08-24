@@ -22,7 +22,7 @@ from pathlib import Path
 import aiosqlite
 import pytest
 
-from database.sqlite import SQLiteDatabase
+from database.sqlite import SQLiteDatabase, CURRENT_SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -48,13 +48,20 @@ async def _make_migrated_db(db_path: Path) -> SQLiteDatabase:
 @pytest.mark.asyncio
 async def test_migration_adds_columns_and_index_and_bumps_version(db_path: Path):
     """AC1: after migration, messages has sent/pending_seq/claimed_at + index,
-    user_version == 6."""
+    and user_version is bumped to the CURRENT schema version.
+
+    Assert against CURRENT_SCHEMA_VERSION, not a hard-coded literal: a full
+    initialize() runs ALL migrations, so the DB ends at CURRENT, not at the
+    version that happened to add these columns. Hard-coding `== 6` left this
+    test pre-existing RED once CURRENT advanced past 6 (the same hard-coded-
+    version class this fix's v9 change addresses)."""
     await _make_migrated_db(db_path)
 
     async with aiosqlite.connect(str(db_path)) as conn:
         cursor = await conn.execute("PRAGMA user_version")
         version = (await cursor.fetchone())[0]
-        assert version == 6, f"expected user_version=6, got {version}"
+        assert version == CURRENT_SCHEMA_VERSION, \
+            f"expected user_version={CURRENT_SCHEMA_VERSION}, got {version}"
 
         cursor = await conn.execute("PRAGMA table_info(messages)")
         cols = {row[1] for row in await cursor.fetchall()}

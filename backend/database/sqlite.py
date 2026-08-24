@@ -1694,7 +1694,7 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 6 — pending-message contract: messages.sent/pending_seq/claimed_at + idx (2026-06-20)
 # 7 — add recall_metrics table (2026-08-09)
 # 8 — index recall_metrics(timestamp) so the retention prune range-seeks (2026-08-10)
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -2391,7 +2391,10 @@ class SQLiteDatabase(BaseDatabase):
                 ("iam_instance_profile_arn", None), ("s3_bucket", None),
                 ("auth_user", "'admin'"), ("auth_password", None),
                 ("seed_data", None), ("shared_content", None),
-                ("custom_ami_id", None),
+                # NOTE: custom_ami_id was mistakenly added here (594528a6). The v3
+                # block only runs on a DB upgrading from <3, so every live DB (already
+                # at v8) never got the column → create_instance INSERT 500. Moved to
+                # the v9 block below. Do NOT re-add it here.
             ]:
                 try:
                     default_clause = f" DEFAULT {default}" if default else ""
@@ -2589,6 +2592,26 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("PRAGMA user_version = 8")
             await conn.commit()
             logger.info("Migration v8: idx_recall_metrics_ts (timestamp) for prune range")
+
+        if current_version < 9:
+            # Version 9: hive_instances.custom_ami_id. This column was originally
+            # (594528a6) added inside the v3 block, but v3 only runs when a DB
+            # upgrades from <3 — every live DB is already at v8, so it never re-ran
+            # v3 and the column was never created. create_instance's INSERT then
+            # failed with "no column named custom_ami_id" (HTTP 500). Placing it in
+            # its own CURRENT block fixes both paths: a fresh DB (v0→v3 builds the
+            # table without the column →…→ v9 adds it) and every existing v8 DB
+            # (8 < 9 → v9 adds it). Idempotent: ADD COLUMN is guarded so a re-run
+            # (or a DB that somehow already has it) is a no-op.
+            try:
+                await conn.execute(
+                    "ALTER TABLE hive_instances ADD COLUMN custom_ami_id TEXT"
+                )
+            except Exception:
+                pass  # Column already exists
+            await conn.execute("PRAGMA user_version = 9")
+            await conn.commit()
+            logger.info("Migration v9: hive_instances.custom_ami_id (moved out of v3)")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
