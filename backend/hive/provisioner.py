@@ -7,7 +7,9 @@ All boto3 calls are sync — wrapped in asyncio.to_thread() for async compat.
 Each step updates the local SQLite DB so status is visible in the UI.
 
 Key design decisions (from approved design doc):
-- S3 bucket per region: swarmai-hive-releases-{region}
+- S3 bucket per account+region: swarmai-hive-{account_id[-4:]}-{region}
+  (account-suffixed; falls back to swarmai-hive-releases-{region} ONLY when no
+  account_id is available). See _ensure_s3_bucket — the suffix is the live scheme.
 - Security Group: ports 80 + 443 only (no SSH, use SSM)
 - EIP: stable IP for CloudFront origin + stop/start resilience
 - CloudFront: Authorization header forwarded, CachingDisabled for API/SSE
@@ -284,8 +286,14 @@ class HiveProvisioner:
             resp = await client.get(gh_url)
             if resp.status_code != 200:
                 raise RuntimeError(
-                    f"Failed to download release v{version} from GitHub: "
-                    f"HTTP {resp.status_code}"
+                    f"Hive release v{version} is not available.\n"
+                    f"  Missing from S3:  s3://{bucket}/{s3_key}\n"
+                    f"  GitHub fallback returned HTTP {resp.status_code} — the hive tar is "
+                    f"NO LONGER published to GitHub Releases (CI 'build-hive' was removed; "
+                    f"hive packaging is local-only).\n"
+                    f"  Fix: on the packaging host run `./hive/release.sh {version}` — it now "
+                    f"auto-uploads the tar to the correct account-suffixed bucket "
+                    f"({bucket}). Then re-run this provision/update."
                 )
             data = resp.content
 
@@ -1119,8 +1127,18 @@ class HiveProvisioner:
             account = await self._get_account(instance["account_ref"])
             session = self._get_session(account, instance["region"])
             ec2_id = instance.get("ec2_instance_id")
-            bucket = instance.get("s3_bucket", f"swarmai-hive-releases-{instance['region']}")
             region = instance["region"]
+            # Fail-loud on a missing persisted bucket rather than silently
+            # recomputing a possibly-wrong name (recompute = new drift source).
+            # s3_bucket is written at deploy Step 1; a NULL here means the
+            # instance was never fully deployed (e.g. reset by a failed retry).
+            bucket = instance.get("s3_bucket")
+            if not bucket:
+                raise RuntimeError(
+                    f"Instance {instance_id} has no persisted s3_bucket "
+                    f"(region {region}); it was never fully deployed — "
+                    f"run deploy/retry before update."
+                )
 
             if not ec2_id:
                 raise ValueError("No EC2 instance ID")

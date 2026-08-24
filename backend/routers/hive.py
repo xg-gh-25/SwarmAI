@@ -164,6 +164,23 @@ class HiveInstanceUpdate(BaseModel):
         return v
 
 
+class HiveRetryRequest(BaseModel):
+    # Optional target version: when provided, retry redeploys THIS version
+    # instead of the instance's stale recorded one. None -> keep recorded.
+    version: Optional[str] = None
+
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not re.match(r'^[a-zA-Z0-9._\-]+$', v):
+            raise ValueError(f"Invalid version string: {v!r}")
+        if len(v) > 32:
+            raise ValueError("Version string too long (max 32 chars)")
+        return v
+
+
 class HiveInstanceResponse(BaseModel):
     """Instance response for list endpoint — no secrets."""
     id: str
@@ -648,8 +665,12 @@ async def health_proxy(instance_id: str):
 
 
 @router.post("/instances/{instance_id}/retry")
-async def retry_instance(instance_id: str):
-    """Retry a failed deploy — cleanup partial resources and redeploy."""
+async def retry_instance(instance_id: str, body: Optional[HiveRetryRequest] = None):
+    """Retry a failed deploy — cleanup partial resources and redeploy.
+
+    Optional body {"version": "x.y.z"} redeploys that version instead of the
+    instance's stale recorded one. Bodyless POST keeps the recorded version.
+    """
     _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
@@ -678,6 +699,14 @@ async def retry_instance(instance_id: str):
                 WHERE id=?""",
             (_now(), instance_id),
         )
+        # Optional version override: write the target version so deploy's
+        # _resolve_version(instance['version']) picks it up (deploy re-resolves
+        # bucket + everything else, so the version column is the only write).
+        if body is not None and body.version:
+            await c.execute(
+                "UPDATE hive_instances SET version=? WHERE id=?",
+                (body.version, instance_id),
+            )
         await c.commit()
 
     # Redeploy

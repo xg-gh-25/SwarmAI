@@ -876,32 +876,38 @@ cmd_release_all() {
         cp "$dmg" "$PROJECT_ROOT/dist/"
     fi
 
-    _log "Generating unified checksums..."
+    # GitHub Release ships DESKTOP artifacts only. The Hive tar is local-only
+    # (direction A): Part 2's release.sh already uploaded it to the account-suffixed
+    # S3 bucket that provision/update read from — it must NOT go into the GitHub
+    # Release (putting it here is the exact "hive in GitHub" drift the S3 supply
+    # closure eliminated).
+    _log "Generating desktop checksums..."
     cd "$PROJECT_ROOT/dist"
     : > checksums.txt
     if [ -n "$dmg" ]; then
         shasum -a 256 "$(basename "$dmg")" >> checksums.txt
     fi
-    shasum -a 256 "swarmai-hive-v${version}-linux-arm64.tar.gz" >> checksums.txt
     cd "$PROJECT_ROOT"
 
     echo ""
-    echo -e "  ${CYAN}Artifacts ready for upload:${NC}"
+    echo -e "  ${CYAN}Artifacts ready for upload (desktop → GitHub):${NC}"
     if [ -n "$dmg" ]; then
         echo "    📦 $(basename "$dmg") ($(du -h "$dmg" | cut -f1))"
     fi
-    echo "    📦 swarmai-hive-v${version}-linux-arm64.tar.gz ($(du -h "$hive_tar" | cut -f1))"
     echo "    📋 checksums.txt"
+    if [ -f "$hive_tar" ]; then
+        echo "    🐝 swarmai-hive-v${version}-linux-arm64.tar.gz ($(du -h "$hive_tar" | cut -f1)) → S3 (local-only, NOT GitHub)"
+    fi
     echo ""
 
-    # Offer to create GitHub release
+    # Offer to create GitHub release (desktop artifacts only)
     echo -e "  ${CYAN}Create GitHub Release:${NC}"
     echo ""
     local -a release_files=()
     if [ -n "$dmg" ]; then
         release_files+=("$PROJECT_ROOT/dist/$(basename "$dmg")")
     fi
-    release_files+=("$hive_tar" "$checksums")
+    release_files+=("$checksums")
     echo "    gh release create v${version} \\"
     echo "      --title \"SwarmAI v${version}\" \\"
     echo "      --generate-notes \\"

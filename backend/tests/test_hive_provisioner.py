@@ -259,6 +259,24 @@ class TestProvisionerS3:
         call_kwargs = mock_s3.create_bucket.call_args
         assert "CreateBucketConfiguration" not in call_kwargs[1]
 
+    @pytest.mark.asyncio
+    async def test_ensure_bucket_account_suffixed(self):
+        """The LIVE scheme: with an account_id, bucket = swarmai-hive-{acct4}-{region}.
+
+        This is the actual path provision/update use (the -releases- tests above
+        cover only the no-account-id fallback edge). Regression guard for the
+        docstring/fallback drift that cost 2 failed provisions.
+        """
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_s3 = MagicMock()
+        mock_session.client.return_value = mock_s3
+
+        bucket = await p._ensure_s3_bucket(mock_session, "us-east-1", "533267412361")
+        assert bucket == "swarmai-hive-2361-us-east-1"
+
 
 class TestProvisionerIAM:
     """Tests for IAM role and instance profile creation."""
@@ -890,6 +908,46 @@ class TestH1PostUpdateHealthVerification:
 
             with pytest.raises(RuntimeError, match="service unreachable"):
                 await p.update("inst-1", "1.9.3")
+
+
+class TestUpdateFailLoudOnMissingBucket:
+    """AC2: update() must FAIL LOUD when s3_bucket is empty/NULL, not silently
+    recompute a possibly-wrong bucket name (recompute = new drift source).
+    Reachable in practice: retry_instance resets s3_bucket=NULL."""
+
+    @pytest.mark.asyncio
+    async def test_update_raises_when_s3_bucket_none(self):
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_instance = {
+            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
+            "region": "us-east-1", "ec2_instance_id": "i-abc123",
+            "s3_bucket": None,  # never fully deployed / reset by a failed retry
+        }
+        mock_account = {
+            "auth_method": "access_keys",
+            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
+        }
+
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_conn.commit = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
+             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
+             patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock) as mock_sync, \
+             patch.object(p, "_get_session"), \
+             patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn):
+
+            with pytest.raises(RuntimeError, match="no persisted s3_bucket"):
+                await p.update("inst-1", "1.9.3")
+            # must fail BEFORE attempting a release sync against a bad bucket
+            mock_sync.assert_not_called()
 
 
 class TestH3HealthProxyFollowRedirects:

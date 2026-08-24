@@ -256,6 +256,41 @@ cd "${DIST_DIR}"
 shasum -a 256 "${PACKAGE_NAME}.tar.gz" > checksums.txt
 
 # ---------------------------------------------------------------------------
+# Supply closure (direction Y): auto-upload the tar to the account-suffixed S3
+# bucket the provisioner actually reads (swarmai-hive-{acct4}-{region}), so
+# provision/update find it instead of 404-ing on the (removed) GitHub hive tar.
+#
+# BEST-EFFORT + set-e-safe: every aws call is guarded (|| true / 2>/dev/null)
+# so a missing cli / creds / network NEVER aborts the package build — the tar
+# is already produced above. Region is resolved honestly (aws config -> env ->
+# us-east-1) and PRINTED, so a future multi-region deploy sees the assumption.
+# ---------------------------------------------------------------------------
+UPLOADED_TO=""
+if command -v aws >/dev/null 2>&1; then
+    S3_REGION="$(aws configure get region 2>/dev/null || true)"
+    S3_REGION="${S3_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
+    S3_ACCT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+    if [ -n "${S3_ACCT}" ] && [ "${S3_ACCT}" != "None" ]; then
+        S3_SUFFIX="${S3_ACCT: -4}"
+        S3_BUCKET="swarmai-hive-${S3_SUFFIX}-${S3_REGION}"
+        S3_KEY="v${VERSION}/${PACKAGE_NAME}.tar.gz"
+        echo "[release] Uploading to s3://${S3_BUCKET}/${S3_KEY} (region ${S3_REGION})..."
+        if aws s3 cp "${ARCHIVE}" "s3://${S3_BUCKET}/${S3_KEY}" --region "${S3_REGION}" 2>/dev/null \
+           && aws s3 cp "${DIST_DIR}/checksums.txt" "s3://${S3_BUCKET}/v${VERSION}/checksums.txt" --region "${S3_REGION}" 2>/dev/null; then
+            UPLOADED_TO="s3://${S3_BUCKET}/${S3_KEY}"
+            echo "[release] Uploaded to ${UPLOADED_TO}"
+        else
+            echo "[release] WARN: S3 upload failed (AccessDenied/network?) — place the tar manually:"
+            echo "[release]        aws s3 cp ${ARCHIVE} s3://${S3_BUCKET}/${S3_KEY} --region ${S3_REGION}"
+        fi
+    else
+        echo "[release] WARN: no AWS credentials — skipping S3 upload (provision will 404 until the tar is uploaded)"
+    fi
+else
+    echo "[release] WARN: aws cli absent — skipping S3 upload (provision will 404 until the tar is uploaded)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
@@ -270,6 +305,10 @@ echo "  Size:     ${ARCHIVE_SIZE}"
 echo "  Version:  ${VERSION}"
 echo "  Checksum: $(cat checksums.txt)"
 echo ""
-echo "  Upload to GitHub Release:"
-echo "    gh release create v${VERSION} ${ARCHIVE} ${DIST_DIR}/checksums.txt"
+if [ -n "${UPLOADED_TO}" ]; then
+    echo "  S3:       ${UPLOADED_TO} (provision/update will find it here)"
+else
+    echo "  S3:       NOT uploaded (see WARN above) — provision/update will 404"
+    echo "            until the tar is placed in swarmai-hive-{acct4}-{region}."
+fi
 echo ""
