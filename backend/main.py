@@ -28,6 +28,7 @@ from routers.pollinate import router as pollinate_router
 from routers.jobs import router as jobs_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
+from middleware.hive_auth import HiveAuthMiddleware
 from middleware.rate_limit import limiter
 from database import initialize_database
 
@@ -1527,6 +1528,15 @@ if _hive_domain:
     cors_origins = list(set(cors_origins + [
         f"https://{_hive_domain}",
     ]))
+
+# Hive app-layer auth (defense-in-depth INNER layer). Pure-ASGI, mode-gated to
+# SWARMAI_MODE=hive; a no-op pass-through off-hive. Added BEFORE CORSMiddleware so
+# that CORS is the OUTER layer (Starlette applies middleware LIFO / last-added-outermost):
+# CORS therefore short-circuits the OPTIONS preflight and can decorate HiveAuth's 401
+# with CORS headers. HiveAuth also independently allow-lists OPTIONS + /health.
+# MUST be pure-ASGI (not BaseHTTPMiddleware) to avoid buffering the SSE StreamingResponse
+# routes (/api/chat/stream) — see middleware/hive_auth.py header.
+app.add_middleware(HiveAuthMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

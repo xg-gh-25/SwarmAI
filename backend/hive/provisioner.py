@@ -1161,6 +1161,38 @@ cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 # The deployed Caddyfile has inline bcrypt auth written by user_data.py.
 # Caddy config changes require a dedicated SSM command (update_caddyfile).
 
+# ── MIGRATION (idempotent): backfill /etc/swarmai/hive-auth.env for hives provisioned
+# BEFORE app-layer auth existed. Those instances have no env file, so the new
+# HiveAuthMiddleware would read an empty hash and FAIL-CLOSED → total lockout on this
+# very upgrade. rsync+restart does NOT re-run user_data step 6b, so we self-heal HERE:
+# if the env file is absent, reconstruct it from the credential ALREADY on the box —
+# the inline bcrypt hash in the deployed Caddyfile (guaranteed present on any running
+# hive) + the admin user. Idempotent: skipped entirely if the file already exists
+# (fresh provisions + already-migrated hives are untouched). Caught by meta-review
+# (run_1e1cc8af); without it, deploying this feature would lock out every existing hive.
+if [ ! -f /etc/swarmai/hive-auth.env ]; then
+  echo "hive-auth.env absent — backfilling from deployed Caddyfile (pre-auth hive migration)"
+  MIG_HASH=$(python3 -c "
+import re, sys
+try:
+    content = open('/etc/caddy/Caddyfile').read()
+except OSError:
+    sys.exit(0)  # no Caddyfile → nothing to migrate; middleware stays fail-closed
+m = re.search(r'\\s+admin\\s+(\\$2[abxy]\\$\\S+)', content)
+print(m.group(1) if m else '')
+")
+  if [ -n "$MIG_HASH" ]; then
+    install -m 700 -d /etc/swarmai
+    install -m 600 /dev/null /etc/swarmai/hive-auth.env
+    printf 'HIVE_USER=%s\\nHIVE_PASS_HASH=%s\\n' 'admin' "$MIG_HASH" > /etc/swarmai/hive-auth.env
+    chown swarm:swarm /etc/swarmai/hive-auth.env
+    chmod 600 /etc/swarmai/hive-auth.env
+    echo "hive-auth.env backfilled (app-layer auth will match the existing Caddy credential)"
+  else
+    echo "WARN: could not extract admin hash from Caddyfile — hive-auth.env NOT written; middleware fail-closed until reset_password"
+  fi
+fi
+
 systemctl restart swarmai-hive --no-block
 echo "Waiting for swarmai-hive to start..."
 for i in $(seq 1 30); do
@@ -1317,7 +1349,7 @@ with open('/etc/caddy/Caddyfile') as f:
 # Match 'admin' followed by a bcrypt hash (starts with dollar sign)
 # Anchored to bcrypt format to avoid matching comments or other 'admin' occurrences
 new_content = re.sub(
-    r'(\\s+admin\\s+)(\\$2[ab]\\$\\S+)',
+    r'(\\s+admin\\s+)(\\$2[abxy]\\$\\S+)',
     r'\\1' + new_hash,
     content,
     count=1,
@@ -1333,13 +1365,46 @@ print('Hash replaced successfully')
 if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
   systemctl restart caddy
   rm -f "$CADDYFILE.bak"
-  echo "Password reset complete"
+  echo "Caddy hash replaced"
 else
   # Rollback on validation failure
   mv "$CADDYFILE.bak" "$CADDYFILE"
   echo "ERROR: Caddy validation failed, rolled back" >&2
   exit 1
 fi
+# R27 two-consumer sync: the backend app-layer auth (middleware/hive_auth.py) reads the
+# SAME credential from /etc/swarmai/hive-auth.env. Rotate the HIVE_PASS_HASH line there
+# too (preserving HIVE_USER) AND restart the backend, or the inner/outer layers drift
+# (Caddy accepts the new password, the backend still verifies the old one -> 401 storm).
+# DRIFT NOTE (accepted, recoverable): if the backend restart below fails while Caddy
+# already reloaded, the layers drift toward a 401 storm — a FAIL-CLOSED degradation (deny,
+# never allow), bounded by systemd Restart=always + StartLimit, and self-heals on the next
+# reset_password. We deliberately do NOT roll Caddy back here (that would trade a bounded,
+# fail-closed lockout for a window where the OLD password still works — the wrong direction).
+AUTHENV="/etc/swarmai/hive-auth.env"
+if [ -f "$AUTHENV" ]; then
+  python3 -c "
+import re, sys
+new_hash = sys.argv[1]
+with open('/etc/swarmai/hive-auth.env') as f:
+    lines = f.read().splitlines()
+out, seen = [], False
+for ln in lines:
+    if ln.startswith('HIVE_PASS_HASH='):
+        out.append('HIVE_PASS_HASH=' + new_hash); seen = True
+    else:
+        out.append(ln)
+if not seen:
+    out.append('HIVE_PASS_HASH=' + new_hash)
+with open('/etc/swarmai/hive-auth.env', 'w') as f:
+    f.write('\\n'.join(out) + '\\n')
+" "$NEW_HASH"
+  chown swarm:swarm "$AUTHENV" || true
+  chmod 600 "$AUTHENV"
+  systemctl restart swarmai-hive || true
+  echo "Backend hive-auth.env rotated + backend restarted"
+fi
+echo "Password reset complete"
 """
 
         def _run_command():

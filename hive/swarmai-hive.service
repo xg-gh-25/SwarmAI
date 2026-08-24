@@ -27,6 +27,12 @@ Environment=SWARMAI_MODE=hive
 Environment=SWARMAI_PORT=18321
 Environment=CLAUDE_CODE_USE_BEDROCK=1
 Environment=CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+# Shared hive-auth credential (HIVE_USER / HIVE_PASS_HASH) for app-layer auth
+# (middleware/hive_auth.py — the INNER defense-in-depth layer). Written by user_data.py
+# step [6b/9]; rotated by provisioner.reset_password(). Same credential Caddy validates.
+# `-` prefix: a missing file is non-fatal at boot (empty hash → middleware fails CLOSED,
+# denying all non-public requests — never fails open).
+EnvironmentFile=-/etc/swarmai/hive-auth.env
 
 # Resource limits — m7g.xlarge has 16GB, budget 6GB for backend
 LimitNOFILE=65535

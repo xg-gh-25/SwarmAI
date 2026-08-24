@@ -761,6 +761,29 @@ class TestH5UpdateNeverOverwritesCaddyfile:
         assert "/tmp/hive-new/ /opt/swarmai/" in source, \
             "rsync scope must be /opt/swarmai/ (Caddyfile at /etc/caddy/ is outside)"
 
+    def test_update_backfills_hive_auth_env_before_restart(self):
+        """MIGRATION GUARD (run_1e1cc8af): update() must idempotently backfill
+        /etc/swarmai/hive-auth.env from the deployed Caddyfile hash BEFORE restarting
+        the backend — otherwise a hive provisioned before app-layer auth existed reads
+        an empty hash and the new HiveAuthMiddleware fail-closes → total lockout on the
+        very upgrade that ships the middleware. Without this, deploying the feature
+        bricks every existing hive."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        # The backfill exists and is idempotent (guarded on file absence).
+        assert "if [ ! -f /etc/swarmai/hive-auth.env ]" in source, \
+            "update() must guard the backfill on the env file being absent (idempotent)"
+        # It reconstructs from the Caddyfile hash (the credential already on the box).
+        assert "/etc/caddy/Caddyfile" in source, \
+            "backfill must source the hash from the deployed Caddyfile"
+        # And it runs BEFORE the restart, or the restarted backend still reads empty hash.
+        backfill_idx = source.index("if [ ! -f /etc/swarmai/hive-auth.env ]")
+        restart_idx = source.index("systemctl restart swarmai-hive --no-block")
+        assert backfill_idx < restart_idx, \
+            "backfill must precede the backend restart (else migration is a no-op this cycle)"
+
 
 class TestH2SystemctlTimeout:
     """H2: systemctl restart must have a timeout guard."""

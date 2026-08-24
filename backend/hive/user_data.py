@@ -124,6 +124,31 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
 }
 CADDY
 
+# ── 6b. Shared Hive auth credential (app-layer defense-in-depth) ──
+# The SAME credential Caddy validates (basic_auth @protected above) is also given to
+# the backend so it can enforce app-layer auth (middleware/hive_auth.py) as the INNER
+# layer of defense-in-depth. Written to a root-only env file that the backend systemd
+# unit reads via EnvironmentFile=. The bcrypt hash is base64-encoded here to avoid ANY
+# shell/systemd `$` expansion of the $2b$.. hash, then decoded when the file is written.
+# ROTATION NOTE: provisioner.reset_password() MUST update BOTH this file AND the
+# Caddyfile inline hash, or the two layers drift (R27 two-consumer credential).
+echo "[6b/9] Writing shared hive-auth credential for the backend..."
+# Pre-create the dir 0700-owned BEFORE the secret file exists (install -d sets the
+# dir mode atomically) so /etc/swarmai is never world-traversable during first boot.
+install -m 700 -d /etc/swarmai
+HIVE_HASH_DECODED=$(echo '${auth_hash_b64}' | base64 -d)
+# Pre-create the file 0600-owned BEFORE any secret is written — `install -m 600`
+# is atomic re: mode, so there is never a window where the credential exists at a
+# looser permission (belt to umask 077's suspenders). Then fill it in place.
+install -m 600 /dev/null /etc/swarmai/hive-auth.env
+umask 077
+cat > /etc/swarmai/hive-auth.env << HIVEAUTHENV
+HIVE_USER=${auth_user}
+HIVE_PASS_HASH=$HIVE_HASH_DECODED
+HIVEAUTHENV
+chown swarm:swarm /etc/swarmai/hive-auth.env
+chmod 600 /etc/swarmai/hive-auth.env
+
 # ── 7. Systemd services ──
 echo "[7/9] Installing systemd services..."
 chmod +x "$INSTALL_DIR/hive/swarmai-hive.sh"
@@ -350,12 +375,18 @@ def render_user_data(
                 f"Invalid {name}: contains unsafe characters"
             )
 
+    # base64-encode the bcrypt hash for the backend env-file write (avoids shell/systemd
+    # `$` expansion of $2b$.. — same footgun the Caddyfile heredoc dodges via single-quotes).
+    import base64
+    auth_hash_b64 = base64.b64encode(auth_hash.encode()).decode()
+
     tmpl = Template(_USER_DATA_TEMPLATE)
     result = tmpl.safe_substitute(
         s3_bucket=s3_bucket,
         version=version,
         auth_user=auth_user,
         auth_hash=auth_hash,
+        auth_hash_b64=auth_hash_b64,
         region=region,
     )
 
@@ -375,7 +406,7 @@ def render_user_data(
 
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
     # Only check for our 5 known template vars (shell vars like ${i}, ${HASH} are expected).
-    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "region"}
+    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")

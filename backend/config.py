@@ -148,6 +148,16 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
+    # Hive app-layer auth (defense-in-depth INNER layer; Caddy basic_auth is the OUTER layer).
+    # ONLY enforced when SWARMAI_MODE=hive (see middleware/hive_auth.py). Desktop/daemon/
+    # subprocess trust the 127.0.0.1 bind and never enforce this. These MUST carry the SAME
+    # credential Caddy validates (hive/Caddyfile @protected) — the provisioner exports
+    # HIVE_USER / HIVE_PASS_HASH to both the Caddy .env and the backend service env.
+    # hive_pass_hash is a bcrypt hash (produced by `caddy hash-password`), verified via
+    # core.auth.verify_password. Empty hash in hive mode => middleware denies ALL (fail-closed).
+    hive_user: str = ""  # Set via HIVE_USER env var
+    hive_pass_hash: str = ""  # Set via HIVE_PASS_HASH env var (bcrypt hash)
+
     # Rate Limiting
     rate_limit_per_minute: int = 100
 
