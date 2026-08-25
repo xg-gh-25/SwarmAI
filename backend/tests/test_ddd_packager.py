@@ -1408,10 +1408,15 @@ class TestAIMCompliance:
 
     # AC4 — s_ sibling refs on SIBLINGS:/NOT FOR: metadata lines are normalized; prose is NOT
     def test_skill_body_sibling_ref_rewritten_scoped(self, tmp_path):
-        # s_fx-analyze is a real domain sibling in the fixture; put it on a metadata line + a prose line
+        # SIBLINGS line names a DOMAIN sibling (s_fx-analyze → rewritten to fx-analyze, so it
+        # does NOT dangle & the dangling-skill gate is satisfied). The prose "not rewritten"
+        # proof uses an ENABLEMENT skill name (s_ddd-manager) — it is not emitted to skills/,
+        # so the dangling gate legitimately ignores it AND _rewrite_skill_body_refs leaves it
+        # (prose, non-metadata). This keeps the "metadata rewritten / prose untouched" contract
+        # while staying compatible with the sibling-ref gate (run_0784859f).
         body = ("SIBLINGS: s_fx-analyze = the analyzer\n"
                 "\n"
-                "Some prose mentioning s_fx-analyze inline should NOT be rewritten.\n")
+                "Some prose mentioning s_ddd-manager inline should NOT be rewritten.\n")
         ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
         # overwrite s_fx-report body with our metadata+prose mix
         (ddd / "skills" / "s_fx-report" / "SKILL.md").write_text(
@@ -1419,7 +1424,7 @@ class TestAIMCompliance:
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         shipped = (res.out_dir / "skills" / "fx-report" / "SKILL.md").read_text(encoding="utf-8")
         assert "SIBLINGS: fx-analyze = the analyzer" in shipped, "metadata-line sibling ref must be normalized"
-        assert "prose mentioning s_fx-analyze inline should NOT" in shipped, "prose s_ ref must be UNTOUCHED"
+        assert "prose mentioning s_ddd-manager inline should NOT" in shipped, "prose s_ ref must be UNTOUCHED"
 
     # AC4 regression — SIBLINGS with a parenthetical (real SecDLC shape: "SIBLINGS (SecDLC ...):")
     def test_sibling_ref_rewritten_with_parenthetical(self, tmp_path):
@@ -1428,11 +1433,11 @@ class TestAIMCompliance:
             "---\nname: s_fx-report\ndescription: >\n"
             "  A report skill.\n"
             "  SIBLINGS (some qualifier): s_fx-analyze = the analyzer.\n"
-            "tags: [x]\n---\n\n# r\nProse with s_fx-analyze stays.\n", encoding="utf-8")
+            "tags: [x]\n---\n\n# r\nProse with s_ddd-manager stays.\n", encoding="utf-8")
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         shipped = (res.out_dir / "skills" / "fx-report" / "SKILL.md").read_text(encoding="utf-8")
         assert "SIBLINGS (some qualifier): fx-analyze" in shipped, "SIBLINGS with a parenthetical must still be normalized"
-        assert "Prose with s_fx-analyze stays" in shipped, "prose s_ ref untouched"
+        assert "Prose with s_ddd-manager stays" in shipped, "prose s_ ref untouched"
 
 
 # ---------------------------------------------------------------------------
@@ -1843,3 +1848,63 @@ class TestGatesEmptyDirCleanup:
         gdir = res.out_dir / "agent-sops" / "gates"
         assert (gdir / "security_scan.py").is_file(), "non-sopified gate script must stay"
         assert not (gdir / "security-coding-baseline.md").exists(), "sopified .md dup removed"
+
+
+# ---------------------------------------------------------------------------
+# Dangling s_-prefixed sibling-skill reference gate (run_0784859f).
+# SwarmAI's skill_registry identifies skills by the s_ prefix, so the SOURCE
+# dir-name + frontmatter `name:` keep it (packager renames on emit). But a PROSE
+# ref to a SIBLING skill by its s_ name dangles in the flat package (dir is the
+# de-prefixed name) — the leak that recurs on every re-distribute. The gate
+# fail-loud catches it; author fixes the source name-neutrally (verify, never rewrite).
+# ---------------------------------------------------------------------------
+class TestDanglingSkillRefGate:
+    def test_sibling_s_ref_in_body_blocks(self, tmp_path):
+        """A skill body that references a SIBLING by its s_ name (s_fx-analyze, emitted
+        as fx-analyze) must FAIL CLOSED — the ref dangles in the package."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # s_fx-report body points at sibling s_fx-analyze (both emit de-prefixed)
+        (ddd / "skills" / "s_fx-report" / "SKILL.md").write_text(
+            "---\nname: s_fx-report\ndescription: fx-report skill\n---\n\n"
+            "# fx-report\nIf handed data, route to `s_fx-analyze` for the deep pass.\n",
+            encoding="utf-8")
+        with pytest.raises(pk.PackagingError, match="dangling s_-prefixed sibling"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_self_s_ref_does_not_block(self, tmp_path):
+        """A skill naming its OWN s_ prefix in the body is its own identity, not a
+        dangling sibling pointer — must NOT block (only frontmatter name: is renamed;
+        a cosmetic self-mention in a heading is harmless)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        (ddd / "skills" / "s_fx-report" / "SKILL.md").write_text(
+            "---\nname: s_fx-report\ndescription: fx-report skill\n---\n\n"
+            "# fx-report (s_fx-report)\nThis skill does the report pass.\n",
+            encoding="utf-8")
+        # no sibling ref → clean emit (self-mention excluded)
+        res = pk.package_ddd(ddd, tmp_path / "out")
+        assert res  # did not raise
+
+    def test_prose_name_colon_s_ref_still_blocks(self, tmp_path):
+        """Gate-2 HIGH (run_0784859f): a `name: s_<sibling>` line OUTSIDE frontmatter (prose
+        or a YAML code-fence example) must STILL block — there is no unanchored `name:` skip.
+        The real frontmatter name: is de-prefixed before the gate runs, so removing the skip
+        does not false-positive on it; but a prose `name: s_fx-analyze` dangles and must fail."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        (ddd / "skills" / "s_fx-report" / "SKILL.md").write_text(
+            "---\nname: s_fx-report\ndescription: fx-report skill\n---\n\n"
+            "# fx-report\nExample skill config:\n```yaml\nname: s_fx-analyze\n```\n",
+            encoding="utf-8")
+        with pytest.raises(pk.PackagingError, match="dangling s_-prefixed sibling"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_context_root_s_ref_not_gated(self, tmp_path):
+        """A context/ ROOT doc (PROJECT/PRODUCT) may name an s_ skill in a dev-log /
+        provenance note — that describes the SwarmAI SOURCE skill and is correct as-is.
+        The gate scope excludes context/ root, so it must NOT block."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # PROJECT.md dev-log references s_fx-analyze (a source-side note, legit)
+        (ddd / "PROJECT.md").write_text(
+            "# dev log\n- [decision] s_fx-analyze authored as consume-by-reference.\n",
+            encoding="utf-8")
+        res = pk.package_ddd(ddd, tmp_path / "out")
+        assert res  # did not raise (context/ root out of gate scope)

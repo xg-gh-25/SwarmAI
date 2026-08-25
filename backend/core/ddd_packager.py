@@ -365,6 +365,69 @@ def gate_hardcoded_layout_paths(out_dir: Path) -> list[tuple[str, int, str]]:
     return hits
 
 
+def gate_dangling_skill_refs(out_dir: Path) -> list[tuple[str, int, str]]:
+    """Scan emitted RUNTIME files for a residual ``s_<name>`` reference that points at a
+    SIBLING skill this package emitted under its de-prefixed compliant name — a dangling
+    pointer (the package dir is ``skills/<name>/``, so ``s_<name>`` resolves to nothing on
+    the consumer). Returns [(rel_file, line_no, line_text), …] — empty = clean.
+
+    Fulfills the TECH.md private-skill-name fail-closed promise + breaks the ``s_`` leak
+    cycle: SwarmAI's skill_registry identifies skills by the ``s_`` prefix, so the SOURCE
+    dir-name + frontmatter ``name:`` MUST keep it (the packager renames those on emit). But
+    a PROSE/metadata ``s_<sibling>`` reference in a skill body is NOT renamed by
+    ``_rewrite_skill_body_refs`` (which only touches SIBLINGS/NOT-FOR lines, and misses
+    folded-block continuation lines) — so it dangles and recurs on every re-distribute.
+    This gate catches it; the author fixes the SOURCE prose to be name-neutral (describe the
+    capability, not ``s_x``), exactly like the hardcoded-path gate — verify, never rewrite
+    (a prose regex-rewrite can't tell a sibling pointer from a dev-log note about the SwarmAI
+    source skill — skeptic-verified, run_0784859f).
+
+    Scope = ``skills/**`` + ``agent-sops/**`` (what an installed agent EXECUTES/READS). NOT
+    ``context/`` (root docs + knowledge corpus legitimately describe the SwarmAI SOURCE skills
+    — a dev-tracking decision log / provenance note names ``s_x`` correctly). SELF references
+    (a skill body naming its OWN ``s_`` are excluded — that is the skill's own identity, not a
+    dangling sibling pointer; and it is cosmetic, the frontmatter ``name:`` is what binds)."""
+    # The set of s_-names this package RENAMED away — i.e. sibling skills whose emitted dir is
+    # the de-prefixed compliant name. Derived from the emitted skills/ dirs (self-contained,
+    # like gate_hardcoded_layout_paths — no reliance on caller state).
+    skills_root = out_dir / "skills"
+    emitted = sorted(d.name for d in skills_root.iterdir() if d.is_dir()) if skills_root.is_dir() else []
+    if not emitted:
+        return []
+    # A residual s_-ref dangles iff de-prefixing it (s_ strip + _→-) lands on an emitted dir.
+    # Build name→emitted map so we detect s_<raw> for every raw whose compliant form shipped.
+    import re as _re
+    compliant_set = set(emitted)
+    hits: list[tuple[str, int, str]] = []
+    # Match a whole-token s_<name> (word-boundary-ish: not preceded/followed by an ident char).
+    sref = _re.compile(r"(?<![\w-])s_([a-z0-9_-]+)")
+    for path in sorted(out_dir.rglob("*")):
+        if not path.is_file() or not _is_scannable(path):
+            continue
+        rel = path.relative_to(out_dir)
+        parts = rel.parts
+        if parts[0] not in ("skills", "agent-sops"):
+            continue
+        # SELF: a skill body naming its own s_ prefix is not a dangling sibling pointer.
+        self_name = parts[1] if parts[0] == "skills" and len(parts) >= 2 else None
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            # NOTE: no `name:` skip — the frontmatter `name:` is already de-prefixed to the
+            # compliant form by _rewrite_skill_name BEFORE this gate runs, so it never carries
+            # an `s_` and never matches `sref`. A `name:` skip would be an unanchored fail-open
+            # (a prose / code-fence line starting `name: s_x` would ship a dangling ref —
+            # Gate-2 HIGH, run_0784859f).
+            for m in sref.finditer(line):
+                comp = _compliant_skill_name("s_" + m.group(1))
+                if comp in compliant_set and comp != self_name:
+                    hits.append((str(rel), i, line.strip()[:160]))
+                    break
+    return hits
+
+
 def rewrite_host_paths(tree: Path) -> int:
     """Explicit, opt-in remediation (M2): rewrite host-path literals to the portable
     workspace var across the emitted tree. Returns the count of files changed.
@@ -1586,6 +1649,20 @@ def package_ddd(
                 f"hardcoded six-section layout path BLOCKED {target} ({len(layout_hits)} in skill/SOP): "
                 f"{detail}. Reference internal assets layout-neutrally (by name / retrievable "
                 f"knowledge), never by physical 2-understanding/ 3-gates/ 4-capabilities/ path."
+            )
+
+        # Fail-loud gate (run_0784859f): a shipped skill/SOP must NOT reference a SIBLING skill
+        # by its SwarmAI `s_`-prefixed name — the package dir is the de-prefixed compliant name,
+        # so `s_<sibling>` dangles. Fulfills the TECH.md private-skill-name promise + breaks the
+        # `s_` leak recurrence. Author fixes the SOURCE prose name-neutrally (verify, never rewrite).
+        skill_ref_hits = gate_dangling_skill_refs(out_dir)
+        if skill_ref_hits:
+            detail = "; ".join(f"{f}:{ln} ({txt})" for f, ln, txt in skill_ref_hits[:8])
+            raise PackagingError(
+                f"dangling s_-prefixed sibling-skill reference BLOCKED {target} "
+                f"({len(skill_ref_hits)} in skill/SOP): {detail}. The package dir is the "
+                f"de-prefixed name (security-cr-review, not s_security-cr-review) — reference a "
+                f"sibling capability by name-neutral description, never by its s_ source name."
             )
         for f in findings:
             res.warnings.append(f"scan: {f.kind}@{f.file}:{f.line} ({f.detail})")
