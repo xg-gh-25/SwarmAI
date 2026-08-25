@@ -538,6 +538,35 @@ this file is just a placeholder honoring the canonical six-section structure. On
 asset is bound and a dev-consumer profile pulls this DDD, the refresher regenerates
 the projection LOCALLY (never PR-flowed-back — the derived-projection rule, spec §3.6).
 """,
+    # SYSTEM_PROMPT.md — the agent's RUNTIME PERSONA, the source the AIM export uses as
+    # config.systemPrompt (AIM standard §4: systemPrompt points at a dedicated prompt
+    # file, NOT AGENTS.md — AGENTS.md is the consumer entry doc, §7). Authored here at
+    # provision so it exists in the DDD source and is maintained IN the brain, never
+    # conjured at export. The packager fail-loud requires it; this stub makes a fresh
+    # DDD package-ready. REWRITE this for your domain — it is what the installed agent
+    # becomes. NOT a directory map (that is AGENTS.md); it is identity + when-to-use-
+    # which-capability + how-you-ground-judgment, in package-relative terms.
+    "SYSTEM_PROMPT.md": """# {project_name} — Agent
+
+You are the **{project_name} agent**. Rewrite this file to define who this installed
+agent is and how it operates — it becomes the agent's system prompt when the package
+is installed via `aim`.
+
+## What you do
+_(One paragraph: this agent's purpose and the value it delivers.)_
+
+## When to use which capability
+_(One line per shipped skill: "for X → `<skill-name>`". The installed agent routes on
+this.)_
+
+## How you ground your judgment
+_(Point at your retrievable knowledge (`context/knowledge/`) and any always-apply
+standards (`agent-sops/`). Cite the specific rule you apply; a claim without a grounded
+source is a lead, not a verdict.)_
+
+## How you operate
+_(Operating doctrine: evidence before verdict, boundaries, any human-gated actions.)_
+""",
 }
 
 # ③④ section DIRECTORIES that exist in the skeleton but carry no prose README

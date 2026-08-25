@@ -71,6 +71,7 @@ def build_fixture_ddd(
     gates: dict[str, str] | None = None,
     add_gate_pycache: bool = False,
     add_noise: bool = False,
+    system_prompt: str | None = "# {name}\nYou are the {name} agent.\n",
 ) -> Path:
     """Build a minimal compliant six-section DDD. Returns its dir.
 
@@ -146,6 +147,10 @@ def build_fixture_ddd(
         (ddd / doc).write_text(f"# {name} — {doc}\nReal content here.\n", encoding="utf-8")
     (ddd / "AGENTS.md").write_text(f"# {name} — Agent Guide\nUse this brain.\n", encoding="utf-8")
     (ddd / "REFRESHER.md").write_text(f"# {name} refresher\n", encoding="utf-8")
+    # SYSTEM_PROMPT.md is the agent's runtime persona (AIM systemPrompt source). Present
+    # by default; system_prompt=None omits it (to exercise the fail-loud missing case).
+    if system_prompt is not None:
+        (ddd / "SYSTEM_PROMPT.md").write_text(system_prompt.format(name=name), encoding="utf-8")
     if build_system:
         (ddd / "Config").write_text(
             f"package.{name} = {{\n    build-system = {build_system};\n}};\n", encoding="utf-8")
@@ -245,7 +250,8 @@ class TestAC2TargetAim:
         assert len(spec_files) == 1
         spec = json.loads(spec_files[0].read_text())
         assert spec["schemaVersion"] == "1"
-        assert spec["config"]["systemPrompt"].startswith("{{aim:include:")
+        assert spec["config"]["systemPrompt"] == "{{aim:include:context/SYSTEM_PROMPT.md}}"
+        assert (out / "context" / "SYSTEM_PROMPT.md").is_file()  # the persona ships
         assert (out / "context" / "TECH.md").is_file()
         assert (out / "skills" / "fx-report" / "SKILL.md").is_file()  # emitted under compliant name
 
@@ -1406,3 +1412,54 @@ class TestAIMCompliance:
         shipped = (res.out_dir / "skills" / "fx-report" / "SKILL.md").read_text(encoding="utf-8")
         assert "SIBLINGS (some qualifier): fx-analyze" in shipped, "SIBLINGS with a parenthetical must still be normalized"
         assert "Prose with s_fx-analyze stays" in shipped, "prose s_ ref untouched"
+
+
+# ---------------------------------------------------------------------------
+# SYSTEM_PROMPT.md — the agent's runtime persona (run_0395c955)
+# AIM standard §4: systemPrompt points at a dedicated prompt file, NOT AGENTS.md.
+# AGENTS.md stays as the consumer entry doc (§7). One-to-one map, no generator.
+# ---------------------------------------------------------------------------
+class TestSystemPrompt:
+    def test_aim_systemprompt_points_at_system_prompt_md(self, tmp_path):
+        """AC: aim agent-spec systemPrompt includes context/SYSTEM_PROMPT.md, not AGENTS.md."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal",
+                                system_prompt="# Persona\nYou are the fixture security agent.\n")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
+        assert spec["config"]["systemPrompt"] == "{{aim:include:context/SYSTEM_PROMPT.md}}"
+        # the persona file ships in context/, byte-verbatim from source
+        shipped = (res.out_dir / "context" / "SYSTEM_PROMPT.md").read_text()
+        assert shipped == "# Persona\nYou are the fixture security agent.\n"
+
+    def test_agents_md_still_ships_as_consumer_doc(self, tmp_path):
+        """AGENTS.md stays in context/ (consumer entry doc, §7) — it is NOT the systemPrompt."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "context" / "AGENTS.md").is_file()
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
+        assert "AGENTS.md" not in spec["config"]["systemPrompt"]
+
+    def test_missing_system_prompt_fails_loud(self, tmp_path):
+        """No SYSTEM_PROMPT.md → fail-loud PackagingError (never ship a persona-less package,
+        never silently fall back to AGENTS.md, never generate a hollow one)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal",
+                                system_prompt=None)
+        with pytest.raises(pk.PackagingError, match="SYSTEM_PROMPT"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_open_plugin_agent_md_uses_system_prompt(self, tmp_path):
+        """open-plugin agents/<plugin>.md body = SYSTEM_PROMPT.md content, not AGENTS.md."""
+        ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="internal",
+                                system_prompt="# Persona\nRuntime persona body.\n")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        md = next((res.out_dir / "agents").glob("*.md")).read_text()
+        assert "Runtime persona body." in md
+        assert "Agent Guide" not in md  # the AGENTS.md dev door-plate must NOT be the body
+
+    def test_system_prompt_verbatim_no_generation(self, tmp_path):
+        """The persona is the author's file VERBATIM — no metadata-generated filler injected."""
+        authored = "# SecFix\nYou review authz. Use cr-review for diffs.\n"
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal",
+                                system_prompt=authored)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "context" / "SYSTEM_PROMPT.md").read_text() == authored

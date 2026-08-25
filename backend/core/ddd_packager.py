@@ -679,6 +679,35 @@ def _skill_description(ddd_dir: Path, raw_skill: str) -> str:
     return head[:200]
 
 
+_SYSTEM_PROMPT_FILE = "SYSTEM_PROMPT.md"
+
+
+def _read_system_prompt(ddd_dir: Path) -> str:
+    """The DDD's authored agent runtime persona (root ``SYSTEM_PROMPT.md``), returned
+    VERBATIM. This is the source the AIM ``config.systemPrompt`` includes and the
+    open-plugin ``agents/<plugin>.md`` body carries.
+
+    FAIL-LOUD if absent (run_0395c955): an installed agent with no persona is a broken
+    package — we NEVER silently fall back to ``AGENTS.md`` (that is the DDD *dev*
+    door-plate / AIM *consumer* entry doc, per the AIM standard §7, NOT a runtime
+    persona) and NEVER synthesize a hollow one from metadata. The author writes this
+    file once, at the DDD root, like README.md — so it is visible + maintainable IN
+    the DDD source, not conjured at export time.
+
+    Exfil-guard parity with the other root-file readers (Gate-2 run_6e4bced6): a
+    ``SYSTEM_PROMPT.md`` that is a symlink escaping the DDD is treated as ABSENT
+    (→ fail-loud), never dereferenced into the package."""
+    src = ddd_dir / _SYSTEM_PROMPT_FILE
+    if not src.is_file() or (src.is_symlink() and _escapes_ddd(src, ddd_dir)):
+        raise PackagingError(
+            f"{_SYSTEM_PROMPT_FILE} is missing at the DDD root ({ddd_dir}). It is the "
+            f"agent's runtime persona (the AIM systemPrompt source) and is REQUIRED — "
+            f"author it like README.md. The packager never falls back to AGENTS.md "
+            f"(that is the consumer entry doc, not a persona) nor generates one."
+        )
+    return src.read_text(encoding="utf-8")
+
+
 def _render_readme(ddd_dir: Path, skills_included: list[str]) -> str:
     """The package's top-level README (B2, run_d8d60202): if the DDD authored a root
     ``README.md`` → return it VERBATIM (author controls the wording, like a deck/corpus);
@@ -961,6 +990,10 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     if with_enablement and engine_skills:
         res.warnings.append(f"with-enablement: shipping portable copy of enablement skill(s) {engine_skills} for bare foreign hosts")
 
+    # Fail-loud on a missing persona BEFORE writing anything (Gate-2 LOW, run_0395c955)
+    # — so a broken DDD never leaves a partial half-tree on disk.
+    system_prompt = _read_system_prompt(ddd_dir)
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Config: preserve any existing build-system, ADD AIMBuild + ai-capabilities target.
@@ -999,6 +1032,9 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
         src = ddd_path(ddd_dir, doc)  # migrated docs live under 2-understanding/
         if src.is_file():
             shutil.copy2(src, ctx / doc)
+    # Agent runtime persona → context/SYSTEM_PROMPT.md (the systemPrompt include source,
+    # AIM standard §4). Read fail-loud at the top of this fn (before any write).
+    (ctx / _SYSTEM_PROMPT_FILE).write_text(system_prompt, encoding="utf-8")
     sops = out_dir / "agent-sops"
     sops.mkdir(parents=True, exist_ok=True)
     for doc in ("REFRESHER.md",):
@@ -1030,7 +1066,10 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
         "name": normalize_name(ddd_name, prefix=""),
         "config": {
             "description": str(aim.get("description", f"{ddd_name} domain brain")),
-            "systemPrompt": "{{aim:include:context/AGENTS.md}}",
+            # The agent's runtime persona is context/SYSTEM_PROMPT.md — NOT AGENTS.md
+            # (which is the consumer entry doc, AIM standard §7). Matches the official
+            # SampleAICapabilities shape ({{aim:include:context/included-prompt.md}}).
+            "systemPrompt": f"{{{{aim:include:context/{_SYSTEM_PROMPT_FILE}}}}}",
         },
         "dependencies": {
             # skillNames must reference the emitted (AIM-compliant) dir names, not the
@@ -1077,6 +1116,9 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     if with_enablement and engine_skills:
         res.warnings.append(f"with-enablement: shipping portable copy of enablement skill(s) {engine_skills} for bare foreign hosts")
 
+    # Fail-loud on a missing persona BEFORE writing anything (Gate-2 LOW, run_0395c955).
+    system_prompt = _read_system_prompt(ddd_dir)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     plugin_name = normalize_name(ddd_name)
 
@@ -1096,11 +1138,12 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", skills_to_copy)
     res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", skills_to_copy)
 
-    # agents/<ddd>.md — system prompt as a sub-agent markdown
+    # agents/<ddd>.md — system prompt as a sub-agent markdown. Body = the DDD's authored
+    # runtime persona (SYSTEM_PROMPT.md), NOT AGENTS.md (the consumer entry doc). Fail-loud
+    # if absent — same contract as the aim target (_read_system_prompt).
     agents_dir = out_dir / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
-    agents_src = ddd_dir / "AGENTS.md"
-    body = agents_src.read_text(encoding="utf-8") if agents_src.is_file() else f"# {ddd_name}\n"
+    body = system_prompt
     (agents_dir / f"{plugin_name}.md").write_text(
         f"---\nname: {plugin_name}\ndescription: {ddd_name} domain brain\n---\n\n{body}",
         encoding="utf-8",
