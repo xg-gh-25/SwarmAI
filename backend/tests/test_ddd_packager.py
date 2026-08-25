@@ -1396,6 +1396,32 @@ class TestAIMCompliance:
         reg = spec.get("dependencies", {}).get("mcpRegistry", {})
         assert "FxMCP" in reg, "mcpRegistry must include the aim.json-declared MCP (FxMCP)"
 
+    # A package installs on Kiro (aim agents install) AND Claude Code (aim plugins install),
+    # so the agent-spec must carry BOTH clientConfig blocks — a kiroCli-only spec configures
+    # the client it never documents how to install on (learned from target commit 273ac13).
+    def test_agent_spec_has_both_kiro_and_claude_client_configs(self, tmp_path):
+        res = self._aim(tmp_path)
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text(encoding="utf-8"))
+        cc = spec.get("clientConfig", {})
+        assert "kiroCli" in cc, "kiroCli block required"
+        assert "claudeCli" in cc, "claudeCli block required — the aim plugins install (Claude Code) path"
+        claude = cc["claudeCli"]
+        tools = claude.get("tools", [])
+        # Capitalized tool names (Claude Code), NOT Kiro's lowercase read/write/shell
+        assert "Read" in tools and "Write" in tools and "Bash" in tools, \
+            f"claudeCli.tools must grant Capitalized Read/Write/Bash; got {tools}"
+        assert "read" not in tools, "claudeCli must NOT use Kiro's lowercase tool names"
+        # each declared MCP granted at whole-server wildcard mcp__<name>__* (fixture: FxMCP),
+        # NOT Kiro's @<name> form and NOT enumerated tools
+        assert "mcp__FxMCP__*" in tools, f"declared MCP must be granted as mcp__FxMCP__*; got {tools}"
+        assert "@FxMCP" not in tools, "claudeCli must NOT use Kiro's @<mcp> grant form"
+        # knowledgeBase is Kiro-specific — claudeCli carries NO resources
+        assert "resources" not in claude, "claudeCli must NOT carry a resources/knowledgeBase block"
+        # both clients name the SAME MCP set (single _extract_mcp source)
+        kiro_mcps = {t[1:] for t in cc["kiroCli"].get("tools", []) if t.startswith("@")}
+        claude_mcps = {t[len("mcp__"):-len("__*")] for t in tools if t.startswith("mcp__") and t.endswith("__*")}
+        assert kiro_mcps == claude_mcps, f"both clients must name the same MCP servers; kiro={kiro_mcps} claude={claude_mcps}"
+
     # AC3 — knowledge corpus declared as a knowledgeBase resource, not just resident context
     def test_agent_spec_knowledgebase_resource(self, tmp_path):
         res = self._aim(tmp_path, corpus_docs={"note.md": "# a knowledge note\nfact.\n"})

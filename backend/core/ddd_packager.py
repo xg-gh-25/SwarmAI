@@ -1195,6 +1195,35 @@ def _build_kiro_client_config(ddd_dir: Path, has_corpus: bool) -> dict[str, Any]
     return cfg
 
 
+# Claude Code's tool names are Capitalized (Read/Write/Bash), distinct from Kiro's
+# lowercase read/write/shell — a shared clientConfig block for both clients would be
+# wrong for each. Kept as an explicit default rather than a case-map off the Kiro
+# names so a future Kiro-tool addition can't silently mistranslate.
+_DEFAULT_CLAUDE_TOOLS = ("Read", "Write", "Bash")
+
+
+def _build_claude_client_config(ddd_dir: Path) -> dict[str, Any]:
+    """Build the clientConfig.claudeCli block for an emitted agent-spec.
+
+    A package installed via ``aim plugins install`` runs on Claude Code, which needs its
+    OWN clientConfig block — a kiroCli-only spec configures the client it never documents
+    how to install on (learned from the SecDLC target's commit 273ac13). Differences from
+    kiroCli, all deliberate:
+      - tool names are Capitalized (``Read``/``Write``/``Bash``), NOT Kiro's lowercase.
+      - each declared MCP is granted at WHOLE-SERVER granularity ``mcp__<name>__*`` (Claude's
+        wildcard form), NOT enumerated tools — an enumerated list silently loses a tool the
+        moment a skill starts calling another one (the exact Kiro-works/Claude-fails gap this
+        exists to close).
+      - NO ``resources`` — a knowledgeBase index is Kiro-specific; no installed claudeCli
+        block uses one.
+    MCP set derives from the SAME ``_extract_mcp`` as kiroCli (single source), so both
+    clients name the same servers by construction."""
+    tools = list(_DEFAULT_CLAUDE_TOOLS)
+    for name in sorted(_extract_mcp(ddd_dir)):
+        tools.append(f"mcp__{name}__*")
+    return {"tools": tools}
+
+
 def _emit_gate_sops(ddd_dir: Path, sops_dir: Path) -> list[str]:
     """Emit each TOP-LEVEL ``.md`` gate STANDARD as ``agent-sops/<stem>.sop.md`` so the
     AIM runtime DISCOVERS it as a SOP (it recognizes ``agent-sops/*.sop.md`` only — a
@@ -1380,7 +1409,13 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             # NOT inferred from skill-body text (Gate-1: body-grep over/under-declares).
             "mcpRegistry": {name: {} for name in sorted(_extract_mcp(ddd_dir))},
         },
-        "clientConfig": {"kiroCli": _build_kiro_client_config(ddd_dir, bool(corpus_files))},
+        "clientConfig": {
+            # BOTH clients: a package is installable on Kiro (aim agents install) AND
+            # Claude Code (aim plugins install). Each client needs its own block — the
+            # tool-name casing + MCP-grant syntax differ (learned from target 273ac13).
+            "kiroCli": _build_kiro_client_config(ddd_dir, bool(corpus_files)),
+            "claudeCli": _build_claude_client_config(ddd_dir),
+        },
     }
     _write_json(out_dir / "agents" / f"{normalize_name(ddd_name, prefix='')}.agent-spec.json", agent_spec)
 
