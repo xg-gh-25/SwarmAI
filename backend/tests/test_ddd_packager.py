@@ -1420,7 +1420,9 @@ class TestAIMCompliance:
 # ---------------------------------------------------------------------------
 # SYSTEM_PROMPT.md — the agent's runtime persona (run_0395c955)
 # AIM standard §4: systemPrompt points at a dedicated prompt file, NOT AGENTS.md.
-# AGENTS.md stays as the consumer entry doc (§7). One-to-one map, no generator.
+# Three package-relative roles, one file each: SYSTEM_PROMPT.md = runtime persona;
+# README.md = consumer entry doc (§7 overview+map+usage); the source AGENTS.md is the
+# DDD dev door-plate and does NOT ship into the package (P1, run_ed775916). No generator.
 # ---------------------------------------------------------------------------
 class TestSystemPrompt:
     def test_aim_systemprompt_points_at_system_prompt_md(self, tmp_path):
@@ -1434,11 +1436,19 @@ class TestSystemPrompt:
         shipped = (res.out_dir / "context" / "SYSTEM_PROMPT.md").read_text()
         assert shipped == "# Persona\nYou are the fixture security agent.\n"
 
-    def test_agents_md_still_ships_as_consumer_doc(self, tmp_path):
-        """AGENTS.md stays in context/ (consumer entry doc, §7) — it is NOT the systemPrompt."""
+    def test_source_agents_md_does_not_ship_to_package(self, tmp_path):
+        """P1 (run_ed775916): the source AGENTS.md is the DDD *dev* door-plate — it
+        describes the six-section SOURCE tree (2-understanding/3-gates/4-capabilities),
+        which does NOT exist in the flat AIM package → it is noise to a package user, so
+        it is NOT shipped. The consumer entry doc job (overview + map + usage, §7) is
+        carried by README.md; the runtime persona by SYSTEM_PROMPT.md."""
         ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        assert (res.out_dir / "context" / "AGENTS.md").is_file()
+        assert not (res.out_dir / "context" / "AGENTS.md").exists(), \
+            "source AGENTS.md (dev door-plate) must NOT ship into the AIM package"
+        # the two package-relative docs that DO carry the consumer + persona roles:
+        assert (res.out_dir / "README.md").is_file(), "README is the consumer entry doc"
+        assert (res.out_dir / "context" / "SYSTEM_PROMPT.md").is_file(), "persona ships"
         spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
         assert "AGENTS.md" not in spec["config"]["systemPrompt"]
 

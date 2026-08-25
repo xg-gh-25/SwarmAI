@@ -748,6 +748,22 @@ def _render_readme(ddd_dir: Path, skills_included: list[str]) -> str:
             lines.append(f"| `{_compliant_skill_name(raw)}` | {desc} |")
     else:
         lines.append("_(No domain skills — a pure-knowledge package.)_")
+    # Directory map — the third element of the AIM §7 consumer-entry contract (overview +
+    # MAP + usage). This is the FLAT package layout (not the DDD six-section source tree —
+    # that source map lives in the DDD's own AGENTS.md, which does NOT ship, P1). Static:
+    # these are the dirs the packager emits; deterministic, no filesystem walk.
+    lines += [
+        "",
+        "## Package layout",
+        "",
+        "| Path | What's here |",
+        "| --- | --- |",
+        "| `skills/` | the domain skills this package installs |",
+        "| `context/` | reference docs; `context/knowledge/` = the retrievable corpus |",
+        "| `context/SYSTEM_PROMPT.md` | the installed agent's system prompt (persona) |",
+        "| `agents/` | the agent spec(s) |",
+        "| `agent-sops/` | always-apply SOPs incl. `agent-sops/gates/` standards |",
+    ]
     lines += [
         "",
         "## Install",
@@ -1048,13 +1064,20 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     )
     (out_dir / "Config").write_text(config_text, encoding="utf-8")
 
-    # skills/, context/ (knowledge docs + AGENTS.md), context/knowledge/ (corpus),
-    # agent-sops/ (refresher.sop.md + gates/ — the ③ gate section, always-apply standards)
+    # skills/, context/ (knowledge docs), context/knowledge/ (corpus),
+    # agent-sops/ (refresher.sop.md + gates/ — the ③ gate section, always-apply standards).
+    # NOTE (P1, run_ed775916): the source AGENTS.md is DELIBERATELY NOT copied — it is the
+    # DDD *dev* door-plate describing the six-section SOURCE tree (2-understanding/,
+    # 3-gates/, 4-capabilities/), which does NOT exist in the flat AIM package, so it is
+    # noise to a package user. The consumer entry doc role (overview + directory map +
+    # usage, AIM standard §7) is carried by the package README.md; the agent runtime
+    # persona by context/SYSTEM_PROMPT.md. AGENTS.md is not an aim-build-scanned file (§2)
+    # and has no machine consumer, so omitting it breaks nothing.
     res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", skills_to_copy)
     res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", skills_to_copy)
     ctx = out_dir / "context"
     ctx.mkdir(parents=True, exist_ok=True)
-    for doc in (*_KNOWLEDGE_DOCS, "AGENTS.md"):
+    for doc in _KNOWLEDGE_DOCS:
         src = ddd_path(ddd_dir, doc)  # migrated docs live under 2-understanding/
         if src.is_file():
             shutil.copy2(src, ctx / doc)
