@@ -886,7 +886,9 @@ def _render_readme(ddd_dir: Path, skills_included: list[str]) -> str:
         "| Path | What's here |",
         "| --- | --- |",
         "| `skills/` | the domain skills this package installs |",
-        "| `context/` | reference docs; `context/knowledge/` = the retrievable corpus |",
+        "| `context/` | reference docs; `context/knowledge/` = the corpus — read a member "
+        "directly by name (both clients share one on-disk cache); on Kiro it is additionally "
+        "indexed as a searchable knowledge base |",
         "| `context/SYSTEM_PROMPT.md` | the installed agent's system prompt (persona) |",
         "| `agents/` | the agent spec(s) |",
         "| `agent-sops/` | always-apply SOPs incl. `agent-sops/gates/` standards |",
@@ -1376,11 +1378,17 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     # ["*"] sweeps EVERY context/ file resident, INCLUDING the large context/knowledge/
     # corpus that is ALREADY a retrievable knowledgeBase (§5) — double-loading it (100K+
     # tokens resident AND retrievable) and re-loading SYSTEM_PROMPT.md (already inlined as
-    # the systemPrompt). Resident context = ONLY the ROOT .md that shipped (canonical docs +
-    # SYSTEM_PROMPT), by NAME (matches the 3 production AIM packages, none of which use bare
-    # context/*). The corpus stays retrievable-only via the knowledgeBase resource.
+    # the systemPrompt). Resident context = ONLY the ROOT canonical .md that shipped, by NAME
+    # (matches the 3 production AIM packages, none of which use bare context/*). The corpus
+    # stays retrievable-only via the knowledgeBase resource.
+    #
+    # EXCLUDE SYSTEM_PROMPT.md (run_a562d674, learned from target a8e61a4): it is ALREADY
+    # delivered as config.systemPrompt (line ~1397, inlined into the agent every turn) — also
+    # listing it in contextNames double-loads the persona (inlined twice on Claude Code; prompt
+    # field + resources[] on Kiro). It is the systemPrompt, never a resident contextName.
     resident_context = sorted(
-        p.name for p in (out_dir / "context").glob("*.md") if p.is_file()
+        p.name for p in (out_dir / "context").glob("*.md")
+        if p.is_file() and p.name != _SYSTEM_PROMPT_FILE
     )
 
     # agents/<ddd>.agent-spec.json — built AFTER corpus copy so the knowledgeBase
@@ -1401,7 +1409,13 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             # raw s_-prefixed source names — else the agent-spec points at dirs that
             # don't exist in the package. Same normalization _copy_skill_dirs applies.
             "skills": {"skillNames": [_compliant_skill_name(s) for s in skills_to_copy] or ["*"]},
-            "context": {"contextNames": resident_context or ["*"]},
+            # NO `or ["*"]` fallback (run_a562d674, Gate-2 HIGH): after excluding
+            # SYSTEM_PROMPT.md, a DDD with no canonical docs (a valid pure-knowledge/
+            # pure-persona shape) yields an EMPTY resident set — and empty is the CORRECT
+            # state (persona is the systemPrompt, corpus is retrievable). A `["*"]` fallback
+            # here would re-sweep the persona + 100K-token corpus resident — the exact
+            # double-load ④ exists to kill. Empty contextNames = nothing resident, by design.
+            "context": {"contextNames": resident_context},
             "agentSops": {"agentSopNames": ["*"]},
             # Every MCP a packaged skill uses must be DECLARED here or the runtime never
             # injects it. Source = aim.json plugins.mcp (author-declared ceiling, the
@@ -1708,6 +1722,32 @@ def package_ddd(
                 res.warnings.append(
                     f"unscanned binary deliverable (content-safety scan cannot read it): "
                     f"{p.relative_to(out_dir)}"
+                )
+        # ③ corpus-orientation ADVISORY (run_a562d674, learned from target a8e61a4).
+        # NON-blocking by design (skeptic-refuted the fail-loud gate): the corpus IS reachable
+        # on BOTH clients via the shared AIM cache — "what's missing is not the files but the
+        # ADDRESS". The packager can NOT author the persona prose that names it, so this is a
+        # WARNING (never a raise), advising the author to add a corpus-orientation line to a
+        # shipped context doc (SYSTEM_PROMPT.md / a canonical doc) so a Claude-Code agent knows
+        # to read `context/knowledge/`. Predicate is LOOSE (any context doc MENTIONS the corpus
+        # dir), NOT the brittle literal `{{aim:filepath:...}}` template — an author may orient
+        # via any phrasing. Fires only when a corpus actually shipped.
+        ctx_out = out_dir / "context"
+        corpus_out = ctx_out / "knowledge"
+        corpus_shipped = corpus_out.is_dir() and any(corpus_out.glob("*.md"))
+        if corpus_shipped:
+            context_docs = [p for p in ctx_out.glob("*.md") if p.is_file()]
+            names_corpus = any(
+                "context/knowledge" in p.read_text(encoding="utf-8", errors="replace")
+                for p in context_docs
+            )
+            if not names_corpus:
+                res.warnings.append(
+                    "corpus shipped (context/knowledge/) but no context doc names it — a "
+                    "Claude-Code agent has no orientation to read it (Kiro gets the knowledgeBase "
+                    "resource; claudeCli has no equivalent). Add a corpus-orientation line to "
+                    "SYSTEM_PROMPT.md (or a canonical context doc) referencing context/knowledge, "
+                    "e.g. via {{aim:filepath:context/knowledge}}."
                 )
         results.append(res)
 

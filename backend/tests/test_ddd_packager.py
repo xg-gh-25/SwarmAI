@@ -1804,8 +1804,10 @@ class TestGate2Fixes:
 
 class TestReviewRound2Rootfix:
     def test_context_names_narrowed_not_wildcard(self, tmp_path):
-        """A1: contextNames lists the resident ROOT docs by NAME, never ['*'] (which would
-        double-load the knowledge/ corpus that is already a retrievable knowledgeBase)."""
+        """A1: contextNames lists the resident ROOT canonical docs by NAME, never ['*'] (which
+        would double-load the knowledge/ corpus that is already a retrievable knowledgeBase).
+        SYSTEM_PROMPT.md is EXCLUDED — it is delivered via config.systemPrompt, so listing it
+        resident double-loads the persona (run_a562d674, target a8e61a4)."""
         ddd = build_fixture_ddd(
             tmp_path, targets=["aim-capabilities"], visibility="internal",
             corpus_docs={"big-corpus.md": "# corpus\n" + "x " * 200})
@@ -1813,9 +1815,63 @@ class TestReviewRound2Rootfix:
         spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
         names = spec["dependencies"]["context"]["contextNames"]
         assert names != ["*"], "contextNames must be narrowed, not wildcard"
-        assert "SYSTEM_PROMPT.md" in names, "resident context must include the persona doc"
+        # persona is the systemPrompt, NEVER also a resident contextName (double-load fix)
+        assert "SYSTEM_PROMPT.md" not in names, "SYSTEM_PROMPT.md double-loads if resident"
+        assert spec["config"]["systemPrompt"] == "{{aim:include:context/SYSTEM_PROMPT.md}}", \
+            "persona must be delivered once, via config.systemPrompt"
+        # canonical root docs ARE resident
+        assert "PRODUCT.md" in names and "TECH.md" in names, "canonical docs must stay resident"
         # the corpus file is retrievable-only — must NOT be a resident contextName
         assert "big-corpus.md" not in names, "knowledge corpus must not be resident (double-load)"
+
+    def test_corpus_shipped_but_unnamed_warns_not_blocks(self, tmp_path):
+        """③ (run_a562d674, target a8e61a4): a corpus ships but no context doc names it →
+        NON-blocking WARNING (not a raise), so a Claude-Code agent can be told to read it.
+        The default fixture persona does NOT mention context/knowledge, so it must warn."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"big-corpus.md": "# corpus\n" + "x " * 50})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert any("corpus shipped" in w and "no context doc names it" in w
+                   for w in res.warnings), f"expected a corpus-orientation WARN, got {res.warnings}"
+
+    def test_corpus_named_in_persona_no_warn(self, tmp_path):
+        """③ no-false-positive: when the persona (or any context doc) names context/knowledge,
+        the advisory is silent — the author has oriented the agent. Predicate is LOOSE (a plain
+        mention), not the literal {{aim:filepath}} template."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"big-corpus.md": "# corpus\n" + "x " * 50},
+            system_prompt="# {name}\nRead members of context/knowledge/ directly when needed.\n")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert not any("corpus shipped" in w for w in res.warnings), \
+            f"corpus is named — no advisory expected, got {res.warnings}"
+
+    def test_no_corpus_no_orientation_warn(self, tmp_path):
+        """③ no-false-positive: a 0-corpus DDD must NOT emit the corpus-orientation advisory
+        (nothing to orient toward)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert not any("corpus shipped" in w for w in res.warnings), \
+            f"no corpus → no advisory, got {res.warnings}"
+
+    def test_doc_less_ddd_contextnames_empty_not_wildcard(self, tmp_path):
+        """④ boundary (Gate-2 HIGH, run_a562d674): a DDD with NO canonical docs (a valid
+        pure-knowledge/pure-persona shape) must yield EMPTY contextNames — NEVER ['*']. The
+        pre-fix `or ['*']` fallback would re-sweep the persona + corpus resident, the exact
+        double-load ④ exists to kill."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"big-corpus.md": "# corpus\n" + "x " * 200})
+        # a valid pure-persona/pure-knowledge DDD ships no canonical six-section docs
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (ddd / doc).unlink()
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
+        names = spec["dependencies"]["context"]["contextNames"]
+        assert names == [], f"doc-less DDD must yield empty contextNames, not {names!r}"
+        assert names != ["*"], "['*'] would re-sweep persona + corpus resident (double-load)"
 
     def test_gate_standard_single_source_no_dup(self, tmp_path):
         """A2: a gate .md standard ships ONCE as agent-sops/<stem>.sop.md — the byte-dup
