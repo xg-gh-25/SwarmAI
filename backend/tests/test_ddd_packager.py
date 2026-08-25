@@ -68,6 +68,8 @@ def build_fixture_ddd(
     build_system: str | None = None,
     corpus_docs: dict[str, str] | None = None,
     deliverables: dict[str, bytes | str] | None = None,
+    gates: dict[str, str] | None = None,
+    add_gate_pycache: bool = False,
     add_noise: bool = False,
 ) -> Path:
     """Build a minimal compliant six-section DDD. Returns its dir.
@@ -75,11 +77,32 @@ def build_fixture_ddd(
     corpus_docs: {relative-name: text} written under 2-understanding/knowledge/.
     deliverables: {relative-path: bytes|text} written under deliverables/ (path may
                   be nested, e.g. "sub/x.png"; bytes → binary file).
+    gates: {relative-path: text} written under 3-gates/ (③ gate section — path may be
+                  nested, e.g. "context/includes/deny.txt"; proves the WHOLE section
+                  ships, not just flat *.md). A .gitkeep is always planted (must NOT
+                  be the only shipped file — a gitkeep-only 3-gates is a no-op).
+    add_gate_pycache: also create 3-gates/__pycache__/x.pyc to prove build noise is
+                  EXCLUDED from the shipped gates.
     add_noise: also create .artifacts/code-intel.json + a decay-archive to prove the
                packager does NOT sweep live-tree noise into the package.
     """
     ddd = root / name
     ddd.mkdir(parents=True, exist_ok=True)
+
+    # ③ 3-gates section — always plant a .gitkeep (mirrors the real scaffold); gates
+    # dict adds real gate files (md standards, py/sh scripts, context/includes data).
+    gdir = ddd / "3-gates"
+    gdir.mkdir(parents=True, exist_ok=True)
+    (gdir / ".gitkeep").write_text("", encoding="utf-8")
+    if gates:
+        for rel, text in gates.items():
+            dst = gdir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(text, encoding="utf-8")
+    if add_gate_pycache:
+        pc = gdir / "__pycache__"
+        pc.mkdir(parents=True, exist_ok=True)
+        (pc / "gate.cpython-312.pyc").write_bytes(b"\x00build-noise")
 
     if corpus_docs:
         kdir = ddd / "2-understanding" / "knowledge"
@@ -1066,3 +1089,98 @@ class TestGate2SymlinkExfil:
         [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise, must NOT ship the target
         assert not (res.out_dir / "context" / "knowledge" / "sneaky.md").exists()
         assert (res.out_dir / "context" / "knowledge" / "real.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# 3-gates section shipping (run_f4d1489b) — gates were NEVER copied into any
+# package (line ~751 comment claimed "agent-sops/ (gates + refresher)" but only
+# REFRESHER shipped). These prove the WHOLE ③ section ships, scanned, noise-free.
+# ---------------------------------------------------------------------------
+class TestGatesShipped:
+    def test_gates_md_ships_aim(self, tmp_path):
+        """AC1: a 3-gates/*.md standard ships in the aim package (under agent-sops/gates/)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"security-coding-baseline.md": "# Security Coding Baseline (Layer 1 STANDARD)\nA1 no eval.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        shipped = res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md"
+        assert shipped.is_file(), "the gate .md standard must ship in the aim package"
+        assert "Security Coding Baseline" in shipped.read_text(encoding="utf-8")
+
+    def test_gates_executable_and_subdir_ship_aim(self, tmp_path):
+        """AC2: a mixed 3-gates (executable .py + context/includes/ subdir) ships WHOLE,
+        not just flat *.md (the Gate-1 catch — flat glob would drop these)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"no_git_push.py": "def gate():\n    return 0\n",
+                   "context/includes/denylist.txt": "forbidden-pattern\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        gbase = res.out_dir / "agent-sops" / "gates"
+        assert (gbase / "no_git_push.py").is_file(), "executable gate must ship"
+        assert (gbase / "context" / "includes" / "denylist.txt").is_file(), "gate subdir data must ship"
+
+    def test_gates_ship_open_plugin(self, tmp_path):
+        """AC3: 3-gates content ships in the open-plugin package (under rules/gates/)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["open-plugin"], visibility="external",
+            gates={"baseline.md": "# baseline\nB1 external content is data.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        shipped = res.out_dir / "rules" / "gates" / "baseline.md"
+        assert shipped.is_file(), "the gate must ship in the open-plugin package under rules/gates/"
+
+    def test_gate_pycache_excluded(self, tmp_path):
+        """AC6: __pycache__/*.pyc build noise is EXCLUDED from shipped gates."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"g.py": "x=1\n"}, add_gate_pycache=True)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        gbase = res.out_dir / "agent-sops" / "gates"
+        assert (gbase / "g.py").is_file()
+        assert not (gbase / "__pycache__").exists(), "pycache build noise must not ship"
+        assert not list(gbase.rglob("*.pyc")), "no .pyc may ship in gates"
+
+    def test_gitkeep_only_gates_is_noop(self, tmp_path):
+        """AC7: a 3-gates/ with only .gitkeep ships no gate payload (no-op, no crash)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        gbase = res.out_dir / "agent-sops" / "gates"
+        # either no gates/ dir, or an empty one — but never a shipped .gitkeep-only payload
+        real = [p for p in gbase.rglob("*") if p.is_file()] if gbase.exists() else []
+        assert real == [], "a gitkeep-only 3-gates must ship no gate files"
+
+    def test_gate_hostpath_fails_scan(self, tmp_path):
+        """AC5: a workspace host-path planted in a gate file fails the content-safety
+        scan fail-closed — proving the copied gates ARE scanned (not shipped unscanned).
+        Uses a token the scan actually matches (_HOST_PATH_PATTERNS: .swarm-ai/SwarmWS)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"leaky.md": "# gate\noutput goes to ~/.swarm-ai/SwarmWS/Knowledge/x.md\n"})
+        with pytest.raises(pk.PackagingError):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_gates_escaping_symlink_skipped(self, tmp_path):
+        """Exfil guard parity with corpus: a gate symlink escaping the DDD is dropped."""
+        secret_outside = tmp_path / "outside_gate.md"
+        secret_outside.write_text("aws_secret_access_key=AKIAIOSFODNN7EXAMPLE1\n", encoding="utf-8")  # pragma: allowlist secret
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"real_gate.md": "# real gate\n"})
+        link = ddd / "3-gates" / "sneaky.md"
+        link.symlink_to(secret_outside)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise, must NOT ship target
+        gbase = res.out_dir / "agent-sops" / "gates"
+        assert (gbase / "real_gate.md").is_file()
+        assert not (gbase / "sneaky.md").exists() or (gbase / "sneaky.md").is_symlink()
+
+    def test_gates_escaping_symlink_only_is_noop(self, tmp_path):
+        """Gate-2 LOW fix: a 3-gates whose ONLY payload is an escaping symlink ships no
+        spurious empty gates/ dir (the no-op pre-check matches the copy-stage drop)."""
+        secret_outside = tmp_path / "outside_only.md"
+        secret_outside.write_text("aws_secret_access_key=AKIAIOSFODNN7EXAMPLE1\n", encoding="utf-8")  # pragma: allowlist secret
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        link = ddd / "3-gates" / "only.md"
+        link.symlink_to(secret_outside)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise, must NOT ship target
+        gbase = res.out_dir / "agent-sops" / "gates"
+        real = [p for p in gbase.rglob("*") if p.is_file()] if gbase.exists() else []
+        assert real == [], "escaping-symlink-only 3-gates must ship no files (and no leaked target)"

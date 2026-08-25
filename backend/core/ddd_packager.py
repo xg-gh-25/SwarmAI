@@ -679,6 +679,68 @@ def _copy_deliverables(ddd_dir: Path, out_dir: Path) -> list[str]:
     return sorted(str(p.relative_to(out_dir)) for p in dst.rglob("*") if p.is_file())
 
 
+# Build-noise names that must NEVER ship inside a copied section (a live DDD's
+# 3-gates/ accumulates a __pycache__/ next to its .py gate scripts). Excluded by
+# DIR NAME (so copytree never recurses into it) AND by suffix (a stray .pyc).
+_GATES_EXCLUDE_DIRS = frozenset({"__pycache__"})
+_GATES_EXCLUDE_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+
+def _copy_gates(ddd_dir: Path, dst: Path) -> list[str]:
+    """Copy the DDD's ③ ``3-gates/`` section WHOLE (recursively) into ``dst``.
+
+    The gate section is MIXED — it holds ``.md`` standards (e.g. a security-coding
+    baseline a consuming repo drops into ``.kiro/steering/``), executable ``.py``/``.sh``
+    gate scripts, AND a ``context/includes/`` subdir of denylist data. A flat
+    ``glob("*.md")`` (the corpus pattern) would silently drop the executables + the
+    subdir — so this mirrors ``_copy_deliverables`` (recursive ``copytree``), NOT
+    ``_copy_corpus``. Differences from deliverables:
+    - EXCLUDES ``__pycache__``/``*.pyc`` build noise (a live 3-gates has it next to
+      its gate scripts; the deliverables zone does not) — run_f4d1489b payload boundary.
+    - No-op when the section is absent OR contains only a ``.gitkeep`` (a freshly
+      scaffolded 3-gates ships nothing) — returns ``[]``.
+
+    Exfil guard (parity with ``_copy_corpus``/``_copy_deliverables``, Gate-2
+    run_6e4bced6): ``symlinks=True`` preserves a link (never dereferences the target's
+    bytes) AND any symlink escaping the DDD dir is dropped entirely.
+    """
+    src = ddd_path(ddd_dir, "gates")
+    if not src.is_dir():
+        return []
+    # No-op if the section carries no real SHIPPABLE payload (only .gitkeep / empty /
+    # excluded build-noise / an escaping symlink the copy stage would drop). The
+    # escaping-symlink clause keeps this pre-check in lockstep with the _ignore closure
+    # below — otherwise is_file() (which follows symlinks) would count an escaping link
+    # as payload and ship a spurious empty gates/ dir (Gate-2 LOW, run_f4d1489b).
+    real = [
+        p for p in src.rglob("*")
+        if p.is_file()
+        and p.name != ".gitkeep"
+        and p.suffix not in _GATES_EXCLUDE_SUFFIXES
+        and not any(part in _GATES_EXCLUDE_DIRS for part in p.relative_to(src).parts)
+        and not (p.is_symlink() and _escapes_ddd(p, ddd_dir))
+    ]
+    if not real:
+        return []
+
+    def _ignore(dir_path: str, names: list[str]) -> set[str]:
+        drop: set[str] = set()
+        for n in names:
+            p = Path(dir_path) / n
+            if n in _GATES_EXCLUDE_DIRS or Path(n).suffix in _GATES_EXCLUDE_SUFFIXES:
+                drop.add(n)
+            elif n == ".gitkeep":
+                drop.add(n)  # scaffold marker, not shippable payload
+            elif p.is_symlink() and _escapes_ddd(p, ddd_dir):
+                logger.warning("gate file %s is a symlink escaping the DDD — dropped (exfil guard)",
+                               p.relative_to(ddd_dir))
+                drop.add(n)
+        return drop
+
+    shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=True, ignore=_ignore)
+    return sorted(str(p.relative_to(dst.parent)) for p in dst.rglob("*") if p.is_file())
+
+
 # ---------------------------------------------------------------------------
 # Target A — AIM capabilities package
 # ---------------------------------------------------------------------------
@@ -748,7 +810,8 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     }
     _write_json(out_dir / "agents" / f"{normalize_name(ddd_name, prefix='')}.agent-spec.json", agent_spec)
 
-    # skills/, context/ (knowledge docs + AGENTS.md), agent-sops/ (gates + refresher)
+    # skills/, context/ (knowledge docs + AGENTS.md), context/knowledge/ (corpus),
+    # agent-sops/ (refresher.sop.md + gates/ — the ③ gate section, always-apply standards)
     res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", skills_to_copy)
     res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", skills_to_copy)
     ctx = out_dir / "context"
@@ -765,9 +828,12 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             (sops / f"{Path(doc).stem.lower()}.sop.md").write_text(
                 src.read_text(encoding="utf-8"), encoding="utf-8")
 
-    # Sedimented recall corpus → context/knowledge/ ; human deliverables → deliverables/
-    # (BEFORE the res.files rebuild below, so both land in the manifest).
+    # Sedimented recall corpus → context/knowledge/ ; ③ gate section → agent-sops/gates/
+    # (always-apply standards, co-located with the refresher SOP + covered by the
+    # agentSops:["*"] dependency) ; human deliverables → deliverables/. ALL before the
+    # res.files rebuild + the orchestrator's content-safety scan, so gates are scanned too.
     _copy_corpus(ddd_dir, ctx / "knowledge")
+    _copy_gates(ddd_dir, sops / "gates")
     _copy_deliverables(ddd_dir, out_dir)
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
@@ -841,9 +907,11 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
         _write_json(out_dir / ".mcp.json", {"mcpServers": mcp_servers})
 
     # Sedimented recall corpus → knowledge/ (a subtree distinct from the always-apply
-    # rules/ — corpus is reference knowledge, not a rule) ; human deliverables →
-    # deliverables/. Kept consistent with emit_target_aim (both ship corpus + deliverables).
+    # rules/ — corpus is reference knowledge, not a rule) ; ③ gate section → rules/gates/
+    # (gate standards ARE always-apply rules) ; human deliverables → deliverables/.
+    # Kept consistent with emit_target_aim (both ship corpus + gates + deliverables).
     _copy_corpus(ddd_dir, out_dir / "knowledge")
+    _copy_gates(ddd_dir, out_dir / "rules" / "gates")
     _copy_deliverables(ddd_dir, out_dir)
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
