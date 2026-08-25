@@ -1539,3 +1539,39 @@ class TestContractDrivenTools:
     def test_malformed_tools_fail_soft(self, tmp_path):
         cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"], "tools": "notalist"}))
         assert cc["tools"] == ["read", "write", "shell"], "malformed plugins.tools must fall back to default, not crash"
+
+
+# ---------------------------------------------------------------------------
+# §9 fresh-clone integrity — no empty dir survives in the emitted package
+# (run_c4191122). git drops empty dirs on a fresh clone; a copytree helper that
+# excludes .gitkeep/build-noise can leave an empty subdir → any skill body
+# referencing a file under it breaks on the consumer. Root fix: after emit, every
+# empty dir gets a .gitkeep so the tree is fresh-clone-complete.
+# ---------------------------------------------------------------------------
+class TestFreshCloneIntegrity:
+    def _empty_dirs(self, root: Path) -> list[str]:
+        return sorted(
+            str(d.relative_to(root)) for d in root.rglob("*")
+            if d.is_dir() and not any(c.is_file() for c in d.rglob("*"))
+        )
+
+    def test_aim_no_empty_dir_survives(self, tmp_path):
+        """A gate subdir that holds ONLY a .gitkeep (excluded on emit) must NOT leave an
+        empty dir in the package — it gets a .gitkeep so a fresh clone keeps it."""
+        # gates: a real .md standard + a context/includes/ that is gitkeep-only in source
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"security-coding-baseline.md": "# baseline\nrule.\n",
+                   "context/includes/.gitkeep": ""})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        empties = self._empty_dirs(res.out_dir)
+        assert empties == [], f"emitted package must have NO empty dir (fresh-clone §9); found: {empties}"
+
+    def test_open_plugin_no_empty_dir_survives(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["open-plugin"], visibility="internal",
+            gates={"security-coding-baseline.md": "# baseline\nrule.\n",
+                   "context/includes/.gitkeep": ""})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        empties = self._empty_dirs(res.out_dir)
+        assert empties == [], f"emitted plugin must have NO empty dir (fresh-clone §9); found: {empties}"

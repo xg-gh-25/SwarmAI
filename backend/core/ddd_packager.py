@@ -822,6 +822,31 @@ def _copy_corpus(ddd_dir: Path, dest: Path) -> list[str]:
     return written
 
 
+def _fill_empty_dirs(out_dir: Path) -> list[str]:
+    """Fresh-clone integrity (AIM standard §9): git does NOT track empty directories, so
+    an empty dir in the emitted package VANISHES on a fresh clone — and any skill body /
+    resource path that references a file under it then breaks on the consumer's machine.
+
+    A copytree-based section copy (``_copy_gates`` etc.) that excludes a subdir's only
+    file (a ``.gitkeep`` scaffold marker / ``__pycache__`` build-noise) leaves that subdir
+    present-but-EMPTY in the package. This is a CROSS-CUTTING seam: any current or future
+    emit path can produce one, so it is fixed ONCE here over the whole emitted tree rather
+    than patched per-helper (P8). Every empty dir gets a ``.gitkeep`` so the tree is
+    fresh-clone-complete. Run at the END of each emit target, before the ``res.files``
+    rebuild, so the markers land in the manifest + are content-safety-scanned.
+
+    Returns the relative paths of the ``.gitkeep`` markers written (deterministic, sorted)."""
+    written: list[str] = []
+    # Deepest-first so a dir that becomes non-empty only via a child's marker is still
+    # judged on its own real content (a parent of a filled child is legitimately non-empty).
+    for d in sorted((p for p in out_dir.rglob("*") if p.is_dir()),
+                    key=lambda p: len(p.parts), reverse=True):
+        if not any(c.is_file() for c in d.rglob("*")):
+            (d / ".gitkeep").write_text("", encoding="utf-8")
+            written.append(str((d / ".gitkeep").relative_to(out_dir)))
+    return sorted(written)
+
+
 def _copy_deliverables(ddd_dir: Path, out_dir: Path) -> list[str]:
     """Copy the DDD's ``deliverables/`` tree WHOLE (recursively, incl. binaries) into
     ``out_dir/deliverables/`` as human-facing artifacts. Absent → no-op, returns [].
@@ -1141,6 +1166,10 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     # res.files rebuild so it lands in the manifest AND is content-safety-scanned.
     (out_dir / "README.md").write_text(_render_readme(ddd_dir, skills_to_copy), encoding="utf-8")
 
+    # Fresh-clone integrity (§9): fill any empty dir with a .gitkeep before the manifest
+    # rebuild, so git-clone keeps it and no referenced path breaks on the consumer.
+    _fill_empty_dirs(out_dir)
+
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res
 
@@ -1226,6 +1255,10 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     # Top-level README (authored-copy or generated fallback) — same content as the AIM
     # target; written BEFORE the res.files rebuild so it's in the manifest + scanned.
     (out_dir / "README.md").write_text(_render_readme(ddd_dir, skills_to_copy), encoding="utf-8")
+
+    # Fresh-clone integrity (§9): fill any empty dir with a .gitkeep before the manifest
+    # rebuild (parity with emit_target_aim).
+    _fill_empty_dirs(out_dir)
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res
