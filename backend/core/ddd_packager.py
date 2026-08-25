@@ -84,6 +84,11 @@ _HOST_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\.swarm-ai/SwarmWS"),            # ~/.swarm-ai/SwarmWS, /home/x/.swarm-ai/…, bare
     re.compile(r"/(?:Users|home)/[^/\s\"']+/\.swarm-ai"),
     re.compile(r"SwarmAI-Workspace"),             # any host: /Users/…, /home/…, or bare relative (Gate-2 H2)
+    # SwarmAI-repo dev-command leak (run_aaa50c56): a `backend/skills/…` / `backend/scripts/…`
+    # path in a shipped doc is a source-repo dev command that has no meaning on a consumer
+    # machine (there is no backend/ tree). Anchored to these two SwarmAI-internal subtrees so
+    # a consumer's own generic `backend/` (e.g. a web app dir) is NOT false-flagged.
+    re.compile(r"\bbackend/(?:skills|scripts)/"),
 )
 _PORTABLE_WORKSPACE_VAR = "${SWARM_WORKSPACE}"
 
@@ -1111,6 +1116,11 @@ def _emit_gate_sops(ddd_dir: Path, sops_dir: Path) -> list[str]:
     ``.py``/``.sh`` gate is a CI script (not an agent-read SOP) and a ``context/includes/``
     data file is not a standard, so both stay under ``gates/`` untouched.
 
+    SINGLE-SOURCE (run_aaa50c56): the ``.md`` original that ``_copy_gates`` placed under
+    ``gates/<stem>.md`` is REMOVED once its ``.sop.md`` is emitted — else the same standard
+    ships BYTE-IDENTICAL twice (the discoverable ``.sop.md`` AND a dead ``gates/*.md`` a
+    README could wrongly point at). Must run AFTER ``_copy_gates`` (the caller does).
+
     FAIL-LOUD on a stem collision (a gate named ``refresher.md`` would clobber the
     REFRESHER SOP, or two gates share a stem) — mirrors ``_compliant_skill_map``'s
     fail-loud-on-collision rather than a silent last-writer-wins overwrite."""
@@ -1138,6 +1148,17 @@ def _emit_gate_sops(ddd_dir: Path, sops_dir: Path) -> list[str]:
             )
         target.write_text(md.read_text(encoding="utf-8"), encoding="utf-8")
         emitted.append(target.name)
+        # Remove the byte-duplicate original _copy_gates placed under gates/<stem>.md —
+        # the discoverable .sop.md is now the single source for this standard.
+        dup = sops_dir / "gates" / md.name
+        if dup.is_file():
+            dup.unlink()
+    # If sopification emptied gates/ entirely (every gate was a top-level .md, no scripts /
+    # includes left), remove the now-empty dir so _fill_empty_dirs does not ship a pointless
+    # gates/.gitkeep (Gate-2 LOW, run_aaa50c56). rmdir only succeeds when truly empty.
+    gates_out = sops_dir / "gates"
+    if gates_out.is_dir() and not any(gates_out.iterdir()):
+        gates_out.rmdir()
     return emitted
 
 
@@ -1239,6 +1260,17 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     _emit_gate_sops(ddd_dir, sops)
     _copy_deliverables(ddd_dir, out_dir)
 
+    # contextNames — RESIDENT context (in the window every turn), NOT ["*"] (run_aaa50c56).
+    # ["*"] sweeps EVERY context/ file resident, INCLUDING the large context/knowledge/
+    # corpus that is ALREADY a retrievable knowledgeBase (§5) — double-loading it (100K+
+    # tokens resident AND retrievable) and re-loading SYSTEM_PROMPT.md (already inlined as
+    # the systemPrompt). Resident context = ONLY the ROOT .md that shipped (canonical docs +
+    # SYSTEM_PROMPT), by NAME (matches the 3 production AIM packages, none of which use bare
+    # context/*). The corpus stays retrievable-only via the knowledgeBase resource.
+    resident_context = sorted(
+        p.name for p in (out_dir / "context").glob("*.md") if p.is_file()
+    )
+
     # agents/<ddd>.agent-spec.json — built AFTER corpus copy so the knowledgeBase
     # resource is declared only when there is a corpus to index. clientConfig +
     # mcpRegistry mirror the official SampleAICapabilities kitchen-sink shape.
@@ -1257,7 +1289,7 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             # raw s_-prefixed source names — else the agent-spec points at dirs that
             # don't exist in the package. Same normalization _copy_skill_dirs applies.
             "skills": {"skillNames": [_compliant_skill_name(s) for s in skills_to_copy] or ["*"]},
-            "context": {"contextNames": ["*"]},
+            "context": {"contextNames": resident_context or ["*"]},
             "agentSops": {"agentSopNames": ["*"]},
             # Every MCP a packaged skill uses must be DECLARED here or the runtime never
             # injects it. Source = aim.json plugins.mcp (author-declared ceiling, the

@@ -1115,14 +1115,17 @@ class TestGate2SymlinkExfil:
 # ---------------------------------------------------------------------------
 class TestGatesShipped:
     def test_gates_md_ships_aim(self, tmp_path):
-        """AC1: a 3-gates/*.md standard ships in the aim package (under agent-sops/gates/)."""
+        """AC1: a 3-gates/*.md standard ships in the aim package — as the discoverable
+        agent-sops/<stem>.sop.md (single source, run_aaa50c56; the byte-dup under gates/
+        is removed)."""
         ddd = build_fixture_ddd(
             tmp_path, targets=["aim-capabilities"], visibility="internal",
             gates={"security-coding-baseline.md": "# Security Coding Baseline (Layer 1 STANDARD)\nA1 no eval.\n"})
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        shipped = res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md"
-        assert shipped.is_file(), "the gate .md standard must ship in the aim package"
+        shipped = res.out_dir / "agent-sops" / "security-coding-baseline.sop.md"
+        assert shipped.is_file(), "the gate .md standard must ship as a discoverable .sop.md"
         assert "Security Coding Baseline" in shipped.read_text(encoding="utf-8")
+        assert not (res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md").exists()
 
     def test_gates_executable_and_subdir_ship_aim(self, tmp_path):
         """AC2: a mixed 3-gates (executable .py + context/includes/ subdir) ships WHOLE,
@@ -1186,7 +1189,10 @@ class TestGatesShipped:
         link.symlink_to(secret_outside)
         [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise, must NOT ship target
         gbase = res.out_dir / "agent-sops" / "gates"
-        assert (gbase / "real_gate.md").is_file()
+        # real_gate.md is a top-level standard → sopified to agent-sops/real_gate.sop.md and
+        # its gates/ dup removed (single-source, run_aaa50c56); not left under gates/.
+        assert (res.out_dir / "agent-sops" / "real_gate.sop.md").is_file()
+        assert not (gbase / "real_gate.md").exists(), "sopified standard must not remain under gates/"
         assert not (gbase / "sneaky.md").exists() or (gbase / "sneaky.md").is_symlink()
 
     def test_gates_escaping_symlink_only_is_noop(self, tmp_path):
@@ -1353,10 +1359,12 @@ class TestAIMCompliance:
     def test_gate_md_also_emits_sop(self, tmp_path):
         res = self._aim(tmp_path, gates={"security-coding-baseline.md": "# Baseline\nA1 no eval.\n"})
         sop = res.out_dir / "agent-sops" / "security-coding-baseline.sop.md"
-        assert sop.is_file(), "a .md gate STANDARD must ALSO emit as agent-sops/<stem>.sop.md"
+        assert sop.is_file(), "a .md gate STANDARD must emit as agent-sops/<stem>.sop.md"
         assert "Baseline" in sop.read_text(encoding="utf-8")
-        # and the whole gate section still ships to gates/ (run_f4d1489b behavior preserved)
-        assert (res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md").is_file()
+        # SINGLE-SOURCE (run_aaa50c56): the byte-dup original under gates/<stem>.md is REMOVED —
+        # the discoverable .sop.md is the one source (was a dead duplicate before).
+        assert not (res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md").exists(), \
+            "the sopified gate .md must NOT also remain under gates/ (single source)"
 
     # AC1 collision — a gate named refresher.md would collide with the REFRESHER sop → fail-loud
     def test_gate_sop_stem_collision_fails_loud(self, tmp_path):
@@ -1719,3 +1727,77 @@ class TestGate2Fixes:
             understanding_orphans={"shared.md": "# orphan version\n"})
         with pytest.raises(pk.PackagingError, match="collides|collision"):
             pk.package_ddd(ddd, tmp_path / "out")
+
+
+class TestReviewRound2Rootfix:
+    def test_context_names_narrowed_not_wildcard(self, tmp_path):
+        """A1: contextNames lists the resident ROOT docs by NAME, never ['*'] (which would
+        double-load the knowledge/ corpus that is already a retrievable knowledgeBase)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"big-corpus.md": "# corpus\n" + "x " * 200})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
+        names = spec["dependencies"]["context"]["contextNames"]
+        assert names != ["*"], "contextNames must be narrowed, not wildcard"
+        assert "SYSTEM_PROMPT.md" in names, "resident context must include the persona doc"
+        # the corpus file is retrievable-only — must NOT be a resident contextName
+        assert "big-corpus.md" not in names, "knowledge corpus must not be resident (double-load)"
+
+    def test_gate_standard_single_source_no_dup(self, tmp_path):
+        """A2: a gate .md standard ships ONCE as agent-sops/<stem>.sop.md — the byte-dup
+        original under agent-sops/gates/<stem>.md is removed (single source)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"security-coding-baseline.md": "# baseline\nrule.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        sop = res.out_dir / "agent-sops" / "security-coding-baseline.sop.md"
+        dup = res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md"
+        assert sop.is_file(), "gate standard must ship as discoverable .sop.md"
+        assert not dup.exists(), "byte-duplicate gates/<stem>.md must be removed (single source)"
+
+    def test_backend_devcommand_blocks(self, tmp_path):
+        """A3: a backend/skills or backend/scripts dev-command in a shipped doc is a
+        source-repo host path → blocks (de-personalize scan widening)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md":
+                "# RP\nRun `python backend/skills/s_project-manager/scripts/verify.py` to check.\n"})
+        with pytest.raises(pk.PackagingError, match="content-safety|host-path"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_consumer_generic_backend_not_flagged(self, tmp_path):
+        """A3 no-false-positive: a consumer's own generic backend/ path (not skills/scripts)
+        is NOT flagged."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md":
+                "# RP\nReview the app's backend/api/handlers.py for authz.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert (res.out_dir / "context" / "knowledge" / "security-review-patterns.md").is_file()
+
+
+class TestGatesEmptyDirCleanup:
+
+
+    def test_all_gates_sopified_no_empty_gates_dir(self, tmp_path):
+        """Gate-2 LOW (run_aaa50c56): when every gate is a top-level .md (all sopified +
+        unlinked), gates/ is removed — no pointless empty gates/.gitkeep ships."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"security-coding-baseline.md": "# baseline\nrule.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        gdir = res.out_dir / "agent-sops" / "gates"
+        assert not gdir.exists(), "an all-sopified gates/ must be removed, not shipped empty"
+        assert (res.out_dir / "agent-sops" / "security-coding-baseline.sop.md").is_file()
+
+    def test_gates_with_script_kept_after_sopify(self, tmp_path):
+        """A gates/ that still has a non-sopified file (a .py script) is KEPT."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"security-coding-baseline.md": "# baseline\nrule.\n",
+                   "security_scan.py": "def gate():\n    return 0\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        gdir = res.out_dir / "agent-sops" / "gates"
+        assert (gdir / "security_scan.py").is_file(), "non-sopified gate script must stay"
+        assert not (gdir / "security-coding-baseline.md").exists(), "sopified .md dup removed"
