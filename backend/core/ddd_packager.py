@@ -405,6 +405,7 @@ def _copy_skill_dirs(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list
         dst = out_skills / compliant
         shutil.copytree(src, dst, dirs_exist_ok=True)
         _rewrite_skill_name(dst / "SKILL.md", compliant)
+        _rewrite_skill_body_refs(dst / "SKILL.md", name_map)
         for f in sorted(dst.rglob("*")):
             if f.is_file():
                 copied.append(str(f.relative_to(out_skills.parent)))
@@ -436,6 +437,56 @@ def _rewrite_skill_name(skill_md: Path, dir_name: str) -> None:
     # `_compliant_skill_name` result, but keep the replacement literal defensively.)
     new_text, n = _SKILL_NAME_LINE.subn(lambda _m: f"name: {dir_name}", text, count=1)
     if n and new_text != text:
+        skill_md.write_text(new_text, encoding="utf-8")
+
+
+# A sibling cross-reference line in a SKILL.md — the ONLY lines where an s_-prefixed name
+# is a metadata pointer to another skill (whether in a `description: >` block or the body).
+# Anchored to the SIBLINGS/NOT FOR prefix at line start so PROSE and CODE FENCES that
+# legitimately mention an s_ name (a python example, a description of LOCAL SwarmAI
+# behavior) are NEVER rewritten (Gate-1 C3). The `[^:\n]*` tolerates a parenthetical
+# qualifier between the keyword and the colon — the real shape is
+# `SIBLINGS (SecDLC ④capabilities): ...`, not a bare `SIBLINGS:`.
+_SIBLING_META_LINE = re.compile(r"^(\s*(?:SIBLINGS?|NOT FOR)\b[^:\n]*:.*)$", re.MULTILINE | re.IGNORECASE)
+
+
+def _rewrite_skill_body_refs(skill_md: Path, name_map: dict[str, str]) -> None:
+    """Rewrite ``s_<sibling>`` references to their AIM-compliant names, but ONLY on lines
+    matching the ``SIBLINGS:``/``NOT FOR:`` metadata prefix (``_SIBLING_META_LINE``) —
+    where the name is a machine-resolved pointer to another packaged skill (dir is
+    ``<compliant>``, so a raw ``s_`` ref dangles). A normal prose sentence or code-fence
+    line that merely mentions an ``s_`` name is left UNTOUCHED, because it does NOT start
+    with that metadata prefix — it references LOCAL/source-side behavior and is correct as
+    written (Gate-1 C3). (A line literally shaped ``NOT FOR: s_x`` inside a fence WOULD
+    match the prefix, but the rewrite there is still to the correct compliant name — the
+    scoping is by the metadata prefix, not by fence-awareness.) Only the KNOWN sibling
+    names in ``name_map`` are replaced, whole-token, longest-first so a prefix name can't
+    partially clobber a longer one. Fail-soft on a missing/unreadable SKILL.md."""
+    if not skill_md.is_file():
+        return
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    # Only raw names that actually change under normalization, longest-first (so
+    # s_fx-report is tried before a hypothetical s_fx that is its prefix).
+    renames = sorted(
+        ((raw, comp) for raw, comp in name_map.items() if raw != comp),
+        key=lambda kv: len(kv[0]), reverse=True,
+    )
+    if not renames:
+        return
+
+    def _fix_line(m: "re.Match[str]") -> str:
+        line = m.group(1)
+        for raw, comp in renames:
+            # whole-token: the raw name not flanked by an identifier char (so a longer
+            # sibling that merely CONTAINS this name as a substring is not mangled).
+            line = re.sub(rf"(?<![\w-]){re.escape(raw)}(?![\w-])", comp, line)
+        return line
+
+    new_text = _SIBLING_META_LINE.sub(_fix_line, text)
+    if new_text != text:
         skill_md.write_text(new_text, encoding="utf-8")
 
 
@@ -822,6 +873,72 @@ def _copy_gates(ddd_dir: Path, dst: Path) -> list[str]:
     return sorted(str(p.relative_to(dst.parent)) for p in dst.rglob("*") if p.is_file())
 
 
+# Standard tool set for a kiroCli agent — mirrors the official SampleAICapabilities
+# kitchen-sink agent-spec (read/write/shell + the builder-mcp bundle). Kept minimal +
+# deterministic; a DDD needing more declares them via aim.json (future extension).
+_KIRO_BASE_TOOLS = ["read", "write", "shell", "@builder-mcp"]
+
+
+def _build_kiro_client_config(has_corpus: bool) -> dict[str, Any]:
+    """Build the clientConfig.kiroCli block for an emitted agent-spec, mirroring the
+    official SampleAICapabilities shape (tools + allowedTools + a knowledgeBase
+    resource over context/knowledge). The corpus is declared as a RETRIEVABLE
+    knowledgeBase (indexType fast) rather than left resident in context:["*"] — so a
+    large corpus is searched on demand, not always in-window (standard §5)."""
+    cfg: dict[str, Any] = {
+        "tools": list(_KIRO_BASE_TOOLS),
+        "allowedTools": ["read", "@builder-mcp"],
+    }
+    if has_corpus:
+        cfg["resources"] = [{
+            "type": "knowledgeBase",
+            "source": "file://{{aim:filepath:context/knowledge}}",
+            "name": "DomainKnowledge",
+            "description": "The DDD's sedimented knowledge corpus, retrievable on demand.",
+            "indexType": "fast",
+            "autoUpdate": True,
+        }]
+    return cfg
+
+
+def _emit_gate_sops(ddd_dir: Path, sops_dir: Path) -> list[str]:
+    """Emit each TOP-LEVEL ``.md`` gate STANDARD as ``agent-sops/<stem>.sop.md`` so the
+    AIM runtime DISCOVERS it as a SOP (it recognizes ``agent-sops/*.sop.md`` only — a
+    nested ``agent-sops/gates/foo.md`` ships but is undiscoverable; verified against the
+    official SampleAICapabilities package). Only top-level ``.md`` files convert — a
+    ``.py``/``.sh`` gate is a CI script (not an agent-read SOP) and a ``context/includes/``
+    data file is not a standard, so both stay under ``gates/`` untouched.
+
+    FAIL-LOUD on a stem collision (a gate named ``refresher.md`` would clobber the
+    REFRESHER SOP, or two gates share a stem) — mirrors ``_compliant_skill_map``'s
+    fail-loud-on-collision rather than a silent last-writer-wins overwrite."""
+    gates_src = ddd_path(ddd_dir, "gates")
+    if not gates_src.is_dir():
+        return []
+    emitted: list[str] = []
+    for md in sorted(gates_src.glob("*.md")):  # TOP-LEVEL only (not context/includes/)
+        if md.name == ".gitkeep":
+            continue
+        # Exfil guard parity with _copy_gates (line ~861): a gate .md that is a symlink
+        # escaping the DDD must NOT be dereferenced into a .sop.md — else this new path
+        # would leak the exact out-of-tree secret _copy_gates already drops (P8: the
+        # sopify door must honor the same guard as the copy door).
+        if md.is_symlink() and _escapes_ddd(md, ddd_dir):
+            logger.warning("gate .md %s is a symlink escaping the DDD — not sopified (exfil guard)",
+                           md.relative_to(ddd_dir))
+            continue
+        target = sops_dir / f"{md.stem.lower()}.sop.md"
+        if target.exists():
+            raise PackagingError(
+                f"gate SOP stem collision: {md.name!r} → {target.name!r} already exists "
+                f"(a gate named to match an existing SOP, e.g. refresher.md, would "
+                f"clobber it) — rename the gate at the source"
+            )
+        target.write_text(md.read_text(encoding="utf-8"), encoding="utf-8")
+        emitted.append(target.name)
+    return emitted
+
+
 # ---------------------------------------------------------------------------
 # Target A — AIM capabilities package
 # ---------------------------------------------------------------------------
@@ -872,25 +989,6 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     )
     (out_dir / "Config").write_text(config_text, encoding="utf-8")
 
-    # agents/<ddd>.agent-spec.json — systemPrompt via {{aim:include}}, glob skill dep.
-    agent_spec = {
-        "schemaVersion": "1",
-        "name": normalize_name(ddd_name, prefix=""),
-        "config": {
-            "description": str(aim.get("description", f"{ddd_name} domain brain")),
-            "systemPrompt": "{{aim:include:context/AGENTS.md}}",
-        },
-        "dependencies": {
-            # skillNames must reference the emitted (AIM-compliant) dir names, not the
-            # raw s_-prefixed source names — else the agent-spec points at dirs that
-            # don't exist in the package. Same normalization _copy_skill_dirs applies.
-            "skills": {"skillNames": [_compliant_skill_name(s) for s in skills_to_copy] or ["*"]},
-            "context": {"contextNames": ["*"]},
-            "agentSops": {"agentSopNames": ["*"]},
-        },
-    }
-    _write_json(out_dir / "agents" / f"{normalize_name(ddd_name, prefix='')}.agent-spec.json", agent_spec)
-
     # skills/, context/ (knowledge docs + AGENTS.md), context/knowledge/ (corpus),
     # agent-sops/ (refresher.sop.md + gates/ — the ③ gate section, always-apply standards)
     res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", skills_to_copy)
@@ -913,9 +1011,43 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     # (always-apply standards, co-located with the refresher SOP + covered by the
     # agentSops:["*"] dependency) ; human deliverables → deliverables/. ALL before the
     # res.files rebuild + the orchestrator's content-safety scan, so gates are scanned too.
-    _copy_corpus(ddd_dir, ctx / "knowledge")
+    corpus_files = _copy_corpus(ddd_dir, ctx / "knowledge")
     _copy_gates(ddd_dir, sops / "gates")
+    # ③ .md gate STANDARDs ALSO emit as agent-sops/<stem>.sop.md so the AIM runtime
+    # DISCOVERS them as SOPs (it recognizes agent-sops/*.sop.md only, not nested .md —
+    # verified against the official SampleAICapabilities package, see
+    # Knowledge/Library/2026-08-25-aim-capabilities-package-standard.md §3). Fail-loud
+    # on a stem collision (e.g. a gate literally named refresher.md would clobber the
+    # REFRESHER SOP), mirroring _compliant_skill_map's fail-loud-on-collision.
+    _emit_gate_sops(ddd_dir, sops)
     _copy_deliverables(ddd_dir, out_dir)
+
+    # agents/<ddd>.agent-spec.json — built AFTER corpus copy so the knowledgeBase
+    # resource is declared only when there is a corpus to index. clientConfig +
+    # mcpRegistry mirror the official SampleAICapabilities kitchen-sink shape.
+    agent_spec = {
+        "schemaVersion": "1",
+        "name": normalize_name(ddd_name, prefix=""),
+        "config": {
+            "description": str(aim.get("description", f"{ddd_name} domain brain")),
+            "systemPrompt": "{{aim:include:context/AGENTS.md}}",
+        },
+        "dependencies": {
+            # skillNames must reference the emitted (AIM-compliant) dir names, not the
+            # raw s_-prefixed source names — else the agent-spec points at dirs that
+            # don't exist in the package. Same normalization _copy_skill_dirs applies.
+            "skills": {"skillNames": [_compliant_skill_name(s) for s in skills_to_copy] or ["*"]},
+            "context": {"contextNames": ["*"]},
+            "agentSops": {"agentSopNames": ["*"]},
+            # Every MCP a packaged skill uses must be DECLARED here or the runtime never
+            # injects it. Source = aim.json plugins.mcp (author-declared ceiling, the
+            # same SSOT emit_target_open_plugin's .mcp.json reads via _extract_mcp) —
+            # NOT inferred from skill-body text (Gate-1: body-grep over/under-declares).
+            "mcpRegistry": {name: {} for name in sorted(_extract_mcp(ddd_dir))},
+        },
+        "clientConfig": {"kiroCli": _build_kiro_client_config(bool(corpus_files))},
+    }
+    _write_json(out_dir / "agents" / f"{normalize_name(ddd_name, prefix='')}.agent-spec.json", agent_spec)
 
     # Top-level README (authored-copy or generated fallback) — written BEFORE the
     # res.files rebuild so it lands in the manifest AND is content-safety-scanned.

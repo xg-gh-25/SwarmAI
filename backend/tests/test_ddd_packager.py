@@ -1319,3 +1319,90 @@ class TestReadme:
             encoding="utf-8")
         with pytest.raises(pk.PackagingError, match="content-safety"):
             pk.package_ddd(ddd, tmp_path / "out")
+
+
+# ---------------------------------------------------------------------------
+# AIM capabilities-package compliance (run_7fa39634) — 4 emit defects vs the
+# official SampleAICapabilities shape (Knowledge/Library/2026-08-25-aim-
+# capabilities-package-standard.md). See that doc for the verified contract.
+# ---------------------------------------------------------------------------
+class TestAIMCompliance:
+    def _aim(self, root, **kw):
+        ddd = build_fixture_ddd(root, targets=["aim-capabilities"], visibility="internal", **kw)
+        [res] = pk.package_ddd(ddd, root / "out")
+        return res
+
+    # AC1 — a .md gate STANDARD ALSO emits as agent-sops/<stem>.sop.md (discoverable SOP)
+    def test_gate_md_also_emits_sop(self, tmp_path):
+        res = self._aim(tmp_path, gates={"security-coding-baseline.md": "# Baseline\nA1 no eval.\n"})
+        sop = res.out_dir / "agent-sops" / "security-coding-baseline.sop.md"
+        assert sop.is_file(), "a .md gate STANDARD must ALSO emit as agent-sops/<stem>.sop.md"
+        assert "Baseline" in sop.read_text(encoding="utf-8")
+        # and the whole gate section still ships to gates/ (run_f4d1489b behavior preserved)
+        assert (res.out_dir / "agent-sops" / "gates" / "security-coding-baseline.md").is_file()
+
+    # AC1 collision — a gate named refresher.md would collide with the REFRESHER sop → fail-loud
+    def test_gate_sop_stem_collision_fails_loud(self, tmp_path):
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal",
+                                gates={"refresher.md": "# collides with REFRESHER.md sop\n"})
+        with pytest.raises(pk.PackagingError, match="(?i)sop.*collision|collision.*sop|refresher"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    # AC1 — .py/.sh gates do NOT become .sop.md (they are CI scripts, not SOPs)
+    def test_executable_gate_not_sopified(self, tmp_path):
+        res = self._aim(tmp_path, gates={"no_git_push.py": "def gate():\n    return 0\n"})
+        assert not (res.out_dir / "agent-sops" / "no_git_push.sop.md").exists(), \
+            "a .py gate is a CI script, must NOT become a .sop.md"
+        assert (res.out_dir / "agent-sops" / "gates" / "no_git_push.py").is_file()
+
+    # AC2 — agent-spec carries clientConfig.kiroCli + dependencies.mcpRegistry (from aim.json plugins.mcp)
+    def test_agent_spec_clientconfig_and_mcpregistry(self, tmp_path):
+        res = self._aim(tmp_path)
+        specs = list((res.out_dir / "agents").glob("*.agent-spec.json"))
+        assert specs, "an agent-spec must be emitted"
+        spec = json.loads(specs[0].read_text(encoding="utf-8"))
+        cc = spec.get("clientConfig", {}).get("kiroCli", {})
+        assert cc.get("tools"), "clientConfig.kiroCli.tools must be non-empty"
+        assert "read" in cc["tools"] and "@builder-mcp" in cc["tools"]
+        assert "allowedTools" in cc
+        # mcpRegistry derived from aim.json plugins.mcp (fixture declares FxMCP)
+        reg = spec.get("dependencies", {}).get("mcpRegistry", {})
+        assert "FxMCP" in reg, "mcpRegistry must include the aim.json-declared MCP (FxMCP)"
+
+    # AC3 — knowledge corpus declared as a knowledgeBase resource, not just resident context
+    def test_agent_spec_knowledgebase_resource(self, tmp_path):
+        res = self._aim(tmp_path, corpus_docs={"note.md": "# a knowledge note\nfact.\n"})
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text(encoding="utf-8"))
+        resources = spec.get("clientConfig", {}).get("kiroCli", {}).get("resources", [])
+        kb = [r for r in resources if r.get("type") == "knowledgeBase"]
+        assert kb, "a knowledgeBase resource over context/knowledge must be declared when corpus non-empty"
+        assert "context/knowledge" in kb[0].get("source", "")
+        assert kb[0].get("indexType") == "fast"
+
+    # AC4 — s_ sibling refs on SIBLINGS:/NOT FOR: metadata lines are normalized; prose is NOT
+    def test_skill_body_sibling_ref_rewritten_scoped(self, tmp_path):
+        # s_fx-analyze is a real domain sibling in the fixture; put it on a metadata line + a prose line
+        body = ("SIBLINGS: s_fx-analyze = the analyzer\n"
+                "\n"
+                "Some prose mentioning s_fx-analyze inline should NOT be rewritten.\n")
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # overwrite s_fx-report body with our metadata+prose mix
+        (ddd / "skills" / "s_fx-report" / "SKILL.md").write_text(
+            "---\nname: s_fx-report\ndescription: r\n---\n\n# r\n" + body, encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        shipped = (res.out_dir / "skills" / "fx-report" / "SKILL.md").read_text(encoding="utf-8")
+        assert "SIBLINGS: fx-analyze = the analyzer" in shipped, "metadata-line sibling ref must be normalized"
+        assert "prose mentioning s_fx-analyze inline should NOT" in shipped, "prose s_ ref must be UNTOUCHED"
+
+    # AC4 regression — SIBLINGS with a parenthetical (real SecDLC shape: "SIBLINGS (SecDLC ...):")
+    def test_sibling_ref_rewritten_with_parenthetical(self, tmp_path):
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        (ddd / "skills" / "s_fx-report" / "SKILL.md").write_text(
+            "---\nname: s_fx-report\ndescription: >\n"
+            "  A report skill.\n"
+            "  SIBLINGS (some qualifier): s_fx-analyze = the analyzer.\n"
+            "tags: [x]\n---\n\n# r\nProse with s_fx-analyze stays.\n", encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        shipped = (res.out_dir / "skills" / "fx-report" / "SKILL.md").read_text(encoding="utf-8")
+        assert "SIBLINGS (some qualifier): fx-analyze" in shipped, "SIBLINGS with a parenthetical must still be normalized"
+        assert "Prose with s_fx-analyze stays" in shipped, "prose s_ ref untouched"
