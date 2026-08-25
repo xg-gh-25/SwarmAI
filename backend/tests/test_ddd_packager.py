@@ -66,10 +66,43 @@ def build_fixture_ddd(
     plant_host_path_in_body: bool = False,
     add_unclassified_skill: bool = False,
     build_system: str | None = None,
+    corpus_docs: dict[str, str] | None = None,
+    deliverables: dict[str, bytes | str] | None = None,
+    add_noise: bool = False,
 ) -> Path:
-    """Build a minimal compliant six-section DDD. Returns its dir."""
+    """Build a minimal compliant six-section DDD. Returns its dir.
+
+    corpus_docs: {relative-name: text} written under 2-understanding/knowledge/.
+    deliverables: {relative-path: bytes|text} written under deliverables/ (path may
+                  be nested, e.g. "sub/x.png"; bytes → binary file).
+    add_noise: also create .artifacts/code-intel.json + a decay-archive to prove the
+               packager does NOT sweep live-tree noise into the package.
+    """
     ddd = root / name
     ddd.mkdir(parents=True, exist_ok=True)
+
+    if corpus_docs:
+        kdir = ddd / "2-understanding" / "knowledge"
+        kdir.mkdir(parents=True, exist_ok=True)
+        (kdir / ".gitkeep").write_text("", encoding="utf-8")  # must NOT ship
+        for fname, text in corpus_docs.items():
+            (kdir / fname).write_text(text, encoding="utf-8")
+
+    if deliverables:
+        ddir = ddd / "deliverables"
+        for rel, content in deliverables.items():
+            dst = ddir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                dst.write_bytes(content)
+            else:
+                dst.write_text(content, encoding="utf-8")
+
+    if add_noise:
+        art = ddd / ".artifacts"
+        art.mkdir(parents=True, exist_ok=True)
+        (art / "code-intel.json").write_text('{"nodes": 9999}\n', encoding="utf-8")
+        (art / "decay-archive.jsonl").write_text('{"decayed": true}\n', encoding="utf-8")
 
     aim: dict = {
         "name": name,
@@ -780,3 +813,256 @@ class TestDomainToolsMaterialization:
             if skill == "s_fx-report":
                 continue
             assert not (res.out_dir / "skills" / skill / "scripts" / "priv_tool.py").exists()
+
+
+# ---------------------------------------------------------------------------
+# Knowledge corpus + deliverables shipping (run_6e4bced6)
+# ---------------------------------------------------------------------------
+_HOST_PATH = "Output goes to ~/.swarm-ai/SwarmWS/Knowledge/Reports/x.html"
+_FAKE_PNG = b"\x89PNG\r\n\x1a\n\x00\x00fake-binary-bytes\x00\x01"
+
+
+class TestCorpusShipping:
+    def test_aim_ships_corpus_into_context_knowledge(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"pattern-lib.md": "# Patterns\nRP1..RP80\n",
+                         "case-library.md": "# Cases\nreal content\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        ck = res.out_dir / "context" / "knowledge"
+        assert (ck / "pattern-lib.md").is_file()
+        assert (ck / "case-library.md").is_file()
+        assert "RP1..RP80" in (ck / "pattern-lib.md").read_text(encoding="utf-8")
+        # .gitkeep must NOT ship
+        assert not (ck / ".gitkeep").exists()
+
+    def test_open_plugin_ships_corpus_into_knowledge(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["open-plugin"], visibility="internal",
+            corpus_docs={"pattern-lib.md": "# Patterns\nRP1..RP80\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "knowledge" / "pattern-lib.md").is_file()
+
+    def test_both_targets_consistent_on_corpus(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities", "open-plugin"], visibility="internal",
+            corpus_docs={"a.md": "x\n", "b.md": "y\n"})
+        results = pk.package_ddd(ddd, tmp_path / "out")
+        by_target = {r.target: r for r in results}
+        aim_corpus = {p.name for p in (by_target["aim-capabilities"].out_dir / "context" / "knowledge").glob("*.md")}
+        op_corpus = {p.name for p in (by_target["open-plugin"].out_dir / "knowledge").glob("*.md")}
+        assert aim_corpus == op_corpus == {"a.md", "b.md"}
+
+    def test_no_corpus_dir_is_noop(self, tmp_path):
+        # A 0-corpus DDD must still emit cleanly (no context/knowledge dir required).
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert res  # emits fine; corpus dir simply absent
+
+
+class TestDeliverablesShipping:
+    def test_aim_ships_deliverables_including_binary(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            deliverables={"deck.md": "# Deck\nhuman-facing\n",
+                          "assets/diagram.png": _FAKE_PNG,
+                          "threat-models/tm.md": "# TM\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        dv = res.out_dir / "deliverables"
+        assert (dv / "deck.md").is_file()
+        assert (dv / "threat-models" / "tm.md").is_file()  # nested subdir preserved
+        # binary shipped byte-identical
+        assert (dv / "assets" / "diagram.png").read_bytes() == _FAKE_PNG
+
+    def test_open_plugin_ships_deliverables(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["open-plugin"], visibility="internal",
+            deliverables={"deck.md": "# Deck\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "deliverables" / "deck.md").is_file()
+
+    def test_no_deliverables_dir_is_noop(self, tmp_path):
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert not (res.out_dir / "deliverables").exists()
+
+
+class TestScanPartition:
+    def test_deliverables_host_path_warns_not_blocks(self, tmp_path):
+        # A host-path in a DELIVERABLE (human-facing artifact) must NOT block emit —
+        # it is downgraded to a warning (XG decision A). Internal package, emit-only.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            deliverables={"deck.md": f"# Deck\n{_HOST_PATH}\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert any("host-path" in w and "deliverables/" in w for w in res.warnings)
+
+    def test_context_knowledge_host_path_still_blocks(self, tmp_path):
+        # A host-path in the CORPUS (agent-consumed context) must STILL block emit.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"leaky.md": f"# Leaky\n{_HOST_PATH}\n"})
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out", publish=False)
+
+    def test_secret_in_deliverables_still_blocks(self, tmp_path):
+        # secret blocks in EVERY zone incl. deliverables — never downgraded.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            deliverables={"notes.md": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE1\n"})  # pragma: allowlist secret  (intentional fake fixture)
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out", publish=False)
+
+    def test_deliverables_host_path_blocks_on_publish(self, tmp_path):
+        # On an EXTERNAL publish, everything blocks (deliverables downgrade is emit-only).
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["open-plugin"], visibility="external",
+            deliverables={"deck.md": f"# Deck\n{_HOST_PATH}\n"})
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out", publish=True)
+
+    def test_unscannable_binary_deliverable_warns_loud(self, tmp_path):
+        # G1: a binary deliverable (.png) can't be content-scanned — the packager must
+        # surface a LOUD warning so nobody assumes it was secret-scanned.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            deliverables={"assets/diagram.png": _FAKE_PNG})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert any("unscanned" in w.lower() and "diagram.png" in w for w in res.warnings)
+
+
+class TestPayloadBoundary:
+    def test_live_tree_noise_not_shipped(self, tmp_path):
+        # run_eb45c28d lesson: extending the payload must NOT sweep in live-tree noise.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"a.md": "x\n"}, add_noise=True)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        all_files = [str(p) for p in res.out_dir.rglob("*") if p.is_file()]
+        assert not any("code-intel.json" in f for f in all_files)
+        assert not any("decay-archive" in f for f in all_files)
+        assert not any(".artifacts" in f for f in all_files)
+
+
+# ---------------------------------------------------------------------------
+# Secret regex false-positive on prose (run_6e4bced6, XG decision A)
+# ---------------------------------------------------------------------------
+class TestSecretProseFalsePositive:
+    """Tightening the UNQUOTED secret pattern: an all-letter word after `token =`
+    (English prose) is NOT a secret; a real secret value carries a non-letter
+    (digit/symbol/base64). The QUOTED form and AKIA/PEM/gh_ patterns are unchanged."""
+
+    def test_prose_token_equals_word_is_not_secret(self, tmp_path):
+        # The real SecDLC false-positive: "...a user-identity token = operating a bespoke..."
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"lesson.md": "self-issuing a token = operating a bespoke idP is the anti-pattern\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert not any("secret" in w for w in res.warnings), res.warnings
+
+    def test_prose_password_word_and_secret_word_not_flagged(self, tmp_path):
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"prose.md": "the password: rotated regularly; the secret = shared across callers\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert not any("secret" in w for w in res.warnings), res.warnings
+
+    def test_real_unquoted_secret_with_digits_still_blocks(self, tmp_path):
+        # MUTATION guard: a genuine unquoted secret (has digits) MUST still block.
+        ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
+        (ddd / "skills" / "s_fx-report" / "setup.sh").write_text(
+            "export API_KEY=supersecretvalue123\n", encoding="utf-8")  # pragma: allowlist secret
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out", publish=True)
+
+    def test_real_unquoted_secret_base64ish_still_blocks(self, tmp_path):
+        # A base64/symbol-bearing secret with NO digit must still block (non-letter = /+).
+        ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
+        (ddd / "skills" / "s_fx-report" / "conf.env").write_text(
+            "token=abc/def+ghXYZ\n", encoding="utf-8")  # pragma: allowlist secret
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out", publish=True)
+
+    def test_all_letter_secret_in_config_file_still_blocks(self, tmp_path):
+        # REVIEW finding (HIGH): the prose FP fix must NOT weaken the detector in a real
+        # config/script file. An ALL-LETTER unquoted secret in a .env/.sh MUST still block —
+        # the suppression is scoped to prose (.md/.rst/.txt) ONLY.
+        ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
+        (ddd / "skills" / "s_fx-report" / "creds.env").write_text(
+            "password=abcdefgh\n", encoding="utf-8")  # pragma: allowlist secret
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out", publish=True)
+
+    def test_all_letter_secret_in_prose_is_suppressed(self, tmp_path):
+        # The mirror: an all-letter unquoted `token = word` in a .md knowledge doc is prose,
+        # not a secret — suppressed (this is the whole point of the scoped fix).
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"lesson.md": "a shared token = operating a bespoke idP is the anti-pattern\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert not any("secret" in w for w in res.warnings), res.warnings
+
+
+# ---------------------------------------------------------------------------
+# Gate-2 adversarial findings (run_6e4bced6): prose-suppression hole + symlink exfil
+# ---------------------------------------------------------------------------
+class TestGate2ProseSuppressionNarrowed:
+    """Finding A/G: the prose FP suppression must NOT cover an ISOLATED all-letter
+    assignment in a .md — only a genuine sentence (value FOLLOWED BY prose words)."""
+
+    def test_isolated_all_letter_secret_in_md_still_blocks(self, tmp_path):
+        # `password=hunterhunter` alone on a line in a .md is a real credential, not prose.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"leak.md": "password=hunterhunter\n"})  # pragma: allowlist secret
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_all_letter_secret_last_token_in_md_still_blocks(self, tmp_path):
+        # value is the last token on the line (no trailing prose) → real secret, blocks.
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"leak.md": "the config sets TOKEN=mytokenname\n"})  # pragma: allowlist secret
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_genuine_prose_sentence_still_suppressed(self, tmp_path):
+        # A real sentence — value followed by more words — stays suppressed (the FP we fix).
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"lesson.md": "a shared token = operating a bespoke idP is the anti-pattern\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert not any("secret" in w for w in res.warnings), res.warnings
+
+
+class TestGate2SymlinkExfil:
+    """Finding E: copytree/copy2 must NOT dereference a symlink whose target escapes the
+    DDD dir (would package ~/.aws/credentials etc.). Escaping links are dropped."""
+
+    def test_deliverable_escaping_symlink_not_dereferenced(self, tmp_path):
+        secret_outside = tmp_path / "outside_secret.txt"
+        secret_outside.write_text("aws_secret_access_key=AKIAIOSFODNN7EXAMPLE1\n", encoding="utf-8")  # pragma: allowlist secret
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            deliverables={"readme.md": "# ok\n"})
+        # plant an escaping symlink inside deliverables/
+        link = ddd / "deliverables" / "creds"
+        link.symlink_to(secret_outside)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise, must NOT ship the target
+        shipped = res.out_dir / "deliverables" / "creds"
+        # the escaping link is dropped entirely; if anything shipped it must NOT be the secret bytes
+        if shipped.exists():
+            assert "AKIAIOSFODNN7EXAMPLE1" not in shipped.read_text(encoding="utf-8", errors="replace")  # pragma: allowlist secret
+        assert not (shipped.exists() and not shipped.is_symlink()), "escaping link must not become a real file with the target's bytes"
+
+    def test_corpus_escaping_symlink_skipped(self, tmp_path):
+        secret_outside = tmp_path / "outside.md"
+        secret_outside.write_text("aws_secret_access_key=AKIAIOSFODNN7EXAMPLE1\n", encoding="utf-8")  # pragma: allowlist secret
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"real.md": "# real corpus\n"})
+        link = ddd / "2-understanding" / "knowledge" / "sneaky.md"
+        link.symlink_to(secret_outside)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise, must NOT ship the target
+        assert not (res.out_dir / "context" / "knowledge" / "sneaky.md").exists()
+        assert (res.out_dir / "context" / "knowledge" / "real.md").is_file()

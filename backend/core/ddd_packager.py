@@ -42,7 +42,7 @@ from core.ddd_distribution_policy import (
     TARGET_OPEN_PLUGIN,
 )
 from core.project_registry import DDD_CANONICAL_DOCS
-from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
+from core.ddd_paths import ddd_path, KNOWLEDGE_CORPUS_DIR  # six-section layout resolver (SSOT)
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +102,26 @@ _INTERNAL_STRING_PATTERNS: tuple[re.Pattern[str], ...] = (
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)AKIA[0-9A-Z]{16}"),                   # AWS access key id (case-insensitive, Gate-2 H2)
     re.compile(r"(?i)aws_secret_access_key\s*[=:]\s*\S+"),
-    # Quoted OR unquoted assignment (Gate-2 H1 — .env/shell/YAML are usually unquoted).
+    # Quoted assignment (Gate-2 H1) — the quotes are themselves a strong secret signal,
+    # so ANY 6+ char quoted value counts (applies in EVERY file type, incl. prose).
     re.compile(r"(?i)\b(secret|password|passwd|token|api[_-]?key)\s*[=:]\s*['\"][^'\"]{6,}['\"]"),
-    re.compile(r"(?i)\b(secret|password|passwd|token|api[_-]?key)\s*[=:]\s*[^\s'\"]{6,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),             # GitHub token
 )
+
+# Unquoted assignment (.env/shell/YAML) — kept STRICT (`{6,}`, an all-letter value like
+# `password=abcdefgh` IS caught) so the detector is never weakened in a config/script file.
+# The prose false-positive it used to cause (`token = operating a bespoke idP` in a `.md`
+# knowledge doc) is suppressed by FILE TYPE, NOT by weakening the pattern: see `_scan_text`,
+# which drops an all-LETTER unquoted value ONLY in a prose file (.md/.rst/.txt). A secret in
+# a real config/script extension is still matched by this exact pattern. The value is a named
+# group so `_scan_text` can inspect it. (run_6e4bced6, REVIEW finding — do NOT re-tighten the
+# pattern globally; that fail-opens all-letter secrets in .env — scope the FP fix to prose.)
+_UNQUOTED_SECRET: re.Pattern[str] = re.compile(
+    r"(?i)\b(?:secret|password|passwd|token|api[_-]?key)\s*[=:]\s*(?P<val>[^\s'\"]{6,})"
+)
+# Prose extensions where an all-letter unquoted `word = word` is English, not a secret.
+_PROSE_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown", ".rst", ".txt"})
 
 # Content-safety scan is fail-CLOSED: scan EVERYTHING except a small deny-list of
 # known-binary suffixes (Gate-2 C1 — an allow-list of "content" suffixes fails OPEN,
@@ -124,6 +138,14 @@ _BINARY_SUFFIXES: frozenset[str] = frozenset(
 def _is_scannable(path: Path) -> bool:
     """Fail-closed: scan unless the suffix is a known-binary type (Gate-2 C1)."""
     return path.suffix.lower() not in _BINARY_SUFFIXES
+
+
+def _in_deliverables_zone(rel_file: str) -> bool:
+    """True iff a scan-finding's ``file`` (a path relative to the emitted tree) lives
+    under the ``deliverables/`` zone. Uses path PARTS, not a string prefix — OS-separator
+    safe AND exact (a sibling ``deliverables-foo/`` must NOT match). Gate-1 finding C."""
+    parts = Path(rel_file).parts
+    return bool(parts) and parts[0] == _DELIVERABLES_DIR
 
 
 @dataclass(frozen=True)
@@ -216,11 +238,31 @@ def split_skills(ddd_dir: Path) -> tuple[list[str], list[str], list[str]]:
 # ---------------------------------------------------------------------------
 def _scan_text(rel: str, text: str, *, external: bool) -> list[ScanFinding]:
     findings: list[ScanFinding] = []
+    # Prose files (.md/.rst/.txt) suppress the all-letter unquoted-secret false positive,
+    # but NARROWLY (Gate-2 run_6e4bced6): the real FP is a SENTENCE — "a shared token =
+    # operating a bespoke idP" — where the matched value is one word FOLLOWED BY MORE PROSE
+    # WORDS. An ISOLATED assignment ("password=hunterhunter", "TOKEN=mytokenname" whether the
+    # whole RHS or the last token on the line) is a real credential and MUST flag even in a
+    # .md — the earlier "any all-letter value in prose" rule fail-opened exactly that. So
+    # suppress ONLY when: prose file AND all-letter value AND the value is followed on the
+    # line by whitespace + another word (the sentence tail). A value with any non-letter
+    # (digit/symbol) is flagged everywhere; config/script files flag all values (no weakening).
+    is_prose = Path(rel).suffix.lower() in _PROSE_SUFFIXES
     for i, line in enumerate(text.splitlines(), start=1):
         for pat in _SECRET_PATTERNS:
             m = pat.search(line)
             if m:
                 findings.append(ScanFinding(rel, "secret", m.group(0)[:40], i))
+        um = _UNQUOTED_SECRET.search(line)
+        if um:
+            val = um.group("val")
+            # Sentence tail = the value is followed by " <word>" on the same line (prose),
+            # not the end of an isolated assignment.
+            tail = line[um.end():]
+            has_prose_tail = bool(re.match(r"\s+\S", tail))
+            suppress = is_prose and val.isalpha() and has_prose_tail
+            if not suppress:
+                findings.append(ScanFinding(rel, "secret", um.group(0)[:40], i))
         for pat in _HOST_PATH_PATTERNS:
             m = pat.search(line)
             if m:
@@ -561,6 +603,81 @@ def _read_aim(ddd_dir: Path) -> dict[str, Any]:
 # Single-source per Run 0 (project_registry.DDD_CANONICAL_DOCS) — no stray literal.
 _KNOWLEDGE_DOCS = DDD_CANONICAL_DOCS
 
+# The un-numbered non-section dir carrying human-facing deliverables (decks, diagrams,
+# reports). Shipped whole (incl. binaries) as human artifacts, NOT recall corpus.
+_DELIVERABLES_DIR = "deliverables"
+
+
+def _escapes_ddd(link: Path, ddd_root: Path) -> bool:
+    """True if a symlink resolves to a target OUTSIDE the DDD dir (an exfil vector:
+    ``deliverables/creds → ~/.aws/credentials`` would otherwise dereference the real
+    file INTO the package). Mirrors the ``_collect_shared_sources`` sandbox. A broken
+    link (resolve fails) is treated as escaping (skip it). Gate-2 finding, run_6e4bced6."""
+    try:
+        return not link.resolve().is_relative_to(ddd_root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return True
+
+
+def _copy_corpus(ddd_dir: Path, dest: Path) -> list[str]:
+    """Copy the DDD's sedimented recall corpus (``2-understanding/knowledge/*.md``)
+    into ``dest``. The corpus IS the DDD's value (design §6) — a distributed package
+    without it ships skills but not the knowledge that informs them.
+
+    - FLAT ``*.md`` glob (the corpus is a flat recall dir by convention; a stray
+      ``.gitkeep`` / non-md is excluded by the suffix filter).
+    - A ``.md`` that is a SYMLINK escaping the DDD dir is SKIPPED + WARNed (exfil guard,
+      Gate-2 run_6e4bced6) — ``copy2`` would otherwise dereference it into the package.
+    - No corpus dir → no-op (a 0-corpus DDD is valid), returns [].
+    - Deterministic (sorted). Returns the relative paths written under ``dest``.
+    """
+    src = ddd_dir / KNOWLEDGE_CORPUS_DIR
+    if not src.is_dir():
+        return []
+    written: list[str] = []
+    dest.mkdir(parents=True, exist_ok=True)
+    for md in sorted(src.glob("*.md")):
+        if md.is_symlink() and _escapes_ddd(md, ddd_dir):
+            logger.warning("corpus file %s is a symlink escaping the DDD — skipped (exfil guard)", md.name)
+            continue
+        shutil.copy2(md, dest / md.name)
+        written.append(md.name)
+    return written
+
+
+def _copy_deliverables(ddd_dir: Path, out_dir: Path) -> list[str]:
+    """Copy the DDD's ``deliverables/`` tree WHOLE (recursively, incl. binaries) into
+    ``out_dir/deliverables/`` as human-facing artifacts. Absent → no-op, returns [].
+
+    Payload boundary (run_eb45c28d): copy ONLY ``deliverables/`` — never sweep in
+    ``.artifacts/`` / ``code-intel.json`` / decay-archives (live-tree noise). This
+    function is scoped to the one dir on purpose; it does not walk the DDD root.
+
+    Exfil guard (Gate-2 run_6e4bced6): ``copytree`` defaults to dereferencing symlinks
+    (``symlinks=False`` copies the TARGET's bytes) — a ``deliverables/creds →
+    ~/.aws/credentials`` would package the real credential (a binary target even bypasses
+    the content scan). We copy with ``symlinks=True`` (preserve the link, never its bytes)
+    AND ``ignore`` any symlink whose target escapes the DDD dir (dropped entirely, so no
+    dangling escaping link ships either). Mirrors the ``_collect_shared_sources`` sandbox.
+    """
+    src = ddd_dir / _DELIVERABLES_DIR
+    if not src.is_dir():
+        return []
+    dst = out_dir / _DELIVERABLES_DIR
+
+    def _ignore_escaping_links(dir_path: str, names: list[str]) -> set[str]:
+        drop: set[str] = set()
+        for n in names:
+            p = Path(dir_path) / n
+            if p.is_symlink() and _escapes_ddd(p, ddd_dir):
+                logger.warning("deliverable %s is a symlink escaping the DDD — dropped (exfil guard)",
+                               p.relative_to(ddd_dir))
+                drop.add(n)
+        return drop
+
+    shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=True, ignore=_ignore_escaping_links)
+    return sorted(str(p.relative_to(out_dir)) for p in dst.rglob("*") if p.is_file())
+
 
 # ---------------------------------------------------------------------------
 # Target A — AIM capabilities package
@@ -648,6 +765,11 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             (sops / f"{Path(doc).stem.lower()}.sop.md").write_text(
                 src.read_text(encoding="utf-8"), encoding="utf-8")
 
+    # Sedimented recall corpus → context/knowledge/ ; human deliverables → deliverables/
+    # (BEFORE the res.files rebuild below, so both land in the manifest).
+    _copy_corpus(ddd_dir, ctx / "knowledge")
+    _copy_deliverables(ddd_dir, out_dir)
+
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res
 
@@ -717,6 +839,12 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     mcp_servers = _extract_mcp(ddd_dir)
     if mcp_servers:
         _write_json(out_dir / ".mcp.json", {"mcpServers": mcp_servers})
+
+    # Sedimented recall corpus → knowledge/ (a subtree distinct from the always-apply
+    # rules/ — corpus is reference knowledge, not a rule) ; human deliverables →
+    # deliverables/. Kept consistent with emit_target_aim (both ship corpus + deliverables).
+    _copy_corpus(ddd_dir, out_dir / "knowledge")
+    _copy_deliverables(ddd_dir, out_dir)
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res
@@ -827,10 +955,19 @@ def package_ddd(
         # Content-safety scan over the EMITTED tree.
         external = pol.visibility == policy.VISIBILITY_EXTERNAL
         findings = content_safety_scan(out_dir, external=external)
-        # Secrets + host-paths abort on ANY emit; internal-strings abort only on publish.
-        blocking = [f for f in findings if f.kind in ("secret", "host-path")]
+        # Zone policy (XG decision A): the deliverables/ zone holds human-facing artifacts
+        # (decks, diagrams), NOT agent-consumed context. A host-path in a deliverable does
+        # not "break the package" the way it breaks recall corpus — so it is DOWNGRADED to a
+        # warning on emit. A SECRET is NEVER downgraded (blocks in every zone), and an
+        # EXTERNAL publish blocks on everything regardless of zone.
         if publish:
-            blocking = findings  # everything blocks a publish
+            blocking = findings  # everything blocks a publish (deliverables downgrade is emit-only)
+        else:
+            blocking = [
+                f for f in findings
+                if f.kind == "secret"
+                or (f.kind == "host-path" and not _in_deliverables_zone(f.file))
+            ]
         if blocking:
             detail = "; ".join(f"{f.kind}@{f.file}:{f.line} ({f.detail})" for f in blocking[:8])
             raise PackagingError(
@@ -838,6 +975,14 @@ def package_ddd(
             )
         for f in findings:
             res.warnings.append(f"scan: {f.kind}@{f.file}:{f.line} ({f.detail})")
+        # G1: binary deliverables can't be content-scanned (_is_scannable skips them) —
+        # surface a LOUD warning so nobody assumes they were secret-scanned. Fail-loud, not silent.
+        for p in sorted((out_dir / _DELIVERABLES_DIR).rglob("*")) if (out_dir / _DELIVERABLES_DIR).is_dir() else []:
+            if p.is_file() and not _is_scannable(p):
+                res.warnings.append(
+                    f"unscanned binary deliverable (content-safety scan cannot read it): "
+                    f"{p.relative_to(out_dir)}"
+                )
         results.append(res)
 
     return results
