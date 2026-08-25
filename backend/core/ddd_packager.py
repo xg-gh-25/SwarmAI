@@ -599,6 +599,87 @@ def _read_aim(ddd_dir: Path) -> dict[str, Any]:
         return {}
 
 
+def _skill_description(ddd_dir: Path, raw_skill: str) -> str:
+    """First-sentence description of a skill, via the SSOT frontmatter parser
+    (``skill_manager.parse_frontmatter`` — never a hand-rolled `description:` grep,
+    so a folded ``>`` or quoted value both resolve). Empty string if the skill has
+    no SKILL.md / no description (caller decides how to render an empty one)."""
+    from core.skill_manager import SkillParseError, parse_frontmatter
+
+    skill_md = ddd_path(ddd_dir, "capabilities") / raw_skill / "SKILL.md"
+    if not skill_md.is_file():
+        return ""
+    # Exfil-guard parity (Gate-2 run_d8d60202, LOW): a skill dir that is a SYMLINK
+    # escaping the DDD would embed the target SKILL.md's bytes into the README. The
+    # upstream scan_domain_skill_dirs already filters symlinked skill dirs, but keep
+    # this self-contained (mirrors _copy_corpus/_copy_deliverables/_copy_gates) so
+    # README safety does not depend on a cross-module invariant.
+    skill_dir = skill_md.parent
+    if skill_dir.is_symlink() and _escapes_ddd(skill_dir, ddd_dir):
+        return ""
+    try:
+        meta, _ = parse_frontmatter(skill_md)
+    except (SkillParseError, OSError, ValueError):
+        return ""
+    desc = str(meta.get("description", "")).strip()
+    # First sentence only — keep the capability table one-line-per-skill. Split on the
+    # first ". " (period+space) so an embedded "e.g." mid-word does not truncate early.
+    head = desc.split(". ", 1)[0].strip()
+    return head[:200]
+
+
+def _render_readme(ddd_dir: Path, skills_included: list[str]) -> str:
+    """The package's top-level README (B2, run_d8d60202): if the DDD authored a root
+    ``README.md`` → return it VERBATIM (author controls the wording, like a deck/corpus);
+    otherwise GENERATE a minimal one so EVERY package is guaranteed to carry one — the
+    install-team's first-open doc, present like Config/agent-spec.
+
+    Generated body draws ONLY from the aim.json ``description`` field (NEVER the
+    ``distribution`` block — a code.amazon.com/brazil target would both leak and
+    self-block an external publish) + each included domain skill's first-sentence
+    description via the SSOT frontmatter parser. Deterministic: skills sorted, no
+    timestamp/run-id — byte-stable across re-emits."""
+    authored = ddd_dir / "README.md"
+    # Exfil-guard parity with _copy_corpus/_copy_deliverables/_copy_gates (Gate-2
+    # run_6e4bced6): an authored README that is a SYMLINK escaping the DDD dir
+    # (README.md → ~/.aws/credentials) would embed the target's bytes into the
+    # package. is_file() follows symlinks, so guard it explicitly — an escaping
+    # link is treated as ABSENT (fall through to the generated fallback).
+    if authored.is_file() and not (authored.is_symlink() and _escapes_ddd(authored, ddd_dir)):
+        return authored.read_text(encoding="utf-8")
+
+    aim = _read_aim(ddd_dir)
+    name = str(aim.get("name") or ddd_dir.name)
+    description = str(aim.get("description", "")).strip()
+
+    lines = [f"# {name}", ""]
+    if description:
+        lines += [description, ""]
+    lines += ["## Capabilities", ""]
+    if skills_included:
+        lines += ["| Skill | What it does |", "| --- | --- |"]
+        for raw in sorted(skills_included):
+            # Sanitize the free-form description for a markdown table CELL (Gate-2
+            # run_d8d60202, MEDIUM): an unescaped `|` would inject extra columns, and
+            # a newline would break the single-row-per-skill layout. Escape `|` and
+            # collapse any newline to a space.
+            desc = (_skill_description(ddd_dir, raw) or "—").replace("|", "\\|")
+            desc = " ".join(desc.split())
+            lines.append(f"| `{_compliant_skill_name(raw)}` | {desc} |")
+    else:
+        lines.append("_(No domain skills — a pure-knowledge package.)_")
+    lines += [
+        "",
+        "## Install",
+        "",
+        "```bash",
+        "aim plugins install " + normalize_name(name, prefix=""),
+        "```",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 # Six-section knowledge docs → context/ (deterministic set).
 # Single-source per Run 0 (project_registry.DDD_CANONICAL_DOCS) — no stray literal.
 _KNOWLEDGE_DOCS = DDD_CANONICAL_DOCS
@@ -836,6 +917,10 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     _copy_gates(ddd_dir, sops / "gates")
     _copy_deliverables(ddd_dir, out_dir)
 
+    # Top-level README (authored-copy or generated fallback) — written BEFORE the
+    # res.files rebuild so it lands in the manifest AND is content-safety-scanned.
+    (out_dir / "README.md").write_text(_render_readme(ddd_dir, skills_to_copy), encoding="utf-8")
+
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res
 
@@ -913,6 +998,10 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     _copy_corpus(ddd_dir, out_dir / "knowledge")
     _copy_gates(ddd_dir, out_dir / "rules" / "gates")
     _copy_deliverables(ddd_dir, out_dir)
+
+    # Top-level README (authored-copy or generated fallback) — same content as the AIM
+    # target; written BEFORE the res.files rebuild so it's in the manifest + scanned.
+    (out_dir / "README.md").write_text(_render_readme(ddd_dir, skills_to_copy), encoding="utf-8")
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res

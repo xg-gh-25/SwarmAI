@@ -1184,3 +1184,138 @@ class TestGatesShipped:
         gbase = res.out_dir / "agent-sops" / "gates"
         real = [p for p in gbase.rglob("*") if p.is_file()] if gbase.exists() else []
         assert real == [], "escaping-symlink-only 3-gates must ship no files (and no leaked target)"
+
+
+# ---------------------------------------------------------------------------
+# Package README — authored-copy OR generated fallback (B2), run_d8d60202
+# A distributed package must ALWAYS carry a top-level README.md (the install-team's
+# first-open doc), guaranteed like Config/agent-spec — not reliant on the author.
+# ---------------------------------------------------------------------------
+class TestReadme:
+    def test_authored_readme_copied_verbatim(self, tmp_path):
+        """AC1: a DDD root README.md is copied byte-identical into the package top level."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        authored = "# My Hand-Written Package\n\nCustom wording the author controls.\n"
+        (ddd / "README.md").write_text(authored, encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        pkg_readme = res.out_dir / "README.md"
+        assert pkg_readme.is_file(), "authored README must ship at package top level"
+        assert pkg_readme.read_text(encoding="utf-8") == authored, "authored README must be byte-identical"
+
+    def test_generated_readme_when_absent(self, tmp_path):
+        """AC2: no root README → a fallback is GENERATED containing the aim.description
+        and every INCLUDED domain skill's compliant name (the guarantee: always present)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        assert not (ddd / "README.md").exists()
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        pkg_readme = res.out_dir / "README.md"
+        assert pkg_readme.is_file(), "a package with no authored README must still ship a generated one"
+        text = pkg_readme.read_text(encoding="utf-8")
+        assert "A synthetic fixture DDD for packager tests." in text, "generated README must carry aim.description"
+        # included domain skills are s_fx-report, s_fx-analyze → compliant fx-report, fx-analyze
+        assert "fx-report" in text and "fx-analyze" in text, "generated README must list included domain skills"
+        # excluded enablement skill must NOT appear as a shipped capability
+        assert "ddd-manager" not in text, "excluded enablement skill must not be listed as a capability"
+
+    def test_readme_in_both_targets(self, tmp_path):
+        """AC3: BOTH targets (aim + open-plugin) ship a top-level README with the same content."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities", "open-plugin"], visibility="internal")
+        authored = "# Dual Target README\n\nSame doc in both shapes.\n"
+        (ddd / "README.md").write_text(authored, encoding="utf-8")
+        results = pk.package_ddd(ddd, tmp_path / "out")
+        assert len(results) == 2
+        for res in results:
+            r = res.out_dir / "README.md"
+            assert r.is_file(), f"{res.target} must ship a top-level README"
+            assert r.read_text(encoding="utf-8") == authored
+
+    def test_readme_in_manifest_and_scanned(self, tmp_path):
+        """AC4: README is written BEFORE res.files rebuild → it lands in the manifest
+        (res.files) and is therefore covered by the content-safety scan."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert "README.md" in res.files, "README must be in the emitted manifest (res.files)"
+
+    def test_authored_readme_with_host_path_blocks(self, tmp_path):
+        """AC4 (teeth): README is agent-consumed context, NOT a deliverable — a host-path
+        in it BLOCKS emit (proves it's really scanned, not silently written past the gate)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        (ddd / "README.md").write_text(
+            "# Pkg\n\nRun from ~/.swarm-ai/SwarmWS/Projects/X to build.\n", encoding="utf-8")
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_generated_readme_deterministic(self, tmp_path):
+        """AC5: two emits of the same DDD → byte-identical generated README (no timestamp/run-id)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [r1] = pk.package_ddd(ddd, tmp_path / "out1")
+        [r2] = pk.package_ddd(ddd, tmp_path / "out2")
+        a = (r1.out_dir / "README.md").read_text(encoding="utf-8")
+        b = (r2.out_dir / "README.md").read_text(encoding="utf-8")
+        assert a == b, "generated README must be deterministic across emits"
+
+    def test_generated_readme_excludes_distribution_block(self, tmp_path):
+        """NEVER boundary: the aim.json distribution block (code.amazon.com / brazil target)
+        must NOT leak into the generated README (would self-block an external publish + leak)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # plant a distribution block with a host-ish internal URL
+        import json as _json
+        aim = _json.loads((ddd / "aim.json").read_text(encoding="utf-8"))
+        aim["distribution"]["brazil_package"] = "https://code.amazon.com/packages/Secret/trees/mainline"
+        (ddd / "aim.json").write_text(_json.dumps(aim, indent=2), encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        text = (res.out_dir / "README.md").read_text(encoding="utf-8")
+        assert "code.amazon.com" not in text, "distribution block must not leak into generated README"
+
+    def test_authored_readme_escaping_symlink_falls_back_to_generated(self, tmp_path):
+        """LOW (review) exfil-guard parity: a root README.md symlink escaping the DDD is
+        NOT copied verbatim — it falls through to the generated fallback (no exfil)."""
+        secret_outside = tmp_path / "outside_readme.md"
+        secret_outside.write_text("# proprietary\nnothing-patterned-here\n", encoding="utf-8")
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        (ddd / "README.md").symlink_to(secret_outside)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        text = (res.out_dir / "README.md").read_text(encoding="utf-8")
+        assert "proprietary" not in text, "escaping-symlink README must NOT be copied verbatim"
+        # fell back to generated → carries aim.description
+        assert "A synthetic fixture DDD for packager tests." in text
+
+    def test_skill_description_first_sentence(self, tmp_path):
+        """Direct unit: _skill_description returns the first sentence via the SSOT parser,
+        truncated at 200 chars; missing SKILL.md/description → ''."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # fixture skill s_fx-report has description "s_fx-report skill" (no ". ") → whole kept
+        d = pk._skill_description(ddd, "s_fx-report")
+        assert d == "s_fx-report skill"
+        # unknown skill dir → empty
+        assert pk._skill_description(ddd, "s_does-not-exist") == ""
+
+    def test_generated_readme_escapes_pipe_in_description(self, tmp_path):
+        """Gate-2 MEDIUM: a `|` in a skill description must be ESCAPED in the generated
+        table cell (else it injects extra columns / corrupts the 2-col table)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # overwrite one included domain skill's description with pipe + newline chars
+        sk = ddd / "skills" / "s_fx-report" / "SKILL.md"
+        sk.write_text(
+            "---\nname: s_fx-report\ndescription: Reports | extra col | injection\n---\n\n# x\n",
+            encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        text = (res.out_dir / "README.md").read_text(encoding="utf-8")
+        # the fx-report row must have exactly 3 UNESCAPED pipes (2-col table structure);
+        # description pipes must be backslash-escaped so they don't inject columns.
+        row = [ln for ln in text.splitlines() if "fx-report" in ln and ln.startswith("|")][0]
+        unescaped = row.replace("\\|", "")  # drop escaped pipes, count only structural ones
+        assert unescaped.count("|") == 3, f"table row must stay 2-col (3 structural pipes), got: {row!r}"
+        assert "\\|" in row, "pipe in description must be backslash-escaped"
+
+    def test_generated_readme_skill_desc_host_path_blocks(self, tmp_path):
+        """Gate-2 gap: a host-path in a SKILL description flows into the generated README
+        (agent-consumed context) → must BLOCK emit (not silently ship)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        sk = ddd / "skills" / "s_fx-report" / "SKILL.md"
+        sk.write_text(
+            "---\nname: s_fx-report\ndescription: Run from ~/.swarm-ai/SwarmWS/Projects/X here\n---\n\n# x\n",
+            encoding="utf-8")
+        with pytest.raises(pk.PackagingError, match="content-safety"):
+            pk.package_ddd(ddd, tmp_path / "out")
