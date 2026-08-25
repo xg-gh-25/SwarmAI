@@ -154,7 +154,13 @@ def _run_bandit(root: Path) -> list[dict]:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     # bandit exit: 0 = no issues, 1 = issues found. Both are SUCCESS for us (we parse
-    # JSON). A crash (>1 or empty stdout) is an infra error → fail CLOSED (_die).
+    # JSON). rc>=2 is a config/internal ERROR — bandit can still emit valid JSON with
+    # empty results on rc=2, which would silently read as "clean" (RP50 fail-open, the
+    # exact class this gate exists to catch). Check the returncode, not just empty
+    # stdout — a crash with valid-but-empty JSON must fail CLOSED (_die).
+    if proc.returncode not in (0, 1):
+        _die(f"bandit crashed (rc={proc.returncode}, expected 0|1) — infra/config error, "
+             f"fail closed: {proc.stderr[:300]}")
     if not proc.stdout.strip():
         _die(f"bandit produced no JSON (rc={proc.returncode}): {proc.stderr[:300]}")
     try:
@@ -246,6 +252,12 @@ def _secret_fingerprints(root: Path) -> dict[str, dict]:
         "--exclude-files", SECRETS_EXCLUDE_RE,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(root))
+    # detect-secrets rc: 0 = success (found secrets are reported IN the JSON, not via rc);
+    # rc!=0 is a crash/config error that can still emit valid-but-empty JSON → would read
+    # as "clean" (RP50 fail-open). Check the returncode, not just empty stdout.
+    if proc.returncode != 0:
+        _die(f"detect-secrets crashed (rc={proc.returncode}, expected 0) — infra/config "
+             f"error, fail closed: {proc.stderr[:300]}")
     if not proc.stdout.strip():
         _die(f"detect-secrets produced no JSON (rc={proc.returncode}): {proc.stderr[:300]}")
     try:

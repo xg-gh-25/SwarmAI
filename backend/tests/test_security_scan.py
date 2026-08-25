@@ -248,3 +248,73 @@ def test_inv7b_shared_dir_excluded(scan_tree: Path):
     _make_baseline(scan_tree)
     assert "_shared" not in (scan_tree / "bandit-baseline.json").read_text(), \
         "_shared path leaked into bandit baseline"
+
+
+# ---------------------------------------------------------------------------
+# RP50 fail-open regression (run_a278e1ca): the gate MUST fail CLOSED when a
+# scanner tool CRASHES while still emitting valid JSON. bandit rc>=2 (config /
+# internal error) and detect-secrets rc!=0 both produce parseable JSON with empty
+# results — read as "clean" unless returncode is checked. RP50's own ledger traces
+# to a security_scan.py fail-open incident; these force the recovery path (RP28:
+# a recovery branch needs a test that MAKES it execute, not just compiles).
+#
+# These import the module + monkeypatch subprocess.run (the end-to-end _run_scan
+# tests above can't stably construct a rc=2-with-valid-JSON crash from real tools).
+# ---------------------------------------------------------------------------
+import importlib.util as _ilu
+
+
+def _load_scan_module():
+    spec = _ilu.spec_from_file_location("_secscan_under_test", SCAN_PY)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _FakeProc:
+    def __init__(self, returncode, stdout, stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_bandit_crash_with_valid_json_fails_closed(tmp_path, monkeypatch):
+    """Finding A: bandit rc=2 (internal/config error) + valid JSON + empty results
+    must FAIL CLOSED (_die → SystemExit), not read as clean. rc in (0,1) = success;
+    rc>=2 = crash."""
+    mod = _load_scan_module()
+    (tmp_path / "backend").mkdir()
+    valid_empty = '{"results": [], "metrics": {"_totals": {"loc": 10}, "backend/a.py": {"loc": 10}}, "errors": []}'
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda *a, **k: _FakeProc(2, valid_empty, "internal error"))
+    with pytest.raises(SystemExit) as ei:
+        mod._run_bandit(tmp_path)
+    assert ei.value.code == 2, "bandit rc>=2 must fail closed with exit 2"
+
+
+def test_bandit_success_rc_still_parses(tmp_path, monkeypatch):
+    """Guard the fix's boundary: rc=0 and rc=1 are BOTH success (must NOT _die)."""
+    mod = _load_scan_module()
+    (tmp_path / "backend").mkdir()
+    valid = '{"results": [], "metrics": {"_totals": {"loc": 10}, "backend/a.py": {"loc": 10}}, "errors": []}'
+    for rc in (0, 1):
+        monkeypatch.setattr(mod.subprocess, "run",
+                            lambda *a, **k: _FakeProc(rc, valid))
+        assert mod._run_bandit(tmp_path) == [], f"rc={rc} is success, must not die"
+
+
+def test_detect_secrets_crash_with_valid_json_fails_closed(tmp_path, monkeypatch):
+    """Finding A (ds half): detect-secrets rc!=0 + valid JSON must fail closed."""
+    mod = _load_scan_module()
+    (tmp_path / "backend").mkdir()
+    # NOTE: detect-secrets JSON has NO filelist/files-scanned field (verified: keys are
+    # version/plugins_used/filters_used/results/generated_at only) — so files-scanned>0
+    # is unassertable; the rc check + bandit's loc>0 guard over the same subtree is the
+    # coverage floor. This fixture mirrors the REAL shape (no invented field).
+    valid = ('{"version": "' + mod.EXPECTED_DETECT_SECRETS_VERSION +
+             '", "plugins_used": [{"name": "Base64HighEntropyString"}], "results": {}}')
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda *a, **k: _FakeProc(2, valid, "boom"))
+    with pytest.raises(SystemExit) as ei:
+        mod._secret_fingerprints(tmp_path)
+    assert ei.value.code == 2, "detect-secrets rc!=0 must fail closed"
