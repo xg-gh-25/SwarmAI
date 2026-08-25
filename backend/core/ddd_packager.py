@@ -902,22 +902,48 @@ def _copy_gates(ddd_dir: Path, dst: Path) -> list[str]:
     return sorted(str(p.relative_to(dst.parent)) for p in dst.rglob("*") if p.is_file())
 
 
-# Standard tool set for a kiroCli agent — mirrors the official SampleAICapabilities
-# kitchen-sink agent-spec (read/write/shell + the builder-mcp bundle). Kept minimal +
-# deterministic; a DDD needing more declares them via aim.json (future extension).
-_KIRO_BASE_TOOLS = ["read", "write", "shell", "@builder-mcp"]
+# CONTRACT-DRIVEN tool defaults — the FALLBACK when a DDD's aim.json declares no
+# plugins.tools / plugins.allowed_tools. Base tools ONLY (read/write/shell); NO @<mcp>
+# is baked in here. Every @<mcp> tool is derived from the SINGLE source _extract_mcp
+# (mirrors the official SampleAICapabilities shape where allowedTools = read + the MCP
+# bundles). Baking @builder-mcp into a default would privilege one MCP + create a second
+# source of truth for which MCPs appear in tools (Gate-1 run_91a812c6). A DDD that needs
+# builder-mcp declares it in plugins.mcp — it then derives into both lists automatically.
+_DEFAULT_KIRO_TOOLS = ["read", "write", "shell"]
+_DEFAULT_KIRO_ALLOWED_BASE = ["read"]  # non-MCP allowed base; @<mcp> appended from _extract_mcp
 
 
-def _build_kiro_client_config(has_corpus: bool) -> dict[str, Any]:
-    """Build the clientConfig.kiroCli block for an emitted agent-spec, mirroring the
-    official SampleAICapabilities shape (tools + allowedTools + a knowledgeBase
-    resource over context/knowledge). The corpus is declared as a RETRIEVABLE
-    knowledgeBase (indexType fast) rather than left resident in context:["*"] — so a
-    large corpus is searched on demand, not always in-window (standard §5)."""
-    cfg: dict[str, Any] = {
-        "tools": list(_KIRO_BASE_TOOLS),
-        "allowedTools": ["read", "@builder-mcp"],
-    }
+def _build_kiro_client_config(ddd_dir: Path, has_corpus: bool) -> dict[str, Any]:
+    """Build the clientConfig.kiroCli block for an emitted agent-spec, CONTRACT-DRIVEN
+    from the DDD's aim.json declaration (mirrors the official SampleAICapabilities shape:
+    per-agent tools + allowedTools + a knowledgeBase resource over context/knowledge).
+
+    tools        = declared plugins.tools  OR _DEFAULT_KIRO_TOOLS, then UNION every
+                   declared MCP as @<name> (single source = _extract_mcp), deduped.
+    allowedTools = declared plugins.allowed_tools OR (_DEFAULT_KIRO_ALLOWED_BASE + the
+                   same @<mcp> set) — then CLAMPED to a subset of tools (an author who
+                   over-claims an allowed tool not granted in tools can't leak it).
+    Both @<mcp> segments derive from ONE _extract_mcp call, so allowedTools ⊆ tools
+    holds by construction (Gate-1). The corpus is a RETRIEVABLE knowledgeBase (indexType
+    fast) rather than resident context:["*"] (standard §5)."""
+    mcp_tags = [f"@{name}" for name in sorted(_extract_mcp(ddd_dir))]
+    declared_tools, declared_allowed = _extract_tools(ddd_dir)
+
+    tools = list(declared_tools) if declared_tools is not None else list(_DEFAULT_KIRO_TOOLS)
+    for tag in mcp_tags:  # union the declared MCPs (dedup — builder-mcp only appears once)
+        if tag not in tools:
+            tools.append(tag)
+
+    if declared_allowed is not None:
+        allowed = list(declared_allowed)
+    else:
+        allowed = list(_DEFAULT_KIRO_ALLOWED_BASE) + [t for t in mcp_tags if t not in _DEFAULT_KIRO_ALLOWED_BASE]
+    # Clamp: allowedTools is a GATE over tools — never allow what isn't granted (preserve
+    # order, drop over-claims). Guarantees allowedTools ⊆ tools even on a declared override.
+    tools_set = set(tools)
+    allowed = [t for t in allowed if t in tools_set]
+
+    cfg: dict[str, Any] = {"tools": tools, "allowedTools": allowed}
     if has_corpus:
         cfg["resources"] = [{
             "type": "knowledgeBase",
@@ -1084,7 +1110,7 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             # NOT inferred from skill-body text (Gate-1: body-grep over/under-declares).
             "mcpRegistry": {name: {} for name in sorted(_extract_mcp(ddd_dir))},
         },
-        "clientConfig": {"kiroCli": _build_kiro_client_config(bool(corpus_files))},
+        "clientConfig": {"kiroCli": _build_kiro_client_config(ddd_dir, bool(corpus_files))},
     }
     _write_json(out_dir / "agents" / f"{normalize_name(ddd_name, prefix='')}.agent-spec.json", agent_spec)
 
@@ -1196,6 +1222,32 @@ def _extract_mcp(ddd_dir: Path) -> dict[str, Any]:
                     k: v for k, v in sorted(entry.items()) if k != "name"
                 }
     return servers
+
+
+def _extract_tools(ddd_dir: Path) -> tuple[list[str] | None, list[str] | None]:
+    """Pull the DDD's DECLARED agent tool grants from aim.json — the contract-driven
+    source for clientConfig.kiroCli.{tools,allowedTools} (mirrors _extract_mcp's
+    declaration-read). Reads ``plugins.tools`` and ``plugins.allowed_tools`` (NOT
+    ``plugins.domain_tools`` — that is the data-agent SDK tool-FILE materializer, an
+    unrelated concept). Returns (tools_or_None, allowed_or_None): None means "not
+    declared → caller uses the default". FAIL-SOFT + isinstance-guarded like _extract_mcp:
+    a missing/malformed value (not a list of str) yields None (fall back to default),
+    never raises. Empty list `[]` is a valid explicit declaration (returns [], not None)."""
+    aim = _read_aim(ddd_dir)
+    plugins = aim.get("plugins") if isinstance(aim, dict) else None
+    if not isinstance(plugins, dict):
+        return None, None
+
+    def _clean(key: str) -> list[str] | None:
+        val = plugins.get(key)
+        if not isinstance(val, list):
+            return None  # absent or malformed (e.g. a bare string) → default
+        # drop non-strings/empties, then order-preserving dedup (a declared
+        # ["read","read"] should emit "read" once — the emitted tools list is a SET
+        # of grants, dup entries are noise).
+        return list(dict.fromkeys(t for t in val if isinstance(t, str) and t))
+
+    return _clean("tools"), _clean("allowed_tools")
 
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,7 @@ def build_fixture_ddd(
     add_gate_pycache: bool = False,
     add_noise: bool = False,
     system_prompt: str | None = "# {name}\nYou are the {name} agent.\n",
+    plugins_override: dict | None = None,
 ) -> Path:
     """Build a minimal compliant six-section DDD. Returns its dir.
 
@@ -132,7 +133,7 @@ def build_fixture_ddd(
         "name": name,
         "ddd_spec_version": "1.0",
         "description": "A synthetic fixture DDD for packager tests.",
-        "plugins": {
+        "plugins": plugins_override if plugins_override is not None else {
             "native_skills": ["s_ddd-manager", "s_repo-to-ddd"],
             "domain_skills": ["s_fx-report", "s_fx-analyze"],
             "mcp": [{"name": "FxMCP", "endpoint_env": "MCP_ENDPOINT"}],
@@ -1369,7 +1370,9 @@ class TestAIMCompliance:
         spec = json.loads(specs[0].read_text(encoding="utf-8"))
         cc = spec.get("clientConfig", {}).get("kiroCli", {})
         assert cc.get("tools"), "clientConfig.kiroCli.tools must be non-empty"
-        assert "read" in cc["tools"] and "@builder-mcp" in cc["tools"]
+        # base tools always present; the MCP tag derives from the fixture's declared MCP
+        # (FxMCP) — NOT a hardcoded @builder-mcp (contract-driven, run_91a812c6).
+        assert "read" in cc["tools"] and "@FxMCP" in cc["tools"]
         assert "allowedTools" in cc
         # mcpRegistry derived from aim.json plugins.mcp (fixture declares FxMCP)
         reg = spec.get("dependencies", {}).get("mcpRegistry", {})
@@ -1463,3 +1466,66 @@ class TestSystemPrompt:
                                 system_prompt=authored)
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         assert (res.out_dir / "context" / "SYSTEM_PROMPT.md").read_text() == authored
+
+
+# ---------------------------------------------------------------------------
+# Contract-driven agent-spec tools (run_91a812c6) — tools + allowedTools derive
+# from aim.json plugins.tools/allowed_tools + plugins.mcp, ZERO hardcoded @<mcp>
+# singleton. Standard: Knowledge/Library/2026-08-25-aim-capabilities-package-standard.md.
+# ---------------------------------------------------------------------------
+class TestContractDrivenTools:
+    def _spec(self, root, plugins, **kw):
+        ddd = build_fixture_ddd(root, targets=["aim-capabilities"], visibility="internal",
+                                plugins_override=plugins, **kw)
+        [res] = pk.package_ddd(ddd, root / "out")
+        return json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text(encoding="utf-8"))
+
+    def _cc(self, spec):
+        return spec["clientConfig"]["kiroCli"]
+
+    # AC4 pin — no tools, no mcp declared → tools == base [read,write,shell], allowedTools == [read]
+    def test_no_declaration_byte_identical(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"]}))
+        assert cc["tools"] == ["read", "write", "shell"], "no-decl DDD must get exactly the base tools (no @<mcp>)"
+        assert cc["allowedTools"] == ["read"], "no-decl allowedTools must be exactly [read] (no hardcoded @builder-mcp)"
+
+    # AC1 — declared plugins.tools honored
+    def test_declared_tools(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"], "tools": ["read", "write", "shell", "aws"]}))
+        assert "aws" in cc["tools"], "a declared tool (aws) must appear"
+
+    # AC2 — declared allowed_tools honored
+    def test_declared_allowed_tools(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"], "allowed_tools": ["read"]}))
+        assert cc["allowedTools"] == ["read"]
+
+    # AC3 — EVERY declared MCP derives to @<name> in BOTH tools and allowedTools (single source)
+    def test_mcp_bridge_all_and_both_lists(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"],
+                                            "mcp": [{"name": "coe-mcp"}, {"name": "talos-gateway-mcp"}]}))
+        assert "@coe-mcp" in cc["tools"] and "@talos-gateway-mcp" in cc["tools"]
+        assert "@coe-mcp" in cc["allowedTools"] and "@talos-gateway-mcp" in cc["allowedTools"]
+
+    # AC3 dedup — declaring builder-mcp yields @builder-mcp exactly once
+    def test_mcp_dedup(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"], "mcp": [{"name": "builder-mcp"}]}))
+        assert cc["tools"].count("@builder-mcp") == 1
+
+    # SecDLC-shaped — declares builder-mcp (Gate-1: removing default @builder-mcp must not lose it for SecDLC)
+    def test_secdlc_shaped_derives_builder_mcp(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"],
+                                            "mcp": [{"name": "builder-mcp"}, {"name": "coe-mcp"}, {"name": "talos-gateway-mcp"}]}))
+        assert cc["tools"] == ["read", "write", "shell", "@builder-mcp", "@coe-mcp", "@talos-gateway-mcp"]
+        assert cc["allowedTools"] == ["read", "@builder-mcp", "@coe-mcp", "@talos-gateway-mcp"]
+
+    # invariant — allowedTools ⊆ tools ALWAYS (even with a declared-override that over-claims)
+    def test_allowed_subset_of_tools_clamped(self, tmp_path):
+        # author over-claims: allowed_tools lists a tool NOT in tools → must be clamped, not leak
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"],
+                                            "tools": ["read", "write"], "allowed_tools": ["read", "shell", "aws"]}))
+        assert set(cc["allowedTools"]) <= set(cc["tools"]), "allowedTools must always be a subset of tools (clamp over-claims)"
+
+    # AC5 — fail-soft on malformed plugins.tools (a string, not a list) → falls back to default
+    def test_malformed_tools_fail_soft(self, tmp_path):
+        cc = self._cc(self._spec(tmp_path, {"domain_skills": ["s_fx-report"], "tools": "notalist"}))
+        assert cc["tools"] == ["read", "write", "shell"], "malformed plugins.tools must fall back to default, not crash"
