@@ -73,6 +73,7 @@ def build_fixture_ddd(
     add_noise: bool = False,
     system_prompt: str | None = "# {name}\nYou are the {name} agent.\n",
     plugins_override: dict | None = None,
+    understanding_orphans: dict[str, str] | None = None,
 ) -> Path:
     """Build a minimal compliant six-section DDD. Returns its dir.
 
@@ -112,6 +113,15 @@ def build_fixture_ddd(
         (kdir / ".gitkeep").write_text("", encoding="utf-8")  # must NOT ship
         for fname, text in corpus_docs.items():
             (kdir / fname).write_text(text, encoding="utf-8")
+
+    if understanding_orphans:
+        # non-canonical .md at the 2-understanding/ ROOT (e.g. an RP-library SSOT) —
+        # today these are dropped by the packager (the lost-content bug). Also drop an
+        # archive + a .lock to prove filter-out is preserved.
+        udir = ddd / "2-understanding"
+        udir.mkdir(parents=True, exist_ok=True)
+        for fname, text in understanding_orphans.items():
+            (udir / fname).write_text(text, encoding="utf-8")
 
     if deliverables:
         ddir = ddd / "deliverables"
@@ -1575,3 +1585,137 @@ class TestFreshCloneIntegrity:
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         empties = self._empty_dirs(res.out_dir)
         assert empties == [], f"emitted plugin must have NO empty dir (fresh-clone §9); found: {empties}"
+
+
+# ---------------------------------------------------------------------------
+# Lossless mapping: 2-understanding/ ROOT non-canonical .md -> context/knowledge/
+# (run_f291ad72). RP-library SSOT (security-review-patterns.md) sits in the
+# understanding ROOT, not knowledge/ - the old packager dropped it (lost-content bug).
+# ---------------------------------------------------------------------------
+class TestUnderstandingOrphansShip:
+    def test_root_orphan_md_ships_to_knowledge(self, tmp_path):
+        """A non-canonical .md in 2-understanding/ root (RP library) MUST ship into
+        context/knowledge/ (retrievable), not be dropped."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md": "# RP library\nRP44 ...\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        shipped = res.out_dir / "context" / "knowledge" / "security-review-patterns.md"
+        assert shipped.is_file(), "the RP-library orphan must ship to context/knowledge/"
+        assert "RP44" in shipped.read_text()
+
+    def test_filter_out_preserved_archive_and_lock_do_not_ship(self, tmp_path):
+        """Filter-out preserved: an -archive.md and a .lock at the understanding root
+        must NOT ship."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={
+                "security-review-patterns.md": "# RP\nRP1 ...\n",
+                "IMPROVEMENT-archive.md": "# decay archive\nnoise\n",
+                "PRODUCT.md.lock": "lockstate\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        k = res.out_dir / "context" / "knowledge"
+        assert (k / "security-review-patterns.md").is_file()
+        assert not (k / "IMPROVEMENT-archive.md").exists(), "decay archive must NOT ship"
+        assert not (k / "PRODUCT.md.lock").exists(), ".lock local state must NOT ship"
+        assert not (k / "PRODUCT.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# Gate: fail-loud on a hardcoded six-section physical path in a shipped skill/SOP
+# (run_f291ad72). TECH-class structure docs are NOT gated.
+# ---------------------------------------------------------------------------
+class TestHardcodedPathGate:
+    def test_skill_with_hardcoded_layout_path_fails_loud(self, tmp_path):
+        """A skill body hardcoding a six-section source path -> PackagingError."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        sk = ddd / "skills" / "s_fx-report" / "SKILL.md"
+        sk.write_text(
+            "---\nname: s_fx-report\ndescription: fx\n---\n\n"
+            "Read `2-understanding/knowledge/anti-pattern-case-library.md` before review.\n",
+            encoding="utf-8")
+        with pytest.raises(pk.PackagingError, match="hardcoded|layout|2-understanding"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_clean_skill_passes_gate(self, tmp_path):
+        """A skill referencing assets layout-neutrally emits cleanly."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        sk = ddd / "skills" / "s_fx-report" / "SKILL.md"
+        sk.write_text(
+            "---\nname: s_fx-report\ndescription: fx\n---\n\n"
+            "Consult the anti-pattern case library (retrievable knowledge) before review.\n",
+            encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "skills" / "fx-report" / "SKILL.md").is_file()
+
+
+class TestSecretCodeSpanSuppression:
+    def test_codespan_pattern_in_prose_not_flagged(self, tmp_path):
+        """A security doc that DESCRIBES a secret pattern in a markdown code-span
+        (password=`...`) is NOT a real secret — suppressed in prose (run_f291ad72)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md":
+                "# RP\ngrep for the credential pattern `password=`/`secret=` in config.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert (res.out_dir / "context" / "knowledge" / "security-review-patterns.md").is_file()
+
+    def test_real_unquoted_secret_in_config_still_flagged(self, tmp_path):
+        """Detector NOT weakened: a real unquoted secret in a .env script still blocks."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        (ddd / "skills" / "s_fx-report" / "config.env").write_text(
+            "password=hunter2token\n", encoding="utf-8")
+        with pytest.raises(pk.PackagingError, match="content-safety|secret"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+
+class TestGate2Fixes:
+    def test_backtick_wrapped_real_secret_still_flagged(self, tmp_path):
+        """Gate-2 4a: a backtick-wrapped REAL secret in prose must NOT be suppressed —
+        only a backtick-span that itself contains a key=-PATTERN is a description."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md":
+                "# RP\nExample leak: password=`hunter2realtokenvalue` committed to config.\n"})
+        with pytest.raises(pk.PackagingError, match="content-safety|secret"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_pattern_codespan_still_suppressed(self, tmp_path):
+        """The describe-the-pattern code-span (`password=`/`secret=`) is still suppressed."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md":
+                "# RP\ngrep for the credential pattern `password=`/`secret=` in config.\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert (res.out_dir / "context" / "knowledge" / "security-review-patterns.md").is_file()
+
+    def test_hardcoded_path_in_corpus_is_gated(self, tmp_path):
+        """Gate-2 2c/5: a hardcoded six-section path INSIDE a shipped corpus file
+        (context/knowledge/) is now gated — it dangles like one in a skill."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            understanding_orphans={"security-review-patterns.md":
+                "# RP library\nAlso read `2-understanding/knowledge/other.md` for context.\n"})
+        with pytest.raises(pk.PackagingError, match="hardcoded|layout|2-understanding"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_context_root_doc_not_gated_for_layout_path(self, tmp_path):
+        """A canonical context/ ROOT doc (TECH etc.) describing the six-section structure
+        is NOT gated (path there is descriptive semantics, not a runtime deref)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # TECH.md at ddd root (→ context/TECH.md) describes the layout
+        (ddd / "TECH.md").write_text(
+            "# TECH\nThe DDD keeps standards in `3-gates/` and corpus in `2-understanding/knowledge/`.\n",
+            encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")  # must NOT raise
+        assert (res.out_dir / "context" / "TECH.md").is_file()
+
+    def test_orphan_corpus_name_collision_fails_loud(self, tmp_path):
+        """Gate-2 1b: a root orphan colliding with a knowledge/ corpus file fails loud
+        (never silently clobbers)."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"shared.md": "# corpus version\n"},
+            understanding_orphans={"shared.md": "# orphan version\n"})
+        with pytest.raises(pk.PackagingError, match="collides|collision"):
+            pk.package_ddd(ddd, tmp_path / "out")

@@ -260,7 +260,21 @@ def _scan_text(rel: str, text: str, *, external: bool) -> list[ScanFinding]:
             # not the end of an isolated assignment.
             tail = line[um.end():]
             has_prose_tail = bool(re.match(r"\s+\S", tail))
-            suppress = is_prose and val.isalpha() and has_prose_tail
+            # Markdown code-span DESCRIBING a secret PATTERN (not a real value): a security
+            # doc / the RP library teaches "grep for `password=`/`secret=` in config". The
+            # tell is the value is a backtick-span that ITSELF contains a key=-token — i.e.
+            # `<keyword>=` inside the span — NOT an arbitrary backtick-wrapped value. Gating
+            # on the =-in-span shape (run_f291ad72, Gate-2 4a) keeps a backtick-wrapped REAL
+            # secret (`password=`hunter2realtoken``) FLAGGED — do NOT suppress on bare
+            # startswith("`") (that fail-opens any code-spanned secret). Prose files only.
+            # The value is a backtick code-span (starts with `) AND the span DESCRIBES a
+            # key=-pattern (contains `<keyword>=` inside it, e.g. `password=` / `secret=` in a
+            # security doc). A REAL backtick-wrapped secret is `<plainvalue>` with NO nested
+            # keyword= — so it stays FLAGGED (Gate-2 4a fail-open fix). Prose files only.
+            is_pattern_codespan = is_prose and val.startswith("`") and bool(
+                re.search(r"(?:secret|password|passwd|token|api[_-]?key)\s*[=:]", val, re.IGNORECASE)
+            )
+            suppress = (is_prose and val.isalpha() and has_prose_tail) or is_pattern_codespan
             if not suppress:
                 findings.append(ScanFinding(rel, "secret", um.group(0)[:40], i))
         for pat in _HOST_PATH_PATTERNS:
@@ -299,6 +313,51 @@ def content_safety_scan(tree: Path, *, external: bool) -> list[ScanFinding]:
             continue
         findings.extend(_scan_text(rel, text, external=external))
     return sorted(findings, key=lambda f: (f.file, f.line, f.kind))
+
+
+# Hardcoded six-section SOURCE-layout path in a shipped runtime file. The flat AIM
+# package has no 2-understanding/ 3-gates/ 4-capabilities/ dirs, so a runtime file
+# (skill / SOP) that hardcodes such a path DANGLES on the consumer. This is a DDD-authoring
+# smell killed at the SOURCE (run_f291ad72): the author must reference internal assets
+# layout-neutrally (by asset name / retrievable knowledge), never by physical section path.
+_HARDCODED_LAYOUT_PATH = re.compile(r"(?<![\w./-])(?:2-understanding|3-gates|4-capabilities)/")
+
+
+def gate_hardcoded_layout_paths(out_dir: Path) -> list[tuple[str, int, str]]:
+    """Scan the emitted RUNTIME files (``skills/**``, ``agent-sops/**``) for a hardcoded
+    six-section source path. Returns [(rel_file, line_no, line_text), …] — empty = clean.
+
+    Gated scope = files an installed agent EXECUTES/READS as instructions OR retrievable
+    knowledge: ``skills/**``, ``agent-sops/**``, AND ``context/knowledge/**`` (the corpus —
+    an RP library / methodology doc the agent is TOLD to consult; a hardcoded path inside it
+    dangles identically to one in a skill — Gate-2 2c/5, run_f291ad72). NOT gated: ``context/``
+    ROOT docs (PRODUCT/TECH/… describe the DDD's own six-section structure — a path there is
+    descriptive SEMANTICS, not a runtime dereference), ``ddd-source``/deliverables (not
+    agent-consumed). Fail-loud is raised by the caller (``package_ddd``) so the author fixes
+    the source once (portable refs), like the SYSTEM_PROMPT/README author-owned contract —
+    the packager verifies, never rewrites (a regex rewrite misfires on code fences +
+    consumer-repo paths — skeptic-verified)."""
+    hits: list[tuple[str, int, str]] = []
+    for path in sorted(out_dir.rglob("*")):
+        if not path.is_file() or not _is_scannable(path):
+            continue
+        rel = path.relative_to(out_dir)
+        parts = rel.parts
+        # gated: skills/**, agent-sops/**, context/knowledge/** (corpus). NOT context/ root.
+        gated = (
+            parts[0] in ("skills", "agent-sops")
+            or (len(parts) >= 2 and parts[0] == "context" and parts[1] == "knowledge")
+        )
+        if not gated:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if _HARDCODED_LAYOUT_PATH.search(line):
+                hits.append((str(rel), i, line.strip()[:160]))
+    return hits
 
 
 def rewrite_host_paths(tree: Path) -> int:
@@ -822,6 +881,53 @@ def _copy_corpus(ddd_dir: Path, dest: Path) -> list[str]:
     return written
 
 
+def _copy_understanding_orphans(ddd_dir: Path, dest: Path) -> list[str]:
+    """Ship the ② understanding ROOT's NON-canonical knowledge ``.md`` (e.g. an
+    RP-library SSOT like ``security-review-patterns.md``) into ``dest``
+    (``context/knowledge/``) as retrievable corpus (run_f291ad72 — the lost-content bug).
+
+    The old packager copied ONLY the 4 canonical docs (PRODUCT/TECH/IMPROVEMENT/PROJECT)
+    from the understanding root → any OTHER ``.md`` there was silently dropped, so a
+    package could reference (28×, in SecDLC) an SSOT that never shipped → runtime failure.
+
+    Boundary (filter-out preserved — never widen it):
+    - **Canonical docs** (``_KNOWLEDGE_DOCS``) are handled by the caller (→ ``context/``
+      resident); skip them here so a doc lands in exactly ONE place.
+    - **Decay archives** (``*-archive.md``) and **lock/state** (``*.lock``, non-``.md``)
+      are NOISE / local state — NOT shipped (matches ``_copy_deliverables`` archive
+      boundary + the corpus ``.gitkeep`` exclusion).
+    - A ``.md`` that is a SYMLINK escaping the DDD is skipped (exfil guard parity).
+
+    Deterministic (sorted). Returns the relative names written under ``dest``."""
+    src = ddd_dir / "2-understanding"
+    if not src.is_dir():
+        return []
+    canonical = set(_KNOWLEDGE_DOCS)
+    written: list[str] = []
+    for md in sorted(src.glob("*.md")):  # ROOT only (not knowledge/ — that's _copy_corpus)
+        if md.name in canonical:
+            continue                      # canonical → context/ (caller), not knowledge/
+        if md.name.endswith("-archive.md"):
+            continue                      # decay archive = noise, filter-out preserved
+        if md.is_symlink() and _escapes_ddd(md, ddd_dir):
+            logger.warning("understanding orphan %s is an escaping symlink — skipped (exfil guard)", md.name)
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        target = dest / md.name
+        if target.exists():
+            # A root orphan named identically to a knowledge/ corpus file would silently
+            # clobber it (Gate-2 1b). Fail-loud: a name collision across the two sources is
+            # an author error, not a merge — surface it instead of overwriting.
+            raise PackagingError(
+                f"understanding-root orphan '{md.name}' collides with an existing "
+                f"context/knowledge/ corpus file — rename one (a knowledge asset name must be "
+                f"unique across 2-understanding/ root and 2-understanding/knowledge/)."
+            )
+        shutil.copy2(md, target)
+        written.append(md.name)
+    return written
+
+
 def _fill_empty_dirs(out_dir: Path) -> list[str]:
     """Fresh-clone integrity (AIM standard §9): git does NOT track empty directories, so
     an empty dir in the emitted package VANISHES on a fresh clone — and any skill body /
@@ -1122,6 +1228,7 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     # agentSops:["*"] dependency) ; human deliverables → deliverables/. ALL before the
     # res.files rebuild + the orchestrator's content-safety scan, so gates are scanned too.
     corpus_files = _copy_corpus(ddd_dir, ctx / "knowledge")
+    corpus_files += _copy_understanding_orphans(ddd_dir, ctx / "knowledge")
     _copy_gates(ddd_dir, sops / "gates")
     # ③ .md gate STANDARDs ALSO emit as agent-sops/<stem>.sop.md so the AIM runtime
     # DISCOVERS them as SOPs (it recognizes agent-sops/*.sop.md only, not nested .md —
@@ -1249,6 +1356,7 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     # (gate standards ARE always-apply rules) ; human deliverables → deliverables/.
     # Kept consistent with emit_target_aim (both ship corpus + gates + deliverables).
     _copy_corpus(ddd_dir, out_dir / "knowledge")
+    _copy_understanding_orphans(ddd_dir, out_dir / "knowledge")
     _copy_gates(ddd_dir, out_dir / "rules" / "gates")
     _copy_deliverables(ddd_dir, out_dir)
 
@@ -1412,6 +1520,18 @@ def package_ddd(
             detail = "; ".join(f"{f.kind}@{f.file}:{f.line} ({f.detail})" for f in blocking[:8])
             raise PackagingError(
                 f"content-safety scan BLOCKED {target} ({len(blocking)} finding(s)): {detail}"
+            )
+
+        # Fail-loud gate (run_f291ad72): a shipped skill/SOP must NOT hardcode a six-section
+        # source-layout path — it dangles in the flat package. Kills the class at the source;
+        # the DDD author references assets layout-neutrally (packager verifies, never rewrites).
+        layout_hits = gate_hardcoded_layout_paths(out_dir)
+        if layout_hits:
+            detail = "; ".join(f"{f}:{ln} ({txt})" for f, ln, txt in layout_hits[:8])
+            raise PackagingError(
+                f"hardcoded six-section layout path BLOCKED {target} ({len(layout_hits)} in skill/SOP): "
+                f"{detail}. Reference internal assets layout-neutrally (by name / retrievable "
+                f"knowledge), never by physical 2-understanding/ 3-gates/ 4-capabilities/ path."
             )
         for f in findings:
             res.warnings.append(f"scan: {f.kind}@{f.file}:{f.line} ({f.detail})")
