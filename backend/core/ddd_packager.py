@@ -933,29 +933,53 @@ def _copy_understanding_orphans(ddd_dir: Path, dest: Path) -> list[str]:
     return written
 
 
-def _fill_empty_dirs(out_dir: Path) -> list[str]:
-    """Fresh-clone integrity (AIM standard §9): git does NOT track empty directories, so
-    an empty dir in the emitted package VANISHES on a fresh clone — and any skill body /
-    resource path that references a file under it then breaks on the consumer's machine.
+def _prune_empty_dirs(out_dir: Path, keep: frozenset[str] = frozenset()) -> list[str]:
+    """Fresh-clone integrity (AIM standard §10.4): git does NOT track empty directories,
+    so an empty dir VANISHES on a fresh clone anyway — and an empty dir holds no file that
+    could be referenced, so its disappearance breaks nothing. The correct handling is to
+    PRUNE it from the package, NOT to keep it alive with a re-planted ``.gitkeep`` (that
+    ships a pointless empty placeholder — e.g. a source ``3-gates/context/includes/`` that
+    is a bare ``.gitkeep`` scaffold marker until the first denylist datum matures).
+    Production AIM packages ship ZERO empty/placeholder dirs.
 
     A copytree-based section copy (``_copy_gates`` etc.) that excludes a subdir's only
     file (a ``.gitkeep`` scaffold marker / ``__pycache__`` build-noise) leaves that subdir
-    present-but-EMPTY in the package. This is a CROSS-CUTTING seam: any current or future
-    emit path can produce one, so it is fixed ONCE here over the whole emitted tree rather
-    than patched per-helper (P8). Every empty dir gets a ``.gitkeep`` so the tree is
-    fresh-clone-complete. Run at the END of each emit target, before the ``res.files``
-    rebuild, so the markers land in the manifest + are content-safety-scanned.
+    present-but-empty. This is a CROSS-CUTTING seam: any current or future emit path can
+    produce one, so it is fixed ONCE here over the whole emitted tree rather than patched
+    per-helper (P8). A stray ``.gitkeep`` inside such a dir is itself scaffold noise (never
+    real content), so a dir whose ONLY file is ``.gitkeep`` counts as empty and is pruned.
+    Run at the END of each emit target, before the ``res.files`` rebuild, so the manifest
+    reflects the pruned tree.
 
-    Returns the relative paths of the ``.gitkeep`` markers written (deterministic, sorted)."""
-    written: list[str] = []
-    # Deepest-first so a dir that becomes non-empty only via a child's marker is still
-    # judged on its own real content (a parent of a filled child is legitimately non-empty).
+    ``keep`` is the set of top-level dir names that a manifest/plugin.json DECLARES and so
+    must survive even when empty (e.g. open-plugin's ``hooks`` stub — the plugin.json points
+    at it, so pruning it would dangle the declared path). A declared-but-empty dir is the ONE
+    legitimate empty dir; everything else is noise. Deterministic, sorted return of pruned
+    relative paths."""
+    pruned: list[str] = []
+    # Deepest-first so pruning a child can then make its parent empty and prunable too
+    # (a nested pure-placeholder chain collapses fully in one pass).
     for d in sorted((p for p in out_dir.rglob("*") if p.is_dir()),
                     key=lambda p: len(p.parts), reverse=True):
-        if not any(c.is_file() for c in d.rglob("*")):
-            (d / ".gitkeep").write_text("", encoding="utf-8")
-            written.append(str((d / ".gitkeep").relative_to(out_dir)))
-    return sorted(written)
+        if not d.is_dir():
+            continue  # already removed as a child of an earlier-pruned parent
+        # A symlink-to-dir is NEVER an empty dir the packager emitted — it was preserved by
+        # copytree(symlinks=True) and already exfil-vetted at copy time. shutil.rmtree REFUSES
+        # a symlink (raises OSError), so a symlinked dir must be skipped, not pruned.
+        if d.is_symlink():
+            continue
+        # A declared top-level dir (manifest/plugin.json references it) survives even empty.
+        if d.parent == out_dir and d.name in keep:
+            continue
+        # A .gitkeep is scaffold noise, never referenceable content — a dir whose only
+        # file(s) are .gitkeep markers is effectively empty.
+        real = [c for c in d.rglob("*") if c.is_file() and c.name != ".gitkeep"]
+        if real:
+            continue
+        rel = str(d.relative_to(out_dir))
+        shutil.rmtree(d)
+        pruned.append(rel)
+    return sorted(pruned)
 
 
 def _copy_deliverables(ddd_dir: Path, out_dir: Path) -> list[str]:
@@ -1153,12 +1177,8 @@ def _emit_gate_sops(ddd_dir: Path, sops_dir: Path) -> list[str]:
         dup = sops_dir / "gates" / md.name
         if dup.is_file():
             dup.unlink()
-    # If sopification emptied gates/ entirely (every gate was a top-level .md, no scripts /
-    # includes left), remove the now-empty dir so _fill_empty_dirs does not ship a pointless
-    # gates/.gitkeep (Gate-2 LOW, run_aaa50c56). rmdir only succeeds when truly empty.
-    gates_out = sops_dir / "gates"
-    if gates_out.is_dir() and not any(gates_out.iterdir()):
-        gates_out.rmdir()
+    # A gates/ dir left empty by sopification (every gate was a top-level .md, no scripts /
+    # includes) is pruned by _prune_empty_dirs at emit-end (§10.4) — no special-case here.
     return emitted
 
 
@@ -1305,9 +1325,10 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
     # res.files rebuild so it lands in the manifest AND is content-safety-scanned.
     (out_dir / "README.md").write_text(_render_readme(ddd_dir, skills_to_copy), encoding="utf-8")
 
-    # Fresh-clone integrity (§9): fill any empty dir with a .gitkeep before the manifest
-    # rebuild, so git-clone keeps it and no referenced path breaks on the consumer.
-    _fill_empty_dirs(out_dir)
+    # Fresh-clone integrity (§10.4): PRUNE any empty / pure-.gitkeep-placeholder dir before
+    # the manifest rebuild — an empty dir holds no referenceable file, so shipping it is
+    # pointless noise (production AIM packages ship 0 empty dirs).
+    _prune_empty_dirs(out_dir)
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res
@@ -1396,9 +1417,10 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bo
     # target; written BEFORE the res.files rebuild so it's in the manifest + scanned.
     (out_dir / "README.md").write_text(_render_readme(ddd_dir, skills_to_copy), encoding="utf-8")
 
-    # Fresh-clone integrity (§9): fill any empty dir with a .gitkeep before the manifest
-    # rebuild (parity with emit_target_aim).
-    _fill_empty_dirs(out_dir)
+    # Fresh-clone integrity (§10.4): PRUNE any empty / pure-.gitkeep-placeholder dir before
+    # the manifest rebuild — EXCEPT the dirs plugin.json declares (skills/agents/rules/hooks),
+    # which must survive even when empty (an empty hooks/ stub is a declared, valid path).
+    _prune_empty_dirs(out_dir, keep=frozenset({"skills", "agents", "rules", "hooks"}))
 
     res.files = sorted({str(p.relative_to(out_dir)) for p in out_dir.rglob("*") if p.is_file()})
     return res

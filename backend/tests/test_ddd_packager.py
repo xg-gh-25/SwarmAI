@@ -1560,11 +1560,11 @@ class TestContractDrivenTools:
 
 
 # ---------------------------------------------------------------------------
-# §9 fresh-clone integrity — no empty dir survives in the emitted package
-# (run_c4191122). git drops empty dirs on a fresh clone; a copytree helper that
-# excludes .gitkeep/build-noise can leave an empty subdir → any skill body
-# referencing a file under it breaks on the consumer. Root fix: after emit, every
-# empty dir gets a .gitkeep so the tree is fresh-clone-complete.
+# §10.4 fresh-clone integrity — no empty dir survives in the emitted package.
+# git drops empty dirs on a fresh clone anyway, and an empty dir holds no file to
+# reference, so its removal breaks nothing. Root fix: after emit, every empty /
+# pure-.gitkeep-placeholder dir is PRUNED (not filled) — EXCEPT dirs a manifest/
+# plugin.json declares (e.g. open-plugin's hooks/ stub), which survive even empty.
 # ---------------------------------------------------------------------------
 class TestFreshCloneIntegrity:
     def _empty_dirs(self, root: Path) -> list[str]:
@@ -1574,8 +1574,8 @@ class TestFreshCloneIntegrity:
         )
 
     def test_aim_no_empty_dir_survives(self, tmp_path):
-        """A gate subdir that holds ONLY a .gitkeep (excluded on emit) must NOT leave an
-        empty dir in the package — it gets a .gitkeep so a fresh clone keeps it."""
+        """A gate subdir that holds ONLY a .gitkeep (a pure scaffold placeholder) must NOT
+        leave an empty dir in the package — it is PRUNED (§10.4), not kept alive."""
         # gates: a real .md standard + a context/includes/ that is gitkeep-only in source
         ddd = build_fixture_ddd(
             tmp_path, targets=["aim-capabilities"], visibility="internal",
@@ -1585,14 +1585,56 @@ class TestFreshCloneIntegrity:
         empties = self._empty_dirs(res.out_dir)
         assert empties == [], f"emitted package must have NO empty dir (fresh-clone §9); found: {empties}"
 
-    def test_open_plugin_no_empty_dir_survives(self, tmp_path):
+    def test_open_plugin_prunes_placeholder_keeps_declared(self, tmp_path):
+        """A pure-.gitkeep placeholder (gates/context/includes) is PRUNED, but the
+        plugin.json-DECLARED hooks/ stub survives even though empty (§10.4: a declared
+        empty dir is the one legitimate empty dir; everything else is noise)."""
         ddd = build_fixture_ddd(
             tmp_path, targets=["open-plugin"], visibility="internal",
             gates={"security-coding-baseline.md": "# baseline\nrule.\n",
                    "context/includes/.gitkeep": ""})
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         empties = self._empty_dirs(res.out_dir)
-        assert empties == [], f"emitted plugin must have NO empty dir (fresh-clone §9); found: {empties}"
+        # only the declared hooks/ stub may remain empty — no placeholder scaffold dirs
+        assert empties == ["hooks"], f"only the declared hooks/ stub may be empty; found: {empties}"
+        assert (res.out_dir / "hooks").is_dir(), "plugin.json declares hooks/ — must survive"
+        assert not (res.out_dir / "rules" / "context" / "includes").exists()
+
+    def test_gitkeep_only_placeholder_dir_pruned_not_filled(self, tmp_path):
+        """§10.4: a subdir that is a pure .gitkeep scaffold placeholder in source
+        (no real content) must be PRUNED from the package, NOT kept alive with a
+        re-planted .gitkeep. Shipping an empty context/includes/ is pointless noise;
+        an empty dir has no file to be referenced, so pruning it breaks nothing.
+        Production AIM packages ship 0 empty/placeholder dirs."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"security-coding-baseline.md": "# baseline\nrule.\n",
+                   "context/includes/.gitkeep": ""})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        placeholder = res.out_dir / "agent-sops" / "gates" / "context" / "includes"
+        assert not placeholder.exists(), (
+            "a source-empty .gitkeep-only placeholder dir must be PRUNED (§10.4), "
+            f"not shipped; found it at {placeholder}")
+        # and no re-planted .gitkeep anywhere in the tree (fill-mode leftover)
+        keeps = sorted(str(p.relative_to(res.out_dir)) for p in res.out_dir.rglob(".gitkeep"))
+        assert keeps == [], f"no .gitkeep markers should survive (prune, not fill); found: {keeps}"
+
+    def test_prune_does_not_crash_on_symlinked_dir(self, tmp_path):
+        """Gate-2 CRITICAL (run_0541a3ef): a non-escaping symlink-to-dir is preserved by
+        copytree(symlinks=True); shutil.rmtree REFUSES a symlink (OSError). Prune must SKIP
+        symlinked dirs (never rmtree them), so emit does not crash. Regression: the old
+        _fill_empty_dirs used write_text (followed the link, no crash); the swap to rmtree
+        must not reintroduce a crash on this input class."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            gates={"real_gate.md": "# real gate\n"})
+        # a non-escaping empty dir + a symlink to it, both inside the DDD's gate section
+        realempty = ddd / "3-gates" / "_realempty"
+        realempty.mkdir(parents=True, exist_ok=True)
+        (ddd / "3-gates" / "link_to_empty").symlink_to(realempty)
+        # must NOT raise OSError (the pre-fix crash)
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "agent-sops" / "real_gate.sop.md").is_file()
 
 
 # ---------------------------------------------------------------------------
