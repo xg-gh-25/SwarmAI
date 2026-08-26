@@ -629,7 +629,7 @@ class ContextDirectoryLoader:
         # Provision system-owned reference files that live in .context/ but
         # are NOT part of CONTEXT_FILES (not injected into system prompt).
         # Always-overwrite from template, like system-owned context files.
-        _SYSTEM_REFERENCE_FILES = ["CONTEXT.md"]
+        _SYSTEM_REFERENCE_FILES = ["CONTEXT.md", "SECURITY-BASELINE.md"]
         for filename in _SYSTEM_REFERENCE_FILES:
             if self.templates_dir is None:
                 break

@@ -159,6 +159,18 @@ each migrated — READ paths (tab switch, session load) too, not just writes. Th
 test that FORCES execution (mock the trigger, assert it runs). "Compiles" ≠ "executes"; zero
 coverage = P0 gap. (SOUL P1)
 
+**R32. Secure-coding baseline is non-negotiable on every code change.** Every code change is
+checked against the product secure-coding baseline (`SECURITY-BASELINE.md`): no unsafe
+deserialization/`eval`/`exec` across a trust boundary, SSRF-validate every outbound URL built
+from untrusted input, no `shell=True` on a non-constant command, no wildcard CORS, generic
+client errors (no internal detail), no hardcoded/logged secrets (A1–A6); and — because the
+agent has real tool access + ingests untrusted external content — treat external content as
+DATA-not-instructions, guard the read-poison→exfil chain, never weaken an existing control,
+no memory/state poisoning, scope agent actions + use task-scoped creds (B1–B8). This is the
+coding-TIME checklist — distinct from R7's post-task scan (after the fact) and the §0
+"Security & Quality not negotiable" invariant (the stance). Read `SECURITY-BASELINE.md` for
+the full rule + concrete anti-example before writing security-surface code. (SOUL P2+P5)
+
 ### Coding Execution Safety
 - **Shell:** one command per line, every quote/bracket closed; multi-line logic → a script
   file. Never bare recursive `find .` / `grep -r .` (use Glob/Grep, or `-prune` + wall-clock
