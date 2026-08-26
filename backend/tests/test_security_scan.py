@@ -318,3 +318,131 @@ def test_detect_secrets_crash_with_valid_json_fails_closed(tmp_path, monkeypatch
     with pytest.raises(SystemExit) as ei:
         mod._secret_fingerprints(tmp_path)
     assert ei.value.code == 2, "detect-secrets rc!=0 must fail closed"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# A4 WILDCARD-CORS regression gate (SECURITY-BASELINE.md A4 — the review-only rule
+# earning a machine gate). The scanner grows a 3rd finding source (AST-based, no
+# bandit HIGH check exists for CORS). Tests mirror INV1/INV2: a NEW wildcard blocks,
+# a baselined wildcard passes, a computed (variable) allow_origins is NOT flagged.
+# ═══════════════════════════════════════════════════════════════════════════════
+_CORS_WILDCARD_APP = (
+    "from fastapi.middleware.cors import CORSMiddleware\n"
+    "app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True)\n"
+)
+_CORS_SAFE_APP = (
+    "from fastapi.middleware.cors import CORSMiddleware\n"
+    "cors_origins = ['https://example.com']\n"
+    "app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True)\n"
+)
+
+
+def test_cors_new_wildcard_blocks(scan_tree: Path):
+    """AC1: a NEWLY-introduced literal `allow_origins=['*']` must BLOCK (exit 1).
+    bandit has no HIGH CORS check → without this gate the wildcard ships silently."""
+    f = scan_tree / "backend" / "server.py"
+    f.write_text(_CORS_SAFE_APP)          # clean starting state
+    _make_baseline(scan_tree)
+    f.write_text(_CORS_WILDCARD_APP)      # regression: wildcard introduced
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, (
+        f"a newly-introduced wildcard CORS origin must block. exit={r.returncode} "
+        f"stdout={r.stdout} stderr={r.stderr}"
+    )
+    assert "server.py" in r.stdout and "cors" in r.stdout.lower(), (
+        f"BLOCK output must name the CORS finding + file. stdout={r.stdout}"
+    )
+
+
+def test_cors_variable_origins_not_flagged(scan_tree: Path):
+    """AC1 (no-false-positive half): the REAL backend/main.py shape —
+    `allow_origins=cors_origins` (a Name node, computed at runtime) — must NOT be
+    flagged. A static gate can only prove a LITERAL wildcard; the computed case is
+    the reviewer's job (F004: a gate that false-flags the safe real config gets
+    disabled)."""
+    f = scan_tree / "backend" / "server.py"
+    f.write_text(_CORS_SAFE_APP)
+    r = _run_scan(scan_tree)   # no baseline needed — nothing should be found
+    assert r.returncode == 0, (
+        f"a computed allow_origins=variable must NOT be flagged (only literal '*'). "
+        f"exit={r.returncode} stdout={r.stdout}"
+    )
+
+
+def test_cors_baselined_wildcard_passes(scan_tree: Path):
+    """AC3: a PRE-EXISTING (baselined) wildcard is absorbed and does NOT re-block,
+    but a SECOND, distinct wildcard site introduced afterwards DOES block — the
+    finding-level diff, same as bandit/secrets."""
+    f = scan_tree / "backend" / "server.py"
+    f.write_text(_CORS_WILDCARD_APP)
+    _make_baseline(scan_tree)             # wildcard is now baselined
+    assert _run_scan(scan_tree).returncode == 0, "baselined wildcard must not re-block"
+    # add a SECOND wildcard site in a different file → NEW finding, must block
+    (scan_tree / "backend" / "other.py").write_text(_CORS_WILDCARD_APP)
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, (
+        f"a 2nd, non-baselined wildcard site must block (finding-level diff). "
+        f"exit={r.returncode} stdout={r.stdout}"
+    )
+    assert "other.py" in r.stdout, f"the NEW site must be named. stdout={r.stdout}"
+
+
+def test_cors_regex_catchall_blocks(scan_tree: Path):
+    """AC1 (Gate-1 caveat #1): `allow_origin_regex='.*'` is a wildcard too — a
+    catch-all regex reflects every Origin. The list-only matcher would MISS it;
+    the gate must flag known catch-all regex patterns."""
+    f = scan_tree / "backend" / "server.py"
+    f.write_text(_CORS_SAFE_APP)
+    _make_baseline(scan_tree)
+    f.write_text(
+        "from fastapi.middleware.cors import CORSMiddleware\n"
+        "app.add_middleware(CORSMiddleware, allow_origin_regex='.*', allow_credentials=True)\n"
+    )
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, (
+        f"a catch-all allow_origin_regex ('.*') must block. exit={r.returncode} "
+        f"stdout={r.stdout}"
+    )
+
+
+def test_cors_tuple_wildcard_blocks(scan_tree: Path):
+    """AC1 (Gate-1 rec #3): `allow_origins=('*',)` (a tuple) is just as exploitable
+    as a list — the matcher must handle ast.Tuple, not only ast.List."""
+    f = scan_tree / "backend" / "server.py"
+    f.write_text(_CORS_SAFE_APP)
+    _make_baseline(scan_tree)
+    f.write_text(
+        "from fastapi.middleware.cors import CORSMiddleware\n"
+        "app.add_middleware(CORSMiddleware, allow_origins=('*',), allow_credentials=True)\n"
+    )
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, (
+        f"a tuple wildcard allow_origins=('*',) must block. exit={r.returncode} "
+        f"stdout={r.stdout}"
+    )
+
+
+def test_cors_unparseable_file_does_not_silence_tree(scan_tree: Path):
+    """AC2 (fail-closed): a syntactically-broken .py must NOT make the CORS walk
+    silently clean the whole tree. A real wildcard in a SIBLING valid file must
+    still block. (The broken file is skipped-with-stderr; bandit is the syntax gate.)"""
+    (scan_tree / "backend" / "broken.py").write_text("def (:\n  this is not python\n")
+    (scan_tree / "backend" / "server.py").write_text(_CORS_WILDCARD_APP)
+    # no baseline → the wildcard in server.py is a new finding
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, (
+        f"an unparseable sibling must not silence a real wildcard finding. "
+        f"exit={r.returncode} stdout={r.stdout} stderr={r.stderr}"
+    )
+
+
+def test_cors_baseline_file_is_written(scan_tree: Path):
+    """AC3: --update-baseline writes a cors baseline file alongside the other two,
+    so the CORS diff has a persistent, git-trackable baseline (empty = clean is the
+    desirable steady state; any new wildcard then blocks)."""
+    (scan_tree / "backend" / "server.py").write_text(_CORS_SAFE_APP)
+    _make_baseline(scan_tree)
+    # a cors baseline must exist after --update-baseline (name asserted via the module)
+    mod = _load_scan_module()
+    cors_bl = scan_tree / mod.CORS_BASELINE
+    assert cors_bl.exists(), f"{mod.CORS_BASELINE} must be written by --update-baseline"

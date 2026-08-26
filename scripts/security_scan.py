@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Code-security boundary gate — SSOT scanner (Phase 1: Python SAST + secrets).
+"""Code-security boundary gate — SSOT scanner (Python SAST + secrets + CORS).
 
 WHAT THIS IS
     A decoupled, detect-only security gate that runs OUTSIDE the agent/model. It
@@ -10,6 +10,17 @@ WHAT THIS IS
     It NEVER modifies code (no autofix) and NEVER mutates git configuration
     (`core.hooksPath` is owned by Amazon git-defender — repointing it would DISABLE
     git-defender, a security regression). It is not a git hook.
+
+THREE FINDING SOURCES (all fingerprinted + baseline-diffed identically)
+    1. bandit HIGH×HIGH  — SECURITY-BASELINE.md A1 (eval/exec/pickle), A3 (shell=True)
+    2. detect-secrets    — A6 (hardcoded secrets)
+    3. wildcard CORS (AST) — A4 ("Restrictive CORS — never regress to wildcard").
+       bandit has NO CORS check, so A4 was review-only until this gate earned teeth.
+       An AST walk of backend/*.py flags a LITERAL wildcard: `allow_origins` containing
+       "*" (list OR tuple) or `allow_origin_regex` set to a catch-all pattern (".*",
+       "^.*$", …). A COMPUTED value (`allow_origins=cors_origins`, a Name node) is
+       statically unprovable → NOT flagged (that case is the semantic reviewer's job;
+       flagging the real safe config would get the gate disabled — F004).
 
 WHY FINDING-LEVEL DIFF (not `bandit -b`)
     `bandit -b baseline.json` suppresses per-FILE + per-TEST-TYPE, not per-issue:
@@ -28,24 +39,26 @@ SEVERITY POLICY (data-driven — see run_4b007e00 EVALUATE)
 
 EXIT CODES
     0  no NEW findings (all current findings are in the baselines) — PASS
-    1  at least one NEW high-severity finding or NEW secret — BLOCK
+    1  at least one NEW high-severity finding, NEW secret, or NEW wildcard CORS — BLOCK
     2  usage / infrastructure error (tool missing, version drift, bad args)
 
 USAGE
     security_scan.py                      # scan repo (root inferred from this file)
     security_scan.py --root <dir>         # scan a specific tree (tests use this)
-    security_scan.py --update-baseline    # regenerate both baselines from current state
+    security_scan.py --update-baseline    # regenerate all baselines from current state
 
-Baselines (git-tracked, at repo root) — BOTH use our OWN {"fingerprints": [...]}
+Baselines (git-tracked, at repo root) — ALL use our OWN {"fingerprints": [...]}
 schema (NOT detect-secrets' native baseline format), written/read only by this
 script. Regenerate via `--update-baseline`; never hand-edit or overwrite with the
 native `detect-secrets scan` output.
     bandit-baseline.json   — {"fingerprints": [...], "findings": {...}, "policy": {...}}
     .secrets.baseline      — {"fingerprints": [...], "findings": {...}} (our schema)
+    cors-baseline.json     — {"fingerprints": [...], "findings": {...}} (wildcard CORS)
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import subprocess
@@ -79,6 +92,16 @@ BANDIT_CONFIDENCE = "high"
 
 BANDIT_BASELINE = "bandit-baseline.json"
 SECRETS_BASELINE = ".secrets.baseline"
+CORS_BASELINE = "cors-baseline.json"
+
+# CORS kwargs we inspect (Starlette/FastAPI CORSMiddleware). A wildcard in either is
+# an A4 violation.
+_CORS_ORIGINS_KW = "allow_origins"
+_CORS_REGEX_KW = "allow_origin_regex"
+# Catch-all regex patterns for allow_origin_regex — any of these reflects EVERY Origin
+# (equivalent to a wildcard). Conservative denylist of the common catch-alls; a regex we
+# can't statically prove catch-all is left to the reviewer (documented static limit).
+_CATCHALL_REGEXES = {".*", ".*$", "^.*", "^.*$", "(.*)", "^(.*)$", ".+", "^.+$"}
 
 # Pin: detect-secrets embeds plugins+version in its baseline; a version mismatch
 # fails OPEN (silent under-detection). Assert the runtime matches the pin.
@@ -288,6 +311,93 @@ def _secret_fingerprints(root: Path) -> dict[str, dict]:
     return out
 
 
+def _list_or_tuple_has_wildcard(node: ast.AST) -> bool:
+    """True if an ast.List/ast.Tuple literal contains a bare "*" string constant."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        for elt in node.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and elt.value == "*":
+                return True
+    return False
+
+
+def _cors_fingerprints(root: Path) -> dict[str, dict]:
+    """Map fingerprint → finding for every LITERAL wildcard-CORS site under backend/.
+
+    AST-based (bandit has no CORS check). Flags a keyword arg:
+      * ``allow_origins=`` whose value is a list/tuple LITERAL containing "*", or
+      * ``allow_origin_regex=`` set to a catch-all pattern (see _CATCHALL_REGEXES).
+    A COMPUTED value (a Name / call / f-string) is statically unprovable and NOT
+    flagged (documented limit; the semantic reviewer covers it). Fingerprint =
+    (kind='cors', relpath, locus-string, occurrence-ordinal) — line EXCLUDED so a
+    move doesn't re-trigger, mirroring _bandit_fingerprints.
+
+    A file that fails to parse is SKIPPED with a stderr note (bandit is the syntax
+    gate; RP50 — a broken file must NOT silently clean the tree, but it also must not
+    mask a real finding in a sibling). The tree-level coverage floor is inherited from
+    _run_bandit's loc>0 _die guard over the same subdir."""
+    target = root / SCAN_SUBDIR
+    if not target.exists():
+        return {}
+    excluded = tuple(e.strip() for e in BANDIT_EXCLUDES.split(","))
+
+    def _is_excluded(p: Path) -> bool:
+        # match any path segment against the (glob-free) exclude names; s_cmhk-* is a glob
+        for seg in p.relative_to(target).parts:
+            for pat in excluded:
+                if pat.endswith("*"):
+                    if seg.startswith(pat[:-1]):
+                        return True
+                elif seg == pat:
+                    return True
+        return False
+
+    findings: list[tuple[str, str]] = []  # (relpath, locus) in deterministic order
+    for py in sorted(target.rglob("*.py")):
+        if _is_excluded(py):
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, ValueError, OSError) as e:
+            # Skip THIS file (bandit already gates syntax); never silence the tree.
+            print(f"security_scan: cors: skipped unparseable {py.name}: {e}",
+                  file=sys.stderr)
+            continue
+        try:
+            relpath = str(py.resolve().relative_to(root.resolve()))
+        except (ValueError, OSError):
+            relpath = str(py)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.keyword):
+                continue
+            if node.arg == _CORS_ORIGINS_KW and _list_or_tuple_has_wildcard(node.value):
+                findings.append((relpath, f"{_CORS_ORIGINS_KW}=*"))
+            elif node.arg == _CORS_REGEX_KW and isinstance(node.value, ast.Constant) \
+                    and isinstance(node.value.value, str) \
+                    and node.value.value.strip() in _CATCHALL_REGEXES:
+                findings.append((relpath, f"{_CORS_REGEX_KW}={node.value.value.strip()}"))
+
+    # occurrence-ordinal per (relpath, locus) so two identical loci get distinct fps
+    seen: dict[tuple[str, str], int] = {}
+    out: dict[str, dict] = {}
+    for relpath, locus in sorted(findings):
+        occ = seen.get((relpath, locus), 0)
+        seen[(relpath, locus)] = occ + 1
+        key = f"cors\x00{relpath}\x00{locus}\x00#{occ}"
+        fp = hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()
+        out[fp] = {"kind": "cors", "file": relpath, "locus": locus}
+    return out
+
+
+def _load_cors_baseline(root: Path) -> set[str]:
+    p = root / CORS_BASELINE
+    if not p.exists():
+        return set()
+    try:
+        return set(json.loads(p.read_text()).get("fingerprints", []))
+    except (json.JSONDecodeError, OSError) as e:
+        _die(f"cannot read {CORS_BASELINE}: {e}")
+
+
 def _load_bandit_baseline(root: Path) -> set[str]:
     p = root / BANDIT_BASELINE
     if not p.exists():
@@ -314,6 +424,7 @@ def update_baseline(root: Path) -> int:
     _check_detect_secrets_version()
     bandit_fps = _bandit_fingerprints(root)
     secret_fps = _secret_fingerprints(root)
+    cors_fps = _cors_fingerprints(root)
     (root / BANDIT_BASELINE).write_text(json.dumps({
         "_comment": "Auto-generated by scripts/security_scan.py --update-baseline. "
                     "Finding-level fingerprints (test_id+relpath+normalized-code, "
@@ -333,8 +444,18 @@ def update_baseline(root: Path) -> int:
         "fingerprints": sorted(secret_fps),
         "findings": {fp: secret_fps[fp] for fp in sorted(secret_fps)},
     }, indent=2) + "\n")
+    (root / CORS_BASELINE).write_text(json.dumps({
+        "_comment": "Auto-generated by scripts/security_scan.py --update-baseline. "
+                    "Wildcard-CORS fingerprints (kind+relpath+locus, line EXCLUDED). "
+                    "Gate blocks only NEW literal wildcard CORS sites (allow_origins "
+                    "'*' list/tuple, or catch-all allow_origin_regex) not listed here. "
+                    "Empty is the desirable steady state. Do not hand-edit.",
+        "count": len(cors_fps),
+        "fingerprints": sorted(cors_fps),
+        "findings": {fp: cors_fps[fp] for fp in sorted(cors_fps)},
+    }, indent=2) + "\n")
     print(f"security_scan: baselines updated — {len(bandit_fps)} bandit HIGH, "
-          f"{len(secret_fps)} secret(s) absorbed.")
+          f"{len(secret_fps)} secret(s), {len(cors_fps)} wildcard-CORS absorbed.")
     return 0
 
 
@@ -343,14 +464,17 @@ def scan(root: Path) -> int:
     _check_detect_secrets_version()
     bandit_fps = _bandit_fingerprints(root)
     secret_fps = _secret_fingerprints(root)
+    cors_fps = _cors_fingerprints(root)
     bandit_base = _load_bandit_baseline(root)
     secret_base = _load_secret_baseline(root)
+    cors_base = _load_cors_baseline(root)
 
     new_bandit = {fp: v for fp, v in bandit_fps.items() if fp not in bandit_base}
     new_secrets = {fp: v for fp, v in secret_fps.items() if fp not in secret_base}
+    new_cors = {fp: v for fp, v in cors_fps.items() if fp not in cors_base}
 
-    if not new_bandit and not new_secrets:
-        print("security_scan: PASS — no new HIGH findings or secrets.")
+    if not new_bandit and not new_secrets and not new_cors:
+        print("security_scan: PASS — no new HIGH findings, secrets, or wildcard CORS.")
         return 0
 
     print("security_scan: BLOCK — new security findings (not in baseline):\n")
@@ -358,6 +482,9 @@ def scan(root: Path) -> int:
         print(f"  [bandit {v['test_id']}] {v['file']}:{v['line']} — {v['text']}")
     for v in new_secrets.values():
         print(f"  [secret {v['type']}] {v['file']}:{v['line']}")
+    for v in new_cors.values():
+        print(f"  [cors A4] {v['file']} — wildcard CORS ({v['locus']}); "
+              f"restrict allow_origins to an explicit allowlist (SECURITY-BASELINE.md A4)")
     print("\nFix the finding, or if it is a verified false-positive, regenerate the "
           "baseline: scripts/security_scan.py --update-baseline (and justify in the commit).")
     return 1
