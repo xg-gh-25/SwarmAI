@@ -250,6 +250,37 @@ def test_inv7b_shared_dir_excluded(scan_tree: Path):
         "_shared path leaked into bandit baseline"
 
 
+def test_private_skill_scope_consistent_across_all_sources():
+    """P8 (Gate-2 meta-review): all THREE finding sources must honor the SAME
+    private-skill scope, or a source that scans a .gitignored dir leaks its private
+    path into that source's git-tracked baseline (C041). The scope lives in two
+    syntaxes — BANDIT_EXCLUDES (comma-list, also used by _cors_fingerprints._is_excluded)
+    and SECRETS_EXCLUDE_RE (regex) — with nothing binding them, so a future private-skill
+    glob added to one could silently miss the other. This test is that binding: every
+    private-skill family must be covered by BOTH."""
+    import re
+    mod = _load_scan_module()
+    bandit_globs = set(mod.BANDIT_EXCLUDES.split(","))
+    # Each private-skill family → a concrete on-disk DIR NAME the scanner would walk.
+    # s_cmhk-*/s_internal-* are prefix globs (a real dir is e.g. 's_cmhk-weekly'); _shared
+    # is an exact dir name. The sample path is what _cors_fingerprints/detect-secrets sees.
+    families = {"s_cmhk-": "s_cmhk-weekly", "s_internal-": "s_internal-crux", "_shared": "_shared"}
+    for family, dirname in families.items():
+        # BANDIT_EXCLUDES (also the CORS _is_excluded source): a glob 'fam*' or exact match
+        covered_bandit = any(
+            (g.endswith("*") and dirname.startswith(g[:-1])) or g == dirname
+            for g in bandit_globs
+        )
+        assert covered_bandit, (
+            f"{dirname} not covered by BANDIT_EXCLUDES (bandit + CORS scope): {bandit_globs}"
+        )
+        # SECRETS_EXCLUDE_RE (regex): a sample path under that dir must match
+        sample = f"backend/skills/{dirname}/leak.py"
+        assert re.search(mod.SECRETS_EXCLUDE_RE, sample), (
+            f"{dirname} not covered by SECRETS_EXCLUDE_RE={mod.SECRETS_EXCLUDE_RE!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # RP50 fail-open regression (run_a278e1ca): the gate MUST fail CLOSED when a
 # scanner tool CRASHES while still emitting valid JSON. bandit rc>=2 (config /
@@ -420,6 +451,45 @@ def test_cors_tuple_wildcard_blocks(scan_tree: Path):
         f"a tuple wildcard allow_origins=('*',) must block. exit={r.returncode} "
         f"stdout={r.stdout}"
     )
+
+
+def test_cors_set_wildcard_blocks(scan_tree: Path):
+    """AC1 (Gate-2 adversarial finding): `allow_origins={'*'}` (a SET literal) is a
+    functional Starlette wildcard — CORSMiddleware tests `"*" in allow_origins`, and a
+    set supports `in`. The matcher must handle ast.Set, not only List/Tuple, or a
+    credentialed wildcard ships green."""
+    f = scan_tree / "backend" / "server.py"
+    f.write_text(_CORS_SAFE_APP)
+    _make_baseline(scan_tree)
+    f.write_text(
+        "from fastapi.middleware.cors import CORSMiddleware\n"
+        "app.add_middleware(CORSMiddleware, allow_origins={'*'}, allow_credentials=True)\n"
+    )
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, (
+        f"a set-literal wildcard allow_origins={{'*'}} must block. exit={r.returncode} "
+        f"stdout={r.stdout}"
+    )
+
+
+def test_cors_private_internal_skill_not_baselined(scan_tree: Path):
+    """C041-family leak (Gate-2 adversarial finding): s_internal-* skills are
+    .gitignored (present on disk, absent from git). If the CORS walk scanned them, a
+    wildcard inside one would bake its PRIVATE path into the git-tracked cors-baseline.json
+    → a private Amazon-internal skill-name LEAK on the public repo. This asserts a
+    wildcard inside s_internal-* does NOT enter the baseline (excluded at scan-time),
+    while a public one DOES (scan genuinely ran)."""
+    priv = scan_tree / "backend" / "skills" / "s_internal-crux-cr"
+    priv.mkdir(parents=True)
+    (priv / "dev.py").write_text(
+        "from fastapi.middleware.cors import CORSMiddleware\n"
+        "app.add_middleware(CORSMiddleware, allow_origins=['*'])\n"
+    )
+    (scan_tree / "backend" / "pub.py").write_text(_CORS_WILDCARD_APP)
+    _make_baseline(scan_tree)
+    cors_bl = (scan_tree / "cors-baseline.json").read_text()
+    assert "s_internal" not in cors_bl, "private s_internal-* path leaked into cors baseline"
+    assert "pub.py" in cors_bl, "public wildcard missing — CORS scan didn't cover backend/"
 
 
 def test_cors_unparseable_file_does_not_silence_tree(scan_tree: Path):

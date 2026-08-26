@@ -17,7 +17,7 @@ THREE FINDING SOURCES (all fingerprinted + baseline-diffed identically)
     3. wildcard CORS (AST) — A4 ("Restrictive CORS — never regress to wildcard").
        bandit has NO CORS check, so A4 was review-only until this gate earned teeth.
        An AST walk of backend/*.py flags a LITERAL wildcard: `allow_origins` containing
-       "*" (list OR tuple) or `allow_origin_regex` set to a catch-all pattern (".*",
+       "*" (list/tuple/set) or `allow_origin_regex` set to a catch-all pattern (".*",
        "^.*$", …). A COMPUTED value (`allow_origins=cors_origins`, a Name node) is
        statically unprovable → NOT flagged (that case is the semantic reviewer's job;
        flagging the real safe config would get the gate disabled — F004).
@@ -75,15 +75,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # to the Python source tree. `backend` is relative to the scan root.
 SCAN_SUBDIR = "backend"
 # Exclusions passed to bandit (-x) — comma-separated, relative to root.
-# Private/internal skills (.gitignored: s_cmhk-*, _shared) MUST be excluded here:
-# they exist ONLY on the maintainer's machine, so scanning them bakes their private
-# paths into the git-tracked baseline's findings[].file field → a private-skill-name
-# LEAK on the public repo (C041 family, run_f1fe156b). Excluding at scan-time (not
-# hand-editing the JSON) means the path is NEVER baselined and the fix survives
-# `--update-baseline`. Keep in sync with .gitignore's private-skill patterns.
-BANDIT_EXCLUDES = "tests,.venv,node_modules,s_cmhk-*,_shared"
+# Private/internal skills (.gitignored: s_cmhk-*, s_internal-*, _shared) MUST be
+# excluded here: they exist ONLY on the maintainer's machine (present on disk, absent
+# from git), so scanning them bakes their private paths into the git-tracked baseline's
+# findings[].file field → a private-skill-name LEAK on the public repo (C041 family,
+# run_f1fe156b). Excluding at scan-time (not hand-editing the JSON) means the path is
+# NEVER baselined and the fix survives `--update-baseline`. This list is the SHARED
+# private-skill scope for ALL THREE finding sources (bandit -x, the secrets regex below,
+# and _cors_fingerprints._is_excluded which derives from it) — it MUST stay in sync with
+# .gitignore's private-skill globs (s_cmhk-* / s_internal-* / _shared); a source that
+# scans a dir .gitignore hides is a leak door (P8: every finding source honors one scope).
+BANDIT_EXCLUDES = "tests,.venv,node_modules,s_cmhk-*,s_internal-*,_shared"
 # detect-secrets `--exclude-files` regex counterpart (same private-skill scope).
-SECRETS_EXCLUDE_RE = r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/_shared/"
+SECRETS_EXCLUDE_RE = r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/s_internal-[^/]*/|/_shared/"
 
 # The single severity/confidence policy — used identically for baseline generation
 # AND compare, so they can never drift (Gate-1 MUST-FIX-5).
@@ -311,9 +315,14 @@ def _secret_fingerprints(root: Path) -> dict[str, dict]:
     return out
 
 
-def _list_or_tuple_has_wildcard(node: ast.AST) -> bool:
-    """True if an ast.List/ast.Tuple literal contains a bare "*" string constant."""
-    if isinstance(node, (ast.List, ast.Tuple)):
+def _iterable_literal_has_wildcard(node: ast.AST) -> bool:
+    """True if an ast.List/ast.Tuple/ast.Set literal contains a bare "*" string constant.
+
+    Set is included because Starlette's CORSMiddleware tests `"*" in allow_origins`,
+    so `allow_origins={"*"}` is a fully functional (credentialed) wildcard just like
+    a list/tuple — a literal in the exact class this gate catches (adversarial-found,
+    Gate-2)."""
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         for elt in node.elts:
             if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and elt.value == "*":
                 return True
@@ -369,7 +378,7 @@ def _cors_fingerprints(root: Path) -> dict[str, dict]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.keyword):
                 continue
-            if node.arg == _CORS_ORIGINS_KW and _list_or_tuple_has_wildcard(node.value):
+            if node.arg == _CORS_ORIGINS_KW and _iterable_literal_has_wildcard(node.value):
                 findings.append((relpath, f"{_CORS_ORIGINS_KW}=*"))
             elif node.arg == _CORS_REGEX_KW and isinstance(node.value, ast.Constant) \
                     and isinstance(node.value.value, str) \
