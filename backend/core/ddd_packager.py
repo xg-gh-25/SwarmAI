@@ -270,7 +270,7 @@ def _scan_text(rel: str, text: str, *, external: bool) -> list[ScanFinding]:
             # tell is the value is a backtick-span that ITSELF contains a key=-token — i.e.
             # `<keyword>=` inside the span — NOT an arbitrary backtick-wrapped value. Gating
             # on the =-in-span shape (run_f291ad72, Gate-2 4a) keeps a backtick-wrapped REAL
-            # secret (`password=`hunter2realtoken``) FLAGGED — do NOT suppress on bare
+            # secret (`password=`hunter2realtoken``) FLAGGED — do NOT suppress on bare  # pragma: allowlist secret  (doc example in a comment, not a credential)
             # startswith("`") (that fail-opens any code-spanned secret). Prose files only.
             # The value is a backtick code-span (starts with `) AND the span DESCRIBES a
             # key=-pattern (contains `<keyword>=` inside it, e.g. `password=` / `secret=` in a

@@ -1757,7 +1757,7 @@ class TestGate2Fixes:
         ddd = build_fixture_ddd(
             tmp_path, targets=["aim-capabilities"], visibility="internal",
             understanding_orphans={"security-review-patterns.md":
-                "# RP\nExample leak: password=`hunter2realtokenvalue` committed to config.\n"})
+                "# RP\nExample leak: password=`hunter2realtokenvalue` committed to config.\n"})  # pragma: allowlist secret  (intentional fake fixture — tests the content-safety gate)
         with pytest.raises(pk.PackagingError, match="content-safety|secret"):
             pk.package_ddd(ddd, tmp_path / "out")
 
