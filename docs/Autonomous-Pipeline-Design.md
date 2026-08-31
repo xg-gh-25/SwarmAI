@@ -1,7 +1,7 @@
 ---
 title: "Autonomous Pipeline — Coding as Black Box"
 created: 2026-05-12
-updated: 2026-07-20
+updated: 2026-08-31
 tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review, tdd, ddd]
 project: SwarmAI
 status: current
@@ -9,21 +9,24 @@ status: current
 
 # Autonomous Pipeline — Coding as Black Box
 
-> **Last refresh — 2026-07-20 (PE-review pass):** Re-verified every concrete claim
-> against live source. Corrected the **runtime-pattern count from 40 (RP1-40) to 51
-> (RP1-RP51)** everywhere it appears — RP41-51 are the newest "gate & test integrity"
-> family (`REVIEW_PATTERNS.md`, verified). Replaced the stale 14-command
-> `artifact_cli.py` table in §5 with the **live 28-subcommand surface** (help strings
-> taken verbatim from source), grouped by run-lifecycle / artifact-store / telemetry /
-> DDD-governance. Refreshed **Figure 1** (`diagrams-pipeline/01-overall-architecture.svg`)
-> to annotate the **3 gates (★)** on EVALUATE / PLAN→BUILD / ADVERSARIAL and add the
-> "9 stages · 3 gates · 2 modes" subtitle — it previously showed only "9 stages +
-> convergence".
-> Prior 2026-07-20 update: added the terminal **COMPLETE** stage doc to the
-> file-structure reference; refreshed **Figure 3** for all three gates; clarified the
-> canonical **9 stages · 3 gates · 2 modes** shape (Gate 0 added in v6, 2026-06-26).
-> Prior notable updates: v3 rewrite to the dual-mode implementation (2026-06);
-> "Three Gates" section added to complete the external framing.
+> **Last refresh — 2026-08-31 (drift-calibration pass):** Re-verified every concrete
+> claim against live source and corrected the drift that had accumulated since the
+> 2026-07-20 pass. Changes: the runtime-pattern set is stated as a **range that points
+> at its SSOT (`REVIEW_PATTERNS.md`, currently RP1-RP81)** rather than a pinned count —
+> a frozen number ("40", "51") drifts into a lie the next time a pattern lands, so this
+> doc names the range and defers the exact tally to the file. Added **TEST Layer 4
+> (Cross-Boundary E2E)** — the code-enforced seam-driving layer that fires when EVALUATE
+> classifies `cross_boundary=true` (§3.6). Expanded **EVALUATE** to name the full **Gate-0
+> family** — Understanding Gate, Ambiguity Scan, Cross-Boundary Classification,
+> migration_class (§3.1). Corrected the Direct-Mode rule references to the current
+> **AGENT.md R1/R2** (were the retired R13/R3 numbers, §9). Noted the DELIVER
+> code-enforced sub-gates (still-open reconciliation, meta_review, L4 disk_check, §3.7).
+> Prior 2026-07-20 (PE-review pass): live-verified claims; replaced the stale 14-command
+> `artifact_cli.py` table in §5 with the live subcommand surface; refreshed Figure 1 to
+> annotate the 3 gates and the "9 stages · 3 gates · 2 modes" subtitle.
+> Prior notable updates: terminal **COMPLETE** stage doc added; Figure 3 refreshed for
+> all three gates; canonical **9 stages · 3 gates · 2 modes** shape clarified (Gate 0
+> added in v6, 2026-06-26); v3 rewrite to the dual-mode implementation (2026-06).
 
 ---
 
@@ -53,7 +56,7 @@ Dual-mode pipeline (bounded tasks + open-ended goals) with shared decision front
 | Self-review blind spot elimination | Fresh-context adversarial sub-agents (zero builder bias) |
 | Failure mode safety | Always "escalate with gap report" — never "ship despite known issues" |
 | Cross-run learning | pipeline_intelligence.json + DDD cultivation + RP/OP pattern growth |
-| Structural error prevention | 51 runtime patterns (RP1-51) + 8 operational invariants (OP1-8) |
+| Structural error prevention | The runtime-pattern checklist (RP1-RP81, SSOT `REVIEW_PATTERNS.md`) + 8 operational invariants (OP1-OP8) |
 | Dual execution modes | Bounded tasks (linear) + open-ended goals (iterative) — same quality gates |
 | Background autonomy | Job System decouples pipeline from chat; runs overnight, notifies on completion |
 
@@ -225,17 +228,22 @@ Why gates and not just careful prompting: **carefulness doesn't scale, gates do.
 
 **Mechanics:**
 1. **Requirement Clarification (P0)** — Parse WHO/WHAT/WHY/WHEN; detect ambiguities
-2. **Subsystem Health Audit (P1)** — For non-greenfield: check 8 operational invariants (OP1-8)
-3. **Codebase Complexity Assessment** — If `code_intel.db` exists: dead code + fragility metrics
-4. **Anti-Repetition Check (BLOCKING)** — Scan IMPROVEMENT.md "What Failed" for similar past failures
-5. **Profile Selection** — Decision tree maps task → profile (full/bugfix/trivial/research/docs/goal)
-6. **Intelligence-Informed Selection** — Read `pipeline_intelligence.json` for high-risk shapes, budget calibration
-7. **Acceptance Criteria Quality Gate** — Each AC must be testable, scoped, unambiguous
-8. **Pre-mortem Gate** — "What would make this fail?" (mandatory output)
+2. **Self-Socratic Ambiguity Scan** — Re-scan the clarification output for residual hedge terms (standard/typical/看情况/…); each hit forced concrete by a self-answer (read code/DDD), escalate only genuine unknowable intent. Validator-enforced on strict profiles.
+3. **Subsystem Health Audit (P1)** — For non-greenfield: check 8 operational invariants (OP1-8)
+4. **Codebase Complexity Assessment** — If `code_intel.db` exists: dead code + fragility metrics
+5. **Anti-Repetition Check** — Scan IMPROVEMENT.md "What Failed" for similar past failures
+6. **Cross-Boundary Classification** — Answer once per run: does the change cross a contract seam (event-bus, IPC/wire, schema migration, multi-subsystem path, frontend↔backend allowlist, ACT/SENSE)? Emits the `cross_boundary` flag consumed by TEST Layer 4 + REVIEW; a `false` requires a `ruled_out` attestation, not a blank.
+7. **migration_class (mandatory on a migration-keyword requirement)** — If the requirement says migrate/unify/consolidate/"route all through", enumerate the class members via a physical-sink grep so no un-touched member escapes every diff.
+8. **Profile Selection** — Decision tree maps task → profile (full/bugfix/trivial/research/docs/goal); size/bug gates evaluated FIRST, goal LAST (a test-verifiable "done" is NOT by itself a goal signal)
+9. **Intelligence-Informed Selection** — Read `pipeline_intelligence.json` for high-risk shapes, budget calibration
+10. **Acceptance Criteria Quality Gate** — Each AC must be testable, scoped, unambiguous (no-op / user-value / garbage-in filters)
+11. **Pre-mortem Gate** — "What would make this fail?" (mandatory output; greenfield also runs the Working-Backwards lens)
 
-**Blocking Gates:** Anti-repetition match → REJECT/ESCALATE. Unresolvable ambiguities (>=2) → ESCALATE.
+**Gate 0 — Understanding Gate (the framing checkpoint, ALL work types):** before advancing to THINK, EVALUATE must produce a falsifiable `understanding` block — a claim about the CURRENT state (present-tense, NOT a plan), backed by an observation whose form matches the work_type (code-trace / repro / characterization / premortem), that survives a skeptic sub-agent's refutation (SUPPORTED / UNSUPPORTED / ALREADY-SATISFIED / WRONG-FRAME). M1 (claim ≠ plan) and M2 (no unresolved hedge) are validator-enforced; M3 (the skeptic spawn) is the behavioral half. This is what catches a confidently-wrong framing before it pays for THINK→BUILD→TEST.
 
-**Output:** `evaluation` artifact → GO/DEFER/REJECT/ESCALATE + scope + acceptance_criteria + pre_mortem
+**Blocking Gates:** Understanding-gate M1/M2 + ambiguity-scan (validator, publish-time). Anti-repetition match → REJECT/ESCALATE. Unresolvable ambiguities (>=2) → ESCALATE.
+
+**Output:** `evaluation` artifact → GO/DEFER/REJECT/ESCALATE + scope + acceptance_criteria + `understanding` + `ambiguity_scan` + `cross_boundary` + pre_mortem (+ `migration_class` when applicable)
 
 **Exit Routing:** GO advances to think. DEFER/REJECT ends pipeline. ESCALATE = L2 BLOCK (human review).
 
@@ -322,7 +330,7 @@ Why gates and not just careful prompting: **carefulness doesn't scale, gates do.
 **Trigger:** >3 files OR >100 lines OR touches auth/data/infra code.
 
 Spawn 3 parallel sub-agents:
-- **Code Quality Agent** — RP1-RP51 checklist, integration trace, depth analysis
+- **Code Quality Agent** — RP checklist (RP1-RP81), integration trace, depth analysis
 - **Security & Safety Agent** — Confidence-gated scan per file (1-10 + exploit scenario), wire test (WR1-4)
 - **UX & Test Agent** — Only if frontend files changed; discoverability, feedback states, escape handling
 
@@ -338,6 +346,7 @@ Spawn 3 parallel sub-agents:
 1. **AC-Driven Verification** — Run tests explicitly declared in ac_coverage
 2. **Dependency-Scoped Regression** — Run tests importing changed modules (via grep)
 3. **Import Smoke** — For each new .py file: verify import without crash
+4. **Cross-Boundary E2E (CONDITIONAL, code-enforced)** — Fires ONLY when EVALUATE set `cross_boundary=true`. Layers 1-3 each exercise ONE side of a seam; Layer 4 drives the **real system through the actual boundary** the change crosses (fire the real event through the real listener, run the real reader against the real writer's output — never a mock of the thing-under-change) and **mutation-verifies** it is non-vacuous (revert the contract line → the test goes RED). `artifact_cli` blocks DELIVER if `cross_boundary=true` but a passing Layer-4 record is absent. When `cross_boundary=false`, the layer is skipped with a `ruled_out` attestation (no ceremony tax).
 
 **Additional Checks:**
 - **WTF Gate** — Risk score: files_touched(+2 if >3) + unrelated_module(+3) + API_change(+2) + fix_count(+1 if >10). Score >=5 → L2 BLOCK
@@ -345,7 +354,7 @@ Spawn 3 parallel sub-agents:
 - **Max 20 fixes/session** — Hard cap; checkpoint after
 - **Exit Evidence Checklist** — 9 items verifying all 3 layers executed
 
-**Output:** `test_report` artifact → passed, layers{ac_driven, dependency_scoped, import_smoke}, regressions, wtf_score
+**Output:** `test_report` artifact → passed, layers{ac_driven, dependency_scoped, import_smoke, cross_boundary_e2e}, regressions, wtf_score
 
 ---
 
@@ -397,9 +406,14 @@ Plus **Meta-Review** sub-agent for operational blind spots.
 - **Fresh User Audit (P6)** — Could a new user succeed without modifying source?
 - **User Path Latency Trace (P6.5)** — Trace user scenarios for hidden latency, silent failures
 - **Completion Audit** — AC → evidence matrix with independent verification
+- **Meta-Review (code-enforced for full/bugfix)** — a separate sub-agent that reviews not the code but the PIPELINE'S blind spots (deployment context, no-op scaling, cross-boundary format, first-run, cross-fix interaction); the validator blocks a full/bugfix delivery whose `meta_review` is missing
 - **Push-Ready Gate (Binary)** — PUSH-READY or NOT-PUSH-READY (no numeric score)
 
-**Output:** `delivery` artifact → push_ready, adversarial_review{specialists, findings}, completion_audit, fresh_user_audit[]
+**Code-enforced sub-gates (the model cannot rationalize past these):** each resolved adversarial finding carries a `disk_check` (L4 verifies the fix is actually on disk, not just flagged resolved — a diff-bound grep, not the honor-system `resolved` flag); the delivery blocks on `push_ready` + `outputs_surfaced` before `run-update --status completed` succeeds; and `adversarial_review.profile_tier == "full"` is required for full/bugfix (the gate that cannot be skipped by downgrading the profile). Before delivery, a consolidated **still-open list** reconciles every residual `[TBD]` and unresolved audit finding so nothing unresolved ships silently.
+
+**Delivery boundary:** the pipeline stops at PUSH-READY, then **auto-commits LOCALLY** (`run-commit`, staging only this run's `files_touched` via `git add -- <path>`, never `git add -A`; it never pushes). `git push` + CI + PR are user-initiated post-pipeline actions — the pipeline must be completable offline. (Push to a possibly-public remote is a deployment decision the user owns; STEERING #5 governs it.)
+
+**Output:** `delivery` artifact → push_ready, adversarial_review{profile_tier, specialists, findings[+disk_check]}, completion_audit, meta_review, fresh_user_audit[]
 
 ---
 
@@ -459,7 +473,7 @@ Plus **Meta-Review** sub-agent for operational blind spots.
 | Agent | File | Responsibility |
 |-------|------|---------------|
 | **Spec Compliance** | `review-agents/spec-compliance.md` | AC verification: MISSING / EXTRA / MISUNDERSTOOD. Serial, blocking. |
-| **Code Quality** | `review-agents/code-quality.md` | RP1-51 checklist, integration trace, replace/move parity, depth/seam analysis |
+| **Code Quality** | `review-agents/code-quality.md` | RP checklist (RP1-RP81), integration trace, replace/move parity, depth/seam analysis |
 | **Security & Safety** | `review-agents/security-safety.md` | Confidence-gated security scan (1-10 per file + exploit scenario), wire test WR1-4 |
 | **UX & Test** | `review-agents/ux-test.md` | Frontend-only. Discoverability, feedback states, escape handling, E2E trace |
 
@@ -481,14 +495,19 @@ Dispatched during DELIVER's adversarial gate. Each is scope-gated, produces JSON
 
 ### Pattern Checklists
 
-**REVIEW_PATTERNS.md (RP1-RP51)** — 51 production-proven bug patterns organized by category:
-- Resource lifecycle (RP1-2, RP6, RP11)
-- React/frontend (RP3-5, RP12, RP20-21, RP23)
-- API boundaries (RP7-9, RP14, RP24)
-- State & async (RP13, RP15-16, RP22, RP27)
-- Data integrity (RP17-18, RP28, RP34)
-- Production context (RP19, RP25-26, RP30, RP35-40)
-- Gate & test integrity (RP41-51) — the newest family, distilled from adversarial-review misses: non-orthogonal liveness/health discriminators (RP41), sample-tuned discriminators (RP42), destructive ops keyed by a non-unique field (RP43), identity gates keyed by a raw user name (RP44), injected-deps tests that leave the real adapter uncovered (RP45), enum gates that fail-open on an un-enumerated tier (RP46), test-theater — a test that cannot fail on the bug it guards (RP47), stale/false comments (RP48), redaction written as a denylist instead of an allowlist (RP49), verification gates that fail OPEN (RP50), producer/validator allowlist drift (RP51)
+**REVIEW_PATTERNS.md (SSOT — currently RP1-RP81)** — production-proven bug patterns, each
+distilled from a real adversarial-review miss and organized by category. The exact roster grows
+as REFLECT adds patterns, so the authoritative list is the file itself; the standing categories:
+- Resource lifecycle (subprocess/temp-file/handle release on both success and failure paths)
+- React/frontend (hook cleanup, unstable callback refs, geometry/scroll/multi-tab isolation)
+- API boundaries (async/sync bridge, calling-convention mismatch, wire-format contracts)
+- State & async (state-machine completeness, ordering, shared-state blast radius)
+- Data integrity (null-coercion, schema/format assumptions, migration reader/writer parity)
+- Production context (daemon-env assumptions, no-op scaling, pool contention, process-tree lifetime)
+- Gate & test integrity (the newest family) — the classes where a GATE or a TEST silently fails:
+  fail-OPEN verification gates, test-theater (a test that cannot go RED on the bug it guards),
+  identity-from-request, producer/validator allowlist drift, denylist-not-allowlist redaction,
+  stale/false comments. See `REVIEW_PATTERNS.md` for the current numbered entries.
 
 Every applicable pattern must be explicitly verified or marked N/A. Silence = unchecked = fail.
 
@@ -684,9 +703,9 @@ The profile system IS the escape hatch. A trivial change gets `trivial` profile 
 ### Direct Mode (User Override Only)
 
 Only when user explicitly says "just do it" / "skip pipeline":
-- Agent MUST strong-propose pipeline first with evidence why it's better
-- Still requires adversarial review before commit (STEERING R13)
-- Still requires R3 post-task self-review
+- Agent MUST strong-propose pipeline first with evidence why it's better (AGENT R1: pipeline is mandatory for all code changes)
+- Still requires adversarial review before commit (AGENT R2: `build → test → adversarial → commit`, no exception)
+- Still requires the R7 post-task quality + security scan
 
 ---
 
@@ -751,7 +770,7 @@ When a run is abandoned (user stop, budget exhaustion, session crash, scope expl
 | False escalation rate | <10% | Human override rate |
 | Adversarial accuracy | >90% | Human agreement with findings |
 | DDD cultivation rate | >1 proposal per 5 runs | REFLECT output frequency |
-| CI pass rate post-merge | >99% | Pipeline PRs that pass CI |
+| CI pass rate after push | >99% | Pushed pipeline commits that pass CI (push is user-initiated) |
 | Regression introduction | 0 | Gate L3 catch rate |
 | RP pattern growth | +2-3 per month | New patterns from REFLECT |
 
@@ -759,12 +778,12 @@ When a run is abandoned (user stop, budget exhaustion, session crash, scope expl
 
 1. User states requirement
 2. Pipeline runs (the "black box")
-3. PR appears, CI green, auto-merged
+3. Push-ready code lands: committed locally, all gates green — the user pushes with one command (push stays a user decision; §3.7)
 4. Code is correct, conformant, tested, adversarially reviewed, documented
 5. DDD is richer than before the run
 6. Next run is slightly better than this one
 
-This is Coding as Black Box.
+This is Coding as Black Box — the box guarantees push-ready; crossing to the remote is the human's call.
 
 ---
 
@@ -774,7 +793,7 @@ This is Coding as Black Box.
 s_autonomous-pipeline/
 ├── SKILL.md                    # Skill frontmatter + description
 ├── INSTRUCTIONS.md             # Orchestrator (the mechanical run-loop)
-├── REVIEW_PATTERNS.md          # RP1-RP51 bug pattern checklist
+├── REVIEW_PATTERNS.md          # RP bug pattern checklist (SSOT, RP1-RP81)
 ├── OPERATIONAL_PATTERNS.md     # OP1-OP8 system invariants
 ├── stages/
 │   ├── evaluate.md             # Stage 1: intake + profile selection (Gate 0)
