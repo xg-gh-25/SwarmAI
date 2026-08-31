@@ -49,7 +49,7 @@ When encountering:
    - Who is the audience?
    - What needs to be communicated?
 
-2. **Route to a template if the type is structured.** If the document is a six-pager, PR/FAQ, HLD, LLD, or ADR, load the matching template and follow the Guided Authoring Workflow (self-answer → list → confirm → generate):
+2. **Route to a template if the type is structured.** If the document is a six-pager, PR/FAQ, HLD, LLD, ADR, SOP, or project plan, load the matching template and follow the Guided Authoring Workflow (self-answer → list → confirm → generate):
 
    | User asks for | Load |
    |---------------|------|
@@ -58,6 +58,8 @@ When encountering:
    | HLD / system design / high-level design | `reference/templates/hld.md` |
    | LLD / component design / low-level design | `reference/templates/lld.md` |
    | ADR / decision record | `reference/templates/adr.md` |
+   | SOP / runbook / operating procedure | `reference/templates/sop.md` |
+   | project plan / delivery plan / milestones | `reference/templates/project-plan.md` |
 
    For a free-form document with no matching type, use the section-by-section flow below.
 
@@ -103,9 +105,31 @@ When encountering:
    - Fix any issues the reader test reveals (especially #1 and #2 — if the purpose is unclear or sections confuse a fresh reader, the document fails its primary job)
    - This step catches the #1 document failure mode: **author assumes shared context that doesn't exist for the reader**
 
-7. **Final review:**
+7. **Stakeholder Simulation (spawn cold agent — a skeptical approver, NOT a confused reader):**
+   - This is a DIFFERENT lens from Reader Testing. Reader Testing asks "is it clear?" (comprehension). Stakeholder Simulation asks "does the argument survive a hostile approver who understood it perfectly?" (defensibility). Run it AFTER the document reads clearly — a clear document still loses the room when the argument is weak.
+   - Spawn a sub-agent with ZERO context and this prompt:
+     ```
+     You are a skeptical senior reviewer (a VP or Bar-Raiser) in the reading meeting.
+     You understood the document fully — do NOT report confusion or missing evidence
+     (that is a separate review). Your job is to decide whether to APPROVE, and to
+     surface the pushback you would raise before you would.
+
+     Report:
+     1. The single weakest link in the argument — the claim that, if I dispute it,
+        the recommendation collapses. Where would I push hardest?
+     2. What decision or alternative did the author NOT consider that I would raise?
+     3. Where does the document present a frictionless picture — a risk, cost, or
+        one-way door it downplays or omits?
+     4. What would I demand changed before I approve? (the blocking asks)
+     5. Approve as-is, approve with changes, or send back? State which and why.
+     ```
+   - Fix the blocking asks (#4) and strengthen the weakest link (#1) before delivery. A "send back" verdict means the argument, not the wording, needs work — return to the relevant section, do not just polish.
+   - This step catches the #2 document failure mode: **the argument is clear but not defensible — a senior reviewer sends it back in the meeting.**
+
+8. **Final review:**
    - You **MUST** verify six-page limit (appendices excluded)
    - You **MUST** check for weasel words using `scripts/check-weasel-words.sh`
+   - You **MUST** produce a consolidated **still-open list** before delivery: reconcile every `[TBD]` left in the draft, every unresolved item from Reader Testing (#3 unanswered questions) and Stakeholder Simulation (#4 blocking asks), plus each template Open Questions entry, into ONE list — each with a suggested source or owner to resolve it. This is a reconciliation pass, not a new section: it surfaces what the drafting mechanisms tracked so nothing unresolved ships silently. Deliver with the list attached, or resolve the items first.
    - You **SHOULD** have peer review before submission
 
 **Note:** Section-by-section iteration is more effective than creating a complete draft upfront.
@@ -162,6 +186,8 @@ When encountering:
 | Architecture Doc | Variable | System design, technical decisions |
 | OP1/OP2 | 6 pages + appendices | Annual planning |
 | Interview Feedback | 1-2 pages | Candidate assessment |
+| SOP | Variable | Repeatable operational procedure, runbook |
+| Project Plan | Variable | Scope, milestones, risks, dependencies |
 
 ### Choosing Document Type
 
@@ -224,7 +250,7 @@ Each template in `reference/templates/` maps its structure back to these five cr
 
 ## Guided Authoring Workflow
 
-For a structured document type (six-pager, PR/FAQ, HLD, LLD, ADR), do not start writing prose immediately, and do not interview the user question-by-question. Follow this loop:
+For a structured document type (six-pager, PR/FAQ, HLD, LLD, ADR, SOP, project plan), do not start writing prose immediately, and do not interview the user question-by-question. Follow this loop:
 
 1. **Load the template.** Read `reference/templates/<type>.md` for the type's guided questions and fixed structure (routing is in "Writing a New Document").
 2. **Self-answer the guided questions.** Answer each from the material the user gave you, the codebase, the DDD, and context. This is the same discipline as the Reader-Testing step and the pipeline's "interrogate the spec and your own framing, not the user" rule: derive the answer yourself first. Mark `[TBD]` **only** where the answer is genuine user intent that cannot be derived (a preference, a business constraint only the user knows), never as a shortcut to avoid reading.
