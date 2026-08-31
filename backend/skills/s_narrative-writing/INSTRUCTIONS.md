@@ -64,7 +64,7 @@ When encountering:
    - Documents **MUST** include title with document type and date
    - Documents **MUST** include executive summary (purpose + recommendation + decisions)
    - You **MUST** use logical heading hierarchy (H1 title, H2 sections, H3 subsections)
-   - Documents **SHOULD** include table of contents for documents > 3 pages
+   - Documents **SHOULD** include a table of contents when they have 4+ H2 sections (the markdown proxy for "> 3 pages" — page count is not measurable in markdown)
    - You **MUST** use active voice
    - You **MUST** eliminate weasel words
    - You **MUST** support claims with specific metrics
@@ -178,7 +178,7 @@ flowchart TD
 - **Executive Summary**: Documents **MUST** include purpose, key points, and decisions needed
 - **Objective**: You **MUST** state goal in first paragraph
 - **Scope**: You **SHOULD** clarify what you will and won't cover
-- **Table of Contents**: Documents **SHOULD** include table of contents for documents > 3 pages
+- **Table of Contents**: Documents **SHOULD** include a table of contents when they have 4+ H2 sections (the markdown proxy for "> 3 pages" — page count is not measurable in markdown)
 
 ### Organization
 - **Logical hierarchy**: You **MUST** use H1 for title, H2 for major sections, H3 for subsections
@@ -296,7 +296,7 @@ You **MUST NOT** use mdashes or semicolons in narrative documents.
 
 **Document organization:**
 - You **MUST** split documents into main body followed by appendices
-- You **MUST** use narrative format in main body (prefer prose over bullet points)
+- You **MUST** use narrative format in main body (prefer prose over bullet points). Reconciliation: prose is the default for *argument and analysis*; bullets and tables are correct for genuinely list-shaped content (sequential steps, enumerable items, comparison matrices) — see `reference/visual-formatting.md` "when bullets are right". The failure mode is a bulleted body that should be an argument, not a bulleted list that is genuinely a list.
 - You **SHOULD** write fewer, longer paragraphs rather than many 2-3 sentence paragraphs
 
 **Word choice:**
@@ -314,9 +314,9 @@ You **MUST** avoid ambiguous language that lacks commitment. You **MUST** replac
 
 **For comprehensive weasel words list and replacements**, see `reference/weasel-words.md`
 
-## Removing AI-isms (去 AI 味)
+## Removing AI-isms
 
-Weasel words are one machine tell. There is a second, more structural class: writing that reads as machine-organized rather than human-argued. A busy Amazon reviewer (PE / LT) spots it immediately and it undercuts the document's authority. You **MUST** run the checklist below before finalizing any narrative. Each rule is drawn from real review feedback on machine-drafted narratives.
+Weasel words are one machine tell. There is a second, more structural class: writing that reads as machine-organized rather than human-argued. A busy senior reviewer (a Principal Engineer or leadership-team reader) spots it immediately and it undercuts the document's authority. You **MUST** run the checklist below before finalizing any narrative. Each rule is drawn from real review feedback on machine-drafted narratives.
 
 ### The 9 checks
 
@@ -334,7 +334,7 @@ Weasel words are one machine tell. There is a second, more structural class: wri
    - ❌ "Both were gated by humans at a slower cadence. Now that agents produce at machine speed, if humans do not upgrade how they gate in step, the bottleneck surfaces as incidents."
    - ✅ "Agents produce at machine speed, but our gates still run at human speed, and the gap surfaces as incidents."
 
-5. **Avoid passive + modifier stacking.** `were gated by humans at a slower cadence` is passive voice piled with qualifiers. Rewrite as one active clause that names the result.
+5. **Avoid passive + modifier stacking.** `were gated by humans at a slower cadence` is passive voice piled with qualifiers. Rewrite as one active clause that names the result. (This extends the active-voice rule under "Sentence-Level Clarity" above — same principle, applied to the modifier pile-up that signals machine drafting.)
 
 6. **Do not pre-empt objections.** Delete defensive framing like `These are not homegrown exceptions`, `It is worth noting that`, `To be clear`. Amazon documents state what a thing is and let it stand.
    - ❌ "These two mechanisms are not homegrown exceptions. They map onto…"
@@ -435,11 +435,11 @@ Scans documents for weasel words that require specific replacements.
 ./scripts/check-weasel-words.sh my-document.md
 ```
 
-**What it checks:**
-- Vague qualifiers (generally, usually, might, approximately)
-- Weak commitments (could, should, may, possibly)
-- Ambiguous frequency (often, rarely, sometimes)
-- Uncertain language (seem, appear, tend)
+**What it checks — two word classes:**
+- **COMMITTED weasels** (flagged in ANY casing): vague qualifiers (generally, usually, approximately), vague descriptors (very, really, seamless, robust), unquantified quantities (many, most, several, few, various), and soft-time words (soon). These are always weasel — see `reference/weasel-words.md` for the authoritative list.
+- **MODAL / hedge words** (should, may, can, would, might, could, likely, seem, appear, tend): flagged ONLY as **lowercase** hedging ("we should improve"). ALL-CAPS RFC-2119 keywords (**MUST** / **SHOULD** / **MAY**) and words inside code spans/blocks are intentionally **exempt** — instructional or code text is not prose hedging.
+
+**What it does NOT catch (check by eye):** a sentence-initial capitalized modal ("Should we ship?"), and the full `reference/weasel-words.md` list is broader than the script — the script is a fast first-pass heuristic, `weasel-words.md` is the authoritative reference.
 
 ## Common Mistakes
 

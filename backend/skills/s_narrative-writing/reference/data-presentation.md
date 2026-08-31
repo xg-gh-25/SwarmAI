@@ -135,11 +135,11 @@ This reference provides comprehensive guidance on how to effectively present dat
 ```
 ## 2. Customer Satisfaction Analysis
 
-Our analysis of customer satisfaction metrics reveals three significant trends that inform our recommendation:
+Our analysis of customer satisfaction metrics reveals three trends that inform our recommendation:
 
 ### 2.1 Overall Satisfaction Trend
 
-Customer satisfaction has declined 12 percentage points over the past year, with the most significant drop occurring in Q4 2024.
+Customer satisfaction has declined 12 percentage points over the past year, with the largest single-quarter drop (7 points) occurring in Q4 2024.
 
 [Chart: Line chart showing customer satisfaction percentage by quarter from Q1 2024 to Q1 2025, with clear downward trend]
 
@@ -208,7 +208,7 @@ We should fix the checkout experience to make customers happier.
 ```
 ## 3.2 Performance Impact Analysis
 
-Our A/B test of the new checkout flow demonstrates significant performance improvements across key metrics:
+Our A/B test of the new checkout flow demonstrates measurable performance improvements across key metrics:
 
 [Chart: Bar chart comparing old vs. new checkout flow across multiple metrics]
 

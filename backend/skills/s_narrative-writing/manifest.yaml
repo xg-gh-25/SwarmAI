@@ -1,9 +1,15 @@
 # Auto-generated manifest for narrative-writing
 name: narrative-writing
-version: "1.0.0"
+version: "1.1.0"
 tier: lazy
 
 scripts:
+  - name: check-weasel-words
+    path: scripts/check-weasel-words.sh
+    description: >
+      Scan a document for weasel words. Two classes: COMMITTED weasels
+      (flagged in any casing) and MODAL/hedge words (flagged only as lowercase
+      hedging; ALL-CAPS RFC-2119 keywords and code are exempt). Exit 1 if found.
 
 resources:
   - reference
