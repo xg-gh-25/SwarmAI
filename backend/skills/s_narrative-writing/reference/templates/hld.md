@@ -2,7 +2,7 @@
 
 ## When to use
 
-An HLD defines a solution at the **system level**, across multiple components or services, how they interact, and the significant technology choices. It answers "Are we building the right thing?" and defines interactions at the API level without implementation detail. Use it for:
+An HLD defines a solution at the **system level**, across multiple components or services, how they interact, and the major technology choices. It answers "Are we building the right thing?" and defines interactions at the API level without implementation detail. Use it for:
 - Solutions spanning multiple services or components
 - New product features needing system-level coordination
 - Cross-team projects that must align on system boundaries and interactions

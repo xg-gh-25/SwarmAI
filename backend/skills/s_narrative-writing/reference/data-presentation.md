@@ -13,7 +13,7 @@ This reference provides comprehensive guidance on how to effectively present dat
 - Show year-over-year (YoY) or period-over-period comparisons when possible
 - Provide sample sizes or confidence intervals for survey data
 - Include source information for all data presented
-- Highlight significant patterns, outliers, or trends
+- Highlight notable patterns, outliers, or trends
 - Connect data points to business implications and customer outcomes
 
 ### Chart Selection

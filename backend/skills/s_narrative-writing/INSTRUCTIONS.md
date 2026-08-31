@@ -331,7 +331,7 @@ You **MUST NOT** use mdashes or semicolons in narrative documents.
 
 **Document organization:**
 - You **MUST** split documents into main body followed by appendices
-- You **MUST** use narrative format in main body (prefer prose over bullet points). Reconciliation: prose is the default for *argument and analysis*; bullets and tables are correct for genuinely list-shaped content (sequential steps, enumerable items, comparison matrices) — see `reference/visual-formatting.md` "when bullets are right". The failure mode is a bulleted body that should be an argument, not a bulleted list that is genuinely a list.
+- You **MUST** use narrative format in main body (prefer prose over bullet points). Reconciliation: prose is the default for *argument and analysis*; bullets and tables are correct for genuinely list-shaped content (sequential steps, enumerable items, comparison matrices) — see `reference/visual-formatting.md` "Lists and Tables". The failure mode is a bulleted body that should be an argument, not a bulleted list that is genuinely a list.
 - You **SHOULD** write fewer, longer paragraphs rather than many 2-3 sentence paragraphs
 
 **Word choice:**
