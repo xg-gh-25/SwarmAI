@@ -314,6 +314,44 @@ You **MUST** avoid ambiguous language that lacks commitment. You **MUST** replac
 
 **For comprehensive weasel words list and replacements**, see `reference/weasel-words.md`
 
+## Removing AI-isms (去 AI 味)
+
+Weasel words are one machine tell. There is a second, more structural class: writing that reads as machine-organized rather than human-argued. A busy Amazon reviewer (PE / LT) spots it immediately and it undercuts the document's authority. You **MUST** run the checklist below before finalizing any narrative. Each rule is drawn from real review feedback on machine-drafted narratives.
+
+### The 9 checks
+
+1. **Cut structural label phrases.** Delete `The core judgment:`, `The reasoning:`, `The conclusion:`, `Thesis:`, `Here's why:`. These tag a paragraph with "I am now organizing an argument." State the point directly.
+   - ❌ "The core judgment: AI has removed coding as the bottleneck."
+   - ✅ "AI has removed coding as the bottleneck."
+
+2. **Say each point once.** A summary sentence (for example "speed is proven, the deciding factor is now X") that reappears across sections is padding. Keep it in one place and delete the echoes.
+
+3. **Do not explain a quote.** After a quotation, let the reader draw the conclusion. Delete trailing `This is why…` / `This shows…` / `This is exactly…` sentences.
+   - ❌ "…the bottleneck moves to judgment. This is why EE/OE matters more."
+   - ✅ "…the bottleneck moves to judgment."
+
+4. **State the result, do not lay out the full logic chain.** A complete `Now that A, if B does not C, then D surfaces as E` derivation is a machine tell. Give the result. The reader fills the chain.
+   - ❌ "Both were gated by humans at a slower cadence. Now that agents produce at machine speed, if humans do not upgrade how they gate in step, the bottleneck surfaces as incidents."
+   - ✅ "Agents produce at machine speed, but our gates still run at human speed, and the gap surfaces as incidents."
+
+5. **Avoid passive + modifier stacking.** `were gated by humans at a slower cadence` is passive voice piled with qualifiers. Rewrite as one active clause that names the result.
+
+6. **Do not pre-empt objections.** Delete defensive framing like `These are not homegrown exceptions`, `It is worth noting that`, `To be clear`. Amazon documents state what a thing is and let it stand.
+   - ❌ "These two mechanisms are not homegrown exceptions. They map onto…"
+   - ✅ "Both map onto…"
+
+7. **The closing section must not restate the Executive Summary.** If the final Recommendation repeats the summary's argument, cut it to only the new action-oriented content (owners, dates, the ask). Do not paraphrase yourself.
+
+8. **Appendix / figure captions state meaning, not visual layout.** Describe what the reader should take away, not the arrangement of boxes on a slide. Delete `Top three cards…`, `Four-layer architecture…`, `Seven stages…`, `Left column shows…`.
+   - ❌ "Top three cards: … Bottom three trend lines: …"
+   - ✅ "Our metrics show the shift: speed is banked while security escapes ran to 536."
+
+9. **Final sweep.** Before declaring done, scan once for: sentences that open with a label phrase, repeated summary sentences, explanatory sentences after quotes, and captions that describe layout. Delete what you find.
+
+### Why this matters
+
+These tells survive a weasel-word scan (the script cannot catch them) and survive a first draft that "reads fine" to the author. They are caught only by reading as the reviewer. Treat this checklist as a required pass, the same weight as the weasel-word check.
+
 ## Data Presentation
 
 You **MUST** present data clearly to support decision-making:
