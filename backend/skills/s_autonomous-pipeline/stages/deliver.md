@@ -1203,12 +1203,17 @@ The STEERING standing rule (Post-Push CI Ownership) takes over from there —
 every `git push` must be followed by `gh run watch` → green or fix. That rule
 is always-on regardless of whether a pipeline ran.
 
-### Auto PR Creation (full/bugfix profiles only — USER-INITIATED)
+### PR Creation — a USER-INITIATED post-pipeline tool (NOT a pipeline step)
 
-### Auto PR Creation (full/bugfix profiles only)
+> **This is OUTSIDE the pipeline boundary** (see § Pipeline Boundary above). The
+> pipeline stops at PUSH-READY + auto LOCAL-commit and NEVER pushes or opens a PR on
+> its own. `pipeline_pr.py` is an OPTIONAL convenience the USER may run AFTER they have
+> pushed and CI is green — it does not fire automatically, and DELIVER does not invoke
+> it. It exists so that a user who wants the full "requirement → PR" loop can get it with
+> one command; a user who just wants the local commit ignores it. Do NOT run it as part
+> of the pipeline run.
 
-After CI confirms green, create a PR automatically to close the "Coding as
-Black Box" delivery loop. The user stated a requirement; now a PR appears.
+If the user chooses to create a PR after pushing (full/bugfix profiles):
 
 ```bash
 python backend/skills/s_autonomous-pipeline/scripts/pipeline_pr.py \
@@ -1224,7 +1229,7 @@ python backend/skills/s_autonomous-pipeline/scripts/pipeline_pr.py \
 **PR contents:**
 - Title: `feat(<scope>): <requirement condensed>` (always <=70 chars)
 - Body: TL;DR + Pipeline Delivery stats + Files Changed + link to full REPORT.md
-- Flag: `--auto` (auto-merge when CI required checks pass)
+- The script always creates the PR with `gh pr create --auto` (auto-merge once CI required checks pass) — `--auto` is hardcoded, there is no flag to disable it. The script accepts only `--run-dir` and `--dry-run`. This auto-merge is the SCRIPT's behavior when the USER runs it, and is still outside the pipeline boundary — the pipeline never runs the script.
 
 **Failure handling (AC6):**
 - PR creation failure is a WARNING, not an error
