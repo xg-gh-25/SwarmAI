@@ -20,7 +20,7 @@
 7. Push-Ready Gate — binary final verdict
 ```
 
-### 🚨 CRITICAL: Adversarial Review is NON-NEGOTIABLE
+### 🚨 CRITICAL: Adversarial Review is NON-NEGOTIABLE — [GATE·cli]
 
 > **This is Gate 2 of the pipeline's 3-gate family** (Gate 0 = diagnose-before-build,
 > inside EVALUATE; Gate 1 = Skeptic + SSA, after PLAN; **Gate 2 = Adversarial Review,
@@ -43,11 +43,11 @@ sub-agents in step 3? If the answer is anything other than "yes, spawning now"
 | "Meta-review is redundant — adversarial already checked" | Adversarial reviews CODE. Meta reviews PROCESS (operational blind spots). They catch different classes of bugs. | Pipeline design |
 | "Convergence loop passed in 1 iteration — must be clean" | Fast convergence on non-trivial changes may mean gates are too lenient, not code too clean. Extra scrutiny, not less. | GC11 |
 
-**If you skip this step, the pipeline WILL be mechanically blocked** by Check 9
+**[GATE·cli] If you skip this step, the pipeline WILL be mechanically blocked** by Check 9
 (depth validation) which requires `adversarial_review.profile_tier == "full"` for
 full/bugfix profiles. There is no way to close the pipeline without it.
 
-### Push-Ready Gate (Binary — Final Verdict)
+### Push-Ready Gate (Binary — Final Verdict) — [GATE·cli] (`push_ready: true` required by `run-commit`)
 
 **Evaluated LAST, after all other checks complete.**
 
@@ -264,7 +264,7 @@ COMPLETION AUDIT — Verify before declaring done.
 - `gaps > 0` (not fixed) → NOT-PUSH-READY (blocker)
 - `unfixable_gaps > 0` → WARNING (note in report, user decides)
 
-### Adversarial Review Gate (BLOCKING) — Multi-Specialist Review Army
+### Adversarial Review Gate (BLOCKING) — Multi-Specialist Review Army — [GATE·cli]
 
 **After Completion Audit, BEFORE generating the report or committing.**
 
@@ -283,7 +283,7 @@ bugs AFTER confidence was high: voice input 100% non-functional (C011), 3 CRITIC
 subprocess bugs (run_c2881d2f), 4 hallucinated false-positive criticals (IMPROVEMENT.md).
 Confidence gating solves false positives; specialists solve false negatives.
 
-**⚠️ MECHANICALLY ENFORCED:** `run-update --status completed` validates the deliver
+**⚠️ [GATE·cli] MECHANICALLY ENFORCED:** `run-update --status completed` validates the deliver
 artifact's `adversarial_review.profile_tier` field. If tier is `skipped`/`lite` for
 full/bugfix profiles → pipeline completion is **BLOCKED by code**. You cannot close
 the pipeline without proof that adversarial review ran at the correct tier. This is
@@ -376,8 +376,9 @@ Dispatching N specialists: [names]. Skipped: [names] (scope not detected).
 
 #### Step 2: Parallel Specialist Dispatch
 
-**BLOCKING: Use the Agent tool to spawn ALL selected specialists in a SINGLE
-message** (multiple Agent tool calls) so they run in parallel. Each sub-agent
+**[MUST] BLOCKING: Use the Agent tool to spawn ALL selected specialists in a SINGLE
+message** (multiple Agent tool calls) so they run in parallel. (The *tier* is [GATE·cli];
+that you spawned in ONE parallel message is discipline — code checks the tier/evidence, not the batching.) Each sub-agent
 has fresh context — no prior review bias.
 
 **Sub-agent prompt template (per specialist):**
@@ -608,9 +609,11 @@ to Pipeline Report.
 
 ---
 
-### Meta-Review: "What Did the Pipeline Miss?" (BLOCKING)
+### Meta-Review: "What Did the Pipeline Miss?" (BLOCKING) — [GATE·validator]
 
-**After adversarial review passes, BEFORE declaring push-ready.**
+**After adversarial review passes, BEFORE declaring push-ready.** (Enforced: for full/bugfix
+profiles the validator BLOCKS a deliver artifact whose `meta_review`/`meta_review_verdict` is
+missing — `pipeline_validator.py`; relaxed profiles trivial/research/docs are exempt.)
 
 A different sub-agent that doesn't review the CODE — it reviews the PIPELINE'S
 BLIND SPOTS for this specific changeset. This is the PE review layer that was
@@ -744,7 +747,14 @@ If verdict is RISKS_IDENTIFIED: list each risk with concrete mitigation.
 
 ---
 
-### User-Value Probe (BLOCKING)
+### User-Value Probe (BLOCKING) — [MUST] (⚠️ prose-only, see drift note)
+
+> ⚠️ **Doc-code drift (surfaced by the standalone annotation audit — flagged, NOT fixed here):**
+> this section is labeled "(BLOCKING)" and its verdict rules say "0 value-add claims →
+> NOT-PUSH-READY", but NO code enforces it — `user_value_probe` appears in neither
+> `pipeline_validator.py` nor `artifact_cli.py`'s completion gate (grep: 0 hits). So its true
+> level is [MUST] (agent discipline), not a [GATE]. Handed to the user to decide: add a validator
+> check for `user_value_probe.verdict != "FAIL"`, or downgrade the "BLOCKING" wording to [MUST].
 
 **After meta-review, before Doc Sync Check.** Applies to ALL profiles that
 produce user-facing output (full, bugfix). Skip for research/docs.
@@ -1161,7 +1171,7 @@ python backend/scripts/artifact_cli.py run-surface-changes
    OUTPUTS rows. Mid-run `kind=source` stays suppressed; only this finish batch (a
    DISTINCT `source-final` kind) reaches the rail.
 
-**MANDATORY + gated:** record the surface on the deliver stage —
+**[GATE·cli] MANDATORY + gated:** record the surface on the deliver stage —
 `run-update --stage-json '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`.
 The completion gate (`run-update --status completed`) BLOCKS if this run committed
 run-scoped source (commits ∩ files_touched) but `outputs_surfaced` is not set — so the

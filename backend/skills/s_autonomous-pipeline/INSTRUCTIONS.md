@@ -315,7 +315,7 @@ stage working on session code → read TECH.md `Key Subsystems` section, not the
 full file. (The old auto-generated PROJECTS.md section-TOC was removed 2026-08-14;
 derive the map with a heading grep instead.)
 
-**Upstream artifacts (Output Routing — BLOCKING):**
+**[GATE·validator] Upstream artifacts (Output Routing — BLOCKING):**
 
 Each stage has declared inputs it MUST consume. The validator (Check 13) enforces
 this — if `consumed_artifacts` is present in the stage record but doesn't include
@@ -361,7 +361,7 @@ If an upstream artifact is **stale** (DDD docs changed since it was created, or
 age > 7 days), the validator will WARN. You may still proceed — staleness is a
 signal, not a blocker — but acknowledge it in your stage notes.
 
-#### Understanding Gate (EVALUATE→THINK boundary — ALL work types)
+#### Understanding Gate (EVALUATE→THINK boundary — ALL work types) — [GATE·validator]
 
 THINK (proposing *how* to fix/build) **cannot load** until EVALUATE produces an
 observation-backed, refuted **understanding of the present**. This generalizes
@@ -381,9 +381,10 @@ still scanned. M3 (the skeptic sub-agent) is behavioral, spawned in evaluate.md.
 
 ### 3c. Execute Stage Behavior
 
-**BLOCKING: Before executing ANY stage, you MUST Read ALL files listed
+**[GATE·cli] BLOCKING: Before executing ANY stage, you MUST Read ALL files listed
 in the "Read" column below.** Skipping a file = skipping the stage's
-quality gate = pipeline invariant violation. This is not optional.
+quality gate = pipeline invariant violation. This is not optional. (Enforced via
+the `stage_doc_consumed: true` flag `run-update` requires per stage — exit 1 without it.)
 
 All stage docs are in `backend/skills/s_autonomous-pipeline/stages/`.
 Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
@@ -614,7 +615,7 @@ artifact marked `resolved: true` for a hardening fix that a mid-pipeline git
 conflict had silently reverted; the function had no test coverage, so nothing else
 caught it. PE review found it by reading the file.
 
-**Now code-enforced (Run B, run_c5935199).** Attach a structured `disk_check` to
+**Now code-enforced (Run B, run_c5935199) — [GATE·validator].** Attach a structured `disk_check` to
 each resolved finding and the validator (`_verify_findings_on_disk`, called at BOTH
 the publish-time and completion-time gates, R27) greps it for you — a BLOCK the
 model cannot rationalize past:
@@ -772,7 +773,7 @@ IMPROVEMENT.md so future pipelines learn from this run. Without REFLECT, the
 pipeline generates value but doesn't compound it. A pipeline without REFLECT
 is a single-use tool, not a learning system.
 
-**Gate:** The mechanical completion gate (`run-update --status completed`) will
+**Gate:** [GATE·cli] The mechanical completion gate (`run-update --status completed`) will
 REJECT completion if REFLECT is in the profile but has no stage entry. This is
 enforced by the validator, not honor-system.
 
@@ -795,7 +796,7 @@ This is the LAST thing you output — never end a pipeline run without it.
      --project <PROJECT> --run-id <RUN_ID> --status completed
    ```
 
-   **⚠️ MECHANICAL GATE:** `run-update --status completed` will **BLOCK** if:
+   **⚠️ [GATE·cli] MECHANICAL GATE:** `run-update --status completed` will **BLOCK** if:
    - Any non-skippable stage is incomplete (goal_cycle, deliver, reflect)
    - `adversarial_review` not recorded (goal profile)
    - REFLECT has no substantive lessons
@@ -993,10 +994,13 @@ of flow-pollution.
 
 ## Checkpoint Protocol
 
-### ⚠️ BLOCKING: Budget Check Required Before ANY Checkpoint
+### ⚠️ [GATE·cli] BLOCKING: Budget Check Required Before ANY Checkpoint
 
 **NEVER checkpoint based on "feeling" or "intuition" about context usage.**
-Before every checkpoint, you MUST run:
+Before every checkpoint, you MUST run: (the `cmd_run_checkpoint` CLI command HARD-BLOCKS a
+checkpoint via `sys.exit(2)` when `should_checkpoint=false` + no true-trigger + no `--force`,
+and force-blocks a confabulation-denylist reason — see SELF/EVOLUTION C040. Code-enforced by
+the CLI, not a PreToolUse hook, not prose.)
 ```bash
 python backend/scripts/artifact_cli.py run-budget --project <PROJECT> --run-id <RUN_ID>
 ```
@@ -1191,30 +1195,52 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
 
 ## Rules
 
-1. **Execute inline, never invoke skills.** You ARE the pipeline. Run each
+> **🔖 Enforcement-level tags (read this legend once — used across INSTRUCTIONS.md + all `stages/*.md`).**
+> Every rule-bearing statement is tagged with exactly ONE level so you can tell, at a glance,
+> whether it is code-enforced or discretionary:
+>
+> | Tag | Meaning | Bypassable? | Enforced by |
+> |-----|---------|-------------|-------------|
+> | **[GATE]** | Code-enforced, cannot be rationalized past | ❌ No | ONE of three layers, named in-line: **hook** (`hook_builder.py` PreToolUse gate) · **validator** (`pipeline_validator.py` publish-time BLOCK) · **cli** (`artifact_cli.py` completion/commit-time BLOCK) |
+> | **[MUST]** | Agent discipline — mandatory, but NO code backstop | ⚠️ Yes (only your discipline holds it) | prose only |
+> | **[GUIDE]** | Recommended default; deviation allowed with reason | ✅ Yes | prose only |
+>
+> The full **[GATE] → code-enforcement-point** mapping table (which of the three layers backs each
+> [GATE], with the concrete symbol) lives in `TECH.md` § "Pipeline gate enforcement map"; each
+> [GATE] below also names its layer in-line. If a statement reads like a hard block but carries
+> **[MUST]** (not [GATE]), that is deliberate: it means NO code enforces it — only you do.
+
+1. **[MUST] Execute inline, never invoke skills.** You ARE the pipeline. Run each
    stage's behavior directly. Do not use `/evaluate` or `/qa` as slash commands.
-2. **Read stage docs before executing.** The dispatch table in §3c is BLOCKING.
-3. **TDD is mandatory in BUILD.** RED → GREEN → VERIFY → SMOKE → TRACE → PROBE.
-   Fix code, not tests. Changing tests = changing the spec.
-4. **Classify every decision.** No unclassified decisions. If unsure, default
-   to "taste" (surface at delivery gate rather than block or ignore).
-5. **Verify before advancing.** Run pipeline_validator.py after every stage.
-6. **Completeness bias.** When the complete implementation costs minutes more
+2. **[GATE·cli] Read stage docs before executing.** The dispatch table in §3c is BLOCKING —
+   `run-update` refuses a stage whose stage-json lacks `stage_doc_consumed: true` (exit 1).
+3. **[MUST] TDD is mandatory in BUILD.** RED → GREEN → VERIFY → SMOKE → TRACE → PROBE.
+   Fix code, not tests. Changing tests = changing the spec. (The `tdd` fields are [GATE·validator]
+   at publish — but "did you *actually* RED-first / fix code not tests" is discipline, not code-checked.)
+4. **[MUST] Classify every decision.** No unclassified decisions. If unsure, default
+   to "taste" (surface at delivery gate rather than block or ignore). (Validator Check 4
+   is WARN-only, never a BLOCK — so this is discipline, not a gate.)
+5. **[MUST] Verify before advancing.** Run pipeline_validator.py after every stage.
+   (Running it is discipline; what the validator then finds is [GATE·validator].)
+6. **[GUIDE] Completeness bias.** When the complete implementation costs minutes more
    than the shortcut, do the complete thing.
-7. **Atomic commits.** One commit per logical change in BUILD and TEST stages.
-8. **Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
-9. **Taste decisions batch at delivery.** Don't interrupt mid-pipeline.
-10. **Judgment decisions route via the Escalation Routing Protocol immediately.**
+7. **[GUIDE] Atomic commits.** One commit per logical change in BUILD and TEST stages.
+8. **[MUST] Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
+9. **[MUST] Taste decisions batch at delivery.** Don't interrupt mid-pipeline.
+10. **[MUST] Judgment decisions route via the Escalation Routing Protocol immediately.**
     STAGE-BOUNDARY L2 → in-band AskUserQuestion if `channel=direct` (continue the
     SAME run on answer), else fallback checkpoint. MID-STAGE L2 (build/deliver) →
     always checkpoint. Never default to a bare checkpoint without checking `channel=`.
-11. **DEFER/REJECT at evaluate ends the pipeline.**
-12. **Always generate REPORT.md.** at `.artifacts/runs/<RUN_ID>/REPORT.md`.
-13. **Binary push-ready gate at delivery.** No numeric score. Binary:
-    PUSH-READY (all gates pass) or NOT-PUSH-READY (blockers listed).
-14. **Source-path reads.** Always read from `backend/skills/` (source of truth),
+    (The AskUserQuestion 4h block itself is [GATE·hook] `ask_question_gate`; the *routing choice* is [MUST].)
+11. **[MUST] DEFER/REJECT at evaluate ends the pipeline.**
+12. **[GATE·cli] Always generate REPORT.md** at `.artifacts/runs/<RUN_ID>/REPORT.md`.
+    `run-update --status completed` BLOCKS if REPORT.md is missing or <500 bytes.
+13. **[MUST] Binary push-ready gate at delivery.** No numeric score. Binary:
+    PUSH-READY (all gates pass) or NOT-PUSH-READY (blockers listed). (The `push_ready: true`
+    flag is [GATE·cli] — `run-commit` refuses without it; the binary-not-numeric *framing* is [MUST].)
+14. **[MUST] Source-path reads.** Always read from `backend/skills/` (source of truth),
     not `.claude/skills/` (projected copy).
-15. **Value over completion.** The pipeline's purpose is to deliver qualified
+15. **[GUIDE] Value over completion.** The pipeline's purpose is to deliver qualified
     value, not to finish stages. A pipeline that reaches DELIVER with a
     working feature is worth more than one that reaches REFLECT with a
     broken feature. If BUILD produces something that technically passes
@@ -1222,7 +1248,7 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     not a success. When in doubt: does this change make the user's life
     better? If the answer isn't clearly yes — stop and reassess, don't
     push through to mark done.
-16. **Evidence over assertion.** Do not rely on intent, partial progress,
+16. **[MUST] Evidence over assertion.** Do not rely on intent, partial progress,
     elapsed effort, or memory of earlier work as proof of completion
     (adapted from Codex /goal). The ONLY valid proof is external evidence:
     a test that passes, a file that exists, a command that returns the
@@ -1230,21 +1256,21 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     is evidence. "I reviewed the code" is not evidence — `3 findings,
     all fixed` is evidence. Every claim in Completion Audit must cite
     a verifiable artifact.
-17. **No premature completion.** Do not advance to REFLECT or mark
+17. **[MUST] No premature completion.** Do not advance to REFLECT or mark
     status=completed unless the Quality Convergence Loop (Step 4c) exits
     push-ready — all 6 gate layers pass, self-assessment positive, goal
     aligned. Budget pressure is not a valid reason to skip convergence —
     if budget is low, CHECKPOINT with clear remaining work, don't
     compress the loop. A half-delivered feature with a checkpoint resume
     plan is better than a "completed" pipeline with hidden gaps.
-18. **Adversarial findings must be specific.** Each adversarial review
+18. **[MUST] Adversarial findings must be specific.** Each adversarial review
     finding must include: (a) file path and line number or function name,
     (b) what's wrong, (c) concrete fix. Findings like "looks good",
     "could be improved", or "consider adding" are not findings — they
     are noise. If the sub-agent returns vague findings, reject them
     and re-prompt with "be specific: file, line, what's wrong, how to
     fix."
-19. **Every stage is mandatory — the pipeline is a DDD loop, not a checklist.**
+19. **[GATE·cli] Every stage is mandatory — the pipeline is a DDD loop, not a checklist.**
     The completion gate (`run-update --status completed`) mechanically enforces
     that ALL profile stages are either `completed` or `skipped` (with explicit
     `skip_reason` field). This is not an honor system — it's a hard gate.
@@ -1268,14 +1294,14 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     **If context is exhausted:** CHECKPOINT with the next stage as resume point.
     Do not compress or skip stages to fit in the current session.
 
-20. **Conserve output tokens.** A full pipeline in one response can hit the
+20. **[GUIDE] Conserve output tokens.** A full pipeline in one response can hit the
     ~16K output token limit, causing silent mid-stage truncation. Follow the
     "Output Token Conservation" rules in §Progress Display. Key: suppress CLI
     JSON echo, tail-only test output, no explanatory prose between stages,
     omit preambles for bugfix/trivial. The pipeline's value is in the CODE
     committed, not the TEXT displayed.
 
-21. **Planning unit = pipeline run.** When estimating work, presenting
+21. **[MUST] Planning unit = pipeline run.** When estimating work, presenting
     execution plans, or decomposing features — the atomic unit is a pipeline
     run, not a time-based step or a task list with hours. Each pipeline run
     is one independently committable + verifiable deliverable. Estimation =
@@ -1286,7 +1312,7 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     EVALUATE stage scope breakdown, multi-feature decomposition, and any
     conversation about execution strategy.
 
-22. **Stage metrics are audit trail — MANDATORY for full/bugfix.** Every
+22. **[MUST] Stage metrics are audit trail — MANDATORY for full/bugfix.** Every
     `run-update --stage-json` MUST include `token_cost` (estimated tokens
     consumed by this stage). Chat output IS the live demo, run.json IS the
     audit record, REPORT.md IS the projection of run.json. All three must
@@ -1305,7 +1331,7 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     garbage in = garbage out. The chat showed "198 tests pass, 2 files +58/-4"
     but none of that was in run.json. Never again.
 
-23. **Adversarial review = Agent tool spawn (MANDATORY for full/bugfix).**
+23. **[GATE·cli] Adversarial review = Agent tool spawn (MANDATORY for full/bugfix).**
     Gate 2 (Adversarial Review) for full/bugfix profiles MUST use the Agent
     tool to spawn an independent sub-agent. Self-review disguised as adversarial
     (declaring `spawned=true` without Agent tool invocation) is structurally
@@ -1364,10 +1390,12 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     **Detection:** Golden set trajectory case GS021 verifies Agent tool appears
     in the execution trace. Validator enforces evidence field at completion.
 
-24. **Per-stage REQUIRED fields — the single reference (corrected to validator ground
+24. **[GATE·validator+cli] Per-stage REQUIRED fields — the single reference (corrected to validator ground
     truth, run_57929039/F1).** Two enforcement layers exist and used to disagree with
     this doc — the fields below are what `pipeline_validator.STAGE_SCHEMAS` /
     `STAGE_DEPTH` ACTUALLY require (source of truth), not an aspirational list.
+    (REQUIRED-column fields BLOCK at publish [validator]; the FLAT completion fields in
+    sub-table B BLOCK at `run-update`/`run-commit` time [cli]. Recommended-column = WARN.)
 
     **A. Artifact-schema required fields (BLOCK at publish AND completion):**
 

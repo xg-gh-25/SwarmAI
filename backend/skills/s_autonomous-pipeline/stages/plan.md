@@ -17,7 +17,12 @@ Pipeline-owned stage (no sibling skill).
    - **Test strategy** (required — see below)
 4. If design requires uncommitted dependencies or API changes -- taste/judgment decision
 
-### Exhaustive File Discovery (Required — Before Writing Design Doc)
+### Exhaustive File Discovery (Required — Before Writing Design Doc) `[MUST]`
+
+> ⚠️ **doc-code drift:** labeled "Required" but the PLAN validator's only *required*
+> field is `acceptance_criteria` (`file_discovery`/`change_spec`/`test_strategy` are
+> NOT schema-checked). Treat "Required" here as agent-discipline `[MUST]`, not a gate.
+> Flagged in the drift table (AC4).
 
 **Find ALL affected files BEFORE writing the design — not just the ones you
 plan to change.** The design must account for callers, consumers, importers,
@@ -68,7 +73,7 @@ planned interface doesn't exist, there are 5 more callers than expected, or
 an existing utility already handles the need. Exhaustive discovery in PLAN
 costs 3 minutes; discovering gaps in BUILD costs 20 minutes of backtracking.
 
-### Change Spec (Required — Ordered Atomic Sub-Changes)
+### Change Spec (Required — Ordered Atomic Sub-Changes) `[MUST]`
 
 **Decompose the requirement into topologically-sorted atomic code changes.**
 Each AC tells the user "what done looks like" (outcome). The Change Spec tells
@@ -132,7 +137,10 @@ sub-change is self-explanatory (rename a constant, fix a typo).
 Without a change spec, the agent has to re-derive the sequencing every time,
 often picking the wrong order (implementing a consumer before the provider).
 
-### Boundaries (Required)
+### Boundaries (Required) `[MUST]`
+
+> `boundaries` is a *recommended* (not required) validator field → its absence WARNs,
+> does not BLOCK. `[MUST]` by discipline, not code gate.
 
 Every design document MUST include a three-tier boundary system. This prevents
 the most expensive class of bugs: building the wrong thing because the agent
@@ -160,7 +168,7 @@ made an assumption the user didn't intend.
 - PRODUCT.md non-goals → off-scope becomes "Never" items
 - Pre-mortem risks from EVALUATE → risk mitigations become "Always" items
 
-### Security Boundaries (Required WHEN `cross_boundary.value == true`)
+### Security Boundaries (Required WHEN `cross_boundary.value == true`) `[GATE·validator]`
 
 This is the pipeline's ONLY design-level security checkpoint. Every other security
 review is code-level (REVIEW security specialist / Gate-2 adversarial) — i.e. AFTER
@@ -202,7 +210,9 @@ VALID iff it has a real enforcement locus (`path:line` whose file EXISTS on disk
 locus). The validator verifies the locus is REAL; you + the DELIVER security specialist
 verify it is CORRECT (semantics are beyond a validator).
 
-### Success Criteria (Required)
+### Success Criteria (Required) `[MUST]`
+
+> `success_criteria` is *recommended* (WARN on absence, not a BLOCK). `[MUST]` by discipline.
 
 Reframe vague requirements into specific, testable conditions. These become
 the exit conditions for the DELIVER stage.
@@ -218,7 +228,7 @@ the exit conditions for the DELIVER stage.
 or a visual check. "Works correctly" is not a success criterion. "Returns 200
 with valid JSON body containing `transcript` field" is.
 
-### Test Strategy (Required)
+### Test Strategy (Required) `[MUST]`
 
 **Bridge AC → TDD.** Each acceptance criterion needs a concrete test approach
 BEFORE BUILD starts. Without this, BUILD spends half its time figuring out
@@ -276,8 +286,11 @@ This gives BUILD a testing roadmap beyond just the changed files.
 
 ## Artifact Publish
 
-The design_doc artifact MUST include `boundaries`, `success_criteria`, `file_discovery`,
-`change_spec`, and `test_strategy` fields. Pipeline validator will check for their presence.
+The design_doc artifact SHOULD include `boundaries`, `success_criteria`, `file_discovery`,
+`change_spec`, and `test_strategy` fields. ⚠️ **Note:** the validator only *requires*
+`acceptance_criteria` and *recommends* (WARN, not BLOCK) `boundaries`/`success_criteria`;
+the others are agent-discipline `[MUST]`, not presence-checked. (Prior wording claimed the
+validator checks all five — corrected as a doc-code drift, AC4.)
 **Additionally, when the run's `cross_boundary.value == true`, the artifact MUST include a
 non-empty `security_boundaries` list** (each entry: `boundary`, `trust_assumption`, and
 either `enforcement` = `"path:line"` OR `escalate: true` + `reason`). The completion-time

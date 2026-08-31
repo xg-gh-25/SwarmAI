@@ -36,7 +36,12 @@ Then continue with the Standard Methodology below, starting from Step 4
 
 ---
 
-## Methodology (Standard — all profiles except goal's per-cycle mini-reflect)
+## Methodology (Standard — all profiles except goal's per-cycle mini-reflect) `[MUST]`
+
+> REFLECT has NO validator-required artifact fields (`schema --stage reflect` →
+> required=[]). Every step below (lessons, ADR gate, cultivation, learn, report) is
+> agent-discipline `[MUST]` — the cultivation/learn/report are real scripts the agent
+> invokes, not publish-blocking gates. "Do NOT skip" here means honor the discipline.
 
 1. Extract lessons from this pipeline run
 2. Write to IMPROVEMENT.md: what worked, what failed, patterns discovered

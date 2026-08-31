@@ -81,7 +81,7 @@ old behavioral grill protocol (see think.md) was "almost always skipped".
 }
 ```
 
-**Rules (validator-enforced — `_check_ambiguity_scan`):**
+**Rules `[GATE·validator]` (`pipeline_validator._check_ambiguity_scan`, publish-time BLOCK):**
 - Strict profiles (full/bugfix/goal) REQUIRE the `ambiguity_scan` block; **trivial/
   docs/research are exempt** (anti-ceremony — same rigor tiers as the Understanding
   Gate).
@@ -93,7 +93,7 @@ old behavioral grill protocol (see think.md) was "almost always skipped".
   ACs) and the Understanding Gate (which scans the *diagnosis* for hedge). Here you
   scan the *requirement clarification output* for residual spec ambiguity.
 
-### Understanding Gate (ALL work types — understand the present before proposing a fix)
+### Understanding Gate `[GATE·validator]` (ALL work types — understand the present before proposing a fix)
 
 `NO BUILD WITHOUT AN OBSERVATION-BACKED, REFUTED UNDERSTANDING OF THE PRESENT`
 
@@ -169,7 +169,7 @@ the other side of the wall.
 > class-completeness gate (goal_cycle Final Quality Gate step 2.5) closes it — but ONLY if
 > the run declares a `migration_class`.
 >
-> **Gate-0 rule (BLOCKS the evaluation until satisfied):** if the requirement contains a
+> **Gate-0 rule `[GATE·validator]` (`_check_migration_class` + `check_migration_class.py`, publish-time BLOCK):** if the requirement contains a
 > migration keyword — **migrate / unify / consolidate / de-dup / "route … all" /
 > "gate … all" / "every … through" / "single … for all"** — the evaluation artifact MUST
 > include a `migration_class` block. Opt-in was the C036 escape hatch: an agent with an
@@ -191,16 +191,16 @@ the other side of the wall.
 > list or a single-file-scoped grep. Enumerate the sink (the last-mile write call every
 > member is forced through); let the grep find the files, don't curate them.
 
-**Three mechanisms — all mechanical, none rely on agent discipline:**
+**Three mechanisms — M1+M2 `[GATE·validator]`, M3 `[MUST]` (behavioral spawn):**
 
-- **M1 — Separation (the wall).** The `claim` must describe the PRESENT, not a
+- **M1 — Separation (the wall). `[GATE·validator]`** The `claim` must describe the PRESENT, not a
   fix. The validator BLOCKS a claim containing solution language ("I will / the
   fix is / add … / refactor …"). THINK is the first stage allowed to propose a fix.
-- **M2 — Observation-not-inference (R16b mechanized).** A hedge in the claim or
+- **M2 — Observation-not-inference (R16b mechanized). `[GATE·validator]`** A hedge in the claim or
   evidence (`似乎 / 可能 / probably / should be / I think / likely`) BLOCKS unless
   the `evidence` is a concrete, non-hedged observation that resolves it. Validator-enforced.
-- **M3 — Refutation (the skeptic, BEHAVIORAL — spawn Agent tool, same pattern as
-  deliver.md's adversarial gate).** For bugfix/full/goal, after scoring a GO and
+- **M3 — Refutation (the skeptic). `[MUST]` (BEHAVIORAL — spawn Agent tool, same pattern as
+  deliver.md's adversarial gate; not code-enforced — the validator only records the verdict field).** For bugfix/full/goal, after scoring a GO and
   BEFORE advancing to THINK, spawn ONE fresh-context sub-agent with ZERO of your
   reasoning. Its job is to REFUTE:
 
@@ -244,7 +244,7 @@ marker via the `observation_evidence` alias). M3 (the skeptic) is the
 *human-spawned* verifier that produces the verdict the field records. Model
 proposes, the gate disposes.
 
-### Subsystem Health Audit (P1)
+### Subsystem Health Audit (P1) `[MUST]`
 
 **Before scoring, if the requirement touches an existing subsystem** (not a
 greenfield feature), run a 5-minute E2E audit of that subsystem:
@@ -274,7 +274,12 @@ cost 15 minutes; fixing the gaps individually over time would have cost 15 hours
 **When to skip:** Greenfield features (no existing subsystem to audit), trivial
 one-line fixes, or when the user explicitly says "just fix this one thing."
 
-### Cross-Boundary Classification (P1) — produces the `cross_boundary` flag
+### Cross-Boundary Classification (P1) `[GATE·artifact_cli]` — produces the `cross_boundary` flag
+
+> The `cross_boundary` flag is code-consumed downstream: `artifact_cli.py` `cross_boundary_e2e`
+> gate reads the field from the published EVALUATE artifact and `sys.exit(1)`s if a
+> `cross_boundary=true` change reaches DELIVER without a passing TEST-Layer-4 E2E record.
+> REVIEW check 15 additionally rejects a `false` with no `ruled_out`.
 
 **One question, asked on every run:** *does this change cross a CONTRACT BOUNDARY —
 a seam where each side is a separate unit that a unit test can pass in isolation while
@@ -351,7 +356,7 @@ Adjust **Feasibility** score:
 
 **Skip** when no `code_intel.db` exists or requirement is research-only.
 
-### Drift Detection (P2 — Warning, Non-Blocking)
+### Drift Detection (P2 — Warning, Non-Blocking) `[GUIDE]`
 
 **Before scoring, check whether code has drifted from design docs since
 the last pipeline delivery.** If code changed but design docs didn't update,
@@ -398,7 +403,11 @@ the pipeline may be working from stale assumptions.
 
 ---
 
-### Anti-Repetition Check (BLOCKING)
+### Anti-Repetition Check `[MUST]`
+
+> ⚠️ **doc-code drift:** this section reads "(BLOCKING)" but NO code enforces it —
+> `grep anti_repetition backend/scripts/{pipeline_validator,artifact_cli}.py` = 0 hits.
+> It is agent-discipline (`[MUST]`), NOT a code gate. Flagged in the drift table (AC4).
 
 **Before producing the final GO/DEFER recommendation, cross-reference
 IMPROVEMENT.md "What Failed" for structurally similar approaches.**
@@ -592,7 +601,11 @@ DEFER/REJECT, that takes precedence — the requirement isn't worth pursuing
 regardless of whether it's a goal or a feature. If scoring recommends GO and
 the requirement matches goal indicators → override scope to "goal".
 
-### Acceptance Criteria Quality Gate
+### Acceptance Criteria Quality Gate `[MUST]`
+
+> The *presence* of `acceptance_criteria` is `[GATE·validator]` (required in the PLAN
+> artifact). The three quality FILTERS below (no-op / user-value / garbage-in) are
+> `[MUST]` — agent discipline, not code-checked.
 
 **Every AC must describe an observable outcome, not a mechanism.**
 
@@ -628,7 +641,11 @@ the requirement matches goal indicators → override scope to "goal".
 - **If the AC is about generated content: the AC measures content quality, not just structure**
 - **At least 1 AC per feature must be a "user would notice" criterion — something that fails if the output is trivially wrong**
 
-### Pre-mortem Gate
+### Pre-mortem Gate `[GATE·validator]` (greenfield) / `[MUST]` (else)
+
+> `pre_mortem` is code-required (`_check_working_backwards`) ONLY when
+> `work_type=greenfield` + strict profile. For every other work_type it is `[MUST]`
+> (produced by discipline, not validator-blocked).
 
 After scoring, if the initial recommendation is GO, the base methodology's
 Step 3.5 (Pre-mortem) is **mandatory** in the pipeline. The pre-mortem output
@@ -637,7 +654,7 @@ Step 3.5 (Pre-mortem) is **mandatory** in the pipeline. The pre-mortem output
 If the pre-mortem triggers a score adjustment or escalation, update the
 artifact accordingly before publishing.
 
-### Working-Backwards Lens (GREENFIELD ONLY)
+### Working-Backwards Lens (GREENFIELD ONLY) `[GATE·validator]`
 
 `INTERROGATE THE CUSTOMER VALUE — SELF-ANSWER FIRST, HUMAN CONFIRMS AT REVIEW`
 

@@ -37,7 +37,10 @@ requires: integration trace (real wiring check), runtime patterns RP1-RP81
 (mechanical checklist), and for >3 files: parallel sub-agents with ISOLATED
 context. C011: builder rated 10/10, feature was 100% broken.
 
-## Litmus Pre-Gate (< 2 min, no tools, no sub-agent)
+## Litmus Pre-Gate (< 2 min, no tools, no sub-agent) `[GATE·validator]`
+
+> The `litmus_gate` block is a REQUIRED review-artifact field and Check 8e BLOCKS
+> a missing/invalid one (verdict∈PASS/BORDERLINE/FAIL, 4 hf booleans, evidence >20 chars).
 
 **Before** spawning expensive adversarial sub-agents, run a quick structural
 sanity check on BUILD output. This is a 30-second read, not a deep review.
@@ -103,7 +106,13 @@ Read the BUILD stage artifacts:
 
 ---
 
-## Spec Compliance Gate (Serial, BLOCKING — runs BEFORE fan-out)
+## Spec Compliance Gate (Serial, BLOCKING — runs BEFORE fan-out) `[MUST]`
+
+> "BLOCKING" here = review DISCIPLINE, not a code gate. `spec_compliance` /
+> `spawned_as_subagent` are NOT validator-checked (`grep spec_compliance
+> pipeline_validator.py` = 0 hits). `[MUST]` — the fresh-sub-agent spawn is behavioral,
+> same class as Gate 1 / the M3 skeptic. (The related `runtime_patterns` + `litmus_gate`
+> ARE `[GATE·validator]`.)
 
 `NO FAN-OUT REVIEW WITHOUT SPEC SUB-AGENT FIRST`
 
@@ -386,7 +395,10 @@ Check IMPROVEMENT.md for known issue patterns.
 
 ---
 
-### 3. Integration Trace
+### 3. Integration Trace `[GATE·validator]`
+
+> `integration_trace` is a REQUIRED review-artifact field (validator BLOCKS if absent).
+> The trace CONTENT is agent-produced; only its presence is code-checked.
 
 Verify every new public symbol is actually wired.
 
@@ -477,9 +489,12 @@ discoverability hint, Escape propagation). Engineering-complete != user-complete
 
 ---
 
-### 6. Runtime Pattern Checklist
+### 6. Runtime Pattern Checklist `[GATE·validator]`
 
 **BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP81.**
+
+> `runtime_patterns` is a REQUIRED review-artifact field (validator BLOCKS if absent).
+> The RP1-RP81 range matches REVIEW_PATTERNS.md's current max (RP81) — no drift.
 
 Scan the changeset for known bug patterns. For each pattern that applies, explicitly verify the fix is in place. Do NOT skip patterns -- a "no" answer is fine, but silence means unchecked.
 
@@ -802,7 +817,7 @@ Include in review artifact under `"neighborhood_review"`.
 
 ---
 
-### 14. Anti-Rationalization Gate
+### 14. Anti-Rationalization Gate `[MUST]`
 
 Before concluding REVIEW, reject these shortcuts:
 
@@ -822,7 +837,15 @@ Before concluding REVIEW, reject these shortcuts:
 
 ---
 
-### 15. Exit Evidence Checklist
+### 15. Exit Evidence Checklist `[MUST]` (cross-boundary case (a) = `[GATE·artifact_cli]`)
+
+> The checklist itself is `[MUST]` (agent self-confirms each line). Within the cross-boundary
+> E2E line, ONLY **case (a)** is code-enforced: `artifact_cli.py`'s `cross_boundary_e2e` gate
+> `sys.exit(1)`s at DELIVER if a `value==true` change lacks a passing Layer-4 E2E record.
+> ⚠️ **Cases (b) + (c) are `[MUST]`, NOT gated (adversarially corrected):** the gate lives
+> entirely inside `if _cb.get("value") is True:` — it fail-OPENS on a bare `false`, and
+> `ruled_out` is read by NO code (0 hits). So "bare `false` → BLOCK" (b) and "`true` under
+> docs/research → BLOCK" (c) are agent-discipline, not CLI-enforced.
 
 Confirm each before publishing:
 - [ ] Spec compliance gate passed (coverage matrix shows all ACs IMPLEMENTED, or WARNING findings injected into merge)

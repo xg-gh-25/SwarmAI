@@ -18,7 +18,11 @@ INSTRUCTIONS.md Step 6 — read both.
 
 ---
 
-## Step 0: Surface this run's changes to Canvas (MANDATORY — before the summary)
+## Step 0: Surface this run's changes to Canvas (MANDATORY — before the summary) `[GATE·artifact_cli]`
+
+> The `outputs_surfaced` step is code-enforced for source-committing runs: if this run
+> committed run-scoped source and you skip surfacing (step 2/3), `run-update --status
+> completed` BLOCKS (see the "GATED" note below). A knowledge/docs-only run is exempt.
 
 > **⛔ ORDER PREREQUISITE (run_14e560ed): `run-report` MUST run BEFORE `surface_run_outputs`.**
 > `surface_run_outputs` appends the run's `REPORT.md` as the LAST OUTPUTS row (kind=knowledge)
@@ -60,7 +64,11 @@ source commits) is not gated — skip steps 2-3, still do step 1.
 
 ---
 
-## Output the completion summary to chat (MANDATORY — never skip)
+## Output the completion summary to chat (MANDATORY — never skip) `[MUST]`
+
+> The summary box + executive summary are agent-output DISCIPLINE (`[MUST]`) — no validator
+> inspects chat output. The code-enforced part of COMPLETE is the `run-update --status
+> completed` gate (Step 0 `outputs_surfaced` + upstream `push_ready`/`stage_doc_consumed`).
 
 Pick the variant matching the run's profile.
 

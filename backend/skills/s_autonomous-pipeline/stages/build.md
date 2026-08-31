@@ -33,7 +33,10 @@ rationalize tests." C009: 5 iterations because tests came after code. C011: 57
 tests passed but tested the wrong thing. **The test defines what "correct" means.
 Code without a pre-existing test has no definition of correct.**
 
-## Anti-Pattern: Horizontal Slices (BLOCKING)
+## Anti-Pattern: Horizontal Slices (BLOCKING) `[MUST]`
+
+> "BLOCKING" here = TDD discipline, not a code gate — no validator inspects RED/GREEN
+> ordering. `[MUST]`.
 
 **DO NOT write all tests first, then all implementation.** This is "horizontal
 slicing" — treating RED as "write all tests" and GREEN as "write all code."
@@ -80,10 +83,17 @@ If no `build_injection_recommendations` exist, skip this section.
 
 ---
 
-## Gate 1: Pre-Check (Skeptic + SSA) — ACTIVE
+## Gate 1: Pre-Check (Skeptic + SSA) — ACTIVE `[MUST]`
 
 > **Status:** ACTIVE. BLOCK verdict halts BUILD until resolved.
 > User can override with "proceed anyway" (logged as override, not silent skip).
+>
+> **Enforcement level `[MUST]` (behavioral, not code-gated).** The Skeptic+SSA sub-agent
+> spawn is agent-discipline: the validator records `gate1_verdict` in the run/REPORT but
+> does NOT BLOCK on it (`grep gate1_verdict pipeline_validator.py` = 0 hits — it's read
+> only by `artifact_cli.py` REPORT rendering). Same class as evaluate.md's M3 skeptic.
+> A blocked spawn is recoverable at Gate 2 (which IS code-enforced), so `[MUST]` here is
+> by design — see the `gate_spawn_blocked` fail-closed rule in Execution below.
 
 ### Trigger Conditions
 
@@ -363,7 +373,7 @@ the override was justified (plan succeeded despite BLOCK) or the BLOCK was corre
 5. Write minimal code to make that ONE test pass
 6. Commit: this is your tracer bullet — proof the path works
 
-## Step 1.5: API Existence Check (BLOCKING for handler/integration code)
+## Step 1.5: API Existence Check (BLOCKING for handler/integration code) `[MUST]`
 
 **Before writing any code that calls functions from another module:**
 
@@ -389,7 +399,7 @@ that mock the very API being called wrong.
 
 **Skip when:** all calls target code YOU wrote in the same session (you know the API).
 
-## Step 1.7: Mechanism Declaration (BLOCKING for system API usage)
+## Step 1.7: Mechanism Declaration (BLOCKING for system API usage) `[MUST]`
 
 **When code depends on an OS/system mechanism** (flock, signals, atomicity,
 file ordering, process lifecycle, env var inheritance), declare it explicitly:
@@ -516,7 +526,11 @@ It takes 30 seconds and catches the #1 class of "works on happy path, breaks on 
 invocations below are **SwarmAI's own value, shown for reference** — substitute
 the project's (`go test ./...`, `mvn test`, `cargo test`, `npm test`, etc.).
 
-**VERIFY rules (BLOCKING):**
+**VERIFY rules (BLOCKING):** `[MUST]`
+> These BUILD-step "BLOCKING" labels (1.5 API-check, 1.7 Mechanism-decl, 3 VERIFY,
+> 3.6 Interface-seam) are TDD/verification DISCIPLINE — `[MUST]`, behavioral. The only
+> code-enforced BUILD gate is the AC Coverage Matrix (Check 8f, `[GATE·validator]`, below)
+> + the `tdd`/`files_changed`/`ac_coverage` schema-required fields.
 - Run **changed test files + test files that import changed modules**, using the
   project's test command. *(SwarmAI-self reference:)*
   ```
@@ -570,7 +584,7 @@ code. The function was never registered in `hook_builder.py`. This check catches
 **Skip when:** changeset is pure refactoring (existing callers unchanged) or
 changeset modifies only private/internal functions (leading underscore).
 
-## Step 3.6: INTERFACE SEAM VERIFICATION (for cross-module wiring)
+## Step 3.6: INTERFACE SEAM VERIFICATION (for cross-module wiring) `[MUST]`
 
 **After caller verification, before SMOKE.** Only when changeset introduces
 a new interface boundary (Protocol, ABC, duck-typed contract, callback/callable).
@@ -879,7 +893,10 @@ timeout." Test the resource, not the happy path around it.
     because none actually sent a multipart request through the ASGI stack.
     The most fatal bug was the cheapest to catch.
 
-## Pre-Change Checks
+## Pre-Change Checks `[MUST]`
+
+> The "BLOCKING" grep-before-you-change rules in this section are agent-discipline
+> `[MUST]` (no validator enforces them) — they encode R27 (grep all consumers) at BUILD time.
 
 ### When splitting a variable into multiple categories
 
@@ -998,7 +1015,7 @@ SDD CHECK:
 and `date('now')` UTC mismatch — both passed pipeline because no check verified
 against current docs. Training data goes stale; official docs don't.
 
-## Self-Verification: AC Coverage Matrix (MANDATORY before publish)
+## Self-Verification: AC Coverage Matrix (MANDATORY before publish) `[GATE·validator]`
 
 **After all TDD cycles complete, before publishing the artifact:**
 

@@ -125,7 +125,7 @@ Gate's "refute your claim" discipline at the design layer).
    EVALUATE — `{scanned_fields, terms_checked, hits[{term,where,resolution,kind}],
    hit_count, all_resolved}`).
 
-**Validator-enforced (`_check_ambiguity_scan`):** strict profiles REQUIRE the
+**Validator-enforced (`_check_ambiguity_scan`) `[GATE·validator]`:** strict profiles REQUIRE the
 block; trivial/docs/research exempt; every hit needs a non-empty resolution
 (≥12 chars) or it BLOCKS. `hits: []` is valid (scanned, clean).
 
@@ -135,7 +135,12 @@ THINK must produce substantive analysis, not a token-saving shortcut. Historical
 data shows runs with deeper THINK (>10K tokens) have higher completion rates
 and fewer adversarial findings.
 
-**Minimum requirements (BLOCKING):**
+**Minimum requirements (BLOCKING):** `[MUST]`
+
+> ⚠️ **doc-code drift:** "BLOCKING" but only `key_findings` is a validator-required THINK
+> field — `alternatives` is *recommended* (WARN, not BLOCK) and the 2-approach/3-probe COUNTS
+> are not code-checked. `[MUST]` by discipline. Flagged in the drift table (AC4).
+
 1. At least **2 distinct approaches** with explicit tradeoffs (not 1 approach + "don't do it")
 2. At least **3 risk probes** attempted (verified, falsified, or unresolved)
 3. Each alternative must state its **cost** (effort, risk, tradeoff) — not just benefits

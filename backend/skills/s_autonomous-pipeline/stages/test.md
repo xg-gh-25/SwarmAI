@@ -26,7 +26,10 @@ the bugs YOUR tests can't — because you wrote both the code AND the tests.**
 
 ## Pipeline-Specific Behavior
 
-### Test Strategy (3 layers, executed in order)
+### Test Strategy (3 layers, executed in order) `[GATE·validator]`
+
+> The `layers` block (+ `passed`) is a REQUIRED test-artifact field — validator BLOCKS
+> if absent. Layer CONTENT (which tests ran) is agent-produced; presence is code-checked.
 
 #### Layer 1: AC-Driven Verification
 
@@ -108,7 +111,11 @@ but crashed on real import because of a circular dependency.
 **On failure:** ImportError = wiring bug. Fix the import structure before
 proceeding.
 
-#### Layer 4: Cross-Boundary E2E (CONDITIONAL — fires ONLY when `cross_boundary.value == true`)
+#### Layer 4: Cross-Boundary E2E (CONDITIONAL — fires ONLY when `cross_boundary.value == true`) `[GATE·artifact_cli]`
+
+> When EVALUATE set `cross_boundary=true`, this layer is code-enforced at DELIVER:
+> `artifact_cli.py`'s `cross_boundary_e2e` gate `sys.exit(1)`s if the TEST artifact lacks
+> a passing `cross_boundary_e2e.run` record. When `false`, the layer is skipped (no gate).
 
 Read the EVALUATE artifact's `cross_boundary` flag (see EVALUATE § Cross-Boundary
 Classification). **If `false` → skip this layer** (record `"cross_boundary_e2e": {"run": false, "reason": "not a cross-boundary change"}` and move on — no ceremony tax). **If `true` → this layer is a MANDATORY DoD item; the run is not TEST-complete without it.**
@@ -168,7 +175,11 @@ system through the actual boundary** the change crosses.
 | "All units pass, the migration is done — Layer 4 is overkill" | Units pass ONE side of a seam; a cross-boundary change breaks the SEAM, which no unit sees. run_fdeaead8: every unit green, the ACT/SENSE contract silently severed, caught by adversarial not E2E. If EVALUATE set `cross_boundary=true`, Layer 4 is mandatory. | run_fdeaead8 (M4) |
 | "I wrote a Layer-4 test and it's green" | Green ≠ non-vacuous. If it mocks the thing-under-change, or stays green when you revert the contract line, it's theater. Mutation-verify: revert the seam → it MUST go RED. | CLASS-A test-theater |
 
-### WTF Gate
+### WTF Gate `[MUST]`
+
+> `wtf_gate.py` is a real script, but the pipeline does NOT block publish on its score —
+> the halt-at-≥5 is an agent-obeyed L2 checkpoint (agent runs the script + acts on it),
+> not a validator-enforced publish gate. `[MUST]`.
 
 Calculate WTF score via script:
 
@@ -202,7 +213,7 @@ Max 20 fixes per session. After 20, checkpoint and report regardless of remainin
 6. Re-run failed tests after fixes (confirm green)
 ```
 
-### Single-Platform Compile Trap (BLOCKING for cross-platform changes)
+### Single-Platform Compile Trap (BLOCKING for cross-platform changes) `[MUST]`
 
 **Trigger:** the changeset adds a `#[cfg(...)]` / `#ifdef` / platform-conditional
 symbol, OR touches code that compiles per-target (Rust, C/C++, Go build tags,

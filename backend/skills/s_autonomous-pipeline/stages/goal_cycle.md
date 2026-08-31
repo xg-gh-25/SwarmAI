@@ -39,7 +39,10 @@ calls this stage once; the stage itself manages the cycle loop.
 
 ---
 
-## DoD Quality Rules (BLOCKING — enforced at Pre-Cycle Setup)
+## DoD Quality Rules (BLOCKING — enforced at Pre-Cycle Setup) `[MUST]`
+
+> "BLOCKING" here = agent discipline at setup (the agent scans `dod_criteria` and adds a
+> negative test). No validator enforces the 3 DoD-quality rules — `[MUST]`.
 
 The DoD criteria from EVALUATE are the goal profile's primary quality lever.
 Weak DoD = weak output. These rules prevent the most common DoD failure modes:
@@ -236,7 +239,12 @@ if cycle_number % review_cadence == 0:
     → Update last_review_commit to HEAD
 ```
 
-### 10.5 Cross-Cycle Finding Re-Judgment (AutoSDE #2, run_7583af5f)
+### 10.5 Cross-Cycle Finding Re-Judgment (AutoSDE #2, run_7583af5f) `[MUST]` → `[GATE·validator]` at DELIVER
+
+> The re-judgment loop itself is `[MUST]` (agent re-checks the ledger). Its TEETH are at
+> DELIVER: an APPLICABLE-unresolved finding carried into `adversarial_review.findings[]`
+> is code-blocked by `_blocked_findings` (pipeline_validator.py). The ledger is working
+> memory (`[MUST]`); the DELIVER artifact is the enforcement surface (`[GATE·validator]`).
 
 `A FINDING IS NOT DONE UNTIL RE-JUDGED AGAINST THE LATEST DIFF`
 
@@ -331,7 +339,12 @@ velocity = gm.get_velocity()
 # Append to progress file: "## Velocity Summary\n- Avg delta/cycle: {velocity['avg_delta_per_cycle']}\n..."
 ```
 
-**Final Quality Gate (before exiting goal_cycle stage):**
+**Final Quality Gate (before exiting goal_cycle stage):** `[MUST]` + `[GATE·validator]` (findings block at DELIVER)
+
+> The adversarial spawn + cross-path prompt are `[MUST]` (behavioral). The RESULTING
+> findings are `[GATE·validator]`: goal_cycle's own schema requires an `adversarial_review`
+> DICT with `findings` (a bare `true` FAILS depth validation), and unresolved HIGH/blocking
+> findings are code-blocked by `_blocked_findings` at the DELIVER stage.
 
 0. **Cross-Cycle Re-Judgment (run step 10.5 one final time on the total diff).**
    Re-judge every ledger finding against `git diff <start_commit>..HEAD`. Carry
@@ -371,7 +384,15 @@ velocity = gm.get_velocity()
    code correct?" — cross-path adversarial asks "is this code correct FOR
    ALL ITS USES?"
 
-2.5. **Class-Completeness Gate (MANDATORY when `migration_class` is declared — run_1d3df9e6):**
+2.5. **Class-Completeness Gate (MANDATORY when `migration_class` is declared — run_1d3df9e6):** `[MUST]` → `[GATE·validator]` at DELIVER
+
+   > ⚠️ **Enforcement nuance (adversarially corrected):** the completeness COMPUTATION is
+   > `[MUST]` — `check_migration_class.py` is NOT called by any validator/CLI/hook (only by
+   > its own test); the agent must import it, run it, and `adversarial_review["findings"].append()`
+   > by hand. The TEETH are two SEPARATE real gates around it: (a) the upstream `migration_class`
+   > DECLARATION is `[GATE·validator]` at EVALUATE (`_check_migration_class_declared`, publish-time
+   > BLOCK on a migration keyword); (b) any finding the agent DOES append is `[GATE·validator]` via
+   > `_blocked_findings` at DELIVER. The class-enumeration step BETWEEN them is behavioral.
 
    Runs AFTER the cross-path adversarial (step 2), BEFORE marking the stage complete.
    The cross-path adversarial is DIFF-SCOPED — it only sees code the cycles TOUCHED, so a
@@ -399,7 +420,7 @@ velocity = gm.get_velocity()
    - A MISSED / BAD_ENUMERATION / UNJUSTIFIED_CARVEOUT member → the HIGH finding blocks
      COMPLETE. Fix = migrate the member (or declare an honest carve-out) and re-run.
 
-2.6. **Cross-Boundary Layer-4 E2E (MANDATORY when `cross_boundary.value == true` — run_6b709df9):**
+2.6. **Cross-Boundary Layer-4 E2E (MANDATORY when `cross_boundary.value == true` — run_6b709df9):** `[GATE·artifact_cli]`
 
    The goal profile has NO standalone `test` stage, so TEST's Layer 4 (cross-boundary E2E,
    `stages/test.md` § "Layer 4") is otherwise UNREACHABLE under goal — a cross_boundary goal
