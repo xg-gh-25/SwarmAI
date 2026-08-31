@@ -48,19 +48,31 @@ When encountering:
    - What document type?
    - Who is the audience?
    - What needs to be communicated?
-   
-2. **Get initial structure** (choose one):
+
+2. **Route to a template if the type is structured.** If the document is a six-pager, PR/FAQ, HLD, LLD, or ADR, load the matching template and follow the Guided Authoring Workflow (self-answer → list → confirm → generate):
+
+   | User asks for | Load |
+   |---------------|------|
+   | six-pager / narrative / decision doc | `reference/templates/six-pager.md` |
+   | PR/FAQ / press release / launch doc | `reference/templates/prfaq.md` |
+   | HLD / system design / high-level design | `reference/templates/hld.md` |
+   | LLD / component design / low-level design | `reference/templates/lld.md` |
+   | ADR / decision record | `reference/templates/adr.md` |
+
+   For a free-form document with no matching type, use the section-by-section flow below.
+
+3. **Get initial structure** (free-form documents only. Structured types use the template's fixed structure):
    - **Option A (Preferred)**: User provides template with rough draft notes
    - **Option B**: User describes what each section should cover in one sentence
    
-3. **Iterate section by section:**
+4. **Iterate section by section** (free-form documents only. Structured types use the Guided Authoring Workflow above):
    - Ask clarifying questions to gather information for this section
    - Write the section based on answers
    - Review with user
    - Iterate until user approves
    - Move to next section
    
-4. **Apply standards during iteration:**
+5. **Apply standards during iteration:**
    - Documents **MUST** include title with document type and date
    - Documents **MUST** include executive summary (purpose + recommendation + decisions)
    - You **MUST** use logical heading hierarchy (H1 title, H2 sections, H3 subsections)
@@ -75,7 +87,7 @@ When encountering:
    - Documents **MUST** use minimum 10pt body text
    - Documents **MUST** maintain high contrast for accessibility
    
-5. **Reader Testing (spawn cold agent):**
+6. **Reader Testing (spawn cold agent):**
    - After completing all sections, spawn a sub-agent with ZERO context about the writing process
    - Give it ONLY the finished document and this prompt:
      ```
@@ -91,7 +103,7 @@ When encountering:
    - Fix any issues the reader test reveals (especially #1 and #2 — if the purpose is unclear or sections confuse a fresh reader, the document fails its primary job)
    - This step catches the #1 document failure mode: **author assumes shared context that doesn't exist for the reader**
 
-6. **Final review:**
+7. **Final review:**
    - You **MUST** verify six-page limit (appendices excluded)
    - You **MUST** check for weasel words using `scripts/check-weasel-words.sh`
    - You **SHOULD** have peer review before submission
@@ -197,6 +209,29 @@ flowchart TD
 - **Appendices**: You **SHOULD** use appendices for supporting details that disrupt main flow
 - **Six-page limit**: The limit **MUST** apply to main narrative only (appendices excluded)
 - **Metadata**: Documents **SHOULD** include page numbers and confidentiality in footer
+
+## What Makes a Document Good
+
+The section above defines a document's **structure** (its parts). This defines its **quality**: the five criteria a finished document is judged against, regardless of type. Use them as the Definition of Done, verifying each one holds before delivering any narrative. (Sourced from the Amazon technical-design guidance. They apply to every narrative, not only designs.)
+
+1. **Self-contained.** A reader can understand and evaluate the problem, solution, decisions, and trade-offs without opening other material. If a claim depends on an external doc, summarize the load-bearing part inline.
+2. **Problem and why.** The document states the problem and why it is worth solving, so the reader judges the solution against those objectives, not in a vacuum.
+3. **Decisions with alternatives and rationale.** Every major decision names the alternatives considered and why the chosen option wins. A decision with no visible alternative reads as unconsidered.
+4. **Known risks with mitigation.** The document names its real risks, their potential impact, and the proposed mitigation or graceful fallback. It does not present a frictionless picture.
+5. **Open questions, surfaced not hidden.** Unresolved ambiguity is stated explicitly, each with a suggested approach to resolve or isolate it so the team can proceed. Hiding open questions is the most common reason a senior reviewer sends a document back.
+
+Each template in `reference/templates/` maps its structure back to these five criteria.
+
+## Guided Authoring Workflow
+
+For a structured document type (six-pager, PR/FAQ, HLD, LLD, ADR), do not start writing prose immediately, and do not interview the user question-by-question. Follow this loop:
+
+1. **Load the template.** Read `reference/templates/<type>.md` for the type's guided questions and fixed structure (routing is in "Writing a New Document").
+2. **Self-answer the guided questions.** Answer each from the material the user gave you, the codebase, the DDD, and context. This is the same discipline as the Reader-Testing step and the pipeline's "interrogate the spec and your own framing, not the user" rule: derive the answer yourself first. Mark `[TBD]` **only** where the answer is genuine user intent that cannot be derived (a preference, a business constraint only the user knows), never as a shortcut to avoid reading.
+3. **List all answers once for confirmation.** Present the full set of self-answered questions (and any `[TBD]`s) to the user in a single pass, and ask them to confirm or revise. This is the one human checkpoint. It does not interrupt flow with a stream of questions, and it lets the user correct a wrong assumption before you spend effort drafting.
+4. **Generate the document** from the confirmed answers, using the template's fixed structure, and verify it against the five criteria in "What Makes a Document Good".
+
+This keeps authoring autonomous (self-answer first) while giving the user exactly one high-leverage review point, rather than the question-by-question interview that stalls drafting.
 
 ## Quick Reference
 
