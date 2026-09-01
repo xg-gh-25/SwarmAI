@@ -4,7 +4,7 @@
 
 A project plan defines **how a bounded effort will be delivered**: its scope, the ordered milestones, the risks that threaten it, and the dependencies it relies on. It aligns a team on what "done" is, who owns each part, and when each part lands. Use it to launch a project, request resourcing, or give stakeholders a shared view of the path and its risks.
 
-Not for arguing whether to do the project (use `six-pager.md`; the plan assumes the decision is made) and not for a repeatable operational task (use `sop.md`). A plan projects a path forward; it does not run a recurring procedure.
+Not for arguing whether to do the project (use `six-pager.md`, since the plan assumes the decision is already made) and not for a repeatable operational task (use `sop.md`). A plan projects a path forward. It does not run a recurring procedure.
 
 ## Guided questions (self-answer first)
 

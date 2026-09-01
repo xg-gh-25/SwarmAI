@@ -7,7 +7,7 @@ This reference provides guidance on the visual elements of document design, incl
 ### Typography and Text Formatting
 - Use 10-11pt standard font for body text (Times New Roman, Arial, or similar)
 - Apply consistent font sizes: 14pt for title, 12pt for major headings, 11pt for subheadings, 10-11pt for body text
-- Format headers as bold and underlined; sub-headings as underlined
+- Format headers as bold and underlined, sub-headings as underlined
 - Use left-aligned text (not justified) for better readability and accessibility
 - Apply single line spacing for body text
 - Include white space between paragraphs (6pt before/after paragraphs)
@@ -278,4 +278,4 @@ Effective visual structure and formatting in documents is critical for several r
 
 10. **Attention Direction**: Strategic use of formatting elements directs attention to the most important information, ensuring key points aren't overlooked.
 
-In a document-driven culture, visual structure and formatting aren't merely aesthetic concerns—they're essential components of effective communication that directly impact how information is processed, understood, and acted upon.
+In a document-driven culture, visual structure and formatting aren't merely aesthetic concerns. They are essential components of effective communication that directly impact how information is processed, understood, and acted upon.

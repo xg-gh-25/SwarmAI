@@ -76,13 +76,31 @@ if [ -n "$all_hits" ]; then
     found=1
 fi
 
+# BANNED PUNCTUATION — em-dash and semicolon are forbidden in narrative bodies
+# (INSTRUCTIONS.md: "MUST NOT use mdashes or semicolons"). This was a prose-only
+# rule with no gate; a batch em-dash->semicolon replacement can trade one violation
+# for another undetected. Now enforced.
+#   - HTML entities (&amp; &#39; &mdash; &lt;) carry a legitimate trailing ';' and an
+#     escaped em-dash — strip them BEFORE scanning so they are not false-flagged.
+#   - Code was already stripped into $STRIPPED above.
+NOENT="$(printf '%s\n' "$STRIPPED" | sed -E 's/&(#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z]+);//g')"
+punct_hits="$(printf '%s\n' "$NOENT" | grep -nE '—|;' || true)"
+if [ -n "$punct_hits" ]; then
+    echo "-- banned punctuation (em-dash / semicolon) --"
+    printf '%s\n' "$punct_hits"
+    found=1
+fi
+
 echo "----------------------------------------"
 if [ "$found" = 1 ]; then
-    echo "Found weasel words. Replace with specific metrics and commitments."
+    echo "Found weasel words or banned punctuation. Replace with specific commitments,"
+    echo "and rewrite em-dashes/semicolons as separate sentences (period-first, or a"
+    echo "comma ONLY when it does not create a comma splice)."
     echo "(COMMITTED weasels flag in any casing; MODAL words flag only as lowercase"
-    echo " hedging — ALL-CAPS RFC-2119 keywords and code are intentionally exempt.)"
+    echo " hedging — ALL-CAPS RFC-2119 keywords and code are intentionally exempt;"
+    echo " HTML entities are not counted as banned punctuation.)"
     exit 1
 else
-    echo "No weasel words found."
+    echo "No weasel words or banned punctuation found."
     exit 0
 fi
