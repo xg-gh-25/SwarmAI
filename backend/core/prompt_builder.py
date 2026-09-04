@@ -317,8 +317,34 @@ class PromptBuilder:
     # resolve_model
     # ------------------------------------------------------------------
 
-    # Models that get 1M context — the CLI uses [1m] suffix as a signal.
-    _1M_MODELS = {"claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6"}
+    # 1M-context detection — a FAMILY check, not a hardcoded allowlist.
+    #
+    # The CLI uses a [1m] suffix as the signal to open the full 1M window.
+    # A hardcoded set ({"claude-opus-4-8", ...}) required a human edit for every
+    # new Claude release, so a Bedrock-auto-discovered model (e.g. claude-opus-5)
+    # would be selectable yet silently run BELOW its full window — the silent
+    # capability-degradation class of COE 039c4f32. Deriving 1M-capability from
+    # the model family keeps newly-discovered models correct with no code edit.
+    @staticmethod
+    def _is_1m_model(base: str) -> bool:
+        """Return True if ``base`` (a de-prefixed model name) is a 1M-context Claude.
+
+        1M-capable = Claude ``opus``/``sonnet`` family, generation >= 4.
+        Gen-3 Claude, haiku, and non-Claude models are NOT 1M.
+        ``base`` examples: ``claude-opus-5``, ``claude-opus-4-8``,
+        ``claude-sonnet-4-20250514``.
+        """
+        if not base:
+            return False
+        for family in ("claude-opus-", "claude-sonnet-"):
+            if base.startswith(family):
+                # Remainder looks like "5", "4-8", "4-20250514" — take leading int.
+                lead = base[len(family):].split("-", 1)[0]
+                try:
+                    return int(lead) >= 4
+                except ValueError:
+                    return False
+        return False
 
     def resolve_model(self, agent_config: dict) -> Optional[str]:
         """Resolve the model identifier, respecting per-session overrides.
@@ -327,7 +353,8 @@ class PromptBuilder:
                 > config.json default_model (global default)
 
         When Bedrock is enabled, translates to a Bedrock inference profile ID.
-        For 4.6 models, appends ``[1m]`` so the CLI uses the full 1M context
+        For 1M-capable models (Claude opus/sonnet family, generation >= 4 — see
+        ``_is_1m_model``), appends ``[1m]`` so the CLI uses the full 1M context
         window.  The CLI strips this suffix before calling the API.
 
         Returns:
@@ -358,10 +385,15 @@ class PromptBuilder:
         # Append [1m] for 1M-capable models so the CLI uses full context window.
         # The CLI strips [1m] before sending to the API — Bedrock never sees it.
         if model and not model.endswith("[1m]"):
-            base = model.replace("us.anthropic.", "").rstrip(":0")
+            base = model.replace("us.anthropic.", "").replace("global.anthropic.", "")
+            # Strip the literal version suffixes — NOT rstrip(":0"), which is a
+            # character-class strip that would eat a trailing "0" of a date-suffixed
+            # id (e.g. claude-sonnet-4-20250510 → ...2025051) or mangle "-10" → "-1".
+            if base.endswith(":0"):
+                base = base[:-2]
             if base.endswith("-v1"):
                 base = base[:-3]
-            if base in self._1M_MODELS:
+            if self._is_1m_model(base):
                 model = model + "[1m]"
 
         return model

@@ -48,11 +48,29 @@ export interface SettingsConfig extends Record<string, unknown> {
   awsRegion: string;
   defaultModel: string;
   availableModels: string[];
+  // Nested dict: short model name → Bedrock inference-profile id. The shallow
+  // snake↔camel transform leaves nested keys untouched (they're model ids, not
+  // config field names), so this round-trips intact.
+  bedrockModelMap: Record<string, string>;
   thinkingMode: 'adaptive' | 'enabled' | 'disabled';
   thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   anthropicBaseUrl: string | null;
   readonly awsCredentialsConfigured: boolean;
   readonly anthropicApiKeyConfigured: boolean;
+}
+
+/** One discovered Bedrock model (GET /settings/bedrock/models). */
+export interface BedrockModel {
+  shortName: string;
+  bedrockId: string;
+  isNew: boolean;
+}
+
+/** Fail-open response of the Bedrock discovery endpoint. */
+export interface BedrockModelsResult {
+  available: boolean;
+  error: string | null;
+  models: BedrockModel[];
 }
 
 // ---------------------------------------------------------------------------
@@ -71,5 +89,28 @@ export const settingsService = {
     const payload = transformKeys<Record<string, unknown>>(request, camelToSnake);
     const response = await api.put<Record<string, unknown>>('/settings', payload);
     return transformKeys<SettingsConfig>(response.data, snakeToCamel);
+  },
+
+  /**
+   * Discover callable Claude models from Bedrock (auto-discovery).
+   * Fail-open: on backend/AWS error returns { available:false, error, models:[] }
+   * so the caller can keep the current model list instead of blanking it.
+   */
+  async getBedrockModels(): Promise<BedrockModelsResult> {
+    const response = await api.get<{
+      available: boolean;
+      error: string | null;
+      models: { short_name: string; bedrock_id: string; is_new: boolean }[];
+    }>('/settings/bedrock/models');
+    const d = response.data;
+    return {
+      available: !!d.available,
+      error: d.error ?? null,
+      models: (d.models ?? []).map((m) => ({
+        shortName: m.short_name,
+        bedrockId: m.bedrock_id,
+        isNew: m.is_new,
+      })),
+    };
   },
 };

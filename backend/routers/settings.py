@@ -85,6 +85,77 @@ def _probe_anthropic_api_key() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Bedrock model discovery
+# ---------------------------------------------------------------------------
+
+# Prefix on a SYSTEM_DEFINED inference-profile id that the SDK/CLI resolves to
+# a callable model. We prefer the ``us.`` cross-region profile over ``global.``
+# (matches the existing bedrock_model_map convention).
+_BEDROCK_PROFILE_PREFIXES = ("us.anthropic.", "global.anthropic.")
+
+
+def _bedrock_client(region: str | None = None):
+    """Return a bedrock control-plane client on the daemon's DEFAULT credential
+    chain (same chain that already serves live inference — NOT a per-Hive-account
+    session). Isolated for test patching.
+    """
+    import boto3
+    session = boto3.Session()
+    return session.client("bedrock", region_name=region) if region else session.client("bedrock")
+
+
+def _short_name(profile_id: str) -> str:
+    """Strip the cross-region prefix from an inference-profile id → short name.
+
+    ``us.anthropic.claude-opus-5`` → ``claude-opus-5``.
+    """
+    for prefix in _BEDROCK_PROFILE_PREFIXES:
+        if profile_id.startswith(prefix):
+            return profile_id[len(prefix):]
+    # Fallback: strip a leading ``<region>.anthropic.`` / ``anthropic.`` if present.
+    return profile_id.split("anthropic.", 1)[-1]
+
+
+def _list_bedrock_inference_profiles(available_models: list[str]) -> list[dict]:
+    """List callable Claude inference profiles via list_inference_profiles.
+
+    Paginated (never truncates a newer model onto a dropped page). Filters to
+    Claude + SYSTEM_DEFINED, dedups by short_name preferring ``us.`` over
+    ``global.``. Returns ``[{short_name, bedrock_id, is_new}]`` sorted by name.
+    """
+    client = _bedrock_client()
+    paginator = client.get_paginator("list_inference_profiles")
+
+    # short_name -> bedrock_id (us. wins over global.)
+    discovered: dict[str, str] = {}
+    for page in paginator.paginate():
+        for summary in page.get("inferenceProfileSummaries", []):
+            pid = summary.get("inferenceProfileId", "")
+            if "claude" not in pid.lower():
+                continue
+            if summary.get("type") != "SYSTEM_DEFINED":
+                continue
+            short = _short_name(pid)
+            if not short:
+                continue
+            existing = discovered.get(short)
+            # Prefer us. over global.; first-seen us. wins.
+            if existing is None or (
+                not existing.startswith("us.") and pid.startswith("us.")
+            ):
+                discovered[short] = pid
+
+    have = set(available_models or [])
+    return sorted(
+        (
+            {"short_name": short, "bedrock_id": bid, "is_new": short not in have}
+            for short, bid in discovered.items()
+        ),
+        key=lambda m: m["short_name"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic response builder
 # ---------------------------------------------------------------------------
 
@@ -115,6 +186,37 @@ async def get_app_configuration():
     """Get current application configuration as a plain dict."""
     cfg = get_config_manager()
     return _build_config_response(cfg)
+
+
+@router.get("/bedrock/models")
+async def list_bedrock_models():
+    """Discover callable Claude models from Bedrock (auto-discovery, read-only).
+
+    Uses the daemon's default credential chain to call ``list_inference_profiles``
+    and returns the account's callable Claude models so the Settings UI can offer
+    a newly released model without a hardcoded-table edit.
+
+    Fail-open contract: on ANY AWS error this returns HTTP 200 with
+    ``{available: false, error, models: []}`` — never a 5xx, never an empty list
+    that looks like "no models" — so the frontend keeps the current picker list.
+    """
+    cfg = get_config_manager()
+    available = cfg.get("available_models", DEFAULT_CONFIG["available_models"]) or []
+    try:
+        models = await asyncio.to_thread(_list_bedrock_inference_profiles, available)
+        return {"available": True, "error": None, "models": models}
+    except Exception as exc:  # noqa: BLE001 — fail-open: any AWS/boto error degrades gracefully
+        # Log the full exception server-side; return only a coarse, class-level
+        # reason to the client. boto errors put the ARN/account-id in the first
+        # ~60 chars, so ANY prefix of str(exc) can leak them — return the exception
+        # TYPE + a fixed hint instead of the message body.
+        logger.warning("Bedrock model discovery failed: %s", exc)
+        reason = type(exc).__name__
+        return {
+            "available": False,
+            "error": f"Bedrock discovery unavailable ({reason}) — check AWS credentials / daemon log",
+            "models": [],
+        }
 
 
 @router.put("")
