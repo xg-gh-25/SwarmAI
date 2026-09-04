@@ -56,7 +56,18 @@ echo ""
 echo "Step 2/3: Installing frontend dependencies..."
 echo "----------------------------------------------"
 cd "$PROJECT_ROOT"
-npm install
+# --prefer-offline is the difference between ~7 minutes and <1 second here.
+# npm rebuilds the ideal tree on every install, and that needs a packument for each
+# of the ~690 locked packages. The registry serves packuments with
+# `cache-control: max-age=300`, so any run more than 5 minutes after the last one
+# finds the whole cache stale and revalidates all of them — serially, over one
+# keep-alive socket. On a VPN'd link (~0.5s round trip) that is the entire 7 minutes,
+# and it happens even when the answer is "up to date" and nothing gets written.
+# --prefer-offline reuses cached metadata regardless of age and still hits the network
+# for genuine cache MISSES, so a changed package-lock.json resolves correctly.
+# (--offline would be wrong: it hard-fails on a miss.)
+# --no-audit drops the audit round trip; --no-fund drops the funding banner.
+npm install --prefer-offline --no-audit --no-fund
 
 echo ""
 echo "Step 3/3: Building Tauri application..."

@@ -143,17 +143,35 @@ if [ "$MODE" = "check" ]; then
         exit 1
     fi
 else
-    # Update lockfiles to match bumped versions
-    # Cargo.lock
+    # Update lockfiles to match bumped versions.
+    #
+    # SCOPE: this script writes ONE number — the package's own version. Neither
+    # lockfile refresh below may re-resolve the dependency graph. Widening that
+    # scope is what broke the build on 2026-09-04 (see Cargo.lock note).
+    #
+    # Cargo.lock — `cargo update --workspace` updates only the workspace member
+    # entries. Do NOT use `cargo generate-lockfile` here: it re-resolves the WHOLE
+    # graph to newest-semver-compatible, i.e. a silent `cargo update` on every
+    # `./prod.sh build`. That is how tauri-plugin-notification (2.3.3 -> 2.4.0) and
+    # tauri-plugin-updater (2.10.1 -> 2.11.0) drifted a MINOR ahead of their npm
+    # counterparts, which the Tauri CLI's version-parity preflight rejects — a
+    # version-sync step failing the build it was supposed to prepare.
+    # --offline additionally guarantees no registry round trip.
     cargo_dir="$PROJECT_ROOT/desktop/src-tauri"
     if [ -f "$cargo_dir/Cargo.lock" ]; then
-        (cd "$cargo_dir" && cargo generate-lockfile 2>/dev/null) && \
+        (cd "$cargo_dir" && cargo update --workspace --offline 2>/dev/null) && \
             echo -e "${GREEN}✅${NC} Cargo.lock updated" || true
     fi
-    # package-lock.json (npm install --package-lock-only doesn't touch node_modules)
+    # package-lock.json (npm install --package-lock-only doesn't touch node_modules).
+    # --prefer-offline is load-bearing: --package-lock-only IS a full tree resolve, so
+    # without it npm revalidates a packument for each of the ~690 locked packages
+    # (registry TTL is max-age=300, so anything but a back-to-back run finds the cache
+    # stale) — serially, over one socket. Measured ~7min vs <1s, and 2>/dev/null makes
+    # it a silent stall right after "Cargo.lock updated".
     pkg_dir="$PROJECT_ROOT/desktop"
     if [ -f "$pkg_dir/package-lock.json" ]; then
-        (cd "$pkg_dir" && npm install --package-lock-only --ignore-scripts 2>/dev/null) && \
+        (cd "$pkg_dir" && npm install --package-lock-only --ignore-scripts \
+            --prefer-offline --no-audit --no-fund 2>/dev/null) && \
             echo -e "${GREEN}✅${NC} package-lock.json updated" || true
     fi
     echo -e "${GREEN}All versions synced to $VERSION${NC}"

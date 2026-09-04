@@ -145,7 +145,9 @@ _start_backend() {
 _start_frontend() {
     _log "Starting frontend dev server..."
     cd "$DESKTOP_DIR"
-    npm install --silent 2>/dev/null
+    # --prefer-offline: without it this costs ~7min once the registry's 300s packument
+    # TTL lapses (npm revalidates all ~690 locked packages). See desktop/scripts/build.sh.
+    npm install --prefer-offline --no-audit --no-fund --silent 2>/dev/null
     npm run tauri:dev 2>&1 | tee "$LOG_DIR/frontend.log"
 }
 
