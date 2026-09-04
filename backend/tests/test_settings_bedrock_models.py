@@ -73,10 +73,21 @@ def _fake_bedrock_client_two_pages():
     opus-5 and sonnet-5. If the endpoint does NOT paginate, opus-5/sonnet-5
     (page 2) would be silently dropped — the exact truncation this guards.
     """
+    # Page 1 mixes the real-machine JUNK the >=4.8 filter must exclude (fable,
+    # haiku, gen-3, opus/sonnet <4.8, and a date-snapshot id WITH its real
+    # -v1:0 suffix — _short_name does NOT strip that) + the us/global dup.
     page1 = {"inferenceProfileSummaries": [
         {"inferenceProfileId": "us.anthropic.claude-opus-4-8", "type": "SYSTEM_DEFINED"},
         {"inferenceProfileId": "global.anthropic.claude-opus-4-8", "type": "SYSTEM_DEFINED"},
         {"inferenceProfileId": "us.amazon.nova-pro-v1:0", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-fable-5", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-fable-5-1", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-3-haiku-20240307-v1:0", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-3-sonnet-20240229-v1:0", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-opus-4-7", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-sonnet-4-6", "type": "SYSTEM_DEFINED"},
+        {"inferenceProfileId": "us.anthropic.claude-sonnet-4-20250514-v1:0", "type": "SYSTEM_DEFINED"},
     ]}
     page2 = {"inferenceProfileSummaries": [
         {"inferenceProfileId": "us.anthropic.claude-opus-5", "type": "SYSTEM_DEFINED"},
@@ -108,6 +119,62 @@ class TestBedrockModelDiscovery:
         assert "claude-opus-5" in shorts
         assert "claude-sonnet-5" in shorts
         assert "claude-opus-4-8" in shorts
+
+    def test_only_family_ge_48_returned(self, client: TestClient):
+        """>=4.8 filter: exactly {opus-4-8, opus-5, sonnet-5} — the junk is gone.
+
+        This is the whole bugfix: fable/haiku/gen-3/opus-4-7/sonnet-4-6/date-snapshot
+        must ALL be excluded. Goes RED against the old 'claude+SYSTEM_DEFINED' filter.
+        """
+        fake = _fake_bedrock_client_two_pages()
+        with patch("routers.settings._bedrock_client", return_value=fake):
+            resp = client.get("/api/settings/bedrock/models")
+        shorts = sorted(m["short_name"] for m in resp.json()["models"])
+        assert shorts == ["claude-opus-4-8", "claude-opus-5", "claude-sonnet-5"], (
+            f"filter did not converge to >=4.8 family; got {shorts}"
+        )
+
+
+class TestFamilyGe48:
+    """Exhaustive unit test of the >=4.8 opus/sonnet family predicate.
+
+    Includes the opus-5 / sonnet-5 CASE THAT CRASHED the naive impl (parts=['5']
+    → parts[1] IndexError) — the len(parts)>1 guard must hold.
+    """
+
+    def _fn(self):
+        from routers.settings import _family_ge_48
+        return _family_ge_48
+
+    @pytest.mark.parametrize("short", [
+        "claude-opus-4-8",
+        "claude-opus-5",       # no-minor form — MUST NOT IndexError
+        "claude-sonnet-5",     # no-minor form — MUST NOT IndexError
+        "claude-opus-4-10",    # 4.10 > 4.8
+    ])
+    def test_kept(self, short):
+        assert self._fn()(short) is True
+
+    @pytest.mark.parametrize("short", [
+        "claude-fable-5", "claude-fable-5-1",
+        "claude-haiku-4-5-20251001-v1:0",
+        "claude-3-haiku-20240307-v1:0", "claude-3-sonnet-20240229-v1:0",
+        "claude-opus-4-1-20250805-v1:0", "claude-opus-4-5-20251101-v1:0",
+        "claude-opus-4-6-v1", "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-20250514-v1:0",   # date-snapshot: parts[1]=20250514>=100 → minor 0 → gen4<4.8 drop
+        "claude-sonnet-4-5-20250929-v1:0",
+        "gpt-4o", "",
+    ])
+    def test_dropped(self, short):
+        assert self._fn()(short) is False
+
+    def test_no_index_error_on_bare_generation(self):
+        """The exact Gate-1 crash: a family id with no '-<minor>' segment."""
+        fn = self._fn()
+        # Must return a bool, never raise.
+        assert fn("claude-opus-5") is True
+        assert fn("claude-sonnet-5") is True
 
     def test_filters_non_claude(self, client: TestClient):
         fake = _fake_bedrock_client_two_pages()

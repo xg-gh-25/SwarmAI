@@ -104,6 +104,39 @@ def _bedrock_client(region: str | None = None):
     return session.client("bedrock", region_name=region) if region else session.client("bedrock")
 
 
+def _family_ge_48(short: str) -> bool:
+    """True iff ``short`` is a Claude opus/sonnet model of version >= 4.8.
+
+    Version rule: keep ``gen >= 5`` OR ``gen == 4 and minor >= 8``. ``minor`` is
+    taken ONLY from a short numeric segment (< 100); a date-snapshot segment
+    (e.g. ``20250514``, >= 6 digits) or a non-numeric segment (``v1``) is treated
+    as "no minor" (minor 0) — so a bare gen-4 date snapshot is NOT >= 4.8.
+
+    Crash-proof by design (Gate-1 CRITICAL): a no-minor id like ``claude-opus-5``
+    splits to ``["5"]`` with no ``parts[1]`` — the ``len(parts) > 1`` guard MUST
+    precede any ``parts[1]`` access, or opus-5/sonnet-5 (the highest-priority
+    models) raise IndexError and the fail-open endpoint silently empties.
+    NOTE: ``short`` here is the RAW ``_short_name`` output — it still carries any
+    ``-v1:0`` suffix (that is stripped only in prompt_builder.resolve_model), so
+    the tests feed the full-suffix shape.
+    """
+    for family in ("claude-opus-", "claude-sonnet-"):
+        if short.startswith(family):
+            parts = short[len(family):].split("-")
+            try:
+                gen = int(parts[0])
+            except (ValueError, IndexError):
+                return False
+            minor = 0
+            # isascii() guard: str.isdigit() is True for non-ASCII digits (e.g.
+            # superscript "²") where int() raises — belt-and-suspenders since the
+            # endpoint is fail-open (an uncaught raise would silently empty it).
+            if len(parts) > 1 and parts[1].isascii() and parts[1].isdigit() and int(parts[1]) < 100:
+                minor = int(parts[1])
+            return gen >= 5 or (gen == 4 and minor >= 8)
+    return False
+
+
 def _short_name(profile_id: str) -> str:
     """Strip the cross-region prefix from an inference-profile id → short name.
 
@@ -120,8 +153,10 @@ def _list_bedrock_inference_profiles(available_models: list[str]) -> list[dict]:
     """List callable Claude inference profiles via list_inference_profiles.
 
     Paginated (never truncates a newer model onto a dropped page). Filters to
-    Claude + SYSTEM_DEFINED, dedups by short_name preferring ``us.`` over
-    ``global.``. Returns ``[{short_name, bedrock_id, is_new}]`` sorted by name.
+    SYSTEM_DEFINED Claude models of the opus/sonnet family at version >= 4.8
+    (``_family_ge_48`` — excludes fable/haiku/gen-3 and any opus/sonnet < 4.8),
+    dedups by short_name preferring ``us.`` over ``global.``. Returns
+    ``[{short_name, bedrock_id, is_new}]`` sorted by name.
     """
     client = _bedrock_client()
     paginator = client.get_paginator("list_inference_profiles")
@@ -137,6 +172,10 @@ def _list_bedrock_inference_profiles(available_models: list[str]) -> list[dict]:
                 continue
             short = _short_name(pid)
             if not short:
+                continue
+            # Discovery scope: opus/sonnet family, version >= 4.8 only. Excludes
+            # fable/haiku/gen-3 and any opus/sonnet below 4.8 (incl. date-snapshots).
+            if not _family_ge_48(short):
                 continue
             existing = discovered.get(short)
             # Prefer us. over global.; first-seen us. wins.
