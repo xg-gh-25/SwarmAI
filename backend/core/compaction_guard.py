@@ -52,6 +52,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from model_registry import DEFAULT_CONTEXT_WINDOW
+
 logger = logging.getLogger(__name__)
 
 
@@ -187,7 +189,7 @@ class CompactionGuard:
         self._context_pct: float = 0.0
         self._context_tokens: int = 0
         self._prev_context_pct: float = 0.0  # For heuristic compaction detection
-        self._context_window: int = 200_000
+        self._context_window: int = DEFAULT_CONTEXT_WINDOW
 
         # Tool tracking — sets and sequences
         self._pre_compaction_set: set[tuple[str, str]] = set()
@@ -421,7 +423,7 @@ class CompactionGuard:
                 from .prompt_builder import PromptBuilder
                 window = PromptBuilder.get_model_context_window(model)
             except Exception:
-                window = 200_000  # Safe fallback
+                window = DEFAULT_CONTEXT_WINDOW  # Safe fallback
 
             self._context_window = window
             new_pct = (input_tokens / window) * 100 if window > 0 else 0.0
@@ -883,7 +885,7 @@ class CompactionGuard:
             self._post_compaction_sequence = []
             self._tool_records = []
             self._recent_calls = []
-            self._context_window = 200_000
+            self._context_window = DEFAULT_CONTEXT_WINDOW
             self._last_pair = None
             self._consec_count = 0
             self._grace_calls_remaining = 0

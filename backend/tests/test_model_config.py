@@ -51,9 +51,17 @@ class TestBedrockModelMapping:
 class TestDefaultConfig:
     """Tests for DEFAULT_CONFIG model settings."""
 
-    def test_default_model_is_opus_4_6(self):
-        """Default model should be claude-opus-4-6."""
-        assert DEFAULT_CONFIG["default_model"] == "claude-opus-4-6"
+    def test_default_model_is_the_registry_flagship(self):
+        """Default model must be the registry's flagship, whatever that is.
+
+        This used to assert a LITERAL model name, which made the test a second
+        place to update on every model release — and it silently encoded a
+        default that had already drifted two generations behind the live config.
+        Asserting the derivation instead survives a flagship promotion and still
+        catches a real regression (DEFAULT_CONFIG no longer deriving).
+        """
+        from model_registry import FLAGSHIP_MODEL
+        assert DEFAULT_CONFIG["default_model"] == FLAGSHIP_MODEL
 
     def test_opus_4_6_in_available_models(self):
         """claude-opus-4-6 remains available as fallback."""
@@ -98,23 +106,50 @@ class TestEffortControl:
 
 
 class TestPromptBuilderModelResolution:
-    """Tests for PromptBuilder 1M model detection."""
+    """Tests for PromptBuilder 1M model detection.
 
-    def test_opus_4_8_in_1m_models(self):
+    These assert BEHAVIOR (the family predicate + the resolved window), not the
+    presence of a constant. They previously asserted membership in a
+    ``_1M_MODELS`` set and a ``_MODEL_CONTEXT_WINDOWS`` dict; both were removed
+    when the hardcoded tables were replaced by family derivation, so the tests
+    failed with AttributeError — a red suite that verified nothing. Asserting
+    behavior instead survives the implementation change AND actually checks the
+    property that matters.
+    """
+
+    def test_opus_4_8_is_1m(self):
         """claude-opus-4-8 recognized as 1M context model."""
-        assert "claude-opus-4-8" in PromptBuilder._1M_MODELS
+        assert PromptBuilder._is_1m_model("claude-opus-4-8") is True
 
     def test_opus_4_8_context_window(self):
         """claude-opus-4-8 has 1M context window."""
-        assert PromptBuilder._MODEL_CONTEXT_WINDOWS.get("claude-opus-4-8") == 1_000_000
+        assert PromptBuilder.get_model_context_window("claude-opus-4-8") == 1_000_000
 
-    def test_opus_4_6_still_in_1m_models(self):
+    def test_opus_4_6_still_1m(self):
         """claude-opus-4-6 still recognized as 1M."""
-        assert "claude-opus-4-6" in PromptBuilder._1M_MODELS
+        assert PromptBuilder._is_1m_model("claude-opus-4-6") is True
+        assert PromptBuilder.get_model_context_window("claude-opus-4-6") == 1_000_000
 
-    def test_sonnet_4_6_still_in_1m_models(self):
+    def test_sonnet_4_6_still_1m(self):
         """claude-sonnet-4-6 still recognized as 1M."""
-        assert "claude-sonnet-4-6" in PromptBuilder._1M_MODELS
+        assert PromptBuilder._is_1m_model("claude-sonnet-4-6") is True
+        assert PromptBuilder.get_model_context_window("claude-sonnet-4-6") == 1_000_000
+
+    def test_newer_flagship_is_1m_without_a_code_edit(self):
+        """A model NEWER than any the tables knew must still resolve to 1M.
+
+        This is the property the old hardcoded set could not have: a newly
+        promoted opus was absent from it and would have silently run below its
+        real context window.
+        """
+        from model_registry import FLAGSHIP_MODEL
+        assert PromptBuilder._is_1m_model(FLAGSHIP_MODEL) is True
+        assert PromptBuilder.get_model_context_window(FLAGSHIP_MODEL) == 1_000_000
+
+    def test_non_1m_model_does_not_claim_1m(self):
+        """haiku is NOT 1M — and its window must agree with that."""
+        assert PromptBuilder._is_1m_model("claude-haiku-3") is False
+        assert PromptBuilder.get_model_context_window("claude-haiku-3") != 1_000_000
 
 
 class TestSessionAwareThinking:

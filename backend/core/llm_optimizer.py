@@ -27,6 +27,11 @@ import boto3
 from botocore.config import Config as BotoConfig
 
 from core.evolution_optimizer import TextChange
+from model_registry import (
+    FLAGSHIP_MODEL,
+    resolve_bedrock_id,
+    supports_custom_temperature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +47,23 @@ def _resolve_bedrock_model() -> tuple[str, bool]:
     from core.app_config_manager import AppConfigManager
 
     cfg = AppConfigManager.instance()
-    short_name = cfg.get("default_model", "claude-opus-4-6")
+    short_name = cfg.get("default_model", FLAGSHIP_MODEL)
     model_map = cfg.get("bedrock_model_map") or {}  # null-safe: config may have null
-    model_id = model_map.get(short_name, f"us.anthropic.{short_name}")
+    # Config map first (a deployment may override), then the registry. The
+    # f"us.anthropic.{short_name}" synthesis is a LAST resort only — Bedrock IDs
+    # are not mechanically derivable (4-6 needs "-v1", 4-8 and 5 do not).
+    model_id = (
+        model_map.get(short_name)
+        or resolve_bedrock_id(short_name)
+        or f"us.anthropic.{short_name}"
+    )
 
-    # Opus 4.7+ rejects temperature != 1 with adaptive thinking.
-    # Explicit set on short_name (not substring on model_id) to avoid
-    # false matches on future names like "claude-opus-4-80".
-    _NO_TEMPERATURE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
-    supports_temperature = short_name not in _NO_TEMPERATURE_MODELS
+    # Opus 4.7+ rejects temperature != 1 with adaptive thinking. Derived by
+    # VERSION COMPARISON in the registry, not a hardcoded set: the old
+    # {"claude-opus-4-7", "claude-opus-4-8"} allowlist did not contain the
+    # newer flagship, so a newly promoted opus silently read as
+    # "supports temperature" and would have had one sent that it rejects.
+    supports_temperature = supports_custom_temperature(short_name)
 
     return model_id, supports_temperature
 

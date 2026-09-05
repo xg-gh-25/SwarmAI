@@ -1760,7 +1760,14 @@ class TestHiveSeed:
         art = seed_dir / "Projects" / "SwarmAI" / ".artifacts" / "runs"
         art.mkdir(parents=True)
         (art / "run.json").write_text("{}", encoding="utf-8")
-        (seed_dir / "config-hive.json").write_text('{"default_model": "claude-opus-4-8"}', encoding="utf-8")
+        # A SENTINEL value, deliberately not a real model name: this fixture tests the
+        # COPY behaviour, not the seed CONTENT. The real seed is generated from
+        # backend/model_registry.py and is verified in test_model_registry.py
+        # (TestHiveSeedGeneration). Asserting a real model name here would make
+        # this a second place to edit on every model release.
+        (seed_dir / "config-hive.json").write_text(
+            '{"default_model": "SENTINEL-MODEL"}', encoding="utf-8"
+        )
         ctx = seed_dir / "context"
         ctx.mkdir()
         for f in ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "SELF.md"]:
@@ -1770,7 +1777,7 @@ class TestHiveSeed:
         (ctx / "USER.md").write_text("PRIVATE USER", encoding="utf-8")
 
     def test_hive_seeds_full_ddd_config_and_public_context(self):
-        """AC1-4: hive mode + seed dir → full DDD + config 4-8 + 5 public context."""
+        """AC1-4: hive mode + seed dir → full DDD + config + 5 public context."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "SwarmWS"
             (root / "Projects" / "SwarmAI").mkdir(parents=True)
@@ -1784,8 +1791,9 @@ class TestHiveSeed:
             assert (root / "Projects" / "SwarmAI" / "AGENTS.md").exists()
             # runtime artifact NOT copied (defense-in-depth)
             assert not (root / "Projects" / "SwarmAI" / ".artifacts").exists()
-            # config 4-8 seeded
-            assert "claude-opus-4-8" in (root / "config.json").read_text()
+            # the seed config is copied through verbatim (content-agnostic —
+            # seed CONTENT is covered by test_model_registry.py)
+            assert "SENTINEL-MODEL" in (root / "config.json").read_text()
             # 5 public context seeded
             for f in ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "SELF.md"]:
                 assert (root / ".context" / f).exists(), f"{f} not seeded"

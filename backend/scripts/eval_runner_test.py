@@ -537,6 +537,58 @@ class TestJudgeModelResolution:
             assert _get_judge_model().startswith("us.anthropic.claude-")
             assert "totally-unknown" not in _get_judge_model()
 
+    def test_unmapped_short_name_WARNS_loudly(self, caplog):
+        """The substitution above is correct — but it must not be SILENT.
+
+        Teeth: deleting the logger.warning in _get_judge_model turns this RED.
+        The sibling test above passes either way (it only checks the returned
+        id), which is exactly how the defect survived: a live config pinned an
+        unresolvable judge model and a DIFFERENT model ran the evaluation, with
+        nothing in the logs to reveal it. The warning must name both the
+        offending value and the substitute so the log is actionable.
+        """
+        import logging
+        m, r = self._cfg(eval_judge_model="totally-unknown", bedrock_model_map={})
+        with caplog.at_level(logging.WARNING), m, r:
+            resolved = _get_judge_model()
+        assert "totally-unknown" in caplog.text, (
+            "the unresolvable judge model must be NAMED in a warning — a silent "
+            "substitution is the defect this guards"
+        )
+        assert resolved in caplog.text, "the substituted id must be named too"
+
+    def test_resolvable_judge_model_does_NOT_warn(self, caplog):
+        """No warning noise on the normal path (a warn-always log is ignored)."""
+        import logging
+        m, r = self._cfg(eval_judge_model="claude-sonnet-4-6")
+        with caplog.at_level(logging.WARNING), m, r:
+            assert _get_judge_model() == "us.anthropic.claude-sonnet-4-6"
+        assert "not resolvable" not in caplog.text
+
+    def test_never_raises_on_a_bad_config(self):
+        """One typo must not red the entire eval run — log, substitute, continue."""
+        m = patch.object(Path, "exists", return_value=True)
+        r = patch.object(Path, "read_text", side_effect=OSError("unreadable"))
+        with m, r:
+            assert _get_judge_model().startswith("us.anthropic.claude-")
+
+    def test_resolves_via_the_registry_not_a_private_table(self):
+        """Every registry model must resolve even with an EMPTY config map.
+
+        Teeth: re-adding a private 3-entry _KNOWN_GOOD dict turns this RED for
+        the flagship, which such a table would not contain.
+        """
+        import sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parent.parent))
+        from model_registry import MODEL_NAMES, MODEL_REGISTRY
+        for short_name in MODEL_NAMES:
+            m, r = self._cfg(eval_judge_model=short_name, bedrock_model_map={})
+            with m, r:
+                assert _get_judge_model() == MODEL_REGISTRY[short_name], (
+                    f"{short_name} must resolve through the registry"
+                )
+
 
 class TestJudgeFailureIsErrorNotSkip:
     """Judge-infra failures must be status='error' (red), not 'skipped' (green).

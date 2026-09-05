@@ -39,6 +39,7 @@ from typing import Any, Optional, TYPE_CHECKING
 
 from core import executors
 from core.ddd_paths import ddd_path
+from model_registry import context_window_for, is_large_context_model
 
 if TYPE_CHECKING:
     from .app_config_manager import AppConfigManager
@@ -293,13 +294,16 @@ class PromptBuilder:
     WATCHDOG_MAX_TIMEOUT: int = 600
 
     # ── Model context window sizes (tokens) for L0/L1 selection ───
-    # Claude 4.6: 1M context GA on Bedrock (no beta header needed)
-    _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-        "claude-opus-4-8": 1_000_000,
-        "claude-opus-4-6": 1_000_000,
-        "claude-sonnet-4-6": 1_000_000,
-    }
-    _DEFAULT_CONTEXT_WINDOW: int = 1_000_000
+    # DERIVED from model_registry — there is deliberately NO per-model table
+    # here. A hardcoded ``{model: window}`` dict returned the 1M window for any
+    # unknown model, so ``get_model_context_window("claude-haiku-3")`` answered
+    # 1M while the sibling family predicate answered "not large" for the very
+    # same input. Two functions in one class disagreeing meant a small model
+    # never tripped a context warning until it truly overflowed.
+    #
+    # No class-level window constant either: get_model_context_window delegates
+    # to model_registry.context_window_for, so a constant here would be a second
+    # source of truth with no reader.
 
     # ── Context warning thresholds (percentage of context window) ──
     # # assumes a 1M-token window (our default models). These are PERCENTAGES,
@@ -333,18 +337,13 @@ class PromptBuilder:
         Gen-3 Claude, haiku, and non-Claude models are NOT 1M.
         ``base`` examples: ``claude-opus-5``, ``claude-opus-4-8``,
         ``claude-sonnet-4-20250514``.
+
+        DELEGATES to ``model_registry.is_large_context_model`` — the family
+        logic lives in exactly one place so this predicate and
+        :meth:`get_model_context_window` cannot drift apart (they previously
+        did: an unknown model got the 1M window while this answered False).
         """
-        if not base:
-            return False
-        for family in ("claude-opus-", "claude-sonnet-"):
-            if base.startswith(family):
-                # Remainder looks like "5", "4-8", "4-20250514" — take leading int.
-                lead = base[len(family):].split("-", 1)[0]
-                try:
-                    return int(lead) >= 4
-                except ValueError:
-                    return False
-        return False
+        return is_large_context_model(base)
 
     def resolve_model(self, agent_config: dict) -> Optional[str]:
         """Resolve the model identifier, respecting per-session overrides.
@@ -771,11 +770,25 @@ class PromptBuilder:
     def get_model_context_window(cls, model: Optional[str]) -> int:
         """Return the context window size for a model ID.
 
-        Strips Bedrock prefix/suffix for lookup.  Defaults to 200K.
-        Claude 4.6 models return 1M (GA on Bedrock since 2026-03).
+        DERIVED from the same family predicate as :meth:`_is_1m_model` (both
+        delegate to ``model_registry``), so the two can never disagree. They
+        previously did: this method returned the 1M window for ANY unrecognized
+        model — ``claude-haiku-3`` and even ``gpt-4`` resolved to 1M — while
+        ``_is_1m_model`` answered False for the same input. The consequence was
+        silent, because the window only drives context-warning percentages: a
+        small model never warned until it actually overflowed.
 
-        This is a classmethod because it only uses class-level model
-        window mappings — no instance state needed.
+        An unrecognized model resolves to the conservative window
+        (``model_registry.DEFAULT_CONTEXT_WINDOW``), which is deliberately kept
+        above ``context_directory_loader.THRESHOLD_USE_L1`` — a value below that
+        floor would silently route every unrecognized model onto the L0
+        compact-cache branch.
+
+        Prefix/suffix handling (``us.anthropic.``, ``-v1``, ``[1m]``, ``:0``) is
+        the registry's ``normalize_short_name``. NOTE it strips LITERAL suffixes;
+        the previous ``str.rstrip(":0")`` here was a character-class strip that
+        also ate a trailing "0" of a date-suffixed id
+        (``claude-sonnet-4-20250510`` -> ``...2025051``).
 
         Args:
             model: Model identifier string (may include Bedrock prefix).
@@ -783,15 +796,7 @@ class PromptBuilder:
         Returns:
             Context window size in tokens.
         """
-        if not model:
-            return cls._DEFAULT_CONTEXT_WINDOW
-        base = model.replace("us.anthropic.", "").rstrip(":0")
-        if base.endswith("-v1"):
-            base = base[:-3]
-        # Strip [1m] suffix appended by resolve_model() for CLI context signal
-        if base.endswith("[1m]"):
-            base = base[:-4]
-        return cls._MODEL_CONTEXT_WINDOWS.get(base, cls._DEFAULT_CONTEXT_WINDOW)
+        return context_window_for(model)
 
     # ------------------------------------------------------------------
     # sum_usage_input_tokens (static)

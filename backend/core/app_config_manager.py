@@ -35,6 +35,12 @@ from pathlib import Path
 from typing import Any
 
 from config import get_app_data_dir
+from model_registry import (
+    DEFAULT_JUDGE_MODEL,
+    FLAGSHIP_MODEL,
+    default_available_models,
+    default_bedrock_model_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +66,17 @@ SECRET_KEYS: frozenset[str] = frozenset({
 DEFAULT_CONFIG: dict[str, Any] = {
     "use_bedrock": True,
     "aws_region": "us-east-1",
-    "default_model": "claude-opus-4-6",
-    "available_models": [
-        "claude-opus-4-8",
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
-    ],
-    "bedrock_model_map": {
-        "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-        "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-        "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-    },
+    # All three DERIVE from model_registry (the single authority) — never
+    # re-add a literal model name here. These used to be hand-written copies
+    # that drifted two generations behind the live flagship, so a missing or
+    # corrupt config.json silently downgraded the model.
+    #
+    # available_models is flagship-FIRST: routers/settings.py auto-resets
+    # default_model to available_models[0] when the list changes, so a
+    # newest-last order would silently select the OLDEST model as default.
+    "default_model": FLAGSHIP_MODEL,
+    "available_models": default_available_models(),
+    "bedrock_model_map": default_bedrock_model_map(),
     "thinking_mode": "adaptive",       # "adaptive" | "enabled" | "disabled"
     "thinking_effort": "high",         # "low" | "medium" | "high" | "xhigh" | "max"
     "anthropic_base_url": None,
@@ -89,7 +95,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sandbox_excluded_commands": "docker,ps,pgrep,pkill,top,open,screencapture,osascript,launchctl",
     "sandbox_allow_unsandboxed": False,
     "sandbox_allowed_hosts": "*",
-    "eval_judge_model": "claude-opus-4-6",  # Pinned judge for self-eval. Short name — resolved to a Bedrock ID via bedrock_model_map (NOT passed raw to converse()).
+    # Pinned judge for self-eval — DERIVED like the three model fields above.
+    # A literal here was a fourth independent "default judge" value (alongside
+    # eval_runner's fallback and the Hive seed), and it named a model the seed
+    # did not. Short name; resolved to a Bedrock ID via bedrock_model_map /
+    # the registry, never passed raw to converse().
+    "eval_judge_model": DEFAULT_JUDGE_MODEL,
     "evolution": {
         "enabled": True,
         "max_retries": 3,

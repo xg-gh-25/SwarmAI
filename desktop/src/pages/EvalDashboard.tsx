@@ -1596,8 +1596,8 @@ const guideContent = {
     zh: 'Eval 在隔离的干净 Session 中运行 — 完全相同的 System Prompt 组装（同样的上下文文件、hooks、模型），但零用户对话历史。这在无注意力污染的情况下测试规范行为。Eval 子系统与编码 pipeline 解耦（9-stage / 3-gate 自主 pipeline 是改动被 BUILD + 对抗审查的地方；eval 事后评估已部署的系统 —— agent 绝不在 pipeline 中途跑 eval）。',
   },
   archJudge: {
-    en: 'Judge model is pinned (default claude-opus-4-6, configurable) to a different version than production. If both drift simultaneously, degradation becomes invisible. Pinning is the minimum viable isolation for self-evaluation integrity. NOTE the judge decoupling: golden cases ask "WOULD the agent comply?" (static-contract analysis against its rules); Layer③ session scoring asks "DID this real session actually do well?" (scores the real response + tool trajectory) — different judges for different questions.',
-    zh: 'Judge 模型固定（默认 claude-opus-4-6，可配）为与生产不同的版本。若两者同时漂移，退化将不可见。版本固定是自我评估完整性的最小可行隔离。注意判官解耦：golden case 问"agent 会不会合规？"（对其规则做静态契约分析）；层③会话打分问"这次真实会话实际做得好不好？"（评真实响应 + 工具轨迹）—— 不同问题用不同判官。',
+    en: 'Judge model is pinned (a cheaper tier than production, configurable in Settings) to a different version than production. If both drift simultaneously, degradation becomes invisible. Pinning is the minimum viable isolation for self-evaluation integrity. NOTE the judge decoupling: golden cases ask "WOULD the agent comply?" (static-contract analysis against its rules); Layer③ session scoring asks "DID this real session actually do well?" (scores the real response + tool trajectory) — different judges for different questions.',
+    zh: 'Judge 模型固定（比生产更低的档位，可在 Settings 配置）为与生产不同的版本。若两者同时漂移，退化将不可见。版本固定是自我评估完整性的最小可行隔离。注意判官解耦：golden case 问"agent 会不会合规？"（对其规则做静态契约分析）；层③会话打分问"这次真实会话实际做得好不好？"（评真实响应 + 工具轨迹）—— 不同问题用不同判官。',
   },
   coverage: {
     en: 'Coverage Distribution',

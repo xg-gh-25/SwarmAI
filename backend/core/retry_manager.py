@@ -22,6 +22,8 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
+from model_registry import DEFAULT_CONTEXT_WINDOW
+
 if TYPE_CHECKING:
     from .session_unit import SessionUnit
 
@@ -653,7 +655,7 @@ class RetryManager:
             # We're injecting into the user-turn channel, not the system
             # prompt, so keep it small to avoid hitting autocompact or
             # approaching the circuit-breaker threshold.
-            model_window = 200_000  # safe default
+            model_window = DEFAULT_CONTEXT_WINDOW  # safe default
             if self._parent._model_name:
                 # Attempt to resolve actual window from model name
                 try:

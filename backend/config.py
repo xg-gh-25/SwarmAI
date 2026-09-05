@@ -5,6 +5,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
+from model_registry import MODEL_REGISTRY
+
 # Calculate project root directory (backend's parent directory)
 _BACKEND_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _BACKEND_DIR.parent
@@ -83,23 +85,32 @@ def get_log_file_path() -> Path:
         return log_dir / "backend-daemon.log"
     return log_dir / "backend.log"
 
-# Default model ID mapping: Anthropic API model ID -> AWS Bedrock cross-region inference profile
-# Used when CLAUDE_CODE_USE_BEDROCK=true and no override exists in config.json
-# Format: us.anthropic.<model>-v1 (cross-region inference profile)
-# See: https://docs.anthropic.com/en/docs/claude-code/model-config
-ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = {
-    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-}
+# Default model ID mapping: Anthropic API model ID -> AWS Bedrock cross-region
+# inference profile. Used when CLAUDE_CODE_USE_BEDROCK=true and no override
+# exists in config.json.
+#
+# DERIVED from the single authority (``model_registry.MODEL_REGISTRY``) — do NOT
+# re-add a literal table here. Five independent copies of this table drifted
+# behind the live flagship model; the registry is now the one place a new model
+# is added. The name is kept because it is a live contract: ``routers/agents.py``
+# returns ``list(ANTHROPIC_TO_BEDROCK_MODEL_MAP.keys())`` from ``GET /models``,
+# so this must stay a dict.
+#
+# A COPY, not an alias — this name is reachable from a router, and a caller
+# mutating it would otherwise corrupt the authority process-wide. Every other
+# derivation copies too (``default_bedrock_model_map``).
+ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = dict(MODEL_REGISTRY)
 
 
 def get_bedrock_model_id(anthropic_model_id: str, config_map: dict[str, str] | None = None) -> str:
     """Convert Anthropic model ID to AWS Bedrock model ID.
 
     Checks ``config_map`` (from config.json ``bedrock_model_map``) first,
-    then falls back to the hardcoded ``ANTHROPIC_TO_BEDROCK_MODEL_MAP``.
-    Unknown model IDs pass through unchanged (allows custom ARNs).
+    then falls back to ``ANTHROPIC_TO_BEDROCK_MODEL_MAP`` (the registry).
+    Unknown model IDs pass through unchanged (allows custom ARNs) — note this
+    means an id absent from BOTH maps reaches Bedrock verbatim, which is only
+    valid for a real ARN. Keeping the registry current is what prevents a
+    legitimate short name from taking that path.
 
     Args:
         anthropic_model_id: The Anthropic API model identifier

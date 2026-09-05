@@ -272,3 +272,212 @@ class TestExtensibility:
         # Subsequent GET reflects the updated value
         resp = client.get("/api/settings")
         assert resp.json()["brand_new_setting"] == 99
+
+
+# ===================================================================
+# eval_judge_model validation — the gate whose ABSENCE was the root cause
+# ===================================================================
+
+
+class TestEvalJudgeModelValidation:
+    """``eval_judge_model`` must be rejected at the boundary when unresolvable.
+
+    Provenance: every sibling field here was validated (``default_model``,
+    ``thinking_mode``, ``thinking_effort``) but this one was not, so an
+    unresolvable value was silently persisted. Downstream, ``eval_runner``
+    substituted a different model — meaning the CONFIGURED judge never ran and
+    nothing said so. Patching the stored value alone would have guaranteed a
+    re-drift; this gate is the actual root fix.
+
+    Teeth: deleting the validation block in ``routers/settings.py`` turns
+    ``test_unresolvable_short_name_rejected`` RED (it would return 200).
+    """
+
+    def test_unresolvable_short_name_rejected(self, client):
+        resp = client.put("/api/settings", json={"eval_judge_model": "totally-bogus-model"})
+        assert resp.status_code == 400, (
+            "an unresolvable eval_judge_model must be rejected at the PUT "
+            f"boundary, got {resp.status_code}: {resp.text}"
+        )
+        assert "eval_judge_model" in resp.text
+
+    def test_registry_short_name_accepted(self, client):
+        from model_registry import MODEL_NAMES
+        resp = client.put("/api/settings", json={"eval_judge_model": MODEL_NAMES[-1]})
+        assert resp.status_code == 200, resp.text
+
+    def test_full_bedrock_id_accepted(self, client):
+        """A full us.anthropic.* id is passed through by the resolver."""
+        resp = client.put(
+            "/api/settings",
+            json={"eval_judge_model": "us.anthropic.claude-opus-4-6-v1"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_short_name_present_only_in_config_map_accepted(self, client):
+        """A deployment may map a model the registry does not know."""
+        resp = client.put("/api/settings", json={
+            "eval_judge_model": "custom-tier-model",
+            "bedrock_model_map": {"custom-tier-model": "us.anthropic.custom-tier"},
+        })
+        assert resp.status_code == 200, resp.text
+
+    def test_the_historical_bad_value_is_now_rejected(self, client):
+        """The exact value that sat unresolvable in the live config."""
+        resp = client.put(
+            "/api/settings",
+            json={"eval_judge_model": "claude-sonnet-4-20250514"},
+        )
+        assert resp.status_code == 400, (
+            "this is the value that silently swapped the judge model in "
+            "production — it must not be accepted again"
+        )
+
+    def test_empty_value_is_not_rejected(self, client):
+        """Falsy means 'unset' — the resolver falls back; not a 400."""
+        resp = client.put("/api/settings", json={"eval_judge_model": ""})
+        assert resp.status_code == 200, resp.text
+
+    def test_shrinking_the_map_orphans_nothing(self, client):
+        """MIRROR GAP (adversarial MEDIUM, proven live): a PUT that shrinks
+        bedrock_model_map without naming eval_judge_model used to return 200 and
+        leave the STORED judge model unresolvable.
+
+        The stored judge must be one that ONLY the map can resolve — a registry
+        member stays resolvable after the map shrinks (correctly not a 400), so
+        using one would make this test vacuous.
+
+        Teeth: keying the validation on `"eval_judge_model" in updates` instead
+        of the effective post-merge state turns this GREEN again (a 200).
+        """
+        seed = client.put("/api/settings", json={
+            "eval_judge_model": "custom-only-model",
+            "bedrock_model_map": {"custom-only-model": "us.anthropic.custom-only"},
+        })
+        assert seed.status_code == 200, seed.text
+        # Now shrink the map so the STORED judge is no longer resolvable.
+        resp = client.put("/api/settings", json={
+            "bedrock_model_map": {"some-other-model": "us.anthropic.some-other"},
+        })
+        assert resp.status_code == 400, (
+            "shrinking bedrock_model_map must not silently orphan the stored "
+            f"eval_judge_model, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_arn_judge_model_is_accepted(self, client):
+        """config.py documents ARN passthrough — rejecting one would 400 a
+        legitimate custom-model deployment (adversarial MEDIUM)."""
+        resp = client.put("/api/settings", json={
+            "eval_judge_model": "arn:aws:bedrock:us-east-1:123456789012:custom-model/x",
+        })
+        assert resp.status_code == 200, resp.text
+
+    def test_global_prefixed_id_is_accepted(self, client):
+        """model_registry._ID_PREFIXES supports global.anthropic.* too."""
+        resp = client.put("/api/settings", json={
+            "eval_judge_model": "global.anthropic.claude-opus-4-6-v1",
+        })
+        assert resp.status_code == 200, resp.text
+
+
+class TestAvailableModelsInvariant:
+    """``available_models`` may not be emptied — ``default_model`` would orphan.
+
+    Teeth (adversarial MEDIUM, proven live): the auto-reset guard read
+    `if new_models and ...`, so an empty list fell through as "no change" and
+    returned 200 with default_model pointing at a model no longer offered.
+    """
+
+    def test_empty_available_models_rejected(self, client):
+        resp = client.put("/api/settings", json={"available_models": []})
+        assert resp.status_code == 400, (
+            f"emptying available_models must be rejected, got {resp.status_code}"
+        )
+
+    def test_shrinking_available_models_auto_resets_default(self, client):
+        from model_registry import MODEL_NAMES
+        keep = MODEL_NAMES[1:]  # drop the flagship, which is the stored default
+        resp = client.put("/api/settings", json={"available_models": keep})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["default_model"] == keep[0]
+
+
+class TestLegacyConfigUpgradePath:
+    """A PRE-EXISTING unresolvable judge model must not brick unrelated PUTs.
+
+    CRITICAL (second adversarial pass, proven live): validating the effective
+    post-merge state unconditionally meant a user upgrading with a legacy
+    `eval_judge_model` got a 400 on ANY setting change — including a field they
+    never touched — so the Settings UI could not save at all until they
+    hand-edited config.json. Every Hive shipped before the seed fix was in
+    exactly that state.
+
+    The invariant still holds (an orphan never survives), but it is reached by
+    SELF-HEALING on an unrelated PUT and by a hard 400 only when the PUT
+    actually touches eval_judge_model or bedrock_model_map.
+    """
+
+    @pytest.fixture()
+    def legacy_client(self, tmp_path) -> TestClient:
+        """A client whose stored config holds an unresolvable judge model."""
+        import json as _json
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({
+            **{k: v for k, v in DEFAULT_CONFIG.items() if k not in SECRET_KEYS},
+            # The exact value the previously-shipped Hive seed wrote.
+            "eval_judge_model": "claude-sonnet-4-20250514",
+        }))
+        mgr = AppConfigManager(config_path=cfg_path)
+        mgr.load()
+        set_config_manager(mgr)
+        app = FastAPI()
+        app.include_router(router, prefix="/api/settings")
+        with TestClient(app) as tc:
+            yield tc
+        set_config_manager(None)
+
+    def test_unrelated_put_succeeds_on_a_legacy_config(self, legacy_client):
+        """Teeth: dropping the `_judge_fields_touched` guard turns this RED."""
+        resp = legacy_client.put("/api/settings", json={"thinking_effort": "medium"})
+        assert resp.status_code == 200, (
+            "an unrelated PUT must not be rejected because of a PRE-EXISTING "
+            f"orphan judge model, got {resp.status_code}: {resp.text}"
+        )
+
+    def test_unrelated_put_self_heals_the_orphan(self, legacy_client):
+        """The orphan is repaired, not merely tolerated."""
+        from model_registry import DEFAULT_JUDGE_MODEL
+        resp = legacy_client.put("/api/settings", json={"thinking_effort": "medium"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["eval_judge_model"] == DEFAULT_JUDGE_MODEL
+
+    def test_explicitly_setting_a_bad_judge_still_400s(self, legacy_client):
+        """Self-healing must not weaken the gate when the field IS touched."""
+        resp = legacy_client.put(
+            "/api/settings", json={"eval_judge_model": "still-bogus"}
+        )
+        assert resp.status_code == 400, resp.text
+
+
+class TestEmptyAvailableModelsCannotBeBypassed:
+    """HIGH (second pass, proven live): the empty-list guard sat inside the
+    auto-reset branch, gated on `"default_model" not in updates` — so
+    co-sending both keys skipped it and persisted an unusable config.
+
+    Teeth: moving the check back inside that branch turns this RED.
+    """
+
+    def test_empty_list_alone_is_rejected(self, client):
+        resp = client.put("/api/settings", json={"available_models": []})
+        assert resp.status_code == 400, resp.text
+
+    def test_empty_list_WITH_default_model_is_also_rejected(self, client):
+        from model_registry import FLAGSHIP_MODEL
+        resp = client.put("/api/settings", json={
+            "available_models": [],
+            "default_model": FLAGSHIP_MODEL,
+        })
+        assert resp.status_code == 400, (
+            "co-sending default_model must not bypass the empty-list guard, "
+            f"got {resp.status_code}: {resp.text}"
+        )

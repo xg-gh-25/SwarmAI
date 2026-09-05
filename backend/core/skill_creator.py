@@ -21,9 +21,15 @@ if TYPE_CHECKING:
 
 
 def _get_default_model() -> str:
-    """Resolve default model from config (single source of truth)."""
+    """Resolve default model from config (single source of truth).
+
+    The fallback is the registry's flagship — it used to be a hardcoded model
+    name, which drifted behind the real flagship and contradicted this
+    docstring's own "single source of truth" claim.
+    """
     from core.app_config_manager import AppConfigManager
-    return AppConfigManager.instance().get("default_model", "claude-opus-4-6")
+    from model_registry import FLAGSHIP_MODEL
+    return AppConfigManager.instance().get("default_model", FLAGSHIP_MODEL)
 
 logger = logging.getLogger(__name__)
 

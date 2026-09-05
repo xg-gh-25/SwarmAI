@@ -52,12 +52,20 @@ class TestLoad:
     """Tests for AppConfigManager.load()."""
 
     def test_load_creates_file_with_defaults_when_missing(self, mgr, tmp_config):
-        """Missing config file → defaults written to disk."""
+        """Missing config file → defaults written to disk.
+
+        The model assertion checks the DERIVATION (the registry flagship), not a
+        literal name. A literal made this test a second place to edit on every
+        model release, and it silently encoded a default that had already
+        drifted behind the live config — the exact defect that made a
+        missing-config boot downgrade the model two generations.
+        """
+        from model_registry import FLAGSHIP_MODEL
         result = mgr.load()
         assert tmp_config.exists()
         assert result["use_bedrock"] is True
         assert result["aws_region"] == "us-east-1"
-        assert result["default_model"] == "claude-opus-4-6"
+        assert result["default_model"] == FLAGSHIP_MODEL
 
     def test_load_falls_back_on_empty_file(self, mgr, tmp_config):
         """Empty config file → defaults."""

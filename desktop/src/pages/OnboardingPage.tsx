@@ -14,6 +14,21 @@ import AuthConfigPanel from '../components/settings/AuthConfigPanel';
 import ChannelConfigForm from '../components/settings/ChannelConfigForm';
 import { useTheme } from '../contexts/ThemeContext';
 
+/**
+ * Pre-resolve fallback for the model name shown during onboarding.
+ *
+ * ⚠️ MUST equal `model_registry.FLAGSHIP_MODEL` in the backend. The frontend
+ * cannot import Python, so this is the one place a BINDING TEST is the right
+ * tool instead of derivation — `backend/tests/test_model_registry.py`
+ * (TestFrontendFallbackBinding) reads this literal and fails if it drifts from
+ * the backend flagship. It is exported so that test has a stable anchor.
+ *
+ * Overwritten by the real value from `getAPIConfiguration()` on mount; it only
+ * governs the first paint (and the "Configure later" path, where showing a
+ * model the user is not running is the actual bug).
+ */
+export const FALLBACK_FLAGSHIP_MODEL = 'claude-opus-5';
+
 interface OnboardingPageProps {
   onComplete: () => void;
 }
@@ -497,9 +512,10 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
   const { theme } = useTheme();  // real theme, not a hardcoded "System" string
   // Show the ACTUAL configured model + region (persisted by Step2 on verify),
   // not hardcoded strings that lie when the user picked a different region.
-  // Fallbacks match backend DEFAULT_CONFIG (app_config_manager.py) so the
-  // pre-resolve paint matches the real default a "Configure later" user gets.
-  const [model, setModel] = useState<string>('claude-opus-4-6');
+  // The fallback is only the pre-resolve paint (overwritten by the API call
+  // below); it must still match the backend flagship or a "Configure later"
+  // user briefly sees a model they are not running.
+  const [model, setModel] = useState<string>(FALLBACK_FLAGSHIP_MODEL);
   const [region, setRegion] = useState<string>('us-east-1');
 
   useEffect(() => {

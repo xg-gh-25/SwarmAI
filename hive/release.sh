@@ -188,29 +188,69 @@ rsync -a \
     "${LIVE_DDD}/" "${SEED}/Projects/SwarmAI/"
 echo "[release]   DDD files: $(find "${SEED}/Projects/SwarmAI" -type f | wc -l | tr -d ' ') (from live DDD: ${LIVE_DDD})"
 
-# 2. config-hive.json — model 4-8 (a Hive boots on the current flagship, not the
-#    code DEFAULT_CONFIG 4-6). Non-private fields only; no owner_dm_channel, no
-#    machine-local sandbox paths.
-cat > "${SEED}/config-hive.json" <<'HIVECFG'
-{
-  "use_bedrock": true,
-  "aws_region": "us-east-1",
-  "default_model": "claude-opus-4-8",
-  "available_models": ["claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6"],
-  "bedrock_model_map": {
-    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6"
-  },
-  "thinking_mode": "adaptive",
-  "thinking_effort": "high",
-  "eval_judge_model": "claude-sonnet-4-20250514"
-}
-HIVECFG
+# 2. config-hive.json — GENERATED from backend/model_registry.py, never hand-written.
+#
+#    The model fields used to be a literal in this heredoc, which made the shell a
+#    SECOND source of truth: it drifted behind the real flagship (it shipped 4-8
+#    while the live default moved on) and its eval_judge_model named a model absent
+#    from its own bedrock_model_map, so every Hive silently ran a different judge.
+#    Deriving from the registry means a new model release edits ONE python file.
+#
+#    model_registry is deliberately STDLIB-ONLY so the SYSTEM python3 below can
+#    import it — no venv is activated during packaging. (This is why the registry
+#    is not in backend/config.py: that module imports pydantic_settings.)
+#
+#    Kept OUTSIDE the fail-fast if-block below on purpose: an import/generation
+#    failure must surface as itself, not be reported as "invalid JSON".
+echo "[release] generating config-hive.json from backend/model_registry.py"
+#    Uses the SYSTEM interpreter explicitly (falling back to PATH python3 only
+#    if absent): a venv/conda python3 on the build machine would have the
+#    third-party packages installed and would therefore MASK a stdlib-only
+#    violation in model_registry, which is the whole property this relies on.
+SEED_PY="/usr/bin/python3"
+[ -x "${SEED_PY}" ] || SEED_PY="python3"
+if ! (cd "${PROJECT_ROOT}/backend" && "${SEED_PY}" - "${SEED}/config-hive.json" <<'HIVECFG_GEN'
+import json, sys
+from model_registry import (
+    DEFAULT_JUDGE_MODEL,
+    FLAGSHIP_MODEL,
+    default_available_models,
+    default_bedrock_model_map,
+)
 
-# FAIL-FAST: a typo in the heredoc above would ship invalid JSON; AppConfigManager
-# would then silently fall back to DEFAULT_CONFIG (model 4-6) — a healthy-looking
-# Hive on the WRONG model. Validate at package time so the build aborts instead.
+# A Hive boots on the registry's flagship. Non-private fields only — no
+# owner_dm_channel, no machine-local sandbox paths.
+config = {
+    "use_bedrock": True,
+    "aws_region": "us-east-1",
+    "default_model": FLAGSHIP_MODEL,
+    "available_models": default_available_models(),
+    "bedrock_model_map": default_bedrock_model_map(),
+    "thinking_mode": "adaptive",
+    "thinking_effort": "high",
+    # Judge pinned to a cheaper tier than production ON PURPOSE (it must not
+    # drift in lockstep with the agent). Resolvable within the map above —
+    # an unresolvable value is what silently swapped the judge before.
+    "eval_judge_model": DEFAULT_JUDGE_MODEL,
+}
+assert config["eval_judge_model"] in config["bedrock_model_map"], (
+    "seed eval_judge_model must be resolvable within the seed's own map"
+)
+assert config["default_model"] == config["available_models"][0], (
+    "flagship must be first — settings.py auto-resets default_model to available_models[0]"
+)
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(config, fh, indent=2)
+    fh.write("\n")
+HIVECFG_GEN
+); then
+    echo "[release] ERROR: failed to generate config-hive.json from model_registry — aborting" >&2
+    exit 1
+fi
+
+# FAIL-FAST: a broken generator would ship invalid JSON; AppConfigManager would
+# then silently fall back to the in-code DEFAULT_CONFIG — a healthy-looking Hive
+# on unintended settings. Validate at package time so the build aborts instead.
 if ! python3 -c "import json,sys; json.load(open('${SEED}/config-hive.json'))" 2>/dev/null; then
     echo "[release] ERROR: config-hive.json is not valid JSON — aborting (would boot Hive on wrong model)" >&2
     exit 1

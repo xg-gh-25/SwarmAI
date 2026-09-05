@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from config import get_app_data_dir
 from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG, SECRET_KEYS
+from model_registry import DEFAULT_JUDGE_MODEL, MODEL_NAMES, resolve_bedrock_id
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +294,21 @@ async def update_app_configuration(request: Request):
         cfg.get("available_models", DEFAULT_CONFIG["available_models"]),
     )
 
+    # Validation: available_models may never be emptied.
+    #
+    # Hoisted OUT of the auto-reset branch below: while it lived there it was
+    # gated on `"default_model" not in updates`, so co-sending both keys
+    # bypassed it entirely and persisted an empty list (and skipped the
+    # default-model membership check too, since an empty list is falsy).
+    if "available_models" in updates and not effective_available:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "available_models cannot be empty — default_model would have "
+                "no valid value"
+            ),
+        )
+
     # Validation: default_model must be in available_models
     if "default_model" in updates and effective_available:
         if updates["default_model"] not in effective_available:
@@ -319,11 +335,84 @@ async def update_app_configuration(request: Request):
                 detail=f"thinking_effort must be one of {sorted(_VALID_THINKING_EFFORTS)}",
             )
 
-    # Auto-reset default_model when available_models changed
+    # Validation: eval_judge_model must be RESOLVABLE to a Bedrock ID.
+    #
+    # This gate's absence was the root cause of a real defect: the live config
+    # pinned a judge model that resolved through neither the config's
+    # bedrock_model_map nor the model registry, so eval_runner silently
+    # substituted a different model and the CONFIGURED judge never ran. Every
+    # sibling field here was validated; this one was not, so nothing stopped an
+    # unresolvable value from being persisted.
+    #
+    # ⚠️ Checked against the EFFECTIVE POST-MERGE state, because the invariant is
+    # about the RESULTING config: keying it on `"eval_judge_model" in updates`
+    # alone left a mirror gap where `PUT {"bedrock_model_map": {…shrunk…}}`
+    # returned 200 while orphaning the ALREADY-STORED judge.
+    #
+    # ⚠️ But a 400 fires ONLY when this PUT actually touches one of the two
+    # fields involved. A pre-existing orphan (every Hive shipped before the seed
+    # was fixed stored an unresolvable judge) must NOT make an unrelated PUT
+    # fail: hard-400ing there would mean a user who edits `thinking_effort`
+    # cannot save ANY setting until they hand-edit config.json — a broken
+    # upgrade path, and a rejection naming a field they never touched. Such an
+    # orphan is SELF-HEALED to the registry default with a loud warning, exactly
+    # mirroring the `default_model` auto-reset below.
+    _judge_fields_touched = bool(
+        {"eval_judge_model", "bedrock_model_map"} & updates.keys()
+    )
+    effective_judge = updates.get(
+        "eval_judge_model",
+        cfg.get("eval_judge_model", DEFAULT_CONFIG["eval_judge_model"]),
+    )
+    effective_map = updates.get(
+        "bedrock_model_map",
+        cfg.get("bedrock_model_map", DEFAULT_CONFIG["bedrock_model_map"]),
+    ) or {}
+    if effective_judge:
+        # A full inference-profile ID or a custom-model / provisioned-throughput
+        # ARN is passed through unchanged by get_bedrock_model_id (config.py
+        # documents that ARN passthrough), so those must NOT be rejected here —
+        # a narrower check would 400 a legitimate existing deployment.
+        is_full_id = effective_judge.startswith(
+            ("us.", "global.", "anthropic.", "arn:")
+        )
+        resolvable = (
+            is_full_id
+            or effective_judge in effective_map
+            or resolve_bedrock_id(effective_judge) is not None
+        )
+        if not resolvable:
+            if _judge_fields_touched:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"eval_judge_model {effective_judge!r} would not be resolvable "
+                        f"to a Bedrock model ID after this update — use a full "
+                        f"us.anthropic.*/arn: ID, a key of bedrock_model_map, or one "
+                        f"of {sorted(MODEL_NAMES)}"
+                    ),
+                )
+            # Pre-existing orphan reached via an unrelated PUT → self-heal loudly.
+            logger.warning(
+                "stored eval_judge_model %r is not resolvable (legacy config) — "
+                "resetting to %s so the configured judge is the one that runs",
+                effective_judge, DEFAULT_JUDGE_MODEL,
+            )
+            updates["eval_judge_model"] = DEFAULT_JUDGE_MODEL
+
+    # Auto-reset default_model when available_models changed.
+    #
+    # `effective_available` is used (not `updates["available_models"]`) so an
+    # EMPTY list is handled instead of silently skipped: `PUT
+    # {"available_models": []}` used to return 200 and leave default_model
+    # pointing at a model no longer offered — the same mirror gap as above.
     if "available_models" in updates and "default_model" not in updates:
         current_default = cfg.get("default_model", DEFAULT_CONFIG["default_model"])
         new_models = updates["available_models"]
-        if new_models and current_default not in new_models:
+        # An empty list was already rejected above (hoisted out of this branch
+        # so co-sending default_model cannot bypass it), so new_models is
+        # non-empty here.
+        if current_default not in new_models:
             updates["default_model"] = new_models[0]
 
     # Single atomic update — validated state only

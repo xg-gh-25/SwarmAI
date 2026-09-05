@@ -33,6 +33,7 @@ LLM judge evaluators (uses pinned judge model from config):
 import argparse
 import html as html_mod
 import json
+import logging
 import os
 import re as _re
 import subprocess
@@ -40,6 +41,16 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+# The model registry (single authority for short-name -> Bedrock-ID) lives in
+# backend/, one level up from scripts/. Same insert this module already uses to
+# reach `jobs.bedrock` — hoisted to import time so the judge-model resolver can
+# use it without a per-call path mutation.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from model_registry import (  # noqa: E402 — needs the path insert above
+    DEFAULT_JUDGE_MODEL,
+    resolve_bedrock_id,
+)
 
 try:
     import yaml
@@ -1164,7 +1175,8 @@ Respond in this exact JSON format:
         # Region: preserve the judge's prior env-first precedence (AWS_REGION /
         # AWS_DEFAULT_REGION else us-east-1) — do NOT silently switch to the
         # AppConfigManager region get_client defaults to (Gate-1 mitigation).
-        sys.path.insert(0, str(Path(__file__).parent.parent))
+        # (backend/ is already on sys.path — inserted at module import for
+        # model_registry; see the top of this file.)
         from jobs.bedrock import converse_with_retry
 
         _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
@@ -1306,7 +1318,8 @@ Respond in this exact JSON format:
         judge_model = _get_judge_model()
         # Credential-resilient judge call (see eval_llm_judge for rationale):
         # evict+retry-once on transient auth error; env-first region preserved.
-        sys.path.insert(0, str(Path(__file__).parent.parent))
+        # (backend/ is already on sys.path — inserted at module import for
+        # model_registry; see the top of this file.)
         from jobs.bedrock import converse_with_retry
         _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
         response = converse_with_retry(
@@ -1497,6 +1510,17 @@ def eval_trajectory_capture(case: dict) -> dict:
     return result
 
 
+# Judge-model resolution logging. A dedicated logger (this script has no
+# module-level one) so an unresolvable judge model is VISIBLE — the defect this
+# replaces was pure silence, not a wrong value.
+_judge_log = logging.getLogger("eval_runner.judge_model")
+
+# Last-resort judge model when config is unreadable or names something
+# unresolvable. Read from the registry — NOT a literal here, which would be a
+# fourth "default judge" value alongside DEFAULT_CONFIG and the Hive seed.
+FALLBACK_JUDGE_MODEL = DEFAULT_JUDGE_MODEL
+
+
 def _get_judge_model() -> str:
     """Read pinned judge model from config.json and resolve to a Bedrock ID.
 
@@ -1512,35 +1536,71 @@ def _get_judge_model() -> str:
     a 100/100 health score computed on ~39 mechanical cases only. We now
     resolve through bedrock_model_map (the same path llm_optimizer uses).
 
+    A short name that resolves through NEITHER the config's ``bedrock_model_map``
+    NOR the model registry is substituted with a known-good ID — but LOUDLY.
+    The substitution itself is correct (a synthesized ID would be invalid), yet
+    it used to be completely silent: a live config pinned an unresolvable judge
+    model for weeks while a different model actually ran the evaluation, with
+    zero log line to reveal it. Fail-loud, never fail-silent.
+
+    This does NOT raise: one typo in a config field must not red the entire
+    eval run. The boundary-level rejection lives in the settings PUT validator
+    (``routers/settings.py``) — this is the last-resort runtime guard.
+
     Returns the full Bedrock model ID (us.anthropic.* format).
     """
-    short_name = "claude-opus-4-6"
+    default_judge = FALLBACK_JUDGE_MODEL
+    short_name = default_judge
     model_map: dict = {}
+    config_path = Path.home() / ".swarm-ai" / "SwarmWS" / "config.json"
     try:
-        config_path = Path.home() / ".swarm-ai" / "SwarmWS" / "config.json"
         if config_path.exists():
             import json as _json
             config = _json.loads(config_path.read_text())
             short_name = config.get("eval_judge_model") or short_name
             model_map = config.get("bedrock_model_map") or {}
-    except Exception:
-        pass
-    # Already a full Bedrock ID? pass through. Otherwise map the short name.
-    if short_name.startswith("us.") or short_name.startswith("anthropic."):
+    except Exception as exc:  # noqa: BLE001 — never block the eval on a config read
+        # Was a bare `except: pass`, which hid a corrupt/unreadable config
+        # behind a silently-default judge model.
+        _judge_log.warning(
+            "Could not read judge model from %s (%s: %s) — falling back to %s",
+            config_path, type(exc).__name__, exc, default_judge,
+        )
+    # Already a full Bedrock ID / ARN? pass through. Otherwise map the short name.
+    #
+    # This prefix set MUST match the one routers/settings.py accepts at PUT
+    # time. It previously covered only us./anthropic., so an `arn:` judge model
+    # that settings.py deliberately ALLOWS fell through to the substitute here —
+    # re-creating the original defect (configured judge silently not used)
+    # through the sanctioned path.
+    if short_name.startswith(("us.", "global.", "anthropic.", "arn:")):
         return short_name
     if short_name in model_map:
         return model_map[short_name]
     # Map missing/null (degraded config) OR unmapped short name. Do NOT
     # synthesize f"us.anthropic.{short_name}" — Bedrock inference-profile IDs
-    # are not mechanically derivable (e.g. 4-6 needs a "-v1" suffix, 4-8 does
-    # not), so a guess yields an invalid ID and every judge call errors. Fall
-    # back to a hardcoded known-good full ID (matches bedrock_model_map default).
-    _KNOWN_GOOD = {
-        "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
-        "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-        "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-    }
-    return _KNOWN_GOOD.get(short_name, "us.anthropic.claude-opus-4-6-v1")
+    # are not mechanically derivable (e.g. 4-6 needs a "-v1" suffix, 4-8 and 5
+    # do not), so a guess yields an invalid ID and every judge call errors.
+    # Resolve through the single registry instead of a private duplicate table.
+    resolved = resolve_bedrock_id(short_name)
+    if resolved:
+        return resolved
+    # No `or "us.anthropic...."` fallback: default_judge is a registry member by
+    # construction, so resolve_bedrock_id cannot return None here. A hardcoded
+    # Bedrock ID would contradict this function's own docstring AND be a fifth
+    # copy of the table — if this ever raises, the registry is the bug.
+    substitute = resolve_bedrock_id(default_judge)
+    assert substitute, (
+        f"DEFAULT_JUDGE_MODEL {default_judge!r} is not in the model registry — "
+        f"fix model_registry, do not hardcode a Bedrock ID here"
+    )
+    _judge_log.warning(
+        "eval_judge_model %r is not resolvable (absent from both the config "
+        "bedrock_model_map and the model registry) — substituting %s. The "
+        "CONFIGURED judge model is NOT being used; fix eval_judge_model in %s.",
+        short_name, substitute, config_path,
+    )
+    return substitute
 
 
 def evaluate_case(case: dict, root: Path, *,
