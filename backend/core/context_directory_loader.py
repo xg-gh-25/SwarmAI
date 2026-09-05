@@ -1255,6 +1255,19 @@ class ContextDirectoryLoader:
         """
         # Non-owner session (exclusions active) → never serve the shared L0
         # cache; assemble fresh WITH the exclusions applied.
+        #
+        # ⚠️ DEAD-BUT-LOAD-BEARING ASYMMETRY (be precise about which half):
+        # the EXCLUSION BYPASS below is live and test-covered (a non-owner on a
+        # sub-64K model must not receive the private-lane files —
+        # test_system_prompt_e2e.py::test_nonowner_excludes_private_on_small_model_L0_path
+        # drives exactly this branch, which is why this function must not be
+        # deleted). The CACHE READ inside the `if` is currently UNREACHABLE:
+        # nothing in the tree WRITES L0_SYSTEM_PROMPTS.md any more, and the file
+        # is absent from CONTEXT_FILES so ensure_directory never seeds it — so
+        # the owner path always falls through to _assemble_from_sources (which
+        # is strictly better than serving a stale placeholder). Do NOT cite the
+        # privacy test as coverage for the cache read; it takes this bypass and
+        # never reaches it. Either restore a generator or delete the read.
         if not exclude_filenames:
             l0_path = self.context_dir / L0_CACHE_FILENAME
             try:

@@ -67,6 +67,15 @@ CAPABILITY_MANIFEST = [
     ("tree_sitter_langs",   "tree_sitter_language_pack",     "important"),
 
     # ── Local modules (must be bundled) ──
+    # model_registry is the SINGLE authority for the model list + Bedrock IDs.
+    # It reaches the bundle only TRANSITIVELY, via a module-scope import in
+    # config.py — build-backend.sh's `local_modules` list does not name it. If
+    # that import ever became lazy, the authority would vanish from the packaged
+    # daemon with every dev test still green: exactly the sqlite_vec failure
+    # shape this script's docstring documents (worked in dev, missing from the
+    # binary for 5 days, no crash). Named explicitly so the guard is not
+    # contingent on another module's import style.
+    ("model_registry",      "model_registry",                "critical"),
     ("vec_db",              "core.vec_db",                   "critical"),
     ("recall_engine",       "core.recall_engine",            "critical"),
     ("knowledge_store",     "core.knowledge_store",          "critical"),
