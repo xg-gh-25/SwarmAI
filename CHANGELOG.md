@@ -3,6 +3,62 @@
 
 _Nothing pending._
 
+## [2.1.0] - 2026-09-07
+
+Security moved from advice to enforcement, and two long-standing sources of silent
+drift were closed at the source. **42 commits since v2.0.2 (9 features, 14 fixes).**
+
+> Changelog note: 2.0.1 and 2.0.2 were shipped on GitHub without entries here. They
+> are not retro-documented; this section covers only v2.0.2..v2.1.0.
+
+### 🔒 Security — enforced, not advised
+- **Fail-closed application-layer auth** for the Hive backend. Active only in hive
+  mode, validating the same credential the edge proxy already required, so it is
+  defense-in-depth rather than a new client requirement. Carries an idempotent
+  migration that backfills the credential file on already-provisioned hives — without
+  it, upgrading would have locked every existing hive out.
+- **Secure-coding baseline (R32)** as a product-level standard, plus a wildcard-CORS
+  regression check so the rule enforces itself instead of relying on review.
+- **Security gate now fails CLOSED when a scanner crashes but still emits valid,
+  empty-looking output.** Previously only a scanner that produced no output at all
+  failed the gate, so a crashed scan could read as clean — the exact fail-open shape
+  the gate exists to prevent.
+- **Agent-safety patterns (RP65-RP80)** added to the shipped adversarial review, so
+  prompt-injection sinks and tool-composition chains are reviewed by default.
+- **Design-time threat modeling** available in the pipeline, before code exists.
+
+### 🎯 Drift eliminated at the source
+- **One model registry.** Five hardcoded model tables had drifted up to two generations
+  behind. They now derive from a single stdlib-only authority. The real root cause was
+  a missing validation: `eval_judge_model` accepted an unresolvable value, so the judge
+  actually used was not the one configured — silently, for weeks. It is now rejected at
+  write time and loud at runtime.
+- **Available models follow Bedrock auto-discovery** rather than a hand-maintained list.
+  The discovery endpoint now returns only opus and sonnet models at version 4.8 or
+  higher, so haiku, fable, gen-3, and older opus/sonnet snapshots no longer appear.
+- **Hive instance creation no longer fails with a missing-column error.** A migration
+  had been placed inside a historical version block that never re-runs on an existing
+  database, so the column it added was never created and creating an instance returned
+  a server error. It now runs as its own migration step.
+
+> **Upgrade note.** Two settings can be reset for you. If your configured default model
+> is not in the newly discovered list, it is replaced with the first available model. A
+> legacy `eval_judge_model` that no longer resolves is likewise replaced with the
+> default judge on the next settings write. Check Settings after upgrading if you had
+> pinned either one.
+
+### 📦 Capability packaging
+- DDD-to-package distribution became lossless and self-consistent: knowledge corpus and
+  deliverables ship, dangling sibling-skill references fail the build, package READMEs
+  are generated, the agent system prompt comes from its own file, and no empty or
+  placeholder directory survives into a fresh clone.
+- Packages emit both `claudeCli` and `kiroCli` client configuration.
+
+### ✍️ Narrative writing
+- Guided authoring: five document templates, five-criteria quality bar, adversarial
+  stakeholder simulation, and an AI-ism checklist — with the no-em-dash/no-semicolon
+  rule enforced as a gate rather than stated as a preference.
+
 ## [2.0.0] - 2026-08-16
 
 The agent stopped being something you talk *to* and became something that inhabits
