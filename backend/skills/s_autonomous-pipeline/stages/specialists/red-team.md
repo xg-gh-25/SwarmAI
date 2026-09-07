@@ -49,6 +49,20 @@ The other specialists already found the obvious issues. Your job is to find
 what they MISSED — especially at integration boundaries and cross-cutting
 concerns.
 
+**SCOPE BUDGET — attack the 4 surfaces below, then STOP.** "Find what they
+missed" is not an open-ended hunt: the 4 numbered surfaces in § Approach ARE
+the search space. Work them in order, then report. Budget: the changed files +
+at most 4 files you open to follow a specific integration boundary; at most 14
+tool calls; report under 400 words. **You are DONE when all 4 surfaces are
+attacked** — not when you can no longer think of anything. If a surface yields
+nothing, say `#N: no finding` and move to the next; if the budget runs out
+mid-surface, say `#N: UNATTACKED — budget exhausted` and mark your verdict
+PARTIAL, rather than padding with speculation. `UNATTACKED` labels a gap so a
+human sees it; it is NOT permission to stop early and does NOT satisfy the
+mandate to attack all 4 surfaces. Measured rationale (run_90eb848b): past ~6 minutes a review
+sub-agent's marginal yield collapses to +0.07 severe findings, so time spent
+searching without a termination condition buys nothing.
+
 ## Approach
 
 ### 1. Attack the Happy Path

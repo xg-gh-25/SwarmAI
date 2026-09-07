@@ -1338,6 +1338,33 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     equivalent to skipping the gate. If spawning is infeasible (token budget
     exhaustion, context limit), CHECKPOINT — don't fake it.
 
+    **[MUST] Every spawn prompt is BOUNDED — investigate first, delegate the
+    JUDGEMENT.** A sub-agent's value is a second pair of eyes on YOUR conclusion,
+    not a re-run of your own investigation in a slower process. Three rules,
+    which the shipped templates already carry (`SCOPE BUDGET` line — pinned by
+    `backend/tests/test_deliver_template_drift.py`):
+    - **Finite item list.** Hand it "confirm or refute these N specific things"
+      (N ≤ 3-4, each with the file:line you already read). NEVER ask it to prove
+      a negative — "prove nothing is wrong / default to unsafe until you can
+      prove it's safe" has no termination condition, so it searches until it
+      gives up.
+    - **Don't delegate your own grep.** A prompt full of "verify each of these /
+      grep and confirm / do not take on trust" transfers your judgement cost onto
+      the sub-agent and duplicates work you can do faster yourself.
+    - **State the scope budget in the prompt** — files to read, tool calls,
+      answer length. Bound SCOPE, never the clock: a wall-clock kill would
+      truncate a live review that is still finding real issues (STEERING #2).
+      Never let the budget authorize skipping a checklist item — the reviewer
+      writes `N/A: <reason>` or `UNCHECKED: <item> — budget exhausted` instead.
+
+    Measured (5537 subagent transcripts, run_90eb848b): duration and severe-finding
+    count rise together (0.42 findings <1min → 1.87 at 3-6min) but marginal return
+    collapses past ~6 min (+0.07 from 6-10min to >10min), and 27.8h = 10.8% of all
+    subagent wall-clock sits past that knee. The failure shape: one skeptic prompt
+    carrying 17 numbered verify-this-yourself sub-questions ran 30 min / 84 tool
+    calls; the same claim restated as 3 concrete confirm-or-refute items returned in
+    23s / 7 tool calls — and still caught a real error the orchestrator had missed.
+
     **Spawn REJECTION is fail-closed (gate_spawn_blocked).** Distinct from
     "infeasible" above: the harness/tool layer can REJECT an Agent-tool spawn
     mid-turn ("The user doesn't want to proceed with this tool use" / "does not

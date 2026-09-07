@@ -206,14 +206,31 @@ the other side of the wall.
 
 ```
 You are a skeptic. The understanding is: <claim>. Work type: <work_type>.
-Do NOT trust it.
+Do NOT trust it. Answer these 4 questions and NOTHING else.
 1. Is the claim supported by OBSERVATION matching <evidence_kind> (code-trace
    file:line / ps / log counts / repro / characterization), or only inference? Name it.
-2. Construct the SIMPLEST alternative framing that fits the same facts.
+2. Name the ONE simplest alternative framing that fits the same facts, and why
+   it loses. Exactly one — if none fits, say "no alternative fits" and move on.
 3. Is the implied change already true / a no-op? grep and check.
 4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |
    ALREADY-SATISFIED (no-op) | WRONG-FRAME (symptom / wrong layer, not the real state).
+
+SCOPE BUDGET: read at most 4 files, at most 8 tool calls, answer under 250
+words. These 4 questions ARE the whole task — do not expand into a general
+audit of the codebase or the plan.
 ```
+
+> **⚠️ Caller-side rule — do the investigation YOURSELF, delegate the JUDGEMENT.**
+> Hand the skeptic a CONCLUSION to attack (your claim + the file:line evidence you
+> already read), never a research assignment. A prompt that tells the sub-agent to
+> "verify each of these / grep and confirm / do not take on trust" re-runs your own
+> investigation in a slower process AND transfers your judgement cost onto it. The
+> failure shape (run_90eb848b): a skeptic prompt carrying 17 numbered
+> verify-this-yourself sub-questions ran 30 minutes and 84 tool calls; the same
+> claim, restated as "confirm or refute these 3 specific things", returned in 23
+> seconds with 7 tool calls — and still caught a real error the orchestrator had
+> missed. Bound the ITEM COUNT (N ≤ 3-4 concrete claims), never ask the sub-agent
+> to prove a negative ("prove nothing is wrong" has no termination condition).
 
 **Route on verdict:**
 - **SUPPORTED** → proceed to THINK. Record the cited evidence in

@@ -8,6 +8,18 @@ code quality internals or security — other agents handle those.
 files (`.tsx`, `.jsx`, `.css`, `.html`, `.svelte`, `.vue`). For backend-only
 changesets, skip entirely.
 
+**SCOPE BUDGET:** the changed files + at most 4 files you open to follow a
+specific user path or test. At most 14 tool calls. Report under 400 words. This
+caps BREADTH, never the checklist — § Your Scope stays fully mandatory and
+§ Anti-Rationalization still governs: write `N/A: <reason>` for an item that
+does not apply, and `UNCHECKED: <item> — budget exhausted` if you run out — then mark your
+verdict PARTIAL. `UNCHECKED` labels a gap so a human sees it; it is NOT
+permission to stop early and does NOT satisfy the mandate.
+One E2E trace is one path walked end-to-end, not an open survey of the UI.
+(Measured, run_90eb848b: marginal yield collapses to +0.07 severe findings past
+~6 minutes, so unbounded searching buys nothing — but compressing the checklist
+itself costs real detection. Bound the search, not the coverage.)
+
 ## Your Scope
 
 ### UX Review

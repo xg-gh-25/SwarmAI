@@ -390,6 +390,16 @@ Read the checklist below, then use the Read tool to read EVERY changed
 file listed. Do not skip any file — review all of them.
 Apply the checklist against the code.
 
+SCOPE BUDGET: the changed files listed below + at most 4 files you open to
+resolve a specific question (a caller, a contract, a definition). At most 14
+tool calls. Report in under 400 words. This bounds BREADTH, never the
+checklist: every checklist item is still mandatory — write `N/A: <reason>` for
+one that does not apply. If the budget genuinely runs out with an item still
+unchecked, report `UNCHECKED: <item> — budget exhausted` AND mark your verdict
+PARTIAL. `UNCHECKED` labels a gap so a human sees it; it does NOT satisfy the
+checklist and is NOT permission to stop early — a review with any UNCHECKED
+item is incomplete, not done.
+
 ## Context
 Project: <PROJECT>
 Requirement: <requirement from run.json>
@@ -446,7 +456,15 @@ and how to fix it. Vague findings ("could be improved") are rejected.
 ```
 
 **Sub-agent configuration:**
-- Use default model (opus) — adversarial review needs strongest reasoning
+- **Do NOT pin a model.** Review quality comes from BOUNDED SCOPE + FRESH
+  CONTEXT, not from a model name. The retired directive here read "use default
+  model (opus) — adversarial review needs strongest reasoning"; measured over
+  5537 recorded subagent transcripts that premise does not hold (sonnet-4-5:
+  92s median / 2.19 avg severe findings; the then-current opus-5 default: 413s /
+  1.57), and because model identity is confounded with era and diff in that
+  corpus the evidence licenses deleting the claim, not naming a replacement —
+  which would decay identically at the next default change. Omit `model` and
+  inherit the session default; set it only when you can state a measured reason.
 - Do NOT use `run_in_background` — all specialists must complete before merge
 - If any specialist fails or times out, log the failure and continue with
   results from successful ones. Partial results > no results.
