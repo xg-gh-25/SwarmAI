@@ -24,7 +24,7 @@
 > border, badge, redundant count, decorative tile — that carries neither data nor a
 > comparison. Everything secondary goes behind disclosure.
 
-## The pre-ship checklist (5 checks — burn these in)
+## The pre-ship checklist (6 checks — burn these in)
 
 For ANY info-dense card/dashboard, before shipping:
 
@@ -46,11 +46,60 @@ For ANY info-dense card/dashboard, before shipping:
    with no reference (vs target / last period / peer) is detail-on-demand, not a
    headline. Establish hierarchy before polish; add whitespace before adding
    structure ("when a page looks broken, it's usually spacing"). (Tufte + jgthms)
+6. **BUDGET THE SPACE BEFORE TOUCHING CSS — never tune one padding at a time.**
+   Part-2 #9 ("space WITHIN a group must be tighter than BETWEEN groups") is the
+   *principle*; this is the *procedure* that makes it hold, because reading #9 and
+   agreeing with it demonstrably does not. (a) Name the semantic ZONES on the surface
+   (e.g. title / thesis-band / question-field). (b) Measure ALL zone tops+bottoms and
+   every gap in ONE probe, normalized to design px — not one spot per edit. (c) Assign
+   exactly TWO gap values up front (in-zone ≈ 40-50px, between-zone ≈ 70-110px at
+   1080p) and write those; don't eyeball. (d) Assert
+   `max(in-zone gap) < min(between-zone gap)` — if it fails, the grouping WILL read
+   wrong and no amount of nudging fixes it. (e) Leftover bottom margin > ~150px means
+   a zone is starved: give it the space, don't leave a void.
+   **Structural corollary:** if an element's distance to its neighbour "won't respond
+   to tuning", check for `position:absolute` — its gap is (container height − sibling
+   height), NOT its margin, so tuning the offset is futile. Move it in-flow first.
 
 **The tell that you're about to ship a data-dump:** if you're enumerating signals
 as a grid of equal-weight tiles, or keeping a per-row diagnostics block "because we
 have the data" — that IS the data-dump reflex. Stop, ask "which decision?", demote
 the rest behind disclosure.
+
+**The tell that you're nudging instead of designing:** you are editing your SECOND
+`padding`/`margin`/`bottom` value in response to "the spacing is off". Stop — that's
+pixel-nudging, not layout. Go back to check 6(a): name the zones, budget the gaps.
+
+**The tell that you're measuring the wrong quantity:** you called
+`el.getBoundingClientRect().width` to decide whether TEXT overflows. For a
+block/flex-item that width IS the container's — it says nothing about the text. Use
+`const r=document.createRange(); r.selectNodeContents(el); r.getBoundingClientRect().width`
+(or `scrollWidth > clientWidth`); count lines via `height / lineHeight`. When asked
+for "no wrap": add `white-space:nowrap`, then MEASURE; if it overflows, cut words
+first — shrinking the font is the last resort because it breaks size parity with the
+element's siblings.
+
+**The tell that you cropped an SVG blind:** you computed a figure's "true ink" with
+`getBBox()`. It excludes BOTH stroke width AND `transform` — elements inside a
+`transform`ed `<g>` vanish from the result, so cropping the viewBox to it silently
+guillotines real content. Reliability ladder for ink bounds: **pixel-scan
+(screenshot the `<svg>`, scan for non-background pixels, convert by viewBox/px) >
+`getBoundingClientRect()` (breaks when the SVG has a hard-coded `width` attribute)
+> `getBBox()` (stroke/transform-blind) > hand-rolled CTM maths (reports impossible
+coordinates)**. Inverse rule: for *centring / relative position inside* a viewBox,
+`getBBox()` IS the right tool; for *escapes-its-container*, compare clientRects
+(transform-aware) — `getBBox` vs viewBox false-positives on every transformed node.
+
+**The tell that you're about to fix "too much empty space" the wrong way:** you
+reached for `padding` before computing the aspect ratio. An SVG under
+`preserveAspectRatio="…meet"` has ONE lever, and which one flips with the ratio:
+figure-aspect **>** container-aspect → width-constrained (already full width; spend
+surplus on SPACING, more height changes nothing); figure-aspect **<** container →
+height-constrained (it letterboxes sideways; only MORE HEIGHT widens it). Cropping
+dead margin can make it worse — it moves the aspect, sometimes *away* from the
+container, enlarging the gaps. And when the mismatch is structural (filling the width
+would need height that doesn't exist), no spacing fixes it: **re-lay-out the figure**
+(stacked bands → L-shape) so its aspect matches the container.
 
 ---
 
