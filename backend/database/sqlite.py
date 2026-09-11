@@ -20,6 +20,28 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=dict)
 
+
+def dumps_json(value) -> str:
+    """THE single JSON encoder for anything stored in a DB TEXT column.
+
+    ``ensure_ascii=False`` is the whole point: the stdlib default escapes every
+    non-ASCII character to ``\\uXXXX``, so a Chinese message was stored as ASCII
+    escapes. That is not merely ugly — ``messages_fts`` is an **external-content**
+    FTS5 index over ``messages.content``, so it indexed the escape tokens and no
+    Chinese query could ever match a third of recorded history (run_a7587134).
+
+    Use this instead of a bare ``json.dumps`` for EVERY write door that targets a
+    DB column. Two doors write ``messages.content`` — this table's
+    ``_serialize_value`` and ``core.session_pending``'s raw ``INSERT`` — and a
+    second, independently-decided encoding policy is exactly how the defect
+    recurs when a third door is added. One authority, no drift.
+
+    Read-compatible in both directions: ``json.loads`` parses the escaped and raw
+    forms to the identical object, so a corpus holding a mix of both reads fine
+    and this fix needs no coordinated migration.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
 # Constants
 DEFAULT_AUDIT_LOG_LIMIT: int = 100
 
@@ -406,7 +428,7 @@ class SQLiteTable(BaseTable[T], Generic[T]):
     def _serialize_value(self, value) -> str | int | float | None:
         """Serialize a value for SQLite storage."""
         if isinstance(value, (list, dict)):
-            return json.dumps(value)
+            return dumps_json(value)
         if isinstance(value, datetime):
             return value.isoformat()
         if isinstance(value, bool):

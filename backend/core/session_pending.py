@@ -220,10 +220,19 @@ def _payload_json(user_message: str | None, content: list[dict] | None) -> str:
 
     Text path stores ``[{"type":"text","text":...}]`` (matches the existing
     session_router persist shape), multimodal stores the block list verbatim.
+
+    Encoding is DELEGATED to ``database.sqlite.dumps_json`` — the single authority
+    for DB-stored JSON — not decided here. This module is the SECOND write door
+    into ``messages.content`` (it inserts via a raw ``INSERT``, bypassing
+    ``SQLiteTable._serialize_value``), so an independently-chosen policy here is
+    how the CJK-escape defect recurs: a bare ``json.dumps`` escapes non-ASCII, and
+    ``messages_fts`` then indexes escape tokens instead of Chinese (run_a7587134).
     """
+    from database.sqlite import dumps_json
+
     if content is not None:
-        return json.dumps(content)
-    return json.dumps([{"type": "text", "text": user_message or ""}])
+        return dumps_json(content)
+    return dumps_json([{"type": "text", "text": user_message or ""}])
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +268,10 @@ async def persist_pending(
     expires_at = int(time.time()) + _PENDING_TTL_SECONDS
     msg_id = str(uuid4())
     payload = _payload_json(user_message, content)
-    metadata_json = json.dumps({"client_id": client_id}) if client_id else "{}"
+    # Same single-authority encoder as the payload — a client_id is ASCII today,
+    # but the policy must not fork per call site (that is how door 2 drifted).
+    from database.sqlite import dumps_json
+    metadata_json = dumps_json({"client_id": client_id}) if client_id else "{}"
 
     async def _do() -> int:
         # SELECT MAX+INSERT held inside the per-session lock for monotonic

@@ -30,6 +30,7 @@ from typing import List, Optional
 from uuid import uuid4
 
 from database import db
+from database.sqlite import dumps_json
 from schemas.chat_thread import (
     ChatMessageCreate,
     ChatMessageResponse,
@@ -570,8 +571,12 @@ class ChatThreadManager:
             "thread_id": data.thread_id,
             "summary_type": data.summary_type.value,
             "summary_text": data.summary_text,
-            "key_decisions": json.dumps(data.key_decisions) if data.key_decisions else None,
-            "open_questions": json.dumps(data.open_questions) if data.open_questions else None,
+            # dumps_json, not a bare json.dumps: these columns are pre-serialized
+            # here (they reach the table as STRINGS, so _serialize_value never sees
+            # the list) — a bare dumps would re-escape CJK into \uXXXX and make it
+            # unsearchable, exactly the defect fixed at the shared authority.
+            "key_decisions": dumps_json(data.key_decisions) if data.key_decisions else None,
+            "open_questions": dumps_json(data.open_questions) if data.open_questions else None,
             "updated_at": now,
         }
 
@@ -624,9 +629,9 @@ class ChatThreadManager:
         if data.summary_text is not None:
             updates["summary_text"] = data.summary_text
         if data.key_decisions is not None:
-            updates["key_decisions"] = json.dumps(data.key_decisions)
+            updates["key_decisions"] = dumps_json(data.key_decisions)
         if data.open_questions is not None:
-            updates["open_questions"] = json.dumps(data.open_questions)
+            updates["open_questions"] = dumps_json(data.open_questions)
 
         if not updates:
             return self._summary_to_response(existing)
