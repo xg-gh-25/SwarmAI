@@ -63,153 +63,172 @@ def test_specialist_template_is_classified_adversarial():
 
 
 # ---------------------------------------------------------------------------
-# Scope-budget contract (run_90eb848b)
+# Scope-budget contract — ONE authority, not one copy per template
 # ---------------------------------------------------------------------------
-# Every Agent-spawn prompt template must state an explicit SCOPE budget.
+# WHY a budget at all: an unbounded task framing ("prove no problem exists")
+# has no termination condition, so the sub-agent searches until it gives up.
+# Bounding SCOPE terminates by construction; bounding the CLOCK would truncate
+# a live review that is still finding real issues (STEERING #2).
 #
-# WHY a budget at all: measured over 5537 recorded subagent transcripts, a review
-# sub-agent's duration and its severe-finding count rise TOGETHER (0.42 findings
-# under 1min → 1.87 at 3-6min), but the marginal return COLLAPSES past ~6 minutes
-# (+0.07 going from 6-10min to >10min) while 27.8h = 10.8% of all subagent
-# wall-clock sits past that knee. The waste comes from UNBOUNDED task framing —
-# "prove no problem exists" has no termination condition, so the agent searches
-# until it gives up.
-#
-# WHY scope and NOT a timeout: a wall-clock kill would truncate a live review that
-# is still finding real issues (STEERING #2 — a control that truncates
-# in-progress real work is banned), and the correlation above shows these runs are
-# progressing, not hung. Bounding SCOPE terminates by construction while leaving
-# the productive 3-6min band intact.
-#
-# WHY a test and not just prose: the prose lived in these very templates and did
-# not hold. A missing budget line is invisible at review time and only surfaces as
-# a 30-minute stall, so the contract needs a RED, not a reminder.
+# WHY the authority is the CALLER side: review/adversarial spawn prompts are
+# written by the orchestrator at spawn time, not copied from these template
+# files — so the constraint has to live where the ORCHESTRATOR reads it. An
+# earlier version of this module asserted the marker in each of a hardcoded
+# 7-file list, which turned the duplication into a contract: consolidating to a
+# single authority went RED until this test was retargeted. Guard the authority
+# and the per-spawn parameters, never the number of copies.
 _SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline"
 
 _BUDGET_MARKER = "SCOPE BUDGET"
+_INSTRUCTIONS_MD = _SKILL_ROOT / "INSTRUCTIONS.md"
 
-_SPAWN_TEMPLATES = (
+# The three rules the caller-side authority must state. Each entry is
+# (label, regex) — whitespace-insensitive because the source is prose wrapped at
+# ~78 cols, so a newline can fall anywhere inside a phrase.
+_AUTHORITY_RULES = (
+    ("finite item list", r"[Ff]inite\s+item\s+list"),
+    ("cap on item count", r"N\s*(?:<=|\u2264)\s*3-4"),
+    ("never prove a negative", r"prove\s+a\s+negative"),
+    ("do not delegate your grep", r"delegate\s+your\s+own\s+grep"),
+    ("state the scope budget", r"State\s+the\s+scope\s+budget"),
+    ("bound scope not the clock", r"[Bb]ound\s+SCOPE,\s+never\s+the\s+clock"),
+    ("N/A wording", r"`N/A:"),
+    ("UNCHECKED wording", r"UNCHECKED"),
+    ("budget never authorizes skipping", r"[Nn]ever\s+let\s+the\s+budget\s+authorize\s+skipping"),
+)
+
+# Templates whose budget text is INSIDE a fenced code block — i.e. literally
+# pasted into a spawn prompt, so their concrete numbers do reach the sub-agent.
+_IN_FENCE_TEMPLATES = (
+    _SKILL_ROOT / "stages" / "deliver.md",
+    _SKILL_ROOT / "stages" / "evaluate.md",
+    _SKILL_ROOT / "stages" / "build.md",
+)
+
+# Files that are referenced by PATH only (never pasted). They must not carry a
+# second, differently-worded copy of the contract.
+_PATH_REFERENCED_TEMPLATES = (
     _SKILL_ROOT / "review-agents" / "security-safety.md",
     _SKILL_ROOT / "review-agents" / "code-quality.md",
     _SKILL_ROOT / "review-agents" / "ux-test.md",
     _SKILL_ROOT / "stages" / "specialists" / "red-team.md",
-    _SKILL_ROOT / "stages" / "deliver.md",
-    _SKILL_ROOT / "stages" / "evaluate.md",
-    _SKILL_ROOT / "stages" / "build.md",  # Gate-1 Skeptic + SSA spawn template
-)
-
-# A hand-written list is exactly how the 7th template got missed: the first
-# version of this test hardcoded 6 paths, and Gate-2 found that stages/build.md
-# spawns the Gate-1 Skeptic+SSA sub-agent with no budget at all — invisible to a
-# curated list (R27: enumerate the SINK, don't curate the members). So the list
-# above is cross-checked against a DISCOVERY sweep below: any file carrying a
-# second-person spawn-prompt opening must be either bounded or explicitly
-# accounted for here.
-_SPAWN_OPENING = re.compile(
-    r"^(?:You are (?:a|an|NOT)\b|You receive\b)", re.MULTILINE
 )
 
 
-def test_every_spawn_template_states_a_scope_budget():
-    """Every Agent-spawn prompt template must carry the SCOPE BUDGET marker."""
-    missing = [
-        str(p.relative_to(_SKILL_ROOT))
-        for p in _SPAWN_TEMPLATES
-        if _BUDGET_MARKER not in p.read_text()
-    ]
+def test_caller_side_authority_states_every_rule():
+    """INSTRUCTIONS.md is the single authority for the bounded-spawn contract."""
+    text = _INSTRUCTIONS_MD.read_text()
+    start = text.find("[MUST] Every spawn prompt is BOUNDED")
+    assert start != -1, (
+        "INSTRUCTIONS.md lost the caller-side bounded-spawn rule. This is the ONLY "
+        "layer the orchestrator reliably reads when it hand-writes a spawn prompt; "
+        "without it nothing bounds the prompts that actually run."
+    )
+    end = text.find("**Spawn REJECTION", start)
+    block = text[start: end if end != -1 else start + 4000]
+    missing = [label for label, pat in _AUTHORITY_RULES
+               if not re.search(pat, block, re.S)]
     assert not missing, (
-        f"spawn template(s) lost the {_BUDGET_MARKER!r} line: {missing}. "
-        "Without it the sub-agent has no termination condition and reverts to "
-        "unbounded search (measured: 27.8h of subagent wall-clock spent past the "
-        "6-minute marginal-return knee for +0.07 findings). Restore an explicit "
-        "scope budget — files to read / tool calls / answer length."
+        f"the caller-side authority no longer states: {missing}. Restore it in "
+        "INSTRUCTIONS.md — a rule that lives only in a template file does not "
+        "reach a hand-written spawn prompt."
     )
 
 
-def test_no_undiscovered_spawn_template_is_unbounded():
-    """Discover spawn templates by their prompt shape — don't trust the curated list.
+def test_in_fence_templates_state_concrete_caps():
+    """Fenced templates are pasted verbatim, so they must carry real numbers.
 
-    Gate-2 (run_90eb848b) caught the first version of this module hardcoding 6
-    paths while `stages/build.md` spawned a 7th, entirely unbounded sub-agent. A
-    curated list inherits the same blind spot that caused the miss, so sweep the
-    skill tree for second-person spawn-prompt openings and require each hit to be
-    either budgeted or listed above. A NEW spawn template added later goes RED
-    here instead of silently running unbounded.
+    Guard the INTENT (a numeric ceiling on files or tool calls), never one
+    phrasing. REVIEW caught this: the three templates already use four different
+    wordings ("At most 14 tool", "at most 4 files", "at most 8 tool", "read at
+    most 4 files"), so a literal `at most N` check passed only by luck — and a
+    rewording to "up to 4 files" or "maximum 4 files" would have sailed through
+    while the cap silently vanished. One contract, many wordings is exactly the
+    drift class this module exists to stop.
     """
-    known = {p.resolve() for p in _SPAWN_TEMPLATES}
-    unbounded: list[str] = []
-    for path in sorted(_SKILL_ROOT.rglob("*.md")):
-        if path.resolve() in known:
-            continue
+    caps_re = re.compile(
+        r"(?:at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?(?:\s+of)?|limit(?:ed)?\s+to|"
+        r"\u2264|<=)\s*(\d+)\s*(?:more\s+)?(?:files?|tool)",
+        re.I | re.S,
+    )
+    for path in _IN_FENCE_TEMPLATES:
         text = path.read_text()
-        if _SPAWN_OPENING.search(text) and _BUDGET_MARKER not in text:
-            unbounded.append(str(path.relative_to(_SKILL_ROOT)))
-    assert not unbounded, (
-        "file(s) carry a spawn-prompt opening ('You are a…' / 'You receive…') but "
-        f"no {_BUDGET_MARKER!r} and are absent from _SPAWN_TEMPLATES: {unbounded}. "
-        "Either add a scope budget (if it really spawns a sub-agent) or add it to "
-        "_SPAWN_TEMPLATES so the omission is a recorded decision, not a blind spot."
+        idx = text.find(_BUDGET_MARKER)
+        assert idx != -1, (
+            f"{path.name} is pasted into a spawn prompt but states no "
+            f"{_BUDGET_MARKER!r} — the sub-agent gets no termination condition."
+        )
+        # Scope the cap search to the budget PARAGRAPH. A whole-file scan is
+        # vacuous: unrelated prose elsewhere in the same document (e.g. an
+        # "≤1 file" scope note) satisfies the regex, so removing the budget's own
+        # numbers stayed GREEN. Self-caught by mutation, not by reading.
+        para_end = text.find("\n\n", idx)
+        budget_para = text[idx: para_end if para_end != -1 else idx + 800]
+        assert caps_re.search(budget_para), (
+            f"{path.name} states {_BUDGET_MARKER!r} with no concrete cap in that "
+            "same paragraph. A fenced template reaches the sub-agent verbatim, so "
+            f"the numbers must be there. Paragraph was: {budget_para[:160]!r}"
+        )
+
+
+def test_contract_is_not_restated_in_path_referenced_templates():
+    """No second, differently-worded copy of the contract (single authority)."""
+    duplicated = [
+        str(p.relative_to(_SKILL_ROOT))
+        for p in _PATH_REFERENCED_TEMPLATES
+        if "authorize skipping" in p.read_text()
+        or "never the checklist" in p.read_text()
+    ]
+    assert not duplicated, (
+        f"{duplicated} restate the bounded-spawn contract. These files are "
+        "referenced by path and are not pasted into spawn prompts, so a copy here "
+        "adds no constraint and guarantees two-source drift (already caught once). "
+        "Point at the caller-side rule in INSTRUCTIONS.md instead."
     )
 
 
-def test_budget_line_does_not_displace_the_adversarial_phrase():
-    """The budget must sit AFTER the adversarial framing in deliver.md's template.
+def test_no_volatile_measured_values_in_skill_text():
+    """Product text must not embed values that expire (a model name, a corpus
+    size, a run id, a percentage delta). Store the durable claim; the numbers
+    belong in the pipeline run record, which is dated and reproducible."""
+    banned = re.compile(
+        r"\b(?:sonnet|opus|haiku|fable)-[\d.-]+\b"      # model names with a version
+        r"|\bclaude-(?:opus|sonnet|haiku)-\d"
+        r"|\b5537\b|\b27\.8h\b|\b10\.8%|\+0\.07",
+        re.I,
+    )
+    offenders: list[str] = []
+    for path in sorted(_SKILL_ROOT.rglob("*.md")):
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if banned.search(line):
+                offenders.append(f"{path.relative_to(_SKILL_ROOT)}:{i}: {line.strip()[:70]}")
+    assert not offenders, (
+        "skill text embeds values that will expire:\n  " + "\n  ".join(offenders) +
+        "\nReplace each with a claim that stays true across a model or corpus "
+        "change; keep the measurement in the run record."
+    )
 
-    Gate-1 CHECK 4 (run_90eb848b): the sibling test above asserts the template HEAD
-    carries a phrase `_is_adversarial_intent` recognizes. If the budget line were
-    inserted AHEAD of that phrasing it could displace it, silently breaking the
-    pipeline's own commit gate. Pin the ORDER, not just the presence.
+
+def test_adversarial_phrase_stays_inside_the_prompt_head_window():
+    """The intent detector reads only the first 2000 chars of the spawn prompt.
+
+    `runtime_hooks._read_subagent_prompt_head` truncates at `content[:2000]`, and
+    `_is_adversarial_intent` runs on that slice. So the real constraint is a
+    CHARACTER WINDOW, not the order of two lines: if the adversarial phrasing
+    drifts past 2000 chars the `_adv_` marker stops being written and the
+    pipeline silently blocks its own commits.
     """
     head = _extract_specialist_template_head(_DELIVER_MD.read_text())
+    idx = head.lower().find("adversarially review")
+    assert idx != -1, "template head lost its 'Adversarially review' phrasing"
+    assert idx < 2000, (
+        f"'Adversarially review' sits at char {idx} of the specialist template, "
+        "past the 2000-char head the intent detector reads "
+        "(runtime_hooks._read_subagent_prompt_head). Keep it near the top."
+    )
     assert _BUDGET_MARKER in head, (
         f"{_BUDGET_MARKER} must appear in the specialist template HEAD (before the "
         "first '## ' section), so the spawned sub-agent actually reads it."
-    )
-    adversarial_idx = head.lower().find("adversarially review")
-    budget_idx = head.find(_BUDGET_MARKER)
-    assert adversarial_idx != -1, "template head lost its 'Adversarially review' phrasing"
-    assert adversarial_idx < budget_idx, (
-        "the SCOPE BUDGET line must come AFTER the adversarial framing — placing it "
-        "first risks displacing the phrase _is_adversarial_intent matches, which "
-        "would block the pipeline's own commits."
-    )
-
-
-def test_specialist_budget_caps_agree_across_templates():
-    """deliver.md's spawn template and the specialist files must state the SAME caps.
-
-    Two-source drift (R27): deliver.md carries the template the orchestrator copies
-    into the spawn prompt, while each specialist .md carries its own budget. If the
-    numbers disagree, the spawned agent is told two different limits depending on
-    which document it read — the exact silent-inconsistency class this run exists to
-    remove. Caught by REVIEW (CHECK 3) after the first BUILD shipped 3-files/12-calls
-    in deliver.md against 4-files/14-calls in the specialists.
-    """
-    # NOTE: the caps are prose wrapped at ~78 cols, so a newline can fall ANYWHERE
-    # inside the phrase ("At most 14\ntool calls"). Match on whitespace-insensitive
-    # runs (`\s+`), never a literal space — a space-only pattern silently found no
-    # match and made this test look like a template defect (self-caught, first run).
-    caps_re = re.compile(
-        r"at\s+most\s+(\d+)\s+files.*?at\s+most\s+(\d+)\s+tool\s+calls",
-        re.I | re.S,
-    )
-    specialists = (
-        _SKILL_ROOT / "review-agents" / "security-safety.md",
-        _SKILL_ROOT / "review-agents" / "code-quality.md",
-        _SKILL_ROOT / "review-agents" / "ux-test.md",
-        _SKILL_ROOT / "stages" / "specialists" / "red-team.md",
-    )
-    seen: dict[str, tuple[str, str]] = {}
-    for path in (_DELIVER_MD, *specialists):
-        m = caps_re.search(path.read_text())
-        assert m, f"{path.name} states no 'at most N files / at most N tool calls' caps"
-        seen[path.name] = (m.group(1), m.group(2))
-    distinct = set(seen.values())
-    assert len(distinct) == 1, (
-        f"spawn-budget caps disagree across templates: {seen}. The orchestrator "
-        "copies deliver.md's template while each specialist file states its own "
-        "budget — divergent numbers mean the sub-agent is told two different "
-        "limits. Keep them identical."
     )
 
 
@@ -217,13 +236,11 @@ def test_no_hardcoded_model_directive_in_spawn_config():
     """deliver.md must not hardcode a model for review sub-agents.
 
     The retired line read "Use default model (opus) — adversarial review needs
-    strongest reasoning". Measured per-model over the same 5537 transcripts that
-    premise does not hold: claude-sonnet-4-5 returned a 92s median with 2.19 avg
-    severe findings, while the then-current session default (claude-opus-5)
-    returned 413s median with 1.57. Model identity and era/diff are CONFOUNDED in
-    that corpus, so the evidence licenses DELETING the unsupported claim — not
-    asserting a new "best" model, which would decay identically at the next
-    default change.
+    strongest reasoning". Measured across the recorded sub-agent corpus that
+    premise did not hold, and model identity was confounded with era and diff
+    size — so the evidence licensed DELETING the unsupported claim, not naming a
+    replacement, which would decay identically at the next default change.
+    Review quality comes from bounded scope plus fresh context, not a model name.
     """
     text = _DELIVER_MD.read_text()
     assert "default model (opus)" not in text, (
@@ -255,5 +272,5 @@ def test_no_hardcoded_model_directive_in_spawn_config():
         "deliver.md's Sub-agent configuration block pins a model again: "
         f"{hit.group(0).strip()!r}. Omit `model` and inherit the session default; "
         "a hardcoded tier decays at the next default change (the retired directive "
-        "said 'opus' and silently became wrong when the default moved to opus-5)."
+        "named a tier and silently became wrong when the default moved)."
     )

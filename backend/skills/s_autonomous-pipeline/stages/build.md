@@ -158,9 +158,7 @@ mandatory — write `N/A: <reason>` for one that does not apply, and
 out. `UNCHECKED` labels a gap so a human sees it; it is NOT permission to stop
 early and does NOT satisfy the mandate. "Default to skepticism" means doubt the
 plan's claims, NOT search without a stopping condition — the checks below ARE
-the search space. (Measured, run_90eb848b: a review sub-agent's marginal yield
-collapses to +0.07 severe findings past ~6 minutes, so unbounded searching buys
-nothing — but compressing the checks themselves costs real detection.)
+the search space.
 
 ---
 

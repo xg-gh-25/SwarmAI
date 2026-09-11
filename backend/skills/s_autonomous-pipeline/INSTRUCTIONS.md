@@ -789,12 +789,20 @@ This is the LAST thing you output — never end a pipeline run without it.
 
 **Sequence (all 3 steps are mandatory):**
 
-1. Generate REPORT.md and update run status to "completed":
+1. Update run status to "completed" — the report is generated FOR you:
    ```bash
-   python backend/scripts/artifact_cli.py run-report --project <PROJECT> --run-id <RUN_ID>
    python backend/scripts/artifact_cli.py run-update \
      --project <PROJECT> --run-id <RUN_ID> --status completed
    ```
+
+   **Why completion comes FIRST (do not swap these back):** `completed_at` is
+   written only by this command, and REPORT.md's `Duration:` needs it. Running
+   `run-report` before completion rendered `Duration: N/A` on **466 of 466** real
+   reports even though every run.json held a perfectly good span. The completion
+   branch now regenerates an auto-generated REPORT.md itself (a hand-written one is
+   never touched), so ordering is belt-and-braces rather than the sole guarantee.
+   The `>=500 bytes` gate below is already satisfied by the early report DELIVER
+   produced, so completing first does not trip it.
 
    **⚠️ [GATE·cli] MECHANICAL GATE:** `run-update --status completed` will **BLOCK** if:
    - Any non-skippable stage is incomplete (goal_cycle, deliver, reflect)
@@ -1340,9 +1348,11 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
 
     **[MUST] Every spawn prompt is BOUNDED — investigate first, delegate the
     JUDGEMENT.** A sub-agent's value is a second pair of eyes on YOUR conclusion,
-    not a re-run of your own investigation in a slower process. Three rules,
-    which the shipped templates already carry (`SCOPE BUDGET` line — pinned by
-    `backend/tests/test_deliver_template_drift.py`):
+    not a re-run of your own investigation in a slower process. **This block is the
+    single authority** — spawn prompts are hand-written here, not copied from the
+    template files, so a rule stated only in a template does not reach the prompt
+    that actually runs. Pinned by `backend/tests/test_deliver_template_drift.py`.
+    Three rules:
     - **Finite item list.** Hand it "confirm or refute these N specific things"
       (N ≤ 3-4, each with the file:line you already read). NEVER ask it to prove
       a negative — "prove nothing is wrong / default to unsafe until you can
@@ -1357,13 +1367,12 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
       Never let the budget authorize skipping a checklist item — the reviewer
       writes `N/A: <reason>` or `UNCHECKED: <item> — budget exhausted` instead.
 
-    Measured (5537 subagent transcripts, run_90eb848b): duration and severe-finding
-    count rise together (0.42 findings <1min → 1.87 at 3-6min) but marginal return
-    collapses past ~6 min (+0.07 from 6-10min to >10min), and 27.8h = 10.8% of all
-    subagent wall-clock sits past that knee. The failure shape: one skeptic prompt
-    carrying 17 numbered verify-this-yourself sub-questions ran 30 min / 84 tool
-    calls; the same claim restated as 3 concrete confirm-or-refute items returned in
-    23s / 7 tool calls — and still caught a real error the orchestrator had missed.
+    The failure shape this prevents: a skeptic prompt carrying a long list of
+    numbered verify-this-yourself sub-questions searches for a very long time and
+    finds little; the same claim restated as three concrete confirm-or-refute items
+    returns in seconds — and still catches errors the orchestrator missed. Longer
+    reviews DO find more, but the marginal return collapses well before the point
+    where an unbounded prompt gives up, so bound the SEARCH, never the coverage.
 
     **Spawn REJECTION is fail-closed (gate_spawn_blocked).** Distinct from
     "infeasible" above: the harness/tool layer can REJECT an Agent-tool spawn

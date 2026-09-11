@@ -458,13 +458,12 @@ and how to fix it. Vague findings ("could be improved") are rejected.
 **Sub-agent configuration:**
 - **Do NOT pin a model.** Review quality comes from BOUNDED SCOPE + FRESH
   CONTEXT, not from a model name. The retired directive here read "use default
-  model (opus) — adversarial review needs strongest reasoning"; measured over
-  5537 recorded subagent transcripts that premise does not hold (sonnet-4-5:
-  92s median / 2.19 avg severe findings; the then-current opus-5 default: 413s /
-  1.57), and because model identity is confounded with era and diff in that
-  corpus the evidence licenses deleting the claim, not naming a replacement —
-  which would decay identically at the next default change. Omit `model` and
-  inherit the session default; set it only when you can state a measured reason.
+  model (opus) — adversarial review needs strongest reasoning"; the recorded
+  sub-agent corpus did not support it, and model identity was confounded with
+  era and diff size, so the evidence licensed deleting the claim rather than
+  naming a replacement — which would decay identically at the next default
+  change. Omit `model` and inherit the session default; set it only when you can
+  state a measured reason.
 - Do NOT use `run_in_background` — all specialists must complete before merge
 - If any specialist fails or times out, log the failure and continue with
   results from successful ones. Partial results > no results.

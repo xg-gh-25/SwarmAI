@@ -225,10 +225,10 @@ audit of the codebase or the plan.
 > already read), never a research assignment. A prompt that tells the sub-agent to
 > "verify each of these / grep and confirm / do not take on trust" re-runs your own
 > investigation in a slower process AND transfers your judgement cost onto it. The
-> failure shape (run_90eb848b): a skeptic prompt carrying 17 numbered
-> verify-this-yourself sub-questions ran 30 minutes and 84 tool calls; the same
-> claim, restated as "confirm or refute these 3 specific things", returned in 23
-> seconds with 7 tool calls — and still caught a real error the orchestrator had
+> failure shape: a skeptic prompt carrying a long list of numbered
+> verify-this-yourself sub-questions searches for a very long time and finds
+> little; the same claim, restated as "confirm or refute these 3 specific
+> things", returns in seconds — and still catches errors the orchestrator
 > missed. Bound the ITEM COUNT (N ≤ 3-4 concrete claims), never ask the sub-agent
 > to prove a negative ("prove nothing is wrong" has no termination condition).
 
