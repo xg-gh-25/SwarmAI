@@ -351,3 +351,147 @@ class TestGarbageExclusion:
         self._run(tmp_path, "run_fail", status="failed", stages=[])
         out = pa.analyze_all_runs(tmp_path)
         assert out["runs_analyzed"] == 2, out
+
+
+class TestStageEfficiencySurfacesMinutes:
+    """AC8 (run_fbf97252): the renderer must SHOW the minutes it computes.
+
+    `analyze_stage_efficiency` already computes `avg_minutes`/`median_minutes`
+    (:506-507) but the Stage Efficiency table only printed token columns, so
+    every duration was computed and then thrown on the floor. That is the SAME
+    defect this run exists to fix in artifact_cli (a derived duration discarded
+    by its renderer) wearing a second face — and it is exactly why the old
+    `stage_timing` telemetry looked "missing" when it was merely unrendered.
+    """
+
+    def _intel(self, stages: dict, n_runs: int = 5) -> dict:
+        return {
+            "generated_at": "2026-09-11T00:00:00Z",
+            "runs_analyzed": n_runs,
+            "projects": ["P"],
+            "dimensions": {
+                "stage_efficiency": {"stages": stages},
+                "adversarial_value": {},
+                "goal_performance": {},
+                "profile_accuracy": {},
+            },
+        }
+
+    def _row(self, report: str, stage: str) -> str:
+        block = report[report.find("Stage Efficiency"):]
+        row = next(
+            (l for l in block.splitlines() if l.startswith(f"| {stage}")), None
+        )
+        assert row is not None, f"the {stage} row must render:\n{block[:400]}"
+        return row
+
+    def test_computed_minutes_are_rendered_not_discarded(self):
+        report = pa.generate_report(self._intel({
+            "build": {
+                "avg_tokens": 50000, "median_tokens": 48000, "sample_count": 5,
+                "avg_minutes": 42.5, "median_minutes": 40.0,
+                "duration_sample_count": 5,
+            },
+        }))
+        # Assert on the BUILD ROW, not the whole report. The earlier form was
+        #   assert "42.5" in report or "42" in report
+        # whose right disjunct is satisfied by any "42"-ish substring anywhere —
+        # a token count, a percentage, a run count, a date — so it can go green
+        # with the columns deleted. It had teeth today only by fixture luck
+        # (avg_tokens=42000 would satisfy it against the reverted renderer).
+        row = self._row(report, "build")
+        assert "42.5" in row, (
+            "avg_minutes was computed but never rendered in its own row — the "
+            f"exact derive-then-discard defect this run fixes:\n{row!r}"
+        )
+        assert "40.0" in row, f"median_minutes was discarded:\n{row!r}"
+
+    def test_stage_without_timing_renders_dash_not_zero(self):
+        """A stage with no duration samples must show `—`, never a fake 0.
+
+        Asserts the cell is PRESENT and holds `—`. Asserting only that "0.0" is
+        absent is vacuous: deleting the columns entirely also satisfies it
+        (verified — that form passed against the fully reverted renderer).
+        """
+        report = pa.generate_report(self._intel({
+            "review": {
+                "avg_tokens": 12000, "median_tokens": 11000, "sample_count": 4,
+                # no avg_minutes/median_minutes at all
+            },
+        }))
+        row = self._row(report, "review")
+        cells = [c.strip() for c in row.split("|")]
+        assert len(cells) == 8, (
+            f"the row must have 6 columns (8 split parts), so the minutes cells "
+            f"EXIST at all:\n{row!r}"
+        )
+        assert cells[4] == "—" and cells[5] == "—", (
+            f"a stage with no timing samples must render em-dashes, not a "
+            f"fabricated number:\n{row!r}"
+        )
+
+    def test_minutes_column_exists_in_header(self):
+        report = pa.generate_report(self._intel({
+            "build": {"avg_tokens": 1, "median_tokens": 1, "sample_count": 5,
+                      "avg_minutes": 9.0, "median_minutes": 9.0,
+                      "duration_sample_count": 5},
+        }))
+        block = report[report.find("Stage Efficiency"):]
+        header = next((l for l in block.splitlines() if l.startswith("| Stage")), "")
+        assert "Avg Min" in header and "Median Min" in header, (
+            f"the table has no minutes columns, so durations cannot appear:\n{header!r}"
+        )
+
+    def test_hostile_duration_values_render_dash_never_a_number(self):
+        """bool / NaN / inf / str must degrade to `—`, never look measured.
+
+        `json.loads` accepts bare `NaN`, and `bool` subclasses `int` — so a naive
+        `isinstance(x, (int, float))` prints `nan` and a fabricated `1.0`.
+        """
+        for bad, label in [
+            (True, "bool True"),
+            (float("nan"), "NaN"),
+            (float("inf"), "inf"),
+            ("42.5", "str"),
+            (None, "None"),
+        ]:
+            report = pa.generate_report(self._intel({
+                "build": {"avg_tokens": 100, "median_tokens": 100,
+                          "sample_count": 5, "avg_minutes": bad,
+                          "median_minutes": bad, "duration_sample_count": 5},
+            }))
+            row = self._row(report, "build")
+            cells = [c.strip() for c in row.split("|")]
+            assert cells[4] == "—", f"{label} rendered as a measurement:\n{row!r}"
+            assert "nan" not in row and "inf" not in row, (
+                f"{label} leaked a non-finite literal into the report:\n{row!r}"
+            )
+
+    def test_minutes_gated_on_duration_n_not_token_n(self):
+        """Confident minutes must never sit beside a contradictory n.
+
+        `sample_count` is len(TOKENS); durations are collected independently, so a
+        run with stage_timing but no stage_tokens yields n=0. Rendering
+        `insufficient data (n=0)` next to `42.5` inverts the anti-C044 gate.
+        """
+        report = pa.generate_report(self._intel({
+            "build": {"avg_tokens": 0, "median_tokens": 0, "sample_count": 0,
+                      "avg_minutes": 42.5, "median_minutes": 42.5,
+                      "duration_sample_count": 1},
+        }))
+        row = self._row(report, "build")
+        assert "42.5" not in row, (
+            "a single duration sample was rendered as a confident number while "
+            f"the row simultaneously reports insufficient data:\n{row!r}"
+        )
+
+    def test_duration_sample_count_is_exported(self):
+        """analyze_stage_efficiency must export the duration n, not just tokens."""
+        m = {"run_id": "A", "project": "P", "profile": "full", "status": "completed",
+             "stage_tokens": {"build": 5000},
+             "stage_timing": {"build": {"wall_minutes": 12.0}}}
+        eff = pa.analyze_stage_efficiency([m])
+        assert eff["stages"]["build"].get("duration_sample_count") == 1, (
+            "the duration sample count must be exported so the renderer can gate "
+            f"on it independently of the token count: {eff['stages']['build']}"
+        )

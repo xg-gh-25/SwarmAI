@@ -25,6 +25,7 @@ Public symbols:
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -505,6 +506,12 @@ def analyze_stage_efficiency(metrics: list[dict]) -> dict:
             if data["durations"]:
                 result[stage]["avg_minutes"] = _safe_avg(data["durations"])
                 result[stage]["median_minutes"] = _safe_median(data["durations"])
+                # Durations are collected INDEPENDENTLY of tokens (a run can carry
+                # stage_timing with no stage_tokens for that stage), so
+                # `sample_count` — which is len(tokens) — is NOT the duration's n.
+                # Export the real one: without it the renderer prints confident
+                # minutes beside "n=0", inverting the anti-C044 completeness gate.
+                result[stage]["duration_sample_count"] = len(data["durations"])
 
     return {"stages": result}
 
@@ -747,14 +754,49 @@ def generate_report(intelligence: dict) -> str:
     # Stage Efficiency
     se = dims.get("stage_efficiency", {})
     lines.append("## Stage Efficiency\n")
-    lines.append("| Stage | Avg Tokens | Median | Samples |")
-    lines.append("|-------|-----------|--------|---------|")
+    # Avg/Median Min: analyze_stage_efficiency ALREADY computes these (:506-507)
+    # from stage_timing.wall_minutes — before this column they were computed and
+    # then dropped on the floor, which is why the timing telemetry looked
+    # "missing" when it was merely unrendered. A stage with no duration samples
+    # renders `—`, never a fabricated 0 (an absent measurement is not zero).
+    lines.append("| Stage | Avg Tokens | Median | Avg Min | Median Min | Samples |")
+    lines.append("|-------|-----------|--------|---------|------------|---------|")
     for stage, data in se.get("stages", {}).items():
         _n = data.get("sample_count", 0)
+        # Duration n is its OWN count (see analyze_stage_efficiency): gating minutes
+        # on the TOKEN n would either hide real durations or, worse, print confident
+        # minutes beside "n=0" — a green metric over thin data, the anti-C044 rule
+        # this report exists to honour.
+        _dn = data.get("duration_sample_count", 0)
+        _am = data.get("avg_minutes")
+        _mm = data.get("median_minutes")
+
+        def _min_cell(val: object) -> str:
+            """Render a duration cell, or `—` when there is nothing honest to show.
+
+            `bool` is excluded explicitly (it subclasses int, so `True` would print
+            a fabricated `1.0`), and non-finite values are excluded because
+            `json.loads` accepts bare `NaN`/`Infinity` — a corrupt on-disk
+            wall_minutes would otherwise render the literal text `nan`, which reads
+            as a measurement rather than as missing data.
+            """
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                return "—"
+            if not math.isfinite(val):
+                return "—"
+            return f"{val:.1f}"
+
+        _am_s = "—" if _insufficient(_dn) else _min_cell(_am)
+        _mm_s = "—" if _insufficient(_dn) else _min_cell(_mm)
         if _insufficient(_n):
-            lines.append(f"| {stage} | insufficient data (n={_n}) | — | {_n} |")
+            lines.append(
+                f"| {stage} | insufficient data (n={_n}) | — | {_am_s} | {_mm_s} | {_n} |"
+            )
         else:
-            lines.append(f"| {stage} | {data['avg_tokens']:.0f} | {data['median_tokens']:.0f} | {_n} |")
+            lines.append(
+                f"| {stage} | {data['avg_tokens']:.0f} | {data['median_tokens']:.0f} "
+                f"| {_am_s} | {_mm_s} | {_n} |"
+            )
     lines.append("")
 
     # Adversarial Value

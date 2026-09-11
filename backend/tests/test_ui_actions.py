@@ -393,14 +393,40 @@ class TestReportSurfaceCrossBoundaryContract:
             _P(__file__).resolve().parents[2]
             / "desktop" / "src" / "hooks" / "useCanvasAutoSurface.ts"
         ).read_text()
-        # Line 143: kind gate — the accepted kinds.
-        kind_line = next(l for l in ts.splitlines()
-                         if "kind !== undefined" in l and "return" in l)
-        accepted_kinds = set(_re.findall(r"kind !== '([a-z-]+)'", kind_line))
-        # Line 147: relevance gate — the accepted relevance.
+        # KIND gate. Read BOTH shapes the gate has worn, because a scraper that
+        # knows only one silently degrades to an empty set the moment the TS is
+        # refactored — and an empty set makes every downstream membership check
+        # vacuously... unsatisfiable, i.e. this guard failed for a REASON that
+        # has nothing to do with the contract it protects (commit 9f9fb8ae
+        # hoisted the inline chain into a const array; the old regex then matched
+        # nothing). A parse that finds zero kinds is a BROKEN INSTRUMENT, so it
+        # is asserted against explicitly below rather than silently returned.
+        #   shape A (current): const AUTO_POP_KINDS = ['content', 'knowledge', ...]
+        #   shape B (legacy):  if (kind !== 'content' && kind !== 'knowledge' ...)
+        accepted_kinds: set[str] = set()
+        for line in ts.splitlines():
+            if "AUTO_POP_KINDS" in line and "=" in line and "[" in line:
+                accepted_kinds |= set(_re.findall(r"'([a-z-]+)'", line))
+                break
+        if not accepted_kinds:
+            kind_line = next(l for l in ts.splitlines()
+                             if "kind !== undefined" in l and "return" in l)
+            accepted_kinds = set(_re.findall(r"kind !== '([a-z-]+)'", kind_line))
+        assert accepted_kinds, (
+            "could not parse the auto-pop KIND gate out of useCanvasAutoSurface.ts "
+            "— the scraper is stale (the TS was refactored into a shape it does not "
+            "know), NOT necessarily the contract. Fix the parse before trusting a "
+            "failure here."
+        )
+        # RELEVANCE gate — still an inline comparison. Skip comment lines: the file
+        # discusses `relevance !== 'deliverable'` in prose above the real check.
         rel_line = next(l for l in ts.splitlines()
-                        if "relevance !== undefined" in l and "return" in l)
+                        if "relevance !== undefined" in l and "return" in l
+                        and not l.lstrip().startswith("//"))
         accepted_rel = set(_re.findall(r"relevance !== '([a-z-]+)'", rel_line))
+        assert accepted_rel, (
+            "could not parse the auto-pop RELEVANCE gate — stale scraper, see above."
+        )
         return accepted_kinds, accepted_rel
 
     def test_report_event_passes_frontend_autopop_gate(self, tmp_path):
