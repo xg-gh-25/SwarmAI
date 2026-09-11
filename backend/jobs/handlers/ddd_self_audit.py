@@ -37,6 +37,12 @@ from pathlib import Path
 from core.project_registry import DDD_CANONICAL_DOCS
 from core.ddd_paths import ddd_path  # six-section layout resolver (strangler-aware)
 from ..paths import SWARMWS
+# ONE model SSOT for every job CLI. Imported from the side-effect-free leaf
+# module, NOT from `..executor`: importing executor runs a `zsh -lic` subprocess
+# and replaces os.environ["PATH"] at import time, which would fire during pytest
+# collection (this handler is imported at test module level) and on an HTTP
+# request path (core/ddd_drift_signal lazy-imports it from routers/eval).
+from ..model_resolve import resolve_job_model as _resolve_job_model
 
 logger = logging.getLogger("swarm.jobs.ddd_self_audit")
 
@@ -282,7 +288,12 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
             *(["--bare"] if use_bare else []),
             "--output-format", "json",
             "--no-session-persistence",
-            "--model", "sonnet",
+            # Same SSOT as every other job CLI (_resolve_job_model): a bare family
+            # alias carries no `[1m]` suffix, which caps the context window and
+            # 400s. This third call site was missed by the first pass because it
+            # lives in a handler, not executor.py — a same-shape defect in a
+            # different file, found by adversarial review, not by the tests.
+            "--model", _resolve_job_model(),
             "--permission-mode", "bypassPermissions",
         ]
         mcp_file = None

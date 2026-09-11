@@ -43,6 +43,16 @@ logger = logging.getLogger("swarm.jobs.executor")
 from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, DB_PATH, ESTIMATION_LEARNER_FILE
 
 
+# ── Job model resolution ─────────────────────────────────────────────
+# The implementation lives in the SIDE-EFFECT-FREE leaf module
+# `jobs.model_resolve` (see its docstring for the 400-Input-too-long history and
+# why it is not a function in this file: importing THIS module runs a `zsh -lic`
+# subprocess and replaces os.environ["PATH"], which must not be dragged into a
+# handler's import path). Re-exported under the original private name so the two
+# call sites below read unchanged.
+from .model_resolve import resolve_job_model as _resolve_job_model  # noqa: F401
+
+
 # ── Module-level PATH fix ────────────────────────────────────────────
 # GUI apps (Tauri) don't inherit login shell PATH.  credential_process
 # tools (ada/toolbox), mise shims, and npm globals are invisible.
@@ -791,7 +801,7 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         *(["--bare"] if use_bare else []),  # skip hooks/LSP (>= 2.1.81)
         "--output-format", "json",
         "--no-session-persistence",
-        "--model", "sonnet",
+        "--model", _resolve_job_model(),
         "--max-budget-usd", str(safety.max_budget_usd),
         # Jobs run headless — bypass permission prompts for allowed tools.
         # Safety is enforced by --allowedTools (only listed tools are available).
@@ -1630,7 +1640,7 @@ def _send_slack_dm(message: str) -> bool:
             *(["--bare"] if use_bare else []),
             "--output-format", "text",
             "--no-session-persistence",
-            "--model", "sonnet",
+            "--model", _resolve_job_model(),
             "--max-budget-usd", "1.00",
             "--permission-mode", "bypassPermissions",
             "--mcp-config", mcp_config_file.name,
