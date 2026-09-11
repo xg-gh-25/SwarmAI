@@ -113,8 +113,7 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 > **`Projects/<X>/2-understanding/<doc>`**, NOT the project root. The root path is the
 > PRE-migration location; the layout SSOT is `backend/core/ddd_paths.py` (`ddd_path()`
 > reads new-first, so recall only ever reads `2-understanding/`). Writing to the root
-> `Projects/<X>/TECH.md` creates an ORPHAN: git-tracked but never recalled (this is a
-> real bug that stranded a principle — run_ff06972d). If a `2-understanding/` subdir is
+> `Projects/<X>/TECH.md` creates an ORPHAN: git-tracked but never recalled — a real bug that stranded a principle. If a `2-understanding/` subdir is
 > absent for an un-migrated project, fall back to root; when in doubt, resolve with
 > `python -c "from core.ddd_paths import ddd_path; print(ddd_path('Projects/<X>','TECH.md'))"`.
 
@@ -133,7 +132,7 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 | **Self-correction/bias** | — | `.context/EVOLUTION.md` § Corrections Captured |
 | **Reference/fact/spec** | — | `Knowledge/Library/` (searchable store — recall can find it) |
 
-> **⚠️ Routing fix (run_794adfaf, R4c):** reference/fact content goes to
+> **⚠️ Routing fix(R4c):** reference/fact content goes to
 > `Knowledge/Library/`, **NOT** `.context/KNOWLEDGE.md`. KNOWLEDGE.md is an
 > always-injected *index/cache* file (one of the 11 context files) — it is a
 > **sibling** of `Knowledge/`, so `sync_knowledge_index` (which scans `Knowledge/`

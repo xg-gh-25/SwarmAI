@@ -13,7 +13,7 @@
 > http://jgthms.com/web-design-in-4-minutes/).
 >
 > **SwarmAI counterpart:** this is the universal craft (canonical home). For how it maps
-> onto SwarmAI's own surfaces + the run_9ada46ae failure that earned this skeleton, read
+> onto SwarmAI's own surfaces + the failure that earned this skeleton, read
 > `Projects/SwarmAI/2-understanding/knowledge/designs/2026-08-06-ui-ux-design-judgment-swarmai.md`.
 > The WHEN-reflex ("read this before producing info-dense UI") is governed by AGENT.md R15.
 

@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 def _validate_repo_path(repo_path: Path) -> Path:
     """Validate repo path: must exist, be a directory, and be git-tracked — EITHER
-    a repo root (has its own .git) OR a subdirectory inside a git work-tree (a
-    monorepo package member, whose .git lives at the repo root — run_a9fe5ad3).
+    a repo root (has its own .git) OR a subdirectory inside a git work-tree
+    (a monorepo package member, whose .git lives at the repo root).
 
     A monorepo member has no .git of its own but git ls-files / log scoped to it
     work against the parent repo, so the analysis functions are fully functional.
@@ -89,12 +89,12 @@ def _safe_file_read(file_path: Path, repo_root: Path, max_size: int = 10 * 1024 
 # ─── code-intel.json v2 Schema Validation ───
 
 # Schema aligned to the REAL producer, core/code_intel/json_exporter.py (the
-# ground-truth v2 emitter that runs on every reindex). run_5647c72c fixed a
+# ground-truth v2 emitter that runs on every reindex). A later fix corrected a
 # validator↔exporter divergence: the validator had been written against a
 # hand-built FIXTURE schema (module.path/responsibility, top-level `edges`,
 # entry_point.path) that the exporter never emitted — so the real SwarmAI
 # code-intel.json failed its own validator (43 errors) and v3 generation could
-# not run on real data (O009: validator never tested against real output).
+# not run on real data (validator never tested against real output).
 # The exporter emits: top-level `dependencies` (NOT `edges`); modules as
 # {name, symbol_count, function_count, class_count, file_count, files}; and
 # entry_points as {name, file_path, type}.
@@ -102,7 +102,7 @@ _REQUIRED_TOP_LEVEL = {"$schema", "version", "repo", "modules", "entry_points"}
 _REQUIRED_REPO = {"name", "languages", "total_symbols", "total_edges"}
 # The exporter's _build_modules (json_exporter.py:121-132) emits ALL of these
 # UNCONDITIONALLY (no branches) — so the exact producer contract is all 6, not a
-# loose {name, symbol_count} floor (Gate-2 LOW, run_5647c72c: don't under-specify
+# loose {name, symbol_count} floor (adversarial review: do not under-specify
 # a schema the sole producer always fully populates).
 _REQUIRED_MODULE = {"name", "symbol_count", "function_count", "class_count",
                     "file_count", "files"}
@@ -117,7 +117,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
     Does NOT use jsonschema library — pure Python for zero-dep operation.
 
     ``repo_root`` (optional): threaded to check_mermaid_node_anchoring so a mermaid
-    node naming a real-on-disk-but-unindexed file is accepted (run_3026ef31).
+    node naming a real-on-disk-but-unindexed file is accepted.
     """
     errors: list[str] = []
 
@@ -177,8 +177,8 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
 
     # Entry points validation. The real exporter (_build_entry_points) emits
     # {name, file_path, type}; older/agent-authored docs may use {path, …}.
-    # Accept EITHER a `file_path` or a `path` locator (run_5647c72c: requiring
-    # only `path` rejected every real exporter output).
+    # Accept EITHER a `file_path` or a `path` locator — requiring
+    # only `path` rejected every real exporter output.
     entry_points = doc.get("entry_points")
     if isinstance(entry_points, list):
         for i, ep in enumerate(entry_points):
@@ -194,7 +194,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
     # AND the two anti-hallucination guards (referential integrity + LLM-assertion
     # anchoring). Wiring the guards in here is load-bearing: they are the entire
     # anti-spurious value (§1.5); if the main validator doesn't call them, a
-    # hallucinated/dangling assertion sails through (Gate-2 CRITICAL, run_aad6d4f2).
+    # hallucinated/dangling assertion sails through (adversarial review, CRITICAL).
     _has_v3_content = any(
         isinstance(doc.get(k), list) and doc.get(k) for k in ("domains", "flows", "steps")
     )
@@ -336,8 +336,7 @@ def check_llm_assertion_guards(doc: dict) -> list[str]:
 
     Each assertion object anywhere in the domain layer:
     - MUST be a dict carrying an explicit boolean `verified` — a plain-string rule
-      or a dict with no `verified` is an UN-adjudicated claim, flagged (else an LLM
-      dodges the guard by omitting `verified` — Gate-2 HIGH, run_aad6d4f2).
+      or a dict with no `verified` is an UN-adjudicated claim, flagged(else an LLM dodges the guard by omitting `verified` — Gate-2 HIGH).
     - `verified` MUST be a real bool (not "true"/"false"/1 — the `is True` identity
       check silently mis-branched string values, Gate-2 CRITICAL).
     - verified:true  → non-blank `anchor` (code file:line PRESENT — not resolved/read);
@@ -418,7 +417,7 @@ def _collect_doc_file_anchors(doc: dict) -> set[str]:
 
 
 def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
-    """Gate-1 must-fix (run_3026ef31): the diagram.mermaid field has NO other
+    """Gate-1 must-fix: the diagram.mermaid field has NO other
     validator, so a hallucinated node label ("backend/ghost_service.py") ships
     silently. This closes the hole fail-closed like the §1.5 guards.
 
@@ -431,8 +430,8 @@ def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
 
     Why (b): the anti-hallucination goal is "the node maps to REAL code", and a
     file that exists on disk IS real code. The v2 code-intel graph indexes only a
-    SUBSET of the repo (run_3026ef31: session_healing.py / json_exporter.py exist
-    on disk but aren't in the graph) — without the disk check, the gate would
+    SUBSET of the repo (session_healing.py / json_exporter.py exist on disk but
+    aren't in the graph) — without the disk check, the gate would
     false-reject a truthful node just because the graph is incomplete. repo_root is
     NOT an escape hatch: a token absent from BOTH the doc AND disk still fails, AND
     the disk check enforces containment (an absolute/`../`-traversal token that
@@ -494,7 +493,7 @@ def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
 
 
 def check_business_rule_anchor_files(doc: dict, repo_root=None) -> list[str]:
-    """run_9a9e314c DoD5 — the non-theater fabrication backstop for verified:true
+    """The non-theater fabrication backstop for verified:true
     business_rules (+ preconditions/rules). check_llm_assertion_guards only asserts
     the `anchor` string is NON-BLANK; a fabricated anchor to a NON-EXISTENT FILE
     (e.g. `backend/core/ghost.py:42`) sails through CLEAN. This guard checks the
@@ -579,7 +578,7 @@ def check_business_rule_anchor_files(doc: dict, repo_root=None) -> list[str]:
     return errors
 
 
-# ── Run 1 (run_94e5a5aa): anchor-accounting = the COVERAGE-GUARANTEE mechanism ──
+# ── Run 1: anchor-accounting = the COVERAGE-GUARANTEE mechanism ──
 #
 # The crux this closes: v3 generation was anti-hallucination-hard (a flow.entry_ref
 # must resolve) but coverage-BLIND — the LLM could classify 10 of 208 anchors and
@@ -956,7 +955,7 @@ def blind_spot_scan(doc: dict) -> dict:
 
     Design constraints (§11.2 / §12.4, both load-bearing):
       * REPORT-ONLY — this returns a report; it is NEVER a fail-closed gate. The
-        fail-closed ``behavior_coverage`` gate was DEFERRED as C042 (gating an LLM
+        fail-closed ``behavior_coverage`` gate was DEFERRED as over-reach (gating an LLM
         negative assertion over sparse step data). Callers must not BLOCK on it.
       * DETERMINISTIC — keys off ``risk_areas``/``hot_zones`` (real fan-in/risk facts),
         so it never asserts "X does not exist" from an LLM (the r6 unreliability lesson).
@@ -1025,8 +1024,7 @@ def blind_spot_scan(doc: dict) -> dict:
 def derive_route_id(method: str, path: str, file_path: str) -> str:
     """§1.4 collision-resistant route id = route:{slug}-{hash(method+path+file)}.
 
-    - slug is a readable label; the hash carries uniqueness (Gate-2 fix,
-      run_aad6d4f2): the OLD form slugged `method+path` (collapsing `/a/b`,
+    - slug is a readable label; the hash carries uniqueness: the OLD form slugged `method+path` (collapsing `/a/b`,
       `/a-b`, `/users` vs `/users/` to one slug) and hashed only file_path
       (16-bit → ~40% collision at 200+ routes). Now the hash is over the EXACT
       `method|path|file_path` triple at 32 bits, so distinct routes get distinct
@@ -1039,13 +1037,12 @@ def derive_route_id(method: str, path: str, file_path: str) -> str:
     return f"route:{slug}-{h}"
 
 
-# ─── Incremental merge (Run 2, run_36266b66) ───
+# ─── Incremental merge ───
 
 def merge_code_intel(baseline: dict, new_nodes: list, new_edges: list) -> dict:
     """Merge freshly-analyzed nodes/edges into a baseline GRAPH (§2, UA keep-last).
 
-    ⚠️ OPERATES ON A NODE/EDGE GRAPH, NOT ON THE EXPORTED code-intel.json.
-    (run_5647c72c) This is the UA batch-graph merge — it reads/writes
+    ⚠️ OPERATES ON A NODE/EDGE GRAPH, NOT ON THE EXPORTED code-intel.json. This is the UA batch-graph merge — it reads/writes
     ``baseline["nodes"]`` + ``baseline["edges"]``. The PRODUCED code-intel.json
     (core/code_intel/json_exporter.py) has NO top-level `nodes`/`edges` — it uses
     `modules`/`routes`/`dependencies`. Passing an exported code-intel.json here is
@@ -1147,7 +1144,7 @@ def reconcile_human_blocks(
     # Build hash → domain_id, tracking AMBIGUITY: if two new domains share a
     # content-hash, we cannot know which one a human block belongs to → that
     # hash is ambiguous and matching blocks are quarantined (not silently bound
-    # to a last-wins arbitrary domain). Gate-2 finding, run_36266b66.
+    # to a last-wins arbitrary domain). Gate-2 finding.
     hash_counts: dict = {}
     hash_to_new_domain: dict = {}
     for nd in new_domain_blocks or []:
@@ -1173,7 +1170,7 @@ def reconcile_human_blocks(
     return kept, orphaned
 
 
-# ─── Run 1.5 (run_1417a3a1): domain-layer GENERATION scaffold ───
+# ─── Run 1.5: domain-layer GENERATION scaffold ───
 # The deterministic half of code-intel v3 domain generation (§1.1/§1.4/§1.5):
 # backfill join keys → project the anti-hallucination anchor menu → assemble +
 # fail-closed validate. LLM classification (routes → business domains) stays
@@ -1297,9 +1294,7 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=No
     spurious) is REJECTED, never persisted. Pure: deep-copies, never mutates input.
 
     ``repo_root`` (optional): when given, the mermaid-node-anchoring guard also
-    accepts a node naming a file that EXISTS on disk under repo_root (the v2 graph
-    indexes only a subset of the repo — a truthful node must not be rejected merely
-    because the graph is incomplete; run_3026ef31). NOT an escape hatch: a node
+    accepts a node naming a file that EXISTS on disk under repo_root(the v2 graph indexes only a subset of the repo — a truthful node must not be rejected merely because the graph is incomplete). NOT an escape hatch: a node
     absent from both the doc and disk still fails.
 
     The caller (agent workflow) is expected to have run backfill_route_ids first so
@@ -1320,12 +1315,12 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=No
     # deep-copy the layer args too (not just list()): the spec_hash stamp below
     # mutates each domain dict, and the docstring promises "never mutates input" —
     # a shallow list() would share the caller's dict objects and inject spec_hash
-    # into them (Gate-2 HIGH, run_97a6b1db). deepcopy keeps finalize_v3 pure.
+    # into them (adversarial review, HIGH). deepcopy keeps finalize_v3 pure.
     out["domains"] = _copy.deepcopy(list(domains or []))
     out["flows"] = _copy.deepcopy(list(flows or []))
     out["steps"] = _copy.deepcopy(list(steps or []))
     out["version"] = "3.0"
-    # ── stamp each domain's spec_hash at ASSEMBLY (run_97a6b1db) ──
+    # ── stamp each domain's spec_hash at ASSEMBLY ──
     # finalize_v3 is the sanctioned AGENT domain-authoring chokepoint (domain +
     # flows + steps all in hand). Historically only the core json_exporter (reindex
     # path) stamped spec_hash, so a doc authored HERE shipped staleness-BLIND —
@@ -1352,7 +1347,7 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=No
     return out
 
 
-# ─── Run 3 (run_6602eeab): spec-details eval dims + deterministic skeleton ───
+# ─── Run 3: spec-details eval dims + deterministic skeleton ───
 
 def _iter_domain_assertions(domain: dict, flows: list, steps: list):
     """Yield every LLM-assertion dict (business_rules/issues/gaps + step
@@ -1449,9 +1444,7 @@ def eval_spec_details(doc: dict) -> dict:
 
 def _md_cell(v) -> str:
     """Escape a value for a markdown TABLE cell: a literal `|` would create a
-    phantom column and corrupt the 2-col table; a newline would split the row.
-    (Gate-2 MED, run_235ffe64 — real step.io.output '{status:created} | 400'
-    carries a pipe.)"""
+    phantom column and corrupt the 2-col table; a newline would split the row. A real step.io.output '{status:created} | 400' carries a pipe.)"""
     return str(v).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
@@ -1459,7 +1452,7 @@ def _md_inline_code(v) -> str:
     """Wrap a value in an inline-code span `...` for a markdown TABLE cell, SAFELY.
     Strips backticks (which would prematurely close the span) and pipe-escapes the
     rest via _md_cell. A symbol name / file path containing a backtick therefore can
-    never corrupt the table (Gate-2 LOW, run_d7b78923)."""
+    never corrupt the table."""
     return "`" + _md_cell(str(v).replace("`", "")) + "`"
 
 
@@ -1635,16 +1628,16 @@ def _render_domain_skeleton_body(domain: dict, flows: list, steps: list) -> str:
     return "\n".join(L)
 
 
-# ─── Run 4 (run_b5993cdb, feature D): [human] preservation on regeneration ───
+# ─── Run 4 (feature D): [human] preservation on regeneration ───
 
 # A [human] block = a markdown LIST ITEM carrying a backtick-fenced `[human]`
 # marker (§3.2 / §8.2), PLUS its continuation lines (wrapped text, indented
 # sub-bullets, fenced code) up to the next top-level list item or `## ` header.
 # Skill-LOCAL (NOT imported from core.recall_multi) so the skill stays portable
-# (C046). NOTE — this DELIBERATELY DIVERGES from recall_multi._extract_human_blocks:
+# NOTE — this DELIBERATELY DIVERGES from recall_multi._extract_human_blocks:
 # recall does LINE-level BM25 indexing (one bullet line, comments stripped), but
 # PRESERVATION needs the VERBATIM block (continuation lines + inline comments kept)
-# or a multiline human rule loses its body on regen (Gate-2 CRITICAL, run_b5993cdb).
+# or a multiline human rule loses its body on regen (adversarial review, CRITICAL).
 # Different concern → different extractor; they are not "keep in sync".
 _HUMAN_MARKER_RE = re.compile(r"`\[human\]`")
 _LIST_BULLET_RE = re.compile(r"^(?:[-*+]\s|\d+\.\s)")
@@ -1762,7 +1755,7 @@ def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
     return "\n".join(out)
 
 
-# ─── Run 5 (run_3349787d, design §10): behavioral-equivalence layer ───
+# ─── Run 5 (design §10): behavioral-equivalence layer ───
 #
 # ⚠️ DESIGN-ONLY / CONSUMER-API for a STATIC analyzer (Run C honesty note): this layer
 # scores the spec's behavioral claims against REAL runtime `observations` — but a
@@ -1771,7 +1764,7 @@ def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
 # (a CI harness / test-runner / instrumented runtime). Do NOT build an in-tool
 # "observations producer" — a static tool can only synthesize them from the same doc
 # that made the claims, a closed loop that fake-passes by construction (Run C
-# M3-skeptic verdict: C042 over-engineering). Absent observations the layer is
+# M3-skeptic verdict: over-engineering). Absent observations the layer is
 # CORRECTLY inert: score_equivalence returns 'unchecked', never 'verified'. So this
 # trio is a consumer API awaiting real observations, not a production code path — it
 # is expected to have no non-test caller inside this repo until such a consumer exists.
@@ -1860,7 +1853,7 @@ def score_equivalence(doc: dict, observations: dict) -> dict:
             tag = "partial"
         result_domains[dom] = {"tag": tag, **d}
     # Surface orphan assertions (steps whose flow/domain doesn't resolve to a real
-    # domain) instead of silently dropping them (Gate-2 F5, run_3349787d): a
+    # domain) instead of silently dropping them (adversarial review): a
     # contract that vanishes from the report reads as "fully covered" when it isn't.
     # Fold into an explicit __unresolved__ bucket + the score denominator.
     orphan = {"passed": 0, "total": 0, "observed": 0}
@@ -2277,8 +2270,7 @@ def gotchas_for_agents_md(raw_gotchas: list[dict[str, str]]) -> list[dict[str, s
 def render_agents_md(data: dict[str, Any]) -> str:
     """Render AGENTS.md from structured data. Output MUST be ≤150 lines.
 
-    ⚠️ INPUT IS AN AGENT-ASSEMBLED dict, NOT the exported code-intel.json
-    (run_5647c72c). This reads `modules[].path`/`.responsibility` and
+    ⚠️ INPUT IS AN AGENT-ASSEMBLED dict, NOT the exported code-intel.json. This reads `modules[].path`/`.responsibility` and
     `entry_points[].path`/`.description` — the AGENTS.md authoring shape assembled
     by the skill's GENERATE step (INSTRUCTIONS.md §4.5), NOT the exporter shape
     (which uses `symbol_count`/`file_path`). Do NOT feed a code-intel.json
@@ -2962,11 +2954,10 @@ def run_multi_package(
     produces per-package material + cross-package synthesis. No hand-fed package list.
 
     Composes detect_package_roots() (workspace-manifest boundary detection) so the
-    caller passes ONE repo root, not a pre-computed member list (run_a9fe5ad3 — the
-    detector and this runner were shipped separately and never wired; now they are).
+    caller passes ONE repo root, not a pre-computed member list — the detector and this runner were shipped separately and never wired; now they are.
     A single-package repo degrades to exactly one package rooted at ".".
 
-    Skill-native + core-free by design (C046): uses the skill's own gather_repo_info /
+    Skill-native + core-free by design: uses the skill's own gather_repo_info /
     extract_import_graph / parse_git_gotchas — never core.code_intel. The LLM GENERATE
     fan-out (per-package code-intel.json doc assembly) consumes THIS material; it is
     the INSTRUCTIONS.md orchestration layer, not this deterministic function.
@@ -3270,7 +3261,7 @@ def select_verification_tasks(repo_path: Path) -> list[dict[str, Any]]:
         not necessarily the commit's "primary" file.
       - commit: hash (7-char) for evidence
 
-    Selection (each picks a DISTINCT file — dedup by correct_file, run_006dce1c):
+    Selection (each picks a DISTINCT file — dedup by correct_file):
       1. Most recent fix:/hotfix:/revert: commit
       2. Most recent feat: commit
       3. Largest-diff commit (proxy for refactor)
@@ -3324,7 +3315,7 @@ def select_verification_tasks(repo_path: Path) -> list[dict[str, Any]]:
         """First source file in the commit NOT already claimed by another task.
         Dedup is by FILE, not just by commit hash: two DIFFERENT commits can both
         list foo.py first, which would make the verification ask about the same
-        file twice and inflate the 2/3 pass bar (Gate-1, run_006dce1c). Returns the
+        file twice and inflate the 2/3 pass bar (a plan-gate finding). Returns the
         first unclaimed source file, or None if the commit adds no new source file."""
         for f in c["files"]:
             if f.startswith("tests/") or not f.endswith((".py", ".ts", ".js", ".rs", ".go")):
@@ -3471,13 +3462,13 @@ def evaluate_verification_response(
                 feedback.append(f"Task {i} ({task['type']}): Sub-agent said INSUFFICIENT but didn't specify what's missing")
             continue
 
-        # Check if correct file is mentioned — TOKEN-EXACT match (run_006dce1c).
+        # Check if correct file is mentioned — TOKEN-EXACT match.
         # The old `file_stem in answer` substring test false-passed: a WRONG file
         # sharing the stem (src/utils_v2.py vs src/utils.py), or the stem appearing
         # in APPROACH prose, both matched. Fix: tokenize the answer and accept a
         # token ONLY if it equals the full rel-path OR equals the bare basename.
         #
-        # Gate-2 correction (run_006dce1c): the earlier draft ALSO accepted
+        # Gate-2 correction: the earlier draft ALSO accepted
         # `Path(tok).name == filename` (basename-OF-a-path-token) so 'src/foo.py'
         # would match correct 'backend/core/foo.py'. That is a NEW false-pass class:
         # 'api/models.py' would match correct 'db/models.py' (same basename, genuinely
@@ -3511,8 +3502,8 @@ def evaluate_verification_response(
             results.append({"task": task["description"][:50], "correct": False, "detail": f"Expected: {correct_file}, got: {answer[:80]}"})
             feedback.append(f"Task {i} ({task['type']}): Agent pointed to wrong file. Expected {correct_file}. TECH.md may need better module mapping for this area.")
 
-    # Pass bar is PROPORTIONAL to task count, not a hardcoded >=2 (Gate-2 HIGH,
-    # run_006dce1c): dedup-by-file can legitimately yield <3 tasks (a small repo
+    # Pass bar is PROPORTIONAL to task count, not a hardcoded >=2 (adversarial
+    # review, HIGH): dedup-by-file can legitimately yield <3 tasks (a small repo
     # where every commit touches the same file), and a hardcoded `>=2` made a
     # PERFECT agent fail 1/1. Bar = ceil(2/3 of tasks), min 1 — a repo that only
     # affords 1 verification task passes on that 1, matching the intended "~2/3
@@ -3531,13 +3522,13 @@ def evaluate_verification_response(
 #
 # Navigational, NOT a correctness fix. Symbol ids are already path-qualified
 # (parser.py:_qualify uses rel_path=relative_to(repo_root)) and route.id hashes
-# file_path, so a monorepo does NOT collide — verified by Gate-0 (run_693e08de).
-# Wired end-to-end (run_a9fe5ad3): run_multi_package(repo_root) AUTO-DETECTS via
+# file_path, so a monorepo does NOT collide — verified by Gate-0.
+# Wired end-to-end: run_multi_package(repo_root) AUTO-DETECTS via
 # detect_package_roots (no hand-fed list); packages[] IS emitted into code-intel.json
 # by BOTH producers (core json_exporter reindex + skill INSTRUCTIONS §4.6); the
 # INSTRUCTIONS.md §4.9 monorepo fan-out orchestrates per-package GENERATE.
 #
-# Still skill-layer + core-free (C046): detection uses only stdlib + yaml/tomllib.
+# Still skill-layer + core-free: detection uses only stdlib + yaml/tomllib.
 # Deferred: per-package full v3 (domains/flows/steps) generation is the LLM fan-out
 # layer (§4.9 orchestration), not a deterministic helper.
 
@@ -3835,7 +3826,7 @@ def detect_package_roots(repo_root) -> list[PackageRoot]:
 def build_packages_partition(repo_root) -> list[dict]:
     """Wrap detect_package_roots() into navigation-metadata dicts for a
     code-intel.json `packages[]` partition. Emitted into code-intel.json by BOTH
-    producers (run_a9fe5ad3): the core reindex writer (json_exporter.export_code_intel_json)
+    producers: the core reindex writer (json_exporter.export_code_intel_json)
     and the skill GENERATE path (INSTRUCTIONS §4.6). Names are made unique
     (path-suffixed on collision) so two packages both named 'core' stay distinguishable."""
     roots = detect_package_roots(repo_root)
@@ -3863,7 +3854,7 @@ def build_packages_partition(repo_root) -> list[dict]:
 def render_blind_spots_md(scan: dict, package_name: str) -> str:
     """Render a PER-PACKAGE ``BLIND-SPOTS.md`` from a ``blind_spot_scan`` result.
 
-    This is the human-facing consumer for the reverse-coverage detector (run_d7b78923).
+    This is the human-facing consumer for the reverse-coverage detector.
     ``blind_spot_scan`` was fully implemented + tested but had ZERO callers — its result
     died unreferenced. This renderer + the INSTRUCTIONS Phase-5/6 wiring give it a durable
     home, one file PER package's own ``.ai-context/`` dir (blind spots are that repo's own —
@@ -3878,7 +3869,7 @@ def render_blind_spots_md(scan: dict, package_name: str) -> str:
         Studio "generating zero is a valid expected result" discipline).
 
     REPORT-ONLY: this is an artifact, never a fail-closed gate (blind_spot_scan's own
-    C042-deferred constraint, docstring §11.2). Pure — takes the scan dict, returns md.
+    deferred-as-over-reach constraint, docstring §11.2). Pure — takes the scan dict, returns md.
     """
     total = scan.get("total_risky", 0)
     documented = scan.get("documented", 0)
@@ -3933,7 +3924,7 @@ def render_blind_spots_md(scan: dict, package_name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-# ── Gap 2: Business-Rules Extraction scoring dimension (run_128fc19f) ──────────
+# ── Gap 2: Business-Rules Extraction scoring dimension ──────────
 #
 # The 10th scoring dimension. It certifies the newest engine capability
 # (domain_rules / business-rules-extraction) MECHANICALLY — not by an LLM eyeball,

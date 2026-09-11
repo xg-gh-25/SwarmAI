@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """html2pdf.py — the ONE sanctioned HTML→PDF converter for SwarmAI.
 
-Why this exists (earned 2026-07-08, run_8debb0fe):
+Why this exists(earned 2026-07-08):
     `chrome --headless --print-to-pdf` is NOT a reliable HTML→PDF path. On complex
     HTML (flex/grid, `min-height:100vh`, inline SVG, `white-space:nowrap` chains) the
     Chrome headless print pipeline fails inside

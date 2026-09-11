@@ -65,7 +65,7 @@ a failure case is handled correctly, not just that the happy path works.
   - "script exits 1 (not crash) when target unreachable"  ← NEGATIVE
 ```
 
-**Why:** run_2f2e078a delivered code that passed all 4 positive DoD criteria
+**Why:** a goal run delivered code that passed all 4 positive DoD criteria
 but had 4 undetected gaps (untested error path, failure propagation, scope
 mismatch, orphan accumulation). A single negative test ("what happens when
 the server is down?") would have caught 3 of 4.
@@ -88,7 +88,7 @@ When the deliverable has **multiple input paths** (e.g., `--scope full` vs
 `--scope frontend-only`, or `--backend` vs `--frontend` vs `--all`), at
 least one DoD criterion must exercise a **non-default path**.
 
-**Why:** run_2f2e078a had 4 DoD criteria, all exercising the default path.
+**Why:** that same run had 4 DoD criteria, all exercising the default path.
 The `frontend-only` scope path was completely untested — it existed in code
 but could have been syntactically broken and DoD would still pass.
 
@@ -239,7 +239,7 @@ if cycle_number % review_cadence == 0:
     → Update last_review_commit to HEAD
 ```
 
-### 10.5 Cross-Cycle Finding Re-Judgment (AutoSDE #2, run_7583af5f) `[MUST]` → `[GATE·validator]` at DELIVER
+### 10.5 Cross-Cycle Finding Re-Judgment(AutoSDE #2) `[MUST]` → `[GATE·validator]` at DELIVER
 
 > The re-judgment loop itself is `[MUST]` (agent re-checks the ledger). Its TEETH are at
 > DELIVER: an APPLICABLE-unresolved finding carried into `adversarial_review.findings[]`
@@ -250,7 +250,7 @@ if cycle_number % review_cadence == 0:
 
 **Runs every cycle that the Periodic REVIEW gate fires (same cadence), and once
 more in the Final Quality Gate.** This is the mechanism that catches
-"fixed-in-cycle-3, regressed-in-cycle-7" — the machine version of OT01's
+"fixed-in-cycle-3, regressed-in-cycle-7" — the machine version of a
 "looked fixed, recurred." A fresh adversarial on the total diff does NOT catch
 this: it has no memory that a finding was ever raised and marked resolved, so a
 silent regression reads as clean. Re-judgment DOES, because it re-checks each
@@ -271,7 +271,7 @@ for finding in Findings Ledger where status != OBSOLETE:
     write the updated status + re-judged cycle back to the ledger row
 ```
 
-**Rule — this must have TEETH (Gate-1 finding, run_7583af5f):** re-judgment that
+**Rule — this must have TEETH(Gate-1 finding):** re-judgment that
 only updates a markdown table changes nothing. Every finding that ends this step
 as **APPLICABLE and unresolved** MUST be carried forward into the DELIVER stage's
 `adversarial_review.findings[]` — verbatim, with its `severity` + `confidence` —
@@ -378,13 +378,13 @@ velocity = gm.get_velocity()
    > 4. Are there any code paths that exist in the diff but cannot be
    >    reached by any DoD criterion? Those are dead-on-arrival paths."
 
-   **Why this exists:** run_2f2e078a adversarial found 5 single-file bugs
+   **Why this exists:** in that run the adversarial pass found 5 single-file bugs
    but missed 4 cross-path gaps (untested frontend path, failure propagation,
    scope mismatch, orphan accumulation). Standard adversarial asks "is this
    code correct?" — cross-path adversarial asks "is this code correct FOR
    ALL ITS USES?"
 
-2.5. **Class-Completeness Gate (MANDATORY when `migration_class` is declared — run_1d3df9e6):** `[MUST]` → `[GATE·validator]` at DELIVER
+2.5. **Class-Completeness Gate (MANDATORY when `migration_class` is declared):** `[MUST]` → `[GATE·validator]` at DELIVER
 
    > ⚠️ **Enforcement nuance (adversarially corrected):** the completeness COMPUTATION is
    > `[MUST]` — `check_migration_class.py` is NOT called by any validator/CLI/hook (only by
@@ -396,8 +396,7 @@ velocity = gm.get_velocity()
 
    Runs AFTER the cross-path adversarial (step 2), BEFORE marking the stage complete.
    The cross-path adversarial is DIFF-SCOPED — it only sees code the cycles TOUCHED, so a
-   class sibling that NO cycle touched is invisible to it (this is how the `decisions`
-   write path shipped ungated in run_0d60e04e: 7 per-cycle adversarials all passed). This
+   class sibling that NO cycle touched is invisible to it(this is how the `decisions` write path shipped ungated in : 7 per-cycle adversarials all passed). This
    gate is CLASS-SCOPED: it enumerates the FULL class from live source and blocks any
    member neither migrated nor carved-out.
 
@@ -420,11 +419,11 @@ velocity = gm.get_velocity()
    - A MISSED / BAD_ENUMERATION / UNJUSTIFIED_CARVEOUT member → the HIGH finding blocks
      COMPLETE. Fix = migrate the member (or declare an honest carve-out) and re-run.
 
-2.6. **Cross-Boundary Layer-4 E2E (MANDATORY when `cross_boundary.value == true` — run_6b709df9):** `[GATE·artifact_cli]`
+2.6. **Cross-Boundary Layer-4 E2E (MANDATORY when `cross_boundary.value == true`):** `[GATE·artifact_cli]`
 
    The goal profile has NO standalone `test` stage, so TEST's Layer 4 (cross-boundary E2E,
    `stages/test.md` § "Layer 4") is otherwise UNREACHABLE under goal — a cross_boundary goal
-   run would skip the real-seam E2E entirely (the run_889af826 miss). Close it HERE: if the
+   run would skip the real-seam E2E entirely(the miss). Close it HERE: if the
    evaluation artifact's `cross_boundary.value == true`, this gate is MANDATORY before the
    stage completes, with the SAME contract as test.md Layer 4 (no new mechanism):
 
@@ -439,7 +438,7 @@ velocity = gm.get_velocity()
      ```json
      "cross_boundary_e2e": {"run": true, "test_file": "...", "drives_real": "what real wiring it exercises", "mutation": "reverted X -> RED"}
      ```
-   - **TEETH (code-enforced, run_6b709df9):** the completion gate (`artifact_cli.py`
+   - **TEETH(code-enforced):** the completion gate (`artifact_cli.py`
      `run-update --status completed`) scans ALL stage artifacts for a truthy
      `cross_boundary_e2e.run` whenever `cross_boundary.value == true`, and BLOCKS completion
      if none is found — profile-agnostically, so goal cannot silently skip it. A
@@ -452,7 +451,7 @@ velocity = gm.get_velocity()
 `adversarial_review` **object** (NOT a bare `true`) carrying its `findings[]` — the
 same dict shape the DELIVER adversarial records (see steps above, and
 `adversarial_review["findings"].append(finding)`). The validator's STAGE_SCHEMAS +
-STAGE_DEPTH for `goal_cycle` (D4, run_57929039) require `dod_met` plus an
+STAGE_DEPTH for `goal_cycle`(D4) require `dod_met` plus an
 `adversarial_review` **dict** with a `findings` key — a bare `adversarial_review: true`
 FAILS depth validation (a scalar cannot carry `findings`). This governs the goal_cycle
 artifact's SHAPE. **Where the findings actually BLOCK:** the unresolved-finding gate

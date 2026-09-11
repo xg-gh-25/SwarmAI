@@ -144,7 +144,7 @@ cat > "$TEMP_SCRIPT" << 'EXPORT_SCRIPT'
 //   6. Self-validate (page count == slide count, link-annot count == captured) and
 //      exit nonzero on any mismatch, so a silent regression fails loudly.
 //
-// NOTE (verified empirically run_8546727e): the "native" `page.pdf()` print path
+// NOTE(verified empirically): the "native" `page.pdf()` print path
 // does NOT work for <deck-stage> — its slides stack at inset:0 inside a scaled
 // canvas and the shadow-DOM @media print rules do not flatten them into the print
 // flow, yielding a PDF with only the first slide painted. Screenshot+overlay is the

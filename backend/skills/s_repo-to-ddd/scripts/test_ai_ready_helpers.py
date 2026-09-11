@@ -19,7 +19,7 @@ class TestCodeIntelValidation:
         """A well-formed v2 document should pass validation."""
         from scripts.ai_ready_helpers import validate_code_intel_json
 
-        # Matches the REAL exporter schema (json_exporter.py) — run_5647c72c.
+        # Matches the REAL exporter schema (json_exporter.py).
         # The old fixture used module.path/responsibility + top-level edges +
         # entry_point.path, a schema the exporter NEVER emitted (that mismatch was
         # the bug this run fixed). modules carry symbol_count; entry_points carry
@@ -88,7 +88,7 @@ class TestCodeIntelValidation:
 
     def test_invalid_module_structure_fails(self):
         """Module missing the required field (symbol_count, per the real exporter
-        _build_modules schema — run_5647c72c) should fail."""
+        _build_modules schema) should fail."""
         from scripts.ai_ready_helpers import validate_code_intel_json
 
         doc = {
@@ -108,12 +108,12 @@ class TestCodeIntelValidation:
         assert any("symbol_count" in e for e in errors)
 
 
-# ─── code-intel v3 domain layer (Run 1, run_aad6d4f2) ───
+# ─── code-intel v3 domain layer ───
 
 def _minimal_v2_doc() -> dict:
     """A valid v2 doc matching the REAL exporter schema (json_exporter.py) —
     modules={name,symbol_count,…}, entry_points={name,file_path,type}, top-level
-    `dependencies` (NOT `edges`). run_5647c72c aligned this to ground truth."""
+    `dependencies` (NOT `edges`), aligned to ground truth."""
     return {
         "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
         "version": "2.0",
@@ -263,7 +263,7 @@ class TestRouteIdDerivation:
 
 
 class TestLlmAssertionGuardsHardened:
-    """Gate-2 bypass fixes (run_aad6d4f2): type-confusion, blank, opt-out, contract-level."""
+    """Gate-2 bypass fixes: type-confusion, blank, opt-out, contract-level."""
 
     def test_verified_string_not_bool_is_flagged(self):
         """verified:"true" (string) must NOT sail through as a bool — CRITICAL bypass."""
@@ -326,7 +326,7 @@ class TestGuardsWiredIntoValidator:
 
 
 class TestMermaidNodeAnchoring:
-    """Gate-1 must-fix (run_3026ef31): diagram.mermaid has NO validator — a
+    """Gate-1 must-fix: diagram.mermaid has NO validator — a
     hallucinated node label ships silently. check_mermaid_node_anchoring asserts
     every code-like token in a mermaid body resolves to a real file/module in the
     doc, fail-closed like the other v3 guards."""
@@ -473,7 +473,7 @@ class TestMermaidNodeAnchoring:
 
 
 class TestBusinessRuleAnchorFiles:
-    """run_9a9e314c DoD5: `verified:true` business_rules only check anchor NON-BLANK
+    """`verified:true` business_rules only check anchor NON-BLANK
     (check_llm_assertion_guards) — a fabricated anchor to a NON-EXISTENT FILE sails
     through CLEAN. This is the non-theater backstop: check the anchor's FILE part
     exists (NOT line-resolve — line-resolve is theater per signature-first design).
@@ -1192,7 +1192,7 @@ class TestMultiPackage:
 
 
 class TestValidateRepoPath:
-    """_validate_repo_path contract (run_a9fe5ad3): a git ROOT or a monorepo MEMBER
+    """_validate_repo_path contract: a git ROOT or a monorepo MEMBER
     (subdir inside a git work-tree) is accepted; a non-git dir is still rejected."""
 
     def test_git_root_accepted(self, tmp_path):
@@ -1323,7 +1323,7 @@ class TestVerificationTasks:
         assert "dedup" in result["feedback"][0].lower()
         assert "extension" in result["feedback"][1].lower()
 
-    # ─── Gap 3: matcher false-pass (Gate-1 corrected — run_006dce1c) ───
+    # ─── Gap 3: matcher false-pass (corrected at the plan gate) ───
 
     def test_wrong_file_sharing_stem_does_not_false_pass(self):
         """Gate-2/skeptic bug: `file_stem in answer` substring test scored a WRONG
@@ -1514,7 +1514,7 @@ class TestOutputPathResolution:
         assert result2 == repo.parent / "ai-ready-erepo", f"empty env must fall through, got {result2}"
 
 
-# ─── code-intel v3 incremental merge (Run 2, run_36266b66) ───
+# ─── code-intel v3 incremental merge ───
 
 class TestMergeCodeIntel:
     """keep-last node dedup (baseline-first, new overwrites) + edge dedup + drop-dangling."""
@@ -1568,7 +1568,7 @@ class TestMergeCodeIntel:
         merged = merge_code_intel(baseline, [], [{"from": "a", "to": "b", "type": "x", "direction": "forward"}])
         assert len(merged["edges"]) == 1, "edge with both endpoints present must survive"
 
-    # ── Gate-2 fixes (run_36266b66) ──
+    # ── Gate-2 fixes ──
 
     def test_does_not_mutate_caller_baseline(self):
         """Pure function: mutating the result must NOT touch the caller's baseline."""
@@ -1668,7 +1668,7 @@ class TestHumanBlockReconcile:
         assert len(kept) + len(orphaned) == 3, "conservation: no block may vanish"
 
 
-# ─── Run 3 (run_6602eeab): eval dims + deterministic skeleton projection ───
+# ─── Run 3: eval dims + deterministic skeleton projection ───
 
 class TestEvalSpecDetails:
     """AC4 §9: completeness/precision/explicit/F1 quantitative scorers."""
@@ -1771,7 +1771,7 @@ class TestProjectDomainSkeleton:
         assert md.index("步骤 1 — First") < md.index("步骤 2 — Second")
 
 
-# ─── Run 1.5 (run_1417a3a1): domain-layer generation scaffold ───
+# ─── Run 1.5: domain-layer generation scaffold ───
 
 class TestBackfillRouteIds:
     """AC1: backfill stable §1.4 ids onto v2 routes; idempotent + collision-detected."""
@@ -1865,7 +1865,7 @@ class TestFinalizeV3:
         assert out["domains"][0]["id"] == "domain:orders"
 
     def test_finalize_stamps_spec_hash_on_every_domain(self):
-        """Regression (run_97a6b1db): finalize_v3 is the sanctioned agent domain-
+        """Regression: finalize_v3 is the sanctioned agent domain-
         authoring path, but it did NOT stamp domains[].spec_hash — only the core
         json_exporter (reindex path) did. So an agent authoring domains via the
         documented skill flow produced staleness-BLIND domains (freshness treats an
@@ -1918,7 +1918,7 @@ class TestFinalizeV3:
 class TestGenerationWriteReadLoop:
     """E2E: generate a real domains[] from a v2 doc via backfill→anchor→finalize,
     prove it passes all guards AND is recallable via the Run 3 recall domain leg.
-    Closes the write→read loop (GUI10) — the whole point of Run 1.5 + Run 3."""
+    Closes the write→read loop — what a wiring test exists to prove."""
 
     def test_generate_then_recall_domain(self, tmp_path, monkeypatch):
         import json
@@ -1972,7 +1972,7 @@ class TestGenerationWriteReadLoop:
 
 
 class TestRun15Gate2Fixes:
-    """Gate-2 findings (run_1417a3a1): collision-message clarity, loud-empty-menu,
+    """Gate-2 findings: collision-message clarity, loud-empty-menu,
     finalize type-guard."""
 
     def test_carried_vs_derived_collision_message(self):
@@ -2162,11 +2162,11 @@ class TestRun4Gate2Fixes:
 
 
 class TestValidatorMatchesRealExporter:
-    """run_5647c72c regression: the validator MUST accept what the REAL exporter
+    """Regression: the validator MUST accept what the REAL exporter
     (core/code_intel/json_exporter.py) emits. Previously the validator was written
     against a hand-built FIXTURE schema and rejected every real exporter output
     (SwarmAI's own code-intel.json = 43 errors), blocking v3 generation on real
-    data (O009: validator never tested against real producer output)."""
+    data (validator never tested against real producer output)."""
 
     def _exporter_shaped_doc(self):
         """A doc built from the exporter's ACTUAL builder functions, so this test
@@ -2213,7 +2213,7 @@ class TestValidatorMatchesRealExporter:
 
 
 class TestMergeExportedDocSafety:
-    """run_5647c72c R7-scan: merge_code_intel operates on the nodes/edges GRAPH,
+    """R7-scan: merge_code_intel operates on the nodes/edges GRAPH,
     not the exported code-intel.json (modules/routes). Passing an exported doc
     must NOT wipe its modules/routes (deep-copy preserves them)."""
 
@@ -2234,7 +2234,7 @@ class TestMergeExportedDocSafety:
 
 
 class TestStepSpecTableRender:
-    """Thicken (run_235ffe64): §4 now renders the full §3.2 step spec table
+    """Thicken: §4 now renders the full §3.2 step spec table
     (io/contract/rules) with verified gating, not just name+location."""
 
     _DOM = {"id": "domain:eval", "name": "Eval", "summary": "s", "complexity": "moderate"}
@@ -2276,7 +2276,7 @@ class TestStepSpecTableRender:
 
 
 class TestThickenGate2PipeEscape:
-    """Gate-2 MED (run_235ffe64): a pipe in step.io/contract must not corrupt the
+    """Gate-2 MED: a pipe in step.io/contract must not corrupt the
     markdown table — real eval output '{status:created, case} | 400' has one."""
 
     def test_pipe_in_output_escaped(self):
@@ -2304,7 +2304,7 @@ class TestThickenGate2PipeEscape:
 
 
 class TestEquivalenceLayer:
-    """Run 5 (run_3349787d, §10): derive assertions from step.contract, score
+    """Run 5(§10): derive assertions from step.contract, score
     against observations with honest verified/partial/unchecked tagging, feedback."""
 
     def _doc(self):
@@ -2393,7 +2393,7 @@ class TestEquivalenceLayer:
 
 
 class TestEquivalenceOrphanSurfacing:
-    """Gate-2 F5 (run_3349787d): orphan assertions (step→flow→domain unresolved)
+    """Gate-2 F5: orphan assertions (step→flow→domain unresolved)
     must be SURFACED in __unresolved__, not silently dropped from the report/score."""
 
     def test_orphan_step_surfaced_not_dropped(self):
@@ -2425,7 +2425,7 @@ class TestEquivalenceOrphanSurfacing:
 
 
 class TestAnchorAccounting:
-    """Run 1 (run_94e5a5aa): the coverage-guarantee mechanism. Every anchor must be
+    """Run 1: the coverage-guarantee mechanism. Every anchor must be
     ACCOUNTED — in a flow entry_ref OR an explicit unclassified:[{id,reason}] with a
     real (non-junk) reason. Silent omission = fail-closed error. Reframed away from a
     route-% threshold (Gate-0) to an accounting invariant (no metric to game)."""
@@ -2635,8 +2635,8 @@ class TestUnifiedCoverageLedger:
         # producer/validator contract: parser.py emits kind='gitignored' for files
         # excluded by the repo's .gitignore (parser.py:1496). The validator MUST
         # accept it — a validator that rejects its own producer's output is the bug
-        # (R27 producer/consumer contract; surfaced live on the real code-intel.json
-        # during run_89e28075, blocking finalize_v3).
+        # (R27 producer/consumer contract; surfaced live on the real
+        # code-intel.json, blocking finalize_v3).
         from scripts.ai_ready_helpers import validate_coverage_ledger
         doc = self._v3()
         doc["coverage_ledger"] = [{
@@ -2691,13 +2691,13 @@ class TestUnifiedCoverageLedger:
 class TestB7GateWiringMutation:
     """Run AB Cycle 4 (B7) — prove EVERY v3 gate is load-bearing on the REAL path.
 
-    The authorship trap that bit run_aad6d4f2: a guard fully unit-tested in
+    The authorship trap that bit an earlier run: a guard fully unit-tested in
     isolation while validate_code_intel_json never CALLED it → a bad doc sailed
     through with a 'verified' label. This mutation test drives the REAL entry point
     (validate_code_intel_json) and, for EACH of the 6 v3 gates, monkeypatch-unwires
     that gate and asserts a doc that SHOULD fail on it now PASSES — proving the gate
     was actually firing. If a gate is silently unwired in the future, its row here
-    goes RED. (GUI32/PIT13: exercise the real assembly path, not the function alone.)
+    goes RED. (Exercise the real assembly path, not the function alone.)
     """
 
     import pytest as _pytest
@@ -3047,7 +3047,7 @@ class TestSpecContentHash:
         assert extract_spec_hash_marker(regen) == _spec_content_hash(d, [], [])
 
 
-# ─── §12 domain-coverage completeness (run_89e28075): subsystem breadth anchor ───
+# ─── §12 domain-coverage completeness: subsystem breadth anchor ───
 
 class TestSubsystemCoverage:
     """compute_subsystem_coverage: which load-bearing subsystems have a domain vs
@@ -3122,7 +3122,7 @@ class TestBlindSpotScan:
     business_rules[].anchor) does NOT document it → report it (route to SME queue).
 
     Design constraints (§11.2 / §12.4):
-      - REPORT-ONLY, never fail-closed (the gate version is DEFERRED as C042).
+      - REPORT-ONLY, never fail-closed (the gate version is DEFERRED as over-reach).
       - DETERMINISTIC — keys off existing risk_areas/hot_zones facts, NOT an LLM
         negative assertion ("does X exist" negatives are systematically unreliable, r6).
       - Honest: a risky file documented by a step OR a business_rule anchor = covered;
@@ -3206,7 +3206,7 @@ class TestBlindSpotScan:
 
 
 class TestRenderBlindSpotsMd:
-    """render_blind_spots_md (run_d7b78923): renders a PER-PACKAGE BLIND-SPOTS.md from
+    """render_blind_spots_md: renders a PER-PACKAGE BLIND-SPOTS.md from
     a blind_spot_scan result. Report-only artifact (never a gate). Two shapes:
       - blind>0 → a table listing EVERY blind spot (file / symbol / reason / risk),
         so nothing is silently dropped (the honesty constraint carries into the render).
@@ -3265,7 +3265,7 @@ class TestRenderBlindSpotsMd:
         assert "no" in md.lower() and "blind" in md.lower()
 
 
-# ─── Gap 2: Business-Rules Extraction scoring dimension (run_128fc19f) ───
+# ─── Gap 2: Business-Rules Extraction scoring dimension ───
 
 class TestBusinessRulesDimension:
     """The 10th scoring dimension, mechanically computed from doc['domain_rules'].
@@ -3375,7 +3375,7 @@ class TestBusinessRulesDimension:
         assert r["score"] == 0, r
 
 
-# ─── Gap 3: producer order-invariance tripwires (run_006dce1c) ───
+# ─── Gap 3: producer order-invariance tripwires ───
 #
 # NOT `f(x)==f(x)`. Each test feeds SHUFFLED/REVERSED input to a producer and
 # asserts the collection field comes out SORTED — so if a future edit drops the

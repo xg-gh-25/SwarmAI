@@ -67,10 +67,10 @@ def _load_json_field(json_path: Path, field: str):
 
     An EMPTY list is treated as None (→ SKIP), NOT as "zero confirmed tracks":
     a fast-path/legacy doc that initializes the key to [] must not hard-block a
-    delivery that has real track output (Gate-2 HIGH, run_be232a07).
+    delivery that has real track output (adversarial review, HIGH).
     Top-level non-dict JSON (e.g. a bare list) returns None instead of crashing
     — a raw AttributeError here is swallowed by artifact_cli's bare except and
-    would silently bypass the ENTIRE validator (Gate-2 CRITICAL, run_be232a07)."""
+    would silently bypass the ENTIRE validator (adversarial review, CRITICAL)."""
     if not json_path.exists():
         return None
     try:
@@ -106,8 +106,7 @@ def check_brand_consistency(root: Path) -> dict:
     Returns WARN (NOT FAIL) on divergence — 'all tracks share one accent' is a
     brand-POLICY assumption, not a deterministic fact: a campaign may intentionally
     theme a poster differently from a deck. Hard-blocking that would be exactly the
-    false-positive this gate's design forbids (GUI17/PIT23; Gate-2 MEDIUM,
-    run_be232a07). The divergence is surfaced as a warning for human judgment; only
+    false-positive this gate's design forbids (Gate-2 MEDIUM). The divergence is surfaced as a warning for human judgment; only
     the truly deterministic track-set checks (8, 9) hard-fail."""
     tracks_dir = root / "tracks"
     if not tracks_dir.is_dir():

@@ -183,7 +183,7 @@ the exact Playwright probe — it asserts the stage scales.)
 ## Font notes
 
 - Each design system loads its own upstream font `<link>`. The 34 bundled design.md were
-  backfilled (run_c1dd1173) so their `<link>` now includes BOTH the CJK families AND every
+  backfilled so their `<link>` now includes BOTH the CJK families AND every
   Latin family their CSS names — no hand-adding needed for the shipped systems. (Backfill
   tool: the font-extractor script; re-run it if you add/edit a system.)
 - Upstream design.md frequently link ONLY the CJK families while naming Latin display fonts
@@ -195,4 +195,4 @@ the exact Playwright probe — it asserts the stage scales.)
   in a few templates); browsers ignore the invalid entry and fall through the stack — no action needed.
 - If true **offline** rendering is ever required, open a separate feature to bundle+subset
   the fonts (fontsource complete woff2 + rewrite @font-face). Do NOT bolt local fonts onto
-  this track piecemeal — it was deliberately reverted to CDN for font fidelity (run_68176c82).
+  this track piecemeal — it was deliberately reverted to CDN for font fidelity.

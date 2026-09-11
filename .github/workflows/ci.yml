@@ -43,7 +43,7 @@ jobs:
         working-directory: ./backend
         run: python ../scripts/smoke_import.py
 
-      - name: Lint SKILL.md metadata
+      - name: Lint skill corpus (metadata + no machine-local references)
         run: python scripts/lint_skills.py
 
       - name: Build BVT test list

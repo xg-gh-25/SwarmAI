@@ -325,9 +325,9 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state build
 
 ## Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "I can figure out the files as I build" | Missing one caller = surprise regression in BUILD. C020: extracted function + added new caller in one commit; missed 2 bugs only visible in the new calling context. File discovery BEFORE planning forces you to see ALL affected surfaces. | C020 |
-| "Boundaries are implicit — everyone knows not to touch X" | Implicit boundaries = silent drift. "Never" boundaries caught 3 unauthorized scope expansions in prior runs. If it's not written, it's not enforced. | Pipeline history |
-| "Acceptance criteria are the same as the requirement" | Requirements describe WHAT. ACs describe WHEN DONE (testable, binary, per-scenario). A requirement "add validation" has 5+ ACs (each invalid input × expected response). Without ACs, you build until you "feel done." | C009 |
-| "Test strategy is obvious — just test the happy path" | LL15: "Design doc 里每个 change X 必须有对应的 test." No test strategy in plan = untested edge cases in BUILD = bugs found in REVIEW = rework. Strategy upfront costs 2 minutes; rework costs 30. | LL15 |
+| Rationalization | Reality |
+|---|---|
+| "I can figure out the files as I build" | Missing one caller = surprise regression in BUILD. extracted function + added new caller in one commit; missed 2 bugs only visible in the new calling context. File discovery BEFORE planning forces you to see ALL affected surfaces. |
+| "Boundaries are implicit — everyone knows not to touch X" | Implicit boundaries = silent drift. "Never" boundaries caught 3 unauthorized scope expansions in prior runs. If it's not written, it's not enforced. |
+| "Acceptance criteria are the same as the requirement" | Requirements describe WHAT. ACs describe WHEN DONE (testable, binary, per-scenario). A requirement "add validation" has 5+ ACs (each invalid input × expected response). Without ACs, you build until you "feel done." |
+| "Test strategy is obvious — just test the happy path" | "Design doc 里每个 change X 必须有对应的 test." No test strategy in plan = untested edge cases in BUILD = bugs found in REVIEW = rework. Strategy upfront costs 2 minutes; rework costs 30. |

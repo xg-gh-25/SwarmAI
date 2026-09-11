@@ -6,15 +6,15 @@
 Layer 1 (AC tests you wrote) and declare "tests pass." Layers 2 and 3 catch
 the bugs YOUR tests can't — because you wrote both the code AND the tests.**
 
-| What you're thinking right now | Why it's wrong | Evidence |
-|------|------|------|
-| "My unit tests pass, that's sufficient" | Unit tests verify YOUR assumptions. Layer 2 catches collateral damage to code that imports yours. | C011: all unit tests green, feature broken |
-| "Dependency-scoped grep found 0 files" | Wrong grep pattern? Check TECH.md for import style. 0 results for non-trivial change = suspicious, not reassuring. | LL31: mock format ≠ production format |
-| "Import smoke is pointless for existing files" | Circular imports, missing deps, wrong relative paths — all invisible to unit tests that import individual functions. | C011: circular dep crashed real import |
-| "I'm running low on budget, skip Layer 3" | Layer 3 is ONE command per file, usually <10 seconds total. It costs less context than the sentence you used to rationalize skipping it. | O008: measure before optimizing |
-| "Tests passed in BUILD, why run again?" | BUILD tests ran BEFORE the refactor step. Post-refactor state may differ. Fresh run = fresh evidence. | SOUL P1: Verify, Don't Infer |
-| "Full suite would be better but takes too long" | NEVER run full suite (STEERING R9). Layers 1-3 ARE the scoped alternative. Skipping them means you have NO regression signal. | C013: full suite deadlocked |
-| "The fix was obvious, no need for WTF scoring" | Score EVERY fix. WTF gate is mechanical, not discretionary. "Obvious" fixes that touch 4+ files are not obvious. | C009 |
+| What you're thinking right now | Why it's wrong |
+|------|------|
+| "My unit tests pass, that's sufficient" | Unit tests verify YOUR assumptions. Layer 2 catches collateral damage to code that imports yours. |
+| "Dependency-scoped grep found 0 files" | Wrong grep pattern? Check TECH.md for import style. 0 results for non-trivial change = suspicious, not reassuring. |
+| "Import smoke is pointless for existing files" | Circular imports, missing deps, wrong relative paths — all invisible to unit tests that import individual functions. |
+| "I'm running low on budget, skip Layer 3" | Layer 3 is ONE command per file, usually <10 seconds total. It costs less context than the sentence you used to rationalize skipping it. |
+| "Tests passed in BUILD, why run again?" | BUILD tests ran BEFORE the refactor step. Post-refactor state may differ. Fresh run = fresh evidence — SOUL P1, verify rather than infer. |
+| "Full suite would be better but takes too long" | NEVER run full suite (STEERING R9) — it has deadlocked under pytest-xdist. Layers 1-3 ARE the scoped alternative; skipping them means you have NO regression signal. |
+| "The fix was obvious, no need for WTF scoring" | Score EVERY fix. WTF gate is mechanical, not discretionary. "Obvious" fixes that touch 4+ files are not obvious. |
 
 ---
 
@@ -105,7 +105,7 @@ no cheap load-check, record `"import_smoke": {"run": false, "reason": "<stack> h
 
 **Why this layer:** Catches wiring bugs (circular imports, missing dependencies,
 wrong relative paths) that unit tests miss because they import individual
-functions, not modules. C011 (Voice Mode) had code that passed all unit tests
+functions, not modules. One feature had code that passed all unit tests
 but crashed on real import because of a circular dependency.
 
 **On failure:** ImportError = wiring bug. Fix the import structure before
@@ -140,14 +140,12 @@ system through the actual boundary** the change crosses.
 
 **Per boundary kind, "drive the real system" means:**
 - *event-bus / ACT-SENSE* → mount the real provider + host + registry, `dispatchEvent`
-  the real `swarm:*` event, assert the surface opens (+ that its state is READ back).
-  (Canonical example: `overlayHostE2E.test.tsx`, run_567b107e — 7 surfaces × real
-  registry × real event; mutation = revert open-on-show → all RED.)
+  the real `swarm:*` event, assert the surface opens (+ that its state is READ back). Canonical example: `overlayHostE2E.test.tsx` — 7 surfaces × real registry × real event; mutation = revert open-on-show → all RED.)
 - *frontend↔backend contract* → assert the frontend table is DERIVED from (or bound by a
   test to) the backend SSOT, so a divergence is impossible/RED (e.g.
   `test_backend_allowlist_is_bound_to_leftnav_ssot`).
 - *data/schema migration* → run the real reader against a real writer's output shape
-  (O009: real production data shape, not a fixture that encodes your assumption).
+  (real production data shape, not a fixture that encodes your assumption).
 - *multi-subsystem shared path* → smoke EACH subsystem independently through the shared
   path before combining (R16: send 1 msg → stream → content persists on tab switch).
 
@@ -164,16 +162,16 @@ system through the actual boundary** the change crosses.
 
 ### Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation ≠ pass together. LL13: mock-based tests all passed but real DB had zero matching rows — function returned empty string in production. | LL13 |
-| "This fix is simple, skip the WTF score" | Score every fix. "Simple" fixes that touch 4 files are not simple. C009: 5 iterations on a "simple" hook because each fix revealed new scope. | C009 |
-| "I'll adjust the test expectation to match the new behavior" | Fix the CODE, not the test. Changing test expectations = changing the spec = go back to PLAN. Tests define CORRECT behavior; code must conform to them. | TDD principle |
-| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md "Known Issues." Never silently pass over a red test — it erodes the signal. Today's "pre-existing" is tomorrow's "we thought it was fine." | Pipeline design |
-| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. The 21st fix historically introduces more bugs than it solves (WTF score data). | WTF Gate |
-| "Tests are flaky, re-run until green" | Flaky = non-deterministic = real bug (race condition, shared state, time dependency). Fix the flake, don't re-roll the dice. A test that passes 9/10 times FAILS. | STEERING.md |
-| "All units pass, the migration is done — Layer 4 is overkill" | Units pass ONE side of a seam; a cross-boundary change breaks the SEAM, which no unit sees. run_fdeaead8: every unit green, the ACT/SENSE contract silently severed, caught by adversarial not E2E. If EVALUATE set `cross_boundary=true`, Layer 4 is mandatory. | run_fdeaead8 (M4) |
-| "I wrote a Layer-4 test and it's green" | Green ≠ non-vacuous. If it mocks the thing-under-change, or stays green when you revert the contract line, it's theater. Mutation-verify: revert the seam → it MUST go RED. | CLASS-A test-theater |
+| Rationalization | Reality |
+|---|---|
+| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation ≠ pass together. mock-based tests all passed but real DB had zero matching rows — function returned empty string in production. |
+| "This fix is simple, skip the WTF score" | Score every fix. "Simple" fixes that touch 4 files are not simple — one took 5 iterations because each fix revealed new scope. |
+| "I'll adjust the test expectation to match the new behavior" | Fix the CODE, not the test. Changing test expectations = changing the spec = go back to PLAN. Tests define CORRECT behavior; code must conform to them. |
+| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md "Known Issues." Never silently pass over a red test — it erodes the signal. Today's "pre-existing" is tomorrow's "we thought it was fine." |
+| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. The 21st fix historically introduces more bugs than it solves (WTF score data). |
+| "Tests are flaky, re-run until green" | Flaky = non-deterministic = real bug (race condition, shared state, time dependency). Fix the flake, don't re-roll the dice — STEERING is explicit that a test passing 9/10 times FAILS. |
+| "All units pass, the migration is done — Layer 4 is overkill" | Units pass ONE side of a seam; a cross-boundary change breaks the SEAM, which no unit sees. One delivery had every unit green while the ACT/SENSE contract was silently severed, caught by adversarial reviet E2E. If EVALUATE set `cross_boundary=true`, Layer 4 is mandatory. |
+| "I wrote a Layer-4 test and it's green" | Green ≠ non-vacuous. If it mocks the thing-under-change, or stays green when you revert the contract line, it's theater. Mutation-verify: revert the seam → it MUST go RED. |
 
 ### WTF Gate `[MUST]`
 
@@ -222,7 +220,7 @@ platform-specific imports).
 **The trap:** a compile check on ONE platform (`cargo check` on the dev Mac)
 passes while another target FAILS — e.g. a `#[cfg(target_os="macos")]` function
 referenced by an un-gated caller breaks the Windows build (E0425). The green
-local check hides it. This run (run_8a9de435) hit exactly this; adversarial
+local check hides it. This run hit exactly this; adversarial
 review caught the Windows break a macOS `cargo check` reported as clean (RP40).
 
 **Rule:** a single-platform compile success may NOT be reported as a fully-green

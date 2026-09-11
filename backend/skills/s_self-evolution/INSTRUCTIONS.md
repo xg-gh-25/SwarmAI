@@ -6,7 +6,7 @@
 > 改 skill = 配眼镜。改 SOUL = 治眼睛。
 >
 > Corrections 不是 "多学了一条知识" — 是 "改了一段系统代码"。
-> 每条 C001→C027 都是 OS patch，不是 data update。
+> 每一条 correction 都是 OS patch，不是 data update。
 
 ### Three-Layer Governance Model
 
@@ -248,8 +248,8 @@ Sub-threshold proposals (1-2x evidence, not yet 3x) live in EVOLUTION.md "Candid
 
 | ID | Proposed | Evidence | Bias | Count | Date |
 |----|----------|----------|------|-------|------|
-| GC01 | "Read target API before coding against it" | C027 | A | 1/3 | 2026-05-19 |
-| GC02 | "Never skip review for 'small' changes" | C025, C026 | A | 2/3 | 2026-05-19 |
+| <GC-id> | "Read target API before coding against it" | <correction-ref> | A | 1/3 | 2026-05-19 |
+| <GC-id> | "Never skip review for 'small' changes" | <correction-ref> | A | 2/3 | 2026-05-19 |
 ```
 
 When count reaches threshold → auto-trigger PROMOTE.

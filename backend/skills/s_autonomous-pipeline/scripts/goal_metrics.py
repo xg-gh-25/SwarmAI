@@ -8,7 +8,7 @@ historical trends.
 Usage:
     from scripts.goal_metrics import GoalMetrics
 
-    gm = GoalMetrics(run_dir=Path("Projects/SwarmAI/.artifacts/runs/run_abc123"))
+    gm = GoalMetrics(run_dir=Path("Projects/SwarmAI/.artifacts/runs/"))
     gm.track_goal_start(dod_criteria=[...])
     gm.track_cycle(cycle_num=1, progress_delta=0.33, ...)
     gm.track_goal_complete(status="success", ...)

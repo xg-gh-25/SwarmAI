@@ -196,7 +196,7 @@ Before writing the card, check for connections:
 2. **Existing Learned cards** — glob `Knowledge/Learned/` for related tags/domains. If this is a follow-up or counterpoint to a previous card, link it.
 3. **DDD docs** — if the content relates to an active project (SwarmAI, AIDLC), note the connection.
 
-Write connections in the Relevance section: `Validates KD06 (memory sovereignty). Extends 2026-04-18-memory-is-the-moat.md.`
+Write connections in the Relevance section: `Validates the memory-sovereignty thesis. Extends 2026-04-18-memory-is-the-moat.md.`
 
 **Why this matters:** Isolated cards = information hoarding. Connected cards = compounding knowledge. The cross-reference is what makes "learn" different from "bookmark."
 

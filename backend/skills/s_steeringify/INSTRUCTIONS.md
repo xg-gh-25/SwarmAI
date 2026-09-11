@@ -44,11 +44,11 @@ Show each proposal with context:
 ```
 📋 Steeringify found N rule proposals from recurring corrections:
 
-1. **Tool failure → exhaust alternatives** (C007, C012)
-   Confidence: 0.70 | ⚠️ Violation: rule exists but C012 re-raised the issue
+1. **Tool failure → exhaust alternatives**
+   Confidence: 0.70 | ⚠️ Violation: rule exists but a later correction re-raised the issue
    "ANY tool failure triggers a 3-attempt alternative search before reporting."
 
-2. **Verify before asserting architecture facts** (C005, C008, C010)
+2. **Verify before asserting architecture facts**
    Confidence: 0.85
    "Architecture topology questions MUST be verified against code."
 
@@ -76,7 +76,7 @@ count = write_approved_rules(approved, steering_path)
 
 ```markdown
 ### Tool failure → exhaust alternatives
-> Source: C007, C012 | Added: 2026-04-30 | Confidence: 0.85
+> Source: <correction ids> | Added: 2026-04-30 | Confidence: 0.85
 
 **ANY tool failure triggers a 3-attempt alternative search before reporting to the user.** When ANY tool or operation fails: (1) Try Bash/Python, (2) Try a different tool, (3) Try a workaround. Only after ALL alternatives exhausted, tell the user.
 ```

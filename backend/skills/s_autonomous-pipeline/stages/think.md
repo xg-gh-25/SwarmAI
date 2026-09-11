@@ -184,9 +184,9 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan 
 
 ## Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "I already know the best approach, skip alternatives" | Skipping alternatives means skipping the constraint that FORCES different designs. The "obvious" approach is often SPEED-optimized when the problem needs QUALITY or DELETION. One constraint you didn't consider = one class of failure you didn't prevent. | Pipeline design |
-| "Research wastes tokens, let me just build" | C024: skipped research, read descriptions instead of code, shipped CSS from instructional text without rendering examples. "Understanding > Delivery" — building without understanding = building garbage. | C024 |
-| "Only one approach exists — this is mechanical" | If truly mechanical, the evaluation scope should be "trivial" and the profile should be "trivial" (which skips THINK). If you're in THINK, the evaluation already determined multiple approaches are possible. Trust the profile. | Profile design |
-| "I'll research as I build" | Research in BUILD = discovery mid-construction = rework. Research is cheap (read + think). Rework is expensive (undo + redo + retest). Separate phases exist to separate costs. | C024, LL14 |
+| Rationalization | Reality |
+|---|---|
+| "I already know the best approach, skip alternatives" | Skipping alternatives means skipping the constraint that FORCES different designs. The "obvious" approach is often SPEED-optimized when the problem needs QUALITY or DELETION. One constraint you didn't consider = one class of failure you didn't prevent. |
+| "Research wastes tokens, let me just build" | skipped research, read descriptions instead of code, shipped CSS from instructional text without rendering examples. "Understanding > Delivery" — building without understanding = building garbage. |
+| "Only one approach exists — this is mechanical" | If truly mechanical, the evaluation scope should be "trivial" and the profile should be "trivial" (which skips THINK). If you're in THINK, the evaluation already determined multiple approaches are possible. Trust the profile. |
+| "I'll research as I build" | Research in BUILD = discovery mid-construction = rework. Research is cheap (read + think). Rework is expensive (undo + redo + retest). Separate phases exist to separate costs. |

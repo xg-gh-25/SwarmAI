@@ -183,7 +183,7 @@ def stitch_text(skeleton: str, payload: dict) -> str:
 
     Fails loud (ValueError) if the sidecar is the wrong shape, a referenced block is
     missing, a block value is not a string, or a block is never used — a silent
-    mismatch here would defeat the entire point of the tool (LL18).
+    mismatch here would defeat the entire point of the tool.
     """
     if not isinstance(payload, dict):
         raise ValueError(f"blocks sidecar must be a JSON object, got {type(payload).__name__}.")

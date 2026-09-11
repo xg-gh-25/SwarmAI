@@ -1,7 +1,7 @@
 """Tests for the html_deck track in s_pollinate.
 
-History: Plan B v4 (run_f721108a) originally bundled fonts LOCALLY (zero-network
-render). run_68176c82 REVERSED that to upstream CDN fonts — SwarmAI is online by
+History: Plan B v4 originally bundled fonts LOCALLY (zero-network
+render). A later change REVERSED that to upstream CDN fonts — SwarmAI is online by
 default, and the CDN carries the upstream font fidelity that local bundling
 degraded (true italic serif axis + individual CJK faces, not Noto substitutes).
 
@@ -187,7 +187,7 @@ def test_ac6_render_scale():
     assert transform not in ("none", "NONE", None), f"deck-stage did not scale: {transform}"
 
 
-# ---------- export-pdf.sh: deck-stage support + clickable links (run_8546727e) ----------
+# ---------- export-pdf.sh: deck-stage support + clickable links ----------
 
 def _export_script_text() -> str:
     return (DATA / "shared" / "export-pdf.sh").read_text(encoding="utf-8")
@@ -226,7 +226,7 @@ def test_export_pdf_self_validates():
     assert "<details>" in s or "details" in s, "no <details> collapse-region warning"
 
 
-# ---------- export-pdf.sh: advisory text-overlap check (run_ff9db326, Path A) ----------
+# ---------- export-pdf.sh: advisory text-overlap check(Path A) ----------
 # Implements the READ side of the data-om-validate contract that deck-stage.js:56
 # WRITES ('no_overflowing_text,no_overlapping_text,slide_sized_text') but nothing reads.
 # ADVISORY per INSTRUCTIONS.md:801 — warn, never hard-fail.
@@ -234,7 +234,7 @@ def test_export_pdf_self_validates():
 def test_export_pdf_reads_om_validate_contract():
     """The overlap probe MUST read the data-om-validate contract deck-stage.js writes,
     and honor the per-slide opt-out. Without this the check is not wired to the
-    already-declared contract (GUI08 write->read mismatch)."""
+    already-declared contract — a write/read mismatch."""
     s = _export_script_text()
     assert "data-om-validate" in s, \
         "overlap probe does not read data-om-validate — contract read side missing"

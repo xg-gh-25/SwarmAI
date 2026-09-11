@@ -131,7 +131,7 @@ Most requirements hit 1-2 theses, rarely all. Only report ALIGNS and CONTRADICTS
 - If pre-mortem reveals a scoring assumption was unverified → **reduce the specific dimension whose score relied on that assumption by 1** and recalculate ROI. (E.g., if Feasibility=4 assumed "existing pattern works" but pre-mortem shows it might not → Feasibility becomes 3.) If new ROI < 3.2 → DEFER
 - If all reasons are med/low with clear mitigations → GO confirmed
 
-**Why this exists:** EVALUATE has happy-path bias (LL09, 3 recurrences). Pre-mortem (Gary Klein) generates 30% more specific failure reasons than "argue against" because "imagine it failed" is concrete, "argue why not" is abstract. Same agent, same pass, one extra section — zero architecture change.
+**Why this exists:** EVALUATE has happy-path bias, seen three times. Pre-mortem (Gary Klein) generates 30% more specific failure reasons than "argue against" because "imagine it failed" is concrete, "argue why not" is abstract. Same agent, same pass, one extra section — zero architecture change.
 
 **Skip when:** ROI < 3.2 (already DEFER/REJECT — no need to argue against a NO).
 

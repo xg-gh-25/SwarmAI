@@ -1,4 +1,4 @@
-"""Tests for pipeline_pr default-branch resolution (run_66d5c01e de-SwarmAI-ize).
+"""Tests for pipeline_pr default-branch resolution(de-SwarmAI-ize).
 
 The PR creator must NOT assume the base branch is 'main' — a project on
 master/develop would get a PR against the wrong base. These tests pin
@@ -57,7 +57,7 @@ class TestGetDefaultBranch:
             assert pipeline_pr._get_default_branch() is None
 
     def test_symref_TIMEOUT_still_falls_through_to_fallback(self):
-        # REGRESSION (run_66d5c01e round-3): a transient symbolic-ref TimeoutExpired
+        # REGRESSION(round-3): a transient symbolic-ref TimeoutExpired
         # must NOT short-circuit to None — it must fall through to the common-name
         # fallback. Here symref times out, then origin/master verifies OK.
         def _side(*a, **k):

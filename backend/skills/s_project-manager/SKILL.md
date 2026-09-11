@@ -470,10 +470,10 @@ repo declares its own delivery contract here (decision 7).
 Run the `bind` subcommand — it loads the project's `bindings.yaml`, loops EVERY
 binding, clones each git-clonable repo OUTSIDE the git-tracked workspace, and builds
 its codeIntel graph. Do NOT hand-assemble a `python -c` loop — this is the invokable
-entrypoint (run_8a3e7ebf; `bind_repo` used to be reachable only via a prose recipe):
+entrypoint(`bind_repo` used to be reachable only via a prose recipe):
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && source backend/.venv/bin/activate
+cd "$SWARM_REPO_ROOT" && source backend/.venv/bin/activate   # or cd to your checkout
 python backend/scripts/artifact_cli.py bind --project AIDLC
 ```
 
@@ -542,7 +542,7 @@ binding via a `sync_back` map `{repo-relative-doc → SwarmWS-relative-target}`;
 no-op. Call the helper — never diff by hand:
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && source backend/.venv/bin/activate
+cd "$SWARM_REPO_ROOT" && source backend/.venv/bin/activate   # or cd to your checkout
 python3 -c "
 from pathlib import Path
 from core.ddd_bindings import load_bindings, sync_back

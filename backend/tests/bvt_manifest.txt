@@ -47,6 +47,7 @@ test_file_change_classifier.py
 test_frontmatter.py
 test_golden_case_stamp.py
 test_judgment_classifier.py
+test_lint_skills_body.py
 test_load_amplifier_caps.py
 test_mcp_response_tier.py
 test_memory_decay.py

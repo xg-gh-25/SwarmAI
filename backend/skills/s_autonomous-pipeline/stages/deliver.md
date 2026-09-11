@@ -29,19 +29,19 @@
 
 **STOP. Before you proceed past step 2, confirm:** Will you spawn adversarial
 sub-agents in step 3? If the answer is anything other than "yes, spawning now"
-— you are rationalizing. Read C011, C021, C025 below.
+— you are rationalizing. Read the rows below.
 
 **This gate has been skipped 5 times in 6 weeks.** Each time the agent said
 "tests pass, code is simple, I'm confident." Each time the feature was broken.
 
-| What you're thinking | Why it's wrong | Source |
-|-----|------|------|
-| "Tests pass, adversarial review is unnecessary" | C011: 57 tests green, 10/10 confidence → feature 100% non-functional | C011 |
-| "Code is simple, I already reviewed it" | C025: 3 files, 2 functions, "simple" → user caught it | C025 |
-| "Validator schema is strict, I'll force past it" | C021: bypassing the gate = bypassing the requirement | C021 |
-| "I'll do a quick self-review instead" | Self-review found 0 findings. Adversarial found 5 (2 HIGH). Same session, same code. | run_bd42b58f |
-| "Meta-review is redundant — adversarial already checked" | Adversarial reviews CODE. Meta reviews PROCESS (operational blind spots). They catch different classes of bugs. | Pipeline design |
-| "Convergence loop passed in 1 iteration — must be clean" | Fast convergence on non-trivial changes may mean gates are too lenient, not code too clean. Extra scrutiny, not less. | GC11 |
+| What you're thinking | Why it's wrong |
+|-----|------|
+| "Tests pass, adversarial review is unnecessary" | 57 tests green, 10/10 confidence → feature 100% non-functional |
+| "Code is simple, I already reviewed it" | 3 files, 2 functions, "simple" → user caught it |
+| "Validator schema is strict, I'll force past it" | bypassing the gate = bypassing the requirement |
+| "I'll do a quick self-review instead" | Self-review found 0 findings. Adversarial found 5, two of them HIGH. Same session, same code. |
+| "Meta-review is redundant — adversarial already checked" | Adversarial reviews CODE. Meta reviews PROCESS (operational blind spots). They catch different classes of bugs. |
+| "Convergence loop passed in 1 iteration — must be clean" | Fast convergence on non-trivial changes may mean gates are too lenient, not code too clean. Extra scrutiny, not less. |
 
 **[GATE·cli] If you skip this step, the pipeline WILL be mechanically blocked** by Check 9
 (depth validation) which requires `adversarial_review.profile_tier == "full"` for
@@ -53,7 +53,7 @@ full/bugfix profiles. There is no way to close the pipeline without it.
 
 No numeric score. Binary: PUSH-READY or NOT-PUSH-READY.
 
-Numeric confidence (C011: 10/10 with 100% broken code) measured process compliance,
+Numeric confidence (10/10 with 100% broken code) measured process compliance,
 not code correctness. A number between "push" and "don't push" creates false
 gradients — there is no meaningful difference between 7/10 and 8/10.
 
@@ -178,7 +178,7 @@ COMPLETION AUDIT — Verify before declaring done.
 2.5. INDEPENDENT AC VERIFICATION (Pre-flight for Adversarial)
    NOTE: TEST stage confirmed tests PASS (execution). This step confirms tests
    VERIFY THE RIGHT THING (code review). Passing ≠ correct verification —
-   a test can pass while testing the wrong behavior (C011: 57 green tests,
+   a test can pass while testing the wrong behavior (57 green tests,
    feature 100% broken because tests validated implementation, not spec).
 
    For each AC → test mapping claimed in Step 2:
@@ -218,7 +218,7 @@ COMPLETION AUDIT — Verify before declaring done.
    }
    ```
 
-   **Why this exists:** C011 (Voice Mode) passed all stages with 10/10 confidence
+   **Why this exists:** one feature passed all stages with 10/10 confidence
    and 57 green tests. Feature was 100% non-functional. Builder claimed tests
    verified the spec — they didn't. This step separates "builder claims evidence"
    from "verifier confirms evidence." Same principle as adversarial review
@@ -279,8 +279,8 @@ specialists with isolated context produce deeper, more confident findings.
 (Adopted from gstack's Review Army pattern — verified in production.)
 
 **Why mandatory:** 12+ pipeline runs in IMPROVEMENT.md show reviews find critical
-bugs AFTER confidence was high: voice input 100% non-functional (C011), 3 CRITICAL
-subprocess bugs (run_c2881d2f), 4 hallucinated false-positive criticals (IMPROVEMENT.md).
+bugs AFTER confidence was high: voice input 100% non-functional, 3 CRITICAL
+subprocess bugs, 4 hallucinated false-positive criticals (IMPROVEMENT.md).
 Confidence gating solves false positives; specialists solve false negatives.
 
 **⚠️ [GATE·cli] MECHANICALLY ENFORCED:** `run-update --status completed` validates the deliver
@@ -383,7 +383,7 @@ git ls-files --others --exclude-standard
 >   can ever cover → DENY on a typo. If a commit is refused for a path you do not
 >   recognise, check your own command line before re-running the review.
 >
-> Real instance (run_fbf97252): a new test file sat unstaged through the first
+> Real instance: a new test file sat unstaged through the first
 > review pass and was therefore both unread and uncovered. The pass that finally
 > covered it ran 48 mutations and proved **6 tests vacuous** (9 across the whole
 > run) — the worst being one where the sole writer of a data-loss guard could be
@@ -425,7 +425,7 @@ If override triggers: dispatch ALL applicable specialists per the dispatch rules
 above, not just the profile's subset. A 382-line refactor in "bugfix" profile
 is not a "bugfix" in adversarial review terms — it's a cross-module migration
 with concurrency, import order, and dead-code risks that only full specialist
-coverage catches. This gate exists because run_12f19e0e (2026-05-16) used lite
+coverage catches. This gate exists because a run used lite
 tier on a 382-line migration; PE review caught a HIGH (shell variable scope)
 that full adversarial would have found.
 
@@ -537,8 +537,8 @@ A padded weak finding is worse than silence — it trains the reviewer to ignore
 findings. Do not invent a finding to "look thorough."
 
 **But ZERO findings is valid ONLY after you have Read every changed file and can name
-what you checked.** A bare `NO FINDINGS` with no evidence of reading is the C011 /
-run_bd42b58f failure signature ("self-review found 0, adversarial found 5, same code"),
+what you checked.** A bare `NO FINDINGS` with no evidence of reading is the
+the self-review-vs-adversarial failure signature (self-review found 0, adversarial found 5, same code),
 NOT a clean result. Zero-is-valid is a noise brake, never a skip license — if you have
 not read the files, you have not earned "no findings."
 
@@ -547,8 +547,7 @@ Before you report ANY finding, it must pass ALL 3 questions (not-all-YES → do 
 2. Will it actually trigger in production (not a hypothetical edge outside the requirement)?
    **EXCEPTION — shared mutable state:** if the finding touches a variable/flag/field read
    by 2+ sites, REPORT it even if prod-trigger is uncertain. Blast-radius, not your
-   confidence about one call site, decides — let Step 3c.1 adjudicate (run_fd4d756b: a
-   conf-4 shared-state finding dropped here → real regression shipped). Do NOT pre-empt 3c.1.
+   confidence about one call site, decides — let Step 3c.1 adjudicate — a conf-4 shared-state finding dropped here shipped a real regression. Do NOT pre-empt 3c.1.
 3. Do you have a concrete `file:line` + a reproducing input / exploit?
 
 Do NOT report (negative list):
@@ -590,7 +589,7 @@ tool use" / "does not want to take this action"):
 - **ZERO specialists spawned (all rejected)** → this is NOT "partial results,"
   it is a BLOCKED gate. Follow INSTRUCTIONS.md Rule 23: retry the spawn batch
   EXACTLY ONCE → still all-rejected → **CHECKPOINT, reason="gate_spawn_blocked"**.
-  Resume re-enters on a fresh subprocess (the PIT01 poisoning clears across the
+  Resume re-enters on a fresh subprocess (the poisoning clears across the
   process boundary).
 
 **NEVER** treat an all-rejected spawn as license to self-review — that is the
@@ -613,14 +612,14 @@ After all specialist sub-agents complete:
 
 **3c. Apply confidence gates (Unified Confidence Rubric).**
 
-> **ORDER IS LOAD-BEARING (§11.3 restraint reframe, run_b3404953):** WHEN a finding
+> **ORDER IS LOAD-BEARING (the §11.3 restraint reframe):** WHEN a finding
 > touches shared mutable state (≥2 readers, grep-derived), the Shared-State Override
 > (3c.1) is evaluated first and BLOCKS tier-based suppression — such a finding is NEVER
 > suppressed by the confidence tiers below, regardless of how low its confidence. (A
 > finding that touches no shared symbol has nothing for 3c.1 to evaluate; the tiers apply
 > directly.) This is why the drop is NOT code-enforced as a blind `confidence < 5` filter:
 > the shared-state status is grep-derived (not a finding field), so a mechanical drop would
-> re-automate the run_fd4d756b regression (a conf-4 shared-state finding wrongly suppressed
+> re-automate the regression it was built for (a conf-4 shared-state finding wrongly suppressed
 > → real kill-healthy-subprocess bug shipped).
 
 Three tiers (a finding cleared by 3c.1, or not shared-state):
@@ -655,7 +654,7 @@ checked the same single consumer you'd check to dismiss it.
 4. If all readers verified safe → record the per-site verification in the
    delivery artifact (`shared_state_audit`), THEN suppression is allowed.
 
-**Why this exists (run_fd4d756b, 2026-05-30):** adversarial review flagged a
+**Why this exists(2026-05-30):** adversarial review flagged a
 LOW conf-4 finding on `_content_emitted`. It was suppressed/rejected after
 checking only ONE of its 3 consumers (the one that confirmed dismissal). The
 2nd consumer (zombie detection: `streaming_dur<2s and not _content_emitted →
@@ -750,9 +749,9 @@ previously manual (user had to ask "从PE角度看下").
 
 **Why this exists:** Pipeline REVIEW + adversarial consistently catch code
 correctness bugs but miss operational/scaling/deployment-context bugs:
-- run_d73239fe: O(n) no-op scan in a per-session hook (RP30)
-- run_bded2f47: sys.executable in daemon context (environment assumption)
-- run_91a6fb7e: cross-language JSON space after colon (format assumption)
+- an O(n) no-op scan in a per-session hook (RP30)
+- sys.executable in a daemon context (environment assumption)
+- a cross-language JSON space after colon (format assumption)
 
 These are NOT code bugs — the code is correct in dev. They're
 **deployment context mismatches** that only surface in production.
@@ -892,7 +891,7 @@ produce user-facing output (full, bugfix). Skip for research/docs.
 Adversarial review validates code quality. Meta-review validates operational
 correctness. Neither asks: **"Would a real user actually benefit from this?"**
 
-This probe was born from run_bbe3f167 (AI-Ready-Repo Engine M1, 2026-06-01):
+This probe was born from a documentation-engine run (2026-06-01):
 pipeline declared PUSH-READY with 9 green tests, adversarial clean, all ACs
 pass — but the output was a README paraphrase. No code was read. The TECH.md
 had no file citations. code-intel.json edges were fabricated. A user receiving
@@ -1248,7 +1247,7 @@ Pipeline scope:  code quality達標 → PUSH-READY → auto local-commit → REF
 User scope:      git push → CI green → PR (optional)
 ```
 
-**Auto local-commit (run_76932250) — MANDATORY, right after the PUSH-READY gate:**
+**Auto local-commit — MANDATORY, right after the PUSH-READY gate:**
 
 ```bash
 python backend/scripts/artifact_cli.py run-commit --project <PROJECT> --run-id <RUN_ID>
@@ -1267,7 +1266,7 @@ push_ready or if `files_touched` is empty, and WARNS (listing them) if the worki
 tree has changes this run didn't track — so a forgotten record surfaces loudly
 instead of silently committing the wrong set.
 
-**COMPLETE-stage Canvas review (run_608a6217) — stand on GIT, two channels.** At
+**COMPLETE-stage Canvas review — stand on GIT, two channels.** At
 COMPLETE the agent surfaces "what this run changed" to Canvas. The change truth is
 **git**, not the process that wrote each file — `run-surface-changes` runs `git status`
 on the SwarmWS tree + every bound source worktree and classifies each changed path via
@@ -1283,15 +1282,14 @@ python backend/scripts/artifact_cli.py run-surface-changes
 1. **content + knowledge (DDD / design docs / MEMORY / KNOWLEDGE)** — the IMMEDIATE
    regime: these surfaced as rail rows the moment they were written (per-change,
    auto-popped if live). `run-surface-changes` just confirms them; no explicit action
-   needed (XG: DDD/memory/knowledge 变动 走正常 workflow,有改动就 trigger). NOTE
-   (run_b8ea6d5c): the canonical context files under `.context/` (MEMORY/EVOLUTION/
+   needed (XG: DDD/memory/knowledge 变动 走正常 workflow,有改动就 trigger). NOTE: the canonical context files under `.context/` (MEMORY/EVOLUTION/
    KNOWLEDGE/PROJECTS) and a run's `REPORT.md` under `.artifacts/runs/<id>/` are on a
    NARROW allowlist that lets them escape the bookkeeping/dot-dir/gitignore drop, so
    they too surface immediately.
-2. **source (code)** — the finish BATCH (run_b8ea6d5c): NOT popped per-file mid-run;
+2. **source (code)** — the finish BATCH: NOT popped per-file mid-run;
    at COMPLETE, surfaced as a batch of PR-review rail ROWS (one per committed file,
    each openable as that file's changes — a local-PR experience). There is NO
-   `LOCAL_PR.md` (removed run_b8ea6d5c — the aggregated doc had no review value). After
+   `LOCAL_PR.md`(removed — the aggregated doc had no review value). After
    `run-commit` records the commits, call the `surface_run_outputs` tool ONCE with this
    run_id:
 
@@ -1415,11 +1413,11 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state refle
 
 ## Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "Tests pass, adversarial review is unnecessary" | C011: 57 tests green, 10/10 confidence → feature 100% non-functional. C021: skipped adversarial when validator was strict. Pipeline confidence measures PROCESS compliance, not CODE correctness. Adversarial review from fresh context catches what self-review structurally cannot. | C011, C021 |
-| "Validator schema is strict — I'll force past it" | Strictness IS the quality gate working as designed. Bypassing the validator = bypassing the requirement, not fixing a bug. C021: forced past validator → shipped incomplete. | C021 |
-| "Code is simple, 1-2 files, no new API surface" | C025: "simple" task (3 files, 2 new functions) skipped pipeline entirely. Agent said "I know this code well, tests pass." User caught it. Subjective complexity estimates are unreliable — that's why we have mechanical gates. | C025 |
-| "I already reviewed this multiple times during BUILD" | Repetition ≠ fresh perspective. You validated your own assumptions N times. Adversarial review spawns a NEW agent with ZERO builder bias. That agent reads the code cold and asks "what's wrong?" — you can't do that to your own work. | LL09 |
-| "Convergence loop passed quickly — we're good" | Fast convergence (1 iteration) may mean the gates are too easy OR the agent is rationalizing green across all 6 layers. Quick convergence on a non-trivial change deserves extra scrutiny, not less. | Pipeline design |
-| "Meta-review is redundant after adversarial" | Adversarial reviews CODE. Meta-review reviews PROCESS ("what did the pipeline miss?"). They catch different classes: adversarial catches bugs in what was built; meta catches gaps in what WASN'T built. | Pipeline design |
+| Rationalization | Reality |
+|---|---|
+| "Tests pass, adversarial review is unnecessary" | 57 tests green, 10/10 confidence → feature 100% non-functional. skipped adversarial when validator was strict. Pipeline confidence measures PROCESS compliance, not CODE correctness. Adversarial review from fresh context catches what self-review structurally cannot. |
+| "Validator schema is strict — I'll force past it" | Strictness IS the quality gate working as designed. Bypassing the validator = bypassing the requirement, not fixing a bug. forced past validator → shipped incomplete. |
+| "Code is simple, 1-2 files, no new API surface" | "simple" task (3 files, 2 new functions) skipped pipeline entirely. Agent said "I know this code well, tests pass." User caught it. Subjective complexity estimates are unreliable — that's why we have mechanical gates. |
+| "I already reviewed this multiple times during BUILD" | Repetition ≠ fresh perspective. You validated your own assumptions N times. Adversarial review spawns a NEW agent with ZERO builder bias. That agent reads the code cold and asks "what's wrong?" — you can't do that to your own work. |
+| "Convergence loop passed quickly — we're good" | Fast convergence (1 iteration) may mean the gates are too easy OR the agent is rationalizing green across all 6 layers. Quick convergence on a non-trivial change deserves extra scrutiny, not less. |
+| "Meta-review is redundant after adversarial" | Adversarial reviews CODE. Meta-review reviews PROCESS ("what did the pipeline miss?"). They catch different classes: adversarial catches bugs in what was built; meta catches gaps in what WASN'T built. |

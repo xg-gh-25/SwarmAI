@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Token estimator — delegates to the CANONICAL ContextDirectoryLoader.estimate_tokens.
 
-run_3f25a73a: this REPLACES the old `wc -w * 1.8` shell heuristic, which
+This REPLACES the old `wc -w * 1.8` shell heuristic, which
 counted a whole CJK paragraph as ~1 word (massive under-count) and hardcoded a
 200000-token window. It calls the SAME calibrated estimator the prompt assembly
 uses (CJK 1.1 tok/char, Latin 2.2 tok/word — measured against the real opus-4-8
@@ -55,10 +55,17 @@ def _load_canonical_estimator():
     candidates.extend(here.parents)
     candidates.extend(Path.cwd().resolve().parents)
     candidates.append(Path.cwd().resolve())
-    # 3. Known source-repo install path (last-resort default for this machine's
-    #    deployment topology — the daemon bundle is frozen and ships no .py source,
-    #    so a subprocess estimator must reach the source checkout).
-    candidates.append(Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"))
+    # 3. Last resort — a source checkout under the user's home. Needed because the
+    #    projected copy lives outside the repo (nothing above it holds backend/) and
+    #    the daemon bundle is frozen with no .py source, so a subprocess estimator
+    #    still has to reach a checkout. Derived from the home directory rather than
+    #    written out, so it holds for any account; set SWARM_REPO_ROOT to point at a
+    #    checkout kept somewhere else.
+    home = Path.home()
+    candidates.extend(
+        home / rel
+        for rel in ("Desktop/SwarmAI-Workspace/swarmai", "SwarmAI-Workspace/swarmai", "swarmai")
+    )
 
     seen = set()
     for base in candidates:

@@ -33,13 +33,13 @@ All commands operate on the real `library_mounts` registry + the same
 Judge the kind from the directory (code if it holds parseable source, else docs),
 register it, and index:
 ```bash
-python3 {SKILL_DIR}/scripts/library.py mount --path /Users/gawan/Desktop/AI-Native/some-repo --scope SwarmAI
+python3 {SKILL_DIR}/scripts/library.py mount --path ~/Desktop/AI-Native/some-repo --scope SwarmAI
 ```
 - **code dir** → builds a per-mount symbol graph (index in place). Done — symbols
   are now recallable.
 - **docs dir** → chunks every UTF-8 text file straight into the shared Knowledge
   FTS5 (same engine as `Knowledge/` itself), so recall reaches it IMMEDIATELY.
-  Binaries are skipped. No briefing step — mounting IS indexing (run_3f837bdd).
+  Binaries are skipped. No briefing step — mounting IS indexing.
 
 ### search — see what recall would retrieve
 ```bash

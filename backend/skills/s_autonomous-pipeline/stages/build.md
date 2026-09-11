@@ -10,16 +10,16 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
 current thinking, you are rationalizing. CLASS A has 11 occurrences, 0 self-
 corrections. You will not be the first to self-correct.**
 
-| What you're thinking right now | Why it's wrong | Evidence |
-|------|------|------|
-| "This is just a config change / one-liner" | C025: 3 files, 2 functions, "simple" → user caught 2 bugs | C025 |
-| "I'll write tests after to verify" | Tests written after pass immediately — proves nothing. You never see them catch the bug. | C011 |
-| "I already know the implementation works" | C011: 57 tests green, 10/10 confidence → feature 100% non-functional in production | C011 |
-| "TDD is overkill for this change" | 5/5 HIGH adversarial findings in "trivial" session fixes came from untested code (2026-05-26) | IMPROVEMENT.md 2026-05-26 |
-| "Let me get the code working first, then add tests" | Code written before tests? Delete it. You WILL rationalize test coverage to match existing code. | C009 |
-| "The pipeline profile is trivial, so less rigor" | Trivial profile still includes BUILD+REVIEW+TEST. Profile selects STAGES, not RIGOR within stages. | C036 |
-| "I'll do a quick prototype then formalize" | Prototypes never get formalized. The "quick" version ships. Write the test first. | Observed pattern |
-| "The plan says X, but I see a better approach mid-implementation" | Deviate from Change Spec = deviate from the spec. You haven't reviewed implications for other ACs. Use Micro-Replan Trigger (Step 2) or go back to PLAN. | Step 2 design |
+| What you're thinking right now | Why it's wrong |
+|------|------|
+| "This is just a config change / one-liner" | 3 files, 2 functions, "simple" → user caught 2 bugs |
+| "I'll write tests after to verify" | Tests written after pass immediately — proves nothing. You never see them catch the bug. |
+| "I already know the implementation works" | 57 tests green, 10/10 confidence → feature 100% non-functional in production |
+| "TDD is overkill for this change" | 5/5 HIGH adversarial findings in "trivial" session fixes came from untested code (2026-05-26) |
+| "Let me get the code working first, then add tests" | Code written before tests? Delete it. You WILL rationalize test coverage to match existing code. |
+| "The pipeline profile is trivial, so less rigor" | Trivial profile still includes BUILD+REVIEW+TEST. Profile selects STAGES, not RIGOR within stages. |
+| "I'll do a quick prototype then formalize" | Prototypes never get formalized. The "quick" version ships. Write the test first. |
+| "The plan says X, but I see a better approach mid-implementation" | Deviate from Change Spec = deviate from the spec. You haven't reviewed implications for other ACs. Use Micro-Replan Trigger (Step 2) or go back to PLAN. |
 
 **If you wrote code before a test: DELETE IT. Start over from RED.**
 
@@ -29,8 +29,8 @@ corrections. You will not be the first to self-correct.**
 
 Write the test FIRST. Watch it FAIL. Then write implementation. If you wrote code
 before a test exists for it, you are not doing TDD — you are doing "code then
-rationalize tests." C009: 5 iterations because tests came after code. C011: 57
-tests passed but tested the wrong thing. **The test defines what "correct" means.
+rationalize tests." One recorded case took 5 iterations because the tests came
+after the code; another had 57 tests pass while testing the wrong thing. **The test defines what "correct" means.
 Code without a pre-existing test has no definition of correct.**
 
 ## Anti-Pattern: Horizontal Slices (BLOCKING) `[MUST]`
@@ -292,7 +292,7 @@ Overall: [PASS — proceed to BUILD | WARN — proceed with noted concerns | BLO
 > tool use" / "does not want to take this action"), apply INSTRUCTIONS.md Rule 23:
 > retry the spawn EXACTLY ONCE → still rejected → **CHECKPOINT,
 > reason="gate_spawn_blocked"**, do NOT proceed to BUILD. Resume re-enters on a
-> fresh subprocess (clears the PIT01 poisoning). NEVER self-review the plan in
+> fresh subprocess (clears the poisoning). NEVER self-review the plan in
 > place of the Skeptic+SSA spawn — an unverified BUILD direction is exactly what
 > Gate 1 exists to prevent. (Unlike Gate 2, Gate 1 has no code-enforced evidence
 > field; this instruction is the guard, and a blocked Gate 1 is recoverable at
@@ -401,7 +401,7 @@ API CHECK:
 - GraphStore.bulk_replace() → DOES NOT EXIST ✗ (use clear() + bulk_insert())
 ```
 
-**Why this is blocking:** run_e07816af shipped with `parse_result.nodes` (AttributeError)
+**Why this is blocking:** a run shipped with `parse_result.nodes` (AttributeError)
 and `graph.bulk_replace()` (doesn't exist) — both would have been caught by a 10-second
 Read. Unit tests mocked the boundary and passed. E2E force-run failed. The class of bugs
 where "I assumed the API shape from memory" is structurally undetectable by unit tests
@@ -427,7 +427,7 @@ VERIFY: <how you confirmed — man page, empirical test, or citation>
 - File atomicity — rename vs write, O_CREAT|O_EXCL
 - Process death detection — PID reuse window, waitpid vs kill(0)
 
-**Why this exists:** run_edcfd0e5 (this session) used `lock_path.unlink()` to
+**Why this exists:** a run used `lock_path.unlink()` to
 "break" a stale flock. The ASSUMPTION was "delete file = release lock." WRONG:
 flock is bound to the inode/fd, not the path. Deleting the path creates a new
 inode — two processes can then both hold "the lock" on different inodes. A
@@ -521,7 +521,7 @@ PATH SYMMETRY for: <operation, e.g., "acquire evolution lock">
 - Multiple `return success` points — earlier returns skip later cleanup/setup
 - Fallback paths — the fallback achieves the goal differently but may skip side effects
 
-**Why this exists:** run_edcfd0e5 had two `flock_exclusive_nb()` calls reaching the
+**Why this exists:** a run had two `flock_exclusive_nb()` calls reaching the
 same "lock acquired" state. The first wrote the PID. The second (retry after stale
 lock break) didn't. PE review caught it — TDD didn't because the test only exercised
 the stale-break path's existence check, not its postconditions.
@@ -678,7 +678,7 @@ For EACH function whose body was changed in this changeset:
 | Caller can send extreme-but-valid input that produces unexpected result | **FIX** — add guard or adjust formula |
 | Comment references wrong line/function | **FIX** — correct the reference |
 
-**Why this exists (2026-05-25, adversarial review run_6d052913):** 4 findings in a
+**Why this exists(2026-05-25, adversarial review):** 4 findings in a
 constants-only change — docstring still showed old formula (L190 vs code L235),
 test comment referenced old value, priority skill with 1 correction reached HIGH
 threshold (caller sends min_examples=3). Builder's momentum bias ("I know what I
@@ -727,7 +727,7 @@ within ±50 lines, or change is adding a new function (nothing pre-existing to g
       ```
       This catches the EXACT class of bugs that unit tests with mocks
       structurally cannot: wrong method name, wrong return type, missing
-      attribute. run_e07816af: `graph.bulk_replace()` → AttributeError,
+      attribute. A real instance: `graph.bulk_replace()` → AttributeError,
       `parse_result.nodes` → AttributeError. Both would have been caught
       by a 1-second in-process import smoke. Mock-based TDD CONFIRMS your
       assumptions; import smoke VERIFIES them against reality.
@@ -789,7 +789,7 @@ within ±50 lines, or change is adding a new function (nothing pre-existing to g
 
 ### Resource Lifecycle Verification
 
-Added after run_c2881d2f: 3 CRITICAL subprocess bugs survived 14 green unit tests + 4 smoke tests.
+Added after a run where 3 CRITICAL subprocess bugs survived 14 green unit tests + 4 smoke tests.
 
 For each new resource acquisition in the changeset, verify BOTH the success path AND the failure/timeout path release the resource:
 
@@ -850,15 +850,15 @@ timeout." Test the resource, not the happy path around it.
     - Each finding -- **fix immediately** (these are always real bugs)
     - Update tests to cover the discovered path
 
-    **Why this exists:** run_ec4a73ff shipped with 26 TDD tests, 10/10
+    **Why this exists:** a run shipped with 26 TDD tests, 10/10
     confidence, and 8 pipeline stages passed. User-path trace found 2
     CRITICAL bugs in 5 minutes: (1) `_on_error` fired before health
     monitor -- gateway destroyed adapter -- `_ws_fail_count` reset --
     polling never activated, (2) `conversations.history` messages lack
     `channel` field -- `external_chat_id=""` -- routing broken. Both
     invisible to unit tests because mocks didn't match real API data
-    and no test crossed the adapter/gateway boundary. This is LL04's
-    third recurrence: engineering-complete != user-complete.
+    and no test crossed the adapter/gateway boundary. This is the third
+    recurrence of one class: engineering-complete != user-complete.
 
 ## Step 6: PROBE -- send a real request through the wire (catch format bugs)
 
@@ -1021,7 +1021,7 @@ SDD CHECK:
 - Patterns the agent has already verified in this session
 - User explicitly says "just do it" or "skip verification"
 
-**Why this exists:** LL08 found `asyncio.get_event_loop()` (deprecated in 3.12+)
+**Why this exists:** A recorded case found `asyncio.get_event_loop()` (deprecated in 3.12+)
 and `date('now')` UTC mismatch — both passed pipeline because no check verified
 against current docs. Training data goes stale; official docs don't.
 
@@ -1103,10 +1103,10 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
 
 ## Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "Tests pass, implementation is complete" | C011: 57 tests green, 10/10 pipeline confidence, feature 100% non-functional. Tests verify what you WROTE works, not what you MISSED. State machine had 6 declared states but only 4 wired. Tests only exercised the 4. | C011 |
-| "TDD is overkill for this simple change" | C009: "simple" pytest hook took 5 iterations because tests came after code. Each iteration the user challenged the approach. Final solution was 55 lines; first attempt 130+ with 3 bugs. TDD catches wrong assumptions BEFORE they compound. | C009 |
-| "I'll write tests after — I need to explore first" | Tests written after validate IMPLEMENTATION, not BEHAVIOR. They pass by construction (you match the test to the code), catching nothing. TDD forces you to define behavior before you know the implementation — that's the entire point. | Osmani TDD |
-| "This is a refactor — behavior doesn't change, no new tests needed" | STEERING.md: "Extract ≠ Extend" (C020). If you extracted a function AND added a new caller, the new calling context has different invariants. At minimum: verify existing tests still exercise the extracted function. | C020 |
-| "Smoke tests are redundant with unit tests" | Unit tests verify logic. Smoke tests verify WIRING (does the function get called from the real entry point with real data?). C011: all units green, but the real entry point never triggered the code path. | C011 |
+| Rationalization | Reality |
+|---|---|
+| "Tests pass, implementation is complete" | 57 tests green, 10/10 pipeline confidence, feature 100% non-functional. Tests verify what you WROTE works, not what you MISSED. State machine had 6 declared states but only 4 wired. Tests only exercised the 4. |
+| "TDD is overkill for this simple change" | "simple" pytest hook took 5 iterations because tests came after code. Each iteration the user challenged the approach. Final solution was 55 lines; first attempt 130+ with 3 bugs. TDD catches wrong assumptions BEFORE they compound. |
+| "I'll write tests after — I need to explore first" | Tests written after validate IMPLEMENTATION, not BEHAVIOR. They pass by construction (you match the test to the code), catching nothing. TDD forces you to define behavior before you know the implementation — that's the entire point. |
+| "This is a refactor — behavior doesn't change, no new tests needed" | STEERING.md: "Extract ≠ Extend". If you extracted a function AND added a new caller, the new calling context has different invariants. At minimum: verify existing tests still exercise the extracted function. |
+| "Smoke tests are redundant with unit tests" | Unit tests verify logic. Smoke tests verify WIRING (does the function get called from the real entry point with real data?). all units green, but the real entry point never triggered the code path. |

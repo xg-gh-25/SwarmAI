@@ -9,7 +9,7 @@ states is caught by the correctness specialist; this specialist catches incomple
 or impossible transitions, unreachable states, and stuck states.
 
 Proven pattern: RP13 violations (unreachable states, untriggered transitions),
-COE06 (stale subprocess), COE07 (streaming loss on tab switch), spinner-hang
+a stale subprocess, streaming loss on tab switch, spinner-hang
 (3 occurrences of same stuck-state bug).
 
 Output: JSON objects, one finding per line.

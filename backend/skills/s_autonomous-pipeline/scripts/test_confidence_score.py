@@ -1,4 +1,4 @@
-"""Tests for confidence_score language classification (AC5, run_66d5c01e).
+"""Tests for confidence_score language classification(AC5).
 
 Purpose: the ext-set heuristics in `_has_backend_files` / `_has_frontend_files`
 must classify the common languages a NON-SwarmAI project may use, not just

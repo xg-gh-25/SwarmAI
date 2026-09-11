@@ -260,7 +260,7 @@ Any match → FAIL → fix before proceeding.
 
 When restyling existing content (e.g., "reskin D2 → D5"), the output MUST preserve
 ≥90% of the source content's structural sections. Content truncation during style
-changes is the #1 delegation failure mode (C024, 2026-05-16: all 4 posters were
+changes is the #1 delegation failure mode (2026-05-16: all 4 posters were
 truncated by 40-60% during D5 reskin).
 
 **Verification procedure (after reskin):**

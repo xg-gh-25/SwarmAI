@@ -24,7 +24,7 @@ INSTRUCTIONS.md Step 6 — read both.
 > committed run-scoped source and you skip surfacing (step 2/3), `run-update --status
 > completed` BLOCKS (see the "GATED" note below). A knowledge/docs-only run is exempt.
 
-> **⛔ ORDER PREREQUISITE (run_14e560ed): `run-report` MUST run BEFORE `surface_run_outputs`.**
+> **⛔ ORDER PREREQUISITE: `run-report` MUST run BEFORE `surface_run_outputs`.**
 > `surface_run_outputs` appends the run's `REPORT.md` as the LAST OUTPUTS row (kind=knowledge)
 > so the Canvas auto-SELECTS + renders the report — but ONLY if `REPORT.md` already exists on
 > disk at surface time (`build_surface_events` is exists-guarded: no file → the report row is
@@ -56,14 +56,12 @@ python backend/scripts/artifact_cli.py run-surface-changes
    surfaced IMMEDIATELY as they were written (per-change rail rows — no action needed;
    `run-surface-changes` just confirms them). This is the immediate-trigger regime.
 2. **source** (code) → surface the run's committed coding files as a PR-review BATCH of
-   rail rows (run_b8ea6d5c). Call the `surface_run_outputs` tool ONCE with this run_id;
+   rail rows. Call the `surface_run_outputs` tool ONCE with this run_id;
    the backend emits one OUTPUTS row per committed file (kind=source-final), each
    openable as that file's changes (a local-PR review experience):
    ```
    ui_action-style tool:  surface_run_outputs   run_id=<run_id>
-   ```
-   (Mid-run coding edits are NOT displayed; only this finish batch. There is NO
-   LOCAL_PR.md — removed run_b8ea6d5c; the per-file rows ARE the deliverable.)
+   ```(Mid-run coding edits are NOT displayed; only this finish batch. There is NO LOCAL_PR.md — removed ; the per-file rows ARE the deliverable.)
 3. **Record it** — `run-update --stage-json '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`.
 
 **GATED:** if this run committed run-scoped source (commits ∩ files_touched) and you

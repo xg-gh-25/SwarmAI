@@ -139,7 +139,7 @@ based on the evaluation's scope classification:
 > not a quality stage, so it is not counted in the 9. So a profile's stage list shows
 > the orchestration steps (≤8); the 3 gates (Gate 0 in EVALUATE, Gate 1 after PLAN,
 > Gate 2 in DELIVER) ride *within* them. `★ Gate 1`/`★ Gate 2` are wired into the
-> ④/⑧ landmarks, GS021, and tests — do not renumber them; `★ Gate 0` is the
+> ④/⑧ landmarks, the golden-set trajectory case, and tests — do not renumber them; `★ Gate 0` is the
 > EVALUATE-stage landmark.
 
 ### Profile Selection Principle
@@ -156,7 +156,7 @@ mere verifiability:**
   predict how many changes upfront.
 - ⚠️ "A command exits 0 when done" is NOT a goal signal by itself — *almost every*
   change can be wrapped in an exit-0 check. That over-broad heuristic is what
-  mis-routed a 3-line fix to goal (the heaviest profile, run_ae689ce0). The
+  mis-routed a 3-line fix to goal(the heaviest profile). The
   question is whether you must ITERATE, not whether the result is checkable.
 
 **When to use Full (the default for a bounded change):**
@@ -259,7 +259,7 @@ before you spend tokens executing against them.
 
 This preamble takes 30 seconds. It prevents 30 minutes of rework. The loop is
 not bureaucracy — it is the cheapest insurance against "tests pass but feature
-doesn't work" (C011 pattern).
+doesn't work" (same pattern).
 
 ---
 
@@ -412,9 +412,8 @@ and fill your payload FROM its template — it returns the full shape: the `requ
 required objects must carry (deliver's `adversarial_review.{profile_tier,findings}`, review's dict-shaped
 `litmus_gate`/`integration_trace`/`runtime_patterns`, build's `tdd.{green_pass,smoke_tests}`,
 goal_cycle's `adversarial_review.{findings}`), and a ready `template`. Do NOT hand-assemble a payload from
-memory and let the publish validator reject it — that is a send→reject→refix round-trip PER stage (O028:
-run the tool, don't hand-craft what automation already emits). This note is at the decision point on
-purpose (O003) — the fuller recovery guidance in § Artifact Operations Reference is the FALLBACK, not the
+memory and let the publish validator reject it — that is a send→reject→refix round-trip PER stage (run the tool, don't hand-craft what automation already emits). This note is at the decision point on
+purpose — the fuller recovery guidance in § Artifact Operations Reference is the FALLBACK, not the
 first move.
 
 ### 3d. Classify Decisions
@@ -466,7 +465,7 @@ This checks 8 invariants automatically:
 ```
 
 > ⚠️ **`checks_passed` is NOT a quality score — read `errors`/`warnings`, not the count
-> (F4, run_57929039).** The ADVISORY checks (4 Decision-logged, 5 Budget-recorded, and
+> (F4).** The ADVISORY checks (4 Decision-logged, 5 Budget-recorded, and
 > the other WARN-severity checks) **always credit `checks_passed` whether they pass or
 > fail** — they only ever append a WARNING, never reduce the count. So
 > `checks_passed == checks_total` is the NORMAL state even when advisory checks flagged
@@ -622,12 +621,12 @@ finding marked `resolved: true`, do NOT take the flag's word for it — confirm 
 fix is actually on disk. The artifact's `resolved` field records intent ("I
 applied the fix"), not state ("the fix is on disk"). These diverge whenever a fix
 is reverted between application and delivery — e.g. an external `git stash pop`, a
-parallel-session commit, or a linter undo. run_b5592983 shipped a delivery
+parallel-session commit, or a linter undo. One delivery shipped
 artifact marked `resolved: true` for a hardening fix that a mid-pipeline git
 conflict had silently reverted; the function had no test coverage, so nothing else
 caught it. PE review found it by reading the file.
 
-**Now code-enforced (Run B, run_c5935199) — [GATE·validator].** Attach a structured `disk_check` to
+**Now code-enforced — [GATE·validator].** Attach a structured `disk_check` to
 each resolved finding and the validator (`_verify_findings_on_disk`, called at BOTH
 the publish-time and completion-time gates, R27) greps it for you — a BLOCK the
 model cannot rationalize past:
@@ -641,8 +640,7 @@ model cannot rationalize past:
 ```
 
 - `disk_check.file` MUST be an **ABSOLUTE** source path. Findings reference the
-  SOURCE repo, but the validator's workspace root is `~/.swarm-ai/SwarmWS` (the
-  C040 source-vs-workspace split) — a relative path would be resolved against the
+  SOURCE repo, but the validator's workspace root is `~/.swarm-ai/SwarmWS` (the source-vs-workspace split) — a relative path would be resolved against the
   wrong tree and false-block. A relative/empty path is a WARN, not a check.
 - `must_contain` — for a fix that ADDED code: string ABSENT from the readable file
   → **BLOCK** (fix reverted). Use the durable line the fix introduced.
@@ -655,7 +653,7 @@ model cannot rationalize past:
   one); LOW/unstructured findings are silent (no WARN-storm).
 
 Cost: seconds per finding; the failure it prevents is "the record said done, the
-disk said otherwise" (C011 class). This is distinct from the free-text `path`/`line`
+disk said otherwise" (same class). This is distinct from the free-text `path`/`line`
 in the `finding` string — `disk_check` is the machine-verified locus.
 
 **L5 mechanism (Constitution Pattern):**
@@ -989,7 +987,7 @@ STAGE-BOUNDARY human-escalation (L2 Judgment)
 a human is attending the tab. `channel=direct` + header-present is the ONLY state
 that proves that. Anything else (channel auto-answer, headless hang, unknown) →
 checkpoint. Omitting this guard and just saying "L2 → ask in-band" would regress the
-background-job path (Gate-1 finding, run_48bd39cb).
+background-job path (a plan-gate finding).
 
 ### Mid-stage rule (build.md / deliver.md exits)
 
@@ -1013,7 +1011,7 @@ Escalation is scarce; every raise breaks the user's flow. Default to deciding.
 **Worked counter-example:** "I have a leaning toward retry-with-backoff but want to
 confirm" is **Taste, not L2** — there is a sensible default (your leaning), and it is
 reversible. Decide it, disclose one line, do NOT call AskUserQuestion. Raising it
-would be transferring your judgment cost onto the user (C039 mirror: 判断 ≠ 甩给人).
+would be transferring your judgment cost onto the user (mirror: 判断 ≠ 甩给人).
 Disclosure is ONE line, never a paragraph — a wall of decision notes is its own kind
 of flow-pollution.
 
@@ -1026,7 +1024,7 @@ of flow-pollution.
 **NEVER checkpoint based on "feeling" or "intuition" about context usage.**
 Before every checkpoint, you MUST run: (the `cmd_run_checkpoint` CLI command HARD-BLOCKS a
 checkpoint via `sys.exit(2)` when `should_checkpoint=false` + no true-trigger + no `--force`,
-and force-blocks a confabulation-denylist reason — see SELF/EVOLUTION C040. Code-enforced by
+and force-blocks a confabulation-denylist reason. Code-enforced by
 the CLI, not a PreToolUse hook, not prose.)
 ```bash
 python backend/scripts/artifact_cli.py run-budget --project <PROJECT> --run-id <RUN_ID>
@@ -1357,7 +1355,7 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     - Gate verdicts: `gate1_verdict`/`gate1_checks` (BUILD), adversarial
       findings summary (DELIVER)
     
-    **Why this exists:** run_d6cdd758 REPORT.md was an empty stub because
+    **Why this exists:** a REPORT.md shipped as an empty stub because
     stage-json had no metrics. The report is auto-generated from run.json —
     garbage in = garbage out. The chat showed "198 tests pass, 2 files +58/-4"
     but none of that was in run.json. Never again.
@@ -1400,8 +1398,7 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     **Spawn REJECTION is fail-closed (gate_spawn_blocked).** Distinct from
     "infeasible" above: the harness/tool layer can REJECT an Agent-tool spawn
     mid-turn ("The user doesn't want to proceed with this tool use" / "does not
-    want to take this action"). This is a transient tool-layer signal (PIT01:
-    a prior `interrupt()` poisons the warm subprocess), NOT a structural ban on
+    want to take this action"). This is a transient tool-layer signal (a prior `interrupt()` poisons the warm subprocess), NOT a structural ban on
     spawning, and it is INVISIBLE to the backend (zero records in daemon.log —
     only the orchestrating agent sees it as a tool_result). Required behavior —
     a strict decision tree, no deviation:
@@ -1419,7 +1416,7 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     myself" is the CLASS A bypass (R1/STEERING#13) — it is the exact thing this
     gate exists to prevent. There is no "review it myself" branch in the tree.
 
-    **Why retry-once and not a retry loop:** STEERING #1 + commit `d32c3e9b`/PIT03
+    **Why retry-once and not a retry loop:** STEERING #1 and a recorded pitfall
     — an in-turn retry LOOP on a poisoned subprocess loops harmfully (it reuses
     the same poisoned process). The ONLY safe retry crosses a checkpoint→resume
     process boundary. One fresh in-turn attempt handles the benign-flake case;
@@ -1442,15 +1439,14 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     eliminates the honor-system gap where `spawned=true` was declared without
     actual Agent tool invocation.
 
-    **Why this exists:** run_d6cdd758 and run_1c94f115 declared `spawned=true`
+    **Why this exists:** two runs declared `spawned=true`
     without Agent tool invocation. Single-field `spawned` check is trivially
-    bypassable. Two-field enforcement + GS021 trajectory = two-layer gate.
+    bypassable. Two-field enforcement plus the golden-set trajectory case = two-layer gate.
 
-    **Detection:** Golden set trajectory case GS021 verifies Agent tool appears
+    **Detection:** a golden-set trajectory case verifies the Agent tool appears
     in the execution trace. Validator enforces evidence field at completion.
 
-24. **[GATE·validator+cli] Per-stage REQUIRED fields — the single reference (corrected to validator ground
-    truth, run_57929039/F1).** Two enforcement layers exist and used to disagree with
+24. **[GATE·validator+cli] Per-stage REQUIRED fields — the single reference(corrected to validator ground truth, /F1).** Two enforcement layers exist and used to disagree with
     this doc — the fields below are what `pipeline_validator.STAGE_SCHEMAS` /
     `STAGE_DEPTH` ACTUALLY require (source of truth), not an aspirational list.
     (REQUIRED-column fields BLOCK at publish [validator]; the FLAT completion fields in
@@ -1511,7 +1507,7 @@ publish  --project <P> --run-id <RUN_ID> --type <T> --producer s_autonomous-pipe
 #   🚨 ALWAYS pass --run-id <RUN_ID> on a --stage publish. Without it, the auto-record
 #   target is resolved by "newest active run project-wide" — and with 2+ concurrent
 #   pipelines in the same project it would record into a SIBLING session's run
-#   (run_3caef1d3 contamination). As of that fix, a --run-id-less publish with 2+
+#   (contamination). As of that fix, a --run-id-less publish with 2+
 #   active runs FAILS CLOSED (stderr error + exit 3) rather than guess — so omitting
 #   --run-id will HALT your publish in a multi-run workspace. The RUN_ID is the one
 #   run-create returned; it's already in scope (you use it for run-update/run-budget).

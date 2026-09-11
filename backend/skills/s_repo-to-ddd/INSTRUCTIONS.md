@@ -742,8 +742,8 @@ from ai_ready_helpers import blind_spot_scan, render_blind_spots_md
 doc = json.loads((Path(output_path) / ".ai-context" / "code-intel.json").read_text())
 scan = blind_spot_scan(doc)                       # {total_risky, documented, blind, clean, blind_spots}
 # TITLE ARG = the name of THIS unit. Single-repo path → project_name. In the §4.9
-# monorepo fan-out → package.name (NOT project_name — else every package's doc is
-# titled with the repo name; Gate-2 MED, run_d7b78923). The FILE is already per-package
+# monorepo fan-out → package.name (NOT project_name — else every package's doc
+# is titled with the repo name; adversarial review, MEDIUM). The FILE is already per-package
 # because output_path is the per-package dir inside the fan-out loop.
 md = render_blind_spots_md(scan, unit_name)        # unit_name = project_name | package.name
 (Path(output_path) / ".ai-context" / "BLIND-SPOTS.md").write_text(md)
@@ -756,7 +756,7 @@ Rules (load-bearing):
   (inside its per-package dir); there is NO global/merged BLIND-SPOTS.md.
 - **REPORT-ONLY, never a gate.** `blind_spot_scan` is deterministic (keys off real
   risk_areas/hot_zones, not an LLM negative assertion) and explicitly NOT fail-closed
-  (the gate version was deferred as C042). Do NOT BLOCK generation on blind spots — they
+  (the gate version was deferred as over-reach). Do NOT BLOCK generation on blind spots — they
   are SME-documentation candidates, surfaced honestly.
 - **Zero blind spots is a valid, STATED outcome** — `render_blind_spots_md` emits an
   explicit "no reverse-coverage blind spots" doc, never an empty file.

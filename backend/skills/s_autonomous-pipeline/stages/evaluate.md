@@ -43,7 +43,7 @@ Once you have FILLED the WHO/WHAT/WHY/WHEN and noted assumptions above, **re-sca
 THAT output** (and the acceptance criteria you're about to write) for residual
 ambiguity. This is one self-answer round, not a loop and not a user interview.
 
-**The philosophy (this run's design conviction — run_932c0991):** the Socratic
+**The philosophy (the design conviction behind this stage):** the Socratic
 method in an AUTONOMOUS pipeline means interrogating the *requirement and your own
 framing*, NOT "asking the user more questions". This is the **Understanding Gate's
 "refute your claim" discipline shifted LEFT** to the requirement-clarification
@@ -106,7 +106,7 @@ work type; the gate itself is universal.
 **The problem this prevents:** the hard part is FRAMING — and it happens at
 EVALUATE, before any code. A confident-but-wrong frame sails through
 THINK/PLAN/BUILD and is only caught at the Gate-2 adversarial (full pipeline cost)
-or by an external reviewer. This is NOT bug-specific: run_6adee7d5 framed a
+or by an external reviewer. This is NOT bug-specific: one run framed a
 **feature** change as "frontend ignores [DONE]" — but `chat.ts:276` *already*
 treated `[DONE]` as authoritative, so the "fix" was a **no-op**. The understanding
 of the existing system was wrong, and a bug-only gate would never have caught it.
@@ -162,9 +162,9 @@ the other side of the wall.
 > Working-Backwards rigor rides on `work_type=greenfield` without being its own profile.
 
 > **⚠️ `migration_class` — MANDATORY Gate-0 block for a class-migration requirement
-> (run_1d3df9e6, AC9/AC11).** A goal run that migrates a *class* (all callers of a
+> (AC9/AC11).** A goal run that migrates a *class* (all callers of a
 > chokepoint / all siblings of a type) across cycles has a blind spot no per-cycle
-> adversarial can see: a class member NO cycle touches is never in any diff. run_0d60e04e
+> adversarial can see: a class member NO cycle touches is never in any diff. One run
 > shipped the `decisions` write path ungated for exactly this reason. The
 > class-completeness gate (goal_cycle Final Quality Gate step 2.5) closes it — but ONLY if
 > the run declares a `migration_class`.
@@ -172,7 +172,7 @@ the other side of the wall.
 > **Gate-0 rule `[GATE·validator]` (`_check_migration_class` + `check_migration_class.py`, publish-time BLOCK):** if the requirement contains a
 > migration keyword — **migrate / unify / consolidate / de-dup / "route … all" /
 > "gate … all" / "every … through" / "single … for all"** — the evaluation artifact MUST
-> include a `migration_class` block. Opt-in was the C036 escape hatch: an agent with an
+> include a `migration_class` block. Opt-in was the escape hatch: an agent with an
 > incomplete mental model simply omits it → the gate no-ops → the exact miss ships. Making
 > it mandatory-on-keyword removes that hatch. A keyword-free requirement needs no block
 > (the gate no-ops, zero false-positive).
@@ -283,7 +283,7 @@ greenfield feature), run a 5-minute E2E audit of that subsystem:
 This turns a "fix X" requirement into "fix X + harden the neighborhood."
 The audit typically finds 3-10× more gaps than the original requirement.
 
-**Why this exists:** Hive run_d326c6ae fixed 5 specific bugs (H1-H5). A 15-minute
+**Why this exists:** a Hive run fixed 5 specific bugs. A 15-minute
 post-fix E2E audit found 15 MORE structural gaps (G1-G15) in the same subsystem.
 Pipeline never would have found them because it only reviewed the diff. The audit
 cost 15 minutes; fixing the gaps individually over time would have cost 15 hours.
@@ -321,19 +321,19 @@ a pure-logic function (inputs→outputs, no seam), a docs-only edit, a single-fi
 value, or a cosmetic/style change. **Do NOT inflate the classification** — if you cannot
 name a SPECIFIC boundary kind from the table above with a file:line, it is `false`.
 Marking everything "cross-boundary" re-creates the ceremony tax this gate exists to
-avoid (the C042 "build a mechanism for every case" over-reach).
+avoid (the "build a mechanism for every case" over-reach).
 
 **⚠️ The `false` branch is NOT a free pass — it requires a NEGATIVE ATTESTATION.** The
 self-exemption temptation here is the same one the Understanding Gate faces ("this is
 obviously fine, skip it"), and it fires hardest on exactly the run most likely to break
-a seam — a migration where "every unit passes" (the run_fdeaead8 setup). So `false` is
+a seam — a migration where "every unit passes"(the setup). So `false` is
 not "leave the field blank"; you MUST record `ruled_out`: a one-line statement that you
 checked the 6 kinds and none fire, naming what the change touches. A `false` with no
 `ruled_out` is an INVALID EVALUATE artifact (an unjustified skip), not an exempt one —
 REVIEW check 15 rejects it. This forces the classification to be a *decision on record*,
 not a silent default.
 
-**Why this exists (provenance — read it, it's the whole point):** run_fdeaead8 (M4,
+**Why this exists (read the reasoning — it's the whole point):** one migration run (M4,
 overlay re-architecture) migrated 4 surfaces off the legacy `useExclusiveOverlay`
 window-event bus onto a new host. **Every unit test passed.** But the migration silently
 severed the agent's proprioception contract on BOTH halves — the `swarm:show-<id>` ACT
@@ -402,7 +402,7 @@ the pipeline may be working from stale assumptions.
 ```json
 {
   "drift_detection": {
-    "last_pipeline": "run_abc123",
+    "last_pipeline": "<pipeline id>",
     "code_commits_since": 7,
     "design_doc_commits_since": 0,
     "verdict": "DRIFT_WARNING"
@@ -473,8 +473,8 @@ Output `entries_scanned: 0, matches_found: 0` and proceed. The check is
 satisfied (nothing to match against). Do NOT skip or error.
 
 **Why this exists:** IMPROVEMENT.md accumulated 40+ failure entries over 3 months.
-Without active cross-referencing, the same patterns recur (COE03: big-bang refactor,
-C023: 3x daemon hang from same root cause). The check costs 30 seconds of reading;
+Without active cross-referencing, the same patterns recur (big-bang refactor,
+3x daemon hang from same root cause). The check costs 30 seconds of reading;
 re-discovering a failure costs hours.
 
 ### Profile Selection (Decision Tree)
@@ -517,12 +517,12 @@ digraph profile_selection {
 **Evaluate each condition sequentially.** The first YES determines the profile.
 If all conditions are NO, default to FULL.
 
-> **⚠️ ORDER MATTERS — the SIZE/shape gates come BEFORE goal (fixed run_c236e4b1).**
+> **⚠️ ORDER MATTERS — the SIZE/shape gates come BEFORE goal(fixed).**
 > The old tree asked "can 'done' be verified by a shell command (exit 0)?" FIRST and
 > routed any YES to goal. But *almost every* code change has a test that exits 0, so
 > that catch-all sent even a 3-line fix to **goal — the heaviest profile** (loops
 > build+test per cycle). That is exactly the mis-pick that cost a 3-stale-test fix a
-> full goal run (run_ae689ce0, profile=goal). Goal is now the LAST gate before FULL,
+> full goal run(profile=goal). Goal is now the LAST gate before FULL,
 > and requires a genuinely *iterative* target — not mere test-verifiability.
 
 **Goal indicators (ALL of goal require iteration-toward-a-moving-target — a passing
@@ -768,9 +768,9 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 
 ## Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "This is obviously a GO, skip the full scoring" | "Obvious" tasks have conflicted with non-goals (3x), duplicated prior failed work (2x), and been mis-scoped as trivial when they were standard. Full scoring takes 30 seconds. | Pipeline history |
-| "Scope is trivial — I know this pattern" | Scope determines profile (full/trivial/bugfix). Wrong scope = wrong quality gates applied downstream. A 3-file, 2-function change was called "trivial" → skipped adversarial review → shipped broken (C025). | C025 |
-| "The requirement is clear enough, skip clarification" | Vague requirements scored as GO produce under-specified acceptance criteria. The pipeline builds something that passes but misses the real need. 10 minutes clarifying saves 2 hours building wrong. | Pipeline design |
-| "DDD docs are stale, skip consistency check" | Stale DDD docs = stale constraints. If you skip the check, you may violate a non-goal or repeat a failed pattern. The check surfaces this; skipping hides it. | IMPROVEMENT.md |
+| Rationalization | Reality |
+|---|---|
+| "This is obviously a GO, skip the full scoring" | "Obvious" tasks have conflicted with non-goals (3x), duplicated prior failed work (2x), and been mis-scoped as trivial when they were standard. Full scoring takes 30 seconds. |
+| "Scope is trivial — I know this pattern" | Scope determines profile (full/trivial/bugfix). Wrong scope = wrong quality gates applied downstream. A 3-file, 2-function change was called "trivial" → skipped adversarial review → shipped broken. |
+| "The requirement is clear enough, skip clarification" | Vague requirements scored as GO produce under-specified acceptance criteria. The pipeline builds something that passes but misses the real need. 10 minutes clarifying saves 2 hours building wrong. |
+| "DDD docs are stale, skip consistency check" | Stale DDD docs = stale constraints. If you skip the check, you may violate a non-goal or repeat a failed pattern. The check surfaces this; skipping hides it. |

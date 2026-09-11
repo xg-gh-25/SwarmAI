@@ -155,6 +155,6 @@ The user may ask for specific subsets:
 
 ## Notes
 
-- **Pagination:** GitHub API returns max 30 items per page. For full failure count, may need `--limit 30` or multiple pages. (LL20: paginated fetch required for accurate counts)
+- **Pagination:** GitHub API returns max 30 items per page. For full failure count, may need `--limit 30` or multiple pages. (paginated fetch required for accurate counts)
 - **Rate limits:** gh CLI handles auth automatically. If rate-limited, wait and retry.
 - **Cross-platform failures:** SwarmAI CI runs on Ubuntu. macOS-only features (fcntl, launchd, Tauri) may fail there. This is expected — check if the failure is platform-appropriate before flagging.

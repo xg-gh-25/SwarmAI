@@ -195,7 +195,7 @@ Do NOT convert HTML→PDF with Chrome's CLI print flag. It is **not reliable** a
   Chrome's headless print pipeline fails inside `print_render_frame_helper.cc:2268
   "Printing failed."` — **while the process still exits 0 and writes no file.**
 - Because `exit=0` looks like success, this triggers a retry-the-same-command loop.
-  It cost a prior session ~15 attempts (run_8debb0fe, 2026-07-08) before limping to
+  It cost a prior session ~15 attempts(2026-07-08) before limping to
   a result by splitting the page + stitching with pdfunite.
 
 `html2pdf.py` uses **Playwright** (Chromium via the DevTools `printToPDF` protocol,

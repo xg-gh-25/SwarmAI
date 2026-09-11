@@ -308,7 +308,7 @@ def _is_negated(user_lower: str, signal: str, match_pos: int) -> bool:
 # governing a web target is genuine PPT→web-deck intent. This regex encodes that
 # adjacency; it also covers the one-word "webpage" spelling variant. Everything
 # NOT matching (topic mentions, destinations like "send deck to web team") keeps
-# the PPTX "deck" track. (Gate-2 run_32392299: substring lists mis-fire both ways;
+# the PPTX "deck" track. (Adversarial review: substring lists mis-fire both ways;
 # verb-anchoring is the correct layer.)
 _WEB_CONVERT_VERB = r"(?:convert|turn|make|render|export|publish|host|rebuild|redo|recreate|remake|change)"
 _WEB_TARGET = (
@@ -316,8 +316,8 @@ _WEB_TARGET = (
     r"|html(?:\s+(?:deck|page|slides?|version)s?)?)"  # bare "html" OR "html deck/page/…"
     # ...but NOT when immediately followed by a person/org noun — "to a web page
     # TEAM/group/vendor/owner/ops" is a DESTINATION (send it to that group), not a
-    # conversion target. (Gate-2 run_32392299: "make a deck for the demo to a web
-    # page team" is a destination despite the valid conversion-shaped prefix.)
+    # conversion target. Adversarial review: "make a deck for the demo to a web
+    # page team" is a destination despite the valid conversion-shaped prefix.
     r"(?!\s+(?:team|teams|group|groups|vendor|vendors|owner|owners|ops|dept|"
     r"department|people|folks|guys|person|contact|admin|admins)\b)"
 )
@@ -397,8 +397,7 @@ def _object_is_clean_noun_phrase(obj: str) -> bool:
     NOTE: this is a fast-path CONFIRM-and-skip heuristic (INSTRUCTIONS.md:47-53) —
     the agent shows the detected format and the user can add/narrow, and a miss
     falls through to full discovery. So exotic ungrammatical inputs failing either
-    way are user-correctable, not silent. (Gate-2 run_32392299 iter-6: positive NP
-    grammar replaces the leaky denylist — closes both over- and under-match.)"""
+    way are user-correctable, not silent.(Gate-2 iter-6: positive NP grammar replaces the leaky denylist — closes both over- and under-match.)"""
     if obj is None:
         return True
     s = obj.strip()

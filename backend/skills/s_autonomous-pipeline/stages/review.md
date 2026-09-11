@@ -5,15 +5,15 @@
 **Read this table BEFORE deciding how to review. The thought "I already reviewed
 this during BUILD" is the single most common CLASS A rationalization.**
 
-| What you're thinking right now | Why it's wrong | Evidence |
-|------|------|------|
-| "I already reviewed during BUILD, I know it's correct" | You WROTE it. You're re-reading your own assumptions, not reviewing. C011: builder rated 10/10, feature 100% broken. | C011 |
-| "Tests pass, so the code is correct" | Tests verify declared behavior. Review catches undeclared behavior: missing error paths, wrong conventions, integration wiring. | C029 |
-| "This is a small change, full review is overkill" | C025: 3 files, "simple" → 2 HIGH findings. Small changes have the HIGHEST skip rate and the HIGHEST bug density per line. | C025 |
-| "I'll just do a quick self-review" | Self-review found 0. Adversarial found 5 (2 HIGH). Same code, same session. Your confidence is anti-correlated with bug presence. | run_bd42b58f |
-| "The changeset is only 1-2 files, no need for sub-agents" | Integration trace and RP checklist are mechanical — they don't need sub-agents. But they DO need to run. Size doesn't exempt process. | C030 |
-| "I'm running low on context/budget, skip to DELIVER" | CHECKPOINT instead. A skipped REVIEW means DELIVER's adversarial is your ONLY safety net — single point of failure. | STEERING R11 |
-| "This finding is valid but I'll fix it in a follow-up" | There is no follow-up. This pipeline run ends at DELIVER. A "deferred" finding is a shipped bug. Fix now or escalate. | Pipeline design |
+| What you're thinking right now | Why it's wrong |
+|------|------|
+| "I already reviewed during BUILD, I know it's correct" | You WROTE it. You're re-reading your own assumptions, not reviewing. builder rated 10/10, feature 100% broken. |
+| "Tests pass, so the code is correct" | Tests verify declared behavior. Review catches undeclared behavior: missing error paths, wrong conventions, integration wiring. |
+| "This is a small change, full review is overkill" | 3 files, "simple" → 2 HIGH findings. Small changes have the HIGHEST skip rate and the HIGHEST bug density per line. |
+| "I'll just do a quick self-review" | Self-review found 0. Adversarial found 5 (2 HIGH). Same code, same session. Your confidence is anti-correlated with bug presence. |
+| "The changeset is only 1-2 files, no need for sub-agents" | Integration trace and RP checklist are mechanical — they don't need sub-agents. But they DO need to run. Size doesn't exempt process. |
+| "I'm running low on context/budget, skip to DELIVER" | CHECKPOINT instead (STEERING R11). A skipped REVIEW means DELIVER's adversarial is your ONLY safety net — single point of failure. |
+| "This finding is valid but I'll fix it in a follow-up" | There is no follow-up. This pipeline run ends at DELIVER. A "deferred" finding is a shipped bug. Fix now or escalate. |
 
 ---
 
@@ -35,7 +35,7 @@ You wrote this code. You cannot objectively review it. "I already looked at it
 during BUILD" is not a review — it's re-reading your own assumptions. REVIEW
 requires: integration trace (real wiring check), runtime patterns RP1-RP81
 (mechanical checklist), and for >3 files: parallel sub-agents with ISOLATED
-context. C011: builder rated 10/10, feature was 100% broken.
+context. builder rated 10/10, feature was 100% broken.
 
 ## Litmus Pre-Gate (< 2 min, no tools, no sub-agent) `[GATE·validator]`
 
@@ -124,8 +124,7 @@ criteria from PLAN — nothing more, nothing less. It runs SERIAL and BLOCKING b
 - Finding "AC #3 not implemented" is cheaper than finding "AC #3 has a race condition"
 
 **Why a FRESH sub-agent, not inline self-assessment:** You wrote this code in
-BUILD. Your confidence from BUILD pollutes spec compliance judgment (C011:
-builder rated 10/10 on 100% broken code). A fresh sub-agent has ZERO BUILD
+BUILD. Your confidence from BUILD pollutes spec compliance judgment (builder rated 10/10 on 100% broken code). A fresh sub-agent has ZERO BUILD
 context — it only sees the diff + ACs. This isolation is the entire value.
 
 **Mechanical enforcement:** The spec_compliance artifact MUST include
@@ -187,7 +186,7 @@ They are not duplicates — they operate at different precision levels.
 | trivial | Always | Trivial still has ACs — verify them |
 | goal | Per-cycle | Each goal cycle's mini-BUILD has ACs to verify |
 
-**No profile skips spec review.** This is the lesson of C036 — profile downgrades
+**No profile skips spec review.** The lesson is that profile downgrades
 must not bypass quality gates.
 
 ### Artifact Recording
@@ -411,7 +410,7 @@ For every new function, parameter, config key, or `.get("key")` call in the chan
 | New config key in DEFAULT_CONFIG | Trace: `DEFAULT_CONFIG` -- `config_manager.get()` -- consumer | `memory_progressive_disclosure` read by prompt_builder |
 | `agent_config.get("key")` or `config.get("key")` | Verify key has a setter | `_first_user_message` -- no setter |
 | New CLI flag / argument | >= 1 caller passes it | `--regenerate-index` -- 0 callers |
-| **Calling convention mismatch** | async callee called from sync caller -- explicit bridge exists (`asyncio.run()`, `get_running_loop().create_task()` with loop guard) | sync `bedrock.invoke()` calls `async record_token_usage()` via bare `create_task` -- no running loop in job context -- task silently lost (run_6823b0d4 E2E review) |
+| **Calling convention mismatch** | async callee called from sync caller -- explicit bridge exists (`asyncio.run()`, `get_running_loop().create_task()` with loop guard) | sync `bedrock.invoke()` calls `async record_token_usage()` via bare `create_task` -- no running loop in job context -- task silently lost(E2E review) |
 
 **Action on findings:**
 - 0 production callers -- **WARN** (not BLOCK). Agent must either:
@@ -458,10 +457,10 @@ When code is **moved or replaced** (not just added):
 | Feature parity | Every capability of old code exists in new code | Old `_recall_knowledge` had TranscriptStore; new `_recall_for_query` must too |
 | Dead orphan detection | After removing a call site, grep old function -- if 0 callers remain, flag as dead code | `_recall_knowledge` still defined after its only caller was removed |
 | Argument validity | Mock attributes must exist on the real class | `unit.working_directory` doesn't exist on SessionUnit |
-| **Control-flow preservation** | **Moved code executes at the same point in the caller's flow** — check early returns, guards, conditional branches ABOVE the new call site. If the caller has `if X: return` before line N, code placed after line N never runs when X is true. | Extracted `_run_data_cleanups()` from `_run_migrations()` but placed it AFTER a fast-path `return` — cleanup never ran for up-to-date DBs (run_91a6fb7e) |
-| **Duplicate detection** | After adding a new method, `grep -n "def method_name"` in the same file — parallel sessions may have added a stub | Added `_run_data_cleanups()` at line 2263, parallel session had already added stub at line 1785 — two definitions, Python uses last one silently (run_91a6fb7e) |
+| **Control-flow preservation** | **Moved code executes at the same point in the caller's flow** — check early returns, guards, conditional branches ABOVE the new call site. If the caller has `if X: return` before line N, code placed after line N never runs when X is true. | Extracted `_run_data_cleanups()` from `_run_migrations()` but placed it AFTER a fast-path `return` — cleanup never ran for up-to-date DBs |
+| **Duplicate detection** | After adding a new method, `grep -n "def method_name"` in the same file — parallel sessions may have added a stub | Added `_run_data_cleanups()` at line 2263, parallel session had already added stub at line 1785 — two definitions, Python uses last one silently |
 
-This check exists because PE review of the RecallEngine activation found 2 HIGH bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock hid a missing attribute. Both would have been caught by feature parity diff. Desktop Update Gaps (run_91a6fb7e) added 2 more: control-flow bypass on code extraction, and duplicate method from parallel session.
+This check exists because PE review of the RecallEngine activation found 2 HIGH bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock hid a missing attribute. Both would have been caught by feature parity diff. Desktop Update Gaps added 2 more: control-flow bypass on code extraction, and duplicate method from parallel session.
 
 ---
 
@@ -483,7 +482,7 @@ Walk through every new/changed user-facing interaction and check:
 - Each finding -- **auto-fix** (these are always bugs, not taste decisions)
 - Include UX review results in the review artifact under `"ux_review"`
 
-**Why this exists:** Pipeline run_6455a707 shipped with 10/10 confidence and 44/44
+**Why this exists:** a pipeline run shipped with 10/10 confidence and 44/44
 tests, but E2E user walkthrough found 3 bugs in 5 minutes (scroll tracking, no
 discoverability hint, Escape propagation). Engineering-complete != user-complete.
 
@@ -540,7 +539,7 @@ This is code-level trace only -- no live requests needed. Read the frontend serv
 
 Include wire test results in the review artifact under `"wire_test"`.
 
-**Why this exists:** Voice Input (run_c2881d2f) had an explicit `Content-Type: multipart/form-data` header that broke the Axios boundary string -- voice input would have been completely non-functional. Integration trace verified "symbols are connected" but not "the data format crossing the wire is correct." This check fills that gap.
+**Why this exists:** Voice Input had an explicit `Content-Type: multipart/form-data` header that broke the Axios boundary string -- voice input would have been completely non-functional. Integration trace verified "symbols are connected" but not "the data format crossing the wire is correct." This check fills that gap.
 
 ---
 
@@ -728,7 +727,7 @@ Blast radius trace:
 
 **Action:** Fix every ❌ before advancing to TEST. These are always real bugs — they're invisible in the diff but break the system.
 
-**Why this exists:** run_19129544 (unified release pipeline) passed all stages with 9/10 confidence. DevOps E2E audit found 2 HIGH + 3 MED in 5 minutes — all outside the diff, all inside the system lifecycle. Pipeline REVIEW reads the diff; it doesn't trace the system. For infra/release code, the system lifecycle IS the feature. (2026-04-29)
+**Why this exists:** a unified-release-pipeline run passed all stages with 9/10 confidence. DevOps E2E audit found 2 HIGH + 3 MED in 5 minutes — all outside the diff, all inside the system lifecycle. Pipeline REVIEW reads the diff; it doesn't trace the system. For infra/release code, the system lifecycle IS the feature. (2026-04-29)
 
 ---
 
@@ -900,7 +899,7 @@ Platform verification:
 - Platform requires undocumented env var setup = **MEDIUM** (works but fragile)
 - Platform covered by fallback that's less optimal = **LOW** (acceptable)
 
-**Why this exists:** run_edcfd0e5 hardcoded `~/Desktop/SwarmAI-Workspace/swarmai`
+**Why this exists:** a run hardcoded `~/Desktop/SwarmAI-Workspace/swarmai`
 as the only canonical path. On Hive (EC2 Linux), this path doesn't exist. The code
 fell through to the `__file__`-based fallback — which is the EXACT path that's wrong
 in daemon context (the bug we were trying to fix). TECH.md explicitly listed 4
@@ -966,10 +965,10 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test 
 
 ## Common Rationalizations
 
-| Rationalization | Reality | Source |
-|---|---|---|
-| "Code is straightforward, self-review is sufficient" | Single-person review has structural blind spots regardless of code simplicity. C011: builder + pipeline rated 10/10, feature was 100% broken. You cannot review your own assumptions — you'll validate them instead of challenging them. | C011 |
-| "Integration trace is redundant — unit tests cover wiring" | Unit tests mock boundaries. Integration trace verifies REAL wiring: does caller A actually reach callee B with correct params at runtime? C011: each unit worked perfectly; the data flowing between them was wrong. | C011 |
-| "Runtime patterns RP1-RP81 — most don't apply" | Check each and mark N/A explicitly. LL08: `asyncio.get_event_loop()` (deprecated, RP19) and `date('now')` UTC mismatch (RP18) both passed pipeline because "didn't seem to apply." They applied. | LL08 |
-| "Small changeset, fan-out review is overkill" | Fan-out threshold (>3 files OR >100 lines) is carefully calibrated. Below threshold, single-pass STILL runs all checks (integration trace, patterns, wire test). "Small" doesn't mean "skip checks" — it means "one reviewer does all checks." | Review design |
-| "Findings are low-confidence, I'll suppress them all" | Suppressing is valid for confidence ≤4. But suppressing ALL findings = you didn't try to confirm any. At least verify the top-3 by evidence. One confirmed finding > ten suppressed ones. | Unified Confidence Rubric |
+| Rationalization | Reality |
+|---|---|
+| "Code is straightforward, self-review is sufficient" | Single-person review has structural blind spots regardless of code simplicity. builder + pipeline rated 10/10, feature was 100% broken. You cannot review your own assumptions — you'll validate them instead of challenging them. |
+| "Integration trace is redundant — unit tests cover wiring" | Unit tests mock boundaries. Integration trace verifies REAL wiring: does caller A actually reach callee B with correct params at runtime? each unit worked perfectly; the data flowing between them was wrong. |
+| "Runtime patterns RP1-RP81 — most don't apply" | Check each and mark N/A explicitly. `asyncio.get_event_loop()` (deprecated, RP19) and `date('now')` UTC mismatch (RP18) both passed pipeline because "didn't seem to apply." They applied. |
+| "Small changeset, fan-out review is overkill" | Fan-out threshold (>3 files OR >100 lines) is carefully calibrated. Below threshold, single-pass STILL runs all checks (integration trace, patterns, wire test). "Small" doesn't mean "skip checks" — it means "one reviewer does all checks." |
+| "Findings are low-confidence, I'll suppress them all" | Suppressing is valid for confidence ≤4. But suppressing ALL findings = you didn't try to confirm any. At least verify the top-3 by evidence. One confirmed finding > ten suppressed ones. |

@@ -428,7 +428,7 @@ Work systematically:
 > duplicated keys in `manifest.yaml`/supporting files in sync.
 >
 > _Provenance: this exact silent-drop bug was fixed on the API edit path
-> (`skill_manager.py::update_skill`, run_3467799d) after the
+> (`skill_manager.py::update_skill`) after the
 > disable-model-invocation adoption; this guardrail closes the same gap on the
 > direct-Edit path that `s_skill-builder` uses (which does not go through that API)._
 

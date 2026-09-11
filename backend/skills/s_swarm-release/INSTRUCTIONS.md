@@ -309,23 +309,23 @@ If `git push` fails (auth, network): **STOP and report** — do NOT proceed.
 > tag first, then re-tag the new HEAD and push — `git push origin :refs/tags/v${VERSION}`
 > then `git tag -f -a … && git push origin v${VERSION}`. Deleting a tag whose Release is
 > still a **draft / 0-download** is safe (no star/download loss); a tag on a PUBLISHED
-> release is star-sensitive (C041) — never delete/re-point that without XG sign-off.
+> release is star-sensitive — never delete/re-point that without XG sign-off.
 
 ### Stage 7b: CI GREEN GATE + verify draft assets (Agent, blocking, ~3-8min wall-clock)
 
 Two things gate the flip to published: (1) CI green on the current HEAD, (2) the CI-built
 draft carries all-platform assets from THIS HEAD.
 
-**CI-green marker** (run_9fec1fb1): `release-gate --poll` is the only thing that writes
+**CI-green marker**: `release-gate --poll` is the only thing that writes
 the CI-green marker; 7b is how you EARN it. Enforcement is the **explicit `release-gate
---verify` step 7c runs immediately before the publish** (run_d613bb27) — it authorizes
+--verify` step 7c runs immediately before the publish** — it authorizes
 the flip IFF the marker attests the commit being released, fail-CLOSED (exit≠0 → do NOT
 publish). This REPLACES the old `release_publish_guard` PreToolUse hook: a per-command
 product-wide hook was the wrong layer for SwarmAI's OWN release discipline, so the check
 moved into this release flow as a one-time gate. (`--verify` covers the same publish the
 flip performs — `gh release edit --draft=false`; run 7c's `--verify` before it.)
 
-> **✅ Tag-aware gate (run_81ad1cfe):** when you poll with `--ref v${VERSION}` (below),
+> **✅ Tag-aware gate:** when you poll with `--ref v${VERSION}` (below),
 > the gate verifies CI on the **commit the tag points at**, not the moving `main` HEAD,
 > and records the tag in the marker. The `--verify` step then confirms the tag you're
 > flipping derefs to that same CI-verified commit — LOCALLY, fail-CLOSED. This is what
@@ -425,7 +425,7 @@ all-platform assets). 7c does NOT create a release and does NOT upload a local D
 cd $SWARMAI_ROOT
 VERSION=$(cat VERSION)
 
-# ★ PUBLISH GATE (fail-closed, replaces the old release_publish_guard hook, run_d613bb27):
+# ★ PUBLISH GATE(fail-closed, replaces the old release_publish_guard hook):
 # authorize the flip IFF the CI-green marker attests the commit this tag ships. exit≠0 →
 # CI not green on the published commit → STOP, do NOT flip. (Legit manual re-publish of an
 # already-green tag: SWARM_RELEASE_GATE_FORCE is gone with the hook — instead re-poll, or

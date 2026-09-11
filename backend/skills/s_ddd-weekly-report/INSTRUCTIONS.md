@@ -52,11 +52,11 @@ print(f'Output: {result[\"output_path\"]}')
 - `Projects/*/.artifacts/proposals/*.json` — pending escalations
 - `Projects/*/.artifacts/protected-zone-candidates.jsonl` — lessons auto-dropped from
   a protected zone (TECH>Architecture / SELF / PRODUCT>Vision,Non-Goals,Strategic) that
-  a human should hand-distill (NEW — run_97519f7c). NOT auto-writable (human-only zone),
+  a human should hand-distill. NOT auto-writable (human-only zone),
   so cultivation diverts them here instead of silently dropping.
 - `Projects/*/PRODUCT.md|TECH.md|IMPROVEMENT.md|PROJECT.md` — health stats (line count, mtime)
 
-## Human-Distill Candidates Section (NEW — run_97519f7c)
+## Human-Distill Candidates Section
 
 The weekly report MUST surface the protected-zone candidates so the sink sediments UP
 into a human decision instead of becoming a write-only landfill (Principle 1). Read

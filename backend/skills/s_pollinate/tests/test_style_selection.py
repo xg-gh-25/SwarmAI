@@ -1,4 +1,4 @@
-"""Tests for the html-deck style-selection gallery (run_4e1ed63e).
+"""Tests for the html-deck style-selection gallery.
 
 WS1 foundation:
   - recommend_systems.py: metadata-driven ranking of the 34 design systems against
@@ -22,7 +22,7 @@ import render_style_thumbnails as rt  # noqa: E402
 import format_recommend as fr  # noqa: E402
 
 
-# ---------- Defect 1: PPT→web intent detection (run_a620a6ca) ----------
+# ---------- Defect 1: PPT→web intent detection ----------
 
 def test_ppt_to_web_conversion_emits_html_deck_only():
     """The natural PPT→web-deck phrasings must return html_deck ONLY — never the
@@ -54,14 +54,14 @@ def test_ppt_that_MENTIONS_web_as_topic_stays_pptx():
         "做个关于网页设计的ppt",          # a PPT about web design
         "做个ppt讲讲html的历史",          # a PPT on the history of html
         "我要做个pptx，主题是网页开发",   # explicit pptx, topic = web dev
-        # English "web page" as a TOPIC noun (Gate-2 CRITICAL, run_32392299):
+        # English "web page" as a TOPIC noun (adversarial review, CRITICAL):
         # bare "web page"/"web pages" nouns must NOT fire html_deck — only a
         # verb-anchored conversion phrase does.
         "a deck about our web page redesign",
         "make a deck comparing our web pages to competitors",
         "build a ppt on how to design a web page",
-        # "as a web page" as a NON-conversion prepositional phrase (Gate-2 MEDIUM,
-        # run_32392299): a preposition alone is not a conversion verb governing the
+        # "as a web page" as a NON-conversion prepositional phrase (adversarial review, MEDIUM):
+    # a preposition alone is not a conversion verb governing the
         # target — a deck-noun object between verb and target = topic mention.
         "a deck describing our product as a web page",
         "make a ppt that presents our app as a web page",
@@ -73,7 +73,7 @@ def test_ppt_that_MENTIONS_web_as_topic_stays_pptx():
 
 
 def test_deck_to_web_TEAM_destination_is_not_html_deck():
-    """Over-broad MEDIUM regression (run_32392299): the bare 'to web' / 'into a web'
+    """Over-broad MEDIUM regression: the bare 'to web' / 'into a web'
     substrings matched a DESTINATION phrase ('send this deck to web team') and
     misfired html_deck. These are deck requests being SENT somewhere web-adjacent —
     NOT conversion-to-web-format intent. They must stay ['deck']."""
@@ -82,7 +82,7 @@ def test_deck_to_web_TEAM_destination_is_not_html_deck():
         "push the ppt to web team review",
         "email deck to web ops",
         "hand this deck into a web-facing group",
-        # Gate-2 CRITICAL (run_32392299): a LEADING conversion verb + a SEPARATE
+        # Gate-2 CRITICAL: a LEADING conversion verb + a SEPARATE
         # destination clause must NOT be read as conversion. The verb ('make')
         # governs the deck; 'send/email/post ... to/as a web page' is the
         # destination. _WEB_CONVERT_RE forbids a clause break in its object gap.
@@ -98,7 +98,7 @@ def test_deck_to_web_TEAM_destination_is_not_html_deck():
 
 
 def test_clause_break_ending_in_source_noun_is_not_html_deck():
-    """Gate-2 iter-4→6 CRITICAL (run_32392299): a SECOND clause that ends in a source
+    """Gate-2 iter-4→6 CRITICAL: a SECOND clause that ends in a source
     noun ('...and send SLIDES to a web page') must NOT be read as one conversion
     object. The object is validated by a POSITIVE noun-phrase grammar
     (_object_is_clean_noun_phrase / _OBJECT_NP_RE): a genuine object is a single NP
@@ -152,7 +152,7 @@ def test_clause_break_ending_in_source_noun_is_not_html_deck():
 
 
 def test_prepositional_object_conversion_is_html_deck():
-    """Gate-2 iter-6 Q2 (run_32392299): a genuine conversion whose object is a
+    """Gate-2 iter-6 Q2: a genuine conversion whose object is a
     source-noun head + prepositional modifier ('convert the deck OF q3 results to a
     web page', 'turn the slides FROM last week into a web page') must fire html_deck.
     Banning all prepositions (the iter-5 denylist attempt) wrongly rejected these;
@@ -175,7 +175,7 @@ def test_prepositional_object_conversion_is_html_deck():
 
 
 def test_possessive_and_powerpoint_conversion_is_html_deck():
-    """Gate-2 iter-7 (run_32392299): two ordinary phrasings the grammar/source-noun
+    """Gate-2 iter-7: two ordinary phrasings the grammar/source-noun
     set initially missed. (1) Possessive modifiers ("last week's deck", "the team's
     deck") — the object token must allow an apostrophe (_NP_MOD → [...']* ). (2) The
     spelled-out word "powerpoint" as a source noun — was absent from _WEB_SRC_NOUN/
@@ -209,7 +209,7 @@ def test_genuine_web_conversion_still_html_deck():
         "render the deck as web pages",
         "web version of this deck",
         "convert to web",
-        # bare "html" as the conversion target (Gate-2 HIGH, run_32392299): the
+        # bare "html" as the conversion target (adversarial review, HIGH): the
         # target was previously "html <noun>" only, so "convert this ppt to html"
         # wrongly returned ['deck']. _WEB_TARGET now accepts bare "html".
         "convert this ppt to html",
@@ -234,7 +234,7 @@ def test_genuine_web_conversion_still_html_deck():
 
 
 def test_webpage_one_word_conversion_is_html_deck():
-    """Gate-2 gap (run_32392299): the single-word 'webpage' spelling was absent
+    """Gate-2 gap: the single-word 'webpage' spelling was absent
     from the old substring list — 'make this a webpage' → None, 'host the deck as
     a webpage' → ['deck'] (actively WRONG format). The verb-anchored _WEB_CONVERT_RE
     covers 'webpage' as a _WEB_TARGET, including the prep-less 'make this a X' shape."""

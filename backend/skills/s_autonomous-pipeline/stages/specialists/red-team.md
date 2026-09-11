@@ -70,7 +70,7 @@ verdict PARTIAL rather than padding with speculation.
 - Operations that partially complete (3 of 5 items done, then crash)
 - State left inconsistent on failure (DB updated but file not written)
 - Background tasks that fail without alerting anyone
-- Fallback paths that hide broken primary paths (C007 pattern)
+- Fallback paths that hide broken primary paths (same pattern)
 
 ### 3. Exploit Trust Assumptions
 - Data validated on frontend but not backend
@@ -94,6 +94,6 @@ verdict PARTIAL rather than padding with speculation.
 
 ### 6. Challenge the Test Coverage
 - Are tests testing the REAL behavior or a mock that behaves differently?
-- Could all tests pass while the feature is completely broken? (C011 pattern)
+- Could all tests pass while the feature is completely broken? (same pattern)
 - Are edge cases tested or only happy path?
 - Do tests verify integration or just unit correctness?

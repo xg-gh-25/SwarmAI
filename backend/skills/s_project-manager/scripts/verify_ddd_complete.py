@@ -18,7 +18,7 @@ WHY ASSET-AWARE (the load-bearing design constraint):
     makes the real completeness explicit without punishing brains that correctly
     have no code asset.)
 
-TWO SCHEMAS IN bindings.yaml (verified 2026-07-19, run_df79b8ce):
+TWO SCHEMAS IN bindings.yaml(verified 2026-07-19):
     - `governed_assets:` (kind: skill-set / data-source / code-repo / …) — the
       asset inventory. Parsed by ZERO other Python code; THIS gate is its first
       reader, via a tolerant direct `yaml.safe_load` (NOT core.ddd_bindings.

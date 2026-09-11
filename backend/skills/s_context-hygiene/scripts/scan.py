@@ -12,7 +12,7 @@ INSTRUCTIONS.md); the "human judges + deletes" half is the agent, never this scr
 It opens files in read mode ONLY. It has no --fix / --apply / --write mode and
 MUST never grow one. Auto-modifying a curated cognitive store is forbidden by the
 sedimented MEMORY principle ("cleaning an already-curated store is a READ-and-judge
-job, NOT a batch auto pass") and by the C046 gut-and-summarize guard. If you are
+job, NOT a batch auto pass") and by the gut-and-summarize guard. If you are
 tempted to add auto-fix here: STOP — that is the exact anti-pattern this skill exists
 to prevent. The output is a candidate LIST; the agent decides and edits by hand.
 
@@ -20,7 +20,8 @@ Detectors (all heuristic — every hit is a CANDIDATE for human judgment, not a 
   1. echoed-title  — a bold-titled entry whose body repeats the title verbatim
                      (`- [type] **T** — T — body`), pure duplication.
   2. drift-number  — a stored volatile figure (LOC/counts/sizes/%/star-snapshots)
-                     that AGENT R30#4 bans from cognitive stores (store the
+                     that AGENT R30#4 bans (this scanner covers the cognitive stores; R30#7
+                     extends the same ban to shipped artifacts). Store the
                      reproducible method, not the frozen output).
   3. dated-pointer — a dated one-line changelog fragment that only points at a
                      DailyActivity file (the DailyActivity IS the record; the pointer
@@ -120,7 +121,8 @@ def _load_routing() -> tuple[list[dict], str]:
 # ─────────────────────────────────────────────────────────────────────────────
 _ENTRY_RE = re.compile(r"^\s*- \[[a-z]+\] \*\*(.+?)\*\* — (.*)$")
 
-# Volatile figures R30#4 bans from cognitive stores. Deliberately conservative:
+# Volatile figures R30#4 bans. This scanner's scope is the cognitive stores;
+# R30#7 carries the same ban into shipped code and product artifacts. Conservative:
 # only flags numbers with a unit/context that marks them as a frozen snapshot,
 # not every digit (dates, rule refs like R30, section numbers are NOT drift).
 _DRIFT_RE = re.compile(

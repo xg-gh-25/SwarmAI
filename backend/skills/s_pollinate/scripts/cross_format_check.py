@@ -5,7 +5,7 @@ cross_format_check.py — RP-X Cross-Format Consistency Verification (ADVISORY).
 Verifies that all tracks produced in a multi-track Pollinate run maintain
 consistency across format boundaries. Runs during REVIEW stage.
 
-⚠️ ENFORCEMENT SPLIT (run_be232a07, 2026-07-03): the DETERMINISTIC cross-format
+⚠️ ENFORCEMENT SPLIT(2026-07-03): the DETERMINISTIC cross-format
 facts are now HARD-ENFORCED by pollinate_validator.py at the DELIVER chokepoint
 (the only place artifact_cli.py can exit(1)):
     - RP-X1 (brand-token/--accent consistency)   → validator Check 7

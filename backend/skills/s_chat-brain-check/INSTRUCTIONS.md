@@ -18,7 +18,7 @@ Run phases Q0-Q4 in order. Any BLOCK failure = do not ship.
 This skill's invariant probes grep live code. When code is refactored (file moves,
 symbol renames), a probe silently greps nothing -> false-green ("no hits, must be
 fine") or false-red ("symbol gone, must be broken"). Q0 catches that BEFORE any
-invariant is trusted. **It validates the TOOL before using the tool** (PIT07).
+invariant is trusted. **It validates the TOOL before using the tool**.
 
 Run this first. If any file or anchor symbol is MISSING, STOP -- the skill is stale
 against the current architecture and must be realigned (re-run this skill's own
@@ -307,7 +307,7 @@ grep -n "event.type === 'heartbeat'" desktop/src/services/chat.ts
 ```bash
 cd $SWARMAI_ROOT/desktop/src
 
-# NOTE: post render-source-split (OT01 fix, 2026-06-25), the indicator RENDER
+# NOTE: post render-source-split (2026-06-25), the indicator RENDER
 # moved out of ChatPage.tsx into pages/chat/components/TabView.tsx (single render
 # authority). The DERIVATION pure-function `deriveStreamingActivity` is DEFINED in
 # the lifecycle hook and CONSUMED by the hooks/useStreamingActivity.ts wrapper hook.
@@ -442,10 +442,10 @@ Every call site. Update this table when adding new sites.
 ## Probe Freshness
 
 **Architecture baseline: 2026-06-26** (MessageStore single-writer, 2026-06-17;
-render-source split / OT01 fix, 2026-06-25). The Q0-Q4 invariant probes are greps
+render-source split, 2026-06-25). The Q0-Q4 invariant probes are greps
 against the frontend tree as of this baseline. If you change the chat architecture
 (move a file, rename a symbol, relocate the indicator render), the matching probe
-goes stale and silently false-greens/reds (PIT07). **Q0 is the guardrail** -- it
+goes stale and silently false-greens/reds. **Q0 is the guardrail** -- it
 fails loudly when a probe target drifts. When Q0 BLOCKs, realign this skill's
 targets (re-run its own pipeline) and bump this baseline date. The probes assert
 file + symbol presence only -- never line numbers, which rot on every edit.

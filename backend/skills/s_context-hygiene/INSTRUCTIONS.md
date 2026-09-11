@@ -8,7 +8,7 @@ Two modes: **manual** (§1-§6 — a human-directed semantic sweep of a named fi
 **sweep** (§7 — a weekly autonomous sweep across ALL cognitive stores with an
 adversarial delete-gate). Both share the same cleaning rules (§2) and red line (§4).
 
-> **What this is NOT (scope-away — read first, avoid the C042 trap):**
+> **What this is NOT (scope-away — read first, avoid the trap):**
 > - **NOT `context_health_hook`** — that hook runs every session and does AUTONOMOUS
 >   age-decay + dedup + regen (MEMORY/KNOWLEDGE/EVOLUTION lifecycle, KNOWLEDGE-Index
 >   regeneration). It does NOT do semantic compression — proof: echoed-titles + dated-pointer
@@ -19,7 +19,7 @@ adversarial delete-gate). Both share the same cleaning rules (§2) and red line 
 >   rebuild is needed. Orthogonal.
 > - **NOT an UNGATED batch LLM-judge pass.** The原-2026-08-11 rule said "never make this a
 >   scheduled job" — because a naive batch judge over a curated store finds ~0 and mis-deletes
->   load-bearing content (C046). The §7 sweep is allowed ONLY because it does not delete on a
+>   load-bearing content. The §7 sweep is allowed ONLY because it does not delete on a
 >   single judge's say-so: every delete-candidate must survive an ADVERSARIAL review (a skeptic
 >   role that must fail to justify "load-bearing" before the delete lands), and git + a weekly
 >   audit report are the recovery net. Autonomy is earned by the gate, not by the schedule.
@@ -114,7 +114,7 @@ Route every edit through §1 (system file → edit source + flag rebuild; runtim
 
 ---
 
-## 4. 🔴 THE RED LINE — never gut judgment (C046 guard)
+## 4. 🔴 THE RED LINE — never gut judgment
 
 Compression must cut NARRATION, never JUDGMENT. Non-negotiable:
 
@@ -124,7 +124,7 @@ Compression must cut NARRATION, never JUDGMENT. Non-negotiable:
 - **Diff by SECTION, not by line count.** Every philosophy/pattern section must either
   map to the compressed version OR be re-homed with a documented reason. A large
   line-count drop is itself the SIGNATURE of the gut-and-summarize bug — re-verify it,
-  don't celebrate it. (C046: 206→44 line drop = the tell I'd deleted the value.)
+  don't celebrate it. (206→44 line drop = the tell I'd deleted the value.)
 - The goal is "same judgment, fewer tokens" — if a future session couldn't make the
   same decision from the compressed text, you cut too much.
 
@@ -139,8 +139,7 @@ pattern+tell / principle kernel (§4); git is the recovery net (delete noise, do
 deleting anything borderline (not clearly noise/drift).
 
 **Never:** auto-fix / batch-delete (scan.py is read-only by iron law); rebuild
-`context_health_hook`'s autonomous cleanup (C042); cut a pattern+tell or principle kernel (C046); the C041
-irreversible-destructive-op gate still applies (this is about noise in git-tracked
+`context_health_hook`'s autonomous cleanup; cut a pattern+tell or principle kernel; the irreversible-destructive-op gate still applies (this is about noise in git-tracked
 files — recoverable; it does NOT relax the gate on repo-visibility/force-push/deleting
 non-gitignored user data).
 
@@ -159,7 +158,7 @@ mode and MUST never grow one (§3 + §4). Every hit is a lead for human judgment
 **Philosophy (XG, 2026-08-15): a cognitive store that only grows violates Darwin —
 forgetting (deletion) is a design FEATURE, not a risk.** `value, not age, decides
 survival`; the danger is never "we deleted" but "we deleted a load-bearing entry with
-nobody to challenge it" (C046). So the sweep deletes freely — but every delete must
+nobody to challenge it". So the sweep deletes freely — but every delete must
 first survive an ADVERSARIAL challenge. The gate, not a human-in-the-loop, is what makes
 autonomy safe.
 

@@ -41,11 +41,11 @@ after authoring may have gone vacuous or picked up a privacy leak.
 |------|--------|-------|
 | schema | required fields, valid types | malformed cases |
 | duplicate | same verification target as existing | corpus bloat |
-| non_vacuous | grep≠match-anything, command≠echo-its-own-literal | GUI21 vacuous-pass |
+| non_vacuous | grep≠match-anything, command≠echo-its-own-literal | a case that passes without the knowledge under test |
 | teeth (new gate-eligible only) | declares verification.negative_command | probes with no proof they go RED |
-| refs (non-grandfathered) | dotted refs (MEMORY./AGENT./…) resolve non-empty | C044 silent ref-drift |
+| refs (non-grandfathered) | dotted refs (MEMORY./AGENT./…) resolve non-empty | silent ref-drift |
 | redline | if `redline` present → must be bool; if true → must have a RUNNABLE evaluator | mis-typed / unenforceable red-line markers |
-| privacy (PROMOTE only) | no sensitive word / instance-path / DDD ref | shipping instance data (MOD01) |
+| privacy (PROMOTE only) | no sensitive word / instance-path / DDD ref | shipping this instance's private data in a public case |
 
 ## The `redline` field — zero-tolerance cases (safety / governance ONLY)
 

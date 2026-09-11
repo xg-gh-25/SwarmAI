@@ -5,7 +5,7 @@ Thin CLI over the ALREADY-TESTED core.library_mounts engines (add_mount,
 judge_mount_kind, index_code_mount, index_docs_mount, recall_mounts) + recall_all.
 This skill reinvents NOTHING — it is the agent-facing entry to the same functions
 the +Add Folder API uses. Mounting indexes AT MOUNT TIME (code → graph, docs →
-shared Knowledge FTS5); there is no separate briefing step (B1, run_3f837bdd).
+shared Knowledge FTS5); there is no separate briefing step(B1).
 
 Locates backend/ by walking up (same pattern as s_estimate-tokens) so it works
 from the dev checkout, the projected .claude/skills copy, or the workspace.
@@ -32,7 +32,15 @@ def _bootstrap_backend() -> None:
     candidates.extend(here.parents)
     candidates.extend(Path.cwd().resolve().parents)
     candidates.append(Path.cwd().resolve())
-    candidates.append(Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"))
+    # Last resort — a checkout under the user's home. The projected copy of this
+    # skill lives outside the repo, so nothing above it holds the marker. Derived
+    # from the home directory rather than written out, so it holds for any account;
+    # set SWARM_REPO_ROOT to point at a checkout kept elsewhere.
+    home = Path.home()
+    candidates.extend(
+        home / rel
+        for rel in ("Desktop/SwarmAI-Workspace/swarmai", "SwarmAI-Workspace/swarmai", "swarmai")
+    )
     seen = set()
     for base in candidates:
         if base in seen:
@@ -93,7 +101,7 @@ def cmd_mount(args) -> None:
                                      f"Recall now reaches this code dir."}))
     else:
         # docs → chunk its text content into the shared Knowledge FTS5 at mount time
-        # (B1, run_3f837bdd): recall-reachable immediately, no briefing step.
+        # (B1): recall-reachable immediately, no briefing step.
         result = index_docs_mount(store, mid)
         chunks = result.get("chunks", 0)
         msg = (f"Mounted + indexed {chunks} chunks. Recall now reaches this docs dir."
