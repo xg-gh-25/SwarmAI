@@ -1514,6 +1514,11 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
+    # Set when this call completes the run; consumed AFTER the --stage-json merge
+    # so METRICS extraction sees the final stage list (explicit flag rather than
+    # a locals() probe — a name that may not exist is not a control-flow signal).
+    _generate_metrics_after_merge = False
+
     if args.status:
         # ── C1: Terminal-state revival guard (transition matrix) ──────────────
         # A run in a TERMINAL status (completed/complete/abandoned/failed/cancelled)
@@ -2210,8 +2215,15 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 sys.exit(1)  # D7: non-zero on completion BLOCK
 
             run_state["completed_at"] = now
-            # Auto-generate METRICS.json on completion
-            _try_generate_metrics(args.project, args.run_id, run_state, reg)
+            # METRICS generation is deferred to AFTER the --stage-json merge
+            # below, not run here. A single
+            # `run-update --status completed --stage-json '{reflect...}'` carries
+            # the FINAL stage record, so extracting at this point reads a
+            # run_state that does not contain it yet. Measured: the derived
+            # per-stage gaps differ on 45 of 556 real runs (8.1%) when the last
+            # stage is missing, and 6 completed runs already carry stage_tokens
+            # missing a stage that IS present in run.json.
+            _generate_metrics_after_merge = True
 
     if args.stage_json:
         stage_record = json.loads(args.stage_json)
@@ -2360,6 +2372,12 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
 
     run_state["updated_at"] = now
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+
+    # Auto-generate METRICS.json on completion — HERE, after the --stage-json
+    # merge above, so the extraction sees the final stage list (see the note at
+    # the `completed_at` assignment for the 8.1%-of-runs measurement).
+    if _generate_metrics_after_merge:
+        _try_generate_metrics(args.project, args.run_id, run_state, reg)
 
     result = {"pipeline_id": args.run_id, "updated": True}
     if args.status == "completed":
@@ -3885,14 +3903,32 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     # artifact median -4.34%, worst -98.98%, only 13.1% within +/-1%. The
     # tempting estimator is the strictly worse one.
     # "(in progress)" must key off the run's STATUS, not off a missing timestamp.
-    # `not completed_at` is true for 218 real runs that are anything but live —
-    # 98 abandoned, 54 cancelled, 4 paused, and 55 whose status IS 'completed' but
-    # which never got the timestamp written. Labelling those "in progress" is a
-    # false liveness claim about a dead run, the same class of confidently-wrong
-    # number this section exists to stop rendering.
-    _TERMINAL = {"completed", "complete", "abandoned", "cancelled", "superseded",
-                 "rejected", "aborted", "failed", "paused"}
-    _in_flight = not completed and str(run_state.get("status", "")).lower() not in _TERMINAL
+    # `not completed_at` is true for 214 real runs that are anything but live —
+    # 98 abandoned, 54 cancelled, and 55 whose status IS 'completed' but which
+    # never got the timestamp written. Labelling those "in progress" is a false
+    # liveness claim about a dead run, the same class of confidently-wrong output
+    # this section exists to stop rendering.
+    #
+    # Derives from `_TERMINAL_STATUSES` — the module's declared SSOT — so the two
+    # cannot drift on the shared values. Three statuses that occur on disk are
+    # added for DISPLAY only (superseded/rejected/aborted, 4 real runs): they are
+    # deliberately NOT pushed into the SSOT itself, because that tuple also drives
+    # `is_terminal_run`, crash-detect, supersede and the revival guard — widening
+    # it changes liveness semantics well beyond a duration label (R5: scope
+    # follows the task).
+    #
+    # `paused` is deliberately EXCLUDED: it is a REVIVAL status
+    # (`_REVIVAL_STATUSES`), and `is_terminal_run`'s docstring is explicit that
+    # treating a paused mid-pipeline run as terminal silently writes off a
+    # genuinely resumable run. A paused run keeps its in-progress marker, which is
+    # the truth — it is unfinished.
+    _DISPLAY_TERMINAL = frozenset(_TERMINAL_STATUSES) | {
+        "superseded", "rejected", "aborted",
+    }
+    _in_flight = (
+        not completed
+        and str(run_state.get("status", "")).strip().lower() not in _DISPLAY_TERMINAL
+    )
     _end = completed or run_state.get("updated_at", "")
     if created and _end:
         try:
@@ -4359,6 +4395,11 @@ def _try_generate_metrics(
         # run passes (no agent discipline required) and is retroactive over any
         # run that has artifacts. Best-effort and narrowly guarded: telemetry must
         # never fail a completion.
+        # AttributeError is in the tuple deliberately: `_stage_publish_times`
+        # raises it for a non-dict run_state, and WITHOUT it the exception escapes
+        # to the outer `except Exception` below — which sits ABOVE the
+        # `write_text`, so the whole METRICS.json write is lost, not merely the
+        # gaps. A telemetry extra must never be able to destroy the telemetry.
         try:
             _rows, _cov = _stage_publish_times(project, run_state)
             _gaps = {
@@ -4366,12 +4407,12 @@ def _try_generate_metrics(
                 for r in _rows
                 if r.get("elapsed_min") is not None and isinstance(r.get("stage"), str)
             }
-            if _gaps:
-                # A stage with no resolvable timestamp is ABSENT, never persisted
-                # as 0 — an absent measurement is not a zero one.
-                metrics["derived_stage_gaps"] = _gaps
-                metrics["derived_gap_coverage"] = _cov
-        except (OSError, ValueError, TypeError, KeyError):
+            # Assign unconditionally when the derivation SUCCEEDED, even if it
+            # yielded nothing: `if _gaps:` would let a stale map from a previous
+            # write survive in `existing` and be re-published as current.
+            metrics["derived_stage_gaps"] = _gaps
+            metrics["derived_gap_coverage"] = _cov
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             pass
 
         metrics_file.parent.mkdir(parents=True, exist_ok=True)

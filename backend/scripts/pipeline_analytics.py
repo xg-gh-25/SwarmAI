@@ -476,13 +476,39 @@ def analyze_abandon_patterns(metrics: list[dict], replaced: set | None = None) -
     }
 
 
+def _duration_of(rec: dict) -> float | None:
+    """A usable `wall_minutes` from a timing record, or None.
+
+    Rejects at the INGESTION boundary rather than at render time. `bool`
+    subclasses `int`, so a stray `wall_minutes: true` otherwise enters the corpus
+    and averages to a fabricated 1.0 minute; and `json.loads` accepts bare `NaN`,
+    which poisons the mean of an entire stage (verified by probe: avg_minutes
+    became `nan`, silently voiding the row). The renderer's own guard cannot
+    catch either, because by then it inspects an already-computed average.
+
+    A `0.0` is also rejected: the run-observe channel has always required a
+    truthy value, and 44 of 2438 real derived gaps are exactly 0.0 (sub-second
+    consecutive publishes). Admitting them here while the sibling channel drops
+    them would make the two paths disagree, and they deflate the mean without
+    representing measured work.
+    """
+    val = rec.get("wall_minutes")
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    if not math.isfinite(val) or val <= 0:
+        return None
+    return float(val)
+
+
 def analyze_stage_efficiency(metrics: list[dict]) -> dict:
     """Dimension 3: Stage timing, tokens, retry rates."""
     completed = [m for m in metrics if m.get("status") == "completed"]
     if not completed:
         return {"stages": {}}
 
-    stage_data: dict[str, dict[str, list]] = defaultdict(lambda: {"tokens": [], "durations": []})
+    stage_data: dict[str, dict[str, list]] = defaultdict(
+        lambda: {"tokens": [], "durations": [], "derived": []}
+    )
 
     for m in completed:
         for stage, tokens in m.get("stage_tokens", {}).items():
@@ -499,16 +525,16 @@ def analyze_stage_efficiency(metrics: list[dict]) -> dict:
         # artifact publish timestamps, so it is the channel that is actually fed.
         # It measures publish-to-publish (inter-stage gaps INCLUDED), which is
         # precisely why it is the fallback rather than the winner.
-        _seen: set[str] = set()
+        # The two lists are kept SEPARATE, never averaged together: mixing an
+        # in-stage measurement with a publish-to-publish gap produces a number
+        # in no unit at all (12.0 in-stage + 99.0 derived averaged to 70.0 in a
+        # probe). Precedence is resolved per-STAGE after the corpus walk.
         for stage, timing in (m.get("stage_timing") or {}).items():
-            if isinstance(timing, dict) and timing.get("wall_minutes"):
-                stage_data[stage]["durations"].append(timing["wall_minutes"])
-                _seen.add(stage)
+            if isinstance(timing, dict) and _duration_of(timing) is not None:
+                stage_data[stage]["durations"].append(_duration_of(timing))
         for stage, gap in (m.get("derived_stage_gaps") or {}).items():
-            if stage in _seen:
-                continue  # observe's precise measurement already counted
-            if isinstance(gap, dict) and isinstance(gap.get("wall_minutes"), (int, float)):
-                stage_data[stage]["durations"].append(gap["wall_minutes"])
+            if isinstance(gap, dict) and _duration_of(gap) is not None:
+                stage_data[stage]["derived"].append(_duration_of(gap))
 
     result = {}
     for stage in ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect", "goal_cycle"]:
@@ -519,15 +545,30 @@ def analyze_stage_efficiency(metrics: list[dict]) -> dict:
                 "median_tokens": _safe_median(data["tokens"]),
                 "sample_count": len(data["tokens"]),
             }
-            if data["durations"]:
-                result[stage]["avg_minutes"] = _safe_avg(data["durations"])
-                result[stage]["median_minutes"] = _safe_median(data["durations"])
+            # PER-STAGE precedence, resolved here rather than per-record. Prefer
+            # run-observe's in-stage measurement when it has enough samples to
+            # report at all; otherwise fall back WHOLESALE to the derived gaps.
+            # Never blend the two — one list, one unit. `timing_basis` is exported
+            # so the renderer can say which unit it is showing; an unlabelled
+            # number that silently changes meaning per stage is the confidently
+            # wrong output this whole change exists to stop.
+            _obs, _der = data["durations"], data["derived"]
+            if len(_obs) >= INSUFFICIENT_N or (_obs and not _der):
+                _dur, _basis = _obs, "in_stage"
+            elif _der:
+                _dur, _basis = _der, "publish_to_publish"
+            else:
+                _dur, _basis = _obs, "in_stage"
+            if _dur:
+                result[stage]["avg_minutes"] = _safe_avg(_dur)
+                result[stage]["median_minutes"] = _safe_median(_dur)
                 # Durations are collected INDEPENDENTLY of tokens (a run can carry
                 # stage_timing with no stage_tokens for that stage), so
                 # `sample_count` — which is len(tokens) — is NOT the duration's n.
                 # Export the real one: without it the renderer prints confident
                 # minutes beside "n=0", inverting the anti-C044 completeness gate.
-                result[stage]["duration_sample_count"] = len(data["durations"])
+                result[stage]["duration_sample_count"] = len(_dur)
+                result[stage]["timing_basis"] = _basis
 
     return {"stages": result}
 
@@ -770,13 +811,19 @@ def generate_report(intelligence: dict) -> str:
     # Stage Efficiency
     se = dims.get("stage_efficiency", {})
     lines.append("## Stage Efficiency\n")
-    # Avg/Median Min: analyze_stage_efficiency ALREADY computes these (:506-507)
-    # from stage_timing.wall_minutes — before this column they were computed and
-    # then dropped on the floor, which is why the timing telemetry looked
-    # "missing" when it was merely unrendered. A stage with no duration samples
-    # renders `—`, never a fabricated 0 (an absent measurement is not zero).
-    lines.append("| Stage | Avg Tokens | Median | Avg Min | Median Min | Samples |")
-    lines.append("|-------|-----------|--------|---------|------------|---------|")
+    # Avg/Median Min: `analyze_stage_efficiency` already computes these; before
+    # this column they were computed and then dropped on the floor, which is why
+    # the timing telemetry looked "missing" when it was merely unrendered. A stage
+    # with no duration samples renders `—`, never a fabricated 0 (an absent
+    # measurement is not a zero one).
+    #
+    # The Basis column is load-bearing, not decoration: the two channels measure
+    # DIFFERENT things (in-stage execution vs publish-to-publish, which includes
+    # inter-stage gap time), and which one a row used depends on its sample count.
+    # An unlabelled minutes column whose meaning silently changes per stage is
+    # exactly the confidently-wrong output this work exists to stop.
+    lines.append("| Stage | Avg Tokens | Median | Avg Min | Median Min | Basis | Samples |")
+    lines.append("|-------|-----------|--------|---------|------------|-------|---------|")
     for stage, data in se.get("stages", {}).items():
         _n = data.get("sample_count", 0)
         # Duration n is its OWN count (see analyze_stage_efficiency): gating minutes
@@ -804,15 +851,30 @@ def generate_report(intelligence: dict) -> str:
 
         _am_s = "—" if _insufficient(_dn) else _min_cell(_am)
         _mm_s = "—" if _insufficient(_dn) else _min_cell(_mm)
+        # Name the unit whenever a number is shown; `—` when there is none.
+        _basis = {"in_stage": "in-stage", "publish_to_publish": "publish-gap"}.get(
+            data.get("timing_basis", ""), "—"
+        )
+        if _am_s == "—":
+            _basis = "—"
         if _insufficient(_n):
             lines.append(
-                f"| {stage} | insufficient data (n={_n}) | — | {_am_s} | {_mm_s} | {_n} |"
+                f"| {stage} | insufficient data (n={_n}) | — | {_am_s} | {_mm_s} "
+                f"| {_basis} | {_n} |"
             )
         else:
             lines.append(
                 f"| {stage} | {data['avg_tokens']:.0f} | {data['median_tokens']:.0f} "
-                f"| {_am_s} | {_mm_s} | {_n} |"
+                f"| {_am_s} | {_mm_s} | {_basis} | {_n} |"
             )
+    lines.append("")
+    lines.append(
+        "_Basis: `in-stage` = run-observe's explicit stage_start/stage_end "
+        "measurement. `publish-gap` = derived from consecutive artifact publish "
+        "times, so it INCLUDES inter-stage time (agent reasoning, gates, sub-agent "
+        "spawns) and is not comparable to `in-stage`. The two are never averaged "
+        "together._"
+    )
     lines.append("")
 
     # Adversarial Value

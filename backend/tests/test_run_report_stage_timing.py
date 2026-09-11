@@ -1437,8 +1437,10 @@ class TestDeadRunsAreNotLabelledInProgress:
         ])
         return run_dir
 
-    @pytest.mark.parametrize("status", ["abandoned", "cancelled", "paused",
-                                        "completed", "superseded"])
+    # `paused` is intentionally ABSENT — see test_paused_run_stays_in_progress.
+    @pytest.mark.parametrize("status", ["abandoned", "cancelled", "failed",
+                                        "completed", "superseded", "rejected",
+                                        "aborted"])
     def test_terminal_status_never_claims_in_progress(self, tmp_path, monkeypatch, status):
         monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
         from scripts.artifact_cli import cmd_run_report, ArtifactRegistry, _get_workspace
@@ -1455,6 +1457,30 @@ class TestDeadRunsAreNotLabelledInProgress:
         )
         assert "45.0 min" in body, (
             f"the duration must still render via the updated_at fallback:\n{body[:400]}"
+        )
+
+    def test_paused_run_stays_in_progress(self, tmp_path, monkeypatch):
+        """`paused` is a REVIVAL status, not a terminal one — it must stay live.
+
+        `_REVIVAL_STATUSES` lists paused alongside running, and
+        `is_terminal_run`'s docstring is explicit that treating a paused
+        mid-pipeline run as terminal silently writes off a genuinely resumable
+        run. A paused run is unfinished, so "in progress" is the TRUE label.
+        This test exists to stop a future "complete the terminal set" edit from
+        quietly reclassifying it.
+        """
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        from scripts.artifact_cli import cmd_run_report, ArtifactRegistry, _get_workspace
+
+        run_dir = self._seed(tmp_path, "run_paused", "paused")
+        cmd_run_report(
+            SimpleNamespace(project="P", run_id="run_paused"),
+            ArtifactRegistry(_get_workspace()),
+        )
+        body = (run_dir / "REPORT.md").read_text(encoding="utf-8")
+        assert "in progress" in body, (
+            "a PAUSED run is resumable, not finished — stripping its in-progress "
+            f"marker writes off work that can still continue:\n{body[:400]}"
         )
 
     def test_genuinely_running_run_still_says_in_progress(self, tmp_path, monkeypatch):

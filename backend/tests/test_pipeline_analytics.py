@@ -17,6 +17,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import pipeline_analytics as pa  # noqa: E402
@@ -421,9 +422,11 @@ class TestStageEfficiencySurfacesMinutes:
         }))
         row = self._row(report, "review")
         cells = [c.strip() for c in row.split("|")]
-        assert len(cells) == 8, (
-            f"the row must have 6 columns (8 split parts), so the minutes cells "
-            f"EXIST at all:\n{row!r}"
+        # 7 columns (Stage, Avg Tokens, Median, Avg Min, Median Min, Basis,
+        # Samples) => 9 split parts including the empty leading/trailing edges.
+        assert len(cells) == 9, (
+            f"the row must carry all 7 columns, so the minutes cells EXIST at "
+            f"all:\n{row!r}"
         )
         assert cells[4] == "—" and cells[5] == "—", (
             f"a stage with no timing samples must render em-dashes, not a "
@@ -494,4 +497,87 @@ class TestStageEfficiencySurfacesMinutes:
         assert eff["stages"]["build"].get("duration_sample_count") == 1, (
             "the duration sample count must be exported so the renderer can gate "
             f"on it independently of the token count: {eff['stages']['build']}"
+        )
+
+
+class TestTimingChannelsAreNeverBlended:
+    """Two channels measure different things; averaging them yields no unit.
+
+    `stage_timing` (run-observe) is in-stage execution. `derived_stage_gaps` is
+    publish-to-publish and INCLUDES inter-stage time. A probe mixing 12.0 in-stage
+    with two 99.0 derived samples produced `avg_minutes: 70.0` — a number in no
+    unit at all, rendered under an unlabelled "Avg Min" header.
+    """
+
+    def _corpus(self, n, *, observe=None, derived=None, stage="build"):
+        out = []
+        for i in range(n):
+            m = {"run_id": f"R{i}", "project": "P", "profile": "full",
+                 "status": "completed", "stage_tokens": {stage: 1000}}
+            if observe is not None:
+                m["stage_timing"] = {stage: {"wall_minutes": observe}}
+            if derived is not None:
+                m["derived_stage_gaps"] = {stage: {"wall_minutes": derived}}
+            out.append(m)
+        return out
+
+    def test_observe_and_derived_are_not_averaged_together(self):
+        corpus = self._corpus(1, observe=12.0) + self._corpus(2, derived=99.0)
+        eff = pa.analyze_stage_efficiency(corpus)["stages"]["build"]
+        assert eff["avg_minutes"] != 70.0, (
+            "an in-stage measurement was averaged with publish-gap samples, "
+            f"producing a number in no unit: {eff}"
+        )
+        # With observe below the completeness floor, fall back WHOLESALE to derived.
+        assert eff["avg_minutes"] == 99.0, eff
+        assert eff["timing_basis"] == "publish_to_publish", eff
+
+    def test_sufficient_observe_samples_win_over_derived(self):
+        corpus = self._corpus(3, observe=12.0, derived=99.0)
+        eff = pa.analyze_stage_efficiency(corpus)["stages"]["build"]
+        assert eff["avg_minutes"] == 12.0, (
+            f"the precise in-stage measurement lost to the coarser gap: {eff}"
+        )
+        assert eff["timing_basis"] == "in_stage", eff
+
+    @pytest.mark.parametrize("bad,label", [
+        (True, "bool True"),
+        (float("nan"), "NaN"),
+        (float("inf"), "inf"),
+        (0.0, "zero"),
+        ("12.0", "str"),
+        (None, "None"),
+    ])
+    def test_hostile_wall_minutes_never_enters_the_corpus(self, bad, label):
+        eff = pa.analyze_stage_efficiency(self._corpus(3, derived=bad))
+        got = eff["stages"].get("build", {})
+        assert "avg_minutes" not in got, (
+            f"{label} was admitted as a duration and will be averaged into a "
+            f"fabricated measurement: {got}"
+        )
+
+    def test_basis_is_disclosed_in_the_report(self):
+        intel = {
+            "generated_at": "2026-09-11T00:00:00Z", "runs_analyzed": 5,
+            "projects": ["P"],
+            "dimensions": {
+                "stage_efficiency": {"stages": {
+                    "build": {"avg_tokens": 100, "median_tokens": 100,
+                              "sample_count": 5, "avg_minutes": 42.5,
+                              "median_minutes": 40.0, "duration_sample_count": 5,
+                              "timing_basis": "publish_to_publish"},
+                }},
+                "adversarial_value": {}, "goal_performance": {},
+                "profile_accuracy": {},
+            },
+        }
+        report = pa.generate_report(intel)
+        block = report[report.find("Stage Efficiency"):]
+        row = next(l for l in block.splitlines() if l.startswith("| build"))
+        assert "publish-gap" in row, (
+            f"the row shows minutes without naming their unit: {row!r}"
+        )
+        assert "INCLUDES inter-stage time" in block, (
+            "the report must explain that a publish-gap number is not in-stage "
+            f"execution time:\n{block[:700]}"
         )
