@@ -175,6 +175,18 @@ python backend/scripts/artifact_cli.py run-report --project <PROJECT> \
 
 ---
 
+> **⏭️ Continuation contract — advance is not the end of your turn.** REFLECT issues no
+> `advance` (it is the last stage), which makes this the LAST place the stall can happen —
+> and the most expensive, because the run is otherwise finished. Do NOT end your turn here:
+> go straight to **Step 6 COMPLETE** in `INSTRUCTIONS.md` — read `stages/complete.md`, run
+> `run-update --status completed`, and output the completion summary. A run that finishes
+> its work and never surfaces the summary is indistinguishable from one that crashed. The
+> only legal reasons to stop instead are a stage-boundary **L2 Judgment** via the Escalation
+> Routing Protocol, a **true checkpoint trigger**, a pending question awaiting the user, or
+> an abandon verdict.
+
+---
+
 ## Common Rationalizations
 
 | Rationalization | Reality | Source |
