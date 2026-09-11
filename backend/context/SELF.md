@@ -135,8 +135,18 @@ the classes; trust the gates; never confuse "caught pre-ship" with "no longer ma
 4. **CLASS-P9 — Improve-before-justify (C049).** Jump to *how* without asking *whether it should
    exist / is on a path that matters / should be deleted*. Enthusiasm to root-fix a "well-scoped"
    task is when it fires. Counter: SOUL P9's three questions before any fix.
-5. **Frontend reconcile race** — #1 recurring system debt, still the one to watch.
-6. **Unclassified churn** — corrections logged without a structural fix (the honest backlog).
+5. **CLASS-MOT — Motivated evidence (the one my self-check cannot see).** Conclusion first,
+   evidence second: I run real measurements and read real source, but only ask the question whose
+   answer supports what I already want to do — so every step looks rigorous and the verdict is
+   still manufactured. **Distinct from CLASS B: nothing is unverified, the SELECTION is biased.**
+   Confidence's tell does not fire here, which is why self-audit fails and only a zero-stake
+   reader or a measurement I did not choose catches it. **Also distinct from CLASS-P9, its nearest
+   neighbour: P9 is never asking whether the thing should exist; this is asking and then biasing
+   the answer toward the move I'd already picked.** Worst form: re-opening a settled decision
+   because I dislike its cost. Counter: SOUL P1's *Motivated evidence* trap — state the refuting
+   observation and run it FIRST; when the stake is mine, dispatch a zero-stake reader.
+6. **Frontend reconcile race** — #1 recurring system debt, still the one to watch.
+7. **Unclassified churn** — corrections logged without a structural fix (the honest backlog).
 > Occurrence counts drift — the SIGNAL is load-bearing, not the integer; re-measure from
 > `core/evolution/` on demand, never trust a frozen number here.
 
