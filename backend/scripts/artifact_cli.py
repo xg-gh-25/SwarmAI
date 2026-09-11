@@ -4043,14 +4043,29 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     # complete (a silent cap).
     _timing_rows, _timing_cov = _stage_publish_times(args.project, run_state)
     if _timing_rows:
+        # A time-of-day-only column makes a MULTI-DAY run read as out-of-order.
+        # Caught on this very run's own report: it spans 2026-09-07 to 09-11, so
+        # `test` published 05:44 on a later day sorted CORRECTLY yet displayed
+        # above `plan` at 09:32 — which looks exactly like a broken sort. Show the
+        # date only when the resolved rows are not all on one day, so a normal
+        # single-day run keeps the compact column.
+        _days = {(_r.get("at") or "")[:10] for _r in _timing_rows if _r.get("at")}
+        _multiday = len(_days) > 1
         timing_lines = []
         for _r in _timing_rows:
             _el = _r.get("elapsed_min")
             _cyc = _r.get("cycles")
             _name = _safe_stage_name(_r["stage"])
+            _at = _r.get("at")
+            if not _at:
+                _at_s = "-"
+            elif _multiday:
+                _at_s = f"{_at[5:10]} {_at[11:19]}"  # MM-DD HH:MM:SS
+            else:
+                _at_s = _at[11:19]
             timing_lines.append(
                 f"| {_name}{f' ({_cyc} cycles)' if _cyc else ''} "
-                f"| {(_r.get('at') or '-')[11:19] if _r.get('at') else '-'} "
+                f"| {_at_s} "
                 f"| {f'{_el:.1f} min' if _el is not None else '-'} |"
             )
         # Name the slowest stage explicitly (AC1). A reader must identify the
