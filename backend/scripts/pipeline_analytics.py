@@ -489,10 +489,26 @@ def analyze_stage_efficiency(metrics: list[dict]) -> dict:
             if isinstance(tokens, (int, float)) and tokens > 0:
                 stage_data[stage]["tokens"].append(tokens)
 
-        # Stage timing (from extended telemetry)
-        for stage, timing in m.get("stage_timing", {}).items():
+        # Stage timing, from TWO channels with a deliberate precedence.
+        #
+        # `stage_timing` (run-observe) is an explicit in-stage measurement and wins
+        # where present — but it needs an agent to call stage_start/stage_end, and
+        # on the real corpus only 34 of 659 runs carry it (per-stage sample counts:
+        # evaluate=8, think=1, plan=1), so gated at n>=3 it can report ONE stage.
+        # `derived_stage_gaps` is written mechanically by every completing run from
+        # artifact publish timestamps, so it is the channel that is actually fed.
+        # It measures publish-to-publish (inter-stage gaps INCLUDED), which is
+        # precisely why it is the fallback rather than the winner.
+        _seen: set[str] = set()
+        for stage, timing in (m.get("stage_timing") or {}).items():
             if isinstance(timing, dict) and timing.get("wall_minutes"):
                 stage_data[stage]["durations"].append(timing["wall_minutes"])
+                _seen.add(stage)
+        for stage, gap in (m.get("derived_stage_gaps") or {}).items():
+            if stage in _seen:
+                continue  # observe's precise measurement already counted
+            if isinstance(gap, dict) and isinstance(gap.get("wall_minutes"), (int, float)):
+                stage_data[stage]["durations"].append(gap["wall_minutes"])
 
     result = {}
     for stage in ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect", "goal_cycle"]:

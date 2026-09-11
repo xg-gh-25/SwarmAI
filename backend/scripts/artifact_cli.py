@@ -3884,7 +3884,15 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     # runs: updated_at median +0.00% error, 97.5% within +/-1%; newest stage
     # artifact median -4.34%, worst -98.98%, only 13.1% within +/-1%. The
     # tempting estimator is the strictly worse one.
-    _in_flight = not completed
+    # "(in progress)" must key off the run's STATUS, not off a missing timestamp.
+    # `not completed_at` is true for 218 real runs that are anything but live —
+    # 98 abandoned, 54 cancelled, 4 paused, and 55 whose status IS 'completed' but
+    # which never got the timestamp written. Labelling those "in progress" is a
+    # false liveness claim about a dead run, the same class of confidently-wrong
+    # number this section exists to stop rendering.
+    _TERMINAL = {"completed", "complete", "abandoned", "cancelled", "superseded",
+                 "rejected", "aborted", "failed", "paused"}
+    _in_flight = not completed and str(run_state.get("status", "")).lower() not in _TERMINAL
     _end = completed or run_state.get("updated_at", "")
     if created and _end:
         try:
@@ -4339,6 +4347,33 @@ def _try_generate_metrics(
             except (json.JSONDecodeError, OSError):
                 existing = {}
         metrics = {**existing, **_extract_run_metrics(project, run_id, run_state)}
+
+        # PERSIST the derived per-stage gaps, don't just render them.
+        # The `stage_timing` channel depends on an agent remembering to call
+        # `run-observe stage_start`/`stage_end`: measured across the real corpus,
+        # 34 of 659 runs carry it, with per-stage sample counts of evaluate=8,
+        # think=1, plan=1 — so an aggregate gated at n>=3 can only ever report ONE
+        # stage. Meanwhile this run's own derivation computes the same durations
+        # for ~71% of stages and renders them into markdown, which nothing reads.
+        # Writing them here feeds the aggregate from a code path EVERY completing
+        # run passes (no agent discipline required) and is retroactive over any
+        # run that has artifacts. Best-effort and narrowly guarded: telemetry must
+        # never fail a completion.
+        try:
+            _rows, _cov = _stage_publish_times(project, run_state)
+            _gaps = {
+                r["stage"]: {"wall_minutes": r["elapsed_min"], "at": r.get("at")}
+                for r in _rows
+                if r.get("elapsed_min") is not None and isinstance(r.get("stage"), str)
+            }
+            if _gaps:
+                # A stage with no resolvable timestamp is ABSENT, never persisted
+                # as 0 — an absent measurement is not a zero one.
+                metrics["derived_stage_gaps"] = _gaps
+                metrics["derived_gap_coverage"] = _cov
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+
         metrics_file.parent.mkdir(parents=True, exist_ok=True)
         metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     except Exception:

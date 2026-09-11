@@ -1276,3 +1276,198 @@ class TestGuardWritersAreExercised:
             f"an unbounded stage name reached the report ({len(rendered)} chars) — "
             "one on-disk value can then dominate the whole table"
         )
+
+
+# ── 10. Meta-review: the derived gaps must FEED the aggregate, not just render ─
+#
+# The meta-review found the sharper half of the AC8 defect: the analytics minutes
+# column reads `stage_timing`, which only exists when an agent remembers to call
+# `run-observe stage_start`/`stage_end`. Measured on the real corpus: 34 of 659
+# METRICS.json carry it, and per-stage wall_minutes counts are evaluate=8,
+# think=1, plan=1 — so with INSUFFICIENT_N=3 the new column would render a number
+# for exactly ONE stage, forever, while the per-run derivation computed the same
+# durations and threw them away into markdown.
+#
+# So completion PERSISTS the derived gaps (`derived_stage_gaps`) and the
+# aggregator prefers them: one channel, fed by a code path every run passes,
+# retroactive over every run that has artifacts.
+
+class TestDerivedGapsArePersisted:
+
+    def _seed(self, ws, project, run_id):
+        run_dir = _write_run(ws, project, run_id, {
+            "id": run_id, "project": project, "profile": "research",
+            "requirement": "persist gaps", "status": "completed",
+            "created_at": _iso(0), "updated_at": _iso(90), "completed_at": _iso(90),
+            "stages": [
+                _stage("evaluate", "art_a", token_cost=10),
+                _stage("think", "art_b", token_cost=20),
+                dict(_stage("reflect", None, token_cost=5), lessons=["x" * 40]),
+            ],
+            "taste_decisions": [],
+        })
+        _write_manifest(ws, project, [
+            _artifact("art_a", _iso(5)),
+            _artifact("art_b", _iso(35)),   # 30.0 min gap
+        ])
+        return run_dir
+
+    def test_completion_persists_derived_gaps(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        from scripts.artifact_cli import (
+            _try_generate_metrics, ArtifactRegistry, _get_workspace,
+        )
+
+        run_dir = self._seed(tmp_path, "P", "run_persist")
+        run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        _try_generate_metrics("P", "run_persist", run_state,
+                              ArtifactRegistry(_get_workspace()))
+
+        m = json.loads((run_dir / "METRICS.json").read_text(encoding="utf-8"))
+        gaps = m.get("derived_stage_gaps")
+        assert gaps, (
+            "the per-stage gaps were derived and then thrown away into markdown; "
+            "nothing persisted them, so the cross-run aggregate stays empty "
+            f"forever: {list(m.keys())}"
+        )
+        assert gaps["think"]["wall_minutes"] == 30.0, (
+            f"the derived gap must persist its real value: {gaps}"
+        )
+        # The unresolvable stage must NOT be invented with a 0.
+        assert "reflect" not in gaps, (
+            f"a stage with no timestamp must be absent, never persisted as 0: {gaps}"
+        )
+
+    def test_persisted_gaps_do_not_clobber_observe_telemetry(self, tmp_path, monkeypatch):
+        """Both channels coexist — persisting must not undo the merge fix."""
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        from scripts.artifact_cli import (
+            _try_generate_metrics, ArtifactRegistry, _get_workspace,
+        )
+
+        run_dir = self._seed(tmp_path, "P", "run_persist2")
+        (run_dir / "METRICS.json").write_text(json.dumps({
+            "stage_timing": {"build": {"wall_minutes": 15.0}},
+            "think_depth": {"alternatives_count": 3},
+        }), encoding="utf-8")
+
+        run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        _try_generate_metrics("P", "run_persist2", run_state,
+                              ArtifactRegistry(_get_workspace()))
+
+        m = json.loads((run_dir / "METRICS.json").read_text(encoding="utf-8"))
+        assert m["stage_timing"]["build"]["wall_minutes"] == 15.0, "observe data lost"
+        assert m["think_depth"]["alternatives_count"] == 3, "observe data lost"
+        assert m.get("derived_stage_gaps", {}).get("think", {}).get("wall_minutes") == 30.0
+
+
+class TestAggregatorPrefersDerivedGaps:
+    """analyze_stage_efficiency must read the fed channel, not only the unfed one."""
+
+    def test_derived_gaps_feed_the_minutes_columns(self):
+        import sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "scripts"))
+        import pipeline_analytics as pa
+
+        # THREE runs, so INSUFFICIENT_N=3 is satisfied and a number must render.
+        corpus = [
+            {"run_id": f"R{i}", "project": "P", "profile": "research",
+             "status": "completed", "stage_tokens": {"think": 1000},
+             "derived_stage_gaps": {"think": {"wall_minutes": 30.0}}}
+            for i in range(3)
+        ]
+        eff = pa.analyze_stage_efficiency(corpus)
+        assert eff["stages"]["think"].get("avg_minutes") == 30.0, (
+            "the aggregator ignored derived_stage_gaps, so the minutes columns stay "
+            f"empty even though every run now carries the data: {eff['stages']['think']}"
+        )
+        assert eff["stages"]["think"]["duration_sample_count"] == 3
+
+    def test_observe_stage_timing_still_wins_when_present(self):
+        """observe's explicit measurement is more precise — it must not be lost."""
+        import sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "scripts"))
+        import pipeline_analytics as pa
+
+        corpus = [
+            {"run_id": f"R{i}", "project": "P", "profile": "research",
+             "status": "completed", "stage_tokens": {"build": 1000},
+             "stage_timing": {"build": {"wall_minutes": 12.0}},
+             "derived_stage_gaps": {"build": {"wall_minutes": 99.0}}}
+            for i in range(3)
+        ]
+        eff = pa.analyze_stage_efficiency(corpus)
+        assert eff["stages"]["build"]["avg_minutes"] == 12.0, (
+            "the derived gap (which includes inter-stage time) overwrote observe's "
+            f"precise in-stage measurement: {eff['stages']['build']}"
+        )
+
+
+class TestDeadRunsAreNotLabelledInProgress:
+    """`(in progress)` must key off STATUS, not off a missing timestamp.
+
+    `not completed_at` is true for 218 real runs that are anything but live:
+    98 abandoned, 54 cancelled, 4 paused, and 55 whose status IS 'completed' but
+    which never got the timestamp written. Labelling those "in progress" is a
+    false liveness claim about a dead run.
+
+    The fixture deliberately OMITS completed_at — a fixture that sets it never
+    reaches the status branch at all (verified: the mutation reverting this fix
+    stayed green against such a fixture).
+    """
+
+    def _seed(self, ws, run_id, status):
+        run_dir = _write_run(ws, "P", run_id, {
+            "id": run_id, "project": "P", "profile": "research",
+            "requirement": "liveness label", "status": status,
+            "created_at": _iso(0), "updated_at": _iso(45),
+            # NO completed_at — the exact real-corpus shape
+            "report_autogenerated": True,
+            "stages": [
+                _stage("evaluate", "art_a", token_cost=10),
+                _stage("think", "art_b", token_cost=10),
+                dict(_stage("reflect", None, token_cost=5), lessons=["x" * 40]),
+            ],
+            "taste_decisions": [],
+        })
+        _write_manifest(ws, "P", [
+            _artifact("art_a", _iso(5)), _artifact("art_b", _iso(30)),
+        ])
+        return run_dir
+
+    @pytest.mark.parametrize("status", ["abandoned", "cancelled", "paused",
+                                        "completed", "superseded"])
+    def test_terminal_status_never_claims_in_progress(self, tmp_path, monkeypatch, status):
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        from scripts.artifact_cli import cmd_run_report, ArtifactRegistry, _get_workspace
+
+        run_dir = self._seed(tmp_path, f"run_dead_{status}", status)
+        cmd_run_report(
+            SimpleNamespace(project="P", run_id=f"run_dead_{status}"),
+            ArtifactRegistry(_get_workspace()),
+        )
+        body = (run_dir / "REPORT.md").read_text(encoding="utf-8")
+        assert "in progress" not in body, (
+            f"a run with status={status!r} was labelled in-progress purely because "
+            f"completed_at was absent — a false liveness claim:\n{body[:400]}"
+        )
+        assert "45.0 min" in body, (
+            f"the duration must still render via the updated_at fallback:\n{body[:400]}"
+        )
+
+    def test_genuinely_running_run_still_says_in_progress(self, tmp_path, monkeypatch):
+        """The in-flight label must survive for a run that IS live."""
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        from scripts.artifact_cli import cmd_run_report, ArtifactRegistry, _get_workspace
+
+        run_dir = self._seed(tmp_path, "run_live", "running")
+        cmd_run_report(
+            SimpleNamespace(project="P", run_id="run_live"),
+            ArtifactRegistry(_get_workspace()),
+        )
+        body = (run_dir / "REPORT.md").read_text(encoding="utf-8")
+        assert "in progress" in body, (
+            f"a genuinely running run lost its in-progress marker:\n{body[:400]}"
+        )
