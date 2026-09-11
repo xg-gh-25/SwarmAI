@@ -10,11 +10,34 @@
 #
 # `covered` compares the WORKTREE to HEAD; `pending` compares the INDEX to HEAD.
 # Wherever those two disagree, a real review produces no coverage for a file the
-# commit is about to include. This script prints every such shape.
+# commit is about to include. This script prints the four known such shapes
+# (staged-then-removed, staged-then-reverted, staged mode-only, staged
+# symlink/file type swap) plus the two that are safe (deletion, and a normally
+# staged change). A staged RENAME is also safe — verified separately, not here.
 #
-# Referenced by: skills/s_autonomous-pipeline/stages/deliver.md (Step 1 scope note).
+# Referenced by: backend/skills/s_autonomous-pipeline/stages/deliver.md (Step 1
+# scope note).
 # Run:  bash backend/scripts/check_review_scope.sh
 set -euo pipefail
+
+# ISOLATION FIRST — before any git call. `git init` + `cd` do NOT shield this;
+# git's environment beats the cwd. Two distinct leaks, both measured:
+#
+#   LOCATION (GIT_DIR & friends): with GIT_DIR alone set, this script ran to
+#   completion (exit 0), printed the CALLER's tracked files as if they were the
+#   fixture, and left `D a.txt` staged in the caller's index. The `git reset
+#   --hard` calls below are one step from destroying uncommitted work that way.
+#
+#   CONFIG (GIT_CONFIG_COUNT / GIT_CONFIG_PARAMETERS): injecting
+#   core.fileMode=false made the mode-only scenario print `pending []` while
+#   still asserting "gate DENIES" — exit 0, evidence silently WRONG. A
+#   core.hooksPath injected the same way even executed a caller hook inside the
+#   fixture. A demo whose numbers can be falsified by ambient env is worse than
+#   no demo, so this unset is correctness AND data safety, not tidiness.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_COMMON_DIR \
+      GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS \
+      GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_ATTR_NOSYSTEM
 
 TMP="${TMPDIR:-/tmp}/check_review_scope.$$"
 trap 'rm -rf "$TMP"' EXIT
@@ -22,6 +45,12 @@ mkdir -p "$TMP"
 cd "$TMP"
 
 git init -q .
+# Pin the settings the scenarios depend on, so ambient/global config cannot
+# falsify the output. core.fileMode=false makes the mode-only scenario vanish
+# (it is the default on some Windows/CIFS checkouts); autocrlf would perturb the
+# content comparisons.
+git config core.fileMode true
+git config core.autocrlf false
 echo tracked > a.txt
 git add a.txt
 git -c user.email=dev@local -c user.name=dev -c commit.gpgsign=false commit -qm init
@@ -60,7 +89,37 @@ show
 echo "  -> pending has a.txt, covered does not => gate DENIES."
 
 echo
-echo "== 5. staged DELETION (fine — appears in both) =="
+echo "== 5. staged MODE change, worktree mode reverted (content identical) =="
+git reset -q --hard
+chmod +x a.txt          # worktree 755
+git add a.txt           # index 755
+chmod 644 a.txt         # worktree back to 644; content never changed
+printf '  %-34s %s\n' "index mode" "$(git ls-files -s a.txt | cut -d' ' -f1)"
+show
+echo "  -> content-identical mode-only change: covered is EMPTY => gate DENIES."
+echo "     Real trigger: chmod +x a script, stage it, then a formatter or"
+echo "     checkout resets the bit. NOTE: needs core.fileMode=true (pinned"
+echo "     above); with it false this shape does not exist at all."
+
+echo
+echo "== 5b. staged symlink -> regular-file swap, reverted on disk =="
+git reset -q --hard
+echo target > target.txt
+ln -s target.txt link.txt
+git add target.txt link.txt
+git -c user.email=dev@local -c user.name=dev -c commit.gpgsign=false commit -qm links
+rm link.txt
+echo target > link.txt      # index: REGULAR file, byte-identical content
+git add link.txt
+rm link.txt
+ln -s target.txt link.txt   # worktree back to the HEAD symlink
+printf '  %-34s %s\n' "index mode" "$(git ls-files -s link.txt | cut -d' ' -f1)"
+show
+echo "  -> TYPE-only change: covered is EMPTY => gate DENIES. Unlike scenario 5"
+echo "     this one survives core.fileMode=false, so it is the more robust case."
+
+echo
+echo "== 6. staged DELETION (fine — appears in both) =="
 git reset -q --hard
 git rm -q a.txt
 show

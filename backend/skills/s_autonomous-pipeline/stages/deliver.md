@@ -343,22 +343,52 @@ git ls-files --others --exclude-standard
 >
 > `reviewed_paths` is captured at SubagentStop from `git diff HEAD`, so a file left
 > UNSTAGED while the review runs cannot enter the covered set — then staging it for
-> the commit puts it in `pending`, `pending ⊄ covered`, and the gate DENIES.
-> (Staging never leaves the local repo, so it is free to do — STEERING #5.)
+> the commit puts it in `pending`, `pending ⊄ covered`, and the gate DENIES (unless a
+> fail-open fires: `SWARM_ADVERSARIAL_GATE_FORCE=1`, a `pending` git cannot compute —
+> including a repo with no commits, where `git diff HEAD` exits 128 — or a marker
+> whose `reviewed_paths` KEY is absent, 1 of 41 real markers. An EMPTY `pending` also
+> approves, but that is not a bypass: there is nothing to cover.) Note the
+> distinct case: a marker whose key is present but the list EMPTY bounds coverage to
+> the null set, so it makes a DENY more likely, not less — 7 of 41 are that shape,
+> which is what a reviewer spawned in an already-clean worktree produces. Staging
+> never leaves the local repo, so it is free to do (STEERING #5).
 >
-> **Necessary, not sufficient.** `git diff HEAD` compares the WORKTREE to HEAD, so
-> a staged file whose worktree copy then matches HEAD again drops out of coverage
-> while staying in `pending` — same DENY. Both shapes verified by the script above:
-> (a) staged-new then deleted from the worktree, (b) staged edit then reverted to
-> HEAD content. A staged DELETION and a RENAME are both fine. Rule of thumb: the
-> reviewer must see the change ON DISK, not merely in the index.
+> **Necessary, not sufficient — at least four ways a STAGED file still misses
+> coverage.** `git diff HEAD` compares the WORKTREE to HEAD, so a staged file whose
+> worktree copy matches HEAD again drops out of `covered` while staying in `pending`.
+> All four reproduce in the script above:
+> - (a) staged-new, then deleted from the worktree
+> - (b) staged edit, then reverted to HEAD content
+> - (c) a staged MODE-only change (`chmod +x`, stage, then a formatter or checkout
+>   resets the bit) — content identical. Requires `core.fileMode=true` (git's
+>   default, but false on some Windows/CIFS checkouts, where this shape vanishes).
+> - (d) a staged symlink↔regular-file TYPE swap, reverted on disk. This one survives
+>   `core.fileMode=false`, so it is the more robust case of the two.
+>
+>   A staged DELETION and a RENAME are both fine (rename verified separately, not by
+>   the script). Rule of thumb: the reviewer must see the change ON DISK, not merely
+>   in the index.
+> - **`pending` is the WHOLE INDEX, not your run's files.** A parallel session's
+>   staged file lands in `pending` too and therefore also demands coverage. Note
+>   `run-commit` stages by explicit path but then runs a BARE `git commit -m`
+>   (`artifact_cli.py`, no pathspec), so whatever else sits in the index is
+>   committed as well. This is the one way "stage early" can hurt: it widens the
+>   window during which your file shares an index with another session's. Before
+>   spawning the review, run `git diff --cached --name-only` and unstage anything
+>   that is not yours (`git restore --staged -- <path>`, R29). This is not
+>   hypothetical: while this very note was being written, a parallel session's bare
+>   `git commit` swept both of these files into ITS commit.
+> - **A positional pathspec is added to `pending` even if the path does not exist.**
+>   `git commit -m msg -- typo.txt` yields `pending = {…, typo.txt}`, which no review
+>   can ever cover → DENY on a typo. If a commit is refused for a path you do not
+>   recognise, check your own command line before re-running the review.
 >
 > Real instance (run_fbf97252): a new test file sat unstaged through the first
 > review pass and was therefore both unread and uncovered. The pass that finally
-> covered it ran 48 mutations and found **9 vacuous tests** — the worst being one
-> where the sole writer of a data-loss guard could be deleted with the whole suite
-> still green. The gate did DENY, but only at COMMIT time, after a review round had
-> already been spent.
+> covered it ran 48 mutations and proved **6 tests vacuous** (9 across the whole
+> run) — the worst being one where the sole writer of a data-loss guard could be
+> deleted with the whole suite still green. The gate did DENY, but only at COMMIT
+> time, after a review round had already been spent.
 
 **Dispatch rules:**
 
@@ -426,21 +456,35 @@ has fresh context — no prior review bias.
 >
 > *Load-bearing:* whether an `_adv_` marker is written **at all** is decided by
 > `_is_adversarial_intent(agent_type, "", prompt_head)` — and when
-> `subagent_type` is a generic `general-purpose` (as every real marker on this
-> machine is), classification falls back ENTIRELY to the spawn prompt's wording.
+> `subagent_type` is a generic one — `general-purpose` for 40 of the 41 real markers
+> on this machine, `Explore` for the last — classification falls back ENTIRELY to the
+> spawn prompt's wording, because no generic type matches the adversarial-type regex.
 > Measured against the live function:
 >
 > | spawn prompt | marker written? |
 > |---|---|
 > | "You are an ADVERSARIAL reviewer…" | ✅ yes |
+> | "find bugs in the diff" | ✅ yes |
 > | "Please carefully review this changeset and tell me if it is correct." | ❌ **no** |
 > | "Check the diff for mistakes before I commit." | ❌ **no** |
+> | "find bugs in the **staged** diff" | ❌ **no** |
+> | "audit the **staged** diff" | ❌ **no** |
+> | "Prove this diff wrong." / "Try to falsify the claims" | ❌ **no** |
 >
 > So a genuine, thorough review phrased in ordinary language produces **zero
 > coverage**, and the commit is then DENIED for a review that actually happened.
-> Keep explicit adversarial vocabulary in the prompt (adversarial / refute /
-> red-team / hunt for bugs in this diff / 对抗 / 挑刺) — it is not stylistic, it is
-> the classifier's only input.
+> Two non-obvious traps in the same classifier:
+> - **Keep the subject BARE.** The pattern wants `this diff` / `the diff`; one
+>   intervening adjective breaks it, so `the STAGED diff` fails while `the diff`
+>   passes. Same for "prove wrong" / "falsify" — neither is in the vocabulary.
+> - **Front-load it.** The prompt head is read as `content[:2000]`
+>   (`runtime_hooks.py` `_read_subagent_prompt_head`), so adversarial vocabulary
+>   past ~2000 chars is never seen. Put it in the first sentence.
+>
+> Safe vocabulary (verified against the live function): adversarial / refute /
+> red-team / poke holes / stress-test / try to break this / hunt for bugs /
+> find bugs in the diff / 对抗 / 挑刺 / 找 bug. This is not stylistic — it is the
+> classifier's only input.
 >
 > Two further consequences: (1) coverage is decided by the working tree AT
 > SubagentStop TIME, so anything you `git add` only afterwards was never covered —
@@ -1211,8 +1255,12 @@ python backend/scripts/artifact_cli.py run-commit --project <PROJECT> --run-id <
 ```
 
 `run-commit` stages EXACTLY this run's `files_touched` (recorded during BUILD, see
-below) via `git add -- <path>` — NEVER `git add -A` — so a parallel session's
-in-flight edits are never swept in (R29). It commits locally in whichever repo
+below) via `git add -- <path>` — NEVER `git add -A`, so it never *adds* a parallel
+session's in-flight edits (R29). ⚠️ But it then runs a BARE `git commit -m` with no
+pathspec, so anything ALREADY in the index — e.g. staged by a parallel session —
+is committed too. `git add` scoping is not commit scoping. Before completing, run
+`git diff --cached --name-only` and `git restore --staged -- <path>` anything that
+is not this run's. It commits locally in whichever repo
 each file lives in (source repo and/or SwarmWS), and **NEVER pushes** (STEERING
 #5: 限制的是 auto-push,不是 local commit). It refuses if the deliver stage isn't
 push_ready or if `files_touched` is empty, and WARNS (listing them) if the working
