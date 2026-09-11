@@ -270,6 +270,7 @@ async def persist_pending(
     payload = _payload_json(user_message, content)
     # Same single-authority encoder as the payload — a client_id is ASCII today,
     # but the policy must not fork per call site (that is how door 2 drifted).
+    from core.cjk_index import expand_cjk
     from database.sqlite import dumps_json
     metadata_json = dumps_json({"client_id": client_id}) if client_id else "{}"
 
@@ -287,14 +288,22 @@ async def persist_pending(
                 )
                 max_seq = (await cursor.fetchone())[0]
                 next_seq = max_seq + 1
+                # content_seg is what messages_fts actually indexes (schema
+                # v10) — a 2-char Chinese word is unfindable under any FTS5
+                # built-in tokenizer, so the text is bigram-segmented in Python.
+                # This raw INSERT bypasses SQLiteMessagesTable.put (the usual
+                # chokepoint), so it MUST populate the column itself: the trigger
+                # only copies it, and a NULL here would leave the message
+                # invisible to search while looking perfectly stored (R27 — the
+                # second writer is the one that gets forgotten).
                 await conn.execute(
                     "INSERT INTO messages "
-                    "(id, session_id, role, content, model, metadata, "
+                    "(id, session_id, role, content, content_seg, model, metadata, "
                     " sent, pending_seq, claimed_at, expires_at, "
                     " created_at, updated_at) "
-                    "VALUES (?, ?, 'user', ?, NULL, ?, 0, ?, NULL, ?, ?, ?)",
-                    (msg_id, session_id, payload, metadata_json, next_seq,
-                     expires_at, now, now),
+                    "VALUES (?, ?, 'user', ?, ?, NULL, ?, 0, ?, NULL, ?, ?, ?)",
+                    (msg_id, session_id, payload, expand_cjk(payload),
+                     metadata_json, next_seq, expires_at, now, now),
                 )
                 await conn.commit()
                 return next_seq

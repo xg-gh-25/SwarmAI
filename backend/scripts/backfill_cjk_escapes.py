@@ -159,6 +159,34 @@ FTS_BY_BASE: dict[str, str] = {
 }
 FTS_TABLES: tuple[str, ...] = tuple(FTS_BY_BASE.values())
 
+# CJK SEGMENTATION COLUMNS (run_4ed75215). Each FTS index now indexes `*_seg`
+# columns holding bigram-expanded text, because SQLite FTS5 has no built-in
+# tokenizer that can segment a 2-character Chinese word — so a Chinese query
+# against the raw columns was returning almost nothing (measured 11.1% recall on
+# real data, 10 of 40 sampled terms returning zero).
+#
+# Why the expansion lives in a COLUMN and not just inside the index: FTS5
+# re-derives tokens from its content source on 'rebuild', on DELETE FROM <fts>,
+# and inside the raw-`old.*` triggers. Pointing the index at a persisted _seg
+# column makes all of those re-derive the already-expanded text; writing expanded
+# text into an index whose source is the raw column corrupts it (verified: stale
+# postings survive an UPDATE and `integrity-check rank=1` reports "database disk
+# image is malformed").
+#
+# ORDERING MATTERS AND IS WHY THIS SCRIPT DOES BOTH JOBS IN ONE PASS: escape
+# re-encoding must happen BEFORE segmentation, or the _seg column would be built
+# from literal \uXXXX text and hold no Chinese characters at all. And the final
+# 'rebuild' is only correct because it re-derives from _seg — which is exactly
+# why history is touched once, here, rather than by two separate migrations.
+SEG_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "messages": (("content", "content_seg"),),
+    "transcript_chunks": (("content", "content_seg"),
+                          ("source_file", "source_file_seg")),
+    "knowledge_chunks": (("content", "content_seg"),
+                         ("heading", "heading_seg"),
+                         ("source_file", "source_file_seg")),
+}
+
 
 def _reject_json_constant(name: str):
     """Reject NaN/Infinity during the round-trip check (they break the invariant)."""
@@ -343,6 +371,25 @@ def _backup(db: Path) -> Path:
     truncated copy can never sit there wearing the official backup name and get
     trusted later.
     """
+    # DISK PRECHECK. The backup is a FULL copy of the database (636 MB on this
+    # machine today), and the caller then grows the index by ~46%. Neither had any
+    # check: on a full disk `copy2`/`Connection.backup` fails part-way and leaves a
+    # truncated file that LOOKS like a backup — the worst possible outcome for the
+    # one artifact that exists to make the write reversible. Refuse early with a
+    # number the operator can act on, instead of failing mid-write.
+    import shutil as _shutil
+
+    db_bytes = Path(db).stat().st_size
+    needed = int(db_bytes * 1.6)      # the backup copy + ~46% index growth + slack
+    free = _shutil.disk_usage(Path(db).parent).free
+    if free < needed:
+        raise OSError(
+            f"refusing to back up: need ~{needed // 1_000_000} MB free "
+            f"(a {db_bytes // 1_000_000} MB copy plus index growth), "
+            f"only {free // 1_000_000} MB available on "
+            f"{Path(db).parent}. Free space and re-run."
+        )
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = db.with_name(f"{db.stem}.pre-cjk-backfill-{stamp}.db")
     src = dst = None
@@ -386,6 +433,144 @@ def _backup(db: Path) -> Path:
 #: that once wiped this project's data.db. A non-guessable token cannot be supplied
 #: by accident or by a generic `**kwargs` pass-through (REVIEW HIGH).
 WRITE_CONFIRMATION = "I-UNDERSTAND-THIS-REWRITES-USER-DATA"
+
+
+# How many times a row skipped by the compare-and-swap is re-surveyed before it is
+# reported as still-changing. Bounded, because an unbounded retry against a live
+# daemon that keeps rewriting the same row would never terminate.
+_STALE_RETRY_PASSES = 2
+
+
+def _populate_seg_columns(
+    conn: sqlite3.Connection,
+    *,
+    apply: bool = False,
+    confirm: str | None = None,
+    chunk_size: int = 500,
+    _only_base: str | None = None,
+) -> dict[str, int]:
+    """Fill the CJK segmentation columns for every row that needs one.
+
+    Returns ``{base_table: rows_written}``. In dry-run it returns the counts it
+    WOULD write and touches nothing.
+
+    IDEMPOTENT BY PREDICATE, not by a marker: a row is selected only when its
+    ``*_seg`` value differs from ``expand_cjk(source)``. Re-running therefore
+    converges to zero, which is what makes "touch history once" verifiable rather
+    than merely intended — the second run's report shows 0 and proves it.
+
+    Chunked + committed per chunk for the same reason the escape phase is: this
+    runs against a live database that the daemon is writing to, and holding one
+    transaction over ~170K rows would lock it out.
+
+    A table missing its ``*_seg`` column is SKIPPED, not an error: the column is
+    created by the owning module's schema path (``ensure_tables`` /
+    ``_run_versioned_migrations``), so a database that has not started the new
+    code yet simply has nothing to populate. Failing here would make the script
+    unusable exactly when someone runs it before restarting the daemon.
+    """
+    from core.cjk_index import expand_cjk
+
+    # Same gate as `backfill`: a bare `apply=True` boolean is one attribute away
+    # for any future job, hook or "auto-repair" that imports this module, and this
+    # function rewrites rows in the user's live database. The unguessable token
+    # makes reaching the write path a deliberate act rather than a default.
+    if apply and confirm != WRITE_CONFIRMATION:
+        raise PermissionError(
+            "refusing to write: pass confirm=WRITE_CONFIRMATION alongside "
+            "apply=True. Segmentation rewrites rows in a live user database."
+        )
+
+    written: dict[str, int] = {}
+    for base, pairs in SEG_COLUMNS.items():
+        if _only_base is not None and base != _only_base:
+            continue  # a retry pass, scoped to the one table that had stale rows
+        if not _table_exists(conn, base):
+            continue
+        usable = [(src, seg) for src, seg in pairs
+                  if _column_exists(conn, base, src)
+                  and _column_exists(conn, base, seg)]
+        if not usable:
+            continue
+
+        src_cols = ", ".join(src for src, _ in usable)
+        seg_cols = ", ".join(seg for _, seg in usable)
+        # ITERATE the cursor, never fetchall(): this runs against a live database
+        # with ~170K rows across the three tables, and materializing every row's
+        # full content PLUS an expansion per row (~3x the source size) is a
+        # multi-GB spike in a script the operator runs while the daemon is
+        # attached. An OOM kill mid-pass is survivable (the phase is idempotent
+        # and commits per chunk) but wastes the whole run.
+        cursor = conn.execute(
+            f"SELECT rowid, {src_cols}, {seg_cols} FROM {base}")
+
+        n = len(usable)
+        pending: list[tuple] = []
+        for row in cursor:
+            rowid = row[0]
+            sources = row[1:1 + n]
+            current = row[1 + n:1 + 2 * n]
+            wanted = [expand_cjk(str(s or "")) for s in sources]
+            if list(current) == wanted:
+                continue  # already correct — the idempotence predicate
+            # Carry the SOURCE values too: the write below compare-and-swaps on
+            # them, because a rowid is not a stable identity here (see the CAS
+            # comment at the UPDATE).
+            pending.append((rowid, wanted, list(sources)))
+
+        written[base] = len(pending)
+        if not apply or not pending:
+            continue
+
+        set_clause = ", ".join(f"{seg} = ?" for _, seg in usable)
+        # COMPARE-AND-SWAP on the source columns, not just the rowid.
+        #
+        # A rowid is NOT a stable identity on these tables: `messages` has no
+        # AUTOINCREMENT, so SQLite REUSES the rowid of a deleted row, and rows do
+        # get deleted (90-day TTL, session cascade). The survey above ran minutes
+        # earlier on a live database. Without this guard, a row that expired
+        # between survey and write hands its segmented text to whatever NEW row
+        # took its rowid — that row becomes unfindable, and searching the old text
+        # surfaces the wrong message. Worse, the idempotence predicate would keep
+        # re-applying it on every run, so it never self-corrects.
+        #
+        # The escape phase in this same script already does exactly this for the
+        # same reason; omitting it here was the gap.
+        where_cas = " AND ".join(f'"{src}" IS ?' for src, _ in usable)
+        stale = 0
+        for i in range(0, len(pending), chunk_size):
+            with conn:  # one transaction per chunk
+                for rowid, wanted, sources in pending[i:i + chunk_size]:
+                    cur = conn.execute(
+                        f"UPDATE {base} SET {set_clause} "
+                        f"WHERE rowid = ? AND {where_cas}",
+                        (*wanted, rowid, *sources),
+                    )
+                    if cur.rowcount == 0:
+                        stale += 1  # row changed or vanished since the survey
+        if stale:
+            # RETRY, do not merely count. A row the daemon rewrote between survey
+            # and write is skipped by the CAS — correctly, since our expansion is
+            # of stale text — but leaving it at that makes the skip PERMANENT for
+            # this pass, and the report then shows `would_convert: 0` alongside a
+            # nonzero stale count, which reads as "done" to an operator. The row's
+            # source has already settled by now, so a bounded re-survey converges.
+            for _ in range(_STALE_RETRY_PASSES):
+                again = _populate_seg_columns(
+                    conn, apply=True, confirm=confirm, chunk_size=chunk_size,
+                    _only_base=base)
+                remaining = again.get(f"{base}:changed_since_survey", 0)
+                written[base] += again.get(base, 0)
+                if not remaining:
+                    stale = 0
+                    break
+                stale = remaining
+            written[base] -= stale
+            if stale:
+                written[f"{base}:changed_since_survey"] = stale
+    return written
+
+
 
 
 def backfill(
@@ -432,6 +617,7 @@ def backfill(
         "per_table": {},
         "backup_path": None,
         "fts_rebuilt": [],
+        "seg_populated": {},
     }
 
     # PASS 1 — read-only survey. Runs identically in both modes, so the dry-run
@@ -468,9 +654,75 @@ def backfill(
 
     report["would_convert"] = len(pending)
 
+    # ── CJK segmentation phase ───────────────────────────────────────────────
+    # Placed BEFORE the early returns on purpose:
+    #   * a DRY RUN must report what it would segment, or its report understates
+    #     the work and the operator cannot tell whether running it is worthwhile;
+    #   * an --apply with ZERO escaped rows still needs segmenting — the two
+    #     phases touch overlapping but different row sets, and after the escape
+    #     backlog is cleared once, segmentation is the only work left.
+    # It opens its own connection because the survey above closed its own in the
+    # `finally`, and it re-checks its own idempotence predicate per row, so
+    # running it on both paths is safe.
+    def _run_seg_phase(*, write: bool) -> None:
+        """Count (and optionally write) the segmentation columns.
+
+        Opens its own connection because the survey above closed its own in a
+        `finally`. Idempotent per row, so calling it to COUNT and later to WRITE
+        is safe.
+        """
+        seg_conn = sqlite3.connect(str(db))
+        try:
+            # MERGE rather than overwrite: on the `pending` path this runs after a
+            # dry-run count already recorded figures, and clobbering them would
+            # under-report what the pass actually did.
+            report["seg_populated"] = {
+                **(report.get("seg_populated") or {}),
+                **_populate_seg_columns(
+                    seg_conn, apply=write,
+                    confirm=WRITE_CONFIRMATION if write else None),
+            }
+        except Exception as exc:  # noqa: BLE001 — recorded, never swallowed
+            report["seg_failed"] = f"{type(exc).__name__}: {exc}"
+            report["resume_hint"] = (
+                "CJK segmentation failed — re-run --apply once the cause is "
+                "cleared; the phase is idempotent"
+            )
+        finally:
+            seg_conn.close()
+
     if not apply:
+        # DRY RUN: report what segmentation WOULD write, so the operator can see
+        # the real size of the job. Counted against the CURRENT (still-escaped)
+        # text, which is the honest answer for "if I ran this now".
+        _run_seg_phase(write=False)
         return report
+    # An --apply with zero escaped rows still needs segmenting: the two phases
+    # touch overlapping but different row sets, and once the escape backlog is
+    # cleared, segmentation is the only remaining work.
     if not pending and not rebuild_fts:
+        # Back up FIRST. `--apply` promises a snapshot before any row is written,
+        # and this branch DOES write (it segments every row that needs it) — the
+        # backup used to be taken only on the escape path, so the steady state
+        # after the first successful run silently wrote with no snapshot.
+        if report.get("backup_path") is None:
+            report["backup_path"] = str(_backup(db))
+        _run_seg_phase(write=True)
+        # The index must be refreshed for whatever the phase just rewrote.
+        for _base, _n in (report.get("seg_populated") or {}).items():
+            _fts = FTS_BY_BASE.get(_base)
+            if _n and _fts:
+                seg_conn = sqlite3.connect(str(db))
+                try:
+                    seg_conn.execute(
+                        f"INSERT INTO {_fts}({_fts}) VALUES('rebuild')")
+                    seg_conn.commit()
+                    report["fts_rebuilt"].append(_fts)
+                except Exception as exc:  # noqa: BLE001
+                    report["fts_stale"] = True
+                    report.setdefault("crashed", f"{type(exc).__name__}: {exc}")
+                finally:
+                    seg_conn.close()
         return report
     # NOTE: `pending` may be EMPTY here when rebuild_fts is set. That path is
     # load-bearing: after a crashed or already-completed conversion the index can be
@@ -539,7 +791,19 @@ def backfill(
         # does not wait for --rebuild-fts. Uses the surveyed set: a table whose rows
         # were all CAS-skipped gets a redundant (harmless, idempotent) rebuild, which
         # is the right side to err on — the index is derived.
+        # ── CJK segmentation phase (ordered) ─────────────────────────────────
+        # AFTER escape re-encoding, so it segments real Chinese rather than
+        # literal \uXXXX — a row stored as escapes would otherwise get a _seg
+        # column holding "u914d u7f6e" and stay unsearchable while both phases
+        # reported success. BEFORE the rebuild, so the index has something to
+        # derive from. This ordering is what makes one pass over history correct.
+        _run_seg_phase(write=True)
+
         touched = {table for table, _, _, _, _ in pending}
+        # A table can need a rebuild because its _seg column was (re)populated
+        # even when no escaped row was converted — the two phases touch
+        # overlapping but different row sets.
+        touched |= {b for b, n in (report.get("seg_populated") or {}).items() if n}
         # Guarded for the same reason the chunk loop is: if the rebuild ALSO fails
         # (read-only DB, disk full, lock), the already-committed conversions and the
         # backup path must still reach the caller. An unguarded rebuild threw the

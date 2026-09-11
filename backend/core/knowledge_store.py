@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from .cjk_index import _CJK_RE, expand_cjk, expand_cjk_query
+
 logger = logging.getLogger(__name__)
 
 # Directories to skip when scanning Knowledge/
@@ -202,16 +204,174 @@ class KnowledgeStore:
         # vec0 module and made ensure_tables crash on any plain sqlite3 conn without
         # sqlite-vec loaded. FTS5 needs no such dependency.
 
+        # CJK segmentation columns (run_4ed75215). The FTS index points at THESE,
+        # not at the raw columns, so every path that re-derives tokens from the
+        # content source — 'rebuild', DELETE FROM <fts>, and any raw-old.* trigger
+        # — re-derives the ALREADY-EXPANDED text. Writing expanded text into an
+        # index whose source is the raw column corrupts it (verified: stale
+        # postings survive, and integrity-check rank=1 reports "database disk
+        # image is malformed"). See core/cjk_index for the full rationale.
+        for _seg_col in ("content_seg", "heading_seg", "source_file_seg"):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE knowledge_chunks ADD COLUMN {_seg_col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # already present
+
         # FTS5 for keyword search — content-sync'd with knowledge_chunks
         # Using external content table pattern for FTS5
         self._conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-                content, heading, source_file,
+                content_seg, heading_seg, source_file_seg,
                 content=knowledge_chunks, content_rowid=id
             )
         """)
+        self._migrate_fts_to_seg_columns()
+        self._reconcile_fresh_index()
 
         self._conn.commit()
+
+    # Column set the index MUST have. A pre-run_4ed75215 database has the raw
+    # columns instead; a virtual table cannot be ALTERed, so migrating means
+    # DROP + CREATE + repopulate.
+    _FTS_COLUMNS = ("content_seg", "heading_seg", "source_file_seg")
+
+    # (source column, segmented column) pairs this table maintains.
+    _SEG_PAIRS = (('content', 'content_seg'), ('heading', 'heading_seg'), ('source_file', 'source_file_seg'))
+
+    def _populate_seg_columns(self, chunk_size: int = 500) -> int:
+        """Fill any NULL/stale ``*_seg`` value from its source column.
+
+        Called before a rebuild so the index has something to derive from. The
+        alternative — rebuild now, populate later via a script — leaves the index
+        EMPTY for every pre-existing row, which silently kills historical search
+        while ``integrity-check`` still reports OK.
+
+        Idempotent by predicate (a row whose segmented value already equals the
+        expansion is skipped), and COMMITTED PER CHUNK — not merely looped in
+        chunks. Without the commit the chunking is cosmetic: all N updates plus the
+        rebuild that follows sit in ONE transaction holding the write lock the
+        daemon needs (measured 27.7s for 41K rows), and an interrupted upgrade
+        discards every row. Per-chunk commits let a killed migration resume,
+        because the predicate skips rows already done. Returns rows written.
+        """
+        from .cjk_index import expand_cjk
+
+        src_cols = ", ".join(s for s, _ in self._SEG_PAIRS)
+        seg_cols = ", ".join(g for _, g in self._SEG_PAIRS)
+        set_clause = ", ".join(f"{g} = ?" for _, g in self._SEG_PAIRS)
+        n = len(self._SEG_PAIRS)
+        try:
+            # Stream the cursor rather than fetchall(): this reads every row of the
+            # table, and materializing the whole corpus (plus an expansion per row)
+            # is a needless spike on a 636 MB database.
+            cursor = self._conn.execute(
+                f"SELECT rowid, {src_cols}, {seg_cols} FROM knowledge_chunks")
+        except sqlite3.DatabaseError:
+            return 0  # columns not present yet — ensure_tables adds them first
+
+        pending = []
+        for row in cursor:
+            wanted = [expand_cjk(str(v or "")) for v in row[1:1 + n]]
+            if list(row[1 + n:1 + 2 * n]) != wanted:
+                pending.append((wanted, row[0]))
+        for i in range(0, len(pending), chunk_size):
+            self._conn.commit()  # per chunk — see the docstring
+            for wanted, rowid in pending[i:i + chunk_size]:
+                self._conn.execute(
+                    f"UPDATE knowledge_chunks SET {set_clause} WHERE rowid = ?",
+                    (*wanted, rowid))
+        if pending:
+            logger.info("knowledge_chunks: populated %d segmentation column set(s)",
+                        len(pending))
+        return len(pending)
+
+    def _reconcile_fresh_index(self) -> None:
+        """Reconcile the index with its content source ONCE per database.
+
+        A freshly CREATEd external-content index holds no postings while its source
+        column already has a value for every row. Those two states disagree, and the
+        disagreement is not cosmetic: ``integrity-check rank=1`` reports "database
+        disk image is malformed", and on a trigger-backed table the next UPDATE
+        fails outright — measured on a copy of the real database, where it made the
+        segmentation backfill die and search return 0 for EVERY query, Chinese and
+        English alike.
+
+        GATED ON A STORED MARKER, not on probing. The obvious design — run
+        ``integrity-check`` and rebuild if it fails — is what this replaced: that
+        probe RE-DERIVES every token from the content source, so it costs the same
+        as the rebuild it is deciding about (measured: ~100 ms per 3,000 rows,
+        identical to a full rebuild), on every single startup. Probing to avoid
+        work that costs exactly as much as the probe is not a guard, it is the work
+        done twice. So the reconcile runs once, records that it ran, and is a
+        single cheap SELECT thereafter.
+
+        Rebuilding is free of data risk — the index is DERIVED from the base table.
+        """
+        try:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS knowledge_chunks_index_state ("
+                "  marker TEXT PRIMARY KEY,"
+                "  applied_at TEXT NOT NULL DEFAULT (datetime('now'))"
+                ")")
+            done = self._conn.execute(
+                "SELECT 1 FROM knowledge_chunks_index_state WHERE marker = ?",
+                ("cjk_seg_v1",)).fetchone()
+            if done:
+                return
+            self._conn.execute(
+                "INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
+            self._conn.execute(
+                "INSERT OR IGNORE INTO knowledge_chunks_index_state(marker) VALUES(?)",
+                ("cjk_seg_v1",))
+            logger.info(
+                "knowledge_fts: reconciled with its content source (one-time, marker %s)",
+                "cjk_seg_v1")
+        except sqlite3.DatabaseError as exc:
+            # Leave the marker UNSET so the next startup retries. repair_fts_index
+            # owns the nuclear path if even rebuild cannot read the shadow tables.
+            logger.error(
+                "knowledge_fts: reconcile failed, will retry next startup: %s: %s",
+                type(exc).__name__, exc)
+
+    def _migrate_fts_to_seg_columns(self) -> None:
+        """Re-point a pre-existing knowledge_fts at the segmentation columns.
+
+        Idempotent: reads the virtual table's actual column list and returns
+        immediately when it already indexes the _seg columns. Safe to lose — the
+        index is DERIVED from knowledge_chunks, so a DROP destroys no user data
+        (which is why this is not gated behind the migration script's approval).
+        Rows are populated by ``backfill_seg_columns``; until then _seg is NULL
+        and the index is simply empty for those rows, never wrong.
+        """
+        try:
+            cols = [r[1] for r in self._conn.execute(
+                "PRAGMA table_info(knowledge_fts)")]
+        except sqlite3.DatabaseError:
+            return  # unreadable — repair_fts_index owns that path
+        if not cols or self._FTS_COLUMNS[0] in cols:
+            return
+        logger.info(
+            "knowledge_fts: migrating index from %s to CJK-segmented columns", cols)
+        self._conn.execute("DROP TABLE IF EXISTS knowledge_fts")
+        self._conn.execute("""
+            CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+                content_seg, heading_seg, source_file_seg,
+                content=knowledge_chunks, content_rowid=id
+            )
+        """)
+        # POPULATE BEFORE REBUILDING. A rebuild derives the index from the
+        # content source, which is now the *_seg columns — and those are NULL for
+        # every pre-existing row. Rebuilding first therefore produces an EMPTY
+        # index and silently kills ALL historical search, English included
+        # (reproduced: a chunk matching '"daemon"' before the migration returned
+        # nothing after, while integrity-check still reported OK — so the health
+        # probe cannot see the outage). Deferring this to an operator-run script
+        # was the original design and it is not acceptable: this method runs
+        # automatically on daemon start.
+        self._populate_seg_columns()
+        self._conn.execute(
+            "INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
 
     def upsert_chunk(
         self,
@@ -240,35 +400,46 @@ class KnowledgeStore:
             # "database disk image is malformed" (run_1d198980 root cause).
             # Mirrors remove_stale_chunks/remove_file_entries + the messages_fts
             # trigger (sqlite.py:1977 uses old.content).
+            # Read the OLD *_seg values — 'delete' must be given exactly what
+            # was indexed, and what was indexed is the segmented text.
             _old = self._conn.execute(
-                "SELECT content, heading, source_file FROM knowledge_chunks WHERE id = ?",
+                "SELECT content_seg, heading_seg, source_file_seg "
+                "FROM knowledge_chunks WHERE id = ?",
                 (rowid,),
             ).fetchone()
             if _old is not None:
                 self._conn.execute(
-                    "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+                    "INSERT INTO knowledge_fts(knowledge_fts, rowid, content_seg, heading_seg, source_file_seg) "
                     "VALUES('delete', ?, ?, ?, ?)",
-                    (rowid, _old[0], _old[1] or "", _old[2]),
+                    (rowid, _old[0] or "", _old[1] or "", _old[2] or ""),
                 )
             # Update the chunk
             self._conn.execute(
                 "UPDATE knowledge_chunks SET heading = ?, content = ?, content_hash = ?, "
-                "metadata = ?, updated_at = datetime('now') "
+                "metadata = ?, content_seg = ?, heading_seg = ?, source_file_seg = ?, "
+                "updated_at = datetime('now') "
                 "WHERE id = ?",
-                (heading, content, content_hash, metadata_json, rowid),
+                (heading, content, content_hash, metadata_json,
+                 expand_cjk(content), expand_cjk(heading or ""),
+                 expand_cjk(source_file), rowid),
             )
         else:
             cursor = self._conn.execute(
-                "INSERT INTO knowledge_chunks (source_file, chunk_index, heading, content, content_hash, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (source_file, chunk_index, heading, content, content_hash, metadata_json),
+                "INSERT INTO knowledge_chunks (source_file, chunk_index, heading, content, "
+                "content_hash, metadata, content_seg, heading_seg, source_file_seg) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (source_file, chunk_index, heading, content, content_hash, metadata_json,
+                 expand_cjk(content), expand_cjk(heading or ""), expand_cjk(source_file)),
             )
             rowid = cursor.lastrowid
 
-        # Insert FTS5 entry
+        # Insert FTS5 entry — the SEGMENTED text, matching what the index
+        # declares and what every delete path will read back.
         self._conn.execute(
-            "INSERT INTO knowledge_fts(rowid, content, heading, source_file) VALUES(?, ?, ?, ?)",
-            (rowid, content, heading or "", source_file),
+            "INSERT INTO knowledge_fts(rowid, content_seg, heading_seg, source_file_seg) "
+            "VALUES(?, ?, ?, ?)",
+            (rowid, expand_cjk(content), expand_cjk(heading or ""),
+             expand_cjk(source_file)),
         )
 
         self._conn.commit()
@@ -284,19 +455,22 @@ class KnowledgeStore:
 
     def remove_stale_chunks(self, source_file: str, keep_indexes: set[int]) -> int:
         """Remove chunks not in keep_indexes. Returns count removed."""
+        # Read the *_seg values: 'delete' reverses postings using the values it
+        # is given, and the index holds segmented text.
         rows = self._conn.execute(
-            "SELECT id, chunk_index, content, heading FROM knowledge_chunks WHERE source_file = ?",
+            "SELECT id, chunk_index, content_seg, heading_seg, source_file_seg "
+            "FROM knowledge_chunks WHERE source_file = ?",
             (source_file,),
         ).fetchall()
 
         removed = 0
-        for rowid, idx, content, heading in rows:
+        for rowid, idx, content_seg, heading_seg, source_file_seg in rows:
             if idx not in keep_indexes:
                 # Delete from FTS5 first
                 self._conn.execute(
-                    "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+                    "INSERT INTO knowledge_fts(knowledge_fts, rowid, content_seg, heading_seg, source_file_seg) "
                     "VALUES('delete', ?, ?, ?, ?)",
-                    (rowid, content, heading or "", source_file),
+                    (rowid, content_seg or "", heading_seg or "", source_file_seg or ""),
                 )
                 self._conn.execute("DELETE FROM knowledge_chunks WHERE id = ?", (rowid,))
                 removed += 1
@@ -308,15 +482,16 @@ class KnowledgeStore:
     def remove_file_entries(self, source_file: str) -> int:
         """Remove all chunks for a file. Returns count removed."""
         rows = self._conn.execute(
-            "SELECT id, content, heading FROM knowledge_chunks WHERE source_file = ?",
+            "SELECT id, content_seg, heading_seg, source_file_seg "
+            "FROM knowledge_chunks WHERE source_file = ?",
             (source_file,),
         ).fetchall()
 
-        for rowid, content, heading in rows:
+        for rowid, content_seg, heading_seg, source_file_seg in rows:
             self._conn.execute(
-                "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+                "INSERT INTO knowledge_fts(knowledge_fts, rowid, content_seg, heading_seg, source_file_seg) "
                 "VALUES('delete', ?, ?, ?, ?)",
-                (rowid, content, heading or "", source_file),
+                (rowid, content_seg or "", heading_seg or "", source_file_seg or ""),
             )
 
         self._conn.execute(
@@ -338,15 +513,15 @@ class KnowledgeStore:
         never match mount 'abc' (a bare 'mount:ab%' would)."""
         prefix = f"mount:{mount_id}/"
         rows = self._conn.execute(
-            "SELECT id, content, heading, source_file FROM knowledge_chunks "
+            "SELECT id, content_seg, heading_seg, source_file_seg FROM knowledge_chunks "
             "WHERE source_file LIKE ? ESCAPE '\\'",
             (prefix.replace("%", "\\%").replace("_", "\\_") + "%",),
         ).fetchall()
-        for rowid, content, heading, source_file in rows:
+        for rowid, content_seg, heading_seg, source_file_seg in rows:
             self._conn.execute(
-                "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+                "INSERT INTO knowledge_fts(knowledge_fts, rowid, content_seg, heading_seg, source_file_seg) "
                 "VALUES('delete', ?, ?, ?, ?)",
-                (rowid, content, heading or "", source_file),
+                (rowid, content_seg or "", heading_seg or "", source_file_seg or ""),
             )
         if rows:
             ids = [r[0] for r in rows]
@@ -376,6 +551,9 @@ class KnowledgeStore:
         if row is None:
             return True  # empty index — nothing to corrupt
         # First alphanumeric token of a real chunk → guaranteed to exist.
+        # Deliberately NOT CJK-expanded: the probe picks an ASCII-only token,
+        # which expansion passes through verbatim, so expanding here would add
+        # nothing and could mask a genuine malformed-index signal.
         import re as _re
         m = _re.search(r"[A-Za-z0-9]{3,}", row[0])
         probe = m.group(0) if m else None
@@ -396,7 +574,13 @@ class KnowledgeStore:
         """Repair the external-content FTS5 index from knowledge_chunks.
 
         Zero data loss — the content lives in knowledge_chunks; the FTS index
-        carries no unique data. Two-tier:
+        carries no unique data.
+
+        ``'rebuild'`` is SAFE here and needs no CJK special-casing: it re-derives
+        from the content source, which is the segmented ``*_seg`` columns, so the
+        expansion survives a repair. That is the whole reason the index points at
+        those columns rather than holding expanded text over a raw source — under
+        the raw-source shape a repair would silently un-fix CJK search. Two-tier:
           1. ``'rebuild'`` re-derives the index in place (fast, fixes a stale /
              mildly-desynced index).
           2. If 'rebuild' ITSELF raises malformed (the shadow tables are
@@ -429,7 +613,7 @@ class KnowledgeStore:
             self._conn.execute("DROP TABLE IF EXISTS knowledge_fts")
             self._conn.execute("""
                 CREATE VIRTUAL TABLE knowledge_fts USING fts5(
-                    content, heading, source_file,
+                    content_seg, heading_seg, source_file_seg,
                     content=knowledge_chunks, content_rowid=id
                 )
             """)
@@ -468,7 +652,12 @@ class KnowledgeStore:
         # "daemon crash SIGKILL OOM" matches zero chunks with AND but
         # 356 with OR. FTS5 rank still boosts chunks matching more terms.
         # Quote-wrap each term to prevent any residual operator interpretation.
-        clean_query = " OR ".join(f'"{w}"' for w in clean_words)
+        # CJK-aware: a Chinese term must be searched as the AND of its bigrams,
+        # because that is how it was indexed. Falls back to the plain quoted-OR
+        # form when the text has no CJK, so English behaviour is unchanged.
+        clean_query = expand_cjk_query(" ".join(clean_words))
+        if not clean_query:
+            return []
 
         try:
             rows = self._conn.execute(
@@ -500,11 +689,15 @@ class KnowledgeStore:
 
     def _fts5_fallback_search(self, query: str, limit: int) -> list[dict]:
         """Fallback: search each word with OR."""
-        words = [w for w in query.split() if len(w) > 2]
+        # len>2 would drop every 2-char CJK word (the most common Chinese word
+        # length), so keep any term that survives CJK-aware tokenization.
+        words = [w for w in query.split() if len(w) > 2 or _CJK_RE.search(w)]
         if not words:
             return []
 
-        or_query = " OR ".join(words)
+        or_query = expand_cjk_query(" ".join(words))
+        if not or_query:
+            return []
         try:
             rows = self._conn.execute(
                 "SELECT kc.id, kc.source_file, kc.chunk_index, kc.heading, kc.content, "

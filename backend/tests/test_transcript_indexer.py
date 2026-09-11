@@ -317,8 +317,11 @@ class TestTranscriptStore:
 
         # Force a desync: write a bogus FTS row whose content does not match
         # the source row, simulating the legacy corruption.
+        # *_seg column names (run_4ed75215) — the index now holds segmented text.
+        # Still a phantom row whose content has no source row: same teeth.
         conn.execute(
-            "INSERT INTO transcript_fts(rowid, content, source_file) VALUES (999, 'phantom token', 'x')"
+            "INSERT INTO transcript_fts(rowid, content_seg, source_file_seg) "
+            "VALUES (999, 'phantom token', 'x')"
         )
 
         store.repair_fts_index()

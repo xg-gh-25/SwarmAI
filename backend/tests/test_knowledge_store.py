@@ -636,8 +636,11 @@ class TestFtsCorruptionFix:
         assert store._fts_is_healthy() is True
 
         # Desync the external-content index: 'delete' with values never indexed.
+        # Column names follow the index, which now holds CJK-SEGMENTED text in
+        # *_seg columns (run_4ed75215). The test's teeth are unchanged: it still
+        # issues a 'delete' with values that were never indexed.
         conn.execute(
-            "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+            "INSERT INTO knowledge_fts(knowledge_fts, rowid, content_seg, heading_seg, source_file_seg) "
             "VALUES('delete', 1, 'zzz nonexistent qqq', '', 'n.md')"
         )
         assert store._fts_is_healthy() is False, \

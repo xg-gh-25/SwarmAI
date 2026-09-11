@@ -23,6 +23,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.cjk_index import expand_cjk_query
+
 logger = logging.getLogger(__name__)
 
 # Upper bound on FTS rows fetched by search() (run_78bd708f). WITHOUT this, a broad
@@ -110,11 +112,22 @@ class SessionRecall:
             # individually quoted so an FTS5 keyword term (OR/NEAR/NOT) is a
             # phrase-literal, never an operator (injection-safe). Single term →
             # OR-of-one → identical to the old single-term behavior.
-            _terms = [t for t in query.split() if t]
+            # CJK-aware (run_4ed75215): messages_fts indexes the SEGMENTED
+            # column, so a Chinese term must be searched as the AND of its
+            # bigrams. expand_cjk_query keeps the same per-term quoting, so an
+            # FTS5 keyword arriving in user text stays a phrase literal.
+            # Cap term COUNT here as `search_session_list` already does: each term
+            # adds an OR-clause, so an enormous query builds an enormous MATCH
+            # expression whose cost scales with terms x matching rows. (Per-term
+            # LENGTH is capped inside expand_cjk_query.) The HTTP route limits the
+            # query string, but internal callers reach this directly.
+            _terms = [t for t in query.split() if t][:32]
             if _terms:
-                safe_query = " OR ".join('"' + t.replace('"', '""') + '"' for t in _terms)
+                safe_query = expand_cjk_query(" ".join(_terms))
             else:
-                safe_query = '"' + query.replace('"', '""') + '"'
+                safe_query = expand_cjk_query(query)
+            if not safe_query:
+                return RecallResult(query=query, sessions=[], total_matches=0)
 
             # Step 1-2: FTS5 search joined with messages.
             # Root-1 SSOT Phase 2: the FTS insert trigger indexes ALL message
@@ -269,7 +282,9 @@ class SessionRecall:
         # Reuse search()'s OR-join, injection-safe term quoting: each term is a
         # phrase-literal, so an FTS5 keyword (OR/NEAR/NOT) can never act as an
         # operator. Single term → OR-of-one → identical to a plain phrase search.
-        safe_query = " OR ".join('"' + t.replace('"', '""') + '"' for t in _terms)
+        safe_query = expand_cjk_query(" ".join(_terms))
+        if not safe_query:
+            return []
 
         conn = self._open_conn()
         conn.row_factory = sqlite3.Row

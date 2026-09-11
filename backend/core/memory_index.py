@@ -98,8 +98,15 @@ _STOP_WORDS = frozenset({
 
 # ── Tokenization ─────────────────────────────────────────────────────
 
-# CJK Unified Ideographs (U+4E00–U+9FFF) — compiled once at module level
-_CJK_RE = re.compile(r"[一-鿿]")
+# The CJK class is OWNED by core.cjk_index and imported here, never re-declared.
+# A local copy was the bug: this module kept the old ideographs-only range while
+# cjk_index widened to kana + hangul, so the gate below never let a Korean or
+# Japanese token reach the expansion it guards — `_bm25_tokenize('설정파일')`
+# returned one token while `expand_cjk('설정파일')` returned three bigrams. That is
+# precisely the cross-domain disagreement (Python-scored `context_files`/`ddd` vs
+# FTS-scored `library`/`session`) that delegating to one authority exists to
+# prevent, reintroduced by duplicating the constant.
+from .cjk_index import _CJK_RE
 
 
 def _tokenize_lower(text: str) -> list[str]:
@@ -182,12 +189,29 @@ def _bm25_tokenize(text: str) -> list[str]:
     miss '竞品分析陷阱' vs '竞品分析的结论' — they share no whole token, only the
     bigrams 竞品/品分/分析). Mirrors the CJK-flexibility ``keyword_relevance`` has,
     keeping the recall upgrade from REGRESSING bilingual matching.
+
+    Delegates the actual segmentation to ``core.cjk_index`` so the codebase has
+    ONE CJK policy. That module is also what the SQLite FTS5 indexes use, and two
+    tokenizers that disagree about where a Chinese word ends would make the
+    Python-scored domains (``context_files``, ``ddd``) and the FTS-scored domains
+    (``library``, ``session``) answer the same query differently.
+
+    The delegation also FIXES a defect that lived here: the old code bigram-sliced
+    the WHOLE token whenever it contained any CJK, so ``用goal-pipeline跑`` became
+    ``['用g','go','oa','al','l-','-p',...]`` — the embedded English word was
+    destroyed and an English query could not match the document. The shared helper
+    splits a mixed token into maximal CJK and non-CJK runs first. Pure-CJK and
+    pure-ASCII output is byte-identical to before, so the two healthy domains keep
+    their existing behaviour (pinned by tests, including a ranking-ORDER test:
+    ``_bm25_scores`` derives avgdl and idf from the candidate corpus, so a token
+    count change in ANY document re-normalizes every score).
     """
+    from .cjk_index import expand_cjk
+
     out: list[str] = []
     for tok in _tokenize_lower(text):
-        if _CJK_RE.search(tok) and len(tok) >= 2:
-            # Emit character bigrams for the CJK run (overlapping).
-            out.extend(tok[i:i + 2] for i in range(len(tok) - 1))
+        if _CJK_RE.search(tok):
+            out.extend(expand_cjk(tok).split())
         else:
             out.append(tok)
     return out

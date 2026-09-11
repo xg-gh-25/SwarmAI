@@ -64,19 +64,24 @@ def db_path(tmp_path: Path) -> Path:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
+    # Mirrors production schema v10: messages_fts indexes the CJK-SEGMENTED
+    # `content_seg` column, not raw `content`. Keeping the old raw shape here
+    # would make this fixture test a contract that no longer exists.
+    conn.execute("ALTER TABLE messages ADD COLUMN content_seg TEXT")
     conn.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-            content, content=messages, content_rowid=rowid
+            content_seg, content=messages, content_rowid=rowid
         )
     """)
     conn.execute("""
         CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
-            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+            INSERT INTO messages_fts(rowid, content_seg) VALUES (new.rowid, new.content_seg);
         END
     """)
     conn.execute("""
         CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            INSERT INTO messages_fts(messages_fts, rowid, content_seg)
+            VALUES('delete', old.rowid, old.content_seg);
         END
     """)
     conn.commit()
@@ -105,12 +110,20 @@ def _insert_session(db_path: Path, session_id: str, title: str,
 
 def _insert_message(db_path: Path, session_id: str, role: str, content: str,
                     sent: int = 1) -> None:
+    # content_seg is what messages_fts indexes (schema v10): a 2-char Chinese word
+    # is unfindable under any FTS5 built-in tokenizer, so the text is segmented in
+    # Python. A raw INSERT that omits it stores the row and leaves it invisible to
+    # search, so this helper populates it exactly as the production writers do.
+    from core.cjk_index import expand_cjk
+
     conn = sqlite3.connect(str(db_path))
     now = datetime.now().isoformat()
     conn.execute(
-        "INSERT INTO messages (id, session_id, role, content, created_at, updated_at, sent) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (str(uuid4()), session_id, role, content, now, now, sent),
+        "INSERT INTO messages (id, session_id, role, content, content_seg, "
+        "created_at, updated_at, sent) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid4()), session_id, role, content, expand_cjk(content),
+         now, now, sent),
     )
     conn.commit()
     conn.close()
@@ -217,10 +230,13 @@ class TestSearchSessionsEndpoint:
             "VALUES (?, ?, ?, ?, ?, ?)",
             (sid, "agent-ep", "Untitled", now, now, now),
         )
+        from core.cjk_index import expand_cjk
+        _body = "the aardvark migration plan"
         conn.execute(
-            "INSERT INTO messages (id, session_id, role, content, created_at, updated_at, sent) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1)",
-            (str(uuid4()), sid, "user", "the aardvark migration plan", now, now),
+            "INSERT INTO messages (id, session_id, role, content, content_seg, "
+            "created_at, updated_at, sent) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+            (str(uuid4()), sid, "user", _body, expand_cjk(_body), now, now),
         )
         conn.commit()
         conn.close()

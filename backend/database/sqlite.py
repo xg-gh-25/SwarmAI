@@ -411,11 +411,24 @@ class SQLiteTable(BaseTable[T], Generic[T]):
         """
         return _get_pool(str(self.db_path)).borrow(readonly=readonly)
 
+    # Columns that exist only to feed a search index. They are a DERIVED copy of a
+    # column already in the row, so returning them doubles a payload while adding
+    # no information — and `list_by_session` feeds the chat history API with no
+    # response_model, so anything here reaches the client and its logs verbatim.
+    # Stripped at this single read chokepoint rather than per-route: every table
+    # subclass returns rows through here.
+    _INTERNAL_COLUMN_SUFFIX = "_seg"
+
     def _row_to_dict(self, row: aiosqlite.Row) -> dict:
-        """Convert a SQLite row to a dictionary, parsing JSON fields."""
+        """Convert a SQLite row to a dictionary, parsing JSON fields.
+
+        Search-index columns (``*_seg``) are omitted — see
+        ``_INTERNAL_COLUMN_SUFFIX``.
+        """
         if row is None:
             return None
-        result = dict(row)
+        result = {k: v for k, v in dict(row).items()
+                  if not k.endswith(self._INTERNAL_COLUMN_SUFFIX)}
         # Parse JSON fields (lists and nested objects)
         for key, value in result.items():
             if isinstance(value, str) and (value.startswith('[') or value.startswith('{')):
@@ -585,6 +598,23 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
 
         # Set TTL: expires 90 days from now (Unix epoch timestamp in seconds)
         item["expires_at"] = int(time.time()) + self.TTL_SECONDS
+
+        # CJK-searchable index text (run_4ed75215, schema v10). messages_fts
+        # indexes `content_seg`, not `content`, because a 2-character Chinese
+        # word is unfindable under any FTS5 built-in tokenizer. Populating it
+        # HERE — at the write chokepoint — is what keeps the index and its
+        # content source in agreement; the triggers only copy the column.
+        # `content` may already be a JSON string or a list/dict, so serialize
+        # through the same path the base class uses before segmenting.
+        if "content" in item:
+            # Imported lazily: `core/__init__` eagerly imports the session stack,
+            # which imports `database`, so a module-level `from core.cjk_index`
+            # here would be a circular import. cjk_index itself imports nothing
+            # beyond `re`, so the lazy import is cheap and cycle-free.
+            from core.cjk_index import expand_cjk
+
+            item["content_seg"] = expand_cjk(
+                str(self._serialize_value(item["content"]) or ""))
 
         return await super().put(item)
 
@@ -1716,7 +1746,7 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 6 — pending-message contract: messages.sent/pending_seq/claimed_at + idx (2026-06-20)
 # 7 — add recall_metrics table (2026-08-09)
 # 8 — index recall_metrics(timestamp) so the retention prune range-seeks (2026-08-10)
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 11
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -1804,6 +1834,12 @@ class SQLiteDatabase(BaseDatabase):
         session_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
+        -- CJK-segmented copy of `content`; messages_fts indexes THIS column,
+        -- not `content` (see migration v10 and core/cjk_index). Declared here so
+        -- the canonical schema and the migration agree: SQLiteMessagesTable.put
+        -- writes this column on every insert, and a database whose base DDL
+        -- omitted it would fail every write if v10 were ever skipped.
+        content_seg TEXT,
         model TEXT,
         metadata TEXT DEFAULT '{}',
         expires_at INTEGER,
@@ -2310,6 +2346,43 @@ class SQLiteDatabase(BaseDatabase):
             current_version, CURRENT_SCHEMA_VERSION, elapsed_ms,
         )
 
+    async def _populate_messages_seg(self, conn, chunk_size: int = 2000) -> int:
+        """Fill ``messages.content_seg`` with SEGMENTED text, chunked.
+
+        This is what ``messages_fts`` indexes, so it must be the bigram expansion —
+        a raw copy of ``content`` leaves a 2-character Chinese query returning
+        nothing while costing the full index growth (that was v10's bug).
+
+        Committed PER CHUNK, deliberately. The daemon owns this database and the
+        write lock; holding one transaction over ~84K rows would block it for the
+        whole run and make a mid-migration kill discard all the work. Per-chunk
+        commits mean an interrupted upgrade resumes from where it stopped, because
+        the predicate below skips rows already correct.
+
+        Idempotent: only rows whose segmented value differs are rewritten, so this
+        is safe to re-run and converges to zero.
+        """
+        from core.cjk_index import expand_cjk
+
+        cursor = await conn.execute(
+            "SELECT rowid, content, content_seg FROM messages")
+        rows = await cursor.fetchall()
+        pending = []
+        for rowid, content, seg in rows:
+            wanted = expand_cjk(str(content or ""))
+            if seg != wanted:
+                pending.append((wanted, rowid))
+        if not pending:
+            return 0
+        for i in range(0, len(pending), chunk_size):
+            for wanted, rowid in pending[i:i + chunk_size]:
+                await conn.execute(
+                    "UPDATE messages SET content_seg = ? WHERE rowid = ?",
+                    (wanted, rowid))
+            await conn.commit()
+        logger.info("messages: segmented %d row(s) for CJK search", len(pending))
+        return len(pending)
+
     async def _run_versioned_migrations(
         self, conn: aiosqlite.Connection, current_version: int
     ) -> None:
@@ -2632,6 +2705,180 @@ class SQLiteDatabase(BaseDatabase):
             except Exception:
                 pass  # Column already exists
             await conn.execute("PRAGMA user_version = 9")
+
+        if current_version < 10:
+            # Version 10 (run_4ed75215): CJK-searchable messages.
+            #
+            # messages_fts declared no `tokenize=`, so the default unicode61
+            # indexed a whole Chinese run as ONE token and a 2-character Chinese
+            # word — the most common Chinese word length — was structurally
+            # unfindable. FTS5 ships no built-in tokenizer that reaches 2-char
+            # CJK (all six probed return 0), and a custom one needs the C API,
+            # unreachable from Python's sqlite3. So the text is segmented into
+            # overlapping bigrams in Python (see core/cjk_index).
+            #
+            # The segmented text lives in a PERSISTED `content_seg` column and
+            # the index points at THAT, rather than expanded text being written
+            # into an index whose content source is the raw column. That
+            # distinction is load-bearing: FTS5 re-derives tokens from the
+            # content source on 'rebuild' AND inside these very triggers via
+            # `old.<col>`. With a raw source, every UPDATE would subtract tokens
+            # that were never inserted — verified to leave stale postings and to
+            # fail `integrity-check rank=1` with "database disk image is
+            # malformed". Since `UPDATE messages SET sent=...` runs on the
+            # pending-queue hot path, that corruption would accumulate.
+            #
+            # Deliberately NOT a SQL UDF or a generated column: both need the
+            # function registered on every writing connection, and one without it
+            # fails the whole INSERT — unacceptable on the message store.
+            # A PLAIN nullable column, deliberately — not a generated one.
+            #
+            # A generated `COALESCE(content_seg_raw, content)` column would be
+            # strictly nicer: a raw `INSERT INTO messages` that forgets the
+            # segmented text would degrade to raw indexing instead of vanishing
+            # from search. It was rejected because SQLite cannot add a generated
+            # column to an existing table — `ALTER TABLE ADD ... GENERATED`
+            # SILENTLY SUCCEEDS AND ADDS NOTHING (verified on 3.47.1: the
+            # statement returns OK and PRAGMA table_info shows no new column).
+            # The only route is a full table rebuild — copy every row, DROP the
+            # original, RENAME — on the user's irreplaceable message history.
+            # That is the exact shape STEERING #20 forbids, traded for a
+            # convenience, so the honest plain column wins and the risk it leaves
+            # (a future writer forgetting the column) is covered by a test that
+            # enumerates the writers instead.
+            try:
+                await conn.execute(
+                    "ALTER TABLE messages ADD COLUMN content_seg TEXT")
+            except aiosqlite.OperationalError:
+                # Narrow, then VERIFY: "duplicate column" and "database is locked"
+                # both land here, and a bare `except Exception: pass` treated them
+                # alike. That matters because SQLiteMessagesTable.put writes this
+                # column unconditionally — if the ALTER genuinely failed, EVERY
+                # subsequent message insert would fail with "no such column" and
+                # new chat history would silently stop persisting. So confirm the
+                # column is really there before letting the migration proceed.
+                cursor = await conn.execute("PRAGMA table_info(messages)")
+                cols = {r[1] for r in await cursor.fetchall()}
+                if "content_seg" not in cols:
+                    raise
+            # Re-point the index.            # Re-point the index. A virtual table cannot be ALTERed, so this is
+            # DROP + CREATE. Safe: the index is DERIVED from messages, carries no
+            # unique data, and is repopulated by 'rebuild' below once content_seg
+            # is filled (scripts/backfill_cjk_escapes.py --apply does that for
+            # history; new rows are populated by the writers).
+            try:
+                await conn.execute("DROP TRIGGER IF EXISTS messages_fts_insert")
+                await conn.execute("DROP TRIGGER IF EXISTS messages_fts_delete")
+                await conn.execute("DROP TRIGGER IF EXISTS messages_fts_update")
+                await conn.execute("DROP TABLE IF EXISTS messages_fts")
+                await conn.execute("""
+                    CREATE VIRTUAL TABLE messages_fts USING fts5(
+                        content_seg,
+                        content=messages,
+                        content_rowid=rowid
+                    )
+                """)
+                # Triggers carry the SEGMENTED column on both sides. `old.content_seg`
+                # is exactly what was indexed, so a delete reverses the right postings.
+                # REBUILD IMMEDIATELY, before the triggers exist.
+                # A freshly created external-content index is EMPTY, while its
+                # source column already has a value for every row (NULL until the
+                # backfill runs). Those two states disagree, and the first
+                # `UPDATE messages` then issues a 'delete' for postings that were
+                # never inserted → "database disk image is malformed". Verified on
+                # a copy of the real database: without this line the seg-population
+                # UPDATE fails and search returns 0 for EVERY query, Chinese and
+                # English alike. 'rebuild' reconciles index to source (both empty
+                # of real tokens), so the later UPDATEs are consistent.
+                # POPULATE BEFORE REBUILDING. The rebuild derives the index from
+                # content_seg, which is NULL for every pre-existing row, so
+                # rebuilding first yields an EMPTY index and silently kills ALL
+                # historical message search — English included — while
+                # integrity-check still reports OK (reproduced). Deferring this to
+                # the operator-run backfill script was the original design; that
+                # left a window on every deploy where search was dead. The script
+                # is still the right tool for the ESCAPE re-encoding (it rewrites
+                # `content` itself, which needs a backup + a human token), but
+                # merely deriving an index column does not.
+                await self._populate_messages_seg(conn)
+                await conn.execute(
+                    "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+                await conn.execute("""
+                    CREATE TRIGGER messages_fts_insert
+                    AFTER INSERT ON messages BEGIN
+                        INSERT INTO messages_fts(rowid, content_seg)
+                        VALUES (new.rowid, new.content_seg);
+                    END
+                """)
+                await conn.execute("""
+                    CREATE TRIGGER messages_fts_delete
+                    AFTER DELETE ON messages BEGIN
+                        INSERT INTO messages_fts(messages_fts, rowid, content_seg)
+                        VALUES('delete', old.rowid, old.content_seg);
+                    END
+                """)
+                await conn.execute("""
+                    CREATE TRIGGER messages_fts_update
+                    AFTER UPDATE ON messages BEGIN
+                        INSERT INTO messages_fts(messages_fts, rowid, content_seg)
+                        VALUES('delete', old.rowid, old.content_seg);
+                        INSERT INTO messages_fts(rowid, content_seg)
+                        VALUES (new.rowid, new.content_seg);
+                    END
+                """)
+                logger.info(
+                    "Migration v10: messages_fts re-pointed at content_seg "
+                    "(CJK-segmented); run backfill_cjk_escapes.py --apply to "
+                    "populate history"
+                )
+                v10_ok = True
+            except Exception as exc:
+                # DDL in Python's sqlite3 AUTO-COMMITS (there is no implicit BEGIN
+                # before CREATE/DROP), so a failure part-way through leaves the
+                # DROPs already durable. If we bumped user_version anyway, the next
+                # startup would take the >= CURRENT_SCHEMA_VERSION fast path and
+                # never retry — message search would be permanently empty with no
+                # self-heal, because nothing else recreates messages_fts.
+                #
+                # So: log loudly and leave the version BEHIND, which makes the next
+                # startup re-run this block. Every statement in it is idempotent
+                # (DROP IF EXISTS / CREATE), so re-running is safe, and the index
+                # is DERIVED so nothing is lost in the meantime.
+                v10_ok = False
+                logger.error(
+                    "Migration v10: messages_fts re-point failed (will retry on "
+                    "next startup, user_version NOT advanced): %s: %s",
+                    type(exc).__name__, exc,
+                )
+            if v10_ok:
+                await conn.execute("PRAGMA user_version = 10")
+
+        if current_version < 11:
+            # Version 11 (run_4ed75215): re-populate messages.content_seg with
+            # SEGMENTED text.
+            #
+            # v10 shipped `UPDATE messages SET content_seg = content` — a RAW copy.
+            # The ordering was right (populate before rebuild) but the VALUE was
+            # wrong: nothing segmented it, so the largest table paid the full index
+            # cost while a 2-character Chinese query still returned nothing
+            # (reproduced: MATCH '部署' = 0, MATCH 'daemon' = 1). The knowledge and
+            # transcript paths call expand_cjk correctly, which is exactly why a
+            # per-file review missed the one that did not.
+            #
+            # A version bump is REQUIRED rather than fixing v10 in place: a database
+            # that already ran v10 carries user_version=10 and has no marker table,
+            # so it would never retry.
+            try:
+                await self._populate_messages_seg(conn)
+                await conn.execute(
+                    "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+                await conn.execute("PRAGMA user_version = 11")
+            except Exception as exc:
+                # Leave the version behind so the next startup retries (the step is
+                # idempotent). Loud, never silent.
+                logger.error(
+                    "Migration v11: messages segmentation failed (will retry on "
+                    "next startup): %s: %s", type(exc).__name__, exc)
             await conn.commit()
             logger.info("Migration v9: hive_instances.custom_ami_id (moved out of v3)")
 

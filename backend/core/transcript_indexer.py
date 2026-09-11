@@ -25,6 +25,8 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from .cjk_index import expand_cjk, expand_cjk_query
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────
@@ -249,19 +251,177 @@ class TranscriptStore:
             ON transcript_chunks(session_id, chunk_index);
         """)
 
+        # CJK segmentation columns (run_4ed75215) — see core/cjk_index. The FTS
+        # index points at THESE, so 'rebuild', DELETE FROM <fts>, and any future
+        # trigger all re-derive the already-expanded text instead of raw text
+        # (indexing expanded text over a raw source corrupts the index).
+        for _seg_col in ("content_seg", "source_file_seg"):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE transcript_chunks ADD COLUMN {_seg_col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # already present
+
         # FTS5 virtual table (external content pattern)
         try:
             self._conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS transcript_fts USING fts5(
-                    content, source_file,
+                    content_seg, source_file_seg,
                     content=transcript_chunks, content_rowid=id
                 )
             """)
         except sqlite3.OperationalError:
             logger.debug("transcript_fts already exists or FTS5 unavailable")
+        # Deliberately OUTSIDE the try above. That handler exists for "FTS5 is
+        # unavailable" on the CREATE, but it also swallowed any failure of the
+        # migration — and the migration DROPs the index before recreating it, so a
+        # failed CREATE left NO transcript_fts at all while logging the misleading
+        # "already exists" at debug level. These two carry their own DatabaseError
+        # handling and must report their own failures.
+        self._migrate_fts_to_seg_columns()
+        self._reconcile_fresh_index()
 
         # NOTE: the sqlite-vec `transcript_vec` virtual table was removed (2026-08-14)
         # — transcript recall is pure FTS5, the vector leg is dead.
+
+    # Column set the index MUST have. A pre-run_4ed75215 database indexes the
+    # raw columns; a virtual table cannot be ALTERed, so migrating is
+    # DROP + CREATE + rebuild. Losing the index is safe — it is DERIVED from
+    # transcript_chunks.
+    _FTS_COLUMNS = ("content_seg", "source_file_seg")
+
+    # (source column, segmented column) pairs this table maintains.
+    _SEG_PAIRS = (('content', 'content_seg'), ('source_file', 'source_file_seg'))
+
+    def _populate_seg_columns(self, chunk_size: int = 500) -> int:
+        """Fill any NULL/stale ``*_seg`` value from its source column.
+
+        Called before a rebuild so the index has something to derive from. The
+        alternative — rebuild now, populate later via a script — leaves the index
+        EMPTY for every pre-existing row, which silently kills historical search
+        while ``integrity-check`` still reports OK.
+
+        Idempotent by predicate (a row whose segmented value already equals the
+        expansion is skipped), and COMMITTED PER CHUNK — not merely looped in
+        chunks. Without the commit the chunking is cosmetic: all N updates plus the
+        rebuild that follows sit in ONE transaction holding the write lock the
+        daemon needs (measured 27.7s for 41K rows), and an interrupted upgrade
+        discards every row. Per-chunk commits let a killed migration resume,
+        because the predicate skips rows already done. Returns rows written.
+        """
+        from .cjk_index import expand_cjk
+
+        src_cols = ", ".join(s for s, _ in self._SEG_PAIRS)
+        seg_cols = ", ".join(g for _, g in self._SEG_PAIRS)
+        set_clause = ", ".join(f"{g} = ?" for _, g in self._SEG_PAIRS)
+        n = len(self._SEG_PAIRS)
+        try:
+            # Stream the cursor rather than fetchall(): this reads every row of the
+            # table, and materializing the whole corpus (plus an expansion per row)
+            # is a needless spike on a 636 MB database.
+            cursor = self._conn.execute(
+                f"SELECT rowid, {src_cols}, {seg_cols} FROM transcript_chunks")
+        except sqlite3.DatabaseError:
+            return 0  # columns not present yet — ensure_tables adds them first
+
+        pending = []
+        for row in cursor:
+            wanted = [expand_cjk(str(v or "")) for v in row[1:1 + n]]
+            if list(row[1 + n:1 + 2 * n]) != wanted:
+                pending.append((wanted, row[0]))
+        for i in range(0, len(pending), chunk_size):
+            self._conn.commit()  # per chunk — see the docstring
+            for wanted, rowid in pending[i:i + chunk_size]:
+                self._conn.execute(
+                    f"UPDATE transcript_chunks SET {set_clause} WHERE rowid = ?",
+                    (*wanted, rowid))
+        if pending:
+            logger.info("transcript_chunks: populated %d segmentation column set(s)",
+                        len(pending))
+        return len(pending)
+
+    def _reconcile_fresh_index(self) -> None:
+        """Reconcile the index with its content source ONCE per database.
+
+        A freshly CREATEd external-content index holds no postings while its source
+        column already has a value for every row. Those two states disagree, and the
+        disagreement is not cosmetic: ``integrity-check rank=1`` reports "database
+        disk image is malformed", and on a trigger-backed table the next UPDATE
+        fails outright — measured on a copy of the real database, where it made the
+        segmentation backfill die and search return 0 for EVERY query, Chinese and
+        English alike.
+
+        GATED ON A STORED MARKER, not on probing. The obvious design — run
+        ``integrity-check`` and rebuild if it fails — is what this replaced: that
+        probe RE-DERIVES every token from the content source, so it costs the same
+        as the rebuild it is deciding about (measured: ~100 ms per 3,000 rows,
+        identical to a full rebuild), on every single startup. Probing to avoid
+        work that costs exactly as much as the probe is not a guard, it is the work
+        done twice. So the reconcile runs once, records that it ran, and is a
+        single cheap SELECT thereafter.
+
+        Rebuilding is free of data risk — the index is DERIVED from the base table.
+        """
+        try:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS transcript_chunks_index_state ("
+                "  marker TEXT PRIMARY KEY,"
+                "  applied_at TEXT NOT NULL DEFAULT (datetime('now'))"
+                ")")
+            done = self._conn.execute(
+                "SELECT 1 FROM transcript_chunks_index_state WHERE marker = ?",
+                ("cjk_seg_v1",)).fetchone()
+            if done:
+                return
+            self._conn.execute(
+                "INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild')")
+            self._conn.execute(
+                "INSERT OR IGNORE INTO transcript_chunks_index_state(marker) VALUES(?)",
+                ("cjk_seg_v1",))
+            logger.info(
+                "transcript_fts: reconciled with its content source (one-time, marker %s)",
+                "cjk_seg_v1")
+        except sqlite3.DatabaseError as exc:
+            # Leave the marker UNSET so the next startup retries. repair_fts_index
+            # owns the nuclear path if even rebuild cannot read the shadow tables.
+            logger.error(
+                "transcript_fts: reconcile failed, will retry next startup: %s: %s",
+                type(exc).__name__, exc)
+
+    def _migrate_fts_to_seg_columns(self) -> None:
+        """Re-point a pre-existing transcript_fts at the segmentation columns.
+
+        Idempotent — reads the virtual table's real column list and returns
+        immediately when already migrated.
+        """
+        try:
+            cols = [r[1] for r in self._conn.execute(
+                "PRAGMA table_info(transcript_fts)")]
+        except sqlite3.DatabaseError:
+            return  # unreadable — repair_fts_index owns that path
+        if not cols or self._FTS_COLUMNS[0] in cols:
+            return
+        logger.info(
+            "transcript_fts: migrating index from %s to CJK-segmented columns", cols)
+        self._conn.execute("DROP TABLE IF EXISTS transcript_fts")
+        self._conn.execute("""
+            CREATE VIRTUAL TABLE transcript_fts USING fts5(
+                content_seg, source_file_seg,
+                content=transcript_chunks, content_rowid=id
+            )
+        """)
+        # POPULATE BEFORE REBUILDING. A rebuild derives the index from the
+        # content source, which is now the *_seg columns — and those are NULL for
+        # every pre-existing row. Rebuilding first therefore produces an EMPTY
+        # index and silently kills ALL historical search, English included
+        # (reproduced: a chunk matching '"daemon"' before the migration returned
+        # nothing after, while integrity-check still reported OK — so the health
+        # probe cannot see the outage). Deferring this to an operator-run script
+        # was the original design and it is not acceptable: this method runs
+        # automatically on daemon start.
+        self._populate_seg_columns()
+        self._conn.execute(
+            "INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild')")
 
     def upsert_chunk(
         self,
@@ -293,32 +453,38 @@ class TranscriptStore:
             # the OLD tokens' postings in the index → progressive "database disk
             # image is malformed" (mirrors knowledge_store.py:185 / the
             # messages_fts trigger which uses old.content).
+            # Read the OLD *_seg values — 'delete' reverses postings using the
+            # values it is handed, and the index holds segmented text.
             _old = self._conn.execute(
-                "SELECT content, source_file FROM transcript_chunks WHERE id = ?",
+                "SELECT content_seg, source_file_seg FROM transcript_chunks WHERE id = ?",
                 (row_id,),
             ).fetchone()
             if _old is not None:
                 try:
                     self._conn.execute(
-                        "INSERT INTO transcript_fts(transcript_fts, rowid, content, source_file) "
+                        "INSERT INTO transcript_fts(transcript_fts, rowid, content_seg, source_file_seg) "
                         "VALUES('delete', ?, ?, ?)",
-                        (row_id, _old[0], _old[1]),
+                        (row_id, _old[0] or "", _old[1] or ""),
                     )
                 except sqlite3.OperationalError:
                     pass  # FTS5 not available
             # Update
             self._conn.execute(
                 "UPDATE transcript_chunks SET source_file=?, role=?, content=?, "
-                "content_hash=?, metadata=?, created_at=datetime('now') "
+                "content_hash=?, metadata=?, content_seg=?, source_file_seg=?, "
+                "created_at=datetime('now') "
                 "WHERE id=?",
-                (source_file, role, content, content_hash, metadata, row_id),
+                (source_file, role, content, content_hash, metadata,
+                 expand_cjk(content), expand_cjk(source_file), row_id),
             )
         else:
             cursor = self._conn.execute(
                 "INSERT INTO transcript_chunks "
-                "(session_id, source_file, chunk_index, role, content, content_hash, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (session_id, source_file, chunk_index, role, content, content_hash, metadata),
+                "(session_id, source_file, chunk_index, role, content, content_hash, "
+                " metadata, content_seg, source_file_seg) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (session_id, source_file, chunk_index, role, content, content_hash,
+                 metadata, expand_cjk(content), expand_cjk(source_file)),
             )
             row_id = cursor.lastrowid
 
@@ -327,9 +493,9 @@ class TranscriptStore:
         # postings, and a brand-new rowid has none to reverse).
         try:
             self._conn.execute(
-                "INSERT INTO transcript_fts(rowid, content, source_file) "
+                "INSERT INTO transcript_fts(rowid, content_seg, source_file_seg) "
                 "VALUES (?, ?, ?)",
-                (row_id, content, source_file),
+                (row_id, expand_cjk(content), expand_cjk(source_file)),
             )
         except sqlite3.OperationalError:
             pass  # FTS5 not available
@@ -359,7 +525,11 @@ class TranscriptStore:
                     clean_words.append(w)
             if not clean_words:
                 return results
-            safe_query = " OR ".join(f'"{w}"' for w in clean_words)
+            # CJK-aware: a Chinese term is searched as the AND of its bigrams,
+            # matching how it was indexed. No-CJK text keeps the quoted-OR form.
+            safe_query = expand_cjk_query(" ".join(clean_words))
+            if not safe_query:
+                return results
             rows = self._conn.execute(
                 "SELECT tc.id, tc.session_id, tc.source_file, tc.content, tc.metadata, "
                 "rank AS fts_rank "
@@ -405,7 +575,16 @@ class TranscriptStore:
             try:
                 self._conn.execute("DELETE FROM transcript_fts WHERE rowid = ?", (row_id,))
             except sqlite3.OperationalError:
-                pass
+                pass  # FTS5 unavailable — the base-table delete below still runs
+            except sqlite3.DatabaseError as exc:
+                # A malformed/corrupt index raises DatabaseError, NOT
+                # OperationalError, so the narrower catch above let it escape
+                # uncaught AND hid a genuine desync signal. Log it and continue:
+                # the base rows must still be deleted, and repair_fts_index owns
+                # the recovery.
+                logger.error(
+                    "transcript_fts: delete failed for rowid %s (index may need "
+                    "repair): %s: %s", row_id, type(exc).__name__, exc)
 
         self._conn.execute(
             "DELETE FROM transcript_chunks WHERE session_id = ?",
@@ -484,7 +663,7 @@ class TranscriptStore:
             self._conn.execute("DROP TABLE IF EXISTS transcript_fts")
             self._conn.execute("""
                 CREATE VIRTUAL TABLE transcript_fts USING fts5(
-                    content, source_file,
+                    content_seg, source_file_seg,
                     content=transcript_chunks, content_rowid=id
                 )
             """)
