@@ -258,3 +258,18 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN
   --data '{"passed":true,"failed":M,"fixed":K,"skipped":J,"tests_new":N,"tests_total":T,"regressions":0,"layers":{"ac_driven":{"run":true,"pass":A},"dependency_scoped":{"run":true,"tests":B,"pass":C},"import_smoke":{"run":true,"modules":D,"pass":E}}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliver --run-id <RUN_ID>
 ```
+
+> **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
+> handoff point. Immediately Read the next stage's doc (the `advance` output prints its
+> absolute path as `next_stage_doc`) and execute that stage **in this same turn**. The ONLY
+> legal reasons to hand control back are: a stage-boundary **L2 Judgment** routed through the
+> Escalation Routing Protocol, a **true checkpoint trigger** (`should_checkpoint=true`,
+> retries exhausted, or a mid-stage L2), a pending question awaiting the user, or an abandon
+> verdict. Absent one of those, ending your turn here is the stall this contract exists to
+> prevent.
+>
+> **`next_action` is AUTHORITATIVE — this sentence defers to it.** The payload is measured at
+> the moment you advance; this prose was written long before. When `advance` reports a due
+> checkpoint (or that it could not measure the budget), it withholds the continue instruction
+> ON PURPOSE — follow the payload, not this paragraph. Prose cannot see the run's state; the
+> payload can.

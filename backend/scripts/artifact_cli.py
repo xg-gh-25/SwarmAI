@@ -503,6 +503,185 @@ def cmd_state(args, reg: ArtifactRegistry) -> None:
     print(json.dumps({"project": args.project, "pipeline_state": state}))
 
 
+# ── Stage-advance continuation contract (the CONTINUE-side carrier) ─────────
+# The pipeline's STOP side is code-enforced (this function's own fail-closed
+# sys.exit(1) below; `run-update --status completed`; `cmd_run_checkpoint`'s
+# should_checkpoint hard-block). Its CONTINUE side used to be prose ONLY
+# (INSTRUCTIONS.md §3f / the Core Loop / Rule 20) with no turn-boundary
+# directive and no carrier — so `advance` read as a terminal action and the
+# orchestrating agent ended its turn at the stage boundary (stop_reason=
+# end_turn, zero tool_use). This constant is that missing carrier, and it is
+# SINGLE-SOURCED on purpose: the same phrase is asserted in the 7 stage docs,
+# the 3 sibling skills, and INSTRUCTIONS.md §3f, so the contract cannot drift
+# across those sources (R27). Changing this string requires updating them all —
+# `backend/tests/test_advance_continuation.py` enforces that.
+_CONTINUATION_PHRASE = "advance is not the end of your turn"
+
+# Where the stage docs physically live. `Path(__file__).parent.parent` is
+# `backend/` (this file is `backend/scripts/artifact_cli.py`), matching the
+# existing convention used for pipeline_validator/pollinate_validator lookups.
+# This deliberately resolves the `backend/skills/` SOURCE OF TRUTH, never the
+# `.claude/skills/` projection, which can be stale within a session
+# (INSTRUCTIONS.md § "Read from backend/skills").
+_STAGE_DOC_DIR = Path(__file__).resolve().parent.parent / "skills" / "s_autonomous-pipeline" / "stages"
+
+
+def _next_stage_continuation(
+    project: str, next_state: str, run_id: str | None
+) -> tuple[str | None, str]:
+    """Resolve what the agent should do immediately after advancing.
+
+    ⚠️ ``next_state`` is the stage being ENTERED, not the one just finished, so the
+    doc to read next is ``next_state``'s own doc. Evidence: ``stages/build.md``
+    issues ``advance --state review`` at the END of BUILD — the state named is
+    where the run is going. An earlier revision of this helper returned
+    ``stages[index(next_state) + 1]`` and therefore told the agent to skip the very
+    stage it had just entered (advance-to-review pointed at ``test.md``). The spec
+    reviewer caught it; worse, the first version of the test suite had HARDCODED
+    that skew as its expected value, so the tests ratified the bug instead of
+    catching it (RP64: a hardcoded-literal test LOCKS a wrong answer). Do not
+    "fix" this back to ``+ 1``.
+
+    Returns ``(next_stage_doc, next_action)`` where ``next_stage_doc`` is an
+    ABSOLUTE path to that stage's doc, or ``None`` when no doc exists for it
+    (e.g. a terminal ``advance`` target). A path is emitted ONLY after
+    ``Path.is_file()`` passes — emitting an unverified path would send the agent
+    to a failing Read, which is worse than emitting nothing (a fabricated
+    instruction).
+
+    ``next_action`` is CONDITION-AWARE and this is the load-bearing subtlety:
+    when a checkpoint is genuinely due it must NOT urge continuation, or it
+    would compete with a legitimate stop (INSTRUCTIONS.md Rule 19: context
+    exhausted → CHECKPOINT). The checkpoint judgement is NOT re-derived here —
+    it delegates to ``_compute_should_checkpoint``, the same SSOT that
+    ``cmd_run_budget`` and the checkpoint guard use (STEERING #3), so there is
+    exactly one definition of "a checkpoint is due" in this file.
+
+    Never raises: the caller treats this as an enhancement and degrades to the
+    plain payload on any failure.
+    """
+    stages = _get_profile_stages("full")
+    should_checkpoint = False
+    # Tri-state on purpose, NOT a bool: "no checkpoint is due" and "I could not
+    # measure whether one is due" must yield different instructions. Collapsing
+    # them is fail-OPEN on the STOP side — an unreadable run.json, a partial
+    # `budget` dict, or a --run-id-less invocation would silently read as "not
+    # due" and the payload would urge continuation over a checkpoint that may be
+    # pending. Both REVIEW reviewers flagged that direction independently, and it
+    # is the one direction this feature must never take: for a stall-prevention
+    # nudge the safe fallback is SILENCE, never urging.
+    budget_known = False
+
+    if run_id:
+        try:
+            # NOTE: read the run file directly rather than via _resolve_run_file —
+            # that helper is a CLI-command entry point and calls sys.exit(1) when a
+            # run is missing. SystemExit does NOT inherit from Exception, so it
+            # would escape this guard and kill an otherwise-successful advance for
+            # the sake of an optional hint. Resolve the two known layouts inline,
+            # reusing the canonical helpers for both.
+            run_dir = _run_dir(project, run_id)
+            candidates = (
+                run_dir / "run.json",
+                _pipeline_runs_dir(project).parent / f"pipeline-run-{run_id}.json",  # legacy
+            )
+            run_file = next((p for p in candidates if p.is_file()), None)
+            if run_file is not None:
+                run_state = json.loads(run_file.read_text(encoding="utf-8"))
+                if not isinstance(run_state, dict):
+                    raise TypeError("run.json is not an object")
+                stages = _get_profile_stages(run_state.get("profile", "full"))
+                should_checkpoint = bool(
+                    _compute_should_checkpoint(run_state, project)["should_checkpoint"]
+                )
+                # A completed stage with no token_cost makes `consumed` an
+                # UNDER-count, and the SSOT derives should_checkpoint from it — so
+                # a missing cost silently biases the answer toward "not due". That
+                # is the same fail-open this tri-state exists to prevent, entered
+                # through the front door: measured 162/740 (22%) of completed
+                # stages across the last 120 real runs have no token_cost. Treat an
+                # under-countable run as UNMEASURED rather than as "plenty left".
+                incomplete_cost = any(
+                    s.get("status") == "completed" and not s.get("token_cost")
+                    for s in run_state.get("stages", [])
+                    if isinstance(s, dict)
+                )
+                budget_known = not incomplete_cost
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            # Narrow by design: a missing/unreadable run.json (OSError), malformed
+            # JSON (ValueError), or a partial/non-dict `budget` (KeyError/TypeError
+            # raised inside the SSOT) leaves budget_known False, which routes to
+            # the neutral "status unknown" instruction below instead of "keep
+            # going". Anything outside this set is a real defect and should
+            # surface; the caller's own guard still keeps it from failing advance.
+            pass
+
+    # The stage to execute next IS next_state (see the docstring's warning).
+    # `stages` is still consulted so an off-profile state (e.g. advancing to a
+    # stage this profile does not run) resolves to no doc rather than a
+    # confidently-wrong one.
+    target = next_state if next_state in stages else None
+
+    doc_path = None
+    if target:
+        candidate = _STAGE_DOC_DIR / f"{target}.md"
+        if candidate.is_file():
+            doc_path = str(candidate)
+
+    if should_checkpoint:
+        # A real checkpoint trigger outranks continuation. Return doc_path=None as
+        # well as omitting the phrase: every stage doc tells the agent "advance
+        # prints the next doc's path as next_stage_doc — read it", so a POPULATED
+        # field is itself a continuation affordance. The string obeying the
+        # contract while the field invites the opposite is the gap the security
+        # reviewer caught; suppress both.
+        return None, (
+            "A checkpoint is DUE for this run (budget measured, not guessed): run "
+            "`run-budget` for this run and follow the Checkpoint Protocol before "
+            "doing any more stage work. Do not read the next stage doc yet."
+        )
+
+    if not budget_known:
+        # Checkpoint status could not be measured — say exactly that and withhold
+        # the continuation phrase. Naming the doc is still useful (it is derived
+        # from the closed profile enum, not from the unreadable run state), but the
+        # agent must resolve the budget question before continuing.
+        return doc_path, (
+            f"Checkpoint status could NOT be measured for this run (missing or "
+            f"unreadable run state). Run `run-budget` first and follow the "
+            f"Checkpoint Protocol if one is due; only then continue"
+            + (f" with {target}." if target else ".")
+        )
+
+    if doc_path:
+        return doc_path, (
+            f"Now Read {doc_path} and execute the {target} stage IN FULL, including "
+            f"its own gates — {_CONTINUATION_PHRASE}. Hand control back only for a "
+            f"stage-boundary L2 Judgment (via the Escalation Routing Protocol), a "
+            f"true checkpoint trigger, retries exhausted, a mid-stage L2, a pending "
+            f"question awaiting the user, or an abandon verdict."
+        )
+
+    if target is None and next_state:
+        # In PIPELINE_STATES (advance_pipeline accepted it) but NOT in this run's
+        # profile. Deliberately does NOT point at stages/ — the whole reason
+        # doc_path was withheld is that naming a doc for a stage this run does not
+        # run would be confidently wrong, and a prose pointer defeats that exactly
+        # as a populated field would (the same field-vs-string inconsistency the
+        # checkpoint branch was hardened against, inverted).
+        return None, (
+            f"State '{next_state}' is not part of this run's profile, so no stage "
+            f"doc applies. Verify the profile and the intended state before doing "
+            f"any more stage work — do not guess a stage doc."
+        )
+
+    return None, (
+        f"No stage doc resolves for state '{next_state}' — if the run's stages are "
+        f"done, proceed to the COMPLETE step (read stages/complete.md and output "
+        f"the summary). {_CONTINUATION_PHRASE}."
+    )
+
+
 def cmd_advance(args, reg: ArtifactRegistry) -> None:
     """Advance pipeline state. Auto-validates if a run is active.
 
@@ -530,7 +709,28 @@ def cmd_advance(args, reg: ArtifactRegistry) -> None:
 
     try:
         reg.advance_pipeline(args.project, args.state)
-        print(json.dumps({"project": args.project, "pipeline_state": args.state}))
+        # Continuation carrier: tell the agent what to do NEXT, in the machine
+        # output it necessarily reads, rather than relying on it to recall a prose
+        # rule. Both keys are pre-seeded so the payload SHAPE is stable even if
+        # resolution fails — INSTRUCTIONS.md documents them as always present, and
+        # a consumer doing payload["next_action"] must not hit a KeyError.
+        payload = {
+            "project": args.project,
+            "pipeline_state": args.state,
+            "next_stage_doc": None,
+            "next_action": None,
+        }
+        try:
+            next_doc, next_action = _next_stage_continuation(
+                args.project, args.state, getattr(args, "run_id", None)
+            )
+            payload["next_stage_doc"] = next_doc
+            payload["next_action"] = next_action
+        except Exception:
+            # The hint is an enhancement; a failure here must never fail an
+            # otherwise-successful advance. Keys stay present but null.
+            pass
+        print(json.dumps(payload))
     except ValueError as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)

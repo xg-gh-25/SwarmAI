@@ -520,6 +520,18 @@ After verification:
 - **Taste decisions found → log them**, advance (review at delivery gate)
 - **Judgment decision → route via Escalation Routing Protocol** immediately (in-band ask if `channel=direct` + header present; else fallback checkpoint — do NOT default to bare checkpoint)
 
+> **⏭️ [MUST] Continuation contract — advance is not the end of your turn.** This is the
+> CONTINUE-side counterpart to the Checkpoint Protocol, and it is stated here because the
+> stop side is code-enforced while this side is not: `advance` merely records the state
+> transition, so after it you must immediately Read the next stage's doc (the `advance`
+> output prints its absolute path as `next_stage_doc`) and execute that stage **in the same
+> turn**. The ONLY legal handbacks are a stage-boundary **L2 Judgment** via the Escalation
+> Routing Protocol, or a **true checkpoint trigger** (`should_checkpoint=true`, retries
+> exhausted, mid-stage L2). Ending the turn at a stage boundary for any other reason —
+> including having just written "proceeding to <STAGE>" — is a stall, not a handoff:
+> announcing the next stage is not the same as executing it. (Measured failure shape:
+> `stop_reason=end_turn` with zero tool calls in that message, no gate having fired.)
+
 ---
 
 ## Step 4: DELIVER (includes Quality Convergence Loop)
@@ -1177,7 +1189,11 @@ PHASE C: DELIVERY    ⑧⑨⑩     — shared quality gate + knowledge loop
 
 Output formatting MUST NOT degrade execution quality. Rules:
 
-1. **Suppress CLI JSON** — one-line confirmation only (`art_xxxx ✓`)
+1. **Suppress CLI JSON** — one-line confirmation only (`art_xxxx ✓`).
+   **EXEMPT: `advance`'s `next_action` / `next_stage_doc`.** These two fields are the
+   CONTINUE-side enforcement carrier (§3f Continuation contract) — muting them would
+   silence the very channel that tells you to keep going, which is the stall this
+   pipeline is trying to prevent. Read them; you need not echo them to the user.
 2. **Tool output: tail only** — pytest `| tail -5`, git `--stat`
 3. **No prose between stages** — the landmark IS the output
 4. **Validator: suppress when valid** — only show on failure
