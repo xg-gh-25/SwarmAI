@@ -1990,3 +1990,240 @@ class TestDanglingSkillRefGate:
             encoding="utf-8")
         res = pk.package_ddd(ddd, tmp_path / "out")
         assert res  # did not raise (context/ root out of gate scope)
+
+
+class TestProvenanceLeakGate:
+    """AC4: a provenance-APPROPRIATION leak (a de-personalization that was never
+    finished — "stolen"/"lifted" wording, a colleague's alias next to it) must BLOCK
+    the emit, and must do so for a ``visibility: internal`` DDD.
+
+    Why internal matters: ``_INTERNAL_STRING_PATTERNS`` are gated by ``if external:``
+    (``_scan_text``), and ``external`` is ``visibility == external`` — so the existing
+    internal-string class NEVER runs for an internal package. This gate is deliberately
+    NOT behind that flag.
+
+    Why the patterns are ANCHORED (Gate-1 BLOCK, run_003ff3a0): an unanchored
+    ``stolen <asset-noun>`` rule flags "the stolen system prompt" / "the lifted policy
+    engine" — core SECURITY-domain vocabulary. Since this gate runs on EVERY DDD's emit
+    path, that would make it unadoptable for exactly the security DDDs that need it
+    (the too-strict-to-adopt = fail-open-by-abandonment class). Every pattern therefore
+    requires a provenance ANCHOR: proximity to "de-personalized", a ``(verb YYYY-MM-DD)``
+    stamp, a ``Provenance`` label, or an ``asset(stolen)`` parenthetical.
+    """
+
+    def test_provenance_wording_blocks_internal_emit(self, tmp_path):
+        """The real leak shape that shipped: title wording + a Provenance line."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"engine.md": (
+                "# The COE scan engine (a stolen, de-personalized asset)\n"
+                "> **Provenance (stolen 2026-08-17, source-read):** someone's wiki prompt.\n")})
+        with pytest.raises(pk.PackagingError, match="provenance"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_security_vocabulary_does_not_false_block(self, tmp_path):
+        """Gate-1 FP regression lock. These 3 sentences are legitimate security-DDD
+        prose; a gate that blocks them would be removed by its consumers."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"threats.md": (
+                "# Threat model\n"
+                # Gate-1 rejected an unanchored `stolen <asset-noun>` rule on these three:
+                "- An attacker exfiltrates the stolen system prompt via prompt-injection.\n"
+                "- The lifted policy engine must be re-signed before deployment.\n"
+                "- Impact: stolen customer data asset.\n"
+                "- The agent sends the stolen credentials out via mcp_call.\n"
+                # REVIEW rejected a `de-personalized`-proximity-only rule on these three:
+                # privacy / de-identification prose, i.e. a security DDD's own vocabulary.
+                "- RP-114: de-personalized audit logs prevent linking a lifted record to a user.\n"
+                "- Provenance: the attacker exfiltrated a stolen credential from the vault.\n"
+                "- The incident (stolen 2024-03-11) postmortem is attached.\n")})
+        res = pk.package_ddd(ddd, tmp_path / "out")
+        assert res, "legitimate security vocabulary must not block the emit"
+
+    def test_legitimate_wiki_citation_does_not_false_block(self, tmp_path):
+        """A registered internal-wiki source citation is provenance done RIGHT — a bare URL
+        in a references list must ship. Real instance: internal-references.md cites a
+        colleague's wiki user page as a source, which is correct attribution, not a leak.
+
+        This test HAS TEETH because the fixture contains a wiki *user* URL — the same
+        identity payload patterns 1/2/7 key on. It passes only because the URL is NOT in a
+        provenance-attribution context on the same line. (An earlier version of this fixture
+        contained neither an identity payload nor the wording, so NO pattern could ever have
+        flagged it — it was vacuous. Caught in REVIEW.)"""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"refs.md": (
+                "# References\n"
+                "- **URL:** https://w.amazon.com/bin/view/Users/someone/EndOfBuilderToil\n"
+                "- Engine adapted + de-personalized from an internal prompt.\n")})
+        res = pk.package_ddd(ddd, tmp_path / "out")
+        assert res, "a legitimate wiki citation must not block the emit"
+
+    def test_reworded_leak_with_alias_payload_blocks(self, tmp_path):
+        """The REWORDED bypass (found by the security reviewer): drop the appropriation
+        adjective entirely and the harm is unchanged — the alias + wiki user page IS the
+        payload. Wording is cosmetic; the identity is the leak.
+
+        This is the pair to the test above: same URL class, but here it sits in a
+        provenance-attribution context, which is what makes it a leak."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"engine.md": (
+                "# Scan engine\n"
+                "Provenance: adapted from an internal asset by ~jdoe — "
+                "https://w.amazon.com/bin/view/Users/jdoe/SomePrompt\n")})
+        with pytest.raises(pk.PackagingError, match="provenance"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+
+class TestPackageStalenessDetection:
+    """AC7 (Gate-1 SSA root fix): a content gate runs at EMIT time — it does NOTHING
+    for a package that is never re-emitted. The leak this run fixed shipped precisely
+    that way: the SOURCE was corrected 2026-08-26, the package was built 2026-08-25,
+    and nothing detected the divergence for 17 days.
+
+    So the emitted package records the source's content hash, and
+    ``detect_stale_package`` answers "has the source moved since this was built?"
+    """
+
+    def test_fresh_emit_is_not_stale(self, tmp_path):
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert pk.detect_stale_package(ddd, res.out_dir) is False
+
+    def test_source_edit_makes_package_stale(self, tmp_path):
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        # Edit a packaged SOURCE doc — exactly the 2026-08-26 fix shape. (Path READ from the
+        # fixture, not assumed: build_fixture_ddd writes canonical docs at the DDD root.)
+        target = ddd / "PRODUCT.md"
+        target.write_text(target.read_text(encoding="utf-8") + "\n- a later source fix\n",
+                          encoding="utf-8")
+        assert pk.detect_stale_package(ddd, res.out_dir) is True, (
+            "a source edit after emit must be detectable — this is the 17-day blind spot")
+
+    def test_stamp_is_deterministic_across_reemit(self, tmp_path):
+        """The module promises byte-identical output across runs (no mtimes in
+        structural output). The hash must come from CONTENT, so re-emitting an
+        unchanged source yields the same hash."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [r1] = pk.package_ddd(ddd, tmp_path / "out1")
+        [r2] = pk.package_ddd(ddd, tmp_path / "out2")
+        assert pk.read_source_stamp(r1.out_dir)["source_hash"] == \
+               pk.read_source_stamp(r2.out_dir)["source_hash"]
+
+    def test_missing_stamp_reads_as_stale(self, tmp_path):
+        """A package emitted by an OLDER packager carries no stamp. Fail-safe: treat
+        an unstamped package as stale (it may well be) rather than silently 'fresh'."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        (res.out_dir / ".ddd-source-stamp.json").unlink()
+        assert pk.detect_stale_package(ddd, res.out_dir) is True
+
+    def test_gate_ignores_artifacts_dir(self, tmp_path):
+        """SMOKE-caught (run_003ff3a0): `.artifacts/` holds the DDD's own EMITTED packages
+        + run records. A gate that scans it flags its OWN stale output as a source leak —
+        so a DDD whose previously-emitted package contains the wording can NEVER re-emit,
+        which is the self-inflicted deadlock that blocks the very fix that cleans it.
+        `compute_source_hash` already excludes `.artifacts/` for the same reason; the gate
+        must agree (one asset, one exclusion rule)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        stale_pkg = ddd / ".artifacts" / "dist" / "aim-capabilities" / "context"
+        stale_pkg.mkdir(parents=True)
+        (stale_pkg / "old.md").write_text(
+            "# engine (a stolen, de-personalized asset)\n"
+            "> **Provenance (stolen 2026-08-17):** someone's prompt.\n", encoding="utf-8")
+        assert pk.gate_provenance_leaks(ddd) == [], (
+            "the DDD's own .artifacts/ output must not be scanned as source")
+        res = pk.package_ddd(ddd, tmp_path / "out")
+        assert res, "a stale prior emit under .artifacts/ must not block a fresh emit"
+
+    def test_build_noise_does_not_trigger_staleness(self, tmp_path):
+        """REVIEW finding: the hash must ignore files the packager EXCLUDES from packages.
+        A regenerated `.pyc` or a Finder `.DS_Store` changes nothing shippable — reporting
+        it as 'source moved' turns the staleness signal into noise the reader learns to
+        ignore, which is how a real drift then goes unnoticed."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert pk.detect_stale_package(ddd, res.out_dir) is False
+        cache = ddd / "4-capabilities" / "s_fx-analyze" / "scripts" / "__pycache__"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "run.cpython-312.pyc").write_bytes(b"\x00compiled-bytes\x01")
+        (ddd / ".DS_Store").write_bytes(b"\x00finder\x01")
+        assert pk.detect_stale_package(ddd, res.out_dir) is False, (
+            "build/OS noise is excluded from packages, so it must not mark them stale")
+
+    def test_failed_second_target_leaves_no_stamp_on_first(self, tmp_path):
+        """REVIEW finding: with 2+ declared targets, a gate failure on target #2 used to
+        leave target #1 stamped — a stale package asserting its own freshness, the exact
+        silence the stamp exists to break. Stamps are therefore all-or-nothing.
+
+        Reachable today: a real DDD declares both aim-capabilities and open-plugin."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities", "open-plugin"], visibility="internal",
+            # A host-path OUTSIDE the deliverables zone blocks on emit (not downgraded), and
+            # it lands in the corpus of BOTH targets — so the 2nd target raises.
+            corpus_docs={"leaky.md": "# doc\npath: ~/.swarm-ai/SwarmWS/Knowledge/x.md\n"})
+        with pytest.raises(pk.PackagingError):
+            pk.package_ddd(ddd, tmp_path / "out")
+        for target_dir in (tmp_path / "out").glob("*"):
+            assert not (target_dir / ".ddd-source-stamp.json").exists(), (
+                f"{target_dir.name} kept a freshness stamp despite a failed emit")
+
+
+class TestGate2ProvenanceHardening:
+    """Gate-2 (adversarial) findings on the provenance gate + source stamp. Each test is a
+    regression lock on a defect an independent reviewer found and I did not."""
+
+    def test_contact_email_in_provenance_does_not_false_block(self, tmp_path):
+        """An email address is NOT an identity payload. Without a not-an-email guard, the
+        `@alias` alternative matched a contact address inside a provenance sentence and
+        hard-blocked a legitimate emit — the too-strict-to-adopt class."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"refs.md": (
+                "# Refs\n"
+                "Provenance: adapted from an internal wiki page; questions to appsec@example.com\n"
+                "- Engine de-personalized from an internal prompt (owner: sec-team@example.com).\n")})
+        res = pk.package_ddd(ddd, tmp_path / "out")
+        assert res, "a contact email in a provenance sentence must not block the emit"
+
+    def test_soft_wrapped_leak_still_blocks(self, tmp_path):
+        """A leak split across a soft wrap must still block. Every pattern forbids a newline
+        in its gap, so single-line scanning missed the gate's own headline shape whenever an
+        editor/prettier wrapped it — routine in markdown, so a real bypass."""
+        ddd = build_fixture_ddd(
+            tmp_path, targets=["aim-capabilities"], visibility="internal",
+            corpus_docs={"engine.md": (
+                "# Scan engine\n"
+                "Provenance: adapted from an internal asset by\n"
+                "~jdoe — https://w.amazon.com/bin/view/Users/jdoe/SomePrompt\n")})
+        with pytest.raises(pk.PackagingError, match="provenance"):
+            pk.package_ddd(ddd, tmp_path / "out")
+
+    def test_build_noise_is_not_shipped(self, tmp_path):
+        """Noise excluded from the hash must also be excluded from the PACKAGE. A file that
+        ships but is not hashed lets a package whose bytes differ from source report itself
+        fresh — defeating the stamp. One exclusion set, both sides."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        cache = ddd / "4-capabilities" / "s_fx-analyze" / "scripts" / "__pycache__"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "run.cpython-312.pyc").write_bytes(b"\x00compiled\x01")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        shipped = [f for f in res.files if "__pycache__" in f or f.endswith(".pyc")]
+        assert shipped == [], f"build noise shipped into the package: {shipped}"
+
+    def test_source_hash_is_collision_safe_against_nul_bytes(self, tmp_path):
+        """NUL-delimited framing was forgeable from file CONTENT: one file holding
+        b'\\x00b\\x00' hashed identically to two empty files `a` and `b`. Reachable via the
+        NUL-dense binaries the packager knowingly ships. Length-prefixing fixes it."""
+        a = tmp_path / "treeA"
+        (a / "sub").mkdir(parents=True)
+        (a / "sub" / "a").write_bytes(b"\x00b\x00")
+        b = tmp_path / "treeB"
+        (b / "sub").mkdir(parents=True)
+        (b / "sub" / "a").write_bytes(b"")
+        (b / "sub" / "b").write_bytes(b"")
+        assert pk.compute_source_hash(a) != pk.compute_source_hash(b), (
+            "distinct trees must not collide — file bytes can contain the delimiter")

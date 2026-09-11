@@ -328,6 +328,218 @@ def content_safety_scan(tree: Path, *, external: bool) -> list[ScanFinding]:
 _HARDCODED_LAYOUT_PATH = re.compile(r"(?<![\w./-])(?:2-understanding|3-gates|4-capabilities)/")
 
 
+# Provenance-APPROPRIATION wording: an adapted external asset whose de-personalization
+# was never finished. The real leak (run_003ff3a0): a corpus doc titled "(a stolen,
+# de-personalized asset)" carrying a colleague's alias + their internal wiki URL shipped
+# in a package installed into OTHER teams' repos, while the SOURCE had already been fixed.
+#
+# ⚠️ THE DECIDING RULE: appropriation wording alone is NEVER enough to block. A pattern must
+# ALSO see either an IDENTITY PAYLOAD (`~alias`, a wiki *user* page, `@alias` — the thing that
+# actually harms someone) or an explicit self-describing PROVENANCE construct ("engine
+# (stolen):", "(a stolen, de-personalized …)", "stolen + de-personalized", a dated
+# `source-read` stamp). Two rejected designs and why:
+#   1. UNANCHORED `stolen <asset-noun>` — rejected at Gate-1: flags "the stolen system prompt",
+#      "the lifted policy engine", "stolen customer data asset".
+#   2. ANCHORED-on-`de-personalized`-proximity ALONE — rejected at REVIEW: it did not remove the
+#      false-positive class, it MOVED it onto privacy/de-identification prose, e.g.
+#      "de-personalized audit logs prevent linking a lifted record to a user" and
+#      "Provenance: the attacker exfiltrated a stolen credential". That is a security DDD's own
+#      vocabulary — exactly the consumer this gate must not punish.
+# Because this gate runs on EVERY DDD's emit path, a false block leaves the consumer two exits:
+# edit prose they consider correct, or DELETE the gate. A deleted gate protects nothing — the
+# too-strict-to-adopt = fail-open-by-abandonment class. Do NOT drop the payload/construct
+# requirement; `TestProvenanceLeakGate` locks that regression with real sentences.
+#
+# Pattern 7 (`PROV` near an identity) is what catches the REWORDED leak: "Provenance: adapted
+# from an internal asset by ~jdoe — https://w.amazon.com/bin/view/Users/jdoe" carries no
+# appropriation adjective at all, yet is the identical harm. Wording is cosmetic; the alias is
+# the payload.
+#
+# Deliberately NOT part of ``_INTERNAL_STRING_PATTERNS``: those only run when ``external=True``
+# (``_scan_text``), i.e. never for a ``visibility: internal`` package — which is exactly the
+# case that leaked. An internal AIM package still crosses a TEAM boundary, so this class holds
+# on EVERY target.
+#
+# KNOWN LIMITS (stated, not silent): (a) a bare "the stolen MeshClaw engine" with neither a
+# payload nor a provenance construct is NOT caught — textually indistinguishable from the
+# security prose above; (b) binary deliverables (`.pdf`, `.pptx`) are unscannable, so a leak
+# inside a shipped deck is invisible here (``content_safety_scan`` already emits a loud
+# unscanned-binary warning for those). Both residues are handled by re-emitting from a clean
+# source, not by widening these patterns.
+# An identity PAYLOAD — the part that actually harms a person. The `@alias` alternative
+# needs a not-an-email guard: without it, a contact address inside a provenance sentence
+# ("adapted from an internal page; questions to appsec@example.com") matches and hard-BLOCKS
+# a legitimate emit (Gate-2 finding, verified firing on 2 real-shaped sentences). So `@` must
+# not be preceded by an addr-spec local part, and must not be followed by a TLD-like suffix.
+_PROVENANCE_IDENTITY = (
+    r"(?:~[a-z][a-z0-9]{2,}"
+    r"|w\.amazon\.com/bin/view/Users/"
+    r"|(?<![\w.+-])@[a-z][a-z0-9]{2,}\b(?!\.[a-z]{2,}))"
+)
+_PROVENANCE_CONTEXT = r"(?:provenance|source-read|adapted from|de-personaliz)"
+_PROVENANCE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # A. appropriation wording co-occurring with an identity payload (either order)
+    re.compile(rf"\b(?:stolen|lifted)\b[^.\n]{{0,80}}{_PROVENANCE_IDENTITY}", re.IGNORECASE),
+    re.compile(rf"{_PROVENANCE_IDENTITY}[^.\n]{{0,80}}\b(?:stolen|lifted)\b", re.IGNORECASE),
+    # B. explicit self-describing provenance constructs (no payload needed — the doc is
+    #    literally announcing its own unfinished de-personalization)
+    re.compile(r"\b(?:engine|asset|prompt)\s*\((?:stolen|lifted)\)", re.IGNORECASE),
+    re.compile(r"\((?:a\s+)?(?:stolen|lifted),?\s+de-personalized", re.IGNORECASE),
+    re.compile(r"\b(?:stolen|lifted)\s*\+\s*de-personalized", re.IGNORECASE),
+    re.compile(r"\((?:stolen|lifted)\s+\d{4}-\d{2}-\d{2}[^)]*source-read", re.IGNORECASE),
+    # C. a provenance CONTEXT naming a person — catches the reworded, adjective-free leak
+    re.compile(rf"{_PROVENANCE_CONTEXT}[^.\n]{{0,60}}{_PROVENANCE_IDENTITY}", re.IGNORECASE),
+)
+
+
+_SOURCE_STAMP_FILE = ".ddd-source-stamp.json"
+
+# Build/OS noise excluded from the source hash — these never reach a package, so a change in
+# them is NOT a source change. Without this, a regenerated `.pyc` or a Finder-created
+# `.DS_Store` reports every emitted package as stale (REVIEW finding: the signal becomes noise
+# and the reader learns to ignore it).
+_HASH_EXCLUDE_DIRS: frozenset[str] = frozenset({"__pycache__", ".git", ".pytest_cache", "node_modules"})
+_HASH_EXCLUDE_NAMES: frozenset[str] = frozenset({".DS_Store", ".gitkeep", "Thumbs.db"})
+_HASH_EXCLUDE_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo"})
+
+
+def _ignore_build_noise(_dir: str, names: list[str]) -> set[str]:
+    """`shutil.copytree` ignore predicate — the EMIT-side half of the exclusion set above.
+
+    Both halves must agree: a file that SHIPS but is NOT hashed lets a package whose bytes
+    differ from source report itself fresh (Gate-2 finding — `_copy_skill_dirs` used a bare
+    copytree and shipped `__pycache__/*.pyc`). Excluding here, and hashing what remains,
+    keeps stamp ⇔ package consistent.
+    """
+    return {
+        n for n in names
+        if n in _HASH_EXCLUDE_DIRS
+        or n in _HASH_EXCLUDE_NAMES
+        or any(n.endswith(s) for s in _HASH_EXCLUDE_SUFFIXES)
+    }
+
+
+def compute_source_hash(ddd_dir: Path) -> str:
+    """Content hash of a DDD's packageable source. Deterministic: CONTENT only, no mtimes.
+
+    Honours the module's byte-identical-across-runs invariant — re-emitting an unchanged
+    source yields the same hash, so the stamp itself never makes output non-deterministic.
+    Walks sorted relative paths and hashes ``path\\0bytes`` pairs, so a RENAME changes the
+    hash too (a moved doc is a source change). ``.artifacts/`` is excluded: it holds the
+    emitted packages + run records, so including it would make the hash depend on its own
+    output (every emit would report the source as changed).
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    for path in sorted(ddd_dir.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel = path.relative_to(ddd_dir)
+        if rel.parts and rel.parts[0] == ".artifacts":
+            continue
+        # Skip build/OS noise that the packager itself EXCLUDES from every package. Hashing
+        # it would report "the source moved" when nothing shippable changed — a regenerated
+        # `.pyc` alone would flip every package to stale, training the reader to ignore the
+        # signal (REVIEW finding). Mirrors the emit-side exclusions (`_GATES_EXCLUDE_DIRS`).
+        if any(part in _HASH_EXCLUDE_DIRS for part in rel.parts):
+            continue
+        if path.name in _HASH_EXCLUDE_NAMES or path.suffix in _HASH_EXCLUDE_SUFFIXES:
+            continue
+        # LENGTH-PREFIXED framing, not NUL-delimited. File bytes are unescaped and may
+        # THEMSELVES contain NUL, so a delimiter is forgeable from content: a tree with one
+        # file `a` containing b"\x00b\x00" hashed IDENTICALLY to a tree with empty files `a`
+        # and `b` (Gate-2 finding, collision demonstrated). Reachable in practice because the
+        # packager knowingly ships NUL-dense binaries (.pdf/.pptx), and a colliding source
+        # change would report the package as fresh. Length prefixes are unforgeable.
+        rel_bytes = str(rel).encode("utf-8")
+        h.update(len(rel_bytes).to_bytes(8, "big"))
+        h.update(rel_bytes)
+        try:
+            data = path.read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        h.update(len(data).to_bytes(8, "big"))
+        h.update(data)
+    return h.hexdigest()
+
+
+def read_source_stamp(out_dir: Path) -> dict[str, Any] | None:
+    """Read an emitted package's source stamp, or None if absent/unparseable."""
+    stamp = Path(out_dir) / _SOURCE_STAMP_FILE
+    try:
+        data = json.loads(stamp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def detect_stale_package(ddd_dir: Path, out_dir: Path) -> bool:
+    """True iff the emitted package at ``out_dir`` no longer matches ``ddd_dir``'s source.
+
+    This closes the blind spot that let the real leak persist (run_003ff3a0): a content
+    gate only runs when someone RE-EMITS, so a package built before a source fix stays
+    wrong indefinitely and nothing reports it. With a recorded source hash, "source moved,
+    package didn't" becomes a checkable question.
+
+    Fail-SAFE: a package with no stamp (emitted by an older packager) reads as STALE. The
+    alternative — treating unstamped as fresh — reproduces the exact silence this fixes.
+    """
+    stamp = read_source_stamp(out_dir)
+    if stamp is None or not stamp.get("source_hash"):
+        return True
+    return str(stamp["source_hash"]) != compute_source_hash(Path(ddd_dir))
+
+
+def gate_provenance_leaks(tree: Path) -> list[tuple[str, int, str]]:
+    """Scan a tree for unfinished-de-personalization provenance wording.
+
+    Returns [(rel_file, line_no, line_text), …] — empty = clean. Pure: never mutates.
+
+    Scans the **SOURCE** tree, called BEFORE any target is emitted (see ``package_ddd``).
+    Three reasons this is source-side + pre-loop rather than per-emitted-tree (Gate-1,
+    run_003ff3a0): (1) ``package_ddd`` rmtree+writes per target, so raising mid-loop would
+    leave an earlier target fully written to disk; (2) the per-target ``content_safety_scan``
+    downgrades findings in the ``deliverables/`` zone, and a provenance leak in a shipped
+    deck is not less of a leak; (3) provenance wording is a SOURCE-authoring smell, so
+    scanning the source once kills the class where the author can fix it — the same
+    "verifies, never rewrites" contract as ``gate_hardcoded_layout_paths``.
+    """
+    hits: list[tuple[str, int, str]] = []
+    for path in sorted(tree.rglob("*")):
+        if not path.is_file() or not _is_scannable(path):
+            continue
+        rel = path.relative_to(tree)
+        # `.artifacts/` holds this DDD's OWN previously-emitted packages + run records.
+        # Scanning it makes the gate flag its own stale output as a source leak — so a DDD
+        # whose LAST emit carries the wording could NEVER re-emit, deadlocking the very fix
+        # that cleans it. (Found by real-DDD smoke, NOT by 165 green unit tests: 10 hits on
+        # SecDLC, every one from `.artifacts/`.) `compute_source_hash` excludes the same dir
+        # for the same reason — one asset, one exclusion rule (P8: every door agrees).
+        if rel.parts and rel.parts[0] == ".artifacts":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            # Unreadable → not a silent skip, but not this gate's failure mode either:
+            # content_safety_scan already surfaces unreadable files as a loud finding.
+            continue
+        # Scan a 2-line SLIDING WINDOW, not single lines. Every pattern forbids a newline
+        # inside its gap (`[^.\n]{0,80}`), so a leak soft-wrapped by an editor or prettier —
+        # "…adapted from an internal asset by\n~jdoe — https://…/Users/jdoe" — produced ZERO
+        # matches while the identical unwrapped text blocked (Gate-2 finding, verified).
+        # Markdown wrapping at 80-100 cols is routine, so this was a real bypass, not a limit.
+        # Joining with a SPACE (never stripping the boundary) keeps the `.` sentence terminator
+        # meaningful: a leak may span a wrap, but not a sentence end.
+        lines = text.splitlines()
+        for i, line in enumerate(lines, 1):
+            window = line if i >= len(lines) else f"{line} {lines[i]}"
+            if any(pat.search(window) for pat in _PROVENANCE_PATTERNS):
+                # Report the FIRST line of the window — where the author starts reading.
+                hits.append((str(rel), i, line.strip()[:160]))
+    return hits
+
+
 def gate_hardcoded_layout_paths(out_dir: Path) -> list[tuple[str, int, str]]:
     """Scan the emitted RUNTIME files (``skills/**``, ``agent-sops/**``) for a hardcoded
     six-section source path. Returns [(rel_file, line_no, line_text), …] — empty = clean.
@@ -530,7 +742,13 @@ def _copy_skill_dirs(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list
             continue
         compliant = name_map[raw]
         dst = out_skills / compliant
-        shutil.copytree(src, dst, dirs_exist_ok=True)
+        # Drop build/OS noise instead of shipping it (Gate-2 finding): a bare copytree
+        # shipped `scripts/__pycache__/*.pyc` and `.DS_Store` into the package. That is not
+        # just clutter — it desynced the source stamp, because `compute_source_hash` excludes
+        # exactly these files. A shipped-but-unhashed file means a package whose bytes differ
+        # from source can report itself FRESH, defeating the stamp. One exclusion set, applied
+        # on BOTH sides (P8: every door agrees) — fixed at the emit, not by widening the hash.
+        shutil.copytree(src, dst, dirs_exist_ok=True, ignore=_ignore_build_noise)
         _rewrite_skill_name(dst / "SKILL.md", compliant)
         _rewrite_skill_body_refs(dst / "SKILL.md", name_map)
         for f in sorted(dst.rglob("*")):
@@ -1653,6 +1871,25 @@ def package_ddd(
             f"(emit ≠ publish). Change the declaration (human-gated) to publish externally."
         )
 
+    # Provenance gate — SOURCE-side, BEFORE any target is emitted. Placed here (not in the
+    # per-target loop) so it fails before the first rmtree: a mid-loop raise would leave an
+    # earlier target fully written to disk. Unconditional by design — NOT behind `publish`
+    # or `external`, because the leak this catches shipped in a `visibility: internal`
+    # package (see `_PROVENANCE_PATTERNS`).
+    prov_hits = gate_provenance_leaks(ddd_dir)
+    if prov_hits:
+        detail = "; ".join(f"{f}:{ln} ({txt})" for f, ln, txt in prov_hits[:8])
+        raise PackagingError(
+            f"provenance-appropriation wording BLOCKED the emit ({len(prov_hits)} hit(s)): "
+            f"{detail}. An adapted external asset must be fully de-personalized in the SOURCE: "
+            f"describe it as 'adapted from an internal <thing>', drop the alias / wiki-user URL, "
+            f"and keep the citation in the references doc."
+        )
+
+    # Computed ONCE before the loop: the source cannot change mid-emit, and every target
+    # stamps the same hash (so a per-target drift is impossible by construction).
+    source_hash = compute_source_hash(ddd_dir)
+
     results: list[PackageResult] = []
     for target in sorted(permitted):
         out_dir = out_root / target
@@ -1750,5 +1987,24 @@ def package_ddd(
                     "e.g. via {{aim:filepath:context/knowledge}}."
                 )
         results.append(res)
+
+    # Source stamps — written only AFTER EVERY target has passed EVERY gate. Deferring past
+    # the loop is deliberate (REVIEW finding): with 2+ declared targets (e.g. a DDD declaring
+    # both aim-capabilities and open-plugin), stamping inside the loop meant a raise on
+    # target #2 left target #1 on disk carrying a stamp that ASSERTS it matches the source —
+    # a stale package that reports itself fresh, the exact silence this stamp exists to break.
+    # All-or-nothing: either every emitted target is stamped, or none is.
+    # CONTENT-hash only (no mtime) → preserves the byte-identical-across-runs invariant.
+    for res in results:
+        _write_json(res.out_dir / _SOURCE_STAMP_FILE, {
+            "source_hash": source_hash,
+            "ddd_name": ddd_dir.name,
+            "target": res.target,
+        })
+        # res.files was finalized by the emit_target_* call; refresh so the shipped-file
+        # manifest includes the stamp itself (otherwise res.files under-reports).
+        res.files = sorted(
+            {str(p.relative_to(res.out_dir)) for p in res.out_dir.rglob("*") if p.is_file()}
+        )
 
     return results

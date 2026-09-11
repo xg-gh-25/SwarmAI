@@ -54,12 +54,22 @@ A DDD declares its own reach in its `aim.json`:
 ## Invocation
 
 ```bash
+# Read-only staleness check — run this FIRST when a package already exists:
+python3 scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> --check-stale
+
+# Emit:
 python3 scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> \
   [--targets aim-capabilities,open-plugin] [--publish]
 ```
 
 - `--targets` omitted → emit the full DECLARED set (subset-only still enforced).
 - `--publish` → run the external-publish gate (refused unless visibility=external).
+- `--check-stale` → **do NOT emit; answer "did the source move since we last packaged?"**
+  Exit codes: **0** = at least one target checked and all fresh · **1** = at least one target
+  is stale (re-emit) · **2** = nothing was checked (no emitted target under `--out`, or a
+  typo'd path — deliberately NOT 0, so a CI/job cannot read "checked nothing" as green).
+  Run it before emitting: a package built before a source fix stays wrong indefinitely and
+  nothing else reports it — that silence is the failure this flag exists to break.
 - The script only ORCHESTRATES — it never contains packaging logic.
 
 ## What this skill does NOT do

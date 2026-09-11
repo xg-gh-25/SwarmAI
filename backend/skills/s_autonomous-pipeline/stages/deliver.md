@@ -325,7 +325,40 @@ Analyze the changeset to determine which specialists to dispatch:
 BASE_REF=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
   || for _b in origin/main origin/master origin/develop; do git rev-parse --verify "$_b" >/dev/null 2>&1 && { echo "$_b"; break; }; done)
 git diff --name-only "${BASE_REF:-HEAD~1}"...HEAD 2>/dev/null || git diff --name-only HEAD~1
+# UNTRACKED files are INVISIBLE to every `git diff` form above — add them:
+git ls-files --others --exclude-standard
 ```
+
+> **⚠️ `git add` your new files BEFORE spawning the review — not after.** A
+> brand-new file is the one most likely to need review and the one `git diff`
+> cannot see, and the fix is a staging order, not a bigger file list.
+>
+> Measured — reproduce with `bash backend/scripts/check_review_scope.sh`: with
+> `a.txt` modified and `b.txt` brand new,
+>
+> | | untracked | after `git add b.txt` |
+> |---|---|---|
+> | `git diff --name-only HEAD` — the **`reviewed_paths`** source | `a.txt` | `a.txt b.txt` |
+> | `git diff --name-only --cached` — the **pending-commit** source | *(empty)* | `b.txt` |
+>
+> `reviewed_paths` is captured at SubagentStop from `git diff HEAD`, so a file left
+> UNSTAGED while the review runs cannot enter the covered set — then staging it for
+> the commit puts it in `pending`, `pending ⊄ covered`, and the gate DENIES.
+> (Staging never leaves the local repo, so it is free to do — STEERING #5.)
+>
+> **Necessary, not sufficient.** `git diff HEAD` compares the WORKTREE to HEAD, so
+> a staged file whose worktree copy then matches HEAD again drops out of coverage
+> while staying in `pending` — same DENY. Both shapes verified by the script above:
+> (a) staged-new then deleted from the worktree, (b) staged edit then reverted to
+> HEAD content. A staged DELETION and a RENAME are both fine. Rule of thumb: the
+> reviewer must see the change ON DISK, not merely in the index.
+>
+> Real instance (run_fbf97252): a new test file sat unstaged through the first
+> review pass and was therefore both unread and uncovered. The pass that finally
+> covered it ran 48 mutations and found **9 vacuous tests** — the worst being one
+> where the sole writer of a data-loss guard could be deleted with the whole suite
+> still green. The gate did DENY, but only at COMMIT time, after a review round had
+> already been spent.
 
 **Dispatch rules:**
 
@@ -380,6 +413,41 @@ Dispatching N specialists: [names]. Skipped: [names] (scope not detected).
 message** (multiple Agent tool calls) so they run in parallel. (The *tier* is [GATE·cli];
 that you spawned in ONE parallel message is discipline — code checks the tier/evidence, not the batching.) Each sub-agent
 has fresh context — no prior review bias.
+
+> **The file LIST is inert; the prompt's WORDING is load-bearing. Do not confuse
+> the two.**
+>
+> *Inert:* the pasted file list tells the sub-agent what to READ, and nothing more.
+> It does not define SCOPE as the gate computes it — `reviewed_paths` is written by
+> `runtime_hooks.py:928` at SubagentStop from a mechanical
+> `git diff --name-only HEAD` over the working tree, and the gate requires
+> `pending_commit ⊆ union(reviewed_paths)` (`security_hooks.py:1981`). Naming a file
+> you never opened does not widen coverage; omitting one does not narrow it.
+>
+> *Load-bearing:* whether an `_adv_` marker is written **at all** is decided by
+> `_is_adversarial_intent(agent_type, "", prompt_head)` — and when
+> `subagent_type` is a generic `general-purpose` (as every real marker on this
+> machine is), classification falls back ENTIRELY to the spawn prompt's wording.
+> Measured against the live function:
+>
+> | spawn prompt | marker written? |
+> |---|---|
+> | "You are an ADVERSARIAL reviewer…" | ✅ yes |
+> | "Please carefully review this changeset and tell me if it is correct." | ❌ **no** |
+> | "Check the diff for mistakes before I commit." | ❌ **no** |
+>
+> So a genuine, thorough review phrased in ordinary language produces **zero
+> coverage**, and the commit is then DENIED for a review that actually happened.
+> Keep explicit adversarial vocabulary in the prompt (adversarial / refute /
+> red-team / hunt for bugs in this diff / 对抗 / 挑刺) — it is not stylistic, it is
+> the classifier's only input.
+>
+> Two further consequences: (1) coverage is decided by the working tree AT
+> SubagentStop TIME, so anything you `git add` only afterwards was never covered —
+> stage first (Step 1 warning); (2) `reviewed_paths` is captured relative to ONE
+> repo root (the reviewer's cwd). A change spanning the source repo AND SwarmWS
+> needs a reviewer per root, or the other repo's paths are uncoverable no matter
+> how you stage.
 
 **Sub-agent prompt template (per specialist):**
 
@@ -1279,6 +1347,21 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN
   --data '{"title":"...","quality":{"tests_pass":true,"regressions":0,"smoke_pass":true},"adversarial_review":{"spawned":true,"profile_tier":"full","findings_total":N,"findings_fixed":N,"findings_remaining":0,"findings":[{"severity":"HIGH|MEDIUM","resolved":true,"finding":"path/file.py func() line N: issue. Fixed: how."}]},"completion_audit":{"all_green":true,"requirements_met":N,"requirements_total":N,"evidence":"..."},"meta_review":"...","report_path":"runs/<RUN_ID>/REPORT.md"}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect --run-id <RUN_ID>
 ```
+
+> **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
+> handoff point. Immediately Read the next stage's doc (the `advance` output prints its
+> absolute path as `next_stage_doc`) and execute that stage **in this same turn**. The ONLY
+> legal reasons to hand control back are: a stage-boundary **L2 Judgment** routed through the
+> Escalation Routing Protocol, a **true checkpoint trigger** (`should_checkpoint=true`,
+> retries exhausted, or a mid-stage L2), a pending question awaiting the user, or an abandon
+> verdict. Absent one of those, ending your turn here is the stall this contract exists to
+> prevent.
+>
+> **`next_action` is AUTHORITATIVE — this sentence defers to it.** The payload is measured at
+> the moment you advance; this prose was written long before. When `advance` reports a due
+> checkpoint (or that it could not measure the budget), it withholds the continue instruction
+> ON PURPOSE — follow the payload, not this paragraph. Prose cannot see the run's state; the
+> payload can.
 
 ---
 
