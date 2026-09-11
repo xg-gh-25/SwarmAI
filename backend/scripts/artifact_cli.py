@@ -79,7 +79,73 @@ def _git_repo_root(path: str) -> "str | None":
         return None
 
 
-def _compute_untrackable_source(files_touched: "list[str] | None") -> "list[str]":
+def _merge_incoming_files_touched(
+    persisted: "list[str] | None", incoming_json: "str | None"
+) -> "list[str] | None":
+    """Merge an incoming ``--files-touched`` JSON array into the ``persisted`` list.
+
+    SINGLE OWNER of the merge semantics: the completion gate evaluates the result of
+    this function, and the persisting write in ``cmd_run_update`` calls it too — so the
+    value the gate JUDGES and the value written to run.json can never drift (they are
+    the same computation, not two copies of the same rules).
+
+    Semantics (dedup-append, order-preserving, str-filtered) intentionally match what
+    the persisting write always did:
+      - keep ``persisted`` order, append only genuinely new entries;
+      - each incoming entry is ``.strip()``ed and empty/non-str entries are dropped;
+      - comparison is by the STRIPPED string, because completion_gate matches
+        ``untrackable_source`` against ``files_touched`` by EXACT string equality.
+
+    ``None`` IS PRESERVED when there is nothing to merge: completion_gate treats
+    ``files_touched=None`` as "legacy / not recorded" (returns ok WITH a nudge warning)
+    but ``[]`` as a silent ok — so normalizing None -> [] would silently delete that
+    warning for legacy/in-flight runs. Returns ``None`` only when ``persisted`` is None
+    AND there is no usable incoming value.
+
+    Invalid/unparseable ``incoming_json`` is IGNORED here (returns ``persisted``
+    unchanged) rather than raising: the persisting write is the single place that
+    validates the arg and exits non-zero on malformed input, and this gate-side helper
+    must never turn a malformed-arg error into a confusing gate verdict.
+    """
+    # ⚠️ VALIDATE `persisted` FIRST — ABOVE every early return (Gate-2 HIGH, and its
+    # placement fixed by meta-review's cross-fix check). The incoming ARG is validated
+    # by the persisting write, but the PERSISTED value comes from run.json and is never
+    # checked. A non-list there used to be harmless (the pure gate merely iterated it),
+    # but this helper now feeds `_compute_untrackable_source`, which spawns 2 git
+    # subprocesses PER ENTRY — so a stray `files_touched: "a.py"` would explode into one
+    # "file" per CHARACTER (a subprocess storm), and an int/bool would raise an uncaught
+    # TypeError INSIDE the completion gate, replacing a JSON verdict with a traceback.
+    #
+    # WHY THE ORDER MATTERS: this guard sat BELOW the `if not incoming_json` early
+    # return, so it only covered calls that actually carried an incoming arg — while
+    # the COMMON path (the gate runs on every completion, usually with no
+    # --files-touched) returned the corrupt value untouched. A guard that misses the
+    # common path is not a guard. Measured 0/373 live runs carry a non-list, so this
+    # protects against a corrupt/hand-edited run.json, not an observed shape.
+    if persisted is not None and not isinstance(persisted, list):
+        persisted = None
+    if not incoming_json:
+        return persisted
+    try:
+        incoming = json.loads(incoming_json)
+    except (ValueError, TypeError):
+        return persisted  # malformed → the persisting write reports it, not this gate
+    if not isinstance(incoming, list):
+        return persisted
+    merged = list(persisted) if persisted else []
+    seen = set(merged)
+    for p in incoming:
+        if isinstance(p, str) and p.strip() and p.strip() not in seen:
+            merged.append(p.strip())
+            seen.add(p.strip())
+    if not merged and persisted is None:
+        return None  # nothing usable arrived → keep the legacy "not recorded" signal
+    return merged
+
+
+def _compute_untrackable_source(
+    files_touched: "list[str] | None", repo_root: "str | None" = None
+) -> "list[str]":
     """Return the subset of files_touched that git CANNOT commit because they are
     gitignored (run_e0aa14f7 — a gitignored project, e.g. CMHK per STEERING #5).
 
@@ -87,13 +153,35 @@ def _compute_untrackable_source(files_touched: "list[str] | None") -> "list[str]
     case: CMHK files live in the SwarmWS workspace repo, not the swarmai source
     repo). FAIL-SAFE: if the repo root can't be resolved OR check-ignore errors
     (rc 128 / OSError / timeout), the file is OMITTED from the result → it counts
-    as trackable → the gate still blocks it (never fail-open, C045)."""
+    as trackable → the gate still blocks it (never fail-open, C045).
+
+    ⚠️ ``repo_root`` ANCHORS A RELATIVE ENTRY (Gate-2 HIGH). ``_git_repo_root`` falls
+    back to ``Path.cwd()`` for a relative path, and the backend daemon's measured cwd
+    is ``/`` — not a repo — so a gitignored file recorded RELATIVELY resolved to no
+    repo, was omitted (fail-safe = "trackable"), and the completion gate then BLOCKED
+    a run git literally cannot commit: a PERMANENT false-block, the very
+    run_e0aa14f7 class the untrackable concept exists to prevent. Callers that know
+    the run's workspace/repo MUST pass it. Anchoring only affects RELATIVE entries;
+    an absolute entry keeps resolving from its own parent exactly as before.
+
+    The fail-safe direction is deliberately asymmetric and stays that way: an
+    unresolvable root still means "trackable" (the gate blocks), because a
+    false-block is recoverable by committing while a fail-open would let genuinely
+    uncommitted source ship (C045).
+    """
     import subprocess
     out: list[str] = []
     for f in (files_touched or []):
         if not (isinstance(f, str) and f.strip()):
             continue
-        root = _git_repo_root(f)
+        # A relative entry is anchored to the caller-supplied root; only fall back to
+        # cwd-based discovery when the caller could not tell us (preserves the prior
+        # behavior for absolute paths and for callers with no workspace context).
+        _p = Path(f)
+        if not _p.is_absolute() and repo_root:
+            root = _git_repo_root(str(Path(repo_root) / _p))
+        else:
+            root = _git_repo_root(f)
         if not root:
             continue  # unresolved root → treat as trackable (fail-safe)
         try:
@@ -2391,9 +2479,50 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # Gitignored-project source (run_e0aa14f7): git can't commit these, so
             # they're excluded from the COMMIT check (still surface-checked). Computed
             # here (the caller has repo + subprocess) and passed into the pure gate.
-            _untrackable = _compute_untrackable_source(run_state.get("files_touched"))
+            #
+            # ⚠️ INCOMING-ARG MERGE (the SECOND instance of this staleness class in
+            # this function — see the --stage-json merge above). `run_state` was read
+            # ONCE at the top of cmd_run_update, but an incoming `--files-touched` is
+            # only applied to it ~150 lines BELOW this gate. So a single
+            # `run-update --status completed --files-touched '[...]'` call used to
+            # evaluate this gate against a STALE-EMPTY list -> ok=True -> an
+            # uncommitted-source run reached status=completed with commits[] empty,
+            # while the documented two-call flow (record files_touched, THEN complete)
+            # correctly BLOCKED. Same run, same data, only the call shape differed.
+            # Merging here makes both shapes reach the SAME verdict.
+            #
+            # BOTH gate arguments MUST derive from this ONE merged list:
+            # completion_gate compares `untrackable_source` to `files_touched` by EXACT
+            # string membership, so merging one but not the other would drop every
+            # newly-incoming gitignored file out of `untrackable` -> counted trackable
+            # -> a single-call GITIGNORED run would block FOREVER (re-opening
+            # run_e0aa14f7). `_merge_incoming_files_touched` also PRESERVES None
+            # (never normalizes to []): completion_gate treats None as
+            # "legacy/not recorded" (ok + a nudge warning) but [] as a silent ok, so
+            # normalizing would delete that nudge.
+            #
+            # A THIRD instance of this class should trigger the structural fix (apply
+            # ALL incoming arg mutations to run_state BEFORE any gate runs) rather than
+            # a third special case. That refactor is deliberately NOT done here: several
+            # gates in this function intentionally read PRE-mutation state (the
+            # terminal-revival guard compares the old status; the profile-immutability
+            # check counts persisted stages), so reordering would flip multiple gate
+            # verdicts at once with no harness to catch it.
+            _effective_files_touched = _merge_incoming_files_touched(
+                run_state.get("files_touched"), getattr(args, "files_touched", None)
+            )
+            # Pass the WORKSPACE as the relative-entry anchor (Gate-2 HIGH): without
+            # it the classifier resolves a relative path's repo root from Path.cwd(),
+            # and the daemon's measured cwd is `/` — no repo — so a gitignored file
+            # recorded relatively was mis-classified TRACKABLE and this gate blocked a
+            # run git cannot commit (a permanent false-block). The workspace IS the
+            # right anchor: a gitignored PROJECT lives under `Projects/` inside it,
+            # which is exactly the run_e0aa14f7 case untrackable_source exists for.
+            _untrackable = _compute_untrackable_source(
+                _effective_files_touched, repo_root=str(_get_workspace())
+            )
             _verdict = completion_surface_verdict(
-                files_touched=run_state.get("files_touched"),
+                files_touched=_effective_files_touched,
                 commits=run_state.get("commits"),
                 deliver_surfaced=_surfaced,
                 untrackable_source=_untrackable,
@@ -2551,6 +2680,12 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # batches across multiple run-update calls. Only WRITTEN files belong here
         # (the caller records Edit/Write targets, not Reads) — an over-broad list
         # would re-introduce the cross-session bleed this design exists to prevent.
+        #
+        # VALIDATION stays HERE (this is the single place that reports a malformed arg
+        # and exits non-zero); the MERGE itself is delegated to
+        # `_merge_incoming_files_touched` so the value the completion gate above
+        # JUDGED and the value persisted here are the SAME computation and cannot
+        # drift (R25 — one owner, not two copies of the same rules).
         try:
             incoming = json.loads(args.files_touched)
         except (ValueError, TypeError):
@@ -2561,14 +2696,23 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             print(json.dumps({"error": "--files-touched must be a JSON array of paths"}),
                   file=sys.stderr)
             sys.exit(1)
-        existing = run_state.get("files_touched", [])
-        # Preserve insertion order, dedup, drop empties/non-strings
-        seen = set(existing)
-        for p in incoming:
-            if isinstance(p, str) and p.strip() and p not in seen:
-                existing.append(p.strip())
-                seen.add(p.strip())
-        run_state["files_touched"] = existing
+        # NOTE: the helper dedups on the STRIPPED string. The prior inline loop
+        # compared the RAW entry against `seen` while appending the stripped form, so
+        # a padded duplicate (" a.py " when "a.py" was already recorded) appended a
+        # second identical entry. Deduping on the stripped value is what the exact
+        # string membership in completion_gate needs.
+        #
+        # ⚠️ THE DEFAULT MUST MATCH THE GATE-SIDE CALL EXACTLY (Gate-2 HIGH): plain
+        # `.get("files_touched")` with NO `[]` default. The gate used `.get(k)` while
+        # this write used `.get(k, [])`, so for a run with no recorded files_touched
+        # the gate JUDGED `None` (legacy → ok + a nudge warning) while `[]` was
+        # PERSISTED (a silent ok) — the two sides ran the same helper on DIFFERENT
+        # inputs, which is precisely the drift the single-owner design exists to make
+        # impossible. Same key, same default, same helper: now genuinely one
+        # computation, not two copies of the same rules.
+        run_state["files_touched"] = _merge_incoming_files_touched(
+            run_state.get("files_touched"), args.files_touched
+        )
 
     run_state["updated_at"] = now
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")

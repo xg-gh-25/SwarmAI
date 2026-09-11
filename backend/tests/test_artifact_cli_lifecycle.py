@@ -2294,3 +2294,310 @@ class TestGoalProfileVariantGate:
         with pytest.raises(SystemExit) as exc:
             cli.cmd_run_update(self._args("run_gv", "completed"), ArtifactRegistry(workspace))
         assert exc.value.code != 0, f"variant '{goal_variant}' must still hit the goal adversarial gate"
+
+
+class TestSingleCallCompletionFilesTouched:
+    """The completion surface gate READS ``files_touched`` early in cmd_run_update, but
+    the incoming ``--files-touched`` CLI arg was only APPLIED to run_state ~152 lines
+    LATER. So ``run-update --status completed --files-touched '[...]'`` in ONE call
+    evaluated the gate against a STALE-EMPTY list, returned ok=True, and let an
+    uncommitted-source run reach status=completed with commits[] empty — while the
+    documented two-call flow (record files_touched, THEN complete) correctly BLOCKED
+    with ``uncommitted_source``. Same run, same data; only the call shape differed.
+
+    This is the SECOND instance of this staleness class in this function — the
+    ``--stage-json`` half was already fixed by merging the incoming value before
+    evaluating. A THIRD instance should trigger the structural refactor (apply ALL
+    incoming arg mutations to run_state before ANY gate runs).
+    """
+
+    def _args(self, run_id, status=None, files_touched=None, stage_json=None):
+        import argparse
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated files_touched fixed force force_checkpoint "
+                 "frontend full indicators lessons limit modules outcome overlap partial "
+                 "probes producer profile project reason requirement resolved retries "
+                 "review_count rp_violations run_id scope stage stage_json state status "
+                 "summary taste_decision timestamp tokens_consumed topic type types "
+                 "user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = run_id
+        ns.status = status
+        ns.files_touched = files_touched
+        ns.stage_json = stage_json
+        ns.force = False
+        ns.force_checkpoint = False
+        return ns
+
+    def _run_update(self, workspace, monkeypatch, args):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        return cli.cmd_run_update(args, ArtifactRegistry(workspace))
+
+    def _deliverable_run(self, workspace, monkeypatch, run_id, files_touched=None,
+                         commits=None):
+        """A run that has already satisfied every OTHER completion gate, so the ONLY
+        thing that can block it is the commit/surface gate under test.
+
+        Publishes REAL evaluate + deliver artifacts via the registry (the deliver
+        artifact_id gate + the C2 validator backstop both load them), mirroring the
+        proven fixture shape used by the C2-backstop tests in this file (RP45 — reuse
+        a driver that already satisfies the surrounding gates instead of re-deriving
+        which fields each gate wants).
+        """
+        from core.artifact_registry import ArtifactRegistry
+        # The completion gate loads pipeline_validator as a FRESH module resolving via
+        # SWARM_WORKSPACE (not the monkeypatched cli._get_workspace), so point it here.
+        monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
+        reg = ArtifactRegistry(workspace)
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "REPORT.md").write_text("# Report\n" + ("detail line\n" * 80))
+
+        ev = reg.publish(project="TestProject", artifact_type="evaluation",
+                         producer="test", summary="e",
+                         data={"recommendation": "GO", "scope": "bugfix",
+                               "understanding": {
+                                   "work_type": "bugfix",
+                                   "claim": "the gate reads a stale list",
+                                   "evidence": "Understanding gate: code-trace of the read/write order",
+                                   "evidence_kind": "code-trace",
+                                   "skeptic_verdict": "SUPPORTED"},
+                               "ambiguity_scan": {"scanned_fields": ["what"], "hits": [],
+                                                  "hit_count": 0, "all_resolved": True}})
+        ev_id = ev["id"] if isinstance(ev, dict) else ev
+        dv = reg.publish(project="TestProject", artifact_type="delivery",
+                         producer="test", summary="ok",
+                         data={"title": "x",
+                               "quality": {"tests_pass": True, "regressions": 0,
+                                           "smoke_pass": True},
+                               "adversarial_review": {"spawned": True, "profile_tier": "full",
+                                                      "evidence": "Agent tool", "findings": []},
+                               "completion_audit": {"all_green": True},
+                               "ac_verification": {"status": "verified"},
+                               "meta_review": "CLEAR",
+                               "convergence": {"iterations": 1, "all_pass": True,
+                                               "final_status": "push-ready"}})
+        dv_id = dv["id"] if isinstance(dv, dict) else dv
+
+        stages = []
+        for stg in ("evaluate", "think", "plan", "build", "review", "test",
+                    "deliver", "reflect"):
+            rec = {"stage": stg, "status": "completed", "stage_doc_consumed": True,
+                   "token_cost": 100}
+            if stg == "evaluate":
+                rec["artifact_id"] = ev_id
+            elif stg == "deliver":
+                rec.update({"artifact_id": dv_id, "push_ready": True,
+                            "outputs_surfaced": True})
+            elif stg == "reflect":
+                rec["lessons"] = ["a substantive lesson long enough to satisfy the gate"]
+            stages.append(rec)
+
+        data = {
+            "id": run_id, "project": "TestProject", "requirement": "x",
+            "profile": "bugfix", "status": "running", "stages": stages,
+            "created_at": "2026-09-01T00:00:00+00:00",
+            "updated_at": "2026-09-01T00:00:00+00:00",
+        }
+        if files_touched is not None:
+            data["files_touched"] = files_touched
+        if commits is not None:
+            data["commits"] = commits
+        (run_dir / "run.json").write_text(json.dumps(data, indent=2))
+        return run_dir / "run.json"
+
+    def test_single_call_with_files_touched_blocks_uncommitted_source(
+            self, workspace, monkeypatch, tmp_path, capsys):
+        """AC1 — RED before the fix: the gate reads a stale-empty files_touched, so this
+        SINGLE call completes an uncommitted-source run. After the fix it must BLOCK."""
+        src = tmp_path / "src" / "real_source.py"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("x = 1\n")
+        run_file = self._deliverable_run(workspace, monkeypatch, "run_sc1")
+
+        with pytest.raises(SystemExit) as exc:
+            self._run_update(workspace, monkeypatch,
+                             self._args("run_sc1", status="completed",
+                                        files_touched=json.dumps([str(src)])))
+        assert exc.value.code != 0, "single-call completion of uncommitted source must BLOCK"
+        out = capsys.readouterr().out
+        assert "uncommitted_source" in out, \
+            f"expected an uncommitted_source verdict, got: {out[:400]}"
+        assert _read_run(run_file)["status"] == "running", \
+            "a blocked completion must NOT persist status=completed"
+
+    def test_two_call_flow_blocks_identically(self, workspace, monkeypatch, tmp_path, capsys):
+        """AC2 control — the two-call flow ALREADY blocks. This pins PARITY: the fix
+        aligns the single-call shape with this, it does not invent new blocking."""
+        src = tmp_path / "src" / "two_call.py"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("y = 2\n")
+        run_file = self._deliverable_run(workspace, monkeypatch, "run_sc2",
+                                         files_touched=[str(src)])
+        with pytest.raises(SystemExit) as exc:
+            self._run_update(workspace, monkeypatch, self._args("run_sc2", status="completed"))
+        assert exc.value.code != 0
+        assert "uncommitted_source" in capsys.readouterr().out
+        assert _read_run(run_file)["status"] == "running"
+
+    def test_single_call_gitignored_source_still_completes(
+            self, workspace, monkeypatch, tmp_path):
+        """AC7 — the Gate-1 catch that would otherwise have shipped: completion_gate
+        compares ``untrackable_source`` to ``files_touched`` by EXACT string equality.
+        If only ``files_touched`` were merged (and ``untrackable_source`` still derived
+        from the stale list), an incoming GITIGNORED path would fall out of
+        ``untrackable`` -> be counted trackable -> block FOREVER (re-opening
+        run_e0aa14f7). git cannot commit a gitignored file, so this run MUST complete.
+
+        REAL git is used, not a stubbed classifier. The earlier stub
+        (``lambda ft: [f for f in ft if "gitignored" in f]``) was VACUOUS: pytest's
+        tmpdir embeds the test's own name, which contains "gitignored", so the filter
+        matched every path under tmp_path and would have passed with or without the
+        merge. Worse, stubbing the classifier hid a real behavior split that only
+        real git exposes (see the sibling cwd-anchoring test)."""
+        import subprocess
+        src = workspace / "Projects" / "GI" / "generated.py"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("z = 3\n")
+        # A real repo whose .gitignore genuinely excludes the file, so
+        # `git check-ignore` — not a lambda — decides it is untrackable.
+        subprocess.run(["git", "init", "-q", "."], cwd=workspace, check=True)
+        (workspace / ".gitignore").write_text("Projects/GI/\n")
+        run_file = self._deliverable_run(workspace, monkeypatch, "run_sc7")
+        self._run_update(workspace, monkeypatch,
+                         self._args("run_sc7", status="completed",
+                                    files_touched=json.dumps([str(src)])))
+        assert _read_run(run_file)["status"] == "completed", \
+            "a gitignored-source single-call run must COMPLETE, not block forever"
+
+    def test_single_call_docs_only_still_completes(self, workspace, monkeypatch):
+        """AC2 — no false-block: a docs/knowledge-only run records NO source, so the
+        gate must not fire just because the merge now sees an (empty) incoming list."""
+        run_file = self._deliverable_run(workspace, monkeypatch, "run_sc3")
+        self._run_update(workspace, monkeypatch,
+                         self._args("run_sc3", status="completed",
+                                    files_touched=json.dumps([])))
+        assert _read_run(run_file)["status"] == "completed"
+
+    def test_single_call_committed_source_completes(self, workspace, monkeypatch, tmp_path):
+        """AC2 — the positive path: source that IS committed (commits[] intersects the
+        incoming files_touched) completes normally. Guards against the merge turning
+        into a blanket block."""
+        src = tmp_path / "src" / "committed.py"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("w = 4\n")
+        run_file = self._deliverable_run(
+            workspace, monkeypatch, "run_sc4",
+            commits=[{"repo": str(tmp_path), "sha": "abc1234", "files": [str(src)]}])
+        self._run_update(workspace, monkeypatch,
+                         self._args("run_sc4", status="completed",
+                                    files_touched=json.dumps([str(src)])))
+        assert _read_run(run_file)["status"] == "completed"
+
+    def test_legacy_none_files_touched_preserved_not_normalized(self, workspace, monkeypatch):
+        """AC2 / Gate-1 catch: ``files_touched=None`` means "legacy / not recorded" and
+        completion_gate returns ok WITH a nudge warning, whereas ``[]`` is a silent ok.
+        A run with no files_touched and no incoming arg must keep None (the merge must
+        not normalize it to []), so the legacy nudge is not silently deleted."""
+        run_file = self._deliverable_run(workspace, monkeypatch, "run_sc5")
+        self._run_update(workspace, monkeypatch, self._args("run_sc5", status="completed"))
+        persisted = _read_run(run_file)
+        assert persisted["status"] == "completed"
+        assert persisted.get("files_touched") is None, \
+            "absent files_touched must stay absent/None, never be normalized to []"
+
+    def test_merge_dedups_on_stripped_value(self, workspace, monkeypatch, tmp_path):
+        """The merge dedups on the STRIPPED string, because completion_gate matches
+        untrackable_source against files_touched by EXACT equality — a padded duplicate
+        must not create a second entry that no untrackable list would ever match."""
+        from scripts.artifact_cli import _merge_incoming_files_touched
+        assert _merge_incoming_files_touched(["a.py"], json.dumps(["  a.py  "])) == ["a.py"]
+        assert _merge_incoming_files_touched(["a.py"], json.dumps(["b.py"])) == ["a.py", "b.py"]
+        # None preserved when nothing usable arrives; malformed JSON is ignored here
+        # (the persisting write is what reports it).
+        assert _merge_incoming_files_touched(None, None) is None
+        assert _merge_incoming_files_touched(None, "not json") is None
+        assert _merge_incoming_files_touched(None, json.dumps([])) is None
+        assert _merge_incoming_files_touched(None, json.dumps(["x.py"])) == ["x.py"]
+
+    def test_gitignored_RELATIVE_path_classified_untrackable_regardless_of_cwd(
+            self, tmp_path, monkeypatch):
+        """Gate-2 HIGH — a REAL-git test for the gap the AC7 stub was hiding.
+
+        AC7 monkeypatches ``_compute_untrackable_source``, so it proves merge PARITY but
+        never exercises the classifier. The classifier resolves a RELATIVE path's repo
+        root from ``Path.cwd()``, and the backend daemon's measured cwd is ``/`` — not a
+        repo. So a gitignored file recorded RELATIVELY was classified TRACKABLE, and the
+        completion gate then blocked a run git literally CANNOT commit: a permanent
+        false-block, the exact run_e0aa14f7 regression class. This is reachable only
+        because the merge now feeds the incoming path to the classifier at all (before,
+        the gate saw a stale-empty list and classified nothing).
+
+        Uses a real ``git init`` + ``.gitignore`` and drives the cwd away from the repo,
+        which is what makes it RED on a cwd-anchored resolution."""
+        import subprocess
+        import scripts.artifact_cli as cli
+        repo = tmp_path / "repo"
+        (repo / "Projects" / "CMHK").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=repo, check=True)
+        (repo / ".gitignore").write_text("Projects/*\n")
+        (repo / "Projects" / "CMHK" / "gen.py").write_text("x = 1\n")
+        rel = "Projects/CMHK/gen.py"
+        monkeypatch.chdir(tmp_path)  # cwd is NOT the repo (stands in for the daemon's /)
+        got = cli._compute_untrackable_source([rel], repo_root=str(repo))
+        assert got == [rel], (
+            "a gitignored RELATIVE path must be classified untrackable so the completion "
+            "gate does not block a run git cannot commit; the classifier must not depend "
+            f"on the process cwd. got {got}")
+
+    def test_merge_ignores_a_non_list_persisted_value(self):
+        """Gate-2 HIGH: the incoming ARG is validated by the persisting write, but the
+        PERSISTED value comes from run.json and was never checked. Since the merged list
+        now feeds ``_compute_untrackable_source`` (2 git subprocesses PER ENTRY), a
+        stray string would explode into one "file" per CHARACTER (a subprocess storm)
+        and an int/bool would raise an uncaught TypeError INSIDE the completion gate,
+        replacing a JSON verdict with a traceback. Anything non-list is treated as
+        "nothing recorded"."""
+        from scripts.artifact_cli import _merge_incoming_files_touched as M
+        inc = json.dumps(["new.py"])
+        assert M("a.py", inc) == ["new.py"], "a string must NOT be iterated per-char"
+        assert M({"a.py": 1}, inc) == ["new.py"], "a dict must not leak its keys"
+        assert M(5, inc) == ["new.py"], "an int must not raise TypeError"
+        assert M(True, inc) == ["new.py"], "a bool must not raise TypeError"
+        # ⚠️ CROSS-FIX INTERACTION (found by meta-review, not by Gate 2): the guard
+        # must also cover the NO-INCOMING-ARG path, which is the COMMON one — the gate
+        # runs on every completion, usually with no --files-touched. An early
+        # `if not incoming_json: return persisted` placed ABOVE the guard let a corrupt
+        # value flow straight through to the classifier untouched.
+        assert M("a.py", None) is None, \
+            "a corrupt persisted value must be neutralized even with NO incoming arg"
+        assert M(5, None) is None, "same for a non-iterable, with no incoming arg"
+        assert M("a.py", "not json") is None, \
+            "same on the malformed-JSON early return"
+
+    def test_gate_and_persist_sides_agree_on_an_empty_incoming_list(
+            self, workspace, monkeypatch):
+        """Gate-2 HIGH — the "cannot drift" claim must hold BEHAVIORALLY, not just in a
+        comment. The gate called ``.get("files_touched")`` (-> None) while the persisting
+        write called ``.get("files_touched", [])`` (-> []), so for a run with nothing
+        recorded the two sides ran the same helper on DIFFERENT inputs: the gate judged
+        None (legacy -> ok + nudge) while [] was PERSISTED (a silent ok).
+
+        Asserted on the OBSERVABLE outcome — what lands in run.json — because grepping
+        the production source for the defaults would pass even if the call were deleted
+        (the vacuous-assertion class: a source-text match proves nothing about
+        behavior)."""
+        run_file = self._deliverable_run(workspace, monkeypatch, "run_sc8")
+        self._run_update(workspace, monkeypatch,
+                         self._args("run_sc8", status="completed",
+                                    files_touched=json.dumps([])))
+        persisted = _read_run(run_file)
+        assert persisted["status"] == "completed"
+        assert persisted.get("files_touched") is None, (
+            "an EMPTY incoming list must leave files_touched as None — the value the "
+            "gate judged — instead of persisting [] and silently dropping the legacy "
+            f"nudge; got {persisted.get('files_touched')!r}")

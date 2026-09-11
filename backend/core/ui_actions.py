@@ -366,6 +366,15 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
         # files have no committed sha, so NO baseRef → the row renders working-tree
         # CONTENT, not a diff (same as REPORT.md, exactly right for uncommitted source).
         if not events:
+            # Drop accounting (LOUD-on-degradation, mirroring the REPORT.md warning
+            # below). Both drops used to be a bare `continue` with ZERO logging, so
+            # "the rows were lost" was indistinguishable from "there was nothing to
+            # show" — while this SAME function already logged loudly for a missing
+            # REPORT.md. Counters are AGGREGATED into one record after the loop: a
+            # per-file warning on a 24-entry run would be a storm that evicts
+            # higher-value records.
+            _drop_outside = 0   # resolved fine, but lands outside the workspace
+            _drop_not_file = 0  # inside the workspace, but nothing on disk there
             for f in data.get("files_touched", []) or []:
                 if not isinstance(f, str) or not f or f in seen:
                     continue
@@ -381,25 +390,83 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
                 # yields the recognizable ws-relative display for free — no absolute
                 # path ever leaks into the row (F3).
                 try:
-                    _resolved = Path(f).resolve()
+                    # ⚠️ RESOLUTION ANCHOR (do NOT revert to a bare Path(f).resolve()):
+                    # files_touched may be recorded ABSOLUTE or REPO-RELATIVE (build.md
+                    # documents both). `Path(f).resolve()` anchors a RELATIVE path to
+                    # the PROCESS CWD — and the backend daemon's cwd is NOT the
+                    # workspace (measured: `/`), so every relative entry resolved to a
+                    # nonexistent absolute path, `relative_to(ws)` raised, and the row
+                    # was dropped SILENTLY. Anchor relative entries to the workspace
+                    # root instead, which is this fallback's actual scope (a gitignored
+                    # PROJECT lives under `Projects/` inside ws). Absolute entries keep
+                    # their exact prior behavior.
+                    #
+                    # SCOPE, stated plainly so this is not mistaken for a wider fix:
+                    # a SOURCE-REPO file (e.g. the swarmai checkout) is OUTSIDE ws and
+                    # therefore still — correctly — dropped by the containment check
+                    # below. Source-repo rows come from `commits[]` (the primary branch
+                    # above), never from this fallback. Anchoring relative entries to
+                    # the bound-repo worktrees was evaluated and REJECTED as provably
+                    # inert: no bound worktree is nested under ws, so such a path would
+                    # be resolved only for the very next line to reject it.
+                    _p = Path(f)
+                    _resolved = (_p if _p.is_absolute() else (ws / _p)).resolve()
+                    # CONTAINMENT IS UNCHANGED (see the security note above): the
+                    # resolve() happens BEFORE this check, so a `../` traversal in a
+                    # relative entry is normalized and then rejected here exactly like
+                    # any other out-of-ws path — anchoring to ws is not a traversal hole.
                     display = str(_resolved.relative_to(ws))
                 except (ValueError, OSError):
+                    _drop_outside += 1
                     continue  # outside workspace (or unresolvable) → do NOT surface
                 # Skip a since-deleted / non-file path — it would emit a dead row that
                 # 404s on fetch. is_file() also follows symlinks, so a dangling symlink
                 # is dropped too (defense-in-depth on top of the containment check).
                 if not _resolved.is_file():
+                    _drop_not_file += 1
                     continue
-                seen.add(f)
+                # ⚠️ DEDUP ON THE RESOLVED PATH, not the raw recorded string (Gate-2
+                # CRITICAL). files_touched really records the same file BOTH absolute
+                # and repo-relative within one run, so a raw-string `seen` let an
+                # abs+rel pair emit TWO byte-identical rows (same path AND same
+                # absolutePath). Row identity IS the resolved path, so that is what
+                # must be deduped. This was masked before the resolution fix above
+                # (the relative form always died in containment); fixing resolution
+                # un-masked it, which is why the guard belongs here and not upstream.
+                _key = str(_resolved)
+                if _key in seen:
+                    continue  # same physical file already emitted (abs+rel pair)
+                seen.add(_key)
+                seen.add(f)  # keep the raw form too: the commits[] branch keys on it
                 events.append({
                     "type": "file_changed",
                     "path": display,
-                    "absolutePath": f,
+                    # The RESOLVED absolute path, not the raw recorded string: the
+                    # frontend uses absolutePath as the render/fetch anchor, so a
+                    # relative entry must not ship its relative form (the client has
+                    # no way to resolve it, and it would 404). For an absolute entry
+                    # this is the same value as before.
+                    "absolutePath": str(_resolved),
                     "operation": "written",
                     "relevance": "deliverable",
                     "kind": "source-final",
                     # NO baseRef — a gitignored file has no committed parent to diff.
                 })
+            # ONE aggregated record per run, only when something was actually dropped
+            # (zero drops → zero noise). Per-class counts make the CAUSE visible:
+            # outside_containment is the security boundary doing its job (expected for
+            # source-repo paths), while not_a_file points at a stale/hallucinated
+            # files_touched entry — two very different follow-ups.
+            if _drop_outside or _drop_not_file:
+                logger.warning(
+                    "build_surface_events: files_touched_drops run=%r dropped=%d "
+                    "(outside_containment=%d, not_a_file=%d) — these files_touched "
+                    "entries produced NO Canvas OUTPUTS row. outside_containment is the "
+                    "workspace-containment guard (source-repo files surface via "
+                    "commits[] instead); not_a_file means the recorded path is absent "
+                    "on disk.",
+                    run_id, _drop_outside + _drop_not_file, _drop_outside, _drop_not_file,
+                )
         # ── Append the run's REPORT.md LAST (run_14e560ed) ────────────────────
         # The pipeline REPORT.md is written by the run-report CLI subprocess, so
         # the SDK never sees a Write tool for it (the live _build_file_write_events

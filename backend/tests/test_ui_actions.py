@@ -540,9 +540,18 @@ class TestGitignoredSurfaceFromFilesTouched:
         # drops non-existent paths (is_file guard), so a test path must actually exist
         # to be surfaced. (The out-of-ws secret is created too, to prove containment —
         # not is_file-absence — is what drops it.)
+        #
+        # ⚠️ A RELATIVE entry is anchored to `tmp_path`, NEVER to `Path(f)`. A bare
+        # `Path(f)` resolves against the PROCESS CWD — i.e. the source repo when pytest
+        # is invoked from it — so this helper used to litter the real working tree
+        # (`escaped_secret.py`, `backend/Projects/`) on every run, and neither stray is
+        # gitignored, so both were `git add .`-committable. A test that asserts on
+        # workspace containment must never itself write outside the sandbox.
         for f in run_data.get("files_touched", []) or []:
             if isinstance(f, str) and f:
                 p = Path(f)
+                if not p.is_absolute():
+                    p = tmp_path / p
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text("x")
         return run_dir
@@ -610,6 +619,128 @@ class TestGitignoredSurfaceFromFilesTouched:
         self._run(tmp_path, "run_none", {"commits": [], "files_touched": []})
         events = build_surface_events("run_none", workspace_root=str(tmp_path))
         assert [e for e in events if e.get("kind") == "source-final"] == []
+
+    def test_workspace_relative_files_touched_surfaces_regardless_of_cwd(
+            self, tmp_path, monkeypatch):
+        """A files_touched entry may be RECORDED RELATIVE (build.md documents both
+        forms). ``Path(f).resolve()`` anchors a relative path to the PROCESS CWD — and
+        the backend daemon's cwd is NOT the workspace (measured: ``/``). So a relative
+        entry resolved to a nonexistent absolute path, ``relative_to(ws)`` raised, and
+        the row was silently dropped. Resolution must be anchored to the WORKSPACE ROOT
+        instead, so the row appears no matter where the process happens to be running.
+
+        The cwd is monkeypatched AWAY from the workspace on purpose: that is what makes
+        this test RED on the cwd-anchored implementation."""
+        from core.ui_actions import build_surface_events
+        rel = "Projects/P/src/relative_source.py"
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x = 1\n")
+        self._run(tmp_path, "run_rel", {"commits": [], "files_touched": [rel]})
+        monkeypatch.chdir(tmp_path.parent)  # process cwd is NOT the workspace
+        events = build_surface_events("run_rel", workspace_root=str(tmp_path))
+        src = [e for e in events if e.get("kind") == "source-final"]
+        assert src, ("a workspace-relative files_touched entry must surface regardless "
+                     f"of the process cwd, got {events}")
+        assert src[0]["path"] == rel, f"row path must be the ws-relative display: {src}"
+
+    def test_relative_entry_escaping_workspace_not_surfaced(self, tmp_path, monkeypatch):
+        """Containment is UNCHANGED by the resolution fix: a relative entry that
+        traverses OUT of the workspace (``../secret``) must still be dropped. Resolving
+        relative paths against ws must not become a traversal hole."""
+        from core.ui_actions import build_surface_events
+        outside = tmp_path.parent / "escaped_secret.py"
+        outside.write_text("secret = 1\n")
+        inside_rel = "Projects/P/src/ok.py"
+        (tmp_path / inside_rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / inside_rel).write_text("ok = 1\n")
+        self._run(tmp_path, "run_esc", {
+            "commits": [],
+            "files_touched": [f"../{outside.name}", inside_rel]})
+        monkeypatch.chdir(tmp_path.parent)
+        events = build_surface_events("run_esc", workspace_root=str(tmp_path))
+        paths = [e.get("absolutePath") for e in events if e.get("kind") == "source-final"]
+        assert not any(str(outside) == p for p in paths), \
+            f"a ../ traversal out of the workspace must NOT surface: {paths}"
+        assert any(str(tmp_path / inside_rel) == p for p in paths), \
+            f"the in-workspace relative entry must still surface: {paths}"
+
+    def test_same_file_recorded_absolute_and_relative_emits_ONE_row(
+            self, tmp_path, monkeypatch):
+        """Gate-2 CRITICAL: dedup must key on the RESOLVED path, not the raw string.
+
+        ``files_touched`` really does record the same file BOTH ways in one run (a
+        survey of live runs found this shape with an empty ``commits[]``, i.e. exactly
+        the population that enters this fallback). ``seen`` keyed the RAW recorded
+        string while row identity is the RESOLVED path, so an abs+rel pair produced TWO
+        byte-identical rows (same ``path`` AND same ``absolutePath``). It was masked
+        before the resolution fix because the relative form always died in containment;
+        fixing resolution un-masked it. The frontend does not save us — the rail dedups
+        the selected path against rows, never rows against each other."""
+        from core.ui_actions import build_surface_events
+        rel = "Projects/P/src/dup.py"
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x = 1\n")
+        self._run(tmp_path, "run_dup", {
+            "commits": [], "files_touched": [str(tmp_path / rel), rel]})
+        monkeypatch.chdir(tmp_path.parent)  # cwd is NOT the workspace
+        src = [e for e in build_surface_events("run_dup", workspace_root=str(tmp_path))
+               if e.get("kind") == "source-final"]
+        assert len(src) == 1, (
+            "the same file recorded absolute AND relative must yield exactly ONE row, "
+            f"got {len(src)}: {[(e['path'], e['absolutePath']) for e in src]}")
+
+    def test_dropped_entries_emit_one_aggregated_warning(self, tmp_path, caplog):
+        """Both fallback drops were bare ``continue`` with ZERO logging, while the SAME
+        function logs loudly when REPORT.md is missing — so 'the rows were lost' was
+        indistinguishable from 'there was nothing to show'. Every drop must now be
+        observable, as ONE aggregated record per run (a per-file warning on a 24-entry
+        run would be a storm that evicts higher-value records)."""
+        import logging
+        from core.ui_actions import build_surface_events
+        secret = str(tmp_path.parent / "not_in_ws" / "credentials")   # outside → contained
+        ghost = str(tmp_path / "Projects" / "P" / "never_written.py")  # inside → not a file
+        good = str(tmp_path / "Projects" / "P" / "real.py")
+        self._run(tmp_path, "run_warn", {"commits": [],
+                                         "files_touched": [secret, ghost, good]})
+        # _run materializes every listed path; remove the ghost so it is genuinely absent.
+        from pathlib import Path as _P
+        _P(ghost).unlink()
+        with caplog.at_level(logging.WARNING, logger="core.ui_actions"):
+            events = build_surface_events("run_warn", workspace_root=str(tmp_path))
+        # Match on a STABLE STRUCTURED MARKER, never a loose word. A first version of
+        # this test filtered on `"drop" in msg.lower()` and passed VACUOUSLY pre-fix:
+        # pytest's tmpdir embeds the TEST NAME ("test_dropped_entries...") in every
+        # absolute path, and the unrelated REPORT.md-absent warning quotes such a path —
+        # so the filter matched the test's own name and found a "drop warning" that did
+        # not exist. A filter that can be satisfied by the fixture is not a filter.
+        drops = [r for r in caplog.records
+                 if r.levelno == logging.WARNING
+                 and "files_touched_drops" in r.getMessage()]
+        assert len(drops) == 1, (
+            "expected exactly ONE aggregated files_touched_drops warning, got "
+            f"{[r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]}")
+        msg = drops[0].getMessage()
+        assert "run_warn" in msg, f"the warning must name the run: {msg}"
+        # 2 of the 3 entries dropped: 1 outside-containment + 1 not-a-file.
+        assert "outside_containment=1" in msg and "not_a_file=1" in msg, \
+            f"the warning must report per-class counts so the CAUSE is visible: {msg}"
+        # the good row still surfaces (observability must not change behavior)
+        assert any(e.get("absolutePath") == good for e in events)
+
+    def test_no_warning_when_nothing_dropped(self, tmp_path, caplog):
+        """Zero drops → zero warnings (no noise on the healthy path)."""
+        import logging
+        from core.ui_actions import build_surface_events
+        good = str(tmp_path / "Projects" / "P" / "clean.py")
+        self._run(tmp_path, "run_clean", {"commits": [], "files_touched": [good]})
+        with caplog.at_level(logging.WARNING, logger="core.ui_actions"):
+            build_surface_events("run_clean", workspace_root=str(tmp_path))
+        # Structured marker, not a loose word — see the sibling test's note on why a
+        # `"drop" in msg` filter is self-satisfying under pytest's tmpdir naming.
+        assert not [r for r in caplog.records
+                    if r.levelno == logging.WARNING
+                    and "files_touched_drops" in r.getMessage()], \
+            "a run with no drops must emit no drop warning"
 
 
 class TestEnsureReportForRun:
