@@ -59,7 +59,7 @@ def entry_dedup_keys(line: str) -> tuple[str | None, str | None]:
     """Compute the two dedup match keys for a single MEMORY.md entry line.
 
     SINGLE SOURCE of the dedup match logic shared by distillation_hook and
-    memory_extractor (R3-C, run_55c6ab8f). Mirrors the keys distillation has
+    memory_extractor (R3-C). Mirrors the keys distillation has
     used inline since its dedup was added:
 
     - prefix key: ``line.strip()[:120].lower()`` — catches exact/near-exact dups

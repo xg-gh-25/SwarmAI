@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 def _validate_repo_path(repo_path: Path) -> Path:
     """Validate repo path: must exist, be a directory, and be git-tracked — EITHER
     a repo root (has its own .git) OR a subdirectory inside a git work-tree (a
-    monorepo package member, whose .git lives at the repo root — run_a9fe5ad3).
+    monorepo package member, whose .git lives at the repo root).
 
     A monorepo member has no .git of its own but git ls-files / log scoped to it
     work against the parent repo, so the analysis functions are fully functional.
@@ -89,12 +89,12 @@ def _safe_file_read(file_path: Path, repo_root: Path, max_size: int = 10 * 1024 
 # ─── code-intel.json v2 Schema Validation ───
 
 # Schema aligned to the REAL producer, core/code_intel/json_exporter.py (the
-# ground-truth v2 emitter that runs on every reindex). run_5647c72c fixed a
+# ground-truth v2 emitter that runs on every reindex). A measured fix closed a
 # validator↔exporter divergence: the validator had been written against a
 # hand-built FIXTURE schema (module.path/responsibility, top-level `edges`,
 # entry_point.path) that the exporter never emitted — so the real SwarmAI
 # code-intel.json failed its own validator (43 errors) and v3 generation could
-# not run on real data (O009: validator never tested against real output).
+# not run on real data — the validator had never been tested against real output.
 # The exporter emits: top-level `dependencies` (NOT `edges`); modules as
 # {name, symbol_count, function_count, class_count, file_count, files}; and
 # entry_points as {name, file_path, type}.
@@ -102,8 +102,8 @@ _REQUIRED_TOP_LEVEL = {"$schema", "version", "repo", "modules", "entry_points"}
 _REQUIRED_REPO = {"name", "languages", "total_symbols", "total_edges"}
 # The exporter's _build_modules (json_exporter.py:121-132) emits ALL of these
 # UNCONDITIONALLY (no branches) — so the exact producer contract is all 6, not a
-# loose {name, symbol_count} floor (Gate-2 LOW, run_5647c72c: don't under-specify
-# a schema the sole producer always fully populates).
+# loose {name, symbol_count} floor: don't under-specify a schema the sole
+# producer always fully populates.
 _REQUIRED_MODULE = {"name", "symbol_count", "function_count", "class_count",
                     "file_count", "files"}
 _OPTIONAL_TOP_LEVEL = {"routes", "hot_zones", "risk_areas", "dead_code",
@@ -117,7 +117,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
     Does NOT use jsonschema library — pure Python for zero-dep operation.
 
     ``repo_root`` (optional): threaded to check_mermaid_node_anchoring so a mermaid
-    node naming a real-on-disk-but-unindexed file is accepted (run_3026ef31).
+    node naming a real-on-disk-but-unindexed file is accepted.
     """
     errors: list[str] = []
 
@@ -177,8 +177,8 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
 
     # Entry points validation. The real exporter (_build_entry_points) emits
     # {name, file_path, type}; older/agent-authored docs may use {path, …}.
-    # Accept EITHER a `file_path` or a `path` locator (run_5647c72c: requiring
-    # only `path` rejected every real exporter output).
+    # Accept EITHER a `file_path` or a `path` locator: requiring only `path`
+    # rejected every real exporter output.
     entry_points = doc.get("entry_points")
     if isinstance(entry_points, list):
         for i, ep in enumerate(entry_points):
@@ -194,7 +194,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
     # AND the two anti-hallucination guards (referential integrity + LLM-assertion
     # anchoring). Wiring the guards in here is load-bearing: they are the entire
     # anti-spurious value (§1.5); if the main validator doesn't call them, a
-    # hallucinated/dangling assertion sails through (Gate-2 CRITICAL, run_aad6d4f2).
+    # hallucinated/dangling assertion sails through (adversarial CRITICAL).
     _has_v3_content = any(
         isinstance(doc.get(k), list) and doc.get(k) for k in ("domains", "flows", "steps")
     )
@@ -336,7 +336,7 @@ def check_llm_assertion_guards(doc: dict) -> list[str]:
     Each assertion object anywhere in the domain layer:
     - MUST be a dict carrying an explicit boolean `verified` — a plain-string rule
       or a dict with no `verified` is an UN-adjudicated claim, flagged (else an LLM
-      dodges the guard by omitting `verified` — Gate-2 HIGH, run_aad6d4f2).
+      dodges the guard by omitting `verified` — adversarial HIGH).
     - `verified` MUST be a real bool (not "true"/"false"/1 — the `is True` identity
       check silently mis-branched string values, Gate-2 CRITICAL).
     - verified:true  → non-blank `anchor` (code file:line PRESENT — not resolved/read);
@@ -417,7 +417,7 @@ def _collect_doc_file_anchors(doc: dict) -> set[str]:
 
 
 def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
-    """Gate-1 must-fix (run_3026ef31): the diagram.mermaid field has NO other
+    """Gate-1 must-fix: the diagram.mermaid field has NO other
     validator, so a hallucinated node label ("backend/ghost_service.py") ships
     silently. This closes the hole fail-closed like the §1.5 guards.
 
@@ -430,7 +430,7 @@ def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
 
     Why (b): the anti-hallucination goal is "the node maps to REAL code", and a
     file that exists on disk IS real code. The v2 code-intel graph indexes only a
-    SUBSET of the repo (run_3026ef31: session_healing.py / json_exporter.py exist
+    SUBSET of the repo (measured: session_healing.py / json_exporter.py exist
     on disk but aren't in the graph) — without the disk check, the gate would
     false-reject a truthful node just because the graph is incomplete. repo_root is
     NOT an escape hatch: a token absent from BOTH the doc AND disk still fails, AND
@@ -492,7 +492,7 @@ def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
     return errors
 
 
-# ── Run 1 (run_94e5a5aa): anchor-accounting = the COVERAGE-GUARANTEE mechanism ──
+# ── anchor-accounting = the COVERAGE-GUARANTEE mechanism ──
 #
 # The crux this closes: v3 generation was anti-hallucination-hard (a flow.entry_ref
 # must resolve) but coverage-BLIND — the LLM could classify 10 of 208 anchors and
@@ -759,8 +759,8 @@ def check_anchor_accounting(doc: dict) -> list[str]:
 def derive_route_id(method: str, path: str, file_path: str) -> str:
     """§1.4 collision-resistant route id = route:{slug}-{hash(method+path+file)}.
 
-    - slug is a readable label; the hash carries uniqueness (Gate-2 fix,
-      run_aad6d4f2): the OLD form slugged `method+path` (collapsing `/a/b`,
+    - slug is a readable label; the hash carries uniqueness (adversarial
+      fix): the OLD form slugged `method+path` (collapsing `/a/b`,
       `/a-b`, `/users` vs `/users/` to one slug) and hashed only file_path
       (16-bit → ~40% collision at 200+ routes). Now the hash is over the EXACT
       `method|path|file_path` triple at 32 bits, so distinct routes get distinct
@@ -773,13 +773,13 @@ def derive_route_id(method: str, path: str, file_path: str) -> str:
     return f"route:{slug}-{h}"
 
 
-# ─── Incremental merge (Run 2, run_36266b66) ───
+# ─── Incremental merge ───
 
 def merge_code_intel(baseline: dict, new_nodes: list, new_edges: list) -> dict:
     """Merge freshly-analyzed nodes/edges into a baseline GRAPH (§2, UA keep-last).
 
     ⚠️ OPERATES ON A NODE/EDGE GRAPH, NOT ON THE EXPORTED code-intel.json.
-    (run_5647c72c) This is the UA batch-graph merge — it reads/writes
+    This is the UA batch-graph merge — it reads/writes
     ``baseline["nodes"]`` + ``baseline["edges"]``. The PRODUCED code-intel.json
     (core/code_intel/json_exporter.py) has NO top-level `nodes`/`edges` — it uses
     `modules`/`routes`/`dependencies`. Passing an exported code-intel.json here is
@@ -881,7 +881,7 @@ def reconcile_human_blocks(
     # Build hash → domain_id, tracking AMBIGUITY: if two new domains share a
     # content-hash, we cannot know which one a human block belongs to → that
     # hash is ambiguous and matching blocks are quarantined (not silently bound
-    # to a last-wins arbitrary domain). Gate-2 finding, run_36266b66.
+    # to a last-wins arbitrary domain). Adversarial finding.
     hash_counts: dict = {}
     hash_to_new_domain: dict = {}
     for nd in new_domain_blocks or []:
@@ -907,7 +907,7 @@ def reconcile_human_blocks(
     return kept, orphaned
 
 
-# ─── Run 1.5 (run_1417a3a1): domain-layer GENERATION scaffold ───
+# ─── domain-layer GENERATION scaffold ───
 # The deterministic half of code-intel v3 domain generation (§1.1/§1.4/§1.5):
 # backfill join keys → project the anti-hallucination anchor menu → assemble +
 # fail-closed validate. LLM classification (routes → business domains) stays
@@ -1033,7 +1033,7 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=No
     ``repo_root`` (optional): when given, the mermaid-node-anchoring guard also
     accepts a node naming a file that EXISTS on disk under repo_root (the v2 graph
     indexes only a subset of the repo — a truthful node must not be rejected merely
-    because the graph is incomplete; run_3026ef31). NOT an escape hatch: a node
+    because the graph is incomplete). NOT an escape hatch: a node
     absent from both the doc and disk still fails.
 
     The caller (agent workflow) is expected to have run backfill_route_ids first so
@@ -1064,7 +1064,7 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=No
     return out
 
 
-# ─── Run 3 (run_6602eeab): spec-details eval dims + deterministic skeleton ───
+# ─── spec-details eval dims + deterministic skeleton ───
 
 def _iter_domain_assertions(domain: dict, flows: list, steps: list):
     """Yield every LLM-assertion dict (business_rules/issues/gaps + step
@@ -1162,7 +1162,7 @@ def eval_spec_details(doc: dict) -> dict:
 def _md_cell(v) -> str:
     """Escape a value for a markdown TABLE cell: a literal `|` would create a
     phantom column and corrupt the 2-col table; a newline would split the row.
-    (Gate-2 MED, run_235ffe64 — real step.io.output '{status:created} | 400'
+    (adversarial MED — a real step.io.output '{status:created} | 400'
     carries a pipe.)"""
     return str(v).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
@@ -1292,16 +1292,16 @@ def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
     return "\n".join(L)
 
 
-# ─── Run 4 (run_b5993cdb, feature D): [human] preservation on regeneration ───
+# ─── [human] preservation on regeneration ───
 
 # A [human] block = a markdown LIST ITEM carrying a backtick-fenced `[human]`
 # marker (§3.2 / §8.2), PLUS its continuation lines (wrapped text, indented
 # sub-bullets, fenced code) up to the next top-level list item or `## ` header.
 # Skill-LOCAL (NOT imported from core.recall_multi) so the skill stays portable
-# (C046). NOTE — this DELIBERATELY DIVERGES from recall_multi._extract_human_blocks:
+# NOTE — this DELIBERATELY DIVERGES from recall_multi._extract_human_blocks:
 # recall does LINE-level BM25 indexing (one bullet line, comments stripped), but
 # PRESERVATION needs the VERBATIM block (continuation lines + inline comments kept)
-# or a multiline human rule loses its body on regen (Gate-2 CRITICAL, run_b5993cdb).
+# or a multiline human rule loses its body on regen (adversarial CRITICAL).
 # Different concern → different extractor; they are not "keep in sync".
 _HUMAN_MARKER_RE = re.compile(r"`\[human\]`")
 _LIST_BULLET_RE = re.compile(r"^(?:[-*+]\s|\d+\.\s)")
@@ -1419,7 +1419,7 @@ def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
     return "\n".join(out)
 
 
-# ─── Run 5 (run_3349787d, design §10): behavioral-equivalence layer ───
+# ─── behavioral-equivalence layer (design §10) ───
 #
 # ⚠️ DESIGN-ONLY / CONSUMER-API for a STATIC analyzer (Run C honesty note): this layer
 # scores the spec's behavioral claims against REAL runtime `observations` — but a
@@ -1428,7 +1428,7 @@ def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
 # (a CI harness / test-runner / instrumented runtime). Do NOT build an in-tool
 # "observations producer" — a static tool can only synthesize them from the same doc
 # that made the claims, a closed loop that fake-passes by construction (Run C
-# M3-skeptic verdict: C042 over-engineering). Absent observations the layer is
+# M3-skeptic verdict: over-engineering). Absent observations the layer is
 # CORRECTLY inert: score_equivalence returns 'unchecked', never 'verified'. So this
 # trio is a consumer API awaiting real observations, not a production code path — it
 # is expected to have no non-test caller inside this repo until such a consumer exists.
@@ -1517,7 +1517,7 @@ def score_equivalence(doc: dict, observations: dict) -> dict:
             tag = "partial"
         result_domains[dom] = {"tag": tag, **d}
     # Surface orphan assertions (steps whose flow/domain doesn't resolve to a real
-    # domain) instead of silently dropping them (Gate-2 F5, run_3349787d): a
+    # domain) instead of silently dropping them (adversarial finding): a
     # contract that vanishes from the report reads as "fully covered" when it isn't.
     # Fold into an explicit __unresolved__ bucket + the score denominator.
     orphan = {"passed": 0, "total": 0, "observed": 0}
@@ -1923,7 +1923,7 @@ def render_agents_md(data: dict[str, Any]) -> str:
     """Render AGENTS.md from structured data. Output MUST be ≤150 lines.
 
     ⚠️ INPUT IS AN AGENT-ASSEMBLED dict, NOT the exported code-intel.json
-    (run_5647c72c). This reads `modules[].path`/`.responsibility` and
+    This reads `modules[].path`/`.responsibility` and
     `entry_points[].path`/`.description` — the AGENTS.md authoring shape assembled
     by the skill's GENERATE step (INSTRUCTIONS.md §4.5), NOT the exporter shape
     (which uses `symbol_count`/`file_path`). Do NOT feed a code-intel.json
@@ -2607,11 +2607,11 @@ def run_multi_package(
     produces per-package material + cross-package synthesis. No hand-fed package list.
 
     Composes detect_package_roots() (workspace-manifest boundary detection) so the
-    caller passes ONE repo root, not a pre-computed member list (run_a9fe5ad3 — the
-    detector and this runner were shipped separately and never wired; now they are).
+    caller passes ONE repo root, not a pre-computed member list (the detector and
+    this runner were shipped separately and never wired; now they are).
     A single-package repo degrades to exactly one package rooted at ".".
 
-    Skill-native + core-free by design (C046): uses the skill's own gather_repo_info /
+    Skill-native + core-free by design: uses the skill's own gather_repo_info /
     extract_import_graph / parse_git_gotchas — never core.code_intel. The LLM GENERATE
     fan-out (per-package code-intel.json doc assembly) consumes THIS material; it is
     the INSTRUCTIONS.md orchestration layer, not this deterministic function.
@@ -3153,13 +3153,13 @@ def _count_langs_by_ext(files) -> "Counter":
 #
 # Navigational, NOT a correctness fix. Symbol ids are already path-qualified
 # (parser.py:_qualify uses rel_path=relative_to(repo_root)) and route.id hashes
-# file_path, so a monorepo does NOT collide — verified by Gate-0 (run_693e08de).
-# Wired end-to-end (run_a9fe5ad3): run_multi_package(repo_root) AUTO-DETECTS via
+# file_path, so a monorepo does NOT collide — verified by Gate-0.
+# Wired end-to-end: run_multi_package(repo_root) AUTO-DETECTS via
 # detect_package_roots (no hand-fed list); packages[] IS emitted into code-intel.json
 # by BOTH producers (core json_exporter reindex + skill INSTRUCTIONS §4.6); the
 # INSTRUCTIONS.md §4.9 monorepo fan-out orchestrates per-package GENERATE.
 #
-# Still skill-layer + core-free (C046): detection uses only stdlib + yaml/tomllib.
+# Still skill-layer + core-free: detection uses only stdlib + yaml/tomllib.
 # Deferred: per-package full v3 (domains/flows/steps) generation is the LLM fan-out
 # layer (§4.9 orchestration), not a deterministic helper.
 
@@ -3457,7 +3457,7 @@ def detect_package_roots(repo_root) -> list[PackageRoot]:
 def build_packages_partition(repo_root) -> list[dict]:
     """Wrap detect_package_roots() into navigation-metadata dicts for a
     code-intel.json `packages[]` partition. Emitted into code-intel.json by BOTH
-    producers (run_a9fe5ad3): the core reindex writer (json_exporter.export_code_intel_json)
+    producers: the core reindex writer (json_exporter.export_code_intel_json)
     and the skill GENERATE path (INSTRUCTIONS §4.6). Names are made unique
     (path-suffixed on collision) so two packages both named 'core' stay distinguishable."""
     roots = detect_package_roots(repo_root)

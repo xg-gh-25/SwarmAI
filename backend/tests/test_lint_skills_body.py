@@ -172,6 +172,12 @@ def test_every_allowlist_entry_still_matches_something():
         for t in texts:
             if t not in body:
                 stale.append(f"{rel}: {t!r} no longer present")
+            elif not (lint_skills.RUNID_RE.search(t) or lint_skills.REGISTER_RE.search(t)):
+                # Present in the file but not a token any pattern flags, so the
+                # exemption suppresses nothing. An inert entry is worse than a
+                # missing one: it reads as a reviewed decision and would sit here
+                # forever, since a text-presence check alone can never retire it.
+                stale.append(f"{rel}: {t!r} matches no pattern — exemption is inert")
     assert stale == [], f"stale allowlist entries: {stale}"
 
 
@@ -725,3 +731,47 @@ def test_a_real_owner_home_is_still_flagged_on_linux(tmp_path):
     f = tmp_path / "leak.md"
     f.write_text("cd /home/gawan/.swarm-ai && ./run.sh\n", encoding="utf-8")
     assert lint_skills.lint_body(f), "a named person's Linux home must still be flagged"
+
+def test_shipped_ddd_skill_templates_are_in_scope():
+    """The ddd-skills template tree ships MORE publicly than backend/skills.
+
+    ``swarm_workspace_manager`` provisions ``backend/templates/ddd-skills/s_ddd-*``
+    into every user DDD and exports it to Kiro / Claude Code, and its own comment
+    block names it "EXTERNAL (tracked, public)". A tree that is copied onto other
+    people's machines is exactly what the body rule exists to protect, so leaving
+    it out of scope is a hole, not a narrower check: the first version of this gate
+    scanned only ``backend/skills`` while 36 unresolvable identifiers sat in the
+    template tree, unflagged.
+
+    Asserts the scope declaration itself, because a gate is only as wide as the
+    tree it reads, and that width is invisible from a green run.
+    """
+    declared = {d.as_posix() for d in lint_skills.SKILL_DIRS}
+    assert "backend/templates/ddd-skills" in declared, (
+        "the publicly-provisioned ddd-skills template tree is not in SKILL_DIRS — "
+        f"declared scope is {sorted(declared)}"
+    )
+
+
+def test_ddd_skill_templates_carry_no_machine_local_identifiers():
+    """End-to-end: the real template tree must pass the real body rule.
+
+    Distinct from the scope assertion above — that one proves the tree is READ,
+    this one proves what is read is CLEAN. Both are needed: a tree can be in scope
+    and dirty, or clean and unscanned, and only one of those two failures is
+    visible from the gate's exit code.
+    """
+    root = lint_skills._REPO_ROOT / "backend/templates/ddd-skills"
+    if not root.exists():
+        pytest.skip("template tree absent in this checkout")
+    tracked = subprocess.run(
+        ["git", "-C", str(lint_skills._REPO_ROOT), "ls-files", "-z",
+         "--", "backend/templates/ddd-skills"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
+    findings: list[str] = []
+    for rel in tracked:
+        if not rel:
+            continue
+        findings.extend(lint_skills.lint_body(lint_skills._REPO_ROOT / rel))
+    assert not findings, "template tree carries machine-local identifiers:\n" + "\n".join(findings)

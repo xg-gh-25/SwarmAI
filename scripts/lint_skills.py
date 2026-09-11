@@ -59,7 +59,24 @@ sys.path.insert(0, str(_BACKEND_DIR))
 from core.ingestion_gate import _SHAPE_BODY_RUNID_RE  # noqa: E402
 from core.skill_manager import SkillParseError, parse_frontmatter  # noqa: E402
 
-SKILL_DIRS = [Path("backend/skills")]
+# Every tree of skills this repo PUBLISHES. The gate is only as wide as the trees
+# it reads, and that width is invisible from a green run — so a tree that ships must
+# be listed here, not assumed covered.
+#
+# `templates/ddd-skills` is not an afterthought: `swarm_workspace_manager` provisions
+# it into every user DDD and exports it to Kiro / Claude Code, so it lands on other
+# people's machines even more directly than `backend/skills` does. Its own source
+# comment classifies it "EXTERNAL (tracked, public)". Scanning only `backend/skills`
+# left 33 unresolvable identifiers shipping from the template tree, unflagged, while
+# the gate reported a clean corpus. (36 tokens matched; three were the entry-id
+# format specimens exempted below, so 33 were real leaks.)
+#
+# A directory absent from a given checkout is a clean no-op (see `corpus_files`), so
+# listing a tree here never blocks a consumer that does not carry it.
+SKILL_DIRS = [
+    Path("backend/skills"),
+    Path("backend/templates/ddd-skills"),
+]
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -156,6 +173,12 @@ BODY_ALLOWLIST: dict[str, set[str]] = {
     "backend/skills/s_steeringify/steeringify.py": {"C007", "C008", "C012"},
     # The same phrasings, documented for the reader of the skill.
     "backend/skills/s_steeringify/INSTRUCTIONS.md": {"C005", "C007"},
+    # The portable twin of s_persist above, provisioned into user DDDs. Same
+    # reason and same shape: an entry-id sample its ``### {entry_id} |`` parser
+    # matches and its CLI help tells the user to imitate. Only ``O001`` is listed
+    # even though the same lines also read "E001, F001": those two match no pattern
+    # here, so exempting them would exempt nothing while reading as though it did.
+    "backend/templates/ddd-skills/s_ddd-persist/scripts/locked_write.py": {"O001"},
 }
 
 

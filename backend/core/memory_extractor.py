@@ -347,12 +347,13 @@ def _write_entries(
         # (120-char prefix + bold-title), inside the lock against existing
         # content — the LLM prompt's soft dedup is non-deterministic and a
         # re-saved session (since_message_idx) can re-extract the same entry.
-        # reindex_memory=True (run_b356b552): this manual "Save to Memory" write
-        # previously left the MEMORY index stale — the new entry was invisible to
-        # index lookups until the next context_health refresh. Rebuild in-lock.
+        # No reindex: the in-prompt MEMORY index was deleted (live MEMORY.md is
+        # full-injected and recall scans the body with FTS5+BM25), so there is no
+        # index for this write to leave stale. The facade still accepts a
+        # ``reindex_memory`` flag for call-site compatibility, but it does nothing —
+        # passing it here would only read as though an index still existed.
         locked_read_modify_write(
             memory_path, section, text, mode="prepend", dedup=True,
-            reindex_memory=True,
         )
         return True
     except LockedWriteError as e:

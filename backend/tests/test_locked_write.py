@@ -1,9 +1,9 @@
 """Tests for the shared dedup helper in scripts/locked_write.py.
 
-R3-C (run_55c6ab8f): memory_extractor and distillation_hook both write entries
-into MEMORY.md; only distillation had mechanical dedup. This extracts that
-dedup into ONE shared place (single-source, no drift) and wires it into the
-extractor path via locked_read_modify_write(dedup=True).
+R3-C: memory_extractor and distillation_hook both write entries into MEMORY.md;
+only distillation had mechanical dedup. This extracts that dedup into ONE shared
+place (single-source, no drift) and wires it into the extractor path via
+locked_read_modify_write(dedup=True).
 
 Parity requirements (Gate-1 verified vs distillation_hook.py:1360-1399):
 - prefix key = line.strip()[:120].lower(), prefix-set is STATIC (built once from existing)
@@ -141,16 +141,56 @@ class TestLockedWriteDedupParam:
         assert body.count("alpha decision") == 2  # dup added — no dedup by default
 
 
-# run_b356b552: writers that pass reindex_memory=True now prepend a
-# <!-- MEMORY_INDEX --> block whose entries echo section titles/text. A
-# whole-body substring count therefore double-counts (section body + index). To
-# assert DEDUP intent we must count within the ## <section> body only, below the
-# index block. This helper scopes to the last "## <section>" occurrence (the real
-# section header always follows the index block, which uses "## Memory Index").
+# Return the body of ONE section: from its header to the next `## ` header, or to
+# EOF if it is the last section. A dedup assertion built on this counts occurrences
+# inside the section it targets, so an echo of the same text in a LATER section
+# cannot satisfy it.
+#
+# It used to slice header-to-EOF, justified by skipping past a prepended
+# `<!-- MEMORY_INDEX -->` block whose entries echoed section text and so
+# double-counted. That block is no longer written (the in-prompt MEMORY index was
+# deleted; live MEMORY.md is full-injected and recall scans the body), which left
+# the slice unbounded on the far side — a pass-through on every current fixture,
+# where the target header happens to sit at byte 0. Bounding it at the next header
+# makes the stated guarantee true rather than merely reworded: today's fixtures are
+# single-section so nothing changes, but a fixture that grows a second section gets
+# the scoping the assertions below assume it already had.
 def _section_body(content: str, section: str) -> str:
     marker = f"## {section}"
     idx = content.rfind(marker)
-    return content[idx:] if idx != -1 else content
+    if idx == -1:
+        return content
+    end = content.find("\n## ", idx + len(marker))
+    return content[idx:] if end == -1 else content[idx:end]
+
+
+def test_section_body_stops_at_the_next_header():
+    """The helper must bound the far side of the slice, not just the near side.
+
+    Every fixture in this file is single-section with its header at byte 0, so an
+    unbounded header-to-EOF slice is a pass-through and looks correct. That is
+    exactly why this is asserted directly: the assertions below state they count
+    "within the section", and without this the first fixture to grow a second
+    section would silently start counting the whole file — a weakening no existing
+    test could observe.
+    """
+    doc = (
+        "## Decisions\n- alpha decision\n\n"
+        "## Guidelines\n- echo of alpha decision\n\n"
+        "## Open Threads\n- another alpha decision\n"
+    )
+    assert doc.count("alpha decision") == 3, "fixture must have decoys to be meaningful"
+
+    first = _section_body(doc, "Decisions")
+    assert first.count("alpha decision") == 1
+    assert "## Guidelines" not in first
+
+    # A section with no following header still runs to EOF.
+    last = _section_body(doc, "Open Threads")
+    assert last.count("alpha decision") == 1
+
+    # An absent section falls back to the whole document rather than raising.
+    assert _section_body(doc, "Nope") == doc
 
 
 class TestExtractorWritePathDedup:
@@ -167,8 +207,8 @@ class TestExtractorWritePathDedup:
             "Decisions", mem,
         )
         assert ok is True
-        # Count within the Decisions section body only — reindex_memory=True now
-        # prepends an index block that also echoes "alpha decision" (run_b356b552).
+        # Count within the Decisions section body only, so the assertion is about
+        # dedup in that section and not an incidental match elsewhere in the file.
         section = _section_body(mem.read_text(encoding="utf-8"), "Decisions")
         assert section.count("alpha decision") == 1   # dup filtered by dedup=True
         assert "gamma decision" in section
@@ -185,8 +225,8 @@ class TestExtractorWritePathDedup:
             "Decisions", mem,
         )
         assert ok is True
-        # Scope to the Decisions section body — the reindex index block echoes
-        # the title too (run_b356b552), so a whole-body scan would see 2 lines.
+        # Scope to the Decisions section body, so the one-line assertion is about
+        # this section's entries and not an incidental match elsewhere.
         section = _section_body(mem.read_text(encoding="utf-8"), "Decisions")
         lines = [ln for ln in section.splitlines() if "header part" in ln]
         assert len(lines) == 1
@@ -217,10 +257,9 @@ class TestDistillationDedupParity:
         DistillationTriggerHook._run_locked_write(mem, "Guidelines", text)
         return mem.read_text(encoding="utf-8")
 
-    # A write that adds ≥1 fresh entry now also prepends a reindex block that
-    # echoes section text (run_b356b552) — so dedup-intent assertions count within
-    # the ## Guidelines section body only. (All-dup / whitespace cases hit the
-    # empty-guard `return` BEFORE any write+reindex, so their `out == existing`
+    # Dedup-intent assertions count within the ## Guidelines section body, so a
+    # match elsewhere in the file cannot satisfy them. (All-dup / whitespace cases
+    # hit the empty-guard `return` BEFORE any write, so their `out == existing`
     # full-equality still holds — those are left unchanged below.)
     def test_prefix_dup_filtered(self, tmp_path):
         existing = "## Guidelines\n- 2026-06-01: existing guideline line\n"

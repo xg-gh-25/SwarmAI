@@ -1801,21 +1801,22 @@ class DistillationTriggerHook:
         """Write a distilled section to MEMORY.md via the SINGLE shared facade.
 
         Delegates to ``scripts.locked_write.locked_read_modify_write`` — the one
-        writer that owns flock + MemoryGuard + line-level dedup + (for MEMORY.md)
-        in-lock reindex. This used to be a hand-rolled PARALLEL copy of that
-        facade (its own flock + guard + filter_duplicate_entries + _modify_content
-        + prepend) — byte-for-byte the same pipeline, just diverged. Collapsed to
-        the facade so the write path can't drift and distillation's writes now
-        reindex too (they previously left the MEMORY index stale). The old
-        "call _modify_content directly to avoid a nested-lock deadlock" note no
-        longer applies: this is a SINGLE call into the facade's own lock, not a
-        lock nested inside another. (run_b356b552)
+        writer that owns flock + MemoryGuard + line-level dedup. This used to be a
+        hand-rolled PARALLEL copy of that facade (its own flock + guard +
+        filter_duplicate_entries + _modify_content + prepend) — byte-for-byte the
+        same pipeline, just diverged. Collapsed to the facade so the write path
+        can't drift. The old "call _modify_content directly to avoid a nested-lock
+        deadlock" note no longer applies: this is a SINGLE call into the facade's
+        own lock, not a lock nested inside another.
+
+        No reindex: the in-prompt MEMORY index was deleted (live MEMORY.md is
+        full-injected and recall scans the body with FTS5+BM25), so there is no
+        index for these writes to leave stale.
         """
         from scripts.locked_write import locked_read_modify_write
         try:
             locked_read_modify_write(
-                memory_path, section, text, mode="prepend",
-                dedup=True, reindex_memory=True,
+                memory_path, section, text, mode="prepend", dedup=True,
             )
         except LockedWriteError as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
