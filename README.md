@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 # SwarmAI
@@ -62,7 +64,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 **macOS (Apple Silicon):** Or download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
 
-Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude Code CLI](https://github.com/anthropics/claude-code)
+Requires: Node.js 18+, Python 3.11–3.13, Rust, [uv](https://astral.sh/uv), [Claude Code CLI](https://github.com/anthropics/claude-code)
 
 > 📖 Full setup guide: [QUICK_START.md](./QUICK_START.md)
 
