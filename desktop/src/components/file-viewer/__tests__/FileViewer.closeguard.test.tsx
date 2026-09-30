@@ -61,6 +61,13 @@ describe('FileViewer — unified close dirty-guard (R2 AC4)', () => {
     const ta = await screen.findByTestId('file-editor-textarea');
     // Make it dirty.
     await act(async () => { fireEvent.change(ta, { target: { value: 'hello EDITED' } }); });
+    // Sync point (mirrors the stable sibling below): confirm the dirty state has actually
+    // rendered (the file-chrome-dirty indicator) BEFORE clicking close, so the close guard
+    // reliably reads a settled dirty verdict (FileEditorCore's hasUnsavedEditsRef) and takes
+    // the guarded branch under full-suite parallel load. Defensive robustness — a CI flake
+    // was observed where discard never appeared; clicking close only after dirty is visible
+    // removes the ordering assumption regardless of the exact underlying cause.
+    await waitFor(() => expect(screen.getByTestId('file-chrome-dirty')).toBeTruthy());
     // Unified header close → delegates to FileEditorCore's guard → dialog, NOT close.
     await act(async () => { fireEvent.click(screen.getByTestId('file-chrome-close')); });
     await waitFor(() => expect(screen.getByTestId('unsaved-warning-discard')).toBeTruthy());
