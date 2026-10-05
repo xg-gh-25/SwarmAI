@@ -20,19 +20,38 @@ tier: always
 
 ---
 
-## Setup
+## Setup — resolving the key (robust in ANY session)
 
-Requires `TAVILY_API_KEY` environment variable.
+The key lives in `~/.swarm-ai/SwarmWS/.claude/settings.local.json` → `env.TAVILY_API_KEY`.
+The harness injects it as `$TAVILY_API_KEY` **only on sessions spawned AFTER the key was
+saved** — an older tab's process env is empty, so `echo $TAVILY_API_KEY` can be blank even
+though the key is configured. **Never conclude "key not set" from an empty env var alone.**
+
+Always resolve the key env-first, settings-file-fallback — this one line works in every
+session, old or new. Put it at the top of any Tavily call:
 
 ```bash
-# Check if set
-echo $TAVILY_API_KEY
-
-# If not, set it (get key from https://app.tavily.com)
-export TAVILY_API_KEY=tvly-your-key-here
+TAVILY_API_KEY="${TAVILY_API_KEY:-$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.swarm-ai/SwarmWS/.claude/settings.local.json')))['env']['TAVILY_API_KEY'])" 2>/dev/null)}"
 ```
 
-Free tier: 1,000 API credits/month. Basic search = 1 credit. Advanced search = 2 credits.
+(settings.local.json is gitignored → the key never leaves the machine.)
+
+### 💰 Free-tier only — do NOT incur paid usage
+
+This account is on the **free Researcher plan (1,000 credits/month)**. Keep it free:
+
+- **NEVER** upgrade the plan or enable pay-as-you-go (paygo) to work around a credit limit.
+- On a `432 Credit limit` error → **STOP and tell the user**; wait for the monthly reset.
+  Do not auto-fall-back to any paid tier.
+- Default to `search_depth: "basic"` (1 credit) — reserve `advanced` (2 credits) for when
+  the user explicitly needs depth.
+- Check remaining credits any time (read-only, costs nothing):
+  ```bash
+  curl -s https://api.tavily.com/usage -H "Authorization: Bearer $TAVILY_API_KEY"
+  ```
+  `account.plan_usage` / `plan_limit` = free-tier counter; `paygo_usage` must stay `0`.
+
+Basic search = 1 credit. Advanced search = 2 credits.
 
 ---
 
@@ -303,10 +322,10 @@ Tavily is a building block for other skills:
 
 | Problem | Solution |
 |---------|----------|
-| "TAVILY_API_KEY not set" | Get key from https://app.tavily.com, then `export TAVILY_API_KEY=tvly-...` |
-| 401 Unauthorized | API key invalid or expired. Check at app.tavily.com |
+| `$TAVILY_API_KEY` empty | Old-session env not injected — use the env-first/settings-fallback resolver in Setup. Do NOT conclude the key is missing. |
+| 401 Unauthorized | Key actually invalid/expired (resolver returned a bad value). Check at app.tavily.com |
 | 429 Rate limited | Too many requests. Wait and retry |
-| 432 Credit limit | Monthly credits exhausted. Upgrade plan or wait for reset |
+| 432 Credit limit | Free monthly credits exhausted. **STOP, tell the user, wait for reset — never upgrade/enable paygo to bypass.** |
 | Empty results | Try broader query, remove domain restrictions, check spelling |
 | Extract fails for URL | Site may block bots. Try `extract_depth: "advanced"` |
 | Slow response | Use `search_depth: "basic"` or reduce `max_results` |
@@ -316,7 +335,8 @@ Tavily is a building block for other skills:
 
 ## Quality Rules
 
-- Always check `TAVILY_API_KEY` is set before making calls
+- Resolve the key env-first/settings-fallback (see Setup) — never assume an empty env var means "not configured"
+- Free-tier only: never upgrade the plan or enable paygo; on a 432 credit limit, stop and tell the user
 - Present AI-generated answers with source attribution
 - Show relevance scores to help user gauge result quality
 - For news queries, always include published dates
@@ -333,5 +353,6 @@ Before marking this task complete, show evidence for each:
 - [ ] **Search query shown** — the exact query string sent to Tavily API is displayed (not just the user's natural-language request)
 - [ ] **Results returned with URLs** — each result includes a title, URL, relevance score, and content snippet
 - [ ] **Relevance confirmed** — results are on-topic for the user's intent; off-topic or low-score results are filtered or flagged
-- [ ] **API key validated** — `TAVILY_API_KEY` was confirmed set before the call was made (no auth errors)
+- [ ] **Key resolved robustly** — resolved env-first/settings-fallback (not assumed from an empty env var); call returned no auth error
+- [ ] **Free-tier respected** — no plan upgrade / paygo enabled; a 432 limit was surfaced to the user, not bypassed
 - [ ] **Credit-efficient** — search used appropriate depth (basic vs advanced) and minimal `max_results` for the task
