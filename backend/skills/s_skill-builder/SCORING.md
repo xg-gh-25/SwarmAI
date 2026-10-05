@@ -236,26 +236,50 @@ Explicit guidance on quality standards.
 
 ---
 
-## Category 7b: Guardrails (5 points, bonus — adds to Structure total)
+## Category 7b: Guardrails (5 points, scored — a production GATE, not a bonus)
 
-Explicit "DO NOT" anti-skip rules that prevent common execution failures.
+Explicit "DO NOT" anti-skip rules that prevent common execution failures. These are
+the skill-level counterpart of the agent's own cognitive discipline (SOUL P5 "the
+more confident you feel, the more you must run the process"; P2 "done = tried to break
+it and failed") — pushed DOWN into every skill's own structure so the discipline fires
+at skill-execution time, not only in the constitution.
+
+**The three categories map 1:1 to the industry skill anatomy** (addyosmani/agent-skills
+"Process, not prose"):
+
+| This skill's category | addyosmani anatomy term | The "DO NOT" shape |
+|-----------------------|-------------------------|--------------------|
+| **false assumptions** | **Rationalizations** (excuse → rebuttal) | `DO NOT assume X. Verify by <method>.` |
+| **skipping validation** | **Red Flags** (signs something is wrong) | `DO NOT skip <validation>. Run it even if output looks correct.` |
+| **missing evidence** | **Verification** (evidence requirement) | `DO NOT produce output without <evidence/checkpoint>.` (+ `VERIFY_WITH:`) |
 
 | Points | Criteria |
 |--------|----------|
 | 0 | No guardrails section |
 | 2 | Has guardrails but they're vague ("be careful") or generic |
-| 3 | 2-3 specific "DO NOT" rules targeting real failure modes |
-| 4 | 3-5 specific, testable guardrails covering: skip, assume, evidence |
+| 3 | 2-3 specific "DO NOT" rules targeting real failure modes **(PASS LINE — see cap below)** |
+| 4 | 3-5 specific, testable guardrails covering all three: assumptions, validation, evidence |
 | 5 | Complete guardrails + `VERIFY_WITH` in frontmatter for generator/code skills |
 
 **What makes a guardrail effective:**
 - Uses "DO NOT" (hard constraint), not "please verify" (suggestion)
 - Targets a specific failure mode observed in practice
 - Is testable — you can determine if it was violated
-- Covers three categories: skipping validation, false assumptions, missing evidence
+- Covers all three categories above (Rationalizations / Red Flags / Verification)
 
 > [!IMPORTANT]
-> **This is a bonus category.** A skill can score 100/100 Structure without it, but guardrails are the single most effective pattern for preventing agent execution failures. Skills with guardrails are measurably more reliable.
+> **This is a GATE, not a bonus — and it does NOT add points on top of 100.** Categories
+> 1-9 already sum to the full 100-point Structure score; this 5-point score is a **gate
+> input, not an 11th addend** (do not add it to the /100 total — that would allow 105/100).
+> Its sole scoring effect: a Guardrails score **below the pass line (< 3/5)** CAPS the whole
+> Structure score at **84** — i.e. a skill with no / vague guardrails CANNOT reach the 85+
+> "production-ready" band regardless of how well it scores elsewhere. A score ≥ 3/5 imposes
+> no cap (the skill keeps its 1-9 total). This is deliberate: guardrails are the single most
+> effective pattern for preventing agent execution failures, so "production-ready" is not a
+> status a guardrail-less skill can earn. (Earlier revisions scored this as a pure bonus a
+> skill could skip while still scoring 100 — that made the most load-bearing quality signal
+> optional, which is exactly backwards. The old "adds to the total" wording also implied a
+> >100 score; the gate/cap model removes both defects.)
 
 ---
 
@@ -356,12 +380,13 @@ Use this worksheet when evaluating a skill:
 - [ ] Anti-patterns listed
 **Score: __/10**
 
-### Guardrails (5 points, bonus)
+### Guardrails (5 points — GATE, do NOT add to the /100 TOTAL below)
 - [ ] Dedicated `## Guardrails` section exists
 - [ ] 3-5 "DO NOT" rules (not vague suggestions)
+- [ ] Covers all three: assumptions (Rationalizations) / validation (Red Flags) / evidence (Verification)
 - [ ] Each targets a specific, testable failure mode
 - [ ] `VERIFY_WITH:` in frontmatter (for generator/code skills)
-**Score: __/5**
+**Score: __/5**  ← GATE input, NOT summed into TOTAL. If < 3, CAP the /100 TOTAL at 84 (not production-ready).
 
 ### Consistency (5 points)
 - [ ] Consistent terminology
@@ -379,17 +404,25 @@ Use this worksheet when evaluating a skill:
 ---
 
 ## TOTAL: __/100
+<!-- = sum of categories 1-9 ONLY (15+15+10+15+15+10+10+5+5). Guardrails (7b) is a
+     GATE, not an addend: it is never summed here — it only CAPS this total at 84 when
+     its score is < 3/5. This keeps the scale a clean 0-100. -->
 ```
 
 ---
 
 ## Score-to-Action Guide
 
+> **⚠️ Guardrails CAP (Category 7b gate):** if the Guardrails score is **< 3/5**, the
+> Structure score is **capped at 84** no matter what the categories sum to — a skill
+> without real guardrails is never "production-ready". Apply the cap BEFORE reading the
+> band below.
+
 | Score Range | Recommended Action |
 |-------------|-------------------|
 | 95-100 | Ready for production use |
 | 85-94 | Fix Priority 3 items (polish) |
-| 70-84 | Fix Priority 2 items (important improvements) |
+| 70-84 | Fix Priority 2 items (important improvements) — **or add missing Guardrails (7b cap)** |
 | 50-69 | Fix Priority 1 items (critical fixes) |
 | 0-49 | Consider rewriting from template |
 

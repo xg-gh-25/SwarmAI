@@ -250,14 +250,21 @@ Read `.context/CONTEXT.md` and verify:
 
 ---
 
-## Section 12: Guardrails (5 items)
+## Section 12: Guardrails (5 items) — MANDATORY (SCORING 7b gate: < 3/5 caps Structure at 84)
 
 ### Anti-Skip Rules
+
+> **This section is a production GATE, not optional polish.** A skill that fails the
+> pass line here (Guardrails < 3/5 in SCORING.md Category 7b) is capped at 84 and
+> cannot be "production-ready" — see SCORING.md § Score-to-Action Guardrails CAP. The
+> three coverage categories in 12.4 map 1:1 to the industry skill anatomy:
+> false assumptions = **Rationalizations**, skipping validation = **Red Flags**,
+> missing evidence = **Verification**.
 
 - [ ] **12.1** Dedicated `## Guardrails` section exists
 - [ ] **12.2** Contains 3-5 "DO NOT" rules (not "please verify" suggestions)
 - [ ] **12.3** Each guardrail targets a specific failure mode (not generic)
-- [ ] **12.4** Guardrails cover: skipping validation, false assumptions, missing evidence
+- [ ] **12.4** Guardrails cover all three: false assumptions (Rationalizations), skipping validation (Red Flags), missing evidence (Verification)
 - [ ] **12.5** Guardrails are testable (you can tell if one was violated)
 
 ### What Good Guardrails Look Like

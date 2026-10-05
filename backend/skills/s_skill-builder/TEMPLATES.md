@@ -49,10 +49,14 @@ tier: lazy
 [Instructions for step 3]
 
 ## Guardrails
+<!-- GATE (SCORING 7b): required for production-ready — the three lines below are the
+     three anatomy categories, keep all three. Rationalizations = false-assumption;
+     Red Flags = skip-validation; Verification = missing-evidence. (Each line is
+     tagged with its category; the line order here is incidental, the coverage is what matters.) -->
 
-- DO NOT [skip specific validation]. [Run/verify] even if output looks correct.
-- DO NOT [assume X]. Verify by [method].
-- DO NOT [produce output] without [evidence/checkpoint].
+- DO NOT [skip specific validation]. [Run/verify] even if output looks correct.   <!-- Red Flags -->
+- DO NOT [assume X]. Verify by [method].                                          <!-- Rationalizations -->
+- DO NOT [produce output] without [evidence/checkpoint].                          <!-- Verification -->
 
 ## Examples
 
