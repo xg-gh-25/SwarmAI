@@ -35,6 +35,7 @@ from .security_hooks import (
     create_governance_file_gate,
     create_skill_access_checker,
 )
+from .design_hooks import design_lint_guard
 from .ask_question_manager import ask_question_manager
 from .permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
 from .agent_defaults import expand_allowed_skills_with_plugins
@@ -324,6 +325,21 @@ async def build_hooks(
     registry.register(
         "PreToolUse", inclusive_term_guard,
         "inclusive_term_guard", matcher="Write|Edit|MultiEdit",
+    )
+
+    # ── PreToolUse: design-lint guard (Write|Edit|MultiEdit) ──
+    # WARN (never deny) on dated CSS design anti-patterns in FRONTEND STYLE writes
+    # (.tsx/.jsx/.css/.scss under desktop/src|hive) — an in-session nudge before a
+    # data-dump/dated pattern lands, enforcing the design-judgment canon that a prose
+    # rule (R15) did not hold (SOUL P7: when prose fails, build a gate; UI data-dump is
+    # SELF.md's #1 known blind spot). Advisory only (STEERING #2: style is not security;
+    # O030: never truncate real work); self-guarded fail-open so a scan error can never
+    # block a write. Scope-gated to frontend style files so backend/.py/markdown writes
+    # are never scanned (zero false-positive surface). A-class CSS rules only; the three
+    # shipped rules measured 0 false positives on the live desktop/src tree.
+    registry.register(
+        "PreToolUse", design_lint_guard,
+        "design_lint_guard", matcher="Write|Edit|MultiEdit",
     )
 
     # ── PreToolUse: image-read dedup guard (Read-scoped) ─────
