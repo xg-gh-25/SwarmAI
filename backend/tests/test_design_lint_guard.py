@@ -95,6 +95,20 @@ def test_flag_pure_black_text_keyword():
     assert "pure-black-text" in _ctx(r)
 
 
+def test_flag_pure_black_text_jsx_inline_quoted():
+    # JSX inline-object style — the value is a QUOTED string. The core .tsx scope.
+    # Single-quote, double-quote, and the `black` keyword must all fire. (The quote
+    # between `:` and the literal is why the CSS-only regex missed these — the gap
+    # this test locks closed.)
+    for jsx in (
+        "const C = () => <div style={{color: '#000'}}>x</div>;",
+        'const C = () => <div style={{color: "#000000"}}>x</div>;',
+        "const C = () => <div style={{color: 'black'}}>x</div>;",
+    ):
+        r = guard(_write(jsx))
+        assert "pure-black-text" in _ctx(r), f"JSX quoted form not flagged: {jsx!r}"
+
+
 def test_flag_bounce_easing_keyword():
     r = guard(_write(".x { transition: transform 200ms ease-elastic; }"))
     assert "bounce-easing" in _ctx(r)
@@ -150,6 +164,29 @@ def test_no_fp_star_color_properties():
     # but a REAL `color: #000` directly after a `background-color` line still fires
     r3 = guard(_write(".x { background-color: #fff; color: #000; }"))
     assert "pure-black-text" in _ctx(r3)
+
+
+def test_no_fp_jsx_camelcase_color_props():
+    # The JSX camelCase siblings of *-color (quoted VALUE) must NOT fire — widening
+    # the value side to tolerate a quote must not weaken the (?<![-\w]) property anchor.
+    for prop in ("backgroundColor", "borderColor", "outlineColor", "caretColor",
+                 "textDecorationColor"):
+        r = guard(_write(f"const C = () => <div style={{{{{prop}: '#000'}}}}>x</div>;"))
+        assert "pure-black-text" not in _ctx(r), f"JSX {prop}: '#000' wrongly flagged"
+        r2 = guard(_write(f"const C = () => <div style={{{{{prop}: 'black'}}}}>x</div>;"))
+        assert "pure-black-text" not in _ctx(r2), f"JSX {prop}: 'black' wrongly flagged"
+
+
+def test_no_fp_quoted_nonblack_color():
+    # The widened (quote-tolerant) rule must still restrict the LITERAL to #000/#000000/
+    # black — a quoted non-black color must not trip it (the inverted-SNR guard).
+    for jsx in (
+        "const C = () => <div style={{color: '#333'}}>x</div>;",
+        "const C = () => <div style={{color: '#0000ff'}}>x</div>;",
+        "const C = () => <div style={{color: 'navy'}}>x</div>;",
+    ):
+        r = guard(_write(jsx))
+        assert "pure-black-text" not in _ctx(r), f"quoted non-black wrongly flagged: {jsx!r}"
 
 
 def test_no_fp_in_range_cubic_bezier():

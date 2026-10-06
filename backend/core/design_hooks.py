@@ -70,10 +70,20 @@ _TARGET_PATH_MARKERS = ("/desktop/src/", "/hive/")
 # or #fff (both commonly legitimate → measured 12 #fff hits on live tree, all valid).
 # The negative-lookbehind `(?<![-\w])` anchors the property name to `color`, so the
 # `color:` TAIL of `background-color` / `border-color` / `outline-color` / `caret-color`
-# does NOT false-positive (Gate-2 correctness finding: an unanchored `color:` matched
-# every `*-color: #000` property, violating the "does not touch backgrounds" contract).
+# (and their JSX camelCase siblings `backgroundColor` / `borderColor` / …) does NOT
+# false-positive (Gate-2 correctness finding: an unanchored `color:` matched every
+# `*-color: #000` property, violating the "does not touch backgrounds" contract).
+# The optional quote-char `['"\x60]?` directly after the `\s*:\s*` makes the rule match
+# BOTH CSS declaration syntax (`color: #000`) AND JSX inline-object syntax where the value
+# is a quoted string (`style={{color: '#000'}}` / `"#000"` / `'black'`) — the .tsx inline-
+# style form that the CSS-only pattern silently missed. The quote char has NO `\s*` after
+# it (a value never has whitespace between its opening quote and the literal) — this is
+# deliberate: an adjacent `\s*['"]?\s*` would create a catastrophic-backtracking surface
+# (measured 395ms on a 5000-space line), the Gate-2 ReDoS class the easing rule caps with
+# {1,12}. Only ONE optional quote char is allowed and the LITERAL stays #000/#000000/black,
+# so a quoted NON-black color (`color: '#333'`) still does NOT fire (inverted-SNR guard).
 _RE_PURE_BLACK_TEXT = re.compile(
-    r"(?<![-\w])color\s*:\s*(?:#000(?:000)?\b|black\b)", re.IGNORECASE
+    r"(?<![-\w])color\s*:\s*['\"\x60]?(?:#000(?:000)?\b|black\b)", re.IGNORECASE
 )
 # bounce / overshoot easing: explicit keywords, OR a cubic-bezier whose Y control
 # point overshoots [0,1] (true spring/elastic). A plain cubic-bezier in-range is NOT
