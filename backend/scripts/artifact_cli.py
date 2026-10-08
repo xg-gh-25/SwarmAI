@@ -3202,6 +3202,34 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                     existing.append(c)
                     seen_shas.add(c.get("sha"))
             fresh["commits"] = existing
+
+            # Autonomy observability (AIDLC design §4.2 blindspot补): a file that
+            # LANDED in this run's commit but was never in files_touched means a
+            # human edited code the agent didn't self-report → a codefix
+            # intervention. Cross-diff against the AUTHORITATIVE committed[].files
+            # (what actually landed), not the dirty worktree (which is noisy with
+            # unrelated untracked files). files_touched=None → no inference
+            # (honest lower-bound — never a FALSE codefix). Fused into THIS
+            # fresh-reread transaction so interventions[] obeys the same
+            # no-stale-clobber discipline the commits[] write established (Gate-1).
+            ft = fresh.get("files_touched")  # read from FRESH, not stale run_state
+            # Inject the git normalizer: files_touched is often ABSOLUTE, committed[]
+            # is repo-relative — compare like-for-like or a false codefix fires
+            # (Gate-2 F1). Same ls-files idiom used for tracked_rel above.
+            codefix_files = _infer_codefix_from_commits(
+                committed, ft, normalizer=_git_repo_rel_normalizer
+            )
+            if codefix_files:
+                _append_intervention(
+                    fresh, stage="deliver", kind="codefix", avoidable=True,
+                    note=("committed but not in files_touched (human edit): "
+                          + ", ".join(codefix_files[:8])),
+                )
+                warnings.append(
+                    f"codefix intervention inferred: {len(codefix_files)} committed "
+                    f"file(s) absent from files_touched (human edit → autonomy−)"
+                )
+
             tmp = run_file.with_suffix(".commits.tmp")
             tmp.write_text(json.dumps(fresh, indent=2), encoding="utf-8")
             tmp.replace(run_file)
@@ -3608,6 +3636,144 @@ def _checkpoint_reason_hits_denylist(reason: str) -> bool:
     return any(re.search(p, r) for p in _CHECKPOINT_CONFABULATION_DENYLIST)
 
 
+# ─────────────────────── Autonomous-rate observability (AIDLC design §6) ──────
+# Classify a checkpoint reason into an intervention KIND, reusing the SAME
+# _CHECKPOINT_TRUE_TRIGGERS vocabulary (no new taxonomy — design §4.2). The
+# mapping is deliberately NARROW: only reasons that imply a HUMAN was in the loop
+# become a human-intervention kind; systemic events (budget/crash/retry) map to
+# None (they are the pipeline pausing itself, not a person stepping in).
+#
+# Mapping (Gate-1-corrected to tokens that ACTUALLY exist in the trigger tuple):
+#   "judgment"                        -> "judgment"  (a human judgment-class decision)
+#   "l2" / "block" / gate_spawn_blocked -> "unblock"  (a human cleared a block)
+#   "external"                        -> "approval"   (an external approval gate)
+#   everything else systemic          -> None         (not a human intervention)
+# Precedence: judgment > approval > unblock (most-human-specific wins), so a reason
+# mentioning both a judgment call AND a block classifies as judgment.
+def _classify_intervention_kind(reason: "str | None") -> "str | None":
+    """Map a checkpoint reason to an intervention kind, or None if systemic.
+
+    Pure function (no I/O). Reuses _checkpoint_reason_has_true_trigger's word-
+    boundary semantics via the shared _CHECKPOINT_TRUE_TRIGGERS tuple so the
+    classifier can never drift from the pause vocabulary (design §4.2).
+    """
+    if not reason:
+        return None
+    r = reason.lower()
+
+    def _has(token: str) -> bool:
+        # Whole-word match, mirroring _checkpoint_reason_has_true_trigger so
+        # 'block' does not match 'roadblock'. Multi-word tokens match as phrase.
+        if " " in token or "-" in token:
+            pat = re.escape(token)
+        elif token in _CHECKPOINT_TRUE_TRIGGER_STEMS:
+            pat = rf"\b{re.escape(token)}\w*"
+        else:
+            pat = rf"\b{re.escape(token)}\b"
+        return bool(re.search(pat, r))
+
+    # Precedence order: most-human-specific first.
+    if _has("judgment"):
+        return "judgment"
+    if _has("external"):
+        return "approval"
+    if _has("l2") or _has("block") or _has("gate_spawn_blocked"):
+        return "unblock"
+    return None
+
+
+def _append_intervention(run_state: dict, *, stage: str, kind: str,
+                         avoidable: bool, note: str) -> None:
+    """Append one intervention record to run_state['interventions'] (lazy-init).
+
+    Mutates run_state in place. interventions[] is absent-by-default (same
+    convention as commits/checkpoint — no migration of existing runs); readers
+    use .get('interventions', []). note is truncated to 200 chars.
+    """
+    run_state.setdefault("interventions", []).append({
+        "stage": stage,
+        "kind": kind,
+        "avoidable": bool(avoidable),
+        "note": (note or "")[:200],
+    })
+
+
+def _norm_repo_rel(files: "list[str]", repo_root: str) -> "set[str]":
+    """Map paths to their git repo-relative form within repo_root (best-effort).
+
+    files_touched is free-form agent input (absolute / cwd-relative / already
+    repo-relative); committed[].files is always repo-relative (`git diff --cached
+    --name-only`). A raw string compare between the two mis-fires on any non-repo-
+    relative entry — the SAME reason cmd_run_commit normalizes via
+    `git ls-files --full-name` before comparing (see the tracked_rel block). This
+    mirrors that pattern. A path git cannot resolve in this repo is silently
+    skipped (it isn't a file this repo committed, so it can't be a codefix here).
+    """
+    import subprocess
+    out: set[str] = set()
+    for f in files:
+        try:
+            r = subprocess.run(
+                ["git", "-C", repo_root, "ls-files", "--full-name", "--", f],
+                capture_output=True, text=True, timeout=10,
+            )
+            for ln in r.stdout.splitlines():
+                if ln.strip():
+                    out.add(ln.strip())
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return out
+
+
+def _infer_codefix_from_commits(
+    commits: "list[dict] | None", files_touched: "list[str] | None",
+    *, normalizer=None
+) -> "list[str]":
+    """Return committed files that the run did NOT self-report in files_touched.
+
+    These are the human-codefix blindspot (design §4.2): a file landed in a
+    run's commit but the agent never recorded editing it → a human edited it.
+
+    HONEST LOWER-BOUND: files_touched is None (legacy / not recorded) means we
+    CANNOT determine what the agent touched, so we infer NOTHING — never a FALSE
+    codefix. An EMPTY list [] is different: it means "recorded, zero files", so
+    every committed file is genuinely extra.
+
+    PATH NORMALIZATION (Gate-2 F1): committed[].files is git repo-relative;
+    files_touched is free-form (often ABSOLUTE). A raw compare marks EVERY file a
+    codefix when files_touched is absolute → a FALSE codefix that deflates the
+    rate below true (the opposite of the honest-upper-bound guarantee). The real
+    caller injects ``normalizer(repo, files_touched) -> set[repo-relative paths]``
+    (git ls-files, same idiom cmd_run_commit already uses for this exact format
+    gap). ``normalizer=None`` (the default) treats files_touched as already
+    comparable — keeps this a PURE function for unit tests with synthetic
+    repo-relative paths. Pure core; the git fact is injected, not baked in.
+    """
+    if files_touched is None:
+        return []  # cannot determine → honest lower-bound, no inference
+    extra: list[str] = []
+    seen: set[str] = set()
+    cache: dict[str, set] = {}
+    for c in (commits or []):
+        if not isinstance(c, dict):
+            continue
+        repo = c.get("repo") or ""
+        if repo not in cache:
+            cache[repo] = (normalizer(repo, files_touched) if normalizer
+                           else set(files_touched))
+        tracked = cache[repo]
+        for f in (c.get("files") or []):
+            if f not in tracked and f not in seen:
+                extra.append(f)
+                seen.add(f)
+    return extra
+
+
+def _git_repo_rel_normalizer(repo_root: str, files: "list[str]") -> "set[str]":
+    """normalizer for _infer_codefix_from_commits: files → repo-relative set."""
+    return _norm_repo_rel(files, repo_root)
+
+
 def _compute_should_checkpoint(run_state: dict, project: str) -> dict:
     """Compute should_checkpoint + budget numbers for a run (single source).
 
@@ -3712,6 +3878,20 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
         "should_checkpoint_at_pause": measured_checkpoint,
     }
     run_state["checkpoint"] = checkpoint_meta
+
+    # Autonomy observability (AIDLC design §4.2): if this pause reflects a HUMAN
+    # intervention (judgment-class decision / cleared block / external approval),
+    # record it. Systemic pauses (budget/crash/retry) classify to None → no entry.
+    # Written into the SAME run_state dict so it rides the single write below (no
+    # second racy write). judgment/approval are unavoidable (a human genuinely had
+    # to decide/approve); an unblock is avoidable (ideally the pipeline would not
+    # have needed a human to clear it).
+    _iv_kind = _classify_intervention_kind(args.reason)
+    if _iv_kind is not None:
+        _append_intervention(
+            run_state, stage=args.stage or "unknown", kind=_iv_kind,
+            avoidable=(_iv_kind == "unblock"), note=args.reason or "",
+        )
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
     # 2. Publish checkpoint artifact to the registry
