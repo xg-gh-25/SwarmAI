@@ -741,6 +741,66 @@ class LifecycleManager:
                     # (is_cold_resume=False), not a replay — it falls in the
                     # non-resume branch below and gets the fast 120s.
                     effective_timeout = max(DUMB_SPAWN_TIMEOUT_SECONDS * 2, adaptive)
+
+                    # ── ② zero-token hang guard (run_22393305) ──────────────
+                    # The resume budget above was DELIBERATELY widened to ~1800s
+                    # (GUI66/run_6c482b10) so a legitimate large replay — which
+                    # emits no SDK event until the first token — is not
+                    # false-aborted. The cost: a GENUINE zero-token API hang on a
+                    # resume spawn (b5e495cb: 1037s stalled, zero CPU, zero
+                    # output) also waits the full ~1800s. Close that gap WITHOUT
+                    # lowering the budget: once stall passes an intermediate
+                    # floor, consult the SAME CPU-liveness discriminator the
+                    # post-timeout gate uses (~:796). A replay burning CPU returns
+                    # 'working' → spared (budget intact); a provably zero-CPU hang
+                    # returns 'wedged'. XG decision A / Gate-1 residual risk: a
+                    # single 6s sample could misread a CPU-idle I/O-bound replay
+                    # as wedged, so require TWO CONSECUTIVE wedged verdicts across
+                    # ~60s loop ticks (RESUME_WEDGED_STRIKE_THRESHOLD) before the
+                    # early unstick; ANY 'working'/'unknown' tick resets the
+                    # strike counter. 'working'/'unknown' are NEVER early-killed —
+                    # the run_6c482b10 protection is fully preserved.
+                    min_stall = getattr(
+                        unit, "RESUME_EARLY_WEDGED_MIN_STALL_S",
+                        DUMB_SPAWN_TIMEOUT_SECONDS * 2,
+                    )
+                    strike_threshold = getattr(
+                        unit, "RESUME_WEDGED_STRIKE_THRESHOLD", 2,
+                    )
+                    pid = getattr(unit, "pid", None)
+                    ceiling = getattr(unit, "TOOL_FREE_HARD_CEILING_S", None)
+                    verdict_fn = getattr(unit, "_tool_free_hang_verdict", None)
+                    if (
+                        min_stall < stall <= effective_timeout
+                        and pid and verdict_fn and ceiling and stall <= ceiling
+                    ):
+                        verdict = await verdict_fn(pid)
+                        # Post-await state re-check (mirrors the post-timeout gate
+                        # at ~:802): the ~SAMPLES×INTERVAL await can race a
+                        # transition to WAITING_INPUT / IDLE / DEAD — never unstick
+                        # a session that is no longer STREAMING.
+                        if unit.state != SessionState.STREAMING:
+                            continue
+                        if verdict == "wedged":
+                            unit._resume_wedged_strikes = (
+                                getattr(unit, "_resume_wedged_strikes", 0) + 1
+                            )
+                            if unit._resume_wedged_strikes >= strike_threshold:
+                                logger.warning(
+                                    "lifecycle_manager.resume_early_wedged "
+                                    "session_id=%s stall=%.0fs strikes=%d — "
+                                    "provable zero-CPU hang, early force_unstick "
+                                    "(budget was %.0fs)",
+                                    unit.session_id, stall,
+                                    unit._resume_wedged_strikes, effective_timeout,
+                                )
+                                await unit.force_unstick_streaming()
+                            continue
+                        # 'working' (CPU-busy legit replay) or 'unknown'
+                        # (unmeasurable → fail-safe): reset strikes, keep waiting
+                        # out the full adaptive budget. NEVER early-killed.
+                        unit._resume_wedged_strikes = 0
+                        continue
                 else:
                     # Fresh (non-resume) spawn: no replay, first token should
                     # arrive in seconds. Zero events past 120s = genuinely dumb.

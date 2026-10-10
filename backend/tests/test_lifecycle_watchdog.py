@@ -754,7 +754,7 @@ def _make_streaming_unit(
     (session_unit.py:3055) so the watchdog sees a realistic stall.
     """
     import time as _t
-    from core.session_unit import SessionState
+    from core.session_unit import SessionState, DUMB_SPAWN_TIMEOUT_SECONDS
 
     unit = MagicMock()
     unit.state = SessionState.STREAMING
@@ -784,6 +784,14 @@ def _make_streaming_unit(
     from unittest.mock import AsyncMock as _AM
     unit.TOOL_FREE_HARD_CEILING_S = 1800.0
     unit._tool_free_hang_verdict = _AM(return_value="wedged")
+    # ② zero-token hang guard (run_22393305): the resume-branch EARLY wedged
+    # consult requires TWO consecutive wedged verdicts (across ~60s loop ticks)
+    # before an early force_unstick — a per-unit strike counter, int-typed so
+    # the production comparison works (a bare MagicMock attr would be truthy and
+    # break the `>= 2` check). Default 0 = no prior strike.
+    unit._resume_wedged_strikes = 0
+    unit.RESUME_WEDGED_STRIKE_THRESHOLD = 2
+    unit.RESUME_EARLY_WEDGED_MIN_STALL_S = DUMB_SPAWN_TIMEOUT_SECONDS * 2
 
     # Use the REAL stall computation (bound to our mock's attributes).
     def _stall():
@@ -897,6 +905,163 @@ class TestDumbSpawnWatchdog:
         )
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_awaited_once()
+
+
+class TestResumeEarlyWedgedGuard:
+    """② zero-token hang guard (run_22393305): a resume dumb-spawn (zero SDK
+    events since spawn, _sdk_session_id set, tool-free) that is PROVABLY wedged
+    (zero-CPU) is force_unstuck EARLIER than the ~1800s adaptive ceiling — but
+    ONLY after TWO consecutive wedged verdicts (XG decision A, Gate-1 residual
+    risk: a single 6s CPU sample could misread a CPU-idle I/O-bound replay as
+    wedged). A 'working' (CPU-busy = legit replay) or 'unknown' verdict is NEVER
+    early-killed; the run_6c482b10 false-abort protection stays intact."""
+
+    def _run_once(self, unit):
+        router = MagicMock()
+        router.list_units.return_value = [unit]
+        mgr = LifecycleManager(router=router)
+        asyncio.run(mgr._check_streaming_timeout())
+
+    def test_ac1_two_consecutive_wedged_force_unstick_early(self):
+        """stall past the intermediate threshold (DUMB*2=240s) but below the
+        full 1800s adaptive ceiling; verdict='wedged' on TWO ticks → early
+        force_unstick on the 2nd. The b5e495cb-class incident."""
+        unit = _dumb_unit(stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+        # verdict default is 'wedged'
+        self._run_once(unit)  # tick 1: strike 0→1, NOT yet unstuck
+        unit.force_unstick_streaming.assert_not_called()
+        assert unit._resume_wedged_strikes == 1
+        self._run_once(unit)  # tick 2: strike 1→2 → unstick
+        unit.force_unstick_streaming.assert_awaited_once()
+
+    def test_ac2_working_verdict_never_early_unstuck(self):
+        """verdict='working' (CPU-busy legit replay) → NEVER early-killed, even
+        across many ticks. run_6c482b10 false-abort protection intact."""
+        from unittest.mock import AsyncMock as _AM
+        unit = _dumb_unit(stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+        unit._tool_free_hang_verdict = _AM(return_value="working")
+        self._run_once(unit)
+        self._run_once(unit)
+        self._run_once(unit)
+        unit.force_unstick_streaming.assert_not_called()
+        # a 'working' tick RESETS the strike counter (not merely "doesn't increment")
+        assert unit._resume_wedged_strikes == 0
+
+    def test_ac3_unknown_verdict_never_early_unstuck(self):
+        """verdict='unknown' (unmeasurable CPU) → fail-safe, NEVER early-killed."""
+        from unittest.mock import AsyncMock as _AM
+        unit = _dumb_unit(stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+        unit._tool_free_hang_verdict = _AM(return_value="unknown")
+        self._run_once(unit)
+        self._run_once(unit)
+        unit.force_unstick_streaming.assert_not_called()
+
+    def test_ac2_wedged_then_working_resets_strikes(self):
+        """A single 'working' tick between wedged ticks RESETS the strike counter
+        — two NON-consecutive wedged must NOT accumulate to a kill (the whole
+        point of 'consecutive': a legit replay that briefly idles then burns CPU
+        is spared)."""
+        from unittest.mock import AsyncMock as _AM
+        unit = _dumb_unit(stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+        # tick 1 wedged → strike 1
+        self._run_once(unit)
+        assert unit._resume_wedged_strikes == 1
+        # tick 2 working → reset to 0, not unstuck
+        unit._tool_free_hang_verdict = _AM(return_value="working")
+        self._run_once(unit)
+        assert unit._resume_wedged_strikes == 0
+        unit.force_unstick_streaming.assert_not_called()
+        # tick 3 wedged again → strike back to 1 only, still not unstuck
+        unit._tool_free_hang_verdict = _AM(return_value="wedged")
+        self._run_once(unit)
+        assert unit._resume_wedged_strikes == 1
+        unit.force_unstick_streaming.assert_not_called()
+
+    def test_ac4_below_threshold_verdict_not_consulted(self):
+        """stall below the intermediate threshold (DUMB*2=240s) → the early
+        wedged consult does NOT run at all (verdict fn not awaited), and no
+        strike is accumulated. Preserves the short-stall no-op."""
+        unit = _dumb_unit(stall=210, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+        self._run_once(unit)
+        unit._tool_free_hang_verdict.assert_not_awaited()
+        unit.force_unstick_streaming.assert_not_called()
+        assert unit._resume_wedged_strikes == 0
+
+    def test_ac6_left_streaming_mid_verdict_not_unstuck(self):
+        """Post-await state re-check: if the unit leaves STREAMING during the
+        verdict await, do NOT force_unstick (mirrors the existing :802 guard)."""
+        from unittest.mock import AsyncMock as _AM
+        from core.session_unit import SessionState
+        unit = _dumb_unit(stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+        # prime one strike so this tick would otherwise reach the threshold
+        unit._resume_wedged_strikes = 1
+
+        async def _verdict_then_leave(pid):
+            unit.state = SessionState.IDLE  # left STREAMING mid-sample
+            return "wedged"
+        unit._tool_free_hang_verdict = _AM(side_effect=_verdict_then_leave)
+        self._run_once(unit)
+        unit.force_unstick_streaming.assert_not_called()
+
+    def test_episode_isolation_strikes_reset_on_unstick(self):
+        """Finding-1 regression (REVIEW): after an early unstick fires, the strike
+        counter must be cleared so a re-wedge on the respawn gets a FRESH two-tick
+        debounce — not an immediate re-kill on its first wedged tick. The real
+        force_unstick_streaming clears _resume_wedged_strikes (session_unit.py);
+        here we model that contract on the mock and assert the next episode needs
+        TWO wedged ticks again, not one."""
+        unit = _dumb_unit(stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0)
+
+        async def _unstick_resets():
+            unit._resume_wedged_strikes = 0  # mirror the real force_unstick reset
+        unit.force_unstick_streaming = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(side_effect=_unstick_resets)
+
+        self._run_once(unit)  # strike 1
+        self._run_once(unit)  # strike 2 → unstick → reset to 0
+        assert unit.force_unstick_streaming.await_count == 1
+        assert unit._resume_wedged_strikes == 0
+        # next episode: ONE wedged tick must NOT re-kill (debounce restored)
+        self._run_once(unit)  # strike 1 again
+        assert unit.force_unstick_streaming.await_count == 1  # still 1, not 2
+        assert unit._resume_wedged_strikes == 1
+
+    def test_streaming_entry_resets_strikes_per_turn(self):
+        """Adversarial-found gap (Gate-2 Correctness #3 + Operational #4, convergent):
+        _resume_wedged_strikes is PER-TURN state and MUST reset at the STREAMING-entry
+        chokepoint — otherwise a new turn that re-enters STREAMING without the prior
+        turn completing a healthy stream (or a force_unstick) inherits a stale strike,
+        collapsing the two-consecutive-wedged debounce to one on that turn. Drives the
+        REAL _transition (not a mock) through IDLE→STREAMING and asserts the reset."""
+        from core.session_unit import SessionUnit, SessionState
+        unit = SessionUnit.__new__(SessionUnit)
+        unit.state = SessionState.IDLE
+        unit.session_id = "entry-reset-test"
+        unit._wrapper = None  # pid property → None (logging tolerates it)
+        unit._on_state_change = None
+        # minimal per-turn fields _transition's STREAMING-entry block touches
+        unit._hooks_enqueued = True
+        unit._last_turn_clean = True
+        unit._adopted_prewarm_fresh = True
+        unit._resume_wedged_strikes = 1  # stale strike from a prior turn
+        unit._last_progress_time = 123.0
+        unit._transition(SessionState.STREAMING)
+        assert unit._resume_wedged_strikes == 0  # the fix: per-turn reset
+        # mutation-proof companion assertions: the sibling per-turn resets also fire
+        assert unit._last_turn_clean is False
+        assert unit._adopted_prewarm_fresh is False
+
+    def test_ac5_non_resume_dumb_spawn_unaffected(self):
+        """A non-resume dumb spawn (sdk_session_id=None) is NOT governed by the
+        resume early-wedged path — it keeps the flat DUMB_SPAWN 120s behavior
+        and does NOT accumulate resume strikes."""
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        # stall between 240 (would-be resume threshold) and never relevant here;
+        # non-resume uses flat 120s so stall=300 > 120 → unstuck immediately,
+        # with NO strike bookkeeping.
+        unit = _dumb_unit(stall=300, sdk_session_id=None, adaptive_timeout=600.0)
+        self._run_once(unit)
+        unit.force_unstick_streaming.assert_awaited_once()
+        assert unit._resume_wedged_strikes == 0
 
     def test_integration_real_transition_produces_dumb_detectable_state(self):
         """CRITICAL REGRESSION GUARD (run_6c482b10 adversarial HIGH): the unit

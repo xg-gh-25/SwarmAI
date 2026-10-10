@@ -923,6 +923,17 @@ class SessionUnit:
         # Reset on successful stream completion (alongside _consecutive_oom_kills).
         self._consecutive_unstick_timeouts: int = 0
 
+        # ② zero-token hang guard (run_22393305): consecutive 'wedged' CPU
+        # verdicts seen by the lifecycle watchdog's EARLY resume-branch consult
+        # (before the full ~1800s adaptive ceiling). Requires TWO consecutive
+        # wedged verdicts across ~60s loop ticks before an early force_unstick —
+        # a single 6s CPU sample could misread a CPU-idle I/O-bound resume
+        # replay as wedged (Gate-1 residual risk, XG decision A). ANY 'working'/
+        # 'unknown' verdict (or a successful stream) RESETS it to 0, so only a
+        # SUSTAINED zero-CPU hang accumulates to the kill. Reset alongside
+        # _consecutive_unstick_timeouts on a healthy stream.
+        self._resume_wedged_strikes: int = 0
+
         # ── PID Watchdog (out-of-band subprocess death detection) ──
         # Polls os.kill(pid, 0) while STREAMING/WAITING_INPUT.
         # Detects external kills (jetsam, OOM) that pipe can't detect.
@@ -1154,6 +1165,17 @@ class SessionUnit:
             # sees the normal poison_guard. Cleared at the SAME chokepoint as
             # _last_turn_clean for symmetry (both are per-turn STREAMING-entry state).
             self._adopted_prewarm_fresh = False
+            # ② zero-token hang guard (run_22393305): the resume early-wedged
+            # strike counter is PER-TURN state — a new streaming turn deserves a
+            # fresh two-tick debounce budget. Resetting HERE (the single
+            # STREAMING-entry chokepoint) is the root reset point: it covers EVERY
+            # re-entry (force_unstick→respawn, healthy continuation, AND a new turn
+            # that re-enters STREAMING without the prior turn completing a healthy
+            # stream — the adversarial-found gap the force_unstick-only reset
+            # missed). The force_unstick reset + healthy-stream reset remain as
+            # defense-in-depth, but THIS is what makes "two CONSECUTIVE wedged
+            # ticks" a per-turn invariant rather than a cross-turn accumulation.
+            self._resume_wedged_strikes = 0
             # ONE timestamp for both — the dumb-spawn watchdog discriminates
             # "no event since spawn" by `_last_event_time <= _streaming_start_time`
             # (lifecycle_manager._check_streaming_timeout). Two separate
@@ -2380,6 +2402,9 @@ class SessionUnit:
             # Success — reset counters (session is healthy)
             self._consecutive_oom_kills = 0
             self._consecutive_unstick_timeouts = 0
+            # ② zero-token hang guard: a healthy stream clears any accumulated
+            # wedged strikes (the hang resolved on its own / a new turn began).
+            self._resume_wedged_strikes = 0
 
             # ── Self-healing check (invisible to user) ────────────
             # After successful stream, check if session health is degrading.
@@ -4877,6 +4902,18 @@ class SessionUnit:
     # This breaks the dead loop: timeout → unstick → resume → same timeout.
     _UNSTICK_CIRCUIT_BREAKER_THRESHOLD: int = 2
 
+    # ② zero-token hang guard (run_22393305): the lifecycle watchdog's EARLY
+    # resume-branch wedged consult fires only once stall exceeds this
+    # intermediate threshold (2× DUMB_SPAWN, i.e. the same floor the resume
+    # dumb-spawn branch already uses) AND the subprocess is provably wedged on
+    # RESUME_WEDGED_STRIKE_THRESHOLD consecutive ticks. Below the stall floor the
+    # verdict is not consulted at all (short-stall no-op). This recovers a
+    # b5e495cb-class zero-token hang near ~240s+ one tick instead of ~1800s,
+    # WITHOUT lowering any existing timeout and WITHOUT ever killing a 'working'
+    # (CPU-busy) legitimate large replay.
+    RESUME_EARLY_WEDGED_MIN_STALL_S: float = DUMB_SPAWN_TIMEOUT_SECONDS * 2
+    RESUME_WEDGED_STRIKE_THRESHOLD: int = 2
+
     async def force_unstick_streaming(self) -> None:
         """Force a stuck STREAMING session back to COLD.
 
@@ -4923,6 +4960,16 @@ class SessionUnit:
             # genuine unstick attempt) and leave the session alone.
             self._consecutive_unstick_timeouts -= 1
             return
+
+        # ② zero-token hang guard: a genuine unstick (not a user-stop SKIP) ENDS
+        # this wedge episode — clear the strike counter so the next episode, if
+        # the respawn re-wedges on a resume, gets a FRESH two-tick debounce
+        # instead of re-killing on its first wedged tick (the stale counter would
+        # otherwise collapse the intended two-consecutive-wedged guard to one on
+        # every episode after the first). The healthy-stream reset (~:2396) only
+        # fires if a turn SUCCEEDS in between; this covers the kill→respawn→re-wedge
+        # path where no success intervenes.
+        self._resume_wedged_strikes = 0
 
         if _decision.verdict is RecoveryVerdict.PROCEED_KILL_HARD:
             # Circuit breaker tripped: stop retrying with --resume (structurally
