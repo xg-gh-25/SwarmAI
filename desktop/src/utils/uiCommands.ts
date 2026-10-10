@@ -127,9 +127,11 @@ export function dispatchUiCommand(
     // ~/.aws/credentials). The BACKEND build_ui_command_event is the sole session-type
     // authority: it drops abs/`..` for any channel and, ONLY for local-desktop, admits
     // an absolute path and marks the event allowAbs=true.
-    //   * `~` and `..` are rejected UNCONDITIONALLY here — these are escape/traversal
-    //     shapes with no legitimate session-type nuance (a `~` never resolves anyway;
-    //     `..` is a traversal attack). No wire flag can relax them.
+    //   * `~` and `..` are rejected UNCONDITIONALLY here — this ui_command channel is
+    //     workspace-relative BY POLICY, independent of whether the backend can resolve
+    //     the shape. (The backend FileViewer resolver DOES expand a leading `~`→$HOME
+    //     for the HTTP read path; this channel still rejects it on purpose — a `~`/`..`
+    //     has no legitimate session-type nuance here.) No wire flag can relax them.
     //   * a leading `/` (absolute) is relaxed ONLY when the backend authored
     //     allowAbs===true. This is the ONE dimension the frontend cannot decide alone
     //     (session-type is backend-only knowledge), so it defers to the backend flag

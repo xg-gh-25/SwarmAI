@@ -789,7 +789,14 @@ def _resolve_file_path(
             don't resolve through a trusted workspace symlink, or an external
             absolute path neither under ``$HOME`` nor in ``allowed_external``.
     """
-    normalized = os.path.normpath(path)
+    # Expand a leading ``~`` → ``$HOME`` BEFORE the absolute/relative split, so a path
+    # like ``~/Desktop/x.md`` becomes an absolute $HOME path (which the home-only guard
+    # then validates) instead of falling into the workspace-relative branch and
+    # resolving to a bogus ``<workspace>/~/Desktop/...`` → 404. ``expanduser`` only
+    # expands a LEADING ~, so an embedded ``foo/~/bar`` is left intact (no mid-path
+    # $HOME injection). This does NOT widen the home-only guard: a ~-expanded path IS
+    # under $HOME and is validated by the SAME check below.
+    normalized = os.path.expanduser(os.path.normpath(path))
 
     # ── Absolute path — allow under $HOME, OR (read-only) if surfaced this session ──
     if os.path.isabs(normalized):
@@ -1015,7 +1022,11 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
         return None
 
     # --- Stage 0: Absolute path handling ---
-    normalized = os.path.normpath(path)
+    # Expand a leading ``~`` → ``$HOME`` first (P8 all-doors: same blind spot as
+    # ``_resolve_file_path``). Without this, a ``~/...`` path is not absolute, falls
+    # through Stages 1-4, is never found, and silently returns None on the streaming
+    # hot path. ``expanduser`` only expands a LEADING ~ (embedded ~ left intact).
+    normalized = os.path.expanduser(os.path.normpath(path))
     if os.path.isabs(normalized):
         abs_path = Path(normalized).resolve()
         projects_dir = workspace_root / "Projects"
