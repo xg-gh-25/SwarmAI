@@ -12,9 +12,15 @@ as a subprocess for the exit-code contract; the parser is imported by path
 Key invariants: selection never hides a row it cannot judge (a missing token
 reads as always-on); a backend .py path and a desktop .tsx path select
 different strict subsets; ``N of M patterns apply`` reports the real totals.
+The ``*`` row count is pinned (<= 12) so always-on rows cannot creep back; a
+hook change with a subprocess diff pulls in the command-injection and the
+hook-relevant agent-safety rows; a README change pulls in only ``*`` rows plus
+doc rows; every agent-safety row (RP65-RP80) is reachable from the agent code
+paths it targets, by path alone (the diff is optional on the REVIEW card).
 """
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import subprocess
 import sys
@@ -166,3 +172,124 @@ def test_cli_usage_errors_exit_1_with_empty_stdout(args, stdin):
     res = _cli(*args, stdin=stdin)
     assert res.returncode == 1, (res.returncode, res.stderr)
     assert res.stdout == ""
+
+
+# ── always-on budget + targeted selection of the narrowed rows ───────────────
+_MAX_STAR_ROWS = 12
+_HOOKS = "backend/core/security_hooks.py"
+_PROMPT = "backend/core/prompt_builder.py"
+_SLACK = "backend/channels/adapters/slack.py"
+_CTX = "backend/core/context_injector.py"
+_SUBPROCESS_DIFF = (
+    "--- a/backend/core/security_hooks.py\n"
+    "+++ b/backend/core/security_hooks.py\n"
+    "@@ -210,6 +210,10 @@ async def bash_syntax_guard(input_data, tool_use_id, context):\n"
+    '     command = input_data.get("tool_input", {}).get("command", "")\n'
+    "+    proc = subprocess.run(\n"
+    '+        ["bash", "-n", "-c", command],\n'
+    "+        capture_output=True, text=True, timeout=5,\n"
+    "+    )\n"
+    "     if proc.returncode != 0:\n"
+    '         return _deny(f"Bash syntax error: {proc.stderr.strip()[:200]}")\n'
+)
+
+
+def _star_ids():
+    return {r["id"] for r in _rows() if r["always"]}
+
+
+def test_always_on_row_count_is_pinned():
+    star = sorted(_star_ids(), key=lambda s: int(s[2:]))
+    assert 0 < len(star) <= _MAX_STAR_ROWS, (
+        f"{len(star)} `match: *` rows (cap {_MAX_STAR_ROWS}): {star} -- give the "
+        "new row a glob:/kw: match instead of always-on")
+
+
+def test_hook_change_with_subprocess_diff_selects_injection_and_agent_rows():
+    got = _selected([_HOOKS], _SUBPROCESS_DIFF)
+    # subprocess lifecycle + shell/command injection + process-tree lifetime
+    assert {"RP1", "RP2", "RP17", "RP37"} <= got
+    # agent-safety rows whose deterministic gate lives in the PreToolUse hooks
+    hook_agent = {"RP65", "RP66", "RP68", "RP69", "RP75", "RP76", "RP77"}
+    assert hook_agent <= got
+    # the same agent-safety rows hold by path alone (the diff is optional)
+    assert hook_agent <= _selected([_HOOKS])
+    assert got < {r["id"] for r in _rows()}
+
+
+def test_readme_change_selects_only_star_rows_and_doc_rows():
+    rows = {r["id"]: r for r in _rows()}
+    got = _selected(["README.md"])
+    extra = got - _star_ids()
+    for rid in extra:   # every non-star hit must be a row that targets docs
+        assert any(fnmatch.fnmatchcase("readme.md", g) for g in rows[rid]["globs"]), rid
+    assert extra == {"RP34"}, sorted(extra)
+
+
+# Which representative agent path each agent-safety row is ABOUT (chosen per
+# row, not "all four"): prompt assembly + skill/MCP loading (prompt_builder),
+# the PreToolUse gate layer (security_hooks), an external channel holding a bot
+# token and acting for a user (slack adapter), persisted context read back into
+# the next session (context_injector).
+_AGENT_ROW_PATHS = {
+    "RP65": [_PROMPT, _SLACK, _CTX],   # untrusted content -> prompt
+    "RP66": [_HOOKS, _PROMPT],         # tool-set composition
+    "RP67": [_PROMPT, _HOOKS],         # policy in prose vs enforced in code
+    "RP68": [_HOOKS],                  # model output -> shell interpreter
+    "RP69": [_HOOKS, _SLACK],          # side-effecting action scope
+    "RP70": [_CTX],                    # persisted state read back as trusted
+    "RP71": [_SLACK],                  # standing broad credentials
+    "RP72": [_SLACK],                  # acting on behalf of a user identity
+    "RP73": [_SLACK],                  # async entrypoint bypassing API authz
+    "RP74": [_SLACK, _HOOKS],          # URL fetch / egress control
+    "RP75": [_HOOKS],                  # model-chosen tool/sub-agent params
+    "RP76": [_HOOKS],                  # confused deputy on destructive calls
+    "RP77": [_PROMPT, _HOOKS, _SLACK, _CTX],  # secret in code: always-on
+    "RP78": [_PROMPT, _HOOKS],         # skill load without provenance
+    "RP79": [_PROMPT],                 # transitive / drifting skill trust
+    "RP80": [_PROMPT],                 # cross-platform skill semantics
+}
+
+
+def test_agent_row_map_covers_rp65_to_rp80_exactly():
+    assert set(_AGENT_ROW_PATHS) == {f"RP{n}" for n in range(65, 81)}
+    assert set(_AGENT_ROW_PATHS) <= {r["id"] for r in _rows()}
+
+
+@pytest.mark.parametrize("rid", sorted(_AGENT_ROW_PATHS, key=lambda s: int(s[2:])))
+def test_agent_safety_row_is_selected_by_the_paths_it_targets(rid):
+    for path in _AGENT_ROW_PATHS[rid]:
+        assert rid in _selected([path]), (rid, path)
+
+
+def test_agent_safety_rows_are_not_all_always_on():
+    # the agent rows were narrowed from `*`; only the secret-in-code row stays
+    agent_star = {f"RP{n}" for n in range(65, 81)} & _star_ids()
+    assert agent_star == {"RP77"}
+
+
+# Browser-automation / a11y-perception rows (RP85, RP87, RP88) and the request-identity,
+# async-blocking and grouped-LIMIT rows (RP52-RP54) used to match every `*.py` file.
+_BROWSER_ROWS = {"RP85", "RP87", "RP88"}
+
+
+def test_plain_backend_change_skips_browser_rows():
+    got = _selected(["backend/core/session_unit.py"])
+    assert not got & _BROWSER_ROWS, sorted(got & _BROWSER_ROWS)
+    assert "RP53" in got, "async core code must still get the sync-I/O-on-event-loop row"
+
+
+def test_e2e_spec_gets_browser_rows():
+    assert _BROWSER_ROWS <= _selected(["desktop/e2e/chat.spec.ts"])
+
+
+def test_narrowed_rows_still_fire_on_their_concern():
+    assert "RP52" in _selected(["backend/routers/chat.py"])        # request handlers
+    assert "RP54" in _selected(["backend/core/recall_multi.py"])   # ranked recall queries
+    assert "RP53" in _selected(["backend/x.py"], "+    conn = sqlite3.connect(p)\n")
+
+
+def test_typical_backend_change_is_a_small_subset():
+    rows = {r["id"] for r in _rows()}
+    got = _selected(["backend/core/session_unit.py"])
+    assert len(got) <= len(rows) // 3, (len(got), len(rows))
