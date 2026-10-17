@@ -189,7 +189,9 @@ const server = createServer((req, res) => {
 });
 
 const port = await new Promise((resolve) => {
-  server.listen(0, () => resolve(server.address().port));
+  // Loopback only: without a host, Node listens on every interface and the deck
+  // being exported is reachable from the network while the export runs.
+  server.listen(0, '127.0.0.1', () => resolve(server.address().port));
 });
 console.log(`  Local server on port ${port}`);
 
@@ -200,7 +202,7 @@ console.log(`  Local server on port ${port}`);
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: VP_WIDTH, height: VP_HEIGHT } });
-await page.goto(`http://localhost:${port}/`, { waitUntil: 'networkidle' });
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
 await page.evaluate(() => document.fonts.ready);
 
 // ─── Detect deck architecture (deck-stage primary, .slide fallback) ───
