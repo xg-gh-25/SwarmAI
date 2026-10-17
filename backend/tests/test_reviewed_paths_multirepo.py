@@ -257,3 +257,112 @@ def test_chained_second_commit_pathspec_not_dropped(tmp_path):
         f"FAIL-OPEN: SECOND chained commit's positional pathspec dropped — an "
         f"unreviewed file would sneak past the gate: {sorted(pending)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Heredoc body = stdin DATA (the `-F - <<'EOF'` false-DENY).
+#
+# BUG: the quote-aware normalizer scanned a heredoc BODY as shell code. An
+# apostrophe (`don't`) or an odd `"` in a commit message inverted its quote state,
+# shlex raised ValueError, and the whitespace fallback turned EVERY body word
+# (`"bound`, `HEAD`, `Reset`…) into a positional pathspec → a reviewed commit was
+# false-DENIED. Fix: an UNQUOTED heredoc body is dropped before tokenizing. The
+# red-line tests below pin the other direction: nothing that bash would execute
+# as command text may be swallowed as a "body" (that would be fail-open).
+# ---------------------------------------------------------------------------
+
+_GC = "git" + " commit"  # split so this file's own text never reads as a commit
+
+
+@pytest.mark.parametrize("cmd", [
+    # unbalanced `"` + apostrophe in the body (the exact shape that was denied)
+    _GC + " -q -F - <<'EOF'\ntest: Reset queues\n\nthe \"bound value\nwe don't touch HEAD\nEOF",
+    # unquoted delimiter, apostrophe in the body
+    _GC + " -F - <<EOF\nwe don't touch it\nEOF",
+    # `<<-` (tab-stripped terminator) with an odd `"`
+    _GC + " -F - <<-EOF\n\tit's \"x\n\tEOF\n",
+    # space between `<<` and the delimiter → the delimiter is not a pathspec
+    _GC + " -F - << EOF\nsome words here\nEOF",
+    # the Claude Code convention: heredoc inside "$(...)", with a `"` in the body
+    _GC + " -m \"$(cat <<'EOF'\nmsg with \"quote and don't\nEOF\n)\"",
+])
+def test_heredoc_body_with_quotes_not_treated_as_pathspec(staged_repo, cmd):
+    root, staged_abs = staged_repo
+    pending = _pending_commit_paths(str(root), cmd)
+    assert pending == {staged_abs}, (
+        f"heredoc body leaked as pathspec (false DENY): {sorted(pending)}"
+    )
+
+
+@pytest.mark.parametrize("cmd", [
+    # pathspec on the opener line, before the heredoc
+    _GC + " -F - backend/explicit.py <<EOF\nit's fine\nEOF",
+    # pathspec AFTER a "$(cat <<EOF …)" message — the body's `"` must not eat it
+    _GC + " -m \"$(cat <<'EOF'\nan odd \" quote\nEOF\n)\" backend/explicit.py",
+    # `<<` as an arithmetic SHIFT is not a heredoc — the next line is real command text
+    "echo $((1<<2))\n" + _GC + " -m x backend/explicit.py",
+    # a `<<EOF` inside a comment is not a heredoc
+    "# don't <<EOF here\n" + _GC + " -m x backend/explicit.py",
+    # quoted `<<A` inside -m is a literal (run_68245424 red line, re-pinned here)
+    _GC + " -m \"<<A\nx\" backend/explicit.py",
+    # a commit AFTER a terminated heredoc is still seen
+    "cat > /tmp/m <<'EOF'\nhe's here\nEOF\n" + _GC + " -F /tmp/m backend/explicit.py",
+    # `#` mid-word is not a comment
+    _GC + " -m x#y backend/explicit.py",
+    # `#` that bash does NOT treat as a comment (Gate-2 HIGH: a comment-dropper hid these)
+    _GC + " -m x\\ #y backend/explicit.py",
+    _GC + " -m x\\\n#y backend/explicit.py",
+    _GC + " -m $(echo x)#y backend/explicit.py",
+    # ANSI-C quoting: `$'\\''` is ONE quote char, then '#'-ish text stays quoted
+    _GC + " -m $'\\'' -m 'a #' backend/explicit.py",
+    # heredoc whose terminator bash 3.2 accepts but we do not model (`EOF)`) → kept
+    _GC + " -m \"$(cat <<EOF\nmsg\nEOF)\" backend/explicit.py",
+    # a quoted '<<' ARGUMENT is not a redirect — the next token stays a pathspec
+    _GC + " -m x '<<' backend/explicit.py",
+])
+def test_heredoc_handling_never_drops_real_pathspec(staged_repo, cmd):
+    """[FAIL-OPEN RED-LINE] bash would commit backend/explicit.py in every shape."""
+    root, staged_abs = staged_repo
+    other = root / "backend" / "explicit.py"
+    other.write_text("# explicitly pathspec'd\n")
+    pending = _pending_commit_paths(str(root), cmd)
+    assert pending is not None
+    assert os.path.realpath(str(other)) in pending, (
+        f"FAIL-OPEN: real positional pathspec dropped: {sorted(pending)}"
+    )
+
+
+@pytest.mark.parametrize("cmd", [
+    # [FAIL-OPEN RED-LINE, Gate-2 HIGH] bash runs the commit in every shape below; a
+    # misread `#` comment / `<<` opener / arith frame must never hide it.
+    "echo a\\ #; " + _GC + " -m x",
+    "echo a\\\n#; " + _GC + " -m x",
+    "echo $(true)#; " + _GC + " -m x",
+    "echo $[1<<2]\n" + _GC + " -m x",
+    "echo $'\\'' '<<X'\\'\n" + _GC + " -m x",
+    "echo $((echo hi) )\n" + _GC + " -m x",
+    "((cd /tmp); true)\n" + _GC + " -m x",
+    "echo $((x<<y))\n" + _GC + " -m x\ny",
+    "cat <<EOF\n" + _GC + " -m x",  # no terminator → kept as code (fail-closed)
+    # operator glued to `commit` (pre-existing hole: shlex kept `commit<<EOF` one token)
+    _GC + "<<EOF\nmsg\nEOF",
+    _GC + "<< E\n'\nE\n",
+    _GC + " -m x>/dev/null",
+    _GC + ">/dev/null 2>&1",
+    # a `<<WORD` inside a comment is not a heredoc, even with a matching later line
+    "\\\n#<<EOF 'd e'\nE\n" + _GC + "\nEOF\n",
+    "# write the msg with cat <<EOF\n" + _GC + " -m x\ncat > f <<EOF\nbody\nEOF",
+])
+def test_commit_never_hidden_by_heredoc_scanner(cmd):
+    from core.security_hooks import _command_has_git_commit
+    assert _command_has_git_commit(cmd) is True, f"FAIL-OPEN: commit hidden in {cmd!r}"
+
+
+def test_heredoc_body_mentioning_commit_is_not_a_commit():
+    """Writing a file whose heredoc body mentions a commit is not a commit (the
+    gate used to demand an adversarial review for it); a real commit after the
+    terminator still is."""
+    from core.security_hooks import _command_has_git_commit
+    body_only = "cat > /tmp/x.py <<'EOF'\n" + _GC + " -m x evil.py\nit's\nEOF"
+    assert _command_has_git_commit(body_only) is False
+    assert _command_has_git_commit(body_only + "\n" + _GC + " -m y") is True

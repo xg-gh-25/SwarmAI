@@ -1736,77 +1736,193 @@ def _skip_leading_wrappers(tokens: list[str]) -> list[str]:
     return tokens[i:]
 
 
+# A heredoc opener `<<[-][ ]WORD` whose WORD is an IDENTIFIER, bare or fully quoted
+# ('EOF' / "EOF" / \\EOF). Requiring an identifier keeps `$((1<<2))` / `$[1<<2]` (shift
+# operators) from ever being read as a heredoc; real heredoc delimiters are words.
+# The opener must END at a word boundary (whitespace / operator / end), so `<<EOF.txt`
+# or `<<EO"F"` (shapes this model does not cover) are simply not recognised → kept.
+_HEREDOC_OPENER_RE = re.compile(
+    r"<<(?P<dash>-?)[ \t]*(?P<delim>'(?P<q1>[A-Za-z_]\w*)'|\"(?P<q2>[A-Za-z_]\w*)\""
+    r"|\\(?P<bs>[A-Za-z_]\w*)|(?P<bare>[A-Za-z_]\w*))(?=[\s;&|<>()]|$)"
+)
+
+
+def _redirect_glued_to_word(command: str, i: int) -> bool:
+    """True iff the unquoted `<`/`>` at *i* starts a redirect operator that is glued to
+    the preceding WORD (`commit>out`, `commit<<EOF`). False when nothing precedes it,
+    it follows whitespace / an operator char, it continues an operator (`>>`, `&>`), or
+    the preceding word is an all-digit fd number at a word start (`2>&1`)."""
+    if i == 0 or command[i - 1] in " \t\n\r;&|()<>":
+        return False
+    j = i - 1
+    while j >= 0 and command[j].isdigit():
+        j -= 1
+    if j < i - 1 and (j < 0 or command[j] in " \t\n\r;&|("):
+        return False  # `2>&1` / `0<<EOF`: an fd number, part of the operator
+    return True
+
+
 def _normalize_newlines_quote_aware(command: str) -> str:
-    """Replace command-separating newlines with ` ; `, but ONLY newlines OUTSIDE a
-    shell-quoted span. A newline INSIDE `'...'`/`"..."` is literal DATA (a multiline
-    -m message, a quoted heredoc-looking string), NOT a command separator.
+    """Replace command-separating newlines with ` ; ` — only newlines in UNQUOTED command
+    text — and drop heredoc BODIES, so the shlex split that runs next sees only shell
+    code. A newline inside `'...'`/`"..."` (incl. inside a `"$(...)"`) is literal DATA (a
+    multiline -m message) and stays a newline inside its token.
 
-    This REPLACES the old `command.replace("\\n", " ; ")` + regex heredoc pre-strip,
-    which was the root of the run_68245424 fail-open: the blind replace turned a
-    newline inside a quoted `-m "<<A\\n"` value into a separator, which split the real
+    Why quote-aware (run_68245424): the old blind `command.replace("\\n", " ; ")` turned
+    a newline inside a quoted `-m "<<A\\n"` value into a separator, which split the real
     positional pathspec (`secret.py`) into a NON-commit segment → the pending-path set
-    missed it → unreviewed file committed (fail-OPEN). Deferring quote handling to this
-    pass (then letting shlex tokenize) means a quoted newline stays inside its token and
-    the pathspec stays in the commit segment. A REAL (unquoted) heredoc body still ends
-    up in its own `;`-split non-commit segments, so its lines never become false
-    pathspecs — no regex guessing on raw text (Gate-0 root).
+    missed it → unreviewed file committed (fail-OPEN).
 
-    Quote tracking mirrors POSIX shell quoting so it does NOT diverge from the shlex
-    split that runs next (a divergence is a fail-OPEN: run_68245424 Gate-2 found that a
-    naive walker treating `\\"` inside a double-quoted span as a CLOSING quote inverts the
-    quote state on odd `\\"` counts → an in-message newline is mis-read as a separator →
-    the glued-`;` resplit splits the `-m` value → a real positional pathspec falls into a
-    NON-commit segment → dropped from pending → unreviewed file committed). So:
+    Quote tracking mirrors POSIX shell quoting so it does NOT diverge from shlex (a
+    divergence is a fail-OPEN: run_68245424 Gate-2 found that treating `\\"` inside a
+    double-quoted span as a CLOSING quote inverts the quote state). So:
       • single-quote `'...'`: everything literal, only `'` ends it — backslash is NOT
-        special (POSIX single-quote rule);
-      • double-quote `"..."`: a backslash escapes the next char, so `\\"` stays INSIDE
-        the span (does not close it);
+        special (POSIX single-quote rule); `$'...'` (ANSI-C) honours backslash escapes;
+      • double-quote `"..."`: a backslash escapes the next char, so `\\"` stays INSIDE;
+        `$(` re-enters unquoted rules until its `)`, so `"$(cat <<'EOF' … EOF)"` works;
       • unquoted: a backslash escapes the next char too, so `\\'`/`\\"` do NOT open a
         span and a `\\<newline>` line-continuation is not treated as a separator.
+
+    Heredoc bodies (the false-DENY fix): a heredoc body is stdin DATA, but it used to be
+    scanned as code — an apostrophe or odd `"` in a message (`git commit -F - <<'EOF'` …
+    `don't` … `EOF`) inverted the quote state, shlex raised, and the callers' whitespace
+    fallback turned every body word into a "pathspec". Now an UNQUOTED `<<[-]WORD` opener
+    with an IDENTIFIER delimiter (bare, `'EOF'`, `"EOF"`, `\\EOF`; see
+    _HEREDOC_OPENER_RE) registers a heredoc, and at the next unquoted newline its body is
+    dropped up to the exact terminator line (`<<-` strips leading tabs). Not recognised
+    inside quotes (`-m "<<A"` is a literal), for `<<<`, or inside `$((…))`/`((…))` (shift).
+    A spaced `<< EOF` is emitted glued (`<<EOF`) so the token walker skips it as ONE
+    redirect. FAIL-CLOSED by construction: text is dropped ONLY when the terminator line
+    is actually found — with no terminator the body is kept and scanned as code, because
+    wrongly dropping real command text would hide a commit (fail-OPEN) while keeping data
+    only over-collects. Comments are deliberately NOT modelled (dropping a `#…` tail that
+    bash does not treat as a comment — `a\\ #`, `$(x)#` — hid real commits); instead any
+    unquoted `#` switches heredoc recognition off for the rest of its line, so a `<<WORD`
+    inside a comment can never swallow the code after it. An unquoted `<`/`>` glued to a
+    word (`git commit<<EOF`, `git commit>out`) gets a space before it, so shlex splits it
+    off the word the way bash does (see _redirect_glued_to_word).
+
     This is a pre-tokenizer only — shlex does the authoritative split next. An UNCLOSED
-    quote leaves the tail unconverted, which can only MERGE segments → fewer separators →
-    over-collection downstream = fail-CLOSED, never fail-open."""
+    quote leaves the tail unconverted, which only MERGES lines — bash rejects such a
+    command anyway, so nothing that merges here can run."""
     out: list[str] = []
-    q: str | None = None
+    # Context stack: "top" (unquoted command text), "dq" (inside "..."), "cmd" (inside
+    # `$(...)` / `(...)` — unquoted rules again, even when nested in a "..."), "arith"
+    # (the two paren frames of `$((...))` / `((...))` — same rules as "cmd").
+    stack: list[str] = ["top"]
+    pending: list[tuple[str, bool]] = []  # heredocs opened on the current line
+    # An unquoted `#` MAY start a comment, and a `<<WORD` inside a comment is not a
+    # heredoc — recognising it would drop the real code below it (fail-OPEN). Comments
+    # are not modelled precisely (escapes / continuations make that error-prone), so any
+    # unquoted `#` simply turns heredoc recognition OFF until the next real newline.
+    hash_on_line = False
     i = 0
     n = len(command)
+
+    def _sep() -> str:
+        # A newline nested anywhere inside "..." is literal DATA inside one shlex token;
+        # only an unquoted newline separates commands.
+        return "\n" if "dq" in stack else " ; "
+
     while i < n:
         c = command[i]
-        if q == "'":
-            # single-quote: literal; only `'` ends it (backslash NOT special in POSIX).
-            out.append(c)
-            if c == "'":
-                q = None
-            i += 1
-        elif q == '"':
+        ctx = stack[-1]
+        if ctx == "dq":
             # double-quote: backslash escapes the next char, so `\"` stays inside.
             if c == "\\" and i + 1 < n:
-                out.append(c)
-                out.append(command[i + 1])
-                i += 2
-                continue
+                out.append(command[i:i + 2]); i += 2; continue
+            if command.startswith("$((", i):
+                out.append("$(("); stack += ["arith", "arith"]; i += 3; continue
+            if command.startswith("$(", i):
+                out.append("$("); stack.append("cmd"); i += 2; continue
             out.append(c)
             if c == '"':
-                q = None
+                stack.pop()
             i += 1
-        else:
-            # unquoted: backslash escapes the next char (a `\'`/`\"` does NOT open a span,
-            # a `\<newline>` continuation is not a separator).
-            if c == "\\" and i + 1 < n:
-                out.append(c)
-                out.append(command[i + 1])
-                i += 2
+            continue
+        # ctx is "top" or "cmd": unquoted shell rules.
+        # A backslash escapes the next char (a `\'`/`\"` does NOT open a span, a
+        # `\<newline>` continuation is not a separator).
+        if c == "\\" and i + 1 < n:
+            out.append(command[i:i + 2]); i += 2; continue
+        if command.startswith("$'", i):
+            # ANSI-C quoting `$'...'`: backslash escapes inside, so `$'\''` is ONE quote
+            # char — modelled so it cannot invert the quote state.
+            j = i + 2
+            while j < n and command[j] != "'":
+                j += 2 if command[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(command[i:j]); i = j; continue
+        if c == "'":
+            # single-quote: literal; only `'` ends it (backslash NOT special in POSIX).
+            # An UNCLOSED quote copies the rest verbatim (fail-closed: merges segments).
+            j = command.find("'", i + 1)
+            j = n if j == -1 else j + 1
+            out.append(command[i:j]); i = j; continue
+        if c == '"':
+            out.append(c); stack.append("dq"); i += 1; continue
+        if command.startswith("$((", i) or command.startswith("((", i):
+            # Arithmetic: two ordinary paren frames (each closes on `)`, newlines are
+            # handled as in any frame), tagged so `<<` inside is a SHIFT, never a heredoc.
+            k = 3 if c == "$" else 2
+            out.append(command[i:i + k]); stack += ["arith", "arith"]; i += k; continue
+        if command.startswith("$(", i):
+            out.append("$("); stack.append("cmd"); i += 2; continue
+        if c == "(":
+            out.append(c); stack.append("cmd"); i += 1; continue
+        if c == ")" and ctx in ("cmd", "arith"):
+            out.append(c); stack.pop(); i += 1; continue
+        if c == "#":
+            hash_on_line = True
+        if c in "<>" and "arith" not in stack and _redirect_glued_to_word(command, i):
+            # `git commit<<EOF` / `git commit>out`: bash splits the operator off the word,
+            # shlex does not — a glued `commit<<EOF` token would hide the commit (fail-OPEN,
+            # pre-existing). Emit a space so the word and the operator tokenize apart.
+            out.append(" ")
+        if (command.startswith("<<", i) and not command.startswith("<<<", i)
+                and (i == 0 or command[i - 1] != "<") and "arith" not in stack
+                and not hash_on_line):
+            m = _HEREDOC_OPENER_RE.match(command, i)
+            if m:
+                word = m.group("q1") or m.group("q2") or m.group("bs") or m.group("bare")
+                pending.append((word, bool(m.group("dash"))))
+                # Glue `<< EOF` → `<<EOF` so the token walker skips it as ONE
+                # self-contained redirect (its delimiter is never a pathspec).
+                out.append("<<" + (m.group("dash") or "") + m.group("delim"))
+                i = m.end()
                 continue
-            if c in ("'", '"'):
-                q = c
-                out.append(c)
-                i += 1
-            elif c in ("\n", "\r"):
-                out.append(" ; ")
-                i += 1
-            else:
-                out.append(c)
-                i += 1
+            out.append("<<"); i += 2; continue
+        if c in ("\n", "\r"):
+            out.append(_sep())
+            i += 1
+            hash_on_line = False
+            if c == "\n" and pending:
+                # Drop each pending heredoc body, in order — but ONLY when its exact
+                # terminator line (bash rule; `<<-` strips leading TABs) is found. No
+                # terminator → the text is KEPT and scanned as code: wrongly dropping real
+                # command text would be fail-OPEN, keeping data is only over-collection.
+                for word, strip_tabs in pending:
+                    k = i
+                    found = None
+                    while k < n:
+                        j = command.find("\n", k)
+                        line = command[k:] if j == -1 else command[k:j]
+                        nxt = n if j == -1 else j + 1
+                        cand = line.rstrip("\r")
+                        if strip_tabs:
+                            cand = cand.lstrip("\t")
+                        if cand == word:
+                            found = nxt
+                            break
+                        k = nxt
+                    if found is None:
+                        break  # keep this body (and any later ones) as code
+                    i = found
+                    out.append(_sep())
+                pending = []
+            continue
+        out.append(c)
+        i += 1
     return "".join(out)
 
 
@@ -1839,10 +1955,16 @@ def _command_has_git_commit(command: str) -> bool:
     newline→';' normalization (so a newline inside a quoted `-m` value is NOT a false
     separator), glued-';' resplit, and separator-split. Fail-safe: unparseable input →
     substring fallback (only a real `git commit` token pattern)."""
+    normalized = _normalize_newlines_quote_aware(command)
     try:
-        all_tokens = shlex.split(_normalize_newlines_quote_aware(command))
+        all_tokens = shlex.split(normalized)
     except ValueError:
-        return bool(re.search(r"\bgit\b[^;&|]*\bcommit\b", command))
+        # Substring check on the NORMALIZED text with the separators it inserted
+        # removed: only heredoc bodies with a found terminator are gone (stdin data),
+        # so a body that merely MENTIONS `git commit` cannot make a non-commit
+        # look like one, and no inserted separator can split a real `git … commit`.
+        return bool(re.search(r"\bgit\b[^;&|]*\bcommit\b",
+                              normalized.replace(" ; ", " ")))
     if not all_tokens:
         return False
     _resplit: list[str] = []
@@ -1965,14 +2087,21 @@ def _pending_commit_paths(dir_path: str, command: str):
     # inside a quoted span is literal data, not a separator), then let shlex tokenize.
     #   • quoted `<<A\n` → stays inside the `-m` value token; `secret.py` stays a token in
     #     the SAME commit segment → collected as a pathspec → covered-check sees it.
-    #   • a REAL (unquoted) heredoc body → its lines fall into their own `;`-split
-    #     NON-commit segments (`_segment_is_git_commit` rejects them) → never false paths.
-    # No regex, no heredoc guessing. An unclosed quote only MERGES segments (over-collect →
+    #   • a REAL (unquoted) heredoc body → DROPPED by the normalizer once its terminator
+    #     line is found (it is stdin DATA),
+    #     so its words never become pathspecs and a stray `'`/`"` in it (`don't`, an
+    #     odd `"`) can no longer invert quote state and push shlex into the whitespace
+    #     fallback that turned every body word into a pathspec (the `-F - <<'EOF'`
+    #     false-DENY).
+    # No regex on raw text: heredocs are recognised only in UNQUOTED context. An unclosed quote only MERGES segments (over-collect →
     # fail-CLOSED). `-a`/`--cached` sweeps still come from `git diff` below, independent.
+    _normalized = _normalize_newlines_quote_aware(command)
     try:
-        _all = _shlex.split(_normalize_newlines_quote_aware(command))
+        _all = _shlex.split(_normalized)
     except ValueError:
-        _all = command.split()
+        # ONE segment like HEAD (over-collect = fail-closed): drop only the separators
+        # the normalizer inserted; terminated heredoc bodies stay dropped.
+        _all = _normalized.replace(" ; ", " ").split()
     _resplit: list[str] = []
     for _tok in _all:
         if ";" in _tok and _tok != ";":
