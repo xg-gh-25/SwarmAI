@@ -2070,8 +2070,10 @@ def _session_has_adversarial_evidence(session_id: str) -> bool:
 
 _GATE_GIT_TIMEOUT = 3  # per git subprocess — a gate that shells git must never hang the commit
 # Outer wall-clock cap on the whole coverage helper. _pending_commit_paths can run up
-# to 4 sequential git subprocesses (2× rev-parse for a -C retarget check + diff --cached
-# + diff for -a), each bounded by _GATE_GIT_TIMEOUT. The outer wait_for MUST exceed the
+# to 4 sequential git subprocesses, each bounded by _GATE_GIT_TIMEOUT: root rev-parse +
+# (the single-commit fast path's ls-files + ls-tree, then diff --cached if it declines)
+# OR (one -C retarget rev-parse + diff --cached + diff for -a). The fast path only runs
+# without -C / -a, so the two never add up. The outer wait_for MUST exceed the
 # worst-case inner sum, or it fires first and orphans the still-running git children
 # (Gate-2 MED timeout-incoherence). 4×3 + 3 buffer = 15s ceiling; git on a warm repo is
 # ~0.05s/call so this only bites a genuinely wedged/contended repo → fail-open.
@@ -2103,14 +2105,221 @@ def _gate_repo_root_for(dir_path: str) -> str | None:
 _PENDING_CROSS_REPO = object()
 
 
+# ── Single-commit pathspec ("--only") fast path ─────────────────────────────────
+# `git commit [--] <paths>` (no -a/-i/-p) commits ONLY those paths and leaves every
+# other staged entry staged. The general path below still seeds pending with the WHOLE
+# staged index, so a file a PARALLEL session staged was demanded as review coverage and
+# the commit false-DENIED. The fast path narrows pending to the literal paths, but ONLY
+# for the one command shape whose meaning we can prove; everything else keeps the
+# general (wider) set. Each condition below closes a reproduced fail-open:
+#   • the whole command is ONE simple command `git commit …` with NO shell operator
+#     token at all, by an operator-aware tokenizer (plain shlex splits on whitespace
+#     only, so `-m fix& a.py` reads as a value `fix&` while bash backgrounds a bare
+#     `git commit` of the whole index). This also excludes `cd`, functions, `source`,
+#     subshells, wrappers, a second unrecognised commit, and every redirect (a quoted
+#     `'>x.py'` is a real file name once quotes are gone).
+#   • no command substitution anywhere (`$(`, backtick, `<(`, `>(`) and no heredoc or
+#     here-string (`<<`, `<<<`: an unquoted-delimiter heredoc body runs `$(…)`, and its
+#     quotes are gone after tokenizing). One exception: the `-m "$(cat <<'EOF' … EOF)"`
+#     message, whose delimiter quotes survive inside the double-quoted token.
+#   • no expansion characters in ANY argument, option values included: `-m *.py a.py`
+#     globs into extra pathspecs.
+#   • every option an EXACT git-commit option (git 2.48 `git commit -h` plus the hidden
+#     --allow-empty/--allow-empty-message). git accepts unambiguous long-option PREFIXES
+#     (`--tra x` == `--trailer x`), so an unknown name could be an option whose value we
+#     would misread as a path → not eligible. --amend is excluded: the rewritten commit
+#     also carries the original HEAD's changes.
+#   • every pathspec a plain path whose `git ls-files --full-name` match is EXACTLY
+#     itself (not a directory prefix of a deleted tree, not a glob), whose HEAD-tree
+#     match (`git ls-tree -r HEAD`) adds nothing else (a dir→file type change commits
+#     the deletion of the old tree), and not a symlink or directory on disk. The
+#     literal paths are then exactly the committed set.
+# The general walk in _pending_commit_paths shares the option tables below.
+_COMMIT_LONG_VALUE_OPTS = frozenset({
+    "--file", "--author", "--date", "--message", "--reedit-message", "--reuse-message",
+    "--fixup", "--squash", "--trailer", "--template", "--cleanup",
+})
+_COMMIT_LONG_FLAG_OPTS = frozenset({
+    "--quiet", "--verbose", "--reset-author", "--signoff", "--edit", "--status",
+    "--gpg-sign", "--only", "--no-verify", "--verify", "--dry-run", "--short",
+    "--branch", "--ahead-behind", "--porcelain", "--long", "--null",
+    "--no-post-rewrite", "--post-rewrite", "--untracked-files", "--allow-empty",
+    "--allow-empty-message",
+})
+# Options that pull in paths/files beyond the literal pathspecs → never eligible.
+_COMMIT_INDEX_SWEEP_OPTS = frozenset({
+    "--all", "--include", "--interactive", "--patch", "--pathspec-from-file",
+    "--pathspec-file-nul", "--amend",
+})
+_COMMIT_SHORT_VALUE = frozenset("FmcCt")   # value is the rest of the cluster or next token
+_COMMIT_SHORT_FLAG = frozenset("qvsenoz")  # value-less
+_COMMIT_SHORT_OPTARG = frozenset("Su")     # optional value, only ever STUCK (-Skey, -uno)
+# Characters bash expands in an unquoted word (quotes are gone after tokenizing, so a
+# quoted `*` is rejected too — that only costs the fast path, never safety).
+_ARG_UNSAFE_CHARS = frozenset("*?[{~$`")
+# ...plus what git or bash read specially inside a pathspec word.
+_PATHSPEC_UNSAFE_CHARS = _ARG_UNSAFE_CHARS | frozenset("]}\\!:'\"#")
+_SUBSTITUTION_MARKERS = ("$(", "`", "<(", ">(")
+_SHELL_OPERATOR_CHARS = frozenset("();<>|&")
+# `-m "$(cat <<'EOF' … EOF)"` — the commit-message convention. The command text has been
+# through _normalize_newlines_quote_aware, which has ALREADY DROPPED a heredoc body
+# once its terminator line is found, so a safe message heredoc reads exactly
+# `$(cat <<'EOF'` + whitespace + `)`. Anything else left between them is text bash
+# would run (an early terminator followed by commands, an unterminated body). QUOTED
+# delimiter only: with an unquoted one bash expands `$(…)` inside the (dropped) body.
+_SAFE_MSG_HEREDOC_RE = re.compile(r"\A(?:--message=)?\$\(cat <<-?(['\"])\w+\1\s*\)\Z")
+
+
+def _is_safe_message_heredoc(token: str) -> bool:
+    return bool(_SAFE_MSG_HEREDOC_RE.match(token))
+
+
+def _operator_aware_tokens(normalized: str) -> list[str] | None:
+    """Tokenize like a shell word splitter: unquoted operator characters become their own
+    tokens (`fix&` → `fix`, `&`), quoted spans stay whole, `#` is never a comment (a
+    dropped comment could hide a real pathspec). None if the text does not tokenize."""
+    import shlex as _shlex
+    lexer = _shlex.shlex(normalized, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def _commit_only_mode_pathspecs(args: list[str]) -> list[str] | None:
+    """Pathspecs of a `git commit` argv (tokens after `commit`) iff every option is an
+    exact known git-commit option and none sweeps the index; else None."""
+    paths: list[str] = []
+    after_dashdash = False
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if after_dashdash:
+            paths.append(t)
+            i += 1
+            continue
+        if t == "--":
+            after_dashdash = True
+            i += 1
+            continue
+        if t.startswith("--"):
+            name, eq, _val = t.partition("=")
+            negated = "--" + name[5:] if name.startswith("--no-") else None
+            if name in _COMMIT_INDEX_SWEEP_OPTS:
+                return None
+            if name in _COMMIT_LONG_VALUE_OPTS:
+                if not eq:
+                    if i + 1 >= len(args):
+                        return None
+                    i += 1  # the value token
+            elif name in _COMMIT_LONG_FLAG_OPTS:
+                pass
+            elif negated and (negated in _COMMIT_LONG_FLAG_OPTS
+                              or negated in _COMMIT_LONG_VALUE_OPTS):
+                pass  # --no-<option>: value-less
+            else:
+                return None  # unknown or abbreviated long option
+        elif t.startswith("-") and len(t) > 1:
+            cluster = t[1:]
+            j = 0
+            while j < len(cluster):
+                c = cluster[j]
+                if c in _COMMIT_SHORT_VALUE:
+                    if j + 1 == len(cluster):  # value is the next token
+                        if i + 1 >= len(args):
+                            return None
+                        i += 1
+                    break  # rest of the cluster (if any) is the value
+                if c in _COMMIT_SHORT_OPTARG:
+                    break  # optional value is the rest of the cluster
+                if c not in _COMMIT_SHORT_FLAG:
+                    return None  # -a/-i/-p (index sweep) or unknown
+                j += 1
+        else:
+            paths.append(t)
+        i += 1
+    return paths
+
+
+def _single_commit_only_paths(root: str, dir_path: str, normalized: str) -> set[str] | None:
+    """The exact pending set for a provable single-command pathspec commit, or None when
+    the command is not that shape (caller then uses the general, wider computation).
+    `normalized` is the command after _normalize_newlines_quote_aware."""
+    tokens = _operator_aware_tokens(normalized)
+    if not tokens or len(tokens) < 3 or tokens[0] != "git" or tokens[1] != "commit":
+        return None
+    for tok in tokens:
+        if _is_safe_message_heredoc(tok):
+            continue
+        if not tok or all(c in _SHELL_OPERATOR_CHARS for c in tok):
+            return None  # a shell operator: a second command, a redirect, a group
+        if "<<" in tok or any(m in tok for m in _SUBSTITUTION_MARKERS):
+            return None
+        if any(c in _ARG_UNSAFE_CHARS for c in tok):
+            return None
+    paths = _commit_only_mode_pathspecs(tokens[2:])
+    if not paths:
+        return None
+    base = dir_path or root
+    out: set[str] = set()
+    rels: set[str] = set()
+    for p in paths:
+        if not p or p.startswith("-") or any(c in _PATHSPEC_UNSAFE_CHARS for c in p):
+            return None
+        ap = p if os.path.isabs(p) else os.path.join(base, p)
+        if os.path.islink(ap) or os.path.isdir(ap):
+            return None
+        real = os.path.realpath(ap)
+        rel = os.path.relpath(real, root)
+        if rel.startswith(".."):
+            return None
+        out.add(real)
+        rels.add(rel.replace(os.sep, "/"))
+    try:
+        r = subprocess.run(
+            ["git", "-C", base, "ls-files", "-z", "--full-name", "--", *paths],
+            capture_output=True, timeout=_GATE_GIT_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    matched = {m.decode("utf-8", "surrogateescape") for m in r.stdout.split(b"\0") if m}
+    if matched != rels:
+        return None  # untracked, a directory prefix, or a case/normalization mismatch
+    # A partial commit also matches the pathspec against HEAD: a path that was a
+    # DIRECTORY in HEAD and is a file now commits the deletion of everything under it.
+    # Unborn HEAD (ls-tree fails) → not provable here → general path.
+    try:
+        t = subprocess.run(
+            ["git", "-C", base, "ls-tree", "-r", "-z", "--full-name", "--name-only",
+             "HEAD", "--", *paths],
+            capture_output=True, timeout=_GATE_GIT_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if t.returncode != 0:
+        return None
+    in_head = {m.decode("utf-8", "surrogateescape") for m in t.stdout.split(b"\0") if m}
+    if not in_head <= rels:
+        return None
+    return out
+
+
 def _pending_commit_paths(dir_path: str, command: str):
     """The set of ABSOLUTE paths a `git commit` is about to commit; or None if
     uncomputable (not a repo / git error / timeout → gate fails OPEN); or the
     _PENDING_CROSS_REPO sentinel if a global option retargets another repo (→ DENY).
 
-    Folds EVERY sweep form: staged (`--cached`), `-a/--all` working-tree, positional
-    pathspec, `-o/--only`. Git-diff paths are repo-root-relative; a positional
-    pathspec / `-o` path is COMMITTER-CWD-relative (git semantics), NOT root-relative."""
+    A command that is exactly one provable pathspec commit (`git commit [opts] -- f1 f2`,
+    see _single_commit_only_paths) returns just those files: git commits only them, so
+    files a parallel session staged are not demanded. Every other shape folds EVERY
+    sweep form: staged (`--cached`), `-a/--all` / `--pathspec-from-file` working-tree,
+    positional pathspec, `-o/--only` — a deliberately wide set. Git-diff paths are
+    repo-root-relative; a positional pathspec is COMMITTER-CWD-relative (git
+    semantics), NOT root-relative."""
     import shlex as _shlex
     root = _gate_repo_root_for(dir_path)
     if root is None:
@@ -2139,12 +2348,14 @@ def _pending_commit_paths(dir_path: str, command: str):
     # No regex on raw text: heredocs are recognised only in UNQUOTED context. An unclosed quote only MERGES segments (over-collect →
     # fail-CLOSED). `-a`/`--cached` sweeps still come from `git diff` below, independent.
     _normalized = _normalize_newlines_quote_aware(command)
+    _shlex_ok = True
     try:
         _all = _shlex.split(_normalized)
     except ValueError:
         # ONE segment like HEAD (over-collect = fail-closed): drop only the separators
         # the normalizer inserted; terminated heredoc bodies stay dropped.
         _all = _normalized.replace(" ; ", " ").split()
+        _shlex_ok = False
     _resplit: list[str] = []
     for _tok in _all:
         if ";" in _tok and _tok != ";":
@@ -2169,6 +2380,13 @@ def _pending_commit_paths(dir_path: str, command: str):
             _cur.append(_tok)
     if _cur:
         _segments.append(_cur)
+    # A provable single-segment pathspec commit is gated on exactly its literal paths,
+    # so a file a parallel session staged is no longer demanded (see the fast-path block
+    # above _single_commit_only_paths). Any other shape falls through to the wider set.
+    if _shlex_ok:
+        _only = _single_commit_only_paths(root, dir_path, _normalized)
+        if _only is not None:
+            return _only
     # (3) W3: select EVERY segment that is a `git commit` (via _segment_is_git_commit,
     #     which strips wrappers/env-assignments/git global options) — NOT a bare
     #     `"commit" in seg` (which would match a `-m "commit the fix"` message value).
@@ -2268,17 +2486,20 @@ def _pending_commit_paths(dir_path: str, command: str):
                         cwd_paths.append(inline_val)               # --only=path
                     elif i + 1 < len(tokens):
                         cwd_paths.append(tokens[i + 1]); i += 1    # --only path
-                elif name in ("--message", "--author", "--date", "--reuse-message",
-                              "--reedit-message", "--fixup", "--squash", "--template",
-                              "--cleanup", "--file", "--pathspec-from-file"):
+                elif name in _COMMIT_LONG_VALUE_OPTS or name == "--pathspec-from-file":
+                    if name == "--pathspec-from-file":
+                        # Its paths live in a file we do not read; any tracked change could
+                        # be listed there, so sweep the working tree like -a (widen).
+                        dash_a = True
                     if not eq and i + 1 < len(tokens):
                         i += 1  # space form consumes next token (equals form does not)
                 # --gpg-sign[=keyid] / --amend / --no-edit / --signoff → no path arg
             elif t.startswith("-") and len(t) > 1:
                 # Decode a short-flag cluster. VALUE flags whose value is a SEPARATE token
-                # when trailing: -m -C -c -F -o -t -u. NOT -S (its keyid is OPTIONAL and
-                # must be STUCK, -Skey) and NOT -s (--signoff, no value) — consuming a next
-                # token for either would swallow a real pathspec (Gate-2 MED: -S secret.py).
+                # when trailing: -m -C -c -F -t. NOT -S / -u (their value is OPTIONAL and
+                # must be STUCK: -Skey, -uno) and NOT -s / -o (no value) — consuming a next
+                # token for any of them would swallow a real pathspec (Gate-2 MED:
+                # -S secret.py; `-u mine.py` commits mine.py). -o's path is positional.
                 cluster = t[1:]
                 j = 0
                 consumed_next = False
@@ -2286,18 +2507,14 @@ def _pending_commit_paths(dir_path: str, command: str):
                     c = cluster[j]
                     if c == "a":
                         dash_a = True; j += 1; continue
-                    if c in ("m", "C", "c", "F", "o", "t", "u"):
+                    if c in _COMMIT_SHORT_OPTARG:
+                        break  # optional value, stuck to the flag: rest of cluster
+                    if c in _COMMIT_SHORT_VALUE:
                         inline = cluster[j + 1:]  # rest of cluster is this flag's value
-                        if c == "o":  # -o <path> is a pathspec restriction we must track
-                            if inline:
-                                cwd_paths.append(inline)
-                            elif i + 1 < len(tokens):
-                                cwd_paths.append(tokens[i + 1]); consumed_next = True
-                        else:
-                            if not inline and i + 1 < len(tokens):
-                                consumed_next = True  # value is the next token; skip it
+                        if not inline and i + 1 < len(tokens):
+                            consumed_next = True  # value is the next token; skip it
                         break  # rest of cluster (if any) was this flag's value
-                    # value-less / optional-stuck-value short flag (-q -v -e -s -S…) → skip
+                    # value-less short flag (-q -v -e -s -o -n -z…) → skip
                     j += 1
                 if consumed_next:
                     i += 1
