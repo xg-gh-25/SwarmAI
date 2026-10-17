@@ -10,7 +10,7 @@ author: Kiro（CLI transcript 取证 + 代码调研）
 ---
 # Autonomous Pipeline 提速：系统化修复方案
 
-> 依据：2026-10-17 切到 Opus 5.5 之后的 5 个 run（`e4fc6ad4`、`2cb579ce`、`b3dd7ed9`、`bfd8b9d3`、`48d377ec`），数据来自 CLI transcript；当前 run `ba1c8a22` 作为补充。
+> 依据：2026-10-17 切到 Opus 5.5 之后的 5 个 run（`e4fc6ad4`、`2cb579ce`、`b3dd7ed9`、`bfd8b9d3`、`48d377ec`），数据来自 CLI transcript；当前 run `ba1c8a22` 和一次没走 pipeline 的直接修复作为补充。
 > 范围外：autocompact 阈值（另一个 session 在做）、模型选择、validator 规则本身的松紧（一条都不放宽）。
 
 ## 0. 一页摘要
@@ -98,7 +98,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 一次返回：
 - 执行卡路径；
 - 这个 stage 需要消费的上游 artifact 摘要（按 STAGE_ROUTING，带 id）；
-- PLAN 的 AC 列表；
+- PLAN 的 AC 列表和退出契约（G1）；
 - 当前的 `files_touched` 和 `required_experts`；
 - artifact 和 record 的**可直接通过校验的示例**；
 - review 和 deliver 阶段额外返回：改动文件（区分新增和修改）、增删行数、是否触发大 diff 升级、本次要派的专家清单和每位专家已填好的 prompt（见 F1）。
@@ -144,7 +144,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 **测试准则（由 runner 和 gate 强制执行，不靠文档提醒）**
 
 1. **只有一个入口。** pipeline 运行期间，所有测试类命令（pytest、vitest、tsc、eslint、vite build）都只能通过 `pipeline_test.py` 执行。
-2. **范围由模式决定，不由模型列文件。** 一共 4 种模式，没有全量模式：
+2. **范围由模式决定，不由模型列文件。** 一共 4 种测试模式，没有全量模式（另有 G2 的 probe 和 mutation 两种验证模式）：
 
    | 模式 | 用在哪 | 范围 |
    |---|---|---|
@@ -155,7 +155,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 3. **没变就不重跑。** runner 以"测试文件 + 它 import 的源文件"的内容摘要作为缓存键。输入没变时直接返回上次结果，标记为 `cached`，耗时为 0。
 4. **一个模式一次调用跑完。** 内部按文件分片并行，不需要也不允许拆成多次调用。
-5. **与本次改动无关的失败不在现场排查。** 基线（B2）判定为 pre-existing 的失败，记入 Known Issues 后继续，不修也不调试。
+5. **与本次改动无关的失败不在现场排查。** 基线（B2）判定为 pre-existing 的失败，或涉及其他 session 正在改的文件的失败（H4），记录后继续，不修也不调试。
 6. **hang 由工具报告。** 超时的测试自动附带栈信息，模型不需要也不应该手工 `ps`、`kill`、`faulthandler`、`sleep` 轮询。
 7. **迭代次数可见，但不阻断。** `tdd` 模式下同一文件超过 8 次时，输出里给出提醒（"先把修改攒齐再跑"），并把次数记入 METRICS。不用硬性上限，因为 TDD 迭代本身是正当的，而 XG 的原则是不要无端停下 run。
 8. **结果直接进 artifact。** TEST 阶段的 `layers`、`regressions`、`ac_driven.pass` 由 runner 的 evidence 自动填，不由模型手抄。
@@ -198,7 +198,7 @@ perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipelin
 - conftest 的 venv 守卫在 worktree 里不会误触发，因为 worktree 里没有 `backend/.venv` 目录，守卫的 `isdir` 判断为假直接跳过。实现时要实测确认。
 
 **B3. 结构性 gate：`pipeline_test_gate`（PreToolUse，Bash）**
-- **生效条件**：当前 session 有一个 `status=running` 的 run（用 E1 记录在 run.json 里的 `session_id` 判断）。不在 pipeline 里的普通对话完全不受影响。
+- **生效条件**：当前 session 有一个 `status=running` 的 run（包括 `direct` profile 的 run，用 E1 记录在 run.json 里的 `session_id` 判断）。不在 pipeline 里的普通对话完全不受影响。
 - **拦截内容**：
   - 直接调用 pytest、vitest、tsc、eslint、vite build、`npm run build`、`npm test`；
   - 对 backend 做 `git archive`、`rsync`、`cp -r`、`git worktree add` 导出副本；
@@ -253,6 +253,7 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 - 工具调用数、单调用响应占比；
 - 流程类调用数、`artifact_cli.py` 源码读取次数、机械工作调用数（F1 各类）；
 - 测试类调用数和同一文件的最大重复次数；
+- 结束条件满足的时间点，以及满足之后的验证类调用数（G3）；
 - 峰值上下文、测试执行时长、gate 拒绝次数。
 
 每个 run 结束时由 `run-report` 调用它，结果写进 METRICS.json。这样提速有数字为证，以后变慢也能马上看到。
@@ -277,7 +278,7 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 | 运行时长 | `completed_at − created_at`，另附耗时最长的阶段（来自 `derived_stage_gaps`）。 |
 | 文件 | 对 `run.json.commits` 的每个 sha 执行 `git show --name-status` 和 `--numstat`，得到新增、修改、删除、重命名，以及每个文件的增删行数。没有 commit 的 run（被 gitignore 的项目）回退到 `files_touched` 加工作区状态。 |
 
-run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK 的 `env` 参数给 CLI 子进程注入 `SWARM_APP_SESSION_ID`。这是每个子进程各自的 env，不改全局 `os.environ`，符合 session 隔离规则。`run-create` 读取这个变量写入 run.json。B3 的 test gate 也用这个关联判断当前 session 是否在 pipeline 里。
+run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK 的 `env` 参数给 CLI 子进程注入 `SWARM_APP_SESSION_ID`。这是每个子进程各自的 env，不改全局 `os.environ`，符合 session 隔离规则。`run-create` 读取这个变量写入 run.json。B3 的 test gate 和 H1 的文件认领也用这个关联判断归属。
 
 **E2. 渲染：一个纯函数，一个出口**
 - 新增纯函数 `render_delivery_summary_md(run_state, eval_artifact, usage, file_changes)`。`run-update --status completed` 的返回里带上 `_display_block`，沿用 evaluate publish 已有的做法，单一 JSON 对象，不破坏解析。另加 `artifact_cli.py run-summary --run-id <R>`，可以随时重新渲染。
@@ -317,7 +318,7 @@ run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK
 > | ✏️ | [backend/core/streaming_orchestrator.py](#) | +88 −12 |
 > | ✏️ | [backend/core/leak_transcript.py](#) | +31 −4 |
 >
-> **质量** 测试 34/34 通过 · Gate-2 13 条发现全部修复 · push-ready
+> **质量** 测试 34/34 通过 · Gate-2 13 条发现全部修复 · 结束条件 3/3 满足 · push-ready
 >
 > 📄 **[REPORT.md](#)**：完整报告，点击在 Canvas 打开
 > ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -346,10 +347,10 @@ run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK
 | 计算改动范围（`git diff`、`ls-files`、`--stat`、BASE_REF、DIFF_LINES） | 80 | 13.6 分钟 | `stage-start` 直接返回：改动文件（区分新增和修改）、增删行数、是否触发大 diff 升级为 full tier |
 | 前端测试和构建（vitest、tsc、eslint、build） | 80 | 45.5 分钟 | B：同一个 runner，按前端源码摘要缓存 |
 | 读 `artifact_cli` / validator 源码 | 47 | 3.0 分钟 | A3：结构化报错 |
-| `git add`、暂存检查、清掉别的 session 暂存的文件 | 42 | 3.7 分钟 | `stage-start --stage deliver` 自动暂存本 run 的 `files_touched`（只动 index），并列出不属于本 run 的已暂存文件 |
+| `git add`、暂存检查、清掉别的 session 暂存的文件 | 42 | 3.7 分钟 | H2：私有 index 提交，模型不再碰共享 index |
 | ps / kill / faulthandler / sleep 轮询 | 33 | 48.5 分钟 | B：runner 报告 hang 栈，gate 拦手工排查 |
 | schema / run-get / discover 查询 | 26 | 1.3 分钟 | A2：`stage-start` 一次返回 |
-| git commit / 自写 commit 脚本 | 19 | 0.8 分钟 | `run-commit` 作为唯一提交通道；commit gate 的 deny 消息直接给出 `run-commit` 命令 |
+| git commit / 自写 commit 脚本 | 19 | 0.8 分钟 | H2：`run-commit` 作为唯一提交通道；commit gate 的 deny 消息直接给出 `run-commit` 命令 |
 | run-report / run-cultivate / learn | 15 | 2.1 分钟 | reflect 阶段的 `stage-complete` 自动执行 |
 | 导出代码副本做基线 | 10 | 3.3 分钟 | B2：HEAD 基线缓存 |
 | run-observe 遥测 | 8 | 0.7 分钟 | `stage-start` / `stage-complete` 自动记录阶段起止时间 |
@@ -365,12 +366,13 @@ run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK
 | `files_changed`、`diff_summary`、`commits` | git |
 | `tdd.*` 计数、`layers.*`、`regressions`、`ac_driven.pass` | runner 的 evidence |
 | `findings_total`、`findings_fixed`、`findings_remaining` | 由模型给出的 `findings[]` 计数得出 |
+| `exit_criteria_met` | 按退出契约逐条对照 runner 的 evidence（G1） |
 | 专家派遣清单（tier 默认 ∪ `required_experts` ∪ 按文件规则触发的专家，大 diff 自动升级） | `stage-start` 按 deliver.md 里现有的派遣表计算 |
-| `push_ready` | 由各项 gate 结果计算：测试通过、没有未解决的 HIGH 和高置信度 MEDIUM、completion audit 全绿、没有回归、meta-review 没有 HIGH。模型不再自己声明 push-ready。 |
+| `push_ready` | 由各项 gate 结果计算：测试通过、没有未解决的 HIGH 和高置信度 MEDIUM、completion audit 全绿、没有回归、meta-review 没有 HIGH、退出契约全部满足。模型不再自己声明 push-ready。 |
 
 **F3. 留给模型的只有判断**
 
-understanding 和 claim、方案选择、AC 的写法、写代码、决策分类、review 发现的取舍和修复、meta-review、lessons、next steps。
+understanding 和 claim、方案选择、AC 和退出契约的写法、写代码、决策分类、review 发现的取舍和修复、meta-review、lessons、next steps。
 
 **F4. 防止机械工作回流到模型**
 - C4 的 lint 再加一条：执行卡里的代码块只允许出现 pipeline 自己的命令（`artifact_cli.py`、`pipeline_test.py`、`spawn_prompt.py`）。出现多行 shell 配方（例如现在 deliver.md 里计算 BASE_REF 和 DIFF_LINES 的那段），就说明有机械工作还留在文档里，必须先改成工具。
@@ -481,7 +483,7 @@ Phase 1'  run ②：B + G2（probe、mutation 模式）+ H1、H3、H4（认领 g
 Phase 2   C 文档三层化 + 规则保全检查 + 大小 lint（依赖前两次 run 的新命令）
 ```
 
-F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动暂存、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。G 和 H 按改动的文件拆进上面两次 run。H 的方案二（worktree 隔离）不在本轮范围内，等 XG 决定。
+F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。G 和 H 按改动的文件拆进上面两次 run。H 的方案二（worktree 隔离）不在本轮范围内，等 XG 决定。
 
 E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完成分支返回 `_display_block`、新增 `run-summary`）、`prompt_builder.py`（注入 `SWARM_APP_SESSION_ID`）、`MarkdownRenderer.tsx`（`#base=` 片段）、`stages/complete.md`（改为原样转发）。
 
