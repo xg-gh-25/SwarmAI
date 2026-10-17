@@ -717,12 +717,13 @@ class StreamingOrchestrator:
                 ntask.cancel()
                 try:
                     await ntask
-                except BaseException:  # noqa: BLE001 — the stream is being torn down
-                    pass
+                except BaseException as exc:  # noqa: BLE001 — the stream is being torn down
+                    logger.debug("output_degeneration drain: pending read cancelled (%s)", type(exc).__name__)
                 break
             try:
                 msg = ntask.result()
-            except BaseException:  # noqa: BLE001 — exhausted / closed: nothing left to drain
+            except BaseException as exc:  # noqa: BLE001 — exhausted / closed: nothing left to drain
+                logger.debug("output_degeneration drain: stream ended (%s)", type(exc).__name__)
                 break
             if isinstance(msg, ResultMessage):
                 self._record_token_usage_bg(msg, getattr(msg, "usage", None) or {})
@@ -1025,9 +1026,10 @@ class StreamingOrchestrator:
                     tick_task.cancel()
                     try:
                         await tick_task
-                    except (asyncio.CancelledError, Exception):
-                        logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
-                        pass
+                    except asyncio.CancelledError:
+                        pass  # expected: we just cancelled it (fires on every streamed event)
+                    except Exception:
+                        logger.debug("_read_formatted_response: tick timer raised on cancel", exc_info=True)
                     done.discard(tick_task)
                     pending.discard(tick_task)
                     break

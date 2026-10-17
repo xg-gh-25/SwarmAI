@@ -394,3 +394,77 @@ class TestPagerScopedToPytestSegment:
 
     def test_command_substitution_pipe_denied(self):
         assert _is_deny(_run("echo $(gtimeout 90 pytest x; true) | tail"))
+
+    # Shapes the separator split cannot read (security review, Gate-2): each is ONE
+    # pipeline in bash that feeds pytest's output to the pager, so each must deny.
+    def test_pipe_at_line_end_continuing_to_tail_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} |\ntail -5"))
+
+    def test_pipe_at_line_end_indented_head_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} |\n  head -20"))
+
+    def test_backslash_line_continuation_before_pipe_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} \\\n| tail -5"))
+
+    def test_escaped_semicolon_in_args_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} -k a\;b | tail -5"))
+
+    def test_escaped_ampersand_in_args_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} x\\&y | head"))
+
+    def test_pipe_ampersand_to_tail_denied(self):
+        # `|&` pipes stdout+stderr — the old regex missed it in every version.
+        assert _is_deny(_run(f"{_CAPPED} |& tail"))
+
+    def test_line_ending_pipe_on_other_command_still_falls_back(self):
+        # Fail-closed: an unsplittable shape anywhere reverts to the whole-string
+        # check, even when the pager is on a different command.
+        assert _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1\ngrep x /tmp/t.txt |\ntail -1"))
+
+    # Compound commands pipe their whole body (correctness review, Gate-2 HIGH).
+    def test_for_loop_output_piped_to_tail_denied(self):
+        assert _is_deny(_run("for f in a b; do gtimeout 90 pytest x; done | tail"))
+
+    def test_while_loop_output_piped_to_tail_denied(self):
+        assert _is_deny(_run("while true; do gtimeout 90 pytest x; break; done | tail -3"))
+
+    def test_if_block_output_piped_to_tail_denied(self):
+        assert _is_deny(_run("if true; then gtimeout 90 pytest x; fi | tail -3"))
+
+    def test_multiline_if_block_output_piped_denied(self):
+        assert _is_deny(_run("if true\nthen\n  gtimeout 90 pytest x\nfi | tail -3"))
+
+    def test_pipe_backslash_newline_tail_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | \\\n tail"))
+
+    # Text between the pipe and the pager (delta review, Gate-2 MEDIUM).
+    def test_comment_after_pipe_then_tail_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | # note\ntail -3"))
+
+    def test_comment_line_between_pipe_and_tail_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} |\n# comment\ntail -1"))
+
+    def test_heredoc_body_between_pipe_and_tail_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} <<EOF |\nEOF\ntail -1"))
+
+    def test_pager_by_absolute_path_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | /usr/bin/tail -3"))
+
+    def test_pager_via_command_builtin_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | command tail -3"))
+
+    # Words between the pipe and the pager (final review, Gate-2 MEDIUM).
+    def test_pager_behind_env_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | env tail -3"))
+
+    def test_pager_behind_time_and_nice_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | time nice tail -3"))
+
+    def test_pager_behind_assignment_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | LC_ALL=C tail -3"))
+
+    def test_pager_behind_redirect_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | 2>&1 tail -3"))
+
+    def test_pager_behind_command_option_denied(self):
+        assert _is_deny(_run(f"{_CAPPED} | command -p head -3"))

@@ -1422,7 +1422,13 @@ _PYTEST_INVOCATION_RE = re.compile(
 )
 # Output piped into a pager that the harness swallows (tail/head), possibly at
 # the end of a pipe chain (`pytest | grep x | tail`).
-_PIPE_TO_PAGER_RE = re.compile(r"\|\s*(?:tail|head)\b", re.IGNORECASE)
+_PIPE_TO_PAGER_RE = re.compile(
+    r"\|&?(?:\s|\\\n)*(?:command\s+|exec\s+)?(?:[\w./-]*/)?(?:tail|head)\b",
+    re.IGNORECASE,
+)
+# A pager word anywhere (used only on the fail-closed fallback path, AFTER the
+# first `|` — see _fallback_pipes_to_pager).
+_PAGER_WORD_RE = re.compile(r"\b(?:tail|head)\b", re.IGNORECASE)
 # Shell LIST separators that end one pipeline and start the next: `;`, `&&`,
 # `||`, newline, and a lone background `&`. The `&` arm excludes the redirect
 # forms `2>&1` / `&>file` / `>&2` and `|&`, which do NOT end a pipeline.
@@ -1430,6 +1436,34 @@ _LIST_SEPARATOR_RE = re.compile(r"\|\||&&|;|\n|(?<![|&<>])&(?![&>])")
 # Grouping / substitution syntax. A group can carry a pipe across a separator
 # (`{ pytest; } | tail`), so a command containing any of these is NOT segmented.
 _SHELL_GROUPING_CHARS = frozenset("(){}`")
+# Shapes where a raw separator does NOT end the pipeline: a backslash (line
+# continuation `\<newline>| tail`, escaped `\;` / `\&`), a pipe that ends a
+# line and continues on the next (`pytest |<newline>tail`), a comment after the
+# pipe (`pytest | # note<newline>tail`), or a heredoc (`<<`), whose body can sit
+# between the pipe and the pager. The splitter can't read these, so such a
+# command is NOT segmented either.
+_UNSPLITTABLE_PIPE_RE = re.compile(r"\\|<<|\|&?[ \t]*(?:\n|#)")
+# A compound command (`for/while/until ... done`, `if ... fi`, `case ... esac`)
+# pipes its WHOLE body: `for f in a; do pytest $f; done | tail` feeds pytest to
+# tail, yet a `;` split puts `| tail` in a pytest-free piece. Its closing keyword
+# anywhere means the command is NOT segmented.
+_COMPOUND_CLOSER_RE = re.compile(r"(?:^|[\s;&|])(?:done|fi|esac)\b")
+
+
+def _fallback_pipes_to_pager(stripped: str) -> bool:
+    """True iff a tail/head word appears after the first `|` of ``stripped``.
+
+    Used on a whole command the pipeline splitter can't read, and on each
+    pytest-carrying pipeline the splitter produces. Comments, heredoc bodies,
+    continuations, wrappers (`env`/`time`/`nice`/`command -p`), assignments and
+    redirects can all sit between a pipe and its pager, so adjacency is never
+    required. Linear time: one `find` plus one regex
+    search over the tail of the string (no lazy `.*?` scan from each `|`).
+    """
+    if _PIPE_TO_PAGER_RE.search(stripped):
+        return True
+    first_pipe = stripped.find("|")
+    return first_pipe != -1 and bool(_PAGER_WORD_RE.search(stripped, first_pipe + 1))
 
 
 def _pytest_output_piped_to_pager(stripped: str) -> bool:
@@ -1438,14 +1472,23 @@ def _pytest_output_piped_to_pager(stripped: str) -> bool:
     The hang this guards is pytest's stdout swallowed by a pager, so only a
     pipeline that RUNS pytest matters: `pytest > f; grep x f | tail` pipes grep,
     not pytest, and is safe. Split the command into its pipelines and check each
-    one that carries a pytest token. Grouping/substitution syntax can route
-    pytest's output across a separator, so any such command falls back to the
-    whole-string check (fail-closed, the pre-segmentation behavior).
+    one that carries a pytest token. Grouping/substitution syntax, compound
+    commands (loops / if / case), backslashes, heredocs and a pipe that ends a
+    line (or is followed by a comment) can all carry pytest's output across what
+    looks like a separator, so any such command falls back to
+    _fallback_pipes_to_pager (fail-closed, stricter than the old whole-string check).
     """
-    if _SHELL_GROUPING_CHARS & set(stripped):
-        return bool(_PIPE_TO_PAGER_RE.search(stripped))
+    if (
+        _SHELL_GROUPING_CHARS & set(stripped)
+        or _UNSPLITTABLE_PIPE_RE.search(stripped)
+        or _COMPOUND_CLOSER_RE.search(stripped)
+    ):
+        return _fallback_pipes_to_pager(stripped)
+    # Within the pytest pipeline, any pager word after a `|` denies — adjacency
+    # isn't required because wrappers, assignments and redirects can sit between
+    # them (`| env tail`, `| time tail`, `| LC_ALL=C tail`, `| 2>&1 tail`).
     return any(
-        _PYTEST_TOKEN_RE.search(seg) and _PIPE_TO_PAGER_RE.search(seg)
+        _PYTEST_TOKEN_RE.search(seg) and _fallback_pipes_to_pager(seg)
         for seg in _LIST_SEPARATOR_RE.split(stripped)
     )
 # A wall-clock wrapper that BINDS the pytest token — the wrapper must IMMEDIATELY
