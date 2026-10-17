@@ -1,3 +1,20 @@
+/**
+ * MarkdownRenderer — renders chat / file-preview markdown (GFM, math, mermaid,
+ * highlighted code) with SwarmAI's link, inline-code and image handling.
+ *
+ * Workspace file paths in `<a>` links and inline `<code>` spans are clickable and
+ * dispatch OPEN_FILE_EVENT (`swarm:open-file`) on `document`. A link/path may carry a
+ * `#base=<sha>[^]` fragment: the fragment is stripped before path detection, and a
+ * valid sha ref is passed as `baseRef` (with the OUTPUTS-rail `autoDiff:false` shape)
+ * so Canvas diffs the file against that baseline. Any other fragment is dropped.
+ *
+ * @exports default MarkdownRenderer — the memoized renderer component
+ * @exports OPEN_FILE_EVENT — the open-file CustomEvent name
+ * @exports isWorkspaceFilePath — clickable-file-path detector
+ * @exports parseOpenFileTarget — split a link/path into URL-decoded path + validated baseRef
+ * @exports buildOpenFileDetail — build the OPEN_FILE_EVENT detail for a link/path
+ * @exports resolveImageSrc — local-only image src resolver (remote images dropped)
+ */
 /* eslint-disable react-refresh/only-export-components */
 import { useEffect, useRef, useState, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -643,32 +660,92 @@ export function isWorkspaceFilePath(text: string): boolean {
   return false;
 }
 
+/**
+ * Diff-baseline ref shape accepted from a `#base=<ref>` fragment: a 7-40 char hex sha
+ * with an optional trailing `^` (parent). Same shape backend/core/ui_actions
+ * build_surface_events emits (`<sha>^`). Anything else (`HEAD`, `../x`, `;rm`) is
+ * rejected, so model-written link text can never inject an arbitrary git ref.
+ */
+const BASE_REF_RE = /^[0-9a-fA-F]{7,40}\^?$/;
+
+/** URL-decode a link path; a malformed %-escape (or a literal `%`) keeps it raw. */
+function decodePath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Split a link href / inline-code path into the bare path and an optional validated
+ * diff baseline. Any `#...` fragment is ALWAYS stripped from `path` (so the extension
+ * check in isWorkspaceFilePath still sees `.py`, not `.py#base=…`). Only a fragment of
+ * exactly `base=<ref>` whose URL-decoded ref (react-markdown encodes `^` as `%5E`)
+ * matches BASE_REF_RE yields `baseRef`; every other fragment is ignored.
+ *
+ * The path itself is URL-decoded too: react-markdown percent-encodes link targets,
+ * so `/Users/x/my file.md` and non-ASCII names arrive as `my%20file.md` / `%E6%8A…`.
+ * The split on `#` happens BEFORE decoding (a `%23` in a filename stays in the path).
+ * A malformed escape keeps the raw path. Callers run isWorkspaceFilePath on the
+ * DECODED path, so an encoded `%2e%2e` segment is still rejected as traversal.
+ */
+export function parseOpenFileTarget(raw: string): { path: string; baseRef?: string } {
+  const hash = raw.indexOf('#');
+  if (hash < 0) return { path: decodePath(raw) };
+  const path = decodePath(raw.slice(0, hash));
+  const fragment = raw.slice(hash + 1);
+  if (!fragment.startsWith('base=')) return { path };
+  let ref: string;
+  try {
+    ref = decodeURIComponent(fragment.slice('base='.length));
+  } catch {
+    return { path }; // malformed %-escape → ignore the fragment
+  }
+  return BASE_REF_RE.test(ref) ? { path, baseRef: ref } : { path };
+}
+
+/**
+ * Build the OPEN_FILE_EVENT detail for an already-detected workspace file target
+ * (fragment-stripped by parseOpenFileTarget, leading `./` removed). Without a valid
+ * baseRef the detail is exactly `{ path }` (unchanged legacy shape). With one it
+ * mirrors CanvasOutputRail.outputRowOpenDetail — `{ path, autoDiff: false, baseRef }`
+ * — so Canvas opens it like an OUTPUTS row: content view, with Show Changes diffing
+ * against `baseRef` instead of HEAD. (Mirrored, not imported: CanvasOutputRail
+ * imports this module, so importing back would be circular.)
+ */
+export function buildOpenFileDetail(
+  rawTarget: string,
+): { path: string; autoDiff?: boolean; baseRef?: string } {
+  const { path, baseRef } = parseOpenFileTarget(rawTarget);
+  const cleanPath = path.startsWith('./') ? path.slice(2) : path;
+  return baseRef ? { path: cleanPath, autoDiff: false, baseRef } : { path: cleanPath };
+}
+
 // Inline code component (supports multiline with whitespace-pre-wrap)
 // When content looks like a workspace file path, renders as a clickable link
 // that dispatches OPEN_FILE_EVENT for ThreeColumnLayout to handle.
 const InlineCode = memo(function InlineCode({ children }: { children: React.ReactNode }) {
   const content = String(children);
   const hasNewlines = content.includes('\n');
-  const isFilePath = !hasNewlines && isWorkspaceFilePath(content);
+  // Detect on the fragment-stripped path (a `#base=…` suffix breaks the ext check).
+  const isFilePath = !hasNewlines && isWorkspaceFilePath(parseOpenFileTarget(content).path);
 
   if (isFilePath) {
-    // Strip leading ./ if present for the dispatched path
-    const cleanPath = content.startsWith('./') ? content.slice(2) : content;
+    // Fragment stripped, leading ./ removed; baseRef added when `#base=<sha>` is valid.
+    const detail = buildOpenFileDetail(content);
+    const cleanPath = detail.path;
 
     const handleClick = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      document.dispatchEvent(
-        new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
-      );
+      document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { ...detail } }));
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        document.dispatchEvent(
-          new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
-        );
+        document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { ...detail } }));
       }
     };
 
@@ -785,9 +862,12 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
   // causing a fullscreen loading state with no way to return. Defense-in-depth:
   // Layer 1 (Rust): on_navigation blocks external URLs at the webview level.
   // Layer 2 (React): no href on external links = nothing for the webview to navigate to.
+  //
+  // A `#base=<sha>^` fragment (E3) is stripped BEFORE detection — else the `.py#…` tail
+  // fails the extension check and a modified-file link would be treated as external.
   a: ({ href, children }) => {
     const isExternal = href && !isWorkspaceFilePath(
-      href.startsWith('file://') ? href.replace('file://', '') : href,
+      parseOpenFileTarget(href.startsWith('file://') ? href.replace('file://', '') : href).path,
     );
     return (
       <a
@@ -801,10 +881,9 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
             e.preventDefault();
             try {
               const filePath = href.startsWith('file://') ? href.replace('file://', '') : href;
-              if (isWorkspaceFilePath(filePath)) {
-                const cleanPath = filePath.startsWith('./') ? filePath.slice(2) : filePath;
+              if (isWorkspaceFilePath(parseOpenFileTarget(filePath).path)) {
                 document.dispatchEvent(
-                  new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
+                  new CustomEvent(OPEN_FILE_EVENT, { detail: buildOpenFileDetail(filePath) }),
                 );
               } else {
                 const url = new URL(href, window.location.href);

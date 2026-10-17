@@ -2341,6 +2341,13 @@ class PromptBuilder:
         session_env = gateway_env_for_session(
             self._config, channel_context=channel_context, thinking_display=thinking_display,
         )
+        # Run ↔ session link (pipeline design §4-E1): the CLI subprocess gets the
+        # APP session id (session_context["sdk_session_id"] holds the app id, see
+        # session_router) so `artifact_cli run-create` can record it in run.json.
+        # Per-subprocess env only — never os.environ (session isolation).
+        _app_sid = (session_context or {}).get("sdk_session_id")
+        if _app_sid:
+            session_env = {**(session_env or {}), "SWARM_APP_SESSION_ID": str(_app_sid)}
 
         # ── Max turns: per-message API roundtrip limit ─────────────
         #
