@@ -29,6 +29,8 @@ from .security_hooks import (
     pytest_command_guard,
     create_adversarial_commit_gate,
     create_active_run_commit_gate,
+    create_pipeline_test_gate,
+    create_direct_commit_gate,
     bash_syntax_guard,
     inclusive_term_guard,
     create_image_read_dedup_guard,
@@ -319,6 +321,20 @@ async def build_hooks(
         "background_command_guard", matcher="Bash",
     )
 
+    # ── PreToolUse: pipeline-test gate (Bash-scoped) ──
+    # Design §4-B3. Only while THIS session has an active pipeline run (run.json
+    # session_id == app session id, status running, recent activity): DENY direct
+    # pytest/vitest/tsc/eslint/vite build/npm build|test|lint|typecheck/make test*,
+    # repo-copy baselines and manual pytest hang triage, and hand back a filled-in
+    # pipeline_test.py command. No run → no effect. Fail-open; operator bypass
+    # SWARM_TEST_GATE_FORCE=1 (logged). Registered BEFORE pytest_command_guard and
+    # dangerous_command_gate: its deny names the one sanctioned runner, and a user
+    # must never be asked to approve a command this gate would then deny.
+    registry.register(
+        "PreToolUse", create_pipeline_test_gate(hook_session_context),
+        "pipeline_test_gate", matcher="Bash",
+    )
+
     # ── PreToolUse: pytest anti-pattern guard (Bash-scoped) ──
     # Deny pytest piped to tail/head (output swallowed by auto-backgrounding)
     # and pytest without a timeout (unbounded hang). R9 in prose; this is the
@@ -379,6 +395,19 @@ async def build_hooks(
     registry.register(
         "PreToolUse", create_image_read_dedup_guard(),
         "image_read_dedup_guard", matcher="Read",
+    )
+
+    # ── PreToolUse: direct-commit gate (Bash-scoped) ──
+    # Design §4-G1. A `git commit` in the SwarmAI source repo of >20 changed SOURCE
+    # lines (docs/lockfiles excluded) from a session with no run of its own → DENY with
+    # a copyable `run-create --profile direct`, so a direct fix also gets an exit
+    # contract. Other sessions' / unowned runs never exempt a session. Fail-open;
+    # operator bypass SWARM_ADVERSARIAL_GATE_FORCE / SWARM_DIRECT_GATE_FORCE. Registered
+    # BEFORE dangerous_command_gate so a user is never asked to approve a commit this
+    # gate would then deny.
+    registry.register(
+        "PreToolUse", create_direct_commit_gate(hook_session_context),
+        "direct_commit_gate", matcher="Bash",
     )
 
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────

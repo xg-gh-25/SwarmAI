@@ -207,7 +207,12 @@ implementations in `security_hooks.py`). By category:
 1. **Observability** — `pre_tool_logger`: logs every tool invocation; never blocks.
 2. **Hang prevention (Bash)** — `background_command_guard` (default-deny backgrounding),
    `pytest_command_guard` (denies pytest piped to tail/head or without a wall-clock cap),
-   `bash_syntax_guard` (`bash -n` parse check).
+   `bash_syntax_guard` (`bash -n` parse check), `pipeline_test_gate` (registered before
+   `pytest_command_guard`; only while this session's own run is running with activity in
+   the last 3h: tests, lint, typecheck, builds, repo-copy baselines and manual pytest hang
+   triage must go through `backend/scripts/pipeline_test.py`; the deny carries the
+   filled-in runner command and the `run-update --status abandoned` escape; operator-set
+   `SWARM_TEST_GATE_FORCE=1` in the backend env bypasses, logged).
 3. **Command safety + human-in-the-loop** — `dangerous_command_gate` (Bash) and
    `external_approval_gate` (non-Bash off-machine side effects) route risky calls through
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
@@ -218,7 +223,11 @@ implementations in `security_hooks.py`). By category:
    (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
    patches — to governed context files), `adversarial_commit_gate` (no `git commit` without
    a sub-agent review this session), `active_run_commit_gate` (files owned by an active
-   pipeline run go through run-commit).
+   pipeline run go through run-commit), `direct_commit_gate` (registered before
+   `dangerous_command_gate`; a session with no run of its own that commits more than 20
+   changed source lines in the SwarmAI source repo, docs and lockfiles excluded, is sent
+   to `artifact_cli.py run-create --profile direct`; other sessions' and unowned runs
+   never exempt it; fails open on errors).
 5. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 
