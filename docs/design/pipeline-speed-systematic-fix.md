@@ -35,7 +35,7 @@ pipeline 把本该由工具做的机械工作交给了模型：选测试、判�
 4. **文档分层。** 执行卡（每次都读，最多 5K）、参考（按需读）、历史（运行时不读）。大小由 lint 卡住。
 5. **gate 一个不放宽。** 新命令内部调用现有的 validator 和 gate，旧命令保留。
 
-## 4. 四个工作流
+## 4. 五个工作流
 
 ### A. Stage 边界：`stage-start` 和 `stage-complete`
 
@@ -196,6 +196,78 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 
 取证方法（已验证）：transcript 在 `~/.claude/projects/**/<sdk-session-id>.jsonl`；按 `message.id` 归并 assistant 记录，跳过 `isSidechain` 和 `agent-*` 文件；tool_use id 与 tool_result 时间戳配对得到工具耗时；用 run.json 的 `created_at`/`completed_at`（UTC）切时间窗；按命令内容分类（流程类、测试/构建、读/探查、编辑、git、sub-agent）。
 
+### E. 交付摘要：渲染好的结构化结果，点击在 Canvas 打开
+
+**现状问题**
+- 完成摘要由模型按 `stages/complete.md` 的模板手写，整块放在 ``` 代码块里。代码块里的路径不能点击（MarkdownRenderer 只对行内 code 和 markdown 链接做路径识别），`Report:` 一行写的还是项目相对路径。
+- 摘要里没有初始意图、没有真实 token 花费、没有运行时长，文件只有"N changed"，不区分新增和修改。
+- token 数是模型按公式估的（例如 `48d377ec` 的 635,000），不是实测值。真实用量其实已经写进 `token_usage` 表（按 session_id），但 run 和 session 之间没有关联。
+- `run.json.requirement` 是模型改写过的需求，不是用户原话。
+
+**E1. 数据：全部由工具取，不由模型抄**
+
+| 字段 | 来源 |
+|---|---|
+| 初始意图 | `run-create` 时记录 `session_id`，并从 data.db 取这个 session 在 `created_at` 之前的最后一条真实用户消息（跳过 UI State、task-notification、"继续"这类短消息，往前找到有内容的那条），写入 `run.json.intent` 和 `intent_source`。取不到时回退到 `--intent` 参数，再回退到 `requirement`，并标注来源。 |
+| 最终需求 | evaluate artifact 的 `requirements[]`（每条的 statement 和达成状态）。旧格式 run 用 `acceptance_criteria`。另外列出"AI 替你拍板"的条目（self-answered clarification、assumption），与 REPORT 的需求溯源审计同源。 |
+| token 花费 | `token_usage` 表中该 session 在 `[created_at, completed_at]` 窗口内的行，汇总 cost_usd、新输入、输出、缓存读。注意该表时间戳是本地时间，run.json 是 UTC。没有 session 关联的旧 run 显示估算值，并明确标注"估算"。 |
+| 运行时长 | `completed_at − created_at`，另附耗时最长的阶段（来自 `derived_stage_gaps`）。 |
+| 文件 | 对 `run.json.commits` 的每个 sha 执行 `git show --name-status` 和 `--numstat`，得到新增、修改、删除、重命名，以及每个文件的增删行数。没有 commit 的 run（被 gitignore 的项目）回退到 `files_touched` 加工作区状态。 |
+
+run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK 的 `env` 参数给 CLI 子进程注入 `SWARM_APP_SESSION_ID`。这是每个子进程各自的 env，不改全局 `os.environ`，符合 session 隔离规则。`run-create` 读取这个变量写入 run.json。
+
+**E2. 渲染：一个纯函数，一个出口**
+- 新增纯函数 `render_delivery_summary_md(run_state, eval_artifact, usage, file_changes)`。`run-update --status completed` 的返回里带上 `_display_block`，沿用 evaluate publish 已有的做法，单一 JSON 对象，不破坏解析。另加 `artifact_cli.py run-summary --run-id <R>`，可以随时重新渲染。
+- 执行卡要求模型**原样输出** `_display_block`，自己只补 2 到 3 条 next steps（放在现有的 ```next-steps 块里，前端已经会渲染成可点击的 chip）。①到⑩的过程框和 Executive Summary 移进 REPORT，不再在 chat 里手写。
+- 格式约束：
+  - 不用代码块。文件路径写成 markdown 链接：显示文字用仓库相对路径，链接目标用绝对路径，这样能通过 `isWorkspaceFilePath` 识别，点击后派发 `swarm:open-file` 在 Canvas 打开。
+  - 只保留首尾两条 `━` 分隔线：`LANDMARK_RE` 靠它识别 landmark，同时不会触发 `48d377ec` 新加的重复输出检测。
+  - 文件超过 15 行时折叠为"另 N 个文件见报告 §8"；需求超过 7 条时同样处理；意图摘录最多 200 字。
+  - 所有用户或模型写的文本都经过 `_md_cell` 中和，与需求溯源审计的处理一致，防止换行注入假标题。
+
+**E3. 修改过的文件点击后直接看 diff**
+- chat 链接目前只传 `{path}`，Canvas 打开的是文件全文。OUTPUTS rail 的行带了 `baseRef=<sha>^`，所以能看到本次 run 之前到之后的 diff。
+- 前端小改动：MarkdownRenderer 的链接处理支持 `#base=<ref>` 片段，先剥离片段再做路径识别，然后把 `baseRef` 一起放进 `swarm:open-file` 的参数。渲染器给修改过的文件生成 `…/x.py#base=<sha>^`，新增的文件不带片段。
+- `baseRef` 只接受与 `ui_actions.build_surface_events` 相同的 sha 正则，否则丢弃。
+
+**E 的 chat 显示样例**（以 `48d377ec` 为例；链接目标实际是绝对路径，这里省略；数字是示意）
+
+> ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+> **✅ Pipeline 完成** · `run_48d377ec` · bugfix · ⏱ 147 分钟（BUILD 最长，77 分钟）· 💰 $23.40（输出 283K tokens · 缓存读 165M）
+>
+> **你要的**
+> > 清理 127K 退化污染，再起 full run：流式输出退化 / 无进展检测（model-agnostic）…
+>
+> **最终需求**（7 条，7 条达成）
+> - ✅ FR-1 按 content block 维护 2000 字符窗口，zlib 压缩比 ≥15 判退化
+> - ✅ FR-2 判退化后走用户 Stop 的中断路径，对话内提示，不触发 leak continuation
+> - …另 5 条见报告
+>
+> ⚠️ **AI 替你拍板 3 处**：Q1 提示文案用中文加英文括注 · Q2 提示走 assistant 事件通道 · Q3 不检测 thinking 内容
+>
+> **改动** · 7 个文件 · +612 / −48 · commit `abc1234`
+>
+> | | 文件 | 行数 |
+> |---|---|---|
+> | 🆕 | [backend/core/output_degeneration.py](#) | +210 |
+> | 🆕 | [backend/tests/test_output_degeneration.py](#) | +260 |
+> | ✏️ | [backend/core/streaming_orchestrator.py](#) | +88 −12 |
+> | ✏️ | [backend/core/leak_transcript.py](#) | +31 −4 |
+>
+> **质量** 测试 34/34 通过 · Gate-2 13 条发现全部修复 · push-ready
+>
+> 📄 **[REPORT.md](#)**：完整报告，点击在 Canvas 打开
+> ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+设计取舍：
+- 顺序按用户关心的先后排：结果和代价、我要的、做成了什么、AI 替我决定了什么、改了哪些文件、能不能放心用、看详情。
+- 过程信息（①到⑩各阶段、决策分类、token 分阶段）只放 REPORT，不在 chat 里占位置。
+- 文件表的图标：🆕 新增、✏️ 修改、🗑️ 删除、↪️ 重命名。排序是新增在前，然后按改动行数从多到少。
+
+**E4. REPORT 同步**
+- REPORT 的 `原始意图` 改用 `run.json.intent`（用户原话）。`requirement` 作为"最终需求描述"另列。
+- REPORT 头部的 Tokens 改用 E1 的实测值；旧 run 仍显示估算值并标注"估算"。
+
 ## 5. 验收指标
 
 | 指标 | 现在（实测） | 目标 |
@@ -208,7 +280,11 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 | 峰值上下文 | 63 万到 90 万 token | 不超过 45 万 token |
 | bugfix / full 总时长 | 21 到 147 / 54 到 110 分钟 | bugfix 不超过 40 分钟，full 不超过 70 分钟 |
 
-最后两行是估算，需要用 D 的工具在改完后的前 5 个 run 上验证。
+| 完成摘要里的 token 花费 | 模型估算（例如 635,000） | 来自 `token_usage` 的实测值，含美元 |
+| 完成摘要可点击的文件 | 0（整块在代码块里） | 所有改动文件和 REPORT.md 都能点开；修改过的文件打开即是 diff |
+| 完成摘要的生成方式 | 模型按模板手写 | CLI 渲染，模型原样转发，只补 next steps |
+
+最后两行时长指标是估算，需要用 D 的工具在改完后的前 5 个 run 上验证。
 
 ## 6. 实施顺序
 
@@ -216,8 +292,11 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 Phase 0  D 度量工具（小，先做，拿到基线）
 Phase 1  A stage-start / stage-complete / 结构化错误 / record schema   ┐ 可以并行，
 Phase 1' B pipeline_test.py / 基线缓存 / scope gate                    ┘ 改的文件不重叠
-Phase 2  C 文档三层化 + 规则保全检查 + 大小 lint（依赖 A、B 的新命令）
+Phase 1" E 交付摘要（和 A 放在同一次 run：都改 artifact_cli.py 的完成分支）
+Phase 2  C 文档三层化 + 规则保全检查 + 大小 lint（依赖 A、B、E 的新命令）
 ```
+
+E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完成分支返回 `_display_block`、新增 `run-summary`）、`prompt_builder.py`（注入 `SWARM_APP_SESSION_ID`）、`MarkdownRenderer.tsx`（`#base=` 片段）、`stages/complete.md`（改为原样转发）。
 
 每个 phase 走一次 pipeline run（full profile）。A 和 B 可以在两个 tab 里并行：A 改的是 `artifact_cli.py`、`pipeline_validator.py`，B 改的是新脚本、`security_hooks.py`、`hook_builder.py`，文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。
 
@@ -242,6 +321,7 @@ Phase 2  C 文档三层化 + 规则保全检查 + 大小 lint（依赖 A、B 的
 - `test_lint_skills_body.py`：REVIEW_PATTERNS 至少 80 行。
 - `test_security_hooks.py:601`：governance 层级。
 - `test_artifact_cli_schema.py`：扩展到所有 stage 的 artifact 和 record。
+- E 新增：`render_delivery_summary_md` 的纯函数测试（含注入中和、截断、无 session 时标注估算）；前端 `MarkdownRenderer` 的 `#base=` 片段测试（非法 ref 被丢弃）；`run-create` 读取 `SWARM_APP_SESSION_ID` 的测试。注意 conftest 会剥掉 `SWARM_*` 变量，测试里要用 `monkeypatch.setenv` 设置。
 
 ## 9. 明确不做
 
