@@ -4359,7 +4359,16 @@ GOVERNANCE_TIER1_PATTERNS: list[str] = [
 GOVERNANCE_TIER2_PATTERNS: list[str] = [
     "*/.context/STEERING.md",
     "backend/context/STEERING.md",
+    # Covers the WHOLE stages/ subtree, not just its top level: the matcher is
+    # fnmatch, whose `*` crosses `/`, so stages/ref/<stage>/<topic>.md and
+    # stages/history/<stage>.md match too. The subtree spellings below are
+    # redundant under fnmatch on purpose: they keep ref/ and history/ governed
+    # if the matcher ever moves to a path-segment-aware glob (PurePath.match,
+    # pathlib.glob) where `*` stops at `/`. Pinned by
+    # test_tier2_matches_pipeline_stage_subtrees.
     "*/s_autonomous-pipeline/stages/*.md",
+    "*/s_autonomous-pipeline/stages/ref/**/*.md",
+    "*/s_autonomous-pipeline/stages/history/**/*.md",
     # The gate sub-agent prompts. They were covered by the stages/ pattern above
     # until they moved into their own files (whole-file prompts, emitted by
     # scripts/spawn_prompt.py rather than retyped from a fenced block). Governance

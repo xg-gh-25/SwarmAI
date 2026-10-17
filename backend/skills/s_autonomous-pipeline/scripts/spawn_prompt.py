@@ -15,6 +15,12 @@ USAGE
     python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
         --knowledge-only --project <PROJECT> --files <changed files...>
 
+    # Only the REVIEW_PATTERNS.md rows that apply to a change (instead of reading
+    # the whole ~110K checklist). Paths as args, or one per line on stdin:
+    python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
+        --patterns-for <changed files...> [--diff-file <unified diff>]
+    git diff --name-only | python .../spawn_prompt.py --patterns-for-stdin
+
     Use the output ONLY on exit 0.
 
 WHY THIS EXISTS: gate prompts are hand-composed at spawn time, and a prompt that
@@ -34,7 +40,8 @@ EXIT CODES — the contract, not decoration:
     0  stdout is the prompt, ready to paste.
     2  the prompt states no numeric cap. stdout is EMPTY, stderr says why.
     1  the prompt could not be loaded at all (unknown gate, missing/empty file),
-       or a usage error.
+       or a usage error (including an unknown flag). For --patterns-for*: no
+       paths given, or REVIEW_PATTERNS.md unreadable / unparseable.
     3  the prompt needs project knowledge and ``--project`` was not given (also:
        ``--knowledge-only`` without ``--project``). stdout is EMPTY, stderr says why.
        Refused rather than emitted with the slot unfilled, because an unfilled slot
@@ -45,6 +52,8 @@ without checking the status then spawns with NO prompt, which is loud and
 immediately wrong, rather than with a prompt whose cap silently vanished.
 """
 import argparse
+import fnmatch
+import re
 import sys
 from pathlib import Path
 
@@ -100,6 +109,120 @@ def _fill_project(text: str, project: str, files: list[str]) -> str:
     return text.replace(KNOWLEDGE_SLOT, block)
 
 
+# ── REVIEW_PATTERNS on-demand selection ──────────────────────────────────────
+REVIEW_PATTERNS_PATH = Path(__file__).resolve().parent.parent / "REVIEW_PATTERNS.md"
+_MATCH_TOKEN_RE = re.compile(r"`match: ([^`]+)`")
+_ALWAYS = "*"
+
+
+class PatternsError(ValueError):
+    """REVIEW_PATTERNS.md could not be parsed into selectable rows."""
+
+
+def parse_match_spec(spec: str) -> tuple[bool, list[str], list[str]]:
+    """``(always, globs, keywords)`` for one ``match:`` spec.
+
+    Raises PatternsError on an unknown term, so a typo cannot silently turn a
+    row into one that never applies.
+    """
+    terms = spec.split()
+    if terms == [_ALWAYS]:
+        return True, [], []
+    globs, kws = [], []
+    for term in terms:
+        kind, sep, value = term.partition(":")
+        if not sep or not value or kind not in ("glob", "kw"):
+            raise PatternsError(f"bad match term {term!r} in `match: {spec}`")
+        (globs if kind == "glob" else kws).append(value.lower())
+    if not terms:
+        raise PatternsError("empty `match:` spec")
+    return False, globs, kws
+
+
+def parse_review_patterns(text: str) -> tuple[list[str], list[dict]]:
+    """``(header_lines, rows)`` from the REVIEW_PATTERNS.md text.
+
+    A row is every line starting ``| RP`` (the same definition the lint test
+    counts). Each row dict carries ``id``, ``line`` and the parsed spec. A row
+    with NO match token is treated as always-applies — selection fails toward
+    showing a row, never toward hiding one — and flagged ``missing``. More than
+    one token in a row is ambiguous and raises.
+    """
+    lines = text.splitlines()
+    header: list[str] = []
+    rows: list[dict] = []
+    for i, line in enumerate(lines):
+        if not header and line.startswith("| # |") and i + 1 < len(lines):
+            header = [line, lines[i + 1]]
+        if not line.startswith("| RP"):
+            continue
+        rid = line.split("|", 2)[1].strip()
+        specs = _MATCH_TOKEN_RE.findall(line)
+        if len(specs) > 1:
+            raise PatternsError(f"{rid}: {len(specs)} `match:` tokens, expected one")
+        if specs:
+            always, globs, kws = parse_match_spec(specs[0].strip())
+        else:
+            always, globs, kws = True, [], []
+        rows.append({"id": rid, "line": line, "always": always, "globs": globs,
+                     "keywords": kws, "missing": not specs})
+    if not rows:
+        raise PatternsError("no `| RP` rows found")
+    return header, rows
+
+
+def row_applies(row: dict, paths: list[str], diff_text: str = "") -> bool:
+    """True if the row is always-on, a glob hits a path (or its basename), or a
+    keyword occurs in a path or the diff. Case-insensitive throughout."""
+    if row["always"]:
+        return True
+    norm = [p.replace("\\", "/").lower() for p in paths]
+    for p in norm:
+        base = p.rsplit("/", 1)[-1]
+        if any(fnmatch.fnmatchcase(p, g) or fnmatch.fnmatchcase(base, g)
+               for g in row["globs"]):
+            return True
+    hay = "\n".join(norm) + "\n" + diff_text.lower()
+    return any(k in hay for k in row["keywords"])
+
+
+def render_patterns_for(text: str, paths: list[str], diff_text: str = "") -> str:
+    """Compact markdown: the table header, the applying rows, a count line."""
+    header, rows = parse_review_patterns(text)
+    hits = [r for r in rows if row_applies(r, paths, diff_text)]
+    always = sum(1 for r in hits if r["always"])
+    out = list(header) + [r["line"] for r in hits]
+    out.append("")
+    out.append(
+        f"{len(hits)} of {len(rows)} patterns apply "
+        f"({always} always-on, {len(hits) - always} matched by path/diff) — verify "
+        f"each listed row or mark it N/A; rows not listed do not apply to these files."
+    )
+    missing = [r["id"] for r in rows if r["missing"]]
+    if missing:
+        out.append(f"WARNING: rows with no `match:` token, shown as always-on: "
+                   f"{', '.join(missing)}")
+    return "\n".join(out) + "\n"
+
+
+def _emit_patterns(paths: list[str], diff_file: str | None, source: str | None) -> int:
+    paths = [p.strip() for p in paths if p.strip()]
+    if not paths:
+        sys.stderr.write("spawn_prompt: --patterns-for needs at least one path.\n")
+        return 1
+    src = Path(source) if source else REVIEW_PATTERNS_PATH
+    try:
+        text = src.read_text(encoding="utf-8")
+        diff_text = (Path(diff_file).read_text(encoding="utf-8", errors="replace")
+                     if diff_file else "")
+        rendered = render_patterns_for(text, paths, diff_text)
+    except (OSError, PatternsError) as exc:
+        sys.stderr.write(f"spawn_prompt: cannot select review patterns: {exc}\n")
+        return 1
+    sys.stdout.write(rendered)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = _Parser(
         description="Emit a gate's sub-agent prompt (only on exit 0).",
@@ -117,6 +240,22 @@ def main(argv=None) -> int:
         "--knowledge-only", action="store_true",
         help="emit only the recalled project-knowledge block (needs --project)",
     )
+    source.add_argument(
+        "--patterns-for", nargs="+", metavar="FILE",
+        help="emit only the REVIEW_PATTERNS.md rows that apply to these paths",
+    )
+    source.add_argument(
+        "--patterns-for-stdin", action="store_true",
+        help="like --patterns-for, reading the paths one per line from stdin",
+    )
+    parser.add_argument(
+        "--diff-file",
+        help="with --patterns-for*: diff text whose content also feeds kw: terms",
+    )
+    parser.add_argument(
+        "--patterns-source",
+        help="with --patterns-for*: alternate patterns file (default: the skill's)",
+    )
     parser.add_argument(
         "--project",
         help="project whose DDD is recalled into the prompt's knowledge slot",
@@ -126,6 +265,13 @@ def main(argv=None) -> int:
         help="the change's files; their names key the DDD recall",
     )
     args = parser.parse_args(argv)
+
+    selecting = bool(args.patterns_for) or args.patterns_for_stdin
+    if (args.diff_file or args.patterns_source) and not selecting:
+        parser.error("--diff-file/--patterns-source only apply to --patterns-for*")
+    if selecting:
+        paths = args.patterns_for or sys.stdin.read().splitlines()
+        return _emit_patterns(paths, args.diff_file, args.patterns_source)
 
     if args.knowledge_only:
         if not args.project:

@@ -39,6 +39,12 @@ BODY (every tracked file in the corpus)
     in the backend are not cleaned yet; the governance rule covers them, and this
     gate keeps the corpus from regrowing.
 
+SIZE (the autonomous pipeline's stage documents)
+    ``lint_sizes()`` caps ``stages/*.md`` at 5K chars, ``INSTRUCTIONS.md`` at 10K
+    and ``stages/<dir>/**`` at 15K (``stages/history/`` unlimited). Files that
+    predate the limits sit in the ``_SIZE_PENDING_SPLIT`` ratchet: they may
+    shrink, never grow, and leave the table once they fit.
+
 Run from repo root (CI runs after backend deps are installed):
     python scripts/lint_skills.py
 
@@ -428,6 +434,120 @@ def lint_skill(skill_md: Path) -> list[str]:
     return errors
 
 
+# ── SIZE pass: the autonomous pipeline's stage documents ──────────────────────
+#
+# Every stage entry re-reads its document, so size is a per-run token cost paid
+# on every stage of every run. The target structure (docs/design/
+# pipeline-speed-systematic-fix.md §C1) is a short execution card per stage, an
+# on-demand reference tree, and an unread history tree. Limits are CHARACTERS
+# (``len`` of the UTF-8-decoded text), not bytes.
+#
+#   stages/*.md                    ≤ 5,000   execution card, read on every entry
+#   INSTRUCTIONS.md                ≤ 10,000  orchestration card
+#   stages/history/**              unlimited never read at runtime
+#   stages/<any other dir>/**/*.md ≤ 15,000  ref/ (read only when a card says
+#                                            so), and any sibling such as
+#                                            specialists/ — a doc an agent may be
+#                                            told to read gets the ref ceiling
+#                                            rather than escaping all limits.
+PIPELINE_SKILL_DIR = Path("backend/skills/s_autonomous-pipeline")
+SIZE_LIMIT_STAGE_CARD = 5_000
+SIZE_LIMIT_INSTRUCTIONS = 10_000
+SIZE_LIMIT_REF = 15_000
+_SIZE_UNLIMITED_DIRS = frozenset({"history"})
+
+# RATCHET for files that predate the limits and have not been split yet. Each
+# value is the file's size when it was listed: it may shrink, it may not grow.
+# A file that drops under its real limit must be REMOVED from this table (a
+# stale entry is itself a finding), so the table only ever shrinks. A file not
+# listed here must meet the real limit. Never raise a ceiling to make a red
+# build green — split the document instead.
+_SIZE_PENDING_SPLIT: dict[str, int] = {
+    "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md": 96_478,
+    "backend/skills/s_autonomous-pipeline/stages/build.md": 54_303,
+    "backend/skills/s_autonomous-pipeline/stages/complete.md": 5_717,
+    "backend/skills/s_autonomous-pipeline/stages/deliver.md": 72_840,
+    "backend/skills/s_autonomous-pipeline/stages/evaluate.md": 56_020,
+    "backend/skills/s_autonomous-pipeline/stages/goal_cycle.md": 28_327,
+    "backend/skills/s_autonomous-pipeline/stages/plan.md": 19_943,
+    "backend/skills/s_autonomous-pipeline/stages/reflect.md": 10_815,
+    "backend/skills/s_autonomous-pipeline/stages/review.md": 56_261,
+    "backend/skills/s_autonomous-pipeline/stages/test.md": 15_636,
+    "backend/skills/s_autonomous-pipeline/stages/think.md": 9_758,
+}
+
+
+def size_limit_for(rel: str) -> int | None:
+    """The real character limit for a repo-relative POSIX path, or None.
+
+    None means "not size-governed": outside the pipeline skill, not markdown,
+    or under an unlimited tree (``stages/history/``).
+    """
+    prefix = PIPELINE_SKILL_DIR.as_posix() + "/"
+    if not rel.startswith(prefix) or not rel.endswith(".md"):
+        return None
+    parts = rel[len(prefix):].split("/")
+    if parts == ["INSTRUCTIONS.md"]:
+        return SIZE_LIMIT_INSTRUCTIONS
+    if len(parts) < 2 or parts[0] != "stages":
+        return None  # SKILL.md, REVIEW_PATTERNS.md, data/ — not stage docs
+    if len(parts) == 2:
+        return SIZE_LIMIT_STAGE_CARD
+    if parts[1] in _SIZE_UNLIMITED_DIRS:
+        return None
+    return SIZE_LIMIT_REF
+
+
+def lint_sizes(repo_root: Path | None = None,
+               pending: dict[str, int] | None = None) -> list[str]:
+    """Return a finding per stage document over its limit or ratchet ceiling.
+
+    Reads the FILESYSTEM, not git: the cost being bounded is what an agent reads
+    at runtime, and an untracked doc is read just the same. An absent pipeline
+    skill is a clean no-op, so a consumer without it is never blocked.
+    """
+    root = _REPO_ROOT if repo_root is None else repo_root
+    table = _SIZE_PENDING_SPLIT if pending is None else pending
+    skill = root / PIPELINE_SKILL_DIR
+    if not skill.is_dir():
+        return []
+    findings: list[str] = []
+    seen: set[str] = set()
+    candidates = [skill / "INSTRUCTIONS.md", *sorted((skill / "stages").rglob("*.md"))]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        limit = size_limit_for(rel)
+        if limit is None:
+            continue
+        seen.add(rel)
+        try:
+            size = len(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as e:
+            findings.append(f"{rel}: cannot read for size check: {e}")
+            continue
+        ceiling = table.get(rel)
+        if ceiling is None:
+            if size > limit:
+                findings.append(
+                    f"{rel}: {size:,} chars exceeds the {limit:,}-char limit — "
+                    f"split it (execution card / stages/ref / stages/history)")
+        elif size <= limit:
+            findings.append(
+                f"{rel}: now {size:,} chars, within the {limit:,}-char limit — "
+                f"remove its stale _SIZE_PENDING_SPLIT entry")
+        elif size > ceiling:
+            findings.append(
+                f"{rel}: grew to {size:,} chars past its pending-split ceiling "
+                f"{ceiling:,} — shrink it; never raise the ceiling")
+    for rel in sorted(set(table) - seen):
+        findings.append(
+            f"{rel}: listed in _SIZE_PENDING_SPLIT but not a size-governed file "
+            f"on disk — remove the stale entry")
+    return findings
+
+
 def main() -> int:
     all_errors: list[str] = []
 
@@ -467,6 +587,9 @@ def main() -> int:
     for path in body_files:
         all_errors.extend(lint_body(path))
 
+    # Pass 3 — size budget for the pipeline's stage documents (ratcheted).
+    all_errors.extend(lint_sizes())
+
     if all_errors:
         print(f"\n{len(all_errors)} skill lint error(s):")
         for err in all_errors:
@@ -475,7 +598,9 @@ def main() -> int:
 
     print(
         f"{meta_count} SKILL.md files pass metadata checks ✓  ·  "
-        f"{len(body_files)} corpus files carry no machine-local references ✓"
+        f"{len(body_files)} corpus files carry no machine-local references ✓  ·  "
+        f"pipeline stage docs within size limits "
+        f"({len(_SIZE_PENDING_SPLIT)} pending split) ✓"
     )
     return 0
 
