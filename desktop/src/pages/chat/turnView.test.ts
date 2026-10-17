@@ -129,6 +129,15 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(thoughtAfter.kind === 'process' && thoughtAfter.live).toMatchObject({ note: undefined, thinking: 'new thought' });
   });
 
+  it('live row keeps the newest FINISHED step next to the current one', () => {
+    const p = deriveTurnView([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b'), tu('c', 'Running: make')], true).units[0];
+    expect(p.kind === 'process' && p.live?.step?.block.id).toBe('c');
+    expect(p.kind === 'process' && p.live?.recent?.block.id).toBe('b');
+    const between = deriveTurnView([tu('a', 'Running: ls'), tr('a')], true).units[0];
+    expect(between.kind === 'process' && between.live?.step).toBeUndefined();
+    expect(between.kind === 'process' && between.live?.recent?.block.id).toBe('a');
+  });
+
   it('a finished turn has no live thinking line', () => {
     const th = { type: 'thinking', thinking: 'plan' } as ContentBlock;
     const p = deriveTurnView([th, tu('a', 'Running: ls'), tr('a'), tx('done')], false).units[0];

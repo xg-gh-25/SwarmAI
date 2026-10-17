@@ -88,7 +88,7 @@ export interface ProcessUnit {
   /** What the live row shows: the pending tool (if any), the latest note, and —
    *  when the model's newest non-tool output is thinking — that thinking's last
    *  line, so the collapsed row follows what the model is thinking right now. */
-  live?: { step?: ToolStep; note?: string; thinking?: string };
+  live?: { step?: ToolStep; note?: string; thinking?: string; recent?: ToolStep };
   /** The turn's final tool failed and nothing followed it — shown outside the fold. */
   unrecoveredFailure?: ToolStep;
 }
@@ -277,7 +277,12 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
         (s): s is NoteStep | ThinkingStep => s.kind === 'note' || s.kind === 'thinking',
       );
       const thinking = latest?.kind === 'thinking' ? lastLine(latest.text) : undefined;
-      last.live = { step: pending, note: thinking ? undefined : note?.text, thinking };
+      // The newest step that already finished, so the collapsed row always says
+      // what was just done — not only a bare spinner between two tool calls.
+      const recent = [...last.steps].reverse().find(
+        (s): s is ToolStep => s.kind === 'tool' && s.status !== 'pending',
+      );
+      last.live = { step: pending, note: thinking ? undefined : note?.text, thinking, recent };
     }
   }
 

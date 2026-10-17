@@ -7,8 +7,9 @@
  *   1. the row: "Working 1m09s · 10 steps · read 7 files" (always visible)
  *   2. the steps: verb + object per tool call, notes and thinking in time order
  *   3. the raw command / result of one step (click a step)
- * While streaming, only the CURRENT step is shown under the row (plus the latest
- * note, clamped), so a long turn never becomes a wall of rows.
+ * While streaming, the row stays folded but shows the last FINISHED step, the
+ * CURRENT step (or "Thinking"), and the latest note or thought line — enough to
+ * follow the work, never a wall of rows.
  *
  * Status comes ONLY from the projection (`ToolStep.status`); this component never
  * re-derives whether a tool is done.
@@ -257,6 +258,11 @@ export function ProcessBlock({ unit, expanded, onToggle, startedAt }: ProcessBlo
           {unit.live?.note && (
             <div className="py-0.5 text-[12.5px] leading-relaxed text-[var(--color-text-dim)] line-clamp-3 whitespace-pre-wrap">
               {unit.live.note}
+            </div>
+          )}
+          {unit.live?.recent && (
+            <div data-testid="process-live-recent" className="-ml-2">
+              <ToolStepRow step={unit.live.recent} />
             </div>
           )}
           {unit.live?.thinking && (

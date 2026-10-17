@@ -54,13 +54,16 @@ function renderView(content: ContentBlock[], opts: { isStreaming?: boolean; isLa
 beforeEach(() => injectSpy.mockClear());
 
 describe('AssistantMessageView — folded process', () => {
-  it('streaming 38 tool calls → one process row + one live row, no per-tool rows (AC1)', () => {
+  it('streaming 38 tool calls → one process row + one live row, only the last finished step (AC1)', () => {
     // Real live shape: finished tools carry their tool_result; the last is still running.
     const live = bashRun(38).flatMap((b, i) => (i < 37 ? [b, tr(`t${i}`)] : [b]));
     const { container } = renderView(live, { isStreaming: true });
     expect(screen.getAllByTestId('process-row')).toHaveLength(1);
     expect(screen.getAllByTestId('process-live')).toHaveLength(1);
-    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
+    // Still folded: of 37 finished steps only the newest is shown (XG 2026-10-17:
+    // the live row must say what was just done, not only what is running).
+    expect(screen.queryAllByTestId('step-row')).toHaveLength(1);
+    expect(screen.getByTestId('process-live-recent').textContent).toContain('needle36');
     expect(container.textContent).not.toContain('/Users/x/repo');
   });
 
@@ -231,6 +234,15 @@ describe('AssistantMessageView — live row between steps', () => {
     renderView([th, tu('a', 'Running: ls'), tx('the answer')]);
     expect(screen.queryByTestId('process-live-thinking')).toBeNull();
     expect(document.querySelector('details')).toBeNull();
+  });
+
+  it('collapsed live row shows what just finished AND what is running now', () => {
+    renderView([tu('a', 'Running: npm test'), tr('a'), tu('b', 'Running: npm run build')], { isStreaming: true });
+    const live = screen.getByTestId('process-live');
+    expect(screen.getByTestId('process-live-recent').textContent).toContain('npm test');
+    expect(live.textContent).toContain('npm run build');
+    // still folded: the full step list is not rendered
+    expect(screen.getAllByTestId('step-row')).toHaveLength(1);
   });
 
   it('after a tool returns and before the next starts, the live row still spins', () => {
