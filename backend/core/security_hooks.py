@@ -1423,6 +1423,31 @@ _PYTEST_INVOCATION_RE = re.compile(
 # Output piped into a pager that the harness swallows (tail/head), possibly at
 # the end of a pipe chain (`pytest | grep x | tail`).
 _PIPE_TO_PAGER_RE = re.compile(r"\|\s*(?:tail|head)\b", re.IGNORECASE)
+# Shell LIST separators that end one pipeline and start the next: `;`, `&&`,
+# `||`, newline, and a lone background `&`. The `&` arm excludes the redirect
+# forms `2>&1` / `&>file` / `>&2` and `|&`, which do NOT end a pipeline.
+_LIST_SEPARATOR_RE = re.compile(r"\|\||&&|;|\n|(?<![|&<>])&(?![&>])")
+# Grouping / substitution syntax. A group can carry a pipe across a separator
+# (`{ pytest; } | tail`), so a command containing any of these is NOT segmented.
+_SHELL_GROUPING_CHARS = frozenset("(){}`")
+
+
+def _pytest_output_piped_to_pager(stripped: str) -> bool:
+    """True iff pytest's own output feeds tail/head (on a quote-stripped command).
+
+    The hang this guards is pytest's stdout swallowed by a pager, so only a
+    pipeline that RUNS pytest matters: `pytest > f; grep x f | tail` pipes grep,
+    not pytest, and is safe. Split the command into its pipelines and check each
+    one that carries a pytest token. Grouping/substitution syntax can route
+    pytest's output across a separator, so any such command falls back to the
+    whole-string check (fail-closed, the pre-segmentation behavior).
+    """
+    if _SHELL_GROUPING_CHARS & set(stripped):
+        return bool(_PIPE_TO_PAGER_RE.search(stripped))
+    return any(
+        _PYTEST_TOKEN_RE.search(seg) and _PIPE_TO_PAGER_RE.search(seg)
+        for seg in _LIST_SEPARATOR_RE.split(stripped)
+    )
 # A wall-clock wrapper that BINDS the pytest token — the wrapper must IMMEDIATELY
 # precede pytest (optionally via `python -m`), not merely appear somewhere in the
 # string. Gate-2 (run BLOCK) proved an unbound "wrapper anywhere" check fails open:
@@ -1557,8 +1582,9 @@ async def pytest_command_guard(
     ):
         return {"decision": "approve"}
 
-    # DENY: piped to a pager (check the unquoted form only).
-    if _PIPE_TO_PAGER_RE.search(_strip_quoted(command)):
+    # DENY: pytest's own output piped to a pager (unquoted form, scoped to the
+    # pipeline that runs pytest — see _pytest_output_piped_to_pager).
+    if _pytest_output_piped_to_pager(_strip_quoted(command)):
         logger.warning("[BLOCKED] pytest piped to pager: %s", command[:80])
         return {
             "hookSpecificOutput": {
@@ -2205,6 +2231,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError; ANY gate-infra failure (even
+            logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}  # a bug in the helper) fails OPEN by design
 
         if not has_marker:
@@ -2231,6 +2258,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                     timeout=_GATE_COVERAGE_TIMEOUT,
                 )
             except Exception:  # incl. asyncio.TimeoutError → fail open (never hang)
+                logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
                 return {"decision": "approve"}  # fail open on gate-infra failure
             if pending is _PENDING_CROSS_REPO:
                 # A `git -C <other>` global option retargets a repo we can't bind →
@@ -2268,6 +2296,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
             elif pending is _PENDING_CROSS_REPO:
                 uncovered = " (commit retargets another repo via -C/--git-dir — cannot bind coverage)"
         except Exception:
+            logger.debug("_gate: suppressed exception on a fail-safe path", exc_info=True)
             uncovered = ""
 
         logger.warning("[BLOCKED] git commit not covered by an adversarial review this "
@@ -2344,6 +2373,7 @@ def _canonical_rel_bases() -> list:
         # backend/core/security_hooks.py → repo root = parents[2]
         bases.append(str(Path(__file__).resolve().parents[2]))
     except Exception:
+        logger.debug("_canonical_rel_bases: suppressed exception on a fail-safe path", exc_info=True)
         pass
     return bases
 
@@ -2372,8 +2402,10 @@ def _canonicalize_owned_path(p: str) -> set:
             try:
                 out.add(os.path.realpath(os.path.join(base, p)))
             except Exception:
+                logger.debug("_canonicalize_owned_path: suppressed exception on a fail-safe path", exc_info=True)
                 continue
     except Exception:
+        logger.debug("_canonicalize_owned_path: suppressed exception on a fail-safe path", exc_info=True)
         pass
     return out
 
@@ -2404,12 +2436,14 @@ def _active_run_owned_paths() -> set:
     try:
         files = _glob.glob(pattern)
     except Exception:
+        logger.debug("_active_run_owned_paths: suppressed exception on a fail-safe path", exc_info=True)
         return owned
     for f in files:
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception:
+            logger.debug("_active_run_owned_paths: suppressed exception on a fail-safe path", exc_info=True)
             continue  # corrupt/unreadable single run.json → skip, never raise
         if data.get("status") not in _ACTIVE_RUN_STATUSES:
             continue
@@ -2455,6 +2489,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:  # incl. asyncio.TimeoutError
+            logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}
 
         # None (uncomputable: not a repo / git error) / cross-repo sentinel / empty
@@ -2470,6 +2505,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:
+            logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}
 
         offending = sorted(p for p in pending if p in owned)
@@ -2625,6 +2661,7 @@ async def bash_syntax_guard(
                 proc.kill()
                 await proc.wait()
             except Exception:  # noqa: BLE001 — best-effort reap; never block on it
+                logger.debug("bash_syntax_guard: suppressed exception on a fail-safe path", exc_info=True)
                 pass
             logger.warning(
                 "[bash_syntax_guard] %s -n exceeded %.1fs — failing open",
@@ -2886,6 +2923,7 @@ def create_governance_file_gate() -> Callable[..., Any]:
                     str(tool_input.get("command") or "")
                 )
             except Exception:  # noqa: BLE001
+                logger.warning("governance_file_gate: gate infrastructure error — failing open", exc_info=True)
                 return {"decision": "approve"}
         else:
             file_path = tool_input.get("file_path", "")

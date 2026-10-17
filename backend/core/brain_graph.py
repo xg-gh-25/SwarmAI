@@ -66,6 +66,8 @@ def build_brain_graph(memory_content: str) -> dict:
     try:
         entries = parse_entries(memory_content)
     except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("build_brain_graph: suppressed exception on a fail-safe path", exc_info=True)
         entries = []
 
     by_type: dict[str, list] = {t: [] for t in VALID_TYPES}
@@ -150,6 +152,8 @@ def build_evolution_graph(evolution_content: str) -> dict:
                 kind = "entry"
             by_kind[kind].append(header)
     except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("build_evolution_graph: suppressed exception on a fail-safe path", exc_info=True)
         by_kind = {k: [] for k in EVOLUTION_DISPLAY_ORDER}
 
     nodes = []

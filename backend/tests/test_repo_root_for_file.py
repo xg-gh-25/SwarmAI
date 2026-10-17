@@ -84,3 +84,26 @@ def test_relative_nonexistent_falls_back_to_cwd(repos):
     launch, workspace = repos
     root = _repo_root_for_file("does/not/exist.py")
     assert root == _tl(launch)
+
+
+def test_relative_deleted_tracked_path_resolves_to_the_repo_that_tracks_it(repos):
+    """A file deleted from the WORKSPACE repo no longer exists anywhere on disk, so
+    the existence probe cannot find its repo — git's index can. Without this the
+    deletion binds to the cwd (launch) repo and is dropped there as a ghost."""
+    launch, workspace = repos
+    rel = "notes/removed.md"
+    (workspace / "notes").mkdir()
+    (workspace / rel).write_text("x\n")
+    subprocess.run(["git", "-C", str(workspace), "add", rel], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(workspace), "commit", "-qm", "add"], check=True, capture_output=True)
+    (workspace / rel).unlink()
+    (workspace / "notes").rmdir()
+
+    assert _repo_root_for_file(rel) == _tl(workspace)
+
+
+def test_absolute_path_with_removed_parent_dir_still_resolves(repos):
+    launch, workspace = repos
+    f = workspace / "gone_dir" / "f.py"
+    assert not f.parent.exists()
+    assert _repo_root_for_file(str(f)) == _tl(workspace)

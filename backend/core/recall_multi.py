@@ -28,6 +28,8 @@ flag. Ingestion (the WRITE path) is a separate subsystem.
 Public symbols:
 - ``BucketedRecall``  — per-domain hits + per-domain hit_layer
 - ``recall_all``      — the unified multi-domain fan-out
+- ``recall_ddd_entries`` — up to N content-bearing DDD entries (for callers whose
+  reader cannot follow a section pointer, e.g. pipeline review sub-agents)
 - ``DOMAINS``         — the canonical domain key tuple
 """
 from __future__ import annotations
@@ -698,35 +700,78 @@ def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
     return hits, layer
 
 
+def _load_ddd_docs_text(project: Optional[str]):
+    """Return ``(project_dir, {doc_name: text})`` for a project's canonical DDD docs.
+
+    The ONE loader for "read this project's DDD docs": ``_recall_ddd`` (the recall
+    fan-out leg) and ``recall_ddd_entries`` (the expert-prompt leg) both read through
+    it, so the two can never disagree about which docs a project has. Layout comes
+    from the SSOTs — ``DDD_CANONICAL_DOCS`` for the doc set and ``ddd_path`` for where
+    each doc lives — so nothing here knows any section name or directory layout.
+
+    Returns ``(None, {})`` for no project / an unknown project; a missing or
+    unreadable doc is simply absent (a project with zero docs is a complete brain,
+    not an error).
+    """
+    from core.project_registry import get_projects_dir
+
+    if not project:
+        return None, {}
+    base = get_projects_dir() / project
+    if not base.exists():
+        return None, {}
+
+    from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
+    from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
+    docs_text: dict[str, str] = {}
+    for doc in DDD_CANONICAL_DOCS:
+        p = ddd_path(base, doc)
+        if not p.exists():
+            continue
+        try:
+            docs_text[doc] = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return base, docs_text
+
+
+def recall_ddd_entries(query: str, project: Optional[str], top_n: int = 8) -> list[dict]:
+    """Top ``top_n`` content-bearing ENTRY hits from a project's DDD docs.
+
+    Unlike the ``ddd`` leg of :func:`recall_all` — which returns ``## section``
+    pointers plus at most ONE entry with its text — this returns up to ``top_n``
+    entries WITH their text, each as ``{"doc", "section", "score", "content"}``
+    highest-first. It exists for callers that hand the recalled knowledge to a
+    reader who cannot follow a pointer cheaply (a review sub-agent with a bounded
+    tool budget), so the knowledge has to arrive as text.
+
+    Structure-agnostic: any ``- `` entry under any ``## `` section of any canonical
+    doc can match; superseded entries are filtered (same rule as recall_all).
+    READ-only, keyword-only. Returns ``[]`` for no project, an unknown project, a
+    project with no docs, or a query sharing no vocabulary with any entry.
+    """
+    _base, docs_text = _load_ddd_docs_text(project)
+    if not docs_text or not (query or "").strip():
+        return []
+    sections_by_doc = _parse_docs_sections(docs_text)
+    return _ddd_entry_hits(query, docs_text, max(1, int(top_n)),
+                           sections_by_doc=sections_by_doc)
+
+
 def _recall_ddd(query: str, project: Optional[str],
                 max_sections: int) -> tuple[list, str]:
     """Recall over a project's DDD docs via the generic ##-section scorer."""
-    from core.project_registry import get_projects_dir
-
     hits: list = []
-    if not project:
-        return hits, "none"
-    base = get_projects_dir() / project
-    if not base.exists():
+    base, _docs_text = _load_ddd_docs_text(project)
+    if base is None:
         return hits, "none"
 
-    from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
     from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
     scored: list[tuple[str, str, float]] = []  # (doc, section, score)
     # entry_hits carry CONTENT (the entry text) so a fresh cultivated lesson buried
     # in a huge section is recallable by its own words, not diluted at section-BM25
     # (run_97a6b1db). Reserved a slot below like the domain leg so it isn't crowded
     # out by whole-doc section scores at the default max_sections.
-    _docs_text: dict[str, str] = {}
-    for doc in DDD_CANONICAL_DOCS:
-        p = ddd_path(base, doc)
-        if not p.exists():
-            continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        _docs_text[doc] = text
     # Shared-corpus section scoring (run_9092cb25): normalize ONCE across all
     # canonical docs so scores are comparable — a weakly-matching marketing section
     # can no longer peg at 1.0 per-doc and crowd out a genuinely-relevant section /

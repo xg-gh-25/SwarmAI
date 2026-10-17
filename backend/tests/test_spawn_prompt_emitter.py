@@ -69,7 +69,11 @@ _GATE_IDS = ("gate0-skeptic", "gate1-skeptic", "gate2-adversarial")
 _PRE_MOVE_SHA256 = {
     "gate0-skeptic": "8039bcb42857ed1bcf0436b0db250af94f4782d4c18f3724bcc80a0714aacec1",  # pragma: allowlist secret
     "gate1-skeptic": "b81db3c969fbf5e207748c589d2777b53967e76589bc25984ecd3f06e8948570",  # pragma: allowlist secret
-    "gate2-adversarial": "180f353dd61eceb9d5bdbabc15762ae02353870ca8f56a5398d747478dc2993e",  # pragma: allowlist secret
+    # gate2 was INTENTIONALLY edited after the move: its hand-paste "Project-Specific
+    # Traps" block (which named two TECH.md section titles and was filled for 1 of 13
+    # real expert prompts) became the <PROJECT_KNOWLEDGE> slot that spawn_prompt.py
+    # fills from DDD recall. Recomputed in the same change, as this test instructs.
+    "gate2-adversarial": "d53c378461e18d028ee3ed746c820dd832f81943bc11e2e868eeab619d9f2400",  # pragma: allowlist secret
 }
 
 
@@ -122,6 +126,22 @@ def test_gate_prompt_matches_pre_move_digest(gate_id):
     )
 
 
+def test_gate2_emit_changes_only_the_filled_placeholders():
+    """With --project, gate2 is the gate file with exactly its placeholders filled.
+
+    Expected text is assembled from the file on disk, not from the emitter, so the
+    emitter cannot pass by agreeing with itself: everything before ``<PROJECT>``
+    and everything after the knowledge slot must come through unchanged.
+    """
+    raw = (_GATE_PROMPTS / "gate2-adversarial.md").read_text()
+    rc, out, err = _run_emitter("--gate", "gate2-adversarial", "--project", "NoSuchProject")
+    assert rc == 0, err
+    head = raw[: raw.index("<PROJECT>")]
+    tail = raw[raw.index("<PROJECT_KNOWLEDGE>") + len("<PROJECT_KNOWLEDGE>"):]
+    assert out.startswith(head), "text before the project placeholder was altered"
+    assert out.endswith(tail), "text after the knowledge slot was altered"
+
+
 def test_gate1_prompt_retains_the_output_format_block():
     """The Gate-1 prompt must still carry its verdict format.
 
@@ -143,7 +163,11 @@ def test_gate1_prompt_retains_the_output_format_block():
 # AC1/AC3 — the emitter emits the real prompt, caps included
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("gate_id", _GATE_IDS)
+#: Gates whose prompt carries no project-knowledge slot — emitted byte-for-byte.
+_VERBATIM_GATE_IDS = ("gate0-skeptic", "gate1-skeptic")
+
+
+@pytest.mark.parametrize("gate_id", _VERBATIM_GATE_IDS)
 def test_emitter_prints_the_gate_file_verbatim(gate_id):
     """stdout is the gate file, unmodified.
 
@@ -168,7 +192,8 @@ def test_emitted_prompt_states_a_numeric_cap(gate_id):
     gate silently loses its cap.
     """
     sb = _load_spawn_budget()
-    rc, out, _ = _run_emitter("--gate", gate_id)
+    extra = ("--project", "NoSuchProject") if gate_id == "gate2-adversarial" else ()
+    rc, out, _ = _run_emitter("--gate", gate_id, *extra)
     assert rc == 0
     assert sb.BUDGET_MARKER in out, f"{gate_id} prompt lost its {sb.BUDGET_MARKER} line"
     assert sb.has_numeric_cap(out), (

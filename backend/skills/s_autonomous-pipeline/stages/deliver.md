@@ -522,12 +522,27 @@ has fresh context — no prior review bias.
 
 ```bash
 # The prompt lives in data/gate-prompts/gate2-adversarial.md — emit it, do not retype it.
-# Run from the repo root. Substitute <DOMAIN> per specialist (Correctness, Security, …)
-# and fill the <PROJECT>/<requirement>/<list of all changed files> placeholders.
-# Use the output ONLY on exit 0 — exit 2 means the prompt states no numeric cap
-# and stdout is deliberately EMPTY, so pasting it blindly would spawn with no prompt.
-python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate gate2-adversarial
+# Run from the repo root. Pass the run's project and EVERY changed file: the emitter
+# fills <PROJECT>, the changed-file list, and the "Project Knowledge" block — the
+# project's DDD entries recalled for these files (scripts/project_knowledge.py). You
+# still substitute <EXPERT_ID>/<DOMAIN> per specialist, <requirement>, and the checklist.
+# Use the output ONLY on exit 0. Exit 2 = the prompt states no numeric cap; exit 3 =
+# --project missing. On both, stdout is deliberately EMPTY, so pasting it blindly
+# would spawn with no prompt. In zsh pass the files as separate words (an array or
+# ${=FILES}) — an unsplit "$FILES" arrives as ONE path and recalls almost nothing.
+python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate gate2-adversarial \
+  --project <PROJECT> --files <changed file 1> <changed file 2> ...
 ```
+
+> **Why the knowledge block is emitted, not pasted:** experts are fresh-context on
+> purpose — they must not inherit the AUTHOR's reasoning — but that also cut them off
+> from the project's recorded pitfalls and invariants. The block used to be a
+> hand-paste of named TECH.md sections; it was filled for 1 of 13 expert prompts in
+> one recorded run, and the expert reviewing a known fragile zone never saw the
+> pitfall about it. Recall is structure-agnostic (any DDD, any section names); an
+> empty DDD says so explicitly, and a recall failure is marked UNAVAILABLE in the
+> block and on stderr rather than passing for "no knowledge". The block also names
+> the on-demand recall command so an expert can query identifiers it sees in the diff.
 
 > **⚠️ ALSO fill `<EXPERT_ID>` (R1.5b-i, 方案 Z — the D7 key, do NOT skip).** The
 > template's first line is `EXPERT-ID: <EXPERT_ID>`. Fill it with the specialist's

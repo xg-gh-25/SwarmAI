@@ -517,7 +517,12 @@ async def build_hooks(
     # ── PreCompact: flag session_context ─────────────────────
     if session_context is not None:
         async def _pre_compact_hook(hook_input, tool_name, hook_context):
-            trigger = getattr(hook_input, "trigger", "auto")
+            # SDK hook inputs are plain dicts (probed: {"trigger": "manual", ...});
+            # getattr() on a dict always fell back, so every compaction read "auto".
+            trigger = (
+                hook_input.get("trigger", "auto") if isinstance(hook_input, dict)
+                else getattr(hook_input, "trigger", "auto")
+            )
             logger.info(
                 f"PreCompact hook fired — trigger={trigger}, "
                 f"session={session_context.get('sdk_session_id')}"

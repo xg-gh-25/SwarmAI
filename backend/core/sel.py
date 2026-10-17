@@ -81,6 +81,7 @@ def _app_data_dir() -> Path:
         from config import get_app_data_dir
         return get_app_data_dir()
     except Exception:  # pragma: no cover - config import guard
+        logger.debug("_app_data_dir: suppressed exception on a fail-safe path", exc_info=True)
         return Path.home() / ".swarm-ai"
 
 
@@ -120,6 +121,7 @@ def summarize_resource(payload: Any) -> str:
         else:
             s = type(payload).__name__
     except Exception:
+        logger.debug("summarize_resource: suppressed exception on a fail-safe path", exc_info=True)
         s = "<unsummarizable>"
     return s[:_MAX_RESOURCE_CHARS]
 

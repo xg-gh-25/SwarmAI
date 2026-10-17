@@ -83,6 +83,7 @@ def record_surfaced_path(session_id: str | None, absolute_path: str) -> None:
         from pathlib import Path as _P
         surfaced_paths.setdefault(session_id, set()).add(str(_P(absolute_path).resolve()))
     except Exception:  # noqa: BLE001 — hot-path fail-safe
+        logger.debug("record_surfaced_path: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 

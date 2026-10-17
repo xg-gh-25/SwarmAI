@@ -67,7 +67,7 @@ def test_committed_offloads_git_subprocess(tmp_path: Path, monkeypatch) -> None:
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "init")
     target = (tmp_path / "a.txt").resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (target, False))
 
     result, calls = _run_endpoint(
         lambda: wa.get_workspace_file_committed(path=str(target)),
@@ -97,7 +97,7 @@ def test_committed_ref_returns_that_refs_content(tmp_path: Path, monkeypatch) ->
     sha2 = _sp.run(["git", "-C", str(tmp_path), "rev-parse", "--short", "HEAD"],
                    capture_output=True, text=True).stdout.strip()
     target = f.resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (target, False))
 
     # Default (no ref) → HEAD → v2.
     head_res, _ = _run_endpoint(
@@ -119,7 +119,7 @@ def test_committed_unsafe_ref_falls_back_to_head(tmp_path: Path, monkeypatch) ->
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "c1")
     target = f.resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (target, False))
     for bad in ["--upload-pack=evil", "-x", "HEAD~1; rm -rf /", "../etc/passwd", "main"]:
         res, _ = _run_endpoint(
             lambda: wa.get_workspace_file_committed(path=str(target), ref=bad),
@@ -141,7 +141,7 @@ def test_safe_git_ref_regex_allows_only_sha_and_caret() -> None:
 def test_get_file_offloads_read(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "b.txt").write_text("hello\n")
     target = (tmp_path / "b.txt").resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (target, False))
 
     result, calls = _run_endpoint(
         lambda: wa.get_workspace_file(path=str(target)),
@@ -160,7 +160,7 @@ def test_diff_offloads_git_subprocess(tmp_path: Path, monkeypatch) -> None:
     _git(tmp_path, "commit", "-q", "-m", "init")
     (tmp_path / "c.txt").write_text("line1\nline2-changed\n")  # dirty → non-empty diff
     target = (tmp_path / "c.txt").resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (target, False))
 
     result, calls = _run_endpoint(
         lambda: wa.get_workspace_file_diff(path=str(target)),

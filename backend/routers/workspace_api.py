@@ -939,6 +939,7 @@ async def get_workspace_file(
             # through this reference (frozenset would also work; copy keeps the type).
             _allowed_external = set(_live) if _live else None
         except Exception:  # noqa: BLE001 — fail-safe: no allowlist → home-only guard
+            logger.debug("get_workspace_file: suppressed exception on a fail-safe path", exc_info=True)
             _allowed_external = None
     target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external)
 

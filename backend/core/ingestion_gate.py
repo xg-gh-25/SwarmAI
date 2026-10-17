@@ -268,6 +268,8 @@ def _append_judge_telemetry(text: str, section: str, verdict: str, reason: str) 
     try:
         _write_telemetry_row(_telemetry_row(text, section, verdict, reason))
     except Exception:  # noqa: BLE001 — telemetry is observation, NEVER alters a verdict
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_append_judge_telemetry: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 
@@ -279,6 +281,8 @@ def _append_gate_telemetry(text: str, section: str, verdict: str, reason: str) -
     try:
         _write_telemetry_row(_telemetry_row(text, section, verdict, reason, source="gate"))
     except Exception:  # noqa: BLE001 — telemetry is observation, NEVER alters a verdict
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_append_gate_telemetry: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 # ── Judge fan-out budget (fail-closed rolling-window rate limit) ──────────────
@@ -400,6 +404,8 @@ def _neutralize_untrusted(s: str) -> str:
         out = re.sub(r"(?im)^\s*(VERDICT|REASON)\s*:", r"\1​:", out)
         return out
     except Exception:  # noqa: BLE001 — sanitization must never break the judge
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_neutralize_untrusted: suppressed exception on a fail-safe path", exc_info=True)
         return s or ""
 
 
@@ -420,6 +426,8 @@ def _judge_client():
         model_id = (AppConfigManager.instance().get("bedrock_model_map") or {}).get(
             "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6")
     except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_judge_client: suppressed exception on a fail-safe path", exc_info=True)
         model_id = "us.anthropic.claude-sonnet-4-6"
     # max_attempts=2: the judge guards the brain, so ONE transient (throttle / cold
     # connection / brief network blip) must not fail-close and silently HOLD a whole
@@ -446,6 +454,8 @@ def self_adversarial_judge(text: str, section: str, neighbors: list) -> "tuple[s
     try:
         _append_judge_telemetry(text, section, verdict, reason)
     except Exception:  # noqa: BLE001 — telemetry is observation, NEVER a gate
+        import logging as _logging
+        _logging.getLogger(__name__).debug("self_adversarial_judge: suppressed exception on a fail-safe path", exc_info=True)
         pass
     return (verdict, reason)
 
@@ -490,6 +500,8 @@ def keep_type_holdback(text: str) -> "tuple[bool, str]":
         section, etype = route_lesson_type(text)
         return (section is None, etype)
     except Exception:  # noqa: BLE001 — fail toward holding back (safe for permanent knowledge)
+        import logging as _logging
+        _logging.getLogger(__name__).debug("keep_type_holdback: suppressed exception on a fail-safe path", exc_info=True)
         return (True, "holdback_error")
 
 
@@ -543,6 +555,8 @@ def episodic_warstory(text: str) -> bool:
         from hooks.context_health_hook import _is_episodic_warstory
         return _is_episodic_warstory(text)
     except Exception:  # noqa: BLE001 — heuristic floor, fail-open (don't block on error)
+        import logging as _logging
+        _logging.getLogger(__name__).debug("episodic_warstory: suppressed exception on a fail-safe path", exc_info=True)
         return False
 
 
@@ -677,6 +691,8 @@ def ingestion_gate(
             try:
                 _append_gate_telemetry(text, section, verdict, reason)
             except Exception:  # noqa: BLE001 — defense-in-depth: telemetry NEVER alters a verdict
+                import logging as _logging
+                _logging.getLogger(__name__).debug("_emit_and_return: suppressed exception on a fail-safe path", exc_info=True)
                 pass
         return GateVerdict(verdict, tiers_run, reason)
 
@@ -930,6 +946,8 @@ def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str, str | Non
                                      "original) [%s]: %s :: %.80s", resolved, de, raw_text)
                         distilled = None
             except Exception:  # noqa: BLE001 — shape check advisory; never break admit
+                import logging as _logging
+                _logging.getLogger(__name__).debug("admit_memory_lesson: suppressed exception on a fail-safe path", exc_info=True)
                 distilled = None
             return ("auto", resolved, reason, distilled)
         return ("discard", None, reason or "unroutable_type", None)
@@ -1018,4 +1036,6 @@ def shape_warnings(text: str) -> "list[str]":
                          "provenance metadata, not the rule text)")
         return warns
     except Exception:  # noqa: BLE001 — shape is advisory; never break a write
+        import logging as _logging
+        _logging.getLogger(__name__).debug("shape_warnings: suppressed exception on a fail-safe path", exc_info=True)
         return []

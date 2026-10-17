@@ -425,6 +425,7 @@ def _collect_db_recovery() -> list[AttentionItem]:
                     if (not _text and store_name == "secrets.json") or isinstance(_json.loads(_text), dict):
                         continue
                 except Exception:  # noqa: BLE001 — still unreadable → keep surfacing
+                    logger.debug("_collect_db_recovery: suppressed exception on a fail-safe path", exc_info=True)
                     pass
                 if f"db_recovery:{isolated}" in seen_ids:
                     continue
@@ -554,6 +555,7 @@ def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
                     head = _fh.read(600)
                 fm, _ = parse_frontmatter(head)
             except Exception:
+                logger.debug("_collect_community_digests: suppressed exception on a fail-safe path", exc_info=True)
                 continue
             if not fm:
                 continue

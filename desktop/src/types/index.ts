@@ -511,7 +511,7 @@ export interface CompactionGuardEvent {
 // fixed backend constant; the frontend is a pure projection of it.
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacting' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -572,8 +572,13 @@ export interface StreamEvent {
   subtype?: string;
   contextPct?: number;
   patternDescription?: string;
-  // Context compaction fields (context_compacted event)
+  // Context compaction fields (context_compacting / context_compacted events).
+  // context_compacting is emitted LIVE when the CLI starts (phase 'started') or
+  // fails (phase 'failed'); context_compacted when it finishes, with sizes.
   trigger?: 'manual' | 'auto';
+  phase?: 'started' | 'failed';
+  preTokens?: number;
+  postTokens?: number;
   // Usage/caching fields (result event)
   usage?: {
     input_tokens?: number;

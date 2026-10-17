@@ -304,6 +304,7 @@ def _docs_mount_paths() -> dict:
         finally:
             conn.close()
     except Exception:  # noqa: BLE001
+        logger.debug("_docs_mount_paths: suppressed exception on a fail-safe path", exc_info=True)
         return {}
 
 
@@ -370,6 +371,7 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
             record_recall_metric("library_overlay", LIBRARY_DOMAINS, _latency_ms,
                                   hit_count=len(hits))
         except Exception:  # noqa: BLE001
+            logger.debug("library_search: suppressed exception on a fail-safe path", exc_info=True)
             pass
         return {"query": q, "scope": scope, "count": len(hits), "hits": hits}
     except Exception as exc:  # noqa: BLE001 — search must degrade to empty, never 500 the overlay

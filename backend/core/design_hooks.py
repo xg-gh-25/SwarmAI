@@ -165,6 +165,7 @@ def _in_scope(file_path: str) -> bool:
         raw = file_path.replace(os.sep, "/")
         return any(m in norm or m in raw for m in _TARGET_PATH_MARKERS)
     except Exception:  # noqa: BLE001 — scope check must never raise
+        logger.debug("_in_scope: suppressed exception on a fail-safe path", exc_info=True)
         return False
 
 

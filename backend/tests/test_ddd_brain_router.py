@@ -1,8 +1,15 @@
 """Tests for the DDD Brain Hub read-only router (GET /api/ddd/brains[/{name}]).
 
-Methodology: integration tests against the REAL workspace Projects/ tree (no
-mocks of parse_entries / git / ddd_paths) — the whole point of the Brain Hub is
-to project real cognitive state, so the tests assert against real data.
+Methodology: integration tests against a REAL on-disk workspace (no mocks of
+parse_entries / git / ddd_paths) — the Brain Hub projects real cognitive state, so
+the tests assert against real files, a real `git` repo and a real parse. The
+workspace is a HERMETIC one built per test in tmp (`hermetic_workspace`), not the
+developer's live ~/.swarm-ai/SwarmWS: conftest re-roots every test's app-data dir
+off production, so a test that silently depended on the live tree saw an EMPTY
+Projects/ and went red on every machine, and on CI it never had data to begin
+with. A fixture also makes the asserted facts (2 brains, 1 dormant + 1 archived
+entry, exactly one brain with a code_intel.db) deterministic instead of whatever
+the live workspace happened to contain.
 
 Key invariants under test:
   - AC1: brains list returns every real DDD project with live health signals
@@ -30,6 +37,9 @@ def client():
     app = FastAPI()
     app.include_router(router, prefix="/api/ddd")
     return TestClient(app)
+
+
+from tests._brain_workspace import hermetic_workspace  # noqa: E402,F401 — pytest fixture
 
 
 class TestLifecycleStageOrdering:
@@ -153,6 +163,7 @@ class TestDocstringHonesty:
         assert "apply -R" in doc and "watermark" in doc.lower()
 
 
+@pytest.mark.usefixtures("hermetic_workspace")
 class TestBrainsList:
     """GET /api/ddd/brains — Gallery data (AC1)."""
 
@@ -164,8 +175,8 @@ class TestBrainsList:
         names = {b["name"] for b in data["brains"]}
         # SwarmAI is the non-deletable default project — MUST be present.
         assert "SwarmAI" in names
-        # There are multiple real DDD projects in the workspace.
-        assert len(data["brains"]) >= 2
+        # Every DDD project in the workspace is listed (the fixture has two).
+        assert names == {"SwarmAI", "Other"}
 
     def test_each_brain_has_live_health_and_sections(self, client):
         resp = client.get("/api/ddd/brains")
@@ -321,6 +332,7 @@ class TestBrainsList:
         assert brains["SwarmAI"]["health"]["sinking"] == expected
 
 
+@pytest.mark.usefixtures("hermetic_workspace")
 class TestBrainDetail:
     """GET /api/ddd/brains/{name} — Brain view data (AC2)."""
 
@@ -526,7 +538,7 @@ class TestPathTraversal:
 
 
 def _swarmai_dir() -> Path:
-    """Resolve the real SwarmAI project dir from the active workspace."""
+    """Resolve the SwarmAI project dir from the active (fixture) workspace."""
     from routers.ddd_brain import _projects_root
 
     return _projects_root() / "SwarmAI"

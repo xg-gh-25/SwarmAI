@@ -16,18 +16,18 @@ updated: 2026-09-13
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 4142+ | `git log --oneline | wc -l` |
-| Duration | ~236 days | First commit to latest (1 human contributor) |
-| Backend core modules | 181 Python files, 104280 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
-| Total backend LOC | 236177 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
-| Test files | 553 | `find backend/tests -name "*.py" | wc -l` |
+| Total commits | 4149+ | `git log --oneline | wc -l` |
+| Duration | ~237 days | First commit to latest (1 human contributor) |
+| Backend core modules | 181 Python files, 104736 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
+| Total backend LOC | 236708 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
+| Test files | 556 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 84 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 14 | `ls backend/hooks/*.py | wc -l` |
 | React components | 289 | `find desktop/src -name "*.tsx" | wc -l` |
 | Pipeline spec depth | 1808 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 5024 lines | `wc -l backend/core/session_unit.py` |
+| Largest state machine | 5069 lines | `wc -l backend/core/session_unit.py` |
 | Context system | 1419 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
 | Background jobs | 16 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-| Code graph | 27,140 symbols, 45,015 edges | `code_intel.db` (code_nodes / code_edges tables) |
+| Code graph | 27,205 symbols, 46,521 edges | `code_intel.db` (code_nodes / code_edges tables) |
 <!-- METRICS_END -->

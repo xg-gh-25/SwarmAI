@@ -396,6 +396,29 @@ the stale-break path's existence check, not its postconditions.
 **This is mechanical, not judgment.** Count paths. List postconditions. Check each.
 It takes 30 seconds and catches the #1 class of "works on happy path, breaks on retry."
 
+## Step 2.7: Real-Data Replay (when the change reads PERSISTED data) `[MUST]`
+
+**Trigger:** the change parses, projects, classifies or renders data that already
+exists on disk — DB rows, transcripts, artifact/run JSON, log lines, stored tool
+summaries, any file a previous run wrote.
+
+**Do:** before leaving BUILD, run the new code over the REAL persisted corpus (all
+of it, or a sample big enough to hit the long tail) and count the outcomes that
+matter — exceptions, unparsed/fallback shapes, values that come out empty or
+wrong. Fix what it finds and add the shapes it found to the unit tests. Read the
+corpus; never write to it (copy it first if the code under test writes).
+
+**Why at BUILD and not only at TEST Layer-4:** unit tests built from imagined
+inputs test the shapes you thought of. In one run a label parser passed its whole
+hand-written table and then, replayed over the real stored summaries at TEST,
+still mis-handled 362 of them (`2>/dev/null`, `|| exit`, quoted exports) — found
+one stage later than it had to be, after review had already passed the code. The
+real corpus is the specification of "what inputs exist"; read it while the code is
+still cheap to change.
+
+**Skip when:** the change reads no persisted data (a pure function over new input,
+a docs change, a UI change with no stored-data path).
+
 ## Step 3: VERIFY -- Targeted tests, zero regressions
 
 **STEP: resolve THIS project's test command first.** Read the project's TECH.md

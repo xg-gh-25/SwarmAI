@@ -127,6 +127,8 @@ def _parse_memory_shard(text: str) -> list[dict]:
                 "archived_from": "",  # MEMORY shards carry no per-entry provenance
             })
     except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_parse_memory_shard: suppressed exception on a fail-safe path", exc_info=True)
         return []
     return out
 
@@ -291,6 +293,8 @@ def search_archive(query: str, source: ArchiveSource, limit: int = 30) -> dict:
                 if len(results) >= limit:
                     break
     except Exception:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("search_archive: suppressed exception on a fail-safe path", exc_info=True)
         return {"results": [], "q": query, "source": source}
 
     return {"results": results, "q": query, "source": source}

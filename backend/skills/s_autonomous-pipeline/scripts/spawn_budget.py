@@ -27,6 +27,19 @@ GATE_PROMPT_DIR = _SKILL_ROOT / "data" / "gate-prompts"
 #: The literal every gate prompt must carry so a human can find its budget.
 BUDGET_MARKER = "SCOPE BUDGET"
 
+#: Slot a gate prompt carries when its sub-agent must receive the project's recalled
+#: DDD knowledge. A prompt containing it can only be emitted with ``--project``
+#: (spawn_prompt.py exit 3 otherwise): the knowledge used to be a hand-paste step,
+#: and a hand-paste step is exactly what was skipped. Data-driven on purpose — a
+#: gate opts in by carrying the slot, so there is no second list of gate ids to
+#: keep in sync with the templates.
+KNOWLEDGE_SLOT = "<PROJECT_KNOWLEDGE>"
+
+
+def requires_knowledge(text: str) -> bool:
+    """True if the prompt carries the project-knowledge slot."""
+    return KNOWLEDGE_SLOT in (text or "")
+
 #: A numeric ceiling on files read or tool calls made. Guards the INTENT (some
 #: number bounds some countable resource), so rewording a cap does not silently
 #: disable the check. Kept in sync with nothing — this IS the definition.

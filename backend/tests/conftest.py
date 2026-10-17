@@ -45,6 +45,25 @@ if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
     )
     _sys.exit(1)
 
+# ---------------------------------------------------------------------------
+# Inherited runtime-flag strip — must fire BEFORE any app module is imported
+# ---------------------------------------------------------------------------
+# A pytest launched from an agent shell inherits the DAEMON's environment
+# (launchd plist): SWARM_RESUME_VIA_QUERY, SWARM_DESKTOP_PREWARM, SWARMAI_MODE,
+# SWARMAI_SELF_HEAL, SWARMAI_OWNER_PID, ... Production code branches on these,
+# so the same test went green on CI (no flags) and red on the dev box (flags
+# inherited) — e.g. the abandon-continuation tests asserted the flag-OFF shape
+# while the shell carried SWARM_RESUME_VIA_QUERY=true. A flag a test depends on
+# must be SET BY THE TEST (monkeypatch.setenv), never inherited, so we drop every
+# SWARM_* / SWARMAI_* var here and make local runs see what CI sees. Done at
+# import time (not in a fixture) because some modules read flags at import.
+# Kept: the suite's own control knobs, which are deliberately exported by the
+# person running the tests.
+_TEST_CONTROL_ENV = frozenset({"SWARMAI_SUITE", "SWARMAI_REGEN_TOOL_SUMMARY_FIXTURE"})
+for _k in [k for k in _os.environ if k.startswith(("SWARM_", "SWARMAI_"))]:
+    if _k not in _TEST_CONTROL_ENV:
+        del _os.environ[_k]
+
 import atexit
 
 import gc

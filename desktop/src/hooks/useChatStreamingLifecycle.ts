@@ -3667,15 +3667,22 @@ export function useChatStreamingLifecycle(
         //      Mirrors the resume-boundary store-append path above (session-scoped: no DB
         //      row — the message survives in-session reconcile via MessageStore._applyMerge
         //      Pass 2, which preserves local-only synthetic system messages).
-        else if (event.type === 'context_compacted') {
+        //
+        // context_compacting (2026-10-17) — emitted LIVE the moment the CLI starts
+        // compacting (phase 'started') or if it fails ('failed'), so a 1-2 minute
+        // pause reads as "compacting", not a hang. Same store-append path and the
+        // same 'compact-' id prefix (TabView renders it as the compact divider);
+        // the warning is only cleared once compaction actually completes.
+        else if (event.type === 'context_compacted' || event.type === 'context_compacting') {
+          const completed = event.type === 'context_compacted';
           const tabState = capturedTabId
             ? tabMapRef.current.get(capturedTabId)
             : undefined;
-          if (tabState) {
+          if (completed && tabState) {
             tabState.contextWarning = null;
           }
           // Clear the active tab's warning banner mirror (pct resets post-compact).
-          if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
+          if (completed && (capturedTabId === null || capturedTabId === activeTabIdRef.current)) {
             setContextWarning(null);
           }
           if (event.message && capturedTabId) {
@@ -3685,20 +3692,23 @@ export function useChatStreamingLifecycle(
             // last-write-wins race — the single-writer store IS the per-tab authority).
             const compactStore = messageStoreRegistry.get(capturedTabId);
             if (compactStore) {
-              // DEDUP: if the last message is already a compact boundary, skip —
-              // repeated/re-emitted compactions must not stack adjacent notices
+              // DEDUP: skip only when the last message is the SAME compact notice —
+              // a re-emitted compaction must not stack, but "started" followed by
+              // "completed" are two different notices and both must show
               // (mirrors the resume-boundary alreadyHasBoundary guard).
               const existing = compactStore.messages;
               const prev = existing[existing.length - 1];
+              const prevText = prev?.content?.[0]?.type === 'text' ? prev.content[0].text : undefined;
               const alreadyCompact =
-                prev?.role === 'system' && prev?.id?.startsWith('compact-');
+                prev?.role === 'system' && prev?.id?.startsWith('compact-') &&
+                prevText === event.message;
               if (!alreadyCompact) {
                 compactStore.append({
                   // Suffix a random token so two same-millisecond compactions can
                   // never collide to one id (which MessageStore would de-dup by id,
                   // silently dropping the second) — matches the evolution-message
                   // id scheme. The 'compact-' PREFIX is the contract TabView keys on.
-                  id: `compact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  id: `compact-${completed ? '' : 'start-'}${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                   role: 'system',
                   content: [{ type: 'text', text: event.message }],
                   timestamp: new Date().toISOString(),

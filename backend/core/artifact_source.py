@@ -89,6 +89,8 @@ def classify_source(
         )
         owning = _owning_tree(p, ws_root)
     except Exception:  # noqa: BLE001 — fail-safe: never let classification raise
+        import logging as _logging
+        _logging.getLogger(__name__).debug("classify_source: suppressed exception on a fail-safe path", exc_info=True)
         owning = None
 
     if owning is not None:
@@ -106,6 +108,8 @@ def classify_source(
         if is_noise_path(p):
             return "copy", "disposable-or-noise"
     except Exception:  # noqa: BLE001 — fail-safe
+        import logging as _logging
+        _logging.getLogger(__name__).debug("classify_source: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
     # External, non-noise path — still a copy (we don't own it; not a live pointer).

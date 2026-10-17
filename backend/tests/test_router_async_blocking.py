@@ -248,7 +248,12 @@ def _find_violations(source: str, filename: str = "<src>") -> list[tuple[str, in
         # dotted path keeps this robust to aliasing (`from anyio import to_thread`), at
         # the cost of exempting an unrelated `x.run_sync(...)` — acceptable under the
         # file's under-match principle, and no such call exists in scope.
-        _DISPATCH_ATTRS = {"to_thread", "run_sync"}
+        # `executors.run_in(pool, fn)` / `loop.run_in_executor(pool, fn)` are the
+        # same off-loop dispatch onto a NAMED pool (run_d72047b0 routed high-risk
+        # work there on purpose). Missing them made correctly-dispatched calls
+        # count as blocking: plugin_manager's three hang-guarded git calls moved
+        # INTO run_in and the ratchet went red for code that had just been fixed.
+        _DISPATCH_ATTRS = {"to_thread", "run_sync", "run_in", "run_in_executor"}
         in_to_thread = any(
             isinstance(a, ast.Call)
             and isinstance(a.func, ast.Attribute)
@@ -483,6 +488,20 @@ def test_scanner_passes_sanctioned_to_thread_patterns():
 # dispatch call's arguments — by checking a violation SIBLING to a dispatch is still
 # caught. Without this, the FP fix could silently hollow out the gate.
 # ---------------------------------------------------------------------------
+def test_scanner_passes_named_pool_dispatch():
+    """executors.run_in / loop.run_in_executor with a lambda are off-loop."""
+    src = (
+        "async def via_run_in():\n"
+        "    return await executors.run_in('subprocess', lambda: subprocess.run(['git']))\n"
+        "async def via_run_in_executor(loop):\n"
+        "    return await loop.run_in_executor(None, lambda: p.read_text())\n"
+    )
+    assert _find_violations(src) == []
+    # ...and the SAME call outside the dispatcher is still a violation.
+    bare = "async def raw():\n    return subprocess.run(['git'])\n"
+    assert [v[2] for v in _find_violations(bare)] == ["subprocess.run"]
+
+
 def test_anyio_exemption_does_not_blanket_pass_the_handler():
     mixed = (
         "import anyio\n"

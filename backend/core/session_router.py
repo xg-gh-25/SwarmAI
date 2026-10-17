@@ -134,6 +134,7 @@ def _read_run_map(session_id: str) -> "tuple[str, float] | None":
             map_ts = 0.0
         return (map_run_id.strip(), map_ts)
     except Exception:  # fail-safe: attribution read must never raise
+        logger.debug("_read_run_map: suppressed exception on a fail-safe path", exc_info=True)
         return None
 
 
@@ -239,6 +240,7 @@ def _record_recall_degraded(reason: str) -> None:
     try:
         _recall_degraded_count[reason] = _recall_degraded_count.get(reason, 0) + 1
     except Exception:  # noqa: BLE001 — metric must never break recall
+        logger.debug("_record_recall_degraded: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 
@@ -257,6 +259,7 @@ def _record_ddd_inject(outcome: str) -> None:
     try:
         _ddd_inject_count[outcome] = _ddd_inject_count.get(outcome, 0) + 1
     except Exception:  # noqa: BLE001 — metric must never break recall
+        logger.debug("_record_ddd_inject: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 
@@ -849,6 +852,7 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
                 ts.ensure_tables()
                 additional_stores.append(ts)
             except Exception:
+                logger.debug("_recall_for_query: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # Transcript recall unavailable — Knowledge-only is fine
 
             # Include MemoryRecallStore so the user's real query also recalls
@@ -858,6 +862,7 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
                 from .memory_recall_store import MemoryRecallStore
                 additional_stores.append(MemoryRecallStore(conn))
             except Exception:
+                logger.debug("_recall_for_query: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # Memory recall unavailable — other domains still work
 
             engine = RecallEngine(store, additional_stores=additional_stores)
@@ -1085,6 +1090,7 @@ def _graph_enrich_recall(query: str) -> str:
         lines.append(f"Related via knowledge graph: {', '.join(related[:10])}")
         return "\n".join(lines)
     except Exception:
+        logger.debug("_graph_enrich_recall: suppressed exception on a fail-safe path", exc_info=True)
         return ""
 
 
@@ -1157,6 +1163,7 @@ async def _maybe_inject_recall(
         try:
             unit._recall_injected = True
         except Exception:  # noqa: BLE001
+            logger.debug("_maybe_inject_recall: suppressed exception on a fail-safe path", exc_info=True)
             pass
         return None
 
@@ -1245,6 +1252,7 @@ async def _maybe_inject_recall_inner(
     try:
         unit._active_project = _active_project
     except Exception:  # noqa: BLE001 — cache write must never break recall
+        logger.debug("_maybe_inject_recall_inner: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
     # ── DDD runtime injection (run_91bc0651 M2) — runs BEFORE the keyword gate ──
@@ -1362,6 +1370,7 @@ async def _maybe_inject_recall_inner(
                 degraded_reason=(None if recalled else "empty_with_keywords"),
             )
         except Exception:  # noqa: BLE001 — metric must never break recall
+            logger.debug("_maybe_inject_recall_inner: suppressed exception on a fail-safe path", exc_info=True)
             pass
         if recalled:
             # Append to this options instance only — safe even if options is
@@ -1433,6 +1442,7 @@ async def _maybe_inject_recall_inner(
                     "keywords": list(keywords[:32]),
                 }
             except Exception:  # noqa: BLE001 — snapshot must never break recall
+                logger.debug("_maybe_inject_recall_inner: suppressed exception on a fail-safe path", exc_info=True)
                 pass
             logger.info(
                 "recall injected: +%d chars (~%d tok) into %s | keywords=%s",
@@ -1492,6 +1502,7 @@ async def _maybe_inject_recall_inner(
                     "keywords": list(keywords[:32]),
                 }
             except Exception:  # noqa: BLE001 — snapshot must never break recall
+                logger.debug("_maybe_inject_recall_inner: suppressed exception on a fail-safe path", exc_info=True)
                 pass
             logger.info(
                 "recall ran but matched nothing | keywords=%s | "
@@ -1660,6 +1671,7 @@ def _inject_ddd_for_active_project(
         record_recall_metric("session_ddd", ("ddd",), _ddd_ms,
                              hit_count=len(ddd_hits))
     except Exception:  # noqa: BLE001
+        logger.debug("_inject_ddd_for_active_project: suppressed exception on a fail-safe path", exc_info=True)
         pass
     if not ddd_hits:
         _record_ddd_inject("declined:no_ddd_hits")
@@ -1704,6 +1716,7 @@ def _inject_ddd_for_active_project(
             # record_ddd_hit no-ops on "". Anchor IS the key (no doc/section).
             record_ddd_hit(project, entry_anchor_text(content), _today)
     except Exception:  # noqa: BLE001 — best-effort, never block the recall path
+        logger.debug("_inject_ddd_for_active_project: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 
@@ -2298,6 +2311,7 @@ class SessionRouter:
                     continue
             return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
         except Exception:  # noqa: BLE001 — staleness is best-effort, never fatal
+            logger.debug("_desktop_ctx_hash: suppressed exception on a fail-safe path", exc_info=True)
             return ""
 
     def _desktop_prewarm_enabled(self) -> bool:
@@ -3099,6 +3113,7 @@ class SessionRouter:
                 try:
                     unit._last_drained_seqs = list(seqs)
                 except Exception:
+                    logger.debug("_finalize_pending_delivery: suppressed exception on a fail-safe path", exc_info=True)
                     pass
         elif saw_error is not None and terminal:
             # Terminally-undeliverable: a permanent, non-retriable error. mark_sent
@@ -3709,6 +3724,7 @@ class SessionRouter:
                     _rsnap if _ttft_recall_ms is not None else None
                 )
             except Exception:  # noqa: BLE001 — observability copy must never break send
+                logger.debug("run_conversation: suppressed exception on a fail-safe path", exc_info=True)
                 pass
 
         # G3 shadow recall REMOVED — recall is already live (wired into
@@ -4464,6 +4480,7 @@ class SessionRouter:
             try:
                 await self._drain_worker_task
             except (asyncio.CancelledError, Exception):
+                logger.debug("disconnect_all: suppressed exception on a fail-safe path", exc_info=True)
                 pass
             self._drain_worker_task = None
 

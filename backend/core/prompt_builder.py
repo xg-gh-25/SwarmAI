@@ -143,30 +143,44 @@ def strip_sensitive_mcps(mcp_servers: dict) -> dict:
 TRUNCATION_MARKER = "[Truncated: kept newest ~2000 tokens]"
 
 # ── Autocompact trigger threshold (NOT a cost cap — STEERING #2) ──────────────
-# task_budget is the per-interaction-chain token count at which the SDK CLI fires
-# autocompact (summarize earlier context + CONTINUE — it never truncates in-flight
-# work). It is DERIVED from the model's context window, not a frozen literal, so it
-# tracks the window and triggers EARLY: a smaller resident context means lower
-# per-turn prefill latency + cost, at the acceptable price of compacting a little
-# more often (compaction is auto, visible, and self-continuing — XG 2026-10-14:
-# "阀值只能比800k 小才合理 基本75% context window其实就应该触发").
-AUTOCOMPACT_WINDOW_FRACTION = 0.75
-# Floor so a hypothetical tiny-window model can never get a budget so small it
-# thrashes autocompact / effectively disables useful context. 128K was the old CLI
-# default (a known-workable lower bound); no current model is below it.
-AUTOCOMPACT_BUDGET_FLOOR = 128_000
+# The CLI fires autocompact (summarize earlier context + CONTINUE the turn; it
+# never truncates in-flight work) when context reaches its threshold. XG
+# 2026-10-14: "基本75% context window其实就应该触发" — trigger at 75% of the window.
+#
+# The knob is the CLI setting `autoCompactWindow`, NOT `task_budget`. Measured
+# 2026-10-17 via get_context_usage() on claude-opus-5-5[1m]: default threshold
+# 967K; task_budget=750K → still 967K (task_budget is an API-side model budget,
+# it does not move compaction); autoCompactWindow=750K → 717K. So the CLI
+# threshold = autoCompactWindow − a fixed 33K buffer, and to trigger AT a target
+# we set the window to target + buffer.
+AUTOCOMPACT_TRIGGER_FRACTION = 0.75
+# Floor so a hypothetical tiny-window model can never get a trigger so low it
+# thrashes autocompact. 128K was the old CLI default; no current model is below it.
+AUTOCOMPACT_TRIGGER_FLOOR = 128_000
+# CLI-internal gap between autoCompactWindow and the threshold it yields (measured).
+AUTOCOMPACT_CLI_BUFFER = 33_000
+# Channel (unattended Slack) sessions trigger at a fixed 400K, paired with
+# max_turns=100 — an unattended-safety line, not a window fraction.
+CHANNEL_AUTOCOMPACT_TRIGGER = 400_000
 
 
-def _compute_desktop_task_budget(context_window: int) -> int:
-    """Desktop autocompact task_budget = max(FLOOR, 0.75 × context window).
+def _compute_desktop_autocompact_trigger(context_window: int) -> int:
+    """Desktop trigger = max(FLOOR, 0.75 × context window) tokens.
 
-    Pure function of the window so it is unit-testable and model-agnostic:
-    a 1M-window model → 750_000; the 200K conservative/unknown default → 150_000
-    (still above the old 128K CLI default); a sub-171K window floors at 128K.
-    Returns an int (SDK task_budget["total"]). int() truncates — no spurious
-    rounding on an already-integer window × 0.75.
+    1M window → 750_000; 200K conservative/unknown default → 150_000; a
+    sub-171K window floors at 128K. int() truncates an integer window × 0.75.
     """
-    return max(AUTOCOMPACT_BUDGET_FLOOR, int(AUTOCOMPACT_WINDOW_FRACTION * context_window))
+    return max(AUTOCOMPACT_TRIGGER_FLOOR, int(AUTOCOMPACT_TRIGGER_FRACTION * context_window))
+
+
+def _compute_autocompact_window_setting(trigger_tokens: int, context_window: int) -> int:
+    """`autoCompactWindow` value that makes the CLI compact at ``trigger_tokens``.
+
+    window = trigger + CLI buffer, capped at the model window (the CLI itself uses
+    min(setting, model window), so a cap never changes behavior — it just keeps
+    the value honest). 1M model, 750K trigger → 783_000.
+    """
+    return min(context_window, trigger_tokens + AUTOCOMPACT_CLI_BUFFER)
 
 
 def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -> str:
@@ -900,6 +914,50 @@ class PromptBuilder:
             "trigger": norm_trigger,
             "message": cls.COMPACT_NOTICE_TEXT,
         }
+
+    # Shown the moment the CLI starts compacting (SystemMessage status=compacting).
+    COMPACTING_NOTICE_TEXT = (
+        "Compacting conversation context\n"
+        "Context reached the compaction threshold. Earlier messages are being "
+        "summarized; this turn continues automatically when it is done."
+    )
+    COMPACT_FAILED_NOTICE_TEXT = (
+        "Context compaction failed\n"
+        "The conversation was not summarized; the turn continues with the full context."
+    )
+
+    @classmethod
+    def build_compacting_notice(cls, *, failed: bool = False) -> dict:
+        """``context_compacting`` SSE event: compaction started (or failed).
+
+        Emitted live from the stream (not at turn end) so the user sees that a
+        1-2 minute pause is a compaction, not a hang.
+        """
+        return {
+            "type": "context_compacting",
+            "phase": "failed" if failed else "started",
+            "message": cls.COMPACT_FAILED_NOTICE_TEXT if failed else cls.COMPACTING_NOTICE_TEXT,
+        }
+
+    @classmethod
+    def build_compact_boundary_notice(cls, metadata: Optional[dict]) -> dict:
+        """``context_compacted`` event built from the CLI's ``compact_boundary``.
+
+        Same event type and fixed text as :meth:`build_compact_notice`, plus a
+        detail line with the measured sizes when the CLI reports them
+        (``pre_tokens`` / ``post_tokens`` / ``duration_ms``).
+        """
+        md = metadata if isinstance(metadata, dict) else {}
+        evt = cls.build_compact_notice(md.get("trigger"))
+        pre, post, dur = md.get("pre_tokens"), md.get("post_tokens"), md.get("duration_ms")
+        if isinstance(pre, int) and isinstance(post, int) and pre > 0:
+            secs = f" in {round(dur / 1000)}s" if isinstance(dur, (int, float)) else ""
+            evt["message"] = (
+                f"{cls.COMPACT_NOTICE_TEXT}\n"
+                f"Context {pre // 1000}K → {post // 1000}K tokens{secs}. Continuing."
+            )
+            evt["preTokens"], evt["postTokens"] = pre, post
+        return evt
 
     # ------------------------------------------------------------------
     # get_model_context_window
@@ -2287,16 +2345,16 @@ class PromptBuilder:
         # unreachable (the original bug). See session_healing.py.
         # Evidence: run_bbe3f167 hit exactly 101 turns at pipeline stage 7/8.
         #
-        # Safety: max_turns is an INDEPENDENT runaway cap, orthogonal to
-        # task_budget (which is the autocompact TRIGGER line — window-derived
-        # desktop / 400K channel — NOT a cost cap; see the Task budget block
-        # below). The user can always press Stop for true runaway scenarios.
+        # Safety: max_turns is an INDEPENDENT runaway cap, orthogonal to the
+        # autocompact trigger (75% window desktop / 400K channel — NOT a cost
+        # cap; see the autocompact block below). The user can always press Stop
+        # for true runaway scenarios.
         from .session_healing import CHANNEL_MAX_TURNS, DESKTOP_MAX_TURNS
 
         max_turns = agent_config.get("max_turns") or None
         if channel_context and (max_turns is None or max_turns > CHANNEL_MAX_TURNS):
             # Channel: generous limit for skill execution (was 15, too small).
-            # Channel's real safety comes from its 400K task_budget, not turn count.
+            # Channel's real safety comes from its 400K autocompact line, not turn count.
             # 100 covers all skills (max observed: ~60 turns for complex research).
             max_turns = CHANNEL_MAX_TURNS
         elif not channel_context and max_turns is None:
@@ -2306,36 +2364,28 @@ class PromptBuilder:
             # Self-healing triggers at max_turns-20 for seamless refresh.
             max_turns = DESKTOP_MAX_TURNS
 
-        # ── Task budget: the CLI-autocompact TRIGGER line (NOT a cost cap) ─────
+        # ── Autocompact trigger (CLI setting `autoCompactWindow`) ───────────────
         #
-        # task_budget is the per-interaction-chain token count at which the SDK
-        # CLI fires autocompact — it SUMMARIZES earlier context and CONTINUES the
-        # turn; it never truncates in-flight work. So it is the autocompact TRIGGER
-        # line, NOT a cost cap (STEERING #2: a cost cap that truncated real work
-        # would be the banned O030 pattern — this is the opposite).
+        # Compaction SUMMARIZES earlier context and CONTINUES the turn; it never
+        # truncates in-flight work, so this is a trigger line, not a cost cap
+        # (STEERING #2). Desktop triggers at 75% of the window (XG 2026-10-14);
+        # channel at a fixed 400K (unattended-safety line, with max_turns=100).
         #
-        # DISCOVERY (2026-06-01): the CLI default (128K) fired autocompact mid-task
-        # on 1M models (session 59b18ce8 compacted 3× at ~100-123K while reading a
-        # 3200-line file) — absurdly early. The first fix hardcoded 800K desktop /
-        # 400K channel.
-        #
-        # NOW (2026-10-14, XG directive): the desktop value is DERIVED from the
-        # model context window (0.75 × window via _compute_desktop_task_budget),
-        # not a frozen 800K literal. Lower + window-bound = context stays leaner →
-        # less per-turn prefill latency/cost, at the acceptable price of compacting
-        # a little more often (auto, visible, self-continuing). 1M window → 750K
-        # (250K headroom to the window, safer than the old 800K's 200K).
-        #
-        # Channel keeps a FIXED 400K: it is an unattended-safety line paired with
-        # max_turns=100 (a different rationale from desktop's prefill-tax tuning),
-        # and 400K is not a clean fraction of any standard window — leave it literal.
-        if channel_context:
-            # Channel: unattended but must handle large docs.
-            # max_turns=100 caps total interaction length independently.
-            task_budget = {"total": 400_000}
-        else:
-            # Desktop chat: window-derived trigger (0.75 × context window, floored).
-            task_budget = {"total": _compute_desktop_task_budget(self.get_model_context_window(model))}
+        # History: this used to be passed as `task_budget`, which turned out NOT to
+        # move the CLI threshold at all (measured 2026-10-17: still 967K on a 1M
+        # model) — autocompact never fired in practice (7 days, 170 sessions, real
+        # peaks up to 904K, zero auto compactions). task_budget is an API-side
+        # budget the MODEL is told about ("pace tool use and wrap up"), so it is no
+        # longer sent. See AUTOCOMPACT_CLI_BUFFER for the measured mapping.
+        _ctx_window = self.get_model_context_window(model)
+        _ac_trigger = (
+            CHANNEL_AUTOCOMPACT_TRIGGER if channel_context
+            else _compute_desktop_autocompact_trigger(_ctx_window)
+        )
+        cli_settings = {
+            "skillOverrides": CLI_SKILL_OVERRIDES,
+            "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
+        }
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
@@ -2388,9 +2438,9 @@ class PromptBuilder:
             cwd=_channel_sender_dir or working_directory,
             setting_sources=setting_sources,
             # Flag-level CLI settings (`--settings`; the SDK merges `sandbox` in).
-            # Hides CLI-bundled skills that SwarmAI must not load — see
-            # CLI_SKILL_OVERRIDES.
-            settings=json.dumps({"skillOverrides": CLI_SKILL_OVERRIDES}),
+            # Hides CLI-bundled skills SwarmAI must not load (CLI_SKILL_OVERRIDES)
+            # and sets the autocompact trigger (autoCompactWindow, see above).
+            settings=json.dumps(cli_settings),
             hooks=hooks if hooks else None,
             resume=resume_session_id,
             sandbox=sandbox_settings,
@@ -2403,7 +2453,6 @@ class PromptBuilder:
             thinking=thinking_config,
             effort=effort,
             max_turns=max_turns,
-            task_budget=task_budget,
         )
 
     # Canonical DDD doc set — single source: project_registry.DDD_CANONICAL_DOCS (Run 0).

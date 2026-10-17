@@ -113,3 +113,36 @@ class TestQuietFailureContract:
         parsed = json.loads(err)
         assert parsed["validation_failed"] is True
         assert parsed["errors"]  # non-empty reasons present
+
+
+class TestTemplatePassesItsOwnValidator:
+    """`schema --stage X` hands out a template the agent fills in. If that template
+    is missing a field the publish validator REQUIRES, every run discovers the gap
+    by rejection — publish → reject → add field → republish, per stage, per run.
+    The deliver template lacked `adversarial_review.evidence`, `meta_review`,
+    `convergence` and `ac_verification`, so every full/bugfix DELIVER was rejected
+    on its first publish. Pin the invariant instead of the field list: the template
+    itself, under the strictest profile, must validate clean."""
+
+    @pytest.mark.parametrize("stage", ["build", "review", "test", "deliver"])
+    def test_template_validates_clean_under_full_profile(self, stage, tmp_path):
+        import copy
+
+        from pipeline_validator import STAGE_TEMPLATES, validate_artifact_data
+
+        data = copy.deepcopy(STAGE_TEMPLATES[stage])
+        # The template carries placeholder unions like "full|lite|skipped" for the
+        # agent to pick from; pick the strict branch the way a real run would.
+        ar = data.get("adversarial_review")
+        if isinstance(ar, dict) and "|" in str(ar.get("profile_tier", "")):
+            ar["profile_tier"] = "full"
+            for f in ar.get("findings", []):
+                f["severity"] = "LOW"
+        lg = data.get("litmus_gate")
+        if isinstance(lg, dict) and "|" in str(lg.get("verdict", "")):
+            lg["verdict"] = "PASS"
+        for p in (data.get("runtime_patterns") or {}).get("patterns", []):
+            if "|" in str(p.get("status", "")):
+                p["status"] = "pass"
+        errors = validate_artifact_data(stage, data, profile="full", repo_root=str(tmp_path))
+        assert errors == [], f"{stage} template fails its own validator: {errors}"

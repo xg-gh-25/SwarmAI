@@ -42,6 +42,6 @@ Before marking the pipeline complete, show evidence for each:
 
 - [ ] **REPORT.md generated** — saved to `.artifacts/runs/<RUN_ID>/REPORT.md`
 - [ ] **All stage artifacts published** — every completed stage has a published artifact
-- [ ] **Confidence score calculated** — score breakdown shown, not just a number
+- [ ] **Push-ready verdict recorded** — the binary PUSH-READY / NOT-PUSH-READY gate (deliver.md), not a numeric score
 - [ ] **Decision log complete** — every non-trivial decision classified (mechanical/taste/judgment)
 - [ ] **TDD cycle verified** — RED (tests fail) → GREEN (tests pass) → VERIFY (no regressions)

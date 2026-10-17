@@ -34,9 +34,19 @@ This is **append-only** (D7-SAFETY③): PLAN sets the baseline, BUILD may ADD an
 if the changeset grows into a new domain, but **nothing removes one** — a removable
 declaration would be a channel to skip a required review. Use the registry's expert
 ids as the vocabulary (`ExpertManager.scan_experts()` / the 12 ids under
-`backend/experts/code/`). Declaring an expert does not yet block a commit (the D7
-enforcement gate is a later run); declaring it now makes the required-set explicit and
-auditable, and is the input the future gate verifies against what actually ran.
+`backend/experts/code/`).
+
+**This declaration is ENFORCED.** `run-commit` refuses (D7) unless every declared
+expert left an adversarial-review marker for THIS run. The marker is written on
+sub-agent completion only when the spawn reads as ADVERSARIAL (the Gate-2
+template's "Adversarially review this changeset — hunt for bugs…" wording), and it
+credits an expert only when the prompt carries an `EXPERT-ID: <id>` line. So a declared expert must run **in the DELIVER Gate-2 batch**,
+which takes the union of the tier default and this list (deliver.md). An expert that
+only ran at REVIEW — e.g. the Spec Compliance Gate, whose prompt is a per-AC check,
+not an attack — does NOT satisfy D7, and the commit is refused until it is
+re-spawned in a second, serial batch. Declare the experts the change must be
+ATTACKED by; don't declare `spec-compliance` to record that REVIEW will run it
+(REVIEW always does).
 
 ### Exhaustive File Discovery (Required — Before Writing Design Doc) `[MUST]`
 

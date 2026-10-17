@@ -345,3 +345,52 @@ class TestInQuoteFalsePositive:
         # An unterminated quote can't be proven in-quote → fail CLOSED (DENY a
         # real invocation rather than risk a hang slipping past the cap).
         assert _is_deny(_run("echo 'oops; " + PYT + " tests/"))
+
+
+_CAPPED = "perl -e 'alarm 90; exec @ARGV' python -m pytest tests/foo.py --timeout=60"
+
+
+class TestPagerScopedToPytestSegment:
+    """The pager check is scoped to the shell command that RUNS pytest.
+
+    The swallowed-output hang only happens when pytest's OWN stdout feeds a pager.
+    A `| tail`/`| head` on a DIFFERENT command of the same Bash call — grepping
+    the file pytest was redirected into, or an unrelated `ls | head` before it —
+    does not touch pytest's output, yet a whole-string check denies it, forcing a
+    correct command to be re-split. Grouping / subshell syntax is not segmented:
+    it falls back to the whole-string check (fail-closed), since
+    `{ pytest; } | tail` DOES pipe pytest.
+    """
+
+    def test_tail_on_redirected_file_after_semicolon_approved(self):
+        assert not _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1; grep FAILED /tmp/t.txt | tail -3"))
+
+    def test_tail_after_and_and_approved(self):
+        assert not _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1 && grep x /tmp/t.txt | head"))
+
+    def test_unrelated_head_before_pytest_approved(self):
+        assert not _is_deny(_run(f"ls | head -3; {_CAPPED} > /tmp/t.txt 2>&1"))
+
+    def test_newline_separated_commands_approved(self):
+        assert not _is_deny(_run(f"{_CAPPED} > /tmp/t.txt 2>&1\ngrep x /tmp/t.txt | tail -1"))
+
+    def test_stderr_redirect_does_not_split_the_pipe(self):
+        # `2>&1` contains `&` — must NOT be read as a command separator.
+        assert _is_deny(_run(f"{_CAPPED} 2>&1 | tail -5"))
+
+    def test_pipe_in_same_segment_after_other_commands_denied(self):
+        assert _is_deny(_run(f"cd backend && {_CAPPED} 2>&1 | grep x | tail -3"))
+
+    def test_loop_body_pipe_denied(self):
+        assert _is_deny(_run("for f in a b; do gtimeout 90 pytest $f | tail; done"))
+
+    def test_subshell_group_pipe_denied(self):
+        assert _is_deny(_run("(gtimeout 90 pytest x) | tail"))
+
+    def test_brace_group_pipe_denied(self):
+        # Splitting on `;` would put `| tail` in a pytest-free segment — grouping
+        # must fall back to the whole-string check.
+        assert _is_deny(_run("{ gtimeout 90 pytest x; } | tail"))
+
+    def test_command_substitution_pipe_denied(self):
+        assert _is_deny(_run("echo $(gtimeout 90 pytest x; true) | tail"))

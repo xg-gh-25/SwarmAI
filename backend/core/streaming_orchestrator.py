@@ -247,6 +247,7 @@ class StreamingOrchestrator:
                 )
             )
         except Exception:
+            logger.debug("_record_token_usage_bg: suppressed exception on a fail-safe path", exc_info=True)
             pass  # fire-and-forget — never break streaming
 
     @property
@@ -444,6 +445,7 @@ class StreamingOrchestrator:
             try:
                 r = await executors.run_in("io", resolve_path_to_physical, raw, ws_root)
             except Exception:  # noqa: BLE001 — fail-safe: unresolvable → dropped below
+                logger.debug("_resolve_one: suppressed exception on a fail-safe path", exc_info=True)
                 r = None
             resolve_cache[raw] = r
             return r
@@ -576,6 +578,7 @@ class StreamingOrchestrator:
                     "io", needs_human_review, raw, "written"
                 )).review_worthy
             except Exception:  # noqa: BLE001 — fail-safe: emit the delete (drop the row)
+                logger.debug("_build_file_delete_events: suppressed exception on a fail-safe path", exc_info=True)
                 _worthy = True
             # Resolve to a physical absolute path FIRST (shared with the emit below +
             # symmetric with the write gate, which consults is_canvas_surfaceable on
@@ -587,6 +590,7 @@ class StreamingOrchestrator:
                 try:
                     resolved = await executors.run_in("io", resolve_path_to_physical, raw, ws_root)
                 except Exception:
+                    logger.debug("_build_file_delete_events: suppressed exception on a fail-safe path", exc_info=True)
                     resolved = None
                 resolve_cache[raw] = resolved
             if not _worthy:
@@ -603,6 +607,7 @@ class StreamingOrchestrator:
                         "io", is_canvas_surfaceable, _ext_probe
                     )).surfaceable
                 except Exception:  # noqa: BLE001 — fail-safe: don't emit a phantom delete
+                    logger.debug("_build_file_delete_events: suppressed exception on a fail-safe path", exc_info=True)
                     _ext_surf = False
                 if not _ext_surf:
                     continue
@@ -624,6 +629,58 @@ class StreamingOrchestrator:
         persisted with the turn and rendered in the chat (the frontend keeps a
         confirmed text block that differs from earlier ones)."""
         return {"type": "assistant", "content": [{"type": "text", "text": text}], "model": None}
+
+    def _compaction_events(self, subtype: str, data: Any) -> list[dict]:
+        """Live SSE events for a CLI compaction, from its stream SystemMessages.
+
+        Observed CLI sequence (probed 2026-10-17): ``status`` status=compacting
+        → PreCompact hook → ``status`` status=None compact_result=success|… →
+        ``compact_boundary`` with ``compact_metadata`` {trigger, pre_tokens,
+        post_tokens, duration_ms}. These used to be dropped, so the user saw a
+        silent 1-2 minute pause and the notice only after ``result``.
+
+        * status=compacting → ``context_compacting`` (started).
+        * status=None, compact_result not "success" → ``context_compacting``
+          (failed).
+        * compact_boundary → ``context_compacted`` with sizes; clears the
+          PreCompact flag so the turn-end fallback notice does not repeat it, and
+          activates the CompactionGuard on the REAL signal (not only the
+          averaged-usage drop heuristic).
+        """
+        from .prompt_builder import PromptBuilder
+
+        data = data if isinstance(data, dict) else {}
+        parent = self._parent
+        if subtype == "status":
+            if data.get("status") == "compacting":
+                parent._last_progress_time = time.time()
+                logger.info("session_unit.compaction_started session_id=%s",
+                            parent.session_id)
+                return [PromptBuilder.build_compacting_notice()]
+            result = data.get("compact_result")
+            if data.get("status") is None and result and result != "success":
+                logger.warning("session_unit.compaction_failed session_id=%s result=%s",
+                               parent.session_id, result)
+                return [PromptBuilder.build_compacting_notice(failed=True)]
+            return []
+        if subtype == "compact_boundary":
+            parent._last_progress_time = time.time()
+            md = data.get("compact_metadata")
+            ctx = getattr(parent, "_hook_session_context", None)
+            if isinstance(ctx, dict):
+                ctx["_compact_notice_pending"] = False
+            try:
+                parent._compaction_guard.activate()
+            except Exception:  # noqa: BLE001 — visibility must never break the stream
+                logger.debug("compaction_guard.activate failed", exc_info=True)
+            evt = PromptBuilder.build_compact_boundary_notice(md)
+            logger.info(
+                "session_unit.compaction_done session_id=%s trigger=%s pre=%s post=%s",
+                parent.session_id, evt.get("trigger"),
+                evt.get("preTokens"), evt.get("postTokens"),
+            )
+            return [evt]
+        return []
 
     def _stall_event(self, text: str) -> dict:
         """A no-progress notice as the in-tab ``still_working`` status — NOT an
@@ -969,6 +1026,7 @@ class StreamingOrchestrator:
                     try:
                         await tick_task
                     except (asyncio.CancelledError, Exception):
+                        logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
                         pass
                     done.discard(tick_task)
                     pending.discard(tick_task)
@@ -996,6 +1054,7 @@ class StreamingOrchestrator:
                     perm_request = perm_task.result()
                 except Exception:
                     # Queue.get shouldn't fail, but be safe
+                    logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
                     continue
 
                 # ── AskUserQuestion item (kind-discriminated) ─────────
@@ -1206,6 +1265,11 @@ class StreamingOrchestrator:
                         "type": "session_start",
                         "sessionId": self._parent.session_id,
                     }
+                elif message.subtype in ("status", "compact_boundary"):
+                    for _cev in self._compaction_events(
+                        message.subtype, getattr(message, "data", None)
+                    ):
+                        yield _cev
                 continue  # Don't forward other system messages
 
             # ── StreamEvent: token-by-token streaming ─────────────
@@ -1414,6 +1478,11 @@ class StreamingOrchestrator:
             # ── AssistantMessage: full content blocks ─────────────
             if isinstance(message, AssistantMessage):
                 saw_assistant_message = True
+                # Per-request usage of the MAIN agent (a sub-agent's usage is its
+                # own context) → the real current context size for the warning.
+                _am_usage = getattr(message, "usage", None)
+                if _am_usage and getattr(message, "parent_tool_use_id", None) is None:
+                    self._parent._last_call_usage = _am_usage
                 self._parent._last_progress_time = time.time()  # real content blocks
                 if any(isinstance(b, (TextBlock, ToolUseBlock)) for b in message.content):
                     _progress.on_visible(self._parent._last_progress_time)
@@ -1943,6 +2012,7 @@ class StreamingOrchestrator:
                                 )
                             )
                         except Exception:
+                            logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
                             pass  # fire-and-forget — never break streaming
 
                     for meta_event in self._parent._emit_post_stream_metadata(
@@ -2132,6 +2202,7 @@ class StreamingOrchestrator:
                                 )
                             )
                         except Exception:
+                            logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
                             pass  # fire-and-forget
                     # Emit context metadata so frontend updates context
                     # ring/bar — especially important for timeout errors
@@ -2349,6 +2420,7 @@ class StreamingOrchestrator:
                             )
                         )
                     except Exception:
+                        logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
                         pass  # fire-and-forget — never break streaming
 
                 # ── Context usage & metadata bridge ────────────────
@@ -2417,8 +2489,8 @@ class StreamingOrchestrator:
                 # A post-turn LLM /compact at 60% held _client_io for up to
                 # 300s, blocking the user's next send() at the turn boundary
                 # ("streaming freezes at 60%"). Context is now managed by the
-                # CLI's built-in autocompact (task_budget=800K + per-session
-                # window-% autoCompact) + manual refresh — neither holds our
+                # CLI's built-in autocompact (autoCompactWindow, 75% of the
+                # window — prompt_builder) + manual refresh — neither holds our
                 # _client_io lock, so no turn-boundary freeze.
 
                 return

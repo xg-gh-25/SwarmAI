@@ -903,3 +903,79 @@ class TestReviewDeliverableCheckin:
             "fail-loud BLOCK must leave code UNcommitted — HEAD moved, meaning code shipped without audit"
         assert not (repo / ".aidlc" / "deliverables" / run_id).exists(), \
             "no B dir on a blocked commit"
+
+
+# ── Tracked deletions are commits, not ghosts ─────────────────────────────────
+class TestRunCommitTrackedDeletion:
+    """A run that DELETES a tracked file must be able to commit the deletion.
+
+    The ghost filter dropped every recorded path absent on disk — which is right
+    for a hallucinated path and wrong for a deliberate deletion: a real run deleted
+    two superseded components and run-commit could not commit the removal. The
+    discriminator is git itself: absent on disk AND tracked (index or HEAD) is a
+    deletion; absent and untracked is still a ghost.
+    """
+
+    def _git(self, repo, *a):
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, timeout=15)
+
+    def _setup(self, tmp_path):
+        repo = tmp_path / "delrepo"
+        (repo / "pkg" / "old").mkdir(parents=True)
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "keep.py").write_text("v1\n")
+        (repo / "pkg" / "gone.py").write_text("old\n")
+        (repo / "pkg" / "old" / "only.py").write_text("old\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        (repo / "keep.py").write_text("v2\n")
+        (repo / "pkg" / "gone.py").unlink()
+        (repo / "pkg" / "old" / "only.py").unlink()
+        (repo / "pkg" / "old").rmdir()  # its parent dir is gone too
+        return repo
+
+    def test_tracked_deletions_are_committed(self, workspace, tmp_path, capsys):
+        repo = self._setup(tmp_path)
+        rf = _write_run(workspace, "run_del",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "keep.py"), str(repo / "pkg" / "gone.py"),
+                                       str(repo / "pkg" / "old" / "only.py"),
+                                       str(repo / "never_existed.py")])
+        _run_commit(workspace, "run_del")
+        result = json.loads(capsys.readouterr().out)
+        assert len(result["committed"]) == 1, result
+        names = self._git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split("\n")
+        assert "M\tkeep.py" in names
+        assert "D\tpkg/gone.py" in names, f"deletion not committed: {names}"
+        assert "D\tpkg/old/only.py" in names, f"deletion under a removed dir not committed: {names}"
+        assert self._git(repo, "status", "--porcelain").stdout.strip() == ""
+        files = json.loads(rf.read_text())["commits"][0]["files"]
+        assert "pkg/gone.py" in files and "never_existed.py" not in files
+        warnings = " ".join(result.get("warnings", []))
+        assert "never_existed.py" in warnings, "an untracked missing path is still reported as a ghost"
+
+
+    def test_pathspec_magic_entries_are_ghosts_not_tracked(self, workspace, tmp_path, capsys):
+        """A recorded ':/' or glob must never count as "tracked" and reach git add.
+
+        git reads a path argument as a pathspec, so `ls-files --error-unmatch -- ':/'`
+        succeeds and `git add -- ':/'` stages the whole tree. The tracked check is
+        literal; these entries name no tracked file and are dropped as ghosts.
+        """
+        repo = self._setup(tmp_path)
+        (repo / "unrelated_untracked.py").write_text("another session's work\n")
+        rf = _write_run(workspace, "run_magic",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "keep.py"), ":/", "pkg/*.py",
+                                       str(repo / "*.py")])
+        _run_commit(workspace, "run_magic")
+        result = json.loads(capsys.readouterr().out)
+        committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        assert committed == ["keep.py"], f"only the real recorded file may commit: {committed}"
+        status = self._git(repo, "status", "--porcelain").stdout
+        assert "unrelated_untracked.py" in status, "an unrelated file must stay untouched"
+        assert "pkg/gone.py" in status, "a deletion NOT recorded by this run must stay uncommitted"
+        assert json.loads(rf.read_text())["commits"][0]["files"] == ["keep.py"]

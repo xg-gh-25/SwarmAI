@@ -151,6 +151,9 @@ sub-agent prompt — only raw diff + raw ACs.
    Context: acceptance_criteria + code diff + commit messages
    ```
    The sub-agent returns a JSON report with verdict + coverage matrix.
+   This REVIEW-stage spawn does NOT count toward the run's `required_experts` (D7
+   only credits adversarial Gate-2 spawns — see plan.md § Required Experts). If
+   `spec-compliance` is declared there, it must ALSO be in the DELIVER Gate-2 batch.
 
 4. **Route on verdict:**
 
@@ -235,6 +238,22 @@ Sub-agent prompts are in: backend/experts/code/
 3. UX & Test Agent (backend/experts/code/ux-test.md) — ONLY when frontend files changed
    → UX review (UX1-UX5), test coverage gaps, E2E trace
 ```
+
+**Project knowledge for every fan-out agent (and the Spec Compliance agent):** these
+prompts are composed here, not emitted whole, so put the recalled-knowledge block into
+each of them — emitted once for the change, the same block for every agent:
+
+```bash
+# Run from the repo root. Use the output ONLY on exit 0 (exit 3 = --project missing).
+python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --knowledge-only \
+  --project <PROJECT> --files <changed file 1> <changed file 2> ...
+```
+
+It carries the project's DDD entries recalled for the changed files, with doc +
+section provenance, an explicit "none recalled" or "UNAVAILABLE" state, and the
+command an agent can run to query further. Paste it under a `## Project Knowledge`
+heading after the agent's task statement (never before it — the adversarial
+classifier reads the prompt head).
 
 Each sub-agent returns a JSON report. They do NOT communicate with each other.
 

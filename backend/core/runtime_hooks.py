@@ -400,6 +400,7 @@ def create_user_correction_detector(
                         from core.ddd_cultivation import is_memory_worthy_correction
                         _worthy = is_memory_worthy_correction(summary)
                     except Exception:  # noqa: BLE001 — floor error → fail-closed (don't write)
+                        logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
                         _worthy = False
                     if not _worthy:
                         verdict = "discard"
@@ -420,6 +421,7 @@ def create_user_correction_detector(
                             from hooks.distillation_hook import requeue_pending_lesson
                             requeue_pending_lesson(ws / ".context", "lesson", summary)
                         except Exception:  # noqa: BLE001 — defer is best-effort
+                            logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
                             pass
                     elif verdict == "auto":
                         # ROOT-FIX (capture-vs-distill): if the gate distilled a
@@ -440,6 +442,7 @@ def create_user_correction_detector(
                                 mode="append", dedup=True,
                             )
                 except Exception:
+                    logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
                     pass  # Non-blocking — MEMORY write is best-effort
 
         return {}
@@ -543,6 +546,7 @@ def _get_recent_git_commits(workspace_dir: str, since_ts: float) -> list[str]:
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().split("\n")[:5]
     except Exception:
+        logger.debug("_get_recent_git_commits: suppressed exception on a fail-safe path", exc_info=True)
         pass
     return []
 
@@ -615,6 +619,7 @@ def create_session_checkpoint(
                     }
                 ring.pending_cleanup()
             except Exception:
+                logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # Observation enrichment is best-effort
 
         checkpoint = {
@@ -1196,6 +1201,7 @@ def _read_subagent_prompt_head(transcript_path: str) -> str:
                     return content[:2000]
         return ""
     except Exception:
+        logger.debug("_read_subagent_prompt_head: suppressed exception on a fail-safe path", exc_info=True)
         return ""
 
 
@@ -1251,6 +1257,7 @@ def _candidate_review_repos(dir_path: str) -> list[str]:
         from config import get_app_data_dir  # local import: avoids a load-time cycle
         _add(str(get_app_data_dir() / "SwarmWS"))
     except Exception:
+        logger.debug("_candidate_review_repos: suppressed exception on a fail-safe path", exc_info=True)
         pass  # workspace unresolvable → just scan the cwd repo (no fail-open change)
     return roots
 
@@ -1463,6 +1470,7 @@ def create_post_compact_injection(
                 if intents:
                     parts.append("Most recent steps: " + " | ".join(intents[-3:]) + ".")
             except Exception:
+                logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # enrichment is best-effort; never break the hook chain
 
         # Test status — did this session run tests? (continuity: pick the thread back up)
@@ -2063,6 +2071,7 @@ def register_runtime_hooks(
             "change_triggered_eval",
         )
     except Exception:
+        logger.debug("register_runtime_hooks: suppressed exception on a fail-safe path", exc_info=True)
         pass  # Non-blocking — eval hooks are optional
 
     # Phase 2: SubagentStop transcript capture

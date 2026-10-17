@@ -2500,7 +2500,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     _ac = deliver_stage_rec.get("ac_verification", {})
                     if not isinstance(_ac, dict):
                         _ac = {}
-                    if (_adv and _adv.get("findings")) or (_audit and _audit.get("criteria_met")) or _ac:
+                    # Any recorded completion audit counts — the current writer fields are
+                    # requirements_met/requirements_total/all_green; criteria_met is legacy.
+                    if (_adv and _adv.get("findings")) or _audit or _ac:
                         # Build delivery artifact data
                         auto_delivery = {
                             "title": _requirement[:80] or "Pipeline Delivery",
@@ -3121,7 +3123,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             run_state.get("files_touched"), args.files_touched
         )
 
-    if args.add_required_expert:
+    # getattr: cmd_run_update is also called in-process with a minimal
+    # SimpleNamespace (tests, ui_actions); a bare attribute read raises there.
+    if getattr(args, "add_required_expert", None):
         # ── R1.5a: required_experts is APPEND-ONLY (D7-SAFETY③) ─────────────────
         # The IC declares the experts a run MUST spawn (at PLAN); BUILD may ADD more
         # (a changeset that grows past a dispatch threshold needs another expert),
@@ -3294,7 +3298,12 @@ def _repo_root_for_file(path: str) -> str | None:
     """
     p = Path(path)
     if p.is_absolute():
-        return _rev_parse_toplevel(str(p.parent))
+        # A deleted file's parent dir may be gone too; git refuses to run in a
+        # missing dir, so resolve from the nearest ancestor that still exists.
+        anchor = p.parent
+        while not anchor.exists() and anchor != anchor.parent:
+            anchor = anchor.parent
+        return _rev_parse_toplevel(str(anchor))
     candidates = [str(Path.cwd())]
     try:
         from config import get_app_data_dir
@@ -3306,9 +3315,41 @@ def _repo_root_for_file(path: str) -> str | None:
             root = _rev_parse_toplevel(str((Path(base) / path).parent))
             if root:
                 return root
+    # Not on disk in any candidate: a DELETED file is still known to the git repo
+    # that tracked it — bind the deletion there, not to whatever repo cwd is in.
+    for base in candidates:
+        root = _rev_parse_toplevel(base) if Path(base).is_dir() else None
+        if root and _path_is_tracked(path, root):
+            return root
     # No candidate holds the file → cwd repo root (back-compat: a genuinely
     # cwd-relative not-yet-existing file still resolves as before).
     return _rev_parse_toplevel(str(Path.cwd()))
+
+
+def _path_is_tracked(f: str, root: str) -> bool:
+    """True if git at ``root`` tracks ``f`` — in the index, or in HEAD.
+
+    The index answers for a file deleted from the working tree but not yet staged;
+    HEAD answers for one whose deletion is already staged (gone from the index).
+    ``f`` may be absolute or repo-relative; git resolves both under ``-C root``.
+
+    LITERAL on purpose (``GIT_LITERAL_PATHSPECS=1``): git otherwise reads ``f`` as a
+    pathspec, so a recorded ``':/'`` or ``'backend/*.py'`` — a hallucinated or
+    injected files_touched entry — would match tracked files, count as "tracked",
+    and reach ``git add`` / ``git commit``, staging the whole tree (including a
+    parallel session's edits). Only a path that names one tracked file passes.
+    """
+    env = dict(os.environ)
+    try:
+        r = subprocess.run(["git", "-C", root, "ls-files", "--error-unmatch", "--", f],
+                           capture_output=True, text=True, timeout=10, env=env)
+        if r.returncode == 0:
+            return True
+        r = subprocess.run(["git", "-C", root, "ls-tree", "-r", "--name-only", "HEAD", "--", f],
+                           capture_output=True, text=True, timeout=10, env=env)
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def _path_exists_in_repo(f: str, root: str) -> bool:
@@ -3974,7 +4015,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         # cwd (Gate-2 HIGH) — see _path_exists_in_repo. files_touched may be
         # REPO-RELATIVE (a supported input); a cwd-relative check would mis-drop a
         # real file in another repo as a ghost in a multi-repo run.
-        real_files = [f for f in files if _path_exists_in_repo(f, root)]
+        # A path absent on disk that git still TRACKS is a deliberate deletion, not a
+        # ghost: staging it by pathspec records the removal, and the pathspec-scoped
+        # step below records it in history. Only absent AND untracked paths drop.
+        real_files = [f for f in files
+                      if _path_exists_in_repo(f, root) or _path_is_tracked(f, root)]
         ghosts = [f for f in files if f not in real_files]
         if ghosts:
             warnings.append(
@@ -5127,6 +5172,170 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
     }, indent=2))
 
 
+# ── REPORT read helpers: the reader follows the writer ───────────────────────
+# The report used to read fields no stage writes (``tdd.tests_total`` off the BUILD
+# record, adversarial ``verdict``, completion ``criteria_met``, ``confidence_score``)
+# and default each miss to 0 / "?", so a real run rendered "Tests: 0/0", "verdict: ?"
+# and "Confidence 0/10" over a 2847-test, 16-finding, push-ready delivery. Every field
+# read below is pinned to the writer schema (pipeline_validator.get_stage_schema) by
+# tests/test_run_report_writer_fields.py — a reader that drifts goes red there. A
+# value no stage wrote is OMITTED ("not recorded"), never rendered as a measurement.
+
+#: (stage, nested path) -> fields the report reads there. Two tests hold it honest:
+#: every entry must exist in the writer schema (template + required + recommended),
+#: and every field the read helpers below actually ``.get()`` must be listed here
+#: (found by parsing their code) — so the list cannot drift from the code either.
+_REPORT_READS = {
+    ("test", ()): ("tests_total", "passed", "failed", "tests_new", "regressions"),
+    ("review", ()): ("findings_count", "findings", "approved"),
+    ("build", ("tdd",)): ("tests_generated",),
+    ("deliver", ("adversarial_review",)): (
+        "spawned", "profile_tier", "findings_total", "findings_fixed",
+        "findings_remaining", "findings",
+    ),
+    ("deliver", ("completion_audit",)): (
+        "all_green", "requirements_met", "requirements_total", "gaps", "unfixable_gaps",
+    ),
+}
+
+#: Fields read ONLY so that reports of runs written under an older schema still
+#: render. Not in the current writer schema on purpose — new runs never write them.
+_REPORT_LEGACY_READS = {
+    ("deliver", ("adversarial_review",)): ("verdict",),
+    ("deliver", ("completion_audit",)): ("criteria_met", "criteria_unmet"),
+}
+
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _int_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _report_test_metrics(test_data: dict) -> dict:
+    """Measured test metrics from the test_report artifact; {} when none recorded.
+
+    ``passed`` is a boolean "suite passed" in the current schema. Older runs wrote
+    an integer pass COUNT there, in which case total = passed + failed.
+    """
+    if not isinstance(test_data, dict) or not test_data:
+        return {}
+    out: dict = {}
+    total = _int_or_none(test_data.get("tests_total"))
+    failed = _int_or_none(test_data.get("failed"))
+    passed = test_data.get("passed")
+    if total is None and _int_or_none(passed) is not None:
+        total = passed + (failed or 0)
+    if total is not None:
+        out["tests_total"] = total
+    if failed is not None:
+        out["failed"] = failed
+    for k in ("tests_new", "regressions"):
+        v = _int_or_none(test_data.get(k))
+        if v is not None:
+            out[k] = v
+    if isinstance(passed, bool):
+        out["suite_passed"] = passed
+    return out
+
+
+def _report_build_tests_written(build_tdd: dict):
+    """Tests WRITTEN during BUILD (``tdd.tests_generated``) — not the suite total."""
+    if not isinstance(build_tdd, dict):
+        return None
+    return _int_or_none(build_tdd.get("tests_generated"))
+
+
+def _report_tests_phrase(m: dict):
+    """Header phrase, e.g. "2847 run, 0 failed"; None when no test count was recorded."""
+    if not m or "tests_total" not in m:
+        return None
+    phrase = f"{m['tests_total']} run"
+    if "failed" in m:
+        phrase += f", {m['failed']} failed"
+    return phrase
+
+
+def _report_adversarial_summary(ar: dict):
+    """"16 found · 14 fixed · 0 open" from the writer's counts; None if not recorded."""
+    if not isinstance(ar, dict):
+        return None
+    total = _int_or_none(ar.get("findings_total"))
+    if total is None:
+        return None
+    parts = [f"{total} found"]
+    fixed = _int_or_none(ar.get("findings_fixed"))
+    if fixed is not None:
+        parts.append(f"{fixed} fixed")
+    open_ = _int_or_none(ar.get("findings_remaining"))
+    if open_ is not None:
+        parts.append(f"{open_} open")
+    return " · ".join(parts)
+
+
+def _report_completion_lines(ca: dict) -> list:
+    """Completion-audit lines from the writer fields (legacy criteria_* still render)."""
+    if not isinstance(ca, dict):
+        return []
+    lines: list = []
+    met = _int_or_none(ca.get("requirements_met"))
+    total = _int_or_none(ca.get("requirements_total"))
+    if met is not None and total is not None:
+        lines.append(f"**Requirements met:** {met}/{total}")
+    if isinstance(ca.get("all_green"), bool):
+        lines.append(f"**All green:** {'yes' if ca['all_green'] else 'no'}")
+    for key, label in (("gaps", "Open gaps"), ("unfixable_gaps", "Unfixable gaps (user decides)")):
+        v = _int_or_none(ca.get(key))
+        if v:
+            lines.append(f"**{label}:** {v}")
+    for c in _as_list(ca.get("criteria_met", [])):
+        lines.append(f"- [x] {c}")
+    for c in _as_list(ca.get("criteria_unmet", [])):
+        lines.append(f"- [ ] {c}")
+    return lines
+
+
+def _report_commit_stats(commits):
+    """Files and +/- lines of the run's OWN recorded commits, via ``git show --numstat``.
+
+    Returns ``{"files": [...], "added": N, "removed": N}`` or None when nothing could
+    be measured (no commits, a vanished repo, git failed). A ``sha`` that is not a
+    plain hex object id is skipped and never reaches git — it comes from run.json,
+    which is a file on disk, not a trusted value. Binary files count as 0 lines.
+    """
+    files: list = []
+    added = removed = 0
+    measured = False
+    for c in commits or []:
+        if not isinstance(c, dict):
+            continue
+        repo, sha = c.get("repo"), str(c.get("sha") or "")
+        if not repo or not _SHA_RE.match(sha) or not Path(str(repo)).is_dir():
+            continue
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(repo), "show", "--numstat", "--format=", sha, "--"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        if r.returncode != 0:
+            continue
+        measured = True
+        for line in r.stdout.splitlines():
+            cols = line.split("\t")
+            if len(cols) != 3:
+                continue
+            a, d, path = cols
+            added += int(a) if a.isdigit() else 0
+            removed += int(d) if d.isdigit() else 0
+            if path not in files:
+                files.append(path)
+    if not measured:
+        return None
+    return {"files": files, "added": added, "removed": removed}
+
+
 def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     """Generate comprehensive REPORT.md for a completed (or running) pipeline run.
 
@@ -5295,33 +5504,27 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     # Files changed (prefer stage-json, fallback to artifact)
     stage_files_changed = _build_rec.get("files_changed", [])
 
-    # TDD from stage-json (test or build stage)
     _test_rec = _stage_map.get("test", {})
-    stage_tdd = _test_rec.get("tdd", _build_rec.get("tdd", {}))
 
     # Total token cost (sum all stages)
     total_token_cost = sum(s.get("token_cost", 0) for s in stages)
 
-    # ── Section 5: TDD Results ────────────────────────────────────────
+    # ── Section 5: Test results ───────────────────────────────────────
+    # From the test_report artifact — the TEST stage's own record of what ran. The
+    # BUILD record's ``tdd`` is a different thing (tests WRITTEN during BUILD:
+    # tests_generated/green_pass) and is shown as such, never as the suite total.
     test_data = art_data.get("test", {})
-    # Prefer stage-json tdd over artifact data
-    if stage_tdd:
-        test_total = stage_tdd.get("tests_total", stage_tdd.get("total", 0))
-        test_passed = stage_tdd.get("tests_passed", stage_tdd.get("passed", 0))
-        test_failed = stage_tdd.get("tests_failed", stage_tdd.get("failed", 0))
-    else:
-        test_total = test_data.get("total", test_data.get("passed", 0) + test_data.get("failed", 0))
-        test_passed = test_data.get("passed", 0)
-        test_failed = test_data.get("failed", 0)
-    test_new = test_data.get("new_tests", stage_tdd.get("new_tests", 0))
-    test_duration = test_data.get("duration_s", 0)
+    test_metrics = _report_test_metrics(test_data)
+    if not test_metrics and isinstance(_test_rec.get("tdd"), dict):
+        test_metrics = _report_test_metrics(_test_rec.get("tdd"))
+    tests_phrase = _report_tests_phrase(test_metrics)
+    build_tdd = _build_rec.get("tdd") if isinstance(_build_rec.get("tdd"), dict) else {}
 
     # Profile-aware changeset (Kiro #6): a goal run's changeset lives under
     # goal_cycle with its OWN schema (cycles/tests_total/regressions/mutations_red),
     # NOT build's files_changed/lines_added — reading "build" off a goal artifact
     # silently renders 0. Section 8 below maps the fields per changeset stage.
     changeset = art_data.get(_changeset_stage, {})
-    tests_added = changeset.get("tests_added", test_new)
 
     # ── Section 6: Decision Log ───────────────────────────────────────
     decision_lines = []
@@ -5333,22 +5536,31 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
 
     # ── Section 7: Quality Gates ──────────────────────────────────────
     review_data = art_data.get("review", {})
-    _rf = review_data.get("findings", [])
+    _rf = review_data.get("findings")
     review_findings = _rf if isinstance(_rf, list) else []
-    review_findings_count = len(review_findings) if isinstance(_rf, list) else (_rf if isinstance(_rf, int) else 0)
-    review_severity = review_data.get("severity", "?")
+    # None = not recorded. A present list (even empty) is a measurement; a bare int
+    # is a legacy count.
+    review_findings_count = (len(_rf) if isinstance(_rf, list)
+                             else _rf if _int_or_none(_rf) is not None else None)
+    # The review writer records findings_count + approved (no "severity" field).
+    _fc_review = _int_or_none(review_data.get("findings_count"))
+    if _fc_review is not None:
+        review_findings_count = _fc_review
+    _approved = review_data.get("approved")
+    review_status = ("approved" if _approved is True else "not approved"
+                     if _approved is False else None)
 
     adversarial = delivery.get("adversarial_review", {})
+    if not isinstance(adversarial, dict):
+        adversarial = {}
     adversarial_findings = _as_list(adversarial.get("findings", []))
-    adversarial_verdict = adversarial.get("verdict", "?")
+    adversarial_summary = _report_adversarial_summary(adversarial)
+    adversarial_verdict = adversarial.get("verdict")  # legacy runs only
 
     completion_audit = delivery.get("completion_audit", {})
-    criteria_met = _as_list(completion_audit.get("criteria_met", []))
-    criteria_unmet = _as_list(completion_audit.get("criteria_unmet", []))
-
-    confidence_score = delivery.get("confidence_score", 0)
-    if isinstance(confidence_score, dict):
-        confidence_score = confidence_score.get("score", 0)
+    completion_lines = _report_completion_lines(completion_audit)
+    # Numeric confidence was retired for the binary push-ready verdict (deliver.md
+    # "Push-Ready Gate"); no stage writes it, so the report no longer renders one.
 
     # ── Section 8: Files Changed ──────────────────────────────────────
     # Prefer stage-json files_changed (always populated per Rule 22), fallback to artifact.
@@ -5358,8 +5570,8 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     _fc = stage_files_changed if stage_files_changed else changeset.get("files_changed", [])
     files_changed = _fc if isinstance(_fc, list) else []
     files_changed_count = len(files_changed) if isinstance(_fc, list) else (_fc if isinstance(_fc, int) else 0)
-    lines_added = changeset.get("lines_added", 0)
-    lines_removed = changeset.get("lines_removed", 0)
+    lines_added = _int_or_none(changeset.get("lines_added"))
+    lines_removed = _int_or_none(changeset.get("lines_removed"))
     # Goal-cycle files/lines fallback (Kiro #6 + REVIEW code-quality MED): a goal
     # run's changeset lives under goal_cycle, which is in _ARTIFACTLESS_STAGES
     # ("commits incrementally") so it MAY record no artifact_id → art_data['goal_cycle']
@@ -5373,6 +5585,15 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
         if isinstance(_gc_files, list) and _gc_files:
             files_changed = _gc_files
             files_changed_count = len(_gc_files)
+    # Git truth wins: once the run has committed, its recorded commits say exactly
+    # which files changed and by how many lines. The stage lists above are the
+    # agent's own (often earlier, partial) account and are only the fallback.
+    commit_stats = _report_commit_stats(run_state.get("commits"))
+    if commit_stats is not None:
+        files_changed = commit_stats["files"]
+        files_changed_count = len(files_changed)
+        lines_added = commit_stats["added"]
+        lines_removed = commit_stats["removed"]
 
     # ── Duration & timestamps ─────────────────────────────────────────
     created = run_state.get("created_at", "")
@@ -5442,7 +5663,7 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
 
 **Run ID:** {run_state['id']} | **Project:** {args.project} | **Profile:** {profile}
 **Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Tokens:** {total_token_cost:,}
-**Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count} | **Tests:** {test_passed}/{test_total}""")
+**Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count if files_changed_count else 'not recorded'} | **Tests:** {tests_phrase or 'not recorded'}""")
 
     # TL;DR
     summary_text = delivery.get("summary", requirement[:200])
@@ -5627,16 +5848,26 @@ The run's `created_at` -> first publish is NOT counted. \
 A stage with no published artifact cannot be timed and shows `-`."""
     sections.append(exec_section)
 
-    # 5. TDD Results
-    tdd_section = f"""## 5. TDD Results
-| Metric | Value |
-|--------|-------|
-| Tests total | {test_total} |
-| Tests passed | {test_passed} |
-| Tests failed | {test_failed} |
-| New tests added | {tests_added} |
-| Duration | {test_duration}s |
-| Regressions | {test_failed} |"""
+    # 5. Test results — only rows a stage actually recorded
+    _rows = []
+    if "tests_total" in test_metrics:
+        _rows.append(("Tests run (TEST stage)", test_metrics["tests_total"]))
+    if "failed" in test_metrics:
+        _rows.append(("Failed", test_metrics["failed"]))
+    if "suite_passed" in test_metrics:
+        _rows.append(("Suite passed", "yes" if test_metrics["suite_passed"] else "no"))
+    if "tests_new" in test_metrics:
+        _rows.append(("New tests", test_metrics["tests_new"]))
+    if "regressions" in test_metrics:
+        _rows.append(("Regressions", test_metrics["regressions"]))
+    _gen = _report_build_tests_written(build_tdd)
+    if _gen is not None:
+        _rows.append(("Tests written in BUILD", _gen))
+    if _rows:
+        tdd_section = "## 5. Test Results\n| Metric | Value |\n|--------|-------|\n" + "\n".join(
+            f"| {k} | {v} |" for k, v in _rows)
+    else:
+        tdd_section = "## 5. Test Results\n_Not recorded by any stage._"
     sections.append(tdd_section)
 
     # 6. Decision Log
@@ -5651,47 +5882,57 @@ A stage with no published artifact cannot be timed and shows `-`."""
     # 7. Quality Gates
     quality_section = "## 7. Quality Gates\n"
     quality_section += "| Gate | Result |\n|------|--------|\n"
-    quality_section += f"| REVIEW (code quality) | {review_findings_count} findings ({review_severity}) |\n"
-    quality_section += f"| TEST (suite) | {test_passed}/{test_total} pass |\n"
-    quality_section += f"| Confidence | {confidence_score}/10 |\n"
+    if review_data:
+        _rv = (f"{review_findings_count} findings" if review_findings_count is not None
+               else "findings not recorded")
+        quality_section += (f"| REVIEW (code quality) | {_rv}"
+                            + (f" ({review_status})" if review_status else "") + " |\n")
+    else:
+        quality_section += "| REVIEW (code quality) | not recorded |\n"
+    quality_section += f"| TEST (suite) | {tests_phrase or 'not recorded'} |\n"
 
     # 7.5 Adversarial Review
     quality_section += f"\n### 7.5 Adversarial Review\n"
     if not adversarial and "deliver" not in stage_data_map:
         quality_section += f"**⏭ NOT RUN** — deliver stage was skipped (profile: {profile})\n"
-    elif not adversarial or (adversarial_verdict == "?" and not adversarial_findings):
+    elif not adversarial or (adversarial.get("spawned") is not True and not adversarial_verdict
+                             and not adversarial_findings and adversarial_summary is None):
         quality_section += "**⚠️ NOT RUN** — adversarial sub-agent was not spawned during this run.\n"
         quality_section += "This is a quality gap. Pipeline DELIVER requires adversarial review.\n"
-    elif adversarial_findings:
-        quality_section += f"**{len(adversarial_findings)} findings** (verdict: {adversarial_verdict})\n"
+    elif adversarial_summary or adversarial_findings:
+        _head = adversarial_summary or f"{len(adversarial_findings)} findings"
+        quality_section += f"**{_head}**" + (f" (verdict: {adversarial_verdict})" if adversarial_verdict else "") + "\n"
         for f in adversarial_findings[:5]:
             if isinstance(f, dict):
                 quality_section += f"- [{f.get('severity', '?')}] {f.get('description', f.get('finding', ''))[:80]}\n"
             else:
                 quality_section += f"- {str(f)[:80]}\n"
     else:
-        quality_section += f"Verdict: **{adversarial_verdict}** | Sub-agent spawned: ✅ | Findings: 0\n"
+        # Reaching here: spawned, no counts, no findings listed. Only a PRESENT empty
+        # findings list measures zero; an absent one is simply not recorded.
+        _zero = isinstance(adversarial.get("findings"), list)
+        quality_section += ((f"Verdict: **{adversarial_verdict}** | " if adversarial_verdict else "")
+                            + "Sub-agent spawned: ✅ | "
+                            + ("Findings: 0\n" if _zero else "findings not recorded\n"))
 
     # 7.6 Completion Audit
     quality_section += f"\n### 7.6 Completion Audit\n"
-    if criteria_met or criteria_unmet:
-        for c in criteria_met:
-            quality_section += f"- [x] {c}\n"
-        for c in criteria_unmet:
-            quality_section += f"- [ ] {c}\n"
-        quality_section += f"\n**Met:** {len(criteria_met)} | **Unmet:** {len(criteria_unmet)}"
+    if completion_lines:
+        quality_section += "\n".join(completion_lines) + "\n"
     else:
-        quality_section += "(No completion audit data)\n"
+        quality_section += "_Not recorded by any stage._\n"
     sections.append(quality_section)
 
     # 8. Files Changed
     files_section = "## 8. Files Changed\n"
+    _lines_txt = (f"+{lines_added} / -{lines_removed} lines"
+                  if lines_added is not None and lines_removed is not None else "lines not recorded")
     if files_changed:
         for f in files_changed:
             files_section += f"- `{f}`\n"
-        files_section += f"\n**+{lines_added} / -{lines_removed} lines** | {files_changed_count} files"
+        files_section += f"\n**{_lines_txt}** | {files_changed_count} files"
     elif files_changed_count > 0:
-        files_section += f"**{files_changed_count} files** | +{lines_added} / -{lines_removed} lines\n"
+        files_section += f"**{files_changed_count} files** | {_lines_txt}\n"
         files_section += "(file list not captured in changeset artifact)\n"
     elif "build" in skipped_stages:
         files_section += f"**⏭ Skipped** — {skipped_stages['build']}\n"
@@ -5765,13 +6006,19 @@ A stage with no published artifact cannot be timed and shows `-`."""
 
     # 10. Known Gaps
     gaps_section = "## 10. Known Gaps & Attention Flags\n"
-    if criteria_unmet:
-        for c in criteria_unmet:
-            gaps_section += f"- {c}\n"
+    _flags = [f"- {c}" for c in _as_list(
+        completion_audit.get("criteria_unmet", []) if isinstance(completion_audit, dict) else [])]
+    if isinstance(completion_audit, dict):
+        _open = _int_or_none(completion_audit.get("gaps"))
+        _unfix = _int_or_none(completion_audit.get("unfixable_gaps"))
+        if _open:
+            _flags.append(f"- {_open} completion-audit gap(s) still open")
+        if _unfix:
+            _flags.append(f"- {_unfix} gap(s) could not be closed inside the pipeline — "
+                          "the user decides (see the completion audit evidence)")
     if validation_blocks:
-        gaps_section += f"- Validator blocked {validation_blocks} time(s) during execution\n"
-    if not criteria_unmet and not validation_blocks:
-        gaps_section += "None identified.\n"
+        _flags.append(f"- Validator blocked {validation_blocks} time(s) during execution")
+    gaps_section += ("\n".join(_flags) + "\n") if _flags else "None identified.\n"
     sections.append(gaps_section)
 
     # Footer
@@ -5832,8 +6079,10 @@ A stage with no published artifact cannot be timed and shows `-`."""
         "stages": len(stages),
         "decisions": len(all_decisions),
         "files_changed": files_changed_count,
-        "tests_passed": test_passed,
-        "tests_total": test_total,
+        # None = not recorded (the report says so too) — never a fabricated 0.
+        "tests_passed": (test_metrics["tests_total"] - test_metrics["failed"]
+                         if "tests_total" in test_metrics and "failed" in test_metrics else None),
+        "tests_total": test_metrics.get("tests_total"),
         "regenerated": already_autogenerated,
     }))
     return "written"
@@ -6051,8 +6300,11 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
             completion_all_green = ca.get("all_green", False) if isinstance(ca, dict) else False
 
         elif stage_name == "test":
-            test_passed = data.get("passed", 0)
-            test_failed = data.get("failed", 0)
+            # Same reader as REPORT.md: ``passed`` is a boolean in the current
+            # test_report schema, so it is not a count of passing tests.
+            _tm = _report_test_metrics(data)
+            test_failed = _tm.get("failed", 0)
+            test_passed = (_tm["tests_total"] - test_failed) if "tests_total" in _tm else 0
 
         elif stage_name == "build":
             fc = data.get("files_changed", [])

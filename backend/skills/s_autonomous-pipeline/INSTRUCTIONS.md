@@ -420,9 +420,9 @@ Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
 | think | `stages/think.md` | — |
 | plan | `stages/plan.md` | — |
 | build | `stages/build.md` | `scripts/spawn_prompt.py --gate gate1-skeptic` (Gate-1 Skeptic+SSA) |
-| review | `stages/review.md` AND `REVIEW_PATTERNS.md` AND `OPERATIONAL_PATTERNS.md` | — |
+| review | `stages/review.md` AND `REVIEW_PATTERNS.md` AND `OPERATIONAL_PATTERNS.md` | `scripts/spawn_prompt.py --knowledge-only --project <P> --files <changed…>` (project-knowledge block for each fan-out agent) |
 | test | `stages/test.md` | `scripts/wtf_gate.py` |
-| deliver | `stages/deliver.md` | `scripts/spawn_prompt.py --gate gate2-adversarial` (Gate-2 specialists) |
+| deliver | `stages/deliver.md` | `scripts/spawn_prompt.py --gate gate2-adversarial --project <P> --files <changed…>` (Gate-2 specialists; fills the recalled project-knowledge block) |
 | reflect | `stages/reflect.md` | — |
 | complete | `stages/complete.md` (Step 6 — output format spec; fresh-read at the decision point) | — |
 

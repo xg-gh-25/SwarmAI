@@ -363,6 +363,7 @@ async def get_artifact_drift(
 
         kind, _why = classify_source(str(abs_p), swarmws_root=str(ws_root))
     except Exception:  # noqa: BLE001 — fail-safe: cannot classify → do not probe
+        logger.debug("get_artifact_drift: suppressed exception on a fail-safe path", exc_info=True)
         kind = "copy"
     if kind != "link":
         return DriftResponse(dirty=False, reason="clean")

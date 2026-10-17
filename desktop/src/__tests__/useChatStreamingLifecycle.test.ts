@@ -3997,6 +3997,36 @@ describe('TabStatusIndicator component', () => {
       expect(compactCount).toBe(1);
     });
 
+    it('live sequence: context_compacting then context_compacted both show, in order', () => {
+      const msgId = 'msg-live';
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      act(() => {
+        initTestTab('tab-live');
+        result.current.setIsStreaming(true);
+        result.current.setContextWarning({ level: 'warn', pct: 76, tokensEst: 760000, message: 'Context 76%' });
+        messageStoreRegistry.getOrCreate('tab-live', { sessionId: 'sess-live' })
+          .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+      });
+      const handler = result.current.createStreamHandler(msgId, 'tab-live');
+      act(() => {
+        handler({ type: 'context_compacting', sessionId: 'sess-live', phase: 'started', message: 'Compacting conversation context' });
+      });
+      // Started: notice shown, but the warning stays until compaction completes.
+      expect(lastMsg('tab-live').id.startsWith('compact-start-')).toBe(true);
+      expect(result.current.contextWarning).not.toBeNull();
+      act(() => {
+        handler({ type: 'context_compacted', sessionId: 'sess-live', trigger: 'auto', message: COMPACT_MSG });
+      });
+      const notices = messageStoreRegistry.getOrCreate('tab-live').getSnapshot()
+        .filter((m) => m.role === 'system' && m.id.startsWith('compact-'))
+        .map((m) => (m.content[0] as { text: string }).text);
+      expect(notices).toEqual(['Compacting conversation context', COMPACT_MSG]);
+      expect(result.current.contextWarning).toBeNull();
+      expect(mockAddToast).not.toHaveBeenCalled();
+    });
+
     it('AC6 exposes NO compactionNotice React-state API (no shared slot)', () => {
       // No shared React-state slot — the message goes to the per-tab store.
       const { result } = renderHook(() =>

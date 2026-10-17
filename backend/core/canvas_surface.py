@@ -183,4 +183,5 @@ def is_canvas_surfaceable(
                 base_ref = f"{sha}^"
         return CanvasSurface(True, "external-diff", base_ref=base_ref)
     except Exception:  # noqa: BLE001 — hot-path fail-safe, never crash the turn
+        logger.debug("is_canvas_surfaceable: suppressed exception on a fail-safe path", exc_info=True)
         return CanvasSurface(False)

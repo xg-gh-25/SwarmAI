@@ -47,6 +47,8 @@ def _serialize_domains(domains: Any) -> str:
             return ",".join(str(d) for d in domains)
         return str(domains)
     except Exception:  # noqa: BLE001
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_serialize_domains: suppressed exception on a fail-safe path", exc_info=True)
         return ""
 
 
@@ -89,6 +91,8 @@ def record_recall_metric(
                 _samples[context] = ring
             ring.append(sample)
     except Exception:  # noqa: BLE001 — a metric must NEVER break recall
+        import logging as _logging
+        _logging.getLogger(__name__).debug("record_recall_metric: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 
@@ -140,6 +144,8 @@ def requeue_samples(samples: list[dict]) -> None:
                     _samples[ctx] = ring
                 ring.append(s)
     except Exception:  # noqa: BLE001 — a requeue failure must never break the flush loop
+        import logging as _logging
+        _logging.getLogger(__name__).debug("requeue_samples: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
 

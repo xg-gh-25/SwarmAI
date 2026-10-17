@@ -3,9 +3,9 @@
 What is tested:
     When the SDK's PreCompact hook fires (CLI-native autocompact), the backend
     must surface a user-visible `context_compacted` SSE event carrying a fixed
-    notice text, WITHOUT re-adding the deleted proactive soft-compact and WITHOUT
-    touching task_budget. The visibility signal must ride an INDEPENDENT flag so
-    it does not collide with post_compact_injection's `_compacted` fire-once reset.
+    notice text, WITHOUT re-adding the deleted proactive soft-compact. The
+    visibility signal must ride an INDEPENDENT flag so it does not collide with
+    post_compact_injection's `_compacted` fire-once reset.
 
 Methodology:
     - Unit-test the pure event builder (`PromptBuilder.build_compact_notice`) for
@@ -14,10 +14,9 @@ Methodology:
       the independent flag `_compact_notice_pending` is set, and clears it (fire-once).
     - Orthogonality: `_compact_notice_pending` and `_compacted` are independent
       (post_compact_injection resets only `_compacted`).
-    - Guard: the deleted soft-compact symbol stays dead. (task_budget is NO LONGER
-      a fixed 800K literal — it is window-derived as of run_4f312c3c; the derivation
-      is asserted in test_compaction_tuning.py, and test_task_budget_desktop_window_derived
-      below guards that the old literal is gone.)
+    - Guard: the deleted soft-compact symbol stays dead, and the autocompact
+      trigger stays window-derived via `autoCompactWindow` (asserted in
+      test_compaction_tuning.py; test_autocompact_trigger_window_derived below).
 
 Key invariants:
     - The notice text is a BACKEND CONSTANT (not agent-generated).
@@ -138,7 +137,7 @@ class TestOrthogonalityWithCompacted:
 
 
 class TestSoftCompactStaysDeleted:
-    """AC4: the deleted proactive soft-compact must NOT be re-added; task_budget unchanged."""
+    """AC4: the deleted proactive soft-compact must NOT be re-added."""
 
     def _session_unit_src(self) -> str:
         return (
@@ -154,17 +153,18 @@ class TestSoftCompactStaysDeleted:
         assert "async def _check_context_soft_compact" not in src
         assert "def _check_context_soft_compact" not in src
 
-    def test_task_budget_desktop_window_derived(self):
-        # task_budget desktop is now DERIVED from the model context window
-        # (0.75 × window via _compute_desktop_task_budget), NOT the old 800K
-        # literal (run_4f312c3c, XG 2026-10-14). Channel keeps its 400K line.
-        from core.prompt_builder import _compute_desktop_task_budget
+    def test_autocompact_trigger_window_derived(self):
+        # The trigger is window-derived (0.75 × window) and rides the CLI
+        # `autoCompactWindow` setting; the old task_budget literals are gone
+        # (task_budget never moved the CLI threshold — measured 2026-10-17).
+        from core.prompt_builder import (
+            CHANNEL_AUTOCOMPACT_TRIGGER,
+            _compute_desktop_autocompact_trigger,
+        )
         src = (
             Path(__file__).resolve().parents[1] / "core" / "prompt_builder.py"
         ).read_text()
-        # the old hardcoded desktop literal must be GONE
         assert not re.search(r'"total":\s*800_000', src)
-        # channel 400K unattended-safety line remains
-        assert re.search(r'"total":\s*400_000', src)
-        # desktop derives from the window: 1M → 750K
-        assert _compute_desktop_task_budget(1_000_000) == 750_000
+        assert "task_budget=task_budget" not in src
+        assert CHANNEL_AUTOCOMPACT_TRIGGER == 400_000
+        assert _compute_desktop_autocompact_trigger(1_000_000) == 750_000

@@ -601,7 +601,8 @@ STAGE_TEMPLATES: dict[str, dict] = {
     },
     "build": {
         "files_changed": ["path/to/file.py"],
-        "tdd": {"green_pass": True, "smoke_tests": 3, "red_count": 5, "green_count": 5},
+        "tdd": {"green_pass": True, "smoke_tests": 3, "red_count": 5, "green_count": 5,
+                "tests_generated": 5},
         "ac_coverage": [
             {"ac": "AC1: User can login with email", "impl": "auth.py::login()",
              "test": "test_auth.py::test_login_email", "verified": True},
@@ -647,8 +648,23 @@ STAGE_TEMPLATES: dict[str, dict] = {
             # blocks regardless. See _blocked_findings().
             "findings": [{"severity": "HIGH|MEDIUM|LOW", "confidence": 8, "resolved": True,
                           "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
+            # Rule 23: HOW the reviewers were spawned (required when spawned=true on a
+            # strict profile — blocks a self-review declared as spawned).
+            "evidence": "Agent tool: N specialist sub-agents (EXPERT-ID: correctness, "
+                        "security, ...) spawned in one parallel batch",
         },
-        "completion_audit": {"all_green": True, "requirements_met": 5, "requirements_total": 5},
+        # gaps / unfixable_gaps are the counts deliver.md's Completion Audit records and
+        # the push-ready gate reads (gaps>0 blocks; unfixable_gaps>0 is a warning the
+        # REPORT must surface) — listed so the template matches what writers write.
+        "completion_audit": {"all_green": True, "requirements_met": 5, "requirements_total": 5,
+                             "gaps": 0, "unfixable_gaps": 0},
+        # The fields below are REQUIRED for strict profiles (full/bugfix/goal) — the
+        # template must carry everything the validator demands, or every run finds
+        # out by rejection (pinned by test_artifact_cli_schema
+        # TestTemplatePassesItsOwnValidator).
+        "ac_verification": {"status": "verified", "detail": "AC1 → test_x; AC2 → test_y"},
+        "meta_review": {"verdict": "CLEAR", "risks": []},
+        "convergence": {"iterations": 1, "all_pass": True, "final_status": "push-ready"},
     },
 }
 

@@ -421,6 +421,7 @@ def _is_oom_signal(error_str: str) -> bool:
             )
             return True
     except Exception:
+        logger.debug("_is_oom_signal: suppressed exception on a fail-safe path", exc_info=True)
         pass  # Resource monitor unavailable — rely on patterns only
 
     return False
@@ -677,6 +678,11 @@ class SessionUnit:
         # semantics are correct and must stay wide.
         self._last_progress_time: Optional[float] = None
         self._streaming_start_time: Optional[float] = None
+        # Usage of the LAST main-agent API request this turn (AssistantMessage.
+        # usage, set by the orchestrator). The real current context size — the
+        # ResultMessage usage is summed over all requests, and dividing it by
+        # num_turns under-reported (a real 904K peak never reached 85% critical).
+        self._last_call_usage: Optional[dict] = None
 
         # ── Compaction loop guard (3-layer anti-loop) ──────────────
         from .compaction_guard import CompactionGuard
@@ -1997,6 +2003,7 @@ class SessionUnit:
             try:
                 await self._pipe_flush_task
             except (asyncio.CancelledError, Exception):
+                logger.debug("send: suppressed exception on a fail-safe path", exc_info=True)
                 pass
             self._pipe_flush_task = None
 
@@ -2190,6 +2197,7 @@ class SessionUnit:
         self._buffer_overflow_recovery = False
         self._leak_restart_done = False  # per-message: one leak restart budget
         self._compaction_guard.reset()  # New user turn — reset tool tracking
+        self._last_call_usage = None  # an interrupted turn's last usage must not leak in
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
@@ -2949,8 +2957,18 @@ class SessionUnit:
         # If the agent makes N tool calls, the SDK sums input_tokens from
         # all N API requests.  But the context window capacity is per-call,
         # not cumulative.  Divide by num_turns for the correct estimate.
-        if usage:
-            from .prompt_builder import PromptBuilder
+        # Prefer the LAST request's real usage (set from AssistantMessage.usage by
+        # the orchestrator); the summed-÷-num_turns average is only a fallback
+        # (it under-reports a growing context). Consumed once per result.
+        from .prompt_builder import PromptBuilder
+        _last_call = getattr(self, "_last_call_usage", None)
+        self._last_call_usage = None
+        _last_call_tokens = (
+            PromptBuilder.sum_usage_input_tokens(_last_call) if _last_call else 0
+        )
+        if _last_call_tokens > 0:
+            input_tokens = _last_call_tokens
+        elif usage:
             total = PromptBuilder.sum_usage_input_tokens(usage)
             turns = max(num_turns, 1)
             input_tokens = (total // turns) if total > 0 else None
@@ -2968,6 +2986,7 @@ class SessionUnit:
                 _win = PromptBuilder.get_model_context_window(self._model_name)
                 _ctx_pct = (input_tokens / _win) * 100 if _win > 0 else 0.0
             except Exception:
+                logger.debug("_emit_post_stream_metadata: suppressed exception on a fail-safe path", exc_info=True)
                 _ctx_pct = 0.0
         _log = logger.warning if _ctx_pct >= SOFT_COMPACT_PCT else logger.info
         _log(
@@ -3023,6 +3042,7 @@ class SessionUnit:
                     if guard_evt:
                         events.append(guard_evt)
             except Exception:
+                logger.debug("_emit_post_stream_metadata: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # Never block on guard failure
 
         # Compaction visibility notice (CLI-native autocompact — approach A).
@@ -3089,6 +3109,7 @@ class SessionUnit:
                 session_registry.system_prompt_metadata[self.session_id] = spm
                 events.append({"type": "system_prompt_metadata", **spm})
         except Exception:
+            logger.debug("_emit_post_stream_metadata: suppressed exception on a fail-safe path", exc_info=True)
             pass  # Never block on metadata failure
 
         return events
@@ -3297,6 +3318,7 @@ class SessionUnit:
             if router:
                 _alive = router.alive_count
         except Exception:
+            logger.debug("_spawn: suppressed exception on a fail-safe path", exc_info=True)
             pass  # Best-effort — penalty is 0 if registry unavailable
         budget = resource_monitor.spawn_budget(alive_count=_alive)
         if not budget.can_spawn:
@@ -4149,8 +4171,8 @@ class SessionUnit:
     # _check_context_soft_compact REMOVED (run_2b1957f8). Proactive soft-compact
     # held _client_io for up to 300s at 60% context, blocking the user's next
     # send() at the turn boundary ("streaming freezes at 60%"). Context is now
-    # managed by the CLI's built-in autocompact (task_budget=800K + per-session
-    # window-% autoCompact) + manual refresh — neither holds our _client_io lock.
+    # managed by the CLI's built-in autocompact (autoCompactWindow, 75% of the
+    # window — prompt_builder) + manual refresh — neither holds our _client_io lock.
     # The RSS proactive-restart path (_check_rss_and_proactive_restart, which owns
     # its own compact() call above) is INDEPENDENT and unaffected.
 
@@ -4325,6 +4347,7 @@ class SessionUnit:
                     state=self.state.value,
                 )
             except Exception:
+                logger.debug("health_check: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # Never let metrics collection break health_check
 
             return True
@@ -4574,6 +4597,7 @@ class SessionUnit:
             from . import session_registry
             session_registry.recall_snapshot.pop(self.session_id, None)
         except Exception:  # noqa: BLE001 — teardown must never raise on cleanup
+            logger.debug("_cleanup_internal: suppressed exception on a fail-safe path", exc_info=True)
             pass
         self._recall_keyword_misses = 0
         # Reset shared active-project cache (run_6ebf6479) — a new subprocess must
@@ -4657,6 +4681,7 @@ class SessionUnit:
                         break
                     self._wrapup_conclusion += text[:remaining]
         except Exception:
+            logger.debug("_capture_wrapup_text: suppressed exception on a fail-safe path", exc_info=True)
             pass  # capture is best-effort; never break streaming
 
     async def _derive_heal_enrichment(self) -> dict:

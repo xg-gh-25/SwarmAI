@@ -178,6 +178,8 @@ def _noise_roots() -> tuple[Path, ...]:
     try:
         roots |= _variants(Path(tempfile.gettempdir()))
     except Exception:  # noqa: BLE001 — a broken temp env must not break classification
+        import logging as _logging
+        _logging.getLogger(__name__).debug("_noise_roots: suppressed exception on a fail-safe path", exc_info=True)
         pass
 
     # Windows OS-owned trees (no-ops elsewhere — the env vars are absent).
@@ -262,4 +264,6 @@ def is_noise_path(path: "str | Path") -> bool:
                 return True
         return False
     except Exception:  # noqa: BLE001 — hot-path fail-safe, fail OPEN (see docstring)
+        import logging as _logging
+        _logging.getLogger(__name__).debug("is_noise_path: suppressed exception on a fail-safe path", exc_info=True)
         return False

@@ -759,6 +759,7 @@ def read_run_status(run_id: object) -> Optional[str]:
             return json.loads(hit.read_text()).get("status")
         return None
     except Exception:  # noqa: BLE001 — pure/fail-safe reader on the hot path
+        logger.debug("read_run_status: suppressed exception on a fail-safe path", exc_info=True)
         return None
 
 

@@ -365,8 +365,10 @@ class TestCheck:
         # 6 calls, all overlap baseline → set-overlap fires
         assert guard.check() == EscalationLevel.SOFT_WARN
 
-    def test_escalation_order_soft_hard_kill(self):
-        """Set-overlap escalates one step per check() call (after grace window)."""
+    def test_post_compaction_overlap_caps_at_soft_warn(self):
+        """Set-overlap after compaction warns but never escalates to an
+        interrupt level (HARD_WARN/KILL make the orchestrator interrupt() the
+        self-continuing turn; post-compaction re-reads are expected)."""
         guard = CompactionGuard()
         guard.record_tool_call("Bash", {"command": "pytest"})
         guard.record_tool_call("Read", {"file_path": "/a.py"})
@@ -375,17 +377,18 @@ class TestCheck:
         for i in range(3):
             guard.record_tool_call("Bash", {"command": "pytest"})
             guard.record_tool_call("Read", {"file_path": "/a.py"})
-        # First detection → SOFT_WARN
-        assert guard.check() == EscalationLevel.SOFT_WARN
-        # Drain grace window (3 calls)
-        for _ in range(3):
+        # Repeated detections, well past several grace windows: stays SOFT_WARN.
+        for _ in range(20):
             assert guard.check() == EscalationLevel.SOFT_WARN
-        # Second detection → HARD_WARN
-        assert guard.check() == EscalationLevel.HARD_WARN
-        # Drain grace window (3 calls)
-        for _ in range(3):
-            assert guard.check() == EscalationLevel.HARD_WARN
-        # Third detection → KILL
+
+    def test_layer0_still_kills_a_real_loop_after_compaction(self):
+        """The cap is Layer-2 only: 7 identical consecutive calls are a real
+        loop in any phase and still reach KILL."""
+        guard = CompactionGuard()
+        guard.activate()
+        guard._context_pct = 90.0
+        for _ in range(7):
+            guard.record_tool_call("Bash", {"command": "pytest"})
         assert guard.check() == EscalationLevel.KILL
 
     def test_kill_stays_kill(self):

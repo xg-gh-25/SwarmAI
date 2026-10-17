@@ -191,12 +191,17 @@ class TestQuery:
 
     def test_stale_threshold_sorts_fresh_before_stale(self):
         """AC1: stale_threshold_days param sorts fresh before stale."""
-        # Explicitly put stale relation FIRST to prove sorting reorders
+        # Explicitly put stale relation FIRST to prove sorting reorders.
+        # Dates are RELATIVE to today: query_relations judges staleness against
+        # date.today(), so a hard-coded "recent" date silently turns stale once
+        # the calendar passes it and the test starts asserting the wrong order.
+        from datetime import timedelta
+        today = date.today()
         rels = [
             Relation("STALE", "applies_to", "target.py",
-                     date(2025, 1, 1), date(2025, 1, 1)),  # old
+                     today - timedelta(days=400), today - timedelta(days=400)),
             Relation("FRESH", "applies_to", "target.py",
-                     date(2026, 5, 1), date(2026, 5, 18)),  # recent
+                     today - timedelta(days=10), today - timedelta(days=1)),
         ]
         results = query_relations(rels, "target.py", stale_threshold_days=90)
         assert len(results) == 2

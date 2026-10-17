@@ -623,9 +623,10 @@ class CompactionGuard:
            - PASSIVE phase caps at HARD_WARN (no KILL without compaction evidence)
 
         2. Context threshold + loop detection (ACTIVE only):
-           - Set-overlap >60% matching baseline → escalate one step
-           - Single-tool repetition ≥5 → escalate one step
-           - Can reach KILL
+           - Set-overlap >60% matching baseline → SOFT_WARN
+           - Single-tool repetition ≥5 → SOFT_WARN
+           - Capped at SOFT_WARN: post-compaction re-reads are expected, so
+             this layer never interrupts the self-continuing turn
 
         The dynamic threshold scales with context window size:
         200K → 85%, 1M → 40% (via _compute_activation_pct).
@@ -721,10 +722,20 @@ class CompactionGuard:
 
             # ACTIVE + ctx ≥ threshold: run loop detection
             if self._detect_loop():
-                # Escalate one step
-                current_idx = _ESCALATION_ORDER.index(self._escalation)
-                next_idx = min(current_idx + 1, len(_ESCALATION_ORDER) - 1)
-                new_level = _ESCALATION_ORDER[next_idx]
+                # WARN-ONLY after compaction (2026-10-17). Re-reading files and
+                # re-running checks after a compaction is EXPECTED — the summary
+                # dropped their detail — so baseline overlap is a weak loop signal.
+                # Escalating it to HARD_WARN/KILL made the orchestrator interrupt()
+                # the self-continuing turn, i.e. compaction stopped the work. This
+                # layer now caps at SOFT_WARN (a hint, never an interrupt). Real
+                # loops are still stopped by Layer 0 (identical consecutive calls)
+                # and Layer 1 (diversity stall), which run in every phase.
+                if self._escalation != EscalationLevel.MONITORING:
+                    # Already warned. Report only this layer's capped signal —
+                    # returning a stored Layer 0/1 HARD_WARN from here would let
+                    # overlap alone re-trigger an interrupt on every later call.
+                    return EscalationLevel.SOFT_WARN
+                new_level = EscalationLevel.SOFT_WARN
 
                 logger.warning(
                     "compaction_guard.escalation old=%s new=%s context_pct=%.1f",

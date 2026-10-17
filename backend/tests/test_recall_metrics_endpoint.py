@@ -36,6 +36,8 @@ def metrics_client(tmp_path, monkeypatch):
     return TestClient(app), db
 
 
+from tests._brain_workspace import hermetic_workspace  # noqa: E402,F401 — pytest fixture
+
 class TestMetricsEndpoint:
     def test_returns_shape_and_percentiles(self, metrics_client):
         import asyncio
@@ -89,7 +91,11 @@ class TestMetricsEndpoint:
         assert len(remaining) == 2, "endpoint must not drain the in-memory rings"
 
 
+@pytest.mark.usefixtures("hermetic_workspace")
 class TestBrainRecallRoute:
+    """Runs against the hermetic two-brain workspace (not the live tree, which
+    conftest isolates away — every SwarmAI lookup used to 404 here)."""
+
     @pytest.fixture
     def brain_client(self):
         from routers.ddd_brain import router
@@ -98,7 +104,7 @@ class TestBrainRecallRoute:
         return TestClient(app)
 
     def test_empty_query_short_circuits(self, brain_client):
-        # SwarmAI is a real project in the workspace tree.
+        # SwarmAI is a brain in the hermetic workspace.
         resp = brain_client.get("/api/ddd/brains/SwarmAI/recall?q=")
         assert resp.status_code == 200
         body = resp.json()

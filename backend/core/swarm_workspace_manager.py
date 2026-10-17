@@ -1313,6 +1313,7 @@ class SwarmWorkspaceManager:
             if found and found.exists():
                 return found.parent
         except Exception:
+            logger.debug("_hive_seed_dir: suppressed exception on a fail-safe path", exc_info=True)
             pass
         return dev_seed if dev_seed.exists() else None
 

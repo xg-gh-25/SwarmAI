@@ -107,6 +107,7 @@ def _workspace_root() -> Path:
         # the private method (meta-review nit); same resolver projects.py uses.
         return Path(swarm_workspace_manager.get_workspace_path())
     except Exception:  # pragma: no cover - defensive fallback
+        logger.debug("_workspace_root: suppressed exception on a fail-safe path", exc_info=True)
         return Path.home() / ".swarm-ai" / "SwarmWS"
 
 
@@ -334,6 +335,7 @@ def _parallel_last_commit_iso(project_dirs: list[Path]) -> Optional[dict[str, st
                 if iso:
                     out[name] = iso
     except Exception:  # pool/thread failure → signal "batch couldn't run" (per-project fallback)
+        logger.debug("_parallel_last_commit_iso: suppressed exception on a fail-safe path", exc_info=True)
         return None
     return out
 
@@ -1506,6 +1508,7 @@ def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
             if td:
                 proposal_files.add(td)
     except Exception:  # pragma: no cover - proposals are best-effort provenance
+        logger.debug("_scoped_diff_hunks: suppressed exception on a fail-safe path", exc_info=True)
         pass
     for h in hunks:
         h["tag"] = _tag_hunk(h["file"], proposal_files)
@@ -1860,6 +1863,7 @@ async def brain_recall(name: str, q: str = "") -> dict:
             record_recall_metric("brainhub_overlay", _BRAINHUB_RECALL_DOMAINS,
                                   _latency_ms, hit_count=len(hits))
         except Exception:  # noqa: BLE001
+            logger.debug("brain_recall: suppressed exception on a fail-safe path", exc_info=True)
             pass
         return {"query": q, "count": len(hits), "hits": hits}
     except Exception as exc:  # noqa: BLE001 — degrade to empty, never 500 the overlay

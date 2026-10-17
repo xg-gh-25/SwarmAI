@@ -552,6 +552,7 @@ class RetryManager:
                     yield {"_abort": True}
                     return
             except Exception:
+                logger.debug("_retry_with_resume: suppressed exception on a fail-safe path", exc_info=True)
                 pass  # Budget check failed — proceed with retry
 
             retry_options = self._parent._build_retry_options(
@@ -647,6 +648,7 @@ class RetryManager:
                         self._parent._model_name
                     )
                 except Exception:
+                    logger.debug("_inject_abandon_continuation: suppressed exception on a fail-safe path", exc_info=True)
                     pass  # use default
             token_budget = min(int(model_window * 0.1), 30_000)
 
@@ -710,6 +712,7 @@ class RetryManager:
                         f"{_RESUME_QUERY_FOOTER}"
                     )
                 except Exception:  # noqa: BLE001 — header is best-effort, never fatal
+                    logger.debug("_inject_abandon_continuation: suppressed exception on a fail-safe path", exc_info=True)
                     pass
 
             # Prepend continuation — mirrors _heal_checkpoint shape
