@@ -85,6 +85,15 @@ _DATA_OPEN, _DATA_CLOSE = "<recalled-ddd>", "</recalled-ddd>"
 _DATA_TAG = re.compile(r"</?\s*recalled-ddd\s*>", re.I)
 
 
+def _strip_fence(text: str) -> str:
+    """Remove every fence tag, repeatedly: one pass over ``</recalled</recalled-ddd>-ddd>``
+    would rebuild a closing tag out of the pieces around the removed one."""
+    prev = None
+    while prev != text:
+        prev, text = text, _DATA_TAG.sub("", text)
+    return text
+
+
 def _default_recall(query: str, project: str, top_n: int) -> list[dict]:
     if str(_BACKEND) not in sys.path:
         sys.path.insert(0, str(_BACKEND))
@@ -180,10 +189,12 @@ def render_block(project: str, files, recall_fn=None) -> tuple[str, str]:
     used = 0
     left_out = 0
     for h in hits:
-        content = _DATA_TAG.sub("", entry_text(h.get("content") or ""))
+        content = _strip_fence(entry_text(h.get("content") or ""))
         if not content:
             continue
-        piece = f"**{h.get('doc', '?')} § {h.get('section', '?')}**\n{content}\n"
+        doc = _strip_fence(str(h.get("doc") or "?"))
+        section = _strip_fence(str(h.get("section") or "?"))
+        piece = f"**{doc} § {section}**\n{content}\n"
         if used + len(piece) > MAX_BLOCK_CHARS:
             left_out += 1
             continue
