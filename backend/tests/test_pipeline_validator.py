@@ -345,15 +345,19 @@ class TestProfileRespected:
         assert _check_profile_respected("test", "docs") is False
 
     def test_all_profiles_include_evaluate(self):
-        """Evaluate is in every profile."""
+        """Evaluate is in every profile (except direct — plan→build→deliver by design,
+        the model writes its own exit contract at PLAN; design §4-G1)."""
         for profile in PIPELINE_PROFILES:
+            if profile == "direct":
+                assert _check_profile_respected("evaluate", profile) is False
+                continue
             assert _check_profile_respected("evaluate", profile) is True
 
     def test_all_profiles_include_reflect(self):
         """Reflect is in every profile (except goal — handles it inside goal_cycle)."""
         for profile in PIPELINE_PROFILES:
-            if profile == "goal":
-                continue  # goal_cycle manages REFLECT internally (two-tier model)
+            if profile in ("goal", "direct"):
+                continue  # goal: goal_cycle manages REFLECT; direct: plan→build→deliver only
             assert _check_profile_respected("reflect", profile) is True
 
 

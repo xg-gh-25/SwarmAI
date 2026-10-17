@@ -405,6 +405,25 @@ still scanned. M3 (the skeptic sub-agent) is behavioral, spawned in evaluate.md.
 
 ### 3c. Execute Stage Behavior
 
+> **⚡ One call in, one call out, one call per test layer** (design
+> `docs/design/pipeline-speed-systematic-fix.md`):
+> - Enter a stage: `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage <S>`
+>   — returns the stage card, upstream artifacts, ACs, exit criteria, valid examples, and for
+>   review/deliver the changed files + expert list with ready prompt files.
+> - Leave a stage: `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage <S> --data @/tmp/<R>/<S>.json`
+>   with `{"artifact": {...}, "record": {"decisions": [...]}}`. It validates everything first
+>   (structured errors with path + expected value), fills derived fields (token_cost,
+>   consumed_artifacts, test layers, push_ready bound, exit-criteria verdict), publishes,
+>   records and advances. Do not read artifact_cli.py source to work out a failure — the
+>   error names the field and shows the expected shape.
+> - Tests: ONLY `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd|verify|regression|recheck [--files ...]`
+>   (scope chosen by the tool, cached, sharded, pre-existing failures classified; heavy
+>   verification via `--mode probe` / `--mode mutation`). Direct pytest/vitest/tsc is
+>   denied by `pipeline_test_gate` while your run is active.
+> - Exit criteria (PLAN `exit_criteria[]`): when `stage-complete` says they are met, stop
+>   verifying and move on.
+> The older publish / run-update / advance commands still work.
+
 **[GATE·cli] BLOCKING: Before executing ANY stage, you MUST Read ALL files listed
 in the "Read" column below.** Skipping a file = skipping the stage's
 quality gate = pipeline invariant violation. This is not optional. (Enforced via
@@ -818,8 +837,12 @@ enforced by the validator, not honor-system.
 ### 🚨 CRITICAL: The pipeline is NOT done until the user sees the summary.
 
 A pipeline that completes silently is indistinguishable from one that crashed.
-The user MUST see a clear, formatted completion summary in the chat window.
+The user MUST see the code-rendered delivery summary in the chat window.
 This is the LAST thing you output — never end a pipeline run without it.
+
+**Before step 1:** read `stages/complete.md` and do its **Step 0** (surface this run's
+changes with `surface_run_outputs`, then record `outputs_surfaced:true` on the deliver
+stage). For a run that committed run-scoped source, step 1 BLOCKS without it.
 
 **Sequence (all 3 steps are mandatory):**
 
@@ -855,23 +878,23 @@ This is the LAST thing you output — never end a pipeline run without it.
    **If blocked:** fix the issue, then retry. You CANNOT bypass — code-enforced.
 
 2. **Read `backend/skills/s_autonomous-pipeline/stages/complete.md` NOW, then OUTPUT
-   THE COMPLETION SUMMARY + EXECUTIVE SUMMARY TO CHAT (MANDATORY — never skip):**
+   THE DELIVERY SUMMARY TO CHAT (MANDATORY — never skip):**
 
-   🚨 **Fresh-read at the decision point (do NOT output from memory).** The exact
-   format — the `━━━` summary-box variants (full / goal / trivial-bugfix) and the
-   Executive Summary spec — lives in `stages/complete.md`, not inline here. Read it
-   the moment you reach this step, exactly like every other stage reads its
-   `stages/<stage>.md`. This is deliberate: the format used to be inline ~750 lines
-   up and silently decayed out of the attention window by the time a run reached
-   COMPLETE (F004) — the summary box "disappeared." Reading the doc fresh is the fix.
+   🚨 **Fresh-read at the decision point (do NOT output from memory).** The output
+   contract lives in `stages/complete.md`, not inline here. Read it the moment you
+   reach this step, exactly like every other stage reads its `stages/<stage>.md`
+   (F004: an inline spec ~750 lines up decayed out of the attention window and the
+   summary "disappeared").
 
-   `stages/complete.md` contains both mandatory outputs in order:
-   - **The completion summary box** — pick the variant matching this run's profile.
-   - **The Executive Summary** — immediately after the box (skip ONLY for trivial/bugfix).
+   The summary is rendered by code — you do not write it. Relay the `_display_block`
+   that step 1 returned VERBATIM (no code fence — the file links must stay clickable),
+   then add 2-3 next steps in a ```next-steps block. Lost it? Re-render with
+   `python backend/scripts/artifact_cli.py run-summary --project <P> --run-id <R>`.
+   The stage-by-stage process view lives in REPORT.md, which the block links to.
 
-3. **STOP.** Do not add explanatory text after the executive summary. Do not ask
-   "would you like me to push?" The summary is the terminal output.
-   User will respond if they want more.
+3. **STOP.** The terminal output is exactly: `_display_block` + the ```next-steps
+   block. Nothing after it — no explanatory text, no recap, and no "would you like me
+   to push?". The user will respond if they want more.
 
 ---
 
@@ -1273,7 +1296,7 @@ Output formatting MUST NOT degrade execution quality. Rules:
    CONTINUE-side enforcement carrier (§3f Continuation contract) — muting them would
    silence the very channel that tells you to keep going, which is the stall this
    pipeline is trying to prevent. Read them; you need not echo them to the user.
-2. **Tool output: tail only** — pytest `| tail -5`, git `--stat`
+2. **Tool output: compact only** — tests through `pipeline_test.py` (it prints one compact JSON; never pipe pytest to tail/head), git `--stat`
 3. **No prose between stages** — the landmark IS the output
 4. **Validator: suppress when valid** — only show on failure
 5. **DDD reads: batch at EVALUATE** — don't re-read per-stage

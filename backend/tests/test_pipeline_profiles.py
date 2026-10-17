@@ -18,8 +18,8 @@ class TestPipelineProfiles:
     """Verify the PIPELINE_PROFILES dictionary structure."""
 
     def test_all_profiles_present(self):
-        """All 6 profiles exist."""
-        expected = {"full", "trivial", "research", "docs", "bugfix", "goal"}
+        """All 7 profiles exist (direct = the lightweight contract→build→deliver path)."""
+        expected = {"full", "trivial", "research", "docs", "bugfix", "goal", "direct"}
         assert set(PIPELINE_PROFILES.keys()) == expected
 
     def test_no_empty_stage_lists(self):
@@ -48,9 +48,11 @@ class TestPipelineProfiles:
         assert PIPELINE_PROFILES[profile] == expected
 
     def test_evaluate_in_all_profiles(self):
-        """Every profile starts with evaluate."""
+        """Every profile starts with evaluate — except direct, which starts at the
+        PLAN-carried exit contract (design §4-G1)."""
         for name, stages in PIPELINE_PROFILES.items():
-            assert stages[0] == "evaluate", f"Profile '{name}' doesn't start with evaluate"
+            expected_first = "plan" if name == "direct" else "evaluate"
+            assert stages[0] == expected_first, f"Profile '{name}' starts with {stages[0]}"
 
 
 class TestGetProfileStages:

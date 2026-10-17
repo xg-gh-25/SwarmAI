@@ -11,6 +11,12 @@ stage as a blocking gate (spawn fresh-context sub-agent before packaging).
 This is why the profile lists below show 8 entries for "full" — ADVERSARIAL
 is not a separate orchestration step, it's a mandatory sub-step of DELIVER.
 All docs, READMEs, and external communications say "9 stages."
+
+Public symbols:
+- ``PIPELINE_PROFILES``  — profile name → ordered stage list (incl. ``direct``).
+- ``normalize_profile`` — canonical comparison key for a raw profile value.
+- ``is_relaxed_profile`` — True iff gates run at relaxed rigor (fail-closed).
+- ``get_profile_stages`` — ordered stage list with full-profile fallback.
 """
 
 PIPELINE_PROFILES: dict[str, list[str]] = {
@@ -20,6 +26,11 @@ PIPELINE_PROFILES: dict[str, list[str]] = {
     "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
     "bugfix": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
     "goal": ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"],
+    # direct (G1, pipeline-speed-systematic-fix §4-G): the lightweight profile for a
+    # direct fix. PLAN carries the exit contract (exit_criteria[]), BUILD implements,
+    # DELIVER runs the same adversarial/completion gates. STRICT (not in
+    # _RELAXED_PROFILES) and DELIVER is non-skippable in the run-update completion gate.
+    "direct": ["plan", "build", "deliver"],
 }
 
 

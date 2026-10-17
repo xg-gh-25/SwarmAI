@@ -24,6 +24,11 @@ Usage — Pipeline Runs (stored in .artifacts/runs/<run_id>/):
     python artifact_cli.py run-status [--active-only]
     python artifact_cli.py run-resume --project SwarmAI --run-id run_xxx
 
+Usage — Stage boundaries (one call in, one call out per stage):
+    python artifact_cli.py stage-start --project SwarmAI --run-id run_xxx --stage build
+    python artifact_cli.py stage-complete --project SwarmAI --run-id run_xxx --stage build \\
+        --data @/tmp/run_xxx/build.json [--check]
+
 Usage — Pipeline Metrics:
     python artifact_cli.py run-metrics --project SwarmAI --run-id run_xxx
     python artifact_cli.py run-analytics --project SwarmAI [--limit 50]
@@ -40,10 +45,19 @@ Storage layout:
 
 Public symbols:
 - ``main``  — CLI entry point with subcommand dispatch.
+- ``cmd_stage_start`` / ``cmd_stage_complete`` — the stage-boundary commands.
+  stage-complete writes run.json ONCE (atomic) after a stub-free publish; a write
+  failure prints one ``{"ok":false,"code":"write_failed",...}`` line.
+- ``_deliver_push_ready_bound`` — the DELIVER push_ready upper bound (all runner
+  evidence, freshness vs files_touched, exit contract); shared by stage-complete
+  and the legacy ``run-update --stage-json`` path, which may only LOWER push_ready.
+- ``_profile_change_error`` — profile changes after EVALUATE may not drop a stage
+  of the current profile that has not completed yet.
 """
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -605,6 +619,91 @@ def _resolve_precheck_stage_json(raw: "str | None") -> "str | None":
     return raw
 
 
+class _PublishRefused(Exception):
+    """A publish refused BEFORE any write (unsafe identifier / phantom run).
+
+    ``payload`` is the exact JSON error object the CLI prints; ``exit_code`` is the
+    documented exit status (3 = rejected before write)."""
+
+    def __init__(self, payload: dict, exit_code: int = 3):
+        super().__init__(payload.get("error", "publish refused"))
+        self.payload = payload
+        self.exit_code = exit_code
+
+
+def _publish_core(
+    reg: ArtifactRegistry, *, project: str, artifact_type: str, data: dict,
+    producer: str, summary: str, topic: str = "", run_id: "str | None" = None,
+    stage: "str | None" = None, record_stub: bool = True,
+) -> dict:
+    """THE artifact publish code path — shared by ``publish`` and ``stage-complete``.
+
+    1. TRUST BOUNDARY (run_44a06138, Kiro #2): validate project + run_id BEFORE
+       reg.publish() writes anything, so a bad identifier writes ZERO bytes.
+    2. PHANTOM-RUN check (Kiro #3): a --stage publish to a named run requires that
+       run to exist and own this project/id — else a phantom runs/<id>/ is minted.
+    3. reg.publish() (ValueError / FileNotFoundError propagate to the caller).
+    4. Auto-record SAFETY NET (stage + run_id): append a ``status="recorded"`` stub
+       (NOT "completed", no stage_doc_consumed) so a forgotten finalize never loses
+       the stage→artifact link, while the completion gate still demands a real
+       completed record. Best-effort: a failure is RETURNED as ``warning``.
+       ``record_stub=False`` (stage-complete) skips it: that caller writes the
+       full record itself in one atomic run.json write.
+
+    Raises _PublishRefused for steps 1-2. Returns
+    ``{"artifact_id", "auto_recorded": True|False|None, "warning": dict|None}``.
+    """
+    try:
+        reg._validate_path_identifiers(project, run_id)
+    except ValueError as _ve:
+        raise _PublishRefused({"error": f"unsafe path identifier (rejected before write): {_ve}"})
+
+    if stage and run_id:
+        _run_json = (
+            Path(reg.workspace_root) / "Projects" / project
+            / ".artifacts" / "runs" / run_id / "run.json"
+        )
+        _phantom = None
+        if not _run_json.is_file():
+            _phantom = f"run '{run_id}' does not exist (no runs/{run_id}/run.json)"
+        else:
+            try:
+                _rj = json.loads(_run_json.read_text(encoding="utf-8"))
+                _rj_proj = _rj.get("project")
+                _rj_id = _rj.get("id") or _rj.get("pipeline_id") or _rj.get("run_id")
+                if _rj_proj not in (None, project):
+                    _phantom = f"run '{run_id}' belongs to project {_rj_proj!r}, not {project!r}"
+                elif _rj_id not in (None, run_id):
+                    _phantom = f"run.json id {_rj_id!r} does not match run_id {run_id!r}"
+            except (json.JSONDecodeError, OSError) as _e:
+                _phantom = f"run '{run_id}' run.json unreadable: {_e}"
+        if _phantom:
+            raise _PublishRefused({"error": f"stage publish to a non-existent/foreign run "
+                                            f"(rejected before write): {_phantom}"})
+
+    artifact_id = reg.publish(
+        project=project, artifact_type=artifact_type, data=data,
+        producer=producer, summary=summary, topic=topic or "", run_id=run_id,
+    )
+    out: dict = {"artifact_id": artifact_id, "auto_recorded": None, "warning": None}
+    if stage and run_id and record_stub:
+        try:
+            _append_stage_to_run(project, run_id, {
+                "stage": stage, "status": "recorded",
+                "artifact_id": artifact_id, "auto_recorded": True,
+            }, reg)
+            out["auto_recorded"] = True
+        except Exception as e:
+            out["auto_recorded"] = False
+            out["warning"] = {
+                "warning": "auto-record stage failed; run.json not updated. "
+                           "Record manually via run-update --stage-json.",
+                "stage": stage,
+                "detail": str(e),
+            }
+    return out
+
+
 def cmd_publish(args, reg: ArtifactRegistry) -> None:
     """Publish a new artifact. Validates schema when --stage is provided.
 
@@ -669,6 +768,7 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             pass  # Default to "full" if can't determine profile
         errors = validate_artifact_data(stage, data, profile=_pub_profile)
         if errors:
+            _structured = _structured_errors_safe(stage, errors, data)
             if getattr(args, "quiet", False):
                 # Quiet mode: a SHORT single-line failure (no verbose schema
                 # dump). Orchestrators parse this without choking on a multi-KB
@@ -677,6 +777,10 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     "validation_failed": True,
                     "stage": stage,
                     "errors": errors,
+                    # quiet stays SHORT: code+path only (message = errors[i];
+                    # the full got/expected form is in the non-quiet payload).
+                    "structured_errors": [{"code": e.get("code"), "path": e.get("path")}
+                                          for e in _structured],
                     "hint": f"re-run without --quiet, or `artifact_cli.py schema --stage {stage}`, for the expected schema template",
                 }), file=sys.stderr)
             else:
@@ -685,6 +789,7 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     "validation_failed": True,
                     "stage": stage,
                     "errors": errors,
+                    "structured_errors": _structured,
                     "expected_schema": schema_info.get("template", {}),
                 }, indent=2), file=sys.stderr)
             sys.exit(1)
@@ -747,143 +852,55 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     # (the HTTP publish endpoint) is fail-closed; a `--stage` publish with no
     # --run-id also fails closed (below). Bare publishes themselves are benign.
 
-    # ── TRUST BOUNDARY (run_44a06138): FAIL-CLOSED ORDER (Kiro #2). ──
-    # Validate project + run_id BEFORE reg.publish() writes anything. The old
-    # order published first and refused after, so a rejected publish had already
-    # created an artifact file + manifest entry. reg.publish() ALSO validates
-    # internally (defense-in-depth), but doing it here first guarantees the CLI
-    # writes ZERO bytes on a bad identifier and emits a clean error.
+    # ── TRUST BOUNDARY + PHANTOM-RUN + write + auto-record ──
+    # Delegated to _publish_core — the ONE publish code path, shared with
+    # `stage-complete` (A1) so the two cannot drift. Validation order (identifiers
+    # → phantom run → write) and the exit codes are unchanged.
     try:
-        reg._validate_path_identifiers(args.project, run_id)
-    except ValueError as _ve:
-        _err = {"error": f"unsafe path identifier (rejected before write): {_ve}"}
-        if getattr(args, "quiet", False):
-            print(json.dumps(_err), file=sys.stderr)
-        else:
-            print(json.dumps(_err, indent=2), file=sys.stderr)
-        sys.exit(3)
-
-    # ── PHANTOM-RUN existence check (run_44a06138, Kiro #3). ──
-    # A --stage publish names a target run; that run MUST already exist and own
-    # this project/id. Without this, publishing to a never-created run_id mints a
-    # phantom runs/<id>/ dir and a dangling artifact. (A bare publish — no run_id,
-    # standalone skills — legitimately has no run and skips this.)
-    if stage and run_id:
-        _run_json = (
-            Path(reg.workspace_root) / "Projects" / args.project
-            / ".artifacts" / "runs" / run_id / "run.json"
-        )
-        _phantom = None
-        if not _run_json.is_file():
-            _phantom = f"run '{run_id}' does not exist (no runs/{run_id}/run.json)"
-        else:
-            try:
-                _rj = json.loads(_run_json.read_text(encoding="utf-8"))
-                _rj_proj = _rj.get("project")
-                _rj_id = _rj.get("id") or _rj.get("pipeline_id") or _rj.get("run_id")
-                if _rj_proj not in (None, args.project):
-                    _phantom = f"run '{run_id}' belongs to project {_rj_proj!r}, not {args.project!r}"
-                elif _rj_id not in (None, run_id):
-                    _phantom = f"run.json id {_rj_id!r} does not match run_id {run_id!r}"
-            except (json.JSONDecodeError, OSError) as _e:
-                _phantom = f"run '{run_id}' run.json unreadable: {_e}"
-        if _phantom:
-            _err = {"error": f"stage publish to a non-existent/foreign run (rejected before write): {_phantom}"}
+        try:
+            _core = _publish_core(
+                reg, project=args.project, artifact_type=args.type, data=data,
+                producer=args.producer, summary=args.summary,
+                topic=args.topic or "", run_id=run_id, stage=stage,
+            )
+        except _PublishRefused as _pr:
             if getattr(args, "quiet", False):
-                print(json.dumps(_err), file=sys.stderr)
+                print(json.dumps(_pr.payload), file=sys.stderr)
             else:
-                print(json.dumps(_err, indent=2), file=sys.stderr)
-            sys.exit(3)
-
-    try:
-        artifact_id = reg.publish(
-            project=args.project,
-            artifact_type=args.type,
-            data=data,
-            producer=args.producer,
-            summary=args.summary,
-            topic=args.topic or "",
-            run_id=run_id,
-        )
+                print(json.dumps(_pr.payload, indent=2), file=sys.stderr)
+            sys.exit(_pr.exit_code)
+        artifact_id = _core["artifact_id"]
         result = {"artifact_id": artifact_id, "project": args.project}
         if run_id:
             result["run_id"] = run_id
 
-        # ── Auto-record stage to run.json (eliminates separate run-update call) ──
-        # If --stage is provided, append stage record to the target run.
-        # Priority: explicit --run-id > auto-discovered active run.
-        if stage:
-            try:
-                target_run_id = run_id  # Explicit --run-id from caller
-                if not target_run_id:
-                    # NEVER GUESS (run_f3975b8b, XG directive). Earlier this code
-                    # tried to "fall back to the newest active run" when --run-id
-                    # was omitted, refusing only when 2+ runs were active. That was
-                    # still unsafe: even a SINGLE active run may belong to a sibling
-                    # session, so auto-recording into it contaminates an unrelated
-                    # pipeline (run_3caef1d3 / run_b9ecb07a). The ability to guess a
-                    # target run is the root of all cross-run contamination, so we
-                    # eradicate it: a --stage publish with NO --run-id ALWAYS fails
-                    # closed, regardless of how many runs are active (0, 1, or N).
-                    #
-                    # The artifact is already published (above) and is NOT lost — the
-                    # agent re-runs the publish with an explicit --run-id and the stub
-                    # records correctly. All pipeline stage docs already thread
-                    # --run-id (run_3caef1d3), so real flows never hit this; only a
-                    # forgotten/manual no-run-id publish does — exactly what must be
-                    # blocked.
-                    #
-                    # Surface on STDERR (matching the validation_failed path), exit 3.
-                    # The documented orchestrator guard reads STDERR on failure and
-                    # feeds STDOUT to json.load(...)['artifact_id'] — printing the
-                    # error to STDOUT would hide it AND crash that json.load.
-                    refused = {
-                        "error": (
-                            f"auto-record REFUSED: publish --stage with NO --run-id "
-                            f"cannot safely pick a target run in '{args.project}' — "
-                            f"any active run may belong to a sibling session. "
-                            f"Re-run this publish with an explicit --run-id."
-                        ),
-                        "artifact_id": artifact_id,
-                        "stage": stage,
-                    }
-                    print(json.dumps(refused), file=sys.stderr)
-                    sys.exit(3)
-                if target_run_id:
-                    # Auto-record is a SAFETY NET, not a substitute for run-update.
-                    # It captures the artifact_id so a forgotten run-update never
-                    # loses the stage→artifact link. But it deliberately marks the
-                    # stage "recorded" (NOT "completed") and omits stage_doc_consumed:
-                    #   - The completion gate (run-update --status completed) only
-                    #     accepts "completed"/"done", so a stub alone can't close
-                    #     the pipeline — the agent must still run-update to mark the
-                    #     stage properly complete with stage_doc_consumed + token_cost.
-                    #   - This preserves the stage_doc_consumed mechanical gate: the
-                    #     stub can't bypass it, because "recorded" != "completed".
-                    # run-update REPLACES (not skips) an existing record, so the
-                    # later enrichment correctly upgrades the stub.
-                    stage_record = {
-                        "stage": stage,
-                        "status": "recorded",
-                        "artifact_id": artifact_id,
-                        "auto_recorded": True,
-                    }
-                    _append_stage_to_run(args.project, target_run_id, stage_record, reg)
-                    result["auto_recorded"] = True
-                    result["run_id"] = target_run_id
-            except Exception as e:
-                # Best-effort — don't fail the publish itself. But NEVER fail
-                # silently: a swallowed auto-record leaves run.json stages empty
-                # and the completion gate blocks with no explanation (the exact
-                # failure this fix addresses). Surface it on stderr so the
-                # orchestrator sees the signal and can fall back to run-update.
-                result["auto_recorded"] = False
-                print(json.dumps({
-                    "warning": "auto-record stage failed; run.json not updated. "
-                               "Record manually via run-update --stage-json.",
-                    "stage": stage,
-                    "detail": str(e),
-                }), file=sys.stderr)
+        if stage and not run_id:
+            # NEVER GUESS (run_f3975b8b, XG directive): a --stage publish with NO
+            # --run-id ALWAYS fails closed — any active run may belong to a sibling
+            # session, and guessing the target is the root of all cross-run
+            # contamination (run_3caef1d3 / run_b9ecb07a). The artifact is already
+            # published (not lost); re-run with an explicit --run-id. STDERR + exit 3
+            # (the orchestrator guard reads STDERR and json.loads STDOUT).
+            refused = {
+                "error": (
+                    f"auto-record REFUSED: publish --stage with NO --run-id "
+                    f"cannot safely pick a target run in '{args.project}' — "
+                    f"any active run may belong to a sibling session. "
+                    f"Re-run this publish with an explicit --run-id."
+                ),
+                "artifact_id": artifact_id,
+                "stage": stage,
+            }
+            print(json.dumps(refused), file=sys.stderr)
+            sys.exit(3)
+        if stage and _core["auto_recorded"] is True:
+            result["auto_recorded"] = True
+            result["run_id"] = run_id
+        elif stage and _core["auto_recorded"] is False:
+            # Best-effort auto-record failed — never silently: surface on stderr so
+            # the orchestrator can fall back to run-update.
+            result["auto_recorded"] = False
+            print(json.dumps(_core["warning"]), file=sys.stderr)
 
         # ── EVALUATE glass-box: hand the agent the rendered "需求理解" block ──
         # The real-time inline emit (evaluate.md §4.6.4 / INSTRUCTIONS.md Phase-2)
@@ -940,6 +957,18 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     except (ValueError, FileNotFoundError) as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
+
+
+def _structured_errors_safe(stage, errors, data=None) -> list:
+    """A3: structured form of legacy error strings for the failure payloads of
+    publish / advance / run-update completion (additive key — the old string
+    lists stay). Never raises: a mapping failure degrades to [] so an error path
+    can never be turned into a crash."""
+    try:
+        from pipeline_validator import structure_errors
+        return structure_errors(stage, list(errors or []), data=data)
+    except Exception:
+        return []
 
 
 def cmd_schema(args, reg: "ArtifactRegistry | None") -> None:
@@ -1254,14 +1283,16 @@ def _auto_validate_before_advance(
         # but routing here too keeps the single choke point, no inline path-build.
         run_dir = _run_dir(project, run_id)
         if not (run_dir / "REPORT.md").exists():
+            _report_errs = [
+                "[deliver] REPORT.md not found. DELIVER stage requires generating "
+                "REPORT.md at .artifacts/runs/<RUN_ID>/REPORT.md before advancing. "
+                "Run: artifact_cli.py run-report --project <PROJECT> --run-id <RUN_ID>"
+            ]
             print(json.dumps({
                 "validation_blocked": True,
                 "stage": "deliver",
-                "errors": [
-                    "[deliver] REPORT.md not found. DELIVER stage requires generating "
-                    "REPORT.md at .artifacts/runs/<RUN_ID>/REPORT.md before advancing. "
-                    "Run: artifact_cli.py run-report --project <PROJECT> --run-id <RUN_ID>"
-                ],
+                "errors": _report_errs,
+                "structured_errors": _structured_errors_safe("deliver", _report_errs),
             }, indent=2), file=sys.stderr)
             sys.exit(1)
 
@@ -1305,6 +1336,7 @@ def _auto_validate_before_advance(
                     "validation_blocked": True,
                     "stage": current_stage,
                     "errors": errors,
+                    "structured_errors": _structured_errors_safe(current_stage, errors),
                     "errored": errored,
                 }, indent=2), file=sys.stderr)
                 sys.exit(1)
@@ -2046,6 +2078,94 @@ def _estimate_session_budget(project: str) -> dict:
     }
 
 
+def _load_stage_artifacts(project: str, run_id: str, run_state: dict, stages=("evaluate", "deliver", "test")) -> dict:
+    """{stage: artifact data} for this run's own stage artifacts (read contract:
+    own-run + type enforced via _load_artifact_for_metrics)."""
+    out: dict = {}
+    for s in run_state.get("stages", []) or []:
+        name = s.get("stage") if isinstance(s, dict) else None
+        if name in stages and s.get("artifact_id"):
+            loaded = _load_artifact_for_metrics(project, run_id, s["artifact_id"],
+                                                _STAGE_ARTIFACT_TYPE.get(name))
+            if loaded and isinstance(loaded.data, dict):
+                out[name] = loaded.data
+    return out
+
+
+def _delivery_summary_for(project: str, run_id: str) -> str:
+    """Render the §4-E chat delivery summary for a run. Never raises."""
+    try:
+        from core.run_delivery_summary import build_delivery_summary
+        run_file = _resolve_run_file(project, run_id)
+        run_state = json.loads(run_file.read_text(encoding="utf-8"))
+        arts = _load_stage_artifacts(project, run_id, run_state)
+        if "test" in arts:
+            tm = _report_test_metrics(arts["test"]) or {}
+            arts["test"] = {"tests_total": tm.get("tests_total"), "failed": tm.get("failed")}
+        # This repo is the git root ONLY for the SwarmAI project's own runs; any
+        # other project's files resolve their repo per file (repo_root=None).
+        repo_root = _BACKEND_DIR.parent if project == "SwarmAI" else None
+        try:
+            return build_delivery_summary(run_state, arts, run_file.parent, repo_root=repo_root)
+        except TypeError:
+            if repo_root is not None:
+                raise
+            return build_delivery_summary(run_state, arts, run_file.parent)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — summary must never break completion
+        return f"(delivery summary unavailable: {type(exc).__name__}; run `artifact_cli.py run-summary --project {project} --run-id {run_id}`)"
+
+
+def _try_write_speed_profile(project: str, run_id: str) -> None:
+    """Merge the §4-D speed profile into METRICS.json. Best-effort, stderr on failure."""
+    try:
+        import pipeline_run_profile as prp
+        run_dir = _run_dir(project, run_id)
+        run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        lo, hi = prp.run_window(run_state)
+        prp.write_metrics(run_dir, prp.profile_run(run_state, prp.find_run_transcripts(run_id, lo, hi)))
+    except Exception as exc:  # noqa: BLE001 — telemetry must never fail a completion
+        print(json.dumps({"warning": f"speed profile skipped: {type(exc).__name__}: {exc}"}),
+              file=sys.stderr)
+
+
+def cmd_run_summary(args, reg: ArtifactRegistry) -> None:
+    """Print the §4-E delivery summary for a run as {"_display_block": md}."""
+    _resolve_run_file(args.project, args.run_id)  # exits 1 on an unknown run
+    print(json.dumps({"run_id": args.run_id,
+                      "_display_block": _delivery_summary_for(args.project, args.run_id)},
+                     ensure_ascii=False))
+
+
+def _run_origin(args, now_iso: str) -> dict:
+    """session_id / intent / intent_source for a new run (contract C1).
+
+    session_id: SWARM_APP_SESSION_ID (validated token) or None. intent: the
+    session's last substantive user message before now; else ``--intent``; else
+    the requirement text. Best-effort: any lookup failure falls back silently to
+    the next source (the run must always be creatable)."""
+    import os as _os
+    sid = (_os.environ.get("SWARM_APP_SESSION_ID") or "").strip()
+    sid = sid if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", sid or "") else None
+    intent, source = None, None
+    if sid:
+        try:
+            from core.run_delivery_summary import capture_intent
+            got = capture_intent(sid, now_iso)
+            if got:
+                intent, source = got
+        except Exception as exc:  # noqa: BLE001 — intent is optional metadata
+            print(json.dumps({"warning": f"intent capture skipped: {type(exc).__name__}"}),
+                  file=sys.stderr)
+    else:
+        print(json.dumps({"warning": "run has no session_id: test/commit gates and measured "
+                                     "tokens are unavailable for it"}), file=sys.stderr)
+    if not intent and getattr(args, "intent", None):
+        intent, source = str(args.intent)[:2000], "arg"
+    if not intent:
+        intent, source = args.requirement, "requirement"
+    return {"session_id": sid, "intent": intent, "intent_source": source}
+
+
 def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     """Create a new pipeline run state file."""
     from datetime import datetime, timezone
@@ -2070,6 +2190,10 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         "updated_at": now,
         "completed_at": None,
     }
+    # E1 (pipeline-speed-systematic-fix §4-E): link the run to the app session that
+    # created it (SWARM_APP_SESSION_ID is injected per CLI subprocess by
+    # prompt_builder) and capture the user's own words as the intent.
+    run_state.update(_run_origin(args, now))
 
     # Register the project AT its birth point — mkdir(parents=True) below would mint
     # Projects/<name>/ with no .project.json (a Brain-Hub-invisible pseudo-DDD) otherwise.
@@ -2168,6 +2292,56 @@ def _maybe_autoaggregate_test_artifact(run_state, profile, reg, project, run_id)
             "fallback": "Manual publish required",
         }), file=_sys.stderr)
         return None
+
+
+def _profile_change_error(run_state: dict, current_profile, new_profile) -> "dict | None":
+    """Structured error when ``new_profile`` drops a stage of the current profile
+    that has not completed yet (its gates would never run), else None. Dropping an
+    ALREADY-completed stage bypasses nothing (e.g. goal → full after goal_cycle)."""
+    cur = _get_profile_stages(normalize_profile(current_profile))
+    new = set(_get_profile_stages(normalize_profile(new_profile)))
+    done = {s.get("stage", "") for s in run_state.get("stages", [])
+            if isinstance(s, dict) and s.get("status") in ("completed", "done")}
+    missing = [s for s in cur if s not in new and s not in done]
+    if not missing:
+        return None
+    return {
+        "ok": False, "blocked": True, "code": "E_PROFILE_CHANGE", "path": "profile",
+        "got": normalize_profile(new_profile),
+        "expected": f"a profile containing every pending stage of "
+                    f"'{normalize_profile(current_profile)}': {missing}",
+        "missing_stages": missing,
+        "error": (f"BLOCKED: profile change '{current_profile}' → '{new_profile}' rejected "
+                  f"after EVALUATE: it drops pending stage(s) {missing}, whose gates would "
+                  f"then never run (C036 / HIGH-1)."),
+    }
+
+
+def _cap_legacy_push_ready(project: str, run_id: str, run_file: Path, run_state: dict,
+                           record: dict) -> None:
+    """MED-4: a legacy ``run-update --stage-json`` deliver record may only LOWER
+    push_ready — a True above the gate-computed bound is capped to False with the
+    reason recorded. The bound reads the record's artifact (else its inline fields)."""
+    import pipeline_validator as pv
+    if record.get("push_ready") is not True:
+        return
+    profile = normalize_profile(run_state.get("profile"))
+    artifact = _load_artifact_data_by_id(project, record.get("artifact_id")) or record
+    run_dir = run_file.parent
+    crit = _plan_exit_criteria(project, run_state, "deliver", None)
+    exit_result = pv.judge_exit_criteria(crit, run_dir, record,
+                                         files_touched=run_state.get("files_touched"),
+                                         roots=_evidence_roots())
+    bound, reasons, _ = _deliver_push_ready_bound(
+        project=project, run_id=run_id, run_dir=run_dir, run_state=run_state,
+        profile=profile, artifact=artifact, exit_result=exit_result)
+    if bound:
+        return
+    record["push_ready"] = False
+    record["push_ready_capped"] = True
+    record["push_ready_reason"] = "capped by run-update to the gate bound: " + "; ".join(reasons)
+    print(json.dumps({"warning": "push_ready capped to false (above the gate bound)",
+                      "reasons": reasons}, ensure_ascii=False), file=sys.stderr)
 
 
 def cmd_run_update(args, reg: ArtifactRegistry) -> None:
@@ -2287,6 +2461,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 "full": {"deliver", "reflect"},
                 "bugfix": {"deliver", "reflect"},
                 "goal": {"goal_cycle", "deliver", "reflect"},
+                # direct (C7): plan carries the exit contract; deliver is the
+                # quality gate — non-skippable exactly like bugfix's deliver.
+                "direct": {"deliver"},
             }
             non_skippable = _NON_SKIPPABLE.get(profile, set())
 
@@ -2442,11 +2619,11 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # ── REPORT.md gate: checked later (line ~1078) after validator runs.
             # Removed duplicate early check — single canonical gate is post-validator.
 
-            # ── Stage metrics gate (full/bugfix only): audit trail completeness ──
+            # ── Stage metrics gate (full/bugfix/direct): audit trail completeness ──
             # Every stage must have token_cost recorded. Chat output IS the live
             # demo, run.json IS the audit trail, REPORT.md IS the projection.
             # Empty metrics = empty report = useless audit.
-            if profile in ("full", "bugfix"):
+            if profile in ("full", "bugfix", "direct"):
                 stages_without_metrics = []
                 for s in run_state.get("stages", []):
                     name = s.get("stage", "?")
@@ -2468,9 +2645,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # When pipeline agent calls --status completed but no delivery artifact
             # exists, auto-construct it from stage-json. This eliminates the
             # publish → validation_failed → fix JSON → re-publish ceremony that
-            # wastes ~5K tokens per run. Only for full/bugfix where delivery matters.
+            # wastes ~5K tokens per run. Only for full/bugfix/direct where delivery
+            # matters (direct's DELIVER is non-skippable and needs an artifact_id too).
             _requirement = run_state.get("requirement", "")
-            if profile in ("full", "bugfix"):
+            if profile in ("full", "bugfix", "direct"):
                 deliver_stage_rec = next(
                     (s for s in run_state.get("stages", [])
                      if s.get("stage", "") == "deliver"
@@ -2591,7 +2769,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 # goal_cycle, enforced by the adversarial_review gate below.)
                 _profile = normalize_profile(run_state.get("profile"))  # C3: canonical
                 if deliver_rec and not deliver_rec.get("artifact_id"):
-                    if _profile in ("full", "bugfix"):
+                    if _profile in ("full", "bugfix", "direct"):
                         validator_errors.append(
                             "[deliver] Stage completed without artifact_id. "
                             "Pipeline ceremony requires: publish deliver artifact "
@@ -2741,6 +2919,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                                  "Fix these issues before declaring the run done.",
                         "pipeline_id": args.run_id,
                         "validator_errors": validator_errors,
+                        "structured_errors": _structured_errors_safe(None, validator_errors),
                     }))
                     sys.exit(1)  # D7: non-zero on completion BLOCK
             except Exception as exc:
@@ -3014,6 +3193,18 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         else:
             run_state["stages"].append(stage_record)
 
+        # MED-4: the legacy path may LOWER push_ready, never raise it past the bound.
+        if stage_record.get("stage") == "deliver" and stage_record.get("push_ready") is True:
+            try:
+                _cap_legacy_push_ready(args.project, args.run_id, run_file, run_state,
+                                       stage_record)
+            except Exception as _cap_exc:  # noqa: BLE001 — fail closed: unverifiable
+                stage_record["push_ready"] = False
+                stage_record["push_ready_capped"] = True
+                stage_record["push_ready_reason"] = (
+                    f"capped by run-update: bound could not be computed "
+                    f"({type(_cap_exc).__name__})")
+
         # Reset resume counters on successful stage completion — a stage advancing
         # proves progress, so the pipeline deserves fresh auto-resume budget if it
         # crashes again later at a different stage. Both the emit-throttle
@@ -3038,7 +3229,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # Fix: profile downgrades are REJECTED once any stage past evaluate exists.
         # Upgrades (trivial→full) are always allowed (more rigor = safe).
         # "standard" kept as backwards-compat alias for "full" (legacy run.json files may use it)
-        _PROFILE_RANK = {"trivial": 1, "docs": 2, "research": 2, "bugfix": 3, "full": 4, "standard": 4, "goal": 4}
+        _PROFILE_RANK = {"trivial": 1, "docs": 2, "research": 2, "bugfix": 3, "direct": 3, "full": 4, "standard": 4, "goal": 4}
         current_profile = run_state.get("profile")
         # C3: normalize before rank lookup — a variant ("Full") would otherwise miss
         # the table and default to rank 3, mis-ordering the downgrade guard (C036).
@@ -3073,6 +3264,18 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 "pipeline_id": args.run_id,
             }))
             sys.exit(1)
+        # HIGH-1: rank alone misses same-rank swaps (bugfix → direct drops review /
+        # test / reflect). Once EVALUATE (or any later stage) completed, the new
+        # profile must still contain every not-yet-completed stage of the current one.
+        _evaluate_done = any(s.get("stage", "") == "evaluate"
+                             and s.get("status") in ("completed", "done")
+                             for s in run_state.get("stages", []))
+        if not is_first_set and (_evaluate_done or post_evaluate_stages):
+            _pc_err = _profile_change_error(run_state, current_profile, args.profile)
+            if _pc_err:
+                _pc_err["pipeline_id"] = args.run_id
+                print(json.dumps(_pc_err, ensure_ascii=False))
+                sys.exit(1)
         # ─────────────────────────────────────────────────────────────────────────
         # C3: store the CANONICAL profile (write-side normalization) so a variant
         # ("Full"/"standard") never lands in run.json to drift a downstream gate.
@@ -3222,6 +3425,17 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # cmd_run_report sys.exit(1)s on a missing run — must not abort a
             # completion that is already persisted.
             result["report_refresh_failed"] = f"SystemExit: {e.code}"
+        # §4-D: persist the run's speed profile (best-effort, read-only scan).
+        _try_write_speed_profile(args.project, args.run_id)
+        # §4-E: the chat delivery summary, rendered by code from recorded data.
+        # The agent relays `_display_block` verbatim (stages/complete.md). It is a
+        # result KEY so stdout stays one JSON object; never fails the completion.
+        result["_display_block"] = _delivery_summary_for(args.project, args.run_id)
+        result["reminder"] = (
+            "⚠️ OUTPUT COMPLETION SUMMARY TO CHAT (Step 6.2 — MANDATORY): relay "
+            "`_display_block` VERBATIM, then add 2-3 next steps in a ```next-steps "
+            "block. Do not retype or reformat the block."
+        )
 
     # ── Auto-emit budget info on stage-json update (LL07 fix) ──────────
     # Agent doesn't need to remember to call run-budget — it's free info
@@ -3250,7 +3464,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         except Exception:
             pass  # Budget calculation failure should never block stage update
 
-    print(json.dumps(result))
+    # ensure_ascii=False: `_display_block` must be relayable verbatim (CJK stays
+    # readable in the raw stdout); the line is still one valid JSON object.
+    print(json.dumps(result, ensure_ascii=False))
 
 
 def cmd_run_surface_changes(args, reg: ArtifactRegistry) -> None:
@@ -5544,6 +5760,21 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
 
     # Total token cost (sum all stages)
     total_token_cost = sum(s.get("token_cost", 0) for s in stages)
+    # E4: measured usage from token_usage when the run is linked to its session;
+    # otherwise the stage sum, labelled as an estimate.
+    tokens_label = f"{total_token_cost:,} (估算 / estimate)"
+    try:
+        from core.run_delivery_summary import token_usage_for_window
+        _usage = token_usage_for_window(
+            run_state.get("session_id"), run_state.get("created_at"),
+            run_state.get("completed_at") or run_state.get("updated_at"))
+        if _usage:
+            _measured = (_usage["input_tokens"] + _usage["output_tokens"]
+                         + _usage["cache_creation_tokens"])
+            tokens_label = (f"{_measured:,} (measured, ${_usage['cost_usd']:.2f}, "
+                            f"cache read {_usage['cache_read_tokens']:,})")
+    except Exception:  # noqa: BLE001 — the report must render without usage data
+        pass
 
     # ── Section 5: Test results ───────────────────────────────────────
     # From the test_report artifact — the TEST stage's own record of what ran. The
@@ -5698,7 +5929,7 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     sections.append(f"""# Autonomous Pipeline Report: {title}
 
 **Run ID:** {run_state['id']} | **Project:** {args.project} | **Profile:** {profile}
-**Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Tokens:** {total_token_cost:,}
+**Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Tokens:** {tokens_label}
 **Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count if files_changed_count else 'not recorded'} | **Tests:** {tests_phrase or 'not recorded'}""")
 
     # TL;DR
@@ -5729,7 +5960,8 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
             # gate agrees with the validator's own (schema_version>=REQ_SCHEMA_VERSION);
             # a requirements[] without a valid version is legacy/half-activated and skips.
             if isinstance(_sv, int) and _sv >= REQ_SCHEMA_VERSION:
-                sections.append(render_audit_trail_md(requirement, _eval_art))
+                # E4: the provenance anchor is the user's own words when recorded.
+                sections.append(render_audit_trail_md(run_state.get("intent") or requirement, _eval_art))
         except Exception as _audit_err:  # never let the audit block break the whole report
             # a VALID structured artifact whose render/import fails degrades VISIBLY (not
             # a silent skip) — the legacy no-version case is handled by the version gate above.
@@ -6787,6 +7019,16 @@ def cmd_run_metrics(args, reg: ArtifactRegistry) -> None:
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     metrics = _extract_run_metrics(args.project, args.run_id, run_state)
+    # MERGE with what is already there (speed_profile, run-observe telemetry,
+    # derived_stage_gaps) — freshly extracted keys win; nothing else is dropped.
+    _existing_metrics_file = run_file.parent / "METRICS.json"
+    if _existing_metrics_file.exists():
+        try:
+            _prior = json.loads(_existing_metrics_file.read_text(encoding="utf-8"))
+            if isinstance(_prior, dict):
+                metrics = {**_prior, **metrics}
+        except (OSError, ValueError):
+            pass  # unreadable prior file: the fresh extraction replaces it (old behavior)
 
     # Write METRICS.json. NOTE: this writes into an ALREADY-RESOLVED run dir
     # (_resolve_run_file requires the run to exist), so it does NOT mint a Projects/<name>/
@@ -7349,6 +7591,908 @@ def cmd_ddd_noise(args, reg) -> None:
     }, indent=2))
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Stage boundaries: `stage-start` / `stage-complete` (pipeline-speed-systematic-fix
+# §4-A, F2, G1). Mechanical work moves into the tool: the model writes judgment
+# fields only; derived fields, publish, record, timing and advance are computed
+# here. ALL checks run BEFORE any write (fail-closed: an error writes nothing).
+# The checks themselves are the existing ones — validate_artifact_data, validate()
+# (via pipeline_validator.validate_stage_state on the in-memory candidate) and
+# the stage-record schema — never a copy.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_STAGE_PRODUCER = "s_autonomous-pipeline"
+_PENDING_ARTIFACT_ID = "art_pending_stage_complete"
+_EXIT_MET_DIRECTIVE = ("Exit criteria met — do not add more verification; move on. / "
+                       "结束条件已满足，不要再加验证，进入下一步")
+# Keys stage-complete owns. A model-supplied value is DROPPED (the tool computes it);
+# `status` is handled separately (only "skipped" is accepted from the caller).
+_DERIVED_RECORD_KEYS = frozenset({
+    "stage", "name", "status", "artifact_id", "stage_doc_consumed",
+    "consumed_artifacts", "token_usage", "token_cost_source", "derived_sources",
+    "auto_recorded", "exit_criteria_met", "exit_contract_source", "push_ready_capped",
+})
+# A PLAN record written by stage-complete carries this marker: its run declared an
+# exit contract through the strict path, so a missing contract at DELIVER is UNMET.
+_EXIT_CONTRACT_SOURCE = "stage-complete"
+_STAGE_START_MAX_BYTES = 8 * 1024
+_EXPERT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
+_EXPERT_DOMAINS = {
+    "correctness": "Correctness", "security": "Security",
+    "performance": "Performance", "api-contract": "API Contract",
+    "integration": "Integration", "operational": "Operational",
+    "red-team": "Red Team",
+}
+# deliver.md "Step 1: Scope Detection" file-pattern triggers, as code.
+_EXPERT_FILE_TRIGGERS = {
+    "security": re.compile(r"(routers/|handler|auth|database|sqlite|quer(y|ies)|"
+                           r"security|permission|file_access|user_input)", re.I),
+    "performance": re.compile(r"(routers/|endpoint|database|sqlite|hooks/|jobs/|"
+                              r"scheduler|background)", re.I),
+    "api-contract": re.compile(r"(routers/|schemas/|/models?/|_models?\.py$|services/)", re.I),
+    "operational": re.compile(r"(hooks/|jobs/|scheduler|daemon|background|launchd|systemd)", re.I),
+}
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+class _StageBoundaryError(Exception):
+    """A stage-boundary failure carrying legacy error strings (pre-structured)."""
+
+    def __init__(self, errors: "list[str]"):
+        super().__init__("; ".join(errors))
+        self.errors = errors
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load_run_for_stage(project: str, run_id: str) -> "tuple[Path, dict]":
+    """(run.json path, parsed state). Ids validated via the _run_dir choke point."""
+    try:
+        run_file = _run_dir(project, run_id) / "run.json"
+    except ValueError as e:
+        raise _StageBoundaryError([f"Input: unsafe path identifier: {e}"])
+    if not run_file.is_file():
+        raise _StageBoundaryError([f"Input: run '{run_id}' not found for project '{project}'"])
+    try:
+        state = json.loads(run_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise _StageBoundaryError([f"Input: run.json unreadable: {e}"])
+    if not isinstance(state, dict):
+        raise _StageBoundaryError(["Input: run.json is not an object"])
+    state.setdefault("stages", [])
+    return run_file, state
+
+
+def _write_run_atomic(run_file: Path, data: dict) -> None:
+    """Write run.json via a same-dir temp file + os.replace (no torn file)."""
+    tmp = run_file.with_name(f".run.json.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, run_file)
+
+
+def _set_stage_timing(run_state: dict, stage: str, key: str, ts: str) -> None:
+    """C4: set run.json["stage_timing"][stage][key], MERGING with whatever
+    run-observe (or an earlier call) already wrote — never clobber other keys."""
+    timing = run_state.get("stage_timing")
+    if not isinstance(timing, dict):
+        timing = {}
+        run_state["stage_timing"] = timing
+    entry = timing.get(stage)
+    if not isinstance(entry, dict):
+        entry = {}
+        timing[stage] = entry
+    entry[key] = ts
+
+
+def _replace_stage_record(stages: list, record: dict) -> None:
+    """Replace the LAST record for record['stage'] (the one validate() reads) or
+    append, carrying forward _CARRY_FORWARD_FIELDS the new record omits."""
+    idx = None
+    for i, s in enumerate(stages):
+        if isinstance(s, dict) and s.get("stage", s.get("name")) == record["stage"]:
+            idx = i
+    if idx is None:
+        stages.append(record)
+        return
+    existing = stages[idx]
+    for cf in _CARRY_FORWARD_FIELDS:
+        if cf not in record and isinstance(existing, dict) and existing.get(cf):
+            record[cf] = existing[cf]
+    stages[idx] = record
+
+
+def _stage_record_of(run_state: dict, stage: str) -> "dict | None":
+    found = None
+    for s in run_state.get("stages", []):
+        if isinstance(s, dict) and s.get("stage", s.get("name")) == stage:
+            found = s
+    return found
+
+
+def _stage_artifact_type(stage: str) -> "str | None":
+    t = _STAGE_ARTIFACT_TYPE.get(stage)
+    return "research" if isinstance(t, set) else t
+
+
+def _load_artifact_data_by_id(project: str, artifact_id: "str | None") -> "dict | None":
+    if not artifact_id:
+        return None
+    from pipeline_validator import _load_artifact_data
+    data = _load_artifact_data(project, "", artifact_id)
+    return data if isinstance(data, dict) else None
+
+
+def _stage_artifact(project: str, run_state: dict, stage: str) -> "dict | None":
+    rec = _stage_record_of(run_state, stage)
+    return _load_artifact_data_by_id(project, (rec or {}).get("artifact_id"))
+
+
+def _upstream_artifacts(run_state: dict, stage: str) -> "tuple[list[dict], bool]":
+    """Upstream artifacts this stage consumes per STAGE_ROUTING (newest completed
+    producer per type). Returns (entries [{stage,type,id}], complete) — complete is
+    False when a COMPLETED producer of a consumed type has no artifact_id, in which
+    case the caller leaves consumed_artifacts absent so Check 13 auto-resolves
+    instead of blocking on an id that does not exist."""
+    from pipeline_validator import STAGE_ROUTING
+    consumes = STAGE_ROUTING.get(stage, {}).get("consumes", [])
+    entries: list[dict] = []
+    complete = True
+    for typ in consumes:
+        hit = None
+        producer_without_id = False
+        for s in run_state.get("stages", []):
+            if not isinstance(s, dict):
+                continue
+            name = s.get("stage", s.get("name"))
+            if name == stage:
+                break
+            if typ not in STAGE_ROUTING.get(name, {}).get("produces", []):
+                continue
+            if s.get("status") not in ("completed", "done"):
+                continue
+            if s.get("artifact_id"):
+                hit = {"stage": name, "type": typ, "id": s["artifact_id"]}
+            else:
+                producer_without_id = True
+        if hit:
+            entries.append(hit)
+        elif producer_without_id:
+            complete = False
+    return entries, complete
+
+
+def _read_run_evidence(run_dir: Path, rel: str, run_id: str) -> "dict | None":
+    """One evidence JSON under <run_dir>/evidence/ (schema 1, same run). None otherwise."""
+    from pipeline_validator import _read_evidence_json
+    data = _read_evidence_json(run_dir / "evidence" / rel)
+    if not isinstance(data, dict) or data.get("schema", 1) != 1:
+        return None
+    if data.get("run_id") not in (None, run_id):
+        return None  # another run's evidence never counts for this one
+    return data
+
+
+def _measure_stage_tokens(session_id, start_iso, end_iso) -> "dict | None":
+    """C5: measured token usage for the stage window, or None when unavailable
+    (no session id / no start / SA-D's module absent / it returns None)."""
+    if not (session_id and start_iso and end_iso):
+        return None
+    try:
+        from core.run_delivery_summary import token_usage_for_window
+    except Exception:
+        return None
+    try:
+        usage = token_usage_for_window(session_id, start_iso, end_iso)
+    except Exception:
+        return None
+    return usage if isinstance(usage, dict) else None
+
+
+def _apply_token_cost(record: dict, model_value, usage: "dict | None") -> dict:
+    """Fill token_cost per C5. Measured wins; else the record-provided estimate;
+    else 0. Returns the derived-field note."""
+    if usage is not None:
+        cost = sum(int(usage.get(k) or 0) for k in
+                   ("input_tokens", "output_tokens", "cache_creation_tokens"))
+        record["token_cost"] = cost
+        record["token_usage"] = usage
+        record["token_cost_source"] = "measured"
+    elif isinstance(model_value, (int, float)) and not isinstance(model_value, bool) \
+            and math.isfinite(model_value) and model_value > 0:
+        record["token_cost"] = model_value
+        record["token_cost_source"] = "estimate"
+    else:
+        record["token_cost"] = 0
+        record["token_cost_source"] = "unavailable"
+    return {"value": record["token_cost"], "source": record["token_cost_source"]}
+
+
+def _plan_exit_criteria(project: str, run_state: dict, stage: str,
+                        candidate_artifact: "dict | None"):
+    """The run's declared exit_criteria (the PLAN artifact's), or None."""
+    plan = candidate_artifact if stage == "plan" else _stage_artifact(project, run_state, "plan")
+    crit = (plan or {}).get("exit_criteria") if isinstance(plan, dict) else None
+    return crit if isinstance(crit, list) else None
+
+
+def _evidence_roots() -> "list[str]":
+    """Where a RELATIVE files_touched entry may live, for the evidence freshness
+    re-hash: the runner's repo override, this repo, then the workspace."""
+    roots = []
+    env = os.environ.get("SWARM_TEST_REPO_ROOT")
+    if env:
+        roots.append(env)
+    roots.append(str(_BACKEND_DIR.parent))
+    try:
+        roots.append(str(_get_workspace()))
+    except Exception:  # noqa: BLE001 — a root we cannot resolve is just skipped
+        pass
+    return roots
+
+
+def _deliver_push_ready_bound(
+    *, project: str, run_id: str, run_dir: Path, run_state: dict, profile: str,
+    artifact: "dict | None", exit_result: "dict | None",
+) -> "tuple[bool, list[str], list[str]]":
+    """DELIVER push_ready upper bound → (bound, reasons, warnings).
+
+    Reads EVERY same-run ``evidence/tests/latest-*.json`` (a regression failure in
+    any of them caps it), judges the NEWEST report as the test verdict, and checks
+    that report's digests against the current content of files_touched (stale →
+    capped; a report without digests → warning only). A run whose PLAN went through
+    stage-complete, or profile ``direct``, with no judged exit contract is UNMET.
+    """
+    import pipeline_validator as pv
+    evidence = [e for e in pv.load_test_evidence(run_dir)
+                if isinstance(e, dict) and e.get("run_id") in (None, run_id)]
+    newest = evidence[0] if evidence else None
+    warnings: list[str] = []
+    fresh = None
+    if newest is not None:
+        fresh = pv.evidence_freshness(newest, run_state.get("files_touched"), _evidence_roots())
+        if fresh["status"] == "undigested":
+            warnings.append(f"latest-{newest.get('mode')}.json carries no tree_digest/"
+                            "changed_files digests — could not verify the tests ran after "
+                            "the last edit")
+    eff_exit = exit_result
+    plan_rec = _stage_record_of(run_state, "plan") or {}
+    contract_required = (normalize_profile(profile) == "direct"
+                         or plan_rec.get("exit_contract_source") == _EXIT_CONTRACT_SOURCE)
+    if contract_required and (not isinstance(exit_result, dict) or exit_result.get("met") is None):
+        eff_exit = {"met": False, "unmet": ["(no exit contract declared at PLAN)"]}
+    bound, reasons = pv.push_ready_upper_bound(
+        artifact or {}, profile, test_evidence=newest,
+        test_artifact=_stage_artifact(project, run_state, "test"),
+        exit_result=eff_exit, all_test_evidence=evidence, evidence_fresh=fresh,
+    )
+    return bound, reasons, warnings
+
+
+def _derive_stage_fields(
+    *, project: str, run_id: str, run_dir: Path, run_state: dict, stage: str,
+    profile: str, artifact: "dict | None", record_in: dict, cand_rec: dict,
+) -> "tuple[dict, dict | None]":
+    """F2: fill every derived field on the candidate artifact/record IN PLACE.
+
+    Evidence wins over model values; each derived field's source is recorded in
+    the returned dict (and in the record's ``derived_sources``). Returns
+    (derived, exit_result) — exit_result is None for stages that do not judge.
+    """
+    import pipeline_validator as pv
+    derived: dict = {}
+    skipped = cand_rec.get("status") == "skipped"
+
+    # consumed_artifacts — upstream ids per STAGE_ROUTING.
+    if not skipped:
+        ups, complete = _upstream_artifacts(run_state, stage)
+        if ups and complete:
+            cand_rec["consumed_artifacts"] = [{"type": u["type"], "id": u["id"]} for u in ups]
+            derived["consumed_artifacts"] = {"value": cand_rec["consumed_artifacts"],
+                                             "source": "STAGE_ROUTING upstream records"}
+
+    reg_ev = _read_run_evidence(run_dir, "tests/latest-regression.json", run_id)
+    if isinstance(artifact, dict) and not skipped:
+        ft = run_state.get("files_touched")
+        if stage == "build" and isinstance(ft, list) and ft:
+            artifact["files_changed"] = [f for f in ft if isinstance(f, str)]
+            derived["files_changed"] = {"value": len(artifact["files_changed"]),
+                                        "source": "run.json files_touched"}
+        ar = artifact.get("adversarial_review")
+        if stage in ("deliver", "goal_cycle") and isinstance(ar, dict) \
+                and isinstance(ar.get("findings"), list):
+            total = len(ar["findings"])
+            fixed = sum(1 for f in ar["findings"] if isinstance(f, dict) and f.get("resolved"))
+            ar.update(findings_total=total, findings_fixed=fixed, findings_remaining=total - fixed)
+            derived["findings"] = {"value": {"total": total, "fixed": fixed,
+                                             "remaining": total - fixed},
+                                   "source": "adversarial_review.findings[]"}
+        if stage == "test" and reg_ev is not None:
+            ev_layers = reg_ev.get("layers")
+            if isinstance(ev_layers, dict) and ev_layers:
+                layers = artifact.get("layers") if isinstance(artifact.get("layers"), dict) else {}
+                for k, v in ev_layers.items():
+                    if isinstance(v, dict):
+                        layers[k] = dict(v)
+                artifact["layers"] = layers
+            artifact["regressions"] = pv.evidence_regressions(reg_ev)
+            derived["test_layers"] = {"value": {"layers": artifact.get("layers"),
+                                                "regressions": artifact["regressions"]},
+                                      "source": "evidence/tests/latest-regression.json"}
+
+    # token_cost — C5 measured window, else estimate/unavailable.
+    timing = (run_state.get("stage_timing") or {}).get(stage) or {}
+    usage = _measure_stage_tokens(run_state.get("session_id"),
+                                  timing.get("started_at"), timing.get("completed_at"))
+    derived["token_cost"] = _apply_token_cost(cand_rec, record_in.get("token_cost"), usage)
+
+    # exit criteria — judged at build / test / deliver.
+    exit_result = None
+    if stage in ("build", "test", "deliver") and not skipped:
+        crit = _plan_exit_criteria(project, run_state, stage, artifact)
+        exit_result = pv.judge_exit_criteria(
+            crit, run_dir, cand_rec, files_touched=run_state.get("files_touched"),
+            roots=_evidence_roots())
+        cand_rec["exit_criteria_met"] = exit_result["met"]
+
+    # push_ready — DELIVER upper bound from gates; the model may only lower it.
+    if stage == "deliver" and not skipped:
+        bound, reasons, ev_warns = _deliver_push_ready_bound(
+            project=project, run_id=run_id, run_dir=run_dir, run_state=run_state,
+            profile=profile, artifact=artifact, exit_result=exit_result)
+        if ev_warns:
+            derived["evidence_warnings"] = {"value": ev_warns, "source": "evidence/tests"}
+        lowered = record_in.get("push_ready") is False
+        cand_rec["push_ready"] = bool(bound and not lowered)
+        if not bound:
+            cand_rec["push_ready_reason"] = "; ".join(
+                reasons + ([str(record_in.get("push_ready_reason"))] if lowered else []))
+        derived["push_ready"] = {"value": cand_rec["push_ready"], "upper_bound": bound,
+                                 "reasons": reasons,
+                                 "source": "gates" + (" + model lowered" if lowered else "")}
+
+    cand_rec["derived_sources"] = {k: v.get("source") for k, v in derived.items()}
+    return derived, exit_result
+
+
+def _stage_boundary_fail(stage: str, errors: "list[str]", *, data=None, record=None,
+                         warnings=None) -> None:
+    """Print the ONE-line structured failure to STDOUT and exit 1."""
+    try:
+        from pipeline_validator import structure_errors
+        structured = structure_errors(stage, errors, data=data, record=record)
+    except Exception:
+        structured = [{"code": "E_VALIDATION", "path": "", "message": e} for e in errors]
+    print(json.dumps({"ok": False, "stage": stage, "errors": structured,
+                      "legacy_errors": errors, "warnings": warnings or []},
+                     default=str, ensure_ascii=False))
+    sys.exit(1)
+
+
+def _parse_stage_data(raw_arg: str) -> "tuple[dict | None, dict]":
+    """--data → (artifact | None, record). Raises _StageBoundaryError on bad input."""
+    try:
+        raw = _read_json_arg(raw_arg, "--data")
+    except SystemExit:
+        raise _StageBoundaryError(["Input: --data source could not be read"])
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError) as e:
+        raise _StageBoundaryError([f"Input: --data is not valid JSON: {e}"])
+    if not isinstance(payload, dict):
+        raise _StageBoundaryError(['Input: --data must be {"artifact": {...}, "record": {...}}'])
+    artifact = payload.get("artifact")
+    record = payload.get("record") if payload.get("record") is not None else {}
+    errs = []
+    if artifact is not None and not isinstance(artifact, dict):
+        errs.append("Input: 'artifact' must be an object (or omitted for an artifactless stage)")
+    if not isinstance(record, dict):
+        errs.append("Input: 'record' must be an object")
+    if errs:
+        raise _StageBoundaryError(errs)
+    return artifact, record
+
+
+def _next_stage_of(profile: str, stage: str) -> "str | None":
+    stages = _get_profile_stages(profile)
+    if stage not in stages:
+        return None
+    i = stages.index(stage)
+    return stages[i + 1] if i + 1 < len(stages) else None
+
+
+def _validate_stage_candidate(
+    *, project: str, run_id: str, stage: str, profile: str, artifact: "dict | None",
+    record_in: dict, cand_rec: dict, cand_run: dict,
+) -> "tuple[list[str], list[str]]":
+    """Collect EVERY error for the candidate (artifact schema, record schema, exit
+    contract, and the per-stage validate() checks on the in-memory state)."""
+    import pipeline_validator as pv
+    from core.pipeline_profiles import is_relaxed_profile
+    errors: list[str] = []
+    warnings: list[str] = []
+    skipped = cand_rec.get("status") == "skipped"
+    # Judge the record AS IT WILL BE WRITTEN for carry-forward fields: a reflect
+    # finalize may legitimately omit lessons seeded earlier (_CARRY_FORWARD_FIELDS).
+    rec_view = dict(record_in)
+    if "lessons" not in rec_view and "lessons" in cand_rec:
+        rec_view["lessons"] = cand_rec["lessons"]
+    rec_errs, rec_warns = pv.validate_stage_record(stage, rec_view)
+    errors += rec_errs
+    warnings += rec_warns
+    if skipped:
+        # A skipped stage has no artifact to judge: run the order / profile /
+        # anti-rationalization checks (single implementations) directly.
+        if not pv._check_profile_respected(stage, profile):
+            errors.append(f"Profile violation: '{stage}' is not in the '{profile}' profile. "
+                          f"Expected stages: {_get_profile_stages(profile)}")
+        elif not pv._check_stage_order(stage, profile, cand_run.get("stages", [])):
+            errors.append(f"Stage order violation: '{stage}' requires every earlier "
+                          f"'{profile}' stage to be completed first")
+        errors += pv._check_skip_justification(cand_rec)
+        return errors, warnings
+    if artifact is not None:
+        errors += pv.validate_artifact_data(stage, artifact, profile=profile)
+    if stage == "plan":
+        errors += pv.validate_exit_criteria(
+            (artifact or {}).get("exit_criteria"), required=not is_relaxed_profile(profile))
+    try:
+        res = pv.validate_stage_state(project, run_id, cand_run, stage, artifact,
+                                      _PENDING_ARTIFACT_ID if artifact is not None else None)
+        errors += [e for e in res.get("errors", []) if e not in errors]
+        warnings += res.get("warnings", [])
+    except Exception as e:  # fail-CLOSED: a validator that cannot run blocks
+        errors.append(f"Validator ERRORED (could not run): {type(e).__name__}: {e}")
+    return errors, warnings
+
+
+def _ensure_report_before_advance(project: str, run_id: str, run_dir: Path) -> bool:
+    """The advance REPORT.md gate (deliver → next): generate it via run-report
+    (list-form subprocess of this CLI) when missing. True iff REPORT.md exists."""
+    if (run_dir / "REPORT.md").exists():
+        return True
+    try:
+        subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "run-report",
+             "--project", project, "--run-id", run_id],
+            capture_output=True, text=True, timeout=120, cwd=str(_BACKEND_DIR),
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return (run_dir / "REPORT.md").exists()
+
+
+def _manifest_ahead_of(reg: ArtifactRegistry, project: str, profile: str,
+                       target: str) -> "str | None":
+    """The manifest's current state when it is already PAST ``target`` in the
+    profile order (so advancing would move it backwards), else None."""
+    try:
+        current = reg.get_pipeline_state(project)
+    except Exception:  # noqa: BLE001 — unreadable manifest: let advance decide
+        return None
+    stages = _get_profile_stages(profile)
+    if current in stages and target in stages and stages.index(current) > stages.index(target):
+        return current
+    return None
+
+
+def _replan_errors(project: str, run_state: dict, profile: str,
+                   artifact: "dict | None", status: str) -> "list[str]":
+    """MED-3: once a stage AFTER plan completed, a re-completed PLAN may only add
+    exit criteria (each with a reason) — never drop/change one, never skip plan."""
+    import pipeline_validator as pv
+    stages = _get_profile_stages(profile)
+    if "plan" not in stages:
+        return []
+    later = [s for s in stages[stages.index("plan") + 1:]
+             if ((_stage_record_of(run_state, s) or {}).get("status")) in ("completed", "done")]
+    if not later:
+        return []
+    if status == "skipped":
+        return [f"Exit criteria: exit_criteria: plan cannot be re-recorded as skipped after "
+                f"'{later[0]}' completed — the exit contract is fixed once work starts"]
+    old_plan = _stage_artifact(project, run_state, "plan") or {}
+    return pv.validate_exit_criteria_replan(old_plan.get("exit_criteria"),
+                                            (artifact or {}).get("exit_criteria"), later[0])
+
+
+def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
+    """The ONE exit of a stage: validate everything, then publish + record + advance.
+
+    Order (A1): build the candidate (artifact + record with derived fields + timing)
+    → collect ALL errors → on any error print one structured JSON line and write
+    NOTHING → (--check stops here) → publish via _publish_core (the publish code
+    path) → write the record (replace + carry-forward) and stage_timing.completed_at
+    → advance the manifest to the profile's NEXT stage (computed, never supplied).
+    """
+    import copy
+    import pipeline_validator as pv
+    project, run_id, stage = args.project, args.run_id, args.stage
+    try:
+        run_file, run_state = _load_run_for_stage(project, run_id)
+        artifact_in, record_in = _parse_stage_data(args.data)
+    except _StageBoundaryError as e:
+        _stage_boundary_fail(stage, e.errors)
+    if stage not in pv.STAGE_RECORD_SCHEMAS:
+        _stage_boundary_fail(stage, [f"Input: unknown stage '{stage}' "
+                                     f"(known: {list(pv.STAGE_RECORD_SCHEMAS)})"])
+    run_dir = run_file.parent
+    profile = normalize_profile(run_state.get("profile"))
+    now = _utc_now_iso()
+
+    status = "skipped" if record_in.get("status") == "skipped" else "completed"
+    artifact = copy.deepcopy(artifact_in) if (artifact_in is not None and status != "skipped") else None
+    cand_rec = {k: copy.deepcopy(v) for k, v in record_in.items() if k not in _DERIVED_RECORD_KEYS}
+    cand_rec.update(stage=stage, status=status, stage_doc_consumed=True)
+    if stage == "plan" and status == "completed":
+        cand_rec["exit_contract_source"] = _EXIT_CONTRACT_SOURCE  # MED-5 marker
+    if artifact is not None:
+        cand_rec["artifact_id"] = _PENDING_ARTIFACT_ID
+
+    cand_run = copy.deepcopy(run_state)
+    _set_stage_timing(cand_run, stage, "completed_at", now)
+    derived, exit_result = _derive_stage_fields(
+        project=project, run_id=run_id, run_dir=run_dir, run_state=cand_run, stage=stage,
+        profile=profile, artifact=artifact, record_in=record_in, cand_rec=cand_rec,
+    )
+    _replace_stage_record(cand_run["stages"], cand_rec)  # carry-forward applied here
+
+    errors, warnings = _validate_stage_candidate(
+        project=project, run_id=run_id, stage=stage, profile=profile, artifact=artifact,
+        record_in=record_in, cand_rec=cand_rec, cand_run=cand_run,
+    )
+    if stage == "plan":
+        errors += _replan_errors(project, run_state, profile, artifact, status)
+    if isinstance(exit_result, dict):
+        warnings += [w for w in exit_result.get("warnings") or [] if w not in warnings]
+    warnings += [w for w in (derived.get("evidence_warnings") or {}).get("value") or []
+                 if w not in warnings]
+    if errors:
+        _stage_boundary_fail(stage, errors, data=artifact, record=record_in, warnings=warnings)
+
+    next_stage = _next_stage_of(profile, stage)
+    if getattr(args, "check", False):
+        print(json.dumps({"ok": True, "check": True, "stage": stage, "next_stage": next_stage,
+                          "derived": derived, "exit_criteria": exit_result,
+                          "warnings": warnings}, default=str, ensure_ascii=False))
+        return
+
+    # ── WRITE (only reached when every check passed) ──
+    # Publish WITHOUT the auto-record stub (record_stub=False): the stub would
+    # re-point an already-completed record at the new artifact before the new
+    # record exists. The record lands in ONE atomic run.json write instead. Any
+    # failure in this phase → one structured line, never a raw traceback.
+    artifact_id = None
+    try:
+        if artifact is not None:
+            summary = str(artifact.get("summary") or record_in.get("summary")
+                          or f"{stage} artifact ({run_id})")[:200]
+            try:
+                core = _publish_core(
+                    reg, project=project, artifact_type=_stage_artifact_type(stage) or "changeset",
+                    data=artifact, producer=_STAGE_PRODUCER, summary=summary,
+                    run_id=run_id, stage=stage, record_stub=False,
+                )
+            except _PublishRefused as pr:
+                _stage_boundary_fail(stage, [f"Input: {pr.payload.get('error')}"])
+            except (ValueError, FileNotFoundError) as e:
+                _stage_boundary_fail(stage, [f"Input: publish failed: {e}"])
+            artifact_id = core["artifact_id"]
+            cand_rec["artifact_id"] = artifact_id
+        fresh = json.loads(run_file.read_text(encoding="utf-8"))  # re-read: a sibling writer
+        fresh.setdefault("stages", [])
+        _set_stage_timing(fresh, stage, "completed_at", now)
+        _replace_stage_record(fresh["stages"], cand_rec)
+        if status == "completed":
+            for counter in ("resume_attempts", "resume_executions"):
+                if fresh.get(counter, 0) > 0:
+                    fresh[counter] = 0
+        fresh["updated_at"] = now
+        _write_run_atomic(run_file, fresh)
+    except Exception as exc:  # noqa: BLE001 — structured failure, never a traceback
+        partial = {"artifact_id": artifact_id} if artifact_id else {}
+        print(json.dumps({"ok": False, "stage": stage, "code": "write_failed",
+                          "error": f"{type(exc).__name__}: {exc}", "partial": partial,
+                          "hint": "re-run stage-complete; it is idempotent"},
+                         default=str, ensure_ascii=False))
+        sys.exit(1)
+
+    # ── ADVANCE to the profile's next stage (computed; never backwards) ──
+    advanced = False
+    next_card, next_action = None, None
+    if next_stage:
+        report_ok = stage != "deliver" or _ensure_report_before_advance(project, run_id, run_dir)
+        from core.artifact_registry import PIPELINE_STATES
+        behind = _manifest_ahead_of(reg, project, profile, next_stage)
+        if behind:
+            warnings.append(f"manifest already at '{behind}' — stage-complete never moves "
+                            f"it backwards to '{next_stage}'")
+        if report_ok and next_stage in PIPELINE_STATES and not behind:
+            try:
+                reg.advance_pipeline(project, next_stage)
+                advanced = True
+            except (ValueError, OSError) as e:
+                warnings.append(f"manifest advance to '{next_stage}' failed: {e}")
+        try:
+            next_card, next_action = _next_stage_continuation(project, next_stage, run_id)
+        except Exception:
+            next_card, next_action = None, None
+        if not report_ok:
+            next_action = (f"REPORT.md gate: run `artifact_cli.py run-report --project {project} "
+                           f"--run-id {run_id}`, then `artifact_cli.py advance --project {project} "
+                           f"--run-id {run_id} --state {next_stage}`. " + (next_action or ""))
+        if next_action and _CONTINUATION_PHRASE not in next_action:
+            next_action += f" — {_CONTINUATION_PHRASE}."
+        next_action = (f"{next_action} First run `artifact_cli.py stage-start --project "
+                       f"{project} --run-id {run_id} --stage {next_stage}`.")
+    else:
+        next_action = (f"'{stage}' is the last stage of the '{profile}' profile — proceed to "
+                       f"COMPLETE: read stages/complete.md, then `run-update --project {project} "
+                       f"--run-id {run_id} --status completed`. {_CONTINUATION_PHRASE}.")
+    if isinstance(exit_result, dict) and exit_result.get("met") is True:
+        next_action = f"{next_action} {_EXIT_MET_DIRECTIVE}"
+
+    print(json.dumps({
+        "ok": True, "stage": stage, "artifact_id": artifact_id or cand_rec.get("artifact_id"),
+        "next_stage": next_stage, "next_card": next_card, "next_action": next_action,
+        "advanced": advanced, "derived": derived, "exit_criteria": exit_result,
+        "warnings": warnings,
+    }, default=str, ensure_ascii=False))
+
+
+def _git_lines(args_list: "list[str]", cwd: str) -> "list[str]":
+    """Run a list-form git command with literal pathspecs; [] on any failure."""
+    try:
+        r = subprocess.run(["git", *args_list], cwd=cwd, capture_output=True, text=True,
+                           timeout=20, env=_LITERAL_GIT_ENV())
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    return r.stdout.splitlines() if r.returncode == 0 else []
+
+
+def _count_lines(path: Path) -> int:
+    try:
+        if path.stat().st_size > 2 * 1024 * 1024:
+            return 0
+        return path.read_bytes().count(b"\n")
+    except OSError:
+        return 0
+
+
+def _changed_files_scope(files_touched) -> dict:
+    """files_touched vs HEAD (+ untracked): [{path,status,added,removed}] + totals.
+    Relative entries anchor to this source repo; absolute ones to their own repo."""
+    default_root = _git_repo_root(str(Path(__file__).resolve()))
+    by_root: dict[str, dict[str, str]] = {}
+    for f in files_touched if isinstance(files_touched, list) else []:
+        if not (isinstance(f, str) and f.strip()):
+            continue
+        p = Path(f)
+        root = _git_repo_root(f) if p.is_absolute() else default_root
+        if not root:
+            continue
+        rel = os.path.relpath(f, root) if p.is_absolute() else f
+        if rel.startswith(".."):
+            continue
+        by_root.setdefault(root, {})[rel] = f
+    changed: list[dict] = []
+    for root, rels in by_root.items():
+        paths = list(rels)
+        num: dict[str, tuple[int, int]] = {}
+        for ln in _git_lines(["diff", "--numstat", "--no-renames", "HEAD", "--", *paths], root):
+            parts = ln.split("\t")
+            if len(parts) == 3:
+                a, d = (int(x) if x.isdigit() else 0 for x in parts[:2])
+                num[parts[2]] = (a, d)
+        seen: set[str] = set()
+        for ln in _git_lines(["diff", "--name-status", "-M", "HEAD", "--", *paths], root):
+            parts = ln.split("\t")
+            if len(parts) < 2:
+                continue
+            st, path = parts[0][:1], parts[-1]
+            a, d = num.get(path, (0, 0))
+            if st == "R" and len(parts) == 3:
+                a, d = (num.get(path, (0, 0))[0], num.get(parts[1], (0, 0))[1])
+                seen.add(parts[1])
+            seen.add(path)
+            changed.append({"path": rels.get(path, path), "status": st, "added": a, "removed": d})
+        for ln in _git_lines(["ls-files", "--others", "--exclude-standard", "--", *paths], root):
+            if ln and ln not in seen:
+                changed.append({"path": rels.get(ln, ln), "status": "A",
+                                "added": _count_lines(Path(root) / ln), "removed": 0})
+    ins = sum(c["added"] for c in changed)
+    dels = sum(c["removed"] for c in changed)
+    return {"changed_files": changed, "diff_insertions": ins, "diff_deletions": dels,
+            "full_tier_override": ins > 100}
+
+
+def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "list[dict]":
+    """deliver.md "Step 1: Scope Detection" as code: tier default ∪ file-pattern
+    triggers ∪ run.json required_experts; refactor rule; bugfix default
+    correctness+security; >100 insertions → full tier; <50 changed lines → none
+    unless required."""
+    from core.pipeline_profiles import is_relaxed_profile
+    picked: dict[str, str] = {}
+
+    def add(eid: str, why: str) -> None:
+        picked.setdefault(eid, why)
+
+    changed = scope.get("changed_files", [])
+    total = scope.get("diff_insertions", 0) + scope.get("diff_deletions", 0)
+    override = bool(scope.get("full_tier_override"))
+    if total >= 50 or override:
+        if (work_type or "") == "refactor":
+            for e in ("correctness", "api-contract", "integration", "red-team"):
+                add(e, "work_type=refactor architecture set")
+        elif profile == "bugfix" and not override:
+            add("correctness", "bugfix tier default")
+            add("security", "bugfix tier default")
+        elif not is_relaxed_profile(profile) or override:
+            add("correctness", "always (changeset > 50 lines)"
+                + ("; diff > 100 insertions → full tier" if override else ""))
+            for eid, rx in _EXPERT_FILE_TRIGGERS.items():
+                hit = next((c["path"] for c in changed if rx.search(c["path"])), None)
+                if hit:
+                    add(eid, f"file pattern: {hit}")
+            new_code = next((c["path"] for c in changed if c["status"] == "A"
+                             and Path(c["path"]).suffix in (".py", ".ts", ".tsx", ".js", ".rs")), None)
+            if new_code:
+                add("integration", f"new code file: {new_code}")
+            if total > 200:
+                add("red-team", f"changeset {total} lines > 200 (also: any specialist HIGH)")
+    for e in required if isinstance(required, list) else []:
+        if isinstance(e, str) and e.strip():
+            add(e.strip(), "run.json required_experts")
+    return [{"id": e, "domain": _EXPERT_DOMAINS.get(e, e.replace("-", " ").title()),
+             "reason": why} for e, why in picked.items()]
+
+
+def _load_spawn_prompt_module():
+    """Import backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py by path."""
+    import importlib.util
+    path = _BACKEND_DIR / "skills" / "s_autonomous-pipeline" / "scripts" / "spawn_prompt.py"
+    spec = importlib.util.spec_from_file_location("_swarm_spawn_prompt", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _write_expert_prompts(*, project: str, run_dir: Path, experts: "list[dict]",
+                          files: "list[str]", requirement: str) -> "list[str]":
+    """Write one gate2-adversarial prompt FILE per expert to
+    <run_dir>/evidence/prompts/<expert_id>.md (adds ``prompt_path`` in place).
+    Built from spawn_prompt.py: load_gate + numeric-cap check + per-expert
+    <EXPERT_ID>/<DOMAIN>/requirement/checklist substitution, then its project fill
+    (knowledge slot LAST). Returns warnings; never raises."""
+    if not experts:
+        return []
+    try:
+        sp = _load_spawn_prompt_module()
+        base = sp.load_gate("gate2-adversarial")
+        if not sp.has_numeric_cap(base):
+            return ["gate2-adversarial prompt states no numeric cap — prompts not written"]
+    except (Exception, SystemExit) as e:
+        return [f"spawn_prompt unavailable ({type(e).__name__}: {e}) — experts returned "
+                f"without prompt paths; run spawn_prompt.py by hand"]
+    out_dir = run_dir / "evidence" / "prompts"
+    warnings: list[str] = []
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return [f"cannot create {out_dir}: {e}"]
+    for ex in experts:
+        eid = ex["id"]
+        if not _EXPERT_ID_RE.fullmatch(eid):
+            warnings.append(f"expert id {eid!r} is not a lowercase registry id — no prompt written")
+            continue
+        checklist_file = _BACKEND_DIR / "experts" / "code" / f"{eid}.md"
+        try:
+            checklist = checklist_file.read_text(encoding="utf-8")[:20000]
+        except OSError:
+            checklist = f"(no checklist file at {checklist_file} — apply your domain judgment)"
+        text = (base.replace("<EXPERT_ID>", eid).replace("<DOMAIN>", ex["domain"])
+                .replace("<requirement from run.json>", (requirement or "")[:1000])
+                .replace("<paste contents of the specialist's .md file>", checklist))
+        try:
+            if sp.requires_knowledge(text):
+                text = sp._fill_project(text, project, files)
+            (out_dir / f"{eid}.md").write_text(text, encoding="utf-8")
+            ex["prompt_path"] = str(out_dir / f"{eid}.md")
+        except (Exception, SystemExit) as e:
+            warnings.append(f"prompt for {eid} not written: {type(e).__name__}: {e}")
+    return warnings
+
+
+def _evaluate_work_type(project: str, run_state: dict) -> "str | None":
+    ev = _stage_artifact(project, run_state, "evaluate") or {}
+    und = ev.get("understanding") if isinstance(ev.get("understanding"), dict) else {}
+    wt = und.get("work_type") or run_state.get("work_type")
+    return wt if isinstance(wt, str) else None
+
+
+def _fit_stage_start(out: dict) -> dict:
+    """Keep the stage-start payload ≤ 8 KB: drop the bulkiest optional parts first
+    (each replaced by a pointer to the command that returns it)."""
+    for key, pointer in (("enums", "schema --stage"), ("artifact_example", "schema --stage"),
+                         ("record_example", "schema --stage"), ("upstream", "discover --full")):
+        if len(json.dumps(out, default=str, ensure_ascii=False).encode()) <= _STAGE_START_MAX_BYTES:
+            break
+        if out.get(key):
+            out[key] = f"(omitted for size — `artifact_cli.py {pointer}`)"
+    return out
+
+
+def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
+    """The ONE entry of a stage: record stage_timing.started_at and return, in one
+    compact JSON line (target ≤ 8 KB), everything the stage needs to begin —
+    replacing the discover / run-get / schema / git diff / spawn_prompt calls."""
+    import pipeline_validator as pv
+    project, run_id, stage = args.project, args.run_id, args.stage
+    try:
+        run_file, run_state = _load_run_for_stage(project, run_id)
+    except _StageBoundaryError as e:
+        _stage_boundary_fail(stage, e.errors)
+    profile = normalize_profile(run_state.get("profile"))
+    if stage not in _get_profile_stages(profile):
+        _stage_boundary_fail(stage, [f"Profile violation: '{stage}' is not in the '{profile}' "
+                                     f"profile. Expected stages: {_get_profile_stages(profile)}"])
+    run_dir = run_file.parent
+
+    # C4 started_at — idempotent re-entry keeps the original start; a re-start
+    # after the stage completed begins a new window.
+    timing = (run_state.get("stage_timing") or {}).get(stage)
+    timing = timing if isinstance(timing, dict) else {}
+    if not timing.get("started_at") or timing.get("completed_at"):
+        _set_stage_timing(run_state, stage, "started_at", _utc_now_iso())
+        if timing.get("completed_at"):
+            run_state["stage_timing"][stage].pop("completed_at", None)
+        _write_run_atomic(run_file, run_state)
+
+    upstream = []
+    for u in _upstream_artifacts(run_state, stage)[0]:
+        meta = pv._load_artifact_meta_from_manifest(project, u["id"]) or {}
+        upstream.append({**u, "summary": str(meta.get("summary") or "")[:200]})
+    plan = _stage_artifact(project, run_state, "plan") or {}
+    if stage == "plan":
+        acs = (_stage_artifact(project, run_state, "evaluate") or {}).get("acceptance_criteria")
+    else:
+        acs = plan.get("acceptance_criteria")
+    files_touched = run_state.get("files_touched") if isinstance(run_state.get("files_touched"), list) else []
+    card = _STAGE_DOC_DIR / f"{stage}.md"
+    out: dict = {
+        "ok": True, "stage": stage, "profile": profile,
+        "card": str(card) if card.is_file() else None,
+        "upstream": upstream,
+        "acceptance_criteria": [str(a)[:300] for a in (acs or [])][:30] if isinstance(acs, list) else [],
+        "exit_criteria": plan.get("exit_criteria") if isinstance(plan.get("exit_criteria"), list) else [],
+        "files_touched": files_touched[:60],
+        "required_experts": run_state.get("required_experts") or [],
+        "artifact_example": pv.STAGE_TEMPLATES.get(stage),
+        "record_example": pv.STAGE_RECORD_TEMPLATES.get(stage, {}),
+        "enums": pv.STAGE_ENUMS.get(stage, {}),
+        "complete_with": (f"artifact_cli.py stage-complete --project {project} --run-id {run_id} "
+                          f"--stage {stage} --data @<file with {{\"artifact\":...,\"record\":...}}>"),
+    }
+    if stage == "plan":
+        out["exit_criteria_default"] = pv.default_exit_criteria(
+            _evaluate_work_type(project, run_state), acs if isinstance(acs, list) else None)
+    warnings: list[str] = []
+    if stage in ("review", "deliver"):
+        scope = _changed_files_scope(files_touched)
+        experts = _dispatch_experts(profile=profile, work_type=_evaluate_work_type(project, run_state),
+                                    scope=scope, required=run_state.get("required_experts"))
+        warnings += _write_expert_prompts(
+            project=project, run_dir=run_dir, experts=experts,
+            files=[c["path"] for c in scope["changed_files"]] or files_touched,
+            requirement=str(run_state.get("requirement") or ""))
+        scope["changed_files"] = scope["changed_files"][:60]
+        out.update(scope)
+        out["experts"] = experts
+    out["warnings"] = warnings
+    print(json.dumps(_fit_stage_start(out), default=str, ensure_ascii=False))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Artifact registry CLI for SwarmAI pipeline"
@@ -7418,7 +8562,9 @@ def main() -> None:
     p_run_create = sub.add_parser("run-create", help="Create a new pipeline run")
     p_run_create.add_argument("--project", required=True)
     p_run_create.add_argument("--requirement", required=True, help="Requirement text")
-    p_run_create.add_argument("--profile", default=None, help="Pipeline profile: full/trivial/research/docs/bugfix")
+    p_run_create.add_argument("--profile", default=None, help="Pipeline profile: full/trivial/research/docs/bugfix/goal/direct")
+    p_run_create.add_argument("--intent", default=None,
+                              help="The user's original words (fallback when the session's message cannot be read)")
 
     # run-update
     p_run_update = sub.add_parser("run-update", help="Update a pipeline run")
@@ -7499,6 +8645,11 @@ def main() -> None:
     p_run_metrics = sub.add_parser("run-metrics", help="Generate METRICS.json for a pipeline run")
     p_run_metrics.add_argument("--project", required=True)
     p_run_metrics.add_argument("--run-id", required=True, help="Pipeline run ID")
+
+    # run-summary (§4-E: re-render the chat delivery summary at any time)
+    p_run_summary = sub.add_parser("run-summary", help="Render the chat delivery summary of a run")
+    p_run_summary.add_argument("--project", required=True)
+    p_run_summary.add_argument("--run-id", required=True, help="Pipeline run ID")
 
     # run-analytics (cross-run aggregation)
     p_run_analytics = sub.add_parser("run-analytics", help="Cross-run pipeline analytics")
@@ -7584,10 +8735,26 @@ def main() -> None:
     p_rel_gate.add_argument("--clear", action="store_true", help="Delete the marker (call after publish, or to reset)")
     p_rel_gate.add_argument("--ref", default=None, help="Tag or sha of the commit BEING RELEASED (e.g. v1.26.0). Resolves <ref>^{commit}, polls CI for THAT commit, records it (+the tag) in the marker. Omit for a branch-tip release (legacy HEAD behavior).")
 
+    # stage-start / stage-complete — the per-stage entry + exit (design §4-A)
+    p_stage_start = sub.add_parser("stage-start", help="Enter a stage: record started_at, return the stage card + upstream + examples (single-line JSON)")
+    p_stage_start.add_argument("--project", required=True)
+    p_stage_start.add_argument("--run-id", required=True)
+    p_stage_start.add_argument("--stage", required=True)
+    p_stage_complete = sub.add_parser("stage-complete", help="Leave a stage: validate EVERYTHING, then publish + record + advance in one call")
+    p_stage_complete.add_argument("--project", required=True)
+    p_stage_complete.add_argument("--run-id", required=True)
+    p_stage_complete.add_argument("--stage", required=True)
+    p_stage_complete.add_argument("--data", required=True,
+                                  help='{"artifact": {...}, "record": {...}} — inline JSON, @PATH or @-')
+    p_stage_complete.add_argument("--check", action="store_true",
+                                  help="Validate only; write nothing")
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
     handlers = {
+        "stage-start": cmd_stage_start,
+        "stage-complete": cmd_stage_complete,
         "discover": cmd_discover,
         "publish": cmd_publish,
         "schema": cmd_schema,
@@ -7607,6 +8774,7 @@ def main() -> None:
         "run-resume": cmd_run_resume,
         "run-report": cmd_run_report,
         "run-metrics": cmd_run_metrics,
+        "run-summary": cmd_run_summary,
         "run-analytics": cmd_run_analytics,
         "run-cultivate": cmd_run_cultivate,
         "cleanup-orphans": cmd_cleanup_orphans,

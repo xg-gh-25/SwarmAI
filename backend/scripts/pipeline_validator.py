@@ -42,11 +42,27 @@ Public symbols:
 - ``validate``          — Core validation logic (testable without CLI)
 - ``check_ddd_consistency`` — Standalone DDD cross-doc check (testable without pipeline)
 - ``check_ddd_staleness``  — Detect runs whose DDD docs changed since evaluation
+- ``validate_stage_state`` — validate() against an in-memory candidate run state
+- ``validate_stage_record`` / ``STAGE_RECORD_SCHEMAS`` / ``STAGE_RECORD_TEMPLATES``
+  — the stage-RECORD contract used by ``artifact_cli.py stage-complete``
+- ``validate_exit_criteria`` / ``judge_exit_criteria`` / ``default_exit_criteria``
+  — the G1 exit contract (structure, judging against runner evidence, defaults)
+- ``push_ready_upper_bound`` — DELIVER push_ready computed from gate results
+- ``evidence_freshness`` / ``evidence_regression_modes`` — is runner evidence newer
+  than the run's last edits (tree_digest / changed_files digests), and which
+  latest-*.json reports carry a regression-classified failure
+- ``validate_exit_criteria_replan`` — a replan after a later stage completed may
+  only ADD exit criteria (each with a reason), never drop or change one
+- ``structure_errors``     — legacy message strings → {code, path, message, got?, expected?}
+- ``STAGE_ENUMS``          — allowed literals for every enum-typed template field
 """
 
 import argparse
+import contextvars
+import copy
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -540,19 +556,19 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
 # Stage schema templates — show expected JSON shape for publish-time errors
 STAGE_TEMPLATES: dict[str, dict] = {
     "evaluate": {
-        "recommendation": "GO|DEFER|REJECT",
-        "scope": "trivial|standard|complex",
+        "recommendation": "GO",
+        "scope": "standard",
         "acceptance_criteria": ["AC1: ...", "AC2: ..."],
         "scores": {"strategic": 0, "priority": 0, "feasibility": 0},
         # Understanding gate (strict profiles): a present-tense, observation-backed,
         # refuted claim about the CURRENT state — before THINK proposes a fix.
         # Bug-class evals may instead use the observation_evidence alias.
         "understanding": {
-            "work_type": "bugfix|existing-feature|greenfield|refactor|research|docs",
+            "work_type": "existing-feature",
             "claim": "A falsifiable statement about the CURRENT state (present-tense, NOT a plan)",
             "evidence": "An OBSERVATION: code-trace file:line / ps / log counts / repro / characterization",
-            "evidence_kind": "observation|code-trace|repro|premortem|characterization",
-            "skeptic_verdict": "SUPPORTED|UNSUPPORTED|ALREADY-SATISFIED|WRONG-FRAME",
+            "evidence_kind": "code-trace",
+            "skeptic_verdict": "SUPPORTED",
             "alternative_considered": "The simplest competing framing, and why it loses",
         },
         # Self-Socratic ambiguity scan (strict profiles): re-scan the filled
@@ -562,7 +578,7 @@ STAGE_TEMPLATES: dict[str, dict] = {
             "terms_checked": list(_AMBIGUITY_TERMS),
             "hits": [{"term": "standard", "where": "what",
                       "resolution": "self-answer: read file:line — exact meaning, not vague.",
-                      "kind": "self-answer|escalation"}],
+                      "kind": "self-answer"}],
             "hit_count": 1,
             "all_resolved": True,
         },
@@ -583,7 +599,7 @@ STAGE_TEMPLATES: dict[str, dict] = {
     },
     "think": {
         "key_findings": ["finding 1", "finding 2"],
-        "alternatives": [{"constraint": "SPEED|QUALITY|SIMPLICITY", "what": "...", "effort": "S|M|L"}],
+        "alternatives": [{"constraint": "SIMPLICITY", "what": "...", "effort": "S"}],
         "recommendation": "Approach X because...",
         "ambiguity_scan": {
             "scanned_fields": ["recommendation", "risk_probe.verification"],
@@ -598,6 +614,15 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "approach": "description",
         "boundaries": {"always": [], "ask_first": [], "never": []},
         "success_criteria": ["verifiable condition"],
+        # G1 exit contract: written BEFORE build, judged by the tool against runner
+        # evidence at build/test/deliver stage-complete. REQUIRED at plan
+        # stage-complete for strict profiles; never required on the legacy publish path.
+        "exit_criteria": [
+            {"id": "X1", "kind": "test", "ref": "backend/tests/test_x.py::test_red_team_case_1",
+             "expect": "pass"},
+            {"id": "X2", "kind": "test", "ref": "backend/tests/test_x.py", "expect": "pass"},
+            {"id": "X3", "kind": "probe", "ref": "bash-fuzz", "expect": "no_new_findings"},
+        ],
     },
     "build": {
         "files_changed": ["path/to/file.py"],
@@ -612,7 +637,7 @@ STAGE_TEMPLATES: dict[str, dict] = {
     "review": {
         "approved": True,
         "litmus_gate": {
-            "verdict": "PASS|BORDERLINE|FAIL",
+            "verdict": "PASS",
             "hf_checked": [True, True, True, True],  # exactly 4 bools, one per HF criterion
             "soft_signal_count": 0,  # BORDERLINE when >= 3
             "weak_areas": [],  # required non-empty when verdict=BORDERLINE
@@ -624,7 +649,7 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "integration_trace": {"checked": 5, "clean": True, "details": "symbol A → caller B verified"},
         "runtime_patterns": {
             "checked": 3, "violations": 0,
-            "patterns": [{"pattern": "name", "status": "pass|N/A", "detail": ">10 chars describing what was checked"}],
+            "patterns": [{"pattern": "name", "status": "pass", "detail": ">10 chars describing what was checked"}],
         },
     },
     "test": {
@@ -640,13 +665,13 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "title": "Feature Name",
         "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
         "adversarial_review": {
-            "spawned": True, "profile_tier": "full|lite|skipped",
+            "spawned": True, "profile_tier": "full",
             "findings_total": 3, "findings_fixed": 3, "findings_remaining": 0,
             # `confidence` (1-10) gates MEDIUM findings at delivery: an unresolved
             # MEDIUM with confidence >= CONFIDENCE_GATE_THRESHOLD (7) BLOCKS; absent
             # confidence on an unresolved MEDIUM is fail-closed (also blocks). HIGH
             # blocks regardless. See _blocked_findings().
-            "findings": [{"severity": "HIGH|MEDIUM|LOW", "confidence": 8, "resolved": True,
+            "findings": [{"severity": "MEDIUM", "confidence": 8, "resolved": True,
                           "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
             # Rule 23: HOW the reviewers were spawned (required when spawned=true on a
             # strict profile — blocks a self-review declared as spawned).
@@ -665,6 +690,60 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "ac_verification": {"status": "verified", "detail": "AC1 → test_x; AC2 → test_y"},
         "meta_review": {"verdict": "CLEAR", "risks": []},
         "convergence": {"iterations": 1, "all_pass": True, "final_status": "push-ready"},
+    },
+    # goal_cycle (D4): the goal-profile inner loop artifact. Mirrors STAGE_SCHEMAS
+    # required (dod_met + adversarial_review dict carrying findings[]).
+    "goal_cycle": {
+        "dod_met": True,
+        "cycles_run": 2,
+        "progress_path": ".artifacts/runs/<RUN_ID>/PROGRESS.md",
+        "review_cadence": "every cycle",
+        "adversarial_review": {
+            "spawned": True, "profile_tier": "full",
+            "findings": [{"severity": "LOW", "confidence": 5, "resolved": True,
+                          "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
+            "evidence": "Agent tool: correctness + security specialists spawned in one batch",
+        },
+    },
+}
+
+# Allowed literal values for every enum-typed template field, keyed by stage then
+# dotted path ("[]" marks a list element). The templates above carry ONE valid
+# literal each (they must pass their own validator); this table carries the full
+# choice set so `schema --stage X` / stage-start can show both.
+STAGE_ENUMS: dict[str, dict[str, list]] = {
+    "evaluate": {
+        "recommendation": ["GO", "DEFER", "REJECT"],
+        "scope": ["trivial", "standard", "complex", "bugfix"],
+        "understanding.work_type": ["bugfix", "existing-feature", "greenfield",
+                                    "refactor", "research", "docs"],
+        "understanding.evidence_kind": ["observation", "code-trace", "repro",
+                                        "premortem", "characterization"],
+        "understanding.skeptic_verdict": ["SUPPORTED", "UNSUPPORTED",
+                                          "ALREADY-SATISFIED", "WRONG-FRAME"],
+        "ambiguity_scan.hits[].kind": ["self-answer", "escalation"],
+    },
+    "think": {
+        "alternatives[].constraint": ["SPEED", "QUALITY", "SIMPLICITY"],
+        "alternatives[].effort": ["S", "M", "L"],
+    },
+    "plan": {
+        "exit_criteria[].kind": ["test", "probe", "mutation", "manual"],
+        "exit_criteria[].expect": ["pass", "no_new_findings", "all_killed", "done"],
+    },
+    "review": {
+        "litmus_gate.verdict": ["PASS", "BORDERLINE", "FAIL"],
+        "runtime_patterns.patterns[].status": ["pass", "N/A", "fail"],
+    },
+    "deliver": {
+        "adversarial_review.profile_tier": ["full", "lite", "skipped"],
+        "adversarial_review.findings[].severity": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+        "ac_verification.status": ["verified", "partial", "unverified"],
+        "meta_review.verdict": ["CLEAR", "RISKS"],
+    },
+    "goal_cycle": {
+        "adversarial_review.profile_tier": ["full", "lite", "skipped"],
+        "adversarial_review.findings[].severity": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
     },
 }
 
@@ -1934,6 +2013,11 @@ def get_stage_schema(stage: str) -> dict:
         "recommended": schema.get("recommended", []),
         "depth": depth,
         "template": template,
+        # Additive (A4): allowed literals for the template's enum fields, and the
+        # stage-RECORD contract (judgment fields stage-complete accepts).
+        "enums": STAGE_ENUMS.get(stage, {}),
+        "record_schema": STAGE_RECORD_SCHEMAS.get(stage, {}),
+        "record_template": STAGE_RECORD_TEMPLATES.get(stage, {}),
     }
 
 
@@ -2327,6 +2411,17 @@ _EVIDENCE_FILE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".md",
 # Workspace resolution
 # ---------------------------------------------------------------------------
 
+# In-memory candidate-state override (A1, stage-complete). When set, _load_run and
+# _load_artifact_data answer from it instead of disk, so validate() — the ONE
+# implementation of the per-stage checks — runs against the state stage-complete is
+# ABOUT to write. A ContextVar (not a module global) so concurrent validations in
+# one process cannot see each other's candidate. Shape:
+#   {"project": str, "run_id": str, "run": dict, "artifacts": {artifact_id: dict}}
+_STATE_OVERRIDE: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar(
+    "pipeline_validator_state_override", default=None,
+)
+
+
 def _get_workspace() -> Path:
     import os
     from config import get_app_data_dir
@@ -2342,7 +2437,16 @@ def _get_artifacts_dir(project: str) -> Path | None:
 
 
 def _load_run(project: str, run_id: str) -> dict[str, Any] | None:
-    """Load a pipeline run from .artifacts/runs/<run_id>/run.json."""
+    """Load a pipeline run from .artifacts/runs/<run_id>/run.json.
+
+    Consults the in-memory candidate-state override first (see
+    ``validate_stage_state``): while a stage-complete pre-write validation is in
+    flight, the CANDIDATE run state is returned for that exact (project, run_id), so
+    validate() judges what WOULD be written without anything touching disk.
+    """
+    _ov = _STATE_OVERRIDE.get()
+    if _ov is not None and _ov.get("project") == project and _ov.get("run_id") == run_id:
+        return _ov.get("run")
     ws = _get_workspace()
     run_file = ws / "Projects" / project / ".artifacts" / "runs" / run_id / "run.json"
     if not run_file.exists():
@@ -2356,7 +2460,15 @@ def _load_artifact_data(project: str, run_id: str, artifact_id: str) -> dict[str
     Note: run_id is accepted for call-site convenience but not used —
     manifest lookup is by artifact_id only (covers both run-scoped and
     top-level artifacts).
+
+    A candidate (not-yet-published) artifact registered by ``validate_stage_state``
+    resolves from the in-memory override before any manifest read.
     """
+    _ov = _STATE_OVERRIDE.get()
+    if _ov is not None and _ov.get("project") == project:
+        _cand = (_ov.get("artifacts") or {}).get(artifact_id)
+        if _cand is not None:
+            return _cand
     ws = _get_workspace()
     artifacts_dir = ws / "Projects" / project / ".artifacts"
 
@@ -3968,7 +4080,8 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # Advisory: emits WARN only (never errors.append) → a crash must not block.
     with _CheckGuard("agent_tool_audit", SEVERITY_ADVISORY, errors, warnings, check_results) as _g:
         _g.passed()
-        if stage == "deliver" and profile in ("full", "bugfix"):
+        # direct (G1) runs the same full-tier adversarial review at DELIVER.
+        if stage == "deliver" and profile in ("full", "bugfix", "direct"):
             checks_total += 1
             marker_found = False
             # Primary: exact run_id marker
@@ -4018,7 +4131,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                 # __exit__ and trigger the errored_nonblocking credit a SECOND time
                 # (would over-count checks_passed). Cleanup failure is never fatal.
                 pass
-    if _g.errored_nonblocking and stage == "deliver" and profile in ("full", "bugfix"):
+    if _g.errored_nonblocking and stage == "deliver" and profile in ("full", "bugfix", "direct"):
         # 9b crashed after its checks_total += 1 but before crediting checks_passed.
         # Credit it so checks_passed == checks_total holds on a valid run (advisory
         # crash does not block). Guarded by the same condition that ran checks_total += 1.
@@ -4315,6 +4428,732 @@ def _load_artifact_meta_from_manifest(project: str, artifact_id: str) -> dict | 
         if entry.get("id") == artifact_id:
             return entry
     return None
+
+
+# ---------------------------------------------------------------------------
+# Stage-boundary contract (pipeline-speed-systematic-fix §4-A / F2 / G1)
+#   STAGE_RECORD_SCHEMAS + validate_stage_record  — the stage-RECORD contract
+#   validate_exit_criteria / judge_exit_criteria  — the G1 exit contract
+#   push_ready_upper_bound                         — deliver push_ready from gates
+#   structure_errors                               — A3 structured error shape
+#   validate_stage_state                           — validate() on a candidate state
+# ---------------------------------------------------------------------------
+
+DECISION_CLASSIFICATIONS = ("mechanical", "taste", "judgment")
+EXIT_CRITERIA_KINDS = ("test", "probe", "mutation", "manual")
+_LESSON_MIN_CHARS = 20  # each reflect lesson must be > 20 chars (completion-gate parity)
+_SAFE_REF_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+_FAILING_OUTCOMES = frozenset({"failed", "error", "timeout"})
+
+# Field → type spec. Specs: "str", "bool", "number", "dict", "list",
+# "list[decision]", "list[lesson]", "dict[str,str]". Unknown record keys are allowed
+# (forward compat) — derived keys are overwritten by stage-complete anyway.
+_COMMON_RECORD_FIELDS: dict[str, str] = {
+    "decisions": "list[decision]",
+    "skip_reason": "str",
+    "skip_justification": "dict",
+    "notes": "str",
+    "summary": "str",
+    "exit_evidence": "dict[str,str]",
+    "token_cost": "number",
+}
+_RECORD_STAGE_EXTRAS: dict[str, dict[str, str]] = {
+    "deliver": {"push_ready": "bool", "push_ready_reason": "str",
+                "outputs_surfaced": "bool", "report_path": "str",
+                "attention_flags": "list"},
+    "reflect": {"lessons": "list[lesson]", "next_steps": "list"},
+}
+_RECORD_STAGES = ("evaluate", "think", "plan", "build", "review", "test",
+                  "deliver", "goal_cycle", "reflect")
+
+# Per-stage stage-RECORD contract (the INSTRUCTIONS.md "flat fields" table as
+# code). `required` applies to a COMPLETED record; `required_when_skipped` to a
+# SKIPPED one. Missing `decisions` stays a validate() WARNING (Check 4) — not
+# tightened here.
+STAGE_RECORD_SCHEMAS: dict[str, dict] = {
+    _st: {
+        "fields": {**_COMMON_RECORD_FIELDS, **_RECORD_STAGE_EXTRAS.get(_st, {})},
+        "required": ["lessons"] if _st == "reflect" else [],
+        "required_when_skipped": ["skip_reason"],
+        "enums": {"decisions[].classification": list(DECISION_CLASSIFICATIONS),
+                  "status": ["completed", "skipped"]},
+    }
+    for _st in _RECORD_STAGES
+}
+
+_DECISION_EXAMPLE = {"description": "Chose the shared helper over a copy",
+                     "classification": "judgment",
+                     "reasoning": "one implementation of the checks cannot drift"}
+STAGE_RECORD_TEMPLATES: dict[str, dict] = {
+    _st: {"decisions": [dict(_DECISION_EXAMPLE)]} for _st in _RECORD_STAGES
+}
+STAGE_RECORD_TEMPLATES["deliver"] = {
+    "decisions": [dict(_DECISION_EXAMPLE)],
+    "exit_evidence": {"X9": "manual check: opened the page and the badge renders"},
+    "notes": "push_ready is computed by the tool; send push_ready:false + "
+             "push_ready_reason only to LOWER it",
+}
+STAGE_RECORD_TEMPLATES["reflect"] = {
+    "lessons": ["SMOKE tests caught 2 runtime crashes that unit tests missed",
+                "Writing the exit contract first ended verification after one probe round"],
+}
+
+def _record_type_error(path: str, spec: str, value) -> str | None:
+    """Return a 'Record schema:' error for `value` not matching `spec`, else None."""
+    def _err(msg: str) -> str:
+        return f"Record schema: {path}: {msg}"
+    if spec == "str":
+        return None if isinstance(value, str) else _err(f"must be a string, got {type(value).__name__}")
+    if spec == "bool":
+        return None if isinstance(value, bool) else _err(f"must be a boolean, got {type(value).__name__}")
+    if spec == "number":
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if ok and not math.isfinite(value):
+            return _err(f"must be a finite number, got {value!r}")
+        return None if ok else _err(f"must be a number, got {type(value).__name__}")
+    if spec in ("dict", "dict[str,str]"):
+        if not isinstance(value, dict):
+            return _err(f"must be an object, got {type(value).__name__}")
+        if spec == "dict[str,str]":
+            bad = [k for k, v in value.items() if not isinstance(v, str)]
+            if bad:
+                return _err(f"values must be strings (bad keys: {bad[:5]})")
+        return None
+    if spec.startswith("list"):
+        return None if isinstance(value, list) else _err(f"must be a list, got {type(value).__name__}")
+    return None
+
+
+def _non_finite_numbers(node, path: str = "", depth: int = 0):
+    """Yield (dotted path, value) for every inf / nan float nested in ``node``."""
+    if depth > 20:
+        return
+    if isinstance(node, float) and not math.isfinite(node):
+        yield path or "record", node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield from _non_finite_numbers(v, f"{path}.{k}" if path else str(k), depth + 1)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _non_finite_numbers(v, f"{path}[{i}]", depth + 1)
+
+
+def validate_stage_record(stage: str, record: dict) -> tuple[list[str], list[str]]:
+    """Validate the judgment fields of a stage RECORD against STAGE_RECORD_SCHEMAS.
+
+    Returns (errors, warnings). Every error starts with ``Record schema: <path>:``
+    so structure_errors() maps it to E_RECORD_SCHEMA with a ``record.<path>`` path.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not isinstance(record, dict):
+        return [f"Record schema: record: must be an object, got {type(record).__name__}"], []
+    schema = STAGE_RECORD_SCHEMAS.get(stage)
+    if schema is None:
+        return [f"Record schema: stage: unknown stage '{stage}'"], []
+    status = record.get("status", "completed")
+    if status not in ("completed", "skipped"):
+        errors.append(f"Record schema: status: must be 'completed' or 'skipped', got {status!r}")
+    for field, spec in schema["fields"].items():
+        if field in record and record[field] is not None:
+            err = _record_type_error(field, spec, record[field])
+            if err:
+                errors.append(err)
+    # Any OTHER numeric value (nested or an unschema'd key) must be finite too:
+    # json.loads accepts 1e999 / NaN / Infinity, and json.dumps would write them
+    # back as non-standard ``Infinity`` into run.json.
+    for path, val in _non_finite_numbers(record):
+        if schema["fields"].get(path) != "number":
+            errors.append(f"Record schema: {path}: must be a finite number, got {val!r}")
+    decisions = record.get("decisions")
+    if isinstance(decisions, list):
+        for i, d in enumerate(decisions):
+            if not isinstance(d, dict):
+                errors.append(f"Record schema: decisions[{i}]: must be an object")
+                continue
+            desc = d.get("description")
+            if not isinstance(desc, str) or not desc.strip():
+                errors.append(f"Record schema: decisions[{i}].description: required non-empty string")
+            cls = d.get("classification")
+            if cls not in DECISION_CLASSIFICATIONS:
+                errors.append(
+                    f"Record schema: decisions[{i}].classification: must be one of "
+                    f"{list(DECISION_CLASSIFICATIONS)}, got {cls!r}"
+                )
+    if status == "skipped":
+        for field in schema["required_when_skipped"]:
+            val = record.get(field)
+            if (not isinstance(val, str) or not val.strip()) and not record.get("skip_justification"):
+                errors.append(f"Record schema: {field}: required when status is 'skipped'")
+        return errors, warnings
+    for field in schema["required"]:
+        if field not in record:
+            errors.append(f"Record schema: {field}: required for a completed '{stage}' record")
+    if stage == "reflect" and isinstance(record.get("lessons"), list):
+        lessons = record["lessons"]
+        if not lessons:
+            errors.append("Record schema: lessons: must contain at least one lesson")
+        for i, lesson in enumerate(lessons):
+            if not isinstance(lesson, str) or len(lesson.strip()) <= _LESSON_MIN_CHARS:
+                errors.append(
+                    f"Record schema: lessons[{i}]: each lesson must be a string of more "
+                    f"than {_LESSON_MIN_CHARS} chars and actionable"
+                )
+    if record.get("push_ready") is False:
+        reason = record.get("push_ready_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append("Record schema: push_ready_reason: required when lowering push_ready to false")
+    return errors, warnings
+
+
+def validate_exit_criteria(criteria, required: bool) -> list[str]:
+    """Structural check of a PLAN ``exit_criteria`` list (G1).
+
+    ``required`` = strict profile at plan stage-complete. The legacy publish path
+    never calls this, so in-flight runs without the field are not broken.
+    Errors start with ``Exit criteria: <path>:`` (→ E_EXIT_CRITERIA).
+    """
+    if criteria is None:
+        if required:
+            return ["Exit criteria: exit_criteria: missing — a strict profile must declare "
+                    "the exit contract at PLAN ([{id, kind, ref, expect}])"]
+        return []
+    if not isinstance(criteria, list):
+        return [f"Exit criteria: exit_criteria: must be a list, got {type(criteria).__name__}"]
+    if not criteria and required:
+        return ["Exit criteria: exit_criteria: empty — declare at least one checkable criterion"]
+    errors: list[str] = []
+    seen: set[str] = set()
+    for i, c in enumerate(criteria):
+        p = f"exit_criteria[{i}]"
+        if not isinstance(c, dict):
+            errors.append(f"Exit criteria: {p}: must be an object")
+            continue
+        cid = c.get("id")
+        if not isinstance(cid, str) or not cid.strip():
+            errors.append(f"Exit criteria: {p}.id: required non-empty string")
+        elif cid in seen:
+            errors.append(f"Exit criteria: {p}.id: duplicate id {cid!r}")
+        else:
+            seen.add(cid)
+        kind = c.get("kind")
+        if kind not in EXIT_CRITERIA_KINDS:
+            errors.append(f"Exit criteria: {p}.kind: must be one of {list(EXIT_CRITERIA_KINDS)}, got {kind!r}")
+        ref = c.get("ref")
+        if kind != "manual" or ref is not None:
+            if not isinstance(ref, str) or not ref.strip():
+                errors.append(f"Exit criteria: {p}.ref: required non-empty string")
+            elif "<" in ref and ">" in ref:
+                errors.append(f"Exit criteria: {p}.ref: still a template placeholder ({ref!r}) — name the real target")
+            elif kind == "probe" and not _SAFE_REF_NAME_RE.fullmatch(ref):
+                errors.append(f"Exit criteria: {p}.ref: probe name must match {_SAFE_REF_NAME_RE.pattern}")
+        expect = c.get("expect")
+        if not isinstance(expect, str) or not expect.strip():
+            errors.append(f"Exit criteria: {p}.expect: required non-empty string")
+    return errors
+
+
+def validate_exit_criteria_replan(old_criteria, new_criteria, later_stage: str) -> list[str]:
+    """A PLAN re-completed after ``later_stage`` already completed may not weaken
+    the exit contract (MED-3): every old criterion id must survive UNCHANGED
+    (same kind / ref / expect), and every added criterion must carry a non-empty
+    ``reason``. Errors start with ``Exit criteria:`` (→ E_EXIT_CRITERIA)."""
+    old = [c for c in (old_criteria if isinstance(old_criteria, list) else [])
+           if isinstance(c, dict) and c.get("id")]
+    new = [c for c in (new_criteria if isinstance(new_criteria, list) else [])
+           if isinstance(c, dict) and c.get("id")]
+    new_by_id = {str(c["id"]): c for c in new}
+    old_ids = {str(c["id"]) for c in old}
+    errors: list[str] = []
+    for c in old:
+        cid = str(c["id"])
+        n = new_by_id.get(cid)
+        if n is None:
+            errors.append(f"Exit criteria: exit_criteria: replan after '{later_stage}' completed "
+                          f"drops criterion {cid!r} — a replan may only ADD criteria")
+        elif any(n.get(k) != c.get(k) for k in ("kind", "ref", "expect")):
+            errors.append(f"Exit criteria: exit_criteria: replan after '{later_stage}' completed "
+                          f"changes criterion {cid!r} — keep it as declared and add a new id instead")
+    for i, c in enumerate(new_criteria if isinstance(new_criteria, list) else []):
+        if not isinstance(c, dict) or not c.get("id") or str(c["id"]) in old_ids:
+            continue
+        reason = c.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(f"Exit criteria: exit_criteria[{i}].reason: criterion {c['id']!r} added "
+                          f"after '{later_stage}' completed needs a reason")
+    return errors
+
+
+def default_exit_criteria(work_type: str | None, acceptance_criteria=None) -> list[dict]:
+    """Default exit-contract TEMPLATE for a work type (G1). Refs are placeholders the
+    model must replace (validate_exit_criteria rejects ``<...>`` refs)."""
+    wt = (work_type or "").strip().lower()
+    if wt == "bugfix":
+        return [
+            {"id": "X1", "kind": "test", "ref": "<test_file>::<regression test per counter-example>", "expect": "pass"},
+            {"id": "X2", "kind": "test", "ref": "<each touched test file>", "expect": "pass"},
+            {"id": "X3", "kind": "probe", "ref": "<probe-name>", "expect": "no_new_findings"},
+        ]
+    if wt == "refactor":
+        return [
+            {"id": "X1", "kind": "test", "ref": "<each touched test file>", "expect": "pass"},
+            {"id": "X2", "kind": "test", "ref": "mode:verify", "expect": "pass"},
+            {"id": "X3", "kind": "mutation", "ref": "<mutation spec>", "expect": "all_killed"},
+        ]
+    if wt in ("docs", "research"):
+        return [{"id": "X1", "kind": "manual", "expect": "done",
+                 "ref": "<what a reader checks to confirm the deliverable>"}]
+    acs = [a for a in (acceptance_criteria or []) if a] or ["AC1"]
+    out = [{"id": f"X{i + 1}", "kind": "test", "expect": "pass",
+            "ref": f"<test proving {_extract_ac_id(str(a)) or f'AC{i + 1}'}>"}
+           for i, a in enumerate(acs[:10])]
+    out.append({"id": f"X{len(out) + 1}", "kind": "test", "ref": "mode:verify", "expect": "pass"})
+    return out
+
+
+def _read_evidence_json(path: Path) -> dict | None:
+    """Read one evidence JSON file (C2/C3 shape, schema 1). None on any problem."""
+    try:
+        if not path.is_file() or path.stat().st_size > _DISK_CHECK_MAX_BYTES:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def load_test_evidence(run_dir: Path) -> list[dict]:
+    """All C2 ``evidence/tests/latest-<mode>.json`` reports, NEWEST first
+    (by ``finished_at``, falling back to file mtime)."""
+    tests_dir = Path(run_dir) / "evidence" / "tests"
+    found: list[tuple[str, float, dict]] = []
+    if tests_dir.is_dir():
+        for p in tests_dir.glob("latest-*.json"):
+            data = _read_evidence_json(p)
+            if data is None:
+                continue
+            data.setdefault("mode", p.stem[len("latest-"):])
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            found.append((str(data.get("finished_at") or ""), mtime, data))
+    found.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [d for _, _, d in found]
+
+
+def _norm_test_path(p: str) -> str:
+    p = (p or "").strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _path_eq(a: str, b: str) -> bool:
+    a, b = _norm_test_path(a), _norm_test_path(b)
+    return bool(a and b) and (a == b or a.endswith("/" + b) or b.endswith("/" + a))
+
+
+def _evidence_matches(ref: str, result: dict) -> bool:
+    nodeid = str(result.get("nodeid") or "")
+    if "::" in ref:
+        return _path_eq(ref, nodeid)
+    rfile = str(result.get("file") or nodeid.split("::")[0])
+    return _path_eq(ref, rfile)
+
+
+def _evidence_green(ev: dict) -> bool:
+    counts = ev.get("counts") if isinstance(ev.get("counts"), dict) else {}
+    bad = sum(int(counts.get(k) or 0) for k in ("failed", "errors", "timeouts"))
+    return bad == 0 and int(counts.get("passed") or 0) > 0
+
+
+_EVIDENCE_DIGEST_LIMIT = 8 * 1024 * 1024  # mirrors pipeline_test._file_digest
+
+
+def _current_digest(path: Path) -> str:
+    """The digest pipeline_test records for a file (sha256 / big:<size>:<mtime> / missing)."""
+    try:
+        st = path.stat()
+        if st.st_size > _EVIDENCE_DIGEST_LIMIT:
+            return f"big:{st.st_size}:{st.st_mtime_ns}"
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "missing"
+
+
+def evidence_digests(ev) -> dict | None:
+    """{repo-rel path: digest} a C2 report recorded (``tree_digest``, else
+    ``changed_files``), or None for an older report that carries neither."""
+    if not isinstance(ev, dict):
+        return None
+    for key in ("tree_digest", "changed_files"):
+        d = ev.get(key)
+        if isinstance(d, dict) and d:
+            return {str(k): str(v) for k, v in d.items()}
+    return None
+
+
+def evidence_freshness(ev, files_touched, roots=()) -> dict:
+    """Is ``ev`` newer than the current content of the run's files_touched?
+
+    Each files_touched entry that the report digested is re-hashed now (absolute
+    entries in place; relative ones under the first of ``roots`` where the file
+    exists). A changed digest means the tests ran BEFORE a later edit.
+    status: ``stale`` (≥1 mismatch) | ``fresh`` (≥1 checked, none changed) |
+    ``unknown`` (nothing comparable) | ``undigested`` (older report format).
+    """
+    digests = evidence_digests(ev)
+    if digests is None:
+        return {"status": "undigested", "stale_files": [], "checked": 0}
+    stale: list[str] = []
+    checked = 0
+    for f in files_touched if isinstance(files_touched, list) else []:
+        if not isinstance(f, str) or not f.strip():
+            continue
+        key = next((k for k in digests if _path_eq(k, f)), None)
+        if key is None:
+            continue
+        p = Path(f.strip())
+        if p.is_absolute():
+            located = p
+        else:
+            located = next((Path(r) / key for r in roots if r and (Path(r) / key).exists()), None)
+            if located is None:
+                if digests[key] == "missing":
+                    checked += 1  # still absent — consistent with the report
+                continue  # cannot locate the file → cannot judge it
+        checked += 1
+        if _current_digest(located) != digests[key]:
+            stale.append(key)
+    status = "stale" if stale else ("fresh" if checked else "unknown")
+    return {"status": status, "stale_files": stale, "checked": checked}
+
+
+def evidence_regression_modes(evidence: list | None) -> list[str]:
+    """Modes of every report carrying a regression-classified failure."""
+    return [str(ev.get("mode")) for ev in (evidence or [])
+            if isinstance(ev, dict) and (evidence_regressions(ev) or 0) > 0]
+
+
+def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tuple[bool, str]:
+    """``stale_of(ev) -> bool``: optional freshness probe; a pass judged on a
+    report that predates later edits does not count."""
+    def _stale(ev) -> bool:
+        return bool(stale_of and stale_of(ev))
+    if ref.startswith("mode:"):
+        mode = ref[len("mode:"):].strip()
+        idx = next((i for i, e in enumerate(evidence) if e.get("mode") == mode), None)
+        if idx is None:
+            return False, f"no latest-{mode}.json evidence"
+        ev = evidence[idx]
+        newer_reg = evidence_regression_modes(evidence[:idx])
+        if newer_reg:
+            return False, f"newer runner evidence ({newer_reg}) reports a regression"
+        if _stale(ev):
+            return False, f"latest-{mode}.json: test evidence predates later edits"
+        return (_evidence_green(ev),
+                f"latest-{mode}.json counts={ev.get('counts')}")
+    for ev in evidence:  # newest first — the newest report that mentions ref decides
+        hits = [r for r in (ev.get("results") or []) if isinstance(r, dict) and _evidence_matches(ref, r)]
+        if not hits:
+            continue
+        failing = [r for r in hits if r.get("outcome") in _FAILING_OUTCOMES]
+        passed = [r for r in hits if r.get("outcome") == "passed"]
+        ok = bool(passed) and not failing
+        if ok and _stale(ev):
+            return False, f"{ev.get('mode')} evidence for {ref}: test evidence predates later edits"
+        return ok, (f"{ev.get('mode')} evidence: {len(passed)} passed, "
+                    f"{len(failing)} failing for {ref}")
+    return False, f"no test evidence mentions {ref}"
+
+
+def judge_exit_criteria(criteria, run_dir: Path, record: dict | None = None, *,
+                        files_touched=None, roots=()) -> dict:
+    """Judge each G1 exit criterion against runner evidence under ``run_dir``.
+
+    test     → newest C2 report mentioning the nodeid/file: ≥1 passed, none failed
+               (``mode:<m>`` refs: latest-<m>.json fully green AND no newer report
+               carries a regression-classified failure). With ``files_touched``,
+               a pass from a report whose digests no longer match the files'
+               current content is UNMET ("test evidence predates later edits");
+               a report without digests is judged as before plus a ``warnings`` entry.
+    probe    → evidence/probes/<ref>.json ``converged`` is true
+    mutation → evidence/mutations/latest.json ``all_killed`` is true
+    manual   → record.exit_evidence[id] is a non-empty string
+    Returns {"met": bool|None, "unmet": [ids], "detail": {id: why}, "count": n};
+    met is None when no criteria are declared (legacy run — nothing to judge).
+    """
+    if not isinstance(criteria, list) or not criteria:
+        return {"met": None, "unmet": [], "detail": {}, "count": 0}
+    run_dir = Path(run_dir)
+    evidence = load_test_evidence(run_dir)
+    manual = (record or {}).get("exit_evidence") if isinstance(record, dict) else None
+    manual = manual if isinstance(manual, dict) else {}
+    unmet: list[str] = []
+    detail: dict[str, str] = {}
+    warns: list[str] = []
+    undigested: set[str] = set()
+
+    def _stale_of(ev) -> bool:
+        if files_touched is None:
+            return False
+        fr = evidence_freshness(ev, files_touched, roots)
+        if fr["status"] == "undigested":
+            undigested.add(str(ev.get("mode")))
+        return fr["status"] == "stale"
+
+    for i, c in enumerate(criteria):
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or f"#{i}")
+        kind = c.get("kind")
+        ref = str(c.get("ref") or "")
+        if kind == "test":
+            ok, why = _judge_test_criterion(ref, evidence, _stale_of)
+        elif kind == "probe":
+            if not _SAFE_REF_NAME_RE.fullmatch(ref):
+                ok, why = False, "unsafe probe ref"
+            else:
+                pr = _read_evidence_json(run_dir / "evidence" / "probes" / f"{ref}.json")
+                ok = bool(pr and pr.get("converged") is True)
+                why = "probe converged" if ok else ("probe not converged" if pr else "no probe evidence")
+        elif kind == "mutation":
+            mu = _read_evidence_json(run_dir / "evidence" / "mutations" / "latest.json")
+            ok = bool(mu and mu.get("all_killed") is True and mu.get("mutations"))
+            why = "all mutations killed" if ok else ("surviving mutation(s)" if mu else "no mutation evidence")
+        elif kind == "manual":
+            val = manual.get(cid)
+            ok = isinstance(val, str) and bool(val.strip())
+            why = "manual evidence recorded" if ok else f"record.exit_evidence['{cid}'] missing"
+        else:
+            ok, why = False, f"unknown kind {kind!r}"
+        detail[cid] = why
+        if not ok:
+            unmet.append(cid)
+    out = {"met": not unmet, "unmet": unmet, "detail": detail, "count": len(criteria)}
+    if undigested:
+        warns.append(f"test evidence {sorted(undigested)} carries no tree_digest/changed_files "
+                     "digests — could not verify it postdates the last edit")
+    if warns:
+        out["warnings"] = warns
+    return out
+
+
+def evidence_regressions(ev: dict | None) -> int | None:
+    """Count of C2 failures classified ``regression`` (None when no evidence)."""
+    if not isinstance(ev, dict):
+        return None
+    return sum(1 for f in (ev.get("failures") or [])
+               if isinstance(f, dict) and f.get("classification") == "regression")
+
+
+def push_ready_upper_bound(
+    artifact: dict, profile: str, *, test_evidence: dict | None = None,
+    test_artifact: dict | None = None, exit_result: dict | None = None,
+    all_test_evidence: list | None = None, evidence_fresh: dict | None = None,
+) -> tuple[bool, list[str]]:
+    """Compute the DELIVER push_ready UPPER BOUND from gate results (F2).
+
+    True only when every gate holds: tests pass (runner evidence wins, else the
+    test/deliver artifact; evidence needs counts.passed > 0, and an explicit
+    ``quality.tests_pass: false`` always counts), no regression-classified
+    failure in ANY latest-*.json report (``all_test_evidence``), the evidence is
+    not older than the last edit (``evidence_fresh`` from evidence_freshness),
+    no blocking finding (_blocked_findings — the same SSOT as the publish +
+    completion gates), completion_audit.all_green, zero regressions, meta_review
+    without a HIGH, and (strict profiles) every declared exit criterion met.
+    Returns (bound, reasons-it-is-false).
+    """
+    artifact = artifact if isinstance(artifact, dict) else {}
+    reasons: list[str] = []
+    quality = _safe_dict(artifact.get("quality"))
+    if isinstance(test_evidence, dict):
+        bad = [f for f in (test_evidence.get("failures") or [])
+               if isinstance(f, dict) and f.get("classification") not in ("pre-existing", "flaky")]
+        counts = _safe_dict(test_evidence.get("counts"))
+        if bad or int(counts.get("timeouts") or 0) > 0:
+            reasons.append(f"tests: {len(bad)} non-pre-existing failure(s) in runner evidence")
+        elif int(counts.get("passed") or 0) <= 0:
+            reasons.append("tests: runner evidence records no passing test (counts.passed == 0)")
+        if quality.get("tests_pass") is False:
+            reasons.append("tests: quality.tests_pass is false")
+    else:
+        tests_pass = quality.get("tests_pass")
+        if tests_pass is None and isinstance(test_artifact, dict):
+            tests_pass = test_artifact.get("passed")
+        if tests_pass is not True:
+            reasons.append("tests: no evidence that tests pass (quality.tests_pass / test.passed)")
+    ar = _safe_dict(artifact.get("adversarial_review"))
+    blocked = _blocked_findings(ar.get("findings", []))
+    if blocked:
+        reasons.append(f"findings: {len(blocked)} unresolved HIGH / MEDIUM(conf>={CONFIDENCE_GATE_THRESHOLD})")
+    if _safe_dict(artifact.get("completion_audit")).get("all_green") is not True:
+        reasons.append("completion_audit.all_green is not true")
+    regs = [quality.get("regressions"), evidence_regressions(test_evidence)]
+    if isinstance(test_artifact, dict):
+        regs.append(test_artifact.get("regressions"))
+    if any(isinstance(r, (int, float)) and r > 0 for r in regs):
+        reasons.append(f"regressions > 0 ({[r for r in regs if r]})")
+    reg_modes = evidence_regression_modes(all_test_evidence)
+    if reg_modes:
+        reasons.append(f"regression-classified failure in runner evidence {reg_modes}")
+    if isinstance(evidence_fresh, dict) and evidence_fresh.get("status") == "stale":
+        reasons.append("test evidence predates later edits "
+                       f"({evidence_fresh.get('stale_files')})")
+    mr = artifact.get("meta_review")
+    if isinstance(mr, dict):
+        risks = [r for r in _safe_list(mr.get("risks")) if isinstance(r, dict)
+                 and str(r.get("severity", "")).upper() in ("HIGH", "CRITICAL")
+                 and not r.get("resolved")]
+        if risks or str(mr.get("verdict", "")).upper() in ("HIGH", "BLOCK", "FAIL"):
+            reasons.append("meta_review carries a HIGH")
+    if not is_relaxed_profile(profile) and isinstance(exit_result, dict) \
+            and exit_result.get("met") is False:
+        reasons.append(f"exit criteria unmet: {exit_result.get('unmet')}")
+    return (not reasons), reasons
+
+
+# (code, regex, path) — first match wins, so specific shapes precede general ones.
+# `path` is a literal, or "{name}" formatted from the regex's named groups.
+_ERROR_SHAPES: list[tuple[str, "re.Pattern[str]", str]] = [
+    ("E_INPUT", re.compile(r"^Input:"), ""),
+    ("E_RECORD_SCHEMA", re.compile(r"^Record schema: (?P<p>[^:]+):"), "record.{p}"),
+    ("E_EXIT_CRITERIA", re.compile(r"^Exit criteria: (?P<p>[^:]+):"), "{p}"),
+    ("E_DEPTH_MISSING", re.compile(r"^Missing required field '(?P<p>[^']+)' — depth validation"), "{p}"),
+    ("E_MISSING_FIELD", re.compile(r"^Missing required field '(?P<p>[^']+)' for stage"), "{p}"),
+    ("E_SCHEMA", re.compile(r"^Schema violation: '[^']+' artifact missing required field '(?P<p>[^']+)'"), "{p}"),
+    ("E_DEPTH_MISSING", re.compile(r"^Missing '(?P<p>[^']+)' — required for depth"), "{p}"),
+    ("E_EMPTY_PATTERNS", re.compile(r"^'(?P<p>[^']+)' is empty — must contain"), "{p}"),
+    ("E_DEPTH_TYPE", re.compile(r"^'(?P<p>[^']+)' must be a dict carrying"), "{p}"),
+    ("E_LITMUS", re.compile(r"^Litmus gate missing"), "litmus_gate"),
+    ("E_LITMUS", re.compile(r"^Litmus (?:gate )?evidence"), "litmus_gate.evidence"),
+    ("E_LITMUS", re.compile(r"^Litmus gate hf_checked"), "litmus_gate.hf_checked"),
+    ("E_LITMUS", re.compile(r"^Litmus BORDERLINE"), "litmus_gate.weak_areas"),
+    ("E_LITMUS", re.compile(r"^Litmus"), "litmus_gate.verdict"),
+    ("E_STAGE_ORDER", re.compile(r"^Stage order violation"), "stage"),
+    ("E_PROFILE", re.compile(r"^Profile violation|is not in the '[^']+' profile"), "stage"),
+    ("E_ARTIFACT_MISSING", re.compile(r"^No artifact published for|could not be loaded"), "artifact"),
+    ("E_ADVERSARIAL_TIER", re.compile(r"^adversarial_review\.profile_tier="), "adversarial_review.profile_tier"),
+    ("E_ADVERSARIAL_SPAWN", re.compile(r"^adversarial_review\.spawned"), "adversarial_review.spawned"),
+    ("E_BLOCKING_FINDINGS", re.compile(r"unresolved blocking finding"), "adversarial_review.findings"),
+    ("E_COMPLETION_AUDIT", re.compile(r"^completion_audit"), "completion_audit"),
+    ("E_META_REVIEW", re.compile(r"^meta_review missing"), "meta_review"),
+    ("E_CONVERGENCE", re.compile(r"^convergence"), "convergence"),
+    ("E_PUSH_READY", re.compile(r"^Push-ready gate|^Confidence gate"), "quality.push_ready"),
+    ("E_TEST_LAYERS", re.compile(r"^TEST "), "layers"),
+    ("E_AC_COVERAGE", re.compile(r"ac_coverage|^AC not covered in BUILD"), "ac_coverage"),
+    ("E_ROUTING", re.compile(r"must consume '[^']+' artifact"), "record.consumed_artifacts"),
+    ("E_SKIP", re.compile(r"skip_reason|skip_justification|Anti-rationalization"), "record.skip_reason"),
+    ("E_INTEGRATION_TRACE", re.compile(r"^Integration trace"), "integration_trace.checked"),
+    ("E_SMOKE", re.compile(r"smoke_tests=0|^SMOKE step"), "tdd.smoke_tests"),
+    ("E_REPORT_MISSING", re.compile(r"REPORT\.md not found"), "REPORT.md"),
+    ("E_VALIDATOR_ERRORED", re.compile(r"ERRORED|crashed", re.I), ""),
+]
+_STAGE_PREFIX_RE = re.compile(r"^\[(?P<stage>[a-z_]+)\]\s*")
+
+
+def _template_at(stage: str, path: str):
+    """The template snippet at a dotted ``path`` (``[i]`` → first element), or None.
+    ``record.*`` paths resolve against STAGE_RECORD_TEMPLATES."""
+    if not path:
+        return None
+    if path.startswith("record."):
+        node, parts = STAGE_RECORD_TEMPLATES.get(stage, {}), path[len("record."):]
+    else:
+        node, parts = STAGE_TEMPLATES.get(stage, {}), path
+    if not node and parts.startswith("exit_criteria"):
+        node = STAGE_TEMPLATES.get("plan", {})
+    for raw in parts.split("."):
+        key = raw.split("[")[0]
+        if isinstance(node, dict) and key in node:
+            node = node[key]
+        else:
+            return None
+        if "[" in raw and isinstance(node, list):
+            node = node[0] if node else None
+    return copy.deepcopy(node)
+
+
+def _value_at(data, path: str):
+    """Best-effort value at a dotted path in ``data`` (``_MISSING`` if absent)."""
+    node = data
+    for raw in path.split("."):
+        key = raw.split("[")[0]
+        if not isinstance(node, dict) or key not in node:
+            return _MISSING
+        node = node[key]
+        m = re.search(r"\[(\d+)\]", raw)
+        if m and isinstance(node, list):
+            idx = int(m.group(1))
+            if idx >= len(node):
+                return _MISSING
+            node = node[idx]
+    return node
+
+
+_MISSING = object()
+
+
+def structure_errors(stage: str | None, errors: list[str], data: dict | None = None,
+                     record: dict | None = None) -> list[dict]:
+    """A3: map legacy validator message strings to structured errors.
+
+    Each → ``{code, path, message, got?, expected?}``. ``expected`` is the stage
+    template's snippet at ``path`` so the error itself shows the fix; ``got`` is the
+    submitted value at that path when ``data``/``record`` is given. A leading
+    ``[stage] `` prefix (run-update completion errors) selects that stage's
+    template. Unmatched shapes fall back to code ``E_VALIDATION``.
+    """
+    out: list[dict] = []
+    for msg in errors or []:
+        text = str(msg)
+        st = stage or ""
+        m = _STAGE_PREFIX_RE.match(text)
+        if m:
+            st, text = m.group("stage"), text[m.end():]
+        code, path = "E_VALIDATION", ""
+        for c, rx, ptmpl in _ERROR_SHAPES:
+            mm = rx.search(text)
+            if mm:
+                code = c
+                path = ptmpl.format(**mm.groupdict()) if "{" in ptmpl else ptmpl
+                break
+        item: dict = {"code": code, "path": path, "message": str(msg)}
+        expected = _template_at(st, path)
+        if expected is not None:
+            item["expected"] = expected
+        src, sub = (record, path[len("record."):]) if path.startswith("record.") else (data, path)
+        if path and isinstance(src, dict):
+            got = _value_at(src, sub)
+            if got is not _MISSING:
+                item["got"] = got
+        out.append(item)
+    return out
+
+
+def validate_stage_state(
+    project: str, run_id: str, run_state: dict, stage: str,
+    artifact_data: dict | None, artifact_id: str | None = None,
+) -> dict[str, Any]:
+    """Run validate() — the single implementation of the per-stage checks —
+    against an IN-MEMORY candidate ``run_state`` (+ candidate artifact) instead of
+    disk. Nothing is read from or written to run.json for (project, run_id) while
+    the override is active; upstream artifacts still resolve from the manifest.
+    The caller's candidate stage record must carry ``artifact_id`` when an
+    artifact is supplied.
+    """
+    artifacts = {}
+    if artifact_id and isinstance(artifact_data, dict):
+        artifacts[artifact_id] = copy.deepcopy(artifact_data)
+    token = _STATE_OVERRIDE.set({
+        "project": project, "run_id": run_id,
+        "run": copy.deepcopy(run_state), "artifacts": artifacts,
+    })
+    try:
+        return validate(project, run_id, stage)
+    finally:
+        _STATE_OVERRIDE.reset(token)
 
 
 # ---------------------------------------------------------------------------

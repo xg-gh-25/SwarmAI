@@ -257,9 +257,7 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 
 每个 run 结束时由 `run-report` 调用它，结果写进 METRICS.json。这样提速有数字为证，以后变慢也能马上看到。
 
-**Phase 0 状态（2026-10-17 已完成）**：`backend/scripts/pipeline_run_profile.py` 和 `tests/test_pipeline_run_profile.py` 已提交。对 5 个基线 run 跑出的数字和 §2 一致（例如 `48d377ec`：309 次调用、单调用响应 0.976、峰值上下文 829K、机械工作 159/265，模型 62.3 分钟 + 工具 84.7 分钟 = 总时长 147.0 分钟）。`--write-metrics` 以合并方式写入 `METRICS.json` 的 `speed_profile`。还剩两件事，随 run ① 一起做：
-- 接入 `run-report`：要等 E1 的 run↔session 关联落地，才能直接定位 transcript，不必扫描文件。
-- `artifact_cli run-metrics` 会整体重写 `METRICS.json`，会把 `speed_profile` 冲掉，需要改成合并写入。
+**Phase 0 状态（2026-10-17 已完成）**：`backend/scripts/pipeline_run_profile.py` 和 `tests/test_pipeline_run_profile.py` 已提交。对 5 个基线 run 跑出的数字和 §2 一致（例如 `48d377ec`：309 次调用、单调用响应 0.976、峰值上下文 829K、机械工作 159/265，模型 62.3 分钟 + 工具 84.7 分钟 = 总时长 147.0 分钟）。`--write-metrics` 以合并方式写入 `METRICS.json` 的 `speed_profile`。原先剩下的两件事已随 Phase 1 完成：`run-update --status completed` 会自动写入 speed profile；`run-metrics` 改成合并写入，不再冲掉 `speed_profile`。
 
 取证方法（已验证）：transcript 在 `~/.claude/projects/**/<sdk-session-id>.jsonl`；按 `message.id` 归并 assistant 记录，跳过 `isSidechain` 和 `agent-*` 文件；tool_use id 与 tool_result 时间戳配对得到工具耗时；用 run.json 的 `created_at`/`completed_at`（UTC）切时间窗；按命令内容分类（流程类、测试/构建、读/探查、编辑、git、sub-agent）。
 
@@ -406,7 +404,7 @@ understanding 和 claim、方案选择、AC 和退出契约的写法、写代码
 - 按 work type 给默认模板。例如 gate 或 parser 类的修复，默认就是"每个反例一条回归测试 + gate 测试全绿 + probe 一轮无新发现"。
 - `stage-complete`（build、test、deliver）根据 runner 的 evidence 逐条判定。全部满足时返回 `exit_criteria_met: true`，`next_action` 写明"结束条件已满足，不要再加验证，进入下一步"。
 - 契约只能因为新发现而扩展：一个新反例对应新增一条回归测试，并记录原因。不允许无缘无故挪球门。
-- **直接修复也用契约。** 新增轻量 profile `direct`，只有 contract、build、deliver 三步，不读 evaluate、think、plan 的文档。模型自己写契约，不需要问 XG。这样直接修复也能用上同一套 runner、gate、`run-commit` 和交付摘要（E）。
+- **直接修复也用契约。** 新增轻量 profile `direct`，只有 plan、build、deliver 三步（契约写在 PLAN 的 `exit_criteria[]` 里，没有另起一个 contract stage 名），不读 evaluate、think 的文档。模型自己写契约，不需要问 XG。这样直接修复也能用上同一套 runner、gate、`run-commit` 和交付摘要（E）。
   - 什么时候必须用：会提交且改动超过 20 行的源码修改。由 commit gate 检查：当前 session 没有 run 就提交这类改动时 deny，并给出可以直接复制的 `run-create --profile direct` 命令。文档和 20 行以内的小改动不受影响。
 
 **G2. probe 模式：heavy 验证一轮无新发现即收敛**
@@ -455,6 +453,16 @@ Phase 1'  run ②：B + G2（probe、mutation 模式）                         
           主要改新的 pipeline_test.py、security_hooks.py、hook_builder.py
 Phase 2   C 文档三层化 + 规则保全检查 + 大小 lint（依赖前两次 run 的新命令）
 ```
+
+**Phase 1 / 1' 状态（2026-10-17 已完成，未走 pipeline，由一个 session 直接实现）**：A、B、E、G1、G2 和 F 的派生字段已提交。经过一轮对抗评审（4 个并行 reviewer），修了 8 个 HIGH、约 15 个 MEDIUM，主要是：profile 降级绕过 review/test、push_ready 用过期证据、缓存漏掉传递依赖、没跑到测试也报绿、order 依赖被判成 flaky、mutation 路径穿越、gate 被无 session 的 run 整体关掉、`python -c`/`make test`/`coverage run` 绕过、token 窗口漏掉最后一轮。与原设计的差异：
+- `direct` = plan → build → deliver（见 G）。
+- B2 的 flaky 判定比原文严格：重跑整个测试文件（保留原顺序）通过，且 HEAD 上也通过，才算 flaky。只重跑单个测试会把 order 依赖的回归误判成 flaky。
+- run 判定为"活跃"要求 3 小时内有活动，避免遗留的 running run 一直卡住测试；deny 文本给出 `run-update --status abandoned`。
+- 交付摘要的 token 数如果在完成那一轮内渲染，标注"已结算（不含当前一轮）"。
+- 已知残留：故意清掉 `SWARM_APP_SESSION_ID` 创建的 run 没有归属，对创建者不生效（run-create 会告警）；`cd X && make`、pnpm/yarn/bun 不识别；跨文件的 order 依赖不复现。
+- 上线需要 `./prod.sh build` 重启 daemon 后，`SWARM_APP_SESSION_ID` 注入和两个新 gate 才会生效。
+
+还剩 Phase 2（C 文档三层化）。
 
 F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。G 按改动的文件拆进上面两次 run。
 

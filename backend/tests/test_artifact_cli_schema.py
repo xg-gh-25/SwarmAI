@@ -124,25 +124,53 @@ class TestTemplatePassesItsOwnValidator:
     on its first publish. Pin the invariant instead of the field list: the template
     itself, under the strictest profile, must validate clean."""
 
-    @pytest.mark.parametrize("stage", ["build", "review", "test", "deliver"])
+    # EVERY stage that has an artifact template (A4): the templates now carry valid
+    # literals (no "A|B|C" unions) with the choice set in STAGE_ENUMS, so the
+    # template is used VERBATIM — no test-side patching of placeholders.
+    @pytest.mark.parametrize("stage", ["evaluate", "think", "plan", "build", "review",
+                                       "test", "deliver", "goal_cycle"])
     def test_template_validates_clean_under_full_profile(self, stage, tmp_path):
         import copy
 
         from pipeline_validator import STAGE_TEMPLATES, validate_artifact_data
 
         data = copy.deepcopy(STAGE_TEMPLATES[stage])
-        # The template carries placeholder unions like "full|lite|skipped" for the
-        # agent to pick from; pick the strict branch the way a real run would.
-        ar = data.get("adversarial_review")
-        if isinstance(ar, dict) and "|" in str(ar.get("profile_tier", "")):
-            ar["profile_tier"] = "full"
-            for f in ar.get("findings", []):
-                f["severity"] = "LOW"
-        lg = data.get("litmus_gate")
-        if isinstance(lg, dict) and "|" in str(lg.get("verdict", "")):
-            lg["verdict"] = "PASS"
-        for p in (data.get("runtime_patterns") or {}).get("patterns", []):
-            if "|" in str(p.get("status", "")):
-                p["status"] = "pass"
-        errors = validate_artifact_data(stage, data, profile="full", repo_root=str(tmp_path))
+        # goal_cycle exists only in the goal profile (strict, like full).
+        profile = "goal" if stage == "goal_cycle" else "full"
+        errors = validate_artifact_data(stage, data, profile=profile, repo_root=str(tmp_path))
         assert errors == [], f"{stage} template fails its own validator: {errors}"
+
+    @pytest.mark.parametrize("stage", ["evaluate", "think", "plan", "build", "review",
+                                       "test", "deliver", "goal_cycle", "reflect"])
+    def test_record_example_validates_clean(self, stage):
+        from pipeline_validator import STAGE_RECORD_TEMPLATES, validate_stage_record
+
+        assert validate_stage_record(stage, STAGE_RECORD_TEMPLATES[stage]) == ([], [])
+
+    def test_plan_template_exit_contract_is_valid_and_strict_ready(self):
+        from pipeline_validator import STAGE_TEMPLATES, validate_exit_criteria
+
+        assert validate_exit_criteria(STAGE_TEMPLATES["plan"]["exit_criteria"], required=True) == []
+
+    def test_templates_carry_no_pipe_unions_and_enums_hold_the_choices(self):
+        from pipeline_validator import STAGE_ENUMS, STAGE_TEMPLATES, get_stage_schema
+
+        def _leaves(node, path=""):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    yield from _leaves(v, f"{path}.{k}" if path else k)
+            elif isinstance(node, list):
+                for v in node:
+                    yield from _leaves(v, f"{path}[]")
+            else:
+                yield path, node
+
+        enum_fields = {"recommendation", "scope", "verdict", "profile_tier", "severity",
+                       "status", "kind", "work_type", "evidence_kind", "skeptic_verdict",
+                       "constraint", "effort"}
+        for stage, tmpl in STAGE_TEMPLATES.items():
+            for path, val in _leaves(tmpl):
+                if isinstance(val, str) and path.split(".")[-1].split("[")[0] in enum_fields:
+                    assert "|" not in val, f"{stage}.{path} is a pipe union: {val!r}"
+            for path, allowed in STAGE_ENUMS.get(stage, {}).items():
+                assert allowed and get_stage_schema(stage)["enums"][path] == allowed
