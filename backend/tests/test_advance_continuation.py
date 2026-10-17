@@ -240,14 +240,11 @@ class TestStageResolution:
         )
         assert Path(doc).is_file()
 
-    # `goal_cycle` is deliberately absent: it is NOT in artifact_registry's
-    # PIPELINE_STATES, so `advance_pipeline` raises ValueError for it in production
-    # (see test_goal_cycle_is_not_an_advanceable_state below). Including it here
-    # would only pass because the test's registry stub no-ops advance_pipeline —
-    # i.e. the test would be asserting against a state the real system rejects. The
-    # adversarial reviewer caught exactly that; the gap is recorded, not papered over.
+    # `goal_cycle` is advanceable: PIPELINE_STATES is derived from PIPELINE_PROFILES
+    # (test_goal_cycle_is_an_advanceable_state below pins that against the REAL enum,
+    # since this test's registry stub no-ops advance_pipeline).
     @pytest.mark.parametrize(
-        "advanced_to", ["evaluate", "think", "plan", "deliver", "reflect"]
+        "advanced_to", ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]
     )
     def test_goal_profile_names_the_stage_being_entered(
         self, cli, workspace, capsys, advanced_to
@@ -260,27 +257,18 @@ class TestStageResolution:
         assert Path(doc).name == f"{advanced_to}.md"
         assert Path(doc).is_file()
 
-    def test_goal_cycle_is_not_an_advanceable_state(self):
-        """Documents a PRE-EXISTING product gap this run did not introduce.
-
-        The `goal` profile's core stage is `goal_cycle`, but PIPELINE_STATES (which
-        `advance_pipeline` validates against) does not contain it — so a goal run
-        cannot `advance --state goal_cycle` at all. Out of scope to fix here (it
-        predates this change and touching the state enum is a separate contract
-        migration), but pinned so the gap is visible and someone can act on it
-        rather than rediscovering it. If this test starts FAILING, the gap was
-        closed — delete the test and re-add goal_cycle to the parametrize list above.
-        """
+    def test_goal_cycle_is_an_advanceable_state(self):
+        """Every profile stage — including goal's `goal_cycle` — is in the REAL
+        PIPELINE_STATES that `advance_pipeline` validates against (the gap this
+        file used to pin is closed: the enum is derived from PIPELINE_PROFILES)."""
         import sys
         sys.path.insert(0, str(BACKEND))
         from core.artifact_registry import PIPELINE_STATES
         from core.pipeline_profiles import PIPELINE_PROFILES
 
         assert "goal_cycle" in PIPELINE_PROFILES["goal"], "goal profile shape changed"
-        assert "goal_cycle" not in PIPELINE_STATES, (
-            "goal_cycle became advanceable — the known gap is closed; update this "
-            "test and restore goal_cycle to test_goal_profile_names_the_stage_being_entered"
-        )
+        for stages in PIPELINE_PROFILES.values():
+            assert set(stages) <= set(PIPELINE_STATES)
 
     def test_reflect_points_at_reflect_not_past_it(self, cli, workspace, capsys):
         """The regression guard for the off-by-one, stated as its own case.

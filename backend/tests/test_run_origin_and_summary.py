@@ -10,6 +10,9 @@ WHAT IS TESTED
   earlier survives a later metrics extraction.
 - A run created without SWARM_APP_SESSION_ID is still created, with a stderr
   warning; the delivery summary gets this repo as ``repo_root`` only for SwarmAI.
+- REPORT.md's ``**Tokens:**`` header comes from ``run_token_usage`` (never the
+  strict window) and carries its caveats (不含当前一轮 / 含建 run 前的同一轮);
+  no measurable usage → the stage-sum ``估算 / estimate`` label.
 
 METHODOLOGY
 Command functions are driven in-process with SimpleNamespace args against a tmp
@@ -159,3 +162,55 @@ def test_summary_repo_root_only_for_swarmai(ws, capsys, monkeypatch, project, ex
     monkeypatch.setattr(rds, "build_delivery_summary", fake)
     assert cli._delivery_summary_for(project, rid) == "S"
     assert seen["repo_root"] == expect_root
+
+
+# ── E4: REPORT header Tokens use run_token_usage with its coverage caveats ──
+
+def _report_header(ws, capsys, monkeypatch, usage):
+    st = _create(capsys, ws)
+    run_file = ws / "Projects" / "Proj" / ".artifacts" / "runs" / st["id"] / "run.json"
+    state = json.loads(run_file.read_text(encoding="utf-8"))
+    state["session_id"] = "sess-r"
+    run_file.write_text(json.dumps(state), encoding="utf-8")
+    seen = {}
+
+    def fake_run_usage(sid, start, end, db_path=None, turn_end_iso=None):
+        seen.update(sid=sid, start=start)
+        return usage
+
+    def strict_window(*a, **k):
+        raise AssertionError("REPORT must not use the strict token_usage_for_window")
+
+    monkeypatch.setattr(rds, "run_token_usage", fake_run_usage)
+    monkeypatch.setattr(rds, "token_usage_for_window", strict_window)
+    cli.cmd_run_report(SimpleNamespace(project="Proj", run_id=st["id"]), None)
+    capsys.readouterr()
+    text = (run_file.parent / "REPORT.md").read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if "**Tokens:**" in ln)
+    return line, seen
+
+
+def test_report_tokens_use_run_token_usage_with_caveats(ws, capsys, monkeypatch):
+    usage = {"cost_usd": 0.5, "input_tokens": 1000, "output_tokens": 200,
+             "cache_read_tokens": 9999, "cache_creation_tokens": 34, "rows": 2,
+             "tokens": 1234, "turns": 2, "complete": False,
+             "excludes_current_turn": True, "includes_prerun": True}
+    line, seen = _report_header(ws, capsys, monkeypatch, usage)
+    assert seen["sid"] == "sess-r"
+    assert "1,234 (measured, $0.50, cache read 9,999" in line
+    assert "不含当前一轮" in line and "含建 run 前的同一轮" in line
+    assert "估算" not in line
+
+
+def test_report_tokens_complete_run_has_no_current_turn_caveat(ws, capsys, monkeypatch):
+    usage = {"cost_usd": 1.0, "input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 0,
+             "cache_creation_tokens": 0, "rows": 1, "tokens": 15, "turns": 1,
+             "complete": True, "excludes_current_turn": False, "includes_prerun": True}
+    line, _ = _report_header(ws, capsys, monkeypatch, usage)
+    assert "15 (measured, $1.00" in line and "不含当前一轮" not in line
+    assert "含建 run 前的同一轮" in line
+
+
+def test_report_tokens_fall_back_to_estimate(ws, capsys, monkeypatch):
+    line, _ = _report_header(ws, capsys, monkeypatch, None)
+    assert "(估算 / estimate)" in line and "measured" not in line

@@ -313,3 +313,16 @@ def test_every_field_a_read_helper_gets_is_listed(fn_name, scope):
         f"{fn_name} reads {sorted(got - allowed)} which _REPORT_READS[{scope}] does not "
         "list — add it there (and the contract test will check it against the writer)."
     )
+
+
+def test_shared_commit_counts_only_the_runs_own_files(repo):
+    """A credited commit can also carry another session's files: stats follow the
+    record's `files`, never the whole commit (retro Gate-2 of ba1c8a22, MEDIUM-1)."""
+    sha = _git(repo, "rev-parse", "--short", "HEAD")
+    st = ac._report_commit_stats([{"repo": str(repo), "sha": sha, "files": ["b.py"]}])
+    assert st == {"files": ["b.py"], "added": 1, "removed": 0}
+    # files: [] = nothing in this commit is ours → not measured from it
+    assert ac._report_commit_stats([{"repo": str(repo), "sha": sha, "files": []}]) is None
+    # legacy record without `files` → the whole commit, as before
+    whole = ac._report_commit_stats([{"repo": str(repo), "sha": sha}])
+    assert whole == {"files": ["a.py", "b.py"], "added": 3, "removed": 1}

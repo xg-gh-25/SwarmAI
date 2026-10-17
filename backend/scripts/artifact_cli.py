@@ -5564,10 +5564,21 @@ def _report_commit_stats(commits):
         repo, sha = c.get("repo"), str(c.get("sha") or "")
         if not repo or not _SHA_RE.match(sha) or not Path(str(repo)).is_dir():
             continue
+        # A credited commit can be SHARED with another session (its `files` is
+        # filtered to this run's own files): count only those paths. An empty list
+        # means none of the commit is ours. No `files` key = a legacy record → the
+        # whole commit, as before.
+        own = c.get("files")
+        if isinstance(own, list):
+            own = [str(p) for p in own if isinstance(p, str) and p.strip()]
+            if not own:
+                continue
         try:
             r = subprocess.run(
-                ["git", "-C", str(repo), "show", "--numstat", "--format=", sha, "--"],
+                ["git", "-C", str(repo), "show", "--numstat", "--format=", sha, "--",
+                 *(own if isinstance(own, list) else [])],
                 capture_output=True, text=True, timeout=15,
+                env={**os.environ, "GIT_LITERAL_PATHSPECS": "1"},
             )
         except (subprocess.TimeoutExpired, OSError):
             continue
@@ -5586,6 +5597,25 @@ def _report_commit_stats(commits):
     if not measured:
         return None
     return {"files": files, "added": added, "removed": removed}
+
+
+def _report_tokens_label(usage: dict) -> str:
+    """REPORT header **Tokens:** value for a ``run_token_usage`` dict: the measured
+    total plus the same coverage caveats the chat summary's ``_usage_label`` shows
+    (不含当前一轮 / 含建 run 前的同一轮). A legacy dict without the flags renders
+    with no caveat."""
+    tokens = usage.get("tokens")
+    if tokens is None:
+        tokens = sum(int(usage.get(k) or 0) for k in
+                     ("input_tokens", "output_tokens", "cache_creation_tokens"))
+    notes = []
+    if usage.get("excludes_current_turn") is True:
+        notes.append("不含当前一轮 / excludes the turn in flight")
+    if usage.get("includes_prerun") is True:
+        notes.append("含建 run 前的同一轮 / includes the pre-run part of the creating turn")
+    tail = ("; " + "; ".join(notes)) if notes else ""
+    return (f"{int(tokens):,} (measured, ${float(usage.get('cost_usd') or 0):.2f}, "
+            f"cache read {int(usage.get('cache_read_tokens') or 0):,}{tail})")
 
 
 def cmd_run_report(args, reg: ArtifactRegistry) -> str:
@@ -5762,19 +5792,20 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     total_token_cost = sum(s.get("token_cost", 0) for s in stages)
     # E4: measured usage from token_usage when the run is linked to its session;
     # otherwise the stage sum, labelled as an estimate.
+    # run_token_usage (not the strict window): it also takes the turn in flight at
+    # completed_at and flags what the figure covers, the same caveats as the chat
+    # summary's _usage_label.
     tokens_label = f"{total_token_cost:,} (估算 / estimate)"
     try:
-        from core.run_delivery_summary import token_usage_for_window
-        _usage = token_usage_for_window(
+        from core.run_delivery_summary import run_token_usage
+        _usage = run_token_usage(
             run_state.get("session_id"), run_state.get("created_at"),
             run_state.get("completed_at") or run_state.get("updated_at"))
         if _usage:
-            _measured = (_usage["input_tokens"] + _usage["output_tokens"]
-                         + _usage["cache_creation_tokens"])
-            tokens_label = (f"{_measured:,} (measured, ${_usage['cost_usd']:.2f}, "
-                            f"cache read {_usage['cache_read_tokens']:,})")
-    except Exception:  # noqa: BLE001 — the report must render without usage data
-        pass
+            tokens_label = _report_tokens_label(_usage)
+    except Exception as exc:  # noqa: BLE001 — the report must render without usage data
+        print(f"run-report: measured token usage unavailable ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
 
     # ── Section 5: Test results ───────────────────────────────────────
     # From the test_report artifact — the TEST stage's own record of what ran. The
@@ -5836,7 +5867,10 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
     # field names off a goal artifact renders a misleading 0; map goal's OWN fields instead.
     _fc = stage_files_changed if stage_files_changed else changeset.get("files_changed", [])
     files_changed = _fc if isinstance(_fc, list) else []
-    files_changed_count = len(files_changed) if isinstance(_fc, list) else (_fc if isinstance(_fc, int) else 0)
+    # None = not recorded (no list / no count); a MEASURED zero (git said 0 files)
+    # stays 0 below and renders as 0, not as "not recorded".
+    files_changed_count = (len(files_changed) if isinstance(_fc, list) and _fc
+                           else (_fc if isinstance(_fc, int) else None))
     lines_added = _int_or_none(changeset.get("lines_added"))
     lines_removed = _int_or_none(changeset.get("lines_removed"))
     # Goal-cycle files/lines fallback (Kiro #6 + REVIEW code-quality MED): a goal
@@ -5930,7 +5964,7 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
 
 **Run ID:** {run_state['id']} | **Project:** {args.project} | **Profile:** {profile}
 **Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Tokens:** {tokens_label}
-**Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count if files_changed_count else 'not recorded'} | **Tests:** {tests_phrase or 'not recorded'}""")
+**Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count if files_changed_count is not None else 'not recorded'} | **Tests:** {tests_phrase or 'not recorded'}""")
 
     # TL;DR
     summary_text = delivery.get("summary", requirement[:200])
@@ -6199,7 +6233,7 @@ A stage with no published artifact cannot be timed and shows `-`."""
         for f in files_changed:
             files_section += f"- `{f}`\n"
         files_section += f"\n**{_lines_txt}** | {files_changed_count} files"
-    elif files_changed_count > 0:
+    elif (files_changed_count or 0) > 0:
         files_section += f"**{files_changed_count} files** | {_lines_txt}\n"
         files_section += "(file list not captured in changeset artifact)\n"
     elif "build" in skipped_stages:
@@ -7776,7 +7810,15 @@ def _read_run_evidence(run_dir: Path, rel: str, run_id: str) -> "dict | None":
 
 def _measure_stage_tokens(session_id, start_iso, end_iso) -> "dict | None":
     """C5: measured token usage for the stage window, or None when unavailable
-    (no session id / no start / SA-D's module absent / it returns None)."""
+    (no session id / no start / SA-D's module absent / it returns None).
+
+    LIMITATION (turn granularity): ``token_usage`` rows are stamped when a TURN
+    ends, and stages usually start and end inside one turn. This strict window
+    therefore counts only the turns that closed inside the stage — the turn in
+    flight at ``end_iso`` is missing and a turn spanning several stages is
+    credited to whichever stage window holds its end stamp. The per-stage figure
+    is indicative only; the run-level REPORT/summary use ``run_token_usage``,
+    which labels what it covers."""
     if not (session_id and start_iso and end_iso):
         return None
     try:
@@ -8047,20 +8089,35 @@ def _validate_stage_candidate(
     return errors, warnings
 
 
-def _ensure_report_before_advance(project: str, run_id: str, run_dir: Path) -> bool:
-    """The advance REPORT.md gate (deliver → next): generate it via run-report
-    (list-form subprocess of this CLI) when missing. True iff REPORT.md exists."""
-    if (run_dir / "REPORT.md").exists():
-        return True
+def _ensure_report_before_advance(project: str, run_id: str, run_dir: Path,
+                                  reg: "ArtifactRegistry | None" = None) -> "tuple[bool, bool]":
+    """The DELIVER REPORT.md gate: generate REPORT.md when missing, in-process via
+    ``cmd_run_report`` (the run-report code path; it stamps ``report_autogenerated``).
+
+    Runs at every DELIVER stage-complete — before the advance to REFLECT and also
+    when DELIVER is the last stage (direct), whose ``run-update --status completed``
+    blocks without REPORT.md. The completion gate itself is unchanged; this only
+    removes the separate manual run-report call. A hand-written REPORT.md is never
+    touched (cmd_run_report's own skip guard). Returns ``(exists, generated_now)``."""
+    report = run_dir / "REPORT.md"
+    if report.exists():
+        return True, False
+    import contextlib
+    import io
+    from types import SimpleNamespace as _NS
     try:
-        subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "run-report",
-             "--project", project, "--run-id", run_id],
-            capture_output=True, text=True, timeout=120, cwd=str(_BACKEND_DIR),
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return (run_dir / "REPORT.md").exists()
+        # cmd_run_report prints its own JSON envelope; stage-complete's stdout is
+        # one JSON line, so the nested print is captured and discarded.
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_run_report(_NS(project=project, run_id=run_id),
+                           reg or ArtifactRegistry(_get_workspace()))
+    except SystemExit as e:
+        print(f"stage-complete: run-report exited ({e.code}) for {run_id}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — reported as report_ok=False, never a traceback
+        print(f"stage-complete: run-report failed for {run_id} "
+              f"({type(e).__name__}: {e})", file=sys.stderr)
+    exists = report.exists()
+    return exists, exists
 
 
 def _manifest_ahead_of(reg: ArtifactRegistry, project: str, profile: str,
@@ -8201,8 +8258,13 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     # ── ADVANCE to the profile's next stage (computed; never backwards) ──
     advanced = False
     next_card, next_action = None, None
+    report_ok, report_generated = True, False
+    if stage == "deliver":
+        report_ok, report_generated = _ensure_report_before_advance(project, run_id, run_dir, reg)
+        if not report_ok:
+            warnings.append("REPORT.md could not be generated — run `artifact_cli.py run-report` "
+                            "before advancing or completing")
     if next_stage:
-        report_ok = stage != "deliver" or _ensure_report_before_advance(project, run_id, run_dir)
         from core.artifact_registry import PIPELINE_STATES
         behind = _manifest_ahead_of(reg, project, profile, next_stage)
         if behind:
@@ -8230,6 +8292,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         next_action = (f"'{stage}' is the last stage of the '{profile}' profile — proceed to "
                        f"COMPLETE: read stages/complete.md, then `run-update --project {project} "
                        f"--run-id {run_id} --status completed`. {_CONTINUATION_PHRASE}.")
+        if not report_ok:
+            next_action = (f"REPORT.md gate: run `artifact_cli.py run-report --project {project} "
+                           f"--run-id {run_id}` first. " + next_action)
     if isinstance(exit_result, dict) and exit_result.get("met") is True:
         next_action = f"{next_action} {_EXIT_MET_DIRECTIVE}"
 
@@ -8237,6 +8302,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         "ok": True, "stage": stage, "artifact_id": artifact_id or cand_rec.get("artifact_id"),
         "next_stage": next_stage, "next_card": next_card, "next_action": next_action,
         "advanced": advanced, "derived": derived, "exit_criteria": exit_result,
+        "report_generated": report_generated,
         "warnings": warnings,
     }, default=str, ensure_ascii=False))
 

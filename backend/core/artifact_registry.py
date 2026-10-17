@@ -17,6 +17,7 @@ Public API:
   - get_artifact(project, artifact_id) -> Artifact | None
   - supersede(project, old_id, new_id) -> None
   - list_projects() -> list[ProjectPipelineStatus]
+  - PIPELINE_STATES — every advanceable state, derived from pipeline_profiles
 """
 
 from __future__ import annotations
@@ -63,9 +64,23 @@ ARTIFACT_TYPES = frozenset({
     "checkpoint",
 })
 
-PIPELINE_STATES = (
-    "evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect",
-)
+def _derive_pipeline_states() -> tuple[str, ...]:
+    """Every stage of every profile, in first-seen order (full's order first).
+
+    Derived from ``core.pipeline_profiles.PIPELINE_PROFILES`` — the single source
+    of truth for stage names — so a profile-only stage (``goal_cycle``) is an
+    advanceable state. A hand-kept list here omitted it: stage-complete on a goal
+    PLAN silently left the manifest at ``plan`` and ``advance --state goal_cycle``
+    raised ValueError."""
+    from core.pipeline_profiles import PIPELINE_PROFILES
+    seen: dict[str, None] = {}
+    for name in ("full", *PIPELINE_PROFILES):
+        for stage in PIPELINE_PROFILES.get(name, ()):
+            seen.setdefault(stage, None)
+    return tuple(seen)
+
+
+PIPELINE_STATES = _derive_pipeline_states()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data classes
