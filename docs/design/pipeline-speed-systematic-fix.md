@@ -257,6 +257,10 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 
 每个 run 结束时由 `run-report` 调用它，结果写进 METRICS.json。这样提速有数字为证，以后变慢也能马上看到。
 
+**Phase 0 状态（2026-10-17 已完成）**：`backend/scripts/pipeline_run_profile.py` 和 `tests/test_pipeline_run_profile.py` 已提交。对 5 个基线 run 跑出的数字和 §2 一致（例如 `48d377ec`：309 次调用、单调用响应 0.976、峰值上下文 829K、机械工作 159/265，模型 62.3 分钟 + 工具 84.7 分钟 = 总时长 147.0 分钟）。`--write-metrics` 以合并方式写入 `METRICS.json` 的 `speed_profile`。还剩两件事，随 run ① 一起做：
+- 接入 `run-report`：要等 E1 的 run↔session 关联落地，才能直接定位 transcript，不必扫描文件。
+- `artifact_cli run-metrics` 会整体重写 `METRICS.json`，会把 `speed_profile` 冲掉，需要改成合并写入。
+
 取证方法（已验证）：transcript 在 `~/.claude/projects/**/<sdk-session-id>.jsonl`；按 `message.id` 归并 assistant 记录，跳过 `isSidechain` 和 `agent-*` 文件；tool_use id 与 tool_result 时间戳配对得到工具耗时；用 run.json 的 `created_at`/`completed_at`（UTC）切时间窗；按命令内容分类（流程类、测试/构建、读/探查、编辑、git、sub-agent）。
 
 ### E. 交付摘要：渲染好的结构化结果，点击在 Canvas 打开
