@@ -84,6 +84,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "bedrock_model_map": default_bedrock_model_map(),
     "thinking_mode": "adaptive",       # "adaptive" | "enabled" | "disabled"
     "thinking_effort": "high",         # "low" | "medium" | "high" | "xhigh" | "max"
+    # Route desktop Bedrock sessions through the loopback thinking-display shim
+    # (core/bedrock_thinking_gateway.py). Turn off once the CLI sends `display`.
+    "bedrock_thinking_gateway": True,
     "anthropic_base_url": None,
     # Persisted, non-secret. The active auth method chosen at setup, so error
     # remediation (CredentialBanner + spawn pre-flight) can be method-aware:

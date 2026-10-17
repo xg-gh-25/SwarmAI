@@ -1763,8 +1763,10 @@ class PromptBuilder:
         raw boto3 with ``display="summarized"`` yields 187 chars. So this is an
         UPSTREAM CLI BUG, not a Bedrock platform limitation (the backend returns
         the summary when asked directly). Tracking: anthropics/claude-code#63358
-        (open). See SwarmAI/IMPROVEMENT.md. Until the CLI adds Bedrock to its
-        allow-list, do not bother adding ``display`` here — it is a dead write.
+        (open). Do not add ``display`` here — it is a dead write. Desktop Bedrock
+        sessions get the summary through the loopback gateway instead, which adds
+        ``display`` to the request after the CLI strips it
+        (core/bedrock_thinking_gateway.py, switch ``bedrock_thinking_gateway``).
         (Also keeps PIT59 satisfied: no unknown subfield for older SDKs to drop.)
         """
         # Defensive: config is contractually an AppConfigManager (always
@@ -1922,6 +1924,9 @@ class PromptBuilder:
         the 2.1.185 pre-release). We keep emitting the flag anyway because it is
         free, harmless, and becomes correct the moment the CLI adds Bedrock to
         its allow-list — no code change needed on our side when upstream lands.
+        Until then, the value returned here also decides whether a desktop session
+        is routed through the loopback gateway that re-adds ``display``
+        (``bedrock_thinking_gateway.gateway_env_for_session``).
 
         **Transport:** carried via ``extra_args["thinking-display"]`` (rendered
         by the SDK as ``--thinking-display <value>``), NOT via a ``display`` key
@@ -2328,6 +2333,14 @@ class PromptBuilder:
         )
         if thinking_display is not None:
             extra_args["thinking-display"] = thinking_display
+        # The CLI strips `display` on Bedrock, so on its own the flag above is a
+        # no-op there. Desktop sessions route the CLI through the loopback
+        # gateway, which adds it back (core/bedrock_thinking_gateway.py). Per-session
+        # env: channel/headless spawns never get it.
+        from .bedrock_thinking_gateway import gateway_env_for_session
+        session_env = gateway_env_for_session(
+            self._config, channel_context=channel_context, thinking_display=thinking_display,
+        )
 
         # ── Max turns: per-message API roundtrip limit ─────────────
         #
@@ -2453,6 +2466,7 @@ class PromptBuilder:
             thinking=thinking_config,
             effort=effort,
             max_turns=max_turns,
+            env=session_env,
         )
 
     # Canonical DDD doc set — single source: project_registry.DDD_CANONICAL_DOCS (Run 0).

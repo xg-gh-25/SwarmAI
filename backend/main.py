@@ -1311,6 +1311,9 @@ async def lifespan(app: FastAPI):
     backend_port = _detect_backend_port()
     backend_mode = _detect_run_mode()
     write_backend_json(port=backend_port, mode=backend_mode)
+    # Desktop CLI sessions reach the Bedrock thinking gateway on this port.
+    from core.bedrock_thinking_gateway import set_listen_port as _set_gw_port
+    _set_gw_port(backend_port)
     logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
 
     # Resolve the bundled CLI version ONCE at boot (subprocess — must never
@@ -1570,6 +1573,11 @@ app.include_router(agents_router, prefix="/api/agents", tags=["agents"])
 app.include_router(skills_router, prefix="/api/skills", tags=["skills"])
 app.include_router(experts_router, prefix="/api/experts", tags=["experts"])
 app.include_router(mcp_router, prefix="/api/mcp", tags=["mcp"])
+# Loopback Bedrock thinking-display shim; every request is SigV4-verified
+# against the user's own credentials (core/bedrock_thinking_gateway.py).
+from core.bedrock_thinking_gateway import GATEWAY_PREFIX as _BEDROCK_GW_PREFIX
+from core.bedrock_thinking_gateway import router as bedrock_gateway_router
+app.include_router(bedrock_gateway_router, prefix=_BEDROCK_GW_PREFIX, include_in_schema=False)
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 app.include_router(chat_threads_router, prefix="/api", tags=["chat-threads"])
 app.include_router(workspace_router, prefix="/api/workspace", tags=["workspace"])
