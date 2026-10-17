@@ -43,6 +43,7 @@ from ..paths import SWARMWS
 # collection (this handler is imported at test module level) and on an HTTP
 # request path (core/ddd_drift_signal lazy-imports it from routers/eval).
 from ..model_resolve import resolve_job_model as _resolve_job_model
+from ..cli_result import cli_api_error, cli_too_old_message
 
 logger = logging.getLogger("swarm.jobs.ddd_self_audit")
 
@@ -63,10 +64,11 @@ def _classify_review_result(returncode: int, output: dict, stderr: str) -> dict:
     """Classify one per-project review subprocess result — pure, no I/O.
 
     Two outcomes:
-      - ``clean``  : returncode 0, use the result.
-      - ``failed`` : any non-zero exit. Carries an ``error_detail`` (the CLI
-        ``errors`` field, else a stderr tail) so the report shows the REAL cause
-        instead of an opaque "exit N".
+      - ``clean``  : returncode 0 and a real result, use the result.
+      - ``failed`` : any non-zero exit, OR an exit-0 run the CLI reported as an
+        API error (``is_error`` / ``"API Error: ..."``; ``cli_result.cli_api_error``).
+        Carries an ``error_detail`` (the API error, the CLI ``errors`` field, else
+        a stderr tail) so the report shows the REAL cause instead of "exit N".
 
     We parse stdout regardless of returncode purely for OBSERVABILITY — to surface
     WHY a review failed. There is deliberately NO cost/budget branch here: cost is
@@ -80,6 +82,9 @@ def _classify_review_result(returncode: int, output: dict, stderr: str) -> dict:
         stderr_tail = (stderr or "").strip()[-200:]
         error_detail = "; ".join(str(e) for e in errors) if errors else (stderr_tail or "no stderr")
         return {"status": "failed", "error_detail": error_detail}
+    api_err = cli_api_error(output)
+    if api_err is not None:
+        return {"status": "failed", "error_detail": api_err[1]}
     return {"status": "clean", "result_text": result_text}
 
 
@@ -224,7 +229,7 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     # Import executor primitives lazily (avoid import cycle: executor imports handlers).
     from ..executor import (
         _resolve_claude_cli, _check_claude_auth, _get_aws_credentials,
-        _cli_supports_bare, _load_mcp_config, _build_cli_env, _parse_cli_output,
+        _cli_supports_bare, _cli_version, _load_mcp_config, _build_cli_env, _parse_cli_output,
         _write_job_result,
     )
     from ..models import Job, JobSafety, JobType
@@ -270,14 +275,21 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     if auth_err:
         return {"status": "failed", "summary": f"Auth pre-check failed: {auth_err}", "output_path": None}
 
+    cli_version = _cli_version(claude_path)
+    too_old = cli_too_old_message(cli_version, _resolve_job_model())
+    if too_old:
+        return {"status": "failed", "summary": too_old, "output_path": None,
+                "error": f"cli_too_old: {too_old}"}
+
     aws_creds = _get_aws_credentials()
-    use_bare = _cli_supports_bare(claude_path)
+    use_bare = _cli_supports_bare(claude_path, cli_version)
     mcp_config = _load_mcp_config()
     env = _build_cli_env(aws_creds)
 
     report_lines = [f"# DDD Self-Audit — {start.strftime('%Y-%m-%d')}", ""]
     total_findings = 0
     reviewed = 0
+    first_failure: str | None = None  # the cause shown when NOTHING could be reviewed
 
     for project_name, project_dir in projects:
         code_backed = _is_code_backed(project_dir)
@@ -323,6 +335,7 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
             )
         except subprocess.TimeoutExpired:
             report_lines.append(f"## {project_name} — ⏱ timed out ({_PER_PROJECT_TIMEOUT_S}s), skipped")
+            first_failure = first_failure or f"timeout: review timed out after {_PER_PROJECT_TIMEOUT_S}s"
             continue
         finally:
             if mcp_file:
@@ -341,8 +354,10 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
 
         if verdict["status"] == "failed":
             # Genuine failure (MCP/auth/crash) — surface the REAL cause, not "exit N".
+            how = f"exit {proc.returncode}" if proc.returncode != 0 else "API error"
+            first_failure = first_failure or f"review_failed ({how}): {verdict['error_detail'][:300]}"
             report_lines.append(
-                f"## {project_name} — ⚠️ review failed (exit {proc.returncode}): {verdict['error_detail']}"
+                f"## {project_name} — ⚠️ review failed ({how}): {verdict['error_detail']}"
             )
             report_lines.append("")
             continue
@@ -372,7 +387,8 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         safety=JobSafety(),
     )
     output_path = _write_job_result(
-        synthetic_job, report_text, start, tokens=0, duration=duration, status="success")
+        synthetic_job, report_text, start, tokens=0, duration=duration,
+        status="success" if reviewed > 0 else "failed")
 
     # Findings live in the report (Knowledge/JobResults/*-ddd-self-audit.md) and are
     # surfaced as a semantic-drift signal via ddd_drift_signal.get_semantic_drift
@@ -383,8 +399,14 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     summary = (f"Audited {reviewed}/{len(projects)} DDD projects · {total_findings} drift finding(s) "
                f"· report → Knowledge/JobResults/")
     logger.info("ddd_self_audit complete: %s", summary)
+    # Not a success if NOTHING was reviewed — every project's review failed (e.g.
+    # every CLI run came back as an API error). The report still records why.
+    status = "success" if reviewed > 0 else "failed"
+    if status == "failed":
+        summary = f"All {len(projects)} DDD reviews failed — {first_failure} · report → Knowledge/JobResults/"
     return {
-        "status": "success",
+        "status": status,
+        "error": first_failure if status == "failed" else None,
         "projects_reviewed": reviewed,
         "findings": total_findings,
         "summary": summary,

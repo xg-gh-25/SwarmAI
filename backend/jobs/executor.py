@@ -51,6 +51,7 @@ from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, DB_PATH, ESTIMAT
 # handler's import path). Re-exported under the original private name so the two
 # call sites below read unchanged.
 from .model_resolve import resolve_job_model as _resolve_job_model  # noqa: F401
+from .cli_result import cli_api_error, cli_too_old_message, parse_cli_version
 
 
 # ── Module-level PATH fix ────────────────────────────────────────────
@@ -340,6 +341,7 @@ def execute_job(
                 summary=audit_result.get("summary", "DDD self-audit"),
                 output_path=audit_result.get("output_path"),
                 duration_seconds=duration,
+                error=audit_result.get("error"),
             )
 
         elif job.type == "swarmai_monthly_report":
@@ -701,26 +703,32 @@ def _resolve_claude_cli() -> str | None:
     return None
 
 
-def _cli_supports_bare(claude_path: str) -> bool:
-    """Check if the resolved CLI supports --bare (>= 2.1.81).
+def _cli_version(claude_path: str) -> tuple[int, int, int] | None:
+    """``claude --version`` as a tuple (``"2.1.85 (Claude Code)"`` -> (2, 1, 85)).
 
-    Parses ``claude --version`` output like "2.1.85 (Claude Code)".
-    Returns False on any parse failure (safe default).
+    None when the probe fails or prints something unparseable — callers treat
+    that as "unknown" (never a reason to block a job).
     """
     try:
         result = subprocess.run(
             [claude_path, "--version"],
             capture_output=True, text=True, timeout=5,
         )
-        # Output format: "2.1.85 (Claude Code)"
-        version_str = result.stdout.strip().split()[0] if result.stdout.strip() else ""
-        parts = version_str.split(".")
-        if len(parts) >= 3:
-            major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-            return (major, minor, patch) >= (2, 1, 81)
-    except Exception:
-        pass
-    return False
+    except (OSError, subprocess.SubprocessError, ValueError) as e:  # ValueError: undecodable output
+        logger.debug("claude --version probe failed: %s", e)
+        return None
+    return parse_cli_version(result.stdout)
+
+
+def _cli_supports_bare(claude_path: str, version: tuple[int, int, int] | None = None) -> bool:
+    """Check if the resolved CLI supports --bare (>= 2.1.81).
+
+    Pass an already-probed ``version`` to avoid a second ``--version`` spawn.
+    Returns False when the version is unknown (safe default).
+    """
+    if version is None:
+        version = _cli_version(claude_path)
+    return version is not None and version >= (2, 1, 81)
 
 
 def _load_mcp_config() -> dict:
@@ -793,8 +801,11 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
             duration_seconds=0,
         )
 
+    # One version probe serves both the --bare decision and the model's CLI floor.
+    cli_version = _cli_version(claude_path)
+
     # Build CLI command (use resolved absolute path, not bare "claude")
-    use_bare = _cli_supports_bare(claude_path)
+    use_bare = _cli_supports_bare(claude_path, cli_version)
     cmd = [
         claude_path,
         "--print",
@@ -807,6 +818,17 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         # Safety is enforced by --allowedTools (only listed tools are available).
         "--permission-mode", "bypassPermissions",
     ]
+
+    # Refuse to start a CLI that is too old for the model it was just given
+    # (it may 400 — or hang — instead of running the job).
+    too_old = cli_too_old_message(cli_version, cmd[cmd.index("--model") + 1])
+    if too_old:
+        return JobResult(
+            job_id=job.id, timestamp=start,
+            status="failed", summary=too_old,
+            duration_seconds=(datetime.now(timezone.utc) - start).total_seconds(),
+            error=f"cli_too_old: {too_old}",
+        )
 
     # MCP config: load from SwarmWS .claude/mcps/ (same merge as chat sessions)
     # Write to temp file for --mcp-config, use --strict-mcp-config to ignore
@@ -912,6 +934,28 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
             )
             if result_text:
                 summary += f"\nPartial result: {result_text[:150]}"
+        elif (api_err := cli_api_error(output)) is not None:
+            # The CLI exited 0 but the run was an API error (is_error / "API
+            # Error: ..." result). Never a success: auth-like errors take the
+            # transient auth path (not counted by the circuit breaker),
+            # throttling/overload is a retryable failure, anything else fails.
+            kind, detail = api_err
+            if kind == "auth":
+                status = "auth_failed"
+                summary = f"API auth error: {detail[:200]}. Will retry on next scheduler tick."
+            else:
+                status = "failed"
+                summary = f"CLI returned an API error: {detail[:200]}"
+            # ``error`` carries the code AND the detail: it is what the 🔔 card
+            # and the failure-streak alert show (they read error before summary).
+            code = {"transient": "api_transient", "auth": "api_auth"}.get(kind, "api_error")
+            return JobResult(
+                job_id=job.id, timestamp=start,
+                status=status, summary=summary,
+                tokens_used=tokens_in + tokens_out,
+                duration_seconds=duration,
+                error=f"{code}: {detail[:300]}",
+            )
         elif _detect_auth_failure(result_text):
             status = "auth_failed"
             summary = (
@@ -1634,7 +1678,8 @@ def _send_slack_dm(message: str) -> bool:
             f'Send this message as a Slack DM to channel {dm_channel}: '
             f'"{message}"'
         )
-        use_bare = _cli_supports_bare(claude_path)
+        cli_version = _cli_version(claude_path)
+        use_bare = _cli_supports_bare(claude_path, cli_version)
         cmd = [
             claude_path, "--print",
             *(["--bare"] if use_bare else []),
@@ -1649,12 +1694,21 @@ def _send_slack_dm(message: str) -> bool:
             "-p", prompt,
         ]
 
+        too_old = cli_too_old_message(cli_version, cmd[cmd.index("--model") + 1])
+        if too_old:
+            logger.warning("Slack DM: %s", too_old)
+            return False
+
         env = _build_cli_env()
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30,
             env=env, cwd=str(SWARMWS),
         )
 
+        if proc.returncode == 0 and (proc.stdout or "").lstrip().startswith("API Error"):
+            # Exit 0 but the CLI never reached the model — nothing was sent.
+            logger.warning("Slack DM failed: CLI returned %s", proc.stdout.strip()[:200])
+            return False
         if proc.returncode == 0:
             logger.info("Slack DM sent via CLI")
             return True
@@ -2151,7 +2205,9 @@ def _is_retryable_failure(result: JobResult) -> bool:
 
     True ONLY for a plain `failed` whose error is exactly "timeout" — the
     subprocess was killed at the wall clock (the observed transient class,
-    run_d383e9a0: two community jobs hit ONE timeout each on 2026-08-14).
+    run_d383e9a0: two community jobs hit ONE timeout each on 2026-08-14) — or
+    "api_transient": the CLI reported a throttling / overload / 5xx API error
+    (classified by ``cli_result.cli_api_error``), which a fresh attempt can clear.
 
     Deliberately NARROW — NOT retried:
     - `auth_failed` — has its own next-tick fast-retry.
@@ -2159,9 +2215,11 @@ def _is_retryable_failure(result: JobResult) -> bool:
     - `partial` — budget exceeded; a retry would burn budget again.
     - a CLI exit-nonzero `failed` — its `error` is raw stderr (a DETERMINISTIC
       bug in the agent's own commands, usually); retrying re-runs the same broken
-      cycle. Only a wall-clock timeout is a safe transient-retry signal.
+      cycle. Only a wall-clock timeout, or an API error the CLI reported as
+      throttling / overload / 5xx (``api_transient``), is a safe transient-retry signal.
     """
-    return result.status == "failed" and (result.error or "").lower() == "timeout"
+    err = (result.error or "").lower()
+    return result.status == "failed" and (err == "timeout" or err.startswith("api_transient"))
 
 
 def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> None:

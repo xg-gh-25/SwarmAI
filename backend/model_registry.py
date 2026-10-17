@@ -409,6 +409,26 @@ def default_bedrock_model_map() -> dict[str, str]:
     return dict(MODEL_REGISTRY)
 
 
+# ---------------------------------------------------------------------------
+# Minimum Claude Code CLI version per model
+# ---------------------------------------------------------------------------
+#
+# A CLI older than this rejects the model with a 400 ("Claude Code X does not
+# support this model; version Y or newer is required"), or may not fail fast at
+# all. Headless jobs run the SYSTEM ``claude`` on PATH (not the SDK-bundled one),
+# so they check this floor before spawning (``jobs/cli_result``). Add an entry
+# when a model with a newer floor is registered.
+MIN_CLI_VERSION: dict[str, tuple[int, int, int]] = {
+    "claude-opus-5-5": (2, 1, 280),
+}
+
+
+def min_cli_version_for(model: str | None) -> tuple[int, int, int] | None:
+    """Minimum CLI version for ``model`` (short name, Bedrock ID or ``[1m]`` form),
+    or None if the model has no known floor."""
+    return MIN_CLI_VERSION.get(normalize_short_name(model))
+
+
 def default_available_models() -> list[str]:
     """Return a fresh copy of the model-name list, flagship first."""
     return list(MODEL_NAMES)
