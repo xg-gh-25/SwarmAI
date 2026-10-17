@@ -958,14 +958,23 @@ class TestRunCommitTrackedDeletion:
         assert "never_existed.py" in warnings, "an untracked missing path is still reported as a ghost"
 
 
-    def test_pathspec_magic_entries_are_ghosts_not_tracked(self, workspace, tmp_path, capsys):
+    def test_pathspec_magic_entries_are_ghosts_not_tracked(self, workspace, tmp_path, capsys,
+                                                           monkeypatch):
         """A recorded ':/' or glob must never count as "tracked" and reach git add.
 
         git reads a path argument as a pathspec, so `ls-files --error-unmatch -- ':/'`
         succeeds and `git add -- ':/'` stages the whole tree. The tracked check is
         literal; these entries name no tracked file and are dropped as ghosts.
+
+        SAFETY: run-commit resolves a RELATIVE path against the process cwd's repo.
+        cwd is moved INTO the temp repo first, so if the literal check ever regresses
+        the damage lands in the throwaway repo — never in the real one the test
+        suite runs from (an earlier version of this test, run against a regressed
+        build, committed the real working tree).
         """
         repo = self._setup(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_data_dir"))
         (repo / "unrelated_untracked.py").write_text("another session's work\n")
         rf = _write_run(workspace, "run_magic",
                         stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
@@ -979,3 +988,49 @@ class TestRunCommitTrackedDeletion:
         assert "unrelated_untracked.py" in status, "an unrelated file must stay untouched"
         assert "pkg/gone.py" in status, "a deletion NOT recorded by this run must stay uncommitted"
         assert json.loads(rf.read_text())["commits"][0]["files"] == ["keep.py"]
+
+
+    def test_recorded_directory_is_not_a_tracked_file(self, workspace, tmp_path, capsys,
+                                                       monkeypatch):
+        """A literal pathspec still matches everything under a directory; a recorded
+        deleted DIRECTORY must not count as tracked and pull in every deletion below it."""
+        repo = self._setup(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_data_dir"))
+        from scripts.artifact_cli import _path_is_tracked
+        assert _path_is_tracked(str(repo / "pkg" / "gone.py"), str(repo)) is True
+        assert _path_is_tracked(str(repo / "pkg"), str(repo)) is False
+        assert _path_is_tracked("pkg/old", str(repo)) is False
+        assert _path_is_tracked("../outside.py", str(repo)) is False
+        assert _path_is_tracked("pkg/gone.py", str(repo)) is True, "repo-relative form"
+        assert _path_is_tracked("./pkg//gone.py", str(repo)) is True, "unnormalized form"
+
+    def test_recorded_existing_directory_is_never_staged(self, workspace, tmp_path, capsys,
+                                                         monkeypatch):
+        """'.' or an existing directory in files_touched must not reach `git add`."""
+        repo = self._setup(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_data_dir"))
+        (repo / "unrelated_untracked.py").write_text("another session's work\n")
+        _write_run(workspace, "run_dir",
+                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   files_touched=[str(repo / "keep.py"), str(repo), str(repo / "pkg")])
+        _run_commit(workspace, "run_dir")
+        committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        assert committed == ["keep.py"], committed
+        assert "unrelated_untracked.py" in self._git(repo, "status", "--porcelain").stdout
+
+
+    def test_tracked_file_replaced_by_a_directory_is_not_staged(self, workspace, tmp_path,
+                                                               capsys, monkeypatch):
+        repo = self._setup(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_data_dir"))
+        (repo / "pkg" / "gone.py").mkdir()          # tracked path is now a directory
+        (repo / "pkg" / "gone.py" / "inner.py").write_text("x\n")
+        _write_run(workspace, "run_dirswap",
+                   stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                   files_touched=[str(repo / "keep.py"), str(repo / "pkg" / "gone.py")])
+        _run_commit(workspace, "run_dirswap")
+        committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        assert committed == ["keep.py"], committed

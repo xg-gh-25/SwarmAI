@@ -3326,6 +3326,22 @@ def _repo_root_for_file(path: str) -> str | None:
     return _rev_parse_toplevel(str(Path.cwd()))
 
 
+def _is_dir_in_repo(f: str, root: str) -> bool:
+    """True if the recorded path is a real directory (anchored to ``root`` like
+    ``_path_exists_in_repo``). A symlink is a single tracked entry, never a tree,
+    so a symlink pointing at a directory is NOT a directory here."""
+    p = Path(f)
+    q = p if p.is_absolute() else Path(root) / f
+    return q.is_dir() and not q.is_symlink()
+
+
+def _LITERAL_GIT_ENV() -> dict:
+    """Environment that makes git read every path argument literally (no globs, no
+    ``:`` magic). run-commit passes recorded paths straight to git, so they must name
+    files, never patterns."""
+    return {**os.environ, "GIT_LITERAL_PATHSPECS": "1"}
+
+
 def _path_is_tracked(f: str, root: str) -> bool:
     """True if git at ``root`` tracks ``f`` — in the index, or in HEAD.
 
@@ -3337,17 +3353,28 @@ def _path_is_tracked(f: str, root: str) -> bool:
     pathspec, so a recorded ``':/'`` or ``'backend/*.py'`` — a hallucinated or
     injected files_touched entry — would match tracked files, count as "tracked",
     and reach ``git add`` / ``git commit``, staging the whole tree (including a
-    parallel session's edits). Only a path that names one tracked file passes.
+    parallel session's edits).
+
+    EXACT on purpose too: a literal pathspec still matches every file UNDER a
+    directory, so a recorded directory ("pkg/old") would pass and `git add` would
+    stage every deletion beneath it. git must report back exactly the one path asked
+    for. Only a path that names one tracked FILE passes.
     """
-    env = dict(os.environ)
     try:
-        r = subprocess.run(["git", "-C", root, "ls-files", "--error-unmatch", "--", f],
-                           capture_output=True, text=True, timeout=10, env=env)
-        if r.returncode == 0:
-            return True
-        r = subprocess.run(["git", "-C", root, "ls-tree", "-r", "--name-only", "HEAD", "--", f],
-                           capture_output=True, text=True, timeout=10, env=env)
-        return r.returncode == 0 and bool(r.stdout.strip())
+        rel = os.path.relpath(Path(f).resolve(), Path(root).resolve()) if Path(f).is_absolute() else f
+    except (OSError, ValueError):
+        return False
+    import posixpath
+    rel = posixpath.normpath(Path(rel).as_posix())
+    if rel.startswith("../") or rel in (".", "..", ""):
+        return False
+    try:
+        for cmd in (["git", "-C", root, "ls-files", "-z", "--full-name", "--", rel],
+                    ["git", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", rel]):
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=_LITERAL_GIT_ENV())
+            if r.returncode == 0 and rel in r.stdout.split("\0"):
+                return True
+        return False
     except (subprocess.TimeoutExpired, OSError):
         return False
 
@@ -4018,8 +4045,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         # A path absent on disk that git still TRACKS is a deliberate deletion, not a
         # ghost: staging it by pathspec records the removal, and the pathspec-scoped
         # step below records it in history. Only absent AND untracked paths drop.
+        # A DIRECTORY is never a recorded file: even literal, `git add -- <dir>` stages
+        # everything beneath it ("." = the whole tree, a parallel session's edits too).
         real_files = [f for f in files
-                      if _path_exists_in_repo(f, root) or _path_is_tracked(f, root)]
+                      if not _is_dir_in_repo(f, root)
+                      and (_path_exists_in_repo(f, root) or _path_is_tracked(f, root))]
         ghosts = [f for f in files if f not in real_files]
         if ghosts:
             warnings.append(
@@ -4030,7 +4060,7 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
             warnings.append(f"[{root}] no recorded files exist on disk — nothing to stage")
             continue
         add = subprocess.run(["git", "-C", root, "add", "--", *real_files],
-                             capture_output=True, text=True, timeout=15)
+                             capture_output=True, text=True, timeout=15, env=_LITERAL_GIT_ENV())
         if add.returncode != 0:
             warnings.append(f"[{root}] git add failed: {add.stderr.strip()[:200]}")
             continue
@@ -4042,7 +4072,8 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         # (:committed below). Scoping to `-- *real_files` keeps `staged` run-scoped.
         staged = subprocess.run(["git", "-C", root, "diff", "--cached", "--name-only",
                                  "--", *real_files],
-                                capture_output=True, text=True, timeout=10).stdout.strip()
+                                capture_output=True, text=True, timeout=10,
+                                env=_LITERAL_GIT_ENV()).stdout.strip()
         if not staged:
             # FIX B (run_c526d393): nothing staged = this run's files were ALREADY
             # committed per-cycle (BUILD.md:428 "commit after each green cycle").
@@ -4080,9 +4111,15 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         # A bare `commit -m` commits the ENTIRE index — sweeping in any file a
         # parallel session pre-staged (R29 violation). `-- *real_files` commits
         # ONLY this run's paths; a pre-staged foreign file stays staged, uncommitted.
+        # Per-path ":(literal)" rather than GIT_LITERAL_PATHSPECS here: the env var
+        # would also reach commit hooks (e.g. a pre-commit scanner) and silently turn
+        # their own glob pathspecs into no-ops.
+        # An inherited GIT_LITERAL_PATHSPECS=1 would make git read ":(literal)x" as a
+        # file name, so it is removed from this one call.
+        _commit_env = {k: v for k, v in os.environ.items() if k != "GIT_LITERAL_PATHSPECS"}
         commit = subprocess.run(["git", "-C", root, "commit", "-m", commit_msg,
-                                 "--", *real_files],
-                                capture_output=True, text=True, timeout=15)
+                                 "--", *[f":(literal){f}" for f in real_files]],
+                                capture_output=True, text=True, timeout=15, env=_commit_env)
         if commit.returncode == 0:
             sha = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
                                  capture_output=True, text=True, timeout=10).stdout.strip()
