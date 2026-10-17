@@ -462,7 +462,9 @@ Phase 2   C 文档三层化 + 规则保全检查 + 大小 lint（依赖前两次
 - 已知残留：故意清掉 `SWARM_APP_SESSION_ID` 创建的 run 没有归属，对创建者不生效（run-create 会告警）；`cd X && make`、pnpm/yarn/bun 不识别；跨文件的 order 依赖不复现。
 - 上线需要 `./prod.sh build` 重启 daemon 后，`SWARM_APP_SESSION_ID` 注入和两个新 gate 才会生效。
 
-还剩 Phase 2（C 文档三层化）。
+**Phase 2 状态（2026-10-18 已完成）**：C 全部落地。INSTRUCTIONS 从约 96K 降到 9.6K 的编排卡，11 个 stage 文档都改成 ≤5K 的执行卡，条件细节放进 `stages/ref/<stage>/`，事故和理由放进 `stages/history/`。旧文档里 127 条 `[GATE…]`/`[MUST]`/BLOCKING/⛔ 规则全部打了标签，`check_rule_preservation.py check` 127/127 通过，并由测试在 CI 里重跑。size lint 的 ratchet 表已清空，以后所有卡片都按真实上限检查。Meta-Review prompt 移到 `data/gate-prompts/meta-review.md`，由 `spawn_prompt.py --gate meta-review` 输出。`advance` 的 `next_action` 不再写 "IN FULL"，改成"读执行卡，满足条件才读 ref"。
+- 与原设计的差异：REVIEW_PATTERNS 按需输出后仍有约 80K（45 行是 `*` 全量适用的规则），收益比 C1 预计的小，后续可以再收紧这些行的 `match`。
+- 下一步：上线后用 profiler 测 5 个 run，对照 §5 的峰值上下文和总时长。
 
 F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。G 按改动的文件拆进上面两次 run。
 

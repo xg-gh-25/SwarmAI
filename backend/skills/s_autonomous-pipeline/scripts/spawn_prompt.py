@@ -9,6 +9,9 @@ USAGE
     # also needs the project and the changed files:
     python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
         --gate gate2-adversarial --project <PROJECT> --files <changed files...>
+    # DELIVER's Meta-Review (operational blind spots) takes the same arguments:
+    python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
+        --gate meta-review --project <PROJECT> --files <changed files...>
 
     # Only the recalled-knowledge block, to put into a prompt this tool does not
     # own (the REVIEW-stage specialist prompts):
@@ -62,6 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from spawn_budget import (  # noqa: E402  (path set above)
         BUDGET_MARKER,
+        GATE_PROMPT_DIR,
         GATES,
         KNOWLEDGE_SLOT,
         GatePromptError,
@@ -79,6 +83,12 @@ except ImportError as exc:  # pragma: no cover - defensive, must stay LOUD
         "definitions must sit in the same scripts/ directory.\n"
     )
     raise SystemExit(1)
+
+#: DELIVER's Meta-Review prompt (design §4-C1: moved out of stages/deliver.md like
+#: gate0/1/2). Registered into the SAME ``GATES`` dict object ``load_gate`` reads,
+#: so it goes through the identical load + numeric-cap + knowledge-slot contract.
+#: ``setdefault`` keeps a future entry in spawn_budget.GATES authoritative.
+GATES.setdefault("meta-review", GATE_PROMPT_DIR / "meta-review.md")
 
 
 class _Parser(argparse.ArgumentParser):

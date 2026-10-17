@@ -463,12 +463,6 @@ _SIZE_UNLIMITED_DIRS = frozenset({"history"})
 # listed here must meet the real limit. Never raise a ceiling to make a red
 # build green — split the document instead.
 _SIZE_PENDING_SPLIT: dict[str, int] = {
-    "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md": 96_478,
-    "backend/skills/s_autonomous-pipeline/stages/build.md": 54_303,
-    "backend/skills/s_autonomous-pipeline/stages/deliver.md": 72_840,
-    "backend/skills/s_autonomous-pipeline/stages/evaluate.md": 56_020,
-    "backend/skills/s_autonomous-pipeline/stages/goal_cycle.md": 28_327,
-    "backend/skills/s_autonomous-pipeline/stages/review.md": 56_261,
 }
 
 

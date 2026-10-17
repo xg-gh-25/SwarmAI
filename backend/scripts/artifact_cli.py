@@ -1101,8 +1101,9 @@ def _next_stage_continuation(
 
     if doc_path:
         return doc_path, (
-            f"Now Read {doc_path} and execute the {target} stage IN FULL, including "
-            f"its own gates — {_CONTINUATION_PHRASE}. Hand control back only for a "
+            f"Now Read the {target} execution card {doc_path} and execute the stage, "
+            f"including its gates (read a stages/ref/ file only when the card's "
+            f"'Read only if' condition holds) — {_CONTINUATION_PHRASE}. Hand control back only for a "
             f"stage-boundary L2 Judgment (via the Escalation Routing Protocol), a "
             f"true checkpoint trigger, retries exhausted, a mid-stage L2, a pending "
             f"question awaiting the user, or an abandon verdict."
