@@ -678,6 +678,29 @@ def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _isolate_permission_queues():
+    """Drop permission_manager's per-session queues around EVERY test.
+
+    The manager keeps one module-level ``asyncio.Queue`` per session id, and a
+    queue binds to the first event loop that waits on it. Tests each run their
+    own ``asyncio.run()`` and reuse fixed ids ("sess-test", "test-cw"), so from
+    the second test on, the orchestrator's ``perm_queue.get()`` raised "bound to
+    a different event loop" at once and its message/permission race loop spun
+    forever (a whole-file hang). The daemon has one loop, so this is test-only.
+    """
+    try:
+        from core.permission_manager import permission_manager as _pm
+        _pm._session_queues.clear()
+    except Exception:  # noqa: BLE001 — never let isolation break a test
+        pass
+    yield
+    try:
+        _pm._session_queues.clear()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Sample test data fixtures
 # ---------------------------------------------------------------------------
