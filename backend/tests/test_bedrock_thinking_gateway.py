@@ -104,6 +104,35 @@ class TestRewrite:
     def test_everything_else_byte_identical(self, body):
         assert gw.rewrite_thinking_display(body) == (body, False)
 
+    def test_lone_surrogate_does_not_raise(self):
+        """Tool output cut mid-emoji leaves "\\ud83d" in the JSON; the rewrite used
+        to raise UnicodeEncodeError → a 500 on every request of that session."""
+        body = b'{"thinking":{"type":"adaptive"},"messages":[{"content":"x \\ud83d y"}]}'
+        out, changed = gw.rewrite_thinking_display(body)
+        doc = json.loads(out)
+        assert changed and doc["thinking"]["display"] == "summarized"
+        assert doc["messages"][0]["content"] == "x \ud83d y"
+
+
+class TestCredentialRefreshLimit:
+    def test_unknown_key_refreshes_at_most_once_per_window(self, monkeypatch):
+        """The key in the (unauthenticated) request must not drive the credential
+        chain on every request."""
+        calls = []
+
+        class _Sess:
+            def get_credentials(self):
+                calls.append(1)
+                return Credentials(AK, SK, TOK)
+
+        import boto3
+        monkeypatch.setattr(boto3, "Session", _Sess)
+        monkeypatch.setattr(gw, "_boto_session", None)
+        monkeypatch.setattr(gw, "_last_refresh", float("-inf"))
+        for _ in range(5):
+            gw._resolve_credentials("ASIAFORGED000001")
+        assert len(calls) == 6  # first resolve + ONE refresh, then cached
+
 
 class _Chunks(httpx.AsyncByteStream):
     """An unread, chunked upstream body (like Bedrock's eventstream)."""
@@ -169,6 +198,8 @@ class TestRoute:
         assert json.loads(up.content)["thinking"]["display"] == "summarized"
         assert up.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={AK}/")
         assert up.headers["authorization"] != _sign()["authorization"]  # re-signed for the new body
+        # raw relay: never ask Bedrock for a compressed body
+        assert up.headers["accept-encoding"] == "identity"
 
 
 class _Cfg(dict):

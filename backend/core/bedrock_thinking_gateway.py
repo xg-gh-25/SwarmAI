@@ -115,7 +115,13 @@ def rewrite_thinking_display(body: bytes) -> tuple[bytes, bool]:
     if thinking.get("display") == "summarized":
         return body, False
     thinking["display"] = "summarized"
-    return json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), True
+    # ensure_ascii: a lone surrogate (tool output cut mid-emoji, "\ud83d") is legal
+    # in JSON but not encodable as UTF-8 — with ensure_ascii=False it raised and
+    # every request of that session got a 500. Escaped output is valid JSON.
+    try:
+        return json.dumps(doc, ensure_ascii=True, separators=(",", ":")).encode("ascii"), True
+    except (TypeError, ValueError):
+        return body, False
 
 
 # ── SigV4 verification (standard AWS Signature Version 4, no new secret) ──────
@@ -192,6 +198,8 @@ def verify_sigv4(
 
 _boto_session: Any = None
 _http_client: Any = None
+_REFRESH_MIN_S = 30.0
+_last_refresh = float("-inf")
 
 
 def _resolve_credentials(expected_akid: str, refresh: bool = False) -> Any:
@@ -201,11 +209,17 @@ def _resolve_credentials(expected_akid: str, refresh: bool = False) -> Any:
     global _boto_session
     import boto3
 
+    global _last_refresh
     if _boto_session is None or refresh:
         _boto_session = boto3.Session()
     creds = _boto_session.get_credentials()
     frozen = creds.get_frozen_credentials() if creds else None
-    if frozen is not None and frozen.access_key != expected_akid and not refresh:
+    # Re-resolve on an unknown key at most once per _REFRESH_MIN_S: the key comes
+    # from the UNAUTHENTICATED request, so without the limit any local process
+    # could make every request re-run the credential chain (credential_process).
+    if (frozen is not None and frozen.access_key != expected_akid and not refresh
+            and time.monotonic() - _last_refresh >= _REFRESH_MIN_S):
+        _last_refresh = time.monotonic()
         return _resolve_credentials(expected_akid, refresh=True)
     return frozen
 
@@ -233,7 +247,10 @@ def _signed_upstream_request(region: str, path: str, body: bytes, in_headers: di
     from botocore.auth import SigV4Auth
     from botocore.awsrequest import AWSRequest
 
-    headers = {"content-type": in_headers.get("content-type", "application/json")}
+    # identity: bytes are relayed raw (aiter_raw) and Content-Encoding is not
+    # passed back, so a gzip reply would reach the CLI as undecodable bytes.
+    headers = {"content-type": in_headers.get("content-type", "application/json"),
+               "accept-encoding": "identity"}
     for k, v in in_headers.items():
         if k == "accept" or k.startswith("x-amzn-bedrock-"):
             headers[k] = v
