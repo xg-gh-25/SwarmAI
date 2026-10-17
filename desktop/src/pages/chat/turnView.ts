@@ -12,8 +12,11 @@
  * a reloaded turn could never fold and two modules disagreed about one fact.
  *
  * Unit kinds (time order is always preserved):
- * - `process`   — a run of work: tool calls, thinking, and the text the agent wrote
- *                 BETWEEN tool calls (`note` steps). Rendered as one folded row.
+ * Stream order is never changed. Only ADJACENT blocks of the same kind are
+ * grouped (XG 2026-10-17: "遵守 streaming response 的顺序").
+ * - `process`   — a run of ADJACENT tool calls / thinking. Rendered as one card:
+ *                 folded once finished, open while it is the live (last) unit.
+ * - `note`      — text the agent wrote BETWEEN tool calls. Rendered in the stream.
  * - `landmark`  — a pipeline landmark / gate verdict line. Stays visible in the
  *                 main stream and splits the process into segments.
  * - `stage`     — a `pipeline_stage` block: a stage the BACKEND saw finish in
@@ -63,19 +66,13 @@ export interface ToolStep {
   result?: ToolResultContent;
 }
 
-export interface NoteStep {
-  kind: 'note';
-  text: string;
-  index: number;
-}
-
 export interface ThinkingStep {
   kind: 'thinking';
   text: string;
   index: number;
 }
 
-export type Step = ToolStep | NoteStep | ThinkingStep;
+export type Step = ToolStep | ThinkingStep;
 
 export type InterruptBlock = AskUserQuestionContent | CmdPermissionContent | EscalationContent;
 
@@ -83,17 +80,17 @@ export interface ProcessUnit {
   kind: 'process';
   /** `seg-<ordinal>` — the segment's position among the message's process
    *  segments. Ordinals survive both appending (streaming) and the stream-end
-   *  reconcile, which DROPS tool_result / thinking blocks from the content (the
-   *  DB never stores them) and would shift any block-index key. */
+   *  reconcile, which drops live-only tool_result blocks and would shift any
+   *  block-index key. */
   id: string;
+  /** ADJACENT tool calls / thinking, in stream order. */
   steps: Step[];
   /** True only for the last unit of a streaming message — the work in progress. */
   isLive: boolean;
-  /** What the live row shows: the pending tool (if any), the latest note, and —
-   *  when the model's newest non-tool output is thinking — that thinking's last
-   *  line, so the collapsed row follows what the model is thinking right now. */
+  /** What the live row shows: the pending tool (if any), the newest finished
+   *  step, and — when the newest step is thinking — that thought's last line. */
   live?: {
-    step?: ToolStep; note?: string; thinking?: string; recent?: ToolStep;
+    step?: ToolStep; thinking?: string; recent?: ToolStep;
     /** The pipeline stage now running: the `next` of the latest stage row before
      *  this segment in the same message (absent outside pipeline turns). */
     stage?: { stage: string; ordinal: number | null };
@@ -105,6 +102,8 @@ export interface ProcessUnit {
 export type TurnUnit =
   | ProcessUnit
   | { kind: 'landmark'; text: string; index: number }
+  /** Text the model wrote between tool calls — shown in the stream, in order. */
+  | { kind: 'note'; text: string; index: number }
   | { kind: 'stage'; block: PipelineStageContent; index: number }
   | { kind: 'outcome'; text: string; index: number }
   | { kind: 'interrupt'; block: InterruptBlock; index: number };
@@ -201,19 +200,15 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
   const units: TurnUnit[] = [];
   let seg: ProcessUnit | null = null;
   let ordinal = 0;
-  // Thinking that arrives with no open segment waits here and joins the NEXT
-  // segment. Thinking is never persisted, so a segment made only of it would
-  // vanish at reload and shift every later segment's ordinal id.
-  let pendingThinking: ThinkingStep[] = [];
+  // Stream order is never changed: a process segment is a run of ADJACENT
+  // tool calls / thinking; any text, stage row or interrupt closes it.
+  // Non-empty thinking is persisted with the turn, so a thinking-only segment
+  // survives the reload reconcile and ordinals stay stable.
   const openSeg = (): ProcessUnit => {
     if (!seg) {
       seg = { kind: 'process', id: `seg-${ordinal}`, steps: [], isLive: false };
       ordinal += 1;
       units.push(seg);
-    }
-    if (pendingThinking.length) {
-      seg.steps.push(...pendingThinking);
-      pendingThinking = [];
     }
     return seg;
   };
@@ -233,25 +228,21 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
     if (block.type === 'text') {
       const text = block.text || '';
       if (!text.trim()) return;
+      seg = null;
       if (index > lastToolIdx) {
-        // Thinking right before the answer still belongs before it.
-        if (pendingThinking.length && !seg) openSeg();
-        seg = null;
         units.push({ kind: 'outcome', text, index });
       } else if (isLandmarkBlock(block, text)) {
-        seg = null;
         units.push({ kind: 'landmark', text, index });
       } else {
-        openSeg().steps.push({ kind: 'note', text, index });
+        // What the model says between tool calls stays in the stream, in order.
+        units.push({ kind: 'note', text, index });
       }
       return;
     }
     if (block.type === 'thinking') {
       const text = block.thinking || '';
       if (!text.trim()) return;
-      const step: ThinkingStep = { kind: 'thinking', text, index };
-      if (seg) seg.steps.push(step);
-      else pendingThinking.push(step);
+      openSeg().steps.push({ kind: 'thinking', text, index });
       return;
     }
     if (block.type === 'tool_use') {
@@ -273,8 +264,6 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
     }
   });
 
-  if (pendingThinking.length) openSeg(); // a thinking-only tail (live, or before nothing)
-
   if (!isStreaming && lastToolIdx >= 0 && !laterBlock[lastToolIdx]) {
     for (const u of units) {
       if (u.kind !== 'process') continue;
@@ -287,9 +276,10 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
     let last = units[units.length - 1];
     if (!last) {
       units.push({ kind: 'process', id: 'seg-live', steps: [], isLive: true, live: {} });
-    } else if (last.kind === 'stage') {
-      // The stage just finished and the next one has not produced a step yet —
-      // still show a live row, so the stage now running is named immediately.
+    } else if (last.kind === 'stage' || last.kind === 'note') {
+      // A stage just finished (or the model just wrote a note) and nothing has
+      // run yet: still show a live row, so the user sees work continuing and the
+      // stage now running is named immediately.
       last = { kind: 'process', id: `seg-${ordinal}`, steps: [], isLive: true, live: {} };
       units.push(last);
     }
@@ -298,19 +288,15 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
       const pending = [...last.steps].reverse().find(
         (s): s is ToolStep => s.kind === 'tool' && s.status === 'pending',
       );
-      const note = [...last.steps].reverse().find((s): s is NoteStep => s.kind === 'note');
-      // Newest note-or-thinking wins: a fresh thought replaces an older note on
-      // the live row, and a newer note replaces an older thought.
-      const latest = [...last.steps].reverse().find(
-        (s): s is NoteStep | ThinkingStep => s.kind === 'note' || s.kind === 'thinking',
-      );
-      const thinking = latest?.kind === 'thinking' ? lastLine(latest.text) : undefined;
-      // The newest step that already finished, so the collapsed row always says
-      // what was just done — not only a bare spinner between two tool calls.
+      // The latest thought, but only while it is the newest thing in the segment.
+      const newest = last.steps[last.steps.length - 1];
+      const thinking = newest?.kind === 'thinking' ? lastLine(newest.text) : undefined;
+      // The newest step that already finished, so the row always says what was
+      // just done — not only a bare spinner between two tool calls.
       const recent = [...last.steps].reverse().find(
         (s): s is ToolStep => s.kind === 'tool' && s.status !== 'pending',
       );
-      last.live = { step: pending, note: thinking ? undefined : note?.text, thinking, recent };
+      last.live = { step: pending, thinking, recent };
       const stageAt = units.map((u) => u.kind).lastIndexOf('stage');
       const prevStage = stageAt >= 0 ? (units[stageAt] as Extract<TurnUnit, { kind: 'stage' }>) : undefined;
       // A landmark after the latest stage row (e.g. "Gate 1: BLOCK" → back to plan)
@@ -378,9 +364,11 @@ const SETUP_RE = /^\s*(?:cd|export\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*')?
 const SETUP_ONLY_RE = /^\s*(?:cd|export|source|set)\b/;
 const WRAPPER_RE = /^\s*(?:perl\s+-e\s+'alarm\s+\d+;\s*exec\s+@ARGV'\s+|g?timeout\s+\d+[smh]?\s+)/;
 
-/** The command up to the first UNQUOTED `&&` / `||` / `|` / `;` / newline. */
-function firstSegment(cmd: string): string {
+/** The command split at every UNQUOTED `&&` / `||` / `|` / `;` / newline. */
+function splitSegments(cmd: string): string[] {
+  const out: string[] = [];
   let quote: string | null = null;
+  let start = 0;
   for (let i = 0; i < cmd.length; i += 1) {
     const c = cmd[i];
     if (quote) {
@@ -388,11 +376,43 @@ function firstSegment(cmd: string): string {
       continue;
     }
     if (c === '"' || c === "'") { quote = c; continue; }
-    if (c === '\n' || c === ';' || c === '|' || (c === '&' && cmd[i + 1] === '&')) {
-      return cmd.slice(0, i).trim();
+    const two = (c === '&' && cmd[i + 1] === '&') || (c === '|' && cmd[i + 1] === '|');
+    if (c === '\n' || c === ';' || c === '|' || two) {
+      out.push(cmd.slice(start, i).trim());
+      if (two) i += 1;
+      start = i + 1;
     }
   }
-  return cmd.trim();
+  out.push(cmd.slice(start).trim());
+  return out.filter(Boolean);
+}
+
+/** Commands that only read. A Bash step is relabelled (Read / Search / List) ONLY
+ *  when every segment of it is one of these, so `grep -l x | xargs rm` stays "Run". */
+const READ_ONLY_HEADS = new Set([
+  'cat', 'head', 'tail', 'less', 'sed', 'wc', 'grep', 'rg', 'ugrep', 'egrep', 'fgrep',
+  'ls', 'tree', 'find', 'sort', 'uniq', 'cut', 'tr', 'jq', 'nl', 'diff', 'stat', 'file',
+  'echo', 'printf', 'basename', 'dirname', 'column', 'true', 'pwd', 'which', 'realpath',
+]);
+const FIND_WRITES = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls']);
+
+function isReadOnlySegment(segment: string): boolean {
+  if (/`|\$\(/.test(segment)) return false; // command substitution runs anything
+  const tokens = tokenize(segment);
+  const head = (tokens[0] ?? '').replace(/^.*\//, '');
+  if (!READ_ONLY_HEADS.has(head)) return false;
+  for (let i = 1; i < tokens.length; i += 1) {
+    // `>file` / `2>> log` write; `2>/dev/null` and `2>&1` do not.
+    const redirect = /^(?:\d|&)?>>?(.*)$/.exec(tokens[i]);
+    if (redirect && !redirect[1].startsWith('&')) {
+      const target = redirect[1] || tokens[i + 1] || '';
+      if (target !== '/dev/null') return false;
+    }
+  }
+  if (head === 'sed' && tokens.some((t) => /^-[a-zA-Z]*i/.test(t) || t.startsWith('--in-place'))) return false;
+  if (head === 'sort' && tokens.some((t) => t === '-o' || t.startsWith('--output'))) return false;
+  if (head === 'find' && tokens.some((t) => FIND_WRITES.has(t))) return false;
+  return true;
 }
 
 function tokenize(segment: string): string[] {
@@ -413,12 +433,27 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object'> {
     rest = next;
   }
   if (SETUP_ONLY_RE.test(rest)) return { verb: 'run', object: '…' };
-  const segment = firstSegment(rest);
+  const segments = splitSegments(rest);
+  const segment = segments[0] ?? '';
   // Redirections (`2>/dev/null`, `>out`, `2>&1`) are not arguments.
   const tokens = tokenize(segment).filter((tok) => !/^\d?>/.test(tok) && !/^&?>/.test(tok));
   const head = (tokens[0] ?? '').replace(/^.*\//, '');
   const args = tokens.slice(1);
   const nonFlag = args.filter((a) => !a.startsWith('-'));
+
+  if (!segments.every(isReadOnlySegment)) {
+    // Something in it may write: never dress it up as a read. Scripts and known
+    // tools keep their short name; anything else shows the command itself.
+    if (['python', 'python3', 'node', 'bash', 'sh', 'perl', 'ruby', 'deno'].includes(head)) {
+      const script = nonFlag.find((a) => /\.[a-z]{1,4}$/i.test(a));
+      if (script) return { verb: 'run', object: basename(script) };
+    }
+    if (['git', 'npm', 'npx', 'pnpm', 'yarn', 'uv', 'cargo', 'go', 'gh'].includes(head)) {
+      return { verb: 'run', object: [head, ...args.slice(0, 2)].join(' ') };
+    }
+    const whole = rest.replace(/\s+/g, ' ').trim();
+    return { verb: 'run', object: whole.length > 60 ? `${whole.slice(0, 57)}…` : whole || cmd.slice(0, 60) };
+  }
 
   if (['cat', 'head', 'tail', 'less', 'sed', 'wc'].includes(head)) {
     const file = [...args].reverse().find(looksLikePath);
@@ -431,13 +466,6 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object'> {
   if (['ls', 'tree', 'find'].includes(head)) {
     const dir = nonFlag.find(looksLikePath) ?? nonFlag[0] ?? '.';
     return { verb: 'list', object: basename(dir) };
-  }
-  if (['python', 'python3', 'node', 'bash', 'sh', 'perl', 'ruby', 'deno'].includes(head)) {
-    const script = nonFlag.find((a) => /\.[a-z]{1,4}$/i.test(a));
-    if (script) return { verb: 'run', object: basename(script) };
-  }
-  if (['git', 'npm', 'npx', 'pnpm', 'yarn', 'uv', 'cargo', 'go', 'gh'].includes(head)) {
-    return { verb: 'run', object: [head, ...args.slice(0, 2)].join(' ') };
   }
   const shown = segment.length > 60 ? `${segment.slice(0, 57)}…` : segment;
   return { verb: 'run', object: shown || cmd.slice(0, 60) };
@@ -557,12 +585,14 @@ export function extractNextSteps(text: string, isStreaming: boolean): NextStepsR
 // ── Collapsed-row summary ───────────────────────────────────────────────────
 
 export interface ProcessSummary {
-  /** Tool calls in the segment (notes and thinking are not counted as steps). */
+  /** Tool calls in the segment (thinking is not counted as a step). */
   stepCount: number;
   /** Known failures (only knowable while results are in memory). */
   errorCount: number;
   /** Verbs by frequency, ties in first-appearance order. */
   counts: Array<{ verb: StepVerb; count: number }>;
+  /** Thinking passages in the segment. */
+  thinkingCount: number;
 }
 
 export function summarizeProcess(unit: ProcessUnit): ProcessSummary {
@@ -570,7 +600,9 @@ export function summarizeProcess(unit: ProcessUnit): ProcessSummary {
   const tally = new Map<StepVerb, number>();
   let errorCount = 0;
   let stepCount = 0;
+  let thinkingCount = 0;
   for (const s of unit.steps) {
+    if (s.kind === 'thinking') thinkingCount += 1;
     if (s.kind !== 'tool') continue;
     stepCount += 1;
     if (s.status === 'error') errorCount += 1;
@@ -582,5 +614,37 @@ export function summarizeProcess(unit: ProcessUnit): ProcessSummary {
     .map((verb, i) => ({ verb, count: tally.get(verb) ?? 0, i }))
     .sort((a, b) => b.count - a.count || a.i - b.i)
     .map(({ verb, count }) => ({ verb, count }));
-  return { stepCount, errorCount, counts };
+  return { stepCount, errorCount, counts, thinkingCount };
+}
+
+// ── Display rows ────────────────────────────────────────────────────────────
+
+/** One row of an expanded segment: a step, or ADJACENT finished reads of one file. */
+export type StepRowItem =
+  | { kind: 'step'; step: Step }
+  | { kind: 'reads'; steps: ToolStep[] };
+
+const readKey = (s: Step): string | null => {
+  if (s.kind !== 'tool' || s.status !== 'done') return null;
+  const label = stepLabel(s.block);
+  return label.verb === 'read' ? (label.path ?? label.object) : null;
+};
+
+/** Merge runs of adjacent finished reads of the SAME file into one row. Order is
+ *  kept; anything in between (another file, thinking, a failure) breaks the run. */
+export function groupSteps(steps: Step[]): StepRowItem[] {
+  const out: StepRowItem[] = [];
+  let runKey: string | null = null;
+  for (const step of steps) {
+    const key = readKey(step);
+    const prev = out[out.length - 1];
+    if (key !== null && key === runKey && prev) {
+      if (prev.kind === 'reads') prev.steps.push(step as ToolStep);
+      else out[out.length - 1] = { kind: 'reads', steps: [(prev.step as ToolStep), step as ToolStep] };
+      continue;
+    }
+    out.push({ kind: 'step', step });
+    runKey = key;
+  }
+  return out;
 }

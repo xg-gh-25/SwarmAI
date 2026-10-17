@@ -12,7 +12,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
-import { deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess } from './turnView';
+import { deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps } from './turnView';
+import type { ToolUseContent } from '../../types';
 
 const tu = (id: string, summary: string, name = 'Bash', category = 'bash'): ContentBlock =>
   ({ type: 'tool_use', id, name, summary, category }) as ContentBlock;
@@ -63,16 +64,18 @@ describe('deriveTurnView — streaming / outcome / interim notes', () => {
     expect(o.kind === 'outcome' && o.text).toBe('The answer is 42.');
   });
 
-  it('text BETWEEN tools is a process note, interleaved in time order', () => {
+  it('text BETWEEN tools is a note unit in the stream, in time order (never a step)', () => {
     const view = deriveTurnView(
       [tx('looking at X'), tu('a', 'Reading /r/a.ts', 'Read', 'read'), tx('found Y'), tu('b', 'Reading /r/b.ts', 'Read', 'read'), tx('final')],
       false,
     );
-    expect(view.units.map((u) => u.kind)).toEqual(['process', 'outcome']);
-    const p = view.units[0];
-    if (p.kind !== 'process') throw new Error('expected process');
-    expect(p.steps.map((s) => s.kind)).toEqual(['note', 'tool', 'note', 'tool']);
-    expect(p.isLive).toBe(false);
+    expect(view.units.map((u) => u.kind)).toEqual(['note', 'process', 'note', 'process', 'outcome']);
+    expect(view.units.map((u) => ('text' in u ? u.text : null))).toEqual(['looking at X', null, 'found Y', null, 'final']);
+    for (const u of view.units) {
+      if (u.kind === 'process') expect(u.steps.map((s) => s.kind)).toEqual(['tool']);
+    }
+    expect(view.units.filter((u) => u.kind === 'process').map((u) => (u as { id: string }).id)).toEqual(['seg-0', 'seg-1']);
+    expect(view.copyText).toBe('final');
   });
 
   it('a pure-text message is all outcome (unchanged from today)', () => {
@@ -118,15 +121,20 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     const th = { type: 'thinking', thinking: 'First I read the config.\n\nThen compare the two thresholds.\n' } as ContentBlock;
     const p = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th], true).units[0];
     expect(p.kind === 'process' && p.live?.thinking).toBe('Then compare the two thresholds.');
-    expect(p.kind === 'process' && p.live?.note).toBeUndefined();
   });
 
-  it('a note newer than the thinking replaces it on the live row, and vice versa', () => {
+  it('the live row shows a thought only while it is the newest step; notes stay in the stream', () => {
     const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
-    const noteAfter = deriveTurnView([th('old thought'), tx('checking logs'), tu('a', 'Running: ls')], true).units[0];
-    expect(noteAfter.kind === 'process' && noteAfter.live).toMatchObject({ note: 'checking logs', thinking: undefined });
-    const thoughtAfter = deriveTurnView([tx('checking logs'), tu('a', 'Running: ls'), tr('a'), th('new thought')], true).units[0];
-    expect(thoughtAfter.kind === 'process' && thoughtAfter.live).toMatchObject({ note: undefined, thinking: 'new thought' });
+    const noteAfter = deriveTurnView([th('old thought'), tx('checking logs'), tu('a', 'Running: ls')], true);
+    expect(noteAfter.units.map((u) => u.kind)).toEqual(['process', 'note', 'process']);
+    const liveA = noteAfter.units[2];
+    expect(liveA.kind === 'process' && liveA.isLive).toBe(true);
+    expect(liveA.kind === 'process' && liveA.live?.thinking).toBeUndefined();
+    expect(liveA.kind === 'process' && liveA.live?.step?.block.id).toBe('a');
+    const thoughtAfter = deriveTurnView([tx('checking logs'), tu('a', 'Running: ls'), tr('a'), th('new thought')], true);
+    expect(thoughtAfter.units.map((u) => u.kind)).toEqual(['note', 'process']);
+    const liveB = thoughtAfter.units[1];
+    expect(liveB.kind === 'process' && liveB.live?.thinking).toBe('new thought');
   });
 
   it('live row keeps the newest FINISHED step next to the current one', () => {
@@ -144,12 +152,15 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(p.kind === 'process' && p.live).toBeUndefined();
   });
 
-  it('the live row carries the latest note written between tools', () => {
+  it('a note written between tools sits between the segments; the NEXT segment is live', () => {
     const view = deriveTurnView([tu('a', 'Running: ls'), tx('checking the config next'), tu('b', 'Reading /r/c.json', 'Read', 'read')], true);
-    const p = view.units[0];
-    if (p.kind !== 'process') throw new Error('expected process');
-    expect(p.live?.note).toBe('checking the config next');
-    expect(p.live?.step?.block.id).toBe('b');
+    expect(view.units.map((u) => u.kind)).toEqual(['process', 'note', 'process']);
+    const [first, note, live] = view.units;
+    expect(first.kind === 'process' && first.isLive).toBe(false);
+    expect(note.kind === 'note' && note.text).toBe('checking the config next');
+    if (live.kind !== 'process') throw new Error('expected process');
+    expect(live.isLive).toBe(true);
+    expect(live.live?.step?.block.id).toBe('b');
   });
 
   it('an errored result is status=error; a final unrecovered failure is flagged (AC4)', () => {
@@ -298,10 +309,10 @@ describe('deriveTurnView — next steps + copy text', () => {
 });
 
 describe('summarizeProcess — the collapsed-row facts', () => {
-  it('counts tool steps, failures and the top verbs (notes/thinking are not steps)', () => {
+  it('counts tool steps, failures and the top verbs (thinking is not a step)', () => {
     const view = deriveTurnView([
       tu('a', 'Reading /r/a.ts', 'Read', 'read'), tr('a'),
-      tx('note'),
+      { type: 'thinking', thinking: 'next: b' } as ContentBlock,
       tu('b', 'Reading /r/b.ts', 'Read', 'read'), tr('b'),
       tu('c', 'Running: grep -n x y.ts'), tr('c', true),
       tu('d', 'Running: make test'), tr('d'),
@@ -343,7 +354,7 @@ describe('stepLabel — real-world setup prefixes (Layer-4 replay found these)',
   const lab = (summary: string) => stepLabel({ type: 'tool_use', id: 'x', name: 'Bash', summary, category: 'bash' } as never);
   it.each([
     ['Running: cd /a/repo 2>/dev/null && source backend/.venv/bin/activate 2>/dev/null; python backend/scripts/x.py --run', 'run', 'x.py'],
-    ['Running: cd ~/.app/logs 2>/dev/null || cd ~/.app\nLOG=$(ls -t ~/.app/logs/b.log | head -1)', 'run', 'LOG=$(ls -t ~/.app/logs/b.log'],
+    ['Running: cd ~/.app/logs 2>/dev/null || cd ~/.app\nLOG=$(ls -t ~/.app/logs/b.log | head -1)', 'run', 'LOG=$(ls -t ~/.app/logs/b.log | head -1)'],
     ['Running: cd /a/b 2>/dev/null\nls -la 2>/dev/null', 'list', '.'],
     ['Running: cd /a/logs 2>/dev/null || cd $HOME/x/logs; pwd; ls -la', 'run', 'pwd'],
     ['Running: cd /a/p 2>/dev/null && git log --oneline -5 2>/dev/null', 'run', 'git log --oneline'],
@@ -422,13 +433,16 @@ describe('Red-team fixes', () => {
     expect(p2.kind === 'process' && p2.steps[0].kind === 'tool' && p2.steps[0].status).toBe('done');
   });
 
-  it('thinking before a landmark joins the NEXT segment, so reconcile cannot shift ordinals', () => {
+  it('thinking before a landmark stays BEFORE it (stream order); reconcile cannot shift ordinals', () => {
+    // Non-empty thinking is persisted with the turn; the reload reconcile only drops
+    // live tool_result blocks — so the live and stored views give the same ids.
     const th = { type: 'thinking', thinking: 'plan' } as ContentBlock;
     const live = [th, tx('## ✦ ① EVALUATE'), tu('a', 'Running: ls'), tr('a'), tx('## ✦ ② THINK'), tu('b', 'Running: pwd'), tr('b'), tx('done')];
-    const db = [tx('## ✦ ① EVALUATE'), tu('a', 'Running: ls'), tx('## ✦ ② THINK'), tu('b', 'Running: pwd'), tx('done')];
+    const db = [th, tx('## ✦ ① EVALUATE'), tu('a', 'Running: ls'), tx('## ✦ ② THINK'), tu('b', 'Running: pwd'), tx('done')];
     const ids = (c: ContentBlock[], s: boolean) => deriveTurnView(c, s).units.filter((u) => u.kind === 'process').map((u) => (u as { id: string }).id);
     expect(ids(live, false)).toEqual(ids(db, false));
-    expect(deriveTurnView(live, false).units.map((u) => u.kind)).toEqual(['landmark', 'process', 'landmark', 'process', 'outcome']);
+    expect(ids(live, true)).toEqual(['seg-0', 'seg-1', 'seg-2']);
+    expect(deriveTurnView(live, false).units.map((u) => u.kind)).toEqual(['process', 'landmark', 'process', 'landmark', 'process', 'outcome']);
   });
 
   it('a thinking-only tail while streaming is still a live segment', () => {
@@ -454,5 +468,56 @@ describe('turn that ended inside a tool call', () => {
   it('a normal turn that ends with an answer keeps every tool done', () => {
     const p = deriveTurnView([tu('a', 'Running: ls'), tu('b', 'Running: make'), tx('done')], false).units[0];
     expect(p.kind === 'process' && p.steps.every((s) => s.kind === 'tool' && s.status === 'done')).toBe(true);
+  });
+});
+
+describe('stepLabel — a Bash step is relabelled only when ALL of it only reads', () => {
+  const label = (cmd: string) => stepLabel(tu('x', `Running: ${cmd}`) as ToolUseContent);
+  it.each([
+    ['grep -n foo src/a.ts | head -5', 'search', '"foo"'],
+    ['cd /r && cat a.ts 2>/dev/null', 'read', 'a.ts'],
+    ['sed -n 1,40p src/b.py', 'read', 'b.py'],
+    ['ls -la /r/docs; wc -l /r/docs/x.md', 'list', 'docs'],
+  ])('%s → %s %s', (cmd, verb, object) => {
+    expect(label(cmd)).toMatchObject({ verb, object });
+  });
+  it.each([
+    'grep -l foo src | xargs rm',
+    'cat a.ts > b.ts',
+    'echo hi >> notes.md',
+    'sed -i s/a/b/ f.ts',
+    'find . -name "*.tmp" -delete',
+    'sort -o out.txt in.txt',
+    'cat $(ls -t logs | head -1)',
+  ])('%s → Run with the command itself', (cmd) => {
+    const l = label(cmd);
+    expect(l.verb).toBe('run');
+    expect(l.object).toBe(cmd.length > 60 ? `${cmd.slice(0, 57)}…` : cmd);
+  });
+  it('a script behind a writing pipeline keeps its short name', () => {
+    expect(label('python3 scripts/x.py --run > out.log')).toMatchObject({ verb: 'run', object: 'x.py' });
+  });
+});
+
+describe('groupSteps — adjacent reads of one file are one row', () => {
+  const rd = (id: string, path = '/r/a.ts') => tu(id, `Reading ${path}`, 'Read', 'read');
+  const stepsOf = (c: ContentBlock[]) => {
+    const p = deriveTurnView(c, true).units[0];
+    return p.kind === 'process' ? p.steps : [];
+  };
+  it('merges a run of finished reads of the same file, keeps order', () => {
+    const rows = groupSteps(stepsOf([rd('a'), tr('a'), rd('b'), tr('b'), rd('c', '/r/b.ts'), tr('c'), rd('d'), tr('d')]));
+    expect(rows.map((r) => (r.kind === 'reads' ? `reads×${r.steps.length}` : 'step'))).toEqual(['reads×2', 'step', 'step']);
+  });
+  it('thinking, a failure or a pending read breaks the run', () => {
+    const th = { type: 'thinking', thinking: 'hm' } as ContentBlock;
+    expect(groupSteps(stepsOf([rd('a'), tr('a'), th, rd('b'), tr('b')]))).toHaveLength(3);
+    expect(groupSteps(stepsOf([rd('a'), tr('a', true), rd('b'), tr('b')]))).toHaveLength(2);
+    expect(groupSteps(stepsOf([rd('a'), tr('a'), rd('b')]))).toHaveLength(2);
+  });
+  it('summarizeProcess counts thoughts separately from steps', () => {
+    const th = { type: 'thinking', thinking: 'hm' } as ContentBlock;
+    const p = deriveTurnView([th, rd('a'), th, tx('x')], false).units[0];
+    expect(p.kind === 'process' && summarizeProcess(p)).toMatchObject({ stepCount: 1, thinkingCount: 2 });
   });
 });

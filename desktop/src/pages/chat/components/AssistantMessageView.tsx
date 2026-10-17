@@ -4,9 +4,10 @@
  * This sub-component handles the full rendering of assistant-role messages:
  * - Branded header via AssistantHeader (🐝 SwarmAI · timestamp)
  * - Content rendered from the ONE turn projection (`deriveTurnView`,
- *   pages/chat/turnView.ts): tool calls / thinking / between-tool notes fold
- *   into ProcessBlock rows; landmarks, the answer (outcome) and interrupts
- *   (question / permission / escalation) render in the main stream
+ *   pages/chat/turnView.ts), in stream order: ADJACENT thinking + tool calls
+ *   form one ProcessBlock card; between-tool notes, landmarks, the answer
+ *   (outcome) and interrupts (question / permission / escalation) render in
+ *   the main stream
  * - Pipeline stage rows (`stage` units — written by the backend from run.json)
  *   render as PipelineStageRow; while streaming, the stage now running is shown
  *   above the live process row (PipelineStageLive)
@@ -103,18 +104,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   readOnly,
 }) => {
   const [copied, setCopied] = useState(false);
-  // Expanded PROCESS segments, keyed by the segment's ordinal id (`seg-<n>`,
-  // see turnView.ts) — stable while the turn streams AND across the stream-end
-  // reconcile that drops tool_result/thinking blocks. Lifted here (not inside
-  // ProcessBlock) so it survives ProcessBlock remounts. Default: collapsed.
-  const [expandedProcess, setExpandedProcess] = useState<Set<string>>(new Set());
-  const toggleProcess = useCallback((id: string) => {
-    setExpandedProcess((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // The user's open/closed CHOICE per process segment, keyed by the segment's
+  // ordinal id (`seg-<n>`, see turnView.ts) — stable while the turn streams AND
+  // across the stream-end reconcile that drops live-only tool_result blocks.
+  // Lifted here (not inside ProcessBlock) so it survives ProcessBlock remounts.
+  // No entry = automatic: open while live, folded 2s after (ProcessBlock).
+  const [processChoice, setProcessChoice] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const chooseProcess = useCallback((id: string, open: boolean) => {
+    setProcessChoice((prev) => new Map(prev).set(id, open));
   }, []);
   const { addToast } = useToast();
 
@@ -258,8 +255,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           {unit.isLive && unit.live?.stage && <PipelineStageLive stage={unit.live.stage} />}
           <ProcessBlock
             unit={unit}
-            expanded={expandedProcess.has(unit.id)}
-            onToggle={() => toggleProcess(unit.id)}
+            expanded={processChoice.get(unit.id)}
+            onToggle={(open) => chooseProcess(unit.id, open)}
             startedAt={message.timestamp}
           />
         </React.Fragment>
@@ -267,8 +264,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     }
     if (unit.kind === 'stage') return <PipelineStageRow key={`st-${unit.index}`} block={unit.block} />;
     if (unit.kind === 'interrupt') return renderBlock(unit.block, `i-${unit.index}`);
-    // landmark + outcome are markdown text; a distinct key prefix per kind keeps
-    // React from reusing one kind's instance for another at the same index.
+    // landmark / note / outcome are markdown text. A note and an outcome share a
+    // key prefix: while streaming, the answer-so-far turns into a note the moment
+    // the next tool call arrives, and the same text must not remount.
     const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
     return renderBlock({ type: 'text', text: unit.text }, `${prefix}-${unit.index}`);
   });

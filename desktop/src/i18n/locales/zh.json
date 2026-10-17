@@ -180,7 +180,11 @@
     "turn": {
       "working": "工作中",
       "thinking": "思考中",
-      "thought": "思考",
+      "thought": "思考了",
+    "worked": "已工作",
+    "thoughtCount_one": "思考 {{count}} 段",
+    "thoughtCount_other": "思考 {{count}} 段",
+    "readTimes": "{{count}} 次",
       "steps_one": "{{count}} 步",
       "steps_other": "{{count}} 步",
       "failed_one": "{{count}} 步失败",
@@ -257,8 +261,6 @@
       },
       "showAll": "还有 {{count}} 项 · 展开全部",
       "backToLatestThinking": "思考中 · 回到最新",
-      "notes_one": "{{count}} 条笔记",
-      "notes_other": "{{count}} 条笔记",
       "stage": {
         "skipped": "已跳过",
         "running": "进行中",

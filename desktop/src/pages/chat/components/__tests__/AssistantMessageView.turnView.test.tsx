@@ -2,18 +2,22 @@
  * AssistantMessageView × turnView — the folded-process render contract.
  *
  * What is tested (real AssistantMessageView, only leaf contexts mocked):
- * - a 38-tool turn renders ONE process row while streaming (+ one live row) and
- *   ONE process row from history, where no tool_result was persisted (AC1/AC2)
- * - expanding the row reveals every step and every interim note (OT03: no text
- *   block is dropped by the assembly — it is behind disclosure, not lost)
+ * - a 38-tool turn renders ONE open, fixed-height live card while streaming and
+ *   ONE folded card from history, where no tool_result was persisted (AC1/AC2)
+ * - between-tool notes stay in the stream, in order (OT03: never folded away)
+ * - chat display v6 timing: a thought streams open and folds 2s after the next
+ *   item; a finished card folds 2s after it stops being live; a user's
+ *   open/closed choice beats both; history mounts folded
+ * - adjacent finished reads of one file merge into one row
  * - interrupts render outside the fold (AC4)
  * - a trailing ```next-steps block renders as chips, never as raw text, and the
  *   chips drive the existing inject-chat-input contract (AC6)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
 import { AssistantMessageView } from '../AssistantMessageView';
+import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import type { Message, ContentBlock } from '../../../../types';
 
@@ -43,6 +47,10 @@ const bashRun = (n: number) =>
 function msg(content: ContentBlock[]): Message {
   return { id: 'm1', role: 'assistant', content, timestamp: new Date().toISOString(), isError: false };
 }
+/** The same message re-rendered as it streams: `rerender(viewOf(next, s))`. */
+const viewOf = (c: ContentBlock[], s: boolean) => (
+  <ToastProvider><AssistantMessageView message={msg(c)} isStreaming={s} /></ToastProvider>
+);
 function renderView(content: ContentBlock[], opts: { isStreaming?: boolean; isLastAssistant?: boolean } = {}) {
   return render(
     <ToastProvider>
@@ -54,17 +62,31 @@ function renderView(content: ContentBlock[], opts: { isStreaming?: boolean; isLa
 beforeEach(() => injectSpy.mockClear());
 
 describe('AssistantMessageView — folded process', () => {
-  it('streaming 38 tool calls → one process row + one live row, only the last finished step (AC1)', () => {
+  it('streaming 38 tool calls → one OPEN live card, paged from the end, running step last (AC1, v6)', () => {
     // Real live shape: finished tools carry their tool_result; the last is still running.
     const live = bashRun(38).flatMap((b, i) => (i < 37 ? [b, tr(`t${i}`)] : [b]));
     const { container } = renderView(live, { isStreaming: true });
     expect(screen.getAllByTestId('process-row')).toHaveLength(1);
-    expect(screen.getAllByTestId('process-live')).toHaveLength(1);
-    // Still folded: of 37 finished steps only the newest is shown (XG 2026-10-17:
-    // the live row must say what was just done, not only what is running).
-    expect(screen.queryAllByTestId('step-row')).toHaveLength(1);
-    expect(screen.getByTestId('process-live-recent').textContent).toContain('needle36');
+    // XG 2026-10-17: the work in progress is shown, not folded away.
+    const steps = screen.getByTestId('process-steps');
+    expect(steps.className).toMatch(/h-\[300px\]/);
+    expect(steps.className).toMatch(/overflow-y-auto/);
+    const rows = screen.getAllByTestId('step-row');
+    expect(rows).toHaveLength(12);
+    expect(rows[rows.length - 1].querySelector('.animate-spin')).not.toBeNull();
+    expect(rows[rows.length - 1].textContent).toContain('needle37');
+    expect(screen.queryByTestId('process-live')).toBeNull();
     expect(container.textContent).not.toContain('/Users/x/repo');
+  });
+
+  it('folding the live card by hand still shows what just finished and what runs now', () => {
+    const live = bashRun(38).flatMap((b, i) => (i < 37 ? [b, tr(`t${i}`)] : [b]));
+    renderView(live, { isStreaming: true });
+    fireEvent.click(screen.getByTestId('process-row'));
+    expect(screen.queryByTestId('process-steps')).toBeNull();
+    expect(screen.getAllByTestId('step-row')).toHaveLength(1);
+    expect(screen.getByTestId('process-live-recent').textContent).toContain('needle36');
+    expect(screen.getByTestId('process-live').textContent).toContain('needle37');
   });
 
   it('history (no tool_result) → one folded row, no spinner; expanding shows all 38 (AC2)', () => {
@@ -77,12 +99,16 @@ describe('AssistantMessageView — folded process', () => {
     expect(screen.getAllByTestId('step-row')).toHaveLength(38);
   });
 
-  it('interim notes are behind disclosure, never dropped; the outcome is always visible (OT03)', () => {
+  it('between-tool notes stay in the stream in order; the outcome is always visible (OT03)', () => {
+    // XG 2026-10-17 "遵守 streaming response 的顺序": a note is never folded away.
     renderView([tx('PRE_TOOL_note before'), tu('a', 'Running: ls'), tx('POST_TOOL_answer after')]);
-    expect(screen.getByText(/POST_TOOL_answer/)).toBeTruthy();
-    expect(screen.queryByText(/PRE_TOOL_note/)).toBeNull();
-    fireEvent.click(screen.getByTestId('process-row'));
-    expect(screen.getByText(/PRE_TOOL_note/)).toBeTruthy();
+    const note = screen.getByText(/PRE_TOOL_note/);
+    const row = screen.getByTestId('process-row');
+    const answer = screen.getByText(/POST_TOOL_answer/);
+    // DOM order = stream order: note, then the folded process, then the answer.
+    expect(note.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
   });
 
   it('an interrupt renders outside the fold (AC4)', () => {
@@ -180,17 +206,21 @@ describe('AssistantMessageView — REVIEW round 2', () => {
     expect(screen.getAllByTestId('step-row')).toHaveLength(40);
   });
 
-  it('an expanded segment stays expanded when streaming ends', () => {
-    const th = { type: 'thinking', thinking: 'planning' } as ContentBlock;
-    const view = (c: ContentBlock[], s: boolean) => (
-      <ToastProvider><AssistantMessageView message={msg(c)} isStreaming={s} /></ToastProvider>
-    );
-    // Opened while ONLY thinking has arrived — the first tool must not re-key it.
-    const { rerender } = render(view([th], true));
-    fireEvent.click(screen.getByTestId('process-row'));
-    rerender(view([th, tu('a', 'Running: ls'), tu('b', 'Running: pwd')], true));
-    rerender(view([th, tu('a', 'Running: ls'), tu('b', 'Running: pwd'), tx('done')], false));
-    expect(screen.getAllByTestId('step-row')).toHaveLength(2);
+  it('a segment the user chose to keep open stays open when streaming ends', () => {
+    vi.useFakeTimers();
+    try {
+      const th = { type: 'thinking', thinking: 'planning' } as ContentBlock;
+      // Chosen while ONLY thinking has arrived — the first tool must not re-key it.
+      const { rerender } = render(viewOf([th], true));
+      fireEvent.click(screen.getByTestId('process-row')); // fold
+      fireEvent.click(screen.getByTestId('process-row')); // open again: a choice
+      rerender(viewOf([th, tu('a', 'Running: ls'), tu('b', 'Running: pwd')], true));
+      rerender(viewOf([th, tu('a', 'Running: ls'), tu('b', 'Running: pwd'), tx('done')], false));
+      act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
+      expect(screen.getAllByTestId('step-row')).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('while streaming, a half-arrived next-steps fence never renders', () => {
@@ -206,34 +236,45 @@ describe('AssistantMessageView — Gate-2 fixes', () => {
     expect(screen.getByTestId('process-row').textContent).toMatch(/Thought/);
   });
 
-  it('expanding a long LIVE segment keeps the running step visible', () => {
+  it('a long LIVE segment keeps the running step visible', () => {
     const live = bashRun(20).flatMap((b, i) => (i < 19 ? [b, tr(`t${i}`)] : [b]));
     const { container } = renderView(live, { isStreaming: true });
-    fireEvent.click(screen.getByTestId('process-row'));
     expect(container.querySelector('[data-testid="step-row"] .animate-spin')).not.toBeNull();
   });
 });
 
-describe('AssistantMessageView — live row between steps', () => {
-  it('collapsed live row shows the newest thought as one italic line; expanded, the Thought is open', () => {
+describe('AssistantMessageView — live card between steps', () => {
+  it('the newest thought streams OPEN in the live card; folded by hand, one italic line', () => {
     const th = { type: 'thinking', thinking: 'Read the config first.\nThen compare both thresholds.' } as ContentBlock;
     renderView([tu('a', 'Running: ls'), tr('a'), th], { isStreaming: true });
+    const row = screen.getByTestId('thinking-row');
+    expect(row.dataset.open).toBe('true');
+    expect(screen.getByTestId('thinking-text').textContent).toContain('Read the config first.');
+    expect(row.querySelector('.animate-spin')).not.toBeNull();
+    fireEvent.click(screen.getByTestId('process-row'));
     const line = screen.getByTestId('process-live-thinking');
     expect(line.textContent).toBe('Then compare both thresholds.');
     expect(line.className).toMatch(/italic/);
     expect(line.className).toMatch(/truncate/);
-    fireEvent.click(screen.getByTestId('process-row'));
-    expect(screen.queryByTestId('process-live-thinking')).toBeNull();
-    const details = document.querySelector('details');
-    expect(details?.open).toBe(true);
-    expect(details?.textContent).toContain('Read the config first.');
   });
 
-  it('finished turn: no live thought line, process stays folded', () => {
+  it('finished turn from history: the card is folded, no live line', () => {
     const th = { type: 'thinking', thinking: 'deliberating' } as ContentBlock;
     renderView([th, tu('a', 'Running: ls'), tx('the answer')]);
     expect(screen.queryByTestId('process-live-thinking')).toBeNull();
-    expect(document.querySelector('details')).toBeNull();
+    expect(screen.queryByTestId('process-steps')).toBeNull();
+    expect(screen.getByTestId('process-row').textContent).toMatch(/Worked/);
+    expect(screen.getByTestId('process-row').textContent).toMatch(/1 thought/);
+  });
+
+  it('history: expanding the card shows the thought folded to one line', () => {
+    const th = { type: 'thinking', thinking: 'first line of the thought\nmore' } as ContentBlock;
+    renderView([th, tu('a', 'Running: ls'), tx('the answer')]);
+    fireEvent.click(screen.getByTestId('process-row'));
+    const row = screen.getByTestId('thinking-row');
+    expect(row.dataset.open).toBe('false');
+    expect(row.textContent).toContain('first line of the thought');
+    expect(screen.queryByTestId('thinking-text')).toBeNull();
   });
 
   it('a finished step shows what it returned (outcome), errors in red', () => {
@@ -241,25 +282,87 @@ describe('AssistantMessageView — live row between steps', () => {
       ({ type: 'tool_result', toolUseId: id, content: 'x', isError, truncated: false, outcome }) as ContentBlock;
     renderView([tu('a', 'Running: npm test'), res('a', '12 passed in 3.1s'),
       tu('b', 'Running: make'), res('b', 'make: *** no rule', true), tu('c', 'Running: ls')], { isStreaming: true });
-    fireEvent.click(screen.getByTestId('process-row'));
     const outcomes = screen.getAllByTestId('step-outcome');
     expect(outcomes.map((o) => o.textContent)).toEqual(['12 passed in 3.1s', 'make: *** no rule']);
     expect(outcomes[1].className).toMatch(/text-red-400/);
   });
 
-  it('collapsed live row shows what just finished AND what is running now', () => {
-    renderView([tu('a', 'Running: npm test'), tr('a'), tu('b', 'Running: npm run build')], { isStreaming: true });
-    const live = screen.getByTestId('process-live');
-    expect(screen.getByTestId('process-live-recent').textContent).toContain('npm test');
-    expect(live.textContent).toContain('npm run build');
-    // still folded: the full step list is not rendered
-    expect(screen.getAllByTestId('step-row')).toHaveLength(1);
+  it('after a tool returns and before the next starts, the open card still spins at the bottom', () => {
+    renderView([tu('a', 'Running: ls'), tr('a')], { isStreaming: true });
+    const idle = screen.getByTestId('process-live-idle');
+    expect(idle.querySelector('.animate-spin')).not.toBeNull();
+    expect(idle.textContent).toContain('Thinking');
   });
 
-  it('after a tool returns and before the next starts, the live row still spins', () => {
-    const { container } = renderView([tu('a', 'Running: ls'), tr('a')], { isStreaming: true });
-    const live = screen.getByTestId('process-live');
-    expect(live.querySelector('.animate-spin')).not.toBeNull();
-    expect(container.textContent).toContain('Thinking');
+  it('before any content: one "Thinking" line with a spinner, nothing to expand', () => {
+    renderView([], { isStreaming: true });
+    const row = screen.getByTestId('process-row');
+    expect(row.tagName).toBe('DIV');
+    expect(row.textContent).toContain('Thinking');
+    expect(row.querySelector('.animate-spin')).not.toBeNull();
+  });
+
+  it('adjacent finished reads of one file are ONE row with every range', () => {
+    const rd = (id: string): ContentBlock =>
+      ({ type: 'tool_use', id, name: 'Read', summary: 'Reading /r/src/a.ts', category: 'read' }) as ContentBlock;
+    const res = (id: string, outcome: string) =>
+      ({ type: 'tool_result', toolUseId: id, content: 'x', isError: false, truncated: false, outcome }) as ContentBlock;
+    renderView([rd('a'), res('a', 'lines 1–200'), rd('b'), res('b', 'lines 200–400'), rd('c'), res('c', 'lines 400–480'),
+      tu('d', 'Running: ls')], { isStreaming: true });
+    const rows = screen.getAllByTestId('step-row');
+    expect(rows).toHaveLength(2);
+    expect(screen.getByTestId('step-repeat').textContent).toBe('3×');
+    expect(rows[0].textContent).toContain('lines 1–200, lines 200–400, lines 400–480');
+  });
+});
+
+describe('AssistantMessageView — v6 fold timing (XG 2026-10-17 "延后2秒 再折叠")', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
+  const thoughtOpen = () => screen.getByTestId('thinking-row').dataset.open;
+
+  it('a thought stays open while it streams, and 2s after the next step arrives', () => {
+    const { rerender } = render(viewOf([th('step one')], true));
+    expect(thoughtOpen()).toBe('true');
+    rerender(viewOf([th('step one, then two')], true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
+    expect(thoughtOpen()).toBe('true'); // still the newest item: never folds mid-thought
+    rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls')], true));
+    expect(thoughtOpen()).toBe('true');
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS - 100); });
+    expect(thoughtOpen()).toBe('true');
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(thoughtOpen()).toBe('false');
+    // The card itself is still live, so it stays open.
+    expect(screen.getByTestId('process-steps')).toBeTruthy();
+  });
+
+  it('a reply after the thought: the card folds 2s later (not at once)', () => {
+    const { rerender } = render(viewOf([th('plan the answer')], true));
+    rerender(viewOf([th('plan the answer'), tx('Here is the answer')], true));
+    expect(screen.getByTestId('process-steps')).toBeTruthy();
+    expect(thoughtOpen()).toBe('true');
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    expect(screen.queryByTestId('process-steps')).toBeNull();
+    expect(screen.getByTestId('process-row').textContent).toMatch(/Thought/);
+  });
+
+  it('a thought the user opened again stays open', () => {
+    const { rerender } = render(viewOf([th('one')], true));
+    rerender(viewOf([th('one'), tu('a', 'Running: ls')], true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    expect(thoughtOpen()).toBe('false');
+    fireEvent.click(screen.getByTestId('thinking-row').querySelector('button')!);
+    rerender(viewOf([th('one'), tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd')], true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
+    expect(thoughtOpen()).toBe('true');
+  });
+
+  it('a card the user folded while live stays folded after it finishes', () => {
+    const { rerender } = render(viewOf([tu('a', 'Running: ls')], true));
+    fireEvent.click(screen.getByTestId('process-row'));
+    rerender(viewOf([tu('a', 'Running: ls'), tr('a'), tx('done')], false));
+    expect(screen.queryByTestId('process-steps')).toBeNull();
   });
 });
