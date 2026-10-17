@@ -35,7 +35,7 @@ pipeline 把本该由工具做的机械工作交给了模型：选测试、判�
 4. **文档分层。** 执行卡（每次都读，最多 5K）、参考（按需读）、历史（运行时不读）。大小由 lint 卡住。
 5. **gate 一个不放宽。** 新命令内部调用现有的 validator 和 gate，旧命令保留。
 
-## 4. 五个工作流
+## 4. 六个工作流
 
 ### A. Stage 边界：`stage-start` 和 `stage-complete`
 
@@ -104,14 +104,47 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 ### B. 测试：范围由工具算，归类由工具判
 
-**B1. `backend/scripts/pipeline_test.py`，一次调用完成一层测试**
+**实测：测试问题有两种，碎片化比范围过大更普遍**
+
+| run | 测试调用 | 测试耗时 | 重复最多的目标 |
+|---|---|---|---|
+| `e4fc6ad4` | pytest 23 次 | 10.8 分钟 | `test_app_config_manager.py` 跑了 16 次 |
+| `2cb579ce` | pytest 10 次 | 4.0 分钟 | `test_job_cli_result.py` 8 次 |
+| `b3dd7ed9` | pytest 17 次 + vitest 6 次 | 26.4 分钟 | `test_prompt_builder_thinking_guard.py` 11 次；一次全量依赖 583 秒被杀 |
+| `bfd8b9d3` | vitest 57 次 + tsc/build 12 次 + pytest 6 次 | 43.1 分钟 | `turnView.test.ts` 35 次 |
+| `48d377ec` | pytest 58 次 | 58.3 分钟 | `test_output_degeneration.py` 34 次；追 hang 的 ps/kill/faulthandler 31 次，48 分钟 |
+
+5 个 run 合计：pytest 114 次（98 分钟），前端测试和构建 80 次（45 分钟），一半以上的调用只针对 1 个文件。范围过大只是少数几次，但每次很长；碎片化是几十次小调用，每次都要付约 10 秒的模型往返，再加 pytest 启动开销。
+
+**测试准则（由 runner 和 gate 强制执行，不靠文档提醒）**
+
+1. **只有一个入口。** pipeline 运行期间，所有测试类命令（pytest、vitest、tsc、eslint、vite build）都只能通过 `pipeline_test.py` 执行。
+2. **范围由模式决定，不由模型列文件。** 一共 4 种模式，没有全量模式：
+
+   | 模式 | 用在哪 | 范围 |
+   |---|---|---|
+   | `tdd` | BUILD 的 RED/GREEN 循环 | 显式列出的测试文件，最多 5 个 |
+   | `verify` | BUILD 结束 | 本次改动的测试 + 直接 import 了改动模块的测试 |
+   | `regression` | TEST 阶段 | L1（ac_coverage 声明的测试）+ L2（依赖范围，最多 40 个文件）+ L3（import smoke），一次调用全部跑完 |
+   | `recheck` | 修复之后（TEST、DELIVER） | 上次失败的测试 + 受本次修改影响的测试 |
+
+3. **没变就不重跑。** runner 以"测试文件 + 它 import 的源文件"的内容摘要作为缓存键。输入没变时直接返回上次结果，标记为 `cached`，耗时为 0。
+4. **一个模式一次调用跑完。** 内部按文件分片并行，不需要也不允许拆成多次调用。
+5. **与本次改动无关的失败不在现场排查。** 基线（B2）判定为 pre-existing 的失败，记入 Known Issues 后继续，不修也不调试。
+6. **hang 由工具报告。** 超时的测试自动附带栈信息，模型不需要也不应该手工 `ps`、`kill`、`faulthandler`、`sleep` 轮询。
+7. **迭代次数可见，但不阻断。** `tdd` 模式下同一文件超过 8 次时，输出里给出提醒（"先把修改攒齐再跑"），并把次数记入 METRICS。不用硬性上限，因为 TDD 迭代本身是正当的，而 XG 的原则是不要无端停下 run。
+8. **结果直接进 artifact。** TEST 阶段的 `layers`、`regressions`、`ac_driven.pass` 由 runner 的 evidence 自动填，不由模型手抄。
+
+**B1. `backend/scripts/pipeline_test.py`**
 
 ```bash
 perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py \
-  --project <P> --run-id <R> --layer l2
+  --project <P> --run-id <R> --mode regression
+perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py \
+  --project <P> --run-id <R> --mode tdd --files backend/tests/test_x.py desktop/src/x.test.ts
 ```
 
-调用形状：pytest 不出现在命令词的位置，同时保留 perl-alarm 外层上限；runner 前台运行，不使用 `&`。这样两个现有 gate 都不会误拦。
+调用形状：pytest 不出现在命令词的位置，同时保留 perl-alarm 外层上限；runner 前台运行，不使用 `&`。这样两个现有 gate 都不会误拦。前端和后端由同一个 runner 处理：后端走 pytest，前端走 `vitest related` 和 tsc，tsc 和 build 同样按前端源码摘要缓存。多个并行 run 共用一个全局 flock 信号量，避免同时跑测试把内存打满。
 
 **选测试**
 - 改动文件 = run.json 的 `files_touched` ∪ `git diff HEAD` ∪ 未跟踪文件。
@@ -139,12 +172,16 @@ perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipelin
 - 同一个 HEAD 的基线缓存可以跨 run 复用。
 - conftest 的 venv 守卫在 worktree 里不会误触发，因为 worktree 里没有 `backend/.venv` 目录，守卫的 `isdir` 判断为假直接跳过。实现时要实测确认。
 
-**B3. 结构性 gate，防止旧习惯回潮**
-- 新 gate：`pipeline_scope_guard`（PreToolUse，Bash），只在有活跃 pipeline run 时生效。
-  - 一条 pytest 命令带超过 8 个测试文件，或用 `$(cat 列表文件)` 展开，就 deny，并在消息里给出可以直接复制的 `pipeline_test.py` 命令。
-  - 活跃 run 期间对 backend 做 `git archive`、`rsync`、`cp -r` 导出，deny 并指向 B2。
-- BUILD 里 TDD 的单文件、少量文件 pytest 不受影响。
+**B3. 结构性 gate：`pipeline_test_gate`（PreToolUse，Bash）**
+- **生效条件**：当前 session 有一个 `status=running` 的 run（用 E1 记录在 run.json 里的 `session_id` 判断）。不在 pipeline 里的普通对话完全不受影响。
+- **拦截内容**：
+  - 直接调用 pytest、vitest、tsc、eslint、vite build、`npm run build`、`npm test`；
+  - 对 backend 做 `git archive`、`rsync`、`cp -r`、`git worktree add` 导出副本；
+  - 手工 hang 排查（对 pytest 进程的 `ps`/`kill`，`python -X faulthandler`）。
+- **deny 消息**：给出对应模式下可以直接复制的 `pipeline_test.py` 命令，不让模型自己去找替代办法。
+- **兜底**：设置 `SWARM_TEST_GATE_FORCE=1` 可以放行，并记日志，与 `SWARM_ADVERSARIAL_GATE_FORCE` 的做法一致，防止 runner 自身的 bug 卡死 run。
 - 按 AGENTS.md 的规定，新 gate 要在 `hook_builder.py` 注册，并更新 Security Architecture 列表。
+- 这条 gate 取代原方案里"超过 8 个文件才拦"的设计。原设计只能防范围过大，防不了碎片化；碎片化的根因是每次修改都单独跑一次测试，只有统一入口加缓存才能消掉。
 
 **B4. 顺手消除文档与代码的矛盾**
 - INSTRUCTIONS.md:1276 写"pytest `| tail -5`"，与 R9 guard 冲突。
@@ -268,6 +305,50 @@ run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK
 - REPORT 的 `原始意图` 改用 `run.json.intent`（用户原话）。`requirement` 作为"最终需求描述"另列。
 - REPORT 头部的 Tokens 改用 E1 的实测值；旧 run 仍显示估算值并标注"估算"。
 
+### F. 全流程：机械工作一律由工具做
+
+原则：凡是能写成确定步骤的事，都由代码执行；模型只做判断和写内容。
+
+**F1. 实测：模型手工做的机械工作（5 个 run 合计，Bash 调用）**
+
+| 机械工作 | 调用次数 | 执行耗时 | 改由谁做 |
+|---|---|---|---|
+| 跑 pytest | 114 | 97.9 分钟 | B：`pipeline_test.py` 四种模式 + 缓存 |
+| 拼 stage JSON（写 `/tmp/*.py`、`--stage-json`） | 113 | 17.6 分钟 | A：`stage-complete`，派生字段由工具填（见 F2） |
+| publish / run-update / advance | 91 | 5.8 分钟 | A：合成 `stage-complete` 一条 |
+| 计算改动范围（`git diff`、`ls-files`、`--stat`、BASE_REF、DIFF_LINES） | 80 | 13.6 分钟 | `stage-start` 直接返回：改动文件（区分新增和修改）、增删行数、是否触发大 diff 升级为 full tier |
+| 前端测试和构建（vitest、tsc、eslint、build） | 80 | 45.5 分钟 | B：同一个 runner，按前端源码摘要缓存 |
+| 读 `artifact_cli` / validator 源码 | 47 | 3.0 分钟 | A3：结构化报错 |
+| `git add`、暂存检查、清掉别的 session 暂存的文件 | 42 | 3.7 分钟 | `stage-start --stage deliver` 自动暂存本 run 的 `files_touched`（只动 index），并列出不属于本 run 的已暂存文件 |
+| ps / kill / faulthandler / sleep 轮询 | 33 | 48.5 分钟 | B：runner 报告 hang 栈，gate 拦手工排查 |
+| schema / run-get / discover 查询 | 26 | 1.3 分钟 | A2：`stage-start` 一次返回 |
+| git commit / 自写 commit 脚本 | 19 | 0.8 分钟 | `run-commit` 作为唯一提交通道；commit gate 的 deny 消息直接给出 `run-commit` 命令 |
+| run-report / run-cultivate / learn | 15 | 2.1 分钟 | reflect 阶段的 `stage-complete` 自动执行 |
+| 导出代码副本做基线 | 10 | 3.3 分钟 | B2：HEAD 基线缓存 |
+| run-observe 遥测 | 8 | 0.7 分钟 | `stage-start` / `stage-complete` 自动记录阶段起止时间 |
+| spawn_prompt 生成专家 prompt | 8 | 0.1 分钟 | `stage-start --stage review/deliver` 直接返回本次要派的专家清单，以及每位专家已填好的 prompt（EXPERT_ID、文件列表、项目知识） |
+| wtf_gate | 2 | 0.9 分钟 | `stage-complete --stage test` 从 `files_touched` 和修复次数自动计算 |
+
+**F2. 派生字段一律由工具计算，模型不再声明**
+
+| 字段 | 计算依据 |
+|---|---|
+| `token_cost` | 该阶段起止时间窗内 `token_usage` 的实测值。删掉 INSTRUCTIONS 里让模型估算的公式。 |
+| `stage_doc_consumed`、`consumed_artifacts`、`artifact_id`、`outputs_surfaced` | `stage-complete` 自动填。`consumed_artifacts` 按 STAGE_ROUTING 取上游 artifact id。 |
+| `files_changed`、`diff_summary`、`commits` | git |
+| `tdd.*` 计数、`layers.*`、`regressions`、`ac_driven.pass` | runner 的 evidence |
+| `findings_total`、`findings_fixed`、`findings_remaining` | 由模型给出的 `findings[]` 计数得出 |
+| 专家派遣清单（tier 默认 ∪ `required_experts` ∪ 按文件规则触发的专家，大 diff 自动升级） | `stage-start` 按 deliver.md 里现有的派遣表计算 |
+| `push_ready` | 由各项 gate 结果计算：测试通过、没有未解决的 HIGH 和高置信度 MEDIUM、completion audit 全绿、没有回归、meta-review 没有 HIGH。模型不再自己声明 push-ready。 |
+
+**F3. 留给模型的只有判断**
+
+understanding 和 claim、方案选择、AC 的写法、写代码、决策分类、review 发现的取舍和修复、meta-review、lessons、next steps。
+
+**F4. 防止机械工作回流到模型**
+- C4 的 lint 再加一条：执行卡里的代码块只允许出现 pipeline 自己的命令（`artifact_cli.py`、`pipeline_test.py`、`spawn_prompt.py`）。出现多行 shell 配方（例如现在 deliver.md 里计算 BASE_REF 和 DIFF_LINES 的那段），就说明有机械工作还留在文档里，必须先改成工具。
+- D 的度量工具把"机械工作调用数"作为一项固定指标。现在 5 个 run 里这几类调用分别是 51、28、42、123、159 次，占 Bash 调用的 59% 到 67%。改完后每个 run 应该只剩：每个 stage 的 `stage-start` 和 `stage-complete`（8 个 stage 共 16 次）、`verify`/`regression`/`recheck` 约 4 次、`tdd` 约 10 次，合计不超过 30 次。
+
 ## 5. 验收指标
 
 | 指标 | 现在（实测） | 目标 |
@@ -280,6 +361,9 @@ run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK
 | 峰值上下文 | 63 万到 90 万 token | 不超过 45 万 token |
 | bugfix / full 总时长 | 21 到 147 / 54 到 110 分钟 | bugfix 不超过 40 分钟，full 不超过 70 分钟 |
 
+| 模型手工做的机械工作（F1 各类合计） | 每个 run 28 到 159 次 | 不超过 30 次，且基本都是 pipeline 自己的命令 |
+| 每个 run 的测试类调用 | 10 到 75 次；同一文件最多重复 35 次 | 不超过 15 次；输入没变的重跑命中缓存 |
+| 手工排查 hang | `48d377ec` 31 次调用、48 分钟 | 0（runner 报告栈信息，gate 拦手工排查） |
 | 完成摘要里的 token 花费 | 模型估算（例如 635,000） | 来自 `token_usage` 的实测值，含美元 |
 | 完成摘要可点击的文件 | 0（整块在代码块里） | 所有改动文件和 REPORT.md 都能点开；修改过的文件打开即是 diff |
 | 完成摘要的生成方式 | 模型按模板手写 | CLI 渲染，模型原样转发，只补 next steps |
@@ -296,6 +380,8 @@ Phase 1" E 交付摘要（和 A 放在同一次 run：都改 artifact_cli.py 的
 Phase 2  C 文档三层化 + 规则保全检查 + 大小 lint（依赖 A、B、E 的新命令）
 ```
 
+F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动暂存、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。
+
 E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完成分支返回 `_display_block`、新增 `run-summary`）、`prompt_builder.py`（注入 `SWARM_APP_SESSION_ID`）、`MarkdownRenderer.tsx`（`#base=` 片段）、`stages/complete.md`（改为原样转发）。
 
 每个 phase 走一次 pipeline run（full profile）。A 和 B 可以在两个 tab 里并行：A 改的是 `artifact_cli.py`、`pipeline_validator.py`，B 改的是新脚本、`security_hooks.py`、`hook_builder.py`，文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。
@@ -310,6 +396,9 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 | 基线 worktree 和真实环境有差异 | 只用来判断失败测试的归属，不用来宣告通过；复用同一个 venv；缓存按 sha 作键。 |
 | 新的 scope gate 误拦 TDD | 只在有活跃 run、且超过 8 个文件时拦；deny 消息给出可直接执行的替代命令。 |
 | 兄弟 skill 依赖旧命令 | 旧命令全部保留；`test_advance_continuation` 的兄弟 skill 契约不变。 |
+| 测试 gate 在 runner 出 bug 时卡死整个 run | `SWARM_TEST_GATE_FORCE=1` 可以放行并记日志；runner 自身有一套独立测试，作为 B 的验收条件之一。 |
+| 工具计算的 `push_ready` 与模型判断不一致 | 工具算出的是上限：工具算出 false 时模型不能改成 true；工具算出 true 时，模型仍然可以带着理由改成 false。 |
+| 缓存命中掩盖了环境变化（依赖升级、conftest 改动） | 缓存键里加入 `conftest.py`、`pyproject.toml`、`package-lock.json` 和 venv 的摘要。 |
 
 ## 8. 受影响的测试（需要同步更新）
 
