@@ -54,6 +54,11 @@ export interface SettingsConfig extends Record<string, unknown> {
   bedrockModelMap: Record<string, string>;
   thinkingMode: 'adaptive' | 'enabled' | 'disabled';
   thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  // Derived, read-only (computed by the backend for defaultModel — never sent
+  // back): the thinking modes the default model accepts, and the mode it actually
+  // runs with. Optional: absent on an older backend.
+  readonly supportedThinkingModes?: Array<'adaptive' | 'enabled' | 'disabled'>;
+  readonly effectiveThinkingMode?: 'adaptive' | 'enabled' | 'disabled';
   anthropicBaseUrl: string | null;
   readonly awsCredentialsConfigured: boolean;
   readonly anthropicApiKeyConfigured: boolean;

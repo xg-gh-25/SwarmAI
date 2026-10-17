@@ -347,9 +347,11 @@ def supports_disabled_thinking(model: str | None) -> bool:
     treated as supporting a disabled thinking mode — the historical default — so
     this never down-grades a model that genuinely accepts ``disabled``.
 
-    Consumed by ``prompt_builder.build_options`` to down-grade a configured
-    ``disabled``/``enabled`` thinking mode to ``adaptive`` for a model that
-    rejects it, rather than letting the request fail on the wire.
+    The single family rule behind :func:`supported_thinking_modes` /
+    :func:`effective_thinking_mode`, which ``prompt_builder.build_options`` (the
+    wire) and ``/api/settings`` (the Settings UI) both use, so a configured
+    ``disabled``/``enabled`` mode is run as ``adaptive`` on a model that rejects
+    it rather than failing on the wire.
 
     Args:
         model: Short name, full Bedrock ID, or ``None``.
@@ -361,6 +363,33 @@ def supports_disabled_thinking(model: str | None) -> bool:
     if version is None:
         return True
     return version < _MIN_OPUS_REJECTING_DISABLED_THINKING
+
+
+THINKING_MODES: tuple[str, ...] = ("adaptive", "enabled", "disabled")
+
+
+def supported_thinking_modes(model: str | None) -> list[str]:
+    """Thinking modes ``model`` accepts on the wire.
+
+    Opus >= 5 accepts only ``adaptive`` (``disabled``/``enabled`` 400); every
+    other model accepts all three. Derived from :func:`supports_disabled_thinking`
+    so there is exactly one rule. Exposed to the Settings UI via /api/settings.
+    """
+    return list(THINKING_MODES) if supports_disabled_thinking(model) else ["adaptive"]
+
+
+def effective_thinking_mode(stored: str | None, model: str | None) -> str:
+    """The thinking mode a session on ``model`` actually runs with.
+
+    The stored mode when the model accepts it; ``adaptive`` when it does not.
+    With no resolved model the stored mode is returned unchanged — never guess.
+    The stored value itself is never rewritten: switching back to a model that
+    accepts it makes it effective again.
+    """
+    mode = stored if stored in THINKING_MODES else "adaptive"
+    if not model:
+        return mode
+    return mode if mode in supported_thinking_modes(model) else "adaptive"
 
 
 def context_window_for(model: str | None) -> int:

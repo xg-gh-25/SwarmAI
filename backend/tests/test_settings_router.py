@@ -36,7 +36,9 @@ _EXPECTED_CONFIG_KEYS = {
     k for k in DEFAULT_CONFIG if k not in SECRET_KEYS
 }
 _CREDENTIAL_STATUS_KEYS = {"aws_credentials_configured", "anthropic_api_key_configured"}
-_ALL_EXPECTED_KEYS = _EXPECTED_CONFIG_KEYS | _CREDENTIAL_STATUS_KEYS
+# Derived, read-only fields computed from default_model (model_registry):
+_DERIVED_THINKING_KEYS = {"supported_thinking_modes", "effective_thinking_mode"}
+_ALL_EXPECTED_KEYS = _EXPECTED_CONFIG_KEYS | _CREDENTIAL_STATUS_KEYS | _DERIVED_THINKING_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -481,3 +483,25 @@ class TestEmptyAvailableModelsCannotBeBypassed:
             "co-sending default_model must not bypass the empty-list guard, "
             f"got {resp.status_code}: {resp.text}"
         )
+
+
+class TestEffectiveThinkingModeExposed:
+    """GET/PUT expose which thinking modes the DEFAULT model accepts and the mode
+    it actually runs with; the stored value is never rewritten."""
+
+    def test_get_reports_supported_and_effective_for_opus_5_5(self, client, _isolated_config):
+        client.put("/api/settings", json={"default_model": "claude-opus-5-5", "thinking_mode": "disabled"})
+        body = client.get("/api/settings").json()
+        assert body["supported_thinking_modes"] == ["adaptive"]
+        assert body["effective_thinking_mode"] == "adaptive"
+        assert body["thinking_mode"] == "disabled", "stored value must not be rewritten"
+
+    def test_put_response_tracks_default_model_change(self, client):
+        client.put("/api/settings", json={"thinking_mode": "disabled"})
+        body = client.put("/api/settings", json={"default_model": "claude-opus-4-8"}).json()
+        assert body["supported_thinking_modes"] == ["adaptive", "enabled", "disabled"]
+        assert body["effective_thinking_mode"] == "disabled"
+
+    def test_derived_fields_are_not_writable(self, client):
+        client.put("/api/settings", json={"default_model": "claude-opus-5-5", "effective_thinking_mode": "disabled"})
+        assert client.get("/api/settings").json()["effective_thinking_mode"] == "adaptive"

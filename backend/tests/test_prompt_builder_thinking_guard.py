@@ -85,3 +85,89 @@ class TestThinkingGuard:
         b = _builder()
         cfg = {"type": "disabled"}
         assert b._guard_thinking_for_model(cfg, None) == {"type": "disabled"}
+
+
+class TestEffectiveThinkingMode:
+    """ONE rule decides the thinking mode a model actually runs with; thinking
+    config, effort and display all follow it (a downgraded session must be a
+    normal adaptive session, not one with effort/display silently dropped)."""
+
+    def test_registry_supported_and_effective_modes(self):
+        from model_registry import effective_thinking_mode, supported_thinking_modes
+
+        assert supported_thinking_modes("claude-opus-5-5") == ["adaptive"]
+        assert supported_thinking_modes("us.anthropic.claude-opus-5-5[1m]") == ["adaptive"]
+        assert supported_thinking_modes("claude-opus-4-8") == ["adaptive", "enabled", "disabled"]
+        assert effective_thinking_mode("disabled", "claude-opus-5-5") == "adaptive"
+        assert effective_thinking_mode("enabled", "claude-opus-5-5") == "adaptive"
+        assert effective_thinking_mode("disabled", "claude-opus-4-8") == "disabled"
+        assert effective_thinking_mode("disabled", None) == "disabled", "unresolved model: do not guess"
+        assert effective_thinking_mode(None, "claude-opus-5-5") == "adaptive"
+
+    def test_downgraded_session_keeps_effort_and_display(self):
+        pb = PromptBuilder({"thinking_mode": "disabled", "thinking_effort": "max"})
+        effective = "adaptive"  # what opus-5-5 runs with
+        assert pb._build_effort(channel_context=None, effective_mode=effective) == "max"
+        assert pb._build_thinking_display(channel_context=None, effective_mode=effective) == "summarized"
+
+    def test_model_that_accepts_disabled_is_unchanged(self):
+        pb = PromptBuilder({"thinking_mode": "disabled", "thinking_effort": "max"})
+        assert pb._build_effort(channel_context=None, effective_mode="disabled") is None
+        assert pb._build_thinking_display(channel_context=None, effective_mode="disabled") is None
+
+    def test_guard_agrees_with_registry_rule(self):
+        from model_registry import effective_thinking_mode
+
+        b = _builder()
+        for model in ("claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-4-6"):
+            for mode in ("disabled", "enabled"):
+                cfg = {"type": mode, **({"budget_tokens": 1000} if mode == "enabled" else {})}
+                assert b._guard_thinking_for_model(cfg, model)["type"] == effective_thinking_mode(mode, model)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model,thinking,effort,display", [
+        ("claude-opus-5-5", {"type": "adaptive"}, "max", "summarized"),
+        ("claude-opus-4-8", {"type": "disabled"}, None, None),
+    ])
+    async def test_build_options_runs_the_effective_mode(self, model, thinking, effort, display):
+        """Drive the real build_options: thinking, effort and --thinking-display
+        must all follow the mode the model actually runs with."""
+        cfg = MagicMock()
+        values = {"thinking_mode": "disabled", "thinking_effort": "max"}
+        cfg.get = MagicMock(side_effect=lambda k, d=None: values.get(k, d))
+        cfg.get_model = MagicMock(return_value=model)
+        pb = PromptBuilder(cfg)
+        options = await pb.build_options(
+            agent_config={"model": model},
+            enable_skills=False, enable_mcp=False, resume_session_id=None,
+            session_context={"sdk_session_id": "sid"}, channel_context=None,
+            editor_context=None, terminal_context=None,
+            cached_system_prompt="CACHED",
+        )
+        assert options.thinking == thinking
+        assert options.effort == effort
+        assert options.extra_args.get("thinking-display") == display
+
+
+@pytest.mark.asyncio
+async def test_arn_mapped_model_is_judged_by_its_name():
+    """A bedrock_model_map value can be a custom ARN with no family version; the
+    thinking rule must judge the model by its NAME, or a stored 'disabled'
+    would be sent to opus-5-5 and 400."""
+    values = {
+        "thinking_mode": "disabled", "thinking_effort": "high", "use_bedrock": True,
+        "default_model": "claude-opus-5-5",
+        "bedrock_model_map": {
+            "claude-opus-5-5": "arn:aws:bedrock:us-east-1:123:application-inference-profile/abc",
+        },
+    }
+    cfg = MagicMock()
+    cfg.get = MagicMock(side_effect=lambda k, d=None: values.get(k, d))
+    pb = PromptBuilder(cfg)
+    options = await pb.build_options(
+        agent_config={}, enable_skills=False, enable_mcp=False, resume_session_id=None,
+        session_context={"sdk_session_id": "sid"}, channel_context=None,
+        editor_context=None, terminal_context=None, cached_system_prompt="CACHED",
+    )
+    assert options.thinking == {"type": "adaptive"}
+    assert options.effort == "high"

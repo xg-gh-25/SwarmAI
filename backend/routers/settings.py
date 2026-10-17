@@ -20,7 +20,13 @@ from fastapi import APIRouter, HTTPException, Request
 
 from config import get_app_data_dir
 from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG, SECRET_KEYS
-from model_registry import DEFAULT_JUDGE_MODEL, MODEL_NAMES, resolve_bedrock_id
+from model_registry import (
+    DEFAULT_JUDGE_MODEL,
+    MODEL_NAMES,
+    effective_thinking_mode,
+    resolve_bedrock_id,
+    supported_thinking_modes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +219,15 @@ def _build_config_response(cfg: AppConfigManager) -> dict:
     }
     clean["aws_credentials_configured"] = _probe_aws_credentials()
     clean["anthropic_api_key_configured"] = _probe_anthropic_api_key()
+    # Derived, read-only: what the DEFAULT model accepts and the mode it actually
+    # runs with (model_registry is the one rule). Not in DEFAULT_CONFIG, so not in
+    # WRITABLE_KEYS — a PUT carrying them is silently ignored. The stored
+    # thinking_mode is reported unchanged alongside.
+    default_model = clean.get("default_model")
+    clean["supported_thinking_modes"] = supported_thinking_modes(default_model)
+    clean["effective_thinking_mode"] = effective_thinking_mode(
+        clean.get("thinking_mode"), default_model
+    )
     return clean
 
 

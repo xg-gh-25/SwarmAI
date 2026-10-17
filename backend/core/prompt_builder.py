@@ -47,7 +47,7 @@ from core.ddd_paths import ddd_path
 from model_registry import (
     context_window_for,
     is_large_context_model,
-    supports_disabled_thinking,
+    effective_thinking_mode,
 )
 
 if TYPE_CHECKING:
@@ -1733,14 +1733,19 @@ class PromptBuilder:
             # Default: adaptive — model decides when thinking is useful
             return {"type": "adaptive"}
 
-    def _build_effort(self, channel_context: dict | None = None) -> str | None:
+    def _build_effort(
+        self, channel_context: dict | None = None, effective_mode: str | None = None
+    ) -> str | None:
         """Resolve the ``effort`` level for thinking depth.
 
         Reads ``thinking_effort`` from config.json.  Valid values:
         ``"low"``, ``"medium"``, ``"high"`` (default), ``"xhigh"``, ``"max"``.
 
         Returns the effort string, or ``None`` if thinking is disabled
-        (effort is meaningless without thinking).
+        (effort is meaningless without thinking). "Disabled" is judged on
+        ``effective_mode`` when given — the mode the session's model actually
+        runs with (``model_registry.effective_thinking_mode``) — so a stored
+        "disabled" that an opus>=5 model runs as adaptive still gets its effort.
 
         ``channel_context`` is accepted for call-site symmetry with
         :meth:`_build_thinking_config`. Effort stays meaningful for channel
@@ -1756,8 +1761,11 @@ class PromptBuilder:
 
         # If thinking is disabled, effort is irrelevant — for ALL session types.
         # (Channel forces adaptive, never disabled, so this only trips when the
-        # operator globally disabled thinking.)
-        if self._config.get("thinking_mode") == "disabled":
+        # operator globally disabled thinking.) ``effective_mode`` is the mode the
+        # session's model actually runs with: a stored "disabled" on a model that
+        # only accepts adaptive is NOT disabled, so effort still applies.
+        mode = effective_mode if effective_mode is not None else self._config.get("thinking_mode")
+        if mode == "disabled":
             return None
 
         effort = self._config.get("thinking_effort", "high")
@@ -1773,6 +1781,13 @@ class PromptBuilder:
 
         return effort
 
+    def _effective_thinking_mode_for(self, model: str | None) -> str | None:
+        """The thinking mode a session on ``model`` actually runs with, or None
+        when there is no config (callers then fall back to their defaults)."""
+        if self._config is None:
+            return None
+        return effective_thinking_mode(self._config.get("thinking_mode"), model)
+
     def _guard_thinking_for_model(
         self, thinking_config: dict | None, model: str | None
     ) -> dict | None:
@@ -1786,7 +1801,8 @@ class PromptBuilder:
         build_options call site (where the resolved ``model`` is already in
         scope) and rewrites such a config to adaptive BEFORE it reaches the wire.
 
-        Scoped by ``model_registry.supports_disabled_thinking`` — a family
+        Scoped by ``model_registry.effective_thinking_mode`` (built on the
+        ``supports_disabled_thinking`` family predicate) — a family
         predicate, not an allowlist — so it fires ONLY for a model that actually
         rejects the mode (opus>=5) and never false-trips opus-4-8 / sonnet / an
         unrecognized model, nor an already-adaptive config.
@@ -1810,9 +1826,10 @@ class PromptBuilder:
         """
         if thinking_config is None or not model:
             return thinking_config
-        if supports_disabled_thinking(model):
-            return thinking_config
-        if thinking_config.get("type") in ("disabled", "enabled"):
+        # One rule (model_registry.effective_thinking_mode): a disabled/enabled
+        # mode the model does not accept runs as adaptive.
+        mode = thinking_config.get("type")
+        if mode in ("disabled", "enabled") and effective_thinking_mode(mode, model) != mode:
             logger.info(
                 "thinking_mode %r rejected by model %s (opus>=5 is adaptive-only) "
                 "— downgrading to adaptive",
@@ -1822,7 +1839,9 @@ class PromptBuilder:
             return {"type": "adaptive"}
         return thinking_config
 
-    def _build_thinking_display(self, channel_context: dict | None = None) -> str | None:
+    def _build_thinking_display(
+        self, channel_context: dict | None = None, effective_mode: str | None = None
+    ) -> str | None:
         """Resolve the thinking ``display`` mode → CLI ``--thinking-display`` flag.
 
         Opus 4.8 silently changed the thinking ``display`` default from
@@ -1858,7 +1877,9 @@ class PromptBuilder:
         Returns ``"summarized"`` for desktop sessions with thinking active, or
         ``None`` when no flag should be emitted:
 
-        - ``None`` if thinking is globally ``disabled`` — no thinking, no display.
+        - ``None`` if thinking is ``disabled`` for this session — judged on
+          ``effective_mode`` when given (a stored "disabled" that the model runs
+          as adaptive is NOT disabled) — no thinking, no display.
         - ``None`` for channel sessions — zero-streaming human-like delivery
           (the thinking summary is never rendered to Slack), and channels
           already force adaptive + cap effort. Mirrors :meth:`_build_effort`'s
@@ -1872,8 +1893,10 @@ class PromptBuilder:
         if self._config is None:
             return "summarized"
 
-        # No thinking → no display to show.
-        if self._config.get("thinking_mode") == "disabled":
+        # No thinking → no display to show (judged on the mode the model actually
+        # runs with — see _build_effort).
+        mode = effective_mode if effective_mode is not None else self._config.get("thinking_mode")
+        if mode == "disabled":
             return None
 
         # Channel sessions skip display: zero-streaming delivery never renders
@@ -2221,15 +2244,30 @@ class PromptBuilder:
         thinking_config = self._build_thinking_config(channel_context=channel_context)
         # Opus 5+ 400s on a disabled/enabled thinking mode — down-grade a stale
         # config to adaptive here, where the resolved `model` (above) is in scope.
-        thinking_config = self._guard_thinking_for_model(thinking_config, model)
-        effort = self._build_effort(channel_context=channel_context)
+        # Judge thinking support on the model's NAME before Bedrock translation:
+        # a bedrock_model_map value can be a custom ARN that carries no family
+        # version, which would read as "accepts disabled" and 400 on the wire.
+        # Same name /api/settings judges the default model by.
+        rule_model = (
+            agent_config.get("model")
+            or (self._config.get("default_model") if self._config is not None else None)
+            or model
+        )
+        thinking_config = self._guard_thinking_for_model(thinking_config, rule_model)
+        # Effort + display follow the mode the session actually runs with, so a
+        # downgraded stored "disabled" is a normal adaptive session (with effort
+        # and --thinking-display), not a degraded one.
+        effective_mode = self._effective_thinking_mode_for(rule_model)
+        effort = self._build_effort(channel_context=channel_context, effective_mode=effective_mode)
 
         # Thinking display: Opus 4.8 defaults display to "omitted" (empty thinking
         # blocks → "Thinking…" spinner with no content). Restore the summary via the
         # CLI flag. Carried in extra_args (rendered as `--<key> <value>`), NOT in
         # thinking_config — version-robust across SDK builds that drop unknown
         # thinking-dict subfields (PIT59). Key is dash-free; SDK prepends `--`.
-        thinking_display = self._build_thinking_display(channel_context=channel_context)
+        thinking_display = self._build_thinking_display(
+            channel_context=channel_context, effective_mode=effective_mode
+        )
         if thinking_display is not None:
             extra_args["thinking-display"] = thinking_display
 

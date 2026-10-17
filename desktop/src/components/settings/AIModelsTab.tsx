@@ -8,9 +8,15 @@ import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { settingsService } from '../../services/settings';
-import type { BedrockModel } from '../../services/settings';
+import type { BedrockModel, SettingsConfig } from '../../services/settings';
 import { Dropdown } from '../common';
 import AuthConfigPanel from './AuthConfigPanel';
+
+const THINKING_MODE_OPTIONS = [
+  { id: 'adaptive', name: 'Adaptive', description: 'Model decides when to think deeply' },
+  { id: 'enabled', name: 'Enabled', description: 'Always use extended thinking' },
+  { id: 'disabled', name: 'Disabled', description: 'Never use extended thinking' },
+];
 
 export default function AIModelsTab() {
   const { t } = useTranslation();
@@ -28,12 +34,36 @@ export default function AIModelsTab() {
   const [defaultModel, setDefaultModel] = useState<string>('');
   const [newModelId, setNewModelId] = useState('');
   const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
+  // What the DEFAULT model accepts + the mode it actually runs with — computed by
+  // the backend (model_registry, the one rule). Null when an older backend omits
+  // them: then all three modes are offered and the stored mode is shown.
+  const [supportedThinkingModes, setSupportedThinkingModes] = useState<string[] | null>(null);
+  const [effectiveThinkingMode, setEffectiveThinkingMode] = useState<string | null>(null);
   const [thinkingEffort, setThinkingEffort] = useState<string>('high');
   // Full current short→bedrock-id map — kept so a Bedrock-discovered model is
   // MERGED into it (never a partial PUT that would clobber existing entries).
   const [bedrockModelMap, setBedrockModelMap] = useState<Record<string, string>>({});
   const [discovered, setDiscovered] = useState<BedrockModel[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
+
+  // Every settings response carries the thinking fields for the CURRENT default
+  // model, so apply them after ANY load/PUT — a default-model change can change
+  // which thinking modes are valid.
+  const applyThinking = (config: SettingsConfig) => {
+    setThinkingMode(config.thinkingMode || 'adaptive');
+    setSupportedThinkingModes(config.supportedThinkingModes ?? null);
+    setEffectiveThinkingMode(config.effectiveThinkingMode ?? null);
+  };
+
+  const supportedOptions = supportedThinkingModes
+    ? THINKING_MODE_OPTIONS.filter((o) => supportedThinkingModes.includes(o.id))
+    : [];
+  // Never render an empty picker (an unexpected payload falls back to all modes).
+  const thinkingModeOptions = supportedOptions.length ? supportedOptions : THINKING_MODE_OPTIONS;
+  const shownThinkingMode = effectiveThinkingMode ?? thinkingMode;
+  const storedModeIsKnown = THINKING_MODE_OPTIONS.some((o) => o.id === thinkingMode);
+  const storedModeName = THINKING_MODE_OPTIONS.find((o) => o.id === thinkingMode)?.name ?? thinkingMode;
+  const shownModeName = THINKING_MODE_OPTIONS.find((o) => o.id === shownThinkingMode)?.name ?? shownThinkingMode;
 
   const modelOptions = useMemo(() => availableModels.map(id => ({
     id,
@@ -46,7 +76,7 @@ export default function AIModelsTab() {
       .then((config) => {
         setAvailableModels(config.availableModels || []);
         setDefaultModel(config.defaultModel || '');
-        setThinkingMode(config.thinkingMode || 'adaptive');
+        applyThinking(config);
         setThinkingEffort(config.thinkingEffort || 'high');
         setBedrockModelMap(config.bedrockModelMap || {});
       })
@@ -109,6 +139,7 @@ export default function AIModelsTab() {
       });
       setAvailableModels(config.availableModels || []);
       setDefaultModel(config.defaultModel || '');
+      applyThinking(config);
       setBedrockModelMap(config.bedrockModelMap || mergedMap);
       setDiscovered((prev) =>
         prev ? prev.map((m) => (m.shortName === model.shortName ? { ...m, isNew: false } : m)) : prev,
@@ -128,6 +159,7 @@ export default function AIModelsTab() {
       });
       setAvailableModels(config.availableModels || []);
       setDefaultModel(config.defaultModel || '');
+      applyThinking(config);
       queryClient.invalidateQueries({ queryKey: ['apiConfig'] });
       setMessage({ type: 'success', text: t('common.message.saveSuccess') });
     } catch (error) {
@@ -174,24 +206,27 @@ export default function AIModelsTab() {
         <div className="space-y-4">
           <Dropdown
             label="Thinking Mode"
-            options={[
-              { id: 'adaptive', name: 'Adaptive', description: 'Model decides when to think deeply' },
-              { id: 'enabled', name: 'Enabled', description: 'Always use extended thinking' },
-              { id: 'disabled', name: 'Disabled', description: 'Never use extended thinking' },
-            ]}
-            selectedId={thinkingMode}
+            options={thinkingModeOptions}
+            selectedId={shownThinkingMode}
             onChange={async (id) => {
               try {
                 const config = await settingsService.updateAPIConfiguration({ thinking_mode: id });
-                setThinkingMode(config.thinkingMode || 'adaptive');
+                applyThinking(config);
                 setMessage({ type: 'success', text: t('common.message.saveSuccess') });
               } catch (error) {
                 setMessage({ type: 'error', text: `${t('common.message.saveFailed')}: ${error}` });
               }
             }}
           />
+          {storedModeIsKnown && effectiveThinkingMode && effectiveThinkingMode !== thinkingMode && (
+            <p data-testid="thinking-mode-not-in-effect" className="text-xs text-[var(--color-text-muted)] -mt-2">
+              Your saved setting "{storedModeName}" is not supported by the default model, so it runs as {shownModeName}.
+              It applies again if you switch to a model that supports it — or select {shownModeName} to save that instead.
+            </p>
+          )}
           <Dropdown
             label="Thinking Effort"
+            disabled={shownThinkingMode === 'disabled'}
             options={[
               { id: 'low', name: 'Low', description: 'Minimal thinking — fastest responses' },
               { id: 'medium', name: 'Medium', description: 'Balanced speed and depth' },
@@ -204,6 +239,7 @@ export default function AIModelsTab() {
               try {
                 const config = await settingsService.updateAPIConfiguration({ thinking_effort: id });
                 setThinkingEffort(config.thinkingEffort || 'high');
+                applyThinking(config);
                 setMessage({ type: 'success', text: t('common.message.saveSuccess') });
               } catch (error) {
                 setMessage({ type: 'error', text: `${t('common.message.saveFailed')}: ${error}` });
