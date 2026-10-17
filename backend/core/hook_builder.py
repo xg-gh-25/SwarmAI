@@ -451,8 +451,8 @@ async def build_hooks(
     # group. A no_timeout member makes build_sdk_hooks() give the WHOLE group the 4h
     # HookMatcher.timeout AND _build_chain awaits every member without the 5s guard.
     # governance_file_gate is a FAST advisory hook — it must NOT lose its 5s hang-guard.
-    # Fix: governance_file_gate is registered with matcher="Write|Edit" (below), which
-    # is behavior-preserving (it early-returns approve for every non-Edit/Write tool),
+    # Fix: governance_file_gate is registered with matcher="Write|Edit|Bash" (below), which
+    # is behavior-preserving (it early-returns approve for every other tool),
     # so external_approval_gate is the SOLO occupant of the None group (solo → no chain
     # → its no_timeout only affects itself).
     external_gate = create_external_approval_gate(
@@ -462,14 +462,16 @@ async def build_hooks(
     registry.register("PreToolUse", external_gate, "external_approval_gate", no_timeout=True)
     logger.info(f"External-approval gate attached for session_key: {session_key}")
 
-    # ── PreToolUse: governance file gate (Edit/Write-scoped) ──
-    # matcher="Write|Edit" (not None): keeps this fast advisory hook OUT of the
+    # ── PreToolUse: governance file gate (Write/Edit/Bash-scoped) ──
+    # matcher="Write|Edit|Bash" (not None): keeps this fast advisory hook OUT of the
     # no-matcher group so external_approval_gate's no_timeout can't strip its 5s
-    # hang-guard (Gate-1 B1). Behavior-preserving — governance_file_gate already
-    # early-returns approve for every tool that isn't Write/Edit.
+    # hang-guard (Gate-1 B1). Groups are keyed by the exact matcher string, so it is
+    # also NOT in the "Bash" group with dangerous_command_gate (no_timeout) — it runs
+    # solo and self-guards its own errors. Bash is included because shell writes
+    # (sed -i, redirects, interpreter heredoc patches) reach the same governed files.
     governance_gate = create_governance_file_gate()
-    registry.register("PreToolUse", governance_gate, "governance_file_gate", matcher="Write|Edit")
-    logger.debug("Governance file gate attached (advisory mode, Write|Edit-scoped)")
+    registry.register("PreToolUse", governance_gate, "governance_file_gate", matcher="Write|Edit|Bash")
+    logger.debug("Governance file gate attached (advisory mode, Write|Edit|Bash-scoped)")
 
     # ── Skill access control ─────────────────────────────────
     allowed_skills = agent_config.get("allowed_skills", [])

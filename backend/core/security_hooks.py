@@ -2831,6 +2831,31 @@ def _match_governance_tier(file_path: str) -> int:
     return 0
 
 
+def _bash_governance_target(command: str) -> tuple[str, int]:
+    """(path, tier) of the highest-tier governance file a Bash command may write.
+
+    Uses the same parsers as the live file-change emit, plus the heredoc
+    candidates (an interpreter script's path literals). A candidate the script
+    only reads can over-trigger; the gate is advisory, so that costs a reminder.
+    Returns ("", 0) when nothing matches.
+    """
+    from core.file_change_classifier import (
+        parse_bash_heredoc_write_candidates,
+        parse_bash_write_targets,
+    )
+
+    if not command:
+        return "", 0
+    best_path, best_tier = "", 0
+    for path in parse_bash_write_targets(command) + parse_bash_heredoc_write_candidates(command):
+        tier = _match_governance_tier(path)
+        if tier and (best_tier == 0 or tier < best_tier):
+            best_path, best_tier = path, tier
+            if tier == 1:
+                break
+    return best_path, best_tier
+
+
 def create_governance_file_gate() -> Callable[..., Any]:
     """Factory: returns an async PreToolUse hook that intercepts governance file edits.
 
@@ -2846,12 +2871,25 @@ def create_governance_file_gate() -> Callable[..., Any]:
         context: Any,
     ) -> dict[str, Any]:
         tool_name = input_data.get("tool_name", "")
-        if tool_name not in ("Edit", "Write"):
+        if tool_name not in ("Edit", "Write", "Bash"):
             return {"decision": "approve"}
 
-        tool_input = input_data.get("tool_input", {})
-        file_path = tool_input.get("file_path", "")
-        tier = _match_governance_tier(file_path)
+        tool_input = input_data.get("tool_input", {}) or {}
+        if tool_name == "Bash":
+            # Shell writes (redirects, tee, cp/mv, sed -i, interpreter heredoc
+            # patches) reach the same files Edit/Write do; without this a
+            # `python3 - <<'PY'` patch to SOUL.md skipped the gate entirely.
+            # Self-guarded: this hook runs solo under its matcher (no chain
+            # try/except), and a parse error must never block a command.
+            try:
+                file_path, tier = _bash_governance_target(
+                    str(tool_input.get("command") or "")
+                )
+            except Exception:  # noqa: BLE001
+                return {"decision": "approve"}
+        else:
+            file_path = tool_input.get("file_path", "")
+            tier = _match_governance_tier(file_path)
 
         if tier == 0:
             return {"decision": "approve"}

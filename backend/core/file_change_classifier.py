@@ -8,7 +8,9 @@ from `git status`). run_cce6f4b9 REVERSED that: the per-turn git sweep was the r
 cause of the Canvas tab-isolation/trigger/cost regression, so live surfacing went back
 to an EVENT-DRIVEN per-tool emit — which needs to know which paths a Bash command
 WROTE. So this module owns BOTH parsers again:
-  - parse_bash_write_targets: `>`/`>>`, `tee`, `cp/mv DEST` → the write emit.
+  - parse_bash_write_targets: `>`/`>>`, `tee`, `cp/mv DEST`, `sed -i` → the write emit.
+  - parse_bash_heredoc_write_candidates: path literals in an interpreter heredoc
+    (`python3 - <<'PY' … open(p,'w')`) — CANDIDATES the caller must confirm.
   - parse_bash_delete_targets: `rm`, `mv SRC` → the operation=deleted rail-drop emit.
 Both conservative (under-match HARD): a MISSED write/delete just skips one surface;
 a FALSE one pops/removes a phantom row — strictly worse.
@@ -22,6 +24,7 @@ import shlex
 
 __all__ = [
     "parse_bash_write_targets",
+    "parse_bash_heredoc_write_candidates",
     "parse_bash_delete_targets",
 ]
 
@@ -116,7 +119,115 @@ def parse_bash_write_targets(command: str) -> list[str]:
                 if t and t not in targets:
                     targets.append(t)
 
+    # 3) `sed -i` rewrites its file arguments in place — exact targets, per segment
+    #    so a later `&& cat x` is never mistaken for an edited file.
+    seg: list[str] = []
+    for tok in tokens + [";"]:
+        if tok in ("&&", "||", "|", ";", "&"):
+            for t in _sed_in_place_targets(seg):
+                if t not in targets:
+                    targets.append(t)
+            seg = []
+        else:
+            seg.append(tok)
+
     return targets
+
+
+# ── Interpreter heredoc writes (`python3 - <<'PY' … open(p,'w') … PY`) ──────────
+# A script fed to an interpreter on stdin can write any file, and the target only
+# appears as a string literal inside the body, so the redirect/token parsers above
+# see nothing. These are CANDIDATES, not proof: a script that reads a.py and writes
+# b.py names both. Callers must confirm (the live emit checks the file's mtime
+# moved; the governance gate only advises, so an extra candidate costs a reminder).
+_INTERP_HEREDOC_RE = re.compile(
+    r"(?:^|[\s;&|(/])(?:python[\d.]*|node|ruby|perl)\b[^\n|;&]*?(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1"
+)
+_BODY_WRITE_OP_RE = re.compile(
+    r"\.write_text\(|\.write_bytes\(|\bopen\([^)\n]*['\"][wax]b?\+?['\"]"
+    r"|\bos\.replace\(|\bshutil\.(?:copy\w*|move)\(|writeFileSync\(|\bFile\.write\("
+)
+_PATH_LITERAL_RE = re.compile(r"['\"]((?:~|\.{1,2})?/?[\w@+~.-]+(?:/[\w@+~.-]+)*\.[A-Za-z0-9]{1,8})['\"]")
+_CD_RE = re.compile(r"(?:^|[;&|]\s*)cd\s+([^\s;&|]+)")
+_MAX_HEREDOC_CANDIDATES = 20
+
+
+def parse_bash_heredoc_write_candidates(command: str) -> list[str]:
+    """Paths a heredoc-fed interpreter script MAY write (see block comment above).
+
+    Only bodies of heredocs whose opener line runs an interpreter (python/node/
+    ruby/perl) AND that contain a write call are scanned; every path-like string
+    literal in such a body is a candidate. A relative literal is joined to the
+    last absolute/``~`` ``cd`` before the heredoc, so ``cd repo && python3 - <<``
+    yields repo-anchored paths. Pure, never raises; capped at 20 candidates.
+    """
+    if not command or "<<" not in command:
+        return []
+    out: list[str] = []
+    lines = command.split("\n")
+    i = 0
+    while i < len(lines):
+        m = _INTERP_HEREDOC_RE.search(lines[i])
+        if not m:
+            i += 1
+            continue
+        delim = m.group(2)
+        dash = "<<-" in lines[i][m.start():m.end()]
+        cds = _CD_RE.findall("\n".join(lines[: i + 1]))
+        base = cds[-1] if cds and (cds[-1].startswith("/") or cds[-1].startswith("~")) else ""
+        body: list[str] = []
+        i += 1
+        while i < len(lines):
+            ln = lines[i]
+            if (ln.lstrip("\t").rstrip() == delim) if dash else (ln == delim):
+                break
+            body.append(ln)
+            i += 1
+        text = "\n".join(body)
+        if not _BODY_WRITE_OP_RE.search(text):
+            i += 1
+            continue
+        for lit in _PATH_LITERAL_RE.findall(text):
+            p = lit
+            if base and not (p.startswith("/") or p.startswith("~")):
+                p = base.rstrip("/") + "/" + (p[2:] if p.startswith("./") else p)
+            if p not in out:
+                out.append(p)
+            if len(out) >= _MAX_HEREDOC_CANDIDATES:
+                return out
+        i += 1
+    return out
+
+
+def _sed_in_place_targets(tokens: list[str]) -> list[str]:
+    """Files edited by ``sed -i`` in one command segment (the args after the script)."""
+    if not tokens or tokens[0] != "sed":
+        return []
+    rest = tokens[1:]
+    if not any(t == "--in-place" or t.startswith("--in-place=") or (t.startswith("-i") and not t.startswith("--")) for t in rest):
+        return []
+    files: list[str] = []
+    script_seen = False
+    skip_next = False
+    for j, t in enumerate(rest):
+        if skip_next:
+            skip_next = False
+            script_seen = True
+            continue
+        if t in ("-e", "--expression", "-f", "--file"):
+            skip_next = True
+            continue
+        if t.startswith("-"):
+            continue
+        if t == "" and j > 0 and rest[j - 1] == "-i":
+            continue  # macOS `sed -i '' ...` backup-suffix argument
+        if not script_seen:
+            script_seen = True  # first positional is the script when no -e
+            continue
+        c = _clean_target(t)
+        if c:
+            files.append(c)
+    return files
 
 
 def parse_bash_delete_targets(command: str) -> list[str]:

@@ -215,7 +215,8 @@ implementations in `security_hooks.py`). By category:
    `~/.swarm-ai/pending_approvals.json`, 4h answer timeout. `ask_question_gate` blocks for
    AskUserQuestion answers.
 4. **Scope + commit discipline** — `skill_access_checker` (Skill), `governance_file_gate`
-   (Write|Edit on governed context files), `adversarial_commit_gate` (no `git commit` without
+   (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
+   patches — to governed context files), `adversarial_commit_gate` (no `git commit` without
    a sub-agent review this session), `active_run_commit_gate` (files owned by an active
    pipeline run go through run-commit).
 5. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
