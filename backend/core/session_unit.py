@@ -759,13 +759,14 @@ class SessionUnit:
         # is terminal (or the budget is exhausted, then it finalizes on what it has).
         self._mcp_pending_reprobes_left: int = 3
 
-        # ── Sub-agent progress observability ─────────────────────
-        # Tracks active sub-agent(s) for progress observability.
+        # ── Active sub-agents (Agent tool) ───────────────────────
         # Keys = tool_use_id, values = {label, start_time}.
         # Set when ToolUseBlock(name="Agent") arrives, removed when matching
         # ToolResultBlock arrives. Cleared at every turn boundary (send,
-        # interrupt, turn_limit) to prevent cross-turn stale banners.
-        # Frontend polls via GET /sessions/{id}/sub-agent-progress.
+        # interrupt, turn_limit). In-process state for diagnostics; the UI
+        # no longer polls it (2026-10-18: the timer banner and its endpoint
+        # were removed — sub-agent status streams as `subagent_progress` and
+        # nests under the Agent step).
         self._active_agent_tools: dict[str, dict] = {}
 
         # ── Tool-hang tracking (run_fb6e94a9) ─────────────────────

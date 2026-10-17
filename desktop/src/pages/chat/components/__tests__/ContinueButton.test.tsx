@@ -29,14 +29,6 @@ vi.mock('../../../../contexts/ToastContext', () => ({
   useToast: () => ({ addToast: vi.fn() }),
 }));
 
-vi.mock('../../../../hooks/useSubAgentProgress', () => ({
-  useSubAgentProgress: () => null,
-}));
-
-vi.mock('../../../../components/chat/SubAgentProgressBanner', () => ({
-  SubAgentProgressBanner: () => null,
-}));
-
 const mockAssistantMessage: Message = {
   id: 'msg-1',
   role: 'assistant',

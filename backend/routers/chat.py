@@ -923,45 +923,6 @@ async def get_streaming_state_endpoint():
     return {"sessions": result}
 
 
-@router.get("/sessions/{session_id}/sub-agent-progress")
-async def get_sub_agent_progress(session_id: str):
-    """Return progress info when a sub-agent (Agent tool) is active.
-
-    Frontend polls this every 5s while streaming to render tiered
-    awareness banners (T0-T4) based on elapsed time. Lightweight:
-    single field read, no computation.
-    """
-    import time as _time
-
-    sr = _get_router()
-    unit = sr.get_unit(session_id)
-    if not unit:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Snapshot the dict — prevents TOCTOU if .pop() mutates during iteration
-    active_tools = unit._active_agent_tools.copy()
-    is_streaming = unit.state.value == "streaming"
-
-    if not active_tools or not is_streaming:
-        return {"active": False, "elapsed_s": 0, "label": None, "count": 0}
-
-    # elapsed_s tracks the OLDEST (longest-running) sub-agent — this is the
-    # "is something stuck?" signal that drives the tiered awareness banner.
-    # label tracks the NEWEST sub-agent — so the banner reflects CURRENT
-    # activity instead of freezing on the first-spawned one. With parallel
-    # reviewers (Gate 2 spawns several), anchoring both on the oldest made
-    # the label stick on "Spec compliance review" for the whole run.
-    oldest = active_tools[min(active_tools, key=lambda k: active_tools[k]["start_time"])]
-    newest = active_tools[max(active_tools, key=lambda k: active_tools[k]["start_time"])]
-    elapsed = _time.time() - oldest["start_time"]
-    return {
-        "active": True,
-        "elapsed_s": round(elapsed, 1),
-        "label": newest.get("label"),
-        "count": len(active_tools),
-    }
-
-
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
 async def get_session(session_id: str):
     """Get a specific chat session by ID."""

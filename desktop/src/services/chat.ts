@@ -622,19 +622,6 @@ export const chatService = {
     return out;
   },
 
-  // Get sub-agent progress for a session (polls while Agent tool running)
-  async getSubAgentProgress(sessionId: string): Promise<{
-    active: boolean;
-    elapsed_s: number;
-    label: string | null;
-    count: number;
-  }> {
-    const response = await api.get<{ active: boolean; elapsed_s: number; label: string | null; count: number }>(
-      `/chat/sessions/${sessionId}/sub-agent-progress`,
-    );
-    return response.data;
-  },
-
   // Get a specific session
   async getSession(sessionId: string): Promise<ChatSession> {
     const response = await api.get<Record<string, unknown>>(`/chat/sessions/${sessionId}`);
