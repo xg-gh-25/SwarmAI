@@ -16,10 +16,15 @@ Invariants:
   • pipeline_test_gate: inactive → approve everything. Active → deny each family
     (pytest, vitest, tsc, eslint, vite build, npm build/test/lint/typecheck/check,
     python -c / stdin code running pytest, coverage run, make test*, bash -o/--long
-    -c wrappers, node entry points, git archive, git worktree add, rsync / cp -r of
-    the repo or backend/, ps/pgrep/kill/pkill on pytest, python -X faulthandler);
-    approve pytest --version/--help, pytest words that are only quoted / grep
-    patterns / commit / echo text, and the pipeline_test.py runner. The deny text
+    -c wrappers, node entry points, pnpm / yarn / bun test|run|exec|dlx / bunx,
+    git archive, git worktree add, rsync / cp -r of the repo or backend/,
+    ps/pgrep/kill/pkill on pytest, python -X faulthandler); approve pytest
+    --version/--help, pytest words that are only quoted / grep patterns / commit /
+    echo text, pnpm|yarn|bun install / dev, and the pipeline_test.py runner. A
+    leading cd / pushd across && / ; moves the directory a bare make resolves its
+    default goal in (real tmp Makefiles); an unknown directory (cd $X, cd -, ||, |,
+    a closed subshell) never denies a bare make but still denies explicit test
+    targets. The deny text
     carries the runner command and the run-update --status abandoned escape, filled
     with the real project and run id, and calls the force env operator-only.
   • direct_commit_gate: only for the SwarmAI source repo; no own run + >20 changed
@@ -187,6 +192,56 @@ DENIED_COMMANDS = [
     "perl -e 'alarm 90; exec @ARGV' make test-file F=tests/test_x.py",
     "make -j4 -C backend test-all PROFILE=dev",
     "make --directory=backend test-lf",
+    # residual 1: a leading cd / pushd moves make's directory (backend/Makefile → test)
+    "cd backend && make",
+    "cd backend; make",
+    "cd backend; make test",
+    "pushd backend && make",
+    "cd ./backend/../backend && make -j4",
+    "cd desktop && cd ../backend && make",
+    "cd backend && bash -c 'make'",
+    "(cd backend && make)",
+    "cd $UNKNOWN && make test",
+    "cd backend || make check",
+    # residual 2: pnpm / yarn / bun
+    "pnpm test",
+    "pnpm t",
+    "pnpm run test",
+    "pnpm run lint",
+    "pnpm run typecheck",
+    "pnpm run check",
+    "pnpm run build:all",
+    "pnpm --filter web run test:run",
+    "pnpm -C desktop lint",
+    "pnpm -r test",
+    "pnpm recursive run build",
+    "pnpm vitest run",
+    "pnpm vite build",
+    "pnpm exec vitest run src/a.test.ts",
+    "pnpm exec eslint src",
+    "pnpm --dir desktop exec tsc --noEmit",
+    "pnpm dlx vitest",
+    "pnpx vitest run",
+    "yarn test",
+    "yarn lint",
+    "yarn vitest",
+    "yarn run typecheck",
+    "yarn run build",
+    "yarn --cwd desktop test",
+    "yarn exec tsc",
+    "yarn dlx eslint src",
+    "yarn workspace web test",
+    "yarn workspaces foreach -A run lint",
+    "bun test",
+    "bun run test",
+    "bun run lint",
+    "bun run --bun vitest",
+    "bun build ./src/index.ts",
+    "bunx vitest",
+    "bunx eslint src",
+    "bunx tsc --noEmit",
+    "bun x vitest run",
+    "cd ../desktop && perl -e 'alarm 90; exec @ARGV' pnpm test",
     # M1: shell -c behind -o / --long options
     "bash -o pipefail -c \"perl -e 'alarm 90; exec @ARGV' .venv/bin/python -m pytest tests/test_x.py\"",
     "bash --norc -c 'pytest tests/test_x.py'",
@@ -253,6 +308,32 @@ APPROVED_COMMANDS = [
     "npm ci",
     "node scripts/build-icons.js",
     "node -e 'console.log(1)'",
+    # residual 1: bare make in an unknown / non-test directory is not a hit
+    "cd $UNKNOWN && make",
+    "cd - && make",
+    "popd && make",
+    "cd backend || make",
+    "cd backend | make",
+    "(cd backend); make",
+    "cd backend && make help",
+    "cd backend && ls",
+    # residual 2: installs, dev servers and other scripts
+    "pnpm install",
+    "pnpm i",
+    "pnpm add -D vitest",
+    "pnpm dev",
+    "pnpm run dev",
+    "pnpm exec prettier --check .",
+    "yarn",
+    "yarn install",
+    "yarn add eslint",
+    "yarn dev",
+    "yarn workspace web dev",
+    "bun install",
+    "bun add vitest",
+    "bun run dev",
+    "bun index.ts",
+    "bunx prettier --write .",
 ]
 
 RUNNER = ("perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python "
@@ -302,6 +383,31 @@ class TestPipelineTestGateActive:
         gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
         assert _call(gate, "make", cwd=str(tmp_path)) == {"decision": "approve"}
         assert _is_deny(_call(gate, "make test", cwd=str(tmp_path)))
+
+    def test_cd_chain_resolves_the_makefile_directory(self, ws, tmp_path, monkeypatch):
+        # sub/ defaults to `check` (gated), other/ to `all` (not gated); the hook cwd
+        # (tmp_path) has no Makefile, so only cd tracking can decide.
+        _seed(ws)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "Makefile").write_text("check:\n\tpytest\nall:\n\techo\n")
+        (tmp_path / "other").mkdir()
+        (tmp_path / "other" / "Makefile").write_text("all:\n\techo hi\ntest:\n\tpytest\n")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
+        here = str(tmp_path)
+        for cmd in ["cd sub && make", "cd sub; make", "pushd sub && make",
+                    "cd other && cd ../sub && make", "cd " + here + "/sub && make",
+                    "cd ~/sub && make", "cd other; (cd ../sub && make)",
+                    "cd sub && bash -c 'make -j2'"]:
+            assert _is_deny(_call(gate, cmd, cwd=here)), cmd
+        for cmd in ["make", "cd other && make", "cd sub/../other && make",
+                    "(cd sub) && make", "cd sub | make", "cd sub || make",
+                    "cd $D && make", "pushd -n sub && make",
+                    "(cd sub && echo) ; make", "cd sub && make all"]:
+            assert _call(gate, cmd, cwd=here) == {"decision": "approve"}, cmd
+        # an explicit gated target is denied wherever make runs, known dir or not
+        for cmd in ["cd other && make test", "cd $D && make test", "cd sub || make check"]:
+            assert _is_deny(_call(gate, cmd, cwd=here)), cmd
 
     def test_force_env_approves(self, ws, monkeypatch):
         _seed(ws)

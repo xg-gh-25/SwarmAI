@@ -2941,7 +2941,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 #   • pipeline_test_gate (B3): while the session HAS an active run, every test/build
 #     command goes through backend/scripts/pipeline_test.py (one entry point, scoped
 #     by mode, cached, hang-safe). Direct pytest / vitest / tsc / eslint / vite build /
-#     npm build|test, code-copy baselines (git archive, git worktree add, rsync / cp -r
+#     npm|pnpm|yarn|bun build|test, make test*, code-copy baselines (git archive, git worktree add, rsync / cp -r
 #     of the repo or backend/) and manual hang triage (ps / pgrep / kill / pkill aimed
 #     at pytest, python -X faulthandler) are DENIED with a copyable runner command.
 #     A session with no active run is never affected.
@@ -2958,12 +2958,19 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # transition, so an idle "running" file is a crashed or abandoned run and must not
 # pin a gate (the deny text names `run-update --status abandoned`).
 #
-# ACCEPTED RESIDUAL (same trade as pytest_command_guard): eval, `cd X && make`
-# (cwd changes are not tracked), project scripts, pnpm/yarn/bun and `sudo -u X` are
-# not recognised. Recognised: `bash|sh|zsh -c` (one level, skipping -o/+o/--long
-# options), make targets test*/check*/lint*/typecheck* (and a bare make whose default
-# goal is one), coverage run, python -c / stdin code naming pytest or vitest, node
-# entry points of vitest/eslint/tsc, npm run test*/lint*/typecheck*/check*/build*.
+# ACCEPTED RESIDUAL (same trade as pytest_command_guard): eval, project scripts and
+# `sudo -u X` are not recognised; a cd to an unresolvable directory (`cd $X`, `cd -`,
+# popd, or any cd joined by `||` / `|` / `&`) leaves the directory unknown, so a bare
+# make after it is not a hit (explicit test*/check* targets still are); `pnpm dlx -c
+# '<cmd>'` shell mode and `yarn check` (a v1 builtin, denied as a check script) are
+# imprecise. Recognised: `bash|sh|zsh -c` (one level, skipping -o/+o/--long options),
+# make targets test*/check*/lint*/typecheck* (and a bare make whose default goal is
+# one, resolved in the directory a leading `cd X &&` / `cd X;` / `pushd X &&` of the
+# same chain moved to), coverage run, python -c / stdin code naming pytest or vitest,
+# node entry points of vitest/eslint/tsc, npm run test*/lint*/typecheck*/check*/
+# build*, and the same for pnpm / yarn / bun (`<pm> test`, `<pm> run <script>`, the
+# implicit `<pm> lint|vitest|build`, `pnpm exec|dlx`, `yarn exec|dlx`, `bunx`,
+# `bun x`, `bun build`); `pnpm install`, `yarn`, `bun install`, `pnpm dev` pass.
 
 # A running run counts as ACTIVE only while it shows recent activity (run.json mtime or
 # its updated_at, whichever is newer). An abandoned run left at status=running must not
@@ -3075,6 +3082,26 @@ _NPM_VALUE_OPTS = frozenset({"--prefix", "-C", "--workspace", "-w"})
 # build. Matched by prefix of the part before ':' (test, test:run, lint:contract, ...).
 _NPM_GATED_SCRIPT_PREFIXES = ("build", "test", "lint", "typecheck", "type-check",
                               "check", "tsc", "eslint", "vitest")
+# pnpm / yarn / bun: global options that take a separate value (skipped before the
+# subcommand), and the subcommands that run a package binary like npx.
+_JS_PM_VALUE_OPTS = {
+    "pnpm": frozenset({"-C", "--dir", "--filter", "-F", "--filter-prod", "--reporter",
+                       "--loglevel", "--workspace-concurrency", "--resume-from",
+                       "--test-pattern", "--changed-files-ignore-pattern"}),
+    "yarn": frozenset({"--cwd", "--modules-folder", "--cache-folder", "--global-folder",
+                       "--link-folder", "--mutex", "--network-timeout", "--registry",
+                       "--use-yarnrc", "--network-concurrency"}),
+    "bun": frozenset({"--cwd", "--filter", "-F", "--config", "-c", "--preload", "-r",
+                      "--env-file", "--tsconfig-override", "--elide-lines", "--shell"}),
+}
+_JS_PM_EXEC_SUBCOMMANDS = {
+    "pnpm": frozenset({"exec", "dlx"}),
+    "yarn": frozenset({"exec", "dlx"}),
+    "bun": frozenset({"x"}),
+}
+_JS_EXEC_VALUE_OPTS = frozenset({"-p", "--package", "--filter", "-F", "-C", "--dir", "--cwd"})
+# yarn workspaces foreach options that take a value.
+_YARN_FOREACH_VALUE_OPTS = frozenset({"--include", "--exclude", "--from", "-j", "--jobs"})
 # make targets that run tests / checks (backend/Makefile: test, test-all, test-file, ...).
 _MAKE_GATED_TARGET_PREFIXES = ("test", "check", "lint", "typecheck")
 _MAKE_VALUE_OPTS = frozenset({"-C", "-f", "-I", "-o", "-W", "-l", "--directory",
@@ -3093,7 +3120,9 @@ _PYTEST_INFO_ONLY_OPTS = frozenset({"--version", "-V", "--help", "-h"})
 _TRIAGE_FILTER_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "awk"})
 
 
-def _gate_shell_segments(command: str) -> "list[list[str]] | None":
+def _gate_shell_segments(
+    command: str, seps: "list[str] | None" = None,
+) -> "list[list[str]] | None":
     """Split *command* into simple-command token lists, or None if unparseable.
 
     Heredoc bodies are dropped and unquoted newlines become separators
@@ -3101,7 +3130,11 @@ def _gate_shell_segments(command: str) -> "list[list[str]] | None":
     `` `cmd` `` substitution is scanned as its own segment. A POSIX shlex with
     punctuation_chars splits `;` `&&` `||` `|` `(` `)` off words the way bash does,
     so `$(pytest)` and `a;pytest` expose pytest as a command word. Redirect operators
-    (`>`, `2>`, `>&`, `<<`) are dropped together with their target."""
+    (`>`, `2>`, `>&`, `<<`) are dropped together with their target.
+
+    When *seps* is a list it receives, per returned segment, the concatenated
+    separator tokens that PRECEDE it ("" for the first; e.g. ");" or "&&(") — the
+    cd/pushd chain tracking in _classify_pipeline_test_command reads them."""
     normalized = _normalize_newlines_quote_aware(command).replace("`", " ; ")
     try:
         lex = shlex.shlex(normalized, posix=True, punctuation_chars=_GATE_PUNCT_CHARS)
@@ -3111,6 +3144,7 @@ def _gate_shell_segments(command: str) -> "list[list[str]] | None":
         return None
     segments: list[list[str]] = []
     cur: list[str] = []
+    pending_sep = ""
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -3118,7 +3152,11 @@ def _gate_shell_segments(command: str) -> "list[list[str]] | None":
             if set(tok) & _GATE_SEPARATOR_CHARS or tok in ("&", "&&"):
                 if cur:
                     segments.append(cur)
+                    if seps is not None:
+                        seps.append(pending_sep)
+                    pending_sep = ""
                 cur = []
+                pending_sep += tok
                 i += 1
                 continue
             i += 2  # redirect operator + its target
@@ -3127,6 +3165,8 @@ def _gate_shell_segments(command: str) -> "list[list[str]] | None":
         i += 1
     if cur:
         segments.append(cur)
+        if seps is not None:
+            seps.append(pending_sep)
     return segments
 
 
@@ -3146,7 +3186,8 @@ def _unwrap_program(tokens: list[str]) -> list[str]:
     Handles env assignments and timeout/sudo-style wrappers (_skip_leading_wrappers),
     shell keywords (`do`, `then`, `{`, `!`, `exec`), `xargs [opts]`, the sanctioned
     perl-alarm cap (`perl -e '...@ARGV...' CMD`), `uv|poetry|pdm run`, and
-    `npx` / `npm exec` / `bunx` (whose package token becomes the program)."""
+    `npx` / `npm exec` / `bunx` / `pnpx` / `pnpm|yarn [opts] exec|dlx` /
+    `bun [opts] x` (whose package token becomes the program)."""
     for _ in range(10):  # bounded: each pass strips at least one token
         tokens = _skip_leading_wrappers(tokens)
         if not tokens:
@@ -3174,9 +3215,17 @@ def _unwrap_program(tokens: list[str]) -> list[str]:
         if w in ("uv", "poetry", "pdm") and len(tokens) > 1 and tokens[1] == "run":
             tokens = tokens[_skip_dash_opts(tokens, 2, frozenset()):]
             continue
-        if w in ("npx", "bunx") or (w == "npm" and len(tokens) > 1 and tokens[1] in ("exec", "x")):
-            start = 1 if w != "npm" else 2
-            i = _skip_dash_opts(tokens, start, frozenset({"-p", "--package"}))
+        start = -1
+        if w in ("npx", "bunx", "pnpx"):
+            start = 1
+        elif w == "npm" and len(tokens) > 1 and tokens[1] in ("exec", "x"):
+            start = 2
+        elif w in _JS_PM_VALUE_OPTS:
+            j = _skip_dash_opts(tokens, 1, _JS_PM_VALUE_OPTS[w])
+            if j < len(tokens) and tokens[j] in _JS_PM_EXEC_SUBCOMMANDS[w]:
+                start = j + 1
+        if start >= 0:
+            i = _skip_dash_opts(tokens, start, _JS_EXEC_VALUE_OPTS)
             if i >= len(tokens):
                 return []
             pkg = tokens[i]
@@ -3309,6 +3358,47 @@ def _classify_npm(args: list[str], hits: set) -> None:
                 hits.add("npm run " + script)
 
 
+def _classify_js_pm(
+    pm: str, args: list[str], cwd: str, depth: int, hits: set, files: list,
+    chain_dir: "str | None" = None,
+) -> None:
+    """`pnpm` / `yarn` / `bun` (same rules as npm / npx). `<pm> test` (pnpm also
+    `t` / `tst`) and `bun build` are hits; `<pm> run|run-script <script>` is a hit when
+    the script matches _NPM_GATED_SCRIPT_PREFIXES. Any other subcommand is the
+    implicit script-or-binary form (`pnpm lint`, `yarn vitest`, `pnpm vite build`):
+    a gated name is a hit, otherwise `[name, *rest]` is classified as its own command
+    (`pnpm install` / `yarn` / `pnpm dev` pass). exec / dlx / `bun x` are unwrapped
+    earlier (_unwrap_program). `pnpm recursive|multi|m ...`, `yarn workspace NAME ...`
+    and `yarn workspaces [foreach [opts]] ...` re-classify the rest."""
+    i = _skip_dash_opts(args, 0, _JS_PM_VALUE_OPTS[pm])
+    if i >= len(args):
+        return  # bare `yarn` = install
+    sub, rest = args[i], args[i + 1:]
+
+    def _again(more: list[str]) -> None:
+        _classify_test_segment([pm, *more], cwd, depth, hits, files, chain_dir)
+
+    if pm == "pnpm" and sub in ("recursive", "multi", "m"):
+        _again(rest)
+    elif pm == "yarn" and sub == "workspace":
+        _again(rest[1:])
+    elif pm == "yarn" and sub == "workspaces":
+        j = 1 if rest[:1] == ["foreach"] else 0
+        _again(rest[_skip_dash_opts(rest, j, _YARN_FOREACH_VALUE_OPTS):])
+    elif sub == "test" or (pm == "pnpm" and sub in ("t", "tst")):
+        hits.add(pm + " test")
+    elif pm == "bun" and sub == "build":
+        hits.add("bun build")
+    elif sub in ("run", "run-script"):
+        j = _skip_dash_opts(rest, 0, _JS_PM_VALUE_OPTS[pm])
+        if j < len(rest) and rest[j].split(":", 1)[0].startswith(_NPM_GATED_SCRIPT_PREFIXES):
+            hits.add(pm + " run " + rest[j])
+    elif sub.split(":", 1)[0].startswith(_NPM_GATED_SCRIPT_PREFIXES):
+        hits.add(pm + " " + sub)
+    elif sub not in _JS_PM_VALUE_OPTS:  # `pnpm yarn ...` nesting is not followed
+        _classify_test_segment([sub, *rest], cwd, depth, hits, files, chain_dir)
+
+
 def _makefile_default_goal(make_dir: str, makefile: "str | None") -> str:
     """First ordinary rule target of the Makefile make would read ("" if unknown).
     Targets starting with '.' (.PHONY, .DEFAULT_GOAL handling aside) are skipped."""
@@ -3327,10 +3417,26 @@ def _makefile_default_goal(make_dir: str, makefile: "str | None") -> str:
     return ""
 
 
+def _resolve_dir(base: str, sub: str) -> str:
+    """Directory *sub* (`~` expanded) resolved against *base*; "" = unknown (a
+    relative *sub* with an unknown base, or one containing $ ` * ? [ { or an
+    unexpanded ~user)."""
+    if any(ch in sub for ch in "$`*?[{"):
+        return ""
+    p = os.path.expanduser(sub)
+    if p.startswith("~"):
+        return ""
+    if os.path.isabs(p):
+        return os.path.normpath(p)
+    return os.path.normpath(os.path.join(base, p)) if base else ""
+
+
 def _classify_make(args: list[str], cwd: str, hits: set) -> None:
     """`make [opts] [VAR=val] targets...`: a target starting with test / check / lint /
     typecheck is a hit. With no target, the Makefile's default goal decides (in
-    backend/Makefile the first target is `test`)."""
+    backend/Makefile the first target is `test`). *cwd* is the directory make runs
+    in ("" = unknown, e.g. after `cd $X`); with an unknown directory a bare make is
+    not a hit, explicit targets still are."""
     make_dir, makefile = cwd, None
     targets: list[str] = []
     i = 0
@@ -3338,17 +3444,16 @@ def _classify_make(args: list[str], cwd: str, hits: set) -> None:
         a = args[i]
         if a in _MAKE_VALUE_OPTS and i + 1 < len(args):
             if a in ("-C", "--directory"):
-                make_dir = os.path.join(make_dir, args[i + 1]) if make_dir else args[i + 1]
+                make_dir = _resolve_dir(make_dir, args[i + 1])
             elif a in ("-f", "--file", "--makefile"):
                 makefile = args[i + 1]
             i += 2
             continue
         if a.startswith("-"):
             if a.startswith("--directory="):
-                v = a.split("=", 1)[1]
-                make_dir = os.path.join(make_dir, v) if make_dir else v
+                make_dir = _resolve_dir(make_dir, a.split("=", 1)[1])
             elif a.startswith("-C") and len(a) > 2:
-                make_dir = os.path.join(make_dir, a[2:]) if make_dir else a[2:]
+                make_dir = _resolve_dir(make_dir, a[2:])
             elif a == "-j" and i + 1 < len(args) and args[i + 1].isdigit():
                 i += 1
             i += 1
@@ -3356,8 +3461,11 @@ def _classify_make(args: list[str], cwd: str, hits: set) -> None:
         if "=" not in a:
             targets.append(a)
         i += 1
-    if not targets and make_dir:
-        goal = _makefile_default_goal(os.path.expanduser(make_dir), makefile)
+    if makefile:
+        makefile = os.path.expanduser(makefile)
+    known = bool(make_dir) and os.path.isabs(make_dir)
+    if not targets and (known or (makefile and os.path.isabs(makefile))):
+        goal = _makefile_default_goal(make_dir if known else "", makefile)
         targets = [goal] if goal else []
     for t in targets:
         if t.startswith(_MAKE_GATED_TARGET_PREFIXES):
@@ -3495,9 +3603,16 @@ def _copy_of_repo(prog: str, args: list[str], cwd: str) -> bool:
 
 def _classify_test_segment(
     tokens: list[str], cwd: str, depth: int, hits: set, files: list,
+    chain_dir: "str | None" = None,
 ) -> str:
     """Add the test-gate families ONE simple command hits to *hits* (and explicit test
-    files to *files*). Returns the unwrapped program basename ("" if none)."""
+    files to *files*). Returns the unwrapped program basename ("" if none).
+
+    *cwd* is the hook's cwd (copy-source checks); *chain_dir* is the directory this
+    segment runs in after any leading cd/pushd of its chain ("" = unknown, None =
+    *cwd*). make and a nested `bash -c` resolve against *chain_dir*."""
+    if chain_dir is None:
+        chain_dir = cwd
     t = _unwrap_program(tokens)
     if not t:
         return ""
@@ -3512,11 +3627,12 @@ def _classify_test_segment(
     elif w in _SHELL_INTERPRETERS and depth < 1:
         sub_cmd = _shell_c_command(args)
         if sub_cmd is not None:
-            sub_hits, sub_files = _classify_pipeline_test_command(sub_cmd, cwd, depth + 1)
+            sub_hits, sub_files = _classify_pipeline_test_command(
+                sub_cmd, cwd, depth + 1, start_dir=chain_dir)
             hits.update(sub_hits)
             files.extend(sub_files)
     elif w in ("make", "gmake"):
-        _classify_make(args, cwd, hits)
+        _classify_make(args, chain_dir, hits)
     elif w in ("node", "nodejs"):
         _classify_node(args, hits, files)
     elif w == "vitest":
@@ -3530,6 +3646,8 @@ def _classify_test_segment(
             hits.add("vite build")
     elif w == "npm":
         _classify_npm(args, hits)
+    elif w in _JS_PM_VALUE_OPTS:
+        _classify_js_pm(w, args, cwd, depth, hits, files, chain_dir)
     elif w == "git":
         sub = _git_subcommand_args(t)
         if sub and sub[0] == "archive":
@@ -3544,8 +3662,38 @@ def _classify_test_segment(
     return w
 
 
+def _cd_segment_target(tokens: list[str], cur: str) -> "str | None":
+    """None if *tokens* is not cd / pushd / popd; else the directory it switches to
+    ("" = unknown: `cd -`, `popd`, `pushd +N`, `$VAR`, globs, a relative path from an
+    unknown dir). `cd` alone goes to ~; `pushd -n` does not change the directory."""
+    t = _unwrap_program(tokens)
+    if not t or t[0] not in ("cd", "pushd", "popd"):
+        return None
+    if t[0] == "popd":
+        return ""
+    no_change = False
+    i = 1
+    while i < len(t) and t[i].startswith("-") and t[i] != "-":
+        if t[i] == "--":
+            i += 1
+            break
+        if t[0] == "pushd" and t[i] == "-n":
+            no_change = True
+        elif t[0] == "pushd" or not set(t[i][1:]) <= set("LPe@"):
+            return ""  # pushd -N rotates the stack; unknown cd option
+        i += 1
+    if no_change:
+        return cur
+    if i >= len(t):
+        return "" if t[0] == "pushd" else _resolve_dir(cur, "~")
+    arg = t[i]
+    if arg == "-" or arg.startswith("+"):
+        return ""
+    return _resolve_dir(cur, arg)
+
+
 def _classify_pipeline_test_command(
-    command: str, cwd: str = "", depth: int = 0,
+    command: str, cwd: str = "", depth: int = 0, start_dir: "str | None" = None,
 ) -> "tuple[list[str], list[str]]":
     """Classify a Bash command for pipeline_test_gate → ``(hits, test_files)``.
 
@@ -3563,19 +3711,41 @@ def _classify_pipeline_test_command(
     pytest (e.g. `ps aux | grep pytest`, `pkill -f pytest`); `echo "pytest finished"`
     after a kill is not triage. `pytest --version` / `--help` only print, so they are
     not a hit. Python reading code from stdin (`python - <<EOF`, `... | python`) is a
-    hit when the command text names pytest or vitest (the heredoc body is in it)."""
+    hit when the command text names pytest or vitest (the heredoc body is in it).
+
+    A cd / pushd / popd segment moves the directory later segments run in (make's
+    Makefile lookup and a nested `bash -c`), starting from *start_dir* (None = *cwd*).
+    The move applies only across `&&` / `;`; after `||`, `|` or `&` the directory is
+    unknown (""), and `( ... )` restores the outer one. Unknown → a bare make is not a
+    hit; explicit make targets and every other family are unaffected."""
     hits: set = set()
     files: list = []
     normalized = _normalize_newlines_quote_aware(command)
     regex_pytest = 0
     if _PYTEST_INVOCATION_RE.search(normalized) and _pytest_token_is_command_word(normalized):
         regex_pytest = len(_PYTEST_INVOCATION_RE.findall(normalized))
-    segments = _gate_shell_segments(command)
+    seps: list[str] = []
+    segments = _gate_shell_segments(command, seps)
     info_runs = 0
     if segments is not None:
         progs: list[str] = []
-        for seg in segments:
-            progs.append(_classify_test_segment(seg, cwd, depth, hits, files))
+        cur = cwd if start_dir is None else start_dir
+        stack: list[str] = []
+        pending: "str | None" = None  # target of the previous segment if it was a cd
+        for seg, sep in zip(segments, seps):
+            k = 0
+            while k < len(sep):
+                op = sep[k:k + 2] if sep[k:k + 2] in ("&&", "||") else sep[k]
+                k += len(op)
+                if op == "(":
+                    stack.append(cur)
+                elif op == ")":
+                    cur = stack.pop() if stack else ""
+                elif pending is not None:
+                    cur = pending if op in ("&&", ";") else ""
+                pending = None
+            progs.append(_classify_test_segment(seg, cwd, depth, hits, files, cur))
+            pending = _cd_segment_target(seg, cur)
             if "_pytest_info" in hits:  # marker is per segment: count it, then drop it
                 info_runs += 1
                 hits.discard("_pytest_info")
