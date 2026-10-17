@@ -114,6 +114,27 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(p.kind === 'process' && p.isLive).toBe(true);
   });
 
+  it('live row carries the LAST line of the newest thinking', () => {
+    const th = { type: 'thinking', thinking: 'First I read the config.\n\nThen compare the two thresholds.\n' } as ContentBlock;
+    const p = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th], true).units[0];
+    expect(p.kind === 'process' && p.live?.thinking).toBe('Then compare the two thresholds.');
+    expect(p.kind === 'process' && p.live?.note).toBeUndefined();
+  });
+
+  it('a note newer than the thinking replaces it on the live row, and vice versa', () => {
+    const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
+    const noteAfter = deriveTurnView([th('old thought'), tx('checking logs'), tu('a', 'Running: ls')], true).units[0];
+    expect(noteAfter.kind === 'process' && noteAfter.live).toMatchObject({ note: 'checking logs', thinking: undefined });
+    const thoughtAfter = deriveTurnView([tx('checking logs'), tu('a', 'Running: ls'), tr('a'), th('new thought')], true).units[0];
+    expect(thoughtAfter.kind === 'process' && thoughtAfter.live).toMatchObject({ note: undefined, thinking: 'new thought' });
+  });
+
+  it('a finished turn has no live thinking line', () => {
+    const th = { type: 'thinking', thinking: 'plan' } as ContentBlock;
+    const p = deriveTurnView([th, tu('a', 'Running: ls'), tr('a'), tx('done')], false).units[0];
+    expect(p.kind === 'process' && p.live).toBeUndefined();
+  });
+
   it('the live row carries the latest note written between tools', () => {
     const view = deriveTurnView([tu('a', 'Running: ls'), tx('checking the config next'), tu('b', 'Reading /r/c.json', 'Read', 'read')], true);
     const p = view.units[0];

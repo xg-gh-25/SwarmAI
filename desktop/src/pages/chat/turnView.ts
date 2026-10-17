@@ -85,8 +85,10 @@ export interface ProcessUnit {
   steps: Step[];
   /** True only for the last unit of a streaming message — the work in progress. */
   isLive: boolean;
-  /** What the live row shows: the pending tool (if any) and the latest note. */
-  live?: { step?: ToolStep; note?: string };
+  /** What the live row shows: the pending tool (if any), the latest note, and —
+   *  when the model's newest non-tool output is thinking — that thinking's last
+   *  line, so the collapsed row follows what the model is thinking right now. */
+  live?: { step?: ToolStep; note?: string; thinking?: string };
   /** The turn's final tool failed and nothing followed it — shown outside the fold. */
   unrecoveredFailure?: ToolStep;
 }
@@ -269,7 +271,13 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
         (s): s is ToolStep => s.kind === 'tool' && s.status === 'pending',
       );
       const note = [...last.steps].reverse().find((s): s is NoteStep => s.kind === 'note');
-      last.live = { step: pending, note: note?.text };
+      // Newest note-or-thinking wins: a fresh thought replaces an older note on
+      // the live row, and a newer note replaces an older thought.
+      const latest = [...last.steps].reverse().find(
+        (s): s is NoteStep | ThinkingStep => s.kind === 'note' || s.kind === 'thinking',
+      );
+      const thinking = latest?.kind === 'thinking' ? lastLine(latest.text) : undefined;
+      last.live = { step: pending, note: thinking ? undefined : note?.text, thinking };
     }
   }
 
@@ -286,6 +294,12 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
     .map((u) => u.text)
     .join('\n\n');
   return { units, nextSteps, copyText };
+}
+
+/** Last non-empty line of a (possibly still-streaming) thinking summary. */
+function lastLine(text: string): string | undefined {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : undefined;
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────

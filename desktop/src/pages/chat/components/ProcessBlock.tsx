@@ -135,7 +135,9 @@ function StepRow({ step }: { step: Step }) {
   if (step.kind === 'tool') return <ToolStepRow step={step} />;
   if (step.kind === 'thinking') {
     return (
-      <details className="px-2 py-1 text-[13px] text-[var(--color-text-muted)]">
+      // Open by default: the user expanded the process to see it. Uncontrolled
+      // after mount, so collapsing one thought survives streaming re-renders.
+      <details open className="px-2 py-1 text-[13px] text-[var(--color-text-muted)]">
         <summary className="cursor-pointer select-none">{tf(t, 'chat.turn.thought', 'Thought')}</summary>
         <div className="mt-1 ml-1 italic text-[12px] whitespace-pre-wrap max-h-64 overflow-y-auto">{step.text}</div>
       </details>
@@ -255,6 +257,15 @@ export function ProcessBlock({ unit, expanded, onToggle, startedAt }: ProcessBlo
           {unit.live?.note && (
             <div className="py-0.5 text-[12.5px] leading-relaxed text-[var(--color-text-dim)] line-clamp-3 whitespace-pre-wrap">
               {unit.live.note}
+            </div>
+          )}
+          {unit.live?.thinking && (
+            <div
+              data-testid="process-live-thinking"
+              title={unit.live.thinking}
+              className="py-0.5 text-[12.5px] italic text-[var(--color-text-dim)] truncate"
+            >
+              {unit.live.thinking}
             </div>
           )}
           <div className="flex items-center gap-2.5 py-1 text-[13px] text-[var(--color-text-muted)] min-h-[28px] min-w-0">

@@ -212,6 +212,27 @@ describe('AssistantMessageView — Gate-2 fixes', () => {
 });
 
 describe('AssistantMessageView — live row between steps', () => {
+  it('collapsed live row shows the newest thought as one italic line; expanded, the Thought is open', () => {
+    const th = { type: 'thinking', thinking: 'Read the config first.\nThen compare both thresholds.' } as ContentBlock;
+    renderView([tu('a', 'Running: ls'), tr('a'), th], { isStreaming: true });
+    const line = screen.getByTestId('process-live-thinking');
+    expect(line.textContent).toBe('Then compare both thresholds.');
+    expect(line.className).toMatch(/italic/);
+    expect(line.className).toMatch(/truncate/);
+    fireEvent.click(screen.getByTestId('process-row'));
+    expect(screen.queryByTestId('process-live-thinking')).toBeNull();
+    const details = document.querySelector('details');
+    expect(details?.open).toBe(true);
+    expect(details?.textContent).toContain('Read the config first.');
+  });
+
+  it('finished turn: no live thought line, process stays folded', () => {
+    const th = { type: 'thinking', thinking: 'deliberating' } as ContentBlock;
+    renderView([th, tu('a', 'Running: ls'), tx('the answer')]);
+    expect(screen.queryByTestId('process-live-thinking')).toBeNull();
+    expect(document.querySelector('details')).toBeNull();
+  });
+
   it('after a tool returns and before the next starts, the live row still spins', () => {
     const { container } = renderView([tu('a', 'Running: ls'), tr('a')], { isStreaming: true });
     const live = screen.getByTestId('process-live');
