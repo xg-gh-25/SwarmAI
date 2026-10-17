@@ -12,8 +12,13 @@ Key design decisions:
   startup.  All ``get()`` calls return from the cache.
 - **Secret filtering on writes**: ``update()`` strips AWS credentials, API keys,
   and bearer tokens before persisting to disk.
-- **Graceful fallback**: If the config file is missing, empty, or contains
-  invalid JSON, the manager falls back to ``DEFAULT_CONFIG``.
+- **Preserve, never destroy**: A missing config file is created from
+  ``DEFAULT_CONFIG``. A present-but-unreadable one (empty, invalid JSON, not a
+  dict) — and likewise an unparseable ``secrets.json`` — is renamed to
+  ``<name>.corrupt-<ts>`` and surfaced via the recovery marker BEFORE anything
+  replaces it; if it cannot be preserved it is left untouched (STEERING #20).
+- **Atomic writes**: config.json and secrets.json are written via a temp file
+  + ``os.replace`` so a crash can never leave a truncated file.
 - **Legacy migration**: On first load, if the new path doesn't exist but the
   legacy ``~/.swarm-ai/config.json`` does, the file is moved automatically.
 - **File permissions**: The config file is created with ``0o600`` (owner
@@ -173,7 +178,18 @@ class AppConfigManager:
         # API key survives a daemon restart (config.json strips secrets by
         # design — see _write_to_disk).
         self._secret_path: Path = self._config_path.parent / "secrets.json"
+        # Where a corruption-recovery marker goes. The default config lives in the
+        # app data dir, which attention_authority scans; a custom path (tests,
+        # tooling) keeps its marker next to itself so it never writes into the
+        # live app dir.
+        self._marker_dir: Path = (
+            get_app_data_dir() if config_path is None else self._config_path.parent
+        )
         self._cache: dict[str, Any] | None = None
+        # True while config.json is unreadable AND could not be isolated: every
+        # write must re-attempt preservation first, or the first update() after
+        # a failed isolation would overwrite the very file load() refused to touch.
+        self._unpreserved_corrupt: bool = False
 
     # -- public API --------------------------------------------------------
 
@@ -182,8 +198,13 @@ class AppConfigManager:
 
         Called once at startup.  Migrates from the legacy location
         (``~/.swarm-ai/config.json``) if the new path doesn't exist yet.
-        If the file is missing, empty, or contains invalid JSON the cache
-        is populated with ``DEFAULT_CONFIG`` and written to disk.
+        If the file is missing the cache is populated with ``DEFAULT_CONFIG``
+        and written to disk. If it is present but unreadable as a JSON object
+        (empty, invalid JSON, not a dict) it is first ISOLATED — renamed to
+        ``config.json.corrupt-<ts>`` and surfaced via the recovery marker — and
+        only then replaced with defaults; if it cannot be isolated it is left
+        untouched and the process runs on in-memory defaults (STEERING #20:
+        never overwrite a user store you could not preserve).
 
         Returns:
             The loaded (or default) configuration dict.
@@ -200,6 +221,7 @@ class AppConfigManager:
                 except OSError as exc:
                     logger.warning("Failed to migrate legacy config.json: %s", exc)
 
+        self._unpreserved_corrupt = False
         try:
             raw = self._config_path.read_text(encoding="utf-8").strip()
             if not raw:
@@ -219,13 +241,20 @@ class AppConfigManager:
             self._cache = dict(DEFAULT_CONFIG)
             self._write_to_disk()
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning(
-                "Invalid config at %s (%s) — using defaults",
-                self._config_path,
-                exc,
-            )
             self._cache = dict(DEFAULT_CONFIG)
-            self._write_to_disk()
+            if self._isolate_corrupt(self._config_path, exc):
+                logger.error(
+                    "Invalid config at %s (%s) — original isolated, using defaults",
+                    self._config_path, _describe_parse_error(exc),
+                )
+                self._write_to_disk()
+            else:
+                self._unpreserved_corrupt = True
+                logger.error(
+                    "Invalid config at %s (%s) could NOT be isolated — left untouched; "
+                    "running on in-memory defaults (nothing written)",
+                    self._config_path, _describe_parse_error(exc),
+                )
         # Hydrate secrets from the separate 0o600 store into the cache (never
         # from config.json). This makes SECRET_KEYS durable across restarts.
         self._load_secrets()
@@ -256,19 +285,20 @@ class AppConfigManager:
     def set_secret(self, key: str, value: str) -> None:
         """Persist a single SECRET_KEYS value to the durable 0o600 secret store.
 
-        Writes to the cache (so the current process sees it immediately, e.g.
-        _configure_claude_environment at the next spawn) AND to secrets.json
-        (so it survives a daemon restart). NEVER touches config.json.
+        Writes to secrets.json (so it survives a daemon restart) and then to the
+        cache (so the current process sees it immediately, e.g.
+        _configure_claude_environment at the next spawn). NEVER touches config.json.
 
         Raises ValueError if *key* is not a recognized secret key — this is the
         single sanctioned write path for secrets; arbitrary keys are rejected.
+        Raises RuntimeError if secrets.json exists but cannot be read, or cannot
+        be parsed AND cannot be preserved — writing would destroy the other keys.
         """
         if key not in SECRET_KEYS:
             raise ValueError(f"{key!r} is not a secret key; use update() for non-secrets")
         if self._cache is None:
             self.load()
         assert self._cache is not None
-        self._cache[key] = value
         self._secret_path.parent.mkdir(parents=True, exist_ok=True)
         # Serialize the read-modify-write across processes. The lock is held on a
         # PERSISTENT sibling lockfile (secrets.json.lock) — NOT on secrets.json
@@ -282,7 +312,6 @@ class AppConfigManager:
         # own key, and replace → last writer wins, first key lost (classic
         # lost-update on the shared secret store).
         from utils.file_lock import flock_exclusive, flock_unlock
-        import os as _os
         lock_path = str(self._secret_path) + ".lock"
         try:
             lock_fd = open(lock_path, "w")
@@ -300,40 +329,49 @@ class AppConfigManager:
         try:
             flock_exclusive(lock_fd)
             # Read-modify-write the secret store, preserving other secrets.
+            # A missing store starts empty. A store that exists but does not
+            # parse as a JSON object still holds the user's OTHER keys, so it is
+            # isolated (preserved) before being replaced — never silently reset
+            # to {}. A store that cannot be READ at all (permissions, I/O) is not
+            # evidence of corruption: refuse, and write nothing.
             existing: dict[str, Any] = {}
             try:
-                raw = self._secret_path.read_text(encoding="utf-8").strip()
-                if raw:
+                raw: str | None = self._secret_path.read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                raw = ""
+            except UnicodeDecodeError:
+                raw = None  # undecodable bytes = unparseable content, not an I/O failure
+            except OSError as e:
+                raise RuntimeError(
+                    f"Cannot read secret store {self._secret_path} ({type(e).__name__}) "
+                    f"— refusing to overwrite it."
+                ) from e
+            if raw is None or raw:
+                try:
+                    if raw is None:
+                        raise ValueError("not valid UTF-8")
                     loaded = json.loads(raw)
-                    if isinstance(loaded, dict):
-                        existing = loaded
-            except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
-                existing = {}
+                    if not isinstance(loaded, dict):
+                        raise ValueError("root is not a JSON object")
+                    existing = loaded
+                except ValueError as parse_exc:  # JSONDecodeError is a ValueError
+                    if not self._isolate_corrupt(self._secret_path, parse_exc):
+                        raise RuntimeError(
+                            f"Secret store {self._secret_path} is unreadable and could "
+                            f"not be preserved — refusing to overwrite it."
+                        ) from parse_exc
             existing[key] = value
-            # Atomic 0o600 write: write to a temp file created 0o600, then os.replace
-            # onto the target (rename is atomic on the same filesystem). A crash can
-            # never leave a truncated secrets.json → the persisted key is durable.
-            tmp_path = str(self._secret_path) + ".tmp"
-            fd = _os.open(tmp_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
-            try:
-                with _os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    fh.write(json.dumps(existing, indent=2) + "\n")
-                    fh.flush()
-                    _os.fsync(fh.fileno())
-                _os.replace(tmp_path, str(self._secret_path))
-                _os.chmod(str(self._secret_path), 0o600)  # re-assert after replace
-            finally:
-                if _os.path.exists(tmp_path):
-                    try:
-                        _os.unlink(tmp_path)
-                    except OSError:
-                        pass
+            # Atomic 0o600 write — a crash can never leave a truncated secrets.json.
+            _atomic_write_text(self._secret_path, json.dumps(existing, indent=2) + "\n")
         finally:
             try:
                 flock_unlock(lock_fd)
             except OSError:
                 pass
             lock_fd.close()
+        # Only after the durable write succeeded — a refused write must not leave
+        # the process using a secret that would vanish on restart.
+        self._cache[key] = value
         logger.info("Secret persisted: %s (secrets.json, 0o600)", key)
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -349,13 +387,27 @@ class AppConfigManager:
         """Merge *updates* into the cache and persist to disk.
 
         Secret keys (see ``SECRET_KEYS``) are silently stripped before
-        the dict is written to the config file.
+        the dict is written to the config file. The cache only changes once
+        the write has succeeded, so a refused write never leaves the process
+        running on settings that are not on disk.
+
+        Raises:
+            RuntimeError: config.json was found unreadable at load(), could not
+                be preserved then, and still cannot be — writing would destroy
+                it. (Re-checked here first: a file fixed by hand since load(),
+                or one that can now be isolated, unblocks the write.)
         """
-        if self._cache is None:
-            self.load()
+        if self._cache is None or self._unpreserved_corrupt:
+            self.load()  # re-reads a hand-fixed file / retries isolation
+        if self._unpreserved_corrupt:
+            raise RuntimeError(
+                f"{self._config_path} is unreadable and could not be preserved — "
+                f"refusing to overwrite it. Fix or move the file, then retry."
+            )
         assert self._cache is not None
-        self._cache.update(updates)
-        self._write_to_disk()
+        candidate = {**self._cache, **updates}
+        self._write_to_disk(candidate)
+        self._cache = candidate
         logger.info("Config updated: %s", list(updates.keys()))
 
     def reload(self) -> None:
@@ -365,23 +417,117 @@ class AppConfigManager:
 
     # -- private helpers ----------------------------------------------------
 
-    def _write_to_disk(self) -> None:
-        """Persist the current cache to disk, stripping secret keys."""
-        if self._cache is None:
+    def _write_to_disk(self, data: dict[str, Any] | None = None) -> None:
+        """Persist *data* (default: the current cache) to disk, stripping secret keys."""
+        data = self._cache if data is None else data
+        if data is None:
             return
+        if self._unpreserved_corrupt:
+            # Defence in depth: update() already refuses in this state; no write
+            # path may replace a file that load() could not preserve.
+            raise RuntimeError(
+                f"{self._config_path} is unreadable and could not be preserved — "
+                f"refusing to overwrite it."
+            )
 
-        clean = {
-            k: v for k, v in self._cache.items() if k not in SECRET_KEYS
-        }
+        clean = {k: v for k, v in data.items() if k not in SECRET_KEYS}
 
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._config_path.write_text(
-            json.dumps(clean, indent=2, default=str) + "\n",
-            encoding="utf-8",
+        # Atomic (temp + fsync + os.replace): a crash mid-write must never leave
+        # a truncated config.json — that empty/partial file is exactly what
+        # load() would then have to treat as corrupt.
+        _atomic_write_text(
+            self._config_path, json.dumps(clean, indent=2, default=str) + "\n"
         )
 
+    def _isolate_corrupt(self, path: Path, exc: Exception) -> bool:
+        """PRESERVE an unreadable store before anything is written in its place.
+
+        Renames ``path`` to ``<name>.corrupt-<ts>`` (``data_safety.isolate_store``,
+        never a delete) and records a recovery marker so the recover-vs-discard
+        decision is surfaced to the user (``attention_authority``). Returns False
+        if the store could NOT be preserved — the caller must then leave it alone.
+        The marker reason carries only the error type/position, never file
+        content (it is shown in chat; this may be the secret store).
+        """
+        from core.data_safety import IsolationError, isolate_store, write_recovery_marker
+
         try:
-            os.chmod(self._config_path, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError as exc:
-            logger.debug("Could not set file permissions: %s", exc)
+            isolated = isolate_store(path)
+        except IsolationError as iso_exc:
+            logger.error("Could not isolate unreadable %s: %s", path, iso_exc)
+            # Still tell the user: this is the case they most need to know about
+            # (writes to the file are refused until it is fixed or moved). The
+            # marker points at the ORIGINAL path, which is still in place. One entry
+            # per file: every retry (each update()/set_secret/boot) fails the same
+            # way, and the marker only prunes entries whose path disappeared.
+            try:
+                from core.data_safety import read_recovery_marker
+
+                pending = (read_recovery_marker(self._marker_dir) or {}).get("pending") or []
+                if any(Path(e.get("isolated_path", "")) == path for e in pending):
+                    return False
+                write_recovery_marker(
+                    self._marker_dir,
+                    isolated_path=path,
+                    reason=(
+                        f"{path.name} could not be parsed ({_describe_parse_error(exc)}) "
+                        f"and could NOT be moved aside ({type(iso_exc).__name__}). It has "
+                        f"been left untouched; changes to it are refused until it is "
+                        f"fixed or moved."
+                    ),
+                )
+            except Exception as mk_exc:  # noqa: BLE001 — surfacing is best-effort
+                logger.error("Failed to write recovery marker for %s: %s", path, mk_exc)
+            return False
+        try:
+            write_recovery_marker(
+                self._marker_dir,
+                isolated_path=isolated,
+                reason=(
+                    f"{path.name} could not be parsed ({_describe_parse_error(exc)}) and "
+                    f"was isolated instead of overwritten. A fresh {path.name} is now in "
+                    f"use; your previous file is preserved."
+                ),
+            )
+        except Exception as mk_exc:  # noqa: BLE001 — surfacing is best-effort; data already preserved
+            logger.error("Failed to write recovery marker for %s: %s", isolated, mk_exc)
+        return True
+
+
+def _describe_parse_error(exc: Exception) -> str:
+    """Error type + position only — never the parsed document's content."""
+    if isinstance(exc, json.JSONDecodeError):
+        return f"JSONDecodeError: {exc.msg} at line {exc.lineno} column {exc.colno}"
+    return f"{type(exc).__name__}: {exc}" if isinstance(exc, ValueError) else type(exc).__name__
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically with 0o600 permissions.
+
+    A uniquely-named temp file in the same directory (``mkstemp`` creates it
+    0o600) is written, fsync'd and ``os.replace``d onto ``path``. A unique name —
+    not a fixed ``<file>.tmp`` — because several AppConfigManager instances can
+    write in one process without a shared lock, and a fixed name would let one
+    writer's cleanup delete another's temp file mid-write.
+    """
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # re-assert after replace
+    except OSError as exc:
+        logger.debug("Could not set file permissions: %s", exc)

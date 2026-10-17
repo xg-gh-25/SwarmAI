@@ -382,6 +382,10 @@ def _collect_db_recovery() -> list[AttentionItem]:
     NON-SILENT — the decision reaches the user IN their chat at the next session
     open (STEERING #20 'reach the human'), not just a passive log line.
 
+    The same marker also carries non-DB stores isolated by AppConfigManager
+    (an unparseable ``config.json`` / ``secrets.json``); those get their own
+    store-specific title + recovery steps, chosen from the isolated file name.
+
     OS-level (brain=None, like governance). Fail-soft: any error → [].
     """
     items: list[AttentionItem] = []
@@ -402,12 +406,85 @@ def _collect_db_recovery() -> list[AttentionItem]:
         # discipline (which MEMORY warns does not hold).
         pending = marker.get("pending") or [marker]  # legacy flat marker → single entry
         any_live = False
+        seen_ids: set[str] = set()  # one item per store even if the marker repeats it
         for entry in pending:
             isolated = entry.get("isolated_path", "")
             reason = entry.get("reason", "A corrupt database was isolated at boot.")
             if not isolated or isolated == "<already-absent>" or not _Path(isolated).exists():
                 continue  # resolved (or nothing to recover) → don't surface
+            store_name = _Path(isolated).name.split(".corrupt-")[0]
+            if ".corrupt-" not in _Path(isolated).name and not store_name.startswith("data.db"):
+                # Could-not-isolate entry (AppConfigManager): the marker points at
+                # the ORIGINAL file, left in place. Resolved once it parses again
+                # (fixed by hand) — its mere existence is not "pending".
+                try:
+                    import json as _json
+                    _text = _Path(isolated).read_text(encoding="utf-8").strip()
+                    # Mirrors the readers: an empty secrets.json is a valid (empty)
+                    # store for set_secret; config.json must be a JSON object.
+                    if (not _text and store_name == "secrets.json") or isinstance(_json.loads(_text), dict):
+                        continue
+                except Exception:  # noqa: BLE001 — still unreadable → keep surfacing
+                    pass
+                if f"db_recovery:{isolated}" in seen_ids:
+                    continue
+                seen_ids.add(f"db_recovery:{isolated}")
+                any_live = True
+                consequence = (
+                    "saving API keys is refused" if store_name == "secrets.json"
+                    else "settings changes are refused and the app is running on default "
+                         "settings in memory"
+                )
+                items.append(AttentionItem(
+                    id=f"db_recovery:{isolated}",
+                    source="db_recovery",
+                    tier=TIER_BLOCKING,
+                    brain=None,
+                    title=f"{store_name} is unreadable and could not be preserved — fix or move it",
+                    detail=reason,
+                    dispatch={
+                        "message": (
+                            f"{store_name} at {isolated} could not be parsed and could not be "
+                            f"moved aside automatically, so it was left untouched.\n\n"
+                            f"{reason}\n\nUntil it is fixed, {consequence}. Fix the JSON in "
+                            f"place, or move the file elsewhere — the next change re-checks it "
+                            f"(or restart the app)."
+                        ),
+                        "context": {"kind": "db_recovery", "isolated_path": isolated},
+                    },
+                ))
+                continue
             any_live = True
+            if not store_name.startswith("data.db"):
+                # A non-DB store (config.json / secrets.json via AppConfigManager)
+                # shares the marker but NOT the DB recovery steps: there is no
+                # connection pool or -wal/-shm, and the fix is usually a one-line
+                # JSON repair of the preserved file.
+                items.append(AttentionItem(
+                    id=f"db_recovery:{isolated}",
+                    source="db_recovery",
+                    tier=TIER_BLOCKING,
+                    brain=None,
+                    title=f"{store_name} was unreadable and has been preserved — recover or discard?",
+                    detail=reason,
+                    dispatch={
+                        "message": (
+                            f"{store_name} could not be parsed, so it was isolated instead "
+                            f"of being overwritten. A fresh {store_name} is in use now; your "
+                            f"previous file is preserved (not deleted) at: {isolated}\n\n"
+                            f"{reason}\n\n"
+                            "Decide: RECOVER or DISCARD.\n"
+                            f"RECOVER = fix the JSON in the preserved file, then MOVE it back "
+                            f"over {store_name} (moving it clears this notice) and restart the "
+                            "app so it is re-read (merge by hand if you have changed settings "
+                            "since).\n"
+                            "DISCARD = delete the preserved file once you are sure nothing in "
+                            "it is needed."
+                        ),
+                        "context": {"kind": "db_recovery", "isolated_path": isolated},
+                    },
+                ))
+                continue
             items.append(AttentionItem(
                 id=f"db_recovery:{isolated}",
                 source="db_recovery",

@@ -8,7 +8,7 @@ Key invariants verified:
 
 - ``get()`` returns from cache with zero file IO after ``load()``
 - ``update()`` never writes secret keys to the config file
-- Missing / empty / invalid JSON falls back to ``DEFAULT_CONFIG``
+- Missing / empty / invalid JSON falls back to ``DEFAULT_CONFIG`` (a present-but-unreadable file is isolated first, never overwritten)
 - ``reload()`` re-reads from disk and refreshes the cache
 - File is created with ``0o600`` permissions
 - Migration only runs when ``config.json`` is missing
@@ -444,3 +444,229 @@ class TestSingletonAccessorContract:
         assert mgr.get("workspace_path") == "/tmp/ws-under-test"
         on_disk = json.loads(tmp_config.read_text(encoding="utf-8"))
         assert on_disk["workspace_path"] == "/tmp/ws-under-test"
+
+
+# ---------------------------------------------------------------------------
+# Corruption handling — PRESERVE, never destroy (STEERING #20)
+# ---------------------------------------------------------------------------
+
+class TestCorruptStoreIsPreserved:
+    """A present-but-unreadable config.json / secrets.json must be ISOLATED
+    (renamed to ``<name>.corrupt-<ts>``, bytes intact) and surfaced via the
+    recovery marker BEFORE anything is written in its place. Overwriting it
+    with defaults destroys the user's settings / API keys."""
+
+    @staticmethod
+    def _corrupt_copies(directory: Path, name: str) -> list[Path]:
+        return sorted(directory.glob(f"{name}.corrupt-*"))
+
+    @staticmethod
+    def _marker(directory: Path) -> dict | None:
+        from core.data_safety import read_recovery_marker
+        return read_recovery_marker(directory)
+
+    @pytest.mark.parametrize("content", ["{not valid json!!", "[1, 2, 3]", "   "])
+    def test_invalid_config_is_isolated_before_defaults_written(self, tmp_config, content):
+        tmp_config.write_text(content, encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        result = mgr.load()
+
+        copies = self._corrupt_copies(tmp_config.parent, "config.json")
+        assert len(copies) == 1, "corrupt config.json must be preserved by rename"
+        assert copies[0].read_text(encoding="utf-8") == content
+        assert result == DEFAULT_CONFIG
+        assert json.loads(tmp_config.read_text(encoding="utf-8"))["default_model"] == DEFAULT_CONFIG["default_model"]
+
+        marker = self._marker(tmp_config.parent)
+        assert marker is not None, "isolation must be surfaced via the recovery marker"
+        assert any(Path(e["isolated_path"]) == copies[0] for e in marker["pending"])
+
+    def test_isolation_failure_never_overwrites_the_original(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+
+        def _fail(_target):
+            raise ds.IsolationError("read-only fs")
+
+        monkeypatch.setattr(ds, "isolate_store", _fail)
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        result = mgr.load()
+
+        assert result == DEFAULT_CONFIG, "runs degraded on in-memory defaults"
+        assert tmp_config.read_text(encoding="utf-8") == "{half-written", (
+            "a store that could not be preserved must be left untouched"
+        )
+
+    def test_missing_config_creates_defaults_without_isolation(self, tmp_config):
+        AppConfigManager(config_path=tmp_config).load()
+        assert tmp_config.exists()
+        assert self._corrupt_copies(tmp_config.parent, "config.json") == []
+        assert self._marker(tmp_config.parent) is None
+
+    def test_corrupt_secrets_is_isolated_before_new_key_written(self, tmp_config):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        secrets = tmp_config.parent / "secrets.json"
+        secrets.write_text('{"anthropic_api_key": "sk-old", ', encoding="utf-8")
+
+        mgr.set_secret("aws_bearer_token_bedrock", "tok-new")
+
+        copies = self._corrupt_copies(tmp_config.parent, "secrets.json")
+        assert len(copies) == 1, "corrupt secrets.json must be preserved by rename"
+        assert "sk-old" in copies[0].read_text(encoding="utf-8")
+        assert json.loads(secrets.read_text(encoding="utf-8")) == {"aws_bearer_token_bedrock": "tok-new"}
+        assert self._marker(tmp_config.parent) is not None
+
+    def test_unreadable_secrets_raises_and_writes_nothing(self, tmp_config, monkeypatch):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        secrets = tmp_config.parent / "secrets.json"
+        secrets.write_text('{"anthropic_api_key": "sk-keep"}', encoding="utf-8")
+
+        real_read_text = Path.read_text
+
+        def _read_text(self, *a, **kw):
+            if self == secrets:
+                raise PermissionError("EACCES")
+            return real_read_text(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", _read_text)
+        with pytest.raises(RuntimeError):
+            mgr.set_secret("aws_bearer_token_bedrock", "tok-new")
+        monkeypatch.setattr(Path, "read_text", real_read_text)
+
+        assert json.loads(secrets.read_text(encoding="utf-8")) == {"anthropic_api_key": "sk-keep"}
+        assert self._corrupt_copies(tmp_config.parent, "secrets.json") == []
+
+    def test_config_write_is_atomic(self, tmp_config, monkeypatch):
+        import os
+
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        calls: list[tuple[str, str]] = []
+        real_replace = os.replace
+
+        def _spy(src, dst):
+            calls.append((str(src), str(dst)))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", _spy)
+        mgr.update({"aws_region": "eu-west-1"})
+
+        assert any(dst == str(tmp_config) for _src, dst in calls), "config.json must be os.replace()d into place"
+        assert json.loads(tmp_config.read_text(encoding="utf-8"))["aws_region"] == "eu-west-1"
+        assert stat.S_IMODE(tmp_config.stat().st_mode) == 0o600
+        assert list(tmp_config.parent.glob("config.json.tmp*")) == []
+        assert [p for p in tmp_config.parent.iterdir() if p.name.startswith(".config.json")] == []
+
+
+class TestUnpreservedCorruptStoreStaysProtected:
+    """If isolation failed at load(), a LATER write must not overwrite the file."""
+
+    def test_update_after_failed_isolation_refuses_while_still_unpreservable(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+
+        def _fail(_target):
+            raise ds.IsolationError("read-only fs")
+
+        monkeypatch.setattr(ds, "isolate_store", _fail)
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        with pytest.raises(RuntimeError):
+            mgr.update({"aws_region": "eu-west-1"})
+        assert tmp_config.read_text(encoding="utf-8") == "{half-written"
+
+    def test_update_after_failed_isolation_isolates_once_possible(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+
+        real = ds.isolate_store
+        state = {"fail": True}
+
+        def _flaky(target):
+            if state["fail"]:
+                raise ds.IsolationError("transient")
+            return real(target)
+
+        monkeypatch.setattr(ds, "isolate_store", _flaky)
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        state["fail"] = False
+        mgr.update({"aws_region": "eu-west-1"})
+
+        copies = sorted(tmp_config.parent.glob("config.json.corrupt-*"))
+        assert len(copies) == 1 and copies[0].read_text(encoding="utf-8") == "{half-written"
+        assert json.loads(tmp_config.read_text(encoding="utf-8"))["aws_region"] == "eu-west-1"
+
+    def test_refused_update_leaves_cache_unchanged(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+
+        monkeypatch.setattr(ds, "isolate_store", lambda _t: (_ for _ in ()).throw(ds.IsolationError("ro")))
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        with pytest.raises(RuntimeError):
+            mgr.update({"aws_region": "eu-west-1"})
+        assert mgr.get("aws_region") == DEFAULT_CONFIG["aws_region"], (
+            "a refused write must not leave the process on unsaved settings"
+        )
+
+    def test_hand_fixed_file_is_adopted_not_isolated(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+
+        monkeypatch.setattr(ds, "isolate_store", lambda _t: (_ for _ in ()).throw(ds.IsolationError("ro")))
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        tmp_config.write_text(json.dumps({"aws_region": "ap-east-1"}), encoding="utf-8")  # user repairs it
+
+        mgr.update({"thinking_effort": "max"})
+
+        on_disk = json.loads(tmp_config.read_text(encoding="utf-8"))
+        assert on_disk["aws_region"] == "ap-east-1", "repaired settings must survive"
+        assert on_disk["thinking_effort"] == "max"
+        assert list(tmp_config.parent.glob("config.json.corrupt-*")) == []
+
+    def test_non_utf8_secrets_is_isolated_not_500(self, tmp_config):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        secrets = tmp_config.parent / "secrets.json"
+        secrets.write_bytes(b"\xff\xfe{")
+        mgr.set_secret("anthropic_api_key", "sk-new")
+        copies = sorted(tmp_config.parent.glob("secrets.json.corrupt-*"))
+        assert len(copies) == 1 and copies[0].read_bytes() == b"\xff\xfe{"
+        assert json.loads(secrets.read_text(encoding="utf-8")) == {"anthropic_api_key": "sk-new"}
+
+    def test_non_utf8_config_is_isolated(self, tmp_config):
+        tmp_config.write_bytes(b"\xff\xfe{")
+        result = AppConfigManager(config_path=tmp_config).load()
+        assert result == DEFAULT_CONFIG
+        copies = sorted(tmp_config.parent.glob("config.json.corrupt-*"))
+        assert len(copies) == 1 and copies[0].read_bytes() == b"\xff\xfe{"
+
+    def test_failed_isolation_is_still_surfaced(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+
+        monkeypatch.setattr(ds, "isolate_store", lambda _t: (_ for _ in ()).throw(ds.IsolationError("ro")))
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        AppConfigManager(config_path=tmp_config).load()
+        from core.data_safety import read_recovery_marker
+        marker = read_recovery_marker(tmp_config.parent)
+        assert marker is not None
+        assert any(Path(e["isolated_path"]) == tmp_config for e in marker["pending"])
+
+    def test_repeated_failed_isolation_writes_one_marker_entry(self, tmp_config, monkeypatch):
+        import core.data_safety as ds
+        from core.data_safety import read_recovery_marker
+
+        monkeypatch.setattr(ds, "isolate_store", lambda _t: (_ for _ in ()).throw(ds.IsolationError("ro")))
+        tmp_config.write_text("{half-written", encoding="utf-8")
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                mgr.update({"aws_region": "eu-west-1"})
+        entries = [e for e in read_recovery_marker(tmp_config.parent)["pending"]
+                   if Path(e["isolated_path"]) == tmp_config]
+        assert len(entries) == 1

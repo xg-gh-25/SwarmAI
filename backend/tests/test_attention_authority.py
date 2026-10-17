@@ -501,3 +501,55 @@ def test_governance_nonfinite_occurrence_does_not_abort_loop(monkeypatch):
     assert "recurred" not in bad.detail  # non-finite → clause dropped, no crash
     good = next(i for i in items if i.id == "governance:good")
     assert "recurred 5×" in good.detail
+
+
+def test_recovery_item_for_a_non_db_store_is_store_specific(tmp_path, monkeypatch):
+    """An isolated config.json/secrets.json must not be described as data.db
+    (daemon connection pool, -wal/-shm) — the recovery steps are different."""
+    from core.data_safety import write_recovery_marker
+    isolated = tmp_path / "config.json.corrupt-x"
+    isolated.write_text("{bad", encoding="utf-8")
+    write_recovery_marker(tmp_path, isolated_path=isolated, reason="invalid JSON")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    items = aa._collect_db_recovery()
+    assert len(items) == 1
+    it = items[0]
+    assert it.tier == TIER_BLOCKING
+    assert "config.json" in it.title
+    assert "data.db" not in it.title and "data.db" not in it.dispatch["message"]
+    assert str(isolated) in it.dispatch["message"]
+
+
+def test_recovery_item_for_data_db_keeps_db_text(tmp_path, monkeypatch):
+    from core.data_safety import write_recovery_marker
+    isolated = tmp_path / "data.db.corrupt-x"
+    isolated.write_text("preserved", encoding="utf-8")
+    write_recovery_marker(tmp_path, isolated_path=isolated, reason="corrupt")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    it = aa._collect_db_recovery()[0]
+    assert it.title.startswith("Database recovery pending")
+    assert "data.db" in it.dispatch["message"]
+
+
+def test_could_not_isolate_entry_surfaces_until_file_parses(tmp_path, monkeypatch):
+    """When a store could not be moved aside, the marker points at the original
+    file; it must surface (the user has to act) and clear once the file parses."""
+    from core.data_safety import write_recovery_marker
+    original = tmp_path / "config.json"
+    original.write_text("{bad", encoding="utf-8")
+    write_recovery_marker(tmp_path, isolated_path=original, reason="could NOT be moved aside")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    items = aa._collect_db_recovery()
+    assert len(items) == 1 and "could not be preserved" in items[0].title
+    original.write_text('{"aws_region": "x"}', encoding="utf-8")  # user fixes it
+    assert aa._collect_db_recovery() == []
+
+
+def test_repeated_entries_for_same_store_surface_once(tmp_path, monkeypatch):
+    from core.data_safety import write_recovery_marker
+    original = tmp_path / "config.json"
+    original.write_text("{bad", encoding="utf-8")
+    for _ in range(3):
+        write_recovery_marker(tmp_path, isolated_path=original, reason="could NOT be moved aside")
+    monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
+    assert len(aa._collect_db_recovery()) == 1

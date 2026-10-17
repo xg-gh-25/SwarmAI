@@ -1167,6 +1167,38 @@ class TestPrivacyGitignoreAndUntrack:
             cwd=ws, timeout=30,
         ).returncode == 0
 
+    def test_template_ignores_secrets_and_isolated_corrupt_copies(self, temp_dir):
+        """secrets.json (API keys) and any <store>.corrupt-<ts> preserved by
+        AppConfigManager / data_safety must never be committable — the isolated
+        secrets copy still holds the keys."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        (Path(ws) / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        self._init_git(ws)
+        for rel in ("secrets.json", "secrets.json.corrupt-20261017-120000-abc123",
+                    "config.json.corrupt-20261017-120000-abc123"):
+            (Path(ws) / rel).write_text("{}", encoding="utf-8")
+            assert subprocess.run(
+                ["git", "check-ignore", "-q", rel], cwd=ws, timeout=30,
+            ).returncode == 0, f"{rel} must be gitignored"
+
+    @pytest.mark.asyncio
+    async def test_migration_appends_secret_rules_to_existing_gitignore(self, temp_dir):
+        """A workspace whose .gitignore predates the rules gets them appended."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        (Path(ws) / ".gitignore").write_text("*.log\n", encoding="utf-8")
+        for d in FOLDER_STRUCTURE:
+            os.makedirs(os.path.join(ws, d), exist_ok=True)
+
+        await SwarmWorkspaceManager().verify_integrity(ws)
+
+        rule_lines = {
+            ln.strip() for ln in (Path(ws) / ".gitignore").read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        }
+        assert {"secrets.json", "*.corrupt-*"} <= rule_lines
+
 
 def _collect_all_files(root: Path) -> dict[str, str]:
     """Walk the workspace and return {relative_path: content} for all files."""

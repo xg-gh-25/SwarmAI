@@ -831,6 +831,13 @@ hook_stats.json
 .swarm_privacy_migrated
 .swarm_ai_instr_untracked
 
+# ── Secrets + isolated corrupt stores — never commit ──
+# secrets.json holds API keys (0o600, see AppConfigManager). A store that could
+# not be parsed is preserved as <name>.corrupt-<ts> (core.data_safety) — the
+# isolated secrets copy still holds those keys, so the pattern must cover it.
+secrets.json
+*.corrupt-*
+
 # ── AI-instruction sentinels — per-machine startup artifacts, never source ──
 # SwarmWS/CLAUDE.md + AGENTS.md are force-reset to a fixed read-only sentinel on
 # every startup + session spawn (see _assert_ai_instruction_sentinels). They are
@@ -2306,7 +2313,8 @@ class SwarmWorkspaceManager:
                 # only if absent — append-only, never rewrites user custom lines.
                 for entry in (
                     ["proactive_state.json", "hook_stats.json", "*.tmp",
-                     ".swarm_ai_instr_untracked", "CLAUDE.md", "AGENTS.md"]
+                     ".swarm_ai_instr_untracked", "CLAUDE.md", "AGENTS.md",
+                     "secrets.json", "*.corrupt-*"]
                     + _PRIVACY_GITIGNORE_RULES
                 ):
                     if entry not in existing_rules:
