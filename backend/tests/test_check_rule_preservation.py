@@ -343,3 +343,39 @@ def test_real_repo_head_has_rules_in_every_doc(tmp_path, capsys):
     ids = [r["id"] for r in m["rules"]]
     assert len(ids) == len(set(ids))
     assert crp.extract(root, m["commit"])["rules"] == m["rules"]  # deterministic
+
+
+def test_only_and_merge_replace_just_those_sources(repo, capsys):
+    """Batched split: `--only build --merge` re-extracts build at a later ref and
+    keeps every other source's rules, IDs and extraction ref untouched."""
+    _run(repo, capsys, "extract")
+    before = _manifest(repo)
+    instr_before = [r for r in before["rules"] if r["source"] == "instr"]
+    _write(repo, "stages/build.md", "# Build\n\n- [MUST] only rule now\n")
+    _commit(repo, "build changed")
+    assert _run(repo, capsys, "extract", "--only", "build", "--merge")[0] == 0
+    after = _manifest(repo)
+    assert [r for r in after["rules"] if r["source"] == "instr"] == instr_before
+    build = [r for r in after["rules"] if r["source"] == "build"]
+    assert [(r["id"], r["text"]) for r in build] == [("R-build-001", "[MUST] only rule now")]
+    refs = {f["source"]: f["commit"] for f in after["files"]}
+    assert refs["build"] != refs["instr"]
+    assert [f["source"] for f in after["files"]] == ["instr", "build", "test"]
+    assert _run(repo, capsys, "extract", "--only", "nope", "--merge")[0] == 2
+
+
+def test_merge_without_manifest_is_usage_error(repo, capsys):
+    assert _run(repo, capsys, "extract", "--only", "build", "--merge")[0] == 2
+
+
+def test_shipped_manifest_rules_are_all_preserved(capsys):
+    """The committed stages/rules.json is the contract of every split so far: each
+    rule it lists must still be tagged in a runtime-read doc of the REAL tree. This
+    is what keeps a later edit of an exec card from silently dropping a rule."""
+    root = crp.repo_root(_SCRIPT.parent)
+    manifest = root / crp.DEFAULT_MANIFEST
+    if not manifest.is_file():
+        pytest.skip("no stage doc has been split yet")
+    code = crp.main(["check", "--repo", str(root)])
+    out = capsys.readouterr().out
+    assert code == 0, out[-3000:]

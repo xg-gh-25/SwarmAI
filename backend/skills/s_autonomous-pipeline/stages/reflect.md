@@ -1,209 +1,52 @@
-# REFLECT Stage
-
-Pipeline-owned stage (no sibling skill).
-
-## Goal Loop Mode (Two-Tier REFLECT)
-
-When the pipeline profile is `goal`, REFLECT operates differently:
-
-### Mini-Reflect (per cycle — handled in goal_cycle.md Step 9)
-
-Not run here. Each cycle appends a one-line insight to the progress file.
-No DDD writes. Accumulates raw material for full REFLECT.
-
-### Full REFLECT (at goal completion — runs HERE)
-
-Triggered when goal_cycle exits with SUCCESS (all DoD met + adversarial clean):
-
-1. **Read all mini-reflects** from the progress file "Cycle Log" section
-2. **Read the goal requirement** and DoD criteria from evaluation artifact
-3. **Distill patterns:**
-   - Which DoD criteria were hardest? Why?
-   - Which cycle actions had highest leverage? (most progress per cycle)
-   - Any recurring blockers across cycles?
-   - What was the velocity curve? (accelerating, decelerating, flat)
-4. **Write to IMPROVEMENT.md:**
-   - "What Worked" entry: the effective patterns from this goal
-   - "What Failed" entry (if cycles stalled): the anti-patterns
-   - Goal completion metadata: total cycles, wall time, criteria count
-5. **Update PROJECT.md:** goal completed, date, cycles taken, key insight
-6. **DDD Cultivation** (Step 7 below): run normally on distilled lessons
-
-Then continue with the Standard Methodology below, starting from Step 4
-(checklist maintenance → ADR gate → dead code → cultivation → record → learn → report).
-
-**For non-goal profiles:** skip this section, start directly at Step 1 below.
-
----
-
-## Methodology (Standard — all profiles except goal's per-cycle mini-reflect) `[MUST]`
-
-> REFLECT has NO validator-required artifact fields (`schema --stage reflect` →
-> required=[]). Every step below (lessons, ADR gate, cultivation, learn, report) is
-> agent-discipline `[MUST]` — the cultivation/learn/report are real scripts the agent
-> invokes, not publish-blocking gates. "Do NOT skip" here means honor the discipline.
-
-> **⚠️ Lessons were SEEDED in DELIVER — reuse them, do NOT re-extract.** The DELIVER
-> stage's "Pipeline Report" step already extracted this run's lessons and wrote them into
-> THIS reflect stage record's `lessons` field (that is what makes the git-committed audit
-> report carry §9 before run-commit — see deliver.md). So Step 1 below is a REUSE +
-> finalize, not a fresh extraction: read the lessons already in the reflect record, refine
-> only if REFLECT surfaces something genuinely new, and do NOT author a DIFFERENT set (two
-> sources of §9 re-introduces the drift this split removed). REFLECT's distinct job is
-> everything DELIVER did NOT do: the IMPROVEMENT.md/MEMORY.md writes (Steps 2-3), the ADR
-> gate (Step 5), DDD cultivation (Step 7), and finalizing the reflect record to
-> `completed` (Step 8).
-
-1. Reuse the lessons already seeded into the reflect stage record (by DELIVER); extract
-   additional ones ONLY if REFLECT genuinely surfaces new material
-2. Write to IMPROVEMENT.md: what worked, what failed, patterns discovered
-3. Update MEMORY.md if the lesson is cross-project
-4. **Checklist maintenance** -- if any post-pipeline review (E2E, external,
-   or user feedback) found bugs that the pipeline missed:
-   a. Classify each missed bug: does it fit an existing RP pattern?
-   b. If yes -- the checklist was applied but missed (investigate why)
-   c. If no -- **add a new RP pattern** to the Runtime Pattern Checklist
-      at `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md`.
-      Include: trigger condition, what to verify, and the real bug as the example.
-   d. If the bug is a resource type missing from the lifecycle table --
-      **add the row** to the Resource Lifecycle table (BUILD Step 4 in
-      `backend/skills/s_autonomous-pipeline/stages/build.md`).
-   This ensures the pipeline learns from every review cycle. Without
-   this step, lessons live in IMPROVEMENT.md but never reach the
-   checklist that would prevent recurrence.
-5. **ADR gate** -- for each **judgment** or **taste** decision classified during
-   the pipeline, check whether it qualifies for an ADR. All three must be true:
-
-   a. **Hard to reverse** — the cost of changing your mind later is meaningful
-   b. **Surprising without context** — a future reader will wonder "why this way?"
-   c. **Real trade-off** — there were genuine alternatives and you picked one
-
-   If all three are true → write a 1-paragraph ADR to IMPROVEMENT.md under a new
-   "### Architecture Decision Records" section (or the project's `docs/adr/`
-   directory if it exists). Format:
-
-   ```markdown
-   **ADR: <short title>** (<date>)
-   <1-3 sentences: context, decision, and why. Include rejected alternative.>
-   ```
-
-   If any of the three is missing, skip. Most decisions don't qualify — easy to
-   reverse (skip), obvious choice (skip), no real alternative (skip). The value
-   is recording the surprising, costly, non-obvious decisions so future pipeline
-   runs don't re-litigate them.
-
-   **Pipeline integration:** When EVALUATE reads IMPROVEMENT.md, it checks ADRs
-   to avoid contradicting existing decisions. If a new requirement conflicts with
-   an ADR, EVALUATE surfaces it explicitly.
-
-6. **Dead Code Checkpoint** (if code_intel.db exists)
-
-   Compare dead code count before vs after this pipeline run:
-   ```python
-   from core.code_intel import load_project_graph
-   g = load_project_graph("PROJECT_NAME")
-   if g:
-       dead = g.find_dead_code()
-       # Compare with snapshot taken at REVIEW Step 0 (if available)
-   ```
-   - If dead code increased: note in IMPROVEMENT.md "What to Watch For"
-   - If dead code decreased: note in "What Worked"
-
-   **Skip** when no `code_intel.db` exists.
-
-7. **DDD Cultivation** — After extracting lessons, cultivate DDD documents:
-
-   ```bash
-   python backend/scripts/artifact_cli.py run-cultivate \
-     --project <PROJECT> --run-id <RUN_ID>
-   ```
-
-   This reads the `lessons` field from the reflect stage in run.json and
-   routes them through the cultivation engine. Output:
-   ```json
-   {"applied": N, "escalated": M, "rejected": K}
-   ```
-
-   **Tiered autonomy model:**
-   - ADDITIVE (IMPROVEMENT.md lessons, TECH.md patterns): auto-applied, logged
-   - RISKY (PRODUCT.md changes, contradictions): escalated to proposal queue
-
-   This is zero-cost (no LLM, keyword heuristic only). Applied changes appear
-   in the weekly DDD report. Escalations surface in session briefing.
-   Do NOT skip this step — it closes the REFLECT → DDD feedback loop.
-
-8. **Record stage with structured lessons in run.json** — the REFLECT stage record
-   MUST include a `lessons` list so REPORT.md can inline them:
-
-```bash
-python backend/scripts/artifact_cli.py run-update --project <PROJECT> \
-  --run-id <RUN_ID> --stage-json '{
-    "stage": "reflect",
-    "status": "completed",
-    "token_cost": <tokens>,
-    "lessons": [
-      "[pitfall] Lesson 1 — concise, actionable, one sentence",
-      "[decision] Lesson 2 — what worked, what failed, what to do differently"
-    ],
-    "decisions": []
-  }'
-```
-
-   **Declare the type — you KNOW it, don't make the classifier guess.** Prefix every
-   lesson with `[type]` (one of the 7: `guideline` `pitfall` `decision` `principle`
-   `correction` `process` `model`). You know at author-time whether a lesson is a
-   *pitfall* (a bug/trap that bit you), a *decision* (a choice you made + why), a
-   *principle* (a first-principle belief), or a *correction* (a wrong→right on your own
-   behavior). Cultivation HONORS the declared type — it drives both the entry's `[type]`
-   tag AND its destination (a `[decision]` → PROJECT § Recent Decisions, `[principle]` →
-   PRODUCT § Design Philosophy, `[correction]` → IMPROVEMENT § What Failed), instead of a
-   keyword guess that structurally over-produces pitfall/guideline. An undeclared or
-   invalid prefix falls back to the keyword guess (safe, but skews the corpus — so declare).
-
-   **Lesson quality bar:** Each lesson must be specific and self-contained.
-   Bad: "3 lessons captured" / "Tests pass" / "Report written"
-   Good: "[pitfall] SMOKE is highest ROI — caught 2 runtime crashes that unit tests missed"
-   Good: "[principle] setTimeout for state propagation is always wrong — use event-driven transitions"
-
-9. Record outcome for learning feedback (calibration):
-
-```bash
-python backend/scripts/artifact_cli.py learn --project <PROJECT> \
-  --evaluation-id <eval_artifact_id> --outcome success \
-  --actual-effort "<T-shirt>" \
-  --lessons "lesson 1;lesson 2"
-```
-
-10. **Regenerate REPORT.md** — DELIVER generated the report before REFLECT ran,
-   so lessons were missing. Regenerate to inline them:
-
-```bash
-python backend/scripts/artifact_cli.py run-report --project <PROJECT> \
-  --run-id <RUN_ID> --force
-```
-
-   This is the final version of the report. Section 9 will now contain the
-   actual lessons from step 7 above.
-
----
-
-> **⏭️ Continuation contract — advance is not the end of your turn.** REFLECT issues no
-> `advance` (it is the last stage), which makes this the LAST place the stall can happen —
-> and the most expensive, because the run is otherwise finished. Do NOT end your turn here:
-> go straight to **Step 6 COMPLETE** in `INSTRUCTIONS.md` — read `stages/complete.md`, run
-> `run-update --status completed`, and output the completion summary. A run that finishes
-> its work and never surfaces the summary is indistinguishable from one that crashed. The
-> only legal reasons to stop instead are a stage-boundary **L2 Judgment** via the Escalation
-> Routing Protocol, a **true checkpoint trigger**, a pending question awaiting the user, or
-> an abandon verdict.
-
----
-
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "Nothing went wrong — no lessons to capture" | If nothing went wrong, capture WHY. What structural decisions prevented errors? Positive lessons compound: "vertical TDD eliminated all rework" is a lesson that reinforces the pattern. Empty reflect = missed compounding. |
-| "Lessons are generic — 'be careful' isn't worth recording" | Generic = sign you haven't gone deep enough. Good lessons cite: file path, line number, exact mistake, structural fix, which future scenario it prevents. "Be careful with async" → bad. "asyncio.to_thread for subprocess in async context" → good. |
-| "DDD docs are fine, no update needed" | Every pipeline run generates knowledge. If nothing in IMPROVEMENT.md changed, either: (1) the run was trivial (fine), or (2) you're not extracting insights (not fine). At minimum update PROJECT.md "Recent Decisions" with this run's key choices. |
-| "I'll reflect later / next session" | Reflection quality degrades with time. In-context you have the full reasoning chain. Next session you have summaries. The difference between "I traced this specific code path and found X" vs "something about async was tricky" is the difference between useful and useless. |
+# REFLECT — execution card
+Purpose: turn this run's lessons into durable learning (IMPROVEMENT.md, MEMORY.md, ADRs, checklists, DDD docs) and finalize REPORT.md. Pipeline-owned stage, no sibling skill.
+**Enter**: `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage reflect` (returns the lessons DELIVER seeded, upstream artifacts and a valid record example).
+**Goal profile:** first run the Full REFLECT in `stages/ref/reflect/goal-mode.md`, then continue here at step 4. Per-cycle mini-reflects belong to goal_cycle.md, not here.
+## Methodology (Standard — all profiles except goal's per-cycle mini-reflect) `[MUST]` <!-- R-reflect-001 -->
+> REFLECT has NO validator-required artifact fields (it is artifactless; `schema --stage reflect` →
+> required=[]); the record's only required field is `lessons`. Every step below (lessons, ADR gate,
+> cultivation, learn, report) is agent-discipline `[MUST]` — the cultivation/learn/report are real
+> scripts the agent invokes, not publish-blocking gates. "Do NOT skip" here means honor the
+> discipline. <!-- R-reflect-002 -->
+1. **Reuse the seeded lessons — do NOT re-extract.** DELIVER's "Pipeline Report" step already wrote
+   this run's lessons into the reflect record. Finalize them; add one ONLY if REFLECT surfaces
+   genuinely new material. Never author a DIFFERENT set (two sources of REPORT §9 = drift).
+   Format, `[type]` prefixes, quality bar: `ref/reflect/lessons.md`.
+2. **IMPROVEMENT.md**: what worked, what failed, patterns discovered.
+3. **MEMORY.md** only if the lesson is cross-project, and only through
+   `backend/scripts/locked_write.py` (never a raw write).
+4. **Checklist maintenance**: if a post-pipeline review (E2E, external, user feedback) found a bug
+   the pipeline missed: fits an existing RP pattern → investigate why it was missed; no pattern →
+   add a new RP pattern (trigger, what to verify, the real bug as example) to
+   `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md`; a resource type missing from the
+   lifecycle table → add the row to Resource Lifecycle (BUILD Step 4, `stages/build.md`).
+5. **ADR gate**: for each judgment/taste decision, write a 1-paragraph ADR only when ALL three hold:
+   hard to reverse, surprising without context, real trade-off. Any missing → skip (most decisions).
+6. **Dead code checkpoint** (skip without `code_intel.db`): compare dead code before vs after;
+   increased → IMPROVEMENT "What to Watch For", decreased → "What Worked".
+7. **Learn** (calibration): `python backend/scripts/artifact_cli.py learn --project <P> --evaluation-id <eval_artifact_id> --outcome success --actual-effort "<T-shirt>" --lessons "lesson 1;lesson 2"`
+8. **Record = Exit** (below): writes the final lessons to run.json.
+9. **DDD cultivation** — do NOT skip, it closes the REFLECT → DDD loop:
+   `python backend/scripts/artifact_cli.py run-cultivate --project <P> --run-id <R>` →
+   `{"applied": N, "escalated": M, "rejected": K}`. It reads the recorded lessons, so run it after step 8.
+10. **Regenerate REPORT.md** (final version; §9 inlines the lessons), after the record and BEFORE
+   COMPLETE: `python backend/scripts/artifact_cli.py run-report --project <P> --run-id <R> --force`
+Recipes for steps 2-6 and 9 (ADR format, locked_write command, tiered autonomy): `ref/reflect/writes.md`.
+## Gates
+- `[GATE·cli]` stage-complete rejects a reflect record with no `lessons`, or any lesson ≤20 chars.
+- `[GATE·cli]` `run-update --status completed` BLOCKS when reflect has no entry, no lesson >20 chars, or REPORT.md is missing / <500 bytes.
+- `[MUST]` prefix every lesson with its `[type]`: guideline pitfall decision principle correction process model.
+## Read only if
+- `stages/ref/reflect/goal-mode.md` — the profile is `goal`.
+- `stages/ref/reflect/lessons.md` — refining/adding lessons, where each `[type]` lands, the quality bar, or "nothing went wrong".
+- `stages/ref/reflect/writes.md` — any write in steps 2-6 or 9 (IMPROVEMENT / MEMORY / ADR / checklist / dead code / cultivation).
+## Exit (step 8)
+Write `/tmp/<R>/reflect.json` = `{"record": {"lessons": ["[pitfall] ...", "[decision] ..."], "decisions": []}}` (no artifact), then:
+`python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage reflect --data @/tmp/<R>/reflect.json`
+On `ok: false`, fix the field named in `errors[].path`. Exit records the stage; steps 9-10 still follow.
+> **⏭️ Continuation contract — advance is not the end of your turn.** REFLECT is the last stage,
+> so this is the LAST place the stall can happen, and the most expensive. After steps 9-10 go
+> straight to **Step 6 COMPLETE** in `INSTRUCTIONS.md`: read `stages/complete.md`, run
+> `run-update --status completed`, relay its `_display_block`. Legal stops instead: a
+> stage-boundary **L2 Judgment** via the Escalation Routing Protocol, a true **checkpoint**
+> trigger, a pending user question, or an abandon verdict.

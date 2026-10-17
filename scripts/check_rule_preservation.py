@@ -8,6 +8,9 @@ no enforceable rule is lost in the split:
 * ``extract`` reads the OLD docs from a git ref (``git show``), pulls every
   rule-bearing block (``[GATE…]``, ``[MUST]``, ``BLOCKING``, ``⛔``) and writes
   a manifest with stable IDs ``R-<source>-<nnn>`` + content hashes.
+  ``--only SRC --merge`` re-extracts just those sources into an existing
+  manifest, so the split can go in batches (each source extracted at the ref
+  that still holds its old text).
 * ``check`` scans the NEW tree on disk and asserts every manifest ID appears
   as a tag ``<!-- R-<source>-<nnn> -->`` in a runtime-read doc (INSTRUCTIONS,
   ``stages/*.md``, ``stages/ref/**``). ``stages/history/**`` does not count.
@@ -26,7 +29,8 @@ Public symbols:
     find_markers(raw)           -> list[(kind, shape)]
     normalize(raw)              -> canonical rule text
     extract_rules(text, source, file) -> list[dict] rules (IDs assigned)
-    extract(repo, ref)          -> manifest dict
+    extract(repo, ref, only)    -> manifest dict (optionally only some sources)
+    merge_sources(base, part)   -> base with part's sources replaced
     write_manifest(path, manifest, force)
     scan_tags(repo, also=())    -> {"live": {...}, "history": {...}}
     check(manifest, scan)       -> result dict (``ok`` flag)
@@ -270,15 +274,24 @@ def _count_excluded(text: str, counter: Counter) -> None:
         counter[label] += len(rx.findall(text))
 
 
-def extract(repo: Path, ref: str = "HEAD") -> dict:
-    """Build the manifest from the docs as they exist at git *ref*."""
+def extract(repo: Path, ref: str = "HEAD", only: tuple[str, ...] = ()) -> dict:
+    """Build the manifest from the docs as they exist at git *ref*.
+
+    *only* limits extraction to those sources (``instr``, ``build``, …); an
+    unknown source name is a usage error."""
     if not ref or ref.startswith("-"):
         raise ToolError(f"invalid ref: {ref!r}")
     commit = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip()
     rules: list[dict] = []
     files: list[dict] = []
     excluded: Counter = Counter()
-    for source, path in _old_doc_paths(repo, commit):
+    docs = _old_doc_paths(repo, commit)
+    unknown = sorted(set(only) - {s for s, _ in docs})
+    if unknown:
+        raise ToolError(f"unknown source(s) at {ref}: {unknown}")
+    for source, path in docs:
+        if only and source not in only:
+            continue
         text = _git(repo, "show", f"{commit}:{path}")
         found = extract_rules(text, source, path)
         _count_excluded(text, excluded)
@@ -295,6 +308,37 @@ def extract(repo: Path, ref: str = "HEAD") -> dict:
         "excluded_shape_counts": dict(sorted(excluded.items())),
         "rules": rules,
     }
+
+
+def merge_sources(base: dict, part: dict) -> dict:
+    """Replace *part*'s sources in *base* (the doc split goes in batches: each
+    batch re-extracts only its own sources, at the ref holding their OLD text).
+
+    Every other source keeps its rules, IDs and extraction ref untouched. Each
+    file entry records the ``ref``/``commit`` it was extracted at."""
+    sources = {f["source"] for f in part["files"]}
+    for f in part["files"]:
+        f.setdefault("ref", part["ref"])
+        f.setdefault("commit", part["commit"])
+    kept_files = [f for f in base.get("files", []) if f["source"] not in sources]
+    for f in kept_files:
+        f.setdefault("ref", base.get("ref"))
+        f.setdefault("commit", base.get("commit"))
+    order: dict[str, int] = {}
+    for f in [*base.get("files", []), *part["files"]]:
+        order.setdefault(f["source"], len(order))  # a replaced source keeps its slot
+    files = sorted(kept_files + part["files"], key=lambda f: order[f["source"]])
+    rank = {f["source"]: i for i, f in enumerate(files)}
+    rules = [r for r in base["rules"] if r["source"] not in sources] + part["rules"]
+    rules.sort(key=lambda r: (rank[r["source"]], r["id"]))
+    merged = dict(base)
+    merged.update({
+        "files": files,
+        "rules": rules,
+        "marker_counts": dict(sorted(Counter(m for r in rules for m in r["markers"]).items())),
+        "shape_counts": dict(sorted(Counter(s for r in rules for s in r["shapes"]).items())),
+    })
+    return merged
 
 
 def write_manifest(path: Path, manifest: dict, force: bool = False) -> None:
@@ -483,6 +527,11 @@ def _parser() -> argparse.ArgumentParser:
     ex = sub.add_parser("extract", parents=[common], help="build manifest from old docs at --ref")
     ex.add_argument("--ref", default="HEAD", help="git ref holding the OLD docs (default HEAD)")
     ex.add_argument("--force", action="store_true", help="overwrite an existing manifest")
+    ex.add_argument("--only", action="append", default=[], metavar="SOURCE",
+                    help="extract only this source (instr, build, …); repeatable")
+    ex.add_argument("--merge", action="store_true",
+                    help="replace only the extracted sources in the existing manifest "
+                         "(batched split: other sources keep their rules and ref)")
     for name, desc in (("check", "assert every rule ID is tagged in card/ref docs"),
                        ("index", "print markdown index: rule ID -> current file")):
         sp = sub.add_parser(name, parents=[common], help=desc)
@@ -501,8 +550,12 @@ def main(argv: list[str] | None = None) -> int:
         if not manifest_path.is_absolute():
             manifest_path = repo / manifest_path
         if args.cmd == "extract":
-            manifest = extract(repo, args.ref)
-            write_manifest(manifest_path, manifest, force=args.force)
+            manifest = extract(repo, args.ref, tuple(args.only))
+            if args.merge:
+                if not manifest_path.is_file():
+                    raise ToolError(f"--merge needs an existing manifest: {manifest_path}")
+                manifest = merge_sources(load_manifest(manifest_path), manifest)
+            write_manifest(manifest_path, manifest, force=args.force or args.merge)
             if args.json:
                 print(json.dumps({k: v for k, v in manifest.items() if k != "rules"}
                                  | {"rules": len(manifest["rules"]),

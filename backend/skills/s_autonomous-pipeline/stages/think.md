@@ -1,192 +1,65 @@
-# THINK Stage
+# THINK — execution card
 
-## Base Methodology
+Purpose: research the requirement, stress-test 2-3 constraint-driven designs, recommend one with its reasoning.
 
-> **Reference:** `backend/skills/s_deep-research/SKILL.md`
->
-> Follow the constraint-driven alternatives framework: research the requirement,
-> summarize key findings, present 3 approaches (each with an explicit constraint),
-> and recommend one with reasoning.
+**Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage think`
+(returns the EVALUATE artifact, ACs, and valid `artifact`/`record` examples).
 
-## Pipeline-Specific Behavior
+## Steps
 
-### DDD Alignment
+1. **Research** (method: `backend/skills/s_deep-research/SKILL.md`). Read the code, not descriptions
+   of it. If DDD docs exist: align with PRODUCT.md priorities, avoid IMPROVEMENT.md failures.
+   Record `key_findings[]` (required) and `sources[]`.
+2. **Alternatives.** Pick the 3 most relevant constraints from SPEED / QUALITY / SIMPLICITY /
+   FLEXIBILITY / DELETION: high feasibility → SPEED; high strategic → QUALITY; low feasibility →
+   SIMPLICITY; uncertain scope → DELETION. Each approach states **Constraint, What** (1-2
+   sentences), **Effort** (S/M/L + sessions), **Risk, Tradeoff**. → `alternatives[]`.
+3. **Design Risk Probe** (after research, before presenting alternatives). Per approach, name the
+   3 riskiest assumptions (max 9 probes total) and verify or falsify each yourself by reading code
+   or TECH.md/IMPROVEMENT.md. "Unresolved" only if it truly needs user intent. Drop
+   non-viable approaches, adjust effort and the recommendation to match.
+   → `risk_probe[]` (`approach, assumption, verification, status`).
+4. **Recommend** one approach with reasoning → `recommendation`. All probes verified → proceed
+   without asking; unresolved ones → see `ref/think/risk-probe.md`.
+5. **Self-Socratic ambiguity re-scan** (ONE round, interrogate yourself, not the user): scan
+   `risk_probe[].verification` + `recommendation` for hedge terms (canonical list:
+   `pipeline_validator._AMBIGUITY_TERMS`; the stage-start example carries it), self-answer each hit
+   from code/DDD, escalate only real user-intent ambiguity → `ambiguity_scan`.
+6. **Depth telemetry:**
+   `python backend/scripts/artifact_cli.py run-observe --project <P> --run-id <R> --event think_depth --alternatives <N> --probes <N> --resolved <N> --escalated <N>`
+7. **Write** `/tmp/<R>/think.json` = `{"artifact": {...}, "record": {"decisions": [...]}}`
+   (output shape: see stage-start examples). Optional preflight: the exit command + `--check`.
 
-If DDD docs are available:
-- Align with PRODUCT.md priorities
-- Avoid IMPROVEMENT.md failures
+THINK runs no tests. If a probe needs code run, only via
+`perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd --files <test>`.
 
-### Constraint-Driven Alternatives (T2)
+## Gates
 
-**Replace** generic Minimal/Ideal/Creative labels with **explicit constraints**
-that force genuinely different designs:
+- **Validator-enforced (`_check_ambiguity_scan`) `[GATE·validator]`:** strict profiles REQUIRE the `ambiguity_scan` block; trivial/docs/research exempt; every hit needs a non-empty resolution (≥12 chars) or it BLOCKS. `hits: []` is valid (scanned, clean). <!-- R-think-001 -->
+- **Minimum requirements (BLOCKING):** `[MUST]` (1) at least **2 distinct approaches** with explicit tradeoffs (not 1 approach + "don't do it"); (2) at least **3 risk probes** attempted (verified, falsified, or unresolved); (3) each alternative states its **cost** (effort, risk, tradeoff), not just benefits. "This is obvious" is no excuse: trivial work belongs in the `trivial` profile (skips THINK); if you are here, go deep or EVALUATE mis-classified. <!-- R-think-002 -->
+- ⚠️ **doc-code drift:** "BLOCKING" above but only `key_findings` is a validator-required THINK field — `alternatives` is *recommended* (WARN, not BLOCK) and the 2-approach/3-probe COUNTS are not code-checked. `[MUST]` by discipline. Flagged in the drift table (AC4). <!-- R-think-003 -->
 
-| Constraint | Forces | Good for |
-|-----------|--------|----------|
-| **SPEED** | Ship in 1 session, cut scope ruthlessly | Urgent features, proven patterns |
-| **QUALITY** | Survive 2 years, full test coverage, extensible | Core architecture |
-| **SIMPLICITY** | Junior dev can maintain, minimal abstractions | Utility features |
-| **FLEXIBILITY** | Support 3 future use cases you can imagine | Platform features |
-| **DELETION** | Easiest to remove if wrong, minimal coupling | Experimental features |
+## Read only if
 
-**Selection logic:** Pick the 3 most relevant constraints based on the evaluation:
-- High feasibility score → include SPEED
-- High strategic score → include QUALITY
-- Low feasibility → include SIMPLICITY
-- Uncertain scope → include DELETION
+- `stages/ref/think/alternatives.md` — the constraints don't fit the problem (pure research,
+  docs-only → Minimal/Ideal/Creative fallback), or you need the constraint table / enum note.
+- `stages/ref/think/risk-probe.md` — any probe is "unresolved", you think the probe can be
+  skipped, or >50% of probes are unresolved on a high-stakes choice (full grill escalation);
+  also holds the `risk_probe` JSON example.
+- `stages/ref/think/ambiguity-scan.md` — the re-scan finds a hit, or you need the full term list
+  and `ambiguity_scan` field shape.
 
-Each approach: **Constraint** (which one), **What** (1-2 sentences), **Effort**
-(T-shirt + sessions), **Risk**, **Tradeoff**. End with recommendation.
+## Exit
 
-**Fallback:** If constraints don't fit the problem (pure research, docs-only),
-revert to Minimal/Ideal/Creative.
+`python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage think --data @/tmp/<R>/think.json`
 
-### Design Risk Probe (T1)
+It validates first, publishes the research artifact, records the stage and advances to the next
+stage. On `ok: false`, fix the field named in `errors[].path` (the error shows `expected`).
 
-**After research, before presenting alternatives**, stress-test each approach's
-riskiest assumptions. Unlike the old "grill protocol" (which asked the user and
-was almost always skipped), this is a **self-answering probe** — the agent
-identifies risks and resolves them by reading code or DDD docs.
-
-**Process:**
-
-1. For each alternative, identify the **3 riskiest assumptions** — things that,
-   if wrong, would change the recommendation
-2. For each assumption, **try to verify or falsify it yourself:**
-   - Can you Read the codebase to confirm? → do it
-   - Can you check TECH.md/IMPROVEMENT.md? → do it
-   - Is it genuinely unknowable without user input? → mark as "unresolved"
-3. Present the probe results alongside alternatives
-
-**Output (in research artifact `risk_probe` field):**
-
-```json
-{
-  "risk_probe": [
-    {
-      "approach": "A (SIMPLICITY)",
-      "assumption": "existing hook interface accepts new event type",
-      "verification": "Read hook_executor.py — confirmed: dispatches any event dict",
-      "status": "verified"
-    },
-    {
-      "approach": "B (QUALITY)",
-      "assumption": "sqlite-vec available in PyInstaller bundle",
-      "verification": "Checked verify_build.py — NOT in hidden imports list",
-      "status": "falsified — approach B not viable without build change"
-    },
-    {
-      "approach": "C (SPEED)",
-      "assumption": "user wants temporary solution replaced later",
-      "verification": "Cannot determine from codebase — user intent",
-      "status": "unresolved"
-    }
-  ]
-}
-```
-
-**Rules:**
-- Verified + falsified assumptions → update alternatives accordingly (remove
-  non-viable approaches, adjust effort estimates, change recommendation)
-- Unresolved assumptions → present to user as part of alternatives output:
-  "I couldn't verify X — my recommendation assumes Y, override if wrong."
-- If ALL assumptions are verified → skip user interaction, proceed with recommendation
-- **Max 3 assumptions per approach × 3 approaches = 9 probes max** (scarcity)
-
-**When to do a full grill instead (rare):**
-If >50% of probes are "unresolved" AND the choice is high-stakes (judgment-class
-decision), escalate to the interactive grill protocol: ask the user ONE question
-at a time, provide your recommended answer, wait for confirmation. Max 5 questions.
-
-**Skip entirely when:**
-- Scope is trivial (S effort, proven pattern)
-- User already specified the approach ("use pipeline", "just do it")
-- Only one viable approach exists (mechanical, no design choice)
-
-### Self-Socratic Ambiguity Re-Scan (after the risk probe)
-
-`INTERROGATE YOUR OWN ASSUMPTIONS — NOT THE USER`
-
-After the Design Risk Probe produces its `verification` text and you've chosen a
-recommendation, **re-scan the probe assumptions + recommendation** for residual
-ambiguity. One self-answer round — the THINK-side mirror of EVALUATE's ambiguity
-scan (see `evaluate.md` § "Self-Socratic Ambiguity Re-Scan" for the full
-philosophy: interrogate the framing, not the user; this is the Understanding
-Gate's "refute your claim" discipline at the design layer).
-
-**Process (ONE round):**
-1. Scan the `risk_probe[].verification` strings and the `recommendation` for
-   ambiguity/hedge terms: `depends`, `maybe`, `not sure`, `mix of`, `somewhere
-   between`, `standard`, `typical` + CJK `看情况 / 可能 / 大概 / 差不多 / 视情况 /
-   标准做法 / 一般` (canonical: `pipeline_validator._AMBIGUITY_TERMS`).
-2. For each hit: self-answer by reading code/DDD (e.g. a "standard pattern" must
-   name the EXACT pattern + file). Escalate only genuinely user-intent ambiguity.
-3. Record the scan in the research artifact `ambiguity_scan` field (same shape as
-   EVALUATE — `{scanned_fields, terms_checked, hits[{term,where,resolution,kind}],
-   hit_count, all_resolved}`).
-
-**Validator-enforced (`_check_ambiguity_scan`) `[GATE·validator]`:** strict profiles REQUIRE the
-block; trivial/docs/research exempt; every hit needs a non-empty resolution
-(≥12 chars) or it BLOCKS. `hits: []` is valid (scanned, clean).
-
-### Minimum Depth Gate (Meta-Intelligence L3)
-
-THINK must produce substantive analysis, not a token-saving shortcut. Historical
-data shows runs with deeper THINK (>10K tokens) have higher completion rates
-and fewer adversarial findings.
-
-**Minimum requirements (BLOCKING):** `[MUST]`
-
-> ⚠️ **doc-code drift:** "BLOCKING" but only `key_findings` is a validator-required THINK
-> field — `alternatives` is *recommended* (WARN, not BLOCK) and the 2-approach/3-probe COUNTS
-> are not code-checked. `[MUST]` by discipline. Flagged in the drift table (AC4).
-
-1. At least **2 distinct approaches** with explicit tradeoffs (not 1 approach + "don't do it")
-2. At least **3 risk probes** attempted (verified, falsified, or unresolved)
-3. Each alternative must state its **cost** (effort, risk, tradeoff) — not just benefits
-
-**If the requirement is genuinely trivial:** The profile should be `trivial` (skips THINK).
-If you're IN think, the requirement deserves depth. "This is obvious" is not a valid
-reason to produce shallow output — it means EVALUATE mis-classified.
-
-**Telemetry:** After completing THINK, record depth metrics:
-```bash
-python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
-  --event think_depth --alternatives <N> --probes <N> --resolved <N> --escalated <N>
-```
-
-### Artifact Publish
-
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
-  --type research --producer s_autonomous-pipeline \
-  --summary "3 alternatives for <topic>. Recommending: <approach>" --stage think \
-  --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","risk_probe":[...],"ambiguity_scan":{"scanned_fields":["recommendation","risk_probe.verification"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true},"sources":[...]}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan --run-id <RUN_ID>
-```
-
-> **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
-> handoff point. Immediately Read the next stage's doc (the `advance` output prints its
-> absolute path as `next_stage_doc`) and execute that stage **in this same turn**. The ONLY
-> legal reasons to hand control back are: a stage-boundary **L2 Judgment** routed through the
-> Escalation Routing Protocol, a **true checkpoint trigger** (`should_checkpoint=true`,
-> retries exhausted, or a mid-stage L2), a pending question awaiting the user, or an abandon
-> verdict. Absent one of those, ending your turn here is the stall this contract exists to
-> prevent.
->
-> **`next_action` is AUTHORITATIVE — this sentence defers to it.** The payload is measured at
-> the moment you advance; this prose was written long before. When `advance` reports a due
-> checkpoint (or that it could not measure the budget), it withholds the continue instruction
-> ON PURPOSE — follow the payload, not this paragraph. Prose cannot see the run's state; the
-> payload can.
-
----
-
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "I already know the best approach, skip alternatives" | Skipping alternatives means skipping the constraint that FORCES different designs. The "obvious" approach is often SPEED-optimized when the problem needs QUALITY or DELETION. One constraint you didn't consider = one class of failure you didn't prevent. |
-| "Research wastes tokens, let me just build" | skipped research, read descriptions instead of code, shipped CSS from instructional text without rendering examples. "Understanding > Delivery" — building without understanding = building garbage. |
-| "Only one approach exists — this is mechanical" | If truly mechanical, the evaluation scope should be "trivial" and the profile should be "trivial" (which skips THINK). If you're in THINK, the evaluation already determined multiple approaches are possible. Trust the profile. |
-| "I'll research as I build" | Research in BUILD = discovery mid-construction = rework. Research is cheap (read + think). Rework is expensive (undo + redo + retest). Separate phases exist to separate costs. |
+> **⏭️ Continuation — advance is not the end of your turn.** Read `next_card` from the
+> stage-complete output and execute that stage (normally PLAN) **in this same turn**. Legal
+> hand-backs only: a stage-boundary **L2 Judgment** routed through the Escalation Routing
+> Protocol, a true **checkpoint** trigger (`should_checkpoint=true`, retries exhausted, or a
+> mid-stage L2), a pending user question, or an abandon verdict. `next_action` is
+> AUTHORITATIVE: if it withholds the continue instruction (checkpoint due, budget unmeasured),
+> follow the payload, not this card.

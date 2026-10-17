@@ -1,0 +1,431 @@
+{
+  "version": 1,
+  "ref": "HEAD",
+  "commit": "8c1c41d451394987fcd7b191c2799941169bca3d",
+  "tag_syntax": "<!-- R-<source>-<nnn> -->",
+  "files": [
+    {
+      "source": "complete",
+      "file": "backend/skills/s_autonomous-pipeline/stages/complete.md",
+      "rules": 3
+    },
+    {
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "rules": 10
+    },
+    {
+      "source": "reflect",
+      "file": "backend/skills/s_autonomous-pipeline/stages/reflect.md",
+      "rules": 2
+    },
+    {
+      "source": "test",
+      "file": "backend/skills/s_autonomous-pipeline/stages/test.md",
+      "rules": 5
+    },
+    {
+      "source": "think",
+      "file": "backend/skills/s_autonomous-pipeline/stages/think.md",
+      "rules": 3
+    }
+  ],
+  "marker_counts": {
+    "BLOCKING": 3,
+    "GATE·artifact_cli": 2,
+    "GATE·validator": 3,
+    "MUST": 17,
+    "⛔": 1
+  },
+  "shape_counts": {
+    "(BLOCKING": 1,
+    "(BLOCKING):**": 1,
+    "BLOCKING": 1,
+    "`[GATE·artifact_cli]`": 2,
+    "`[GATE·validator]`": 3,
+    "`[MUST]`": 17,
+    "⛔": 1
+  },
+  "excluded_shape_counts": {
+    "BLOCK (bare uppercase)": 12,
+    "MANDATORY": 3,
+    "[GUIDE]": 0,
+    "blocking (lower/title case)": 1
+  },
+  "rules": [
+    {
+      "id": "R-complete-001",
+      "source": "complete",
+      "file": "backend/skills/s_autonomous-pipeline/stages/complete.md",
+      "line": 22,
+      "end_line": 22,
+      "block": "heading",
+      "markers": [
+        "GATE·artifact_cli"
+      ],
+      "shapes": [
+        "`[GATE·artifact_cli]`"
+      ],
+      "text": "## Step 0: Surface this run's changes to Canvas (MANDATORY — before the summary) [GATE·artifact_cli]",
+      "hash": "3273d6f13b68"
+    },
+    {
+      "id": "R-complete-002",
+      "source": "complete",
+      "file": "backend/skills/s_autonomous-pipeline/stages/complete.md",
+      "line": 28,
+      "end_line": 38,
+      "block": "quote-paragraph",
+      "markers": [
+        "⛔"
+      ],
+      "shapes": [
+        "⛔"
+      ],
+      "text": "⛔ ORDER PREREQUISITE: run-report MUST run BEFORE surface_run_outputs. surface_run_outputs appends the run's REPORT.md as the LAST OUTPUTS row (kind=knowledge) so the Canvas auto-SELECTS + renders the report — but ONLY if REPORT.md already exists on disk at surface time (build_surface_events is exists-guarded: no file → the report row is silently skipped, and the finish batch auto-opens on a source file instead of the report). Step 0 sits at the TOP of this doc, so a top-to-bottom reader could surface BEFORE any report exists and lose the report row. Therefore: REPORT.md must already be on disk before you call surface_run_outputs here. The ONLY doc that actually invokes the generator is reflect.md step 10 (run-report --force, which also inlines the lessons) — deliver.md contains a report TEMPLATE but no run-report call, so do not rely on DELIVER to have produced it. If REPORT.md is absent, run run-report explicitly before surfacing.",
+      "hash": "f349a20aa620"
+    },
+    {
+      "id": "R-complete-003",
+      "source": "complete",
+      "file": "backend/skills/s_autonomous-pipeline/stages/complete.md",
+      "line": 75,
+      "end_line": 75,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "## Output the delivery summary to chat (MANDATORY — never skip) [MUST]",
+      "hash": "502a8f45561b"
+    },
+    {
+      "id": "R-plan-001",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 51,
+      "end_line": 51,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "### Exhaustive File Discovery (Required — Before Writing Design Doc) [MUST]",
+      "hash": "a470df037063"
+    },
+    {
+      "id": "R-plan-002",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 53,
+      "end_line": 56,
+      "block": "quote-paragraph",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "⚠️ doc-code drift: labeled \"Required\" but the PLAN validator's only required field is acceptance_criteria (file_discovery/change_spec/test_strategy are NOT schema-checked). Treat \"Required\" here as agent-discipline [MUST], not a gate. Flagged in the drift table (AC4).",
+      "hash": "652312fae1fc"
+    },
+    {
+      "id": "R-plan-003",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 107,
+      "end_line": 107,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "### Change Spec (Required — Ordered Atomic Sub-Changes) [MUST]",
+      "hash": "a5c114675704"
+    },
+    {
+      "id": "R-plan-004",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 171,
+      "end_line": 171,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "### Boundaries (Required) [MUST]",
+      "hash": "dd514d1701ea"
+    },
+    {
+      "id": "R-plan-005",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 173,
+      "end_line": 174,
+      "block": "quote-paragraph",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "boundaries is a recommended (not required) validator field → its absence WARNs, does not BLOCK. [MUST] by discipline, not code gate.",
+      "hash": "e0066fa2e891"
+    },
+    {
+      "id": "R-plan-006",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 202,
+      "end_line": 202,
+      "block": "heading",
+      "markers": [
+        "GATE·validator"
+      ],
+      "shapes": [
+        "`[GATE·validator]`"
+      ],
+      "text": "### Security Boundaries (Required WHEN cross_boundary.value == true) [GATE·validator]",
+      "hash": "8f9e2893de74"
+    },
+    {
+      "id": "R-plan-007",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 244,
+      "end_line": 244,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "### Success Criteria (Required) [MUST]",
+      "hash": "ef798db7999f"
+    },
+    {
+      "id": "R-plan-008",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 246,
+      "end_line": 246,
+      "block": "quote-paragraph",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "success_criteria is recommended (WARN on absence, not a BLOCK). [MUST] by discipline.",
+      "hash": "9ab6f0f6e31d"
+    },
+    {
+      "id": "R-plan-009",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 262,
+      "end_line": 262,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "### Test Strategy (Required) [MUST]",
+      "hash": "c94296ce261c"
+    },
+    {
+      "id": "R-plan-010",
+      "source": "plan",
+      "file": "backend/skills/s_autonomous-pipeline/stages/plan.md",
+      "line": 320,
+      "end_line": 329,
+      "block": "paragraph",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "The design_doc artifact SHOULD include boundaries, success_criteria, file_discovery, change_spec, and test_strategy fields. ⚠️ Note: the validator only requires acceptance_criteria and recommends (WARN, not BLOCK) boundaries/success_criteria; the others are agent-discipline [MUST], not presence-checked. (Prior wording claimed the validator checks all five — corrected as a doc-code drift, AC4.) Additionally, when the run's cross_boundary.value == true, the artifact MUST include a non-empty security_boundaries list (each entry: boundary, trust_assumption, and either enforcement = \"path:line\" OR escalate: true + reason). The completion-time validator BLOCKS a cross_boundary=true plan that lacks it or cites a non-existent locus; OMIT the field when cross_boundary=false (no-op).",
+      "hash": "0d27fb3ca477"
+    },
+    {
+      "id": "R-reflect-001",
+      "source": "reflect",
+      "file": "backend/skills/s_autonomous-pipeline/stages/reflect.md",
+      "line": 39,
+      "end_line": 39,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "## Methodology (Standard — all profiles except goal's per-cycle mini-reflect) [MUST]",
+      "hash": "95a034bc923d"
+    },
+    {
+      "id": "R-reflect-002",
+      "source": "reflect",
+      "file": "backend/skills/s_autonomous-pipeline/stages/reflect.md",
+      "line": 41,
+      "end_line": 44,
+      "block": "quote-paragraph",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "REFLECT has NO validator-required artifact fields (schema --stage reflect → required=[]). Every step below (lessons, ADR gate, cultivation, learn, report) is agent-discipline [MUST] — the cultivation/learn/report are real scripts the agent invokes, not publish-blocking gates. \"Do NOT skip\" here means honor the discipline.",
+      "hash": "b501ce13a592"
+    },
+    {
+      "id": "R-test-001",
+      "source": "test",
+      "file": "backend/skills/s_autonomous-pipeline/stages/test.md",
+      "line": 29,
+      "end_line": 29,
+      "block": "heading",
+      "markers": [
+        "GATE·validator"
+      ],
+      "shapes": [
+        "`[GATE·validator]`"
+      ],
+      "text": "### Test Strategy (3 layers, executed in order) [GATE·validator]",
+      "hash": "c99dabaf5185"
+    },
+    {
+      "id": "R-test-002",
+      "source": "test",
+      "file": "backend/skills/s_autonomous-pipeline/stages/test.md",
+      "line": 114,
+      "end_line": 114,
+      "block": "heading",
+      "markers": [
+        "GATE·artifact_cli"
+      ],
+      "shapes": [
+        "`[GATE·artifact_cli]`"
+      ],
+      "text": "#### Layer 4: Cross-Boundary E2E (CONDITIONAL — fires ONLY when cross_boundary.value == true) [GATE·artifact_cli]",
+      "hash": "4d9b0f736f01"
+    },
+    {
+      "id": "R-test-003",
+      "source": "test",
+      "file": "backend/skills/s_autonomous-pipeline/stages/test.md",
+      "line": 176,
+      "end_line": 176,
+      "block": "heading",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "### WTF Gate [MUST]",
+      "hash": "49109bc21073"
+    },
+    {
+      "id": "R-test-004",
+      "source": "test",
+      "file": "backend/skills/s_autonomous-pipeline/stages/test.md",
+      "line": 178,
+      "end_line": 180,
+      "block": "quote-paragraph",
+      "markers": [
+        "MUST"
+      ],
+      "shapes": [
+        "`[MUST]`"
+      ],
+      "text": "wtf_gate.py is a real script, but the pipeline does NOT block publish on its score — the halt-at-≥5 is an agent-obeyed L2 checkpoint (agent runs the script + acts on it), not a validator-enforced publish gate. [MUST].",
+      "hash": "cfa73d3483e9"
+    },
+    {
+      "id": "R-test-005",
+      "source": "test",
+      "file": "backend/skills/s_autonomous-pipeline/stages/test.md",
+      "line": 214,
+      "end_line": 214,
+      "block": "heading",
+      "markers": [
+        "BLOCKING",
+        "MUST"
+      ],
+      "shapes": [
+        "(BLOCKING",
+        "`[MUST]`"
+      ],
+      "text": "### Single-Platform Compile Trap (BLOCKING for cross-platform changes) [MUST]",
+      "hash": "ff0fa188d811"
+    },
+    {
+      "id": "R-think-001",
+      "source": "think",
+      "file": "backend/skills/s_autonomous-pipeline/stages/think.md",
+      "line": 128,
+      "end_line": 130,
+      "block": "paragraph",
+      "markers": [
+        "GATE·validator"
+      ],
+      "shapes": [
+        "`[GATE·validator]`"
+      ],
+      "text": "Validator-enforced (_check_ambiguity_scan) [GATE·validator]: strict profiles REQUIRE the block; trivial/docs/research exempt; every hit needs a non-empty resolution (≥12 chars) or it BLOCKS. hits: [] is valid (scanned, clean).",
+      "hash": "055f7efb6152"
+    },
+    {
+      "id": "R-think-002",
+      "source": "think",
+      "file": "backend/skills/s_autonomous-pipeline/stages/think.md",
+      "line": 138,
+      "end_line": 138,
+      "block": "paragraph",
+      "markers": [
+        "BLOCKING",
+        "MUST"
+      ],
+      "shapes": [
+        "(BLOCKING):**",
+        "`[MUST]`"
+      ],
+      "text": "Minimum requirements (BLOCKING): [MUST]",
+      "hash": "5c1a7d4900a4"
+    },
+    {
+      "id": "R-think-003",
+      "source": "think",
+      "file": "backend/skills/s_autonomous-pipeline/stages/think.md",
+      "line": 140,
+      "end_line": 142,
+      "block": "quote-paragraph",
+      "markers": [
+        "BLOCKING",
+        "MUST"
+      ],
+      "shapes": [
+        "BLOCKING",
+        "`[MUST]`"
+      ],
+      "text": "⚠️ doc-code drift: \"BLOCKING\" but only key_findings is a validator-required THINK field — alternatives is recommended (WARN, not BLOCK) and the 2-approach/3-probe COUNTS are not code-checked. [MUST] by discipline. Flagged in the drift table (AC4).",
+      "hash": "2bbb1b9ada3b"
+    }
+  ]
+}

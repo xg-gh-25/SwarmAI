@@ -1,273 +1,61 @@
-# TEST Stage
+# TEST — execution card
 
-### 🚨 STOP — Are You About to Skip Test Layers?
+Purpose: fresh runner evidence for the post-BUILD tree; fix what this change broke; record it.
 
-**The temptation at TEST is not to skip testing entirely — it's to run only
-Layer 1 (AC tests you wrote) and declare "tests pass." Layers 2 and 3 catch
-the bugs YOUR tests can't — because you wrote both the code AND the tests.**
+**Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage test`
 
-| What you're thinking right now | Why it's wrong |
-|------|------|
-| "My unit tests pass, that's sufficient" | Unit tests verify YOUR assumptions. Layer 2 catches collateral damage to code that imports yours. |
-| "Dependency-scoped grep found 0 files" | Wrong grep pattern? Check TECH.md for import style. 0 results for non-trivial change = suspicious, not reassuring. |
-| "Import smoke is pointless for existing files" | Circular imports, missing deps, wrong relative paths — all invisible to unit tests that import individual functions. |
-| "I'm running low on budget, skip Layer 3" | Layer 3 is ONE command per file, usually <10 seconds total. It costs less context than the sentence you used to rationalize skipping it. |
-| "Tests passed in BUILD, why run again?" | BUILD tests ran BEFORE the refactor step. Post-refactor state may differ. Fresh run = fresh evidence — SOUL P1, verify rather than infer. |
-| "Full suite would be better but takes too long" | NEVER run full suite (STEERING R9) — it has deadlocked under pytest-xdist. Layers 1-3 ARE the scoped alternative; skipping them means you have NO regression signal. |
-| "The fix was obvious, no need for WTF scoring" | Score EVERY fix. WTF gate is mechanical, not discretionary. "Obvious" fixes that touch 4+ files are not obvious. |
+`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
+Tests go ONLY through `RUN`: `pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/vite build.
+One call per mode, foreground, never split; no full suite (STEERING R9).
 
----
+1. **L1+L2+L3 in one call:** `RUN --mode regression`. L1 = BUILD `ac_coverage` tests, L2 =
+   tests importing the changed modules (cap 40, overflow in `skipped_for_budget`), L3 =
+   import smoke; `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
+   if BUILD was green (post-refactor tree). Zero L2 files, non-SwarmAI stack, skips:
+   `ref/test/layers.md`.
+2. **Classify** by `failures[].classification`: `regression` / `new` → fix the CODE,
+   never the test expectation (that changes the spec → back to PLAN); `pre-existing` →
+   log in IMPROVEMENT.md "Known Issues", do not fix or debug it here; `flaky` → fix the
+   flake (passes 9/10 = FAILS); `unknown` / timeout → read the attached stack (no manual
+   ps/kill/faulthandler).
+3. **Fix loop, max 20 fixes** (then checkpoint and report, whatever remains). Per fix:
+   one atomic commit → `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
+   (score ≥ 5 → halt, L2 BLOCK) → `RUN --mode recheck`. After the last fix run
+   `RUN --mode regression` once more (unchanged inputs are cached): `stage-complete`
+   derives layers from `latest-regression.json`. Formula + table: `ref/test/fixing.md`.
+4. **Layer 4** only if EVALUATE `cross_boundary.value == true`: `ref/test/cross-boundary.md`
+   (real-wiring test + `RUN --mode mutation --mutations <spec.json>`). Otherwise record
+   `"cross_boundary_e2e": {"run": false, "reason": "not a cross-boundary change"}`.
+5. **Cross-platform** changeset (`#[cfg]`, `#ifdef`, Go build tags, per-target code):
+   `ref/test/cross-platform.md`.
+6. **Exit criteria:** once `stage-complete --check` reports `exit_criteria_met: true`,
+   stop verifying and exit.
 
-## Base Methodology
+**Gates**
+- `[GATE·validator]` artifact needs `passed` + `layers.ac_driven`; layers and
+  `regressions` come from runner evidence. <!-- R-test-001 -->
+- `[GATE·artifact_cli]` cross_boundary=true → DELIVER exits 1 without a passing
+  `cross_boundary_e2e.run` record (full rule: `ref/test/cross-boundary.md`).
+- `[MUST]` WTF gate after EVERY fix, score shown even if 0. `wtf_gate.py` does NOT block
+  publish: halt-at-≥5 is an agent-obeyed L2 checkpoint, not a validator publish gate. <!-- R-test-004 -->
+- `[MUST]` BLOCKING: a single-platform compile is never a fully-green TEST result for a
+  cross-platform changeset (`ref/test/cross-platform.md`).
+- `pipeline_test_gate`: runner only. `SWARM_TEST_GATE_FORCE=1` is operator-set, never yours.
 
-> **Reference:** `backend/skills/s_qa/INSTRUCTIONS.md`
->
-> Follow the scoped test methodology defined there: detect test framework, run scoped tests, fix failures with atomic commits.
+**Read only if:** layer detail / skip records / other stacks → `ref/test/layers.md`;
+fixing, WTF formula, regression table → `ref/test/fixing.md`; cross-boundary →
+`ref/test/cross-boundary.md`; cross-platform → `ref/test/cross-platform.md`.
 
-## Pipeline-Specific Behavior
+**Exit:** write `/tmp/<R>/test.json` from the stage-start example:
+`{"artifact": {"passed": true, "failed": 0, "fixed": K, "skipped": J, "tests_new": N, "tests_total": T, "cross_boundary_e2e": {...}}, "record": {"decisions": [...], "exit_evidence": {...}}}`.
+`exit_evidence` keys: `wtf` (score, even 0), `fixes` (each atomic commit), `unfixed`
+(each with diagnosis), `expectations` ("no test expectation modified"), `classes`
+(regression / new / pre-existing kept apart), `platforms` (cross-platform only).
+Then `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage test --data @/tmp/<R>/test.json`
+(`--check` first validates without writing).
 
-### Test Strategy (3 layers, executed in order) `[GATE·validator]`
-
-> The `layers` block (+ `passed`) is a REQUIRED test-artifact field — validator BLOCKS
-> if absent. Layer CONTENT (which tests ran) is agent-produced; presence is code-checked.
-
-#### Layer 1: AC-Driven Verification
-
-Load the BUILD artifact and extract `ac_coverage`:
-
-```bash
-# Retrieve BUILD artifact (changeset type)
-python backend/scripts/artifact_cli.py discover --project <PROJECT> --types changeset --full
-# Read the ac_coverage array from the artifact JSON
-```
-
-For each ac_coverage entry, execute its declared test:
-
-```bash
-# Extract test functions from ac_coverage and run them explicitly, using the
-# project's test runner (read TECH.md ## Dev Commands). SwarmAI-self reference:
-pytest -xvs -k "test_login_email or test_handle_error or test_rate_limit"
-# Other stacks: go test -run 'TestLoginEmail|TestHandleError'; cargo test <names>;
-# mvn -Dtest=... ; npx vitest run -t "login email".
-```
-
-**Why this layer:** BUILD claims "AC1 is tested by test_foo." This layer
-verifies that claim by actually running test_foo. If BUILD fabricated
-coverage (impl exists but test doesn't pass), this catches it immediately.
-
-**On failure:** Report which AC's test failed. Do NOT fix the test expectation —
-fix the code. If the test was wrong from BUILD, that's a BUILD quality issue
-(flag in artifact, don't silently adjust).
-
-#### Layer 2: Dependency-Scoped Regression
-
-Run tests that import or reference the changed modules:
-
-```bash
-# Python projects:
-grep -rl "from module_name\|import module_name" tests/ --include="*.py" | \
-  xargs pytest -x --timeout=60
-
-# TypeScript/JavaScript projects:
-grep -rl "from.*module_name\|require.*module_name" src/ --include="*.ts" --include="*.tsx" | \
-  xargs npx vitest run --reporter=verbose
-```
-
-Adapt the grep pattern to the project's language (read TECH.md for test framework).
-If Layer 2 returns zero test files for a non-trivial changeset, emit a WARNING —
-this may indicate the grep pattern doesn't match the project's import style.
-If the project has no `tests/` directory, skip Layer 2 with WARN in artifact:
-`"dependency_scoped": {"run": false, "reason": "no test directory"}`.
-
-**Why this layer:** A change to `auth.py` might break `test_session.py` that
-imports auth. AC-driven tests only verify what was explicitly declared;
-dependency-scoped tests catch collateral damage.
-
-**Scope limit:** Only tests that directly import changed modules. NOT the full
-suite. *(SwarmAI-SELF note: SwarmAI's full suite needs user approval + has a
-pytest-xdist deadlock risk — STEERING R9. Other projects: read their TECH.md/
-STEERING for the full-suite policy; the xdist hazard is SwarmAI-specific.)*
-
-#### Layer 3: Build/Import Smoke (Zero-Infrastructure E2E Proxy)
-
-Verify each new/changed file loads without crashing, using the project's stack.
-**Python projects** — import each new module:
-
-```bash
-# SwarmAI-self (Python): for each new/changed python file
-python -c "import sys; sys.path.insert(0, '.'); import module_name"
-```
-
-**Other stacks — use the equivalent load/compile check, or WARN-skip Layer 3
-if none applies** (read TECH.md ## Stack): Go `go build ./...`; Rust `cargo check`;
-TypeScript `tsc --noEmit`; Java compile the changed sources. If the project has
-no cheap load-check, record `"import_smoke": {"run": false, "reason": "<stack> has no import-smoke equivalent"}`.
-
-**Why this layer:** Catches wiring bugs (circular imports, missing dependencies,
-wrong relative paths) that unit tests miss because they import individual
-functions, not modules. One feature had code that passed all unit tests
-but crashed on real import because of a circular dependency.
-
-**On failure:** ImportError = wiring bug. Fix the import structure before
-proceeding.
-
-#### Layer 4: Cross-Boundary E2E (CONDITIONAL — fires ONLY when `cross_boundary.value == true`) `[GATE·artifact_cli]`
-
-> When EVALUATE set `cross_boundary=true`, this layer is code-enforced at DELIVER:
-> `artifact_cli.py`'s `cross_boundary_e2e` gate `sys.exit(1)`s if the TEST artifact lacks
-> a passing `cross_boundary_e2e.run` record. When `false`, the layer is skipped (no gate).
-
-Read the EVALUATE artifact's `cross_boundary` flag (see EVALUATE § Cross-Boundary
-Classification). **If `false` → skip this layer** (record `"cross_boundary_e2e": {"run": false, "reason": "not a cross-boundary change"}` and move on — no ceremony tax). **If `true` → this layer is a MANDATORY DoD item; the run is not TEST-complete without it.**
-
-Layers 1-3 are all *unit-shaped* — they exercise one side of a seam (AC's own test,
-importers, a module import). None drive the SEAM. Layer 4 does: it drives the **real
-system through the actual boundary** the change crosses.
-
-**Two hard requirements (both, or it's theater):**
-
-1. **Drive the REAL wiring, not a mock of it.** The test must exercise the actual
-   contract end-to-end: fire the real event through the real listener/registry; send
-   the real payload through the real serializer; run the real reader against the real
-   writer's output. **The test MUST NOT `patch`/mock the thing-under-change** — mocking
-   the event bus / the registry / the serializer you just edited is the CLASS-A
-   test-theater the whole layer exists to prevent. (Mock only the far leaf boundary —
-   a network call, the LLM — never the seam itself.)
-2. **Mutation-verify it's non-vacuous.** Revert the one contract line the change added
-   (the dispatch→open mapping, the migrated field, the allowlist entry) → the Layer-4
-   test MUST go RED. A green-on-revert Layer-4 test proves nothing; state the mutation
-   you ran + that it went RED in the artifact.
-
-**Per boundary kind, "drive the real system" means:**
-- *event-bus / ACT-SENSE* → mount the real provider + host + registry, `dispatchEvent`
-  the real `swarm:*` event, assert the surface opens (+ that its state is READ back). Canonical example: `overlayHostE2E.test.tsx` — 7 surfaces × real registry × real event; mutation = revert open-on-show → all RED.)
-- *frontend↔backend contract* → assert the frontend table is DERIVED from (or bound by a
-  test to) the backend SSOT, so a divergence is impossible/RED (e.g.
-  `test_backend_allowlist_is_bound_to_leftnav_ssot`).
-- *data/schema migration* → run the real reader against a real writer's output shape
-  (real production data shape, not a fixture that encodes your assumption).
-- *multi-subsystem shared path* → smoke EACH subsystem independently through the shared
-  path before combining (R16: send 1 msg → stream → content persists on tab switch).
-
-**Record in the TEST artifact:** `"cross_boundary_e2e": {"run": true, "test_file": "...", "drives_real": "what real wiring it exercises", "mutation": "reverted X → test RED"}`.
-
-### Regression Definition
-
-| Status | Meaning | Action |
-|--------|---------|--------|
-| **Regression** | Test PASSED before this changeset, FAILS now | Fix the code (not the test) |
-| **New failure** | Test was ADDED in this changeset and fails | Fix the code (TDD green phase incomplete) |
-| **Pre-existing** | Test was already failing before this changeset | Log in IMPROVEMENT.md "Known Issues", do NOT fix in this pipeline run |
-| **Flaky** | Test passes/fails non-deterministically | Fix the flake (race condition, time dependency). A test that passes 9/10 = FAILS |
-
-### Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation ≠ pass together. mock-based tests all passed but real DB had zero matching rows — function returned empty string in production. |
-| "This fix is simple, skip the WTF score" | Score every fix. "Simple" fixes that touch 4 files are not simple — one took 5 iterations because each fix revealed new scope. |
-| "I'll adjust the test expectation to match the new behavior" | Fix the CODE, not the test. Changing test expectations = changing the spec = go back to PLAN. Tests define CORRECT behavior; code must conform to them. |
-| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md "Known Issues." Never silently pass over a red test — it erodes the signal. Today's "pre-existing" is tomorrow's "we thought it was fine." |
-| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. The 21st fix historically introduces more bugs than it solves (WTF score data). |
-| "Tests are flaky, re-run until green" | Flaky = non-deterministic = real bug (race condition, shared state, time dependency). Fix the flake, don't re-roll the dice — STEERING is explicit that a test passing 9/10 times FAILS. |
-| "All units pass, the migration is done — Layer 4 is overkill" | Units pass ONE side of a seam; a cross-boundary change breaks the SEAM, which no unit sees. One delivery had every unit green while the ACT/SENSE contract was silently severed, caught by adversarial reviet E2E. If EVALUATE set `cross_boundary=true`, Layer 4 is mandatory. |
-| "I wrote a Layer-4 test and it's green" | Green ≠ non-vacuous. If it mocks the thing-under-change, or stays green when you revert the contract line, it's theater. Mutation-verify: revert the seam → it MUST go RED. |
-
-### WTF Gate `[MUST]`
-
-> `wtf_gate.py` is a real script, but the pipeline does NOT block publish on its score —
-> the halt-at-≥5 is an agent-obeyed L2 checkpoint (agent runs the script + acts on it),
-> not a validator-enforced publish gate. `[MUST]`.
-
-Calculate WTF score via script:
-
-```bash
-python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M
-```
-
-WTF score formula:
-```
-wtf_score = 0
-+2 if fix touches > 3 files
-+3 if fix modifies unrelated module
-+2 if fix changes API contract
-+1 if fix_count > 10
-+3 if previous fix broke something
---> halt if wtf_score >= 5 (judgment decision --> L2 BLOCK)
-```
-
-### Max Fixes
-
-Max 20 fixes per session. After 20, checkpoint and report regardless of remaining failures.
-
-### Test Execution Summary
-
-```
-1. Layer 1: Run AC-declared tests (from ac_coverage)
-2. Layer 2: Run dependency-scoped tests (grep imports of changed modules)
-3. Layer 3: Import smoke for new files
-4. For each failure: attempt fix + atomic commit
-5. Run WTF gate after each fix
-6. Re-run failed tests after fixes (confirm green)
-```
-
-### Single-Platform Compile Trap (BLOCKING for cross-platform changes) `[MUST]`
-
-**Trigger:** the changeset adds a `#[cfg(...)]` / `#ifdef` / platform-conditional
-symbol, OR touches code that compiles per-target (Rust, C/C++, Go build tags,
-platform-specific imports).
-
-**The trap:** a compile check on ONE platform (`cargo check` on the dev Mac)
-passes while another target FAILS — e.g. a `#[cfg(target_os="macos")]` function
-referenced by an un-gated caller breaks the Windows build (E0425). The green
-local check hides it. This run hit exactly this; adversarial
-review caught the Windows break a macOS `cargo check` reported as clean (RP40).
-
-**Rule:** a single-platform compile success may NOT be reported as a fully-green
-TEST result for a cross-platform changeset. Either:
-1. Run the cross-target check locally if the toolchain exists
-   (`cargo check --target <other>`), OR
-2. Mark the result explicitly: `"platform_verified": ["macos"],
-   "platform_pending_ci": ["windows", "linux"]` and surface it as a known gap
-   in DELIVER — the CI matrix is the definitive check, not the local build.
-
-Never write `all_pass: true` / "compiles" unqualified when only one of N targets
-was actually checked.
-
-### Exit Evidence Checklist
-
-Confirm each before publishing:
-- [ ] Layer 1 output pasted (AC tests: N/N pass)
-- [ ] Layer 2 output pasted (dependency scope: N tests, N pass)
-- [ ] Layer 3 output (import smoke: N modules, N success)
-- [ ] WTF score calculated and shown (even if 0)
-- [ ] Each fix has atomic commit listed
-- [ ] Remaining unfixed issues documented with diagnosis
-- [ ] No test expectation modifications (only code fixes)
-- [ ] Regressions vs new failures vs pre-existing clearly separated
-- [ ] Cross-platform changeset: single-platform compile NOT reported as fully-green (Single-Platform Compile Trap above)
-
-### Artifact Publish
-
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
-  --type test_report --producer s_autonomous-pipeline \
-  --summary "Tests: <passed>/<total> pass, <fixed> bugs fixed, layers: AC/dep/smoke" --stage test \
-  --data '{"passed":true,"failed":M,"fixed":K,"skipped":J,"tests_new":N,"tests_total":T,"regressions":0,"layers":{"ac_driven":{"run":true,"pass":A},"dependency_scoped":{"run":true,"tests":B,"pass":C},"import_smoke":{"run":true,"modules":D,"pass":E}}}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliver --run-id <RUN_ID>
-```
-
-> **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
-> handoff point. Immediately Read the next stage's doc (the `advance` output prints its
-> absolute path as `next_stage_doc`) and execute that stage **in this same turn**. The ONLY
-> legal reasons to hand control back are: a stage-boundary **L2 Judgment** routed through the
-> Escalation Routing Protocol, a **true checkpoint trigger** (`should_checkpoint=true`,
-> retries exhausted, or a mid-stage L2), a pending question awaiting the user, or an abandon
-> verdict. Absent one of those, ending your turn here is the stall this contract exists to
-> prevent.
->
-> **`next_action` is AUTHORITATIVE — this sentence defers to it.** The payload is measured at
-> the moment you advance; this prose was written long before. When `advance` reports a due
-> checkpoint (or that it could not measure the budget), it withholds the continue instruction
-> ON PURPOSE — follow the payload, not this paragraph. Prose cannot see the run's state; the
-> payload can.
+> **⏭️ Continuation — advance is not the end of your turn.** `stage-complete` records and
+> advances; read `next_card` and run that stage in this same turn. Legal hand-backs only:
+> a stage-boundary **L2 Judgment** (Escalation Routing Protocol), a true **checkpoint**
+> trigger (retries exhausted, mid-stage L2), a pending user question, or an abandon
+> verdict. `next_action` is AUTHORITATIVE over this prose.

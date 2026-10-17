@@ -465,15 +465,10 @@ _SIZE_UNLIMITED_DIRS = frozenset({"history"})
 _SIZE_PENDING_SPLIT: dict[str, int] = {
     "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md": 96_478,
     "backend/skills/s_autonomous-pipeline/stages/build.md": 54_303,
-    "backend/skills/s_autonomous-pipeline/stages/complete.md": 5_717,
     "backend/skills/s_autonomous-pipeline/stages/deliver.md": 72_840,
     "backend/skills/s_autonomous-pipeline/stages/evaluate.md": 56_020,
     "backend/skills/s_autonomous-pipeline/stages/goal_cycle.md": 28_327,
-    "backend/skills/s_autonomous-pipeline/stages/plan.md": 19_943,
-    "backend/skills/s_autonomous-pipeline/stages/reflect.md": 10_815,
     "backend/skills/s_autonomous-pipeline/stages/review.md": 56_261,
-    "backend/skills/s_autonomous-pipeline/stages/test.md": 15_636,
-    "backend/skills/s_autonomous-pipeline/stages/think.md": 9_758,
 }
 
 
