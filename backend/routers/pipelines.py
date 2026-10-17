@@ -91,9 +91,8 @@ def _is_stale(state: dict) -> bool:
     A run that finished all stages (a completed reflect/deliver marker) but
     crashed before `run-update --status completed` ran is FINISHED, not a
     failure. Honoring `is_terminal_run` here mirrors the SAME guard that
-    `artifact_cli._abandon_verdict` (before its abandon verdict) and
-    `proactive_intelligence` (before auto-resume) already apply — so all three
-    consumers of on-disk run state agree: terminal runs are skipped, never
+    `artifact_cli._abandon_verdict` (before its abandon verdict) already
+    applies — so both consumers of on-disk run state agree: terminal runs are skipped, never
     re-labeled. Without this, the stale→failed presentation coercion in
     _to_response would flip delivered-but-crashed runs to "failed" (run_aad474c7:
     a run that completed all its profile's stages must present as completed, not failed).

@@ -1478,10 +1478,10 @@ def is_terminal_run(data: dict) -> bool:
     """Single source of truth: has this run reached a TERMINAL (finished) state,
     judged by STAGE PROGRESS — not by the top-level `status` string?
 
-    Why stage-based, not status-based: the orphan-transition
-    (proactive_intelligence: running->paused + reason=session_crash_auto_detected)
-    can flip a run whose STAGES are all done to status='paused' during a session
-    refresh. Such a run is FINISHED, not a crash orphan — but every liveness check
+    Why stage-based, not status-based: a since-deleted orphan-transition
+    (running->paused + reason=session_crash_auto_detected, once run on every
+    session refresh) left legacy run.json files whose STAGES are all done but
+    whose status is 'paused'. Such a run is FINISHED, not a crash orphan — but every liveness check
     that keys off `status` alone mis-reads it as a resumable crash-zombie and
     re-surfaces it forever (run_bf840159: 6/6 stages incl. reflect completed, yet
     status='paused'+crash-reason → endless auto-resume prompt).
@@ -5184,14 +5184,13 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
     if "checkpoint" in run_state:
         run_state["checkpoint"]["resumed_at"] = now
 
-    # R2: count the REAL resume execution. resume_attempts (proactive_intelligence)
-    # counts directive EMITS (a throttle); this counts the agent ACTUALLY running
-    # run-resume — the true paused→running transition. The two answer different
-    # questions: emitted-3x-executed-0x = delivery broken (agent never picked up
-    # the briefing); executed-3x = pipeline broken (resume runs, keeps failing).
+    # R2: count the REAL resume execution — the agent ACTUALLY running
+    # run-resume, the true paused→running transition. (resume_attempts is a
+    # legacy field: its writer, a briefing auto-resume directive, was deleted;
+    # resuming is now always a deliberate run-resume, never prompt-driven.)
     # No extra lock: cmd_run_resume is the sole writer of status→running ON THE
-    # RESUME PATH (the documented auto-resume flow + directive both use run-resume,
-    # not run-update --status running), and is not self-concurrent (one agent
+    # RESUME PATH (resuming always goes through run-resume, never
+    # run-update --status running), and is not self-concurrent (one agent
     # resumes one run). Placed AFTER the status!=paused early-exit so a no-op never
     # counts as an execution. (The pre-existing unlocked write here is unchanged;
     # this adds one field to it.)

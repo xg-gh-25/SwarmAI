@@ -36,7 +36,7 @@
   "core/needs_human_review.py": 4,
   "core/observation_hooks.py": 2,
   "core/plugin_manager.py": 1,
-  "core/proactive_intelligence.py": 6,
+  "core/proactive_intelligence.py": 3,
   "core/readiness_sampler.py": 2,
   "core/recall_multi.py": 1,
   "core/service_manager.py": 1,

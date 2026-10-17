@@ -167,17 +167,14 @@ class TestDeadHelpersRemoved:
             "(feed/DB/eval sections removed; dead code deleted with them)."
         )
 
-    def test_auto_resume_engine_retained(self):
-        # _get_paused_pipeline_highlights + _newest_completed_run are the LIVE
-        # auto-resume engine (fs-only, the only trigger that resumes a paused
-        # pipeline). They must NOT be deleted — deleting them silently kills
-        # pipeline recovery (regression caught in adversarial review).
-        assert hasattr(pi, "_get_paused_pipeline_highlights"), (
-            "_get_paused_pipeline_highlights is the live auto-resume trigger — must be retained."
-        )
-        assert hasattr(pi, "_newest_completed_run"), (
-            "_newest_completed_run (used by the auto-resume engine) must be retained."
-        )
+    def test_no_pipeline_run_state_engine(self):
+        # Pipeline run state is NOT system-prompt cognition (XG-directed): the
+        # engine that injected it also rewrote run.json from whichever session
+        # started next, pausing pipelines still running in another tab. It is
+        # deleted, not disabled — a re-introduction must go red here.
+        for name in ("_get_paused_pipeline_highlights", "_advance_pipeline_recovery_state",
+                     "_render_pipeline_highlights", "_newest_completed_run"):
+            assert not hasattr(pi, name), f"{name} must stay deleted"
 
 
 class TestBriefingStillRendersEndToEnd:
