@@ -653,9 +653,11 @@ class SessionUnit:
         self._leak_count: int = 0
         self._leak_restart_eligible: bool = False
         self._leak_restart_done: bool = False
-        # Set by the orchestrator when a turn ended with the glitch prefix still
-        # in the CLI history (no safe mid-turn restart). The next send() kills
-        # the warm process and cleans the transcript before --resume reads it.
+        # Set by the orchestrator when the CLI history holds something the model
+        # must not see again: the glitch prefix (no safe mid-turn restart came),
+        # or a degenerate repetition run that was cut off mid-block
+        # (core.output_degeneration). The next send() recycles any warm process
+        # and cleans the transcript (leak_transcript) before --resume reads it.
         self._transcript_poisoned: bool = False
 
         # ── Streaming timeout ────────────────────────────────────────
@@ -4705,7 +4707,8 @@ class SessionUnit:
             return {}
 
     async def _clean_poisoned_transcript(self) -> None:
-        """Clean a glitch-poisoned CLI transcript before the next turn reads it.
+        """Clean a poisoned CLI transcript (glitch prefix / degenerate
+        repetition run) before the next turn reads it.
 
         The live CLI holds its history in memory, so a warm process is recycled
         first (identity kept → the following spawn uses --resume on the cleaned
@@ -4726,7 +4729,7 @@ class SessionUnit:
                 await asyncio.to_thread(clean_transcript_leaks, path) if path else 0
             )
             logger.warning(
-                "session_unit.tool_call_glitch_cleaned session_id=%s "
+                "session_unit.transcript_cleaned session_id=%s "
                 "transcript_found=%s blocks_cleaned=%d",
                 self.session_id, path is not None, cleaned,
             )

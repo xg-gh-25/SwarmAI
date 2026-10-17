@@ -228,7 +228,8 @@ class StreamingOrchestrator:
 
     def _record_token_usage_bg(self, message: Any, usage: dict) -> None:
         """Fire-and-forget token accounting for a response whose `result` is
-        not forwarded (leak continuation) — its tokens were still spent."""
+        not forwarded (leak continuation, degeneration abort) — its tokens
+        were still spent."""
         if not usage:
             return
         try:
@@ -617,6 +618,137 @@ class StreamingOrchestrator:
             })
         return events
 
+    @staticmethod
+    def _notice_event(text: str) -> dict:
+        """An in-conversation notice: an ``assistant`` text event, so it is
+        persisted with the turn and rendered in the chat (the frontend keeps a
+        confirmed text block that differs from earlier ones)."""
+        return {"type": "assistant", "content": [{"type": "text", "text": text}], "model": None}
+
+    def _stall_event(self, text: str) -> dict:
+        """A no-progress notice as the in-tab ``still_working`` status — NOT an
+        ``assistant`` event: it describes the stream, so it must not be
+        persisted as something the model said, nor replace text still
+        streaming in the UI."""
+        start = self._parent._streaming_start_time
+        return {
+            "type": "still_working",
+            "elapsedSeconds": int(time.time() - start) if start else 0,
+            "message": text,
+            "stall": True,
+        }
+
+    async def _interrupt_draining(self, response_iter: Any) -> None:
+        """Run the user-Stop interrupt while still reading the SDK stream.
+
+        The SDK buffers at most 100 messages between its stdout reader and us;
+        a looping model fills that fast, and a full buffer stops the reader
+        from ever seeing the interrupt's control response (5s timeout, then a
+        hard kill). A real user Stop never hits this because the stream keeps
+        being consumed meanwhile — so do the same: read and discard until the
+        interrupt returns. Messages read here belong to the aborted block —
+        except the turn's ResultMessage, whose usage is still recorded (a loop
+        near the output cap is the costliest turn there is).
+        """
+        from claude_agent_sdk import ResultMessage
+
+        itask = asyncio.ensure_future(self._parent.interrupt())
+        while not itask.done():
+            ntask = asyncio.ensure_future(response_iter.__anext__())
+            done, _ = await asyncio.wait({itask, ntask}, return_when=asyncio.FIRST_COMPLETED)
+            if ntask not in done:
+                ntask.cancel()
+                try:
+                    await ntask
+                except BaseException:  # noqa: BLE001 — the stream is being torn down
+                    pass
+                break
+            try:
+                msg = ntask.result()
+            except BaseException:  # noqa: BLE001 — exhausted / closed: nothing left to drain
+                break
+            if isinstance(msg, ResultMessage):
+                self._record_token_usage_bg(msg, getattr(msg, "usage", None) or {})
+        try:
+            await itask
+        except Exception as exc:  # noqa: BLE001 — the turn must still be closed for the user
+            logger.error(
+                "session_unit.output_degeneration_interrupt_failed session_id=%s: %s",
+                self._parent.session_id, f"{type(exc).__name__}: {exc}",
+            )
+
+    async def _abort_on_degeneration(
+        self, det: Any, parent_tool_use_id: Optional[str], response_iter: Any,
+    ) -> list[dict]:
+        """End the turn because a content block degenerated into a loop.
+
+        Uses the user-Stop path — ``SessionUnit.interrupt()`` (non-autonomous:
+        sets ``_user_stopped_current_turn``, recycles the poisoned subprocess
+        to COLD keeping the --resume id), with the stream drained meanwhile
+        (``_interrupt_draining``). Never retried: re-running the same context
+        is likely to loop again. The caller ``return``s right after yielding
+        these events, so nothing that handles a ResultMessage — leak
+        continuation (``client.query``), leak/glitch restarts, retry guards —
+        can run for this turn.
+
+        Every per-turn parent field is read/written BEFORE the interrupt: once
+        it reaches IDLE, the drain worker may already start the next send() on
+        this unit, whose state must not be touched.
+
+        Returns the events to yield: for a text block, its legit prefix (cut at
+        the start of the repeated run, leak/glitch text stripped) plus the
+        notice as an ``assistant`` event — it replaces the provisional streamed
+        text in the UI and is what gets persisted — then a ``result`` that
+        closes the turn. The CLI still writes the partial block to its own
+        transcript; ``_transcript_poisoned`` makes the next send() clean it
+        (``leak_transcript``) before --resume.
+        """
+        from .output_degeneration import (
+            DEGENERATION_NOTICE,
+            compress_ratio,
+            find_degenerate_run,
+        )
+        from .session_utils import strip_glitch_prefix, strip_tool_call_leak
+
+        text = det.text
+        run = find_degenerate_run(text)
+        cut = run[0] if run else len(text)
+        logger.warning(
+            "session_unit.output_degeneration session_id=%s block=%s tool=%s sidechain=%s "
+            "chars=%d cut_at=%d ratio=%.1f sample=%r — interrupting turn (user-Stop path, no retry)",
+            self._parent.session_id, det.kind, det.name or "-", bool(parent_tool_use_id),
+            len(text), cut, compress_ratio(text[-2000:]), text[cut:cut + 80],
+        )
+        if det.kind == "tool_use":
+            body = (
+                f"{DEGENERATION_NOTICE}\n(工具 {det.name or '?'} 的调用输入陷入重复,已中止;"
+                f"若它已开始执行,结果可能不完整 / the call to {det.name or 'a tool'} was "
+                "stopped; if it had already started, its result may be incomplete.)"
+            )
+        else:
+            prefix = ""
+            if not parent_tool_use_id and det.kind == "text":
+                prefix = strip_glitch_prefix(strip_tool_call_leak(text[:cut])).rstrip()
+            body = f"{prefix}\n\n{DEGENERATION_NOTICE}" if prefix else DEGENERATION_NOTICE
+        start = self._parent._streaming_start_time
+        events = [
+            self._notice_event(body),
+            {
+                "type": "result",
+                "subtype": "output_degenerated",
+                "stop_reason": "output_degenerated",
+                "session_id": self._parent.session_id,
+                "duration_ms": int((time.time() - start) * 1000) if start else 0,
+                "total_cost_usd": None,
+                "num_turns": 1,
+                "usage": None,
+            },
+        ]
+        self._parent._transcript_poisoned = True
+        self._parent._content_emitted = True
+        await self._interrupt_draining(response_iter)
+        return events
+
     # ═══════════════════════════════════════════════════════════════
     # Migrated from session_unit.py — _read_formatted_response
     # ═══════════════════════════════════════════════════════════════
@@ -701,6 +833,18 @@ class StreamingOrchestrator:
         # the clean+resume restart; if the turn ends first, the transcript is
         # flagged for cleaning before the next send() reuses it.
         _glitch_pending = False
+
+        # ── Output degeneration + no-progress watch (core.output_degeneration) ──
+        # One detector per streamed content block, keyed by (parent_tool_use_id,
+        # index): a sub-agent's block can share an index with a main-thread one.
+        # Fed by text_delta AND input_json_delta (a tool input can loop too). A
+        # hit ends the turn through the user-Stop path (_abort_on_degeneration).
+        # ProgressWatch only produces notices for invisible-thinking / silent
+        # stalls — it never stops the turn.
+        from .output_degeneration import DegenerationDetector, ProgressWatch
+
+        _degen: dict[tuple, DegenerationDetector] = {}
+        _progress = ProgressWatch(now=time.time())
 
         # ── Permission queue watcher ──────────────────────────────
         # The dangerous_command_gate hook blocks inside PreToolUse
@@ -792,16 +936,26 @@ class StreamingOrchestrator:
                             [sdk_task, perm_task, tick_task],
                             return_when=asyncio.FIRST_COMPLETED,
                         )
-                    except Exception:
+                    except BaseException:
                         tick_task.cancel()
                         raise
                     if tick_task in done and sdk_task not in done and perm_task not in done:
                         # Neither a message nor a permission arrived this tick —
                         # surface a heartbeat (throttled internally) and keep
                         # waiting on the SAME sdk_task/perm_task.
+                        _note = _progress.check(
+                            time.time(), tools_open=bool(self._parent._open_tool_uses)
+                        )
+                        if _note is not None:
+                            yield self._stall_event(_note)
                         try:
                             hb = self._parent._maybe_build_elapsed_heartbeat()
                             if hb is not None:
+                                # Keep a reported stall on screen: the generic
+                                # heartbeat shares the toast slot.
+                                _stall = _progress.stall_note(time.time())
+                                if _stall is not None:
+                                    hb = {**hb, "message": _stall, "stall": True}
                                 yield hb
                         except Exception as hb_exc:
                             logger.debug(
@@ -819,8 +973,11 @@ class StreamingOrchestrator:
                     done.discard(tick_task)
                     pending.discard(tick_task)
                     break
-            except Exception:
-                # Cleanup on unexpected errors
+            except BaseException:
+                # Cleanup on unexpected errors — and on GeneratorExit /
+                # CancelledError at a heartbeat/notice yield (consumer closed
+                # the stream): an orphaned perm_queue.get() would swallow the
+                # next permission request on this session's queue.
                 sdk_task.cancel()
                 perm_task.cancel()
                 raise
@@ -1001,6 +1158,7 @@ class StreamingOrchestrator:
             # trigger a spurious self-heal mid-response.
             self._parent._last_event_time = time.time()
             self._parent._health_sensor.record_activity()
+            _progress.on_event(self._parent._last_event_time)
 
             # ── Long-turn heartbeat (Root 2 / AC5) ─────────────────
             # If this turn has been running a long time, surface a "still
@@ -1010,6 +1168,9 @@ class StreamingOrchestrator:
             try:
                 hb = self._parent._maybe_build_elapsed_heartbeat()
                 if hb is not None:
+                    _stall = _progress.stall_note(time.time())
+                    if _stall is not None:
+                        hb = {**hb, "message": _stall, "stall": True}
                     yield hb
             except Exception as hb_exc:
                 # Best-effort — never break the stream — but log so a
@@ -1027,6 +1188,18 @@ class StreamingOrchestrator:
 
             # ── SystemMessage: session init metadata ──────────────
             if isinstance(message, SystemMessage):
+                if message.subtype == "thinking_tokens":
+                    # The only progress signal of an invisible-thinking turn.
+                    _data = getattr(message, "data", None) or {}
+                    _progress.on_thinking_tokens(
+                        time.time(), _data.get("estimated_tokens_delta") or 0
+                    )
+                    _note = _progress.check(
+                        time.time(), tools_open=bool(self._parent._open_tool_uses)
+                    )
+                    if _note is not None:
+                        yield self._stall_event(_note)
+                    continue
                 if message.subtype == "init":
                     self._parent._sdk_session_id = message.data.get("session_id")
                     yield {
@@ -1039,13 +1212,24 @@ class StreamingOrchestrator:
             if isinstance(message, StreamEvent):
                 event_data = message.event
                 event_type = event_data.get("type", "")
+                _dkey = (getattr(message, "parent_tool_use_id", None), event_data.get("index", 0))
                 if event_type == "content_block_delta":
                     delta = event_data.get("delta", {})
                     if delta.get("type") == "text_delta" and delta.get("text"):
                         self._parent._content_emitted = True
                         self._parent._last_progress_time = time.time()  # real content
+                        _progress.on_visible(self._parent._last_progress_time)
                         _idx = event_data.get("index", 0)
                         _dtext = delta["text"]
+                        _det = _degen.get(_dkey)
+                        if _det is None:
+                            _det = _degen[_dkey] = DegenerationDetector(kind="text")
+                        if _det.feed(_dtext):
+                            for _ev in await self._abort_on_degeneration(
+                                _det, _dkey[0], response_iter
+                            ):
+                                yield _ev
+                            return
                         if _idx in _delta_leak_hidden:
                             continue  # rest of a leaked tool call — never shown
                         _prev = _delta_text_buf.get(_idx, "")
@@ -1062,11 +1246,30 @@ class StreamingOrchestrator:
                                 if not _dtext:
                                     continue
                         yield {"type": "text_delta", "text": _dtext, "index": _idx}
+                    elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
+                        # A tool input streaming in is visible progress, and it
+                        # can loop like text (e.g. a Write whose content repeats).
+                        _progress.on_visible(time.time())
+                        _det = _degen.get(_dkey)
+                        if _det is None:
+                            _det = _degen[_dkey] = DegenerationDetector(kind="tool_use")
+                        if _det.feed(delta["partial_json"]):
+                            for _ev in await self._abort_on_degeneration(
+                                _det, _dkey[0], response_iter
+                            ):
+                                yield _ev
+                            return
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
                         self._parent._last_progress_time = time.time()  # real thinking
+                        _progress.on_visible(self._parent._last_progress_time)  # shown to the user
                         yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
                 elif event_type == "content_block_start":
                     block = event_data.get("content_block", {})
+                    # Fresh detector for EVERY block start (an index is reused by
+                    # the next message's blocks, whatever their type).
+                    _degen[_dkey] = DegenerationDetector(
+                        kind=block.get("type", ""), name=block.get("name", "") or "",
+                    )
                     if block.get("type") == "thinking":
                         yield {"type": "thinking_start", "index": event_data.get("index", 0)}
                     elif block.get("type") == "text":
@@ -1075,6 +1278,7 @@ class StreamingOrchestrator:
                         _delta_leak_hidden.discard(event_data.get("index", 0))
                         yield {"type": "text_start", "index": event_data.get("index", 0)}
                 elif event_type == "content_block_stop":
+                    _degen.pop(_dkey, None)  # block done — release its text
                     yield {"type": "content_block_stop", "index": event_data.get("index", 0)}
                 continue
 
@@ -1094,6 +1298,7 @@ class StreamingOrchestrator:
             #       skipped by the sweep, cf. run_5a7be540.)
             if isinstance(message, UserMessage):
                 self._parent._last_progress_time = time.time()  # sub-agent progress
+                _progress.on_visible(self._parent._last_progress_time)  # tool results
                 self._clear_completed_sub_agents(message)
                 # (b) write + delete emit (run_cce6f4b9). List-guard mirrors
                 # _clear_completed_sub_agents (string content carries no blocks). Parent
@@ -1210,6 +1415,8 @@ class StreamingOrchestrator:
             if isinstance(message, AssistantMessage):
                 saw_assistant_message = True
                 self._parent._last_progress_time = time.time()  # real content blocks
+                if any(isinstance(b, (TextBlock, ToolUseBlock)) for b in message.content):
+                    _progress.on_visible(self._parent._last_progress_time)
                 content_blocks = []
                 _msg_leaked = False
                 for block in message.content:

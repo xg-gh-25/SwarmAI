@@ -8,14 +8,23 @@ the transcript before a ``--resume`` removes the priming.
 
 Public symbols:
 - ``find_transcript(sdk_session_id)`` — path of the CLI transcript, or None.
-- ``clean_transcript_leaks(path)``    — strip leak text from assistant text
-  blocks in place (atomic replace); returns the number of blocks changed.
+- ``clean_transcript_leaks(path)``    — strip leak text and degenerate
+  repetition runs from assistant blocks in place (atomic replace); returns the
+  number of blocks changed.
 
-Only ASSISTANT text blocks are touched: a raw line-start ``‹invoke`` outside
-code spans (the signal the live stream uses) is stripped, and so is the second
-glitch shape — a corrupted opener word at the start of a narration line
+Only ASSISTANT records are touched: in text blocks a raw line-start ``‹invoke``
+outside code spans (the signal the live stream uses) is stripped, and so is the
+second glitch shape — a corrupted opener word at the start of a narration line
 (``detect_glitch_prefix``), which the model also copies from history. Prose
 that discusses the syntax, tool results, and user messages are left alone.
+
+The same pass removes degenerate repetition runs (``core.output_degeneration``)
+from assistant text blocks AND from tool_use input strings, replacing each run
+with ``DEGENERATION_TRANSCRIPT_MARKER``. A runaway loop that was interrupted
+mid-block is still written to the transcript by the CLI (up to the stop point),
+and ``--resume`` would replay it; the orchestrator flags the session
+(``_transcript_poisoned``) so this cleaner runs before the next spawn. Detection
+uses the very function the live stream uses, so stream and history agree.
 """
 from __future__ import annotations
 
@@ -26,6 +35,12 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from .output_degeneration import (
+    DEGENERATION_TRANSCRIPT_MARKER,
+    WINDOW as _DEGEN_WINDOW,
+    strip_degenerate_in_value,
+    strip_degenerate_runs,
+)
 from .session_utils import (
     _has_glitch_word,
     detect_glitch_prefix,
@@ -66,7 +81,10 @@ def find_transcript(sdk_session_id: Optional[str]) -> Optional[Path]:
 def _clean_line(line: str) -> tuple[str, int]:
     """Return (line, n_blocks_changed) for one transcript record."""
     if '"assistant"' not in line or not (
-        "<invoke" in line or _has_glitch_word(line)
+        "<invoke" in line
+        or _has_glitch_word(line)
+        # A degenerate run needs a full detector window; shorter lines can't hold one.
+        or len(line) >= _DEGEN_WINDOW
     ):
         return line, 0
     try:
@@ -80,6 +98,15 @@ def _clean_line(line: str) -> tuple[str, int]:
         return line, 0
     n = 0
     for block in content:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            tool_input = block.get("input")
+            cleaned_input = strip_degenerate_in_value(
+                tool_input, DEGENERATION_TRANSCRIPT_MARKER
+            )
+            if cleaned_input is not tool_input:
+                block["input"] = cleaned_input
+                n += 1
+            continue
         if not (isinstance(block, dict) and block.get("type") == "text"):
             continue
         text = block.get("text")
@@ -90,6 +117,8 @@ def _clean_line(line: str) -> tuple[str, int]:
             cleaned = strip_tool_call_leak(cleaned)
         if detect_glitch_prefix(cleaned):
             cleaned = strip_glitch_prefix(cleaned)
+        if len(cleaned) >= _DEGEN_WINDOW:
+            cleaned = strip_degenerate_runs(cleaned, DEGENERATION_TRANSCRIPT_MARKER)
         if cleaned != text:
             block["text"] = cleaned if cleaned.strip() else EMPTY_FILLER
             n += 1
@@ -100,7 +129,8 @@ def _clean_line(line: str) -> tuple[str, int]:
 
 
 def clean_transcript_leaks(path: Path) -> int:
-    """Strip leak text from ``path`` in place; return blocks changed.
+    """Strip leak text and degenerate runs from ``path`` in place; return
+    blocks changed.
 
     Blocking file I/O — call via ``asyncio.to_thread``. Must only run while no
     CLI process is writing the file (the caller kills it first). Never raises:

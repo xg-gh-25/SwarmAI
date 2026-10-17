@@ -2150,6 +2150,15 @@ class ChannelGateway:
                             "(output limit reached). "
                             "Send \"continue\" to get the rest.*"
                         )
+                    elif stop_reason == "output_degenerated":
+                        # The orchestrator cut off a repetition loop. Up to ~2000
+                        # chars of the loop were already streamed into the
+                        # buffers; the reply is finalized from stream_flushed, so
+                        # REPLACE it with the notice event's text (legit prefix +
+                        # notice) — the final update then overwrites the loop.
+                        from core.output_degeneration import DEGENERATION_NOTICE
+                        ctx.stream_buf.clear()
+                        ctx.stream_flushed = reply_text or DEGENERATION_NOTICE
                     if subtype and "error" in subtype:
                         error_detail = event.get("error") or event.get("message") or subtype
                         logger.error(
