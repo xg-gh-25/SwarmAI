@@ -3,7 +3,12 @@
  *
  * This sub-component handles the full rendering of assistant-role messages:
  * - Branded header via AssistantHeader (🐝 SwarmAI · timestamp)
- * - Left-aligned content blocks with no avatar indentation
+ * - Content rendered from the ONE turn projection (`deriveTurnView`,
+ *   pages/chat/turnView.ts): tool calls / thinking / between-tool notes fold
+ *   into ProcessBlock rows; landmarks, the answer (outcome) and interrupts
+ *   (question / permission / escalation) render in the main stream
+ * - Next-step chips (NextSteps) from a trailing ```next-steps block, last
+ *   assistant message only; Copy copies the answer, not the process
  * - Red border error wrapper when message.isError is true
  * - min-w-0 overflow constraint on content (prevents flex overflow)
  * - Save-to-Memory button on the last assistant message (hover-to-reveal,
@@ -24,17 +29,17 @@
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import clsx from 'clsx';
-import type { Message, ToolResultContent } from '../../../types';
+import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
-import { ToolGroup } from './ToolGroup';
-import { groupConsecutiveTools } from '../utils';
+import { ProcessBlock } from './ProcessBlock';
+import { NextSteps } from './NextSteps';
+import { deriveTurnView, extractNextSteps } from '../turnView';
 import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
-import { ActivityFeed } from './ActivityFeed';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { isOt01DiagEnabled } from '../../../utils/diagFlags';
 import { useSubAgentProgress } from '../../../hooks/useSubAgentProgress';
@@ -76,6 +81,9 @@ const MEMORY_ICON_MAP: Record<MemorySaveStatus, string> = {
   error: 'error',
 };
 
+/** Tool results are consumed by the projection; ContentBlockRenderer never pairs here. */
+const EMPTY_RESULTS = new Map();
+
 export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   message,
   onAnswerQuestion,
@@ -91,19 +99,16 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   readOnly,
 }) => {
   const [copied, setCopied] = useState(false);
-  // Expanded tool-GROUP ids, keyed by the group's CONTENT-STABLE groupId (first
-  // member's tool_use id), NOT its positional startIndex. Lifted to this
-  // component (not inside ToolGroup) so a tab-switch remount keeps a group the
-  // user opened OPEN — the M4 anti-jump fix from the Gate-1 review. Keying by a
-  // stable id (not startIndex) also means a content shift (load-older prepend /
-  // stream-end reconcile) can't re-point an expanded entry at a DIFFERENT run —
-  // the Gate-2 correctness finding. Default: not present = collapsed.
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const toggleGroup = useCallback((groupId: string) => {
-    setExpandedGroups((prev) => {
+  // Expanded PROCESS segments, keyed by the segment's ordinal id (`seg-<n>`,
+  // see turnView.ts) — stable while the turn streams AND across the stream-end
+  // reconcile that drops tool_result/thinking blocks. Lifted here (not inside
+  // ProcessBlock) so it survives ProcessBlock remounts. Default: collapsed.
+  const [expandedProcess, setExpandedProcess] = useState<Set<string>>(new Set());
+  const toggleProcess = useCallback((id: string) => {
+    setExpandedProcess((prev) => {
       const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }, []);
@@ -147,38 +152,31 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     }
   }, [sessionId, compactStatus, addToast]);
 
-  /** Extract plain text from all content blocks for clipboard copy. */
-  const extractMessageText = useCallback((): string => {
-    return message.content
+  // The ONE display projection of this turn (pages/chat/turnView.ts): ordered
+  // units (process segments / landmarks / outcome / interrupts), the single
+  // done rule, the lifted next-steps block and what Copy copies.
+  const view = useMemo(
+    () => deriveTurnView(message.content, !!isStreaming),
+    [message.content, isStreaming],
+  );
+
+  /** All text the message carries — gates the action row exactly as before the
+   *  projection (a turn that ended mid-process, with no answer yet, still gets
+   *  Continue / Save). */
+  const allText = useMemo(
+    () => message.content
       .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
       .map((b) => b.text)
-      .join('\n');
-  }, [message.content]);
-
-  // Pre-build result map for O(1) tool_use → tool_result pairing
-  const resultMap = useMemo(() => {
-    const map = new Map<string, ToolResultContent>();
-    for (const block of message.content) {
-      if (block.type === 'tool_result') {
-        map.set(block.toolUseId, block);
-      }
-    }
-    return map;
-  }, [message.content]);
-
-  // Only the LAST tool_use without a result should show a spinner.
-  // Earlier tools without results are implicitly complete — the SDK
-  // executes tools sequentially, so if tool N+1 exists, tool N finished.
-  const lastPendingToolUseId = useMemo(() => {
-    if (!isStreaming) return null;
-    for (let i = message.content.length - 1; i >= 0; i--) {
-      const block = message.content[i];
-      if (block.type === 'tool_use' && !resultMap.has(block.id)) {
-        return block.id;
-      }
-    }
-    return null;
-  }, [message.content, resultMap, isStreaming]);
+      .join('\n'),
+    [message.content],
+  );
+  /** Copy copies the answer (outcome text) — not process notes, not next-steps;
+   *  a turn with no answer falls back to all of its text (still without a
+   *  trailing next-steps block). */
+  const extractMessageText = useCallback(
+    (): string => view.copyText || extractNextSteps(allText, false).text,
+    [view, allText],
+  );
 
   const handleCopy = useCallback(() => {
     copyToClipboard(extractMessageText());
@@ -227,60 +225,43 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     });
   }
 
-  // Render ONE block via ContentBlockRenderer. Shared by the top level and by an
-  // expanded ToolGroup's children, so grouping is a PURE DISPLAY WRAPPER — the
-  // underlying 1:1 tool_use↔result pairing, stable `tu-${id}` key, spinner, and
-  // permission wiring are IDENTICAL whether a block renders standalone or inside
-  // a group (the H3 "nothing-breaks" guarantee from the Gate-1 review).
-  const renderBlock = (block: typeof message.content[number], index: number) => {
-    const key = block.type === 'tool_use' ? `tu-${block.id || index}`
-      : block.type === 'tool_result' ? `tr-${block.toolUseId || index}`
-      // Thinking carries LOCAL open-state (ThinkingBlock); a distinct `th-`
-      // prefix stops it from ever reusing a text block's `cb-` slot at the same
-      // positional index — the Gate-2 state-bleed finding.
-      : block.type === 'thinking' ? `th-${index}`
-      : `cb-${index}`;
-    return (
-      <ContentBlockRenderer
-        key={key}
-        block={block}
-        resultMap={resultMap}
-        allBlocks={message.content}
-        onAnswerQuestion={onAnswerQuestion}
-        onPermissionDecision={onPermissionDecision}
-        onEscalationSelect={onEscalationSelect}
-        pendingToolUseId={pendingToolUseId}
-        pendingPermissionRequestId={pendingPermissionRequestId}
-        isStreaming={isStreaming}
-        lastPendingToolUseId={lastPendingToolUseId}
-        readOnly={readOnly}
-        sessionId={sessionId}
-      />
-    );
-  };
+  // Render ONE block via ContentBlockRenderer (markdown text + the interactive
+  // interrupt widgets). Tool calls never come through here — they live inside a
+  // ProcessBlock, which takes its status from the projection.
+  const renderBlock = (block: ContentBlock, key: string) => (
+    <ContentBlockRenderer
+      key={key}
+      block={block}
+      resultMap={EMPTY_RESULTS}
+      allBlocks={message.content}
+      onAnswerQuestion={onAnswerQuestion}
+      onPermissionDecision={onPermissionDecision}
+      onEscalationSelect={onEscalationSelect}
+      pendingToolUseId={pendingToolUseId}
+      pendingPermissionRequestId={pendingPermissionRequestId}
+      isStreaming={isStreaming}
+      readOnly={readOnly}
+      sessionId={sessionId}
+    />
+  );
 
-  // Group consecutive same-category clean tool_use runs into one collapsed row.
-  // Mixed-state (error/pending/streaming) runs are downgraded to individual
-  // blocks UPSTREAM by groupConsecutiveTools, so a group here is always safe to
-  // collapse — this view never has to hide an error or a spinner.
-  const renderUnits = groupConsecutiveTools(message.content, resultMap, !!isStreaming);
-  const contentBlocks = renderUnits.map((unit) => {
-    if (unit.kind === 'block') {
-      return renderBlock(unit.block, unit.index);
+  const contentBlocks = view.units.map((unit) => {
+    if (unit.kind === 'process') {
+      return (
+        <ProcessBlock
+          key={`p-${unit.id}`}
+          unit={unit}
+          expanded={expandedProcess.has(unit.id)}
+          onToggle={() => toggleProcess(unit.id)}
+          startedAt={message.timestamp}
+        />
+      );
     }
-    // tool-group: collapsed summary row; expanded → the original per-tool blocks.
-    // Keyed + expansion-tracked by the content-stable groupId (not startIndex).
-    return (
-      <ToolGroup
-        key={unit.groupId}
-        category={unit.category}
-        count={unit.blocks.length}
-        expanded={expandedGroups.has(unit.groupId)}
-        onToggle={() => toggleGroup(unit.groupId)}
-      >
-        {unit.blocks.map((item) => renderBlock(item.block, item.index))}
-      </ToolGroup>
-    );
+    if (unit.kind === 'interrupt') return renderBlock(unit.block, `i-${unit.index}`);
+    // landmark + outcome are markdown text; a distinct key prefix per kind keeps
+    // React from reusing one kind's instance for another at the same index.
+    const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
+    return renderBlock({ type: 'text', text: unit.text }, `${prefix}-${unit.index}`);
   });
 
   return (
@@ -324,13 +305,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         </div>
       )}
 
-      {/* Activity Feed — collapsible tool action summary */}
-      {!isStreaming && <ActivityFeed blocks={message.content} />}
+      {/* Next steps — the reply's trailing ```next-steps block as clickable chips.
+          Only on the latest answer (older ones are stale) and never in read-only. */}
+      {!readOnly && !isStreaming && isLastAssistant && <NextSteps steps={view.nextSteps} />}
 
       {/* Action buttons — appear on hover below content, hidden while streaming.
           Hidden entirely in read-only (History preview) — Copy/Save/Compact/
           Continue are all side-effecting controls that don't belong there. */}
-      {!readOnly && !isStreaming && extractMessageText().length > 0 && (
+      {!readOnly && !isStreaming && allText.length > 0 && (
         <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity mt-1 flex items-center gap-2">
           {/* Copy button (unchanged) */}
           <button

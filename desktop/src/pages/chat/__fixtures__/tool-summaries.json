@@ -1,0 +1,152 @@
+[
+  {
+    "name": "Bash",
+    "category": "bash",
+    "summary": "Running: cd /Users/x/repo && grep -n \"needle\" src/a.ts",
+    "expectedVerb": "search"
+  },
+  {
+    "name": "Bash",
+    "category": "bash",
+    "summary": "Running: cat desktop/src/pages/chat/turnView.ts | head -40",
+    "expectedVerb": "read"
+  },
+  {
+    "name": "Bash",
+    "category": "bash",
+    "summary": "Running: ls -la desktop/src",
+    "expectedVerb": "list"
+  },
+  {
+    "name": "Bash",
+    "category": "bash",
+    "summary": "Running: git log --oneline -5",
+    "expectedVerb": "run"
+  },
+  {
+    "name": "Read",
+    "category": "read",
+    "summary": "Reading /Users/x/repo/backend/core/tool_summarizer.py",
+    "expectedVerb": "read"
+  },
+  {
+    "name": "Write",
+    "category": "write",
+    "summary": "Writing to /Users/x/repo/desktop/src/a.ts",
+    "expectedVerb": "edit"
+  },
+  {
+    "name": "Edit",
+    "category": "write",
+    "summary": "Writing to /Users/x/repo/desktop/src/b.ts",
+    "expectedVerb": "edit"
+  },
+  {
+    "name": "Grep",
+    "category": "search",
+    "summary": "Searching for useState",
+    "expectedVerb": "search"
+  },
+  {
+    "name": "Glob",
+    "category": "search",
+    "summary": "Searching for **/*.tsx",
+    "expectedVerb": "search"
+  },
+  {
+    "name": "WebFetch",
+    "category": "web_fetch",
+    "summary": "Fetching https://example.com/docs/page",
+    "expectedVerb": "fetch"
+  },
+  {
+    "name": "WebSearch",
+    "category": "web_search",
+    "summary": "Searching web for claude opus release notes",
+    "expectedVerb": "websearch"
+  },
+  {
+    "name": "ToolSearch",
+    "category": "tool_search",
+    "summary": "Loading tools: Bash, Read",
+    "expectedVerb": "loadTools"
+  },
+  {
+    "name": "Skill",
+    "category": "skill",
+    "summary": "Using skill: s_pdf",
+    "expectedVerb": "skill"
+  },
+  {
+    "name": "LS",
+    "category": "list_dir",
+    "summary": "Listing /Users/x/repo/desktop",
+    "expectedVerb": "list"
+  },
+  {
+    "name": "TodoWrite",
+    "category": "todowrite",
+    "summary": "Writing 2 todos",
+    "expectedVerb": "todo"
+  },
+  {
+    "name": "Agent",
+    "category": "agent",
+    "summary": "Agent: inventory streaming surfaces",
+    "expectedVerb": "agent"
+  },
+  {
+    "name": "Task",
+    "category": "agent",
+    "summary": "Agent (reviewer): review the diff for correctness",
+    "expectedVerb": "agent"
+  },
+  {
+    "name": "mcp__coe__search_coe",
+    "category": "fallback",
+    "summary": "MCP: search_coe — lambda timeout",
+    "expectedVerb": "mcp"
+  },
+  {
+    "name": "SomethingNew",
+    "category": "fallback",
+    "summary": "SomethingNew: x",
+    "expectedVerb": "tool"
+  },
+  {
+    "name": "Bash",
+    "category": "bash",
+    "summary": "Using Bash",
+    "expectedVerb": "tool"
+  },
+  {
+    "name": "TodoWrite",
+    "category": "todowrite",
+    "summary": "Writing 1 todos → tasks.md",
+    "expectedVerb": "todo"
+  },
+  {
+    "name": "Agent",
+    "category": "agent",
+    "summary": "Agent: reviewer",
+    "expectedVerb": "agent"
+  },
+  {
+    "name": "mcp__coe__search_coe",
+    "category": "fallback",
+    "summary": "MCP: search_coe",
+    "expectedVerb": "mcp"
+  },
+  {
+    "name": "mcp__fs__read_file",
+    "category": "fallback",
+    "summary": "MCP: read_file — /x/a.md",
+    "expectedVerb": "mcp"
+  },
+  {
+    "name": "Read",
+    "category": "read",
+    "summary": "Reading /x/ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "expectedVerb": "read"
+  }
+]

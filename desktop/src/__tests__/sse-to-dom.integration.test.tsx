@@ -30,7 +30,7 @@
  * survives), never pixel/exact-AI-text — cannot flake on output variance.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { parseSSEEvent } from '../services/chat';
 import { MessageStore } from '../stores/MessageStore';
@@ -134,8 +134,11 @@ describe('E2E assembly — SSE → MessageStore → DOM', () => {
     store.append({ id: asstId, role: 'assistant', content: ev.content, timestamp: new Date().toISOString() });
     renderFromStore(store);
 
-    // both the pre-tool AND the post-tool text blocks survive assembly + render
-    expect(screen.getByText(/PRE_TOOL_zeta/)).toBeTruthy();
+    // The post-tool text is the answer: visible without any interaction. The
+    // pre-tool text is process (folded since the turnView projection) — it must
+    // survive assembly, i.e. appear once the process row is expanded.
     expect(screen.getByText(/POST_TOOL_yota/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('process-row'));
+    expect(screen.getByText(/PRE_TOOL_zeta/)).toBeTruthy();
   });
 });

@@ -164,14 +164,6 @@
     "attachFile": "附加文件",
     "sending": "发送中...",
     "thinking": "思考中...",
-    "thinkingWithElapsed": "思考中... ({{elapsed}})",
-    "runningTool": "运行中: {{tool}}...",
-    "runningToolElapsed": "运行中: {{tool}}... ({{elapsed}})",
-    "runningToolWithContext": "运行中: {{tool}} — {{context}} ({{count}} 个工具已使用)",
-    "runningToolWithContextElapsed": "运行中: {{tool}} — {{context}} ({{count}} 工具 | {{elapsed}})",
-    "runningToolWithCount": "运行中: {{tool}} ({{count}} 个工具已使用)",
-    "runningToolWithCountElapsed": "运行中: {{tool}} ({{count}} 工具 | {{elapsed}})",
-    "processing": "处理中...",
     "editAgent": "编辑 Agent",
     "deleteSession": "删除会话",
     "deleteSessionConfirm": "确定要删除这个会话吗？",
@@ -184,7 +176,95 @@
     "runAsTask": "后台任务",
     "runAsTaskDescription": "在后台运行 - 即使离开页面任务也会继续执行",
     "taskCreated": "任务已创建！前往任务页面查看。",
-    "taskCreateFailed": "创建任务失败"
+    "taskCreateFailed": "创建任务失败",
+    "turn": {
+      "working": "工作中",
+      "thinking": "思考中",
+      "thought": "思考",
+      "steps_one": "{{count}} 步",
+      "steps_other": "{{count}} 步",
+      "failed_one": "{{count}} 步失败",
+      "failed_other": "{{count}} 步失败",
+      "showSteps": "展开步骤",
+      "hideSteps": "收起步骤",
+      "showCommand": "查看命令",
+      "backToLatest": "工作中 · 第 {{count}} 步 · 回到最新",
+      "counts": {
+        "read_one": "读取 {{count}} 个文件",
+        "read_other": "读取 {{count}} 个文件",
+        "edit_one": "修改 {{count}} 个文件",
+        "edit_other": "修改 {{count}} 个文件",
+        "search_one": "搜索 {{count}} 次",
+        "search_other": "搜索 {{count}} 次",
+        "run_one": "运行 {{count}} 条命令",
+        "run_other": "运行 {{count}} 条命令",
+        "fetch_one": "获取 {{count}} 个页面",
+        "fetch_other": "获取 {{count}} 个页面"
+      },
+      "verb": {
+        "read": {
+          "live": "读取",
+          "done": "读取"
+        },
+        "edit": {
+          "live": "编辑",
+          "done": "编辑"
+        },
+        "search": {
+          "live": "搜索",
+          "done": "搜索"
+        },
+        "run": {
+          "live": "运行",
+          "done": "运行"
+        },
+        "list": {
+          "live": "列出",
+          "done": "列出"
+        },
+        "fetch": {
+          "live": "获取",
+          "done": "获取"
+        },
+        "websearch": {
+          "live": "联网搜索",
+          "done": "联网搜索"
+        },
+        "loadTools": {
+          "live": "加载工具",
+          "done": "加载工具"
+        },
+        "skill": {
+          "live": "使用技能",
+          "done": "使用技能"
+        },
+        "todo": {
+          "live": "更新",
+          "done": "更新"
+        },
+        "agent": {
+          "live": "运行子代理",
+          "done": "运行子代理"
+        },
+        "mcp": {
+          "live": "调用",
+          "done": "调用"
+        },
+        "tool": {
+          "live": "运行",
+          "done": "运行"
+        }
+      },
+      "showAll": "还有 {{count}} 项 · 展开全部",
+      "backToLatestThinking": "思考中 · 回到最新",
+      "notes_one": "{{count}} 条笔记",
+      "notes_other": "{{count}} 条笔记"
+    },
+    "nextSteps": {
+      "label": "下一步",
+      "fill": "填入输入框（快捷键 {{key}}）",
+      "send": "直接发送"
+    }
   },
   "tasks": {
     "title": "任务管理",

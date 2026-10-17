@@ -3,10 +3,11 @@
  *
  * Renders a single tab's scrollable message list: the "Load earlier messages"
  * control, the `WelcomeScreen` empty-state, the per-message bubble map
- * (MessageBubble / system divider / ChatErrorMessage), the
- * streaming activity indicators (reconnecting / resuming / running-tool /
- * thinking, the fallback spinner, the SESSION_BUSY recovery spinner, and the
- * sticky bottom indicator), and the `messagesEndRef` scroll anchor.
+ * (MessageBubble / system divider / ChatErrorMessage), the connection-state
+ * indicators (reconnecting / resuming, the fallback spinner, the SESSION_BUSY
+ * recovery spinner), the "back to latest" pill (only while streaming AND the
+ * user has scrolled away), and the `messagesEndRef` scroll anchor. What the
+ * agent is DOING is not rendered here — it lives in each message's ProcessBlock.
  *
  * Migration Step 5.1 (this revision): TabView is now rendered ONE PER OPEN TAB
  * and kept mounted; only the active tab is visible (`display:none` otherwise).
@@ -30,19 +31,20 @@
  *
  * Validates: Requirements 1.1, 2.1
  */
-import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, memo } from 'react';
+import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
 import { useStreamingActivity } from '../../../hooks/useStreamingActivity';
 import type { StreamingActivity, ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
-import { formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../../../hooks/useChatStreamingLifecycle';
+import { formatElapsed } from '../../../hooks/useChatStreamingLifecycle';
 import { Spinner } from '../../../components/common';
 import { ChatErrorMessage } from '../../../components/chat';
 import type { PendingQuestion } from '../types';
 import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
 import { WelcomeScreen } from './WelcomeScreen';
+import { tf } from '../tf';
 
 /** Bottom-proximity threshold (px): within this of the bottom counts as "at
  *  bottom" for both auto-scroll and the resize re-pin. */
@@ -332,6 +334,12 @@ function TabViewImpl({
   // discriminator (a grow with unchanged scrollTop is not a user scroll). */
   const followRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  // Render mirror of followRef, written ONLY where followRef is written
+  // (handleScroll) so the two can never disagree. It exists because a ref
+  // change does not re-render: the "back to latest" pill must appear the moment
+  // the user scrolls away. It is NOT a second scroll authority — the pin path
+  // still reads followRef.
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
 
   // ── Mount-on-first-activation (Step 5.2 / F2) ──────────────────────
   // A tab that has never been visible renders a lightweight placeholder — no
@@ -360,6 +368,7 @@ function TabViewImpl({
     );
     followRef.current = next.follow;
     lastScrollTopRef.current = next.lastScrollTop;
+    setAwayFromBottom(!next.follow);
     if (el.scrollTop === 0) onLoadOlder();
   }, [onLoadOlder]);
 
@@ -457,7 +466,7 @@ function TabViewImpl({
       // gets flex-col/flex-1 so WelcomeScreen's h-full still fills the viewport.
       <div
         ref={contentRef}
-        className={messages.length === 0 ? 'flex-1 flex flex-col min-h-0' : 'space-y-2.5'}
+        className={messages.length === 0 ? 'flex-1 flex flex-col min-h-0' : 'space-y-2.5 mx-auto w-full max-w-[940px]'}
       >
       {isLoadingOlderMessages && (
         <div className="flex justify-center py-2">
@@ -551,9 +560,11 @@ function TabViewImpl({
           const isLastAssistantForStreaming = isStreaming
             && msg.role === 'assistant'
             && idx === lastAssistantIdx;
-          // Render streaming status indicators immediately after the
-          // streaming assistant message so they stay visually attached
-          // to the response — above any queued user messages.
+          // Connection-state indicators (reconnecting / resuming) render right
+          // after the streaming assistant message, above any queued user
+          // messages. What the agent is DOING lives in that message's own
+          // ProcessBlock (pages/chat/turnView.ts) — the one activity surface —
+          // so there is no separate activity line here any more.
           const streamingIndicator = isLastAssistantForStreaming ? (
             <>
               {isReconnecting && (
@@ -566,49 +577,6 @@ function TabViewImpl({
                 <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                   <Spinner size="sm" />
                   <span className="text-sm">{t('chat.resuming', 'Resuming session...')}</span>
-                </div>
-              )}
-              {!isResuming && (
-                <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                  <Spinner size="sm" />
-                  <span className="text-sm">
-                    {displayedActivity?.toolName
-                      ? (displayedActivity.toolContext
-                          ? (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                              ? t('chat.runningToolWithContextElapsed', {
-                                  tool: displayedActivity.toolName,
-                                  context: displayedActivity.toolContext,
-                                  count: displayedActivity.toolCount,
-                                  elapsed: formatElapsed(elapsedSeconds),
-                                })
-                              : t('chat.runningToolWithContext', {
-                                  tool: displayedActivity.toolName,
-                                  context: displayedActivity.toolContext,
-                                  count: displayedActivity.toolCount,
-                                }))
-                          : displayedActivity.toolCount > 1
-                            ? (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                                ? t('chat.runningToolWithCountElapsed', {
-                                    tool: displayedActivity.toolName,
-                                    count: displayedActivity.toolCount,
-                                    elapsed: formatElapsed(elapsedSeconds),
-                                  })
-                                : t('chat.runningToolWithCount', {
-                                    tool: displayedActivity.toolName,
-                                    count: displayedActivity.toolCount,
-                                  }))
-                            : (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                                ? t('chat.runningToolElapsed', {
-                                    tool: displayedActivity.toolName,
-                                    elapsed: formatElapsed(elapsedSeconds),
-                                  })
-                                : t('chat.runningTool', { tool: displayedActivity.toolName })))
-                      : displayedActivity?.hasContent
-                        ? t('chat.processing')
-                        : elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                          ? t('chat.thinkingWithElapsed', { elapsed: formatElapsed(elapsedSeconds) })
-                          : t('chat.thinking')}
-                  </span>
                 </div>
               )}
             </>
@@ -680,12 +648,13 @@ function TabViewImpl({
           )}
         </div>
       )}
-      {/* Sticky streaming indicator — always visible when agent is working,
-          regardless of scroll position. Uses CSS sticky to float at the
-          bottom of the scroll viewport when user scrolls up. Click to
-          scroll to the active streaming message. */}
-      {isStreaming && lastAssistantIdx >= 0 && (
-        <div className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
+      {/* "Back to latest" pill — shown ONLY while streaming AND the user has
+          scrolled away from the bottom (awayFromBottom mirrors followRef). At
+          the bottom the live step is already visible in the message's
+          ProcessBlock, so a pill there would repeat it. CSS sticky floats it at
+          the bottom of the viewport; click scrolls back to the live message. */}
+      {isStreaming && lastAssistantIdx >= 0 && awayFromBottom && (
+        <div data-testid="streaming-pill" className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
           <button
             type="button"
             onClick={scrollToBottom}
@@ -696,10 +665,12 @@ function TabViewImpl({
                           hover:border-[var(--color-border)] hover:text-[var(--color-text-secondary)]
                           transition-colors cursor-pointer">
             <Spinner size="sm" />
-            <span className="text-xs font-medium">
-              {displayedActivity?.toolName
-                ? t('chat.runningTool', { tool: displayedActivity.toolName })
-                : t('chat.thinking')}
+            <span className="text-xs font-medium tabular-nums">
+              {displayedActivity?.toolCount
+                ? tf(t, 'chat.turn.backToLatest', 'Working · step {{count}} · back to latest', {
+                    count: displayedActivity.toolCount,
+                  })
+                : tf(t, 'chat.turn.backToLatestThinking', 'Thinking · back to latest')}
             </span>
             {elapsedSeconds >= 5 && (
               <span className="text-xs opacity-60">{formatElapsed(elapsedSeconds)}</span>

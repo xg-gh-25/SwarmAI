@@ -64,4 +64,5 @@ test_pipeline_profiles.py
 test_pipeline_validator_repro_gate.py
 test_redline_gate.py
 test_tool_risk.py
+test_tool_summary_fixture.py
 test_tscc_security_scan.py

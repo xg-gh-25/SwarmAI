@@ -26,7 +26,7 @@
  * AI-text — so it can't flake on output variance (method-A constraint).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
@@ -99,8 +99,12 @@ describe('AssistantMessageView — render fidelity (OT03 content-loss guard)', (
       textBlock('POST_TOOL_text after the tool result'),
     ];
     renderView(blocks);
-    expect(screen.getByText(/PRE_TOOL_text/)).toBeTruthy();
+    // POST_TOOL is the answer (outcome) — visible as-is. PRE_TOOL is process
+    // (folded by the turnView projection): it must survive assembly and appear
+    // once the process row is expanded — behind disclosure, never dropped.
     expect(screen.getByText(/POST_TOOL_text/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('process-row'));
+    expect(screen.getByText(/PRE_TOOL_text/)).toBeTruthy();
   });
 
   it('an empty text block does not drop its sibling (graceful)', () => {

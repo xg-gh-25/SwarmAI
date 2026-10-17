@@ -166,14 +166,6 @@
     "attachFile": "Attach File",
     "sending": "Sending...",
     "thinking": "Thinking...",
-    "thinkingWithElapsed": "Thinking... ({{elapsed}})",
-    "runningTool": "Running: {{tool}}...",
-    "runningToolElapsed": "Running: {{tool}}... ({{elapsed}})",
-    "runningToolWithContext": "Running: {{tool}} — {{context}} ({{count}} tools used)",
-    "runningToolWithContextElapsed": "Running: {{tool}} — {{context}} ({{count}} tools | {{elapsed}})",
-    "runningToolWithCount": "Running: {{tool}} ({{count}} tools used)",
-    "runningToolWithCountElapsed": "Running: {{tool}} ({{count}} tools | {{elapsed}})",
-    "processing": "Processing...",
     "editAgent": "Edit Agent",
     "deleteSession": "Delete Session",
     "deleteSessionConfirm": "Are you sure you want to delete this session?",
@@ -186,7 +178,95 @@
     "runAsTask": "Background Task",
     "runAsTaskDescription": "Run in background - task continues even if you navigate away",
     "taskCreated": "Task created! View in Tasks page.",
-    "taskCreateFailed": "Failed to create task"
+    "taskCreateFailed": "Failed to create task",
+    "turn": {
+      "working": "Working",
+      "thinking": "Thinking",
+      "thought": "Thought",
+      "steps_one": "{{count}} step",
+      "steps_other": "{{count}} steps",
+      "failed_one": "{{count}} failed",
+      "failed_other": "{{count}} failed",
+      "showSteps": "Show steps",
+      "hideSteps": "Hide steps",
+      "showCommand": "Show command",
+      "backToLatest": "Working · step {{count}} · back to latest",
+      "counts": {
+        "read_one": "read {{count}} file",
+        "read_other": "read {{count}} files",
+        "edit_one": "edited {{count}} file",
+        "edit_other": "edited {{count}} files",
+        "search_one": "{{count}} search",
+        "search_other": "{{count}} searches",
+        "run_one": "ran {{count}} command",
+        "run_other": "ran {{count}} commands",
+        "fetch_one": "fetched {{count}} page",
+        "fetch_other": "fetched {{count}} pages"
+      },
+      "verb": {
+        "read": {
+          "live": "Reading",
+          "done": "Read"
+        },
+        "edit": {
+          "live": "Editing",
+          "done": "Edited"
+        },
+        "search": {
+          "live": "Searching",
+          "done": "Searched"
+        },
+        "run": {
+          "live": "Running",
+          "done": "Ran"
+        },
+        "list": {
+          "live": "Listing",
+          "done": "Listed"
+        },
+        "fetch": {
+          "live": "Fetching",
+          "done": "Fetched"
+        },
+        "websearch": {
+          "live": "Searching web",
+          "done": "Searched web"
+        },
+        "loadTools": {
+          "live": "Loading tools",
+          "done": "Loaded tools"
+        },
+        "skill": {
+          "live": "Using skill",
+          "done": "Used skill"
+        },
+        "todo": {
+          "live": "Updating",
+          "done": "Updated"
+        },
+        "agent": {
+          "live": "Running agent",
+          "done": "Ran agent"
+        },
+        "mcp": {
+          "live": "Calling",
+          "done": "Called"
+        },
+        "tool": {
+          "live": "Running",
+          "done": "Ran"
+        }
+      },
+      "showAll": "{{count}} more · show all",
+      "backToLatestThinking": "Thinking · back to latest",
+      "notes_one": "{{count}} note",
+      "notes_other": "{{count}} notes"
+    },
+    "nextSteps": {
+      "label": "Next steps",
+      "fill": "Add to input (shortcut {{key}})",
+      "send": "Send now"
+    }
   },
   "tasks": {
     "title": "Task Management",
