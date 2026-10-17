@@ -37,9 +37,13 @@ import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ProcessBlock } from './ProcessBlock';
-import { PipelineStageRow, PipelineStageLive } from './PipelineStageRow';
+import { PipelineStageRow } from './PipelineStageRow';
+import { FileChip } from './FileChip';
 import { NextSteps } from './NextSteps';
-import { deriveTurnView, extractNextSteps } from '../turnView';
+import { deriveTurnView, extractNextSteps, isUnanswered, sectionUnits, turnChangedFiles } from '../turnView';
+import type { TurnUnit } from '../turnView';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
@@ -47,6 +51,9 @@ import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { isOt01DiagEnabled } from '../../../utils/diagFlags';
+
+/** A turn that went straight to work this long gets the "no restatement" note. */
+const NO_RESTATEMENT_MIN_STEPS = 3;
 
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
@@ -101,6 +108,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   onContinue,
   readOnly,
 }) => {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   // The user's open/closed CHOICE per process segment, keyed by the segment's
   // ordinal id (`seg-<n>`, see turnView.ts) — stable while the turn streams AND
@@ -238,30 +246,121 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     />
   );
 
-  const contentBlocks = view.units.map((unit) => {
+  // ── Attention layers (design-judgment Surface 6; chat display v7.1) ──────────
+  // Spacing groups, never boxes: a note sits right under the work that produced it;
+  // a new run of work starts a new group. Notes are demoted text (L3); the
+  // alignment and the result are primary (L1); finished work is one dim line (L4).
+  const hasWork = view.units.some((u) => u.kind === 'process' && u.steps.length > 0);
+  const firstWork = view.units.findIndex((u) => u.kind === 'process' && u.steps.length > 0);
+  const lastUnit = view.units[view.units.length - 1];
+  const showResult = !isStreaming && hasWork && lastUnit?.kind === 'outcome';
+  const isPipeline = view.units.some((u) => u.kind === 'stage');
+  const turnFiles = useMemo(
+    () => (!isStreaming && hasWork && !isPipeline ? turnChangedFiles(view.units) : []),
+    [view, isStreaming, hasWork, isPipeline],
+  );
+
+  const renderUnit = (unit: TurnUnit, prev: TurnUnit | undefined, pos: number) => {
+    const gap = !prev ? '' : (unit.kind === 'note' || unit.kind === 'landmark') && prev.kind === 'process' ? 'mt-1' : 'mt-3';
     if (unit.kind === 'process') {
-      // Always a Fragment, so the element type never changes when the live stage
-      // line comes and goes — ProcessBlock keeps its state instead of remounting.
       return (
-        <React.Fragment key={`p-${unit.id}`}>
-          {unit.isLive && unit.live?.stage && <PipelineStageLive stage={unit.live.stage} />}
+        <div key={`p-${unit.id}`} className={gap}>
           <ProcessBlock
             unit={unit}
             expanded={processChoice.get(unit.id)}
             onToggle={(open) => chooseProcess(unit.id, open)}
-            startedAt={message.timestamp}
           />
-        </React.Fragment>
+        </div>
       );
     }
-    if (unit.kind === 'stage') return <PipelineStageRow key={`st-${unit.index}`} block={unit.block} />;
-    if (unit.kind === 'interrupt') return renderBlock(unit.block, `i-${unit.index}`);
-    // landmark / note / outcome are markdown text. A note and an outcome share a
-    // key prefix: while streaming, the answer-so-far turns into a note the moment
-    // the next tool call arrives, and the same text must not remount.
+    if (unit.kind === 'stage') return null; // rendered as its section's header
+    if (unit.kind === 'interrupt') return <div key={`i-${unit.index}`} className={gap}>{renderBlock(unit.block, `ib-${unit.index}`)}</div>;
+    // A note and an outcome share a key prefix: while streaming, the answer-so-far
+    // turns into a note the moment the next tool call arrives — no remount.
     const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
-    return renderBlock({ type: 'text', text: unit.text }, `${prefix}-${unit.index}`);
+    const isAlignment = hasWork && pos === 0 && firstWork > 0 && unit.kind !== 'landmark';
+    const isResult = showResult && unit === lastUnit;
+    const demoted = unit.kind === 'note' && !isAlignment;
+    return (
+      <div
+        key={`${prefix}-${unit.index}`}
+        data-testid={isAlignment ? 'turn-alignment' : isResult ? 'turn-result' : undefined}
+        className={`${gap} ${demoted ? 'text-[13.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
+      >
+        {isAlignment && <div className="mb-0.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">{tf(t, 'chat.turn.alignment', 'How I read it')}</div>}
+        {isResult && (
+          <div className="flex items-center gap-2.5 mt-5 mb-1.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">
+            {tf(t, 'chat.turn.result', 'Result')}
+            <span className="flex-1 border-t border-[var(--color-border)]" />
+          </div>
+        )}
+        {renderBlock({ type: 'text', text: unit.text }, `${prefix}-b-${unit.index}`)}
+      </div>
+    );
+  };
+
+  const renderList = (units: TurnUnit[], offset = 0) =>
+    units.map((u, i) => renderUnit(u, units[i - 1], offset + i));
+
+  const sections = sectionUnits(view.units, !!isStreaming);
+  const stageSeen = new Map<string, number>();
+  let unitPos = 0;
+  let prevSection: TurnUnit | undefined;
+  const contentBlocks = sections.map((sec, k) => {
+    if (sec.kind === 'unit') {
+      const el = renderUnit(sec.unit, prevSection, unitPos);
+      unitPos += 1;
+      prevSection = sec.unit;
+      return el;
+    }
+    const name = sec.kind === 'stage' ? sec.block.stage : sec.stage.stage;
+    const n = stageSeen.get(name) ?? 0;
+    if (sec.kind === 'stage') stageSeen.set(name, n + 1);
+    // Same key while running and once finished, so the row folds 2s after it ends.
+    const key = `sec-${name}-${n}`;
+    const children = sec.children;
+    const changed = turnChangedFiles(children).length;
+    const failed = children.some((u) => u.kind === 'process' && !!u.unrecoveredFailure);
+    const mustOpen = children.some((u) => u.kind === 'interrupt' && isUnanswered(u.block));
+    prevSection = undefined;
+    unitPos += children.length;
+    const firstStage = sections.findIndex((s) => s.kind !== 'unit');
+    return (
+      <div key={key} className={k === firstStage ? 'mt-3' : ''}>
+        <PipelineStageRow
+          block={sec.kind === 'stage' ? sec.block : undefined}
+          live={sec.kind === 'liveStage' ? sec.stage : undefined}
+          position={sec.kind === 'liveStage' ? sec.position : undefined}
+          startedAt={sec.kind === 'stage' ? (sec.prevAt ?? message.timestamp) : undefined}
+          changedCount={changed}
+          failed={failed}
+          mustOpen={mustOpen}
+          choice={processChoice.get(key)}
+          onChoose={(open) => chooseProcess(key, open)}
+        >
+          {children.length ? renderList(children, 1) : null}
+        </PipelineStageRow>
+      </div>
+    );
   });
+  // The model went straight to work without restating the ask: that absence is
+  // itself worth knowing — alignment is the cheapest moment to correct course.
+  const toolSteps = view.units.reduce((n, u) => n + (u.kind === 'process' ? u.steps.filter((s) => s.kind === 'tool').length : 0), 0);
+  if (firstWork === 0 && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
+    contentBlocks.unshift(
+      <div key="no-alignment" data-testid="turn-no-alignment" className="mb-1 text-[11px] tracking-wide text-[var(--color-text-dim)]">
+        {tf(t, 'chat.turn.noAlignment', 'Started without restating the ask')}
+      </div>,
+    );
+  }
+  if (turnFiles.length) {
+    contentBlocks.push(
+      <div key="turn-files" data-testid="turn-files" className="mt-2 flex flex-wrap items-center gap-1.5 text-[12.5px] text-[var(--color-text-muted)]">
+        <span>{tf(t, 'chat.turn.thisTurnChanged', 'This turn changed')}</span>
+        {turnFiles.map((p) => <FileChip key={p} path={p} change="edited" />)}
+      </div>,
+    );
+  }
 
   return (
     <div className="group/msg min-w-0 flex gap-2.5 items-start">
@@ -288,10 +387,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           role="alert"
           aria-label="Connection interrupted"
         >
-          <div className="space-y-3">{contentBlocks}</div>
+          <div>{contentBlocks}</div>
         </div>
       ) : (
-        <div className="space-y-3 text-[var(--color-text-secondary)]">
+        <div className="text-[var(--color-text-secondary)]">
           {contentBlocks}
           {/* Streaming cursor — blinking caret at end of streaming content */}
           {isStreaming && (

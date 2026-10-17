@@ -12,7 +12,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
-import { deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps, thoughtTail } from './turnView';
+import {
+  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps, thoughtTail,
+  changedFiles, sectionUnits, stageHeadline,
+} from './turnView';
 import type { ToolUseContent } from '../../types';
 
 const tu = (id: string, summary: string, name = 'Bash', category = 'bash'): ContentBlock =>
@@ -577,5 +580,63 @@ describe('deriveTurnView — sub-agent steps nest under their Agent step', () =>
     if (p.kind !== 'process' || p.steps[0].kind !== 'tool') throw new Error('expected tool step');
     expect([p.steps[0].status, p.steps[0].result?.outcome]).toEqual(['error', 'make: *** no rule']);
     expect(p.unrecoveredFailure?.block.id).toBe('a');
+  });
+});
+
+describe('v7.1 — what changed, stage sections, clickable Bash paths', () => {
+  const wr = (id: string, p: string) => tu(id, `Writing to ${p}`, 'Edit', 'write');
+  const st = (stage: string, over: Record<string, unknown> = {}) => ({
+    type: 'pipeline_stage', runId: 'r', stage, status: 'completed', ordinal: 1, position: 1, total: 8,
+    profile: 'full', next: 'think', nextOrdinal: 2, gate: null, summary: null, at: '2026-10-18T00:00:00Z', ...over,
+  }) as ContentBlock;
+
+  it('changedFiles: written paths in first-touch order, failed writes excluded', () => {
+    const p = deriveTurnView([wr('a', '/r/x.ts'), tr('a'), wr('b', '/r/y.py'), tr('b', true), wr('c', '/r/x.ts'), tr('c'), tx('ok')], false)
+      .units[0];
+    expect(p.kind === 'process' && changedFiles(p.steps)).toEqual(['/r/x.ts']);
+  });
+
+  it('sectionUnits: no stage rows → the units unchanged', () => {
+    const v = deriveTurnView([tu('a', 'Running: ls'), tx('done')], false);
+    expect(sectionUnits(v.units, false).map((s) => s.kind)).toEqual(['unit', 'unit']);
+  });
+
+  it('sectionUnits: alignment stays out; work before a stage row belongs to it; the rest is the running stage', () => {
+    const v = deriveTurnView([tx('I read it as X.'), tu('a', 'Running: ls'), tr('a'), st('evaluate'),
+      tu('b', 'Running: pwd'), st('think', { ordinal: 2, position: 2, next: 'plan', nextOrdinal: 3 }), tu('c', 'Running: make')], true);
+    const secs = sectionUnits(v.units, true);
+    expect(secs.map((s) => s.kind)).toEqual(['unit', 'stage', 'stage', 'liveStage']);
+    expect(secs[1].kind === 'stage' && secs[1].children.map((u) => u.kind)).toEqual(['process']);
+    expect(secs[2].kind === 'stage' && secs[2].prevAt).toBe('2026-10-18T00:00:00Z');
+    const live = secs[3];
+    expect(live.kind === 'liveStage' && [live.stage.stage, live.position]).toEqual(['plan', { n: 3, total: 8 }]);
+  });
+
+  it('sectionUnits: once the turn ends, what follows the last stage row is flat (the result)', () => {
+    const v = deriveTurnView([tu('a', 'Running: ls'), st('deliver', { next: null, nextOrdinal: null }), tx('All done.')], false);
+    expect(sectionUnits(v.units, false).map((s) => s.kind)).toEqual(['stage', 'unit']);
+  });
+
+  it('stageHeadline keeps the first segment', () => {
+    expect(stageHeadline('GO · profile: full · scope: standard')).toBe('GO');
+    expect(stageHeadline('3 sub-agents(spec/quality)· spec PASS')).toBe('3 sub-agents');
+    expect(stageHeadline(null)).toBe('');
+  });
+
+  it.each([
+    ['cd /a/repo && cat src/x.ts', '/a/repo/src/x.ts'],
+    ['sed -n 1,40p /abs/b.py', '/abs/b.py'],
+    ['cat ./src/c.md', undefined],             // relative with no known cd: no link
+    ['cd /a && cat ../up.ts', undefined],      // escaping the cd: no guess
+    ['cd /a && cat ~/x.md', undefined],
+    ['cd $HOME && cat x.md', undefined],
+  ])('Bash read %s → path %s', (cmd, path) => {
+    expect(stepLabel(tu('x', `Running: ${cmd}`) as ToolUseContent).path).toBe(path);
+  });
+
+  it('a summary cut at the cap gives no Bash path (it may be cut through the path)', () => {
+    const long = `cd /a/repo && cat ${'d/'.repeat(100)}x.ts`;
+    const label = stepLabel(tu('x', `Running: ${long}`.slice(0, 200)) as ToolUseContent);
+    expect(label.path).toBeUndefined();
   });
 });

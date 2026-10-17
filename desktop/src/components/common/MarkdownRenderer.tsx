@@ -30,6 +30,7 @@ import { getApiBaseUrl } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal } from '../../utils/openExternal';
+import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 import { OFFICE_EXTENSIONS } from '../file-viewer/utils/fileViewTypes';
 
 interface MarkdownRendererProps {
@@ -755,10 +756,18 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
         onKeyDown={handleKeyDown}
         role="button"
         tabIndex={0}
-        className="px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-primary font-mono cursor-pointer hover:bg-[var(--color-primary)]/10 hover:underline decoration-primary/50 transition-colors inline-flex items-center gap-0.5"
+        className="px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-[var(--color-text-secondary)] font-mono cursor-pointer hover:text-[var(--color-text)] hover:underline transition-colors inline-flex items-center gap-1"
         title={`Open ${cleanPath}`}
       >
-        <span className="material-symbols-outlined text-[11px] leading-none">open_in_new</span>
+        {/* One file, one look: the same type icon as the Canvas OUTPUTS rail and
+            the chat's FileChip, desaturated so a type never reads as a status. */}
+        <span
+          aria-hidden="true"
+          className="material-symbols-outlined text-[13px] leading-none"
+          style={{ color: fileIconColor(cleanPath), filter: 'saturate(0.55)' }}
+        >
+          {fileIcon(cleanPath)}
+        </span>
         {children}
       </code>
     );

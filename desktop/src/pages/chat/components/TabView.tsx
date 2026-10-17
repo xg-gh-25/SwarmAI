@@ -35,9 +35,8 @@ import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useSta
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
-import { useStreamingActivity } from '../../../hooks/useStreamingActivity';
+import { STEP_VERB_FALLBACK, deriveTurnView, stepLabel } from '../turnView';
 import type { StreamingActivity, ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
-import { formatElapsed } from '../../../hooks/useChatStreamingLifecycle';
 import { Spinner } from '../../../components/common';
 import { ChatErrorMessage } from '../../../components/chat';
 import type { PendingQuestion } from '../types';
@@ -421,11 +420,22 @@ function TabViewImpl({
     prevScrollHeightRef.current = el.scrollHeight;
   }, [messages]);
 
-  // ── Per-tab streaming activity (Migration Step 4.1) ────────────────
-  // Activity label + elapsed timer derived from THIS tab's own state, gated to
-  // streaming (no timers for idle/background tabs). Replaces the former
-  // displayedActivity/elapsedSeconds props (now ignored).
-  const { displayedActivity, elapsedSeconds } = useStreamingActivity(isStreaming, messages);
+  // ── Per-tab live action (Migration Step 4.1; v7.1) ─────────────────
+  // Derived from THIS tab's own messages, only while streaming. Replaces the
+  // former displayedActivity/elapsedSeconds props (now ignored).
+  // What runs now, from the same projection the live card uses — the pill repeats
+  // the card's title (one fact, once), never a step count or a second timer.
+  const liveAction = useMemo(() => {
+    if (!isStreaming) return null;
+    const last = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!last) return null;
+    const units = deriveTurnView(last.content, true).units;
+    const live = units[units.length - 1];
+    const step = live?.kind === 'process' ? live.live?.step : undefined;
+    if (!step) return null;
+    const label = stepLabel(step.block);
+    return label.verb === 'tool' ? label.object : `${tf(t, `chat.turn.verb.${label.verb}.live`, STEP_VERB_FALLBACK[label.verb][0])} ${label.object}`;
+  }, [isStreaming, messages, t]);
 
   // Last assistant message index — used for Save-to-Memory button placement
   // and to scope streaming indicators to the final assistant bubble.
@@ -666,15 +676,10 @@ function TabViewImpl({
                           transition-colors cursor-pointer">
             <Spinner size="sm" />
             <span className="text-xs font-medium tabular-nums">
-              {displayedActivity?.toolCount
-                ? tf(t, 'chat.turn.backToLatest', 'Working · step {{count}} · back to latest', {
-                    count: displayedActivity.toolCount,
-                  })
+              {liveAction
+                ? tf(t, 'chat.turn.backToLatestAction', '{{action}} · back to latest', { action: liveAction })
                 : tf(t, 'chat.turn.backToLatestThinking', 'Thinking · back to latest')}
             </span>
-            {elapsedSeconds >= 5 && (
-              <span className="text-xs opacity-60">{formatElapsed(elapsedSeconds)}</span>
-            )}
           </button>
         </div>
       )}

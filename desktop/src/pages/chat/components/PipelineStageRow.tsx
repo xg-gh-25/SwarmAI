@@ -1,21 +1,27 @@
 /**
- * PipelineStageRow — one quiet line for a pipeline stage the backend saw finish.
+ * PipelineStageRow — a pipeline stage as ONE row that folds its own work (v7.1).
  *
- * Renders a `stage` unit from `deriveTurnView` (pages/chat/turnView.ts), i.e. a
- * `pipeline_stage` block written by backend/core/pipeline_stage_events.py from
- * run.json — never by the model, so it shows up even when the model wrote no
- * landmark text. Layout follows the design-judgment skeleton: the stage
- * ("⑤ BUILD") is the one thing that stands out; its place in the run ("4/8") is
- * the reference it is compared to; the Gate-1 verdict and the stage's own summary
- * are demoted. No border or fill — whitespace separates it from the process rows.
+ * A `pipeline_stage` block is written by backend/core/pipeline_stage_events.py when
+ * the backend sees a stage finish in run.json — never by the model. The units
+ * between two stage rows are that stage's work (turnView `sectionUnits`):
+ *   - a finished stage is one line — "✓ ⑤ BUILD  TDD: 6R→GREEN  changed 5 files  4m 43s ›"
+ *     — and opens to its work on click. Progress is the stage's place in the plan,
+ *     the summary says its effect; step counts live one level down.
+ *   - the stage now running stays open: "⑤ BUILD · in progress · stage 5 of 8".
+ *     It carries no spinner — the live work card below holds the one spinner.
+ *   - colour only for exceptions: a Gate verdict other than PASS (WARN amber, BLOCK
+ *     red), an unrecovered failure. A normal finish is neutral.
  *
- * `summary` is model-written text from run.json: it is rendered as plain text
- * (React escapes it), never through the markdown renderer.
+ * `summary` / verdicts are model-written text from run.json: rendered as plain text.
  *
- * @exports PipelineStageRow, PipelineStageLive
+ * @exports PipelineStageRow
  */
+import type React from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PipelineStageContent } from '../../../types';
+import { useLinger } from '../../../hooks/useLinger';
+import { stageHeadline } from '../turnView';
 import { tf } from '../tf';
 
 /** ① … ⑳ for 1–20; anything else (null / out of range) → ''. */
@@ -25,72 +31,127 @@ function circled(n: number | null | undefined): string {
     : '';
 }
 
-const stageName = (stage: string) => stage.replace(/_/g, ' ').toUpperCase();
+/** "gate1" → "GATE 1", "goal_cycle" → "GOAL CYCLE". */
+const stageName = (stage: string) => stage.replace(/_/g, ' ').replace(/^gate(\d)$/i, 'gate $1').toUpperCase();
 
 function verdictClass(verdict: string): string {
   const v = verdict.toUpperCase();
-  if (v.startsWith('PASS')) return 'text-status-online';
   if (v.startsWith('WARN')) return 'text-amber-400';
   if (v.startsWith('BLOCK')) return 'text-red-400';
-  return 'text-[var(--color-text-muted)]';
+  return 'text-[var(--color-text-muted)]'; // PASS and the rest: neutral
 }
 
-export function PipelineStageRow({ block }: { block: PipelineStageContent }) {
+const formatSeconds = (s: number): string =>
+  s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+
+function secondsBetween(from?: string, to?: string): number | null {
+  const a = from ? Date.parse(from) : NaN;
+  const b = to ? Date.parse(to) : NaN;
+  return Number.isFinite(a) && Number.isFinite(b) && b >= a ? Math.round((b - a) / 1000) : null;
+}
+
+export interface PipelineStageRowProps {
+  /** A finished stage; absent for the stage now running. */
+  block?: PipelineStageContent;
+  /** The stage now running (live) — `{stage, ordinal}` from the previous row's `next`. */
+  live?: { stage: string; ordinal: number | null };
+  position?: { n: number; total: number };
+  /** When the stage started (previous row's `at`, or the turn start). */
+  startedAt?: string;
+  /** Files the stage's work changed. */
+  changedCount?: number;
+  /** The stage's work ended on a failure nobody recovered from. */
+  failed?: boolean;
+  /** Something inside needs the user (an unanswered question) — never folded away. */
+  mustOpen?: boolean;
+  /** The user's open/closed choice; undefined = automatic. */
+  choice?: boolean;
+  onChoose: (open: boolean) => void;
+  children?: React.ReactNode;
+}
+
+export function PipelineStageRow({
+  block, live, position, startedAt, changedCount = 0, failed, mustOpen, choice, onChoose, children,
+}: PipelineStageRowProps) {
   const { t } = useTranslation();
-  const skipped = block.status === 'skipped';
-  const label = `${circled(block.ordinal)} ${stageName(block.stage)}`.trim();
+  const isLive = !block;
+  // Open while running; folds 2s after it finishes (the same component carries over).
+  const auto = useLinger(isLive);
+  const [hover, setHover] = useState(false);
+  const hasBody = !!children && (!Array.isArray(children) || children.length > 0);
+  const open = hasBody && (mustOpen || (choice ?? auto));
+  const name = block ? block.stage : live?.stage ?? '';
+  const ordinal = block ? block.ordinal : live?.ordinal ?? null;
+  const label = `${circled(ordinal)} ${stageName(name)}`.trim();
+  const skipped = block?.status === 'skipped';
+  const verdict = block?.gate?.verdict;
+  const summaryHead = stageHeadline(block?.summary);
+  const took = block ? secondsBetween(startedAt, block.at) : null;
+
+  const Head = hasBody ? 'button' : 'div';
   return (
     <div
-      data-testid="pipeline-stage-row"
-      aria-label={tf(t, skipped ? 'chat.turn.stage.ariaSkipped' : 'chat.turn.stage.ariaDone',
-        skipped ? 'Pipeline stage {{stage}} skipped' : 'Pipeline stage {{stage}} done', { stage: label })}
-      className="-ml-2 flex items-center gap-2 px-2 py-0.5 text-[13px] text-[var(--color-text-muted)] min-w-0"
+      data-testid={isLive ? 'pipeline-stage-live' : 'pipeline-stage-row'}
+      data-open={open ? 'true' : 'false'}
+      className="border-t border-[var(--color-border)] first:border-t-0"
     >
-      <span
-        className={`material-symbols-outlined text-[15px] ${skipped ? 'text-[var(--color-text-dim)]' : 'text-status-online'}`}
-        aria-hidden="true"
+      <Head
+        {...(hasBody ? { type: 'button' as const, onClick: () => onChoose(!open), 'aria-expanded': open } : {})}
+        {...(isLive ? { role: 'status' } : {})}
+        aria-label={tf(t, isLive ? 'chat.turn.stage.ariaRunning' : skipped ? 'chat.turn.stage.ariaSkipped' : 'chat.turn.stage.ariaDone',
+          isLive ? 'Pipeline stage {{stage}} in progress' : skipped ? 'Pipeline stage {{stage}} skipped' : 'Pipeline stage {{stage}} done',
+          { stage: label })}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        className={`w-full flex items-center gap-2 py-1.5 text-left text-[13px] text-[var(--color-text-muted)] min-w-0 rounded ${hasBody ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
       >
-        {skipped ? 'remove' : 'check_circle'}
-      </span>
-      <span className="font-medium text-[var(--color-text-secondary)] tabular-nums shrink-0">{label}</span>
-      {block.position !== null && block.total > 0 && (
-        // Position in this run's stage list — worded as such, so it never reads as a
-        // second number for the circled one (⑤ counts the gate slots, 4/8 does not).
-        <span className="tabular-nums shrink-0">
-          · {tf(t, 'chat.turn.stage.position', 'stage {{position}} of {{total}}', { position: block.position, total: block.total })}
+        <span aria-hidden="true" className="material-symbols-outlined text-[14px] leading-none w-[14px] text-[var(--color-text-dim)] shrink-0">
+          {isLive ? 'radio_button_checked' : skipped ? 'remove' : 'check'}
         </span>
-      )}
-      {skipped && <span className="shrink-0">· {tf(t, 'chat.turn.stage.skipped', 'skipped')}</span>}
-      {block.gate && (
-        <span className="shrink-0">
-          · ★ {block.gate.name} <span className={verdictClass(block.gate.verdict)}>{block.gate.verdict}</span>
+        <span className={`font-semibold tracking-wide tabular-nums shrink-0 ${isLive ? 'text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]'}`}>
+          {label}
         </span>
-      )}
-      {block.summary && (
-        <span className="truncate min-w-0 text-[var(--color-text-dim)]" title={block.summary}>
-          · {block.summary}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** The stage now running — shown above the live process row while a pipeline
- *  turn streams (turnView's `live.stage`). Same quiet line as a finished stage,
- *  with a spinner instead of a check. */
-export function PipelineStageLive({ stage }: { stage: { stage: string; ordinal: number | null } }) {
-  const { t } = useTranslation();
-  const label = `${circled(stage.ordinal)} ${stageName(stage.stage)}`.trim();
-  return (
-    <div
-      data-testid="pipeline-stage-live"
-      role="status"
-      aria-label={tf(t, 'chat.turn.stage.ariaRunning', 'Pipeline stage {{stage}} in progress', { stage: label })}
-      className="-ml-2 flex items-center gap-2 px-2 py-0.5 text-[13px] text-[var(--color-text-muted)] min-w-0"
-    >
-      <span className="material-symbols-outlined text-[15px] animate-spin" aria-hidden="true">progress_activity</span>
-      <span className="font-medium text-[var(--color-text-secondary)] tabular-nums shrink-0">{label}</span>
-      <span className="shrink-0">· {tf(t, 'chat.turn.stage.running', 'in progress')}</span>
+        {isLive ? (
+          <span className="shrink-0 text-[var(--color-text-secondary)]">
+            {tf(t, 'chat.turn.stage.running', 'in progress')}
+            {position && ` · ${tf(t, 'chat.turn.stage.position', 'stage {{position}} of {{total}}', { position: position.n, total: position.total })}`}
+          </span>
+        ) : skipped ? (
+          <span className="shrink-0">{tf(t, 'chat.turn.stage.skipped', 'skipped')}</span>
+        ) : (
+          <>
+            {/* The ④ GATE row says only its verdict; a legacy stage that carries a
+                verdict names the gate once — never "GATE1 · ★ GATE 1 WARN". */}
+            {verdict && (
+              <span className={`shrink-0 ${verdictClass(verdict)}`}>
+                {name === 'gate1' ? verdict : `${block?.gate?.name} ${verdict}`}
+              </span>
+            )}
+            {summaryHead && (
+              <span className="truncate min-w-0" title={block?.summary ?? undefined}>{summaryHead}</span>
+            )}
+          </>
+        )}
+        {!isLive && changedCount > 0 && (
+          <span className="shrink-0 text-[12px] text-[var(--color-text-dim)]">
+            {tf(t, 'chat.turn.stage.changed', 'changed {{count}} files', { count: changedCount })}
+          </span>
+        )}
+        {failed && <span className="shrink-0 text-[12px] text-red-400">{tf(t, 'chat.turn.failedOne', 'failed')}</span>}
+        {took !== null && (
+          <span className="ml-auto pl-2 shrink-0 text-[12px] text-[var(--color-text-dim)] tabular-nums">{formatSeconds(took)}</span>
+        )}
+        {hasBody && (
+          <span
+            aria-hidden="true"
+            className={`${took === null ? 'ml-auto' : ''} material-symbols-outlined text-[16px] shrink-0 transition-transform duration-150 ${hover ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}
+            style={{ transform: open ? 'rotate(90deg)' : 'none' }}
+          >
+            chevron_right
+          </span>
+        )}
+      </Head>
+      {open && <div data-testid="stage-body" className="pl-[22px] pb-2">{children}</div>}
     </div>
   );
 }

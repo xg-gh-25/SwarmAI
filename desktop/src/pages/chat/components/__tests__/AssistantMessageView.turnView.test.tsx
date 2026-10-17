@@ -71,22 +71,26 @@ describe('AssistantMessageView — folded process', () => {
     const steps = screen.getByTestId('process-steps');
     expect(steps.className).toMatch(/h-\[300px\]/);
     expect(steps.className).toMatch(/overflow-y-auto/);
+    // v7.1: the running step is the card's TITLE (the one spinner); the list holds
+    // the newest finished steps, each a static mark — one fact, once.
+    const title = screen.getByTestId('process-row');
+    expect(title.textContent).toContain('Searching');
+    expect(title.textContent).toContain('needle37');
+    expect(title.querySelector('.animate-spin')).not.toBeNull();
     const rows = screen.getAllByTestId('step-row');
     expect(rows).toHaveLength(12);
-    expect(rows[rows.length - 1].querySelector('.animate-spin')).not.toBeNull();
-    expect(rows[rows.length - 1].textContent).toContain('needle37');
-    expect(screen.queryByTestId('process-live')).toBeNull();
+    expect(rows[rows.length - 1].textContent).toContain('needle36');
+    expect(container.querySelectorAll('.animate-spin')).toHaveLength(1);
     expect(container.textContent).not.toContain('/Users/x/repo');
   });
 
-  it('folding the live card by hand still shows what just finished and what runs now', () => {
+  it('folding the live card by hand leaves its title: what runs now', () => {
     const live = bashRun(38).flatMap((b, i) => (i < 37 ? [b, tr(`t${i}`)] : [b]));
     renderView(live, { isStreaming: true });
     fireEvent.click(screen.getByTestId('process-row'));
     expect(screen.queryByTestId('process-steps')).toBeNull();
-    expect(screen.getAllByTestId('step-row')).toHaveLength(1);
-    expect(screen.getByTestId('process-live-recent').textContent).toContain('needle36');
-    expect(screen.getByTestId('process-live').textContent).toContain('needle37');
+    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
+    expect(screen.getByTestId('process-row').textContent).toContain('needle37');
   });
 
   it('history (no tool_result) → one folded row, no spinner; expanding shows all 38 (AC2)', () => {
@@ -236,10 +240,12 @@ describe('AssistantMessageView — Gate-2 fixes', () => {
     expect(screen.getByTestId('process-row').textContent).toMatch(/Thought/);
   });
 
-  it('a long LIVE segment keeps the running step visible', () => {
+  it('a long LIVE segment keeps the running step visible — as the card title', () => {
     const live = bashRun(20).flatMap((b, i) => (i < 19 ? [b, tr(`t${i}`)] : [b]));
-    const { container } = renderView(live, { isStreaming: true });
-    expect(container.querySelector('[data-testid="step-row"] .animate-spin')).not.toBeNull();
+    renderView(live, { isStreaming: true });
+    const title = screen.getByTestId('process-row');
+    expect(title.textContent).toContain('needle19');
+    expect(title.querySelector('.animate-spin')).not.toBeNull();
   });
 });
 
@@ -249,14 +255,13 @@ describe('AssistantMessageView — live card between steps', () => {
     renderView([tu('a', 'Running: ls'), tr('a'), th], { isStreaming: true });
     const row = screen.getByTestId('thinking-row');
     expect(row.dataset.open).toBe('true');
-    expect(screen.getByTestId('thinking-text').textContent).toContain('Read the config first.');
-    expect(row.querySelector('.animate-spin')).not.toBeNull();
-    fireEvent.click(screen.getByTestId('process-row'));
-    const line = screen.getByTestId('process-live-thinking');
-    // XG 2026-10-18 "该换行就换行": both lines, wrapped — not the last line in a truncated slot.
-    expect(line.textContent).toBe('Read the config first.\nThen compare both thresholds.');
-    expect(line.className).toMatch(/whitespace-pre-wrap/);
-    expect(line.className).not.toMatch(/truncate/);
+    const text = screen.getByTestId('thinking-text');
+    // XG 2026-10-18 "该换行就换行": both lines, wrapped — never one replaced slot.
+    expect(text.textContent).toBe('Read the config first.\nThen compare both thresholds.');
+    expect(text.className).toMatch(/whitespace-pre-wrap/);
+    // The card title says "Thinking" and holds the one spinner; the row has none.
+    expect(screen.getByTestId('process-row').textContent).toContain('Thinking');
+    expect(row.querySelector('.animate-spin')).toBeNull();
   });
 
   it('a long or failed outcome wraps on its own line; a short one stays on the row', () => {
@@ -273,13 +278,37 @@ describe('AssistantMessageView — live card between steps', () => {
     expect(wrapped.className).not.toMatch(/truncate/);
   });
 
-  it('finished turn from history: the card is folded, no live line', () => {
+  it('finished turn from history: one dim line that says the one step it was', () => {
     const th = { type: 'thinking', thinking: 'deliberating' } as ContentBlock;
     renderView([th, tu('a', 'Running: ls'), tx('the answer')]);
-    expect(screen.queryByTestId('process-live-thinking')).toBeNull();
     expect(screen.queryByTestId('process-steps')).toBeNull();
-    expect(screen.getByTestId('process-row').textContent).toMatch(/Worked/);
-    expect(screen.getByTestId('process-row').textContent).toMatch(/1 thought/);
+    const line = screen.getByTestId('process-row');
+    expect(line.textContent).toContain('Listed');
+    expect(line.textContent).not.toMatch(/thought/i); // workload is not an effect
+    expect(screen.getByTestId('process-block').dataset.live).toBe('false');
+  });
+
+  it('finished multi-step work says what it changed, as file chips that open the diff', () => {
+    const wr = (id: string, p: string): ContentBlock =>
+      ({ type: 'tool_use', id, name: 'Edit', summary: `Writing to ${p}`, category: 'write' }) as ContentBlock;
+    const seen: unknown[] = [];
+    const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.addEventListener('swarm:open-file', onOpen);
+    try {
+      renderView([tu('a', 'Running: ls'), wr('b', '/r/src/TabView.tsx'), wr('c', '/r/src/x.py'), tx('done')]);
+      const line = screen.getByTestId('process-row');
+      expect(line.textContent).toContain('Worked');
+      expect(line.textContent).toContain('changed');
+      const chips = line.querySelectorAll('[data-testid="file-chip"]');
+      expect([...chips].map((c) => c.getAttribute('data-path'))).toEqual(['/r/src/TabView.tsx', '/r/src/x.py']);
+      expect(line.textContent).toContain('3 steps');
+      fireEvent.click(chips[0]);
+      expect(seen).toEqual([{ path: '/r/src/TabView.tsx', autoDiff: true }]);
+      // the chip's click opens the file, not the line
+      expect(screen.queryByTestId('process-steps')).toBeNull();
+    } finally {
+      document.removeEventListener('swarm:open-file', onOpen);
+    }
   });
 
   it('history: expanding the card shows the thought folded to one line', () => {
@@ -302,11 +331,15 @@ describe('AssistantMessageView — live card between steps', () => {
     expect(outcomes[1].className).toMatch(/text-red-400/);
   });
 
-  it('after a tool returns and before the next starts, the open card still spins at the bottom', () => {
-    renderView([tu('a', 'Running: ls'), tr('a')], { isStreaming: true });
-    const idle = screen.getByTestId('process-live-idle');
-    expect(idle.querySelector('.animate-spin')).not.toBeNull();
-    expect(idle.textContent).toContain('Thinking');
+  it('after a tool returns and before the next starts, the card title says Thinking and spins', () => {
+    const { container } = renderView([tu('a', 'Running: ls'), tr('a')], { isStreaming: true });
+    const title = screen.getByTestId('process-row');
+    expect(title.textContent).toContain('Thinking');
+    expect(title.querySelector('.animate-spin')).not.toBeNull();
+    expect(container.querySelectorAll('.animate-spin')).toHaveLength(1);
+    expect(screen.getAllByTestId('step-row')[0].dataset.status).toBe('done');
+    // Colour only for exceptions: a normal finish is a neutral mark.
+    expect(container.querySelector('.text-status-online, .text-green-400, .text-green-500')).toBeNull();
   });
 
   it('before any content: one "Thinking" line with a spinner, nothing to expand', () => {
@@ -325,7 +358,7 @@ describe('AssistantMessageView — live card between steps', () => {
     renderView([rd('a'), res('a', 'lines 1–200'), rd('b'), res('b', 'lines 200–400'), rd('c'), res('c', 'lines 400–480'),
       tu('d', 'Running: ls')], { isStreaming: true });
     const rows = screen.getAllByTestId('step-row');
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1); // the running ls is the card title, not a row
     expect(screen.getByTestId('step-repeat').textContent).toBe('3×');
     expect(rows[0].textContent).toContain('lines 1–200, lines 200–400, lines 400–480');
   });
@@ -375,9 +408,9 @@ describe('AssistantMessageView — v6 fold timing (XG 2026-10-17 "延后2秒 再
   });
 
   it('a card the user folded while live stays folded after it finishes', () => {
-    const { rerender } = render(viewOf([tu('a', 'Running: ls')], true));
+    const { rerender } = render(viewOf([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd')], true));
     fireEvent.click(screen.getByTestId('process-row'));
-    rerender(viewOf([tu('a', 'Running: ls'), tr('a'), tx('done')], false));
+    rerender(viewOf([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b'), tx('done')], false));
     expect(screen.queryByTestId('process-steps')).toBeNull();
   });
 });
@@ -400,14 +433,16 @@ describe('AssistantMessageView — a running sub-agent keeps the chat alive (XG 
     const detail = screen.getByTestId('agent-detail');
     expect(detail.textContent).toContain('Sub-agent');
     expect(detail.textContent).toContain('8 steps');
-    expect(detail.textContent).toContain('1m 15s');
-    expect(detail.querySelector('.animate-spin')).not.toBeNull();
+    // One timer: the Agent title's own elapsed; the sub-agent shows no second clock
+    // and no second spinner while it runs.
+    expect(detail.textContent).not.toContain('1m 15s');
+    expect(detail.querySelector('.animate-spin')).toBeNull();
     const nested = screen.getByTestId('agent-steps');
     expect(nested.querySelectorAll('[data-testid="step-row"]')).toHaveLength(6);
     expect(nested.textContent).toContain('x7');
     expect(nested.textContent).toContain('2 more');
-    // Only the Agent itself is a step of the main card.
-    expect(screen.getByTestId('process-row').textContent).toContain('1 step');
+    // The Agent itself is what runs now: the card's title.
+    expect(screen.getByTestId('process-row').textContent).toContain('Review spec');
   });
 
   it('before its first step: the tool it is on, from the progress event', () => {
@@ -415,10 +450,9 @@ describe('AssistantMessageView — a running sub-agent keeps the chat alive (XG 
     expect(screen.getByTestId('agent-detail').textContent).toContain('now Read');
   });
 
-  it('folded by hand, the live row still shows the sub-agent newest step', () => {
+  it('a running Agent with nothing else in the card: its sub-agent stays visible', () => {
     withProgress([agent, ...subs(3)], {});
-    fireEvent.click(screen.getByTestId('process-row'));
-    expect(screen.getByTestId('process-live-subagent').textContent).toContain('x2');
+    expect(screen.getByTestId('agent-steps').textContent).toContain('x2');
   });
 
   it('from history: folded to a count, opens on click', () => {
@@ -430,5 +464,54 @@ describe('AssistantMessageView — a running sub-agent keeps the chat alive (XG 
     expect(screen.queryByTestId('agent-steps')).toBeNull();
     fireEvent.click(detail.querySelector('button')!);
     expect(screen.getByTestId('agent-steps').querySelectorAll('[data-testid="step-row"]')).toHaveLength(3);
+  });
+});
+
+describe('AssistantMessageView — v7.1 turn frame (alignment → work → result)', () => {
+  const wr = (id: string, p: string): ContentBlock =>
+    ({ type: 'tool_use', id, name: 'Edit', summary: `Writing to ${p}`, category: 'write' }) as ContentBlock;
+
+  it('the first restatement is labelled as the alignment; the final answer gets a Result divider', () => {
+    renderView([tx('Three steps: export, sync, push.'), tu('a', 'Running: ls'), tx('checking'), tu('b', 'Running: pwd'),
+      tx('All three done.')]);
+    expect(screen.getByTestId('turn-alignment').textContent).toContain('How I read it');
+    expect(screen.getByTestId('turn-alignment').textContent).toContain('Three steps');
+    const result = screen.getByTestId('turn-result');
+    expect(result.textContent).toContain('Result');
+    expect(result.textContent).toContain('All three done.');
+  });
+
+  it('no divider while streaming', () => {
+    renderView([tx('a'), tu('a', 'Running: ls'), tx('partial')], { isStreaming: true });
+    expect(screen.queryByTestId('turn-result')).toBeNull();
+  });
+
+  it('a pure text reply has no alignment label and no divider', () => {
+    renderView([tx('just an answer')]);
+    expect(screen.queryByTestId('turn-alignment')).toBeNull();
+    expect(screen.queryByTestId('turn-result')).toBeNull();
+  });
+
+  it('straight to work with no restatement: that absence is said, once', () => {
+    renderView([tu('a', 'Running: ls'), tu('b', 'Running: pwd'), tu('c', 'Running: make'), tx('done')]);
+    expect(screen.getByTestId('turn-no-alignment')).toBeTruthy();
+    renderView([tu('a', 'Running: ls'), tx('done')]);
+    expect(screen.getAllByTestId('turn-no-alignment')).toHaveLength(1); // short turns stay quiet
+  });
+
+  it('a finished plain turn lists what it changed, each opening its diff', () => {
+    renderView([tu('a', 'Running: ls'), wr('b', '/r/a.ts'), tx('note'), wr('c', '/r/b.md'), tx('Done.')]);
+    const line = screen.getByTestId('turn-files');
+    expect([...line.querySelectorAll('[data-testid="file-chip"]')].map((c) => c.getAttribute('data-path')))
+      .toEqual(['/r/a.ts', '/r/b.md']);
+    expect(line.textContent).toContain('edited');
+  });
+
+  it('a note right after its work sits close to it; a new run of work starts a new group', () => {
+    const { container } = renderView([tx('plan'), tu('a', 'Running: ls'), tx('found it'), tu('b', 'Running: pwd'), tx('done')]);
+    const kids = [...container.querySelectorAll('[data-testid="process-block"]')].map((el) => el.parentElement!);
+    expect(kids[1].className).toContain('mt-3'); // new group
+    const note = screen.getByText('found it').closest('div.mt-1');
+    expect(note).not.toBeNull();
   });
 });

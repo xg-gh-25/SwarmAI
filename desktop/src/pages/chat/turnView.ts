@@ -131,7 +131,7 @@ export interface TurnView {
 const INTERRUPT_TYPES = new Set(['ask_user_question', 'cmd_permission_request', 'escalation']);
 
 /** An interrupt the user has not answered yet (so the call before it has not run). */
-function isUnanswered(b: InterruptBlock): boolean {
+export function isUnanswered(b: InterruptBlock): boolean {
   if (b.type === 'cmd_permission_request') return !b.decision;
   if (b.type === 'ask_user_question') return !b.answers || Object.keys(b.answers).length === 0;
   return b.status === 'pending';
@@ -398,6 +398,15 @@ export type StepVerb =
   | 'read' | 'edit' | 'search' | 'run' | 'list' | 'fetch' | 'websearch'
   | 'loadTools' | 'skill' | 'todo' | 'agent' | 'mcp' | 'tool';
 
+/** English [live, done] verb for each step kind — the i18n fallback. */
+export const STEP_VERB_FALLBACK: Record<StepVerb, [string, string]> = {
+  read: ['Reading', 'Read'], edit: ['Editing', 'Edited'], search: ['Searching', 'Searched'],
+  run: ['Running', 'Ran'], list: ['Listing', 'Listed'], fetch: ['Fetching', 'Fetched'],
+  websearch: ['Searching web', 'Searched web'], loadTools: ['Loading tools', 'Loaded tools'],
+  skill: ['Using skill', 'Used skill'], todo: ['Updating', 'Updated'], agent: ['Running agent', 'Ran agent'],
+  mcp: ['Calling', 'Called'], tool: ['Running', 'Ran'],
+};
+
 export interface StepLabel {
   verb: StepVerb;
   /** Short human object: a basename, a quoted pattern, a command head. */
@@ -483,7 +492,23 @@ function tokenize(segment: string): string[] {
 
 const looksLikePath = (t: string): boolean => !t.startsWith('-') && /[./]/.test(t) && !/^\d+(,\d+)?p?$/.test(t);
 
-function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object'> {
+/** The absolute directory a command `cd`s into first, if it says so plainly. */
+function leadingCd(cmd: string): string | undefined {
+  const m = /^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/.exec(cmd);
+  const dir = m ? (m[1] ?? m[2] ?? m[3]) : undefined;
+  return dir && dir.startsWith('/') ? dir.replace(/\/+$/, '') : undefined;
+}
+
+/** A file argument as a full path: absolute as is, relative only under a known
+ *  absolute `cd`. Anything else (`~`, `$VAR`, `..`, no cd) gets no link — never a guess. */
+function resolveBashPath(file: string, cwd: string | undefined): string | undefined {
+  if (/[$`*?]/.test(file) || file.startsWith('~')) return undefined;
+  if (file.startsWith('/')) return file;
+  if (!cwd || file.split('/').includes('..')) return undefined;
+  return `${cwd}/${file.replace(/^\.\//, '')}`;
+}
+
+function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path'> {
   let rest = cmd;
   for (let guard = 0; guard < 8; guard += 1) {
     const next = rest.replace(SETUP_RE, '').replace(WRAPPER_RE, '');
@@ -515,7 +540,10 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object'> {
 
   if (['cat', 'head', 'tail', 'less', 'sed', 'wc'].includes(head)) {
     const file = [...args].reverse().find(looksLikePath);
-    if (file) return { verb: 'read', object: basename(file) };
+    if (file) {
+      const full = resolveBashPath(file, leadingCd(cmd));
+      return full ? { verb: 'read', object: basename(file), path: full } : { verb: 'read', object: basename(file) };
+    }
   }
   if (['grep', 'rg', 'ugrep', 'egrep', 'fgrep'].includes(head)) {
     const pattern = nonFlag.find((a) => !a.startsWith('--')) ?? nonFlag[0];
@@ -563,7 +591,10 @@ export function stepLabel(block: ToolUseContent): StepLabel {
 function computeStepLabel(block: ToolUseContent): StepLabel {
   const raw = block.summary || block.name || '';
   if (raw.startsWith('Running: ')) {
-    return { ...labelBash(raw.slice('Running: '.length)), raw };
+    const bash = labelBash(raw.slice('Running: '.length));
+    // A summary cut at the cap may have cut through the path: no link then.
+    if (raw.length >= SUMMARY_CAP) delete bash.path;
+    return { ...bash, raw };
   }
   for (const [prefix, verb, build] of PREFIXES) {
     if (raw.startsWith(prefix)) {
@@ -705,4 +736,91 @@ export function groupSteps(steps: Step[]): StepRowItem[] {
     runKey = key;
   }
   return out;
+}
+
+// ── What changed ────────────────────────────────────────────────────────────
+
+/** Files the given steps wrote (Write/Edit), in first-touch order, with the
+ *  sub-agent steps nested under an Agent step included. Summary says EFFECT. */
+export function changedFiles(steps: Step[]): string[] {
+  const out: string[] = [];
+  const visit = (s: ToolStep) => {
+    const label = stepLabel(s.block);
+    if (label.verb === 'edit' && label.path && s.status !== 'error' && !out.includes(label.path)) out.push(label.path);
+    s.children?.forEach(visit);
+  };
+  for (const s of steps) if (s.kind === 'tool') visit(s);
+  return out;
+}
+
+/** Files changed anywhere in the turn's process units. */
+export function turnChangedFiles(units: TurnUnit[]): string[] {
+  const out: string[] = [];
+  for (const u of units) {
+    if (u.kind !== 'process') continue;
+    for (const p of changedFiles(u.steps)) if (!out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+// ── Stage sections (pipeline turns) ─────────────────────────────────────────
+//
+// A `stage` row is written when a stage FINISHES, after its work. So the units
+// between two stage rows are that stage's work: a finished stage folds them under
+// its row (one line per stage — design-judgment Surface 6, "process folds, it is
+// not deleted"); the work after the last row, while streaming, is the stage now
+// running and stays open. Text before the first work is the alignment and stays
+// in the stream; so does everything after the last row once the turn is over.
+
+export type TurnSection =
+  | { kind: 'unit'; unit: TurnUnit }
+  | { kind: 'stage'; block: PipelineStageContent; children: TurnUnit[]; prevAt?: string }
+  | {
+      kind: 'liveStage';
+      stage: { stage: string; ordinal: number | null };
+      /** Place in the run's plan ("5 of 8"), when the previous rows say it. */
+      position?: { n: number; total: number };
+      children: TurnUnit[];
+    };
+
+export function sectionUnits(units: TurnUnit[], isStreaming: boolean): TurnSection[] {
+  if (!units.some((u) => u.kind === 'stage')) return units.map((unit) => ({ kind: 'unit', unit }));
+  const out: TurnSection[] = [];
+  let i = 0;
+  // Alignment: whatever the model wrote before it started working.
+  while (i < units.length && units[i].kind !== 'process' && units[i].kind !== 'stage') {
+    out.push({ kind: 'unit', unit: units[i] });
+    i += 1;
+  }
+  let buffer: TurnUnit[] = [];
+  let last: PipelineStageContent | undefined;
+  let lastWithPosition: PipelineStageContent | undefined;
+  for (; i < units.length; i += 1) {
+    const u = units[i];
+    if (u.kind === 'stage') {
+      out.push({ kind: 'stage', block: u.block, children: buffer, prevAt: last?.at });
+      buffer = [];
+      last = u.block;
+      if (u.block.position !== null) lastWithPosition = u.block;
+    } else {
+      buffer.push(u);
+    }
+  }
+  if (!buffer.length) return out;
+  const liveUnit = buffer.find((u): u is ProcessUnit => u.kind === 'process' && u.isLive);
+  const stage = liveUnit?.live?.stage;
+  if (isStreaming && stage) {
+    const position = stage.stage !== 'gate1' && lastWithPosition && lastWithPosition.position !== null
+      ? { n: lastWithPosition.position + 1, total: lastWithPosition.total }
+      : undefined;
+    out.push({ kind: 'liveStage', stage, position, children: buffer });
+  } else {
+    out.push(...buffer.map((unit): TurnSection => ({ kind: 'unit', unit })));
+  }
+  return out;
+}
+
+/** The first segment of a stage summary ("GO · profile: full" → "GO"). */
+export function stageHeadline(summary: string | null | undefined): string {
+  return (summary ?? '').split(/\s+·\s+|[(（]/)[0].trim().slice(0, 48);
 }

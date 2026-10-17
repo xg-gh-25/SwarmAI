@@ -183,16 +183,16 @@
       "working": "Working",
       "thinking": "Thinking",
       "thought": "Thought",
-    "worked": "Worked",
-    "thoughtCount_one": "{{count}} thought",
-    "thoughtCount_other": "{{count}} thoughts",
-    "readTimes": "{{count}}×",
-    "subAgent": "Sub-agent",
-    "nowUsing": "now {{tool}}",
-    "subAgentStatus": {
-      "failed": "failed",
-      "stopped": "stopped"
-    },
+      "worked": "Worked",
+      "thoughtCount_one": "{{count}} thought",
+      "thoughtCount_other": "{{count}} thoughts",
+      "readTimes": "{{count}}×",
+      "subAgent": "Sub-agent",
+      "nowUsing": "now {{tool}}",
+      "subAgentStatus": {
+        "failed": "failed",
+        "stopped": "stopped"
+      },
       "steps_one": "{{count}} step",
       "steps_other": "{{count}} steps",
       "failed_one": "{{count}} failed",
@@ -275,13 +275,28 @@
         "ariaDone": "Pipeline stage {{stage}} done",
         "ariaSkipped": "Pipeline stage {{stage}} skipped",
         "ariaRunning": "Pipeline stage {{stage}} in progress",
-        "position": "stage {{position}} of {{total}}"
-      }
+        "position": "stage {{position}} of {{total}}",
+        "changed_one": "changed {{count}} file",
+        "changed_other": "changed {{count}} files"
+      },
+      "changed": "changed",
+      "andMore": "+{{count}}",
+      "failedRecovered_one": "{{count}} failed, recovered",
+      "failedRecovered_other": "{{count}} failed, recovered",
+      "failedOne": "failed",
+      "alignment": "How I read it",
+      "result": "Result",
+      "thisTurnChanged": "This turn changed",
+      "noAlignment": "Started without restating the ask"
     },
     "nextSteps": {
       "label": "Next steps",
       "fill": "Add to input (shortcut {{key}})",
       "send": "Send now"
+    },
+    "file": {
+      "new": "new",
+      "edited": "edited"
     }
   },
   "tasks": {

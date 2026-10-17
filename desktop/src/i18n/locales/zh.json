@@ -181,16 +181,16 @@
       "working": "工作中",
       "thinking": "思考中",
       "thought": "思考了",
-    "worked": "已工作",
-    "thoughtCount_one": "思考 {{count}} 段",
-    "thoughtCount_other": "思考 {{count}} 段",
-    "readTimes": "{{count}} 次",
-    "subAgent": "子代理",
-    "nowUsing": "正在 {{tool}}",
-    "subAgentStatus": {
-      "failed": "失败",
-      "stopped": "已停止"
-    },
+      "worked": "已工作",
+      "thoughtCount_one": "思考 {{count}} 段",
+      "thoughtCount_other": "思考 {{count}} 段",
+      "readTimes": "{{count}} 次",
+      "subAgent": "子代理",
+      "nowUsing": "正在 {{tool}}",
+      "subAgentStatus": {
+        "failed": "失败",
+        "stopped": "已停止"
+      },
       "steps_one": "{{count}} 步",
       "steps_other": "{{count}} 步",
       "failed_one": "{{count}} 步失败",
@@ -273,13 +273,28 @@
         "ariaDone": "Pipeline 阶段 {{stage}} 已完成",
         "ariaSkipped": "Pipeline 阶段 {{stage}} 已跳过",
         "ariaRunning": "Pipeline 阶段 {{stage}} 进行中",
-        "position": "第 {{position}}/{{total}} 阶段"
-      }
+        "position": "第 {{position}}/{{total}} 阶段",
+        "changed_one": "改了 {{count}} 个文件",
+        "changed_other": "改了 {{count}} 个文件"
+      },
+      "changed": "改了",
+      "andMore": "等 {{count}} 个",
+      "failedRecovered_one": "{{count}} 步失败（已恢复）",
+      "failedRecovered_other": "{{count}} 步失败（已恢复）",
+      "failedOne": "失败",
+      "alignment": "AI 的理解",
+      "result": "结果",
+      "thisTurnChanged": "本轮改了",
+      "noAlignment": "AI 没有先复述它的理解就开始了"
     },
     "nextSteps": {
       "label": "下一步",
       "fill": "填入输入框（快捷键 {{key}}）",
       "send": "直接发送"
+    },
+    "file": {
+      "new": "新建",
+      "edited": "修改"
     }
   },
   "tasks": {
