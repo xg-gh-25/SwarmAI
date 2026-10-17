@@ -827,6 +827,61 @@ class TestBuildResumeContextElastic:
         )
 
 
+def _section(out: str, header: str) -> str:
+    """Body of one ``### header`` layer in an assembled resume block."""
+    start = out.find(f"### {header}\n")
+    if start < 0:
+        return ""
+    nxt = out.find("\n### ", start + 1)
+    return out[start:nxt if nxt > 0 else len(out)]
+
+
+class TestConclusionsDedupAgainstRecent:
+    """The conclusions layer must not repeat assistant text that the Recent
+    Conversation layer already shows verbatim (measured: p50 76% duplicated
+    when both layers walked the same tail). Property: every assistant message
+    appears in at most one of the two layers, and with a binding recent budget
+    the conclusions layer carries OLDER turns than the recent window."""
+
+    def test_format_recent_turns_reports_included_messages(self):
+        msgs = _mk_session(3, answer_chars=10)
+        seen: set[int] = set()
+        _format_recent_turns(msgs, included_ids=seen)
+        # Last assistant is dropped by design; the other 5 are included.
+        assert seen == {id(m) for m in msgs[:-1]}
+
+    def test_conclusions_skip_excluded_ids(self):
+        msgs = _mk_session(3, answer_chars=10)
+        exclude = {id(msgs[1]), id(msgs[3])}
+        result = _extract_assistant_conclusions(msgs, exclude_ids=exclude)
+        assert result == [msgs[5]["content"][0]["text"]]
+
+    def test_short_session_no_assistant_text_in_both_layers(self):
+        out = _run_resume(_mk_session(6, answer_chars=200),
+                          model_context_window=1_000_000)
+        conclusions = _section(out, "Assistant Conclusions")
+        recent = _section(out, "Recent Conversation")
+        assert recent, "recent layer must be present"
+        for i in range(6):
+            mark = f"turn{i} "
+            assert not (mark in conclusions and mark in recent), (
+                f"{mark!r} duplicated in both layers")
+        # The last assistant message (dropped from Recent) is still carried.
+        assert "turn5 " in conclusions
+
+    def test_binding_recent_budget_pushes_conclusions_to_older_turns(self):
+        out = _run_resume(_mk_session(80, answer_chars=3000),
+                          model_context_window=128_000)
+        conclusions = _section(out, "Assistant Conclusions")
+        recent = _section(out, "Recent Conversation")
+        in_recent = [i for i in range(80) if f"turn{i} " in recent]
+        in_concl = [i for i in range(79) if f"turn{i} " in conclusions]
+        assert in_recent and in_concl
+        assert not set(in_recent) & set(in_concl)
+        assert max(in_concl) < min(in_recent), (
+            "conclusions should come from before the recent window")
+
+
 class TestHardClamp:
     """Direct unit tests of the _hard_clamp backstop. The full-pipeline test
     above can't reliably ENGAGE the clamp (every layer is now budget-bounded),

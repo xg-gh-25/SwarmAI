@@ -485,7 +485,7 @@ def _count_user_turns(messages: list[dict]) -> int:
 
 def _extract_assistant_conclusions(
     messages: list[dict], max_blocks: int = 100, char_budget: int = 0,
-    block_trunc: int = 1500,
+    block_trunc: int = 1500, exclude_ids: set[int] | frozenset = frozenset(),
 ) -> list[str]:
     """Extract the text of the last N assistant messages (non-tool).
 
@@ -496,12 +496,20 @@ def _extract_assistant_conclusions(
     Elastic caps (run_6d5f60dd): ``char_budget`` (when >0) governs collection —
     stop once accumulated chars reach it. ``max_blocks`` is a high secondary
     safety cap so it never binds before the char budget.
+
+    ``exclude_ids`` holds ``id()`` of messages already shown verbatim in the
+    Recent Conversation layer (see ``_format_recent_turns(included_ids=...)``).
+    They are skipped, so this layer's budget carries assistant text from BEFORE
+    the recent window instead of repeating it (measured 2026-10-17: p50 76% of
+    this layer duplicated Recent Conversation when both walked the same tail).
     """
     try:
         conclusions: list[str] = []
         accumulated = 0
         for msg in reversed(messages):
             if msg.get("role") != "assistant":
+                continue
+            if id(msg) in exclude_ids:
                 continue
             text = _extract_text_from_content(msg.get("content"))
             if not text:
@@ -899,9 +907,12 @@ def _build_checkpoint(messages: list[dict], directives_char_budget: int = 0) -> 
 
 def _format_recent_turns(
     messages: list[dict], max_turns: int = 500, budget_chars: int = 0,
-    recent_chars: int = 0,
+    recent_chars: int = 0, included_ids: set[int] | None = None,
 ) -> str:
     """Format the last N user-assistant turn pairs.
+
+    When ``included_ids`` is given, the ``id()`` of every message that made it
+    into the output is added to it, so the conclusions layer can skip them.
 
     4K per message preserves detailed assistant reasoning, code snippets,
     and multi-paragraph analyses.  First principle: the resumed agent should
@@ -943,6 +954,8 @@ def _format_recent_turns(
                     text = text[:3997] + "..."
                 formatted.append(text)
                 accumulated += len(text)
+                if included_ids is not None:
+                    included_ids.add(id(msg))
                 # Stop collecting once we have enough for the budget
                 if size_limit and accumulated >= size_limit:
                     break
@@ -1247,14 +1260,22 @@ async def build_resume_context(
                 raw_messages,
                 directives_char_budget=layer_caps["directives_chars"],
             )
+            in_recent: set[int] = set()
             recent = _format_recent_turns(
                 raw_messages, budget_chars=budget_chars,
                 recent_chars=layer_caps["recent_chars"],
+                included_ids=in_recent,
             )
 
-            # Enrichment layer: assistant conclusions
+            # Enrichment layer: assistant conclusions — only from messages NOT
+            # already in Recent Conversation, so the layer extends coverage
+            # backwards instead of duplicating the tail. (_trim_to_budget can
+            # still trim recent_turns afterwards, but real builds sit far below
+            # budget: 140 enriched builds in the daemon log, ~42-47K of 150K
+            # tokens, zero clamps — so an excluded message is not later lost.)
             conclusions = _extract_assistant_conclusions(
                 raw_messages, char_budget=layer_caps["conclusions_chars"],
+                exclude_ids=in_recent,
             )
             if conclusions:
                 conclusion_lines = "\n\n".join(
