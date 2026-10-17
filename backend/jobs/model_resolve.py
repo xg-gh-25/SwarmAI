@@ -177,8 +177,9 @@ def _flagship_fallback() -> str:
         )
     # Only reachable if model_registry itself is unimportable, in which case the
     # job is going to fail anyway; a plausible string beats an empty --model.
-    # Keep this in lockstep with the registry flagship (claude-opus-4-8).
-    return "claude-opus-4-8"
+    # Keep this in lockstep with the registry flagship (claude-opus-5-5) —
+    # bound by test_job_model_ssot.test_last_resort_literal_stays_in_lockstep_with_the_flagship.
+    return "claude-opus-5-5"
 
 
 def _is_usable_model(model: str) -> bool:

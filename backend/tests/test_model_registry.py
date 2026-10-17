@@ -109,42 +109,50 @@ class TestFlagshipOrdering:
     def test_flagship_is_first(self):
         assert reg.MODEL_NAMES[0] == reg.FLAGSHIP_MODEL
 
-    def test_flagship_is_the_deliberately_chosen_opus_4_8_not_the_newest(self):
-        """The teeth for flagship-first — pinned to the CHOSEN model, not the newest.
+    def test_flagship_is_the_deliberately_chosen_opus_5_5(self):
+        """The teeth for flagship-first — pinned to the CHOSEN model by literal.
 
         ``FLAGSHIP_MODEL`` is *defined* as ``MODEL_NAMES[0]``, so asserting
         ``MODEL_NAMES[0] == FLAGSHIP_MODEL`` is a tautology (stays GREEN even if
         the order is wrong). This test instead pins the ACTUAL chosen flagship at
-        index 0.
+        index 0, by an independent literal.
 
-        The flagship is DELIBERATELY CHOSEN, not "newest-version-wins":
-        claude-opus-5 is present and selectable but is intentionally NOT the
-        default (it ran far slower per turn, did not follow sedimented cognition,
-        and did not converge on adversarial loops). So the guard is no longer
-        "newest must be first" — it is "the chosen model (opus-4-8) must be first,
-        and a higher-version model may sit behind it."
+        The flagship is DELIBERATELY CHOSEN, not "newest-version-wins": it was
+        promoted to claude-opus-5-5 by an explicit human decision, while
+        claude-opus-5 (a higher-numbered sibling that was tried and rolled back)
+        stays demoted. Changing the flagship is therefore a deliberate edit of
+        this literal, never a side effect of re-sorting the registry.
 
-        Teeth: re-promoting claude-opus-5 (or any other model) to index 0 turns
-        this RED — which is what protects settings.py's ``new_models[0]``
-        auto-reset from silently re-selecting opus-5 as the default (the exact
-        drift this pin exists to prevent).
+        Teeth: putting any other model at index 0 (including rolling back to
+        claude-opus-4-8) turns this RED — which is what protects settings.py's
+        ``new_models[0]`` auto-reset from silently selecting a different default.
         """
-        assert reg.MODEL_NAMES[0] == "claude-opus-4-8", (
-            f"MODEL_REGISTRY must list the chosen flagship claude-opus-4-8 FIRST "
+        assert reg.MODEL_NAMES[0] == "claude-opus-5-5", (
+            f"MODEL_REGISTRY must list the chosen flagship claude-opus-5-5 FIRST "
             f"— found {reg.MODEL_NAMES[0]!r} at index 0. settings.py auto-resets "
             f"default_model to available_models[0]; a different first entry "
             f"silently changes the default model."
         )
-        assert reg.FLAGSHIP_MODEL == "claude-opus-4-8", (
-            f"FLAGSHIP_MODEL must derive to claude-opus-4-8, got "
+        assert reg.FLAGSHIP_MODEL == "claude-opus-5-5", (
+            f"FLAGSHIP_MODEL must derive to claude-opus-5-5, got "
             f"{reg.FLAGSHIP_MODEL!r}"
         )
+
+    def test_previous_flagship_opus_4_8_stays_as_rollback_target(self):
+        """opus-4-8 is demoted, never removed — it is the one-line rollback.
+
+        Rolling the flagship back means moving claude-opus-4-8 to index 0; that
+        only works if it is still registered with its Bedrock id. Teeth:
+        dropping opus-4-8 from the registry turns this RED.
+        """
+        assert reg.MODEL_REGISTRY.get("claude-opus-4-8") == "us.anthropic.claude-opus-4-8"
+        assert reg.MODEL_NAMES[0] != "claude-opus-4-8"
 
     def test_opus_5_remains_available_but_not_flagship(self):
         """opus-5 is DOWNGRADED, never removed — it must stay selectable.
 
-        The change that pinned opus-4-8 as flagship must NOT delete opus-5: a
-        user can still pick it explicitly. Teeth: dropping opus-5 from the
+        opus-5 was tried as flagship and rolled back; demoting it must NOT
+        delete it: a user can still pick it explicitly. Teeth: dropping opus-5 from the
         registry (rather than merely moving it off first place) turns this RED.
         """
         assert "claude-opus-5" in reg.MODEL_REGISTRY, (
@@ -154,30 +162,6 @@ class TestFlagshipOrdering:
         assert reg.MODEL_NAMES[0] != "claude-opus-5", (
             "claude-opus-5 must NOT be first (it is intentionally not the default)"
         )
-
-    def test_opus_5_5_is_available_but_not_flagship(self):
-        """opus-5-5 is a selectable candidate — added, NOT made flagship.
-
-        It must be in the registry (so Settings can pick it + resolve its
-        Bedrock id) AND it must NOT be index 0 (settings.py auto-resets
-        default_model to available_models[0]; placing 5-5 first would silently
-        swap the default). Teeth: moving 5-5 to index 0, or dropping it, turns
-        this RED.
-        """
-        assert "claude-opus-5-5" in reg.MODEL_REGISTRY, (
-            "claude-opus-5-5 must be a selectable registry member"
-        )
-        assert reg.MODEL_REGISTRY["claude-opus-5-5"] == "us.anthropic.claude-opus-5-5"
-        assert reg.MODEL_NAMES[0] != "claude-opus-5-5", (
-            "claude-opus-5-5 must NOT be first — default stays opus-4-8"
-        )
-        assert reg.FLAGSHIP_MODEL == "claude-opus-4-8", (
-            "flagship must remain opus-4-8 — this change adds a candidate, "
-            "not a new default"
-        )
-        # Placed AFTER opus-4-8 (not before) — the explicit insertion contract.
-        names = reg.MODEL_NAMES
-        assert names.index("claude-opus-5-5") > names.index("claude-opus-4-8")
 
     def test_opus_5_5_resolves_bedrock_id(self):
         """The 5-5 Bedrock id must resolve (it is the live inference-profile)."""
@@ -420,9 +404,14 @@ class TestDisabledThinkingDerivation:
         assert reg.supports_disabled_thinking("us.anthropic.claude-opus-5-5") is False
         assert reg.supports_disabled_thinking("claude-opus-5-5[1m]") is False
 
-    def test_opus_4_8_flagship_still_supports_disabled(self):
-        """The current flagship must NOT be caught by the guard (no false-trip)."""
-        assert reg.supports_disabled_thinking(reg.FLAGSHIP_MODEL) is True
+    def test_opus_4_8_still_supports_disabled(self):
+        """opus-4-8 (demoted, still selectable) must NOT be caught by the guard."""
+        assert reg.supports_disabled_thinking("claude-opus-4-8") is True
+
+    def test_flagship_rejects_disabled_so_the_guard_engages(self):
+        """The flagship is an opus >= 5: a persisted thinking_mode=disabled must be
+        down-graded by prompt_builder's guard rather than sent on the wire."""
+        assert reg.supports_disabled_thinking(reg.FLAGSHIP_MODEL) is False
 
     def test_llm_optimizer_CONSUMES_the_derivation(self, monkeypatch):
         """The teeth: llm_optimizer must actually USE the registry predicate.

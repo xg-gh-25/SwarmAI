@@ -24,10 +24,11 @@ import { useTheme } from '../contexts/ThemeContext';
  * the backend flagship. It is exported so that test has a stable anchor.
  *
  * Overwritten by the real value from `getAPIConfiguration()` on mount; it only
- * governs the first paint (and the "Configure later" path, where showing a
- * model the user is not running is the actual bug).
+ * governs Step 4's first paint and the case where that fetch fails or returns
+ * no default model — where showing a model the user is not running is the
+ * actual bug. ("Configure later" skips Step 4 entirely, so it never shows this.)
  */
-export const FALLBACK_FLAGSHIP_MODEL = 'claude-opus-4-8';
+export const FALLBACK_FLAGSHIP_MODEL = 'claude-opus-5-5';
 
 interface OnboardingPageProps {
   onComplete: () => void;
@@ -513,8 +514,8 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
   // Show the ACTUAL configured model + region (persisted by Step2 on verify),
   // not hardcoded strings that lie when the user picked a different region.
   // The fallback is only the pre-resolve paint (overwritten by the API call
-  // below); it must still match the backend flagship or a "Configure later"
-  // user briefly sees a model they are not running.
+  // below) and the fetch-failed case; it must still match the backend flagship
+  // or the user sees a model they are not running.
   const [model, setModel] = useState<string>(FALLBACK_FLAGSHIP_MODEL);
   const [region, setRegion] = useState<string>('us-east-1');
 

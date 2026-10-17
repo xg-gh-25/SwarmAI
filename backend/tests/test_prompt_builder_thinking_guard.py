@@ -57,7 +57,7 @@ class TestThinkingGuard:
         assert out == {"type": "adaptive"}
 
     def test_opus_4_8_disabled_is_NOT_touched(self):
-        """The current flagship genuinely supports disabled — no false-trip."""
+        """opus-4-8 genuinely supports disabled — no false-trip."""
         b = _builder()
         cfg = {"type": "disabled"}
         out = b._guard_thinking_for_model(cfg, "claude-opus-4-8")

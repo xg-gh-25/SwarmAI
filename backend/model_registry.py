@@ -46,34 +46,54 @@ from __future__ import annotations
 #
 # FLAGSHIP FIRST (see the order warning in the module docstring).
 #
-# ⚠️ Flagship is DELIBERATELY CHOSEN, not "newest-version-wins". claude-opus-5
-# is present and selectable but is INTENTIONALLY NOT first: in practice it ran
-# far slower per turn, did not follow sedimented cognition, and did not converge
-# on adversarial loops — so the flagship/default is pinned to claude-opus-4-8.
-# Do NOT "correct" this ordering to put the highest version first; that would
-# silently re-promote opus-5 to the default (the reason it sits second).
+# ⚠️ Flagship is DELIBERATELY CHOSEN, not "newest-version-wins".
+#
+# - claude-opus-5-5 is the flagship/default — promoted 2026-10-17 by an explicit
+#   human decision. It needs Claude Code CLI >= 2.1.280 (an older bundled CLI
+#   rejects it with a 400 "does not support this model"). Reordering changes
+#   the DEFAULT only: an existing config.json keeps its stored default_model
+#   (AppConfigManager merges stored values over DEFAULT_CONFIG).
+# - claude-opus-4-8 sits second: the previous flagship and the ROLLBACK target.
+#   To roll back, move it to index 0 (and update the two lockstep literals
+#   listed below) — nothing has to be deleted. A rollback only changes the
+#   DEFAULT too: any config.json written while 5-5 was the default (a fresh
+#   install, or AppConfigManager re-seeding a missing/corrupt file, or a Hive
+#   first boot) has default_model=claude-opus-5-5 persisted and keeps it until
+#   that config is edited — there is no migration that follows the flagship.
+# - claude-opus-5 is present and selectable but INTENTIONALLY NOT first: tried
+#   as flagship, it ran far slower per turn, did not follow sedimented
+#   cognition, and did not converge on adversarial loops, so it was rolled back.
+#   Do NOT re-sort this registry by version number; that would silently
+#   re-promote it via settings.py's available_models[0] auto-reset.
+#
+# What the promotion was NOT based on: an OS-Eval A/B. No current evaluator can
+# discriminate production models — ``eval_runner.eval_llm_judge`` asks a pinned
+# judge model whether the RULES would produce compliant behaviour (the
+# production model never runs), and ``trajectory_capture`` runs a real agent
+# but ``scripts/scenario_runner.py`` hard-codes ``--model sonnet``. Until the
+# production model is wired into that runner, a model A/B is unavailable, so a
+# promotion here is a human judgement with a one-line code rollback, not a
+# measured one.
+#
 # Bedrock IDs are NOT mechanically derivable from the short name — note that
 # 4-6 carries a "-v1" suffix while 4-8 and 5 do not. Never synthesize an ID as
 # f"us.anthropic.{short_name}"; look it up here.
 MODEL_REGISTRY: dict[str, str] = {
-    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
     "claude-opus-5-5": "us.anthropic.claude-opus-5-5",
+    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
     "claude-opus-5": "us.anthropic.claude-opus-5",
     "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
     "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
 }
-# ⚠️ claude-opus-5-5 is a selectable CANDIDATE, deliberately NOT first. It is
-# newer and benchmarks higher, but flagship stays opus-4-8 until an OS-Eval A/B
-# clears it on the behavior axes that matter here (cognition-adherence,
-# adversarial convergence, writing — community reports 5.5 writing regressed vs
-# 4.7). Promoting it = move it to index 0 (settings.py auto-resets default_model
-# to available_models[0]); do that only after the eval, never as a side effect.
 
 # Derived — never hand-maintain a parallel list.
 MODEL_NAMES: list[str] = list(MODEL_REGISTRY)
 
-# The flagship / default model. Derived from position, so promoting a new
-# flagship means inserting it at the top of MODEL_REGISTRY and nothing else.
+# The flagship / default model. Derived from position: promoting a new flagship
+# means moving it to the top of MODEL_REGISTRY, PLUS updating the two lockstep
+# literals that cannot import this module — ``jobs/model_resolve.py``
+# (``_flagship_fallback`` last resort) and ``desktop/src/pages/OnboardingPage.tsx``
+# (``FALLBACK_FLAGSHIP_MODEL``). Both are bound by tests that fail on drift.
 FLAGSHIP_MODEL: str = MODEL_NAMES[0]
 
 # ---------------------------------------------------------------------------

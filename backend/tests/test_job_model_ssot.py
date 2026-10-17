@@ -240,6 +240,27 @@ def test_fallback_derives_from_the_registry_not_a_literal():
     )
 
 
+def test_last_resort_literal_stays_in_lockstep_with_the_flagship(monkeypatch):
+    """The registry-unimportable branch returns a hardcoded literal.
+
+    That literal cannot derive (the registry is exactly what failed to import),
+    so it is a lockstep copy — and the derived-branch test above never reaches
+    it. Drive the real fallback with the registry made unimportable and require
+    it to still name the current flagship. Teeth: promoting a new flagship in
+    model_registry without updating the literal turns this RED.
+    """
+    import sys
+
+    from jobs import model_resolve as mr
+    from model_registry import FLAGSHIP_MODEL
+
+    monkeypatch.setitem(sys.modules, "model_registry", None)  # import -> ImportError
+    assert mr._flagship_fallback() == FLAGSHIP_MODEL, (
+        "jobs/model_resolve.py last-resort literal drifted from "
+        "model_registry.FLAGSHIP_MODEL"
+    )
+
+
 def test_resolver_module_has_no_import_side_effects():
     """AC9: importing the resolver must not spawn a subprocess or mutate PATH.
 

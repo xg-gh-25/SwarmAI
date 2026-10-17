@@ -2,7 +2,7 @@
 
 Verifies that:
 - All supported models have correct Bedrock inference profile mappings
-- Default model is claude-opus-4-8
+- Default model is the registry flagship (model_registry.FLAGSHIP_MODEL)
 - 1M context window detection works for all supported models
 - Unknown models pass through unchanged (custom ARN support)
 """
