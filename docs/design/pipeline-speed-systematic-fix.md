@@ -4,7 +4,7 @@ date: 2026-10-17
 created: 2026-10-17
 updated: 2026-10-17
 project: SwarmAI
-status: DESIGN — XG 已确认方向，含 A-F 六个工作流，按 §6 顺序实施
+status: DESIGN — XG 已确认方向，含 A-H 八个工作流，按 §6 顺序实施；H 方案二待 XG 决定
 related: Opus 5.5 后 pipeline run 变慢（e4fc6ad4 / 2cb579ce / b3dd7ed9 / bfd8b9d3 / 48d377ec / ba1c8a22）
 author: Kiro（CLI transcript 取证 + 代码调研）
 ---
@@ -23,8 +23,10 @@ author: Kiro（CLI transcript 取证 + 代码调研）
 | D. 度量 | 提速与否没有数字 | `pipeline_run_profile.py`，每个 run 结束自动记录指标 |
 | E. 交付摘要 | 完成摘要靠模型手写，放在代码块里点不开；token 是估算的；看不到原始意图和新增文件 | CLI 用实测数据渲染，模型原样转发；文件和 REPORT.md 可以点开在 Canvas 查看，修改过的文件直接打开 diff |
 | F. 全流程机械工作 | 每个 run 有 28 到 159 次 Bash 调用是模型手工做的机械工作 | 每类机械工作指定一个工具接手；派生字段由工具计算；lint 防止 shell 配方回到文档里 |
+| G. 完成条件先行 | 没有事先定好的结束条件，验证停不下来：fuzz 跑了近 10 轮、40 多分钟，mutation 重复 4 遍 | 动手前先写机器可检查的退出契约；heavy 验证走 probe 模式，一轮没有新发现即收敛，目标和探针都没变时直接返回上次结果；直接修也用轻量的 `direct` profile |
+| H. 并行 session 提交隔离 | 多个 session 共用一个工作区和一个 git index：互相暂存、同一文件的改动混进别人的 commit、测试跑在别人改了一半的代码上 | 文件认领（同一文件同一时间只有一个 session 能写）；用私有 index 提交；gate 只按本次提交的路径算覆盖；测试结果标注"别的 session 正在改"的文件 |
 
-实施顺序：D → A+E（同一次 run）和 B 并行 → C。gate 一条不放宽，旧命令全部保留。
+实施顺序：D → 两次并行的 run（A+E+G 的契约部分+H 的提交部分；B+G 的 probe 部分+H 的认领和 gate 部分）→ C。gate 一条不放宽，旧命令全部保留。
 
 ## 1. 问题一句话
 
@@ -41,6 +43,8 @@ pipeline 把本该由工具做的机械工作交给了模型：选测试、判�
 | 测试碎片化 | pytest 114 次、前端测试和构建 80 次，一半以上只跑 1 个文件；`turnView.test.ts` 重跑 35 次 | 每次小修改后都单独跑一次测试；没有统一入口，也没有缓存。详见 B。 |
 | 机械工作由模型手做 | 每个 run 28 到 159 次 Bash 调用，占 Bash 调用的 59% 到 67% | 文档里写的是 shell 配方和公式，没有对应的工具。详见 F。 |
 | 完成摘要不可用 | 文件和 REPORT 点不开，token 是估算值，没有原始意图 | 摘要由模型手写，放在代码块里；run 和 session 没有关联。详见 E。 |
+| 验证没有终点 | 一次直接修复里，fuzz 每轮 6 万条命令、4 到 5 分钟，跑了近 10 轮，超过 40 分钟，其中 fuzz 早已找不到新问题；一轮因为 macOS 上 `sed` 转义没生效，跑的还是旧字母表；mutation 测试重复 4 遍 | 事先没有定好"做到什么程度算完"，"尝试打破它但失败"变成了"必须证明完美"（STEERING #17）。heavy 验证是临时脚本，没有记录、没有收敛判断，改没改成功也看不出来。详见 G。 |
+| 并行 session 互相干扰 | 今天提交本方案时，其他 session 已暂存 `artifact_cli.py` 等 4 个文件；`48d377ec` 自己写了 `commit_mine.py` 用临时 index 只提交自己的改动，提交相关调用 12 次；5 个 run 里 `git add`/暂存检查共 42 次；`48d377ec` 还专门绕开 `bfd8b9d3` 暂存的文件 | 所有 session 共用一个工作区和一个 git index，没有文件归属，也没有提交隔离，只能靠模型自己避让。详见 H。 |
 | 调用串行 | 超过 90% 的响应只带一个 tool call，每步 p50 8 到 11 秒 | 模型行为，没法直接改。能做的是减少需要的步数。 |
 
 ## 3. 设计原则
@@ -49,11 +53,13 @@ pipeline 把本该由工具做的机械工作交给了模型：选测试、判�
 2. **每个边界只需一次调用。** 进入 stage 一次（`stage-start`），离开 stage 一次（`stage-complete`），跑测试一次（`pipeline_test.py`）。
 3. **契约要机器可读，并且只有一份。** schema、示例和报错来自同一个定义；文档只引用它，不再复述。
 4. **文档分层。** 执行卡（每次都读，最多 5K）、参考（按需读）、历史（运行时不读）。大小由 lint 卡住。
-5. **派生字段由工具算，不由模型声明。** 计数、耗时、token、文件清单、push_ready 都从 git、runner 和数据库算出。
-6. **交付结果由工具渲染。** 模型只补充判断类内容（next steps），不手写格式。
-7. **gate 一个不放宽。** 新命令内部调用现有的 validator 和 gate，旧命令保留。
+5. **先定结束条件，再动手。** 做完的定义是"试图打破它但没成功"，不是"证明它完美"。结束条件满足就停。
+6. **每个 session 只碰自己的文件。** 写、暂存、提交、测试归因都按 session 隔离，不靠模型互相避让。
+7. **派生字段由工具算，不由模型声明。** 计数、耗时、token、文件清单、push_ready 都从 git、runner 和数据库算出。
+8. **交付结果由工具渲染。** 模型只补充判断类内容（next steps），不手写格式。
+9. **gate 一个不放宽。** 新命令内部调用现有的 validator 和 gate，旧命令保留。
 
-## 4. 六个工作流
+## 4. 八个工作流
 
 ### A. Stage 边界：`stage-start` 和 `stage-complete`
 
@@ -370,6 +376,74 @@ understanding 和 claim、方案选择、AC 的写法、写代码、决策分类
 - C4 的 lint 再加一条：执行卡里的代码块只允许出现 pipeline 自己的命令（`artifact_cli.py`、`pipeline_test.py`、`spawn_prompt.py`）。出现多行 shell 配方（例如现在 deliver.md 里计算 BASE_REF 和 DIFF_LINES 的那段），就说明有机械工作还留在文档里，必须先改成工具。
 - D 的度量工具把"机械工作调用数"作为一项固定指标。现在 5 个 run 里这几类调用分别是 51、28、42、123、159 次，占 Bash 调用的 59% 到 67%。改完后每个 run 应该只剩：每个 stage 的 `stage-start` 和 `stage-complete`（8 个 stage 共 16 次）、`verify`/`regression`/`recheck` 约 4 次、`tdd` 约 10 次，合计不超过 30 次。
 
+### G. 完成条件先行：验证要有终点
+
+**现状问题**（来自一次没走 pipeline 的直接修复）
+- 第一版被 Red Team 打穿，重写一版，这一步是对的。
+- 之后开始用 fuzz"证明它完美"：每轮 6 万条随机命令、每条对照真实 bash，一次调用 4 到 5 分钟，前后跑了将近 10 轮（bash fuzz 7 个 seed，路径 fuzz 3 个 seed），超过 40 分钟。
+- 该停的信号出现了没停：重写后的 fuzz 已经找不到新问题，这本来就是结束条件，却又往字母表里加片段再跑。
+- 浪费了一轮：加字母表用的 `sed` 在 macOS 上转义没生效，那一轮跑的还是旧字母表，没被发现。
+- mutation 测试重复 4 遍：脚本一开始没有隔离出要验证的改动，后来又被 `--maxfail` 提前截断。
+- 正确做法是先定结束条件：Red Team 找到的例子都写成回归测试，gate 测试全绿，fuzz 只跑一轮且没有新发现，然后提交，大约 15 分钟。
+
+根因：结束条件不是事先定的，而 heavy 验证是临时脚本，没有记录、没有收敛判断。工具看不出"这一轮和上一轮一模一样"，也看不出"改动没生效"。
+
+**G1. 退出契约：动手前写好，满足就停**
+- PLAN artifact 新增必填字段 `exit_criteria[]`，每一条都能由工具检查：
+
+  ```json
+  {"exit_criteria": [
+    {"id": "X1", "kind": "test", "ref": "backend/tests/test_x.py::test_red_team_case_1", "expect": "pass"},
+    {"id": "X2", "kind": "test", "ref": "backend/tests/test_security_hooks.py", "expect": "pass"},
+    {"id": "X3", "kind": "probe", "ref": "bash-fuzz", "expect": "no_new_findings"}]}
+  ```
+
+- 按 work type 给默认模板。例如 gate 或 parser 类的修复，默认就是"每个反例一条回归测试 + gate 测试全绿 + probe 一轮无新发现"。
+- `stage-complete`（build、test、deliver）根据 runner 的 evidence 逐条判定。全部满足时返回 `exit_criteria_met: true`，`next_action` 写明"结束条件已满足，不要再加验证，进入下一步"。
+- 契约只能因为新发现而扩展：一个新反例对应新增一条回归测试，并记录原因。不允许无缘无故挪球门。
+- **直接修复也用契约。** 新增轻量 profile `direct`，只有 contract、build、deliver 三步，不读 evaluate、think、plan 的文档。模型自己写契约，不需要问 XG。这样直接修复也能用上同一套 runner、gate、提交隔离（H）和交付摘要（E）。
+  - 什么时候必须用：会提交且改动超过 20 行的源码修改。由 commit gate 检查：当前 session 没有 run 就提交这类改动时 deny，并给出可以直接复制的 `run-create --profile direct` 命令。文档和 20 行以内的小改动不受影响。
+
+**G2. probe 模式：heavy 验证一轮无新发现即收敛**
+- fuzz、数据集回放、e2e 探针这类重验证，都通过 `pipeline_test.py --mode probe --name <名字> -- <命令>` 执行。约定 probe 输出 JSON，`findings[]` 里每条带稳定的 id，runner 跨轮去重。
+- runner 每轮记录：被测目标的内容摘要、probe 脚本和输入的摘要、耗时、新发现数。
+- 规则：
+  1. 一轮新发现为 0，这个 probe 就判定为**已收敛**。
+  2. 已收敛的 probe，在目标和 probe 都没变的情况下再跑，直接返回上次结果，耗时为 0，并提示"目标和探针都没变"。macOS 上 `sed` 没生效的那一轮，会在这里马上暴露出来，而不是白跑 5 分钟。
+  3. 目标没变、只扩展了 probe（例如加字母表），允许再跑一轮。这一轮仍然没有新发现，就是最终收敛；之后再扩展，必须先有新发现。也就是说，收敛后最多多跑一轮。
+  4. 在 pipeline 里，契约中的 probe 条目以收敛结果为准，收敛后 `stage-complete` 不再接受这个 probe 的新轮次作为证据。
+- **mutation 模式**：`pipeline_test.py --mode mutation --mutations <spec.json>`。在隔离的 worktree 里（HEAD + 本 session 改动的文件 + 变异）执行，一次调用批量跑完所有变异，固定 `--maxfail=0`，报告每个变异让哪些测试变红。不碰共享工作区，并行 session 不受影响，也不会出现"没隔离出要验证的改动"或被 `--maxfail` 截断的问题。
+
+**G3. 度量**
+- D 的工具记录"结束条件满足的时间点"和"满足之后的验证类调用数"。目标是 0。
+
+### H. 并行 session 的提交隔离
+
+**现状问题**
+- 所有 session 共用 `swarmai` 这一个工作区和一个 git index，直接在 main 上工作。
+- 今天我提交这份方案时，其他 session 已经暂存了 `artifact_cli.py` 和 `test_artifact_cli_run_commit.py`，还改了 `security_hooks.py` 和 `test_reviewed_paths_multirepo.py`，只能用 pathspec 只提交自己的文件。
+- `48d377ec` 自己写了 `commit_mine.py`，用临时 index 只提交本 run 的改动，提交相关调用 12 次，其中 R1 commit gate 拒绝 4 次。5 个 run 里 `git add` 和暂存检查共 42 次。
+- `48d377ec` 在澄清问题 Q2 里专门选了一个方案来绕开 `bfd8b9d3` 暂存的 `TabView`、`turnView`，靠模型自己协调。
+- `adversarial_commit_gate` 把整个 index 当作待提交集合，别的 session 暂存的文件也要求被 review 覆盖（deliver.md 里有一大段专门解释这个问题）。
+
+除了慢，还有正确性风险：
+1. `git commit -- <file>` 提交的是工作区里整个文件，两个 session 改了同一个文件时，别人改了一半的代码会混进你的 commit。
+2. 测试跑在别的 session 改了一半的代码上，出现的失败既不是回归也不是 pre-existing，会被误判。
+3. 共享 index 被反复写，模型要花调用去检查和清理。
+
+**方案一（推荐先做，符合"只在 main 上直接提交、不建分支"的现有规则）**
+- **H1. 文件认领。** 一个 session 第一次写某个文件时认领它，登记在 `~/.swarm-ai/state/file_claims.json`（路径 → session_id、run_id、认领时间）。另一个 session 再写这个文件时，PreToolUse 拦下（Write、Edit，以及已经能识别的 Bash 写入），deny 消息写明谁在改、从什么时候开始，以及可选的做法。认领在 run-commit 后释放；session 结束或 COLD 超过 1 小时自动过期。这从源头上避免了同一文件的改动混在一起。
+- **H2. 私有 index 提交。** `run-commit` 用私有的 `GIT_INDEX_FILE`：以 HEAD 为基础，只加入本 run 的文件，在这个 index 上提交；提交后只刷新共享 index 里这些路径的条目，别的 session 暂存的内容原样保留。这就是把 `48d377ec` 临时写的 `commit_mine.py` 做成正式工具。`direct` profile 用同一个命令。
+- **H3. gate 只看本次提交的路径。** `adversarial_commit_gate` 的待提交集合改为"本次提交的 pathspec ∩ 私有 index"，不再是整个共享 index。别的 session 暂存的文件不再要求被 review 覆盖。
+- **H4. 测试归因。** runner 发现失败的测试涉及被其他 session 认领的文件时，标注为"其他 session 正在改"，不计入回归，也不需要模型去排查。
+- 剩下的限制：测试仍然会看到其他 session 在别的文件里尚未提交的改动。H4 能正确标注这类失败，但不能完全隔离。
+
+**方案二（彻底隔离，需要 XG 决定是否放宽规则）**
+- 每个 run 在自己的 git worktree 里工作（本地临时分支，不 push），run-commit 时 rebase 到最新的 main 并 fast-forward 落地，最终 commit 仍然直接在 main 上。
+- 好处：每个 run 有独立的工作区和 index，测试只跑自己的代码；两个 run 改了同一处时，冲突在落地时显式出现，而不是悄悄混在一起。
+- 代价：AGENTS.md 写的是"Commit directly to main — never auto-branch"，需要 XG 同意"本地临时分支、不 push"不算违反；`desktop/node_modules` 要软链到主工作区；`Projects/SwarmAI` 这个 symlink 指向主工作区，`files_touched`、Canvas 链接和 DDD 路径都要能识别 worktree 路径。
+- 建议：先做方案一，跑一段时间后用 D 的数据判断是否需要方案二。
+
 ## 5. 验收指标
 
 | 指标 | 现在（实测） | 目标 |
@@ -387,24 +461,31 @@ understanding 和 claim、方案选择、AC 的写法、写代码、决策分类
 | 完成摘要里的 token 花费 | 模型估算（例如 635,000） | 来自 `token_usage` 的实测值，含美元 |
 | 完成摘要可点击的文件 | 0（整块在代码块里） | 所有改动文件和 REPORT.md 都能点开；修改过的文件打开即是 diff |
 | 完成摘要的生成方式 | 模型按模板手写 | CLI 渲染，模型原样转发，只补 next steps |
+| 结束条件满足后的验证类调用 | 一次直接修复里 fuzz 收敛后又跑了多轮，超过 40 分钟 | 0；同一 probe 收敛后最多多跑一轮 |
+| mutation 测试的重复执行 | 同一验证重复 4 遍 | 一次调用批量跑完 |
+| 每个 run 的提交和暂存相关调用 | `git add`/暂存检查 42 次（5 个 run 合计）；`48d377ec` 提交相关 12 次 | 只有一次 `run-commit` |
+| 混进别的 session 改动的 commit | 无法检测 | 0（文件认领 + 私有 index） |
 
 "峰值上下文"和"总时长"两行的目标是估算，需要用 D 的工具在改完后的前 5 个 run 上验证。
 
 ## 6. 实施顺序
 
 ```
-Phase 0  D 度量工具（小，先做，拿到基线）
-Phase 1  A stage-start / stage-complete / 结构化错误 / record schema   ┐ 可以并行，
-Phase 1' B pipeline_test.py / 基线缓存 / test gate                     ┘ 改的文件不重叠
-Phase 1" E 交付摘要（和 A 放在同一次 run：都改 artifact_cli.py 的完成分支）
-Phase 2  C 文档三层化 + 规则保全检查 + 大小 lint（依赖 A、B、E 的新命令）
+Phase 0   D 度量工具（小，先做，拿到基线）
+Phase 1   run ①：A + E + G1（退出契约、direct profile）+ H2（私有 index 提交）  ┐ 可以并行，
+          主要改 artifact_cli.py、pipeline_validator.py、prompt_builder.py、       │ 改的文件
+          MarkdownRenderer.tsx                                                     │ 不重叠
+Phase 1'  run ②：B + G2（probe、mutation 模式）+ H1、H3、H4（认领 gate、          │
+          commit gate 改用本次路径、测试归因）                                      ┘
+          主要改新的 pipeline_test.py、security_hooks.py、hook_builder.py
+Phase 2   C 文档三层化 + 规则保全检查 + 大小 lint（依赖前两次 run 的新命令）
 ```
 
-F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动暂存、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。
+F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字段、`stage-start` 返回的改动范围和专家清单、自动暂存、自动遥测随 A 一起做；测试和基线随 B；token 实测随 E。F4 的执行卡 lint 随 C。G 和 H 按改动的文件拆进上面两次 run。H 的方案二（worktree 隔离）不在本轮范围内，等 XG 决定。
 
 E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完成分支返回 `_display_block`、新增 `run-summary`）、`prompt_builder.py`（注入 `SWARM_APP_SESSION_ID`）、`MarkdownRenderer.tsx`（`#base=` 片段）、`stages/complete.md`（改为原样转发）。
 
-每个 phase 走一次 pipeline run（full profile）。A 和 B 可以在两个 tab 里并行：A 改的是 `artifact_cli.py`、`pipeline_validator.py`，B 改的是新脚本、`security_hooks.py`、`hook_builder.py`，文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。A 和 E 要等 `ba1c8a22` 把它在 `artifact_cli.py` 上的改动提交之后再开始。
+每个 phase 走一次 pipeline run（full profile）。run ① 和 run ② 可以在两个 tab 里并行，改的文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。run ① 要等 `ba1c8a22` 把它在 `artifact_cli.py` 上的改动提交之后再开始；run ② 改 `security_hooks.py`，开始前也要确认没有其他 session 正在改这个文件（H 落地之前，这一步只能人工确认）。
 
 ## 7. 风险与对策
 
@@ -416,6 +497,11 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 | 基线 worktree 和真实环境有差异 | 只用来判断失败测试的归属，不用来宣告通过；复用同一个 venv；缓存按 sha 作键。 |
 | test gate 拖慢 TDD 循环 | TDD 通过 runner 的 `tdd` 模式执行，不做选择也不分片，开销与直接跑 pytest 相当；gate 只在当前 session 有运行中的 run 时生效；deny 消息给出可以直接执行的 runner 命令。 |
 | 兄弟 skill 依赖旧命令 | 旧命令全部保留；`test_advance_continuation` 的兄弟 skill 契约不变。 |
+| 退出契约写得太松，验证不够就停了 | 按 work type 给默认模板（例如 gate 类修复必须有反例回归测试和一轮 probe）；Gate-2 的专家仍然会审查契约是否覆盖了需求。 |
+| probe 的"无新发现"依赖 probe 自己去重 | 约定 findings 带稳定 id，由 runner 跨轮去重，不信任 probe 自报的计数。 |
+| `direct` profile 给小修复增加负担 | 只有会提交且超过 20 行的源码改动才需要；创建由模型自己完成，一条命令，不问 XG。 |
+| 文件认领造成死等 | session 结束或 COLD 超过 1 小时自动释放；deny 消息写明是谁认领的、什么时候开始的；认领只限制写，不限制读和测试。 |
+| 私有 index 提交后共享 index 不一致 | 提交后只刷新本次提交路径在共享 index 里的条目，并用测试覆盖"别的 session 已暂存的内容在提交后保持不变"。 |
 | 测试 gate 在 runner 出 bug 时卡死整个 run | `SWARM_TEST_GATE_FORCE=1` 可以放行并记日志；runner 自身有一套独立测试，作为 B 的验收条件之一。 |
 | 工具计算的 `push_ready` 与模型判断不一致 | 工具算出的是上限：工具算出 false 时模型不能改成 true；工具算出 true 时，模型仍然可以带着理由改成 false。 |
 | 缓存命中掩盖了环境变化（依赖升级、conftest 改动） | 缓存键里加入 `conftest.py`、`pyproject.toml`、`package-lock.json` 和 venv 的摘要。 |
@@ -431,6 +517,8 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 - `test_security_hooks.py:601`：governance 层级。
 - `test_artifact_cli_schema.py`：扩展到所有 stage 的 artifact 和 record。
 - E 新增：`render_delivery_summary_md` 的纯函数测试（含注入中和、截断、无 session 时标注估算）；前端 `MarkdownRenderer` 的 `#base=` 片段测试（非法 ref 被丢弃）；`run-create` 读取 `SWARM_APP_SESSION_ID` 的测试。注意 conftest 会剥掉 `SWARM_*` 变量，测试里要用 `monkeypatch.setenv` 设置。
+- G 新增：`exit_criteria` 的 schema 和逐条判定测试；probe 收敛规则测试（无新发现即收敛、目标和探针都没变时返回缓存、扩展后最多多一轮）；mutation 模式不修改共享工作区的测试。
+- H 新增：文件认领的冲突 deny 和过期释放测试；私有 index 提交后，别的 session 已暂存的内容不变的测试；`adversarial_commit_gate` 改用本次路径后，原有的覆盖测试（`test_reviewed_paths_multirepo.py` 等）要同步更新。
 
 ## 9. 明确不做
 
@@ -438,3 +526,4 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 - 不动 autocompact（另一个 session 在做）。
 - 不靠 prose 劝模型"并行一点"：减少需要的步数比劝说可靠。
 - 不删旧 CLI 命令。
+- 本轮不做 H 的方案二（worktree 隔离），等 XG 决定是否放宽"不建分支"的规则。
