@@ -295,21 +295,77 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   filing with no backlink/graph; divergent copies per view.
 
 ### Surface 6 — Agent panel / tool-call & run visibility (AI-native)
-- **Convergence:** Claude/ChatGPT tool-call cards · Cursor/Windsurf agent loop ·
+- **Convergence:** Claude/ChatGPT tool calls · Cursor/Windsurf agent loop ·
   OpenHands · Continue.dev — the agent's actions (tool calls, file edits, terminal
-  runs, sub-agent spawns) render as a legible, collapsible STREAM of typed cards,
-  each showing intent + status + result, expandable for detail.
+  runs, sub-agent spawns) render as a legible, typed STREAM, each action showing
+  intent + status + result, expandable for detail. Chat products already fold a
+  finished REASONING phase behind one line (e.g. ChatGPT's "Thought for Ns") and keep
+  the answer outside it; this surface extends that fold to finished WORK segments,
+  with a summary that names the effect rather than the duration.
 - **Why:** an autonomous agent is opaque by default; trust requires legibility. A
-  typed action-card stream turns an opaque loop into an auditable one.
-- **Invariants:** (1) each agent action = a typed card (tool name + args summary +
-  status + result), collapsible; detail on demand. (2) Live status per action
-  (running / done / failed) driven by real events. (3) Human-in-the-loop affordances
-  land IN the stream, in-band (approve / stop / answer) — never a passive panel the
-  user must dig out. (4) Long/nested work (sub-agents) is summarized, expandable, not
-  dumped.
-- **Anti-patterns:** raw log dump as the primary view; a decision the agent needs
-  routed to an async panel instead of the current channel; no stop/intervene; status
-  that lies (frontend guess vs real state).
+  typed action stream turns an opaque loop into an auditable one. But legible is not
+  equally visible: a long turn produces far more process than answer, and if visual
+  weight follows volume, the machinery buries the two things the user came for —
+  where the work stands, and what it produced.
+- **Attention moves across the turn — weight follows the user's current question,
+  not the data volume.** Over one turn the user tends to ask four questions in order,
+  and the surface re-ranks itself for each:
+  1. *Did it understand me?* (align) — the agent's restatement of the intent, or its
+     first thought, leads. This is the cheapest moment to correct course.
+  2. *Where is it, and what is it doing now?* (delegate) — position in the plan plus
+     the one current action lead; finished steps and tool detail recede.
+  3. *Is the result good?* (accept) — once done, the result dominates and the whole
+     process collapses above it.
+  4. *How did it get there?* (retro) — on demand only: the user drills plan stage →
+     segment → step. Nothing at this depth is in the default view.
+- **Invariants:** (1) each action is a TYPED step (tool name + args summary + status
+  + result), but a step is not its own container: adjacent steps group into one
+  segment, a finished segment folds to a single summary line, and only the LIVE work
+  is a bordered region — parallel live work (several sub-agents) shares that ONE
+  region, one row per agent. A segment folds when the next one starts or the user
+  scrolls past it, never under the reader, and folding keeps the bottom pin and the
+  scroll position (Surface 1 #1, Motion). A page of equal-weight cards is the failure
+  this invariant exists to prevent. (2) Live status per action (running / done /
+  failed / needs-you) driven by real events. (3) Human-in-the-loop affordances land
+  IN the stream, in-band (approve / stop / answer) — never a passive panel the user
+  must dig out; a needs-you step outranks the live work as the single focus, and an
+  approval shows the exact action being approved. (4) Long/nested work (sub-agents)
+  is summarized, expandable, not dumped.
+- **Principles (each names the decision it serves):**
+  - **One focus at a time** — Check 4 applied across time: the live segment while
+    working, the result once done, and a step that needs the user above both. If every
+    segment is boxed, nothing reads as "now".
+  - **Progress is position in the plan, not effort spent** — "stage 4 of 8" answers
+    "how far along, how much left"; "92 steps" answers neither. Step counts belong
+    behind disclosure.
+  - **Summaries name effects, not effort** — a folded segment says what changed or
+    what was found ("edited A and B"), not how many reads, commands and thoughts it
+    took.
+  - **A finding sits with the work that produced it** — text the agent writes between
+    steps is that segment's conclusion: tighter to the work above than to what follows
+    (Proximity; Part 2 #9). Interim notes are a lower tier than the final answer.
+  - **One fact, one representation** — Check 2 applied to live state: one spinner,
+    one elapsed timer, one position-in-plan. Two indicators that disagree (a turn
+    total in one place, a segment total in another) cost more trust than either
+    earns.
+  - **Color only for what needs action** — failed and needs-you get color; done gets
+    a neutral mark. When every finished step is green, the one red
+    step stops standing out.
+  - **Fold, never delete** — the process stays auditable at three depths (plan stage
+    → segment → step), Part 4's Depth applied over time: collapsed by default, never
+    removed.
+- **Anti-patterns:** raw log dump as the primary view; every finished segment a
+  bordered, filled card at equal weight (machinery outweighs the milestones and the
+  answer); a live region expanded by default into raw tool arguments (an approval
+  request is the exception — it shows the exact action); interim notes
+  styled identically to the final answer; two progress indicators whose numbers
+  disagree; a decision the agent needs routed to an async panel instead of the
+  current channel; no stop/intervene; status that lies (frontend guess vs real
+  state).
+- **The tell:** you are giving finished work the same border and weight as the work
+  in progress, or a count ("12 steps · 7 thoughts") is the headline of a summary.
+  Ask which of the four questions the user is asking right now, and give weight only
+  to the answer to that one.
 
 ### Surface 7 — Infinite Canvas / Whiteboard (spatial surface)
 - **Convergence:** tldraw · Excalidraw · Figma · Penpot — an infinite pannable/
@@ -415,7 +471,7 @@ action/observation stream · Continue.dev). Two recipes that make "never diverge
 **(a) sender-scoped deltas** — each delta is tagged with its producer so a sub-agent's
 live tokens are never concatenated onto the main agent's final event (Continue.dev).
 **(b) tense-template status** — each tool/action declares its state as `wouldLikeTo` /
-`isCurrently` / `hasAlready` so the card's live label derives from an explicit lifecycle,
+`isCurrently` / `hasAlready` so the step's live label derives from an explicit lifecycle,
 not a guessed boolean (Continue.dev). *Anti-pattern:* one mutable buffer that both
 the live stream and the final authority write to (they drift; the classic reconcile
 race); a frontend boolean guessing "done" instead of a durable event marking it.
