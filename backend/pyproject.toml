@@ -13,7 +13,9 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     # Claude Agent SDK
-    "claude-agent-sdk==0.2.109",
+    # 0.2.168 bundles Claude Code CLI 2.1.301; Opus 5.5 needs CLI >= 2.1.280
+    # (0.2.109's bundled 2.1.190 rejects it with API Error 400).
+    "claude-agent-sdk==0.2.168",
     # SQLite
     "aiosqlite>=0.20.0",
     # Authentication
