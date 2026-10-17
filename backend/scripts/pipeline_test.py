@@ -1235,8 +1235,69 @@ def _targets_from_nodeids(nodeids: list[str]) -> dict:
     return t
 
 
+# Per-sha baseline worktrees are a cache, and every commit makes a new HEAD, so
+# without eviction they pile up (a full checkout each). Keep the most recently used
+# BASELINE_KEEP; evict an older one only when it has been idle longer than any run
+# can last (MAX_DEADLINE + margin) AND its per-sha lock is free — so a worktree
+# another session is creating or running tests in is never removed.
+BASELINE_KEEP = 2
+BASELINE_IDLE_S = MAX_DEADLINE + 1800.0
+
+
+def _baseline_last_used(base: Path, sha: str) -> float:
+    for p in (base / f"{sha}.used", base / sha):
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            continue
+    return 0.0
+
+
+def _evict_baselines(repo: Path, base: Path, keep_sha: str | None,
+                     keep: int = BASELINE_KEEP, idle_s: float = BASELINE_IDLE_S,
+                     now: float | None = None) -> list[str]:
+    """Remove baseline worktrees beyond the ``keep`` most recently used. Returns the
+    evicted shas. Never touches ``keep_sha``, a worktree used in the last ``idle_s``
+    seconds, or one whose lock is held. Also drops the evicted sha's outcome file."""
+    if not base.is_dir():
+        return []
+    now = time.time() if now is None else now
+    shas = [d.name for d in base.iterdir()
+            if d.is_dir() and re.fullmatch(r"[0-9a-f]{40}", d.name) and d.name != keep_sha]
+    shas.sort(key=lambda s: _baseline_last_used(base, s), reverse=True)
+    evicted = []
+    for sha in shas[max(0, keep - (1 if keep_sha else 0)):]:
+        if now - _baseline_last_used(base, sha) < idle_s:
+            continue
+        fd = _try_lock(base / f"{sha}.lock", 0)
+        if fd is None:
+            continue  # being created or used right now
+        try:
+            _remove_worktree(repo, base / sha)
+            for p in (base / f"{sha}.used", base.parent / f"baseline-{sha}-v{RUNNER_VERSION}.json"):
+                p.unlink(missing_ok=True)
+            evicted.append(sha)
+        finally:
+            _unlock(fd)
+        (base / f"{sha}.lock").unlink(missing_ok=True)
+    return evicted
+
+
+def _mark_baseline_used(ctx, base: Path, sha: str) -> None:
+    (base / f"{sha}.used").touch()
+    try:
+        gone = _evict_baselines(ctx.repo, base, keep_sha=sha)
+    except OSError as exc:  # eviction is housekeeping; never fail a test run on it
+        ctx.warnings.append(f"baseline eviction skipped: {exc}")
+        return
+    if gone:
+        ctx.warnings.append(f"evicted {len(gone)} old baseline worktree(s)")
+
+
 def _ensure_worktree(ctx, sha: str, time_left: float) -> Path | None:
-    """Reusable detached worktree ``<cache>/test-baseline/<sha>`` (created once)."""
+    """Reusable detached worktree ``<cache>/test-baseline/<sha>`` (created once).
+
+    Each use stamps ``<sha>.used`` and evicts idle older shas (``_evict_baselines``)."""
     base = ctx.cache / "test-baseline"
     wt = base / sha
     fd = _try_lock(base / f"{sha}.lock", min(30.0, max(0.0, time_left - 2)))
@@ -1245,6 +1306,7 @@ def _ensure_worktree(ctx, sha: str, time_left: float) -> Path | None:
         return None
     try:
         if (wt / ".git").exists() and (wt / "backend").is_dir():
+            _mark_baseline_used(ctx, base, sha)
             return wt
         if wt.exists():  # half-created dir inside our cache
             _remove_worktree(ctx.repo, wt)
@@ -1259,6 +1321,7 @@ def _ensure_worktree(ctx, sha: str, time_left: float) -> Path | None:
             _PRIVATE_WT.pop(wt, None)
             return None
         _PRIVATE_WT.pop(wt, None)  # complete: a reusable per-sha cache from here on
+        _mark_baseline_used(ctx, base, sha)
         return wt
     finally:
         _unlock(fd)
