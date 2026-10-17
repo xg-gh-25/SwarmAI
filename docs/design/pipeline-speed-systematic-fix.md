@@ -91,12 +91,13 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 一次返回：
 - 执行卡路径；
-- 这个 stage 需要消费的上游 artifact 摘要（按 STAGE_ROUTING，带 id，可以直接填进 `consumed_artifacts`）；
+- 这个 stage 需要消费的上游 artifact 摘要（按 STAGE_ROUTING，带 id）；
 - PLAN 的 AC 列表；
 - 当前的 `files_touched` 和 `required_experts`；
-- artifact 和 record 的**可直接通过校验的示例**。
+- artifact 和 record 的**可直接通过校验的示例**；
+- review 和 deliver 阶段额外返回：改动文件（区分新增和修改）、增删行数、是否触发大 diff 升级、本次要派的专家清单和每位专家已填好的 prompt（见 F1）。
 
-它替代现在进入 stage 时的 discover、run-get、schema 和读文档这几次调用。
+它替代现在进入 stage 时的 discover、run-get、schema、git diff、spawn_prompt 和读文档这几类调用。
 
 **A3. 统一的结构化错误（所有命令共用一个格式）**
 
@@ -177,7 +178,7 @@ perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipelin
 - 每片开启 faulthandler：超时的测试自动附带卡住位置的栈。`48d377ec` 里手工做的 faulthandler 排查由工具完成。
 
 **输出**
-- 紧凑 JSON：通过、失败、超时的计数，每个失败的 nodeid 附 10 行摘要。完整日志落盘到 `runs/<R>/evidence/tests-<layer>-<ts>/`。
+- 紧凑 JSON：通过、失败、超时的计数，每个失败的 nodeid 附 10 行摘要。完整日志落盘到 `runs/<R>/evidence/tests-<mode>-<ts>/`。
 - `stage-complete --stage test` 直接读这份 evidence 填 `layers`，模型不再手抄测试数字。
 
 **B2. 判断失败是不是之前就存在：HEAD 基线缓存**
@@ -244,7 +245,8 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 它对单个 run 输出：
 - 总时长、模型时间和工具时间的拆分；
 - 工具调用数、单调用响应占比；
-- 流程类调用数、`artifact_cli.py` 源码读取次数；
+- 流程类调用数、`artifact_cli.py` 源码读取次数、机械工作调用数（F1 各类）；
+- 测试类调用数和同一文件的最大重复次数；
 - 峰值上下文、测试执行时长、gate 拒绝次数。
 
 每个 run 结束时由 `run-report` 调用它，结果写进 METRICS.json。这样提速有数字为证，以后变慢也能马上看到。
@@ -269,7 +271,7 @@ python backend/scripts/pipeline_run_profile.py --run-id <R>
 | 运行时长 | `completed_at − created_at`，另附耗时最长的阶段（来自 `derived_stage_gaps`）。 |
 | 文件 | 对 `run.json.commits` 的每个 sha 执行 `git show --name-status` 和 `--numstat`，得到新增、修改、删除、重命名，以及每个文件的增删行数。没有 commit 的 run（被 gitignore 的项目）回退到 `files_touched` 加工作区状态。 |
 
-run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK 的 `env` 参数给 CLI 子进程注入 `SWARM_APP_SESSION_ID`。这是每个子进程各自的 env，不改全局 `os.environ`，符合 session 隔离规则。`run-create` 读取这个变量写入 run.json。
+run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK 的 `env` 参数给 CLI 子进程注入 `SWARM_APP_SESSION_ID`。这是每个子进程各自的 env，不改全局 `os.environ`，符合 session 隔离规则。`run-create` 读取这个变量写入 run.json。B3 的 test gate 也用这个关联判断当前 session 是否在 pipeline 里。
 
 **E2. 渲染：一个纯函数，一个出口**
 - 新增纯函数 `render_delivery_summary_md(run_state, eval_artifact, usage, file_changes)`。`run-update --status completed` 的返回里带上 `_display_block`，沿用 evaluate publish 已有的做法，单一 JSON 对象，不破坏解析。另加 `artifact_cli.py run-summary --run-id <R>`，可以随时重新渲染。
@@ -318,6 +320,7 @@ run 和 session 的关联：backend 在构建 `ClaudeAgentOptions` 时通过 SDK
 - 顺序按用户关心的先后排：结果和代价、我要的、做成了什么、AI 替我决定了什么、改了哪些文件、能不能放心用、看详情。
 - 过程信息（①到⑩各阶段、决策分类、token 分阶段）只放 REPORT，不在 chat 里占位置。
 - 文件表的图标：🆕 新增、✏️ 修改、🗑️ 删除、↪️ 重命名。排序是新增在前，然后按改动行数从多到少。
+- 实际 chat 里，文件名和 REPORT.md 都是可点击的链接。
 
 **E4. REPORT 同步**
 - REPORT 的 `原始意图` 改用 `run.json.intent`（用户原话）。`requirement` 作为"最终需求描述"另列。
@@ -401,7 +404,7 @@ F 不单独成一个 phase，它的各项已经落在 A、B、E 里：派生字�
 
 E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完成分支返回 `_display_block`、新增 `run-summary`）、`prompt_builder.py`（注入 `SWARM_APP_SESSION_ID`）、`MarkdownRenderer.tsx`（`#base=` 片段）、`stages/complete.md`（改为原样转发）。
 
-每个 phase 走一次 pipeline run（full profile）。A 和 B 可以在两个 tab 里并行：A 改的是 `artifact_cli.py`、`pipeline_validator.py`，B 改的是新脚本、`security_hooks.py`、`hook_builder.py`，文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。
+每个 phase 走一次 pipeline run（full profile）。A 和 B 可以在两个 tab 里并行：A 改的是 `artifact_cli.py`、`pipeline_validator.py`，B 改的是新脚本、`security_hooks.py`、`hook_builder.py`，文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。A 和 E 要等 `ba1c8a22` 把它在 `artifact_cli.py` 上的改动提交之后再开始。
 
 ## 7. 风险与对策
 
