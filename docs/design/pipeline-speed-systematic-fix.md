@@ -4,7 +4,7 @@ date: 2026-10-17
 created: 2026-10-17
 updated: 2026-10-17
 project: SwarmAI
-status: DESIGN — XG 已确认方向，按 §6 顺序实施
+status: DESIGN — XG 已确认方向，含 A-F 六个工作流，按 §6 顺序实施
 related: Opus 5.5 后 pipeline run 变慢（e4fc6ad4 / 2cb579ce / b3dd7ed9 / bfd8b9d3 / 48d377ec / ba1c8a22）
 author: Kiro（CLI transcript 取证 + 代码调研）
 ---
@@ -13,9 +13,22 @@ author: Kiro（CLI transcript 取证 + 代码调研）
 > 依据：2026-10-17 切到 Opus 5.5 之后的 5 个 run（`e4fc6ad4`、`2cb579ce`、`b3dd7ed9`、`bfd8b9d3`、`48d377ec`），数据来自 CLI transcript；当前 run `ba1c8a22` 作为补充。
 > 范围外：autocompact 阈值（另一个 session 在做）、模型选择、validator 规则本身的松紧（一条都不放宽）。
 
+## 0. 一页摘要
+
+| 工作流 | 解决什么 | 怎么解决 |
+|---|---|---|
+| A. Stage 边界 | 每个 stage 收尾要 3 到 5 次调用；报错看不懂，就反复读 `artifact_cli.py` 源码 | `stage-start` 一次拿齐进入所需的信息；`stage-complete` 一次完成校验、写盘和 advance；报错带错误码、字段路径和期望值片段 |
+| B. 测试 | 碎片化（同一文件最多重跑 35 次）和范围过大（一次跑 583 秒被杀）；现场追 hang | 测试准则 8 条；`pipeline_test.py` 作为唯一入口，4 种模式，按内容摘要缓存；HEAD 基线判断失败是否之前就存在；gate 拦截直接调用测试命令 |
+| C. 文档 | stage 文档整篇读入，上下文涨到 80 到 90 万 token | 执行卡（最多 5K）、参考、历史三层；规则 ID 保全检查；大小 lint |
+| D. 度量 | 提速与否没有数字 | `pipeline_run_profile.py`，每个 run 结束自动记录指标 |
+| E. 交付摘要 | 完成摘要靠模型手写，放在代码块里点不开；token 是估算的；看不到原始意图和新增文件 | CLI 用实测数据渲染，模型原样转发；文件和 REPORT.md 可以点开在 Canvas 查看，修改过的文件直接打开 diff |
+| F. 全流程机械工作 | 每个 run 有 28 到 159 次 Bash 调用是模型手工做的机械工作 | 每类机械工作指定一个工具接手；派生字段由工具计算；lint 防止 shell 配方回到文档里 |
+
+实施顺序：D → A+E（同一次 run）和 B 并行 → C。gate 一条不放宽，旧命令全部保留。
+
 ## 1. 问题一句话
 
-pipeline 把本该由工具做的机械工作交给了模型：选测试、判断失败是不是之前就有、拼 stage 记录、记住 validator 规则。模型每做一步机械工作，就要一次约 10 秒的串行往返，还要往上下文里加内容。
+pipeline 把本该由工具做的机械工作交给了模型：选测试、判断失败是不是之前就有、拼 stage 记录、计算改动范围、生成专家 prompt、记住 validator 规则、写完成摘要。模型每做一步机械工作，就要一次约 10 秒的串行往返，还要往上下文里加内容。
 
 ## 2. 实测证据
 
@@ -25,6 +38,9 @@ pipeline 把本该由工具做的机械工作交给了模型：选测试、判�
 | 反复读 `artifact_cli.py` | 7610 行的文件，每个 run 被 `sed`、`grep` 读 13 到 54 次 | validator 报错是自由文本，不附示例；stage 记录的字段（stage_doc_consumed、token_cost、decisions、consumed_artifacts、push_ready 等）只写在 prose 里，没有 schema。 |
 | 每个 stage 收尾 3 到 5 次调用 | 写 `/tmp/*.py` 拼 JSON，再 publish、run-update、advance，失败了再改再提交 | 收尾被拆成 3 条命令，每条做一部分校验；`advance` 校验的是"最后一个已完成的 stage"，不是刚做完的那个；stage 文档写 publish→advance，INSTRUCTIONS 又说必须先 run-update，两边互相矛盾。 |
 | 上下文一个 run 内涨到 80 到 90 万 token | stage 文档被整篇读进来：deliver 73K 字符，evaluate、review、build 各约 55K，INSTRUCTIONS 95K，REVIEW_PATTERNS 112K | INSTRUCTIONS §3c 要求"BLOCKING: Read ALL files"；`advance` 的 next_action 写的是"execute IN FULL"；规则、事故史和示例都写在同一个文件里。 |
+| 测试碎片化 | pytest 114 次、前端测试和构建 80 次，一半以上只跑 1 个文件；`turnView.test.ts` 重跑 35 次 | 每次小修改后都单独跑一次测试；没有统一入口，也没有缓存。详见 B。 |
+| 机械工作由模型手做 | 每个 run 28 到 159 次 Bash 调用，占 Bash 调用的 59% 到 67% | 文档里写的是 shell 配方和公式，没有对应的工具。详见 F。 |
+| 完成摘要不可用 | 文件和 REPORT 点不开，token 是估算值，没有原始意图 | 摘要由模型手写，放在代码块里；run 和 session 没有关联。详见 E。 |
 | 调用串行 | 超过 90% 的响应只带一个 tool call，每步 p50 8 到 11 秒 | 模型行为，没法直接改。能做的是减少需要的步数。 |
 
 ## 3. 设计原则
@@ -33,7 +49,9 @@ pipeline 把本该由工具做的机械工作交给了模型：选测试、判�
 2. **每个边界只需一次调用。** 进入 stage 一次（`stage-start`），离开 stage 一次（`stage-complete`），跑测试一次（`pipeline_test.py`）。
 3. **契约要机器可读，并且只有一份。** schema、示例和报错来自同一个定义；文档只引用它，不再复述。
 4. **文档分层。** 执行卡（每次都读，最多 5K）、参考（按需读）、历史（运行时不读）。大小由 lint 卡住。
-5. **gate 一个不放宽。** 新命令内部调用现有的 validator 和 gate，旧命令保留。
+5. **派生字段由工具算，不由模型声明。** 计数、耗时、token、文件清单、push_ready 都从 git、runner 和数据库算出。
+6. **交付结果由工具渲染。** 模型只补充判断类内容（next steps），不手写格式。
+7. **gate 一个不放宽。** 新命令内部调用现有的 validator 和 gate，旧命令保留。
 
 ## 4. 六个工作流
 
@@ -49,10 +67,10 @@ python backend/scripts/artifact_cli.py stage-complete \
 `--data` 文件包含两部分：
 
 ```json
-{"artifact": {...}, "record": {"token_cost": 0, "decisions": [], "consumed_artifacts": []}}
+{"artifact": {...}, "record": {"decisions": [{"description": "...", "classification": "taste", "reasoning": "..."}]}}
 ```
 
-`stage_doc_consumed`、`status=completed`、`artifact_id` 由命令自己填，不需要模型写。
+模型只写判断类内容。`stage_doc_consumed`、`status=completed`、`artifact_id`、`token_cost`、`consumed_artifacts` 以及 F2 列出的其他派生字段都由命令自己填。
 
 执行顺序：先全部校验，校验全过才写盘。
 
@@ -360,7 +378,6 @@ understanding 和 claim、方案选择、AC 的写法、写代码、决策分类
 | 单个 run 读进的 pipeline 文档 | 29 万到 46 万字符 | 不超过 6 万字符 |
 | 峰值上下文 | 63 万到 90 万 token | 不超过 45 万 token |
 | bugfix / full 总时长 | 21 到 147 / 54 到 110 分钟 | bugfix 不超过 40 分钟，full 不超过 70 分钟 |
-
 | 模型手工做的机械工作（F1 各类合计） | 每个 run 28 到 159 次 | 不超过 30 次，且基本都是 pipeline 自己的命令 |
 | 每个 run 的测试类调用 | 10 到 75 次；同一文件最多重复 35 次 | 不超过 15 次；输入没变的重跑命中缓存 |
 | 手工排查 hang | `48d377ec` 31 次调用、48 分钟 | 0（runner 报告栈信息，gate 拦手工排查） |
@@ -368,14 +385,14 @@ understanding 和 claim、方案选择、AC 的写法、写代码、决策分类
 | 完成摘要可点击的文件 | 0（整块在代码块里） | 所有改动文件和 REPORT.md 都能点开；修改过的文件打开即是 diff |
 | 完成摘要的生成方式 | 模型按模板手写 | CLI 渲染，模型原样转发，只补 next steps |
 
-最后两行时长指标是估算，需要用 D 的工具在改完后的前 5 个 run 上验证。
+"峰值上下文"和"总时长"两行的目标是估算，需要用 D 的工具在改完后的前 5 个 run 上验证。
 
 ## 6. 实施顺序
 
 ```
 Phase 0  D 度量工具（小，先做，拿到基线）
 Phase 1  A stage-start / stage-complete / 结构化错误 / record schema   ┐ 可以并行，
-Phase 1' B pipeline_test.py / 基线缓存 / scope gate                    ┘ 改的文件不重叠
+Phase 1' B pipeline_test.py / 基线缓存 / test gate                     ┘ 改的文件不重叠
 Phase 1" E 交付摘要（和 A 放在同一次 run：都改 artifact_cli.py 的完成分支）
 Phase 2  C 文档三层化 + 规则保全检查 + 大小 lint（依赖 A、B、E 的新命令）
 ```
@@ -394,7 +411,7 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 | 拆文档时规则丢失 | C3 的规则 ID 保全检查不全绿就不合入。 |
 | 测试截断后漏掉回归 | 截断列表显式写进 artifact；DELIVER 的完成审计必须看到 `skipped_for_budget`；CI 的 BVT 仍是兜底。 |
 | 基线 worktree 和真实环境有差异 | 只用来判断失败测试的归属，不用来宣告通过；复用同一个 venv；缓存按 sha 作键。 |
-| 新的 scope gate 误拦 TDD | 只在有活跃 run、且超过 8 个文件时拦；deny 消息给出可直接执行的替代命令。 |
+| test gate 拖慢 TDD 循环 | TDD 通过 runner 的 `tdd` 模式执行，不做选择也不分片，开销与直接跑 pytest 相当；gate 只在当前 session 有运行中的 run 时生效；deny 消息给出可以直接执行的 runner 命令。 |
 | 兄弟 skill 依赖旧命令 | 旧命令全部保留；`test_advance_continuation` 的兄弟 skill 契约不变。 |
 | 测试 gate 在 runner 出 bug 时卡死整个 run | `SWARM_TEST_GATE_FORCE=1` 可以放行并记日志；runner 自身有一套独立测试，作为 B 的验收条件之一。 |
 | 工具计算的 `push_ready` 与模型判断不一致 | 工具算出的是上限：工具算出 false 时模型不能改成 true；工具算出 true 时，模型仍然可以带着理由改成 false。 |
