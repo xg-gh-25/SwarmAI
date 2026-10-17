@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
-import { deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps } from './turnView';
+import { deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps, thoughtTail } from './turnView';
 import type { ToolUseContent } from '../../types';
 
 const tu = (id: string, summary: string, name = 'Bash', category = 'bash'): ContentBlock =>
@@ -117,10 +117,20 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(p.kind === 'process' && p.isLive).toBe(true);
   });
 
-  it('live row carries the LAST line of the newest thinking', () => {
+  it('live row carries the newest PART of the thinking, line breaks kept (it wraps, never replaces)', () => {
     const th = { type: 'thinking', thinking: 'First I read the config.\n\nThen compare the two thresholds.\n' } as ContentBlock;
     const p = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th], true).units[0];
-    expect(p.kind === 'process' && p.live?.thinking).toBe('Then compare the two thresholds.');
+    expect(p.kind === 'process' && p.live?.thinking).toBe('First I read the config.\n\nThen compare the two thresholds.');
+  });
+
+  it('thoughtTail keeps the newest text up to the cap, cut at a line boundary', () => {
+    const long = `${'old line\n'.repeat(80)}NEWEST thought here`;
+    const tail = thoughtTail(long, 120)!;
+    expect(tail.startsWith('…')).toBe(true);
+    expect(tail.endsWith('NEWEST thought here')).toBe(true);
+    expect(tail.length).toBeLessThanOrEqual(121);
+    expect(tail.slice(1).startsWith('old line')).toBe(true); // whole lines, no half word
+    expect(thoughtTail('  \n ')).toBeUndefined();
   });
 
   it('the live row shows a thought only while it is the newest step; notes stay in the stream', () => {
@@ -519,5 +529,53 @@ describe('groupSteps — adjacent reads of one file are one row', () => {
     const th = { type: 'thinking', thinking: 'hm' } as ContentBlock;
     const p = deriveTurnView([th, rd('a'), th, tx('x')], false).units[0];
     expect(p.kind === 'process' && summarizeProcess(p)).toMatchObject({ stepCount: 1, thinkingCount: 2 });
+  });
+});
+
+describe('deriveTurnView — sub-agent steps nest under their Agent step', () => {
+  const agent = (id = 'ag') => tu(id, 'Agent: Review spec', 'Agent', 'agent');
+  const sub = (id: string, parent = 'ag') =>
+    ({ ...(tu(id, `Reading /r/${id}.ts`, 'Read', 'read') as object), parentToolUseId: parent }) as ContentBlock;
+  const subRes = (id: string, parent = 'ag', isError = false) =>
+    ({ type: 'tool_result', toolUseId: id, isError, outcome: isError ? 'boom' : 'lines 1–9', parentToolUseId: parent }) as ContentBlock;
+
+  it('a sub-agent step is a child of the Agent step, never a main step or the turn boundary', () => {
+    const view = deriveTurnView([agent(), sub('s1'), subRes('s1'), sub('s2'), tr('ag'), tx('All good.')], false);
+    expect(view.units.map((u) => u.kind)).toEqual(['process', 'outcome']);
+    const p = view.units[0];
+    if (p.kind !== 'process') throw new Error('expected process');
+    expect(p.steps).toHaveLength(1);
+    const a = p.steps[0];
+    if (a.kind !== 'tool') throw new Error('expected tool');
+    expect(a.children?.map((c) => [c.block.id, c.status, c.result?.outcome])).toEqual([
+      ['s1', 'done', 'lines 1–9'], ['s2', 'done', undefined]]);
+    expect(summarizeProcess(p).stepCount).toBe(1);
+  });
+
+  it('children share a running or cut-off Agent fate unless their own result came back', () => {
+    const live = deriveTurnView([agent(), sub('s1'), subRes('s1', 'ag', true), sub('s2')], true).units[0];
+    const a = live.kind === 'process' ? live.steps[0] : undefined;
+    expect(a?.kind === 'tool' && a.status).toBe('pending');
+    expect(a?.kind === 'tool' && a.children?.map((c) => c.status)).toEqual(['error', 'pending']);
+    expect(live.kind === 'process' && live.live?.step?.block.id).toBe('ag');
+    const cut = deriveTurnView([agent(), sub('s1')], false).units[0];
+    const b = cut.kind === 'process' ? cut.steps[0] : undefined;
+    expect(b?.kind === 'tool' && [b.status, b.children?.[0].status]).toEqual(['unknown', 'unknown']);
+  });
+
+  it('live sub-agent progress attaches to its Agent step only while streaming', () => {
+    const progress = { ag: { parentToolUseId: 'ag', status: 'running', toolUses: 4, durationMs: 9000 } };
+    const live = deriveTurnView([agent()], true, progress).units[0];
+    expect(live.kind === 'process' && live.steps[0].kind === 'tool' && live.steps[0].progress?.toolUses).toBe(4);
+    const done = deriveTurnView([agent(), tx('x')], false, progress).units[0];
+    expect(done.kind === 'process' && done.steps[0].kind === 'tool' && done.steps[0].progress).toBeUndefined();
+  });
+
+  it('a persisted compact result (no content) gives a reloaded step its failure and outcome', () => {
+    const compact = { type: 'tool_result', toolUseId: 'a', isError: true, outcome: 'make: *** no rule' } as ContentBlock;
+    const p = deriveTurnView([tu('a', 'Running: make'), compact], false).units[0];
+    if (p.kind !== 'process' || p.steps[0].kind !== 'tool') throw new Error('expected tool step');
+    expect([p.steps[0].status, p.steps[0].result?.outcome]).toEqual(['error', 'make: *** no rule']);
+    expect(p.unrecoveredFailure?.block.id).toBe('a');
   });
 });

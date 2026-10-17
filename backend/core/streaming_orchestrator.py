@@ -765,6 +765,54 @@ class StreamingOrchestrator:
             "outcome": summarize_tool_result(tool_name, text, is_error),
         }
 
+    @staticmethod
+    def _subagent_progress_event(message: Any, task_parent: dict) -> "dict | None":
+        """A live ``subagent_progress`` event from an SDK Task* system message.
+
+        Without it a sub-agent run is silent in the chat: the main agent emits
+        nothing until the Agent tool returns, so the user cannot tell anything is
+        running (XG 2026-10-18: "不能把我的 chat experience 搞断流"). Keyed by
+        ``parentToolUseId`` — the Agent tool_use the sub-agent runs under — so
+        the UI nests it under that step. ``task_parent`` (task_id → parent id) is
+        per-turn state: TaskUpdatedMessage carries no tool_use_id of its own.
+        Not an ``assistant`` event, so it is never persisted.
+        """
+        from claude_agent_sdk import (
+            TaskNotificationMessage, TaskProgressMessage, TaskStartedMessage, TaskUpdatedMessage,
+        )
+
+        if not isinstance(message, (TaskStartedMessage, TaskProgressMessage,
+                                    TaskNotificationMessage, TaskUpdatedMessage)):
+            return None
+        task_id = getattr(message, "task_id", None)
+        parent = getattr(message, "tool_use_id", None) or task_parent.get(task_id)
+        if not parent:
+            return None  # a background task not tied to a step in this turn
+        if task_id:
+            task_parent[task_id] = parent
+        event: dict = {"type": "subagent_progress", "parentToolUseId": parent, "taskId": task_id}
+        if isinstance(message, TaskUpdatedMessage):
+            status = message.status or (message.patch or {}).get("status")
+            if not status:
+                return None
+            event["status"] = "stopped" if status == "killed" else status
+            return event
+        if isinstance(message, TaskNotificationMessage):
+            event["status"] = message.status
+            if message.summary:
+                event["summary"] = message.summary[:300]
+        else:
+            event["status"] = "running"
+        if getattr(message, "description", None):
+            event["description"] = message.description[:200]
+        if getattr(message, "last_tool_name", None):
+            event["lastToolName"] = message.last_tool_name
+        usage = getattr(message, "usage", None) or {}
+        if usage:
+            event["toolUses"] = usage.get("tool_uses")
+            event["durationMs"] = usage.get("duration_ms")
+        return event
+
     def _stall_event(self, text: str) -> dict:
         """A no-progress notice as the in-tab ``still_working`` status — NOT an
         ``assistant`` event: it describes the stream, so it must not be
@@ -1022,6 +1070,11 @@ class StreamingOrchestrator:
         _pending_completion: dict[str, str] = {}
         # tool_use_id → tool name, so a result can be summarized per tool.
         _tool_names: dict[str, str] = {}
+        # tool_use_id → the Agent tool_use it ran under (sub-agent steps only).
+        # Stamped on its live tool_result so the UI nests it under that step.
+        _tool_parent: dict[str, str] = {}
+        # SDK task_id → parent Agent tool_use id (TaskUpdatedMessage lacks one).
+        _task_parent: dict[str, str] = {}
         # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
         # Its successful result re-reads run.json and yields a persisted
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
@@ -1362,6 +1415,13 @@ class StreamingOrchestrator:
                         message.subtype, getattr(message, "data", None)
                     ):
                         yield _cev
+                else:
+                    # A sub-agent's lifecycle / progress: real work the user must see.
+                    _sa_ev = self._subagent_progress_event(message, _task_parent)
+                    if _sa_ev is not None:
+                        self._parent._last_progress_time = time.time()
+                        _progress.on_visible(self._parent._last_progress_time)
+                        yield _sa_ev
                 continue  # Don't forward other system messages
 
             # ── StreamEvent: token-by-token streaming ─────────────
@@ -1386,6 +1446,11 @@ class StreamingOrchestrator:
                             ):
                                 yield _ev
                             return
+                        if _dkey[0] is not None:
+                            # A sub-agent's text is not the main reply: the frontend
+                            # appends every text_delta to the main answer, and the
+                            # leak buffers below are keyed by index alone.
+                            continue
                         if _idx in _delta_leak_hidden:
                             continue  # rest of a leaked tool call — never shown
                         _prev = _delta_text_buf.get(_idx, "")
@@ -1418,7 +1483,8 @@ class StreamingOrchestrator:
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
                         self._parent._last_progress_time = time.time()  # real thinking
                         _progress.on_visible(self._parent._last_progress_time)  # shown to the user
-                        yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
+                        if _dkey[0] is None:  # a sub-agent's thinking is not the main turn's
+                            yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
                 elif event_type == "content_block_start":
                     block = event_data.get("content_block", {})
                     # Fresh detector for EVERY block start (an index is reused by
@@ -1426,6 +1492,8 @@ class StreamingOrchestrator:
                     _degen[_dkey] = DegenerationDetector(
                         kind=block.get("type", ""), name=block.get("name", "") or "",
                     )
+                    if _dkey[0] is not None:
+                        continue  # sub-agent block boundaries: nothing to show
                     if block.get("type") == "thinking":
                         yield {"type": "thinking_start", "index": event_data.get("index", 0)}
                     elif block.get("type") == "text":
@@ -1435,7 +1503,8 @@ class StreamingOrchestrator:
                         yield {"type": "text_start", "index": event_data.get("index", 0)}
                 elif event_type == "content_block_stop":
                     _degen.pop(_dkey, None)  # block done — release its text
-                    yield {"type": "content_block_stop", "index": event_data.get("index", 0)}
+                    if _dkey[0] is None:
+                        yield {"type": "content_block_stop", "index": event_data.get("index", 0)}
                 continue
 
             # ── UserMessage: tool_result blocks (Anthropic protocol) ─
@@ -1463,15 +1532,19 @@ class StreamingOrchestrator:
                 _um_content = getattr(message, "content", None)
                 # (c) Live tool result → UI. The CLI's tool results arrive ONLY
                 # here, and were never forwarded: every step stayed a spinner
-                # until the turn ended and showed no outcome. Main agent only (a
-                # sub-agent's tool ids are not steps in this turn). Its own SSE
-                # type, NOT "assistant", so it is not persisted as a DB row.
-                if isinstance(_um_content, list) and getattr(message, "parent_tool_use_id", None) is None:
+                # until the turn ended and showed no outcome. A sub-agent's result
+                # carries `parent_tool_use_id` (the Agent step it nests under).
+                # Its own SSE type, NOT "assistant": the router persists only a
+                # compact {tool_use_id, is_error, outcome} of it, never the content.
+                if isinstance(_um_content, list):
                     _tr_blocks = []
                     for _blk in _um_content:
                         if isinstance(_blk, ToolResultBlock) and _blk.tool_use_id in _tool_names:
-                            _tr_blocks.append(self._tool_result_block(
-                                _blk, _tool_names.pop(_blk.tool_use_id)))
+                            _tr = self._tool_result_block(_blk, _tool_names.pop(_blk.tool_use_id))
+                            _parent_id = _tool_parent.pop(_blk.tool_use_id, None)
+                            if _parent_id:
+                                _tr["parent_tool_use_id"] = _parent_id
+                            _tr_blocks.append(_tr)
                     if _tr_blocks:
                         yield {"type": "tool_result", "content": _tr_blocks}
                 if isinstance(_um_content, list):
@@ -1600,7 +1673,14 @@ class StreamingOrchestrator:
                     _progress.on_visible(self._parent._last_progress_time)
                 content_blocks = []
                 _msg_leaked = False
+                # A sub-agent's message (the SDK forwards its tool calls with
+                # parent_tool_use_id = the Agent step): its tool_use blocks are
+                # stamped so the UI nests them under that step; its text/thinking
+                # (only with forward_subagent_text) is not the main reply.
+                _am_parent = getattr(message, "parent_tool_use_id", None)
                 for block in message.content:
+                    if _am_parent is not None and isinstance(block, (TextBlock, ThinkingBlock)):
+                        continue
                     if isinstance(block, TextBlock):
                         # ── Tool-call XML leak guard (strip, never terminate) ──
                         # The model occasionally emits tool-call SYNTAX
@@ -1884,10 +1964,14 @@ class StreamingOrchestrator:
                         else:
                             summary = f"{block.name}(...)"
                             category = "unknown"
-                        content_blocks.append({
+                        _tu_block = {
                             "type": "tool_use", "id": block.id,
                             "name": block.name, "summary": summary, "category": category,
-                        })
+                        }
+                        if _am_parent is not None:
+                            _tu_block["parent_tool_use_id"] = _am_parent
+                            _tool_parent[block.id] = _am_parent
+                        content_blocks.append(_tu_block)
                         _tool_names[block.id] = block.name
                         # ── Record tool call for compaction guard ──
                         self._parent._compaction_guard.record_tool_call(

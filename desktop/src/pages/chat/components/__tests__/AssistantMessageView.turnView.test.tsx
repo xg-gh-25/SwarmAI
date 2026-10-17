@@ -244,7 +244,7 @@ describe('AssistantMessageView — Gate-2 fixes', () => {
 });
 
 describe('AssistantMessageView — live card between steps', () => {
-  it('the newest thought streams OPEN in the live card; folded by hand, one italic line', () => {
+  it('the newest thought streams OPEN in the live card; folded by hand, it still WRAPS', () => {
     const th = { type: 'thinking', thinking: 'Read the config first.\nThen compare both thresholds.' } as ContentBlock;
     renderView([tu('a', 'Running: ls'), tr('a'), th], { isStreaming: true });
     const row = screen.getByTestId('thinking-row');
@@ -253,9 +253,24 @@ describe('AssistantMessageView — live card between steps', () => {
     expect(row.querySelector('.animate-spin')).not.toBeNull();
     fireEvent.click(screen.getByTestId('process-row'));
     const line = screen.getByTestId('process-live-thinking');
-    expect(line.textContent).toBe('Then compare both thresholds.');
-    expect(line.className).toMatch(/italic/);
-    expect(line.className).toMatch(/truncate/);
+    // XG 2026-10-18 "该换行就换行": both lines, wrapped — not the last line in a truncated slot.
+    expect(line.textContent).toBe('Read the config first.\nThen compare both thresholds.');
+    expect(line.className).toMatch(/whitespace-pre-wrap/);
+    expect(line.className).not.toMatch(/truncate/);
+  });
+
+  it('a long or failed outcome wraps on its own line; a short one stays on the row', () => {
+    const res = (id: string, outcome: string, isError = false) =>
+      ({ type: 'tool_result', toolUseId: id, content: 'x', isError, truncated: false, outcome }) as ContentBlock;
+    const long = 'error: the build failed because the module could not be resolved from src/x.ts';
+    renderView([tu('a', 'Running: npm test'), res('a', 'ok'), tu('b', 'Running: make'), res('b', long, true),
+      tu('c', 'Running: ls')], { isStreaming: true });
+    const [short, wrapped] = screen.getAllByTestId('step-outcome');
+    expect(short.tagName).toBe('SPAN');
+    expect(wrapped.tagName).toBe('DIV');
+    expect(wrapped.textContent).toBe(long);
+    expect(wrapped.className).toMatch(/whitespace-pre-wrap/);
+    expect(wrapped.className).not.toMatch(/truncate/);
   });
 
   it('finished turn from history: the card is folded, no live line', () => {
@@ -364,5 +379,56 @@ describe('AssistantMessageView — v6 fold timing (XG 2026-10-17 "延后2秒 再
     fireEvent.click(screen.getByTestId('process-row'));
     rerender(viewOf([tu('a', 'Running: ls'), tr('a'), tx('done')], false));
     expect(screen.queryByTestId('process-steps')).toBeNull();
+  });
+});
+
+describe('AssistantMessageView — a running sub-agent keeps the chat alive (XG 2026-10-18 "不能断流")', () => {
+  const agent = { type: 'tool_use', id: 'ag', name: 'Agent', summary: 'Agent: Review spec', category: 'agent' } as ContentBlock;
+  const sub = (i: number) => ({
+    type: 'tool_use', id: `s${i}`, name: 'Bash', summary: `Running: grep -n "x${i}" f.ts`, category: 'bash',
+    parentToolUseId: 'ag',
+  }) as ContentBlock;
+  const subs = (n: number) => Array.from({ length: n }, (_, i) => sub(i));
+  const withProgress = (content: ContentBlock[], progress: Message['subAgentProgress'], isStreaming = true) => render(
+    <ToastProvider>
+      <AssistantMessageView message={{ ...msg(content), subAgentProgress: progress }} isStreaming={isStreaming} />
+    </ToastProvider>,
+  );
+
+  it('its newest steps and live status show nested under the Agent step', () => {
+    withProgress([agent, ...subs(8)], { ag: { parentToolUseId: 'ag', status: 'running', toolUses: 8, durationMs: 75_000 } });
+    const detail = screen.getByTestId('agent-detail');
+    expect(detail.textContent).toContain('Sub-agent');
+    expect(detail.textContent).toContain('8 steps');
+    expect(detail.textContent).toContain('1m 15s');
+    expect(detail.querySelector('.animate-spin')).not.toBeNull();
+    const nested = screen.getByTestId('agent-steps');
+    expect(nested.querySelectorAll('[data-testid="step-row"]')).toHaveLength(6);
+    expect(nested.textContent).toContain('x7');
+    expect(nested.textContent).toContain('2 more');
+    // Only the Agent itself is a step of the main card.
+    expect(screen.getByTestId('process-row').textContent).toContain('1 step');
+  });
+
+  it('before its first step: the tool it is on, from the progress event', () => {
+    withProgress([agent], { ag: { parentToolUseId: 'ag', status: 'running', lastToolName: 'Read' } });
+    expect(screen.getByTestId('agent-detail').textContent).toContain('now Read');
+  });
+
+  it('folded by hand, the live row still shows the sub-agent newest step', () => {
+    withProgress([agent, ...subs(3)], {});
+    fireEvent.click(screen.getByTestId('process-row'));
+    expect(screen.getByTestId('process-live-subagent').textContent).toContain('x2');
+  });
+
+  it('from history: folded to a count, opens on click', () => {
+    renderView([agent, ...subs(3), { type: 'tool_result', toolUseId: 'ag', isError: false, outcome: 'done' } as ContentBlock,
+      tx('Review passed.')]);
+    fireEvent.click(screen.getByTestId('process-row'));
+    const detail = screen.getByTestId('agent-detail');
+    expect(detail.textContent).toContain('3 steps');
+    expect(screen.queryByTestId('agent-steps')).toBeNull();
+    fireEvent.click(detail.querySelector('button')!);
+    expect(screen.getByTestId('agent-steps').querySelectorAll('[data-testid="step-row"]')).toHaveLength(3);
   });
 });

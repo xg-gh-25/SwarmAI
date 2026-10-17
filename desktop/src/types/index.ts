@@ -222,17 +222,37 @@ export interface ToolUseContent {
   name: string;
   summary: string;
   category?: string;
+  /** Set on a SUB-AGENT's tool call: the Agent tool_use it ran under. Such a
+   *  call is not a step of the main turn; it nests under that Agent step. */
+  parentToolUseId?: string;
 }
 
 export interface ToolResultContent {
   type: 'tool_result';
   toolUseId: string;
+  /** The (truncated) output — live only; the persisted form has no content. */
   content?: string;
   isError: boolean;
-  truncated: boolean;
+  truncated?: boolean;
   /** One-line result computed backend-side from the FULL output
-   *  ("lines 1–240", "12 matches", last output line, error line). Live only. */
+   *  ("lines 1–240", "12 matches", last output line, error line). Live AND
+   *  persisted (SessionRouter._compact_tool_results). */
   outcome?: string;
+  /** Set on a sub-agent tool's result (see ToolUseContent.parentToolUseId). */
+  parentToolUseId?: string;
+}
+
+/** Live status of a sub-agent, from the backend `subagent_progress` event
+ *  (SDK Task* messages). Keyed by the Agent tool_use it runs under. Never
+ *  persisted: kept on the streaming Message (`subAgentProgress`). */
+export interface SubAgentProgress {
+  parentToolUseId: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped' | (string & {});
+  description?: string;
+  lastToolName?: string;
+  toolUses?: number;
+  durationMs?: number;
+  summary?: string;
 }
 
 // AskUserQuestion types
@@ -357,6 +377,10 @@ export interface Message {
    *  consumed on the first reconcile and a later mid-turn-cut reconcile
    *  duplicates the bubble (run_f62f4b80). */
   metadata?: { client_id?: string; [key: string]: unknown };
+  /** Ephemeral — latest status per running sub-agent, keyed by its Agent
+   *  tool_use id. Written by the `subagent_progress` stream event; dropped by
+   *  the turn-end reconcile (the persisted steps + results then tell the story). */
+  subAgentProgress?: Record<string, SubAgentProgress>;
 }
 
 export interface ChatRequest {
@@ -565,6 +589,13 @@ export interface StreamEvent {
   timestamp?: number;
   // Long-turn "still_working" notice fields
   elapsedSeconds?: number;
+  // subagent_progress fields (`description` is the TSCC field below)
+  parentToolUseId?: string;
+  taskId?: string;
+  status?: string;
+  lastToolName?: string;
+  toolUses?: number;
+  summary?: string;
   // Error fields
   error?: string;
   message?: string;

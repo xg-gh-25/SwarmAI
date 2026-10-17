@@ -185,8 +185,10 @@ const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
  * tool_result blocks:
  * - tool_use_id → toolUseId
  * - is_error → isError
+ * - parent_tool_use_id → parentToolUseId (a sub-agent's step)
  *
  * tool_use blocks:
+ * - parent_tool_use_id → parentToolUseId (a sub-agent's step)
  * - Enriches generic "Using Skill" summary with the actual skill name from input
  *
  * Defensively handles all block types — passes unknown blocks through unchanged.
@@ -202,12 +204,19 @@ export const toCamelCaseContentBlock = (block: Record<string, unknown>): Record<
       converted.isError = converted.is_error;
       delete converted.is_error;
     }
-    return converted;
+    return parentToCamel(converted);
   }
   if (block.type === 'tool_use') {
-    return enrichToolUseSummary(block);
+    return enrichToolUseSummary(parentToCamel(block));
   }
   return block;
+};
+
+/** `parent_tool_use_id` → `parentToolUseId`: a sub-agent step's Agent parent. */
+const parentToCamel = (block: Record<string, unknown>): Record<string, unknown> => {
+  if (!('parent_tool_use_id' in block)) return block;
+  const { parent_tool_use_id: parent, ...rest } = block;
+  return { ...rest, parentToolUseId: parent };
 };
 
 /**

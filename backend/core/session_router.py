@@ -2114,6 +2114,63 @@ class SessionRouter:
             # show the same (cleaned) bytes even if the row did not persist.
             return blocks_to_persist
 
+    @staticmethod
+    def _compact_tool_results(blocks: list) -> list[dict]:
+        """What a live ``tool_result`` event keeps in data.db: the step's
+        status and one-line outcome, never its (possibly huge) content."""
+        out: list[dict] = []
+        for blk in blocks or []:
+            if not (isinstance(blk, dict) and blk.get("type") == "tool_result" and blk.get("tool_use_id")):
+                continue
+            compact = {
+                "type": "tool_result", "tool_use_id": blk["tool_use_id"],
+                "is_error": bool(blk.get("is_error")), "truncated": False,
+            }
+            if blk.get("outcome"):
+                compact["outcome"] = str(blk["outcome"])[:300]
+            if blk.get("parent_tool_use_id"):
+                compact["parent_tool_use_id"] = blk["parent_tool_use_id"]
+            out.append(compact)
+        return out
+
+    # Events after which no assistant row may follow in this stream: pending
+    # step results are written on their own row at that point.
+    _RESULT_FLUSH_EVENTS = frozenset({"result", "error", "ask_user_question", "cmd_permission_request"})
+
+    async def _persist_stream_event(
+        self, session_id: str, event: dict, pending: list[dict],
+        *, label: str = "", client_id: str | None = None,
+    ) -> None:
+        """Persist what one streamed event contributes to the turn's rows.
+
+        - ``assistant``: persisted immediately (crash-safe), PREFIXED with the
+          step results that arrived since the last row, so each result sits right
+          after its tool_use and the row count does not double. The cleaned
+          blocks are written back into ``event['content']`` (stream == DB, bug 2d).
+        - ``tool_result``: compacted into ``pending`` (status + outcome only), so
+          a reloaded turn shows what each step returned and which failed.
+        - a terminal event: any ``pending`` results get their own row.
+        """
+        etype = event.get("type")
+        if etype == "tool_result" and event.get("content"):
+            pending.extend(self._compact_tool_results(event["content"]))
+            return
+        if etype == "assistant" and event.get("content"):
+            n = len(pending)
+            cleaned = await self._persist_assistant_blocks(
+                session_id, [*pending, *event["content"]], event.get("model"),
+                label=label, client_id=client_id,
+            )
+            pending.clear()
+            event["content"] = cleaned[n:]  # the clean is one-to-one per block
+            return
+        if pending and etype in self._RESULT_FLUSH_EVENTS:
+            await self._persist_assistant_blocks(
+                session_id, list(pending), None,
+                label=f"{label or 'turn'}-results", client_id=client_id,
+            )
+            pending.clear()
+
     def get_unit(self, session_id: str) -> Optional[SessionUnit]:
         """Look up a SessionUnit by session_id."""
         return self._units.get(session_id)
@@ -3907,6 +3964,8 @@ class SessionRouter:
         _coalesce_delivered_ok = False
         _coalesce_saw_error: Optional[str] = None
         _coalesce_saw_terminal = False
+        # Step results waiting to ride the turn's next assistant row.
+        _pending_results: list[dict] = []
         try:
             async for event in unit.send(
                 query_content=query_content,
@@ -4012,14 +4071,13 @@ class SessionRouter:
                 # row already carries the bare client_id, so a bare key here would
                 # collide with the user placeholder in MessageStore._applyMerge,
                 # leaving the assistant placeholder unmatched → duplicate bubble.
-                if event.get("type") == "assistant" and event.get("content"):
-                    # Write the cleaned blocks back to event['content'] so the
-                    # yielded stream carries the SAME bytes persisted to the DB
-                    # (bug 2d — no UI≠DB fork).
-                    event["content"] = await self._persist_assistant_blocks(
-                        session_id, event["content"], event.get("model"),
-                        client_id=f"{client_id}-asst" if client_id else None,
-                    )
+                # The cleaned blocks are written back to event['content'] so the
+                # yielded stream carries the SAME bytes persisted to the DB (bug
+                # 2d — no UI≠DB fork); step results ride along (compact).
+                await self._persist_stream_event(
+                    session_id, event, _pending_results,
+                    client_id=f"{client_id}-asst" if client_id else None,
+                )
 
                 # Echo client_id in result event for frontend dedup (AC2)
                 if client_id and event.get("type") == "result":
@@ -4323,19 +4381,18 @@ class SessionRouter:
             )
             return
 
+        _pending_results: list[dict] = []
         async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id):
-            if event.get("type") == "assistant" and event.get("content"):
-                # Write cleaned blocks back → stream == DB bytes (bug 2d).
-                event["content"] = await self._persist_assistant_blocks(
-                    session_id, event["content"], event.get("model"),
-                    label="answer",
-                    # Reuse the originating turn's client_id (stashed by
-                    # send_message) so this continuation row carries the SAME
-                    # `{client_id}-asst` key as the turn's main-path rows — keeping
-                    # the merged bubble correlatable no matter where a reconcile-tail
-                    # cut lands (run_9bbf1761).
-                    client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
-                )
+            # Write cleaned blocks back → stream == DB bytes (bug 2d).
+            await self._persist_stream_event(
+                session_id, event, _pending_results, label="answer",
+                # Reuse the originating turn's client_id (stashed by
+                # send_message) so this continuation row carries the SAME
+                # `{client_id}-asst` key as the turn's main-path rows — keeping
+                # the merged bubble correlatable no matter where a reconcile-tail
+                # cut lands (run_9bbf1761).
+                client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
+            )
             yield event
 
     async def continue_with_cmd_permission(
@@ -4354,17 +4411,16 @@ class SessionRouter:
             )
             return
 
+        _pending_results: list[dict] = []
         async for event in unit.continue_with_permission(request_id, allowed):
-            if event.get("type") == "assistant" and event.get("content"):
-                # Write cleaned blocks back → stream == DB bytes (bug 2d).
-                event["content"] = await self._persist_assistant_blocks(
-                    session_id, event["content"], event.get("model"),
-                    label="permission",
-                    # Reuse the originating turn's client_id (stashed by
-                    # send_message) — same rationale as continue_with_answer above
-                    # (run_9bbf1761): keeps the continuation row keyed to the turn.
-                    client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
-                )
+            # Write cleaned blocks back → stream == DB bytes (bug 2d).
+            await self._persist_stream_event(
+                session_id, event, _pending_results, label="permission",
+                # Reuse the originating turn's client_id (stashed by
+                # send_message) — same rationale as continue_with_answer above
+                # (run_9bbf1761): keeps the continuation row keyed to the turn.
+                client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
+            )
             yield event
 
     async def compact_session(

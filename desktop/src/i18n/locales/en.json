@@ -187,6 +187,12 @@
     "thoughtCount_one": "{{count}} thought",
     "thoughtCount_other": "{{count}} thoughts",
     "readTimes": "{{count}}×",
+    "subAgent": "Sub-agent",
+    "nowUsing": "now {{tool}}",
+    "subAgentStatus": {
+      "failed": "failed",
+      "stopped": "stopped"
+    },
       "steps_one": "{{count}} step",
       "steps_other": "{{count}} steps",
       "failed_one": "{{count}} failed",

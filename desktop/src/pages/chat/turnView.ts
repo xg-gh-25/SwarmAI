@@ -34,9 +34,14 @@
  * call it gates).
  * A later tool_use alone does NOT prove completion — the model may issue several
  * tool calls in parallel in one message, and each stays pending until its own
- * result arrives. Failure (`error`) is only knowable while the tool_result is in
- * memory — results are not persisted, so a reloaded turn reports no failures
- * rather than guessing.
+ * result arrives. Results are persisted in compact form (status + one-line
+ * outcome, since 2026-10-18), so a reloaded turn shows failures and outcomes;
+ * older turns have none and fall back to the inference above.
+ *
+ * Sub-agents: a tool_use / tool_result with `parentToolUseId` belongs to the
+ * sub-agent run by that Agent step. It is nested under that step (`children`)
+ * and ignored by everything else here, so a sub-agent's 40 reads never look
+ * like the main agent's steps.
  *
  * @exports deriveTurnView, stepLabel, extractNextSteps, summarizeProcess,
  *          isLandmarkText, and the TurnView / TurnUnit / ProcessUnit / Step /
@@ -51,6 +56,7 @@ import type {
   CmdPermissionContent,
   EscalationContent,
   PipelineStageContent,
+  SubAgentProgress,
 } from '../../types';
 
 /** `waiting` = the tool has not run: an unanswered permission / question gates it.
@@ -64,6 +70,11 @@ export interface ToolStep {
   index: number;
   status: ToolStatus;
   result?: ToolResultContent;
+  /** An Agent step's own sub-agent steps (tool_use blocks whose
+   *  `parentToolUseId` is this step), in stream order. */
+  children?: ToolStep[];
+  /** An Agent step's live sub-agent status (`subagent_progress`), while streaming. */
+  progress?: SubAgentProgress;
 }
 
 export interface ThinkingStep {
@@ -88,7 +99,8 @@ export interface ProcessUnit {
   /** True only for the last unit of a streaming message — the work in progress. */
   isLive: boolean;
   /** What the live row shows: the pending tool (if any), the newest finished
-   *  step, and — when the newest step is thinking — that thought's last line. */
+   *  step, and — when the newest step is thinking — that thought's newest part
+   *  (`thoughtTail`, multi-line). */
   live?: {
     step?: ToolStep; thinking?: string; recent?: ToolStep;
     /** The pipeline stage now running: the `next` of the latest stage row before
@@ -167,13 +179,32 @@ function buildResultMap(content: ContentBlock[]): Map<string, ToolResultContent>
   return map;
 }
 
-/** Derive the display units for one assistant message. Pure. */
-export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): TurnView {
+/** A sub-agent's tool call or result: it nests under its Agent step and is
+ *  invisible to the main turn's structure (segments, done rule, outcome). */
+const isSubAgentBlock = (b: ContentBlock): boolean =>
+  (b.type === 'tool_use' || b.type === 'tool_result') && !!b.parentToolUseId;
+
+/** Derive the display units for one assistant message. Pure.
+ *  `progress` is the streaming message's live sub-agent status, by Agent id. */
+export function deriveTurnView(
+  content: ContentBlock[],
+  isStreaming: boolean,
+  progress?: Record<string, SubAgentProgress>,
+): TurnView {
   const results = buildResultMap(content);
+  // Sub-agent steps by the Agent tool_use they ran under, in stream order.
+  const children = new Map<string, Array<{ block: ToolUseContent; index: number }>>();
+  content.forEach((b, index) => {
+    if (b.type === 'tool_use' && b.parentToolUseId) {
+      const list = children.get(b.parentToolUseId) ?? [];
+      list.push({ block: b, index });
+      children.set(b.parentToolUseId, list);
+    }
+  });
 
   let lastToolIdx = -1;
   for (let i = content.length - 1; i >= 0; i -= 1) {
-    if (content[i].type === 'tool_use') { lastToolIdx = i; break; }
+    if (content[i].type === 'tool_use' && !isSubAgentBlock(content[i])) { lastToolIdx = i; break; }
   }
   // Backward scan, per index i:
   //   laterBlock[i]   — some non-tool_result block follows i
@@ -192,6 +223,7 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
     laterNonTool[i] = seenNonTool;
     gatedAfter[i] = gate;
     const b = content[i];
+    if (isSubAgentBlock(b)) continue;
     if (b.type !== 'tool_result') seen = true;
     if (b.type === 'text' || b.type === 'thinking') { seenNonTool = true; gate = false; }
     if (INTERRUPT_TYPES.has(b.type)) gate = isUnanswered(b as InterruptBlock);
@@ -215,6 +247,7 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
 
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
+    if (isSubAgentBlock(block)) return; // nested under its Agent step below
     if (block.type === 'pipeline_stage') {
       seg = null;
       units.push({ kind: 'stage', block, index });
@@ -260,7 +293,20 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
                 : index === lastToolIdx
                   ? 'unknown'
                   : 'done';
-      openSeg().steps.push({ kind: 'tool', block, index, status, result });
+      const step: ToolStep = { kind: 'tool', block, index, status, result };
+      const subs = children.get(block.id);
+      if (subs) {
+        // A sub-agent step is done when its own result came back; without one it
+        // shares its Agent's fate (running while it runs, cut off if it was).
+        step.children = subs.map(({ block: sb, index: si }) => {
+          const r = results.get(sb.id);
+          const s: ToolStatus = r?.isError ? 'error' : r ? 'done'
+            : status === 'pending' || status === 'unknown' || status === 'waiting' ? status : 'done';
+          return { kind: 'tool', block: sb, index: si, status: s, result: r };
+        });
+      }
+      if (isStreaming && progress?.[block.id]) step.progress = progress[block.id];
+      openSeg().steps.push(step);
     }
   });
 
@@ -290,7 +336,7 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
       );
       // The latest thought, but only while it is the newest thing in the segment.
       const newest = last.steps[last.steps.length - 1];
-      const thinking = newest?.kind === 'thinking' ? lastLine(newest.text) : undefined;
+      const thinking = newest?.kind === 'thinking' ? thoughtTail(newest.text) : undefined;
       // The newest step that already finished, so the row always says what was
       // just done — not only a bare spinner between two tool calls.
       const recent = [...last.steps].reverse().find(
@@ -323,10 +369,22 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
   return { units, nextSteps, copyText };
 }
 
-/** Last non-empty line of a (possibly still-streaming) thinking summary. */
-function lastLine(text: string): string | undefined {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  return lines.length ? lines[lines.length - 1] : undefined;
+/** Characters of a still-streaming thought shown on the folded live row. */
+export const THOUGHT_TAIL_CHARS = 360;
+
+/** The newest part of a (possibly still-streaming) thought, line breaks kept,
+ *  so the folded live row WRAPS and grows instead of one line whose text is
+ *  replaced each time a new line starts (XG 2026-10-18: "该换行就换行"). Cut at
+ *  a line or word boundary, marked with a leading ellipsis. */
+export function thoughtTail(text: string, max: number = THOUGHT_TAIL_CHARS): string | undefined {
+  const t = text.replace(/\n{3,}/g, '\n\n').trim();
+  if (!t) return undefined;
+  if (t.length <= max) return t;
+  const cut = t.slice(-max);
+  const nl = cut.indexOf('\n');
+  const sp = cut.search(/\s/);
+  const at = nl >= 0 && nl < max / 2 ? nl + 1 : sp >= 0 && sp < 40 ? sp + 1 : 0;
+  return `…${cut.slice(at).trimStart()}`;
 }
 
 // ── Step labels ─────────────────────────────────────────────────────────────

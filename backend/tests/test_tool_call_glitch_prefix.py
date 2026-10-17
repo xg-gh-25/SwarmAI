@@ -183,7 +183,10 @@ def test_glitch_in_final_answer_flags_transcript():
     assert orch._parent._transcript_poisoned is True
 
 
-def test_subagent_text_strips_but_does_not_arm():
+def test_subagent_text_is_not_the_main_reply_and_does_not_arm():
+    # A sub-agent's text (parent_tool_use_id set) is not shown as the main
+    # reply at all (2026-10-18, sub-agent steps nest under their Agent step),
+    # so its glitch word can neither show nor arm the main-thread restart.
     from claude_agent_sdk import AssistantMessage, TextBlock
 
     orch = _orch()
@@ -191,7 +194,7 @@ def test_subagent_text_strips_but_does_not_arm():
                            parent_tool_use_id="toolu_agent")
     events, raised = asyncio.run(_drive(orch, [sub, _make_result_message()]))
     assert raised is None
-    assert _shown(events) == ["跑子任务"]
+    assert _shown(events) == []
     assert getattr(orch._parent, "_transcript_poisoned", False) is False
 
 

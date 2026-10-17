@@ -157,8 +157,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // units (process segments / landmarks / outcome / interrupts), the single
   // done rule, the lifted next-steps block and what Copy copies.
   const view = useMemo(
-    () => deriveTurnView(message.content, !!isStreaming),
-    [message.content, isStreaming],
+    () => deriveTurnView(message.content, !!isStreaming, message.subAgentProgress),
+    [message.content, isStreaming, message.subAgentProgress],
   );
 
   /** All text the message carries — gates the action row exactly as before the

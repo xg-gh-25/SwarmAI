@@ -694,10 +694,11 @@ def _extract_key_tool_results(
 ) -> str:
     """Extract detailed tool action summaries from ``tool_use.summary``.
 
-    The Claude Agent SDK persists ``tool_use`` blocks with a ``summary``
-    field (e.g. "Reading /path/to/file.py", "Running: git status") but
-    does NOT persist ``tool_result`` blocks — those are consumed by the
-    SDK internally and never reach the DB.  So we extract from summary.
+    ``tool_use`` blocks are persisted with a ``summary`` field (e.g.
+    "Reading /path/to/file.py", "Running: git status"). ``tool_result`` blocks
+    are persisted only in compact form (status + one-line outcome, no content,
+    SessionRouter._compact_tool_results), so the action log is built from the
+    summary.
 
     This gives the resumed agent a detailed action log: what was read,
     what commands were run, what was edited — richer than the checkpoint's

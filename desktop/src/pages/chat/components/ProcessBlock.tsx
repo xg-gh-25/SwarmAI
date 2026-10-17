@@ -14,6 +14,9 @@
  *     "Thought" line 2s after something follows it ("不然这个会让用户等待焦虑")
  *   - adjacent finished reads of one file are one row (`groupSteps`)
  *   - one step's raw command / result opens on click
+ *   - an Agent step nests its sub-agent's steps and live status (`AgentDetail`)
+ *   - streamed text wraps (thought tail, long outcomes, the running command);
+ *     nothing streaming is a one-line slot whose text is replaced
  *
  * Status comes ONLY from the projection (`ToolStep.status`); this component never
  * re-derives whether a tool is done.
@@ -103,6 +106,10 @@ function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) 
   // What the call returned, Kiro-style: "lines 1–240", "12 matches", the last
   // output line, or the error. Merged reads list each range once.
   const outcome = [...new Set(all.map((s) => s.result?.outcome).filter((o): o is string => !!o))].join(', ');
+  // A short outcome sits at the end of the row; a long one or an error gets its
+  // own wrapped line — never cut to one line with the end hidden.
+  const inlineOutcome = !!outcome && !isError && outcome.length <= INLINE_OUTCOME_CHARS;
+  const outcomeTone = isError ? 'text-red-400' : 'text-[var(--color-text-dim)]';
   // Two SIBLING controls (never a link nested in a button): the row toggles the
   // raw command; a file target is its own button that opens the file.
   return (
@@ -118,7 +125,10 @@ function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) 
           <StatusIcon status={step.status} />
           {/* An unrecognised summary is shown verbatim — no invented verb. */}
           {verb && <span className={isError ? 'text-red-400' : 'text-[var(--color-text-secondary)]'}>{verb}</span>}
-          {!label.path && <span className="font-mono text-[12px] truncate" title={label.object}>{label.object}</span>}
+          {!label.path && (
+            // The running step wraps: it is what the user is reading right now.
+            <span className={`font-mono text-[12px] ${isPending ? 'break-all' : 'truncate'}`} title={label.object}>{label.object}</span>
+          )}
         </button>
         {label.path && (
           <button
@@ -135,12 +145,8 @@ function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) 
             {tf(t, 'chat.turn.readTimes', '{{count}}×', { count: all.length })}
           </span>
         )}
-        {outcome && (
-          <span
-            data-testid="step-outcome"
-            title={outcome}
-            className={`ml-auto pl-2 text-[12px] truncate min-w-0 max-w-[45%] ${isError ? 'text-red-400' : 'text-[var(--color-text-dim)]'}`}
-          >
+        {inlineOutcome && (
+          <span data-testid="step-outcome" className={`ml-auto pl-2 text-[12px] shrink-0 ${outcomeTone}`}>
             {outcome}
           </span>
         )}
@@ -148,6 +154,15 @@ function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) 
           <span className="ml-auto pl-2 text-[12px] text-[var(--color-text-dim)] tabular-nums shrink-0">{formatSeconds(elapsed)}</span>
         )}
       </div>
+      {outcome && !inlineOutcome && (
+        <div
+          data-testid="step-outcome"
+          className={`ml-8 mr-2 -mt-0.5 mb-1 text-[12px] leading-relaxed whitespace-pre-wrap break-words ${outcomeTone}`}
+        >
+          {outcome}
+        </div>
+      )}
+      {(step.children?.length || step.progress) && <AgentDetail step={step} />}
       {open && (
         <pre className="mx-2 mb-1.5 ml-8 px-3 py-2 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] font-mono text-[11.5px] leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
           {all.map((s) => `${stepLabel(s.block).raw}${s.result?.content ? `\n\n${s.result.content}` : ''}`).join('\n\n')}
@@ -196,6 +211,73 @@ function ThinkingRow({ step, streaming }: { step: ThinkingStep; streaming: boole
   );
 }
 
+/**
+ * What a sub-agent (an Agent step) is doing, nested under that step. While it
+ * runs: open, its newest steps and live status (steps so far, its own elapsed,
+ * the tool it is on) — the main agent is silent meanwhile, so this is the only
+ * sign of life. Once done it folds (2s later) to "Sub-agent · N steps", plus its
+ * summary or failure. A click is the user's choice and wins.
+ */
+function AgentDetail({ step }: { step: ToolStep }) {
+  const { t } = useTranslation();
+  const subs = useMemo(() => step.children ?? [], [step.children]);
+  const p = step.progress;
+  const running = step.status === 'pending';
+  const auto = useLinger(running);
+  const [choice, setChoice] = useState<boolean | undefined>(undefined);
+  const open = subs.length > 0 && (choice ?? auto);
+  const rows = useMemo(() => groupSteps(subs), [subs]);
+  const shown = open ? (running && choice === undefined ? rows.slice(-AGENT_LIVE_ROWS) : rows) : [];
+  const earlier = open ? rows.length - shown.length : 0;
+  const count = Math.max(subs.length, p?.toolUses ?? 0);
+  const failed = p?.status === 'failed' || p?.status === 'stopped';
+
+  const facts: string[] = [];
+  if (count > 0) facts.push(tf(t, 'chat.turn.steps', count === 1 ? '{{count}} step' : '{{count}} steps', { count }));
+  if (p?.durationMs) facts.push(formatSeconds(Math.round(p.durationMs / 1000)));
+  if (running && p?.lastToolName && !subs.length) {
+    facts.push(tf(t, 'chat.turn.nowUsing', 'now {{tool}}', { tool: p.lastToolName }));
+  }
+  const Head = subs.length > 0 ? 'button' : 'div';
+  return (
+    <div data-testid="agent-detail" className="ml-8 mr-2 mb-1">
+      <Head
+        {...(subs.length > 0 ? { type: 'button' as const, onClick: () => setChoice(!open), 'aria-expanded': open } : {})}
+        className="flex items-center gap-2 py-0.5 text-[12px] text-[var(--color-text-dim)] text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+      >
+        {running ? <Spinner /> : (
+          <span className="material-symbols-outlined text-[14px]" style={{ transform: open ? 'rotate(90deg)' : 'none' }}>chevron_right</span>
+        )}
+        <span className="text-[var(--color-text-secondary)]">{tf(t, 'chat.turn.subAgent', 'Sub-agent')}</span>
+        {facts.map((f) => <span key={f} className="tabular-nums">· {f}</span>)}
+        {failed && <span className="text-red-400">· {tf(t, `chat.turn.subAgentStatus.${p?.status}`, p?.status ?? '')}</span>}
+      </Head>
+      {open && (
+        <div data-testid="agent-steps" className="ml-1.5 pl-2 border-l-2 border-[var(--color-border)]">
+          {earlier > 0 && (
+            <button
+              type="button"
+              onClick={() => setChoice(true)}
+              className="px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded"
+            >
+              {tf(t, 'chat.turn.showAll', '{{count}} more · show all', { count: earlier })}
+            </button>
+          )}
+          {shown.map((r) => (r.kind === 'reads'
+            ? <ToolStepRow key={`tu-${r.steps[0].block.id}`} step={r.steps[0]} merged={r.steps} />
+            : r.step.kind === 'tool' ? <ToolStepRow key={`tu-${r.step.block.id}`} step={r.step} /> : null
+          ))}
+        </div>
+      )}
+      {!running && p?.summary && (
+        <div data-testid="agent-summary" className="py-0.5 text-[12px] leading-relaxed text-[var(--color-text-dim)] whitespace-pre-wrap break-words">
+          {p.summary}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The running step on the folded live row (only when the user folded it). */
 function LiveStep({ step }: { step: ToolStep }) {
   const { t } = useTranslation();
@@ -205,7 +287,7 @@ function LiveStep({ step }: { step: ToolStep }) {
     <>
       <Spinner />
       {label.verb !== 'tool' && <span className="text-[var(--color-text-secondary)]">{verbText(t, label.verb, true)}</span>}
-      <span className="font-mono text-[12px] truncate min-w-0" title={label.object}>{label.object}</span>
+      <span className="font-mono text-[12px] break-all min-w-0" title={label.object}>{label.object}</span>
       {elapsed !== null && elapsed >= 3 && (
         <span className="ml-auto pl-2 text-[12px] text-[var(--color-text-dim)] tabular-nums shrink-0">{formatSeconds(elapsed)}</span>
       )}
@@ -237,6 +319,10 @@ export interface ProcessBlockProps {
 
 /** Expanded lists show this many steps first; the rest are one click away. */
 const STEP_PAGE = 12;
+/** An outcome up to this long stays on its step's row; longer ones wrap below. */
+const INLINE_OUTCOME_CHARS = 40;
+/** A RUNNING sub-agent shows its newest steps, this many. */
+const AGENT_LIVE_ROWS = 6;
 /** The live list follows the bottom unless the user scrolled this far up. */
 const STICK_PX = 24;
 
@@ -283,7 +369,9 @@ export function ProcessBlock({ unit, expanded, onToggle, startedAt }: ProcessBlo
   // Follow the newest step while live, unless the user scrolled up to read.
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
-  const tail = newest?.kind === 'thinking' ? newest.text.length : newest?.kind === 'tool' ? newest.status : '';
+  const tail = newest?.kind === 'thinking'
+    ? newest.text.length
+    : newest?.kind === 'tool' ? `${newest.status}:${newest.children?.length ?? 0}` : '';
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && unit.isLive && stickRef.current) el.scrollTop = el.scrollHeight;
@@ -381,10 +469,11 @@ export function ProcessBlock({ unit, expanded, onToggle, startedAt }: ProcessBlo
             </div>
           )}
           {unit.live?.thinking && (
+            // The newest part of the thought, WRAPPED: it grows as it streams
+            // instead of one line whose text is replaced each new line.
             <div
               data-testid="process-live-thinking"
-              title={unit.live.thinking}
-              className="px-2 py-0.5 text-[12.5px] italic text-[var(--color-text-dim)] truncate"
+              className="px-2 py-0.5 text-[12.5px] leading-relaxed italic text-[var(--color-text-dim)] whitespace-pre-wrap break-words"
             >
               {unit.live.thinking}
             </div>
@@ -397,6 +486,12 @@ export function ProcessBlock({ unit, expanded, onToggle, startedAt }: ProcessBlo
               </>
             )}
           </div>
+          {/* A running sub-agent: its newest step, so the folded row still moves. */}
+          {pending?.children?.length ? (
+            <div data-testid="process-live-subagent" className="ml-6">
+              <ToolStepRow step={pending.children[pending.children.length - 1]} />
+            </div>
+          ) : null}
         </div>
       )}
 

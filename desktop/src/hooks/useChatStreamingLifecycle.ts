@@ -44,6 +44,7 @@ import type {
   ToolUseContent,
   ToolResultContent,
   StreamEvent,
+  SubAgentProgress,
   SystemPromptMetadata,
   CompactionGuardEvent,
 } from '../types';
@@ -96,6 +97,11 @@ const STALL_THRESHOLD_TEXT_MS = 60_000;
 
 /** Stall threshold during tool execution — tools like Bash/Read can take minutes. */
 const STALL_THRESHOLD_TOOL_MS = 180_000;
+
+/** Stall threshold while a sub-agent (Agent tool) runs: the main agent is silent
+ *  until it returns, and a sub-agent may think for minutes between its own
+ *  steps. The backend's own hang tier for Agent is 30 min (session_unit). */
+const STALL_THRESHOLD_AGENT_MS = 600_000;
 
 /**
  * Tail size for turn-end reconcile fetches. The reconcile sites below only need
@@ -640,6 +646,46 @@ export function applyThinkingDelta(msg: Message, thinking: string): Message {
   return { ...msg, content };
 }
 
+/**
+ * Record a `subagent_progress` event on the streaming message: the latest
+ * status per sub-agent, keyed by its Agent tool_use id. A side field, not a
+ * content block, so it never splits the streaming text block and never shifts
+ * a block index (turnView keys rows by index).
+ */
+export function applySubAgentProgress(msg: Message, event: StreamEvent): Message {
+  const parent = event.parentToolUseId;
+  if (!parent) return msg;
+  const prev = msg.subAgentProgress?.[parent];
+  const next: SubAgentProgress = {
+    ...prev,
+    parentToolUseId: parent,
+    status: event.status ?? prev?.status ?? 'running',
+    ...(event.description ? { description: event.description } : {}),
+    ...(event.lastToolName ? { lastToolName: event.lastToolName } : {}),
+    ...(typeof event.toolUses === 'number' ? { toolUses: event.toolUses } : {}),
+    ...(typeof event.durationMs === 'number' ? { durationMs: event.durationMs } : {}),
+    ...(event.summary ? { summary: event.summary } : {}),
+  };
+  return { ...msg, subAgentProgress: { ...msg.subAgentProgress, [parent]: next } };
+}
+
+/** Which tool calls of a message are still waiting for their result — drives
+ *  the stall threshold (a tool, and above all a sub-agent, legitimately runs
+ *  silent for minutes; a false "session may be stalled" breaks the chat). */
+export function openToolState(msg: Message | undefined): { tool: boolean; agent: boolean } {
+  if (!msg) return { tool: false, agent: false };
+  const done = new Set<string>();
+  for (const b of msg.content) if (b.type === 'tool_result') done.add(b.toolUseId);
+  let tool = false;
+  let agent = false;
+  for (const b of msg.content) {
+    if (b.type !== 'tool_use' || done.has(b.id) || b.name === 'AskUserQuestion') continue;
+    tool = true;
+    if (b.category === 'agent' || b.name === 'Agent' || b.name === 'Task') agent = true;
+  }
+  return { tool, agent };
+}
+
 // ---------------------------------------------------------------------------
 // Fix 5: sessionStorage persistence helpers (exported for testability)
 // ---------------------------------------------------------------------------
@@ -1094,6 +1140,8 @@ export function useChatStreamingLifecycle(
   // large file reads), so we use a longer threshold when a tool is in flight.
   const lastRealEventRef = useRef<number>(Date.now());
   const pendingToolUseRef = useRef<boolean>(false);
+  // A sub-agent (Agent tool) is running: the longest stall threshold applies.
+  const openAgentRef = useRef<boolean>(false);
   const [isLikelyStalled, setIsLikelyStalled] = useState(false);
 
   // ── Streaming State Machine (shadow mode — coexists with boolean flags) ──
@@ -1194,12 +1242,15 @@ export function useChatStreamingLifecycle(
     if (!isStreaming) {
       setIsLikelyStalled(false);
       pendingToolUseRef.current = false;
+      openAgentRef.current = false;
       return;
     }
     const interval = setInterval(() => {
-      const threshold = pendingToolUseRef.current
-        ? STALL_THRESHOLD_TOOL_MS
-        : STALL_THRESHOLD_TEXT_MS;
+      const threshold = openAgentRef.current
+        ? STALL_THRESHOLD_AGENT_MS
+        : pendingToolUseRef.current
+          ? STALL_THRESHOLD_TOOL_MS
+          : STALL_THRESHOLD_TEXT_MS;
       const stalled = Date.now() - lastRealEventRef.current > threshold;
       setIsLikelyStalled(stalled);
     }, 10_000);
@@ -2838,13 +2889,33 @@ export function useChatStreamingLifecycle(
             }
           }
         } else if (event.type === 'tool_result' && event.content) {
-          // Live tool results (not persisted). Same single-writer merge as an
-          // assistant event: updateMessages dedups tool_result by toolUseId and
-          // keeps streaming text, so a step flips to done and gets its outcome.
+          // Live tool results (persisted only in compact form — status + outcome).
+          // Same single-writer merge as an assistant event: updateMessages dedups
+          // tool_result by toolUseId and keeps streaming text, so a step flips to
+          // done and gets its outcome. A sub-agent's result carries
+          // parentToolUseId and lands on its nested step.
           const resStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (resStore) {
             resStore.updateLast(
-              (msg) => updateMessages([msg], assistantMessageId, event.content!, undefined)[0],
+              (msg) => {
+                const next = updateMessages([msg], assistantMessageId, event.content!, undefined)[0];
+                const open = openToolState(next);
+                pendingToolUseRef.current = open.tool;
+                openAgentRef.current = open.agent;
+                return next;
+              },
+              (msg) => msg.id === assistantMessageId,
+            );
+          }
+        } else if (event.type === 'subagent_progress') {
+          // A sub-agent's lifecycle / progress (SDK Task* messages): the main
+          // agent is silent while it runs, so this is what keeps the chat alive
+          // and tells the user what runs and how far it got. Ephemeral side field.
+          openAgentRef.current = event.status === 'running' || openAgentRef.current;
+          const saStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (saStore) {
+            saStore.updateLast(
+              (msg) => applySubAgentProgress(msg, event),
               (msg) => msg.id === assistantMessageId,
             );
           }
@@ -2871,7 +2942,15 @@ export function useChatStreamingLifecycle(
             // Use updateMessages on the single matching message — reuses the
             // complex dedup/confirm logic without rewriting it.
             assistStore.updateLast(
-              (msg) => updateMessages([msg], assistantMessageId, event.content!, event.model)[0],
+              (msg) => {
+                const next = updateMessages([msg], assistantMessageId, event.content!, event.model)[0];
+                // The backend never sends a top-level `tool_use` event: a tool
+                // call arrives inside `assistant`, so the stall threshold is set here.
+                const open = openToolState(next);
+                pendingToolUseRef.current = open.tool;
+                openAgentRef.current = open.agent;
+                return next;
+              },
               (msg) => msg.id === assistantMessageId,
             );
           } else {

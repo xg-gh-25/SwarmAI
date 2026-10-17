@@ -6,8 +6,9 @@ What is tested:
   or match lines; Bash plain output; errors).
 - The real _read_formatted_response loop: a CLI tool result arrives in a
   UserMessage and is now yielded as a `tool_result` SSE event (it used to be
-  dropped, so every step span until the turn ended). Sub-agent results are not.
-  The event type is not "assistant", so session_router never persists it.
+  dropped, so every step span until the turn ended). A result whose tool_use was
+  never seen is not. Sub-agent nesting and the compact persistence of these
+  events are covered in test_subagent_stream.py.
 """
 from __future__ import annotations
 

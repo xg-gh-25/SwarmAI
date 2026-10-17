@@ -236,7 +236,9 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
     elif lower_name in _AGENT_NAMES:
         category = "agent"
         # Extract the most useful context: task_description > prompt snippet > name
-        task_desc = data.get("task_description") or data.get("task", "")
+        # The Agent tool's own short `description` ("Review spec compliance") is
+        # what the user needs on the row; a prompt snippet is a fallback.
+        task_desc = data.get("description") or data.get("task_description") or data.get("task", "")
         prompt = data.get("prompt", "")
         agent_name = data.get("name") or data.get("agent_name", "")
         if task_desc:
