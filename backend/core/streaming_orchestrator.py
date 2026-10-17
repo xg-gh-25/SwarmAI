@@ -682,6 +682,23 @@ class StreamingOrchestrator:
             return [evt]
         return []
 
+    @staticmethod
+    def _tool_result_block(block: Any, tool_name: str) -> dict:
+        """A UI tool_result block: truncated content + a one-line ``outcome``
+        computed from the FULL result (e.g. "lines 1–240", "12 matches")."""
+        from core.tool_summarizer import (
+            summarize_tool_result, tool_result_text, truncate_tool_result,
+        )
+
+        is_error = bool(getattr(block, "is_error", False))
+        text = tool_result_text(getattr(block, "content", None))
+        truncated, was_truncated = truncate_tool_result(text)
+        return {
+            "type": "tool_result", "tool_use_id": block.tool_use_id,
+            "content": truncated, "is_error": is_error, "truncated": was_truncated,
+            "outcome": summarize_tool_result(tool_name, text, is_error),
+        }
+
     def _stall_event(self, text: str) -> dict:
         """A no-progress notice as the in-tab ``still_working`` status — NOT an
         ``assistant`` event: it describes the stream, so it must not be
@@ -937,6 +954,8 @@ class StreamingOrchestrator:
         # agent-discipline surface_run_outputs call (which docs-only runs skipped, so
         # Canvas never auto-opened on the most common pipeline).
         _pending_completion: dict[str, str] = {}
+        # tool_use_id → tool name, so a result can be summarized per tool.
+        _tool_names: dict[str, str] = {}
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
         # Turn-scoped (local to this method), so no cross-session leak; keyed by the
         # raw path string. Only deliverable-candidate writes are ever resolved —
@@ -1371,6 +1390,19 @@ class StreamingOrchestrator:
                 # AND sub-agent tool results arrive here as UserMessage ToolResultBlocks;
                 # emitting on success stamps the WRITING session (correct tab isolation).
                 _um_content = getattr(message, "content", None)
+                # (c) Live tool result → UI. The CLI's tool results arrive ONLY
+                # here, and were never forwarded: every step stayed a spinner
+                # until the turn ended and showed no outcome. Main agent only (a
+                # sub-agent's tool ids are not steps in this turn). Its own SSE
+                # type, NOT "assistant", so it is not persisted as a DB row.
+                if isinstance(_um_content, list) and getattr(message, "parent_tool_use_id", None) is None:
+                    _tr_blocks = []
+                    for _blk in _um_content:
+                        if isinstance(_blk, ToolResultBlock) and _blk.tool_use_id in _tool_names:
+                            _tr_blocks.append(self._tool_result_block(
+                                _blk, _tool_names.pop(_blk.tool_use_id)))
+                    if _tr_blocks:
+                        yield {"type": "tool_result", "content": _tr_blocks}
                 if isinstance(_um_content, list):
                     for _blk in _um_content:
                         if not isinstance(_blk, ToolResultBlock):
@@ -1770,6 +1802,7 @@ class StreamingOrchestrator:
                             "type": "tool_use", "id": block.id,
                             "name": block.name, "summary": summary, "category": category,
                         })
+                        _tool_names[block.id] = block.name
                         # ── Record tool call for compaction guard ──
                         self._parent._compaction_guard.record_tool_call(
                             block.name, block.input

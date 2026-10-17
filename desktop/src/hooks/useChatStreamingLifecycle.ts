@@ -2837,6 +2837,17 @@ export function useChatStreamingLifecycle(
               setMessages((prev) => appendThinkingDelta(prev, assistantMessageId, event.thinking!));
             }
           }
+        } else if (event.type === 'tool_result' && event.content) {
+          // Live tool results (not persisted). Same single-writer merge as an
+          // assistant event: updateMessages dedups tool_result by toolUseId and
+          // keeps streaming text, so a step flips to done and gets its outcome.
+          const resStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (resStore) {
+            resStore.updateLast(
+              (msg) => updateMessages([msg], assistantMessageId, event.content!, undefined)[0],
+              (msg) => msg.id === assistantMessageId,
+            );
+          }
         } else if (event.type === 'thinking_start') {
           // Thinking block started — update tab status to streaming.
           // The actual content arrives via thinking_delta events.

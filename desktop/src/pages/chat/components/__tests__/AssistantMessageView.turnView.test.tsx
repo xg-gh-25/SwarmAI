@@ -236,6 +236,17 @@ describe('AssistantMessageView — live row between steps', () => {
     expect(document.querySelector('details')).toBeNull();
   });
 
+  it('a finished step shows what it returned (outcome), errors in red', () => {
+    const res = (id: string, outcome: string, isError = false) =>
+      ({ type: 'tool_result', toolUseId: id, content: 'x', isError, truncated: false, outcome }) as ContentBlock;
+    renderView([tu('a', 'Running: npm test'), res('a', '12 passed in 3.1s'),
+      tu('b', 'Running: make'), res('b', 'make: *** no rule', true), tu('c', 'Running: ls')], { isStreaming: true });
+    fireEvent.click(screen.getByTestId('process-row'));
+    const outcomes = screen.getAllByTestId('step-outcome');
+    expect(outcomes.map((o) => o.textContent)).toEqual(['12 passed in 3.1s', 'make: *** no rule']);
+    expect(outcomes[1].className).toMatch(/text-red-400/);
+  });
+
   it('collapsed live row shows what just finished AND what is running now', () => {
     renderView([tu('a', 'Running: npm test'), tr('a'), tu('b', 'Running: npm run build')], { isStreaming: true });
     const live = screen.getByTestId('process-live');

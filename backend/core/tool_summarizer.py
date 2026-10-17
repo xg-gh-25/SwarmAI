@@ -8,6 +8,8 @@ functions only transform content for the UI replay path (SSE + SQLite).
 - ``summarize_tool_use``       — Generates ≤200-char summary from tool name + input
 - ``get_tool_category``        — Returns category string for icon mapping on frontend
 - ``truncate_tool_result``     — Truncates content to configurable limit, sets flag
+- ``summarize_tool_result``    — One-line outcome of a finished call (lines/matches/output)
+- ``tool_result_text``         — Plain text of a ToolResultBlock's content
 - ``_sanitize_command``        — Redacts sensitive tokens from bash command strings
 - ``_extract_mcp_tool_name``   — Extracts server/tool from ``mcp__Server__tool`` names
 - ``MAX_SUMMARY_LENGTH``       — 200 characters
@@ -19,7 +21,7 @@ functions only transform content for the UI replay path (SSE + SQLite).
 import os as _os
 import re
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -361,3 +363,66 @@ def truncate_tool_result(
     if len(content) <= limit:
         return (content, False)
     return (content[:limit], True)
+
+
+_OUTCOME_MAX = 120
+_READ_LINE_RE = re.compile(r"^\s*(\d+)\t")
+
+
+def tool_result_text(content: Any) -> str:
+    """Plain text of a ToolResultBlock's content (str, or a list of text blocks)."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return "\n".join(p for p in parts if p)
+    return str(content)
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()[:_OUTCOME_MAX]
+    return ""
+
+
+def _last_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        if line.strip():
+            return line.strip()[:_OUTCOME_MAX]
+    return ""
+
+
+def summarize_tool_result(name: str, text: str, is_error: bool) -> str:
+    """One short line saying what a finished tool call produced.
+
+    Computed from the FULL result (the streamed content is truncated), e.g.
+    ``lines 1–240``, ``12 matches``, the last line of a command's output, or the
+    first line of an error. Shown next to the step so the expanded process says
+    what each call returned, not only what was called.
+    """
+    lower = (name or "").lower()
+    if is_error:
+        return _sanitize_command(_first_line(text)) or "failed"
+    if lower in _READ_NAMES:
+        nums = [int(m.group(1)) for m in map(_READ_LINE_RE.match, text.splitlines()) if m]
+        if nums:
+            return f"lines {nums[0]}–{nums[-1]}" if len(nums) > 1 else f"line {nums[0]}"
+        return _first_line(text) or "empty"
+    if lower in _SEARCH_NAMES or lower in ("glob", "grep"):
+        first = _first_line(text)
+        if not first or first.lower().startswith(("no matches", "no files")):
+            return "no matches"
+        if first.lower().startswith("found "):
+            return first
+        n = sum(1 for line in text.splitlines() if line.strip())
+        return f"{n} match" if n == 1 else f"{n} matches"
+    if lower in _BASH_NAMES:
+        return _sanitize_command(_last_line(text)) or "no output"
+    if lower in _WRITE_NAMES or lower in ("edit", "multiedit", "notebookedit"):
+        return "saved"
+    if lower in ("agent", "task"):
+        return "done"
+    return _sanitize_command(_first_line(text))

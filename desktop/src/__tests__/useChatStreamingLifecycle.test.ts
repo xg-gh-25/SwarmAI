@@ -4027,6 +4027,27 @@ describe('TabStatusIndicator component', () => {
       expect(mockAddToast).not.toHaveBeenCalled();
     });
 
+    it('a live tool_result event merges into the assistant message (step done + outcome)', () => {
+      const msgId = 'msg-tr';
+      const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+      act(() => {
+        initTestTab('tab-tr');
+        result.current.setIsStreaming(true);
+        messageStoreRegistry.getOrCreate('tab-tr', { sessionId: 'sess-tr' }).replace([makeMessage({
+          id: msgId, role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tu1', name: 'Read', summary: 'Reading /a.py', category: 'read' } as never],
+        })]);
+      });
+      const handler = result.current.createStreamHandler(msgId, 'tab-tr');
+      act(() => {
+        handler({ type: 'tool_result', content: [{ type: 'tool_result', toolUseId: 'tu1', content: '1\tx',
+          isError: false, truncated: false, outcome: 'lines 1–40' } as never] } as StreamEvent);
+      });
+      const blocks = lastMsg('tab-tr').content;
+      expect(blocks.map((b) => b.type)).toEqual(['tool_use', 'tool_result']);
+      expect((blocks[1] as { outcome?: string }).outcome).toBe('lines 1–40');
+    });
+
     it('AC6 exposes NO compactionNotice React-state API (no shared slot)', () => {
       // No shared React-state slot — the message goes to the per-tab store.
       const { result } = renderHook(() =>

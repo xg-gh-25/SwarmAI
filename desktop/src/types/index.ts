@@ -230,6 +230,9 @@ export interface ToolResultContent {
   content?: string;
   isError: boolean;
   truncated: boolean;
+  /** One-line result computed backend-side from the FULL output
+   *  ("lines 1–240", "12 matches", last output line, error line). Live only. */
+  outcome?: string;
 }
 
 // AskUserQuestion types

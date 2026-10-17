@@ -120,6 +120,17 @@ function ToolStepRow({ step }: { step: ToolStep }) {
             {label.object}
           </button>
         )}
+        {/* What the call returned, Kiro-style: "lines 1–240", "12 matches", the
+            last output line, or the error. Absent for history (not persisted). */}
+        {step.result?.outcome && (
+          <span
+            data-testid="step-outcome"
+            title={step.result.outcome}
+            className={`ml-auto pl-2 text-[12px] truncate min-w-0 max-w-[45%] ${isError ? 'text-red-400' : 'text-[var(--color-text-dim)]'}`}
+          >
+            {step.result.outcome}
+          </span>
+        )}
       </div>
       {open && (
         <pre className="mx-2 mb-1.5 ml-8 px-3 py-2 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] font-mono text-[11.5px] leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
