@@ -21,9 +21,11 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from . import executors
+from . import pipeline_stage_events as _pse
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
 from .ui_actions import (
@@ -272,6 +274,70 @@ class StreamingOrchestrator:
             seen = set()
             self._parent._auto_surfaced_run_ids_set = seen
         return seen
+
+    def _pipeline_stage_snapshot(self) -> dict:
+        """Session-scoped ``run_id → last-seen stage state`` (pipeline_stage_events).
+
+        The baseline every stage diff is taken against. Session-scoped (lazily on the
+        parent SessionUnit, like ``_auto_surfaced_run_ids``) rather than per turn, so a
+        pipeline that spans several turns never repeats a stage row, and two
+        artifact_cli calls in one message that both see the same transition emit it
+        once: the first result advances the snapshot, the second diffs against it."""
+        snap = getattr(self._parent, "_pipeline_stage_snapshot_map", None)
+        if snap is None:
+            snap = {}
+            self._parent._pipeline_stage_snapshot_map = snap
+        return snap
+
+    async def _watch_pipeline_stage_call(self, run_id: str) -> None:
+        """Seed the snapshot for a run this session has not seen yet, at its tool_use
+        — normally before the CLI has written run.json — so the first diff only shows
+        what this call changed, not every stage the run finished earlier. (The CLI runs
+        the tool on its own, so the order is not guaranteed; if the write wins, that one
+        row is missed, never duplicated.) A run already in the snapshot needs no read.
+        Fail-safe: any error leaves the run unseeded, and the result then only seeds
+        (see _pipeline_stage_events) — a missing baseline never replays history."""
+        snap = self._pipeline_stage_snapshot()
+        if run_id in snap:
+            return
+        try:
+            state = await executors.run_in("io", _pse.read_stage_state, run_id)
+        except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
+            logger.warning("pipeline stage pre-read failed for %r: %s", run_id, e)
+            return
+        if state is not None:
+            snap[run_id] = state
+
+    async def _pipeline_stage_events(self, run_id: str) -> list[dict]:
+        """After a SUCCESSFUL artifact_cli call: re-read run.json (the authority — the
+        command string proves nothing), diff its stages against the session snapshot,
+        advance the snapshot, and return one ``assistant`` event carrying a
+        ``pipeline_stage`` block per newly finished stage ([] when nothing changed).
+
+        The event goes through the normal assistant path, so session_router persists
+        it as its own row and the chat shows it in place after a reload. Fail-safe:
+        any error → [] and the turn continues."""
+        try:
+            after = await executors.run_in("io", _pse.read_stage_state, run_id)
+            if after is None:
+                return []
+            snap = self._pipeline_stage_snapshot()
+            before = snap.get(run_id)
+            snap[run_id] = after
+            if before is None:
+                # No baseline (the pre-read failed or found no run.json): seed only.
+                # Diffing against nothing would emit every stage already finished.
+                return []
+            blocks = _pse.new_stage_blocks(
+                run_id, before, after, datetime.now().astimezone().isoformat(),
+            )
+        except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
+            logger.warning("pipeline stage emit failed for %r: %s", run_id, e)
+            return []
+        if not blocks:
+            return []
+        # Not model output: _content_emitted (zombie/empty-turn detection) is left alone.
+        return [{"type": "assistant", "content": blocks, "model": None}]
 
     def _clear_completed_sub_agents(self, message: Any) -> None:
         """Remove tracking entries for sub-agents (Agent tool) that completed.
@@ -956,6 +1022,11 @@ class StreamingOrchestrator:
         _pending_completion: dict[str, str] = {}
         # tool_use_id → tool name, so a result can be summarized per tool.
         _tool_names: dict[str, str] = {}
+        # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
+        # Its successful result re-reads run.json and yields a persisted
+        # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
+        # stage progress shown by the backend, not left to the model writing it.
+        _pending_stage_watch: dict[str, str] = {}
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
         # Turn-scoped (local to this method), so no cross-session leak; keyed by the
         # raw path string. Only deliverable-candidate writes are ever resolved —
@@ -1474,6 +1545,12 @@ class StreamingOrchestrator:
                                         "auto-surface on completion failed for %r: %s",
                                         _um_rid, _e,
                                     )
+                            # ── Pipeline stage rows (successful artifact_cli call) ──
+                            if _tuid in _pending_stage_watch:
+                                for _ev in await self._pipeline_stage_events(
+                                    _pending_stage_watch.pop(_tuid)
+                                ):
+                                    yield _ev
                         else:
                             # FAILED tool result: discard any pending write/delete/completion
                             # tracking so it can never surface later (symmetric with the
@@ -1484,6 +1561,7 @@ class StreamingOrchestrator:
                             _pending_file_deletes.pop(_tuid, None)
                             _pending_heredoc_writes.pop(_tuid, None)
                             _pending_completion.pop(_tuid, None)
+                            _pending_stage_watch.pop(_tuid, None)
                 # ── Glitch prefix in history → clean + resume at this boundary ──
                 # Tool results just came back, so the model is about to write
                 # its next response from a history that still holds the glitch
@@ -1713,6 +1791,14 @@ class StreamingOrchestrator:
                             _completion_run_id = parse_completion_run_id(_cmd)
                             if _completion_run_id:
                                 _pending_completion[block.id] = _completion_run_id
+                            # ── Pipeline stage rows: watch every artifact_cli call that
+                            # names a run; its successful result yields the stages it
+                            # finished (see _pipeline_stage_events). Seed the baseline
+                            # now, normally before the call writes run.json.
+                            _stage_run_id = _pse.parse_watched_run_id(_cmd)
+                            if _stage_run_id:
+                                _pending_stage_watch[block.id] = _stage_run_id
+                                await self._watch_pipeline_stage_call(_stage_run_id)
                         # ── UI-action (ACT): agent drives its own UI (Run 2) ──
                         # The agent calls the ui_action tool; we observe it here,
                         # validate cmd against the fail-closed allowlist, and yield
@@ -1903,13 +1989,20 @@ class StreamingOrchestrator:
                                         "auto-surface on completion failed for %r: %s",
                                         _completion_rid, _e,
                                     )
+                            # ── Pipeline stage rows (successful artifact_cli call) ──
+                            # Queued AFTER the content_blocks flush below, so the
+                            # stage row lands after the tool_result it came from.
+                            _stage_rid = _pending_stage_watch.pop(block.tool_use_id, None)
+                            if _stage_rid:
+                                _fc_events += await self._pipeline_stage_events(_stage_rid)
                         else:
                             # a FAILED tool result: discard any pending tracking (never
-                            # surface a write/delete/completion that errored) so it can't
-                            # leak later.
+                            # surface a write/delete/completion/stage watch that errored)
+                            # so it can't leak later.
                             _pending_file_changes.pop(block.tool_use_id, None)
                             _pending_file_deletes.pop(block.tool_use_id, None)
                             _pending_completion.pop(block.tool_use_id, None)
+                            _pending_stage_watch.pop(block.tool_use_id, None)
                         if _fc_events:
                             # Flush accumulated content blocks first (ordering:
                             # the tool_result must precede its file_changed).

@@ -1,0 +1,80 @@
+[
+  {
+    "type": "pipeline_stage",
+    "runId": "run_fx1",
+    "stage": "think",
+    "status": "completed",
+    "ordinal": 2,
+    "position": 2,
+    "total": 8,
+    "profile": "full",
+    "next": "plan",
+    "nextOrdinal": 3,
+    "gate": null,
+    "summary": "3 alternatives, recommend A",
+    "at": "2026-10-17T22:00:00+08:00"
+  },
+  {
+    "type": "pipeline_stage",
+    "runId": "run_fx1",
+    "stage": "gate1",
+    "status": "completed",
+    "ordinal": 4,
+    "position": null,
+    "total": 8,
+    "profile": "full",
+    "next": "review",
+    "nextOrdinal": 6,
+    "gate": {
+      "name": "GATE 1",
+      "verdict": "WARN"
+    },
+    "summary": null,
+    "at": "2026-10-17T22:00:00+08:00"
+  },
+  {
+    "type": "pipeline_stage",
+    "runId": "run_fx1",
+    "stage": "build",
+    "status": "completed",
+    "ordinal": 5,
+    "position": 4,
+    "total": 8,
+    "profile": "full",
+    "next": "review",
+    "nextOrdinal": 6,
+    "gate": null,
+    "summary": null,
+    "at": "2026-10-17T22:00:00+08:00"
+  },
+  {
+    "type": "pipeline_stage",
+    "runId": "run_fx2",
+    "stage": "plan",
+    "status": "skipped",
+    "ordinal": 3,
+    "position": 3,
+    "total": 5,
+    "profile": "docs",
+    "next": "deliver",
+    "nextOrdinal": 9,
+    "gate": null,
+    "summary": null,
+    "at": "2026-10-17T22:00:00+08:00"
+  },
+  {
+    "type": "pipeline_stage",
+    "runId": "run_fx3",
+    "stage": "reflect",
+    "status": "completed",
+    "ordinal": 10,
+    "position": 3,
+    "total": 3,
+    "profile": "research",
+    "next": null,
+    "nextOrdinal": null,
+    "gate": null,
+    "summary": null,
+    "at": "2026-10-17T22:00:00+08:00"
+  }
+]

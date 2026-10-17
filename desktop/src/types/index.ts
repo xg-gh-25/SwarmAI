@@ -302,7 +302,32 @@ export interface TodoItem {
   activeForm: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent;
+/**
+ * A pipeline stage that run.json records as finished — written by the BACKEND
+ * (backend/core/pipeline_stage_events.py) when an artifact_cli call returns, never
+ * by the model. Persisted like any assistant content; keys arrive camelCase as-is.
+ * `ordinal` is the progress display's circled number (①–⑩; ④/⑧ are gates, so
+ * build is ⑤ and deliver ⑨). `summary` is model-written stage text: render plain.
+ */
+export interface PipelineStageContent {
+  type: 'pipeline_stage';
+  runId: string;
+  stage: string;
+  status: 'completed' | 'skipped';
+  ordinal: number | null;
+  /** 1-based index in the run's profile stage list (null: stage not in the profile). */
+  position: number | null;
+  total: number;
+  profile: string | null;
+  next: string | null;
+  nextOrdinal: number | null;
+  gate: { name: string; verdict: string } | null;
+  summary: string | null;
+  /** ISO time the backend observed the transition. */
+  at: string;
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent;
 
 export interface Message {
   id: string;

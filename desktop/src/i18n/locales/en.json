@@ -260,7 +260,15 @@
       "showAll": "{{count}} more · show all",
       "backToLatestThinking": "Thinking · back to latest",
       "notes_one": "{{count}} note",
-      "notes_other": "{{count}} notes"
+      "notes_other": "{{count}} notes",
+      "stage": {
+        "skipped": "skipped",
+        "running": "in progress",
+        "ariaDone": "Pipeline stage {{stage}} done",
+        "ariaSkipped": "Pipeline stage {{stage}} skipped",
+        "ariaRunning": "Pipeline stage {{stage}} in progress",
+        "position": "stage {{position}} of {{total}}"
+      }
     },
     "nextSteps": {
       "label": "Next steps",

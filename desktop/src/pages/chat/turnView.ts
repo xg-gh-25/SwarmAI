@@ -16,6 +16,9 @@
  *                 BETWEEN tool calls (`note` steps). Rendered as one folded row.
  * - `landmark`  — a pipeline landmark / gate verdict line. Stays visible in the
  *                 main stream and splits the process into segments.
+ * - `stage`     — a `pipeline_stage` block: a stage the BACKEND saw finish in
+ *                 run.json (not model text). Stays visible, splits the process, and
+ *                 names the next stage on the live row while the turn streams.
  * - `outcome`   — text AFTER the last tool call: the answer. Rendered in full.
  * - `interrupt` — a block that needs the user (question / permission / escalation).
  *                 Never folded; also splits the process.
@@ -44,6 +47,7 @@ import type {
   AskUserQuestionContent,
   CmdPermissionContent,
   EscalationContent,
+  PipelineStageContent,
 } from '../../types';
 
 /** `waiting` = the tool has not run: an unanswered permission / question gates it.
@@ -88,7 +92,12 @@ export interface ProcessUnit {
   /** What the live row shows: the pending tool (if any), the latest note, and —
    *  when the model's newest non-tool output is thinking — that thinking's last
    *  line, so the collapsed row follows what the model is thinking right now. */
-  live?: { step?: ToolStep; note?: string; thinking?: string; recent?: ToolStep };
+  live?: {
+    step?: ToolStep; note?: string; thinking?: string; recent?: ToolStep;
+    /** The pipeline stage now running: the `next` of the latest stage row before
+     *  this segment in the same message (absent outside pipeline turns). */
+    stage?: { stage: string; ordinal: number | null };
+  };
   /** The turn's final tool failed and nothing followed it — shown outside the fold. */
   unrecoveredFailure?: ToolStep;
 }
@@ -96,6 +105,7 @@ export interface ProcessUnit {
 export type TurnUnit =
   | ProcessUnit
   | { kind: 'landmark'; text: string; index: number }
+  | { kind: 'stage'; block: PipelineStageContent; index: number }
   | { kind: 'outcome'; text: string; index: number }
   | { kind: 'interrupt'; block: InterruptBlock; index: number };
 
@@ -124,11 +134,18 @@ function isUnanswered(b: InterruptBlock): boolean {
  * at REVIEW (see the comment on the regex) — the probe's loose form over-counts.
  */
 // Case-sensitive and word-bounded on purpose: an unanchored /GATE\s*[012]/i also
-// matched ordinary prose ("aggregate 1", "delegate 2") and split the fold.
-const LANDMARK_RE = /(^|\n)\s*(## [✦★]|\*\*PHASE [ABC]|🚀 Pipeline|Pipeline (RESUMED|PAUSED)|━━━)|\bGATE [012]\b/;
+// matched ordinary prose ("aggregate 1", "delegate 2") and split the fold. The
+// mixed-case `Gate N` form the model actually writes ("Gate 1: **PASS**") counts only
+// at a LINE START, so a mid-sentence mention ("the Gate 1 skeptic") stays prose; no
+// global `i` flag, which would widen the uppercase mid-line branch too.
+const LANDMARK_RE = /(^|\n)\s*(## [✦★]|\*\*PHASE [ABC]|🚀 Pipeline|Pipeline (RESUMED|PAUSED)|━━━|(\*\*)?(★\s*)?[Gg]ate [012]\b)|\bGATE [012]\b/;
+// A line that LEADS with a circled stage number is a progress line only when it
+// carries a second circled number or a stage name ("③ ④ ⑤ 都已完成，进 ⑦ TEST",
+// "⑤ BUILD → …"); a lone "① 第一点…" is an ordinary numbered list.
+const CIRCLED_LINE_RE = /(^|\n)\s*[①-⑩](?=[^\n]*([①-⑩]|\b(EVALUATE|THINK|PLAN|BUILD|REVIEW|TEST|ADVERSARIAL|DELIVER|REFLECT)\b))/;
 
 export function isLandmarkText(text: string): boolean {
-  return LANDMARK_RE.test(text);
+  return LANDMARK_RE.test(text) || CIRCLED_LINE_RE.test(text);
 }
 
 /** Per-block memo: past text blocks keep their identity while a turn streams, so
@@ -203,6 +220,11 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
 
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
+    if (block.type === 'pipeline_stage') {
+      seg = null;
+      units.push({ kind: 'stage', block, index });
+      return;
+    }
     if (INTERRUPT_TYPES.has(block.type)) {
       seg = null;
       units.push({ kind: 'interrupt', block: block as InterruptBlock, index });
@@ -262,10 +284,16 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
   }
 
   if (isStreaming) {
-    const last = units[units.length - 1];
+    let last = units[units.length - 1];
     if (!last) {
       units.push({ kind: 'process', id: 'seg-live', steps: [], isLive: true, live: {} });
-    } else if (last.kind === 'process') {
+    } else if (last.kind === 'stage') {
+      // The stage just finished and the next one has not produced a step yet —
+      // still show a live row, so the stage now running is named immediately.
+      last = { kind: 'process', id: `seg-${ordinal}`, steps: [], isLive: true, live: {} };
+      units.push(last);
+    }
+    if (last && last.kind === 'process') {
       last.isLive = true;
       const pending = [...last.steps].reverse().find(
         (s): s is ToolStep => s.kind === 'tool' && s.status === 'pending',
@@ -283,6 +311,14 @@ export function deriveTurnView(content: ContentBlock[], isStreaming: boolean): T
         (s): s is ToolStep => s.kind === 'tool' && s.status !== 'pending',
       );
       last.live = { step: pending, note: thinking ? undefined : note?.text, thinking, recent };
+      const stageAt = units.map((u) => u.kind).lastIndexOf('stage');
+      const prevStage = stageAt >= 0 ? (units[stageAt] as Extract<TurnUnit, { kind: 'stage' }>) : undefined;
+      // A landmark after the latest stage row (e.g. "Gate 1: BLOCK" → back to plan)
+      // means that row's `next` may no longer hold — show no stage rather than a stale one.
+      const landmarkAfter = units.slice(stageAt + 1).some((u) => u.kind === 'landmark');
+      if (prevStage?.block.next && !landmarkAfter) {
+        last.live.stage = { stage: prevStage.block.next, ordinal: prevStage.block.nextOrdinal };
+      }
     }
   }
 

@@ -7,6 +7,9 @@
  *   pages/chat/turnView.ts): tool calls / thinking / between-tool notes fold
  *   into ProcessBlock rows; landmarks, the answer (outcome) and interrupts
  *   (question / permission / escalation) render in the main stream
+ * - Pipeline stage rows (`stage` units — written by the backend from run.json)
+ *   render as PipelineStageRow; while streaming, the stage now running is shown
+ *   above the live process row (PipelineStageLive)
  * - Next-step chips (NextSteps) from a trailing ```next-steps block, last
  *   assistant message only; Copy copies the answer, not the process
  * - Red border error wrapper when message.isError is true
@@ -33,6 +36,7 @@ import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ProcessBlock } from './ProcessBlock';
+import { PipelineStageRow, PipelineStageLive } from './PipelineStageRow';
 import { NextSteps } from './NextSteps';
 import { deriveTurnView, extractNextSteps } from '../turnView';
 import { AssistantHeader } from './AssistantHeader';
@@ -247,16 +251,21 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   const contentBlocks = view.units.map((unit) => {
     if (unit.kind === 'process') {
+      // Always a Fragment, so the element type never changes when the live stage
+      // line comes and goes — ProcessBlock keeps its state instead of remounting.
       return (
-        <ProcessBlock
-          key={`p-${unit.id}`}
-          unit={unit}
-          expanded={expandedProcess.has(unit.id)}
-          onToggle={() => toggleProcess(unit.id)}
-          startedAt={message.timestamp}
-        />
+        <React.Fragment key={`p-${unit.id}`}>
+          {unit.isLive && unit.live?.stage && <PipelineStageLive stage={unit.live.stage} />}
+          <ProcessBlock
+            unit={unit}
+            expanded={expandedProcess.has(unit.id)}
+            onToggle={() => toggleProcess(unit.id)}
+            startedAt={message.timestamp}
+          />
+        </React.Fragment>
       );
     }
+    if (unit.kind === 'stage') return <PipelineStageRow key={`st-${unit.index}`} block={unit.block} />;
     if (unit.kind === 'interrupt') return renderBlock(unit.block, `i-${unit.index}`);
     // landmark + outcome are markdown text; a distinct key prefix per kind keeps
     // React from reusing one kind's instance for another at the same index.

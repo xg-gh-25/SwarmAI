@@ -29,7 +29,11 @@ from core.session_utils import strip_glitch_prefix, strip_tool_call_leak
 
 logger = logging.getLogger(__name__)
 
-_TOOL_ONLY_TYPES = {"tool_use", "tool_result"}
+# Block types that are not conversation: a message made only of these is dropped
+# from the resume history. pipeline_stage rows are written by the backend from
+# run.json (core.pipeline_stage_events), not said by the assistant — keeping such a
+# row would add an empty assistant turn to the resumed prompt.
+_TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage"}
 
 # ─── Section headers & preamble ─────────────────────────────────────
 
@@ -77,7 +81,8 @@ _TRUNCATION_NOTE = "[Earlier messages truncated to fit token budget]"
 # ─── Message helpers (shared by both paths) ──────────────────────────
 
 def _filter_tool_only_messages(messages: list[dict]) -> list[dict]:
-    """Remove messages whose content blocks are exclusively tool_use or tool_result."""
+    """Remove messages whose content blocks are all non-conversational
+    (tool_use / tool_result / pipeline_stage — see _TOOL_ONLY_TYPES)."""
     result = []
     for msg in messages:
         content = msg.get("content")

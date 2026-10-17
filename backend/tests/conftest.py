@@ -59,7 +59,11 @@ if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
 # import time (not in a fixture) because some modules read flags at import.
 # Kept: the suite's own control knobs, which are deliberately exported by the
 # person running the tests.
-_TEST_CONTROL_ENV = frozenset({"SWARMAI_SUITE", "SWARMAI_REGEN_TOOL_SUMMARY_FIXTURE"})
+_TEST_CONTROL_ENV = frozenset({
+    "SWARMAI_SUITE",
+    "SWARMAI_REGEN_TOOL_SUMMARY_FIXTURE",
+    "SWARMAI_REGEN_PIPELINE_STAGE_FIXTURE",
+})
 for _k in [k for k in _os.environ if k.startswith(("SWARM_", "SWARMAI_"))]:
     if _k not in _TEST_CONTROL_ENV:
         del _os.environ[_k]
