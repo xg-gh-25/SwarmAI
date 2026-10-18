@@ -176,7 +176,10 @@ class TestInstaller:
 
         # Mock the install to write to tmp instead of ~/Library/LaunchAgents
         dest = tmp_path / f"{DAEMON_LABEL}.plist"
+        # The bundle deploy is covered by test_deploy_hardening.py; stub it here
+        # so this plist test neither syncs a real bundle nor trips on a mocked rsync.
         with patch.object(mod, "LAUNCH_AGENTS", tmp_path), \
+             patch.object(mod, "_deploy_daemon_binary", return_value=True), \
              patch("subprocess.run"):
             mod.install()
 

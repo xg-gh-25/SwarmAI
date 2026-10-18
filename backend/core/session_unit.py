@@ -75,6 +75,52 @@ subprocess_executor = ThreadPoolExecutor(
 # Legacy alias for internal callers
 _subprocess_executor = subprocess_executor
 
+
+# ── Expected-kill log classification ──────────────────────────────────────
+# Every refresh / release / orphan reap / retry recycle SIGKILLs the CLI via
+# _force_kill, and the SDK's message reader then logs
+# "ERROR Fatal error in message reader: Command failed with exit code -9".
+# Those ERRORs are our own doing (16 in one day, all intentional) and bury the
+# real ones. Downgrade that one SDK record to INFO when we SIGKILLed a CLI
+# moments before; an unexplained -9 (jetsam/OOM/external kill) stays ERROR.
+# A bounded ring of kill timestamps — log classification only, not session
+# state (nothing reads it per session; it can only lower one log level).
+from collections import deque as _deque
+
+_INTENTIONAL_KILL_WINDOW_S = 10.0
+_recent_intentional_kills: "_deque[float]" = _deque(maxlen=32)
+
+
+def _note_intentional_kill() -> None:
+    _recent_intentional_kills.append(time.monotonic())
+
+
+class _ExpectedKillLogFilter(logging.Filter):
+    """Downgrade the SDK's reader ERROR for a CLI we just SIGKILLed on purpose."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.ERROR and "exit code -9" in record.getMessage():
+            now = time.monotonic()
+            match = next(
+                (t for t in _recent_intentional_kills if now - t <= _INTENTIONAL_KILL_WINDOW_S),
+                None,
+            )
+            if match is not None:
+                # One kill excuses ONE error: a real jetsam/OOM -9 in another
+                # session right after our kill must still surface as ERROR.
+                try:
+                    _recent_intentional_kills.remove(match)
+                except ValueError:
+                    pass  # consumed concurrently by another record — fine
+                record.levelno = logging.INFO
+                record.levelname = "INFO"
+                record.msg = f"{record.getMessage()} (expected: SwarmAI killed this CLI on purpose)"
+                record.args = None
+        return True
+
+
+logging.getLogger("claude_agent_sdk._internal.query").addFilter(_ExpectedKillLogFilter())
+
 # Dedicated pool for HEAVY psutil process-tree walks (process_tree_rss ~= 107ms
 # each, measured run_409392d4). The maintenance loop gathers these per-session
 # RSS reads concurrently; a dedicated pool keeps that gather burst from
@@ -4541,6 +4587,9 @@ class SessionUnit:
         """
         pid = self.pid
         if pid:
+            # Before the kill: the SDK reader logs its "exit code -9" ERROR
+            # within milliseconds of the signal (see _ExpectedKillLogFilter).
+            _note_intentional_kill()
             try:
                 pgid = os.getpgid(pid)
                 my_pgid = os.getpgid(os.getpid())

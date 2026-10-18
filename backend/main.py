@@ -1311,8 +1311,12 @@ async def lifespan(app: FastAPI):
     # NOT for a verify_build probe: the sweep is system-wide (pgrep), not scoped to
     # this data dir, so a probe started during `./prod.sh build` could kill the
     # LIVE daemon's CLIs (an untagged process, or a `ps` hiccup reading the tag).
-    if os.environ.get("SWARMAI_VERIFY_BUILD") == "1":
-        logger.info("Verify-build probe — skipping leftover claude CLI sweep")
+    # SWARMAI_NO_CLI_SWEEP=1: same for any other throwaway instance (the new-user
+    # smoke test) — it boots on a temp HOME but the sweep would still see the
+    # live daemon's processes.
+    if (os.environ.get("SWARMAI_VERIFY_BUILD") == "1"
+            or os.environ.get("SWARMAI_NO_CLI_SWEEP") == "1"):
+        logger.info("Isolated instance (verify probe / smoke) — skipping leftover claude CLI sweep")
     else:
         startup_killed = session_registry.kill_all_claude_processes()
         if startup_killed:

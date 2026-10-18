@@ -78,60 +78,97 @@ def _resolve_log_dir() -> str:
     return str(log_dir)
 
 
-def _deploy_daemon_binary() -> bool:
-    """Deploy the backend binary to ~/.swarm-ai/daemon/.
+class DaemonDeployError(RuntimeError):
+    """A backend source was found but deploying it into the daemon dir failed."""
 
-    Searches for the PyInstaller binary in these locations (priority order):
-    1. Tauri app bundle: /Applications/SwarmAI.app/Contents/MacOS/python-backend
-    2. Dev build output: <repo>/desktop/src-tauri/binaries/python-backend-*
 
-    Returns True if binary was deployed, False if not found.
-    The daemon wrapper script falls back to venv Python if no binary exists.
+def _deploy_daemon_binary(
+    sources: "list[Path] | None" = None,
+    daemon_dir: "Path | None" = None,
+) -> bool:
+    """Deploy the backend to ~/.swarm-ai/daemon/.
+
+    Sources, in priority order (first that exists wins):
+    1. Installed app: ``SwarmAI.app/Contents/Resources/python-backend/`` — the
+       onedir bundle ``prod.sh release`` injects (``/Applications`` then
+       ``~/Applications``); a legacy one-file ``Contents/MacOS/python-backend``.
+    2. Dev build output: ``<repo>/desktop/src-tauri/binaries/python-backend-<target>/``
+       — a onedir bundle DIRECTORY (executable + ``_internal/``).
+
+    A onedir bundle is synced like scripts/daemon-lib.sh does it (``rsync -a
+    --delete``, keeping the daemon's own ``resources/`` and ``.version``); a
+    plain executable is copied. (The old code ``copy2``'d the bundle directory
+    as if it were a file → IsADirectoryError on every install.)
+
+    Returns True if the backend was deployed or already current, False if no
+    source was found (the wrapper then falls back to venv Python). Raises
+    DaemonDeployError if a found source could not be deployed — the caller must
+    stop before bootstrapping a possibly half-synced bundle.
     """
     import platform as _platform
     import shutil
 
-    daemon_dir = DAEMON_DIR
+    daemon_dir = daemon_dir or DAEMON_DIR
     daemon_binary = daemon_dir / "python-backend"
 
-    # Source 1: Installed Tauri app bundle
-    app_binary = Path("/Applications/SwarmAI.app/Contents/MacOS/python-backend")
-    if not app_binary.exists():
-        # Also check user Applications
-        app_binary = Path.home() / "Applications/SwarmAI.app/Contents/MacOS/python-backend"
-
-    # Source 2: Dev build output (for developers running ./dev.sh build)
-    if _platform.machine() == "arm64":
-        target = "aarch64-apple-darwin"
+    if sources is not None:
+        candidates = list(sources)  # tests inject sources
     else:
-        target = "x86_64-apple-darwin"
-    dev_binary = Path(__file__).parent.parent.parent / "desktop" / "src-tauri" / "binaries" / f"python-backend-{target}"
+        target = "aarch64-apple-darwin" if _platform.machine() == "arm64" else "x86_64-apple-darwin"
+        candidates = []
+        for apps in (Path("/Applications"), Path.home() / "Applications"):
+            app = apps / "SwarmAI.app" / "Contents"
+            candidates += [app / "Resources" / "python-backend", app / "MacOS" / "python-backend"]
+        candidates.append(
+            Path(__file__).parent.parent.parent / "desktop" / "src-tauri" / "binaries"
+            / f"python-backend-{target}"
+        )
 
-    # Pick the first available source
-    source = None
-    for candidate in [app_binary, dev_binary]:
-        if candidate.exists():
-            source = candidate
-            break
+    def _executable_of(path: Path) -> Path | None:
+        if path.is_dir():
+            exe = path / "python-backend"
+            return exe if exe.is_file() else None
+        return path if path.is_file() else None
 
+    source = next((c for c in candidates if _executable_of(c) is not None), None)
     if source is None:
         print("  No backend binary found — daemon will use venv fallback")
         return False
+    source_exe = _executable_of(source)
 
     # Skip if deployed binary is newer than (or same age as) source.
     # Compares mtime directly — catches app updates immediately.
-    if daemon_binary.exists():
-        deployed_mtime = daemon_binary.stat().st_mtime
-        source_mtime = source.stat().st_mtime
-        if deployed_mtime >= source_mtime:
-            print(f"  Daemon binary already up-to-date (deployed >= source)")
-            return True
+    if daemon_binary.exists() and daemon_binary.stat().st_mtime >= source_exe.stat().st_mtime:
+        print("  Daemon binary already up-to-date (deployed >= source)")
+        return True
 
-    # Atomic copy: write to .tmp then rename
     daemon_dir.mkdir(parents=True, exist_ok=True)
-    tmp = daemon_binary.with_suffix(".tmp")
-    shutil.copy2(str(source), str(tmp))
-    tmp.rename(daemon_binary)
+    if source.is_dir():
+        # Anchored excludes: only the daemon dir's top-level resources/ + .version
+        # (they are not in the bundle; --delete would wipe them).
+        try:
+            r = subprocess.run(
+                ["rsync", "-a", "--delete", "--exclude", "/resources", "--exclude", "/.version",
+                 f"{source}/", f"{daemon_dir}/"],
+                capture_output=True, text=True,
+            )
+        except FileNotFoundError as exc:
+            raise DaemonDeployError(f"rsync not available: {exc}") from exc
+        if r.returncode != 0:
+            # Raise, don't return False: the bundle in daemon_dir may now be
+            # half-synced, and install() must NOT go on to (re)bootstrap it.
+            raise DaemonDeployError(
+                f"daemon bundle sync failed (rsync rc={r.returncode}): "
+                f"{(r.stderr or '').strip()[-300:]} — {daemon_dir} may be inconsistent; "
+                "fix the cause and re-run the install"
+            )
+    else:
+        # Legacy one-file binary — atomic copy: write to .tmp then rename
+        tmp = daemon_binary.with_suffix(".tmp")
+        shutil.copy2(str(source), str(tmp))
+        tmp.rename(daemon_binary)
+    if not daemon_binary.is_file():
+        raise DaemonDeployError(f"daemon binary missing after deploy: {daemon_binary}")
     daemon_binary.chmod(0o755)
     print(f"  Daemon binary deployed from {source}")
     return True
@@ -164,7 +201,8 @@ def install():
     content = content.replace("__LOG_DIR__", _resolve_log_dir())
     content = content.replace("__HOME__", str(Path.home()))
 
-    # Deploy backend binary to ~/.swarm-ai/daemon/
+    # Deploy backend binary to ~/.swarm-ai/daemon/. A DaemonDeployError
+    # propagates on purpose: never go on to bootstrap a half-synced bundle.
     _deploy_daemon_binary()
 
     # Uninstall old slack-daemon plist if it exists
@@ -324,7 +362,11 @@ def main():
     elif args.uninstall:
         uninstall()
     else:
-        install()
+        try:
+            install()
+        except DaemonDeployError as exc:
+            print(f"Install aborted: {exc}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

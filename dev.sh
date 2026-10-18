@@ -221,7 +221,7 @@ cmd_deploy() {
 
     # Step 0: Sync versions
     _log "Step 0: Syncing version from VERSION file..."
-    bash "$PROJECT_ROOT/scripts/sync-version.sh"
+    bash "$PROJECT_ROOT/scripts/sync-version.sh" || { _err "Version sync FAILED"; return 1; }
     echo ""
 
     # Step 1+2: PyInstaller + verification (build-backend.sh runs verify_build.py
@@ -243,7 +243,7 @@ cmd_deploy() {
         _daemon_drain_before_restart
     fi
 
-    _deploy_daemon_binary
+    _deploy_daemon_binary || { _err "Deploy to daemon FAILED — daemon NOT restarted; fix and re-run"; return 1; }
 
     echo ""
     _ok "Deploy complete in $(_build_time $start)"

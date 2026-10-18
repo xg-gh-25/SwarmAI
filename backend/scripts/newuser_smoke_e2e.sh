@@ -138,8 +138,11 @@ echo "isolated data : $ISO_DATA_DIR   (real: $REAL_DATA_DIR)"
 echo "port          : $PORT           binary: $BIN"
 
 # ── Launch packaged backend against the virgin HOME ───────────────────────────
+# SWARMAI_NO_CLI_SWEEP=1: the startup "kill leftover claude CLIs" sweep is
+# system-wide (pgrep), not HOME-scoped — without this a smoke run could kill the
+# live daemon's CLIs (an untagged process, or a `ps` hiccup reading the tag).
 env -i HOME="$TMP" PATH="$PATH" \
-    SWARMAI_MODE=subprocess SWARMAI_PORT="$PORT" \
+    SWARMAI_MODE=subprocess SWARMAI_PORT="$PORT" SWARMAI_NO_CLI_SWEEP=1 \
     CLAUDE_CODE_USE_BEDROCK="${CLAUDE_CODE_USE_BEDROCK:-}" \
     AWS_REGION="${AWS_REGION:-us-east-1}" \
     AWS_PROFILE="${AWS_PROFILE:-}" \

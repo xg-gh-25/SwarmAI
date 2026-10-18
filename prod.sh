@@ -115,7 +115,7 @@ cmd_build() {
 
     # Step 0: Sync versions from VERSION file
     _log "Step 0: Syncing version from VERSION file..."
-    bash "$PROJECT_ROOT/scripts/sync-version.sh"
+    bash "$PROJECT_ROOT/scripts/sync-version.sh" || { _err "Version sync FAILED"; return 1; }
     echo ""
 
     # Step 1+2: PyInstaller build + post-build verification. build-backend.sh
@@ -146,7 +146,8 @@ cmd_build() {
         _daemon_drain_before_restart
     fi
 
-    _deploy_daemon_binary
+    # explicit: callers can suspend errexit (`if ! cmd_build` in cmd_deploy)
+    _deploy_daemon_binary || { _err "Deploy to daemon FAILED — daemon NOT restarted; fix and re-run"; return 1; }
 
     echo ""
     _ok "Build complete in $(_build_time $start)"
@@ -203,7 +204,7 @@ cmd_release() {
 
     # 1b. Version sync + check
     _log "Syncing version from VERSION file..."
-    bash "$PROJECT_ROOT/scripts/sync-version.sh"
+    bash "$PROJECT_ROOT/scripts/sync-version.sh" || { _err "Version sync FAILED"; return 1; }
     local version
     version=$(tr -d '[:space:]' < "$PROJECT_ROOT/VERSION")
     _ok "Version: ${version}"
@@ -322,7 +323,8 @@ cmd_release() {
         _daemon_drain_before_restart
     fi
 
-    _deploy_daemon_binary
+    # explicit: callers can suspend errexit (`if ! cmd_build` in cmd_deploy)
+    _deploy_daemon_binary || { _err "Deploy to daemon FAILED — daemon NOT restarted; fix and re-run"; return 1; }
 
     # 3b. Restart daemon — deploy-first pattern (SIGKILL + KeepAlive restarts new
     #     binary; a changed launchd job definition is reloaded instead)

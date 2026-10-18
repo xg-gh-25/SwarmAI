@@ -129,9 +129,20 @@ _deploy_daemon_binary() {
     # Patterns are ANCHORED with a leading '/' so they match ONLY the top-level
     # $DAEMON_DIR/resources and $DAEMON_DIR/.version — NOT a nested 'resources'
     # dir that legitimately ships inside the bundle (e.g. _internal/limits/resources).
+    # Explicit failure checks throughout: callers may run us with errexit
+    # suspended (prod.sh `if ! cmd_build`), where a failed rsync would otherwise
+    # be ignored and the daemon restarted onto a half-synced bundle.
+    local _rsync_rc=0
     rsync -a --delete --exclude='/resources' --exclude='/.version' \
-        "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
-    chmod +x "$DAEMON_BINARY"
+        "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/" || _rsync_rc=$?
+    if [ "$_rsync_rc" -ne 0 ]; then
+        # rsync writes in place: $DAEMON_DIR may now mix old and new files.
+        # Not restarting keeps the running process on what it already loaded;
+        # a respawn would load the mixed bundle, so redeploy before any restart.
+        _err "rsync of the backend bundle into $DAEMON_DIR FAILED (rc=$_rsync_rc) — daemon NOT restarted, but its bundle may be inconsistent: fix the cause and redeploy before restarting"
+        return 1
+    fi
+    chmod +x "$DAEMON_BINARY" || { _err "chmod +x $DAEMON_BINARY failed"; return 1; }
     _ok "Daemon bundle deployed: $(du -sh "$DAEMON_DIR" | cut -f1)"
 
     # Write version file — format: "{semver} {git_hash} {timestamp}"
@@ -140,7 +151,8 @@ _deploy_daemon_binary() {
     local git_hash app_version
     git_hash=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     app_version=$(cd "$PROJECT_ROOT" && grep -m1 '"version"' desktop/src-tauri/tauri.conf.json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-    echo "${app_version} ${git_hash} $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_VERSION_FILE"
+    echo "${app_version} ${git_hash} $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_VERSION_FILE" || \
+        { _err "Writing $DAEMON_VERSION_FILE failed"; return 1; }
 
     # Deploy resources
     local res_src="$DESKTOP_DIR/resources"
@@ -156,8 +168,8 @@ _deploy_daemon_binary() {
     local wrapper_src="$DESKTOP_DIR/resources/daemon/swarmai_backend.sh"
     local wrapper_dst="$HOME/.swarm-ai/swarmai_backend.sh"
     if [ -f "$wrapper_src" ]; then
-        cp -f "$wrapper_src" "$wrapper_dst"
-        chmod +x "$wrapper_dst"
+        cp -f "$wrapper_src" "$wrapper_dst" && chmod +x "$wrapper_dst" || \
+            { _err "Deploying the wrapper to $wrapper_dst failed"; return 1; }
         _ok "Wrapper script deployed"
     fi
 
@@ -173,17 +185,24 @@ _deploy_daemon_binary() {
         # needs `daemon reload`, not SIGKILL+KeepAlive (see _daemon_restart_after_deploy).
         local rendered
         rendered="$(mktemp "${TMPDIR:-/tmp}/swarmai-plist.XXXXXX")"
-        sed -e "s|__WRAPPER_PATH__|${wrapper_dst}|g" \
+        if ! sed -e "s|__WRAPPER_PATH__|${wrapper_dst}|g" \
             -e "s|__LOG_DIR__|${log_dir}|g" \
             -e "s|__HOME__|${HOME}|g" \
-            "$plist_template" > "$rendered"
+            "$plist_template" > "$rendered"; then
+            rm -f "$rendered"; _err "Rendering the launchd plist failed"; return 1
+        fi
+        # Never put an invalid plist in place: a reload would bootout the job
+        # and then fail to bootstrap it, leaving the daemon down.
+        if command -v plutil >/dev/null 2>&1 && ! plutil -lint -s "$rendered"; then
+            rm -f "$rendered"; _err "Rendered launchd plist is invalid — keeping the current one"; return 1
+        fi
         if [ -f "$plist_dst" ] && cmp -s "$rendered" "$plist_dst"; then
             _DAEMON_PLIST_CHANGED=0
         else
             _DAEMON_PLIST_CHANGED=1
         fi
         chmod 644 "$rendered"   # mktemp creates 0600; keep the plist's usual mode
-        mv -f "$rendered" "$plist_dst"
+        mv -f "$rendered" "$plist_dst" || { _err "Writing $plist_dst failed"; return 1; }
         _ok "Plist deployed$([ "$_DAEMON_PLIST_CHANGED" = 1 ] && echo ' (changed — job will be reloaded)')"
     fi
 }
@@ -539,6 +558,17 @@ cmd_daemon() {
             if _reexec_detached_if_descendant daemon "$@"; then
                 return 0
             fi
+            if [ -n "${_SWARM_LIFECYCLE_DETACHED:-}" ]; then
+                # We ARE the detached copy (C034): reexec_detached sends our
+                # stdout/stderr to /dev/null, so a failed op left no trace.
+                # Log to a file instead, with the final exit code.
+                local _lc_log="${LOG_DIR:-$HOME/.swarm-ai/logs}/daemon-lifecycle.log"
+                mkdir -p "$(dirname "$_lc_log")"
+                exec >>"$_lc_log" 2>&1
+                echo "== $(date '+%Y-%m-%d %H:%M:%S') daemon $sub (detached, pid $$)"
+                # capture $? FIRST — the $(date) substitution would reset it to 0
+                trap '_lc_rc=$?; echo "== $(date "+%Y-%m-%d %H:%M:%S") daemon '"$sub"' (detached) exit rc=$_lc_rc"' EXIT
+            fi
             ;;
     esac
 
@@ -592,13 +622,6 @@ cmd_daemon() {
             # bootout is instant (an open SSE stream holds SIGTERM for ExitTimeOut).
             # Non-permanent sentinel: the guardian must not race our bootstrap,
             # and its stale-guard still recovers the daemon if this op dies midway.
-            if [ -n "${_SWARM_LIFECYCLE_DETACHED:-}" ]; then
-                # Detached copy (C034): its stdout goes nowhere — keep a trace.
-                local _lc_log="${LOG_DIR:-$HOME/.swarm-ai/logs}/daemon-lifecycle.log"
-                mkdir -p "$(dirname "$_lc_log")"
-                exec >>"$_lc_log" 2>&1
-                echo "== $(date '+%Y-%m-%d %H:%M:%S') daemon reload (detached, pid $$)"
-            fi
             local _sentinel="$HOME/.swarm-ai/.daemon-intentional-down"
             if [ -f "$_sentinel" ] && \
                 [ $(( $(date +%s) - $(stat -f %m "$_sentinel" 2>/dev/null || echo 0) )) -lt 300 ]; then

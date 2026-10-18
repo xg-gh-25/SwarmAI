@@ -137,7 +137,9 @@ class TestInstallerIdempotent:
             mock_results.append((cmd, result))
             return result
 
+        # bundle deploy is covered by test_deploy_hardening.py — stub it here
         with patch.object(mod, "LAUNCH_AGENTS", tmp_path), \
+             patch.object(mod, "_deploy_daemon_binary", return_value=True), \
              patch("subprocess.run", side_effect=mock_run):
             # Should not raise even when bootstrap returns 37
             mod.install()
@@ -164,6 +166,7 @@ class TestInstallerIdempotent:
             return result
 
         with patch.object(mod, "LAUNCH_AGENTS", tmp_path), \
+             patch.object(mod, "_deploy_daemon_binary", return_value=True), \
              patch("subprocess.run", side_effect=mock_run):
             mod.install()
 

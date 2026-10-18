@@ -238,7 +238,12 @@ class TestSentinel:
         COE-2026-05-01 corruption. Guard the equality."""
         src = (Path(__file__).parent.parent / "main.py").read_text()
         expected_tail = ".swarm-ai/.daemon-intentional-down"
-        assert str(dg.SENTINEL_PATH).endswith(expected_tail)
+        # conftest's app-data isolation re-roots dg.SENTINEL_PATH onto a temp
+        # dir for every test, so compare the DEFINITION, not the live value
+        # (asserting on the re-rooted path made this test fail unconditionally).
+        guard_src = Path(dg.__file__).read_text()
+        assert 'SENTINEL_PATH = Path.home() / ".swarm-ai" / ".daemon-intentional-down"' in guard_src
+        assert dg.SENTINEL_PATH.name == ".daemon-intentional-down"
         assert expected_tail in src, \
             "main.py sentinel literal drifted from daemon_guard.SENTINEL_PATH"
 
