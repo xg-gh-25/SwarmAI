@@ -26,6 +26,11 @@
  * - `interrupt` — a block that needs the user (question / permission / escalation).
  *                 Never folded; also splits the process.
  *
+ * Not units: the backend's display blocks (`pipeline_run`, `pipeline_attention`,
+ * `turn_deliverables`) are lifted into `TurnView.run / attention / deliverables`.
+ * They have a fixed place in the turn (alignment / before the result / after it),
+ * not a place in the flow, so they never split a segment or count as "later".
+ *
  * The done rule (single source): a tool_use is DONE iff it has a tool_result, OR
  * a later TEXT / thinking block follows it (the model only writes again after its
  * tool calls returned), OR the message is no longer streaming — UNLESS an
@@ -56,6 +61,9 @@ import type {
   CmdPermissionContent,
   EscalationContent,
   PipelineStageContent,
+  PipelineRunContent,
+  PipelineAttentionContent,
+  TurnDeliverable,
   SubAgentProgress,
 } from '../../types';
 
@@ -122,6 +130,12 @@ export type TurnUnit =
 
 export interface TurnView {
   units: TurnUnit[];
+  /** The pipeline run's alignment (the first `pipeline_run` block), if any. */
+  run?: PipelineRunContent;
+  /** What the run needs the user to look at (the latest `pipeline_attention`). */
+  attention?: PipelineAttentionContent;
+  /** The turn's products (`turn_deliverables`), by absolute path, first-seen order. */
+  deliverables: TurnDeliverable[];
   /** Action lines lifted from a trailing ```next-steps block of the final outcome. */
   nextSteps: string[];
   /** What Copy copies: the outcome text (no process notes, no next-steps block). */
@@ -184,6 +198,11 @@ function buildResultMap(content: ContentBlock[]): Map<string, ToolResultContent>
 const isSubAgentBlock = (b: ContentBlock): boolean =>
   (b.type === 'tool_use' || b.type === 'tool_result') && !!b.parentToolUseId;
 
+/** Backend-written display blocks that are not part of the turn's flow (the run's
+ *  alignment, what needs the user, the turn's products): lifted into TurnView
+ *  fields, invisible to segments, the done rule and the outcome. */
+const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'turn_deliverables']);
+
 /** Derive the display units for one assistant message. Pure.
  *  `progress` is the streaming message's live sub-agent status, by Agent id. */
 export function deriveTurnView(
@@ -223,7 +242,7 @@ export function deriveTurnView(
     laterNonTool[i] = seenNonTool;
     gatedAfter[i] = gate;
     const b = content[i];
-    if (isSubAgentBlock(b)) continue;
+    if (isSubAgentBlock(b) || DISPLAY_TYPES.has(b.type)) continue;
     if (b.type !== 'tool_result') seen = true;
     if (b.type === 'text' || b.type === 'thinking') { seenNonTool = true; gate = false; }
     if (INTERRUPT_TYPES.has(b.type)) gate = isUnanswered(b as InterruptBlock);
@@ -245,9 +264,20 @@ export function deriveTurnView(
     return seg;
   };
 
+  let run: PipelineRunContent | undefined;
+  let attention: PipelineAttentionContent | undefined;
+  const deliverables: TurnDeliverable[] = [];
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
     if (isSubAgentBlock(block)) return; // nested under its Agent step below
+    if (block.type === 'pipeline_run') { run ??= block; return; }
+    if (block.type === 'pipeline_attention') { attention = block; return; }
+    if (block.type === 'turn_deliverables') {
+      for (const f of block.files ?? []) {
+        if (f?.absolutePath && !deliverables.some((d) => d.absolutePath === f.absolutePath)) deliverables.push(f);
+      }
+      return;
+    }
     if (block.type === 'pipeline_stage') {
       seg = null;
       units.push({ kind: 'stage', block, index });
@@ -366,7 +396,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText };
+  return { units, nextSteps, copyText, run, attention, deliverables };
 }
 
 /** Characters of a still-streaming thought shown on the folded live row. */

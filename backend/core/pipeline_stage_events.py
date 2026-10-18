@@ -134,8 +134,12 @@ def read_stage_state(run_id: object) -> Optional[dict]:
                 if isinstance(rec, dict) and isinstance(rec.get("stage"), str):
                     stages[rec["stage"]] = rec
             profile = data.get("profile")
+            req = data.get("requirement")
             return {"profile": profile if isinstance(profile, str) else None,
-                    "stages": stages}
+                    "stages": stages,
+                    "status": data.get("status") if isinstance(data.get("status"), str) else None,
+                    "requirement": req if isinstance(req, str) else None,
+                    "run_dir": str(hit.parent)}
         return None
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
         logger.debug("read_stage_state: unreadable run.json for %r", run_id, exc_info=True)
@@ -245,3 +249,141 @@ def new_stage_blocks(
             "at": at,
         })
     return blocks
+
+
+# ── Alignment and needs-you blocks (chat display v7.1) ───────────────────────
+#
+# Two more backend-written blocks, both persisted and both non-conversational
+# (context_injector _TOOL_ONLY_TYPES):
+#   pipeline_run       — once per run per session, the first time a call names it:
+#                        the run's requirement (the AI's restatement of the ask —
+#                        the turn's alignment) and its planned stages.
+#   pipeline_attention — with the DELIVER row: only what needs a human judgement,
+#                        from STRUCTURED fields (never the model's prose): questions
+#                        the pipeline answered itself, assumed requirements, gate
+#                        verdicts that are not a pass, and a push_ready of False.
+
+RUN_BLOCK_TYPE = "pipeline_run"
+ATTENTION_BLOCK_TYPE = "pipeline_attention"
+REQUIREMENT_MAX = 400
+ITEM_TEXT_MAX = 200
+MAX_ATTENTION_ITEMS = 8
+
+# A verdict that needs no one: PASS / SUPPORTED / PROCEED / GO / SKIPPED, or a
+# BLOCK that was resolved. Verdicts are free text in real run.json files, so the
+# match is on the leading word.
+_OK_VERDICT_RE = re.compile(r"^\s*(PASS|SUPPORTED|PROCEED|GO|SKIP)", re.I)
+_OPEN_REQ_STATUSES = {"assumed", "needs-clarification"}
+
+
+def _clip(value: object, limit: int = ITEM_TEXT_MAX) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if not text:
+        return None
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def run_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
+    """The run's alignment block, or None when run.json says nothing to show."""
+    if not state:
+        return None
+    requirement = _clip(state.get("requirement"), REQUIREMENT_MAX)
+    if not requirement:
+        return None
+    profile = state.get("profile")
+    stages = list(get_profile_stages(profile)) if profile else []
+    return {"type": RUN_BLOCK_TYPE, "runId": run_id, "profile": profile,
+            "stages": stages, "requirement": requirement, "at": at}
+
+
+def _artifact(run_dir: Optional[str], record: Optional[dict]) -> dict:
+    """A stage record's own artifact (``<type>-<date>-<artifact_id>.json`` in the
+    run directory), unwrapped from its ``{"data": …}`` envelope; {} when absent."""
+    art_id = (record or {}).get("artifact_id")
+    if not run_dir or not isinstance(art_id, str) or not _RUN_ID_RE.fullmatch(art_id):
+        return {}
+    try:
+        for hit in Path(run_dir).glob(f"*-{art_id}.json"):
+            data = json.loads(hit.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data["data"] if isinstance(data.get("data"), dict) else data
+    except Exception:  # noqa: BLE001 — a display aid must never break the stream
+        logger.debug("pipeline attention: unreadable artifact %r", art_id, exc_info=True)
+    return {}
+
+
+def _gate0_verdict(evaluate: dict) -> object:
+    """Gate 0's verdict — the key varies across real run.json files."""
+    if evaluate.get("gate") == "gate0" and evaluate.get("gate_verdict"):
+        return evaluate.get("gate_verdict")
+    return evaluate.get("gate0_verdict") or evaluate.get("gate0") or evaluate.get("gate_result")
+
+
+def _gate1_verdict(stages: dict) -> object:
+    """Gate 1's verdict: on the build (or goal_cycle; older runs: plan) record."""
+    for name in ("build", "goal_cycle", "plan"):
+        rec = stages.get(name) or {}
+        legacy = rec.get("gate1")
+        verdict = rec.get("gate1_verdict") or (legacy.get("verdict") if isinstance(legacy, dict) else None)
+        if verdict:
+            return verdict
+    return None
+
+
+def _gate_items(stages: dict, deliver_art: dict) -> list[dict]:
+    items: list[dict] = []
+    ev = stages.get("evaluate") or {}
+    for name, verdict, note in (
+        ("GATE 0", _gate0_verdict(ev), ev.get("gate0_note") or ev.get("gate_note")),
+        ("GATE 1", _gate1_verdict(stages), None),
+    ):
+        v = _clip(verdict, 40)
+        if v and not _OK_VERDICT_RE.match(v) and "RESOLVED" not in v.upper():
+            items.append({"kind": "gate", "name": name, "verdict": v, "detail": _clip(note)})
+    # Gate 2 is the deliver artifact's adversarial review: open findings need a look.
+    adv = deliver_art.get("adversarial_review") if isinstance(deliver_art.get("adversarial_review"), dict) else {}
+    total, fixed = adv.get("findings_total"), adv.get("findings_fixed")
+    if isinstance(total, int) and isinstance(fixed, int) and total > fixed:
+        items.append({"kind": "gate", "name": "GATE 2", "verdict": f"{total - fixed}/{total} open", "detail": None})
+    return items
+
+
+def _clar_answer(c: dict) -> Optional[str]:
+    ans = c.get("answer")
+    if isinstance(ans, str):
+        return _clip(re.sub(r"^[A-Z]\.\s+", "", ans.strip()))
+    return None
+
+
+def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
+    """What in this run needs a human judgement, from structured fields only; None
+    when nothing does. Fail-safe: an unreadable artifact just contributes nothing."""
+    if not state:
+        return None
+    stages: dict = state.get("stages") or {}
+    run_dir = state.get("run_dir")
+    evaluation = _artifact(run_dir, stages.get("evaluate"))
+    deliver_art = _artifact(run_dir, stages.get("deliver"))
+    items: list[dict] = []
+    for c in evaluation.get("clarifications") or []:
+        if isinstance(c, dict) and str(c.get("answered_by") or "").strip() == "self":
+            items.append({"kind": "self_answered", "id": _clip(c.get("qid"), 20),
+                          "question": _clip(c.get("question")), "answer": _clar_answer(c),
+                          "reason": _clip(c.get("resolution"))})
+    for r in evaluation.get("requirements") or []:
+        if not isinstance(r, dict):
+            continue
+        source = r.get("source") if isinstance(r.get("source"), dict) else {}
+        if source.get("kind") == "assumption" or str(r.get("status") or "").strip() in _OPEN_REQ_STATUSES:
+            items.append({"kind": "assumption", "id": _clip(r.get("id"), 20), "statement": _clip(r.get("statement"))})
+    items += _gate_items(stages, deliver_art)
+    deliver = stages.get("deliver") or {}
+    if deliver.get("push_ready") is False:
+        reasons = [x for x in (_clip(p) for p in str(deliver.get("push_ready_reason") or "").split("; ")) if x]
+        items.append({"kind": "not_push_ready", "reasons": reasons[:4]})
+    if not items:
+        return None
+    return {"type": ATTENTION_BLOCK_TYPE, "runId": run_id,
+            "items": items[:MAX_ATTENTION_ITEMS], "more": max(0, len(items) - MAX_ATTENTION_ITEMS), "at": at}

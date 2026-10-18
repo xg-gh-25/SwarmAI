@@ -11,6 +11,9 @@
  * - Pipeline stage rows (`stage` units — written by the backend from run.json)
  *   render as PipelineStageRow; while streaming, the stage now running is shown
  *   above the live process row (PipelineStageLive)
+ * - Backend cards (TurnCards): a pipeline run's requirement as the alignment at
+ *   the top; "needs your look" right after the Result divider (with the DELIVER
+ *   row while the run is going); the turn's products after the outcome
  * - Next-step chips (NextSteps) from a trailing ```next-steps block, last
  *   assistant message only; Copy copies the answer, not the process
  * - Red border error wrapper when message.isError is true
@@ -39,6 +42,7 @@ import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ProcessBlock } from './ProcessBlock';
 import { PipelineStageRow } from './PipelineStageRow';
 import { FileChip } from './FileChip';
+import { AttentionCard, DeliverablesCard, RunAlignment } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { deriveTurnView, extractNextSteps, isUnanswered, sectionUnits, turnChangedFiles } from '../turnView';
 import type { TurnUnit } from '../turnView';
@@ -51,6 +55,13 @@ import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { isOt01DiagEnabled } from '../../../utils/diagFlags';
+
+/** A step's file path (absolute, or relative to wherever the tool ran) names the
+ *  deliverable at `rel` / `abs`. */
+function isSameFile(p: string, rel: string, abs: string): boolean {
+  const q = p.replace(/^\.\//, '');
+  return q === abs || q === rel || abs.endsWith(`/${q}`);
+}
 
 /** A turn that went straight to work this long gets the "no restatement" note. */
 const NO_RESTATEMENT_MIN_STEPS = 3;
@@ -255,10 +266,18 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const lastUnit = view.units[view.units.length - 1];
   const showResult = !isStreaming && hasWork && lastUnit?.kind === 'outcome';
   const isPipeline = view.units.some((u) => u.kind === 'stage');
+  // A product the turn wrote shows in the Produced card, not again as a changed file.
   const turnFiles = useMemo(
-    () => (!isStreaming && hasWork && !isPipeline ? turnChangedFiles(view.units) : []),
+    () => (!isStreaming && hasWork && !isPipeline ? turnChangedFiles(view.units) : [])
+      .filter((p) => !view.deliverables.some((d) => isSameFile(p, d.path, d.absolutePath))),
     [view, isStreaming, hasWork, isPipeline],
   );
+  const attentionCard = view.attention && view.attention.items.length > 0
+    ? <AttentionCard block={view.attention} />
+    : null;
+  // Once there is a result, what needs the user leads it (right after the divider);
+  // until then it stays where it arrived: with the DELIVER row.
+  let attentionPending = !!attentionCard && !showResult;
 
   const renderUnit = (unit: TurnUnit, prev: TurnUnit | undefined, pos: number) => {
     const gap = !prev ? '' : (unit.kind === 'note' || unit.kind === 'landmark') && prev.kind === 'process' ? 'mt-1' : 'mt-3';
@@ -278,7 +297,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // A note and an outcome share a key prefix: while streaming, the answer-so-far
     // turns into a note the moment the next tool call arrives — no remount.
     const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
-    const isAlignment = hasWork && pos === 0 && firstWork > 0 && unit.kind !== 'landmark';
+    // A pipeline run's requirement IS the alignment (RunAlignment); the model's own
+    // opening text is then an ordinary note: the restatement is said once.
+    const isAlignment = !view.run && hasWork && pos === 0 && firstWork > 0 && unit.kind !== 'landmark';
     const isResult = showResult && unit === lastUnit;
     const demoted = unit.kind === 'note' && !isAlignment;
     return (
@@ -294,6 +315,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             <span className="flex-1 border-t border-[var(--color-border)]" />
           </div>
         )}
+        {isResult && attentionCard && <div className="mb-3">{attentionCard}</div>}
         {renderBlock({ type: 'text', text: unit.text }, `${prefix}-b-${unit.index}`)}
       </div>
     );
@@ -325,6 +347,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     prevSection = undefined;
     unitPos += children.length;
     const firstStage = sections.findIndex((s) => s.kind !== 'unit');
+    const attentionHere = attentionPending && sec.kind === 'stage' && sec.block.stage === 'deliver';
+    if (attentionHere) attentionPending = false;
     return (
       <div key={key} className={k === firstStage ? 'mt-3' : ''}>
         <PipelineStageRow
@@ -340,18 +364,28 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         >
           {children.length ? renderList(children, 1) : null}
         </PipelineStageRow>
+        {attentionHere && <div className="mt-2">{attentionCard}</div>}
       </div>
     );
   });
+  if (attentionPending) {
+    contentBlocks.push(<div key="attention" className="mt-3">{attentionCard}</div>);
+  }
+  if (view.run) {
+    contentBlocks.unshift(<div key="run" className="mb-3"><RunAlignment run={view.run} /></div>);
+  }
   // The model went straight to work without restating the ask: that absence is
   // itself worth knowing — alignment is the cheapest moment to correct course.
   const toolSteps = view.units.reduce((n, u) => n + (u.kind === 'process' ? u.steps.filter((s) => s.kind === 'tool').length : 0), 0);
-  if (firstWork === 0 && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
+  if (!view.run && firstWork === 0 && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
     contentBlocks.unshift(
       <div key="no-alignment" data-testid="turn-no-alignment" className="mb-1 text-[11px] tracking-wide text-[var(--color-text-dim)]">
         {tf(t, 'chat.turn.noAlignment', 'Started without restating the ask')}
       </div>,
     );
+  }
+  if (view.deliverables.length) {
+    contentBlocks.push(<div key="deliverables" className="mt-4"><DeliverablesCard files={view.deliverables} /></div>);
   }
   if (turnFiles.length) {
     contentBlocks.push(

@@ -324,13 +324,27 @@ class StreamingOrchestrator:
             snap = self._pipeline_stage_snapshot()
             before = snap.get(run_id)
             snap[run_id] = after
-            if before is None:
+            at = datetime.now().astimezone().isoformat()
+            blocks: list[dict] = []
+            # The run's alignment (its requirement and plan), once per run per
+            # session, the first time a call names a run still in progress.
+            announced = getattr(self._parent, "_pipeline_runs_announced", None)
+            if announced is None:
+                announced = self._parent._pipeline_runs_announced = set()
+            if run_id not in announced and after.get("status") in (None, "running"):
+                announced.add(run_id)
+                rb = _pse.run_block(run_id, after, at)
+                if rb:
+                    blocks.append(rb)
+            if before is not None:
                 # No baseline (the pre-read failed or found no run.json): seed only.
                 # Diffing against nothing would emit every stage already finished.
-                return []
-            blocks = _pse.new_stage_blocks(
-                run_id, before, after, datetime.now().astimezone().isoformat(),
-            )
+                blocks += _pse.new_stage_blocks(run_id, before, after, at)
+            # What needs the user rides with the DELIVER row (structured fields only).
+            if any(b.get("stage") == "deliver" for b in blocks):
+                ab = await executors.run_in("io", _pse.attention_block, run_id, after, at)
+                if ab:
+                    blocks.append(ab)
         except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
             logger.warning("pipeline stage emit failed for %r: %s", run_id, e)
             return []

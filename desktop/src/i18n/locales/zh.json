@@ -285,7 +285,24 @@
       "alignment": "AI 的理解",
       "result": "结果",
       "thisTurnChanged": "本轮改了",
-      "noAlignment": "AI 没有先复述它的理解就开始了"
+      "noAlignment": "AI 没有先复述它的理解就开始了",
+      "run": {
+        "stages": "{{count}} 个阶段"
+      },
+      "attention": {
+        "title": "需要你看",
+        "heading": "需要你看 · {{count}} 项",
+        "selfAnswered": "AI 自己回答了{{id}}",
+        "assumption": "AI 的假设{{id}}",
+        "notPushReady": "还不能 push",
+        "more": "还有 {{count}} 项，见 run 报告"
+      },
+      "deliverables": {
+        "title": "产出 · {{count}}",
+        "open": "在 Canvas 打开",
+        "copyPath": "复制路径",
+        "copied": "已复制"
+      }
     },
     "nextSteps": {
       "label": "下一步",

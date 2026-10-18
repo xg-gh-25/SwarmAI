@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 # Block types that are not conversation: a message made only of these is dropped
 # from the resume history. pipeline_stage rows are written by the backend from
 # run.json (core.pipeline_stage_events), not said by the assistant — keeping such a
-# row would add an empty assistant turn to the resumed prompt.
-_TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage"}
+# row would add an empty assistant turn to the resumed prompt. pipeline_run /
+# pipeline_attention / turn_deliverables are backend-written display blocks too.
+_TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage", "pipeline_run",
+                    "pipeline_attention", "turn_deliverables"}
 
 # ─── Section headers & preamble ─────────────────────────────────────
 

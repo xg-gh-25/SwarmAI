@@ -287,7 +287,24 @@
       "alignment": "How I read it",
       "result": "Result",
       "thisTurnChanged": "This turn changed",
-      "noAlignment": "Started without restating the ask"
+      "noAlignment": "Started without restating the ask",
+      "run": {
+        "stages": "{{count}} stages"
+      },
+      "attention": {
+        "title": "Needs your look",
+        "heading": "Needs your look · {{count}}",
+        "selfAnswered": "Answered by itself{{id}}",
+        "assumption": "Assumed{{id}}",
+        "notPushReady": "Not ready to push",
+        "more": "+{{count}} more in the run report"
+      },
+      "deliverables": {
+        "title": "Produced · {{count}}",
+        "open": "Open in Canvas",
+        "copyPath": "Copy path",
+        "copied": "Copied"
+      }
     },
     "nextSteps": {
       "label": "Next steps",

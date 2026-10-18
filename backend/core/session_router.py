@@ -37,6 +37,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# A turn lists at most this many products (a bulk export should not flood the chat).
+MAX_TURN_DELIVERABLES = 12
+
 # ── SDK multimodal support flag ────────────────────────────────────
 # False = always convert image/document blocks to path hints.
 # Claude Code CLI does not currently support image/document content blocks
@@ -2137,11 +2140,36 @@ class SessionRouter:
     # step results are written on their own row at that point.
     _RESULT_FLUSH_EVENTS = frozenset({"result", "error", "ask_user_question", "cmd_permission_request"})
 
+    # file_changed kinds that are a turn's PRODUCTS (needs_human_review): content
+    # (docs, decks, pages, images) and knowledge. Source edits show as the turn's
+    # changed-file chips; process / bookkeeping files are machine noise.
+    _DELIVERABLE_KINDS = frozenset({"content", "knowledge"})
+
+    @classmethod
+    def _note_deliverable(cls, files: dict, event: dict) -> None:
+        """Remember a file_changed event that is a product of this turn (latest
+        operation per file wins — a file written then deleted is not a product)."""
+        path = event.get("absolutePath") or event.get("path")
+        if not isinstance(path, str) or not path:
+            return
+        if event.get("operation") == "deleted":
+            files.pop(path, None)
+            return
+        if event.get("kind") in cls._DELIVERABLE_KINDS:
+            prev = files.get(path)
+            files[path] = {
+                "path": str(event.get("path") or path), "absolutePath": path,
+                "kind": event["kind"],
+                # created vs updated is not known here; "written" is the honest word
+                "operation": (prev or {}).get("operation", "written"),
+            }
+
     async def _persist_stream_event(
         self, session_id: str, event: dict, pending: list[dict],
-        *, label: str = "", client_id: str | None = None,
-    ) -> None:
-        """Persist what one streamed event contributes to the turn's rows.
+        *, label: str = "", client_id: str | None = None, files: dict | None = None,
+    ) -> list[dict]:
+        """Persist what one streamed event contributes to the turn's rows; return
+        events to deliver BEFORE this one.
 
         - ``assistant``: persisted immediately (crash-safe), PREFIXED with the
           step results that arrived since the last row, so each result sits right
@@ -2149,12 +2177,19 @@ class SessionRouter:
           blocks are written back into ``event['content']`` (stream == DB, bug 2d).
         - ``tool_result``: compacted into ``pending`` (status + outcome only), so
           a reloaded turn shows what each step returned and which failed.
+        - ``file_changed`` of a product kind: remembered in ``files``.
+        - ``result``: the turn's products become one persisted
+          ``turn_deliverables`` block, delivered just before the result (so the
+          chat shows "what this turn produced" live and after a reload).
         - a terminal event: any ``pending`` results get their own row.
         """
         etype = event.get("type")
+        if etype == "file_changed" and files is not None:
+            self._note_deliverable(files, event)
+            return []
         if etype == "tool_result" and event.get("content"):
             pending.extend(self._compact_tool_results(event["content"]))
-            return
+            return []
         if etype == "assistant" and event.get("content"):
             n = len(pending)
             cleaned = await self._persist_assistant_blocks(
@@ -2163,13 +2198,20 @@ class SessionRouter:
             )
             pending.clear()
             event["content"] = cleaned[n:]  # the clean is one-to-one per block
-            return
+            return []
+        before: list[dict] = []
+        if etype == "result" and files:
+            block = {"type": "turn_deliverables", "files": list(files.values())[:MAX_TURN_DELIVERABLES]}
+            pending.append(block)
+            before.append({"type": "assistant", "content": [block], "model": None})
+            files.clear()
         if pending and etype in self._RESULT_FLUSH_EVENTS:
             await self._persist_assistant_blocks(
                 session_id, list(pending), None,
                 label=f"{label or 'turn'}-results", client_id=client_id,
             )
             pending.clear()
+        return before
 
     def get_unit(self, session_id: str) -> Optional[SessionUnit]:
         """Look up a SessionUnit by session_id."""
@@ -3966,6 +4008,8 @@ class SessionRouter:
         _coalesce_saw_terminal = False
         # Step results waiting to ride the turn's next assistant row.
         _pending_results: list[dict] = []
+        # This turn's products (content / knowledge files written), by path.
+        _turn_files: dict = {}
         try:
             async for event in unit.send(
                 query_content=query_content,
@@ -4074,9 +4118,10 @@ class SessionRouter:
                 # The cleaned blocks are written back to event['content'] so the
                 # yielded stream carries the SAME bytes persisted to the DB (bug
                 # 2d — no UI≠DB fork); step results ride along (compact).
-                await self._persist_stream_event(
+                _before = await self._persist_stream_event(
                     session_id, event, _pending_results,
                     client_id=f"{client_id}-asst" if client_id else None,
+                    files=_turn_files,
                 )
 
                 # Echo client_id in result event for frontend dedup (AC2)
@@ -4145,6 +4190,8 @@ class SessionRouter:
                         _coalesced_pending_seqs = []
                     return
 
+                for _extra in _before:
+                    yield _extra
                 yield event
             # Stream completed normally — finalize the coalesced pending set
             # (mark_sent on an observed result + no error, else roll back). ONE
@@ -4382,17 +4429,19 @@ class SessionRouter:
             return
 
         _pending_results: list[dict] = []
+        _turn_files: dict = {}
         async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
-            await self._persist_stream_event(
-                session_id, event, _pending_results, label="answer",
+            for _extra in await self._persist_stream_event(
+                session_id, event, _pending_results, label="answer", files=_turn_files,
                 # Reuse the originating turn's client_id (stashed by
                 # send_message) so this continuation row carries the SAME
                 # `{client_id}-asst` key as the turn's main-path rows — keeping
                 # the merged bubble correlatable no matter where a reconcile-tail
                 # cut lands (run_9bbf1761).
                 client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
-            )
+            ):
+                yield _extra
             yield event
 
     async def continue_with_cmd_permission(
@@ -4412,15 +4461,17 @@ class SessionRouter:
             return
 
         _pending_results: list[dict] = []
+        _turn_files: dict = {}
         async for event in unit.continue_with_permission(request_id, allowed):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
-            await self._persist_stream_event(
-                session_id, event, _pending_results, label="permission",
+            for _extra in await self._persist_stream_event(
+                session_id, event, _pending_results, label="permission", files=_turn_files,
                 # Reuse the originating turn's client_id (stashed by
                 # send_message) — same rationale as continue_with_answer above
                 # (run_9bbf1761): keeps the continuation row keyed to the turn.
                 client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
-            )
+            ):
+                yield _extra
             yield event
 
     async def compact_session(

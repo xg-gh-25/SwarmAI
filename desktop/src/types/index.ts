@@ -347,7 +347,55 @@ export interface PipelineStageContent {
   at: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent;
+/**
+ * A pipeline run's alignment — written by the BACKEND once per run per session
+ * (pipeline_stage_events.run_block): the run's requirement (the AI's restatement of
+ * the ask) and its planned stages. Model-written text: render plain.
+ */
+export interface PipelineRunContent {
+  type: 'pipeline_run';
+  runId: string;
+  profile: string | null;
+  stages: string[];
+  requirement: string;
+  at: string;
+}
+
+/** One thing in a run that needs a human judgement (structured fields only). */
+export type PipelineAttentionItem =
+  | { kind: 'self_answered'; id: string | null; question: string | null; answer: string | null; reason: string | null }
+  | { kind: 'assumption'; id: string | null; statement: string | null }
+  | { kind: 'gate'; name: string; verdict: string; detail: string | null }
+  | { kind: 'not_push_ready'; reasons: string[] };
+
+/** What in a run needs the user — written by the BACKEND with the DELIVER row
+ *  (pipeline_stage_events.attention_block); absent when nothing does. */
+export interface PipelineAttentionContent {
+  type: 'pipeline_attention';
+  runId: string;
+  items: PipelineAttentionItem[];
+  /** Items beyond the cap that are not listed. */
+  more: number;
+  at: string;
+}
+
+/** A file this turn produced (a content / knowledge file_changed). */
+export interface TurnDeliverable {
+  path: string;
+  absolutePath: string;
+  kind: 'content' | 'knowledge';
+  operation: 'written';
+}
+
+/** The turn's products — written by the BACKEND just before `result`
+ *  (SessionRouter._persist_stream_event). */
+export interface TurnDeliverablesContent {
+  type: 'turn_deliverables';
+  files: TurnDeliverable[];
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
+  | PipelineRunContent | PipelineAttentionContent | TurnDeliverablesContent;
 
 export interface Message {
   id: string;
