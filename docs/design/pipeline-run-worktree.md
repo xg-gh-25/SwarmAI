@@ -4,7 +4,7 @@ date: 2026-10-18
 created: 2026-10-18
 updated: 2026-10-18
 project: SwarmAI
-status: APPROVED r2 — §9 三个决定 XG 2026-10-18 已确认；Gate-0 修订见 §14
+status: APPROVED r3 — §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行 + 外部审查简化落地）见 §16
 related: parallel-session-commit-isolation.md（本文是其中"方案二"的完整设计，取代该草稿）; pipeline-run-budget.md; pipeline-speed-systematic-fix.md
 author: Kiro
 ---
@@ -12,420 +12,529 @@ author: Kiro
 
 ## 1. 问题一句话
 
-所有 session 共用一个 `swarmai` 工作区和一个 git index。一个 run 测到的是别人改了一半的代码，
-提交时分不清哪些改动是自己的（`run-commit` 只能按文件提交，同一文件里两个 run 的改动分不开），
+所有 session 共用一个 `swarmai` 工作区和一个 git index。一个 run 测到的是别人改了一半的代码；
+提交时分不清哪些改动是自己的（`run-commit` 只能按文件提交，同一文件里两个 run 的改动分不开）；
 一个 run 把 `artifact_cli.py` 改到一半时，其他 run 的每次 CLI 调用都会跟着出错。
 
 ## 2. 目标与边界
 
-- **目标**：每个 run 在自己的 worktree 里改代码、跑测试；交付时由工具把它的改动集成回 main，
-  冲突显式出现、由 run 自己解决；run 结束（任何结束方式）时 worktree 和分支被清零，不留残留、不丢工作。
-- **不变的东西**：最终 commit 仍然直接落在 `main` 上，不 push；工具（`artifact_cli.py`、
-  `pipeline_test.py`）从 main checkout 运行；run.json、artifact、REPORT 仍在 SwarmWS。
-- **范围外**：不给 SwarmWS（工作区 repo，存 run.json 和 DDD 文档）建 worktree；不处理非 pipeline
-  的聊天 session 之间的冲突（§7）；不做 hunk 级归属，也不做文件锁（§8）。
+- **目标**：每个 run 在自己的 worktree 里改代码、跑测试；交付时由工具把它的改动集成回 main，冲突显式出现、
+  由 run 自己解决；run 结束（任何结束方式）时 worktree 和分支被清零，不留残留、不丢工作。
+- **不变的东西**：最终 commit 直接落在集成分支（SwarmAI 是 `main`）上，不 push；工具从 main checkout 运行；
+  run.json、artifact、REPORT 仍在 SwarmWS。
+- **原则**：确定性的工作全部由工具做（同步、`files_touched`、集成、清理），模型只做判断（解决冲突、审查）。
+  新流程尽量折进现有的 `stage-start` / `stage-complete` / `run-commit`，不给模型增加新命令和来回。
+- **范围外**：不给 SwarmWS 建 worktree（run.json 和 DDD 文档是全局共享状态）；不解决非 pipeline 聊天 session
+  之间的摩擦（§10）；不做 hunk 级归属，也不做文件锁（§12）。
 
 ## 3. 总体结构
 
 ```
-run-create ──► 建 worktree（每个绑定的代码 repo 一个）──► run.json.worktrees[]
+plan / build / goal_cycle 的第一次 stage-start ──► 建 worktree（每个绑定的代码 repo 一个）
    │
-   ├─ 模型在 worktree 里改代码 ◄── 写入 gate：拒绝写 main checkout，提示对应的 worktree 路径
+   ├─ 模型在 worktree 里改代码；改动始终是"相对 base 未提交"的状态，HEAD 一直等于 base
+   ├─ 写入 gate：拒绝写 main checkout、拒绝动共享 ref 和配置，提示对应的 worktree 路径
    ├─ 测试：pipeline_test.py 从 main 运行，ctx.repo = run 的 worktree
    │
-DELIVER 开头 ──► run-sync：压成一个 commit → rebase 到最新 main（冲突在这里由 run 解决）
-   │                → 在 rebase 后的树上 verify → Gate-2 / meta-review 审的是 rebase 后的 diff
-   │                → stage-complete 的 push_ready 绑定这棵树（tree 指纹）
-DELIVER 末尾 ──► run-integrate（取代 worktree 模式下的 run-commit 位置）
-   │                main 没动 → 直接落地；main 动过 → 重新 sync，补丁不变只需重测，补丁变了要重审
-   │                落地：锁 main 的 index → 先比较交换推进 main（提交点）→ 再写主工作区 → 换上新 index
-   │                → 改写 run.json 的 commits[] / files_touched
+deliver 的 stage-start ──► 自动同步：把改动 rebase 到最新 main（冲突在这里由 run 解决），HEAD 回到新的 base
+   │                     → Gate-2 / meta-review 审的就是同步后的改动
+deliver 的 stage-complete ──► push_ready 成立就直接落地（run-commit 变成幂等的确认）：
+   │                     校验路径 → 一次带 hook 的提交 → 在 main checkout 执行原生 git merge --ff-only
+   │                     → 改写 run.json；main 动过 → 回到同步；与未提交改动重叠 → 挡下，main 不动
    │
-显式终止状态 ──► release_run_worktrees()：已集成 → 删；未集成 → 存 patch + bundle 后删
-每日 / run-create ──► 兜底清扫：只按显式状态回收残留 worktree 和 run/* 分支
+显式终止 ──► 由 owner 执行释放：已集成 → 删；未集成 → 快照进 ledger、校验可恢复后再删
+兜底 ──► daemon 启动、每小时、run-create 时清扫；只按 git 登记 + 显式状态回收，不信任 run.json 里的路径
 ```
 
-开关：`config.json["pipeline"]["worktree_mode"]`（`off` | `on`）。P1、P2 全部落地并验收前保持 `off`，
-`off` 时所有行为与今天完全一致。
+开关 `config.json["pipeline"]["worktree_mode"]`（`off` | `on`）只决定新 run 建不建 worktree；已经存在的 run 一律
+按它自己 run.json 里的模式处理（§9）。P0–P2 全部验收前保持 `off`。
 
-## 4. 创建与映射
+## 4. 前置（P0）：run 锁与归属
 
-### 4.1 什么时候、给哪些 repo 建
+worktree 的创建、同步、落地、释放都要知道"谁在改这个 run、现在能不能动它"。今天这两件事都没有：
 
-- 在 `run-create` 时建（模型还没开始改任何文件）。profile 此时可能还没定（EVALUATE 后才分类），
-  research / docs 这类不改代码的 run 也会建一个，代价是一次 `git worktree add`（实测 5.9 秒、119 MB），
-  可以接受；换来的是"没有任何时间窗口让模型在 main 上改代码"。
-- 建给哪些 repo：项目 `Projects/<P>/bindings.yaml` 里 `kind: code-repo` 的资产（SwarmAI 是自托管，
-  `worktree: <source-repo>` 指向 main checkout）。没有绑定代码 repo 的项目不建，行为与今天一致。
-- 建在 `~/.swarm-ai/worktrees/<run_id>/<repo_name>/`。必须在 `$HOME` 下：前端 `isWorkspaceFilePath`
-  只认 `/Users|/home`，后端 `_resolve_file_path` 只允许 `$HOME` 下的绝对路径，`/tmp` 下的文件在 Canvas
-  里打不开。
-- 命令：`git -C <main> -c core.hooksPath=/dev/null worktree add -b run/<run_id> <path> <main HEAD>`。
-  基于 main 的 HEAD，所以别的 session 没提交的改动不会进来。由 `artifact_cli`（子进程）执行，
-  不经过 PreToolUse，因此 `pipeline_test_gate` 里"禁止 `git worktree add`"的规则不受影响、也不放宽。
-  `core.hooksPath=/dev/null` 只用于 `worktree add`（与今天的基线 worktree 一致）；worktree 里的
-  commit 和 rebase 照常经过公司的 git-defender hook，不覆盖。
-- **集成分支**：创建时记录 main checkout 当前检出的分支（`git symbolic-ref HEAD`，SwarmAI 是 `main`，
-  别的 repo 可能是 `mainline`），之后集成都对这个分支做，不写死 `refs/heads/main`。main checkout 处于
-  detached HEAD 或 merge / rebase 进行中时不建 worktree，回退 `shared`。
-- Windows 上软链需要权限：用 junction，失败则回退 `shared`。
+### 4.1 run 锁
 
-### 4.2 worktree 初始化
+`artifact_cli` 里没有任何 run 级的锁。`cmd_run_update` 读开头、写整份 dict；两个回收器用非原子的
+`write_text`；`PATCH /pipelines/{id}/cancel` 做无锁的读-改-写。结果是 cancel 夹在一次 `run-update` 中间时，
+`running` 会被写回去。
+
+- 新增 `runs/<id>/.lock`（`utils.file_lock`），**所有** run.json 写入者都拿它：`run-update`、`stage-start`、
+  `stage-complete`、`run-checkpoint`、`run-resume`、`run-commit`、两个回收器、`purge_garbage_runs`、router
+  的 cancel、`session_link_stamper`、手工脚本。写入一律临时文件 + `os.replace`。
+- 锁内只做读-改-写，不在锁里跑 git 或测试；落地这种长操作在提交点之前重新拿锁、重新读 status
+  （例如已被取消就停）。
+
+### 4.2 归属与接管
+
+`run.session_id` 是 owner。今天 `run-resume` 只接受 `paused`，而崩溃的 run 一直停在 `running`，新 session
+直接接着调 `stage-start` / `run-update`；stamper 又从不覆盖已有的 `session_id`。于是新 session 不是 owner：
+写入 gate 对它失效，它往自己的 worktree 写反而被拒。
+
+- **接管由 daemon 做**（它能看到 SessionRouter 的状态）：PreToolUse 看到一条带 `--run-id R` 的
+  `artifact_cli` / `pipeline_test` 命令，而 R 的 owner 不是当前 session 时：owner 不在 STREAMING /
+  WAITING_INPUT → 把 `session_id` 改成当前 session，旧值追加到 `session_history[]`，重写 session→run 映射；
+  owner 还活着 → deny，说明是谁在跑。`run-resume` 走同一个判断。
+- **只有 owner 能动 worktree**：`run-sync`、落地、释放要求 `SWARM_APP_SESSION_ID == run.session_id`；
+  daemon 的清扫例外（它先确认 owner 不活跃）。
+- **一个判定，所有 gate 共用**：`own_isolated_run(session)` = 本 session 拥有、状态不是终止、且有 git 登记的
+  active worktree 的 run，没有时间窗口。写入 gate 和 `pipeline_test_gate` 都用它（今天 `pipeline_test_gate`
+  的 3 小时窗口会在长 BUILD 后放行一次直接 pytest，测的却是 main）。
+
+## 5. 创建与映射
+
+### 5.1 什么时候、给哪些 repo 建
+
+- 在 run 的第一次 `stage-start --stage plan|build|goal_cycle` 时建（同一个 run 只建一次）。research 这类只有
+  evaluate / think / reflect 的 run 不建，省掉无用的 6 秒和 119 MB。这之前的 evaluate / think 不改代码；
+  万一改了，同步时的兜底检测会把它们列出来（只报告，§7.2）。
+- 建给项目 `Projects/<P>/bindings.yaml` 里 `kind: code-repo` 的资产（SwarmAI 是自托管，指向 main checkout）。
+  没有绑定代码 repo 的项目不建，行为与今天一致。
+- main checkout 处于 detached HEAD 或 merge / rebase / cherry-pick 进行中时不建，回退 `shared`。
+
+### 5.2 位置、命名与校验（不信任 run.json 里的路径）
+
+run.json、bindings.yaml、日志都是 agent 可以直接编辑的普通文件。如果工具按 run.json 里的 `path` 去
+`worktree remove --force`、按 `integration_branch` 去 `update-ref`，改一个字段就能删掉别人的 worktree 或移动
+任意分支。所以：
+
+- **路径和分支只从 run_id 推导**：`WT_ROOT = ~/.swarm-ai/worktrees`，路径 `WT_ROOT/<run_id>/<repo_name>`，
+  分支 `refs/heads/run/<run_id>`；`run_id` 先过已有的 `_validate_path_identifiers`。必须在 `$HOME` 下：
+  前端 `isWorkspaceFilePath` 只认 `/Users|/home`，后端只允许 `$HOME` 下的绝对路径。
+- **每次使用前校验**：路径的 realpath 等于推导值，且任何一级都不是 symlink（`lstat` 逐级查，`WT_ROOT` 本身也查）；
+  该路径出现在 `git -C <repo> worktree list --porcelain` 里，检出的正是该分支；`repo` 的 `--git-common-dir`
+  等于创建时记录的值；集成分支匹配 `refs/heads/*` 且等于 main checkout 当前的 `symbolic-ref HEAD`。
+  任何一项不符 → 拒绝操作并报告，不"按 run.json 修正"。
+- 创建命令：`git -C <main> -c core.hooksPath=/dev/null worktree add -b run/<run_id> <path> <main HEAD>`。
+  基于 main HEAD，别人未提交的改动不会进来。由 `artifact_cli` 子进程执行，不经过 PreToolUse，
+  `pipeline_test_gate` 对 `git worktree add` 的拒绝不变。`hooksPath` 覆盖只用于这一条命令（与基线 worktree
+  相同），worktree 里的 commit 和 rebase 照常经过公司的 git-defender hook。
+
+### 5.3 worktree 初始化
 
 | 项 | 做法 | 原因 |
 |---|---|---|
-| `desktop/node_modules` | 软链到 main 的 `desktop/node_modules` | 前端测试和 tsc 需要；vite 按 realpath 解析，单份 React |
-| 软链不被 git 当作改动 | 在 `$GIT_COMMON_DIR/info/exclude` 加 `/desktop/node_modules` | `.gitignore` 的 `node_modules/` 带斜杠，不匹配软链，否则它会显示成未跟踪文件进入 change set |
-| Python | 不建 `.venv`，统一用 main 的 `backend/.venv/bin/python` | 软链 `.venv` 会让 conftest 报 WRONG PYTHON；基线 worktree 今天就是这么跑的 |
-| 依赖变更 | run 改了 `pyproject.toml` / `package-lock.json` 时 warning：测试用的是 main 的已安装依赖 | 不为每个 run 重装依赖 |
+| `desktop/node_modules` | 软链到 main 的；Windows 用 junction，失败回退 `shared` | 前端测试和 tsc 需要；`worktree remove --force` 实测不跟随软链，不会删 main 的 node_modules |
+| 软链不被当作改动 | `$GIT_COMMON_DIR/info/exclude` 加 `/desktop/node_modules` | `.gitignore` 的 `node_modules/` 带斜杠，不匹配软链（实测） |
+| Python | 不建 `.venv`，统一用 main 的 venv python | 软链 `.venv` 会让 conftest 报 WRONG PYTHON；基线 worktree 今天就这么跑 |
+| 依赖文件变更 | run 改了 `pyproject.toml` / `package-lock.json` → 同步时 warning：测试用的是 main 已安装的依赖；在 worktree 里 install 会经软链改掉共用的依赖 | 不为此加 Bash 命令识别（§6.1 的边界） |
 
-### 4.3 run.json 里的映射
+### 5.4 run.json 里的记录（只作记录，校验以 5.2 为准）
 
 ```json
-"worktree_mode": "isolated",            // isolated | shared（创建失败时的回退）
+"worktree_mode": "isolated",       // isolated | shared（创建失败或开关关闭时）
 "worktrees": [{
-  "repo": "/Users/gawan/Desktop/SwarmAI-Workspace/swarmai",   // main checkout，realpath
-  "path": "/Users/gawan/.swarm-ai/worktrees/run_x/swarmai",
-  "branch": "run/run_x",
+  "repo_name": "swarmai", "git_common_dir": "<创建时的值>",
   "integration_branch": "refs/heads/main",
-  "base": "<最近一次 sync 时集成分支的 sha；创建时 = main HEAD>",
-  "state": "active",                    // active | integrating | integrated | released
-  "created_at": "..."
+  "base": "<最近一次同步时集成分支的 sha>",
+  "pre_sync_tip": "<最近一次同步前的快照 commit，用于 range-diff>",
+  "state": "active",               // active | integrating | integrated | released
+  "integrated": {"sha": "...", "at": "..."}
 }]
 ```
 
-- 创建失败（磁盘、git 锁、repo 不存在）时 run 照常创建，`worktree_mode: "shared"`，打印 warning，
-  之后全部走今天的共享模式。失败可见，但不阻塞 run。
-- `run-create` 的输出带上 worktree 路径和一行规则："本 run 的代码在 `<path>` 下改，不要改 `<repo>`"；
-  `stage-start` 对 build / goal_cycle / review / test / deliver 再打印一次。
+`stage-start` 的输出带上 worktree 绝对路径和一行规则（"本 run 的代码在 `<path>` 下改"），只在 build /
+goal_cycle / deliver 的 stage-start 打印，不每次重复。
 
-## 5. 运行期：让模型和工具都落在 worktree 里
+## 6. 运行期：让模型和工具都落在 worktree 里
 
-### 5.1 写入 gate（新的 PreToolUse gate）
+### 6.1 写入 gate（新的 PreToolUse gate）
 
-模型的记忆和上下文（`.context/KNOWLEDGE.md` 等）写的都是 main checkout 的绝对路径，只靠提示挡不住。
+模型的记忆和上下文写的都是 main checkout 的绝对路径，只靠提示挡不住。gate 只在 `own_isolated_run` 存在时
+生效（判定三除外，它对所有 session 生效）。
 
-- **作用对象**：Write、Edit、MultiEdit、NotebookEdit，以及 Bash 写入（复用 `file_change_classifier`
-  的 redirect / tee / cp / mv / sed -i / 解释器 heredoc / 删除解析）。目标路径先按 `input_data["cwd"]`
-  以及同一条命令里前面的 `cd X &&` 补全，再 `realpath`（经软链写进 main 的情况也能识别）。
-- **判定一（写 main）**：本 session 拥有一个非终止状态、且有 `state=active` worktree 的 run，目标落在
-  该 worktree 对应的 main checkout 下 → **deny**，消息给出替换后的 worktree 路径。
-  - 不复用 `_session_run_state` 的"只认 running、3 小时内有活动"条件：BUILD 里 3 小时不写 run.json
-    很正常，那样 gate 会悄悄失效。这里按"run 状态不是终止 + 有 active worktree"判定，没有时间窗口。
-  - Bash 在 main checkout 里执行会改 git 状态的命令同样 deny：`commit / add / rm / mv / restore /
-    checkout / switch / stash / apply / am / reset / clean / merge / pull / rebase / cherry-pick / revert /
-    update-index`；识别 `git -C <dir>`、`--work-tree`、`GIT_DIR` / `GIT_WORK_TREE` 以及前置的 `cd`。
-- **判定二（写别人的 worktree）**：目标落在 `~/.swarm-ai/worktrees/<run>/` 下，而该 run 不属于本
-  session，或已不处于 active → **deny**（任何 session 都适用）。这也防止 release 之后模型在已删除的路径
-  上重新建出一个游离目录。
+- **判定一：写 main checkout** → deny，消息给出替换后的 worktree 路径。
+  - 作用于 Write、Edit、MultiEdit、NotebookEdit，以及 Bash 写入（复用 `file_change_classifier` 的
+    redirect / tee / cp / mv / sed -i / 解释器 heredoc / 删除解析）。目标路径按 `input_data["cwd"]` 和命令里
+    前置的 `cd` / `pushd` 补全，再 `realpath`。
+  - main checkout 里改 git 状态的命令同样 deny：`commit / add / rm / mv / restore / checkout / switch / stash /
+    apply / am / reset / clean / merge / pull / rebase / cherry-pick / revert / update-index`，识别 `git -C`、
+    `--work-tree`、`GIT_DIR` / `GIT_WORK_TREE`。
+- **判定二：写别人的 worktree** → deny：目标在 `WT_ROOT/<run>/` 下，而该 run 不是本 session 的、或其 worktree
+  已不在 git 登记里（释放之后不会在旧路径上重新长出游离目录）。
+- **判定三：动共享的 git 状态**（所有 session，按 git common dir 判断，不按 cwd）。worktree 和 main 共享 ref
+  和配置，在自己的 worktree 里 `git update-ref refs/heads/main HEAD` 就能绕过整个集成。deny：
+  `update-ref` / `symbolic-ref` / `branch -f|-D|-m` / `tag` 作用于 `refs/heads/run/<自己的 id>` 以外的 ref；
+  `worktree add|remove|move|prune`；不带 `--worktree` 的 `config`（`core.hooksPath`、`filter.*.clean` 会影响所有
+  session）；`gc --prune`、`reflog expire`、`replace`、`notes`、`push .`。
+- **硬链接**：worktree 下 `st_nlink > 1` 的文件拒绝 Write / Edit（`ln -f <main>/x.py <wt>/x.py` 之后，改 worktree
+  路径实际写的是 main 的 inode）；同步时也拒绝带硬链接的已跟踪文件。
+- **读不拦**：Read / Grep 读 main 时附加一句 additionalContext（"你在读 main；本 run 的副本在 X"）。
 - **不拦的写入**：SwarmWS 里的 DDD 文档、artifact、`.context`；没有 worktree 的其他 repo。
-- **读不拦**：Read / Grep 读 main 时附加一句 additionalContext（"你在读 main；本 run 的副本在 X"），
-  不 deny。读本身无害，但读 main 再去改 worktree 会导致 Edit 的 old_string 对不上。
-- **注册**：matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`（单独一组，不进 4 小时的 Bash 链），
-  自带 try/except 和超时，fail-open；运维旁路 `SWARM_WORKTREE_GATE_FORCE=1`（只在 daemon 环境里有效）。
-  符合 `build_hooks` 的准入三条：通用（任何用户的 run 都需要隔离）、对的层次（每次写入才拦得住）、
-  fail-safe。
-- **漏网检测**：解释器代码（`python -c` 里 `open(...,'w')`）、脚本文件这类 gate 看不见的写入，
-  在 run-sync 时兜底（§6.2 第 1 步）。
-- **受限权限模式**：`global_user_mode=False` 或非 owner 的 session 由 `can_use_tool` 限定可写目录；
-  有 worktree 的 run 把 `~/.swarm-ai/worktrees/<run_id>/` 加入该 session 的允许目录。
+- **注册**：matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`，单独一组（不进 4 小时的 Bash 链），自带 try/except
+  和超时，基础设施出错时 fail-open；运维旁路 `SWARM_WORKTREE_GATE_FORCE=1`（只在 daemon 环境里有效）。符合
+  `build_hooks` 的准入三条：通用、对的层次、fail-safe。
+- **边界固定，不再扩展**：结构化工具（Write / Edit / MultiEdit / NotebookEdit）精确拦截；Bash 只拦 git 写命令
+  （判定一、三）和现有 `file_change_classifier` 已能识别的写入。`python -c`、heredoc 脚本、`$VAR` 目标这类漏网
+  情况**不去补**解析器，交给同步时的兜底检测（§7.2 第 1 步）。补解析器是"每轮审查都冒出新漏洞"的循环
+  （与已放弃的 pytest→tail 防护同形，C055）。
+- **worktree 里的 commit**：只由工具在子进程里做（同步时的快照、落地前的最终提交）。模型在 worktree 里执行
+  `git commit` 会被现有的 `adversarial_commit_gate` / `active_run_commit_gate` 拦下（它们只看命令字符串、不管是哪个
+  repo），这正好符合 §7.1 的不变量；build 卡片写明"不要在 worktree 里 commit"，免得模型和 gate 较劲。
+- **受限权限模式**：`global_user_mode=False` 或非 owner 的 session，把 `WT_ROOT/<run_id>/` 加进允许目录，
+  并确认 `create_file_access_permission_handler` 覆盖 MultiEdit / NotebookEdit。
 
-### 5.2 工具定位到 worktree
+### 6.2 工具定位到 worktree
 
-工具始终从 main checkout 运行：run 改不到正在约束它的 gate 代码，也不会被别的 run 改了一半的工具拖垮。
-带 `--run-id` 时按 run.json 定位 worktree：
+工具始终从 main checkout 运行：run 改不到正在约束它的工具代码。
 
-| 位置 | 今天 | 改为 |
+- **命令一律用 main 的绝对路径**。卡片、`next_action`、各 gate 的 deny 文本今天都写
+  `backend/.venv/bin/python backend/scripts/...`（假设 cwd 是 main）；模型被告知"去 worktree 改"之后会
+  `cd <worktree>` 再跑，结果找不到 `.venv`，或跑到自己改了一半的工具副本。两个 CLI 发现 `__file__` 在
+  `WT_ROOT` 下时拒绝运行，并给出 main 路径的同一条命令。
+- 带 `--run-id` 时按 §5.2 推导并校验 worktree：
+
+| 位置 | 改为 |
+|---|---|
+| `pipeline_test.execute()` | `ctx.repo = worktree`（校验通过才用，否则报错，不回退到 main） |
+| `pipeline_test._python` | 默认 main 的 venv python，不再 warning |
+| 主 venv 的 editable `.pth`（把 main 的 `backend` 放进 `sys.path`） | worktree 里删掉或改名的模块会从 main 回落导入。runner 插件目录里放 `sitecustomize`，`PIPELINE_TEST_STRIP_ROOT` 设置时把 main 的 `backend` 从 `sys.path` 去掉；子进程经 `PYTHONPATH` 继承 |
+| `artifact_cli._evidence_roots`、`_repo_root_for_file`、`_changed_files_scope`（相对路径） | run 的 worktree 排第一 |
+| `security_hooks._canonical_rel_bases` | 加上活跃 run 的 worktree |
+| `_diff_pack` 给 Gate-2 的文件列表 | 用 worktree 绝对路径（sub-agent 读相对路径会读到 main） |
+| `pipeline_test._repo_relative`（`--files` 建议） | 接受 worktree 绝对路径 |
+
+- **`files_touched` 由工具推导**：worktree 里 `git status` 相对 base 的改动就是本 run 的全部改动。
+  `stage-complete` 时用它更新 `files_touched`（记 worktree 绝对路径），build.md 里"手工登记 files_touched"
+  和"`git add` 你的文件"两步删掉；deliver.md 的"暂存、取消暂存别人的文件"、test.md 的"每个修复一个原子
+  commit"也删掉（在 worktree 里没意义，在 main 上会被 gate 拒绝）。
+- **HEAD 一直等于 base**（§7.1），所以所有"diff vs HEAD"的现有代码（`_diff_pack`、`_changed_files_scope`、
+  交付总结、runner 的失败分类基线、reviewed_paths 标记）都不用改，基线自动就是 base。
+- srcgraph 缓存按 repo 路径分文件，每个 run 首次冷启动（重新解析，秒级）；释放时删掉该 worktree 的缓存。
+  runner 的基线 worktree 按 base 分，每个并发 run 最多再占约 2×119 MB，计入磁盘预算。
+
+### 6.3 卡片与 goal 流程
+
+- 卡片几乎没有余量（deliver.md 4996 / 5000 字符，plan.md 4994，goal_cycle.md 4970，build.md 4940，
+  INSTRUCTIONS.md 剩 409）。所以：命令名 `run-commit` 保留，模式差异放在工具输出里，不写进卡片；
+  卡片净变化以删除为主（6.2 里删掉的四步）。
+- goal_cycle 今天用 `git rev-parse HEAD` 记 `start_commit`、按 `<commit>..HEAD` 审查、用 `git checkout --` 回退，
+  cwd 是 main 时这些命令拿到的是 main 的 HEAD。改为 stage-start 直接给出锚点和可执行的 diff 命令
+  （新的只读 CLI `run-diff --since <anchor>`，在 worktree 里算），goal 卡片引用它；同步只在 deliver 的
+  stage-start 发生，goal cycle 期间不同步，锚点保持有效。
+
+### 6.4 Canvas 与交付总结
+
+- 运行期：活跃 run 的 worktree 加进 `needs_human_review._worktree_roots`，live 的 file_changed 能正确归属。
+- 落地后：重新生成 run 目录里的 REPORT.md（今天只在不存在时才写，会保留 worktree 路径），已有的 rail 行按
+  worktree→main 路径映射刷新，避免释放后 404。
+
+## 7. 同步与集成
+
+### 7.1 两个原则
+
+- **改动始终"相对 base 未提交"**：worktree 的 HEAD 一直等于 `base`，run 的改动是工作区 + index 里的未提交状态。
+  所有今天"diff vs HEAD"的代码因此不用改（§6.2）。模型在自己的 worktree 里 `git commit` 会被现有 commit gate 拦下
+  （§6.1），`git add` / `git rm` 允许（解决冲突要用）；goal cycle 需要的锚点用 `run-diff --mark <name>`：工具用临时
+  index 做一个快照 commit，存为 `refs/run/<run_id>/marks/<name>`，之后 `run-diff --since <name>` 比较快照和当前状态。
+- **折进现有命令**：同步发生在 deliver 的 `stage-start`，落地发生在 deliver 的 `stage-complete`。模型不需要学
+  新命令；每个异常都是这两个命令的一个错误，并且只给出一条下一步命令。`run-commit` 保留：已集成就直接
+  返回成功（幂等，`report-and-commit.md` 让模型在临时故障后重跑它），`shared` 模式走原逻辑。
+
+### 7.2 同步（deliver 的 stage-start 自动执行）
+
+只动本 run 的 worktree，拿本 run 的锁，不拿全局锁。
+
+1. **兜底检测（只报告）**：本 run 的改动路径（worktree 相对 base 的 `git status`）与 main checkout 的
+   `git status --porcelain` 求交，交集里修改时间晚于 `run.created_at` 的列出来，提示"main 里这些文件有未提交改动，
+   可能来自 gate 看不见的写入，也可能是别的 session 的工作"。**只报告**：模型不得移动、复制或 restore 这些文件
+   （同一时间段 Kiro 会话改过的文件也会被列出，搬走就是拿走别人的工作，R29），由人决定。
+2. 集成分支当前 sha `C` 等于 `base` → 无需同步，跳到第 5 步。
+3. **rebase**（编辑器一律 `GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true`，否则 `rebase --continue` 会开编辑器失败或挂住）：
+   - 先确认：没有 rebase 在进行（有就转到第 4 步的续跑）、`symbolic-ref HEAD == refs/heads/run/<run_id>`、
+     HEAD 等于 `base`、`base` 是 `C` 的祖先。
+   - 用临时 index `add -A` 做快照 commit `S`（父为 base），记为 `pre_sync_tip`；把本 run 的分支指向 `S`
+     （工作区内容不变）；`git rebase C`。
+   - 成功 → `git reset --soft C`：HEAD 回到新的 base，改动重新变成未提交状态；`base := C`。
+4. **冲突**：保持 rebase 进行中，stage-start 返回 `conflict` 和未合并文件列表（`git diff --name-only --diff-filter=U`），
+   下一步："在 worktree 里解决，逐个 `git add` / `git rm`，然后重跑 stage-start"。重跑时只有未合并列表为空才
+   `rebase --continue`。**不以"没有冲突标记"判断已解决**：实测二进制冲突、改/删冲突都没有冲突标记，按标记判断会
+   悄悄丢掉 run 的改动或替模型做了选择。
+5. **树指纹** `T` = 临时 index `add -A` 后的 `write-tree`（不含 `.aidlc/deliverables/<run_id>/`）。若这次确实
+   rebase 了：用 `git patch-id --stable`（同样排除 B 的路径）比较 `pre_sync_tip` 和新状态——相同 → 提示先跑
+   verify；不同 → stage-start 额外给出需要重审的专家列表和基于 `git range-diff` 的 prompt 文件（与今天生成 Gate-2
+   prompt 的方式相同），只审变化的部分。
+6. 之后才生成 Gate-2 prompt，所以审查者看到的永远是同步后的改动。
+
+### 7.3 证据和审查绑定到树
+
+- runner 的 evidence 记录它测试时的 `T` 和 `base`；Gate-2 / meta-review 的 prompt 文件和完成标记记录生成时的 `T`。
+- 落地时工具**自己重新计算** `T`，与 evidence 和审查记录里的 `T` 比较，不读 run.json 里可以被改写的字段。
+  不一致 → `changed_since_review`（审查之后又改了代码）。
+- 威胁模型说明：这些记录都在 `~/.swarm-ai` 下，一个有意篡改的 agent 仍能伪造。这里防的是模型的失误和被注入
+  的指令走正常命令绕过，与现有 gate 的假设一致；硬保证来自 `T` 由工具现场重算、提交时 git-defender 扫描全部改动。
+
+### 7.4 落地（deliver 的 stage-complete，`push_ready` 上界成立时）
+
+落地用原生 `git merge --ff-only`，不自己实现 checkout / merge。实测（临时 repo，main checkout 里有别人的改动）：
+- 别人暂存了 b、改了 c 未暂存，run 只改了 a 和新增 n → 合并成功，b 的暂存和 c 的未暂存改动原样保留；
+- 别人在 run 也改了的文件 a 上有未提交改动 → git 拒绝（"would be overwritten"），main 不动，a 一个字节不变；
+- main 在此期间被别人推进 → git 拒绝（"Not possible to fast-forward"），什么都不变。
+
+git 在合并期间自己持有 index 锁，处理 mode、symlink、删除、大小写改名、filter，并在 checkout 时做 `.git` 路径保护
+（`core.protectHFS` / `protectNTFS`）。r2 里手写的 index 锁协议、新 index 计算、逐路径三方合并、日志和崩溃恢复全部删掉。
+代价只有一个：与别人未提交或已暂存的改动**重叠**时不做三方合并，直接挡下。这件事多常发生现在没有数据；
+SwarmAI 里的代码改动按规则本来就走 run，主工作区里的未提交改动主要来自 Kiro 会话。P3 统计被挡的频率和文件，
+数据说需要再加三方合并。
+
+**前置条件**（任一不满足：不写任何东西，stage 不前进，返回对应错误）：
+- 调用者是 owner；在 run 锁内重新读 status，不是终止状态。
+- 原 `run-commit` 的 gate：`push_ready`、D7 专家覆盖、Red Team；`--force` 语义和审计记录不变。
+- worktree 校验通过（§5.2）；HEAD 等于 base；没有 rebase 在进行；没有未合并条目。
+- 重算的 `T` 等于 evidence 和审查记录里的 `T`，否则 `changed_since_review`。
+- 集成分支当前 sha `C` 等于 `base`，否则 `needs_resync`。
+- main checkout 检出的就是集成分支，没有 merge / rebase / cherry-pick 在进行（路径用 `git rev-parse --git-path`），
+  否则 `blocked: main_checkout_busy`。
+
+**步骤**：
+
+1. **路径校验**（只读，便宜）：拒绝 gitlink（mode 160000）和 `.gitmodules` 的改动；拒绝目标是绝对路径或指向 repo 外的
+   symlink；`.gitattributes` 新增 `filter=` / `diff=` / `merge=` → 需要重审。`.git` 路径分量由 git 的 checkout 保护挡住，
+   这里只再查一次大小写变体。
+2. **生成 B**（`.aidlc/deliverables/<run_id>/REPORT.md`，按最终的 main 路径），加入 index。
+3. **最终提交**：在 worktree 里 `git commit` 得到 `N`，父为 `C`（断言 `N^ == C`）。普通 commit，经过 git-defender 等
+   全部 hook，扫描的是本 run 的完整改动（包括解决冲突时写的代码）。可能很慢（AGENTS.md 说本机一次 commit 要预留
+   约 600 秒）；P2 先实测，卡片据此给 deliver 的 stage-complete 配 Bash 超时。
+4. 在 run 锁内重新读 status（已被取消 → 撤销）；拿该 repo 的全局集成锁（等待不超过 30 秒，否则 `busy`）。
+5. **落地**：`git -C <main checkout> merge --ff-only N`。
+   - 成功 → 第 6 步。
+   - "would be overwritten" → `blocked_by_uncommitted`，列出 git 报出的文件。
+   - "Not possible to fast-forward" → `needs_resync`。
+   - index 锁被占用 → `busy`。
+   - 任何失败：worktree `git reset --soft C` 回到不变量（N 只是一个无人引用的 commit），什么都没落到 main。
+6. **改写 run.json**（run 锁内）：`commits[]` 记 `{repo: main checkout, sha: N, files}`；`files_touched` 的 worktree 前缀
+   换成 main 路径；`worktrees[].state = integrated`。不在任何 worktree 里的文件（SwarmWS 的 DDD 文档、未绑定的 repo）
+   照旧用原来的按 pathspec 提交，同样记进 `commits[]`。
+7. 重新生成 REPORT 和 Canvas 行（§6.4），然后释放（§8）。
+
+**中断**：`merge --ff-only` 的原子性由 git 负责；它在更新工作区的过程中被杀的情况与人手动合并被打断相同，
+`git status` 能看到，按 git 的常规方式处理。工具这一侧没有需要恢复的中间状态。
+
+### 7.5 多个代码 repo
+
+`base`、`T`、状态、`commits` 都按 worktree 分别记录。第 1–3 步对每个 repo 都做完，再按 repo 名顺序逐个
+`merge --ff-only`。前一个已落地、后一个被挡时，run 记为 `integration: partial`，REPORT 按 repo 列出状态，
+stage-complete 的错误给出剩余 repo 的下一步；完成门槛（§8.4）要求全部集成，或显式以 failed / abandoned 结束并写明原因。
+
+### 7.6 被外部状态挡住时
+
+按 XG 确认的决定 2：`blocked_by_uncommitted` / `busy` / `main_checkout_busy` 时 stage 停在 deliver，模型按卡片退避后
+重跑 stage-complete（每次调用很快），累计 10 分钟仍不行，以"被 <文件> 里未提交的改动挡住"为真实理由 checkpoint。
+是否改成 daemon 后台重试、让 REFLECT 先行，等 P3 有被挡频率的数据再定。
+
+### 7.7 返回给模型的错误（都只给一条下一步命令）
+
+| 错误 | 来自 | 下一步 |
 |---|---|---|
-| `pipeline_test.execute()` | `ctx = _Ctx(_repo_root())`，即脚本所在 repo | 读 `run_state.worktrees`，校验它是同一 git common dir 下登记的 worktree，`ctx.repo = worktree` |
-| `pipeline_test._python` | `repo/backend/.venv` 不存在时回退 `sys.executable` 并 warning | 默认用 main 的 venv python（`_BACKEND_DIR/.venv`），不再 warning |
-| 主 venv 的 editable `.pth` | 把 main 的 `backend` 放进 `sys.path`（排在 site-packages 之后） | worktree 里删掉或改名的模块会从 main"回落"导入，测试通过了一个已不存在的模块。runner 插件目录里放一个 `sitecustomize`，在 `PIPELINE_TEST_STRIP_ROOT` 设置时把 main 的 `backend` 从 `sys.path` 去掉；插件目录在 `PYTHONPATH` 上，子进程也继承 |
-| `artifact_cli._evidence_roots` | `[SWARM_TEST_REPO_ROOT, main, SwarmWS]` | 带 run 时 worktree 排第一 |
-| `_repo_root_for_file`（相对路径） | 先试 cwd（= main） | 先试 run 的 worktree |
-| `_changed_files_scope`（相对路径） | 锚定到脚本所在 repo | 锚定到 run 的 worktree |
-| `security_hooks._canonical_rel_bases` | SwarmWS + main | 加上活跃 run 的 worktree |
-| `files_touched` | 自由格式，多为绝对路径 | 运行期记 worktree 绝对路径（build.md 本来就要求绝对路径）；集成时改写为 main 路径（§6.4 落地第 6 步） |
-| 证据新鲜度比较 | `pv.evidence_freshness` 按路径字符串比 digest key | 两边都按"repo + repo 内相对路径"归一后比较；集成之后的检查固定比对 `N:path` 的 blob，不比主工作区文件（那里可能混着别人的改动） |
-| 失败分类的基线 | `_baseline` 用 `_head_sha(ctx.repo)` | 用 run 的 `base`（最近一次 sync 时集成分支的 sha）。run-sync 把改动提交进 worktree 后，worktree 的 HEAD 已经包含本 run 的改动，拿它当基线会把本 run 造成的回归都判成"既有失败" |
-| "要不要重测"的判断 | — | 按树的内容指纹判断，不按 HEAD：把改动提交成 commit 不改变树，不应触发重测 |
+| `conflict` | stage-start | 在 worktree 里解决、`git add` / `git rm`，重跑 stage-start |
+| `needs_resync` | stage-complete | 重跑 deliver 的 stage-start（它会同步，并说明要重测还是重审） |
+| `changed_since_review` | stage-complete | 重跑 deliver 的 stage-start |
+| 路径校验失败 | stage-complete | 改掉被拒绝的路径（或说明后由人决定） |
+| `blocked_by_uncommitted` / `busy` / `main_checkout_busy` | stage-complete | 退避后重跑 stage-complete，累计 10 分钟后 checkpoint |
 
-`pipeline_test` 的 srcgraph 缓存按 repo 路径分文件：每个 run 首次是冷缓存（重新解析 backend 下全部 .py，
-秒级）。release 时删掉该 worktree 的 srcgraph 缓存文件，不让它们堆积。其余缓存（results、durations、
-slots）按内容或全局共享，不受影响；`slots` 本身就是跨 worktree 的全局并发上限。
+## 8. 清理：和 run 的结束是同一个动作
 
-### 5.3 换 session 恢复
+### 8.1 释放函数
 
-`run-resume` 今天不检查也不改 `session_id`，换一个 session 恢复后，写入 gate 和 `pipeline_test_gate`
-都不会对新 session 生效。改为：`run-resume` 把 `session_id` 改成当前 session（旧值记进
-`session_history[]`），并重写 session→run 映射。worktree 已不在（长期暂停被回收、被手动删除）时，
-`run-resume` 从 ledger 里的 bundle + patch 重建它，再恢复 run。
-
-## 6. 同步与集成
-
-### 6.1 为什么分成两步
-
-今天 DELIVER 的顺序是：审查（Gate-2、meta-review、收敛）→ `stage-complete`（算出 `push_ready` 上界、
-写 REPORT、推进到 REFLECT）→ `run-commit`。如果 rebase 和冲突解决只发生在最后那一步，解决冲突时写的代码
-既没被审查，也不在 `push_ready` 证明的范围里。所以拆成两步：
-
-- **run-sync**（DELIVER 开头，审查之前）：把 run 的改动对齐到最新 main，冲突在这里解决，之后的
-  verify 和审查都针对 rebase 后的代码。
-- **run-integrate**（今天 `run-commit` 的位置）：只落地被审查过、被 `push_ready` 证明过的那棵树。
-
-### 6.2 run-sync
-
-只动本 run 的 worktree，不碰 main checkout，所以只拿本 run 的锁，不拿全局锁。也可以在 DELIVER 之前
-随时调用（例如 TEST 之前先对齐 main）。
-
-1. **漏网检查**。`files_touched` 里有指向 main checkout 的路径 → 拒绝并列出，要求把改动移到 worktree。
-   另外列出 main checkout 里修改时间晚于 `run.created_at`、且在本 run 改动范围内的未提交文件，标为
-   "可能是你的"（gate 看不见的写入），避免到集成时被自己的残留挡住。
-2. **压成一个 commit**。`git reset --soft <base>`，暂存 worktree 里全部已跟踪改动和未忽略的新文件
-   （worktree 里只有本 run 的改动，不需要按 `files_touched` 挑），提交为一个 commit（信息和 trailer
-   与 `run-commit` 相同）。不在 `files_touched` 里的文件补记进去并 warning。模型在 worktree 里自己做过的
-   commit 也一起被压进来，不会绕过审查或缺 trailer。
-3. **rebase 到集成分支当前的 sha `C`**。有冲突：保持 rebase 进行中，返回 `conflict` 和文件列表；再次调用时
-   冲突文件里已没有冲突标记才 `git add` + `rebase --continue`。成功后 `base := C`。
-4. **返回树指纹** `T`（worktree HEAD 的 tree，不含 `.aidlc/deliverables/<run_id>/`），以及最新证据的
-   tree digest 是否与之一致；不一致返回 `needs_verify` 和可直接执行的 runner 命令。
-
-### 6.3 审查和 push_ready 绑定到树
-
-- Gate-2 / meta-review 的输入是 worktree 里 `base..HEAD` 的 diff（rebase 之后的）。
-- `stage-complete --stage deliver` 在算 `push_ready` 上界时额外记录 `push_ready_tree = T` 和
-  `push_ready_base = base`。证据新鲜度照旧检查（按 tree digest）。
-
-### 6.4 run-integrate
-
-**前置条件**（任一不满足就返回对应状态，不做任何写入）：
-- 原 `run-commit` 的全部 gate：`push_ready`、`files_touched` 非空、D7、Red Team；`--force` 语义和审计记录不变。
-- worktree 没有未提交改动，且 HEAD 的树等于 `push_ready_tree`。否则返回 `changed_since_review`：审查之后又改了
-  代码，需要回到 sync → verify → 审查。
-- 集成分支当前 sha 等于 `push_ready_base`。否则 main 在审查之后动过，本次调用内部做一次 rebase：
-  - 有冲突 → 返回 `conflict`（同 6.2 第 3 步），解决后要重新 verify 和审查；
-  - 无冲突、rebase 前后 `git patch-id` 相同（补丁内容没变）→ 返回 `needs_verify`，重测通过后用
-    `run-integrate --reattest` 按新证据重算 `push_ready` 上界并更新 `push_ready_tree / base`；
-  - 无冲突但补丁变了 → 返回 `needs_review` 和 `git range-diff` 命令，只审变化的部分，然后 `--reattest`。
-  - 一次调用不在内部循环重试，main 持续在动时每次都返回一个确定的下一步。
-- main checkout 当前检出的就是集成分支，没有 `MERGE_HEAD` / `CHERRY_PICK_HEAD` / rebase 目录，index 里
-  没有未合并条目。否则返回 `blocked: main_checkout_busy`。
-
-**落地**（每个代码 repo 一把全局锁，等待不超过 30 秒，否则 `blocked: integrate_lock_busy`）：
-
-1. **生成 B**：此时最终路径已确定，按改写后的 main 路径生成 `.aidlc/deliverables/<run_id>/REPORT.md`，
-   amend 进那个唯一的 commit，得到 `N`。树指纹不含 B 的路径，所以 B 不影响上面的树比对。
-2. **锁住 main 的 index**：按 git 自己的协议独占创建 `.git/index.lock`（别的 git 进程这时写 index 会失败
-   重试，不能把中间状态提交出去）。已存在就重试不超过 10 秒，否则 `blocked: index_busy`；绝不删除别人的锁。
-   拿到锁之前先写日志 `~/.swarm-ai/locks/integrate-<run_id>.journal`（`phase: prepared`，pid）。
-3. **计算，不写 main**（`C..N` 用 `--no-renames`，覆盖新增、删除、mode 变化、symlink）：
-   - **新 index**（写进 `index.lock`）：从当前 index 出发，对每个路径 P：index 条目等于 C 的（或两边都没有）
-     → 换成 N 的条目（mode + blob，删除则去掉）；别人暂存了不同内容 → 对暂存内容做三方合并
-     （base = C，ours = 暂存内容，theirs = N），干净则用合并结果、别人的暂存改动得以保留，冲突则
-     `blocked_by_uncommitted`。主工作区里别人暂存的东西是常态（`artifact_cli.py` 就经常被暂存），所以不能
-     一遇到暂存就停。
-   - **主工作区计划**：P 的工作区内容（用 `git hash-object --path` 比较，经过 filter）等于 C → 落地时写 N；
-     已等于 N → 不动；是别人未提交的改动 → 两边都是普通文本文件才做三方合并，干净则写合并结果（保留 mode），
-     冲突、二进制、symlink、改/删冲突、文件与目录冲突 → `blocked_by_uncommitted`；run 新增的文件在主工作区里
-     已作为未跟踪文件存在，内容相同则不动，不同则 blocked。被挡住的文件里修改时间晚于 `run.created_at` 的，
-     标为"可能是你的"。
-   - 任何 blocked：删除 `index.lock`、删日志，main 不动，没有任何写入。
-4. **提交点**：`git update-ref -m "run-integrate <run_id>" <集成分支> N C`（比较交换）。失败（这一瞬间有人
-   直接提交了 main）→ 删除 `index.lock` 和日志，返回 `main_moved`，下一次调用按前置条件重新判断。
-   成功 → 日志写 `phase: committed`。
-5. **写主工作区**：逐个路径，写之前再确认内容仍是第 3 步看到的样子；变了（有人刚刚编辑）就按第 3 步的规则
-   重新合并；原子写入，保留 mode，symlink 按 symlink 写，删除就删除。然后把 `index.lock` 改名为 `index`，
-   `git update-index -q --refresh`，删除日志。
-6. **改写 run.json**（重新读取、只改这些字段、原子写）：`commits[]` 改为
-   `{repo: main checkout, sha: N, files}`；`files_touched` 的 worktree 前缀改为 main 路径；
-   `worktrees[].state = integrated`，记录 `integrated_at`、`base`。REPORT、聊天交付总结、Canvas OUTPUTS
-   读到的都是 main 上真实存在的路径和 commit，`#base=<sha>^` 链接在 main 上可解析。
-7. **释放**：`release_run_worktrees(run, "integrated")`（§7）。
-
-**崩溃和中断**：
-- 第 4 步之前崩溃：日志是 `prepared` 且记录的 pid 已不在 → 恢复时删除我们自己建的 `index.lock`，什么都没写过。
-- 第 4 步之后崩溃：日志是 `committed` → 只向前完成：对剩余路径按第 3 步的规则重新合并后写入（不能盲写，
-  崩溃期间别人可能又改了这些文件），再换上 index。提交点之后从不回滚。
-- 恢复由下一次 run-integrate 或兜底清扫执行。
-- SIGTERM：提交点之前释放锁直接退出；之后先把剩余的写入做完（只是写文件，几秒）再退出。
-- 第 4 步到第 5 步完成之间的几秒里，main checkout 的 `git status` 会显示本 run 的改动像被"撤回"；这期间
-  index 锁在我们手里，别人无法把这个中间状态提交出去。
-
-### 6.5 返回给模型的状态
-
-`integrated` | `conflict` | `needs_verify` | `needs_review` | `changed_since_review` |
-`blocked_by_uncommitted`（文件列表，含"可能是你的"标记）| `blocked: integrate_lock_busy / index_busy /
-main_checkout_busy` | `main_moved` | gate 拒绝（与 run-commit 相同）。
-
-每次调用都在 60 秒内返回（Bash 工具默认 120 秒超时，后台运行又被 `background_command_guard` 禁止），
-内部不做长时间等待。每个状态都对应卡片上写明的下一步。`blocked_by_uncommitted` 和各种 busy 由模型按卡片
-退避重试（累计不超过 10 分钟，聊天 session 一般很快会提交），仍不行则以这个外部状态作为真实理由 checkpoint。
-
-## 7. 清理：和 run 的结束是同一个动作
-
-### 7.1 一个函数，所有结束路径都调它
-
-`release_run_worktrees(run_state, reason)`。**只看显式的终止状态**（`status ∈ _TERMINAL_STATUSES`：
-completed / complete / failed / cancelled / abandoned），不用 `is_terminal_run`：后者在 deliver 阶段
-完成后就返回 true，而这时 run 可能正停在 `needs_verify` 或 `blocked_by_uncommitted`，工作还没集成。
+`release_run_worktrees(run_state, reason)`，只看**显式**终止状态（status 不是 running / paused 的一律算，包括磁盘上
+已有的 `aborted` / `rejected` / `superseded`），不用 `is_terminal_run`：后者在 deliver 完成后就为真，而那时 run 可能正
+停在 `needs_resync` 或 `blocked_by_uncommitted`，工作还没集成。
 
 | worktree 状态 | 处理 |
 |---|---|
-| `integrated` | `git worktree remove --force` → `git branch -d run/<id>`（已并入集成分支，`-d` 就够；`merge-base --is-ancestor` 不成立时不删，记 warning）→ 删该 worktree 的 srcgraph 缓存 → `state = released` |
-| `active`，run 已显式终止但未集成 | 有 rebase 进行中先 `rebase --abort`；把未集成的工作存进 ledger：`runs/<id>/worktree.patch`（`git diff <base>` 加未跟踪文件，含二进制）和 `worktree.bundle`（分支上的提交）；然后删 worktree 和分支。工作可以从 ledger 恢复，磁盘上不留 worktree |
-| `active`，run `running` / `paused` | 保留 |
-| 有集成日志 | 先按 §6.4 的崩溃规则恢复，再按结果处理 |
+| `integrated` | `git worktree remove --force`（实测不跟随 node_modules 软链）→ `git branch -d run/<id>`（已并入，`-d` 够用）→ 删 `refs/run/<id>/marks/*` 和该 worktree 的 srcgraph 缓存 → `released` |
+| `active`，run 已显式终止 | 先快照、校验可恢复，再删（下面） |
+| `active`，run 是 running / paused | 保留（长期不动的见 8.3） |
 
-**调用点**（今天每一个写 run 终止状态的地方）：
-- `cmd_run_update` 写入任何终止状态之后；
-- 两个回收器 `_auto_abandon_stale_runs` 和 `cleanup_orphans`（共用 `_abandon_verdict`，在同一处加）；
-- `purge_garbage_runs` 删 run 目录之前；
-- 手工脚本 `pipeline_cleanup.py`、`reconcile_mislabeled_runs.py`。
+**快照与校验**（实测修正过的做法）：
+1. 有 rebase 在进行时**不先 abort**（abort 会丢掉做了一半的冲突解决）：直接在当前状态做快照。
+2. 快照 = 临时 index `add -A` → `write-tree` → `commit-tree -p HEAD` 得到 `snap`，覆盖所有未忽略的文件（含二进制、
+   +x、新文件）。`commit-tree` 总会产生新 commit，所以 bundle 不会因"范围为空"被拒（实测普通 `git bundle` 在 run 没有
+   commit 时会报 "Refusing to create empty bundle"）。
+3. `git bundle create <ledger>/worktree.bundle <base>..snap`，另存一份 `git diff --binary <base> snap` 便于人看。
+4. **校验通过才删**：`git bundle verify` 成功；在临时目录里从 bundle 恢复出 `snap`，其 tree 与快照一致；`base` 是 `snap`
+   的祖先。任一失败 → 保留 worktree，报告，不删。
+5. ledger 位置：`~/.swarm-ai/worktree-ledger/<run_id>/`，**不在任何 git repo 里**（放进 SwarmWS 会被
+   `WorkspaceAutoCommitHook` 的 `add -A` 提交进历史），保留 90 天，`purge_garbage_runs` 不碰它。恢复方法写进 ledger 的
+   README：在 `base` 处建 worktree，从 bundle 取 `snap` 的 tree。忽略的文件（`.gitignore` 里的）不在快照里，这一点也写明。
 
-**取消要等 session 停下**：`PATCH /pipelines/{id}/cancel` 由 daemon 写 run.json，不停 session、不拿 run 锁，
-直接删 worktree 会删到模型正在编辑或正在跑测试的目录下。改为：cancel 写 `status = cancelled` 和
-`release_requested: true`，真正的 release 发生在 (a) 该 run 下一次任何 `artifact_cli` / `pipeline_test`
-调用（看到已取消就拒绝工作并 release），或 (b) 兜底清扫确认该 session 已不在 STREAMING / WAITING_INPUT。
-release 之后，写入 gate 的判定二拒绝再写这个路径。
+**git 登记的清理**：`git worktree prune` 没有单条形式，全局 prune 又会碰到 runner 的基线 worktree。所以找到
+`$GIT_COMMON_DIR/worktrees/` 下 `gitdir` 文件指向该路径的那个管理目录（目录名按路径末段取，例如 `swarmai`、
+`swarmai1`，不是 run_id），删掉它，再删分支。
 
-每次 release 拿该 run 的锁，与 run-sync / run-integrate 互斥。release 失败不影响状态写入（记 warning），
-由 7.2 补上。
+### 8.2 谁来执行、什么时候执行
 
-### 7.2 兜底清扫
+**真正删除只由 owner 或 daemon 做**。今天会把 run 写成终止状态的地方（`run-update`、两个回收器、router 的 cancel、
+`purge_garbage_runs`、手工脚本）里，只有 owner session 自己的 `run-update` 会立即释放；其余的只写
+`release_requested: true`，删除发生在：
+- 该 run 下一次 owner 的 `artifact_cli` / `pipeline_test` 调用（看到终止就拒绝工作并释放）；或
+- daemon 的清扫确认 owner 不在 STREAMING / WAITING_INPUT 之后。
 
-有的写入者会绕过任何单一调用点（崩溃后一直停在 `running` 的 run、手改的 run.json），所以还需要
-按显式状态回收：
+原因：回收器以 `_run_tokens == 0` 判断"空壳"，而磁盘上 11 个活跃 run 里有 8 个 token 记为 0（测量失败时记 0），
+BUILD 又可能 3 小时不写 run.json；另一个 session 在同项目 `run-create` 时就可能把一个正在干活的 run 判成 orphan。
+所以对 isolated run，`_abandon_verdict` 的"空闲"还要看 worktree 本身的活动（工作区里最新的修改时间），而不是只看
+run.json 和 token。
 
-- **时机**：每次 `run-create`（同项目），以及每日一次（`ContextHealthHook` 的 deep check，和
-  `cleanup_orphans` 放在一起，它在 daemon 里，能看到 session 状态）。
-- **范围**：只看 `~/.swarm-ai/worktrees/` 下的 worktree 和 `run/*` 分支。runner 自己的基线 worktree
-  （`~/.swarm-ai/cache/pipeline_test/test-baseline/`）和其他手工 worktree 不在范围内。
-- **做法**：
-  - 对应的 run 不存在，或 `status` 是显式终止状态 → `release_run_worktrees`；
-  - run 是 running / paused → 保留；
-  - 目录在但 git 没登记 → 存 patch 后删目录；git 登记了但目录不在 → 对这一项 `git worktree prune`；
-  - 没有 worktree 的 `run/*` 分支：run 已终止且分支已并入 → 删；未并入 → 存 bundle 后删；
-  - 有集成日志 → 按 §6.4 恢复。
-- **长期停滞**：deliver 已完成但没集成、或崩溃后一直停在 running 的 run，今天不会被自动回收
-  （`_abandon_verdict` 跳过 tokens > 0 的 run），worktree 跟着保留，在 Radar 里可见。清扫把"worktree
-  存在超过 7 天且 run 无活动"写进 deep check 的 findings；暂停超过 14 天的 run 把工作存进 ledger 后释放
-  worktree（`run-resume` 会从 ledger 重建，§5.3）。
+### 8.3 兜底清扫
 
-### 7.3 清零的验收口径
+- **时机**：daemon 启动时；每小时一次（新的 system job，替代"每天第一次 session 结束时"那一次的不确定性）；
+  每次 `run-create`（同项目）。
+- **范围**：只看 `WT_ROOT` 下、并且出现在 `git worktree list` 里的 worktree，以及 `run/*` 分支。
+  runner 的基线 worktree 和其他手工 worktree 不在范围内。
+- **规则**：
+  - 对应 run 不存在，或 status 不是 running / paused → 按 8.1 释放（owner 不活跃时）。
+  - running / paused、deliver 已完成却一直没集成、或 14 天没有活动 → 快照进 ledger 后释放，记进 Radar；
+    `run-resume` 或 owner 的下一次调用从 ledger 重建 worktree。
+  - `WT_ROOT` 下有目录但 git 没登记 → **不删**，改名移到 `WT_ROOT/.quarantine/` 并报告（防止有人把 symlink 放进
+    `WT_ROOT` 引导清扫删掉别的目录）。
+  - 没有 worktree 的 `run/*` 分支：run 已终止且已并入 → 删；未并入 → 快照后删。
 
-任何时刻：`~/.swarm-ai/worktrees/` 下的 worktree 数 = 状态为 running / paused、且未因长期暂停被释放的
-isolated run 数；`git branch --list 'run/*'` 只包含这些 run 的分支；每个被删掉的未集成 worktree 都能在
-ledger 里找到 patch 和 bundle，并能用它们重建。
+### 8.4 完成门槛
 
-## 8. 不在 pipeline 里的 session
+`run-update --status completed`（以及 REFLECT 的 stage-complete）在任何 worktree 为 `active` 且相对 base 有改动时
+拒绝：要么先集成，要么以 failed / abandoned 结束并写明原因（REPORT 写明"改动未集成，已存入 ledger"）。今天的完成门槛
+只在"有 commit"时检查提交覆盖，一个从未集成的 run 能被标成 completed，工作随即被释放进 ledger，看起来却像已交付。
 
-聊天 session（Kiro 会话、SwarmAI 里没在跑 run 的 tab）没有 worktree，照旧直接改 main checkout。
-它们和 run 之间的保护只有 §6.4 落地第 3 步：run 集成时，如果和它们没提交的改动改到同一段代码，集成停下，
-main 不动，它们的改动不丢。它们彼此之间的摩擦本设计不解决。缓解办法：
+### 8.5 清零的验收口径
 
-- SwarmAI 聊天 tab 要改代码就开 `direct` profile 的 run。`direct_commit_gate` 已经把超过 20 行源码的
-  直接提交挡下并指向 `run-create --profile direct`，开了 worktree 模式之后这些改动自然被隔离。
-- 被集成写回的文件，聊天 session 下一次按旧内容 Edit 会匹配失败，重新读一遍即可，不会丢数据。
+任何时刻：`WT_ROOT` 下 git 登记的 worktree 数 = status 为 running / paused、且未因长期不动被释放的 isolated run 数；
+`run/*` 分支只属于这些 run；每个被删掉的未集成 worktree 都能从 ledger 恢复；`.quarantine/` 为空或已报告。
 
-## 9. 已确认的决定（XG 2026-10-18）
+## 9. 开关与过渡
 
-1. **本地临时分支**。AGENTS.md 写的是"Commit directly to main — never auto-branch"。本设计每个 run 有
-   一个本地分支 `run/<id>`：不 push，集成后删除，最终 commit 仍直接落在 main。已确认不算违反该规则；
-   P2 落地时据此更新 AGENTS.md 那一句。
-2. **集成被未提交改动挡住时**：模型按卡片退避重试，累计 10 分钟，之后 DELIVER checkpoint，理由写明
-   被哪个文件、哪类改动挡住。
-3. **未集成就结束的 run**：工作存成 ledger 里的 patch + bundle，然后删除 worktree 和分支（不在磁盘上
-   保留 worktree）。
+- 开关只决定新 run 是否建 worktree。每个 run 的行为由它自己 run.json 里的 `worktree_mode` 决定：
+  - 开关打开时已经在跑的 shared run：照旧，没有 worktree；落地时 `merge --ff-only` 会保留它们在 main 里的未提交改动
+    （不重叠时），重叠则挡下。
+  - 开关关闭时仍在跑的 isolated run：继续按 isolated 处理到结束（工具继续定位到 worktree，释放和清扫照常）。
+    否则 `pipeline_test` 会去测没有本 run 改动的 main（假绿），旧 `run-commit` 会把改动提交到 `run/<id>` 分支上再被
+    清扫掉。
+- `run-commit` 对有 active worktree 的 run 不走旧逻辑。
 
-## 10. 明确不做
+## 10. 不在 pipeline 里的 session
 
-- **文件锁 / 认领**（草稿方案一的 H1）：`artifact_cli.py` 这类热点几乎每个 run 都要改，run 之间会长时间
-  互相阻塞。
+聊天 session（Kiro 会话、SwarmAI 里没在跑 run 的 tab）没有 worktree，照旧直接改 main checkout。它们和 run 之间的保护
+是 `merge --ff-only` 本身：不重叠的改动保留，重叠的挡下，它们的改动不会被改写。它们彼此之间的摩擦本设计不解决。
+
+- SwarmAI 聊天 tab 要改代码就开 `direct` profile 的 run。注意 `direct_commit_gate` 是在提交时才拦下、并指向
+  `run-create --profile direct` 的，那时改动已经在 main 里了；新建的 run 基于 main HEAD，不包含这些改动。
+  这些改动属于发起提交的这个 session，但工具无法可靠地证明这一点，所以**不提供自动搬运**：deny 文本改为提示"先在
+  run 的 worktree 里重做这次改动，main 里这份由你自己或人处理"，同步时的兜底检测会把它们列出来（只报告）。
+- 落地后，聊天 session 编辑的文件不会被工具改写（ff-only 遇到重叠就停），不存在"对方下一次 Edit 匹配失败"的问题。
+
+## 11. 已确认的决定（XG 2026-10-18）
+
+1. **本地临时分支**：每个 run 一个本地分支 `run/<id>`，不 push，集成后删除，最终 commit 仍直接落在集成分支上。
+   不算违反 AGENTS.md 的"never auto-branch"；落地时据此更新那一句。
+2. **被未提交改动挡住**：模型退避重试，累计 10 分钟，之后 checkpoint，理由写明被哪个文件挡住（§7.6）。
+3. **未集成就结束的 run**：快照存进 ledger，校验可恢复后删除 worktree 和分支（§8.1）。
+
+## 12. 明确不做
+
+- **与重叠的未提交改动做三方合并**：先用 `merge --ff-only` 挡下，P3 统计被挡频率和文件，数据说需要再加。
+- **扩展 Bash 写入解析**：边界见 §6.1。
+- **daemon 后台重试落地**：先按决定 2 由模型退避，P3 有数据再定。
+- **文件锁 / 认领**：`artifact_cli.py` 这类热点几乎每个 run 都要改，run 之间会长时间互相阻塞。
 - **按 hunk 记录归属、提交时拆分**：解决不了"测到别人改了一半的代码"，相邻或重叠的改动无法归属。
-- **给 SwarmWS 建 worktree**：run.json 和 DDD 文档是全局共享状态，多个 session 必须看到同一份。
-- **集成时自动解决冲突**、跳过重测直接推进 main、push。
-- **为每个 run 重装依赖**：依赖文件有改动时只 warning。
+- **给 SwarmWS 建 worktree**、**为每个 run 重装依赖**、集成时自动解决冲突、跳过重测、push。
+- **工具改为从固定在 main HEAD 的快照运行**（防聊天 session 把 main 里的工具改到一半）：§1 的第三个问题在 run 之间
+  已解决（run 不再改 main 里的工具），聊天 session 这一半留作后续。
 
-## 11. 失败模式
+## 13. 失败模式
 
 | 情况 | 结果 |
 |---|---|
 | 建 worktree 失败 / main checkout 不在集成分支上 | run 以 `shared` 模式继续（今天的行为），warning 可见 |
-| 模型用 gate 看不见的方式写了 main | run-sync 第 1 步按 `files_touched` 和修改时间发现并拒绝 / 标为"可能是你的" |
-| 两个 run 改到同一段代码 | 后集成的一方 rebase 冲突，由它解决，然后重测、重审变化部分 |
-| 两个 run 各自通过、合起来坏 | main 在审查之后动过 → 至少要求在 rebase 后的树上重测 |
-| 审查之后又改了代码 | `changed_since_review`，回到 sync → verify → 审查 |
-| 聊天 session 未提交 / 已暂存的改动 | 不重叠 → 三方合并保留；重叠 → `blocked_by_uncommitted`，main 不动，退避重试后 checkpoint |
-| 提交点那一瞬间有人直接提交了 main | 比较交换失败，什么都没写；下一次调用重新判断 |
-| 集成中途崩溃 / 被 SIGTERM | 提交点之前：删自己的 index 锁即可；之后：只向前完成，剩余文件重新合并后写入 |
-| main 的 `.git/index.lock` 被别人占用 | 重试不超过 10 秒，返回 `index_busy`，绝不删别人的锁 |
-| run 被取消 | 先标记 `release_requested`，等 session 停下或下一次 CLI 调用时再 release |
-| deliver 完成但未集成就停住 | 不回收（只认显式终止状态），deep check 报告，人决定 |
-| 长期暂停 | 14 天后工作存进 ledger、释放 worktree；resume 时重建 |
-| daemon 重启 | worktree 在磁盘上，run.json 有映射，无需额外处理 |
-| worktree 目录被手动删掉 | 清扫时 prune 该项；分支未并入则存 bundle；resume 时重建 |
+| run.json 里的路径 / 分支被改 | 工具不读这些字段（§5.2），校验失败就拒绝 |
+| 模型用 gate 看不见的方式写了 main | 同步时列出（只报告），由人决定 |
+| 两个 run 改到同一段代码 | 后同步的一方 rebase 冲突，由它解决，然后重测、重审变化部分 |
+| 两个 run 各自通过、合起来坏 | main 在审查后动过 → 回到同步，至少重测 |
+| 审查之后又改了代码 | `changed_since_review` |
+| 与别人未提交 / 已暂存的改动重叠 | `merge --ff-only` 拒绝，main 和那些文件都不变；退避 10 分钟后 checkpoint |
+| 落地那一刻有人直接提交了 main | `merge --ff-only` 拒绝（不能快进）→ 回到同步 |
+| `merge --ff-only` 中途被杀 | 与手动合并被打断相同，`git status` 可见，工具侧无中间状态 |
+| run 被取消 / 回收 | 只写 `release_requested`，owner 停下后才释放；释放前快照并校验 |
+| 快照校验失败 | 保留 worktree 并报告，不删 |
+| deliver 完成但没集成就停住 | 不按 stage 进度回收；14 天后快照释放并进 Radar |
+| `WT_ROOT` 下出现未登记目录（含 symlink） | 移入 `.quarantine/`，不删 |
+| daemon 重启 | worktree 在磁盘上；启动时清扫一次 |
 | run 改了依赖文件 | warning：测试用的是 main 已安装的依赖 |
 
-## 12. 分期
+## 14. 分期
 
-开关 `worktree_mode` 在 P1 + P2 都验收之前保持 `off`：只有 P1 会把 run 的提交落在 `run/<id>` 分支上，
-不能单独打开。
+- **第一个可交付单元（P0 + P1 + P2）**，完成后打开开关：
+  - **P0** run 锁（§4.1，先覆盖本功能涉及的写入者：run-update、stage-start / complete、run-commit、cancel、两个回收器、
+    stamper）；归属与接管（§4.2）；共用的 `own_isolated_run` 判定。
+  - **P1** 建 worktree 与校验（§5）；写入 gate（§6.1）；工具定位与 `.pth` 屏蔽、`files_touched` 由工具推导、命令用 main
+    绝对路径（§6.2）；`run-diff` 与 goal 卡片锚点（§6.3）；释放、快照、ledger、完成门槛、清扫（§8）。
+  - **P2** deliver stage-start 里的同步（§7.2）、树指纹绑定（§7.3）、stage-complete 里的 `merge --ff-only` 落地（§7.4）、
+    多 repo（§7.5）、卡片删减（§6.2、§6.3）、Canvas 与 REPORT 刷新（§6.4）、AGENTS.md 分支规则和 Security
+    Architecture 列表。
+- **P3 观测与按数据决定**：统计被挡次数、被挡文件、等待时长、冲突次数、同步引起的重测 / 重审次数；据此决定是否加
+  三方合并、是否改成 daemon 后台重试。
 
-- **P1 隔离与生命周期**：run-create 建 worktree 和映射（含 node_modules 软链、info/exclude）；写入 gate；
-  `pipeline_test` / `artifact_cli` / `security_hooks` 按 run 定位 worktree（§5.2 表格全部行）；
-  `.pth` 回落屏蔽；`run-resume` 改写 session；`release_run_worktrees` 接入全部结束路径；兜底清扫。
-- **P2 同步与集成**：`run-sync`、`push_ready` 绑定树、`run-integrate`（§6 全部步骤，含冲突续跑、重测和
-  重审要求、预演、index 锁、提交点、日志恢复、run.json 改写）；runner 基线改用 run 的 base；deliver 卡片和 build 卡片改成新流程（卡片尺寸上限内）；AGENTS.md 的分支规则和
-  Security Architecture 列表更新。
-- **P3 观测**：profiler 和 REPORT 记录集成耗时、冲突次数、重试次数、被挡住的时长；deep check 报告
-  长期停滞的 worktree。
+## 15. 验收
 
-## 13. 验收
+每条都要有自动化测试（临时 git repo + 临时 SwarmWS），交付后再用一个真实 run 验证：
 
-每条都要有自动化测试（临时 git repo + 临时 SwarmWS），P2 结束后再用一个真实 run 验证：
+1. 两个 run 并行改同一个文件的不同函数：各自测试只看到自己的改动；先后集成都成功；main 上各一个 commit，互不包含。
+2. 两个 run 改同一段代码：后者得到 `conflict`；二进制冲突和改/删冲突也必须由模型显式 `git add` / `git rm` 才能继续。
+3. main 在审查后被推进：补丁不变 → 只要求重测；补丁变了 → 要求重审变化部分；之前都不落地。
+4. 主工作区里别人的改动：不重叠（暂存和未暂存各一个）→ 落地后原样保留；重叠 → `blocked_by_uncommitted`，main 和该文件都不变。
+5. 审查后又改了代码 → `changed_since_review`。
+6. 写入 gate：四种结构化工具写 main → deny 并给出 worktree 路径；在 worktree 里 `update-ref` main、`worktree remove`
+   别人的、`config core.hooksPath` → deny；硬链接文件 → deny；没有 run 的 session 不受影响；gate 出错时 fail-open。
+7. run.json 里改 `path` / `integration_branch` → 工具拒绝；`WT_ROOT` 下放 symlink → 清扫移入 quarantine，不删任何东西。
+8. 被删除的模块在 worktree 里导入失败（不从 main 回落）。
+9. 清零：完成、取消、回收、清除、手动删目录之后 §8.5 成立；未集成的工作（含 rebase 进行中的）能从 ledger 恢复。
+10. 新 session 接着跑一个旧 session 崩溃留下的 run：自动接管，gate 对新 session 生效；旧 session 还活着时接管被拒。
+11. 从未集成的 run 不能被标成 completed。
+12. `worktree_mode: off`：现有测试全部不变地通过。
 
-1. 两个 run 并行改同一个文件的不同函数：各自测试只看到自己的改动；先后集成都成功；main 上两处改动都在，
-   各自一个 commit，提交内容不含对方的改动。
-2. 两个 run 改同一段代码：后者得到 `conflict`，解决后重测、集成成功。
-3. main 在 run 期间被别人推进：`needs_verify` 之前不推进 main。
-4. 主工作区里聊天 session 未提交的改动：不同位置 → 合并后保留；同一位置 → `blocked_by_uncommitted`，
-   main 和该文件都不变。
-5. run-integrate 在落地各步之间被杀（每个位置一个测试）：提交点之前恢复后完全回到原样；之后恢复后完整
-   集成，且崩溃期间别人对同一文件的改动不丢。
-5a. 主工作区里别人暂存了本 run 也改的文件（不重叠）：集成后别人的暂存改动仍在 index 里。
-5b. 路径种类：新增、删除、改名、mode 变化（+x）、symlink、二进制、run 新增但主工作区已有同名未跟踪文件，
-   各一个测试。
-5c. 解决冲突后、或审查之后又改了代码：不经重审不能落地（`needs_review` / `changed_since_review`）。
-5d. deliver 已完成但未集成的 run：同项目新建 run 和每日清扫都不回收它的 worktree。
-5e. 失败分类：run 引入的回归在 sync 之后仍被判为 regression，而不是既有失败。
-6. 写入 gate：Write / Edit / MultiEdit / NotebookEdit / 各种 Bash 写入 / 经软链的路径 → deny 并给出
-   worktree 路径；没有 run 的 session 不受影响；gate 出错时 fail-open。
-7. 被删除的模块在 worktree 里导入失败（不从 main 回落）。
-8. 清零：完成、取消、回收、清除、手动删目录五种路径之后，§7.3 的口径成立；未集成的工作能从 patch
-   恢复出来。
-9. `worktree_mode: off`：现有测试全部不变地通过。
+## 16. 对抗审查记录
 
-## 14. Gate-0 对抗审查（r1 → r2 的修改）
+### 16.1 r1 → r2（单人 Gate-0）
 
-| 发现 | 级别 | r2 的修改 |
+主要修改：同步与落地拆成两步、`push_ready` 绑定树（r1 的冲突解决代码没被审查）；清理只认显式终止状态；runner 基线
+改用 base；等待不超过工具超时。r2 的手写落地机制（index 锁、日志恢复）在 r3 被整体替换，见 16.3。
+
+### 16.2 r2 → r3（四路并行：git 机制实测、生命周期与并发、流程契合、安全）
+
+| 发现 | 级别 | r3 的处理 |
 |---|---|---|
-| 先写文件和 index、后推进 ref：中间窗口里别人 `git commit` 会提交出本 run 的改动，回滚又会覆盖别人的新改动 | HIGH | 先独占 `.git/index.lock`、新 index 写在锁文件里；比较交换推进 ref 作为唯一提交点，之后才写主工作区；提交点前失败什么都没写，之后只向前完成（§6.4） |
-| 集成发生在 DELIVER 收尾之后，冲突解决的代码没被审查，`push_ready` 证明的是 rebase 之前的树 | HIGH | 拆成 run-sync（审查之前）和 run-integrate；`push_ready` 绑定树指纹；main 在审查后动过时，补丁不变要重测、补丁变了要重审（§6.1–6.4） |
-| `is_terminal_run` 在 deliver 完成后就为真，清扫会把还没集成的 worktree 回收掉 | HIGH | release 和清扫只认显式终止状态（§7.1、§7.2） |
-| 提交进 worktree 后，runner 拿 worktree HEAD 当基线，本 run 的回归会被判成既有失败；按 HEAD 判断重测会每次都触发 | HIGH | 基线用 run 的 `base`；重测按树内容判断（§5.2） |
-| 等待 10 分钟超过 Bash 工具超时，进程会在落地中途被杀 | HIGH | 每次调用 ≤ 60 秒，锁等待 ≤ 30 秒，由模型按卡片退避重试；SIGTERM 处理（§6.4、§6.5） |
-| 只考虑了普通文件修改：删除、改名、mode、symlink、二进制、filter、同名未跟踪文件 | MED | 逐类定义处理，不确定就 blocked；用 `hash-object --path` 比较；验收 5b |
-| 主工作区里别人已暂存的内容是常态，"暂存就冲突"会让热点文件几乎总被挡 | MED | 对 index 条目也做三方合并，保留别人的暂存改动；main 上的 git 写命令列表补全（§5.1、§6.4） |
-| 写入 gate 沿用"running + 3 小时活动"条件会悄悄失效；不防写别人的 worktree | MED | 按非终止状态 + active worktree 判定；新增判定二（§5.1） |
-| gate 看不见的写入会让 run 被自己的残留挡住 | MED | sync 第 1 步按修改时间标"可能是你的"（§6.2） |
-| 取消时 daemon 直接删 worktree，会删到正在编辑的目录 | MED | `release_requested`，等 session 停下或下一次 CLI 调用（§7.1） |
-| 集成分支写死为 `main`；main checkout 可能正处于 merge / rebase | MED | 记录 `integration_branch`；落地前检查 main checkout 状态（§4.1、§6.4） |
-| B 在 rebase 和路径改写之前生成，里面是 worktree 路径 | MED | B 在落地第 1 步按最终路径生成并 amend 进唯一的 commit（§6.4） |
-| 模型在 worktree 里自己的 commit 会被 rebase 原样带进 main，缺 trailer、缺 B | MED | sync 时压成一个 commit（§6.2 第 2 步） |
-| 崩溃后向前完成时盲写会覆盖别人的新改动 | MED | 向前完成时剩余文件重新合并（§6.4） |
-| resume 时 worktree 可能已不在；长期暂停一直占磁盘 | MED | resume 从 ledger 重建；暂停 14 天释放（§5.3、§7.2） |
-| `core.hooksPath=/dev/null` 绕过公司 hook | LOW | 只用于 `worktree add`，commit / rebase 不覆盖（§4.1） |
-| 受限权限模式下写不了 worktree；Windows 软链 | LOW | 加入允许目录；junction 或回退 shared（§5.1、§4.1） |
-| 比较交换的"调用内重试 3 次"不可能成功 | LOW | 删除调用内重试，每次返回确定的下一步（§6.4） |
-| 集成后新鲜度检查比的是可能混有别人改动的主工作区文件 | LOW | 固定比对 `N:path` 的 blob（§5.2） |
-| "SwarmWS/Projects/SwarmAI 是指向 main 的软链"不成立（它是普通目录） | LOW | 删除该说法，realpath 仍保留（防其他软链） |
-| 清扫的 prune 是全局的，会影响 runner 的基线 worktree | LOW | 清扫范围限定在 `~/.swarm-ai/worktrees/`，prune 只针对该项（§7.2） |
+| 同步后提交成 commit，所有"diff vs HEAD"的代码（Gate-2 diff、范围统计、交付总结、失败基线）都变空 | HIGH | 改动始终相对 base 未提交，HEAD = base（§7.1） |
+| 卡片和 deny 文本用相对路径，模型 `cd` 进 worktree 后跑错工具或找不到 venv | HIGH | 命令一律 main 绝对路径；CLI 在 worktree 里拒绝运行（§6.2） |
+| 没有完成门槛，从未集成的 run 能被标成 completed，工作被释放进 ledger | HIGH | §8.4 |
+| 同步、重测、重审、reattest、重试让模型多出 4–6 次调用 | HIGH | 折进 deliver 的 stage-start / stage-complete，`run-commit` 幂等（§7.1） |
+| goal cycle 的 `git rev-parse HEAD` 在 main 上执行 | HIGH | `run-diff` 锚点，goal 期间不同步（§6.3） |
+| direct_commit_gate 引导的 run 不含已在 main 里的改动 | HIGH | 不自动搬运，提示重做，兜底检测只报告（§10） |
+| 没有 run 锁，cancel 与 run-update / 落地互相覆盖 | HIGH | P0 run 锁（§4.1） |
+| 回收器以 token 为 0 判空壳，会删正在工作的 worktree；非 owner 直接删 | HIGH | 只有 owner / daemon 删，其余写 `release_requested`；看 worktree 活动（§8.2） |
+| 崩溃后新 session 接着跑，不是 owner，gate 失效 | HIGH | daemon 自动接管（§4.2） |
+| 在 worktree 里 `update-ref` main、`worktree remove` 别人的、改共享 config | HIGH | 判定三按 git common dir 拦（§6.1） |
+| 工具按 run.json 里的路径 / 分支操作，可被改写；清扫跟随 symlink 删到 main | HIGH | 路径只从 run_id 推导并校验；未登记目录进 quarantine（§5.2、§8.3） |
+| 自写的文件落地绕过 git 的 checkout 保护（`.GIT/hooks`、逃逸 symlink） | HIGH | 改用 `merge --ff-only`，加只读路径校验（§7.4） |
+| "保存再删"可能悄悄丢工作（abort 丢冲突解决、空 bundle、非二进制 patch） | HIGH | 快照 commit + bundle，校验可恢复才删（§8.1） |
+| 删 `index.lock` 的提示会让别人撤回刚落地的改动；崩溃留锁直到每日清扫 | HIGH | 不再自己持锁，用 git 原生合并（§7.4） |
+| 以"没有冲突标记"判断已解决，会丢二进制改动、替模型选改/删 | HIGH | 只看未合并列表为空（§7.2） |
+| `rebase --continue` 会开编辑器；大小写改名先写后删会把文件删没 | MED | 编辑器设为 true；大小写改名由 git 原生处理 |
+| 多 repo 部分集成没有状态 | MED | `integration: partial`（§7.5） |
+| SwarmWS / 未绑定 repo 的文件失去 run 的 commit | MED | 落地后仍按 pathspec 提交（§7.4 第 6 步） |
+| 开关关闭时在跑的 isolated run 会假绿或丢提交 | MED | 行为按 run 自己的模式（§9） |
+| ledger 放 SwarmWS 会被自动提交进历史，且被 30 天清除 | MED | 放在 git 之外，保留 90 天（§8.1） |
+| 清扫只在每天第一次 session 结束时跑；其他状态值没有规则 | MED | daemon 启动 + 每小时；非 running / paused 一律算终止（§8.3） |
+| `pipeline_test_gate` 的 3 小时窗口与写入 gate 不一致 | MED | 共用 `own_isolated_run`（§4.2） |
+| 硬链接绕过 realpath 检查 | MED | 判定里加 nlink 检查（§6.1） |
+| 单条 `worktree prune` 不存在 | LOW | 删对应管理目录（§8.1） |
+
+### 16.3 r3 对 §7.4 的简化（外部审查，2026-10-18）
+
+外部审查指出 r2 的落地等于手写一遍 git 的 `unpack_trees`：独占 index 锁、逐路径三方合并、六类路径矩阵、提交点后
+靠日志向前恢复；每轮审查都会冒出新边界，与已放弃的 pytest→tail 防护同形（C055）。它比原生 `git merge --ff-only`
+多出的只有一件事：与重叠的未提交改动做三方合并，而这件事多常发生没有数据。实测（§7.4 开头）确认 `--ff-only` 保留
+不重叠的暂存 / 未暂存改动、挡下重叠的、在 main 被推进时拒绝。采纳：
+
+- 落地改为原生 `merge --ff-only`，删掉 index 锁协议、日志与恢复、路径矩阵，以及约一半的验收项；三方合并推到 P3 按数据决定。
+- 兜底检测只报告，模型不得移动或 restore 被列出的文件（防止搬走 Kiro 会话的工作，R29）。
+- 写明现有 commit gate 会拦模型在 worktree 里的 commit，这符合不变量。
+- Bash 写入 gate 的边界固定，不再扩展解析器。
+- P0 + P1 + 简化后的 P2 作为第一个可交付单元，做完就能打开开关。
