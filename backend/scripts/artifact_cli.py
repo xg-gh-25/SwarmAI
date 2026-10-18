@@ -8215,6 +8215,46 @@ def _measure_stage_tokens(session_id, start_iso, end_iso, transcripts=None) -> "
     return usage if isinstance(usage, dict) else None
 
 
+def _add_prior_window_cost(run_state: dict, stage: str, cand_rec: dict, derived: dict) -> None:
+    """A re-record (stage-start re-opened a completed stage) measures only its new
+    window; the stage's earlier windows were measured when they closed and live in
+    the previous record. Combine them, so one record per stage still carries the
+    whole stage's cost (run_376299fa Gate-2: otherwise a re-record under-counts).
+    The result is labelled measured only when both parts were measured; a new window
+    that measured nothing keeps the earlier windows' cost instead of replacing it."""
+    t = (run_state.get("stage_timing") or {}).get(stage) or {}
+    if not t.get("prior_windows"):
+        return
+    prev = _stage_record_of(run_state, stage) or {}
+    prev_cost = prev.get("token_cost")
+    if not isinstance(prev_cost, (int, float)) or isinstance(prev_cost, bool) or prev_cost <= 0:
+        return
+    prev_src = prev.get("token_cost_source")
+    new_src = cand_rec.get("token_cost_source")
+    new_cost = cand_rec.get("token_cost") if new_src in ("measured", "estimate") else 0
+    cand_rec["token_cost"] = int(prev_cost) + int(new_cost or 0)
+    both_measured = prev_src == "measured" and new_src == "measured"
+    cand_rec["token_cost_source"] = "measured" if both_measured else "estimate"
+    usage, prev_usage = cand_rec.get("token_usage"), prev.get("token_usage")
+    if both_measured and isinstance(usage, dict) and isinstance(prev_usage, dict):
+        cand_rec["token_usage"] = _sum_usage(prev_usage, usage)
+    elif not both_measured:
+        cand_rec.pop("token_usage", None)
+    derived["token_cost"] = {"value": cand_rec["token_cost"], "source": cand_rec["token_cost_source"],
+                             "includes_prior_windows": int(prev_cost)}
+
+
+def _sum_usage(a: dict, b: dict) -> dict:
+    """Add two usage dicts: numeric counts add (floats stay floats); a bool or a
+    string keeps the newer value (it is a flag or a label, not a count)."""
+    out = dict(a)
+    for k, v in b.items():
+        old = out.get(k)
+        num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)  # noqa: E731
+        out[k] = (old + v) if (num(old) and num(v)) else v
+    return out
+
+
 def _apply_token_cost(record: dict, model_value, usage: "dict | None") -> dict:
     """Fill token_cost per C5. Measured wins; else the record-provided estimate;
     else 0. Returns the derived-field note."""
@@ -8308,6 +8348,43 @@ def _iso_epoch(v) -> "float | None":
         return None
 
 
+def _stage_windows(timing: dict, now: float) -> "list[tuple[float, float]]":
+    """The stage's own time windows as epoch pairs: each closed window stage-start
+    recorded in ``prior_windows`` plus the current one ending ``now``. A stage with no
+    prior_windows (never re-opened, or re-opened before they were recorded) keeps one
+    window from first_started_at (else started_at)."""
+    out: "list[tuple[float, float]]" = []
+    for w in timing.get("prior_windows") or []:
+        lo = _iso_epoch((w or {}).get("started_at")) if isinstance(w, dict) else None
+        hi = _iso_epoch((w or {}).get("completed_at")) if isinstance(w, dict) else None
+        if lo and hi and hi >= lo:
+            out.append((lo, hi))
+    start = timing.get("started_at") if out else (timing.get("first_started_at") or timing.get("started_at"))
+    lo = _iso_epoch(start)
+    if lo:
+        out.append((lo, now))
+    return out
+
+
+def _in_windows(ts: float, windows: "list[tuple[float, float]]") -> bool:
+    return any(lo <= ts <= hi for lo, hi in windows)
+
+
+def _spawns_in_windows(run_id: str, windows: "list[tuple[float, float]]") -> "dict | None":
+    """_completed_spawns summed over ``windows``; None when any read is unreadable."""
+    total = {"by_expert": {}, "unattributed": 0, "legacy": 0}
+    for lo, hi in windows:
+        part = _completed_spawns(run_id, lo, hi)
+        if part is None:
+            return None
+        for k, v in (part.get("by_expert") or {}).items():
+            total["by_expert"][k] = total["by_expert"].get(k, 0) + v
+        total["unattributed"] += part.get("unattributed") or 0
+        total["legacy"] += part.get("legacy") or 0
+    total["by_expert"] = dict(sorted(total["by_expert"].items()))
+    return total
+
+
 def _completed_spawns(run_id: str, since: float, until: float) -> "dict | None":
     """Completed sub-agents of ``run_id`` in [since, until], by EXPERT-ID, from the
     per-sub-agent SubagentStop markers. ``None`` = marker store unreadable (report it,
@@ -8370,10 +8447,13 @@ def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
     an unreadable marker store → reported, never enforced."""
     import time as _time
     t = (run_state.get("stage_timing") or {}).get(stage) or {}
-    # From the FIRST start: re-entering a stage must not open a fresh allowance.
-    started = _iso_epoch(t.get("first_started_at") or t.get("started_at"))
     now = _time.time()
-    out: dict = {"window": "stage", "stage_seconds": round(now - started) if started else None}
+    # Re-entering a stage must not open a fresh allowance, and must not charge it
+    # with the stages that ran in between: count over the stage's own windows.
+    windows = _stage_windows(t, now)
+    started = windows[0][0] if windows else None
+    out: dict = {"window": "stage",
+                 "stage_seconds": round(sum(hi - lo for lo, hi in windows)) if windows else None}
     if not started:
         out.update(window="unknown (no stage-start)", spawns=None, missing=[])
         return out
@@ -8384,7 +8464,7 @@ def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
         except (TypeError, ValueError, OverflowError):
             cycles = 1
     allowance = ROUNDS_PER_EXPERT * cycles
-    spawns = _completed_spawns(run_id, started, now)
+    spawns = _spawns_in_windows(run_id, windows)
     tests: dict[str, int] = {}
     auto = 0
     tdir = run_dir / "evidence" / "tests"
@@ -8396,7 +8476,7 @@ def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
         for e in index:
             if not isinstance(e, dict) or not isinstance(e.get("ts"), (int, float)):
                 continue
-            if not started <= e["ts"] <= now:
+            if not _in_windows(e["ts"], windows):
                 continue
             if e.get("kind") == "overlay":
                 auto += 1  # an overlay write, not another test run
@@ -8405,7 +8485,7 @@ def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
             tests[mode] = tests.get(mode, 0) + 1
     for p in (tdir.glob("*-*.json") if index is None and tdir.is_dir() else []):
         mode = p.name.split("-", 1)[0]
-        if mode == "latest" or not started <= p.stat().st_mtime <= now:
+        if mode == "latest" or not _in_windows(p.stat().st_mtime, windows):
             continue
         try:
             rf = json.loads(p.read_text(encoding="utf-8")).get("rechecked_from")
@@ -8709,6 +8789,21 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     profile = normalize_profile(run_state.get("profile"))
     now = _utc_now_iso()
 
+    # Open-stage check (run_376299fa), on the run as loaded — before completed_at is
+    # set on the candidate. A stage whose measured window is CLOSED (started_at and
+    # completed_at both set) was not re-opened by stage-start; completing it again
+    # would measure tokens from its ORIGINAL start across every later stage and
+    # overwrite the original completed_at. stage-start is the only re-open (new
+    # started_at, first_started_at kept). A stage with no started_at measures nothing
+    # and is left alone (the MED-3 replan tests complete stages that way).
+    _t_open = (run_state.get("stage_timing") or {}).get(stage)
+    if isinstance(_t_open, dict) and _t_open.get("started_at") and _t_open.get("completed_at"):
+        _stage_boundary_fail(stage, [
+            f"Stage not open: '{stage}' already completed at {_t_open['completed_at']} and "
+            f"was not re-entered. Run `artifact_cli.py stage-start --project {project} "
+            f"--run-id {run_id} --stage {stage}` first, so the re-record is measured over "
+            f"its own window, not across the stages that ran since."])
+
     status = "skipped" if record_in.get("status") == "skipped" else "completed"
     artifact = copy.deepcopy(artifact_in) if (artifact_in is not None and status != "skipped") else None
     cand_rec = {k: copy.deepcopy(v) for k, v in record_in.items() if k not in _DERIVED_RECORD_KEYS}
@@ -8725,6 +8820,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         project=project, run_id=run_id, run_dir=run_dir, run_state=cand_run, stage=stage,
         profile=profile, artifact=artifact, record_in=record_in, cand_rec=cand_rec,
     )
+    _add_prior_window_cost(run_state, stage, cand_rec, derived)
     _replace_stage_record(cand_run["stages"], cand_rec)  # carry-forward applied here
 
     errors, warnings = _validate_stage_candidate(
@@ -9439,6 +9535,12 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         _prev_t = (run_state.get("stage_timing") or {}).get(stage) or {}
         if isinstance(_prev_t, dict) and _prev_t.get("started_at") and not _prev_t.get("first_started_at"):
             _set_stage_timing(run_state, stage, "first_started_at", _prev_t["started_at"])
+        if isinstance(_prev_t, dict) and _prev_t.get("started_at") and _prev_t.get("completed_at"):
+            # The window being closed, so budget and token cost cover only this
+            # stage's own windows, never the stages that ran in between (run_376299fa).
+            _pw = list(_prev_t.get("prior_windows") or [])
+            _pw.append({"started_at": _prev_t["started_at"], "completed_at": _prev_t["completed_at"]})
+            run_state["stage_timing"][stage]["prior_windows"] = _pw
         _set_stage_timing(run_state, stage, "started_at", _utc_now_iso())
         if timing.get("completed_at"):
             run_state["stage_timing"][stage].pop("completed_at", None)

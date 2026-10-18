@@ -5531,6 +5531,7 @@ def push_ready_upper_bound(
 # `path` is a literal, or "{name}" formatted from the regex's named groups.
 _ERROR_SHAPES: list[tuple[str, "re.Pattern[str]", str]] = [
     ("E_INPUT", re.compile(r"^Input:"), ""),
+    ("E_STAGE_NOT_OPEN", re.compile(r"^Stage not open:"), "stage_timing"),
     ("E_RECORD_SCHEMA", re.compile(r"^Record schema: (?P<p>[^:]+):"), "record.{p}"),
     ("E_EXIT_CRITERIA", re.compile(r"^Exit criteria: (?P<p>[^:]+):"), "{p}"),
     ("E_DEPTH_MISSING", re.compile(r"^Missing required field '(?P<p>[^']+)' — depth validation"), "{p}"),
