@@ -69,6 +69,22 @@ Record every finding in `adversarial_review.findings[]`; `stage-complete` derive
 HIGH/CRITICAL finding add a `disk_check` (`{"file": "<ABSOLUTE path>", "must_contain":
 "..."}` or `must_not_contain`): the validator greps it, because a `resolved: true` flag
 records intent, not what is on disk.
+## Re-check round (round 2, the fix only)
+After the fixes are on disk, write the merged findings (the same `findings[]` you record,
+with `specialist`, `severity`, `confidence`, `finding`, `resolved`) to a file and run
+`python backend/scripts/artifact_cli.py gate2-recheck --project <P> --run-id <R> --findings @/tmp/<R>/findings.json`.
+It diffs every changed file against the copy DELIVER stage-start kept for round 1
+(`evidence/prompts/round1/`) into `fix_diff`, and returns `recheck`: one
+`<id>-recheck.md` prompt per specialist with a fixed HIGH or conf ≥ 7 MED finding,
+holding only that diff and its own items (findings marked `resolved: false` are not
+re-checked). Spawn exactly the `recheck` list in ONE message with the same 2-line prompt
+(`EXPERT-ID: <id>` + `read <prompt_path> first; follow it.`). Empty list → no re-check.
+It exits 1 when such findings exist but no file changed since round 1 (the fixes are not
+on disk), and when the snapshot was first taken on a DELIVER re-entry (fixes may already
+have been in it): then re-check by re-spawning the round-1 prompts. A changed file the
+text diff cannot show (binary, too large) is named on the diff's `NOT INCLUDED` line.
+`not_rechecked` lists findings it could not route (no specialist / text, no round-1
+prompt): route those by hand. This is the second and last round; a third needs a recorded reason.
 
 ## Gate outcome (print it)
 

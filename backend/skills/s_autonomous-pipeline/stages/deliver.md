@@ -1,15 +1,15 @@
 # DELIVER — execution card
 Prove the change push-ready (audits, Gate-2, meta-review, convergence), then commit it locally.
-**Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage deliver` → `experts` (+`prompt_path`), `source_insertions`, `full_tier_override`, `spawn_mode`, ACs, exit criteria, examples.
+**Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage deliver` → `experts` (+`prompt_path`), `meta_review_prompt_path`, `spawn_mode`, ACs, exit criteria, examples.
 ## Steps
 1. **Audits** (`ref/deliver/audits.md`): Fresh User + User Path Latency if user-facing; Completion Audit + AC matrix.
 2. **Stage first:** `git add` new files, unstage foreign ones, before any review (`ref/deliver/gate2-coverage.md`).
 3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), 2-line prompt: `EXPERT-ID: <EXPERT_ID>` (registry id) + `Adversarially review this changeset: read <prompt_path> first; follow it.` Never paste it.
-4. **Merge, Red Team, fix** (`ref/deliver/gate2-findings.md`): dedup, Shared-State Override before tiers, Red Team if source > 200 lines or any specialist HIGH (each finding's `specialist` = its EXPERT-ID; gated by the red-team marker), fix HIGH + MED conf ≥ 7, `pipeline_test.py --mode recheck`.
+4. **Merge, Red Team, fix** (`ref/deliver/gate2-findings.md`): dedup, Shared-State Override before tiers, Red Team if source > 200 lines or any specialist HIGH (each finding's `specialist` = its EXPERT-ID; gated by the red-team marker), fix HIGH + MED conf ≥ 7, `pipeline_test.py --mode recheck`, then round 2 = `gate2-recheck` (fix-only prompts; spawn its `recheck` list).
 5. **Meta-review:** one Agent call: `read <meta_review_prompt_path> first; follow it.` (no path → `spawn_prompt.py --gate meta-review --project <P> --files <changed…>`, exit 0 only; `ref/deliver/push-ready.md`).
 6. **User-Value Probe** (`ref/deliver/audits.md`) + **Doc Sync** (`ref/deliver/doc-sync.md`, warning only).
 7. **Convergence, max 3 iterations**, all 6 at once: L1 tests pass, L2 type/lint clean, L3 no regressions, L4 adversarial clean (fixes on disk), L5 DDD conformance, L6 decisions resolved.
-8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (any other shape is rejected) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
+8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (validated) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
 9. **Exit** (below), then `python backend/scripts/artifact_cli.py run-commit --project <P> --run-id <R>` (local, never pushes).
 
 **Sub-agent configuration:** every spawn `run_in_background: false`; never pin a model; a failed spawn → go on with the rest (ALL rejected → `ref/deliver/gate2-dispatch.md`).
@@ -21,11 +21,9 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - `[MUST]` BLOCKING: spawn ALL selected specialists in a SINGLE message (parallel Agent calls). The tier is `[GATE·cli]`; the batching is discipline. <!-- R-deliver-006 -->
 - Meta-Review (BLOCKING) — `[GATE·validator]`: a full/bugfix deliver artifact without `meta_review`/`meta_review_verdict` is blocked; trivial/research/docs exempt. <!-- R-deliver-009 -->
 - Push-Ready Gate (binary) — `[GATE·cli]`: `run-commit` requires `push_ready: true`. <!-- R-deliver-003 -->
-- `[GATE·cli]` MANDATORY + gated: run-scoped source committed (commits ∩ files_touched) → `run-update --status completed` BLOCKS until there is surface evidence: the `surface_run_outputs` tool's marker naming every commit, or `--outputs-surfaced` on that call (legacy: a deliver-record flag); docs-only runs exempt. <!-- R-deliver-015 -->
+- `[GATE·cli]` MANDATORY + gated: run-scoped source committed (commits ∩ files_touched) → `run-update --status completed` BLOCKS until there is surface evidence: the `surface_run_outputs` tool's marker naming every commit, or `--outputs-surfaced` on that call (legacy: a deliver-record flag); docs-only runs exempt; never re-record deliver to acknowledge it (`complete.md` Step 0). <!-- R-deliver-015 -->
 - `[GATE·cli]` D7: `run-commit` refuses unless every `required_experts` entry reviewed this run.
 
-## COMPLETE-stage Canvas review
-At COMPLETE: `run-surface-changes`, then the `surface_run_outputs` tool ONCE with this run_id (it records the gate's evidence itself; a session without the tool adds `--outputs-surfaced` to `run-update --status completed`). Never re-record deliver with `--stage-json` to acknowledge it.
 
 ## Read only if
 - Dispatch rules, tiering, Red Team, rejected spawn → `ref/deliver/gate2-dispatch.md`

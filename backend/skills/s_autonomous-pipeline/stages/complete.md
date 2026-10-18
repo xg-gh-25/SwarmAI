@@ -26,7 +26,7 @@ hand-written or stale report. Ordering detail: `stages/ref/complete/report-order
 
 Do Step 0 BEFORE `run-update --status completed` (it is gated on surface evidence, and
 the summary it returns links the same files). Full Canvas behavior:
-`stages/deliver.md` § "COMPLETE-stage Canvas review".
+`stages/ref/deliver/report-and-commit.md` § "COMPLETE-stage Canvas review — full behavior".
 
 ```bash
 python backend/scripts/artifact_cli.py run-surface-changes

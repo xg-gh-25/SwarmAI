@@ -25,7 +25,7 @@ PLAN runs no tests; any test goes only through `perl -e 'alarm 110; exec @ARGV' 
 - `[MUST]` boundaries / success_criteria are recommended fields: absence WARNs, does not BLOCK. <!-- R-plan-005 R-plan-008 -->
 - `[MUST]` design_doc SHOULD carry boundaries, success_criteria, file_discovery, change_spec, test_strategy, + `security_boundaries` (next line). <!-- R-plan-010 -->
 - `[GATE·validator]` Security Boundaries required WHEN `cross_boundary.value == true`: a non-empty `security_boundaries` list, each entry `boundary`, `trust_assumption`, and either `enforcement` = `"path:line"` OR `escalate: true` + `reason`. BLOCKS a true plan that lacks it or cites a locus whose file does not exist. OMIT the field when false (no-op). <!-- R-plan-006 -->
-- `[GATE·cli]` `exit_criteria` required at plan stage-complete on strict profiles (all except trivial/docs/research; `direct` is strict). A replan after a later stage completed may only ADD criteria, each with a `reason`; run `stage-start --project <P> --run-id <R> --stage plan` first (stage-complete refuses a completed stage that was not re-entered, `E_STAGE_NOT_OPEN`).
+- `[GATE·cli]` `exit_criteria` required at plan stage-complete on strict profiles (all except trivial/docs/research; `direct` is strict). A replan after a later stage completed may only ADD criteria, each with a `reason`.
 - `[GATE·cli]` D7: `run-commit` refuses unless every declared expert left an adversarial-review marker this run (so it must run in DELIVER Gate-2).
 
 ## Read only if
