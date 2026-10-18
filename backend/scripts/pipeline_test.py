@@ -724,14 +724,54 @@ def _plugin_dir(cache: Path) -> Path:
 
 
 def _worker_count() -> int:
-    """min(4, cpu, memory: 1 GB per worker keeping 4 GB headroom); 2 without psutil."""
+    """min(4, cpu, memory: 1 GB per worker keeping 4 GB headroom); 2 without psutil.
+    Raised toward the idle cores by ``_scale_up`` when no other runner is busy."""
     cpu = os.cpu_count() or 2
     try:
         import psutil
         by_mem = int((psutil.virtual_memory().available - 4 * 1024 ** 3) // 1024 ** 3)
     except Exception:  # noqa: BLE001 — psutil missing or unreadable
         by_mem = 2
-    return max(1, min(4, cpu, by_mem))
+    return _scale_up(max(1, min(4, cpu, by_mem)))
+
+
+MAX_WORKERS = 8       # ceiling when no other runner holds a slot
+IDLE_SAMPLE_S = 0.25  # psutil.cpu_percent sampling window
+
+
+def _busy_slots(cache: Path) -> int:
+    """How many runner slots are held right now."""
+    busy = 0
+    for n in range(MAX_SLOTS):
+        fd = _try_lock(cache / "slots" / f"{n}.lock", 0)
+        if fd is None:
+            busy += 1
+        else:
+            _unlock(fd)
+    return busy
+
+
+def _scale_up(base: int) -> int:
+    """``base`` raised toward the cores idle right now (a fixed 4 left 8 of 12 cores
+    unused on a quiet machine). Never below ``base``: on a loaded machine fewer workers
+    only lose CPU share to other processes, they do not make the run faster. Only when
+    no runner holds a slot (two scaled runners would oversubscribe; one starting after
+    us sees our slot and stays at its base). Ceiling: ``MAX_WORKERS``, ``cpu - 2`` (room
+    for the model and the daemon), free memory (1 GB per worker, 4 GB headroom).
+    ``SWARM_TEST_MAX_WORKERS`` set, no psutil, or an unreadable slot dir = ``base``."""
+    if os.environ.get("SWARM_TEST_MAX_WORKERS"):
+        return base
+    try:
+        if _busy_slots(_cache_dir()):
+            return base
+        import psutil
+        cpu = os.cpu_count() or 2
+        idle = cpu * (100.0 - psutil.cpu_percent(interval=IDLE_SAMPLE_S)) / 100.0
+        by_mem = int((psutil.virtual_memory().available - 4 * 1024 ** 3) // 1024 ** 3)
+    except Exception:  # noqa: BLE001 — psutil missing / slot dir unreadable: keep the base
+        return base
+    return max(base, min(MAX_WORKERS, cpu - 2, by_mem, int(idle)))
+
 
 
 def _acquire_slot(cache: Path, warnings: list):
@@ -1540,8 +1580,14 @@ def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool) -> list[_Job]:
     out = ctx.workdir / "vitest.json"
     # The default reporter streams one status line per finished file to stdout, so a
     # run killed at the deadline still says which files passed and which never ended.
+    # ``--maxWorkers``: vitest's default pool takes nearly every core while the runner
+    # counts it as ONE of its workers, so with the pytest shards beside it a run put
+    # ~cpu + workers processes on the machine. Its own pool gets the runner's budget,
+    # but at least 2: with one fork a single hanging test file holds the pool until the
+    # deadline and every other file of the call is reported not-run.
     jobs = [_Job("vitest", [*_npx(), "vitest", "related", *rel, "--run", "--reporter=json",
-                            "--reporter=default", f"--outputFile.json={out}"],
+                            "--reporter=default", f"--outputFile.json={out}",
+                            f"--maxWorkers={max(2, ctx.workers)}"],
                  desktop, env, ctx.workdir, "vitest", json=out, files=desktop_files)]
     if with_tsc:
         jobs.append(_Job("tsc", [*_npx(), "tsc", "--noEmit", "--pretty", "false", "-p", "."],
