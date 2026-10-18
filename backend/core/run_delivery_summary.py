@@ -822,11 +822,18 @@ def _quality_line(run_state: dict, deliver: dict, test_info: dict) -> Optional[s
     parts: list[str] = []
     total, failed, passed = test_info.get("tests_total"), test_info.get("failed"), test_info.get("passed")
     if isinstance(total, int) and total > 0:
+        pre, flaky = (test_info.get(k) for k in ("pre_existing_failures", "flaky_failures"))
+        pre = pre if isinstance(pre, int) and not isinstance(pre, bool) else 0
+        flaky = flaky if isinstance(flaky, int) and not isinstance(flaky, bool) else 0
         if isinstance(passed, int) and not isinstance(passed, bool):
             ok = passed
         else:
-            ok = total - (failed if isinstance(failed, int) else 0)
+            ok = max(total - (failed if isinstance(failed, int) else 0) - pre - flaky, 0)
         parts.append(f"测试 {ok}/{total} 通过")
+        if pre:
+            parts.append(f"{pre} 个既有失败")
+        if flaky:
+            parts.append(f"{flaky} 个 flaky")
     adv = _d(deliver.get("adversarial_review"))
     ft, ff = adv.get("findings_total"), adv.get("findings_fixed")
     if isinstance(ft, int):
@@ -867,6 +874,10 @@ def _raw_list(value: Any) -> list[str]:
 
 _TEXT_KEYS = ("finding", "summary", "description", "title", "issue")
 _DONE_PREFIXES = ("fixed", "resolved", "accepted", "closed", "done")
+# mitigation / disposition hold free text that may be a PROPOSAL ("fixed in follow-up"),
+# so a keyword there counts only with a separator after it ("fixed: …", "accepted; …",
+# "fixed — …"); a dash needs spaces so "accepted-risk" stays open.
+_DONE_MARK_RE = re.compile(r"^(?:fixed|resolved|accepted|closed|done)(?:\s*[:;]|\s+[-—]\s)", re.I)
 
 
 def _item_text(item: Any) -> str:
@@ -879,13 +890,17 @@ def _item_text(item: Any) -> str:
 
 
 def _item_done(item: Any) -> bool:
-    """A dict item marked done: truthy ``resolved`` (every other reader's rule), or a
-    status / resolution that starts with fixed / resolved / accepted / closed / done."""
+    """A dict item marked done: truthy ``resolved`` (every other reader's rule), a
+    status / resolution that starts with fixed / resolved / accepted / closed / done,
+    or a mitigation / disposition that starts with one of those plus a separator
+    (``_DONE_MARK_RE``) — the field writers actually use to mark an in-run fix."""
     if not isinstance(item, dict):
         return False
     if item.get("resolved"):
         return True
-    return any(_raw(item.get(k)).lower().startswith(_DONE_PREFIXES) for k in ("status", "resolution"))
+    if any(_raw(item.get(k)).lower().startswith(_DONE_PREFIXES) for k in ("status", "resolution")):
+        return True
+    return any(_DONE_MARK_RE.match(_raw(item.get(k))) for k in ("mitigation", "disposition"))
 
 
 def _deliver_record(run_state: dict) -> dict:

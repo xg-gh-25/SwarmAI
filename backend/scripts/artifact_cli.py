@@ -2167,7 +2167,8 @@ def _delivery_summary_for(project: str, run_id: str) -> str:
         arts = _load_stage_artifacts(project, run_id, run_state)
         if "test" in arts:
             tm = _report_test_metrics(arts["test"]) or {}
-            arts["test"] = {"tests_total": tm.get("tests_total"), "failed": tm.get("failed")}
+            arts["test"] = {k: tm.get(k) for k in ("tests_total", "failed",
+                                                   "pre_existing_failures", "flaky_failures")}
         # This repo is the git root ONLY for the SwarmAI project's own runs; any
         # other project's files resolve their repo per file (repo_root=None).
         repo_root = _BACKEND_DIR.parent if project == "SwarmAI" else None
@@ -5649,6 +5650,28 @@ def _int_or_none(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+def _test_counts_from_evidence(ev) -> dict | None:
+    """Test counts MEASURED by the runner, from a latest-regression evidence dict.
+
+    ``tests_total`` = results that ran (passed + failed + errors + timeouts; skipped
+    did not run). Failing results split by the runner's classification:
+    ``pre_existing_failures`` (fail on the base tree), ``flaky_failures`` (both
+    non-blocking in pipeline_test._exit_code) and ``failed`` = every other failing
+    result — so ``failed`` keeps meaning "new failures", which METRICS records as
+    regressions. A TIMEOUT stays in ``failed`` whatever its classification, because
+    _exit_code blocks on a hang regardless. None when the evidence has no usable counts."""
+    if not isinstance(ev, dict) or not isinstance(ev.get("counts"), dict):
+        return None
+    c = ev["counts"]
+    ran = [_int_or_none(c.get(k)) or 0 for k in ("passed", "failed", "errors", "timeouts")]
+    bad = sum(ran[1:])
+    cls = [f.get("classification") for f in (ev.get("failures") or [])
+           if isinstance(f, dict) and f.get("outcome") != "timeout"]
+    pre, flaky = cls.count("pre-existing"), cls.count("flaky")
+    return {"tests_total": sum(ran), "failed": max(bad - pre - flaky, 0),
+            "pre_existing_failures": pre, "flaky_failures": flaky}
+
+
 def _report_test_metrics(test_data: dict) -> dict:
     """Measured test metrics from the test_report artifact; {} when none recorded.
 
@@ -5667,7 +5690,7 @@ def _report_test_metrics(test_data: dict) -> dict:
         out["tests_total"] = total
     if failed is not None:
         out["failed"] = failed
-    for k in ("tests_new", "regressions"):
+    for k in ("tests_new", "regressions", "pre_existing_failures", "flaky_failures"):
         v = _int_or_none(test_data.get(k))
         if v is not None:
             out[k] = v
@@ -5690,6 +5713,10 @@ def _report_tests_phrase(m: dict):
     phrase = f"{m['tests_total']} run"
     if "failed" in m:
         phrase += f", {m['failed']} failed"
+    if m.get("pre_existing_failures"):
+        phrase += f", {m['pre_existing_failures']} pre-existing"
+    if m.get("flaky_failures"):
+        phrase += f", {m['flaky_failures']} flaky"
     return phrase
 
 
@@ -8309,6 +8336,13 @@ def _derive_stage_fields(
             derived["test_layers"] = {"value": {"layers": artifact.get("layers"),
                                                 "regressions": artifact["regressions"]},
                                       "source": "evidence/tests/latest-regression.json"}
+            # The counts the summary and REPORT show are the runner's, not the
+            # author's: a hand-written failed:0 hid pre-existing failures.
+            counts = _test_counts_from_evidence(reg_ev)
+            if counts is not None:
+                artifact.update(counts)
+                derived["test_counts"] = {"value": counts,
+                                          "source": "evidence/tests/latest-regression.json"}
 
     # token_cost — C5 measured window, else estimate/unavailable.
     timing = (run_state.get("stage_timing") or {}).get(stage) or {}

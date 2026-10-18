@@ -26,7 +26,11 @@ call, `run_in_background: false`, AFTER Gate-2 passes and BEFORE push-ready.
   4h question mid-loop would freeze a half-written convergence iteration).
 - Only MED/LOW → note them in the report (§10) and proceed.
 - Record `meta_review: {"verdict": "CLEAR" | "RISKS", "risks": [...]}` (the artifact
-  enum spells the prompt's `RISKS_IDENTIFIED` as `RISKS`).
+  enum spells the prompt's `RISKS_IDENTIFIED` as `RISKS`). A risk you addressed in this
+  run gets `"resolved": true` plus `"status": "fixed: <how>"` or `"status": "accepted: <why>"`.
+  `resolved` is the mark every reader honors — the push-ready HIGH check reads only it —
+  while the summary also accepts the status/mitigation text alone; every unmarked risk is
+  listed under 遗留问题.
 - Profiles: full, bugfix and every other strict profile run it; trivial, research, docs
   skip it (no operational context to analyze).
 
