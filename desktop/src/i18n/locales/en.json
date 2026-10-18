@@ -43,7 +43,8 @@
       "stop": "Stop",
       "saving": "Saving...",
       "creating": "Creating...",
-      "saveChanges": "Save Changes"
+      "saveChanges": "Save Changes",
+      "ok": "OK"
     },
     "status": {
       "active": "Active",
@@ -88,7 +89,8 @@
     "placeholder": {
       "search": "Search...",
       "select": "Select..."
-    }
+    },
+    "loading": "Loading..."
   },
   "nav": {
     "swarmcore": "SwarmCore",
@@ -313,6 +315,50 @@
     "file": {
       "new": "new",
       "changed": "changed"
+    },
+    "closeAnyway": "Close anyway",
+    "closeStreamingTab": "Close tab?",
+    "closeStreamingTabConfirm": "This tab is still generating a response. Closing it will stop the response. Close anyway?",
+    "disconnectedPlaceholder": "Backend offline...",
+    "reconnecting": "Reconnecting...",
+    "resuming": "Resuming session...",
+    "stopWaiting": "Stop waiting",
+    "stopWaitingTitle": "Stop waiting and return to idle",
+    "tabLimitReached": "System resources are limited. Close a tab or free memory to open another.",
+    "waitingBackendOffline": "Backend offline — waiting to reconnect...",
+    "waitingForResponse": "Waiting for response...",
+    "message": {
+      "copy": "Copy",
+      "copied": "Copied!",
+      "copyTitle": "Copy message",
+      "save": "Save",
+      "saving": "Saving...",
+      "saved": "Saved!",
+      "saveTitle": "Save to Memory",
+      "compact": "Compact",
+      "compacting": "Compacting...",
+      "compacted": "Compacted!",
+      "compactAria": "Compact Context",
+      "compactTitle": "Compact Context ({{pct}}% used)",
+      "compactDone": "Context compacted successfully",
+      "compactFailed": "Failed to compact session",
+      "continue": "Continue",
+      "continueAria": "Continue response",
+      "continueTitle": "Continue — ask {{name}} to continue its response",
+      "interrupted": "Connection interrupted"
+    },
+    "memory": {
+      "nothingNew": "Nothing new to save",
+      "failed": "Failed to save to memory",
+      "saved": "Saved: {{parts}}",
+      "separator": ", ",
+      "decisions_one": "{{count}} decision",
+      "decisions_other": "{{count}} decisions",
+      "lessons_one": "{{count}} lesson",
+      "lessons_other": "{{count}} lessons",
+      "threads_one": "{{count}} thread",
+      "threads_other": "{{count}} threads",
+      "context": "{{count}} context"
     }
   },
   "tasks": {
@@ -498,7 +544,8 @@
       "system": "System",
       "user": "User",
       "plugin": "Plugin",
-      "pluginManaged": "Managed by plugin - uninstall plugin to remove"
+      "pluginManaged": "Managed by plugin - uninstall plugin to remove",
+      "builtIn": "Built-in"
     },
     "upload": {
       "title": "Upload Skill",
@@ -539,7 +586,8 @@
       "orphanedDesc": "These database entries have no matching files:",
       "allInSync": "All skills are in sync!",
       "errors": "Errors"
-    }
+    },
+    "rescan": "Rescan"
   },
   "mcp": {
     "title": "MCP Management",
@@ -597,6 +645,9 @@
       "back": "Back to catalog",
       "configure": "Configure & Install",
       "presetNone": "Manual Configuration"
+    },
+    "dev": {
+      "title": "Dev / Personal"
     }
   },
   "plugins": {
@@ -835,6 +886,72 @@
           "fallback": "Backup refused: destination not verified. Check your backup settings."
         }
       }
+    },
+    "tabs": {
+      "skills": "Skills",
+      "mcps": "MCP servers",
+      "knowledgebases": "Knowledge"
+    },
+    "knowledgebases": {
+      "description": "Knowledge sources the agent in this workspace can draw on.",
+      "add": "Add knowledge source",
+      "displayName": "Display name",
+      "displayNamePlaceholder": "e.g. Product docs",
+      "sourceType": "Source type",
+      "sourcePath": "Source path",
+      "sourcePathPlaceholder": "/path/to/file or https://…",
+      "empty": "No knowledge sources yet.",
+      "types": {
+        "local_file": "Local file",
+        "url": "URL",
+        "indexed_document": "Indexed document",
+        "context_file": "Context file",
+        "vector_index": "Vector index"
+      }
+    },
+    "skills": {
+      "description": "Turn skills on or off for this workspace.",
+      "empty": "No skills configured for this workspace.",
+      "privileged": "Built-in or plugin skill — enabling it asks for confirmation",
+      "disableWarning": "Turned off. The agent in this workspace can no longer use this skill."
+    },
+    "privileged": {
+      "title": "Enable a privileged capability?",
+      "warning": "{{name}} is a privileged {{type}}.",
+      "explanation": "It comes with SwarmAI or a plugin rather than this workspace. Turn it on only if this workspace needs it.",
+      "confirm": "Enable",
+      "type": {
+        "skill": "skill",
+        "mcp": "MCP server"
+      }
+    }
+  },
+  "canvas": {
+    "openOutputs": "Open Canvas to review outputs"
+  },
+  "health": {
+    "degraded": "Reconnecting…",
+    "disconnected": "Backend Offline",
+    "initializing": "Starting up..."
+  },
+  "signals": {
+    "convertToTask": {
+      "title": "Convert to task",
+      "taskTitle": "Task title",
+      "workspace": "Workspace",
+      "convert": "Convert"
+    },
+    "error": {
+      "convertFailed": "Couldn't convert this signal to a task."
+    }
+  },
+  "swarmWorkspace": {
+    "warning": {
+      "continueAnyway": "Continue Anyway",
+      "deleteTitle": "Cannot Delete System Workspace",
+      "deleteMessage": "The Swarm Workspace is a protected system workspace and cannot be deleted. It is required for SwarmAI's internal operations.",
+      "editTitle": "System Workspace Warning",
+      "editMessage": "You are about to modify a file in the Swarm Workspace. This is a protected system workspace used by SwarmAI for internal operations. Modifying these files may affect SwarmAI's functionality."
     }
   }
 }

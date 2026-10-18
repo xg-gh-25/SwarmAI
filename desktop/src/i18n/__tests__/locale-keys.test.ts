@@ -6,9 +6,10 @@
  * - en.json and zh.json have the SAME key set (a key missing in zh silently
  *   falls back to English — the "· back to latest" pill did exactly that)
  * - every plural `_one` has its `_other`
- * - every static `chat.turn.*` / `chat.file.*` key the source asks for exists
- *   (as itself or as a plural pair); dynamic families (step verbs, sub-agent
- *   status) are complete
+ * - every static key the source passes to t() / tf() / i18n.t() exists, in every
+ *   namespace (as itself or as a plural pair); every template-literal key family
+ *   has keys; dynamic families (step verbs, sub-agent status, settings tabs,
+ *   knowledge source types, privileged capability types) are complete
  * - chat.turn strings never hardcode the assistant's name or say "AI": the name
  *   comes from ASSISTANT_NAME via `{{name}}`, at most once per container
  */
@@ -55,6 +56,37 @@ describe('locale keys', () => {
     }
     expect(used.size).toBeGreaterThan(20); // the scan really sees the chat surfaces
     expect([...used].filter((k) => !has(k))).toEqual([]);
+  });
+
+  it('every static key passed to t() / tf() / i18n.t() anywhere exists', () => {
+    // A missing key shows its fallback in English in every language — or, with no
+    // fallback, the raw key itself (settings tabs once showed "settings.skills.empty").
+    const used = new Set<string>();
+    const call = /\b(?:i18n\.t|t|tf\(\s*t\s*,)\s*\(?\s*(['"])([a-zA-Z]\w*\.[\w.]+)\1/g;
+    for (const s of sources()) for (const m of s.matchAll(call)) used.add(m[2]);
+    expect(used.size).toBeGreaterThan(200);
+    expect([...used].filter((k) => !has(k)).sort()).toEqual([]);
+  });
+
+  it('every template-literal key family has keys, and the known enumerations are complete', () => {
+    const call = /\b(?:i18n\.t|t|tf\(\s*t\s*,)\s*\(?\s*`([a-zA-Z][\w.]*)\$\{[^}]+\}([\w.]*)`/g;
+    const empty: string[] = [];
+    for (const s of sources()) {
+      for (const m of s.matchAll(call)) {
+        const [, pre, suf] = m;
+        if (!Object.keys(EN).some((k) => k.startsWith(pre) && k.endsWith(suf))) empty.push(`${pre}\${…}${suf}`);
+      }
+    }
+    expect(empty).toEqual([]);
+    // Values the code iterates over (WorkspaceSettingsModal TABS, KnowledgebasesTab
+    // SOURCE_TYPES, PrivilegedCapabilityModal capabilityType).
+    const enums: Record<string, string[]> = {
+      'settings.tabs.': ['skills', 'mcps', 'knowledgebases'],
+      'settings.knowledgebases.types.': ['local_file', 'url', 'indexed_document', 'context_file', 'vector_index'],
+      'settings.privileged.type.': ['skill', 'mcp'],
+    };
+    const missing = Object.entries(enums).flatMap(([pre, vals]) => vals.map((v) => pre + v).filter((k) => !(k in EN)));
+    expect(missing).toEqual([]);
   });
 
   it('no dead chat.turn / chat.file keys (dynamic families excepted)', () => {

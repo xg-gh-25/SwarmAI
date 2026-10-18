@@ -48,6 +48,7 @@ import { deriveTurnView, extractNextSteps, isUnanswered, sectionUnits, turnChang
 import type { TurnUnit } from '../turnView';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
+import { ASSISTANT_NAME } from '../assistantName';
 import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
@@ -149,7 +150,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       addToast({
         severity: 'success',
         message: result.status === 'compacted'
-          ? 'Context compacted successfully'
+          ? tf(t, 'chat.message.compactDone', 'Context compacted successfully')
           : result.message,
         autoDismiss: true,
       });
@@ -158,11 +159,11 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       setCompactStatus('idle');
       addToast({
         severity: 'error',
-        message: 'Failed to compact session',
+        message: tf(t, 'chat.message.compactFailed', 'Failed to compact session'),
         autoDismiss: true,
       });
     }
-  }, [sessionId, compactStatus, addToast]);
+  }, [sessionId, compactStatus, addToast, t]);
 
   // The ONE display projection of this turn (pages/chat/turnView.ts): ordered
   // units (process segments / landmarks / outcome / interrupts), the single
@@ -396,6 +397,11 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     );
   }
 
+  const copiedLabel = tf(t, 'chat.message.copied', 'Copied!');
+  const saveTitle = tf(t, 'chat.message.saveTitle', 'Save to Memory');
+  const savedLabel = tf(t, 'chat.message.saved', 'Saved!');
+  const savingLabel = tf(t, 'chat.message.saving', 'Saving...');
+
   return (
     <div className="group/msg min-w-0 flex gap-2.5 items-start">
       {/* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */}
@@ -407,7 +413,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         }}
         aria-hidden="true"
       >
-        <span role="img" aria-label="Swarm">&#x1F41D;</span>
+        <span role="img" aria-label={ASSISTANT_NAME}>&#x1F41D;</span>
       </div>
       <div className="flex-1 min-w-0">
         <AssistantHeader
@@ -419,7 +425,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         <div
           className="border border-amber-500/60 bg-amber-500/10 rounded-lg p-3"
           role="alert"
-          aria-label="Connection interrupted"
+          aria-label={tf(t, 'chat.message.interrupted', 'Connection interrupted')}
         >
           <div>{contentBlocks}</div>
         </div>
@@ -450,12 +456,12 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             onClick={handleCopy}
             className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
                        hover:text-[var(--color-text)] rounded transition-colors"
-            title={copied ? 'Copied!' : 'Copy message'}
+            title={copied ? copiedLabel : tf(t, 'chat.message.copyTitle', 'Copy message')}
           >
             <span className="material-symbols-outlined text-sm">
               {copied ? 'check' : 'content_copy'}
             </span>
-            {copied ? 'Copied!' : 'Copy'}
+            {copied ? copiedLabel : tf(t, 'chat.message.copy', 'Copy')}
           </button>
 
           {/* Save to Memory button — only on last assistant message */}
@@ -473,8 +479,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
                 memorySaveStatus === 'loading' && 'opacity-50 cursor-not-allowed'
               )}
-              title={memorySaveStatus === 'saved' ? 'Saved!' : memorySaveStatus === 'loading' ? 'Saving...' : 'Save to Memory'}
-              aria-label="Save to Memory"
+              title={memorySaveStatus === 'saved' ? savedLabel : memorySaveStatus === 'loading' ? savingLabel : saveTitle}
+              aria-label={saveTitle}
             >
               <span className={clsx(
                 'material-symbols-outlined text-sm',
@@ -482,7 +488,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               )}>
                 {MEMORY_ICON_MAP[memorySaveStatus]}
               </span>
-              {memorySaveStatus === 'saved' ? 'Saved!' : memorySaveStatus === 'loading' ? 'Saving...' : 'Save'}
+              {memorySaveStatus === 'saved' ? savedLabel : memorySaveStatus === 'loading' ? savingLabel : tf(t, 'chat.message.save', 'Save')}
             </button>
           )}
 
@@ -501,8 +507,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
                 compactStatus === 'loading' && 'opacity-50 cursor-not-allowed'
               )}
-              title={`Compact Context (${contextWarning.pct}% used)`}
-              aria-label="Compact Context"
+              title={tf(t, 'chat.message.compactTitle', 'Compact Context ({{pct}}% used)', { pct: contextWarning.pct ?? '' })}
+              aria-label={tf(t, 'chat.message.compactAria', 'Compact Context')}
             >
               <span className={clsx(
                 'material-symbols-outlined text-sm',
@@ -512,9 +518,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
                   : compactStatus === 'done' ? 'check_circle'
                   : 'compress'}
               </span>
-              {compactStatus === 'loading' ? 'Compacting...'
-                : compactStatus === 'done' ? 'Compacted!'
-                : 'Compact'}
+              {compactStatus === 'loading' ? tf(t, 'chat.message.compacting', 'Compacting...')
+                : compactStatus === 'done' ? tf(t, 'chat.message.compacted', 'Compacted!')
+                : tf(t, 'chat.message.compact', 'Compact')}
             </button>
           )}
 
@@ -526,14 +532,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               onClick={onContinue}
               className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
                          hover:text-[var(--color-accent,var(--color-primary))] rounded transition-colors"
-              title="Continue — ask the agent to continue its response"
-              aria-label="Continue response"
+              title={tf(t, 'chat.message.continueTitle', 'Continue — ask {{name}} to continue its response', { name: ASSISTANT_NAME })}
+              aria-label={tf(t, 'chat.message.continueAria', 'Continue response')}
               data-testid="continue-button"
             >
               <span className="material-symbols-outlined text-sm">
                 play_arrow
               </span>
-              Continue
+              {tf(t, 'chat.message.continue', 'Continue')}
             </button>
           )}
         </div>

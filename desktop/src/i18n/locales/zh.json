@@ -43,7 +43,8 @@
       "stop": "停止",
       "saving": "保存中...",
       "creating": "创建中...",
-      "saveChanges": "保存更改"
+      "saveChanges": "保存更改",
+      "ok": "确定"
     },
     "status": {
       "active": "活跃",
@@ -88,7 +89,8 @@
     "placeholder": {
       "search": "搜索...",
       "select": "请选择..."
-    }
+    },
+    "loading": "加载中..."
   },
   "nav": {
     "swarmcore": "SwarmCore",
@@ -313,6 +315,50 @@
     "file": {
       "new": "新建",
       "changed": "改了"
+    },
+    "closeAnyway": "仍然关闭",
+    "closeStreamingTab": "关闭标签页？",
+    "closeStreamingTabConfirm": "这个标签页还在生成回复，关闭会停止它。仍然关闭？",
+    "disconnectedPlaceholder": "后端离线...",
+    "reconnecting": "重新连接中...",
+    "resuming": "正在恢复会话...",
+    "stopWaiting": "停止等待",
+    "stopWaitingTitle": "停止等待，回到空闲",
+    "tabLimitReached": "系统资源有限。关闭一个标签页或释放内存后再打开新的。",
+    "waitingBackendOffline": "后端离线，等待重新连接...",
+    "waitingForResponse": "等待回复...",
+    "message": {
+      "copy": "复制",
+      "copied": "已复制",
+      "copyTitle": "复制这条回复",
+      "save": "保存",
+      "saving": "保存中...",
+      "saved": "已保存",
+      "saveTitle": "存入记忆",
+      "compact": "压缩",
+      "compacting": "压缩中...",
+      "compacted": "已压缩",
+      "compactAria": "压缩上下文",
+      "compactTitle": "压缩上下文（已用 {{pct}}%）",
+      "compactDone": "上下文已压缩",
+      "compactFailed": "压缩会话失败",
+      "continue": "继续",
+      "continueAria": "继续回复",
+      "continueTitle": "继续：让 {{name}} 接着回答",
+      "interrupted": "连接中断"
+    },
+    "memory": {
+      "nothingNew": "没有新内容可保存",
+      "failed": "存入记忆失败",
+      "saved": "已保存：{{parts}}",
+      "separator": "、",
+      "decisions_one": "{{count}} 条决定",
+      "decisions_other": "{{count}} 条决定",
+      "lessons_one": "{{count}} 条经验",
+      "lessons_other": "{{count}} 条经验",
+      "threads_one": "{{count}} 个待续话题",
+      "threads_other": "{{count}} 个待续话题",
+      "context": "{{count}} 条上下文"
     }
   },
   "tasks": {
@@ -498,7 +544,8 @@
       "system": "系统",
       "user": "用户",
       "plugin": "Plugin",
-      "pluginManaged": "由 Plugin 管理 - 卸载 Plugin 以移除"
+      "pluginManaged": "由 Plugin 管理 - 卸载 Plugin 以移除",
+      "builtIn": "内置"
     },
     "upload": {
       "title": "上传 Skill",
@@ -539,7 +586,8 @@
       "orphanedDesc": "这些数据库记录没有对应的文件：",
       "allInSync": "所有 Skill 已同步！",
       "errors": "错误"
-    }
+    },
+    "rescan": "重新扫描"
   },
   "mcp": {
     "title": "MCP 管理",
@@ -597,6 +645,9 @@
       "back": "返回目录",
       "configure": "配置并安装",
       "presetNone": "手动配置"
+    },
+    "dev": {
+      "title": "开发 / 个人"
     }
   },
   "plugins": {
@@ -835,6 +886,72 @@
           "fallback": "备份被拒：目的地未验证。请检查备份设置。"
         }
       }
+    },
+    "tabs": {
+      "skills": "Skill",
+      "mcps": "MCP 服务器",
+      "knowledgebases": "知识库"
+    },
+    "knowledgebases": {
+      "description": "这个工作区的 Agent 可以参考的知识来源。",
+      "add": "添加知识来源",
+      "displayName": "显示名称",
+      "displayNamePlaceholder": "例如：产品文档",
+      "sourceType": "来源类型",
+      "sourcePath": "来源路径",
+      "sourcePathPlaceholder": "/文件路径 或 https://…",
+      "empty": "还没有知识来源。",
+      "types": {
+        "local_file": "本地文件",
+        "url": "网址",
+        "indexed_document": "已索引文档",
+        "context_file": "上下文文件",
+        "vector_index": "向量索引"
+      }
+    },
+    "skills": {
+      "description": "为这个工作区开启或关闭 Skill。",
+      "empty": "这个工作区还没有配置 Skill。",
+      "privileged": "内置或 Plugin 提供的 Skill，开启前需要确认",
+      "disableWarning": "已关闭，这个工作区的 Agent 不能再用这个 Skill。"
+    },
+    "privileged": {
+      "title": "开启特权能力？",
+      "warning": "{{name}} 是一个特权 {{type}}。",
+      "explanation": "它由 SwarmAI 或 Plugin 提供，不是这个工作区自己的。只在这个工作区需要时再开启。",
+      "confirm": "开启",
+      "type": {
+        "skill": "Skill",
+        "mcp": "MCP 服务器"
+      }
+    }
+  },
+  "canvas": {
+    "openOutputs": "打开 Canvas 查看产出"
+  },
+  "health": {
+    "degraded": "重新连接中…",
+    "disconnected": "后端离线",
+    "initializing": "启动中..."
+  },
+  "signals": {
+    "convertToTask": {
+      "title": "转为任务",
+      "taskTitle": "任务标题",
+      "workspace": "工作区",
+      "convert": "转换"
+    },
+    "error": {
+      "convertFailed": "无法把这条信号转为任务。"
+    }
+  },
+  "swarmWorkspace": {
+    "warning": {
+      "continueAnyway": "仍然继续",
+      "deleteTitle": "无法删除系统工作区",
+      "deleteMessage": "Swarm 工作区是受保护的系统工作区，不能删除。SwarmAI 的内部运行依赖它。",
+      "editTitle": "系统工作区警告",
+      "editMessage": "你正要修改 Swarm 工作区里的文件。这是 SwarmAI 内部运行使用的受保护系统工作区，修改这些文件可能影响 SwarmAI 的功能。"
     }
   }
 }

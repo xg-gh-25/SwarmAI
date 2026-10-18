@@ -12,7 +12,9 @@
  *                             across component remounts
  */
 import { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import api from '../services/api';
+import { tf } from '../pages/chat/tf';
 
 export type MemorySaveStatus = 'idle' | 'loading' | 'saved' | 'empty' | 'error';
 
@@ -40,36 +42,37 @@ interface UseMemorySaveReturn {
   reset: (sessionId: string) => void;
 }
 
+type Translate = Parameters<typeof tf>[0];
+
 /**
- * Format the save result into a human-readable toast message.
+ * Format the save result into a human-readable toast message (localized; a
+ * message the backend wrote is shown as-is).
  */
-function formatToastMessage(data: SaveSessionResponse): string {
+function formatToastMessage(data: SaveSessionResponse, t: Translate): string {
+  const nothingNew = tf(t, 'chat.memory.nothingNew', 'Nothing new to save');
   if (data.status === 'empty') {
-    return data.message || 'Nothing new to save';
+    return data.message || nothingNew;
   }
   if (data.status === 'error') {
-    return data.message || 'Failed to save to memory';
+    return data.message || tf(t, 'chat.memory.failed', 'Failed to save to memory');
   }
-
-  const parts: string[] = [];
-  if (data.entries.key_decisions > 0) {
-    parts.push(`${data.entries.key_decisions} decision${data.entries.key_decisions > 1 ? 's' : ''}`);
-  }
-  if (data.entries.lessons_learned > 0) {
-    parts.push(`${data.entries.lessons_learned} lesson${data.entries.lessons_learned > 1 ? 's' : ''}`);
-  }
-  if (data.entries.open_threads > 0) {
-    parts.push(`${data.entries.open_threads} thread${data.entries.open_threads > 1 ? 's' : ''}`);
-  }
-  if (data.entries.recent_context > 0) {
-    parts.push(`${data.entries.recent_context} context`);
-  }
+  const counts: Array<[number, string, string, string]> = [
+    [data.entries.key_decisions, 'chat.memory.decisions', '{{count}} decision', '{{count}} decisions'],
+    [data.entries.lessons_learned, 'chat.memory.lessons', '{{count}} lesson', '{{count}} lessons'],
+    [data.entries.open_threads, 'chat.memory.threads', '{{count}} thread', '{{count}} threads'],
+    [data.entries.recent_context, 'chat.memory.context', '{{count}} context', '{{count}} context'],
+  ];
+  const parts = counts
+    .filter(([n]) => n > 0)
+    .map(([count, key, one, other]) => tf(t, key, count === 1 ? one : other, { count }));
 
   if (parts.length === 0) {
-    return 'Nothing new to save';
+    return nothingNew;
   }
 
-  return `Saved: ${parts.join(', ')}`;
+  return tf(t, 'chat.memory.saved', 'Saved: {{parts}}', {
+    parts: parts.join(tf(t, 'chat.memory.separator', ', ')),
+  });
 }
 
 /**
@@ -89,6 +92,7 @@ function withEntry<T>(prev: Record<string, T>, key: string, value: T): Record<st
 }
 
 export function useMemorySave(): UseMemorySaveReturn {
+  const { t } = useTranslation();
   const [statusMap, setStatusMap] = useState<Record<string, MemorySaveStatus>>(nullMap);
   const [toastMap, setToastMap] = useState<Record<string, string | null>>(nullMap);
 
@@ -113,7 +117,7 @@ export function useMemorySave(): UseMemorySaveReturn {
         nextMessageIdxMap[sessionId] = data.next_message_idx;
       }
 
-      const message = formatToastMessage(data);
+      const message = formatToastMessage(data, t);
       setToastMap(prev => withEntry(prev, sessionId, message));
 
       if (data.status === 'saved') {
@@ -125,9 +129,9 @@ export function useMemorySave(): UseMemorySaveReturn {
       }
     } catch {
       setStatusMap(prev => withEntry(prev, sessionId, 'error'));
-      setToastMap(prev => withEntry(prev, sessionId, 'Failed to save to memory'));
+      setToastMap(prev => withEntry(prev, sessionId, tf(t, 'chat.memory.failed', 'Failed to save to memory')));
     }
-  }, []);
+  }, [t]);
 
   const reset = useCallback((sessionId: string) => {
     setStatusMap(prev => {
