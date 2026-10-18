@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import glob
 import hashlib
 import json
 import os
@@ -109,6 +110,10 @@ SUMMARY_LINES = 10
 STACK_LINES = 40
 OUTPUT_BUDGET = 3000
 _ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# ac_coverage refs of the form probe:<name> are verified from evidence/probes/<name>.json.
+PROBE_REF_PREFIX = "probe:"
+# Desktop vitest files an ac_coverage ref may name (file-level only, see _resolve_desktop_ref).
+_DESKTOP_TEST_RE = re.compile(r"\.(test|spec)\.(ts|tsx|js|jsx)$")
 # Suites known to deadlock when sharing a process with others: one shard each.
 _SERIAL_SUITES = ("session_unit", "lifecycle", "healing", "recovery", "context_health")
 # pytest-timeout per test (thread method: a test over it ends its whole shard process).
@@ -1553,7 +1558,9 @@ def _baseline(ctx, nodeids: list[str]) -> dict[str, str | None]:
 
 # ── regression L1: tests declared by the BUILD artifact's ac_coverage ───────
 def _ac_entries(project: str, run_state: dict) -> list[list[str]]:
-    """ac_coverage[].test refs per entry (``file.py::test_fn`` or ``file.py``)."""
+    """ac_coverage[].test refs per entry: ``file.py::test_fn`` / ``file.py`` (pytest),
+    a desktop vitest file (``desktop/src/...test.tsx``, file-level), or
+    ``probe:<name>`` (verified from the run's probe evidence)."""
     stages = [s for s in run_state.get("stages") or [] if isinstance(s, dict)]
     aid = next((s.get("artifact_id") for s in reversed(stages)
                 if s.get("stage") == "build" and isinstance(s.get("artifact_id"), str)), None)
@@ -1601,12 +1608,98 @@ def _ref_matches(r: dict, file: str, nodeid: str | None) -> bool:
     return n == nodeid or n.startswith(nodeid + "[") or n.startswith(nodeid + "::")
 
 
+def _resolve_desktop_ref(repo: Path, ref: str, warnings: list | None = None):
+    """A desktop vitest ac_coverage ref -> (repo-relative file, None); None if the ref is
+    not desktop-shaped; ("", None) if it is desktop-shaped but unresolvable (warned).
+
+    Accepted spellings: ``desktop/src/...``, ``src/...`` (desktop-relative) or a bare
+    filename that is unique under ``desktop/src``. Refs are FILE-level only: vitest
+    full names contain spaces and _ac_entries splits refs on whitespace, so a
+    ``file::name`` ref could never match one test; it is rejected with a warning.
+    Separate from _resolve_ref on purpose: mutation specs and every other caller of
+    _resolve_ref keep accepting backend .py refs only.
+    """
+    path, sep, _rest = ref.partition("::")
+    if not _DESKTOP_TEST_RE.search(path):
+        return None
+    if sep:
+        if warnings is not None:
+            warnings.append(f"ac_coverage desktop ref must be file-level (no ::name); "
+                            f"use the file path: {ref}")
+        return "", None
+    norm = _norm_path(repo, path) or ""
+    for cand in (norm, f"desktop/{norm}"):
+        if cand.startswith("desktop/src/") and (repo / cand).is_file():
+            return cand, None
+    if norm and "/" not in norm:
+        root = repo / "desktop" / "src"
+        # glob.escape: the ref is a literal file name, never a pattern
+        hits = sorted(p.relative_to(repo).as_posix() for p in root.rglob(glob.escape(norm))
+                      if p.is_file() and "node_modules" not in p.parts) if root.is_dir() else []
+        if len(hits) == 1:
+            return hits[0], None
+        if hits and warnings is not None:
+            warnings.append(f"ac_coverage desktop ref is ambiguous ({len(hits)} files): {ref}")
+            return "", None
+    if warnings is not None:
+        warnings.append(f"ac_coverage test ref not found: {ref}")
+    return "", None
+
+
+def _ac_ref_target(repo: Path, ref: str):
+    """ac_coverage ref -> (file, nodeid|None) for _ref_matches, or None if unresolvable.
+    probe:<name> matches the synthetic probe row _probe_row adds to the results."""
+    if ref.startswith(PROBE_REF_PREFIX):
+        return ref, None
+    drv = _resolve_desktop_ref(repo, ref)
+    if drv is not None:
+        return drv if drv[0] else None
+    return _resolve_ref(repo, ref)
+
+
+def _probe_row(ev_root: Path, repo: Path, ref: str, changed: list[str]) -> dict:
+    """Verdict for a ``probe:<name>`` AC ref, as a result row (layer "probe").
+
+    Passes only if the probe's evidence is converged, its latest EXECUTED round saw
+    zero current findings, and it converged on THIS run's current changed files (the
+    target digest run_probe computes when called without --files). Anything else fails
+    closed with the re-run command: a probe run on a narrower --files set, old evidence
+    without current_findings, a latest round whose probe exited non-zero (a crashed
+    probe that printed no findings checked nothing), or any edit to the changed files
+    since (another session's included).
+    """
+    name = ref[len(PROBE_REF_PREFIX):]
+    rerun = f"re-run it: --mode probe --name {name} -- <probe command> (without --files)"
+
+    def failed(msg: str) -> dict:
+        return _res(ref, "failed", [msg], file=ref, layer="probe")
+    if not _ID_RE.fullmatch(name):
+        return failed(f"invalid probe name {name!r}")
+    st = _read_json(ev_root / "probes" / f"{name}.json")
+    if not isinstance(st, dict):
+        return failed(f"no evidence for probe {name}; {rerun}")
+    if not st.get("converged"):
+        return failed(f"probe {name} has not converged; {rerun}")
+    executed = [r for r in st.get("rounds") or [] if isinstance(r, dict) and not r.get("cached")]
+    current = executed[-1].get("current_findings") if executed else None
+    if current is None:
+        return failed(f"probe {name} evidence has no current_findings (older runner); {rerun}")
+    if executed[-1].get("rc") != 0:
+        return failed(f"probe {name}: its latest round exited rc={executed[-1].get('rc')}; {rerun}")
+    if current:
+        return failed(f"probe {name}: its latest round still reports {current} finding(s)")
+    if (st.get("state") or {}).get("converged_target") != _digest_files(repo, changed):
+        return failed(f"probe {name} is stale: this run's changed files changed since it "
+                      f"converged; {rerun}")
+    return _res(ref, "passed", file=ref, layer="probe")
+
+
 def _ac_layer(repo: Path, entries: list[list[str]], results: list[dict]) -> dict:
     ok_n = fail_n = 0
     for refs in entries:
         good = bool(refs)
         for ref in refs:
-            rv = _resolve_ref(repo, ref)
+            rv = _ac_ref_target(repo, ref)
             hits = [r for r in results if rv and _ref_matches(r, *rv)]
             if not hits or any(r["outcome"] in _FAIL for r in hits) \
                     or not any(r["outcome"] == "passed" for r in hits):
@@ -1774,8 +1867,35 @@ def _tree_digest(inputs: dict[str, str], changed: list[str], run_files) -> dict[
     return {f: d for f, d in sorted(inputs.items()) if f in keep}
 
 
+def _desktop_state(repo: Path) -> str:
+    """HEAD + the content of every uncommitted change under desktop/.
+
+    vitest runs a named test against whatever source it imports, so a cached result
+    is only valid for the same desktop source: keying on the named test files alone
+    served a stale pass (or failure) after the code under test changed. If git cannot
+    say what changed, the key is unique per call (fail closed: no cache hit)."""
+    head = _head_sha(repo)
+    out = _git(repo, "status", "--porcelain", "-z", "--untracked-files=all", "--", "desktop")
+    if head is None or out is None:
+        return "uncacheable-" + os.urandom(8).hex()
+    h = hashlib.sha256(head.encode())
+    entries, paths = out.split("\0"), set()
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        if len(e) > 3:
+            paths.add(e[3:])
+            if e[0] in "RC":
+                i += 1  # porcelain -z: a rename/copy is followed by its source path
+        i += 1
+    paths = sorted(paths)
+    for p in paths:
+        h.update(p.encode() + b"\0" + _file_digest(repo / p).encode() + b"\0")
+    return h.hexdigest()
+
+
 def _frontend_key(ctx, mode: str, files: list[str]) -> str:
-    h = hashlib.sha256((RUNNER_VERSION + mode).encode())
+    h = hashlib.sha256((RUNNER_VERSION + mode + _desktop_state(ctx.repo)).encode())
     for f in sorted(files) + ["desktop/package-lock.json"]:
         h.update(f.encode() + b"\0" + _file_digest(ctx.repo / f).encode() + b"\0")
     return h.hexdigest()[:32]
@@ -1834,6 +1954,17 @@ def _smoke_modules(ctx, changed: list[str]) -> dict[str, str]:
     return dict(sorted(out.items()))
 
 
+def _probe_rows(ctx, ev_root: Path, refs: list[str], changed: list[str]) -> list[dict]:
+    """Evaluate every probe:<name> ref now; a failing one is also a warning (its summary
+    names the re-run command). A recheck of a regression calls this too, so a probe
+    that went stale (or re-converged) since the base is never carried over by overlay."""
+    rows = [_probe_row(ev_root, ctx.repo, r, changed) for r in dict.fromkeys(refs)]
+    for row in rows:
+        if row["outcome"] != "passed":
+            ctx.warnings.append(f"ac_coverage {row['nodeid']}: {row['summary']}")
+    return rows
+
+
 def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
           sgraph: dict | None = None) -> tuple[dict, str | None]:
     plan = {"targets": {}, "skipped": [], "smoke": {}, "ac_entries": [], "l2": [],
@@ -1862,6 +1993,8 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 mod = n[len("import::"):]
                 plan["smoke"][mod] = _module_file(ctx.repo, mod)
                 plan["rechecked"] += 1
+            elif n.startswith(PROBE_REF_PREFIX):
+                plan["rechecked"] += 1  # re-evaluated below with every other probe ref
             elif n in ("desktop::vitest", "desktop::tsc") or n.startswith("desktop/"):
                 plan["desktop_recheck"] = True
                 plan["desktop_tsc"] = plan.get("desktop_tsc") or n == "desktop::tsc"
@@ -1870,6 +2003,10 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 lost.append(n or "<no nodeid>")
         before = prev.get("changed_files") if isinstance(prev.get("changed_files"), dict) else {}
         scope = [f for f in changed if before.get(f) != _file_digest(ctx.repo / f)]
+        if plan["base_mode"] == "regression":
+            plan["probe_rows"] = _probe_rows(ctx, ev_root, [
+                r for refs in _ac_entries(ns.project, run_state) for r in refs
+                if r.startswith(PROBE_REF_PREFIX)], changed)
     recent = _recent_failure_files(ev_root) if mode != "recheck" else []
     sel, skipped, _ = select_backend(ctx.repo, scope, graph, CAP_FILES, recent, sgraph)
     for f in sel:
@@ -1878,8 +2015,18 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     if mode == "regression":
         plan["ac_entries"] = _ac_entries(ns.project, run_state)
         ac_files: list[str] = []
+        ac_desktop: list[str] = []
+        probe_refs: list[str] = []
         for refs in plan["ac_entries"]:
             for ref in refs:
+                if ref.startswith(PROBE_REF_PREFIX):
+                    probe_refs.append(ref)
+                    continue
+                drv = _resolve_desktop_ref(ctx.repo, ref, ctx.warnings)
+                if drv is not None:  # desktop: vitest file list only, never a pytest target
+                    if drv[0]:
+                        ac_desktop.append(drv[0])
+                    continue
                 rv = _resolve_ref(ctx.repo, ref)
                 if rv is None:
                     ctx.warnings.append(f"ac_coverage test ref not found: {ref}")
@@ -1888,6 +2035,8 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 ac_files.append(rv[0])
                 if rv[1] is not None:
                     plan.setdefault("ac_first", {}).setdefault(rv[0], set()).add(rv[1])
+        plan["ac_desktop"] = list(dict.fromkeys(ac_desktop))
+        plan["probe_rows"] = _probe_rows(ctx, ev_root, probe_refs, changed)
         # AC targets first in priority order (a whole-file AC ref is not split out).
         plan["targets"] = {**{f: plan["targets"][f] for f in dict.fromkeys(ac_files)},
                            **plan["targets"]}
@@ -1899,6 +2048,8 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     # changed since: the failure is the reason to run, not a digest change.
     plan["desktop"] = [f for f in (changed if plan.get("desktop_recheck") else scope)
                        if f.startswith("desktop/src/") and (ctx.repo / f).is_file()]
+    # AC-named desktop tests run in the same vitest job (and so join its cache key).
+    plan["desktop"] += [f for f in plan.get("ac_desktop", []) if f not in plan["desktop"]]
     if mode == "recheck" and plan.get("desktop_recheck") and not plan["desktop"]:
         lost.append("desktop:: (no desktop/src file in this run's change set)")
     if mode == "recheck" and lost and getattr(ns, "auto_recheck_of", None):
@@ -1906,7 +2057,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         # error) would keep that failure forever; the caller falls back to a full run.
         return plan, f"auto-recheck cannot re-target: {', '.join(lost[:5])}"
     if mode == "recheck" and prev_failures:
-        if not (plan["targets"] or plan["smoke"] or plan["desktop"]):
+        if not (plan["targets"] or plan["smoke"] or plan["desktop"] or plan.get("probe_rows")):
             # Never green: there were failures and nothing here re-runs them.
             return plan, (f"recheck found {len(prev_failures)} previous failure(s) but could not "
                           f"re-target any of them ({', '.join(lost[:5]) or 'none matched'}); "
@@ -2006,7 +2157,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     changed_in = list(dict.fromkeys(plan["changed"] + plan["desktop"]))
     inputs = _key_inputs(ctx, targets, plan["smoke"], changed_in, sgraph)
     key = _cache_key(ctx, ns.mode, targets, plan["smoke"],
-                     plan["explicit"] + [json.dumps(plan["ac_entries"]), json.dumps(plan["skipped"])],
+                     plan["explicit"] + [json.dumps(plan["ac_entries"]), json.dumps(plan.get("probe_rows") or []),
+                                       json.dumps(plan["skipped"])],
                      inputs, head)
     tree = _tree_digest(inputs, changed_in, list(targets) + list(plan["smoke"].values()))
     if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
@@ -2047,7 +2199,9 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             results += fhit
         elif fkey:
             fres = [r for r in results if r.get("layer") in ("vitest", "tsc")]
-            if fres and not any(r["outcome"] == "timeout" for r in fres):
+            # Cache only an all-green frontend result: a failure (flaky or real) is
+            # always re-run, never served from frontend-{fkey}.json.
+            if fres and not any(r["outcome"] in _FAIL for r in fres):
                 _write_json(fpath, fres)
         cls = classify_failures(ctx, results)
     finally:
@@ -2082,9 +2236,12 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
 
 
 def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
+    results = list(results) + list(plan.get("probe_rows") or [])
     counts = {"passed": 0, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}
     for r in results:
         counts[_COUNT_KEY[r["outcome"]]] += 1
+    # a failing probe verdict is definite ("new"); the cache key already holds the verdict
+    cls = {**cls, **{r["nodeid"]: "new" for r in plan.get("probe_rows") or []}}
     failures = [{"nodeid": r["nodeid"], "classification": cls.get(r["nodeid"], "unknown"),
                  "summary": "\n".join(r["summary"][:STACK_LINES + 1]),
                  "outcome": r["outcome"], "deadline": bool(r.get("deadline"))}
@@ -2271,7 +2428,8 @@ def run_probe(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
         st["findings"].extend(new)
         st["rounds"].append({"at": _now_iso(), "target_digest": target, "probe_digest": probe,
                              "new_findings": len(new), "findings_total": len(st["findings"]),
-                             "duration_s": round(job.duration, 2), "cached": False, "rc": job.rc})
+                             "duration_s": round(job.duration, 2), "cached": False, "rc": job.rc,
+                             "current_findings": len(findings)})
         if new:
             st["converged"] = False
             s.update(extension_used=False, seen_probes=[])

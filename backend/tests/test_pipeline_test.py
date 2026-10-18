@@ -312,6 +312,248 @@ def test_probe_convergence_rules(rig, capsys, tmp_path):
     assert [r["cached"] for r in ev["rounds"]] == [False, False, True, False, False]
 
 
+# ── L1 ac_driven: desktop vitest refs and probe refs ────────────────────────
+FAKE_NPX_AC = """import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[0] == "vitest":
+    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile="))
+    files = [a for a in args[2:] if not a.startswith("--")]
+    flag = Path.cwd() / "src" / "flag.txt"
+    broken = flag.is_file() and flag.read_text().strip() == "fail"
+    flaky = os.environ.get("FAKE_FLAKY_COUNTER")  # fail on the first call only
+    if flaky:
+        n = int(Path(flaky).read_text()) if Path(flaky).is_file() else 0
+        Path(flaky).write_text(str(n + 1))
+        broken = broken or n == 0
+    Path(out).write_text(json.dumps({"testResults": [
+        {"name": str(Path.cwd() / f), "assertionResults": [
+            {"fullName": "suite works",
+             "status": "failed" if ("fails" in f or broken) else "passed",
+             "failureMessages": []}]} for f in files]}))
+sys.exit(0)
+"""
+
+
+def _ac_build(tmp_path: Path, tests: list[str]) -> dict:
+    """Write a BUILD artifact whose ac_coverage[i].test is tests[i]; return run_state."""
+    arts = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts"
+    arts.mkdir(parents=True, exist_ok=True)
+    (arts / "build.json").write_text(json.dumps({"ac_coverage": [
+        {"ac": f"AC{i + 1}", "impl": "x", "test": t, "verified": True}
+        for i, t in enumerate(tests)]}))
+    (arts / "manifest.json").write_text(json.dumps(
+        {"artifacts": [{"id": "art_b1", "file": "build.json"}]}))
+    return {"stages": [{"stage": "build", "artifact_id": "art_b1"}]}
+
+
+DESKTOP_FILES = {
+    "desktop/src/pages/A.test.tsx": "test('works', () => {})\n",
+    "desktop/src/B.fails.test.ts": "test('works', () => {})\n",
+    "desktop/src/one/C.test.ts": "test('works', () => {})\n",
+    "desktop/src/two/C.test.ts": "test('works', () => {})\n",
+}
+
+
+def test_regression_ac_frontend_refs(rig, capsys, monkeypatch, tmp_path):
+    state = _ac_build(tmp_path, [
+        "desktop/src/pages/A.test.tsx",                    # repo-relative -> pass
+        "src/pages/A.test.tsx, A.test.tsx",                # desktop-relative + unique bare -> pass
+        "B.fails.test.ts",                                 # a failing vitest file -> fail
+        "C.test.ts",                                       # ambiguous bare name -> fail
+        "desktop/src/pages/A.test.tsx::suite works",       # ::name rejected (file-level only)
+        "tests/test_x.py::test_add",                       # backend ref, unchanged -> pass
+    ])
+    rig(DESKTOP_FILES, run_state=state)
+    npx = tmp_path / "npx.py"
+    npx.write_text(FAKE_NPX_AC)
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"] == {"run": True, "pass": 3, "fail": 3}, ev["layers"]
+    assert "desktop/src/pages/A.test.tsx" in ev["selected_files"]
+    assert "desktop/src/B.fails.test.ts" in ev["selected_files"]
+    # desktop refs never become pytest targets
+    assert not any(r["file"].startswith("desktop/") and not r["nodeid"].startswith("desktop/")
+                   for r in ev["results"])
+    warns = " ".join(out["warnings"])
+    assert "ambiguous (2 files): C.test.ts" in warns
+    assert "file-level (no ::name)" in warns
+
+
+def test_regression_ac_probe_refs(rig, capsys, monkeypatch, tmp_path):
+    state = _ac_build(tmp_path, ["probe:geo", "probe:../geo", "probe:absent"])
+    repo = rig(run_state=state)
+    probe, findings = tmp_path / "probe.py", tmp_path / "findings.json"
+    probe.write_text(PROBE_SRC)
+    findings.write_text("[]")
+    pargs = ("--run-id", RUN_ID, "--mode", "probe", "--name", "geo", "--",
+             sys.executable, str(probe))
+    out, code = _run(capsys, *pargs)  # no --files: converges on the run's changed files
+    assert code == 0 and out["converged"] is True
+    assert _evidence(tmp_path, "probes/geo.json")["rounds"][-1]["current_findings"] == 0
+
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"] == {"run": True, "pass": 1, "fail": 2}
+    assert not any("ref not found: probe:" in w for w in out["warnings"])
+    assert any("probe:../geo" in w and "invalid probe name" in w for w in out["warnings"])
+    assert any("probe:absent" in w and "--mode probe --name absent" in w for w in out["warnings"])
+    by = {r["nodeid"]: r["outcome"] for r in ev["results"]}
+    assert by["probe:geo"] == "passed" and by["probe:../geo"] == "failed"
+    assert by["probe:absent"] == "failed"
+
+    # the probe finds something after a cached-able regression -> the verdict is
+    # re-evaluated, never served from the whole-result cache
+    findings.write_text(json.dumps([{"id": "A"}]))
+    probe.write_text(PROBE_SRC + "# widened\n")
+    out, code = _run(capsys, *pargs)
+    assert out["converged"] is False
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert out["cached"] is False
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"]["pass"] == 0
+
+    # converged again, then the run's changed files move on -> stale, fails closed
+    findings.write_text("[]")
+    out, code = _run(capsys, *pargs)
+    assert out["converged"] is True
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert _evidence(tmp_path, "tests/latest-regression.json")["layers"]["ac_driven"]["pass"] == 1
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b  # edited\n"})
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"]["pass"] == 0
+    stale = next(r for r in ev["failures"] if r["nodeid"] == "probe:geo")
+    assert "stale" in stale["summary"]
+
+
+def test_cached_regression_is_reevaluated_when_the_probe_changes(rig, capsys, tmp_path):
+    state = _ac_build(tmp_path, ["probe:geo"])
+    rig(run_state=state)
+    probe, findings = tmp_path / "probe.py", tmp_path / "findings.json"
+    probe.write_text(PROBE_SRC)
+    findings.write_text("[]")
+    pargs = ("--run-id", RUN_ID, "--mode", "probe", "--name", "geo", "--",
+             sys.executable, str(probe))
+    assert _run(capsys, *pargs)[0]["converged"] is True
+    reg = ("--run-id", RUN_ID, "--mode", "regression")
+    _run(capsys, *reg)
+    out, code = _run(capsys, *reg)
+    assert code == 0 and out["cached"] is True  # an all-green probe verdict is cacheable
+    findings.write_text(json.dumps([{"id": "A"}]))
+    probe.write_text(PROBE_SRC + "# widened\n")
+    assert _run(capsys, *pargs)[0]["converged"] is False
+    out, code = _run(capsys, *reg)
+    assert out["cached"] is False and code != 0
+    assert _evidence(tmp_path, "tests/latest-regression.json")["layers"]["ac_driven"] == {
+        "run": True, "pass": 0, "fail": 1}
+
+
+def test_recheck_reevaluates_a_probe_that_went_stale(rig, capsys, tmp_path):
+    state = _ac_build(tmp_path, ["probe:geo"])
+    repo = rig(run_state=state)
+    probe, findings = tmp_path / "probe.py", tmp_path / "findings.json"
+    probe.write_text(PROBE_SRC)
+    findings.write_text("[]")
+    assert _run(capsys, "--run-id", RUN_ID, "--mode", "probe", "--name", "geo", "--",
+                sys.executable, str(probe))[0]["converged"] is True
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert _evidence(tmp_path, "tests/latest-regression.json")["layers"]["ac_driven"]["pass"] == 1
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b  # edited\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"] == {"run": True, "pass": 0, "fail": 1}, ev["layers"]
+    assert {r["nodeid"]: r["outcome"] for r in ev["results"]}["probe:geo"] == "failed"
+
+
+def test_recheck_of_a_probe_only_failure_overlays_the_reconverged_probe(rig, capsys, tmp_path):
+    state = _ac_build(tmp_path, ["probe:geo"])
+    rig(run_state=state)
+    probe, findings = tmp_path / "probe.py", tmp_path / "findings.json"
+    probe.write_text(PROBE_SRC)
+    findings.write_text(json.dumps([{"id": "A"}]))
+    pargs = ("--run-id", RUN_ID, "--mode", "probe", "--name", "geo", "--",
+             sys.executable, str(probe))
+    assert _run(capsys, *pargs)[0]["converged"] is False
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert _evidence(tmp_path, "tests/latest-regression.json")["layers"]["ac_driven"]["pass"] == 0
+    findings.write_text("[]")
+    assert _run(capsys, *pargs)[0]["converged"] is True
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 0, out
+    assert _evidence(tmp_path, "tests/latest-regression.json")["layers"]["ac_driven"] == {
+        "run": True, "pass": 1, "fail": 0}
+
+
+def test_a_crashed_probe_never_satisfies_an_ac(rig, capsys, tmp_path):
+    state = _ac_build(tmp_path, ["probe:geo"])
+    rig(run_state=state)
+    probe, findings = tmp_path / "probe.py", tmp_path / "findings.json"
+    probe.write_text(PROBE_SRC + "raise SystemExit(1)\n")
+    findings.write_text("[]")
+    _run(capsys, "--run-id", RUN_ID, "--mode", "probe", "--name", "geo", "--",
+         sys.executable, str(probe))
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"] == {"run": True, "pass": 0, "fail": 1}
+    assert "rc=1" in next(r for r in ev["failures"] if r["nodeid"] == "probe:geo")["summary"]
+
+
+def test_desktop_ref_outside_src_and_glob_names_do_not_resolve(rig, capsys, monkeypatch, tmp_path):
+    state = _ac_build(tmp_path, ["desktop/e2e/X.test.ts", "*.test.tsx"])
+    rig({**DESKTOP_FILES, "desktop/e2e/X.test.ts": "test('e', () => {})\n"}, run_state=state)
+    npx = tmp_path / "npx.py"
+    npx.write_text(FAKE_NPX_AC)
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    out, _ = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["layers"]["ac_driven"]["pass"] == 0
+    assert ev["layers"]["ac_driven"]["fail"] == 2
+
+
+def test_mutation_spec_still_rejects_a_desktop_test(rig, capsys, tmp_path):
+    rig(DESKTOP_FILES)
+    spec = tmp_path / "muts.json"
+    spec.write_text(json.dumps({"tests": ["desktop/src/pages/A.test.tsx"], "mutations": [
+        {"id": "M1", "file": "backend/core/mod.py", "find": "a + b", "replace": "a - b"}]}))
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "mutation", "--mutations", str(spec))
+    assert code == 2 and "mutation test not found" in out["error"]
+
+
+def test_frontend_cache_key_follows_the_source_under_test(rig, capsys, monkeypatch, tmp_path):
+    repo = rig({"desktop/src/pages/A.test.tsx": "test('works', () => {})\n",
+                "desktop/src/flag.txt": "pass\n"})
+    npx = tmp_path / "npx.py"
+    npx.write_text(FAKE_NPX_AC)
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    args = ("--run-id", RUN_ID, "--mode", "tdd", "--files", "desktop/src/pages/A.test.tsx")
+    out, code = _run(capsys, *args)
+    assert code == 0 and out["counts"]["passed"] == 1
+    # the source the test runs against breaks; the test file itself is unchanged
+    _write(repo, {"desktop/src/flag.txt": "fail\n"})
+    out, code = _run(capsys, *args)
+    assert out["counts"]["failed"] == 1, out  # a stale cached pass would report passed
+
+
+
+def test_a_failing_frontend_result_is_not_served_from_cache(rig, capsys, monkeypatch, tmp_path):
+    rig({"desktop/src/pages/A.test.tsx": "test('works', () => {})\n"})
+    npx = tmp_path / "npx.py"
+    npx.write_text(FAKE_NPX_AC)
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    monkeypatch.setenv("FAKE_FLAKY_COUNTER", str(tmp_path / "count"))
+    args = ("--run-id", RUN_ID, "--mode", "tdd", "--files", "desktop/src/pages/A.test.tsx")
+    out, _ = _run(capsys, *args)
+    assert out["counts"]["failed"] == 1  # first vitest call fails
+    out, _ = _run(capsys, *args)  # same inputs: must re-run, not replay the failure
+    assert out["counts"]["passed"] == 1 and out["counts"]["failed"] == 0, out
+    assert (tmp_path / "count").read_text() == "2"
+
+
 # ── G2 mutation ─────────────────────────────────────────────────────────────
 def test_mutation_killed_vs_survived_and_main_tree_untouched(rig, capsys, tmp_path):
     repo = rig()
