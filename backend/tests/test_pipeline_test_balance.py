@@ -219,6 +219,9 @@ def test_split_runs_every_test_once_with_unknown_ac_and_param_family():
 
 
 def test_keep_tokens_go_to_the_plugin_and_count_as_deselected(tmp_path):
+    (tmp_path / "tests").mkdir()
+    for f in ("test_a.py", "test_b.py"):  # targets must exist on disk
+        (tmp_path / "tests" / f).write_text("def t1():\n    pass\n")
     ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
     job = pt._pytest_job(ctx, "j1", ["tests/test_a.py", "--keep=tests/test_a.py::t1",
                                      "--keep=tests/test_a.py::t2", "tests/test_b.py"], tmp_path, False)
@@ -391,3 +394,118 @@ def test_plugin_keep_never_overrides_a_deselect(tmp_path):
     evs = [json.loads(ln) for ln in (tmp_path / "ev.jsonl").read_text().splitlines()]
     ids = next(e["nodeids"] for e in evs if e["ev"] == "collected")
     assert ids == ["test_t.py::test_p[2]", "test_t.py::test_p[10]"]  # [1] exact-deselected, [10] kept
+
+
+# ── run_df73d970: nested worker cap; nodeid targets never take a shard down ──
+def test_worker_count_honours_the_env_cap(monkeypatch):
+    monkeypatch.setattr(pt.os, "cpu_count", lambda: 8)
+    # Pin free memory too: on a low-memory host base would be 1 and every
+    # "unchanged" assertion below would pass for any implementation.
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(
+        virtual_memory=lambda: SimpleNamespace(available=64 * 1024 ** 3)))
+    monkeypatch.delenv("SWARM_TEST_MAX_WORKERS", raising=False)
+    base = pt._worker_count()
+    assert base == 4
+    monkeypatch.setenv("SWARM_TEST_MAX_WORKERS", "1")
+    assert pt._worker_count() == 1
+    for bad in ("0", "-2", "abc", "", "1.5", "\u00b2"):  # "²" isdigit() but int() raises
+        monkeypatch.setenv("SWARM_TEST_MAX_WORKERS", bad)
+        assert pt._worker_count() == base, bad
+    monkeypatch.setenv("SWARM_TEST_MAX_WORKERS", "99")
+    assert pt._worker_count() == base  # a cap, never a raise
+
+
+def _backend(tmp_path):
+    b = tmp_path / "backend"
+    (b / "tests").mkdir(parents=True)
+    (b / "tests" / "test_a.py").write_text("def test_t1():\n    pass\n")
+    (b / "tests" / "test_b.py").write_text("def test_u():\n    pass\n")
+    return b
+
+
+def test_nodeid_targets_become_file_plus_keep(tmp_path):
+    b = _backend(tmp_path)
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
+    job = pt._pytest_job(ctx, "j", ["tests/test_a.py::test_t1", "tests/test_a.py::C::m", "tests/test_b.py"],
+                         b, False)
+    targets = [a for a in job.argv if a.startswith("tests/")]
+    assert targets == ["tests/test_a.py", "tests/test_b.py"]  # no nodeid ever reaches argv
+    assert json.loads(job.env["PIPELINE_TEST_KEEP"]) == ["tests/test_a.py::test_t1", "tests/test_a.py::C::m"]
+    assert job.meta["args"] == ["tests/test_a.py", "tests/test_b.py"]
+    assert job.meta["required"] == ["tests/test_a.py::test_t1", "tests/test_a.py::C::m"]
+
+
+def test_a_whole_file_target_wins_over_its_nodeid(tmp_path):
+    """Gate-1: a keep list for f.py would silently drop the rest of a whole-file f.py."""
+    b = _backend(tmp_path)
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
+    job = pt._pytest_job(ctx, "j", ["tests/test_a.py", "tests/test_a.py::test_t1"], b, False)
+    assert "PIPELINE_TEST_KEEP" not in job.env
+    assert [a for a in job.argv if a.startswith("tests/")] == ["tests/test_a.py"]
+    # an explicit split-chunk keep list for the same file still applies
+    job2 = pt._pytest_job(ctx, "j2", ["tests/test_a.py", "--keep=tests/test_a.py::test_t1"], b, False)
+    assert json.loads(job2.env["PIPELINE_TEST_KEEP"]) == ["tests/test_a.py::test_t1"]
+
+
+def test_a_missing_file_never_reaches_the_test_process(tmp_path):
+    b = _backend(tmp_path)
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
+    job = pt._pytest_job(ctx, "j", ["tests/gone.py::t", "tests/test_b.py"], b, False)
+    assert [a for a in job.argv if a.startswith("tests/")] == ["tests/test_b.py"]
+    assert job.meta["missing"] == ["tests/gone.py::t"]
+
+
+def test_a_stale_nodeid_errors_only_itself_in_a_real_shard(tmp_path):
+    """run_1f81be36: one renamed AC test made the shard exit rc=4 and all 18 AC-lead
+    tests in it were reported as errors."""
+    b = tmp_path / "backend"
+    (b / "tests").mkdir(parents=True)
+    (b / "tests" / "test_k.py").write_text("def test_a():\n    pass\n\n\ndef test_b():\n    pass\n")
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=pt._plugin_dir(tmp_path / "cache"))
+    job = pt._pytest_job(ctx, "j", ["tests/test_k.py::test_a", "tests/test_k.py::test_gone",
+                                    "tests/test_k.py::test_b", "tests/nofile.py::t"], b, False)
+    pt._run_jobs([job], 1, time.monotonic() + 60)
+    res = {r["nodeid"]: r for r in pt._parse_job(job)}
+    assert res["backend/tests/test_k.py::test_a"]["outcome"] == "passed"
+    assert res["backend/tests/test_k.py::test_b"]["outcome"] == "passed"
+    gone = res["backend/tests/test_k.py::test_gone"]
+    assert gone["outcome"] == "error" and gone.get("runner_error")
+    assert any("not found" in ln for ln in gone["summary"])
+    assert res["backend/tests/nofile.py::t"]["outcome"] == "error"
+    assert not any(n.startswith("shard::") for n in res)
+
+
+def test_a_parent_shard_selection_never_leaks_into_a_child(tmp_path, monkeypatch):
+    """Found while mutation-testing run_df73d970: a test running inside a keep chunk saw
+    its own shard's PIPELINE_TEST_KEEP copied into every job it built."""
+    b = _backend(tmp_path)
+    for k in ("PIPELINE_TEST_KEEP", "PIPELINE_TEST_DESELECT", "PIPELINE_TEST_EVENTS"):
+        monkeypatch.setenv(k, '["tests/test_b.py::outer"]')
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
+    job = pt._pytest_job(ctx, "j", ["tests/test_a.py", "tests/test_b.py"], b, False)
+    assert "PIPELINE_TEST_KEEP" not in job.env and "PIPELINE_TEST_DESELECT" not in job.env
+    assert job.env["PIPELINE_TEST_EVENTS"] == str(tmp_path / "j.events")  # its own, set after
+
+
+def test_an_all_missing_shard_still_reports_each_target_once(tmp_path):
+    """Spec review: argv became ``-c pass`` (no event stream, rc 0) and the fallback
+    returned [], so every missing target vanished without a result."""
+    b = _backend(tmp_path)
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=pt._plugin_dir(tmp_path / "cache"))
+    job = pt._pytest_job(ctx, "j", ["tests/nofile.py::t", "tests/gone.py"], b, False)
+    pt._run_jobs([job], 1, time.monotonic() + 60)
+    ids = [r["nodeid"] for r in pt._parse_job(job)]
+    assert sorted(ids) == ["backend/tests/gone.py", "backend/tests/nofile.py::t"]
+    assert all(r["outcome"] == "error" for r in pt._parse_job(job))
+
+
+def test_a_missing_target_is_reported_once_when_the_shard_fails(tmp_path):
+    """Events present, no per-test result, rc!=0: the fallback and _target_gaps both run,
+    and only one of them may add the missing target."""
+    b = _backend(tmp_path)
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
+    job = pt._pytest_job(ctx, "j", ["tests/test_a.py", "tests/gone.py::t"], b, False)
+    job.meta["events"].write_text(json.dumps({"ev": "collected", "nodeids": []}) + "\n")
+    job.started, job.killed, job.rc = True, False, 3
+    ids = [r["nodeid"] for r in pt._parse_job(job)]
+    assert ids.count("backend/tests/gone.py::t") == 1, ids

@@ -109,36 +109,11 @@ _recall_degraded_count: dict[str, int] = {}
 
 def _read_run_map(session_id: str) -> "tuple[str, float] | None":
     """Pure sync read of the ``session_<sid>_run.map`` rendezvous → ``(run_id, ts)``
-    or ``None``. Does real filesystem I/O (stat + open + read + json parse), so the
-    async caller MUST dispatch it via ``asyncio.to_thread`` — it is NEVER called
-    inline on the event loop (Gate-2 concurrency H1: the write-side sibling
-    ``runtime_hooks._persist`` already offloads; the read side must match).
-
-    Returns ``None`` for: no session_id, missing/unreadable/corrupt .map, or a
-    .map whose ``run_id`` is empty/non-string (treat as absent — never hydrate a
-    falsy run_id, L1). ``ts`` is parsed leniently (``float()`` tolerates a numeric
-    string; non-numeric → 0.0). Never raises (fail-safe)."""
-    try:
-        if not session_id:
-            return None
-        from .runtime_hooks import _session_run_map_path
-        p = _session_run_map_path(session_id)
-        if not p.is_file():
-            return None
-        import json as _json
-        data = _json.loads(p.read_text(encoding="utf-8"))
-        map_run_id = data.get("run_id")
-        if not (isinstance(map_run_id, str) and map_run_id.strip()):
-            return None  # empty/missing run_id → treat as absent (L1)
-        raw_ts = data.get("ts")
-        try:
-            map_ts = float(raw_ts)  # tolerate numeric string "123.0" (Gate-2 LOW)
-        except (TypeError, ValueError):
-            map_ts = 0.0
-        return (map_run_id.strip(), map_ts)
-    except Exception:  # fail-safe: attribution read must never raise
-        logger.debug("_read_run_map: suppressed exception on a fail-safe path", exc_info=True)
-        return None
+    or ``None``. Real filesystem I/O, so the async caller MUST dispatch it via
+    ``asyncio.to_thread``. Delegates to ``runtime_hooks.read_session_run_map`` — the
+    one reader shared with the SubagentStop marker writer. Never raises."""
+    from .runtime_hooks import read_session_run_map
+    return read_session_run_map(session_id)
 
 
 async def _rehydrate_pipeline_run_id(ctx: dict, session_id: str) -> None:

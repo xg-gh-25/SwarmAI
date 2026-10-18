@@ -28,10 +28,17 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from scripts import pipeline_test as pt
 from tests.test_pipeline_test import (  # noqa: F401 — rig is a fixture
     PROJECT, RUN_ID, _evidence, _run, _write, rig)
 from tests.test_pipeline_test_order import LEAK_HEAD, LEAK_NOW, STATE
+
+
+# Nested runners (verify + recheck + a HEAD baseline in one test): like test_pipeline_test,
+# they outlast the runner's 30 s per-test timeout under load; 120 s still catches a hang.
+pytestmark = pytest.mark.timeout(120)
 
 F = "backend/tests/test_x.py"
 
@@ -147,6 +154,9 @@ SHARD = ["tests/test_a.py", "--deselect=tests/test_a.py::t_ac", "tests/test_b.py
 def test_prefix_jobs_keep_the_shard_deselects(tmp_path, monkeypatch):
     ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path, seq=0,
                           repo=tmp_path, workers=1)
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    for f in ("test_a.py", "test_b.py"):  # a target whose file is absent never reaches argv
+        (tmp_path / "tests" / f).write_text("")
     job = pt._pytest_job(ctx, "j", SHARD, tmp_path, False)
     assert job.meta["args"] == ["tests/test_a.py", "tests/test_b.py"]
     assert job.meta["shard_args"] == SHARD

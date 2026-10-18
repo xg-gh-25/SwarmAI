@@ -725,14 +725,24 @@ def _plugin_dir(cache: Path) -> Path:
 
 def _worker_count() -> int:
     """min(4, cpu, memory: 1 GB per worker keeping 4 GB headroom); 2 without psutil.
-    Raised toward the idle cores by ``_scale_up`` when no other runner is busy."""
+    Raised toward the idle cores by ``_scale_up`` when no other runner is busy.
+
+    ``SWARM_TEST_MAX_WORKERS`` (a positive integer) caps it — never raises it. The
+    runner's own test rig sets 1: those tests start nested runners, and once their file
+    is split into concurrent chunks, every nested runner sizing itself to 4 workers
+    oversubscribed the machine. A missing or invalid value changes nothing.
+    """
     cpu = os.cpu_count() or 2
     try:
         import psutil
         by_mem = int((psutil.virtual_memory().available - 4 * 1024 ** 3) // 1024 ** 3)
     except Exception:  # noqa: BLE001 — psutil missing or unreadable
         by_mem = 2
-    return _scale_up(max(1, min(4, cpu, by_mem)))
+    n = _scale_up(max(1, min(4, cpu, by_mem)))
+    cap = (os.environ.get("SWARM_TEST_MAX_WORKERS") or "").strip()
+    if cap.isascii() and cap.isdigit() and int(cap) >= 1:
+        n = min(n, int(cap))
+    return n
 
 
 MAX_WORKERS = 8       # ceiling when no other runner holds a slot
@@ -1162,6 +1172,9 @@ def _save_durations(cache: Path, results: list[dict]) -> str | None:
     return None
 
 
+_PLUGIN_ENV = ("PIPELINE_TEST_EVENTS", "PIPELINE_TEST_DESELECT", "PIPELINE_TEST_KEEP")
+
+
 def _child_env(backend: Path, extra_path: list[Path]) -> dict:
     env = dict(os.environ)
     paths = [str(backend)] + [str(p) for p in extra_path]
@@ -1169,6 +1182,11 @@ def _child_env(backend: Path, extra_path: list[Path]) -> dict:
         paths.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(paths)
     env.pop("PYTEST_ADDOPTS", None)
+    # The events plugin's per-shard selection must never leak into a child: when this
+    # runner itself runs inside a shard (its own tests start nested runners), the outer
+    # shard's keep / deselect lists would otherwise filter the nested shard's files.
+    for k in _PLUGIN_ENV:
+        env.pop(k, None)
     return env
 
 
@@ -1177,15 +1195,42 @@ def _pytest_job(ctx, name: str, args: list[str], backend: Path, isolated: bool) 
     # pytest's --deselect (that one matches by prefix): they go to the plugin as an
     # exact-match list. Parsing and gap detection read ``meta["args"]`` = targets only.
     # ``--keep=<nodeid>`` (from a split heavy file) likewise goes to the plugin.
-    targets_only = [a for a in args if not a.startswith(("--deselect=", "--keep="))]
+    #
+    # A NODEID target never reaches pytest argv either: pytest exits rc=4 for one id it
+    # cannot find and runs nothing, which errored every target of the shard (a renamed
+    # AC test once took 18 AC-lead tests down). It becomes its FILE plus a keep entry;
+    # the id is kept in meta["required"] and _target_gaps reports one not-found error
+    # for it alone. A file that is also a whole-file target here wins (no keep — a keep
+    # list would silently drop the rest of that file) unless the shard already carries
+    # an explicit split-chunk keep list for it. A target whose file does not exist is
+    # left out of argv (pytest would exit rc=4 for it too) and reported from
+    # meta["missing"].
     deselect_ids = [a[len("--deselect="):] for a in args if a.startswith("--deselect=")]
     keep_ids = [a[len("--keep="):] for a in args if a.startswith("--keep=")]
+    explicit_keep_files = {k.split("::")[0] for k in keep_ids}
+    plain_files = {a for a in args if not a.startswith("--") and "::" not in a}
+    targets_only, required, missing = [], [], []
+    for a in args:
+        if a.startswith("--"):
+            continue
+        f = a.split("::")[0]
+        if not (backend / f).exists():
+            missing.append(a)
+            continue
+        if "::" in a:
+            required.append(a)
+            if f not in plain_files or f in explicit_keep_files:
+                keep_ids.append(a)
+        if f not in targets_only:
+            targets_only.append(f)
     junit = ctx.workdir / f"{name}.xml"
     events = ctx.workdir / f"{name}.events"
     argv = [ctx.python, "-X", "faulthandler", "-m", "pytest", *targets_only, "-q",
             "-o", "addopts=", "-n", "0", "-p", "no:cacheprovider",
             f"--timeout={PER_TEST_TIMEOUT_S}", "--timeout-method=thread", "--junitxml", str(junit),
             "--rootdir", str(backend), "-p", _PLUGIN_NAME]
+    if not targets_only:  # every target was missing: never let pytest collect the rootdir
+        argv = [ctx.python, "-c", "pass"]
     env = _child_env(backend, [ctx.plugin_dir])
     env["PIPELINE_TEST_EVENTS"] = str(events)
     if deselect_ids:
@@ -1201,11 +1246,17 @@ def _pytest_job(ctx, name: str, args: list[str], backend: Path, isolated: bool) 
     # shard (all pulled to the AC lead, or a keep chunk whose ids left the file).
     deselected = {a.split("=", 1)[1].split("::")[0] for a in args
                   if a.startswith(("--deselect=", "--keep="))}
+    deselected |= {k.split("::")[0] for k in keep_ids}  # its required ids are checked one by one
+    # What to name when the shard yields no per-test results (not started, killed, no
+    # event stream): each required id, and each whole-file target without one.
+    req_files = {r.split("::")[0] for r in required}
+    units = required + [f for f in targets_only if f in plain_files or f not in req_files]
     # ``shard_args`` = the full ordered args incl. ``--deselect=`` tokens: results are
     # tagged with it so a prefix re-run deselects what the original shard deselected.
     return _Job(name, argv, backend, env, ctx.workdir, "pytest",
                 args=targets_only, shard_args=list(args), junit=junit, events=events,
-                deselected=deselected)
+                deselected=deselected, required=required, missing=missing,
+                units=list(dict.fromkeys(units)))
 
 
 def _drop_stale_pyc(repo: Path, changed: list[str]) -> int:
@@ -1376,10 +1427,9 @@ def _parse_job(job: _Job) -> list[dict]:
 
 def _parse_pytest(job: _Job) -> list[dict]:
     pre = "backend/"
-    args = job.meta["args"]
     if not job.started:
         return [_res(pre + a, "timeout", ["not started: global deadline reached"], deadline=True,
-                     notrun=True) for a in args]
+                     notrun=True) for a in _report_units(job)] + _missing_results(job)
     evs = _events(job.meta["events"])
     collected, started, reps, out = [], set(), {}, []
     for e in evs:
@@ -1395,8 +1445,8 @@ def _parse_pytest(job: _Job) -> list[dict]:
             out.append(_res(pre + nid, "error", _lines(e.get("longrepr") or "")[-SUMMARY_LINES:]))
         elif kind == "collect_skip":  # module-level skip: collected, deliberately empty
             out.append(_res(pre + str(e.get("nodeid") or ""), "skipped", collect_skip=True))
-    if not evs:
-        return _parse_pytest_fallback(job)
+    if not evs:  # e.g. every target was missing (argv ran ``-c pass``): still report them
+        return _parse_pytest_fallback(job) + _missing_results(job)
     stack = None
     for nid in list(dict.fromkeys(collected + [n for n in reps if n not in collected])):
         if not isinstance(nid, str):
@@ -1458,6 +1508,18 @@ def _target_gaps(job: _Job, out: list[dict]) -> list[dict]:
             gaps.append(_res(nid, "error", [f"no tests collected for this target (pytest rc="
                                             f"{job.rc}): a selected target that runs zero tests "
                                             "is not green"] + tail, notrun=True, runner_error=True))
+    for rid in job.meta.get("required") or ():
+        nid = pre + rid
+        if _target_hit(nid, out + gaps):
+            continue  # ran, or its file reported a collection error / module skip
+        if job.killed or not job.started:
+            gaps.append(_res(nid, "timeout", ["global deadline reached before this test ran"],
+                             deadline=True, notrun=True))
+        else:
+            gaps.append(_res(nid, "error", [f"test not found: {rid} was not collected from its "
+                                            "file (renamed or deleted?)"], notrun=True,
+                             runner_error=True))
+    gaps += _missing_results(job)
     # rc 5 with every target accounted for = module-level skips only: not an error.
     if job.started and not job.killed and job.rc not in (0, 1, 5) \
             and not any(r["outcome"] in _FAIL for r in out + gaps):
@@ -1467,8 +1529,23 @@ def _target_gaps(job: _Job, out: list[dict]) -> list[dict]:
     return gaps
 
 
+def _report_units(job: _Job) -> list[str]:
+    """What a shard reports on when it yields no per-test result: each whole-file
+    target and each required nodeid (set by ``_pytest_job``)."""
+    return job.meta["units"]
+
+
+def _missing_results(job: _Job) -> list[dict]:
+    return [_res("backend/" + m, "error", [f"not found: {m} (its file does not exist)"],
+                 notrun=True, runner_error=True) for m in job.meta.get("missing") or ()]
+
+
 def _parse_pytest_fallback(job: _Job) -> list[dict]:
-    """No event stream: junit xml if present, else one error/timeout per shard arg."""
+    """No event stream: junit xml if present, else one error/timeout per report unit
+    (``_report_units``).
+
+    Never includes ``_missing_results``: each caller adds them exactly once (the
+    no-events path directly, the empty-events path through ``_target_gaps``)."""
     pre = "backend/"
     junit = job.meta["junit"]
     if junit.exists() and not job.killed:
@@ -1481,10 +1558,10 @@ def _parse_pytest_fallback(job: _Job) -> list[dict]:
     if job.killed:
         stack = _stack(job)
         return [_res(pre + a, "timeout", ["global deadline reached; stack:"] + stack, deadline=True,
-                     notrun=True) for a in job.meta["args"]]
+                     notrun=True) for a in _report_units(job)]
     tail = _lines(job.text())[-SUMMARY_LINES:]
     return [_res(pre + a, "error", [f"pytest exited rc={job.rc}"] + tail, notrun=True,
-                 runner_error=True) for a in job.meta["args"]]
+                 runner_error=True) for a in _report_units(job)]
 
 
 def _parse_junit(path: Path, args: list[str]) -> list[dict]:

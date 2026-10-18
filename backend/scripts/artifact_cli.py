@@ -2233,6 +2233,44 @@ def _run_origin(args, now_iso: str) -> dict:
     return {"session_id": sid, "intent": intent, "intent_source": source}
 
 
+def _link_session_to_run(session_id: "str | None", run_id: str) -> None:
+    """Write the session->run map for a new run (best-effort, never fails run-create).
+
+    The PostToolUse hook writes the same file by parsing run-create's stdout; when that
+    stdout is redirected it sees nothing, the session stays linked to its PREVIOUS run,
+    and every reviewer marker of the new run is credited to the old one (D7 then
+    refuses the commit). Writing it here, through the hook's own helper, removes the
+    dependence on stdout. ``session_id`` is _run_origin's validated token."""
+    if not session_id:
+        return
+    try:
+        from core.runtime_hooks import write_session_run_map
+        write_session_run_map(session_id, run_id)
+    except Exception as e:  # noqa: BLE001 — linking is best-effort
+        print(json.dumps({"warning": f"session->run link not written ({type(e).__name__}): "
+                                     "reviewer markers may not be attributed to this run"}),
+              file=sys.stderr)
+
+
+def _normalize_files_touched_arg(value):
+    """``--files-touched`` as ONE JSON-array string, whatever form it came in.
+
+    argparse collects one or more values: a single value starting with ``[`` is the
+    JSON form (passed through unchanged, so a malformed one still fails validation
+    with exit 1); anything else is a list of plain paths, serialized here. Called once
+    at the top of cmd_run_update, so the completion gate and the persisting write read
+    the SAME value. A str (direct callers) passes through; None stays None."""
+    if value is None or isinstance(value, str):
+        return value
+    vals = [str(v) for v in value]
+    if vals and (vals[0].lstrip().startswith("[") or vals[-1].rstrip().endswith("]")):
+        # The JSON form. Several values here = an UNQUOTED array the shell split into
+        # fragments ("[a.py," "b.py]"): rejoin them so validation sees the real
+        # (malformed) text and exits 1, instead of saving the fragments as paths.
+        return " ".join(vals)
+    return json.dumps(vals)
+
+
 def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     """Create a new pipeline run state file."""
     from datetime import datetime, timezone
@@ -2273,6 +2311,7 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     # Auto-abandon stale same-project runs (lifecycle management)
     abandoned = _auto_abandon_stale_runs(args.project, run_id)
 
+    _link_session_to_run(run_state.get("session_id"), run_id)
     result = {"pipeline_id": run_id, "project": args.project, "file": str(run_file)}
     if abandoned > 0:
         result["auto_abandoned"] = abandoned
@@ -2416,6 +2455,8 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
 
+    if getattr(args, "files_touched", None) is not None:
+        args.files_touched = _normalize_files_touched_arg(args.files_touched)
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
@@ -3383,11 +3424,11 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         try:
             incoming = json.loads(args.files_touched)
         except (ValueError, TypeError):
-            print(json.dumps({"error": "--files-touched must be a JSON array of paths"}),
+            print(json.dumps({"error": "--files-touched: malformed JSON array (or pass plain paths)"}),
                   file=sys.stderr)
             sys.exit(1)
         if not isinstance(incoming, list):
-            print(json.dumps({"error": "--files-touched must be a JSON array of paths"}),
+            print(json.dumps({"error": "--files-touched: malformed JSON array (or pass plain paths)"}),
                   file=sys.stderr)
             sys.exit(1)
         # NOTE: the helper dedups on the STRIPPED string. The prior inline loop
@@ -9355,7 +9396,9 @@ def main() -> None:
     p_run_update.add_argument("--taste-decision", default=None, help="Taste decision JSON to append")
     p_run_update.add_argument("--profile", default=None, help="Pipeline profile override")
     p_run_update.add_argument("--ddd-checksums", default=None, help="DDD doc checksums JSON (from ddd-check)")
-    p_run_update.add_argument("--files-touched", default=None, help="JSON array of source file paths THIS run wrote (dedup-appended to run.json files_touched; consumed by run-commit)")
+    p_run_update.add_argument("--files-touched", default=None, nargs="+",
+                              help="Source files THIS run wrote: one JSON array string or one or more "
+                                   "plain paths (dedup-appended to run.json files_touched; consumed by run-commit)")
     p_run_update.add_argument("--add-required-expert", default=None, action="append", metavar="EXPERT_ID",
                               help="APPEND an expert id to run.json required_experts (R1.5a, D7 key-system; append-only — repeatable, idempotent, NEVER removes). The future D7 gate verifies declared ⊆ actually-ran.")
     p_run_update.add_argument("--force-checkpoint", action="store_true", help="Override the confabulation guard when setting --status paused")

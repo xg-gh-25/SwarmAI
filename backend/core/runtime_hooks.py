@@ -15,6 +15,7 @@ Key public symbols:
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -776,9 +777,12 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 # (a DIFFERENT namespace — a CLI reading that env would write the mapping under the
 # wrong key and D7 would never find it; verified by trace, R1.5a Gate-1).
 #
-# A PostToolUse-Bash hook is the ONLY place both ids coexist: it runs in the daemon
-# (so ctx carries the correct app-level session_id) AND the SDK hands it the Bash
-# tool_response (so it sees run-create's stdout). It (1) revives the EXISTING-but-
+# Two writers produce the map. (a) A PostToolUse-Bash hook: it runs in the daemon (so
+# ctx carries the correct app-level session_id) AND the SDK hands it the Bash
+# tool_response (so it sees run-create's stdout). (b) `run-create` itself, keyed on
+# SWARM_APP_SESSION_ID — the daemon injects the SAME app-level id into the agent's
+# env, unlike CLAUDE_CODE_SESSION_ID above — so the link holds even when run-create's
+# stdout is redirected and (a) sees nothing. The hook (1) revives the EXISTING-but-
 # -set-nowhere `_active_pipeline_run_id` consumer (read at the marker writer below +
 # the compaction briefing) and (2) persists a session_<sid>_run.map file into the
 # SAME _PIPELINE_AUDIT_DIR the gate already scans by session_id.
@@ -799,6 +803,46 @@ def _session_run_map_path(session_id: str) -> Path:
     (a session runs one pipeline at a time — sibling sessions get distinct ids).
     """
     return _PIPELINE_AUDIT_DIR / f"session_{session_id}_run.map"
+
+
+def write_session_run_map(session_id: str, run_id: str, ts: float | None = None) -> None:
+    """Atomically write the session->run rendezvous (tmp sibling + os.replace).
+
+    The ONE writer of the .map shape ``{session_id, run_id, ts}``: the PostToolUse hook
+    below (live, parses run-create stdout) and ``artifact_cli run-create`` itself (so a
+    run whose stdout was redirected is still linked) both call it. Raises on I/O
+    error; callers decide whether that is fatal."""
+    _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _session_run_map_path(session_id)
+    payload = json.dumps({"session_id": session_id, "run_id": run_id,
+                          "ts": time.time() if ts is None else ts})
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, dest)
+
+
+def read_session_run_map(session_id: str) -> "tuple[str, float] | None":
+    """``(run_id, ts)`` from the session's .map, or None (missing / corrupt / empty
+    run_id). Sync file I/O: async callers dispatch it off-loop. Never raises."""
+    try:
+        if not session_id:
+            return None
+        p = _session_run_map_path(session_id)
+        if not p.is_file():
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+        run_id = data.get("run_id")
+        if not (isinstance(run_id, str) and run_id.strip()):
+            return None
+        try:
+            ts = float(data.get("ts"))
+        except (TypeError, ValueError):
+            ts = 0.0
+        return run_id.strip(), ts
+    except Exception:  # noqa: BLE001 — attribution read must never break a hook
+        logger.debug("read_session_run_map: suppressed exception on a fail-safe path",
+                     exc_info=True)
+        return None
 
 
 def _extract_pipeline_id(tool_response: Any) -> Optional[str]:
@@ -881,18 +925,8 @@ def create_pipeline_run_mapping_hook(session_context: Optional[dict] = None):
 
         def _persist() -> None:
             try:
-                _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-                dest = _session_run_map_path(session_id)
-                payload = json.dumps({
-                    "session_id": session_id,
-                    "run_id": run_id,
-                    "ts": _now,
-                })
-                # Atomic: write a temp sibling then os.replace — a torn map read by
-                # the gate would be worse than a missing one.
-                tmp = dest.with_suffix(".map.tmp")
-                tmp.write_text(payload)
-                tmp.replace(dest)
+                # Atomic (a torn map read by the gate would be worse than a missing one).
+                write_session_run_map(session_id, run_id, ts=_now)
             except Exception as e:  # never break the hook path
                 logger.debug("pipeline_run_mapping: persist failed: %s", e)
 
@@ -1049,6 +1083,7 @@ def create_agent_tool_audit_hook(
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         session_id = ctx.get("sdk_session_id", "")
         run_id = ctx.get("_active_pipeline_run_id")
+        ctx_ts = ctx.get("_active_pipeline_run_id_ts")
 
         if not session_id and not run_id:
             return {}
@@ -1072,6 +1107,16 @@ def create_agent_tool_audit_hook(
             # record; splitting them would double hops and let a cancellation land
             # mid-record.
             def _classify_and_write() -> None:
+                # The run this marker belongs to: the NEWER of the session ctx and the
+                # session's .map. run-create writes the .map itself, so a run whose
+                # stdout was redirected (the PostToolUse hook saw nothing and ctx still
+                # names the previous run) still gets its own reviewers in the same turn.
+                owner = run_id
+                linked = read_session_run_map(session_id) if session_id else None
+                if linked is not None:
+                    known = float(ctx_ts) if isinstance(ctx_ts, (int, float)) else float("-inf")
+                    if not owner or linked[1] > known:
+                        owner = linked[0]
                 # Read the sub-agent's spawn-prompt head ONCE, UNCONDITIONALLY (R1.5b-i):
                 # it feeds BOTH adversarial-intent classification AND expert_id
                 # extraction. It MUST be read outside the `if not adversarial` branch —
@@ -1090,12 +1135,12 @@ def create_agent_tool_audit_hook(
                     adversarial = _is_adversarial_intent(agent_type, "", prompt_head)
 
                 # Write run-specific marker if run_id available (primary path)
-                if run_id:
-                    marker_file = _PIPELINE_AUDIT_DIR / f"{run_id}.marker"
+                if owner:
+                    marker_file = _PIPELINE_AUDIT_DIR / f"{owner}.marker"
                     marker_file.write_text(json.dumps({
                         "ts": ts,
                         "event": "SubagentStop",
-                        "run_id": run_id,
+                        "run_id": owner,
                         "session_id": session_id,
                     }))
 
@@ -1113,7 +1158,7 @@ def create_agent_tool_audit_hook(
                     "ts": ts,
                     "event": "SubagentStop",
                     "session_id": session_id,
-                    "run_id": run_id or "unknown",
+                    "run_id": owner or "unknown",
                     "expert_id": _extract_expert_id(prompt_head) if prompt_head else None,
                 }))
 
@@ -1135,7 +1180,7 @@ def create_agent_tool_audit_hook(
                         # run in the SAME session must not satisfy a requirement it did
                         # not review (Gate-1 cross-run finding). None/"unknown" when no
                         # pipeline run owns this session (manual adversarial spawn).
-                        "run_id": run_id or None,
+                        "run_id": owner or None,
                         # R1.5b-i: carry WHICH expert ran (structured), not just THAT an
                         # adversarial sub-agent ran — the D7 gate (R1.5b-ii) matches a
                         # run's declared required_experts against the expert_ids that

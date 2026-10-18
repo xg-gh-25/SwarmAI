@@ -103,6 +103,10 @@ def rig(tmp_path, monkeypatch):
         monkeypatch.setenv("SWARM_TEST_PYTHON", sys.executable)
         monkeypatch.setenv("SWARM_TEST_CACHE_DIR", str(tmp_path / "cache"))
         monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
+        # Nested runners started by these tests use ONE worker: once this file is split
+        # into concurrent chunks, each nested runner sizing itself to 4 workers
+        # oversubscribed the machine (run_1f81be36: 350 s summed at load 21 vs 70 s).
+        monkeypatch.setenv("SWARM_TEST_MAX_WORKERS", "1")
         return repo
     return make
 
@@ -1125,6 +1129,8 @@ def test_plugin_deselects_exact_nodeids_not_prefixes(tmp_path):
 
 
 def test_pytest_job_routes_deselect_tokens_to_the_plugin_not_argv(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("def t_ac():\n    pass\n")  # targets must exist
     ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
     job = pt._pytest_job(ctx, "j1", ["tests/test_a.py", "--deselect=tests/test_a.py::t_ac"],
                          tmp_path, False)
@@ -1235,3 +1241,8 @@ def test_heavy_file_with_history_splits_and_runs_each_test_once(rig, capsys, tmp
     hist = json.loads((cache / "durations.json").read_text())
     assert "backend/tests/test_big.py::test_new" in hist
     assert hist["backend/tests/test_big.py::test_t0"][0] < 100.0  # newest measurement wins
+
+
+def test_rig_caps_nested_runner_workers(rig):
+    rig()
+    assert pt._worker_count() == 1
