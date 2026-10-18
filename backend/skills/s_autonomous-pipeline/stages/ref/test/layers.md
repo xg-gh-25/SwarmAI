@@ -27,9 +27,19 @@ commands — `pipeline_test_gate` denies them.
 
 ### Layer 1 — AC-driven verification (`layers.ac_driven`)
 
-- Source: the BUILD artifact's `ac_coverage[].test` refs (`file.py::test_fn` or
-  `file.py`). The runner reads them itself; you no longer `discover --types changeset`
-  and build a `-k` expression.
+- Source: the BUILD artifact's `ac_coverage[].test` refs. The runner reads them itself;
+  you no longer `discover --types changeset` and build a `-k` expression. Three kinds,
+  separated by commas, semicolons or whitespace (so a ref itself contains no spaces):
+  - backend: `file.py::test_fn` or `file.py` — run by pytest;
+  - desktop: a vitest file, `desktop/src/.../X.test.tsx` (or `src/...`, or a bare name
+    that is unique under `desktop/src`) — FILE-level only, because vitest test names
+    contain spaces; it runs in the same vitest job and passes when >=1 of its tests
+    passed and none failed. `file::name` is rejected with a warning;
+  - probe: `probe:<name>` — passes only if `evidence/probes/<name>.json` converged with
+    zero findings in its latest executed round, that round exited 0, AND it converged on
+    this run's current changed files
+    (run the probe WITHOUT `--files`). A probe run on a narrower file set, or any edit
+    to the changed files after it converged, fails it: re-run the probe.
 - Why: BUILD claims "AC1 is tested by test_foo". This layer verifies the claim by
   running test_foo. Fabricated coverage (impl exists, test does not pass) fails here.
 - `warnings[]` containing `ac_coverage test ref not found: <ref>` means BUILD declared
