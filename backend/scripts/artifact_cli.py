@@ -2189,7 +2189,9 @@ def _try_write_speed_profile(project: str, run_id: str) -> None:
         run_dir = _run_dir(project, run_id)
         run_state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         lo, hi = prp.run_window(run_state)
-        prp.write_metrics(run_dir, prp.profile_run(run_state, prp.find_run_transcripts(run_id, lo, hi)))
+        recorded = run_state.get("transcripts") if isinstance(run_state.get("transcripts"), list) else []
+        prp.write_metrics(run_dir, prp.profile_run(
+            run_state, prp.find_run_transcripts(run_id, lo, hi, recorded_ids=recorded), run_dir=run_dir))
     except Exception as exc:  # noqa: BLE001 — telemetry must never fail a completion
         print(json.dumps({"warning": f"speed profile skipped: {type(exc).__name__}: {exc}"}),
               file=sys.stderr)
@@ -5853,14 +5855,27 @@ def _report_commit_stats(commits):
 
 
 def _report_tokens_label(usage: dict) -> str:
-    """REPORT header **Tokens:** value for a ``run_token_usage`` dict: the measured
-    total plus the same coverage caveats the chat summary's ``_usage_label`` shows
-    (不含当前一轮 / 含建 run 前的同一轮). A legacy dict without the flags renders
-    with no caveat."""
+    """REPORT header **Tokens:** value for a ``measured_run_usage`` dict. A transcript
+    measurement (``source="transcript"``) shows the per-response total and the
+    settled dollar figure only when turn rows supplied one; a ``run_token_usage``
+    dict shows its total plus the same coverage caveats the chat summary's
+    ``_usage_label`` shows (不含当前一轮 / 含建 run 前的同一轮). A legacy dict
+    without the flags renders with no caveat."""
     tokens = usage.get("tokens")
     if tokens is None:
         tokens = sum(int(usage.get(k) or 0) for k in
                      ("input_tokens", "output_tokens", "cache_creation_tokens"))
+    if usage.get("source") == "transcript":
+        # measured_run_usage: tokens per response; dollars only if turn rows settled some
+        cost = ""
+        if usage.get("cost_usd") is not None:
+            cnotes = [n for n, on in (
+                ("excludes the turn in flight", usage.get("cost_excludes_current_turn")),
+                ("includes the pre-run part of the creating turn", usage.get("cost_includes_prerun")))
+                if on]
+            cost = f"; ${float(usage['cost_usd']):.2f} settled" + (f", {', '.join(cnotes)}" if cnotes else "")
+        return (f"{int(tokens):,} (measured per response, "
+                f"cache read {int(usage.get('cache_read_tokens') or 0):,}{cost})")
     notes = []
     if usage.get("excludes_current_turn") is True:
         notes.append("不含当前一轮 / excludes the turn in flight")
@@ -6043,17 +6058,15 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
 
     # Total token cost (sum all stages)
     total_token_cost = sum(s.get("token_cost", 0) for s in stages)
-    # E4: measured usage from token_usage when the run is linked to its session;
-    # otherwise the stage sum, labelled as an estimate.
-    # run_token_usage (not the strict window): it also takes the turn in flight at
-    # completed_at and flags what the figure covers, the same caveats as the chat
-    # summary's _usage_label.
+    # E4: measured usage, the same source as the chat summary (measured_run_usage):
+    # tokens per response from the run's recorded CLI transcripts, so a run whose
+    # turn is still in flight is measured; the settled dollar figure from the
+    # token_usage turn rows when any exist. Nothing measured → the stage sum,
+    # labelled as an estimate.
     tokens_label = f"{total_token_cost:,} (估算 / estimate)"
     try:
-        from core.run_delivery_summary import run_token_usage
-        _usage = run_token_usage(
-            run_state.get("session_id"), run_state.get("created_at"),
-            run_state.get("completed_at") or run_state.get("updated_at"))
+        from core.run_delivery_summary import measured_run_usage
+        _usage = measured_run_usage(run_state)
         if _usage:
             tokens_label = _report_tokens_label(_usage)
     except Exception as exc:  # noqa: BLE001 — the report must render without usage data
@@ -7991,6 +8004,30 @@ def _write_run_atomic(run_file: Path, data: dict) -> None:
     os.replace(tmp, run_file)
 
 
+def _record_transcript_id(run_state: dict) -> bool:
+    """Append this CLI process's session id (``CLAUDE_CODE_SESSION_ID``, the SDK
+    transcript's file stem) to run.json ``transcripts[]``; True when it was added.
+
+    The stage commands call it, so the run names every transcript that worked on it
+    (a resume starts a new one) and token measurement / the speed profiler read
+    exactly those files instead of guessing ownership from command text. A
+    different namespace from ``session_id`` (the APP session) — never stored there.
+    An id that is not an SDK session id is ignored, so it can never become a path."""
+    try:
+        from core.transcript_usage import MAX_TRANSCRIPT_IDS, valid_session_id
+    except Exception:  # noqa: BLE001 — telemetry never fails a stage
+        return False
+    sid = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    if not valid_session_id(sid):
+        return False
+    ids = run_state.get("transcripts")
+    ids = [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+    if sid in ids or len(ids) >= MAX_TRANSCRIPT_IDS:
+        return False
+    run_state["transcripts"] = ids + [sid]
+    return True
+
+
 def _set_stage_timing(run_state: dict, stage: str, key: str, ts: str) -> None:
     """C4: set run.json["stage_timing"][stage][key], MERGING with whatever
     run-observe (or an earlier call) already wrote — never clobber other keys."""
@@ -8093,18 +8130,29 @@ def _read_run_evidence(run_dir: Path, rel: str, run_id: str) -> "dict | None":
     return data
 
 
-def _measure_stage_tokens(session_id, start_iso, end_iso) -> "dict | None":
-    """C5: measured token usage for the stage window, or None when unavailable
-    (no session id / no start / SA-D's module absent / it returns None).
+def _measure_stage_tokens(session_id, start_iso, end_iso, transcripts=None) -> "dict | None":
+    """C5: measured token usage for the stage window, or None when unavailable.
 
-    LIMITATION (turn granularity): ``token_usage`` rows are stamped when a TURN
-    ends, and stages usually start and end inside one turn. This strict window
-    therefore counts only the turns that closed inside the stage — the turn in
-    flight at ``end_iso`` is missing and a turn spanning several stages is
-    credited to whichever stage window holds its end stamp. The per-stage figure
-    is indicative only; the run-level REPORT/summary use ``run_token_usage``,
-    which labels what it covers."""
-    if not (session_id and start_iso and end_iso):
+    First source: the run's recorded CLI transcripts (``transcripts`` = run.json
+    ``transcripts[]``), summed per API response inside the window, sub-agents
+    included (``core.transcript_usage``) — exact even though the stage starts and
+    ends inside one turn. Fallback: ``token_usage`` rows, which are stamped when a
+    TURN ends, so that strict window counts only turns that closed inside the stage
+    (usually none) and credits a multi-stage turn to whichever window holds its end
+    stamp. None when neither measures anything (no start, no id, module absent)."""
+    if not (start_iso and end_iso):
+        return None
+    if transcripts:
+        try:
+            from core.transcript_usage import resolve_transcripts, usage_in_window
+            lo = datetime.fromisoformat(str(start_iso).replace("Z", "+00:00")).timestamp()
+            hi = datetime.fromisoformat(str(end_iso).replace("Z", "+00:00")).timestamp()
+            usage = usage_in_window(resolve_transcripts(transcripts), lo, hi)
+            if usage:
+                return usage
+        except Exception:  # noqa: BLE001 — telemetry never fails a stage
+            pass
+    if not session_id:
         return None
     try:
         from core.run_delivery_summary import token_usage_for_window
@@ -8388,7 +8436,8 @@ def _derive_stage_fields(
     # token_cost — C5 measured window, else estimate/unavailable.
     timing = (run_state.get("stage_timing") or {}).get(stage) or {}
     usage = _measure_stage_tokens(run_state.get("session_id"),
-                                  timing.get("started_at"), timing.get("completed_at"))
+                                  timing.get("started_at"), timing.get("completed_at"),
+                                  transcripts=run_state.get("transcripts"))
     derived["token_cost"] = _apply_token_cost(cand_rec, record_in.get("token_cost"), usage)
 
     # exit criteria — judged at build / test / deliver.
@@ -8619,6 +8668,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         cand_rec["artifact_id"] = _PENDING_ARTIFACT_ID
 
     cand_run = copy.deepcopy(run_state)
+    _record_transcript_id(cand_run)  # so this stage's own transcript is measured
     _set_stage_timing(cand_run, stage, "completed_at", now)
     derived, exit_result = _derive_stage_fields(
         project=project, run_id=run_id, run_dir=run_dir, run_state=cand_run, stage=stage,
@@ -8685,6 +8735,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
             cand_rec["artifact_id"] = artifact_id
         fresh = json.loads(run_file.read_text(encoding="utf-8"))  # re-read: a sibling writer
         fresh.setdefault("stages", [])
+        _record_transcript_id(fresh)
         _set_stage_timing(fresh, stage, "completed_at", now)
         _replace_stage_record(fresh["stages"], cand_rec)
         if stage == "deliver":
@@ -9215,6 +9266,10 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
     # after the stage completed begins a new window.
     timing = (run_state.get("stage_timing") or {}).get(stage)
     timing = timing if isinstance(timing, dict) else {}
+    # Ride along on the started_at write below. A re-entry writes nothing: adding a
+    # telemetry id there would be a new unlocked read-modify-write that could undo a
+    # concurrent cancel; stage-complete records the id in the write it does anyway.
+    _record_transcript_id(run_state)
     if not timing.get("started_at") or timing.get("completed_at"):
         _prev_t = (run_state.get("stage_timing") or {}).get(stage) or {}
         if isinstance(_prev_t, dict) and _prev_t.get("started_at") and not _prev_t.get("first_started_at"):

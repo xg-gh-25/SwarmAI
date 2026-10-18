@@ -12,7 +12,11 @@ Public symbols:
   the END of a turn, so the window is extended to the turn that was in flight at
   ``completed_at`` and the result says what it covers (``complete``,
   ``excludes_current_turn``, ``includes_prerun``).
-- ``capture_intent``         — the user message that started the run (skips injected
+- ``measured_run_usage``     — what the summary and REPORT header show: tokens per
+  response from the run's recorded CLI transcripts (core.transcript_usage), measured
+  even while the run's turn is in flight, plus the settled dollar figure from
+  ``run_token_usage``; falls back to ``run_token_usage`` with no transcript.
+- ``capture_intent``       — the user message that started the run (skips injected
   meta blocks, explicit acks like "继续", and option picks like "选 A").
 - ``file_changes``           — per-file A/M/D/R status, +/− lines and diff base ref
   from ``git show`` of the run's commits (fallback: files_touched + worktree state,
@@ -255,6 +259,66 @@ def run_token_usage(session_id, start_iso, end_iso, db_path=None,
         "includes_prerun": True,  # the first counted turn always spans created_at
     })
     return usage
+
+
+def _transcript_run_usage(rs: dict) -> Optional[dict]:
+    """Per-response usage of the run window from the run's recorded CLI transcripts
+    (run.json ``transcripts[]``), or None. Only recorded ids are read: the current
+    process's own transcript may belong to a session rendering ANOTHER run.
+
+    The window ends at ``completed_at``; a run still ``running`` (a summary or REPORT
+    rendered from inside its completing turn) ends at now; any other run without
+    ``completed_at`` (paused, failed, abandoned) ends at ``updated_at`` — never now,
+    or the session's later chat and runs would be counted into it. Only a
+    ``completed_at`` end is reported as ``complete``."""
+    ids = rs.get("transcripts")
+    if not isinstance(ids, list) or not ids:
+        return None
+    start = _parse_ts(rs.get("created_at"), naive_is_local=False)
+    if start is None:
+        return None
+    end = _parse_ts(rs.get("completed_at"), naive_is_local=False)
+    complete = end is not None
+    if end is None:
+        end = (datetime.now(timezone.utc) if rs.get("status") == "running"
+               else _parse_ts(rs.get("updated_at"), naive_is_local=False))
+    if end is None:
+        return None
+    try:
+        from core.transcript_usage import resolve_transcripts, usage_in_window
+        usage = usage_in_window(resolve_transcripts(ids), start.timestamp(), end.timestamp())
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks a summary
+        logger.debug("transcript usage unavailable: %s", exc)
+        return None
+    if usage:
+        usage["complete"] = complete
+    return usage
+
+
+def measured_run_usage(run_state: Any, db_path=None, turn_end_iso=None) -> Optional[dict]:
+    """The run's measured usage for the chat summary and the REPORT header.
+
+    Tokens come from the CLI transcript, response by response, so a run whose turn
+    is still in flight is measured in full (``source="transcript"``; ``complete`` is
+    True only when the window ended at ``completed_at``, see ``_transcript_run_usage``
+    for the end bound). The transcript has no price: ``cost_usd`` is the settled
+    figure from ``run_token_usage`` (turn-end rows), with what it covers in
+    ``cost_excludes_current_turn`` / ``cost_includes_prerun``, or None when no row
+    exists yet. Without a recorded transcript this is exactly ``run_token_usage``."""
+    rs = _d(run_state)
+    db = run_token_usage(rs.get("session_id"), rs.get("created_at"),
+                         rs.get("completed_at") or rs.get("updated_at"),
+                         db_path=db_path, turn_end_iso=turn_end_iso)
+    tx = _transcript_run_usage(rs)
+    if not tx:
+        return db
+    out = dict(tx)
+    out.update({"excludes_current_turn": False, "includes_prerun": False,
+                "cost_usd": db.get("cost_usd") if db else None})
+    if db:
+        out["cost_excludes_current_turn"] = bool(db.get("excludes_current_turn"))
+        out["cost_includes_prerun"] = bool(db.get("includes_prerun"))
+    return out
 
 
 # ── E1: initial intent ───────────────────────────────────────────────────────
@@ -706,10 +770,19 @@ def _header(run_state: dict, usage: Optional[dict], stage_gaps, estimate_tokens)
 
 def _usage_label(usage: dict) -> str:
     """Measured-usage label that says what it covers (``run_token_usage`` flags).
-    A legacy dict without the flags renders as before (treated as complete)."""
-    cost = f"${float(usage.get('cost_usd') or 0):.2f}"
+    A legacy dict without the flags renders as before (treated as complete).
+    A transcript measurement (``source="transcript"``) leads with the tokens and adds
+    the settled dollar figure only when turn rows supplied one."""
     detail = (f"输出 {_human(usage.get('output_tokens'))} tokens · "
               f"缓存读 {_human(usage.get('cache_read_tokens'))}")
+    if usage.get("source") == "transcript":
+        tail = ""
+        if usage.get("cost_usd") is not None:
+            notes = [n for n, on in (("不含当前一轮", usage.get("cost_excludes_current_turn")),
+                                     ("含建 run 前的同一轮", usage.get("cost_includes_prerun"))) if on]
+            tail = f" · 已结算 ${float(usage['cost_usd']):.2f}" + (f"（{'，'.join(notes)}）" if notes else "")
+        return f"💰 {_human(usage.get('tokens'))} tokens（{detail}{tail}）"
+    cost = f"${float(usage.get('cost_usd') or 0):.2f}"
     notes = []
     if usage.get("excludes_current_turn") is True:
         notes.append("不含当前一轮")
@@ -1061,8 +1134,9 @@ def build_delivery_summary(run_state, artifacts: dict, run_dir: Path, repo_root:
     error yields a minimal block (run id, status, REPORT link).
 
     ``repo_root`` may be None (non-SwarmAI project): files resolve per their own repo.
-    Usage comes from ``run_token_usage`` (``turn_end_iso`` optionally extends the end
-    bound); the stage-sum "估算" is used only when nothing is measured."""
+    Usage comes from ``measured_run_usage`` (transcript tokens, settled cost from
+    ``run_token_usage``; ``turn_end_iso`` optionally extends that end bound); the
+    stage-sum "估算" is used only when nothing is measured."""
     report_path: Any = ""
     try:
         report_path = str((Path(run_dir) / "REPORT.md").resolve())
@@ -1073,9 +1147,7 @@ def build_delivery_summary(run_state, artifacts: dict, run_dir: Path, repo_root:
         rs = _d(run_state)
         arts = _d(artifacts)
         run_dir = Path(run_dir)
-        usage = run_token_usage(rs.get("session_id"), rs.get("created_at"),
-                                rs.get("completed_at") or rs.get("updated_at"),
-                                db_path=db_path, turn_end_iso=turn_end_iso)
+        usage = measured_run_usage(rs, db_path=db_path, turn_end_iso=turn_end_iso)
         changes = file_changes(_l(rs.get("commits")), _l(rs.get("files_touched")), repo_root)
         return render_delivery_summary_md(
             rs, _unwrap(arts.get("evaluate")), _unwrap(arts.get("deliver")),

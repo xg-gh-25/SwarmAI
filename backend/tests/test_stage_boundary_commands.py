@@ -76,8 +76,11 @@ PROJECT = "TestProject"
 
 @pytest.fixture
 def ws(tmp_path, monkeypatch):
-    """A tmp workspace with one project; returns (root, registry)."""
+    """A tmp workspace with one project; returns (root, registry). The CLI session id
+    the test process inherits is cleared, so stage commands never record — or measure
+    tokens from — the transcript of the session running the tests."""
     monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     (tmp_path / "Projects" / PROJECT / ".artifacts").mkdir(parents=True)
     return tmp_path, ArtifactRegistry(tmp_path)
 
@@ -1564,3 +1567,121 @@ def test_stage_budget_counts_from_the_runner_run_index(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_iso_epoch", lambda s: now - 3600 if s else None)
     b = cli._stage_budget("r", tmp_path, state, "test", {})
     assert b["test_runs"] == {"recheck": 1, "verify": 5} and b["auto_rechecks"] == 1
+
+
+# ── transcript ids + per-response token cost (run_045b96b2) ─────────────────
+# token_usage gets one row per TURN end, and a pipeline run sits inside one turn,
+# so a stage window used to hold no row and every stage read "unavailable". The
+# stage commands now record the CLI session id (CLAUDE_CODE_SESSION_ID) in
+# run.json transcripts[] and measure the window from that transcript first.
+
+TX_SID = "0d206ebe-9c4f-40ee-875a-491716e326b8"
+TX_SID2 = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture
+def cli_cfg(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", TX_SID)
+    return tmp_path / "claude" / "projects" / "-ws"
+
+
+def _no_db_usage(monkeypatch):
+    mod = types.ModuleType("core.run_delivery_summary")
+    mod.token_usage_for_window = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "core.run_delivery_summary", mod)
+
+
+def test_stage_commands_record_the_transcript_id(ws, capsys, cli_cfg, monkeypatch):
+    root, reg = ws
+    rid = "run_txid"
+    _make_run(root, rid, "direct")
+    assert _start(reg, capsys, rid, "plan")[0] == 0
+    assert _start(reg, capsys, rid, "plan")[0] == 0           # re-entry: no duplicate
+    assert _run_state(root, rid)["transcripts"] == [TX_SID]
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", TX_SID2)     # resumed in a new CLI session
+    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
+    assert code == 0, out
+    assert _run_state(root, rid)["transcripts"] == [TX_SID, TX_SID2]
+    assert _run_state(root, rid).get("session_id") is None   # never the app-session field
+
+
+@pytest.mark.parametrize("bad", ["../etc/passwd", "a/b", "*", ""])
+def test_malformed_session_id_is_not_recorded(ws, capsys, cli_cfg, monkeypatch, bad):
+    root, reg = ws
+    rid = "run_txbad"
+    _make_run(root, rid, "direct")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", bad)
+    assert _start(reg, capsys, rid, "plan")[0] == 0
+    assert not _run_state(root, rid).get("transcripts")
+
+
+def test_token_cost_measured_from_the_transcript(ws, capsys, cli_cfg, monkeypatch):
+    root, reg = ws
+    rid = "run_txcost"
+    _make_run(root, rid, "direct", session_id="sess_1",
+              stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
+    cli_cfg.mkdir(parents=True)
+    usage = {"input_tokens": 3, "output_tokens": 40, "cache_read_input_tokens": 5000,
+             "cache_creation_input_tokens": 700}
+    (cli_cfg / f"{TX_SID}.jsonl").write_text("\n".join(json.dumps(r) for r in [
+        {"type": "assistant", "timestamp": "2025-12-31T23:59:00Z", "message": {"id": "m0", "usage": usage}},
+        {"type": "assistant", "timestamp": "2026-01-01T00:05:00Z", "message": {"id": "m1", "usage": usage}},
+        {"type": "assistant", "timestamp": "2026-01-01T00:05:01Z", "message": {"id": "m1", "usage": usage}},
+    ]) + "\n", encoding="utf-8")
+    _no_db_usage(monkeypatch)                                 # no turn row in the window
+    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
+    assert code == 0, out
+    rec = cli._stage_record_of(_run_state(root, rid), "plan")
+    assert rec["token_cost_source"] == "measured" and rec["token_cost"] == 3 + 40 + 700
+    assert rec["token_usage"]["source"] == "transcript" and rec["token_usage"]["responses"] == 1
+
+
+def test_token_cost_falls_back_without_a_transcript(ws, capsys, cli_cfg, monkeypatch):
+    root, reg = ws
+    rid = "run_txnone"
+    _make_run(root, rid, "direct", session_id="sess_1",
+              stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
+    _no_db_usage(monkeypatch)                                 # transcript file absent too
+    code, out = _complete(reg, capsys, rid, "plan", _plan_artifact(), {"decisions": DECISION})
+    assert code == 0, out
+    assert cli._stage_record_of(_run_state(root, rid), "plan")["token_cost_source"] == "unavailable"
+
+
+def test_report_tokens_label_for_transcript_usage():
+    tx = {"source": "transcript", "tokens": 1234567, "cache_read_tokens": 9_000_000,
+          "cost_usd": None}
+    assert cli._report_tokens_label(tx) == "1,234,567 (measured per response, cache read 9,000,000)"
+    settled = {**tx, "cost_usd": 12.5, "cost_excludes_current_turn": True}
+    label = cli._report_tokens_label(settled)
+    assert label.startswith("1,234,567 (measured per response, cache read 9,000,000; ")
+    assert "$12.50 settled" in label and "excludes the turn in flight" in label
+    assert "估算" not in label
+
+
+def test_stage_start_reentry_from_a_new_session_keeps_concurrent_writes(ws, capsys, cli_cfg, monkeypatch):
+    """A re-entry whose only change would be a new transcript id writes NOTHING, so a
+    field another writer (e.g. a cancel) saves meanwhile survives; the id is recorded
+    by stage-complete's own write instead."""
+    root, reg = ws
+    rid = "run_txreentry"
+    _make_run(root, rid, "direct")
+    assert _start(reg, capsys, rid, "plan")[0] == 0
+    real_record = cli._record_transcript_id
+    calls = []
+
+    def _concurrent_write(state):          # 1st call: run.json already loaded, not yet written
+        if not calls:
+            st = _run_state(root, rid)
+            st["status"] = "cancelled"
+            (_run_dir(root, rid) / "run.json").write_text(json.dumps(st), encoding="utf-8")
+        calls.append(1)
+        return real_record(state)
+
+    monkeypatch.setattr(cli, "_record_transcript_id", _concurrent_write)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", TX_SID2)
+    assert _start(reg, capsys, rid, "plan")[0] == 0
+    st = _run_state(root, rid)
+    assert st["status"] == "cancelled"             # the concurrent cancel is not undone
+    assert st["transcripts"] == [TX_SID]           # not written on re-entry
+    # (stage-complete recording the new id: test_stage_commands_record_the_transcript_id)

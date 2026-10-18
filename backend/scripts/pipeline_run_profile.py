@@ -48,6 +48,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/
 
+# One locator for transcripts and their sub-agent files, shared with artifact_cli's
+# token measurement (core/transcript_usage); find_subagent_transcripts is re-exported.
+from core.transcript_usage import find_subagent_transcripts, resolve_transcripts  # noqa: E402
+
 # ── command classification ──────────────────────────────────────────────────
 _BOOK_RE = re.compile(
     r"artifact_cli|pipeline_validator|spawn_prompt|confidence_score|\.artifacts/runs"
@@ -55,7 +59,12 @@ _BOOK_RE = re.compile(
 )
 _TEST_RE = re.compile(
     r"\bpytest\b|vitest|\btsc\b|eslint|npm run build|vite build|ci_eval_gate"
+    r"|python[\w.]*\s+(?:-\S+\s+)*\S*pipeline_test\.py\b"
 )
+# The pipeline's single test runner, as an INVOCATION (python … pipeline_test.py):
+# a grep/sed/cat of the file is not a test run. Its executions are counted from
+# the run's evidence (``runner_executions``), its wall time from the command's span.
+_RUNNER_RE = re.compile(r"python[\w.]*\s+(?:-\S+\s+)*\S*pipeline_test\.py\b")
 _EDIT_RE = re.compile(r"<<|\.write_text|open\([^)]*['\"]w|sed -i|cat >")
 _GIT_RE = re.compile(r"(?:^|[\s;&|(])git\s")
 
@@ -85,8 +94,12 @@ MECHANICAL_JOBS: tuple[tuple[str, re.Pattern], ...] = tuple(
 # Pipeline WRITE verbs: a session that runs one of these with --run-id <run>
 # owns (part of) the run. Reads (run-get, schema, discover) do not count.
 _WRITE_VERB_RE = re.compile(
-    r"artifact_cli\.py\s+(?:publish|run-update|advance|run-commit|run-report|run-checkpoint)\b"
+    r"artifact_cli\.py\s+(?:publish|run-update|advance|run-commit|run-report|run-checkpoint"
+    r"|stage-start|stage-complete)\b"
 )
+# ``R=run_x`` / ``RUN='run_x'`` shell assignments, so ``--run-id $R`` can be resolved.
+_ASSIGN_RE = re.compile(r"""^\s*(?:export\s+)?([A-Za-z_]\w*)=(['"]?)([A-Za-z0-9_-]+)\2\s*$""")
+_VAR_RUN_ID_RE = re.compile(r"""--run-id[ =]+(['"]?)\$\{?([A-Za-z_]\w*)\}?\1(?![\w-])""")
 _TEST_TARGET_RE = re.compile(r"(?:tests/|src/)[\w/.-]+\.(?:py|tsx?)")
 _CLI_SOURCE_RE = re.compile(r"(?:artifact_cli|pipeline_validator)\.py")
 _PIPELINE_DOC_RE = re.compile(
@@ -107,6 +120,8 @@ def classify_command(name: str, tool_input: dict) -> str:
     if name != "Bash":
         return "other"
     cmd = str((tool_input or {}).get("command") or "")
+    if _RUNNER_RE.search(cmd):
+        return "test-build"  # before bookkeeping: a runner call often also reads run files
     if _BOOK_RE.search(cmd):
         return "pipeline-bookkeeping"
     if _TEST_RE.search(cmd):
@@ -173,12 +188,15 @@ def _transcript_base() -> str:
     return os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
 
 
-def find_run_transcripts(run_id: str, lo: float, hi: float, base: str | None = None) -> list[str]:
+def find_run_transcripts(run_id: str, lo: float, hi: float, base: str | None = None,
+                         recorded_ids=()) -> list[str]:
     """Top-level transcripts that issued a pipeline WRITE command for ``run_id``
-    inside ``[lo, hi]``. Sub-agent files (``agent-*.jsonl`` / ``subagents/``) are
-    excluded: their work is already counted as the parent's Agent call time."""
+    inside ``[lo, hi]``, plus the transcripts of ``recorded_ids`` (the CLI session
+    ids artifact_cli records in run.json ``transcripts[]``; anything that is not an
+    SDK session id is ignored). Sub-agent files (``agent-*.jsonl`` / ``subagents/``)
+    are excluded: their work is already counted as the parent's Agent call time."""
     base = base or _transcript_base()
-    owners = []
+    owners = list(resolve_transcripts(recorded_ids or []))
     for path in glob.glob(os.path.join(base, "projects", "**", "*.jsonl"), recursive=True):
         if os.path.basename(path).startswith("agent-") or f"{os.sep}subagents{os.sep}" in path:
             continue
@@ -193,7 +211,7 @@ def find_run_transcripts(run_id: str, lo: float, hi: float, base: str | None = N
                         break
         except OSError:
             continue
-    return sorted(owners)
+    return sorted(dict.fromkeys(owners))
 
 
 def _line_owns_run(line: str, run_id: str, lo: float, hi: float) -> bool:
@@ -213,14 +231,25 @@ def _line_owns_run(line: str, run_id: str, lo: float, hi: float) -> bool:
 
 def command_writes_run(command: str, run_id: str) -> bool:
     """True iff ONE ``artifact_cli.py`` invocation in ``command`` is a write verb
-    carrying ``--run-id <run_id>`` (quoted or not). The verb and the id must sit
+    carrying ``--run-id <run_id>`` (quoted or not), or ``--run-id $VAR`` /
+    ``${VAR}`` where an EARLIER segment of the same command assigned
+    ``VAR=<run_id>`` (the latest assignment wins). The verb and the id must sit
     in the same pipeline segment, so ``run-get --run-id A && publish --run-id B``
     does not credit A."""
     needle = re.compile(r"--run-id[ =]+['\"]?" + re.escape(run_id) + r"(?![\w-])")
-    return any(
-        _WRITE_VERB_RE.search(seg) and needle.search(seg)
-        for seg in re.split(r"&&|\|\||;|\||\n", command)
-    )
+    shell_vars: dict[str, str] = {}
+    for seg in re.split(r"&&|\|\||;|\||\n", command):
+        assign = _ASSIGN_RE.match(seg)
+        if assign:
+            shell_vars[assign.group(1)] = assign.group(3)
+            continue
+        if not _WRITE_VERB_RE.search(seg):
+            continue
+        if needle.search(seg):
+            return True
+        if any(shell_vars.get(v.group(2)) == run_id for v in _VAR_RUN_ID_RE.finditer(seg)):
+            return True
+    return False
 
 
 def _input(block: dict) -> dict:
@@ -343,15 +372,6 @@ _EXPERT_ID_PREFIX_RE = re.compile(r"^EXPERT-ID:.*$", re.M)
 _PLANNED_STAGES = ("review", "deliver")  # stages stage-start writes a dispatch_plan for
 
 
-def find_subagent_transcripts(transcripts: list[str]) -> list[str]:
-    """Sub-agent files of the owning transcripts: ``<owner stem>/subagents/agent-*.jsonl``."""
-    out: list[str] = []
-    for owner in dict.fromkeys(transcripts):
-        if owner.endswith(".jsonl"):
-            out.extend(sorted(glob.glob(os.path.join(owner[:-len(".jsonl")], "subagents", "agent-*.jsonl"))))
-    return out
-
-
 def _prompt_text(rec: dict) -> str:
     content = _message(rec).get("content")
     if isinstance(content, str):
@@ -450,8 +470,68 @@ def run_window(run_state: dict) -> tuple[float, float]:
     return lo, max(lo, hi)
 
 
-def profile_run(run_state: dict, transcripts: list[str]) -> dict:
-    """Speed profile of one run from its owning transcripts (see module docstring)."""
+_EVIDENCE_FILE_RE = re.compile(r"^([a-z]+)-\d{8}T\d{6}\.json$")
+
+
+def _is_overlay(ev: dict) -> bool:
+    """A recheck laid over verify/regression evidence: a rewrite, not another run.
+    On disk only ``pipeline_test._overlay_evidence`` writes ``rechecked_from`` into
+    an evidence file, and it keeps the BASE mode, so a non-recheck file carrying it
+    is an overlay. (``overlaid_onto`` is NOT a marker: it is set on the recheck
+    RUN's output after its file is written, and never reaches an evidence file.)"""
+    return bool(ev.get("rechecked_from")) and ev.get("mode") != "recheck"
+
+
+def runner_executions(run_dir: "Path | None") -> dict:
+    """Test-runner executions of a run, from ``evidence/tests``.
+
+    ``run_index.json`` is the authority (append-only, never pruned; ``kind=run``
+    entries, cache hits included and also counted under ``cached``; ``overlay``
+    entries are rewrites). Timestamped ``<mode>-<stamp>.json`` files no index entry
+    names are added — runs from before the index existed — minus overlays.
+    Retention keeps only the newest few such files per mode, so for a run with no
+    index the count is a lower bound; ``sources`` says where each count came from."""
+    out = {"executions": 0, "cached": 0, "by_mode": {},
+           "sources": {"run_index": 0, "evidence_files": 0}}
+    tdir = Path(run_dir) / "evidence" / "tests" if run_dir else None
+    if tdir is None or not tdir.is_dir():
+        return out
+    by_mode: collections.Counter = collections.Counter()
+    named: set = set()
+    try:
+        index = json.loads((tdir / "run_index.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        index = []
+    for e in index if isinstance(index, list) else []:
+        if not isinstance(e, dict):
+            continue
+        named.add(str(e.get("evidence") or ""))
+        if e.get("kind") != "run":
+            continue
+        out["sources"]["run_index"] += 1
+        out["cached"] += 1 if e.get("cached") else 0
+        by_mode[str(e.get("mode") or "?")] += 1
+    for f in sorted(tdir.iterdir()):
+        m = _EVIDENCE_FILE_RE.match(f.name)
+        if not m or f.name in named or not f.is_file():
+            continue
+        try:
+            ev = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(ev, dict) or _is_overlay(ev):
+            continue
+        out["sources"]["evidence_files"] += 1
+        out["cached"] += 1 if ev.get("cached") else 0
+        by_mode[str(ev.get("mode") or m.group(1))] += 1
+    out["by_mode"] = dict(by_mode)
+    out["executions"] = sum(by_mode.values())
+    return out
+
+
+def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" = None) -> dict:
+    """Speed profile of one run from its owning transcripts (see module docstring).
+    ``run_dir`` adds the test-runner executions recorded in the run's evidence."""
     lo, hi = run_window(run_state)
     records: list[dict] = []
     seen: set = set()
@@ -484,7 +564,9 @@ def profile_run(run_state: dict, transcripts: list[str]) -> dict:
                 jobs[job] += 1
                 job_secs[job] += secs
             if _TEST_RE.search(cmd) and "ci_eval_gate" not in cmd:
-                kind = "pytest" if "pytest" in cmd else ("vitest" if "vitest" in cmd else "frontend-build")
+                kind = ("pipeline_test" if _RUNNER_RE.search(cmd) else
+                        "pytest" if "pytest" in cmd else
+                        "vitest" if "vitest" in cmd else "frontend-build")
                 test_kinds[kind] += 1
                 test_secs += secs
                 for target in set(_TEST_TARGET_RE.findall(cmd)):
@@ -504,6 +586,11 @@ def profile_run(run_state: dict, transcripts: list[str]) -> dict:
     contexts = [_context_tokens(r["usage"]) for r in responses.values() if r["usage"]]
     out_tokens = sum(int((r["usage"] or {}).get("output_tokens") or 0) for r in responses.values())
     top_target = test_targets.most_common(1)
+    runner = runner_executions(run_dir)
+    runner_cmds = test_kinds.get("pipeline_test", 0)
+    # One runner command can write several evidence entries (an automatic recheck),
+    # and a command can die before writing any: count what the runner recorded.
+    test_calls = sum(test_kinds.values()) - runner_cmds + (runner["executions"] or runner_cmds)
     return {
         "run_id": run_state.get("id"),
         "profile": run_state.get("profile"),
@@ -538,10 +625,18 @@ def profile_run(run_state: dict, transcripts: list[str]) -> dict:
         "cli_source_reads": cli_source_reads,
         "pipeline_doc_chars_read": doc_chars,
         "tests": {
-            "calls": sum(test_kinds.values()),
+            "calls": test_calls,
             "by_kind": dict(test_kinds),
             "exec_min": round(test_secs / 60, 1),
             "max_repeat": {"target": top_target[0][0], "runs": top_target[0][1]} if top_target else None,
+            "runner": runner,
+            # where each number came from: runner executions are the evidence's
+            # count when it has one, else the runner commands seen in the transcript
+            "sources": {
+                "calls": ("direct test commands + runner evidence" if runner["executions"]
+                          else "direct test commands + runner commands in the transcript"),
+                "exec_min": "transcript tool time of test commands",
+            },
         },
         "context_tokens": {"peak": max(contexts) if contexts else 0,
                            "p50": int(_pct(contexts, .5)) if contexts else 0},
@@ -610,7 +705,11 @@ def _render(p: dict) -> str:
         f" · artifact_cli/validator source reads {p['cli_source_reads']}"
         f" · gate denials {p['gate_denials']['total']} · exact duplicates {p['exact_duplicate_calls']}",
         f"tests {p['tests']['calls']} calls {p['tests']['by_kind']} {p['tests']['exec_min']} min"
-        f" · most repeated {p['tests']['max_repeat']}",
+        f" · most repeated {p['tests']['max_repeat']}"
+        f" · runner executions {(p['tests'].get('runner') or {}).get('executions', 0)}"
+        f" (cached {(p['tests'].get('runner') or {}).get('cached', 0)},"
+        f" {(p['tests'].get('runner') or {}).get('by_mode', {})},"
+        f" from {(p['tests'].get('runner') or {}).get('sources', {})})",
         "categories:",
     ]
     for name, c in p["categories"].items():
@@ -647,11 +746,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
         print(json.dumps({"error": f"cannot load run {args.run_id}: {exc}"}), file=sys.stderr)
         return 1
-    transcripts = args.transcript or find_run_transcripts(args.run_id, lo, hi)
+    recorded = run_state.get("transcripts") if isinstance(run_state.get("transcripts"), list) else []
+    transcripts = args.transcript or find_run_transcripts(args.run_id, lo, hi, recorded_ids=recorded)
     if not transcripts:
         print(json.dumps({"warning": f"no transcript issued a pipeline write for {args.run_id} "
                           "in its window; pass --transcript PATH to choose one"}), file=sys.stderr)
-    profile = profile_run(run_state, transcripts)
+    profile = profile_run(run_state, transcripts, run_dir=run_dir)
     if args.write_metrics:
         try:
             write_metrics(run_dir, profile)

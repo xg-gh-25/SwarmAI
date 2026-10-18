@@ -60,9 +60,13 @@ checkpoint comes only from a true-trigger reason) and `calibration_source` ("his
 "defaults").
 
 ### After each stage — `token_cost`
-`stage-complete` fills `token_cost` from the measured `token_usage` rows in the stage's time
-window (measured wins; else a `record.token_cost` you pass is kept as `token_cost_source:
-"estimate"`; else 0, `"unavailable"`). On the legacy `run-update --stage-json` path, estimate:
+`stage-complete` fills `token_cost` with measured usage inside the stage's time window. It reads
+the CLI transcript first: `stage-complete` (and `stage-start` on a first entry) records the
+session's transcript id in `run.json` `transcripts[]`, and the transcript logs usage per model
+response, so a stage that ends mid-turn is still measured. A session that only re-enters a stage
+and never runs `stage-complete` is not recorded, so its usage in that window is missed. If there is no usable transcript, it falls back to the
+per-turn `token_usage` rows. Measured wins either way; else a `record.token_cost` you pass is
+kept as `token_cost_source: "estimate"`; else 0, `"unavailable"`. On the legacy `run-update --stage-json` path, estimate:
 ```
 token_cost = base_stage_cost + (ddd_docs_read * 2000) + (artifacts_consumed * 3500)
            + (lines_of_code_changed * 50) + (test_count * 200) + (tool_calls * 1500)

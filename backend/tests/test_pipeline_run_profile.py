@@ -353,3 +353,108 @@ class TestSubagents:
         _sub(owner, "dsec", 1900, 2100, GATE2.format(eid="security"), 18, "Gate-2 security")
         text = prof._render(prof.profile_run(self._state(run_dir), [owner]))
         assert "sub-agents" in text and "Gate-2 security" in text and "over cap" in text
+
+
+# ── post-refactor runs: stage-start/stage-complete, $R ids, recorded transcripts,
+#    runner test executions (run_045b96b2) ─────────────────────────────────────
+class TestPostRefactorRuns:
+    @pytest.mark.parametrize("cmd,owns", [
+        ("artifact_cli.py stage-complete --project P --run-id run_abc --stage plan --data @f", True),
+        ("artifact_cli.py stage-start --project P --run-id run_abc --stage build", True),
+        ("R=run_abc; python artifact_cli.py stage-complete --project P --run-id $R --stage x", True),
+        ('R=run_abc; python artifact_cli.py run-update --run-id "$R" --profile bugfix', True),
+        ("RUN='run_abc' && artifact_cli.py stage-start --run-id ${RUN} --stage test", True),
+        ("R=run_abcd; artifact_cli.py stage-complete --run-id $R --stage x", False),   # other run
+        ("R=run_other; echo run_abc; artifact_cli.py stage-complete --run-id $R", False),
+        ("R=run_abc; artifact_cli.py run-get --run-id $R", False),                    # read only
+        ("artifact_cli.py stage-complete --run-id $R --stage x", False),              # R unassigned
+    ])
+    def test_command_writes_run_new_verbs_and_shell_variable(self, cmd, owns):
+        assert prof.command_writes_run(cmd, "run_abc") is owns
+
+    def test_recorded_transcript_ids_are_used(self, ws):
+        tmp, _ = ws
+        sid = "11111111-2222-3333-4444-555555555555"
+        # no pipeline write for the run in this file: only the recorded id selects it
+        rec = _write_jsonl(tmp / "claude" / "projects" / "-ws" / f"{sid}.jsonl", [
+            _use("u1", 10, "m1", "Bash", {"command": "ls"})])
+        lo, hi = prof._ts(T0), prof._ts(T_END)
+        assert prof.find_run_transcripts("run_abc", lo, hi) == []
+        assert prof.find_run_transcripts("run_abc", lo, hi, recorded_ids=[sid, "../x"]) == [rec]
+
+    def test_cli_uses_recorded_ids(self, ws, capsys):
+        tmp, run_dir = ws
+        sid = "11111111-2222-3333-4444-555555555555"
+        _write_jsonl(tmp / "claude" / "projects" / "-ws" / f"{sid}.jsonl", [
+            _use("u1", 10, "m1", "Bash", {"command": "ls"})])
+        state = json.loads((run_dir / "run.json").read_text())
+        state["transcripts"] = [sid]
+        (run_dir / "run.json").write_text(json.dumps(state), encoding="utf-8")
+        assert prof.main(["--run-id", "run_abc", "--project", "P", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["tool_calls"] == 1
+
+    def test_runner_is_a_test_command(self):
+        cmd = ("R=run_abc; perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python "
+               "backend/scripts/pipeline_test.py --project P --run-id $R --mode tdd "
+               "--files backend/tests/test_a.py > /tmp/o.json")
+        assert prof.classify_command("Bash", {"command": cmd}) == "test-build"
+        # reading or grepping the runner's source is not a test run
+        for read in ("grep -n _PLUGIN_SRC backend/scripts/pipeline_test.py | head",
+                     "sed -n 1,80p backend/scripts/pipeline_test.py"):
+            assert prof.classify_command("Bash", {"command": read}) != "test-build"
+            assert not prof._TEST_RE.search(read)
+
+    def _evidence(self, run_dir):
+        t = run_dir / "evidence" / "tests"
+        t.mkdir(parents=True)
+        def ev(name, **kw):
+            (t / name).write_text(json.dumps({"schema": 1, "run_id": "run_abc", **kw}), encoding="utf-8")
+        ev("tdd-20261017T100100.json", mode="tdd", duration_s=30)          # pre-index run
+        ev("verify-20261017T100500.json", mode="verify", duration_s=200)   # pre-index run
+        ev("verify-20261017T100600.json", mode="verify", duration_s=200,   # pre-index overlay
+           rechecked_from="2026-10-17T10:05:00Z")
+        ev("tdd-20261017T101000.json", mode="tdd", duration_s=12)          # indexed run
+        ev("regression-20261017T101500.json", mode="regression", duration_s=9,
+           rechecked_from=None)                                            # null key: still a run
+        ev("latest-verify.json", mode="verify", duration_s=200)            # pointer, not a run
+        (t / "tdd_index.json").write_text("{}", encoding="utf-8")
+        (t / "run_index.json").write_text(json.dumps([
+            {"kind": "run", "mode": "tdd", "evidence": "tdd-20261017T101000.json", "cached": False},
+            {"kind": "run", "mode": "tdd", "evidence": "tdd-20261017T101100.json", "cached": True},  # pruned file
+            {"kind": "run", "mode": "regression", "evidence": "regression-20261017T102000.json", "cached": False},
+            {"kind": "overlay", "mode": "regression", "evidence": "regression-20261017T102100.json"},
+        ]), encoding="utf-8")
+
+    def test_runner_executions_from_index_plus_unindexed_files(self, ws):
+        _, run_dir = ws
+        self._evidence(run_dir)
+        state = json.loads((run_dir / "run.json").read_text())
+        runner = prof.profile_run(state, [], run_dir=run_dir)["tests"]["runner"]
+        assert runner["executions"] == 6          # 3 indexed runs + 3 unindexed run files
+        assert runner["cached"] == 1
+        assert runner["by_mode"] == {"tdd": 3, "regression": 2, "verify": 1}
+        assert runner["sources"] == {"run_index": 3, "evidence_files": 3}
+
+    def test_runner_without_evidence(self, ws):
+        _, run_dir = ws
+        state = json.loads((run_dir / "run.json").read_text())
+        assert prof.profile_run(state, [], run_dir=run_dir)["tests"]["runner"]["executions"] == 0
+        assert prof.profile_run(state, [])["tests"]["runner"]["executions"] == 0
+
+    def test_runner_commands_count_their_tool_time(self, ws):
+        tmp, run_dir = ws
+        self._evidence(run_dir)
+        cmd = ("perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py "
+               "--project P --run-id run_abc --mode tdd --files backend/tests/test_a.py")
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", [
+            _use("u1", 60, "m1", "Bash", {"command": cmd}), _res("u1", 120)])
+        state = json.loads((run_dir / "run.json").read_text())
+        tests = prof.profile_run(state, [path], run_dir=run_dir)["tests"]
+        assert tests["by_kind"] == {"pipeline_test": 1}
+        assert tests["exec_min"] == 1.0
+        assert tests["calls"] == 6                 # runner executions, not the 1 command
+        assert tests["sources"]["calls"] == "direct test commands + runner evidence"
+        # no evidence: the runner commands seen are counted, and the output says so
+        bare = prof.profile_run(state, [path])["tests"]
+        assert bare["calls"] == 1
+        assert bare["sources"]["calls"] == "direct test commands + runner commands in the transcript"

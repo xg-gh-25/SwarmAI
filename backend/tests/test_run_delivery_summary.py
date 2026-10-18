@@ -596,3 +596,86 @@ def test_dict_shaped_risks_and_flags_are_leftovers():
     assert "HIGH 风险：dict risk text" in left and "dict flag" in left
     assert "title-only finding" in left
     assert "already handled" not in left and "fixed via status" not in left
+
+
+# ── measured_run_usage: per-response transcript tokens (run_045b96b2) ────────
+# A pipeline run usually sits inside ONE turn, so token_usage (one row per turn
+# end) holds nothing for it while that turn runs. The CLI transcript carries usage
+# per response; measured_run_usage reads it for the run window and keeps the
+# turn rows only for the settled dollar figure.
+
+TX_SID = "0d206ebe-9c4f-40ee-875a-491716e326b8"
+
+
+def _tx(cfg_root: Path, records):
+    p = cfg_root / "projects" / "-ws" / f"{TX_SID}.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return p
+
+
+def _tx_resp(mid, t, out=10):
+    return {"type": "assistant", "timestamp": t, "uuid": f"u-{mid}",
+            "message": {"id": mid, "usage": {"input_tokens": 2, "output_tokens": out,
+                                             "cache_read_input_tokens": 1000,
+                                             "cache_creation_input_tokens": 300}}}
+
+
+class TestMeasuredRunUsage:
+    START, END = TestTokenUsage.START, TestTokenUsage.END  # 09:00-10:00 UTC
+
+    @pytest.fixture
+    def cfg(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+        return tmp_path / "claude"
+
+    def _rs(self, **kw):
+        return {"id": "run_x", "session_id": "s1", "created_at": self.START,
+                "completed_at": self.END, "transcripts": [TX_SID], **kw}
+
+    def test_transcript_tokens_while_the_turn_is_in_flight(self, tmp_path, cfg, shanghai_tz):
+        _tx(cfg, [_tx_resp("m1", "2026-10-17T09:10:00Z"), _tx_resp("m2", "2026-10-17T09:50:00Z", out=40),
+                  _tx_resp("m0", "2026-10-17T08:00:00Z", out=999)])          # before the run
+        got = rds.measured_run_usage(self._rs(), db_path=tmp_path / "none.db")
+        assert got["source"] == "transcript" and got["responses"] == 2
+        assert got["tokens"] == 2 * 2 + 50 + 600 and got["cost_usd"] is None
+        label = rds._usage_label(got)
+        assert "$" not in label and "估算" not in label and "tokens" in label
+
+    def test_settled_cost_comes_from_turn_rows(self, tmp_path, cfg, shanghai_tz):
+        _tx(cfg, [_tx_resp("m1", "2026-10-17T09:10:00Z")])
+        db = _usage_db(tmp_path / "d.db", [("2026-10-17T17:20:00", "s1", 1, 2, 3, 4, 0.25)])
+        got = rds.measured_run_usage(self._rs(), db_path=db)
+        assert got["source"] == "transcript" and got["cost_usd"] == 0.25
+        assert got["cost_excludes_current_turn"] is True
+        assert "$0.25" in rds._usage_label(got)
+
+    def test_no_recorded_transcript_falls_back_to_turn_rows(self, tmp_path, cfg, shanghai_tz):
+        db = _usage_db(tmp_path / "d.db", [("2026-10-17T18:01:00", "s1", 1, 2, 3, 4, 0.5)])
+        got = rds.measured_run_usage(self._rs(transcripts=None), db_path=db)
+        assert got.get("source") != "transcript" and got["cost_usd"] == 0.5
+        assert rds.measured_run_usage(self._rs(transcripts=["../x"]), db_path=tmp_path / "no.db") is None
+
+    def test_build_summary_uses_transcript_tokens(self, tmp_path, cfg, shanghai_tz):
+        _tx(cfg, [_tx_resp("m1", "2026-10-17T09:10:00Z")])
+        rs = {**RUN, **self._rs(), "stages": [{"stage": "build", "token_cost": 0}]}
+        md = rds.build_delivery_summary(rs, {"evaluate": {"data": EVAL}, "deliver": DELIVER, "test": TESTS},
+                                        tmp_path, db_path=tmp_path / "missing.db")
+        assert "估算" not in md and "312 tokens" in md
+
+
+def test_paused_run_window_ends_at_updated_at_not_now(tmp_path, monkeypatch, shanghai_tz):
+    """Red Team (run_045b96b2): a run that stopped without completed_at must not
+    count the session's later chat or runs; a running run is measured to now."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    _tx(tmp_path / "claude", [_tx_resp("m1", "2026-10-17T09:10:00Z"),
+                              _tx_resp("m2", "2026-10-17T09:40:00Z", out=500)])   # after it stopped
+    base = {"id": "run_p", "created_at": "2026-10-17T09:00:00+00:00", "completed_at": None,
+            "updated_at": "2026-10-17T09:20:00+00:00", "transcripts": [TX_SID]}
+    paused = rds.measured_run_usage({**base, "status": "paused"}, db_path=tmp_path / "no.db")
+    assert paused["responses"] == 1 and paused["complete"] is False
+    running = rds.measured_run_usage({**base, "status": "running"}, db_path=tmp_path / "no.db")
+    assert running["responses"] == 2 and running["complete"] is False
+    done = rds.measured_run_usage({**base, "status": "completed",
+                                   "completed_at": "2026-10-17T09:50:00+00:00"}, db_path=tmp_path / "no.db")
+    assert done["responses"] == 2 and done["complete"] is True
