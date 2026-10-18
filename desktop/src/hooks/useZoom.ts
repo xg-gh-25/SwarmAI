@@ -24,6 +24,8 @@
  */
 import { useEffect, useCallback, useState } from 'react';
 
+import { APP_ZOOM_EVENT } from '../utils/layoutViewport';
+
 const STORAGE_KEY = 'swarmai-zoom-level';
 const APP_ZOOM_INV_VAR = '--app-zoom-inv';
 const MIN_ZOOM = 0.5;
@@ -47,6 +49,9 @@ function applyZoom(level: number) {
   // Publish the reciprocal for the terminal counter-zoom (see module docstring).
   // level is always > 0 (clamped to [MIN_ZOOM, MAX_ZOOM]), so 1/level is safe.
   document.documentElement.style.setProperty(APP_ZOOM_INV_VAR, String(1 / level));
+  // CSS zoom fires no `resize`: tell layout-viewport consumers (the Canvas width)
+  // that the CSS-px viewport just changed. Harmless at module load (no listeners yet).
+  window.dispatchEvent(new Event(APP_ZOOM_EVENT));
 }
 
 // Startup-flash guard: apply BOTH the raw zoom AND its reciprocal at module

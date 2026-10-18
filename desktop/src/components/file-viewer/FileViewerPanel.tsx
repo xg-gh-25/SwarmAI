@@ -10,13 +10,14 @@
  * - `PANEL_CONSTANTS`   — Min/max/default width values
  */
 
-import { memo, useState, useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useReducer, type CSSProperties } from 'react';
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
 import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import type { CanvasCollapse } from '../../hooks/useCanvasHost';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
+import { layoutViewportWidth, clientToCssScale, APP_ZOOM_EVENT } from '../../utils/layoutViewport';
 
 export const PANEL_CONSTANTS = {
   DEFAULT_WIDTH: 500,
@@ -48,10 +49,13 @@ export const PANEL_CONSTANTS = {
  *  clamp order is `max(MIN_WIDTH, min(MAX_WIDTH, available))` — MIN_WIDTH is the HARD
  *  floor (Canvas must stay usable), so on a narrow window (<~962px) the chat reserve
  *  yields and chat gets < CHAT_MIN_HEALTHY. That is deliberate (physical reality); do
- *  NOT assert "chat ≥ CHAT_MIN_HEALTHY unconditionally". */
-export function availableCanvasMax(innerWidth: number): number {
+ *  NOT assert "chat ≥ CHAT_MIN_HEALTHY unconditionally".
+ *  `viewportWidth` is the LAYOUT width in CSS px (layoutViewportWidth()), never
+ *  window.innerWidth: under the app's <html> zoom innerWidth stays unzoomed, so at
+ *  zoom 2 it is twice the space the widths below are laid out in. */
+export function availableCanvasMax(viewportWidth: number): number {
   const available =
-    innerWidth -
+    viewportWidth -
     LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH -
     PANEL_CONSTANTS.CHAT_MIN_HEALTHY -
     PANEL_CONSTANTS.RIGHT_GAP;
@@ -61,15 +65,26 @@ export function availableCanvasMax(innerWidth: number): number {
   );
 }
 
+/** Clamp a Canvas width (CSS px) to [MIN_WIDTH, live viewport-aware ceiling]. The ONE
+ *  clamp every width path uses (read-time, drag, persist, expand-restore, zoom), so a
+ *  change to the ceiling rule cannot miss a site. Reads the layout width live. */
+function clampToCeiling(w: number): number {
+  return Math.max(
+    PANEL_CONSTANTS.MIN_WIDTH,
+    Math.min(availableCanvasMax(layoutViewportWidth()), w),
+  );
+}
+
 /** clamp(MIN, fraction×viewport, availableCanvasMax) — the responsive default before
  *  any drag. The ceiling is availableCanvasMax (viewport-aware), NOT raw MAX_WIDTH, so
  *  the default never starves chat. */
 function responsiveDefaultWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
-  const raw = Math.round(PANEL_CONSTANTS.DEFAULT_FRACTION * window.innerWidth);
+  const vw = layoutViewportWidth();
+  const raw = Math.round(PANEL_CONSTANTS.DEFAULT_FRACTION * vw);
   return Math.max(
     PANEL_CONSTANTS.MIN_WIDTH,
-    Math.min(availableCanvasMax(window.innerWidth), raw),
+    Math.min(availableCanvasMax(vw), raw),
   );
 }
 
@@ -93,10 +108,7 @@ function getStoredWidth(): number {
   if (!stored) return responsiveDefaultWidth();
   const parsed = parseInt(stored, 10);
   if (isNaN(parsed)) return responsiveDefaultWidth();
-  return Math.max(
-    PANEL_CONSTANTS.MIN_WIDTH,
-    Math.min(availableCanvasMax(window.innerWidth), parsed),
-  );
+  return clampToCeiling(parsed);
 }
 
 /**
@@ -193,9 +205,17 @@ function FileViewerPanelImpl({
   const dragCeiling =
     typeof window === 'undefined'
       ? PANEL_CONSTANTS.MAX_WIDTH
-      : availableCanvasMax(window.innerWidth);
+      : availableCanvasMax(layoutViewportWidth());
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
+  // CSS px per client px, taken at drag start: pointer clientX is in unzoomed
+  // client px under the app zoom while the width is in CSS px, so the raw delta
+  // would move the edge zoom-times faster than the pointer.
+  const dragScaleRef = useRef(1);
+  // Last pointer x seen during a drag: a zoom change mid-drag re-takes the drag
+  // baseline from here (see the APP_ZOOM_EVENT effect).
+  const lastClientXRef = useRef(0);
+  const isDraggingRef = useRef(false);
   // rAF-throttle state (run_4b67c510): a mousemove writes the latest requested
   // width to pendingWidthRef and schedules ONE animation frame; the frame applies
   // it (setWidth only). This coalesces 100+Hz mousemove events to ≤1 setWidth per
@@ -223,10 +243,12 @@ function FileViewerPanelImpl({
       preExpandWidthRef.current = width;
       // Expand snaps to the WIDEST width that still keeps chat healthy, NOT raw
       // MAX_WIDTH — otherwise "expand for review" starves chat on a normal window.
-      setWidth(availableCanvasMax(window.innerWidth));
+      setWidth(availableCanvasMax(layoutViewportWidth()));
       setExpanded(true);
     } else {
-      setWidth(preExpandWidthRef.current);
+      // Clamp the restored width: the ceiling may have shrunk while expanded (a
+      // window shrink or an app zoom-in), and the old width would starve chat.
+      setWidth(clampToCeiling(preExpandWidthRef.current));
       setExpanded(false);
     }
   }, [expanded, width]);
@@ -279,13 +301,9 @@ function FileViewerPanelImpl({
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
 
   // Clamp helper — the viewport-aware ceiling (availableCanvasMax, NOT raw
-  // MAX_WIDTH) so a width can never starve chat. innerWidth is read LIVE (per call,
-  // never cached) so the ceiling stays correct if the window resizes mid-drag.
-  const clampWidth = useCallback(
-    (w: number) =>
-      Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(availableCanvasMax(window.innerWidth), w)),
-    [],
-  );
+  // MAX_WIDTH) so a width can never starve chat. The layout width is read LIVE (per
+  // call, never cached) so the ceiling stays correct if the window resizes mid-drag.
+  const clampWidth = clampToCeiling;
   // setLiveWidth — the per-FRAME path: update the visual width ONLY, no persist.
   // Called from the rAF callback during a drag (≤1/frame) and from the mouseup/
   // cleanup flush. NO localStorage here — the drag path must stay free of
@@ -309,7 +327,9 @@ function FileViewerPanelImpl({
     setExpanded(false);
     setIsDragging(true);
     startXRef.current = e.clientX;
+    lastClientXRef.current = e.clientX;
     startWidthRef.current = width;
+    dragScaleRef.current = clientToCssScale();
     // Seed pendingWidthRef to the CURRENT width so a click-without-move (mousedown
     // then mouseup, no mousemove) flushes the unchanged width (idempotent no-op) —
     // NOT a stale value from a prior drag, and NOT 0 (which clamps to MIN_WIDTH and
@@ -319,6 +339,7 @@ function FileViewerPanelImpl({
   }, [width]);
 
   useEffect(() => {
+    isDraggingRef.current = isDragging;
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -326,7 +347,9 @@ function FileViewerPanelImpl({
       // Record the latest requested width; schedule ONE rAF that applies it
       // (setLiveWidth only — NO persist). Extra mousemoves within the same frame
       // just overwrite pendingWidthRef, coalescing to ≤1 setWidth per paint.
-      pendingWidthRef.current = startWidthRef.current + (startXRef.current - e.clientX);
+      lastClientXRef.current = e.clientX;
+      pendingWidthRef.current =
+        startWidthRef.current + (startXRef.current - e.clientX) * dragScaleRef.current;
       if (rafIdRef.current === null) {
         rafIdRef.current = requestAnimationFrame(() => {
           rafIdRef.current = null;
@@ -395,6 +418,40 @@ function FileViewerPanelImpl({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [entered, expanded]);
+
+  // App zoom (Cmd+/Cmd-) changes the CSS-px viewport without a window `resize`, so
+  // it gets its own listener. Unlike a resize it also binds a dragged (stored)
+  // width, because zooming in shrinks the ceiling and a width that no longer fits
+  // would starve chat:
+  //  · expanded   -> re-snap to the new ceiling;
+  //  · otherwise  -> getStoredWidth(): the responsive default when nothing is
+  //    stored, else the STORED width clamped to the new ceiling. Re-deriving from
+  //    storage (not clamping the current width) is what makes a zoom round trip
+  //    lossless: zoom in narrows the panel, zoom back out restores the user's width.
+  //    Never persisted — a zoom is not a manual choice.
+  //  · mid-drag   -> leave the width to the drag (its live clamp already reads the
+  //    new ceiling) and re-take the drag baseline at the new scale, so the edge
+  //    keeps tracking the pointer.
+  // The ceiling bump re-renders even when the width is unchanged, so
+  // aria-valuemax (dragCeiling) never announces a stale maximum.
+  const [, bumpCeiling] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleZoom = () => {
+      if (isDraggingRef.current) {
+        startXRef.current = lastClientXRef.current;
+        startWidthRef.current = clampToCeiling(pendingWidthRef.current);
+        dragScaleRef.current = clientToCssScale();
+      } else if (expanded) {
+        setWidth(availableCanvasMax(layoutViewportWidth()));
+      } else {
+        setWidth(getStoredWidth());
+      }
+      bumpCeiling();
+    };
+    window.addEventListener(APP_ZOOM_EVENT, handleZoom);
+    return () => window.removeEventListener(APP_ZOOM_EVENT, handleZoom);
+  }, [expanded]);
 
   // ── Collapsed rail: the whole Canvas as a thin clickable vertical strip ──
   // Click anywhere on it → expand. Vertical "Canvas · Outputs" + count carry the

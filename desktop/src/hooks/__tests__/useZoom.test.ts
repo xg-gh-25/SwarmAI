@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useZoom } from '../useZoom';
+import { APP_ZOOM_EVENT } from '../../utils/layoutViewport';
 
 describe('useZoom — CSS var publication for terminal counter-zoom', () => {
   beforeEach(() => {
@@ -73,5 +74,21 @@ describe('useZoom — CSS var publication for terminal counter-zoom', () => {
     expect(document.documentElement.style.zoom).not.toBe('');
     expect(invStr).not.toBe('');
     expect(raw * Number(invStr)).toBeCloseTo(1.0, 6);
+  });
+
+  it('fires APP_ZOOM_EVENT after a zoom change, with the new zoom already applied', () => {
+    const seen: string[] = [];
+    const onZoom = () => seen.push(document.documentElement.style.zoom);
+    window.addEventListener(APP_ZOOM_EVENT, onZoom);
+    try {
+      const { result } = renderHook(() => useZoom());
+      seen.length = 0;
+      act(() => result.current.zoomIn());
+      // CSS zoom fires no resize; layout-viewport consumers (the Canvas width)
+      // rely on this event, and must see the NEW zoom when it arrives.
+      expect(seen).toEqual(['1.1']);
+    } finally {
+      window.removeEventListener(APP_ZOOM_EVENT, onZoom);
+    }
   });
 });
