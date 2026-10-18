@@ -5,10 +5,11 @@
  * - how the ask was read is said once: pipeline requirement > a restatement written
  *   before any work; only that one carries "Understanding". The intent thought is
  *   the plan ("Approach"), never the restatement
- * - the "no restatement" note shows whenever nothing restated the ask — an intent
- *   thought does not suppress it
- * - a pipeline stage's body lists its steps directly (no second fold inside it)
- * - a sub-agent's own steps have no detail level (two levels at most)
+ * - there is no "no restatement" note: the intent thought is the place to check
+ *   how the ask was read (chat display v7.11)
+ * - a pipeline stage's body lays its groups out open: title + content, so a stage
+ *   is one click from its strips (two levels at most)
+ * - a sub-agent is one strip; its own steps are not a level of their own
  * - before the first stage row the plan's first stage holds the work, so when the
  *   row lands the stage folds 2s later in place instead of vanishing at once
  */
@@ -61,9 +62,10 @@ describe('how the ask was read is said once', () => {
     expect(screen.getByTestId('thought').textContent).toContain('Approach');
   });
 
-  it('a thought after the work is just a Thought', () => {
+  it('a thought after the work is narration in its group, with no label', () => {
     render(viewOf([tx('I read it as: X.'), tu('a'), tr('a'), th('hm'), tx('done')]));
-    expect(screen.getByTestId('thought').textContent).toContain('Thought');
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.getByTestId('thought').textContent).toBe('hm');
     expect(screen.getByTestId('thought').dataset.intent).toBe('false');
   });
 
@@ -73,12 +75,12 @@ describe('how the ask was read is said once', () => {
     expect(screen.getByTestId('turn-run')).toBeTruthy();
   });
 
-  it('no thought stands in for the restatement: the note shows either way', () => {
+  it('there is no "started without restating" note, with or without an intent', () => {
     const { unmount } = render(viewOf([tu('a'), tr('a'), tu('b'), tr('b'), tu('c'), tr('c'), th('hm'), tx('done')]));
-    expect(screen.getByTestId('turn-no-alignment')).toBeTruthy();
+    expect(screen.queryByTestId('turn-no-alignment')).toBeNull();
     unmount();
     render(viewOf([th('plan first'), tu('a'), tr('a'), tu('b'), tr('b'), tu('c'), tr('c'), tx('done')]));
-    expect(screen.getByTestId('turn-no-alignment')).toBeTruthy();
+    expect(screen.queryByTestId('turn-no-alignment')).toBeNull();
   });
 
   it('a restatement before the work removes the note', () => {
@@ -88,28 +90,25 @@ describe('how the ask was read is said once', () => {
 });
 
 describe('two levels at most', () => {
-  it('a stage body lists its steps directly, thoughts in place, no second fold', () => {
-    render(viewOf([tu('a'), tr('a'), th('between'), tu('b', 'Running: pwd'), tr('b'), stage('evaluate', null), tx('done')]));
+  it('an opened stage lays its groups out open: one click from the stage to its strips', () => {
+    render(viewOf([tu('a'), tr('a'), tu('a2', 'Running: id'), tr('a2'), th('between'), tu('b', 'Running: pwd'), tu('b2', 'Running: make'),
+      tr('b'), stage('evaluate', null), tx('done')]));
     fireEvent.click(screen.getByTestId('pipeline-stage-row').querySelector('button')!);
     const body = screen.getByTestId('stage-body');
-    expect(within(body).getAllByTestId('step-row')).toHaveLength(2);
-    expect(within(body).queryByTestId('process-row')).toBeNull();
+    expect(within(body).getAllByTestId('group-body')).toHaveLength(2);
+    expect(within(body).getAllByTestId('step-row')).toHaveLength(4);
     expect(within(body).getByTestId('thought-text').textContent).toBe('between');
   });
 
-  it('a sub-agent step opens to its steps, and those have no detail of their own', () => {
+  it('a sub-agent is one strip; its own steps are not rows of their own', () => {
     const content = [tu('ag', 'Agent: Review spec', 'Agent', 'agent'), tu('s1', 'Running: grep x', 'Bash', 'bash', 'ag'),
       tr('s1'), tr('ag'), tu('z'), tr('z'), tx('done')];
     render(viewOf(content));
-    fireEvent.click(screen.getByTestId('process-row'));
-    const detail = screen.getByTestId('agent-detail');
-    fireEvent.click(detail.querySelector('button')!);
-    const subs = screen.getByTestId('agent-steps');
-    expect(within(subs).getAllByTestId('step-row')).toHaveLength(1);
-    expect(within(subs).queryAllByTitle('Show command')).toHaveLength(0);
-    expect(within(subs).getByTestId('step-head')).toBeTruthy();
-    // a main step still has its one detail level
-    expect(screen.getAllByTitle('Show command').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    const rows = screen.getAllByTestId('step-row');
+    expect(rows.map((r) => r.dataset.kind)).toEqual(['agent', 'read']);
+    expect(rows[0].textContent).toContain('1 step');
+    expect(screen.queryByTitle('Show command')).toBeNull();
   });
 });
 

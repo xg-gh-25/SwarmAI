@@ -65,7 +65,7 @@ describe('TabView pill — the live action, once', () => {
     await afterActivation();
     scrollAway(container);
     const pill = getByTestId('streaming-pill');
-    expect(pill.textContent).toContain('Reading x.ts · back to latest');
+    expect(pill.textContent).toContain('Read x.ts · back to latest');
     expect(pill.textContent).not.toMatch(/step \d/);
     expect(pill.textContent).not.toMatch(/\d+s\b/);
   });

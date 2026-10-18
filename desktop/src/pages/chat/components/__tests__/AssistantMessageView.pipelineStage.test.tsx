@@ -62,10 +62,10 @@ describe('AssistantMessageView — pipeline stage rows', () => {
     expect(row.textContent).not.toMatch(/step/);
     expect(row.dataset.open).toBe('false');
     // Folded: only the work after the last stage (b) is in the stream.
-    expect(screen.getAllByTestId('process-block')).toHaveLength(1);
+    expect(screen.getAllByTestId('work-group')).toHaveLength(1);
     fireEvent.click(row.querySelector('button')!);
     expect(row.dataset.open).toBe('true');
-    expect(screen.getAllByTestId('process-block')).toHaveLength(2);
+    expect(screen.getAllByTestId('work-group')).toHaveLength(2);
   });
 
   it('streaming: the running stage names its plan position and holds the live work, open', () => {
@@ -140,5 +140,22 @@ describe('AssistantMessageView — pipeline stage rows', () => {
     renderView([tu('a'), ask, stage({ gate: null })], false);
     expect(screen.getByTestId('pipeline-stage-row').dataset.open).toBe('true');
     expect(screen.getByText(/STAGE_Q/)).toBeTruthy();
+  });
+});
+
+describe('AssistantMessageView — a stage with no summary names what it changed (AC8)', () => {
+  const ed = (id: string, p: string): ContentBlock =>
+    ({ type: 'tool_use', id, name: 'Edit', summary: `Writing to ${p}`, category: 'write' }) as ContentBlock;
+  const files = ['/r/a.ts', '/r/b.ts', '/r/c.ts', '/r/d.ts'];
+
+  it('no summary: the changed file names, at most three, "+N" for the rest', () => {
+    renderView([...files.map((p, i) => ed(`e${i}`, p)), stage({ gate: null, summary: null }), tx('done')], false);
+    expect(screen.getByTestId('stage-changed-files').textContent).toBe('changed a.ts, b.ts, c.ts +1');
+  });
+
+  it('with a summary: the summary, and the count form instead of names', () => {
+    renderView([...files.map((p, i) => ed(`e${i}`, p)), stage({ gate: null, summary: 'TDD green' }), tx('done')], false);
+    expect(screen.queryByTestId('stage-changed-files')).toBeNull();
+    expect(screen.getByTestId('pipeline-stage-row').textContent).toContain('changed 4 files');
   });
 });

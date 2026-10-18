@@ -66,6 +66,11 @@ describe('isToggleClick', () => {
     expect(isToggleClick(d.querySelector('#i'))).toBe(d.querySelector('button'));
     expect(isToggleClick(d.querySelector('#b2'))).toBe(d.querySelector('#b2'));
   });
+  it('an element acting as a toggle (role=button + aria-expanded, e.g. a thought\'s text)', () => {
+    const d = html('<div role="button" aria-expanded="false" id="t"><em id="ti">thought</em></div><div role="button" id="nb">no</div>');
+    expect(isToggleClick(d.querySelector('#ti'))).toBe(d.querySelector('#t'));
+    expect(isToggleClick(d.querySelector('#nb'))).toBeNull();
+  });
   it('not plain buttons, not inside the live card, not non-elements', () => {
     const d = html('<button id="c">copy</button><div data-live="true"><button aria-expanded="true" id="l">x</button></div>');
     expect(isToggleClick(d.querySelector('#c'))).toBeNull();

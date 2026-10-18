@@ -4,12 +4,16 @@
  * This sub-component handles the full rendering of assistant-role messages:
  * - Branded header via AssistantHeader (🐝 SwarmAI · timestamp)
  * - Content rendered from the ONE turn projection (`deriveTurnView`,
- *   pages/chat/turnView.ts), in stream order: ADJACENT thinking + tool calls
- *   form one ProcessBlock card; between-tool notes, landmarks, the answer
- *   (outcome) and interrupts (question / permission / escalation) render in
- *   the main stream
- * - Finished turns condense: a note right before a run of work becomes that
- *   work's title line (full note on open); non-intent thoughts clamp to 1 line
+ *   pages/chat/turnView.ts), in stream order, then grouped (`groupWork`): a
+ *   thought and the tool calls it led to are one WorkGroup — folded to a WORKED /
+ *   THOUGHT line once done, the open WORKING card while live; each tool call is
+ *   one strip. Notes to the user, landmarks, the answer (outcome) and interrupts
+ *   (question / permission / escalation) stay in the stream; a ":"-ended note
+ *   titles the group after it
+ * - The process lane: everything that is process (the intent "Approach" thought,
+ *   groups, notes, landmarks, stage rows) sits behind one left rule, a size
+ *   smaller and dimmer; the answer, the alignment, interrupts and cards sit
+ *   outside it at full size — position, size and contrast tell process from answer
  * - Pipeline stage rows (`stage` units — written by the backend from run.json)
  *   render as PipelineStageRow; while streaming, the stage now running is shown
  *   above the live process row (PipelineStageLive)
@@ -41,14 +45,14 @@ import clsx from 'clsx';
 import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
-import { ProcessBlock } from './ProcessBlock';
+import { WorkGroupView } from './WorkGroup';
 import { ThoughtBlock } from './ThoughtBlock';
 import { PipelineStageRow } from './PipelineStageRow';
 import { FileChip } from './FileChip';
 import { AttentionCard, DeliverablesCard, RunAlignment } from './TurnCards';
 import { NextSteps } from './NextSteps';
-import { deriveTurnView, extractNextSteps, headedProcesses, isUnanswered, noteHasMore, noteHeadline, sectionUnits, turnChangedFiles } from '../turnView';
-import type { TurnUnit } from '../turnView';
+import { deriveTurnView, extractNextSteps, groupWork, isUnanswered, sectionUnits, turnChangedFiles } from '../turnView';
+import type { TurnUnit, WorkItem } from '../turnView';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
@@ -76,8 +80,10 @@ function upcomingStages(plan: string[] | undefined, stage: string): string[] | u
   return at >= 0 ? plan!.slice(at + 1, at + 1 + UPCOMING_SHOWN) : undefined;
 }
 
-/** A turn that went straight to work this long gets the "no restatement" note. */
-const NO_RESTATEMENT_MIN_STEPS = 3;
+/** Process content: one left rule, a size smaller and dimmer than the answer. */
+const LANE_CLASS = 'flow-root pl-3 border-l-2 border-[var(--color-border)] text-[12.5px] text-[var(--color-text-muted)]';
+/** The answer's size and contrast, restored for a non-process item inside a stage. */
+const FULL_CLASS = 'text-[15px] text-[var(--color-text-secondary)]';
 
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
@@ -131,11 +137,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  // The user's open/closed CHOICE per process segment, keyed by the segment's
-  // ordinal id (`seg-<n>`, see turnView.ts) — stable while the turn streams AND
-  // across the stream-end reconcile that drops live-only tool_result blocks.
-  // Lifted here (not inside ProcessBlock) so it survives ProcessBlock remounts.
-  // No entry = automatic: open while live, folded 2s after (ProcessBlock).
+  // The user's open/closed CHOICE per work group (`grp-<first member key>`), thought
+  // (`th-<ordinal>`) and stage section, keyed by ids that are stable while the turn
+  // streams AND across the stream-end reconcile that drops live-only tool_result
+  // blocks. Lifted here so it survives remounts. No entry = automatic.
   const [processChoice, setProcessChoice] = useState<ReadonlyMap<string, boolean>>(new Map());
   const chooseProcess = useCallback((id: string, open: boolean) => {
     setProcessChoice((prev) => new Map(prev).set(id, open));
@@ -248,8 +253,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   }
 
   // Render ONE block via ContentBlockRenderer (markdown text + the interactive
-  // interrupt widgets). Tool calls never come through here — they live inside a
-  // ProcessBlock, which takes its status from the projection.
+  // interrupt widgets). Tool calls never come through here — they are strips in a
+  // WorkGroup, which takes its status from the projection.
   const renderBlock = (block: ContentBlock, key: string) => (
     <ContentBlockRenderer
       key={key}
@@ -264,10 +269,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     />
   );
 
-  // ── Attention layers (design-judgment Surface 6; chat display v7.1) ──────────
-  // Spacing groups, never boxes: a note sits right under the work that produced it;
-  // a new run of work starts a new group. Notes are demoted text (L3); the
-  // alignment and the result are primary (L1); finished work is one dim line (L4).
+  // ── Attention layers (design-judgment Surface 6; chat display v7.11) ─────────
+  // Process (intent, groups, notes, landmarks, stage rows) sits in one lane behind a
+  // left rule, a size smaller and dimmer; the alignment, the result, interrupts and
+  // cards sit outside it at full size. Within the lane, spacing groups, never boxes.
   const hasWork = view.units.some((u) => u.kind === 'process' && u.steps.length > 0);
   const firstWork = view.units.findIndex((u) => u.kind === 'process' && u.steps.length > 0);
   const lastUnit = view.units[view.units.length - 1];
@@ -293,139 +298,163 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // until then it stays where it arrived: with the DELIVER row.
   let attentionPending = !!attentionCard && !showResult;
 
-  const renderUnit = (unit: TurnUnit, prev: TurnUnit | undefined, inStage = false) => {
-    const narration = unit.kind === 'note' || unit.kind === 'landmark' || unit.kind === 'thought';
-    const gap = !prev ? '' : narration && prev.kind === 'process' ? 'mt-1' : 'mt-3';
-    if (unit.kind === 'process') {
-      return (
-        <div key={`p-${unit.id}`} className={gap} {...ANCHOR_PROPS}>
-          <ProcessBlock
-            unit={unit}
-            expanded={processChoice.get(unit.id)}
-            onToggle={(open) => chooseProcess(unit.id, open)}
-            flat={inStage}
-            title={titleOf(unit)}
-          />
-        </div>
-      );
+  type Placed = { key: string; el: React.ReactNode; lane: boolean };
+  const renderItem = (item: WorkItem, prev: WorkItem | undefined, inStage: boolean): Placed | null => {
+    const narration = item.kind === 'note' || item.kind === 'landmark' || item.kind === 'thought';
+    const gap = !prev ? '' : narration && prev.kind === 'group' ? 'mt-1' : 'mt-2';
+    if (item.kind === 'group') {
+      return {
+        key: `g-${item.id}`,
+        lane: true,
+        el: (
+          <div key={`g-${item.id}`} className={gap} {...ANCHOR_PROPS}>
+            <WorkGroupView
+              group={item}
+              compact={!isStreaming}
+              expanded={processChoice.get(item.id)}
+              defaultOpen={inStage}
+              onToggle={(open) => chooseProcess(item.id, open)}
+              thoughtOpen={(k) => processChoice.get(k)}
+              onThoughtToggle={chooseProcess}
+            />
+          </div>
+        ),
+      };
     }
-    if (unit.kind === 'thought') {
-      const key = `th-${unit.ordinal}`;
-      return (
-        <div key={key} className={gap} {...ANCHOR_PROPS}>
-          <ThoughtBlock
-            unit={unit}
-            compact={!isStreaming}
-            expanded={processChoice.get(key)}
-            onToggle={(open) => chooseProcess(key, open)}
-          />
-        </div>
-      );
+    if (item.kind === 'thought') {
+      const key = `th-${item.ordinal}`;
+      return {
+        key,
+        lane: true,
+        el: (
+          <div key={key} className={gap} {...ANCHOR_PROPS}>
+            <ThoughtBlock
+              unit={item}
+              compact={!isStreaming}
+              expanded={processChoice.get(key)}
+              onToggle={(open) => chooseProcess(key, open)}
+            />
+          </div>
+        ),
+      };
     }
-    if (unit.kind === 'stage') return null; // rendered as its section's header
-    if (unit.kind === 'interrupt') return <div key={`i-${unit.index}`} className={gap} {...ANCHOR_PROPS}>{renderBlock(unit.block, `ib-${unit.index}`)}</div>;
+    if (item.kind === 'stage') return null; // rendered as its section's header
+    if (item.kind === 'interrupt') {
+      const key = `i-${item.index}`;
+      return { key, lane: false, el: <div key={key} className="mt-3" {...ANCHOR_PROPS}>{renderBlock(item.block, `ib-${item.index}`)}</div> };
+    }
     // A note and an outcome share a key prefix: while streaming, the answer-so-far
     // turns into a note the moment the next tool call arrives — no remount.
-    const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
-    const isAlignment = unit === alignText;
-    const isResult = showResult && unit === lastUnit;
-    const demoted = unit.kind === 'note' && !isAlignment;
-    return (
-      <div
-        key={`${prefix}-${unit.index}`}
-        {...ANCHOR_PROPS}
-        data-testid={isAlignment ? 'turn-alignment' : isResult ? 'turn-result' : undefined}
-        className={`${gap} ${demoted ? 'text-[13.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
-      >
-        {isAlignment && <div className="mb-0.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">{tf(t, 'chat.turn.alignment', 'Understanding')}</div>}
-        {isResult && (
-          <div className="flex items-center gap-2.5 mt-5 mb-1.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">
-            {tf(t, 'chat.turn.result', 'Result')}
-            <span className="flex-1 border-t border-[var(--color-border)]" />
-          </div>
-        )}
-        {isResult && attentionCard && <div className="mb-3">{attentionCard}</div>}
-        {renderBlock({ type: 'text', text: unit.text }, `${prefix}-b-${unit.index}`)}
-      </div>
-    );
+    const prefix = item.kind === 'landmark' ? 'lm' : 'cb';
+    const isAlignment = item === alignText;
+    const isResult = showResult && item === lastUnit;
+    const inLane = !isAlignment && item.kind !== 'outcome';
+    const key = `${prefix}-${item.index}`;
+    return {
+      key,
+      lane: inLane,
+      el: (
+        <div
+          key={key}
+          {...ANCHOR_PROPS}
+          data-testid={isAlignment ? 'turn-alignment' : isResult ? 'turn-result' : undefined}
+          className={`${inLane ? gap : prev ? 'mt-3' : ''} ${inLane ? 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
+        >
+          {isAlignment && <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{tf(t, 'chat.turn.alignment', 'Understanding')}</div>}
+          {isResult && (
+            <div className="flex items-center gap-2.5 mt-5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+              {tf(t, 'chat.turn.result', 'Result')}
+              <span className="flex-1 border-t border-[var(--color-border)]" />
+            </div>
+          )}
+          {isResult && attentionCard && <div className="mb-3">{attentionCard}</div>}
+          {renderBlock({ type: 'text', text: item.text }, `${prefix}-b-${item.index}`)}
+        </div>
+      ),
+    };
   };
-
-  const renderList = (units: TurnUnit[], inStage = false) =>
-    units.map((u, i) => renderUnit(u, units[i - 1], inStage));
+  const renderItems = (items: WorkItem[], inStage = false): Placed[] =>
+    items.map((it, i) => renderItem(it, items[i - 1], inStage)).filter((x): x is Placed => !!x);
 
   const sections = sectionUnits(view.units, !!isStreaming, view.liveStage);
-  // Once the turn is over, a note that introduced a run of work becomes that work's
-  // title line (ProcessBlock `title`) and is not rendered on its own. Never while
-  // streaming (the note is what the user reads live), never the alignment, never
-  // inside a stage's body (the stage row is its title).
-  const headed = isStreaming ? new Map<TurnUnit, TurnUnit>() : headedProcesses(sections, alignText);
-  const headingNotes = new Set<TurnUnit>(headed.values());
-  function titleOf(unit: TurnUnit) {
-    const note = headed.get(unit);
-    if (!note || note.kind !== 'note') return undefined;
-    return {
-      line: noteHeadline(note.text),
-      full: noteHasMore(note.text) ? renderBlock({ type: 'text', text: note.text }, `cbt-${note.index}`) : undefined,
-    };
-  }
+  const placed: Placed[] = [];
+  // Top-level units between stage rows are grouped together; only the turn's final
+  // run can hold the live group.
+  let buffer: TurnUnit[] = [];
+  const flush = (isLast: boolean) => {
+    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, alignText)));
+    buffer = [];
+  };
   const stageSeen = new Map<string, number>();
-  let prevSection: TurnUnit | undefined;
-  const contentBlocks = sections.map((sec, k) => {
-    if (sec.kind === 'unit') {
-      if (headingNotes.has(sec.unit)) return null; // rendered as its work's title
-      const el = renderUnit(sec.unit, prevSection);
-      prevSection = sec.unit;
-      return el;
-    }
+  const firstStage = sections.findIndex((s) => s.kind !== 'unit');
+  sections.forEach((sec, k) => {
+    if (sec.kind === 'unit') { buffer.push(sec.unit); return; }
+    flush(false);
     const name = sec.kind === 'stage' ? sec.block.stage : sec.stage.stage;
     const n = stageSeen.get(name) ?? 0;
     if (sec.kind === 'stage') stageSeen.set(name, n + 1);
     // Same key while running and once finished, so the row folds 2s after it ends.
     const key = `sec-${name}-${n}`;
     const children = sec.children;
-    const changed = turnChangedFiles(children).length;
+    const changed = turnChangedFiles(children);
     const failed = children.some((u) => u.kind === 'process' && !!u.unrecoveredFailure);
     const mustOpen = children.some((u) => u.kind === 'interrupt' && isUnanswered(u.block));
-    prevSection = undefined;
-    const firstStage = sections.findIndex((s) => s.kind !== 'unit');
     const attentionHere = attentionPending && sec.kind === 'stage' && sec.block.stage === 'deliver';
     if (attentionHere) attentionPending = false;
-    return (
-      <div key={key} className={k === firstStage ? 'mt-3' : ''} {...ANCHOR_PROPS}>
-        <PipelineStageRow
-          block={sec.kind === 'stage' ? sec.block : undefined}
-          live={sec.kind === 'liveStage' ? sec.stage : undefined}
-          position={sec.kind === 'liveStage' ? sec.position : undefined}
-          upcoming={sec.kind === 'liveStage' ? upcomingStages(view.run?.stages, sec.stage.stage) : undefined}
-          startedAt={sec.kind === 'stage' ? (sec.prevAt ?? message.timestamp) : undefined}
-          changedCount={changed}
-          failed={failed}
-          mustOpen={mustOpen}
-          choice={processChoice.get(key)}
-          onChoose={(open) => chooseProcess(key, open)}
-        >
-          {children.length ? renderList(children, true) : null}
-        </PipelineStageRow>
-        {attentionHere && <div className="mt-2">{attentionCard}</div>}
-      </div>
-    );
+    const liveSec = !!isStreaming && sec.kind === 'liveStage';
+    // Inside a stage (a lane item) a question / permission / the answer-so-far is
+    // still not process: it is reset to the answer's size and contrast.
+    const body = children.length || liveSec
+      ? renderItems(groupWork(children, liveSec, alignText), true).map((x) => (x.lane ? x.el : (
+        <div key={`full-${x.key}`} className={FULL_CLASS}>{x.el}</div>
+      )))
+      : null;
+    placed.push({
+      key,
+      lane: true,
+      el: (
+        <div key={key} className={k === firstStage && k > 0 ? 'mt-2' : ''} {...ANCHOR_PROPS}>
+          <PipelineStageRow
+            block={sec.kind === 'stage' ? sec.block : undefined}
+            live={sec.kind === 'liveStage' ? sec.stage : undefined}
+            position={sec.kind === 'liveStage' ? sec.position : undefined}
+            upcoming={sec.kind === 'liveStage' ? upcomingStages(view.run?.stages, sec.stage.stage) : undefined}
+            startedAt={sec.kind === 'stage' ? (sec.prevAt ?? message.timestamp) : undefined}
+            changedCount={changed.length}
+            changedFiles={changed}
+            failed={failed}
+            mustOpen={mustOpen}
+            choice={processChoice.get(key)}
+            onChoose={(open) => chooseProcess(key, open)}
+          >
+            {body}
+          </PipelineStageRow>
+        </div>
+      ),
+    });
+    if (attentionHere) placed.push({ key: 'attention-deliver', lane: false, el: <div key="attention-deliver" className="mt-2">{attentionCard}</div> });
   });
+  flush(true);
+
+  // The lane is a class on each item, never a wrapping parent: the streaming answer
+  // ('outcome', outside the lane) turns into a note (inside it) the moment the next
+  // tool call arrives, and a parent change would remount it under the reader. Each
+  // item keeps its key and its parent; only its class changes. `flow-root` keeps the
+  // items' own margins inside the rule, so consecutive lane items read as one line.
+  const contentBlocks: React.ReactNode[] = placed.map((x) => (
+    <div
+      key={x.key}
+      data-lane={x.lane ? 'true' : undefined}
+      className={x.lane ? LANE_CLASS : undefined}
+    >
+      {x.el}
+    </div>
+  ));
   if (attentionPending) {
     contentBlocks.push(<div key="attention" className="mt-3">{attentionCard}</div>);
   }
   if (view.run) {
     contentBlocks.unshift(<div key="run" className="mb-3"><RunAlignment run={view.run} /></div>);
-  }
-  // The model went straight to work without restating the ask: that absence is
-  // itself worth knowing — alignment is the cheapest moment to correct course.
-  const toolSteps = view.units.reduce((n, u) => n + (u.kind === 'process' ? u.steps.filter((s) => s.kind === 'tool').length : 0), 0);
-  // An intent thought is a plan, not a restatement: it does not count.
-  if (!view.run && !alignText && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
-    contentBlocks.unshift(
-      <div key="no-alignment" data-testid="turn-no-alignment" className="mb-1 text-[11px] tracking-wide text-[var(--color-text-dim)]">
-        {tf(t, 'chat.turn.noAlignment', 'Started without restating the ask')}
-      </div>,
-    );
   }
   if (view.deliverables.length) {
     contentBlocks.push(<div key="deliverables" className="mt-4"><DeliverablesCard files={view.deliverables} /></div>);
@@ -479,8 +508,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           {isStreaming && (
             <span className="inline-block w-2 h-4 bg-primary/70 rounded-sm animate-pulse align-text-bottom" aria-hidden="true" />
           )}
-          {/* A running sub-agent shows under its Agent step (ProcessBlock
-              AgentDetail, fed by subagent_progress) — no separate timer banner. */}
+          {/* A running sub-agent shows on its Agent strip (WorkGroup ToolStrip,
+              fed by subagent_progress) — no separate timer banner. */}
         </div>
       )}
 

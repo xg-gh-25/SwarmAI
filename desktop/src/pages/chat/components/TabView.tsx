@@ -8,7 +8,7 @@
  * recovery spinner), the "back to latest" pill (only while streaming AND the
  * user has scrolled away). Where the viewport sits — following the bottom, or
  * holding what the user is reading — is decided by pages/chat/scrollFocus.ts. What the
- * agent is DOING is not rendered here — it lives in each message's ProcessBlock.
+ * agent is DOING is not rendered here — it lives in each message's WorkGroup.
  *
  * Migration Step 5.1 (this revision): TabView is now rendered ONE PER OPEN TAB
  * and kept mounted; only the active tab is visible (`display:none` otherwise).
@@ -36,7 +36,8 @@ import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useSta
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
-import { STEP_VERB_FALLBACK, deriveTurnView, stepLabel } from '../turnView';
+import { deriveTurnView, stepLabel, stripKind } from '../turnView';
+import { stripKindWord } from './WorkGroup';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
   REPLY_TOP_MARGIN, sentMessageId, tailErrorId,
@@ -512,7 +513,10 @@ function TabViewImpl({
     const step = live?.kind === 'process' ? live.live?.step : undefined;
     if (!step) return null;
     const label = stepLabel(step.block);
-    return label.verb === 'tool' ? label.object : `${tf(t, `chat.turn.verb.${label.verb}.live`, STEP_VERB_FALLBACK[label.verb][0])} ${label.object}`;
+    const kind = stripKind(step.block, label);
+    // An unknown tool's object is its summary or, without one, its own name: say it once.
+    if (kind === 'tool') return label.object;
+    return `${stripKindWord(t, kind, step.block.name)} ${label.object}`;
   }, [isStreaming, messages, t]);
 
   // Last assistant message index — used for Save-to-Memory button placement
@@ -654,7 +658,7 @@ function TabViewImpl({
           // Connection-state indicators (reconnecting / resuming) render right
           // after the streaming assistant message, above any queued user
           // messages. What the agent is DOING lives in that message's own
-          // ProcessBlock (pages/chat/turnView.ts) — the one activity surface —
+          // WorkGroup (pages/chat/turnView.ts) — the one activity surface —
           // so there is no separate activity line here any more.
           const streamingIndicator = isLastAssistantForStreaming ? (
             <>
@@ -742,7 +746,7 @@ function TabViewImpl({
       {/* "Back to latest" pill — shown ONLY while streaming AND the user has
           scrolled away from the bottom (awayFromBottom mirrors followRef). At
           the bottom the live step is already visible in the message's
-          ProcessBlock, so a pill there would repeat it. CSS sticky floats it at
+          WorkGroup, so a pill there would repeat it. CSS sticky floats it at
           the bottom of the viewport; click scrolls back to the live message. */}
       {isStreaming && lastAssistantIdx >= 0 && awayFromBottom && (
         <div data-testid="streaming-pill" className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">

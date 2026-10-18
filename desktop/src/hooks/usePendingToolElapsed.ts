@@ -2,7 +2,7 @@
  * usePendingToolElapsed — live per-tool elapsed seconds for a PENDING tool card.
  *
  * Problem (run_02e658d0): during a long tool-execution loop the pending tool
- * CARD (then MergedToolBlock; now ProcessBlock's live title) showed only a static `animate-spin` icon — visually
+ * CARD (then MergedToolBlock; now a WorkGroup strip) showed only a static `animate-spin` icon — visually
  * identical at 5s and 5min, so a long-running tool reads as "frozen" even though
  * the turn is alive. The streaming summary LINE already has a live elapsed timer
  * (useStreamingActivity), but the eye rests on the card, and the card is dead.

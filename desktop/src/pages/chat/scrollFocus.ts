@@ -118,7 +118,8 @@ export function tailErrorId(messages: Message[]): string | null {
  */
 export function isToggleClick(target: EventTarget | null): Element | null {
   if (!(target instanceof Element)) return null;
-  const btn = target.closest('button');
+  // A <button>, or any element acting as one (a thought's text is its own toggle).
+  const btn = target.closest('button, [role="button"]');
   if (!btn || !(btn.hasAttribute('aria-expanded') || btn.hasAttribute('data-expands'))) return null;
   if (btn.closest('[data-live="true"]')) return null;
   return btn;

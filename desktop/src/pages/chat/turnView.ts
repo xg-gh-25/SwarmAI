@@ -14,12 +14,14 @@
  * Unit kinds (time order is always preserved):
  * Stream order is never changed. Only ADJACENT blocks of the same kind are
  * grouped (XG 2026-10-17: "遵守 streaming response 的顺序").
- * - `process`   — a run of ADJACENT tool calls. Rendered as one card: folded once
- *                 finished, open while it is the live (last) unit.
- * - `thought`   — a thinking passage. Narration, like a note: it stays in the
- *                 stream in its place and never folds away with the tool steps
- *                 (XG 2026-10-18). The first one before any tool call is the
- *                 turn's `intent` (how the model read the ask).
+ * - `process`   — a run of ADJACENT tool calls; each call renders as one strip.
+ * - `thought`   — a thinking passage, in its place in the stream. The turn's
+ *                 `intent` ("Approach") is its first substantive thought within
+ *                 the first two tool calls, else its first thought before any.
+ *
+ * A second, pure pass — `groupWork` — folds thoughts and the tool calls they lead
+ * to into work groups (chat display v7.11): a finished group is one WORKED line,
+ * the last group of a streaming turn is the open WORKING card.
  * - `note`      — text the agent wrote BETWEEN tool calls. Rendered in the stream.
  * - `landmark`  — a pipeline landmark / gate verdict line. Stays visible in the
  *                 main stream and splits the process into segments.
@@ -52,10 +54,11 @@
  * and ignored by everything else here, so a sub-agent's 40 reads never look
  * like the main agent's steps.
  *
- * @exports deriveTurnView, stepLabel, extractNextSteps, summarizeProcess,
- *          isLandmarkText, and the TurnView / TurnUnit / ProcessUnit / Step /
- *          ToolStep / ToolStatus / StepLabel / StepVerb / ProcessSummary /
- *          NextStepsResult types
+ * @exports deriveTurnView, groupWork, groupTitle, stepLabel, stripKind,
+ *          extractNextSteps, summarizeProcess, isLandmarkText, sectionUnits,
+ *          and the TurnView / TurnUnit / ProcessUnit / Step / ToolStep /
+ *          ToolStatus / StepLabel / StepVerb / StripKind / WorkGroup / WorkItem /
+ *          ProcessSummary / NextStepsResult types
  */
 import type {
   ContentBlock,
@@ -375,10 +378,31 @@ export function deriveTurnView(
     }
   }
 
-  // The intent: the first thought before any tool call.
-  for (const u of units) {
-    if (u.kind === 'process' && u.steps.length > 0) break;
-    if (u.kind === 'thought') { u.intent = true; break; }
+  // The intent ("Approach"): the first thought of at least INTENT_MIN_CHARS within the
+  // first INTENT_TOOL_WINDOW tool calls — a turn often opens with "let me look at the
+  // image first" and only reads the ask after that first look. Else the first thought
+  // before any tool call. This loop is the single source; groupWork only reads it.
+  {
+    let tools = 0;
+    let first: ThoughtUnit | undefined;
+    let long: ThoughtUnit | undefined;
+    // The thought still streaming (the turn's last unit) — `live` is marked below.
+    const tail = units[units.length - 1];
+    const streamingThought = isStreaming && tail?.kind === 'thought' ? tail : undefined;
+    for (const u of units) {
+      if (u.kind === 'process') {
+        tools += u.steps.length;
+        if (tools >= INTENT_TOOL_WINDOW + 1) break;
+        continue;
+      }
+      if (u.kind !== 'thought') continue;
+      if (tools === 0 && !first) first = u;
+      // Only a FINISHED thought can win on length: one still streaming would take the
+      // label mid-sentence and move the layout under the reader as it grows.
+      if (u !== streamingThought && u.text.trim().length >= INTENT_MIN_CHARS) { long = u; break; }
+    }
+    const intent = long ?? first;
+    if (intent) intent.intent = true;
   }
 
   let liveStage: LiveStage | undefined;
@@ -466,15 +490,6 @@ export type StepVerb =
   | 'read' | 'edit' | 'search' | 'run' | 'list' | 'fetch' | 'websearch'
   | 'loadTools' | 'skill' | 'todo' | 'agent' | 'mcp' | 'tool';
 
-/** English [live, done] verb for each step kind — the i18n fallback. */
-export const STEP_VERB_FALLBACK: Record<StepVerb, [string, string]> = {
-  read: ['Reading', 'Read'], edit: ['Editing', 'Edited'], search: ['Searching', 'Searched'],
-  run: ['Running', 'Ran'], list: ['Listing', 'Listed'], fetch: ['Fetching', 'Fetched'],
-  websearch: ['Searching web', 'Searched web'], loadTools: ['Loading tools', 'Loaded tools'],
-  skill: ['Using skill', 'Used skill'], todo: ['Updating plan', 'Updated plan'], agent: ['Running sub-agent', 'Ran sub-agent'],
-  mcp: ['Calling', 'Called'], tool: ['Running', 'Ran'],
-};
-
 export interface StepLabel {
   verb: StepVerb;
   /** Short human object: a basename, a quoted pattern, a command head. */
@@ -498,6 +513,15 @@ const SETUP_RE = /^\s*(?:cd|export\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*')?
 /** What is left when the (200-char-truncated) summary held nothing but setup. */
 const SETUP_ONLY_RE = /^\s*(?:cd|export|source|set)\b/;
 const WRAPPER_RE = /^\s*(?:perl\s+-e\s+'alarm\s+\d+;\s*exec\s+@ARGV'\s+|g?timeout\s+\d+[smh]?\s+)/;
+/** A bare assignment (`R=run_x;`) or an env prefix (`FOO=1 cmd`): never the subject. */
+const ASSIGN_RE = /^\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)(?:\s*(?:&&|;|\n)\s*|\s+)/;
+/** `LOG=$(ls -t … | head -1)`: the command inside the substitution is the subject. */
+const ASSIGN_SUBST_RE = /^\s*[A-Za-z_][A-Za-z0-9_]*=\$\(/;
+/** A probe that runs before the real command (`uptime; …`) and says nothing about it. */
+const PROBE_RE = /^\s*(?:uptime|date|pwd|true|clear|sleep\s+\d+)\b[^\n;&|]*(?:&&|;|\n)\s*/;
+/** Programs shown with their subcommand (`git log`, `npm run build`). */
+const SUBCOMMAND_HEADS = new Set(['git', 'npm', 'npx', 'pnpm', 'yarn', 'uv', 'cargo', 'go', 'gh', 'brew', 'docker', 'kubectl', 'aws']);
+const SCRIPT_HEADS = new Set(['python', 'python3', 'node', 'bash', 'sh', 'zsh', 'perl', 'ruby', 'deno', 'bun', 'tsx', 'ts-node']);
 
 /** The command split at every UNQUOTED `&&` / `||` / `|` / `;` / newline. */
 function splitSegments(cmd: string): string[] {
@@ -579,7 +603,7 @@ function resolveBashPath(file: string, cwd: string | undefined): string | undefi
 function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path'> {
   let rest = cmd;
   for (let guard = 0; guard < 8; guard += 1) {
-    const next = rest.replace(SETUP_RE, '').replace(WRAPPER_RE, '');
+    const next = rest.replace(SETUP_RE, '').replace(ASSIGN_SUBST_RE, '').replace(ASSIGN_RE, '').replace(PROBE_RE, '').replace(WRAPPER_RE, '');
     if (next === rest) break;
     rest = next;
   }
@@ -593,17 +617,26 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path'> {
   const nonFlag = args.filter((a) => !a.startsWith('-'));
 
   if (!segments.every(isReadOnlySegment)) {
-    // Something in it may write: never dress it up as a read. Scripts and known
-    // tools keep their short name; anything else shows the command itself.
-    if (['python', 'python3', 'node', 'bash', 'sh', 'perl', 'ruby', 'deno'].includes(head)) {
-      const script = nonFlag.find((a) => /\.[a-z]{1,4}$/i.test(a));
-      if (script) return { verb: 'run', object: basename(script) };
+    // Something in it may write: never dress it up as a read. The object is never
+    // the command itself (v7.11): a script's name, a program and its subcommand, or
+    // the program alone — the raw command is audit material, not a row title.
+    const write = /^(?:cat|tee|printf|echo)$/.test(head) ? writeTarget(segment) : undefined;
+    if (write) {
+      const full = resolveBashPath(write, leadingCd(cmd));
+      return full ? { verb: 'edit', object: basename(write), path: full } : { verb: 'edit', object: basename(write) };
     }
-    if (['git', 'npm', 'npx', 'pnpm', 'yarn', 'uv', 'cargo', 'go', 'gh'].includes(head)) {
-      return { verb: 'run', object: [head, ...args.slice(0, 2)].join(' ') };
+    if (SCRIPT_HEADS.has(head)) {
+      if (args.some((a) => a === '-c' || a === '-e' || a === '-') || /<</.test(segment)) return { verb: 'run', object: 'inline script' };
+      const script = nonFlag[0];
+      if (script && /\.[a-z]{1,4}$/i.test(script)) return { verb: 'run', object: basename(script) };
+      return { verb: 'run', object: head };
     }
-    const whole = rest.replace(/\s+/g, ' ').trim();
-    return { verb: 'run', object: whole.length > 60 ? `${whole.slice(0, 57)}…` : whole || cmd.slice(0, 60) };
+    if (SUBCOMMAND_HEADS.has(head)) {
+      const [sub, next] = nonFlag;
+      const words = [head, sub, sub === 'run' || sub === 'exec' ? next : undefined].filter(Boolean);
+      return { verb: 'run', object: words.join(' ') };
+    }
+    return { verb: 'run', object: head || '…' };
   }
 
   if (['cat', 'head', 'tail', 'less', 'sed', 'wc'].includes(head)) {
@@ -621,8 +654,61 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path'> {
     const dir = nonFlag.find(looksLikePath) ?? nonFlag[0] ?? '.';
     return { verb: 'list', object: basename(dir) };
   }
-  const shown = segment.length > 60 ? `${segment.slice(0, 57)}…` : segment;
-  return { verb: 'run', object: shown || cmd.slice(0, 60) };
+  return { verb: 'run', object: head || '…' };
+}
+
+/** `cat > a.py <<EOF` / `tee a.md`: the file a write-only command creates. */
+function writeTarget(segment: string): string | undefined {
+  const tokens = tokenize(segment);
+  for (let i = 1; i < tokens.length; i += 1) {
+    const m = /^>>?(.*)$/.exec(tokens[i]);
+    if (m) { const t = m[1] || tokens[i + 1]; return t && looksLikePath(t) ? t : undefined; }
+  }
+  if (tokens[0] === 'tee') return tokens.slice(1).find((t) => !t.startsWith('-') && looksLikePath(t));
+  return undefined;
+}
+
+/** The one-word kind a tool-call strip leads with (v7.11): Read / Search / Write /
+ *  Edit / Run / Test / Git / Pipeline / Query / Agent / Skill / … */
+export type StripKind =
+  | 'read' | 'search' | 'write' | 'edit' | 'run' | 'test' | 'git' | 'pipeline'
+  | 'query' | 'fetch' | 'agent' | 'skill' | 'tools' | 'plan' | 'tool';
+
+/** English strip-kind word — the i18n fallback. */
+export const STRIP_KIND_FALLBACK: Record<StripKind, string> = {
+  read: 'Read', search: 'Search', write: 'Write', edit: 'Edit', run: 'Run', test: 'Test',
+  git: 'Git', pipeline: 'Pipeline', query: 'Query', fetch: 'Fetch', agent: 'Agent',
+  skill: 'Skill', tools: 'Tools', plan: 'Plan', tool: 'Tool',
+};
+
+const TEST_RE = /\b(?:pytest|vitest|jest|pipeline_test\.py|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|cargo\s+test|go\s+test|tsc\b)/;
+const PIPELINE_RE = /\b(?:artifact_cli|pipeline_validator|spawn_prompt|spawn_budget)\.py\b/;
+
+/** A tool call's strip kind, from its tool name and label. Pure. */
+export function stripKind(block: ToolUseContent, label: StepLabel): StripKind {
+  const name = block.name || '';
+  if (name === 'Write') return 'write';
+  if (name === 'Edit' || name === 'MultiEdit' || name === 'NotebookEdit') return 'edit';
+  if (name.startsWith('mcp__')) return 'query';
+  switch (label.verb) {
+    case 'read': case 'list': return 'read';
+    case 'search': case 'websearch': return 'search';
+    case 'edit': return name === 'Bash' ? 'write' : 'edit';
+    case 'fetch': return 'fetch';
+    case 'agent': return 'agent';
+    case 'skill': return 'skill';
+    case 'loadTools': return 'tools';
+    case 'todo': return 'plan';
+    case 'mcp': return 'query';
+    case 'run': {
+      const cmd = label.raw.replace(/^Running:\s*/, '');
+      if (TEST_RE.test(cmd)) return 'test';
+      if (PIPELINE_RE.test(cmd)) return 'pipeline';
+      if (/^git\b/.test(label.object)) return 'git';
+      return 'run';
+    }
+    default: return 'tool';
+  }
 }
 
 /** backend tool_summarizer MAX_SUMMARY_LENGTH — a summary this long was cut. */
@@ -827,6 +913,119 @@ export function turnChangedFiles(units: TurnUnit[]): string[] {
   return out;
 }
 
+// ── Work groups (chat display v7.11) ───────────────────────────────────────
+//
+// A group is a thought plus the tool calls it leads to. It closes at a note to the
+// user, a landmark / stage / interrupt / outcome. A note ending in ":" ("Now the
+// two docs:") is the NEXT group's title, not an item of its own. A thought after
+// tool calls that leads to no further tool call before the next boundary reflects on
+// that work and stays in the group. Finished groups fold to one WORKED / THOUGHT line;
+// only the last group of a streaming turn is live (the WORKING card). The intent
+// thought (Approach) is passed through, never grouped.
+
+/** Characters a thought needs to count as the turn's intent rather than an opener. */
+export const INTENT_MIN_CHARS = 160;
+/** How many tool calls may come before the intent thought. */
+export const INTENT_TOOL_WINDOW = 2;
+
+export interface WorkGroup {
+  kind: 'group';
+  /** `grp-<first process id>` (else `grp-th-<first thought ordinal>`): survives the
+   *  stream-end reconcile and the intent moving to a later thought. */
+  id: string;
+  /** Thoughts and process segments, in stream order. */
+  members: (ThoughtUnit | ProcessUnit)[];
+  /** A ":"-ended lead-in note, without the colon. */
+  title?: string;
+  /** The last group of a streaming turn. */
+  live: boolean;
+  /** Has at least one tool call (else it is a THOUGHT group). */
+  hasTools: boolean;
+}
+
+export type WorkItem = WorkGroup | Exclude<TurnUnit, ProcessUnit>;
+
+/** Characters a lead-in may have: it becomes a one-line title, so a longer note
+ *  (or one with more lines) stays a note — the title would hide the rest of it. */
+const LEAD_IN_MAX_CHARS = 120;
+const isLeadIn = (u: TurnUnit): u is NoteUnit => {
+  if (u.kind !== 'note') return false;
+  const t = u.text.trim();
+  return /[:：]$/.test(t) && !t.includes('\n') && t.length <= LEAD_IN_MAX_CHARS;
+};
+
+/** `exclude`: a note that is never a lead-in (the turn's alignment restatement). */
+export function groupWork(units: TurnUnit[], isStreaming: boolean, exclude?: TurnUnit): WorkItem[] {
+  const out: WorkItem[] = [];
+  let cur: WorkGroup | null = null;
+  let title: NoteUnit | null = null;
+  const open = (): WorkGroup => {
+    const g: WorkGroup = { kind: 'group', id: '', members: [], live: false, hasTools: false };
+    if (title) { g.title = title.text.trim().replace(/[:：]\s*$/, ''); title = null; }
+    out.push(g);
+    return g;
+  };
+  // A thought leads new work when a tool call follows before any boundary.
+  const leadsTools = (i: number) => {
+    for (let j = i + 1; j < units.length; j += 1) {
+      const u = units[j];
+      if (u.kind === 'process') return u.steps.length > 0;
+      if (u.kind !== 'thought') return false;
+    }
+    return false;
+  };
+  const flushTitle = () => { if (title) { out.push(title); title = null; } };
+  units.forEach((u, i) => {
+    if (u.kind === 'thought' && !u.intent) {
+      if (!cur || (cur.hasTools && leadsTools(i))) cur = open();
+      cur.members.push(u);
+      return;
+    }
+    if (u.kind === 'process') {
+      if (!cur) cur = open();
+      cur.members.push(u);
+      if (u.steps.length > 0) cur.hasTools = true;
+      return;
+    }
+    cur = null;
+    // The streaming answer-so-far ('outcome') is never a lead-in, even when it ends in
+    // ":" ("Here are three options:") — it becomes a note, and so a title, only once
+    // a tool call follows it. Otherwise the answer would flip into a card and back.
+    if (isLeadIn(u) && u !== exclude) { flushTitle(); title = u; return; }
+    flushTitle();
+    out.push(u);
+  });
+  // (assigned inside the forEach callback, so TS cannot narrow it here)
+  const tail = title as NoteUnit | null;
+  if (tail) {
+    // A lead-in with nothing after it yet: while streaming it titles the work about to
+    // start; once the turn is over it is just a note.
+    if (isStreaming) {
+      const placeholder: ProcessUnit = { kind: 'process', id: `lead-${tail.index}`, steps: [], isLive: true, live: {} };
+      open().members.push(placeholder);
+    } else flushTitle();
+  }
+  // A group's id is its first PROCESS member's (stable `seg-<n>`), else its first
+  // thought's: when the intent moves to a later thought, the opener joins the work
+  // group in front of it without renaming it — no remount, no fold under the reader.
+  for (const g of out) {
+    if (g.kind !== 'group') continue;
+    const p = g.members.find((m): m is ProcessUnit => m.kind === 'process');
+    const t = g.members.find((m): m is ThoughtUnit => m.kind === 'thought');
+    g.id = `grp-${p ? p.id : `th-${t?.ordinal ?? 0}`}`;
+  }
+  const last = out[out.length - 1];
+  if (isStreaming && last && last.kind === 'group') last.live = true;
+  else if (isStreaming && (!last || last.kind === 'stage' || last.kind === 'landmark')) {
+    // Streaming, and nothing has started since a boundary (or nothing at all yet):
+    // an empty WORKING card holds the turn's one spinner until the next item lands.
+    const id = `lead-${last ? last.index : 0}`;
+    const placeholder: ProcessUnit = { kind: 'process', id, steps: [], isLive: true, live: {} };
+    out.push({ kind: 'group', id: `grp-${id}`, members: [placeholder], live: true, hasTools: false });
+  }
+  return out;
+}
+
 // ── Stage sections (pipeline turns) ─────────────────────────────────────────
 //
 // A `stage` row is written when a stage FINISHES, after its work. So the units
@@ -890,16 +1089,11 @@ export function stageHeadline(summary: string | null | undefined): string {
   return (summary ?? '').split(/\s+·\s+|[(（]/)[0].trim().slice(0, 48);
 }
 
-// ── Segment titles (finished turns) ───────────────────────────────────────────
-// A note the model wrote right before a run of work says what that work is for
-// ("Now let me check the store…"). Once the turn is over, that note becomes the
-// work's title line — one line instead of a paragraph plus a line — and its full
-// text sits above the steps when the user opens them.
+// ── Group titles ─────────────────────────────────────────────────────────────
+// A group's folded line is titled by its ":"-ended lead-in note, else the first
+// sentence of its first thought — as plain text, one line.
 
 export type NoteUnit = Extract<TurnUnit, { kind: 'note' }>;
-
-/** A headline length past which the folded line cannot show the whole sentence. */
-export const HEADLINE_FULL_CHARS = 80;
 
 /** A note's first line as plain text: markdown markers, emphasis, code ticks and
  *  link targets removed ("## **Fix** the `store`" → "Fix the store"). */
@@ -913,26 +1107,12 @@ export function noteHeadline(text: string): string {
     .trim();
 }
 
-/** Whether a headed note has more to say than its folded headline. */
-export function noteHasMore(text: string): boolean {
-  const lines = text.split('\n').filter((l) => l.trim().length > 0);
-  return lines.length > 1 || noteHeadline(text).length > HEADLINE_FULL_CHARS;
-}
-
-/**
- * The finished turn's top-level work runs, each paired with the note right before
- * it. Only adjacent TOP-LEVEL sections pair (a stage's body is already titled by
- * its row); `exclude` (the turn's alignment note) never becomes a title.
- */
-export function headedProcesses(sections: TurnSection[], exclude?: TurnUnit): Map<ProcessUnit, NoteUnit> {
-  const out = new Map<ProcessUnit, NoteUnit>();
-  for (let k = 1; k < sections.length; k += 1) {
-    const a = sections[k - 1];
-    const b = sections[k];
-    if (a.kind !== 'unit' || b.kind !== 'unit') continue;
-    if (a.unit.kind !== 'note' || a.unit === exclude || !noteHeadline(a.unit.text)) continue;
-    if (b.unit.kind !== 'process' || b.unit.isLive || b.unit.steps.length === 0) continue;
-    out.set(b.unit, a.unit);
-  }
-  return out;
+/** A group's title line: its lead-in, else its first thought's first sentence. */
+export function groupTitle(g: WorkGroup): string {
+  if (g.title) return noteHeadline(g.title);
+  const th = g.members.find((m): m is ThoughtUnit => m.kind === 'thought' && m.text.trim().length > 0);
+  if (!th) return '';
+  const line = noteHeadline(th.text);
+  const m = /^(.+?(?:[.!?](?=\s|$)|[。！？]))/.exec(line);
+  return (m ? m[1] : line).trim();
 }

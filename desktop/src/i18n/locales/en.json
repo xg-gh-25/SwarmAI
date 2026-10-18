@@ -248,9 +248,7 @@
     },
     "turn": {
       "thinking": "Thinking",
-      "worked": "Worked",
       "readTimes": "{{count}}×",
-      "subAgent": "Sub-agent",
       "nowUsing": "now {{tool}}",
       "subAgentStatus": {
         "failed": "failed",
@@ -258,11 +256,6 @@
       },
       "steps_one": "{{count}} step",
       "steps_other": "{{count}} steps",
-      "failed_one": "{{count}} failed",
-      "failed_other": "{{count}} failed",
-      "showSteps": "Show steps",
-      "hideSteps": "Hide steps",
-      "showCommand": "Show command",
       "counts": {
         "read_one": "read {{count}} file",
         "read_other": "read {{count}} files",
@@ -275,60 +268,6 @@
         "fetch_one": "fetched {{count}} page",
         "fetch_other": "fetched {{count}} pages"
       },
-      "verb": {
-        "read": {
-          "live": "Reading",
-          "done": "Read"
-        },
-        "edit": {
-          "live": "Editing",
-          "done": "Edited"
-        },
-        "search": {
-          "live": "Searching",
-          "done": "Searched"
-        },
-        "run": {
-          "live": "Running",
-          "done": "Ran"
-        },
-        "list": {
-          "live": "Listing",
-          "done": "Listed"
-        },
-        "fetch": {
-          "live": "Fetching",
-          "done": "Fetched"
-        },
-        "websearch": {
-          "live": "Searching web",
-          "done": "Searched web"
-        },
-        "loadTools": {
-          "live": "Loading tools",
-          "done": "Loaded tools"
-        },
-        "skill": {
-          "live": "Using skill",
-          "done": "Used skill"
-        },
-        "todo": {
-          "live": "Updating plan",
-          "done": "Updated plan"
-        },
-        "agent": {
-          "live": "Running sub-agent",
-          "done": "Ran sub-agent"
-        },
-        "mcp": {
-          "live": "Calling",
-          "done": "Called"
-        },
-        "tool": {
-          "live": "Running",
-          "done": "Ran"
-        }
-      },
       "showAll": "{{count}} more · show all",
       "backToLatestThinking": "Thinking · back to latest",
       "stage": {
@@ -340,18 +279,16 @@
         "position": "stage {{position}} of {{total}}",
         "changed_one": "changed {{count}} file",
         "changed_other": "changed {{count}} files",
-        "next": "next {{stages}}"
+        "next": "next {{stages}}",
+        "changedNames": "changed {{files}}"
       },
       "changed": "changed",
       "andMore": "+{{count}}",
-      "failedRecovered_one": "{{count}} failed, recovered",
-      "failedRecovered_other": "{{count}} failed, recovered",
       "failedOne": "failed",
       "alignment": "Understanding",
       "result": "Result",
       "thisTurnChanged": "This turn changed",
       "approach": "Approach",
-      "noAlignment": "Started without restating the ask",
       "run": {
         "stages": "{{count}} stages"
       },
@@ -370,10 +307,29 @@
         "copyPath": "Copy path",
         "copied": "Copied"
       },
-      "thoughtRow": "Thought",
       "backToLatestAction": "{{action}} · back to latest",
-      "thoughtMore": "Show all",
-      "thoughtLess": "Show less"
+      "kind": {
+        "read": "Read",
+        "search": "Search",
+        "write": "Write",
+        "edit": "Edit",
+        "run": "Run",
+        "test": "Test",
+        "git": "Git",
+        "pipeline": "Pipeline",
+        "query": "Query",
+        "fetch": "Fetch",
+        "agent": "Agent",
+        "skill": "Skill",
+        "tools": "Tools",
+        "plan": "Plan",
+        "tool": "Tool"
+      },
+      "group": {
+        "working": "Working",
+        "worked": "Worked",
+        "thought": "Thought"
+      }
     },
     "nextSteps": {
       "label": "Next steps",

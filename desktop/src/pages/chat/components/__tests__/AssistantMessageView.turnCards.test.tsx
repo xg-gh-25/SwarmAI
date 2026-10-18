@@ -141,7 +141,7 @@ describe('pipeline_attention — what needs the user', () => {
     const card = screen.getByTestId('turn-attention');
     expect(screen.queryByTestId('turn-result')).toBeNull();
     // right after the deliver section, before the work that follows it
-    const rows = screen.getAllByTestId('process-row');
+    const rows = screen.getAllByTestId('work-group');
     expect(card.compareDocumentPosition(rows[rows.length - 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

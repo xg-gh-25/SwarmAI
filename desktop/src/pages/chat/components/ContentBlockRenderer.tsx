@@ -2,7 +2,7 @@
  * Routes content blocks to type-specific renderers.
  *
  * Markdown text and the interactive interrupts (question / permission /
- * escalation). Tool calls never come here: they render inside ProcessBlock
+ * escalation). Tool calls never come here: they render as WorkGroup strips
  * from the turn projection (turnView), so a tool_use / tool_result block
  * renders nothing.
  *

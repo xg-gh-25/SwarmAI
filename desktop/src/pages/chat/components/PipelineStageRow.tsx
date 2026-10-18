@@ -10,6 +10,8 @@
  *   - the stage now running stays open: "⑤ BUILD · in progress · stage 5 of 8 ·
  *     next REVIEW → TEST" (`upcoming`, from the run's plan in its pipeline_run block).
  *     It carries no spinner — the live work card below holds the one spinner.
+ *   - a finished stage with no model summary says its effect instead: the names of
+ *     the files it changed (plain text — the row is a button, so no chips in it).
  *   - colour only for exceptions: a Gate verdict other than PASS (WARN amber, BLOCK
  *     red), an unrecovered failure. A normal finish is neutral.
  *
@@ -42,6 +44,10 @@ function verdictClass(verdict: string): string {
   return 'text-[var(--color-text-muted)]'; // PASS and the rest: neutral
 }
 
+/** A summary-less stage row names at most this many changed files. */
+const NAMED_FILES = 3;
+const baseName = (p: string) => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
+
 const formatSeconds = (s: number): string =>
   s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 
@@ -63,6 +69,8 @@ export interface PipelineStageRowProps {
   startedAt?: string;
   /** Files the stage's work changed. */
   changedCount?: number;
+  /** Their paths: named on the row when the stage has no summary. */
+  changedFiles?: string[];
   /** The stage's work ended on a failure nobody recovered from. */
   failed?: boolean;
   /** Something inside needs the user (an unanswered question) — never folded away. */
@@ -74,7 +82,7 @@ export interface PipelineStageRowProps {
 }
 
 export function PipelineStageRow({
-  block, live, position, upcoming, startedAt, changedCount = 0, failed, mustOpen, choice, onChoose, children,
+  block, live, position, upcoming, startedAt, changedCount = 0, changedFiles = [], failed, mustOpen, choice, onChoose, children,
 }: PipelineStageRowProps) {
   const { t } = useTranslation();
   const isLive = !block;
@@ -140,7 +148,14 @@ export function PipelineStageRow({
             )}
           </>
         )}
-        {!isLive && changedCount > 0 && (
+        {!isLive && !skipped && !summaryHead && changedFiles.length > 0 ? (
+          <span data-testid="stage-changed-files" className="truncate min-w-0 text-[12px] text-[var(--color-text-dim)]" title={changedFiles.join('\n')}>
+            {tf(t, 'chat.turn.stage.changedNames', 'changed {{files}}', {
+              files: changedFiles.slice(0, NAMED_FILES).map(baseName).join(', ')
+                + (changedFiles.length > NAMED_FILES ? ` +${changedFiles.length - NAMED_FILES}` : ''),
+            })}
+          </span>
+        ) : !isLive && changedCount > 0 && (
           <span className="shrink-0 text-[12px] text-[var(--color-text-dim)]">
             {tf(t, 'chat.turn.stage.changed', 'changed {{count}} files', { count: changedCount })}
           </span>

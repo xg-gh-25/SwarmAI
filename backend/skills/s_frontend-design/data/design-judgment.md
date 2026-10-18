@@ -330,7 +330,20 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   IN the stream, in-band (approve / stop / answer) — never a passive panel the user
   must dig out; a needs-you step outranks the live work as the single focus, and an
   approval shows the exact action being approved. (4) Long/nested work (sub-agents)
-  is summarized, expandable, not dumped.
+  is summarized, expandable, not dumped. (5) **Zero per-item chrome.** Labels and
+  controls live only on GROUP headers and turn landmarks (the alignment, the stage
+  rows, the result divider) — never on the repeated item. A thought carries no
+  "Thought" label and no "Show all / Show less" button: dim italic says it is a
+  thought, the clamp's ellipsis says there is more, and the text itself is the
+  control (click / Enter opens it in place). A label that every item carries tells
+  the reader nothing and taxes every line; it is the cheapest way to dilute a
+  stream. A group of ONE item is that item — never a header that opens to the
+  same line again. (6) **One strip per tool call.** A tool call is one line: kind
+  (Read / Search / Write / Edit / Run / Test …) · target (the file, as a link) ·
+  time · status. Detail appears only when it carries information — a short result
+  ("155 passed"), a sub-agent's verdict, an error on one line below. No row opens
+  to a second level that restates it, and no row shows the raw command: the
+  command is audit material, its program or script name is the row.
 - **Principles (each names the decision it serves):**
   - **One focus at a time** — Check 4 applied across time: the live segment while
     working, the result once done, and a step that needs the user above both. If every
@@ -361,7 +374,10 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   styled identically to the final answer; two progress indicators whose numbers
   disagree; a decision the agent needs routed to an async panel instead of the
   current channel; no stop/intervene; status that lies (frontend guess vs real
-  state).
+  state); a label or toggle repeated on every item ("Thought" + "Show all" under
+  each thought); a single-step group whose header opens to the same step; a raw
+  shell command as a row title; a meta-comment about the model ("started without
+  restating the ask") that the user cannot act on.
 - **The tell:** you are giving finished work the same border and weight as the work
   in progress, or a count ("12 steps · 7 thoughts") is the headline of a summary.
   Ask which of the four questions the user is asking right now, and give weight only

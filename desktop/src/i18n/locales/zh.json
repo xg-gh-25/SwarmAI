@@ -248,9 +248,7 @@
     },
     "turn": {
       "thinking": "思考中",
-      "worked": "做了",
       "readTimes": "{{count}} 次",
-      "subAgent": "子代理",
       "nowUsing": "正在 {{tool}}",
       "subAgentStatus": {
         "failed": "失败",
@@ -258,11 +256,6 @@
       },
       "steps_one": "{{count}} 步",
       "steps_other": "{{count}} 步",
-      "failed_one": "{{count}} 步失败",
-      "failed_other": "{{count}} 步失败",
-      "showSteps": "展开步骤",
-      "hideSteps": "收起步骤",
-      "showCommand": "查看命令",
       "counts": {
         "read_one": "读取 {{count}} 个文件",
         "read_other": "读取 {{count}} 个文件",
@@ -275,60 +268,6 @@
         "fetch_one": "获取 {{count}} 个页面",
         "fetch_other": "获取 {{count}} 个页面"
       },
-      "verb": {
-        "read": {
-          "live": "读取",
-          "done": "读取"
-        },
-        "edit": {
-          "live": "编辑",
-          "done": "编辑"
-        },
-        "search": {
-          "live": "搜索",
-          "done": "搜索"
-        },
-        "run": {
-          "live": "运行",
-          "done": "运行"
-        },
-        "list": {
-          "live": "列出",
-          "done": "列出"
-        },
-        "fetch": {
-          "live": "获取",
-          "done": "获取"
-        },
-        "websearch": {
-          "live": "联网搜索",
-          "done": "联网搜索"
-        },
-        "loadTools": {
-          "live": "加载工具",
-          "done": "加载工具"
-        },
-        "skill": {
-          "live": "使用技能",
-          "done": "使用技能"
-        },
-        "todo": {
-          "live": "更新计划",
-          "done": "更新计划"
-        },
-        "agent": {
-          "live": "运行子代理",
-          "done": "运行子代理"
-        },
-        "mcp": {
-          "live": "调用",
-          "done": "调用"
-        },
-        "tool": {
-          "live": "运行",
-          "done": "运行"
-        }
-      },
       "showAll": "还有 {{count}} 项 · 展开全部",
       "backToLatestThinking": "思考中 · 回到最新",
       "stage": {
@@ -340,18 +279,16 @@
         "position": "第 {{position}}/{{total}} 阶段",
         "changed_one": "改了 {{count}} 个文件",
         "changed_other": "改了 {{count}} 个文件",
-        "next": "接下来 {{stages}}"
+        "next": "接下来 {{stages}}",
+        "changedNames": "改了 {{files}}"
       },
       "changed": "改了",
       "andMore": "等 {{count}} 个",
-      "failedRecovered_one": "{{count}} 步失败（已恢复）",
-      "failedRecovered_other": "{{count}} 步失败（已恢复）",
       "failedOne": "失败",
       "alignment": "理解",
       "result": "结果",
       "thisTurnChanged": "本轮改了",
       "approach": "思路",
-      "noAlignment": "没先复述理解，直接开始了",
       "run": {
         "stages": "{{count}} 个阶段"
       },
@@ -370,10 +307,29 @@
         "copyPath": "复制路径",
         "copied": "已复制"
       },
-      "thoughtRow": "思考",
       "backToLatestAction": "{{action}} · 回到最新",
-      "thoughtMore": "展开全部",
-      "thoughtLess": "收起"
+      "kind": {
+        "read": "读取",
+        "search": "搜索",
+        "write": "写入",
+        "edit": "编辑",
+        "run": "运行",
+        "test": "测试",
+        "git": "Git",
+        "pipeline": "Pipeline",
+        "query": "查询",
+        "fetch": "获取",
+        "agent": "Agent",
+        "skill": "技能",
+        "tools": "工具",
+        "plan": "计划",
+        "tool": "工具"
+      },
+      "group": {
+        "working": "Working",
+        "worked": "Worked",
+        "thought": "Thought"
+      }
     },
     "nextSteps": {
       "label": "下一步",

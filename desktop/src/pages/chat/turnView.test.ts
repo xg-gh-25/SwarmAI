@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
 import {
   deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps, thoughtTail,
-  changedFiles, sectionUnits, stageHeadline,
+  changedFiles, sectionUnits, stageHeadline, stripKind,
 } from './turnView';
 import type { ToolUseContent } from '../../types';
 
@@ -167,12 +167,24 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(v.units.some((u) => u.kind === 'thought' && u.live)).toBe(false);
   });
 
-  it('the intent is the first thought before any tool call — not a later one', () => {
+  it('a short intent is the first thought before any tool call; a short later one never is', () => {
+    // v7.11 rule (INTENT_MIN_CHARS / INTENT_TOOL_WINDOW): the first substantive thought
+    // within the first two tool calls wins; with none, the first thought before any
+    // tool call. These thoughts are all short, so the fallback decides.
     const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
     const late = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th('after work'), tx('done')], false);
     expect(late.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
     const early = deriveTurnView([tx('Reading it as X.'), th('plan it'), th('second'), tu('a', 'Running: ls')], false);
     expect(early.units.filter((u) => u.kind === 'thought').map((u) => u.kind === 'thought' && u.intent)).toEqual([true, false]);
+  });
+
+  it('a substantive thought after a first look (within two tool calls) is the intent instead', () => {
+    const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
+    const real = `The ask is to fix the reconcile race. ${'x'.repeat(160)}`;
+    const v = deriveTurnView([th('Let me look at the image first.'), tu('a', 'Reading /r/a.png', 'Read', 'read'), tr('a'), th(real), tu('b', 'Running: ls')], false);
+    expect(v.units.filter((u) => u.kind === 'thought').map((u) => u.kind === 'thought' && u.intent)).toEqual([false, true]);
+    const tooLate = deriveTurnView([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b'), tu('c', 'Running: id'), tr('c'), th(real)], false);
+    expect(tooLate.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
   });
 
   it('a note written between tools sits between the segments; the NEXT segment is live', () => {
@@ -219,9 +231,9 @@ describe('stepLabel — backend summary string → verb + object (AC5)', () => {
     ['Running: cd /a/b; sed -n 1,200p backend/core/tool_summarizer.py', 'read', 'tool_summarizer.py'],
     ['Running: cat components/ContentBlockRenderer.tsx | sed -n 1,306p', 'read', 'ContentBlockRenderer.tsx'],
     ['Running: ls -la desktop/src/pages/chat/components', 'list', 'components'],
-    ['Running: cd /a/b && git log --oneline -5 -- desktop/', 'run', 'git log --oneline'],
+    ['Running: cd /a/b && git log --oneline -5 -- desktop/', 'run', 'git log'],
     ["Running: perl -e 'alarm 90; exec @ARGV' python3 -I /tmp/x/turns.py", 'run', 'turns.py'],
-    ['Running: export FOO=1; npx vitest run src/a.test.ts', 'run', 'npx vitest run'],
+    ['Running: export FOO=1; npx vitest run src/a.test.ts', 'run', 'npx vitest'],
   ])('bash %s → %s %s', (summary, verb, object) => {
     const l = lab(summary);
     expect(l.verb).toBe(verb);
@@ -376,13 +388,13 @@ describe('stepLabel — real-world setup prefixes (Layer-4 replay found these)',
   const lab = (summary: string) => stepLabel({ type: 'tool_use', id: 'x', name: 'Bash', summary, category: 'bash' } as never);
   it.each([
     ['Running: cd /a/repo 2>/dev/null && source backend/.venv/bin/activate 2>/dev/null; python backend/scripts/x.py --run', 'run', 'x.py'],
-    ['Running: cd ~/.app/logs 2>/dev/null || cd ~/.app\nLOG=$(ls -t ~/.app/logs/b.log | head -1)', 'run', 'LOG=$(ls -t ~/.app/logs/b.log | head -1)'],
+    ['Running: cd ~/.app/logs 2>/dev/null || cd ~/.app\nLOG=$(ls -t ~/.app/logs/b.log | head -1)', 'list', 'b.log'],
     ['Running: cd /a/b 2>/dev/null\nls -la 2>/dev/null', 'list', '.'],
-    ['Running: cd /a/logs 2>/dev/null || cd $HOME/x/logs; pwd; ls -la', 'run', 'pwd'],
-    ['Running: cd /a/p 2>/dev/null && git log --oneline -5 2>/dev/null', 'run', 'git log --oneline'],
+    ['Running: cd /a/logs 2>/dev/null || cd $HOME/x/logs; pwd; ls -la', 'list', '.'],
+    ['Running: cd /a/p 2>/dev/null && git log --oneline -5 2>/dev/null', 'run', 'git log'],
     ['Running: cd /a/repo || exit\ngrep -n "needs_review" core/x.py', 'search', '"needs_review"'],
     ['Running: cd ~/.c/projects 2>/dev/null || { echo "none"; exit 0; }\nls -d *ws*', 'list', '*ws*'],
-    ['Running: export PATH="/a/node/bin:$PATH"\nsource /a/repo/.venv/bin/activate\nnpx vitest run x', 'run', 'npx vitest run'],
+    ['Running: export PATH="/a/node/bin:$PATH"\nsource /a/repo/.venv/bin/activate\nnpx vitest run x', 'run', 'npx vitest'],
     ['Running: cd /Users/someone/Deskt', 'run', '…'],
   ])('%s', (summary, verb, object) => {
     const l = lab(summary);
@@ -511,10 +523,18 @@ describe('stepLabel — a Bash step is relabelled only when ALL of it only reads
     'find . -name "*.tmp" -delete',
     'sort -o out.txt in.txt',
     'cat $(ls -t logs | head -1)',
-  ])('%s → Run with the command itself', (cmd) => {
+  ])('%s → never a read, and never the command itself (v7.11)', (cmd) => {
     const l = label(cmd);
-    expect(l.verb).toBe('run');
-    expect(l.object).toBe(cmd.length > 60 ? `${cmd.slice(0, 57)}…` : cmd);
+    expect(['read', 'search', 'list']).not.toContain(l.verb);
+    expect(l.object).not.toBe(cmd);
+    expect(l.object.length).toBeLessThanOrEqual(24);
+  });
+  it.each([
+    ['cat a.ts > b.ts', 'edit', 'b.ts'],
+    ['echo hi >> notes.md', 'edit', 'notes.md'],
+    ['grep -l foo src | xargs rm', 'run', 'grep'],
+  ])('%s → %s %s', (cmd, verb, object) => {
+    expect(label(cmd)).toMatchObject({ verb, object });
   });
   it('a script behind a writing pipeline keeps its short name', () => {
     expect(label('python3 scripts/x.py --run > out.log')).toMatchObject({ verb: 'run', object: 'x.py' });
@@ -647,5 +667,67 @@ describe('v7.1 — what changed, stage sections, clickable Bash paths', () => {
     const long = `cd /a/repo && cat ${'d/'.repeat(100)}x.ts`;
     const label = stepLabel(tu('x', `Running: ${long}`.slice(0, 200)) as ToolUseContent);
     expect(label.path).toBeUndefined();
+  });
+});
+
+describe('strip labels (chat display v7.11) — never a raw command', () => {
+  const lab = (summary: string, name = 'Bash') => stepLabel({ type: 'tool_use', id: 'x', name, summary } as ToolUseContent);
+
+  it('an inline python -c behind a bare assignment reads "inline script"', () => {
+    const l = lab('Running: R=run_df73d970; python3 -c " import json,os;r=json.load(open(p))"');
+    expect(l.object).toBe('inline script');
+    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary: 'Running: R=run_df73d970; python3 -c "x"' } as ToolUseContent, l)).toBe('run');
+  });
+
+  it('a test-runner command is a Test strip without the command text', () => {
+    const summary = "Running: R=run_x; uptime; perl -e 'alarm 200; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project SwarmAI";
+    const l = lab(summary);
+    expect(l.object).not.toMatch(/R=|perl|alarm|uptime/);
+    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, l)).toBe('test');
+  });
+
+  it('an unknown writing command shows only the program name', () => {
+    expect(lab('Running: rsync -av --delete src/ dst/backup-2026-10-18/').object).toBe('rsync');
+  });
+
+  it('git shows the program and its subcommand, no flags', () => {
+    const summary = 'Running: cd /r && git diff -U0 HEAD -- a.ts';
+    const l = lab(summary);
+    expect(l.object).toBe('git diff');
+    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, l)).toBe('git');
+  });
+
+  it('a heredoc write names the file it writes, as a Write strip', () => {
+    const summary = "Running: cat > /tmp/run/scripts/c1.py <<'PYEOF'";
+    const l = lab(summary);
+    expect(l.object).toBe('c1.py');
+    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, l)).toBe('write');
+  });
+
+  it('a read-only command with no file shows the program, not its arguments', () => {
+    expect(lab("Running: jq '.stages[] | .status' run.json").object).not.toMatch(/stages|status/);
+  });
+
+  it('the pipeline CLI is a Pipeline strip', () => {
+    const summary = 'Running: backend/.venv/bin/python backend/scripts/artifact_cli.py stage-start --project SwarmAI';
+    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, lab(summary))).toBe('pipeline');
+  });
+
+  it('Write and Edit tools are told apart by the tool name', () => {
+    const w = { type: 'tool_use', id: 'w', name: 'Write', summary: 'Writing to /r/a.ts' } as ToolUseContent;
+    const e = { type: 'tool_use', id: 'e', name: 'Edit', summary: 'Writing to /r/a.ts' } as ToolUseContent;
+    expect(stripKind(w, stepLabel(w))).toBe('write');
+    expect(stripKind(e, stepLabel(e))).toBe('edit');
+  });
+
+  it('reads, searches, agents and MCP calls map to their strip kinds', () => {
+    const k = (name: string, summary: string) => {
+      const b = { type: 'tool_use', id: 'k', name, summary } as ToolUseContent;
+      return stripKind(b, stepLabel(b));
+    };
+    expect(k('Read', 'Reading /r/a.ts')).toBe('read');
+    expect(k('Bash', 'Running: grep -n foo /r/a.ts')).toBe('search');
+    expect(k('Agent', 'Agent: Gate-2 correctness')).toBe('agent');
+    expect(k('mcp__builder__search', 'MCP: builder search')).toBe('query');
   });
 });
