@@ -1,9 +1,12 @@
-"""Application configuration settings."""
+"""Application configuration: data/log paths, version, Bedrock model map, settings.
+
+Key symbols: ``get_app_data_dir``, ``get_log_file_path``, ``get_bedrock_model_id``,
+``ANTHROPIC_TO_BEDROCK_MODEL_MAP``, and — loaded lazily from ``config_settings`` on
+first access — ``Settings``, ``get_settings``, ``settings``.
+"""
 import os
-import secrets
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from model_registry import MODEL_REGISTRY
 
@@ -124,72 +127,20 @@ def get_bedrock_model_id(anthropic_model_id: str, config_map: dict[str, str] | N
     return ANTHROPIC_TO_BEDROCK_MODEL_MAP.get(anthropic_model_id, anthropic_model_id)
 
 
-class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
+# ``Settings`` / ``get_settings`` / ``settings`` live in ``config_settings`` and load on
+# first access (PEP 562): the path helpers above are imported by every artifact_cli call
+# and must not pull in pydantic_settings (~100 ms per process). ``from config import
+# settings`` and ``config.settings`` behave exactly as before.
+_LAZY_SETTINGS = ("Settings", "get_settings", "settings")
 
-    # Application
-    app_name: str = "SwarmAI"
-    app_version: str = _read_version()  # reads from VERSION file (single source of truth)
-    debug: bool = False
-
-    # Server
-    host: str = "127.0.0.1"
-    port: int = 8000
-
-    # CORS - Tauri origins for the desktop app (production default).
-    # Security (TT V2265734761 — Cataphract Critical, fix 4): dev-only browser
-    # origins (Vite localhost:5173, CRA localhost:3000) are NOT in the production
-    # default — a page served on those origins could otherwise issue cross-origin
-    # PUT/POST to the daemon. They are re-added ONLY under settings.debug (see the
-    # debug block in main.py). localhost:1420 is the Tauri devUrl and stays.
-    cors_origins: list[str] = ["http://localhost:1420", "tauri://localhost", "https://tauri.localhost", "http://tauri.localhost"]
-
-    # Database
-    database_type: str = "sqlite"
-
-    # SQLite configuration
-    sqlite_db_path: str | None = None  # If None, uses default user data directory
-
-    # AWS (credentials resolved via standard AWS credential chain, not stored here)
-    # aws_region is in config.json via AppConfigManager
-
-    # JWT Authentication
-    jwt_secret_key: str = ""  # Set via JWT_SECRET_KEY env var; auto-generated if empty
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 15
-    refresh_token_expire_days: int = 7
-
-    # Hive app-layer auth (defense-in-depth INNER layer; Caddy basic_auth is the OUTER layer).
-    # ONLY enforced when SWARMAI_MODE=hive (see middleware/hive_auth.py). Desktop/daemon/
-    # subprocess trust the 127.0.0.1 bind and never enforce this. These MUST carry the SAME
-    # credential Caddy validates (hive/Caddyfile @protected) — the provisioner exports
-    # HIVE_USER / HIVE_PASS_HASH to both the Caddy .env and the backend service env.
-    # hive_pass_hash is a bcrypt hash (produced by `caddy hash-password`), verified via
-    # core.auth.verify_password. Empty hash in hive mode => middleware denies ALL (fail-closed).
-    hive_user: str = ""  # Set via HIVE_USER env var
-    hive_pass_hash: str = ""  # Set via HIVE_PASS_HASH env var (bcrypt hash)
-
-    # Rate Limiting
-    rate_limit_per_minute: int = 100
-
-    # NOTE: The following settings have been moved to SwarmWS/config.json
-    # (managed by AppConfigManager, single source of truth):
-    #   - anthropic_api_key, anthropic_base_url, default_model
-    #   - claude_code_use_bedrock
-    #   - aws_region, available_models, bedrock_model_map
-    #   - sandbox_enabled_default, sandbox_auto_allow_bash, sandbox_excluded_commands
-    #   - sandbox_allow_unsandboxed, sandbox_additional_write_paths, sandbox_allowed_hosts
-
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+if TYPE_CHECKING:  # static names for type checkers and PyInstaller's import scan
+    from config_settings import Settings, get_settings, settings
 
 
-@lru_cache()
-def get_settings() -> Settings:
-    """Get cached settings instance."""
-    s = Settings()
-    if not s.jwt_secret_key:
-        s.jwt_secret_key = secrets.token_hex(32)
-    return s
-
-
-settings = get_settings()
+def __getattr__(name: str):
+    if name not in _LAZY_SETTINGS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import config_settings
+    for n in _LAZY_SETTINGS:
+        globals()[n] = getattr(config_settings, n)
+    return globals()[name]
