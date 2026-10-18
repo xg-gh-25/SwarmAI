@@ -4,7 +4,7 @@ date: 2026-10-18
 created: 2026-10-18
 updated: 2026-10-18
 project: SwarmAI
-status: APPROVED r3 — §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行 + 外部审查简化落地）见 §16
+status: APPROVED r3 — §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行 + 两轮外部审查）见 §16
 related: parallel-session-commit-isolation.md（本文是其中"方案二"的完整设计，取代该草稿）; pipeline-run-budget.md; pipeline-speed-systematic-fix.md
 author: Kiro
 ---
@@ -24,6 +24,8 @@ author: Kiro
   run.json、artifact、REPORT 仍在 SwarmWS。
 - **原则**：确定性的工作全部由工具做（同步、`files_touched`、集成、清理），模型只做判断（解决冲突、审查）。
   新流程尽量折进现有的 `stage-start` / `stage-complete` / `run-commit`，不给模型增加新命令和来回。
+- **运行环境**：isolated run 只能在带 hook 的 session 里跑（§4.2）；没有 hook 的 `--bare` 执行器上建 isolated run
+  直接失败并报告。定时 / 后台 run 将来由带 hook 的 daemon 托管执行器承接。
 - **范围外**：不给 SwarmWS 建 worktree（run.json 和 DDD 文档是全局共享状态）；不解决非 pipeline 聊天 session
   之间的摩擦（§10）；不做 hunk 级归属，也不做文件锁（§12）。
 
@@ -77,6 +79,16 @@ worktree 的创建、同步、落地、释放都要知道"谁在改这个 run、
   owner 还活着 → deny，说明是谁在跑。`run-resume` 走同一个判断。
 - **只有 owner 能动 worktree**：`run-sync`、落地、释放要求 `SWARM_APP_SESSION_ID == run.session_id`；
   daemon 的清扫例外（它先确认 owner 不活跃）。
+- **只有带 hook 的 session 能有 isolated run**（不变量，为以后定时 / 后台 run 留接口）：归属判定和写入 gate 都默认
+  run 跑在一个由 SessionRouter 建立、挂了 PreToolUse hook 的 session 里。现有的后台执行器用
+  `claude --print --bare`（`jobs/executor.py`），没有 hook，也没有 `SWARM_APP_SESSION_ID`；在那条路径上建 isolated run，
+  写入 gate 根本不存在。所以：
+  - `prompt_builder` 只给挂了写入 gate 的 session 注入 `SWARM_HOOKED_SESSION=<app session id>`（与
+    `SWARM_APP_SESSION_ID` 一起），`session_link_gate` 像保护 `SWARM_APP_SESSION_ID` 一样保护它不被删除或覆盖。
+  - 建 worktree 的那次 `stage-start` 要求 `SWARM_HOOKED_SESSION` 存在且等于 `run.session_id`。不满足且项目绑定了代码
+    repo、开关为 on → **拒绝并让 run 失败**（`failed`，理由"isolated run 需要带 hook 的 session"），不回退成 shared、
+    不在没有 gate 的情况下悄悄运行。
+  - 以后做 daemon 托管的 headless 执行器时，让它以带 hook 的 session 运行并注入同一个标记，直接接进上面的接管逻辑即可。
 - **一个判定，所有 gate 共用**：`own_isolated_run(session)` = 本 session 拥有、状态不是终止、且有 git 登记的
   active worktree 的 run，没有时间窗口。写入 gate 和 `pipeline_test_gate` 都用它（今天 `pipeline_test_gate`
   的 3 小时窗口会在长 BUILD 后放行一次直接 pytest，测的却是 main）。
@@ -157,6 +169,12 @@ goal_cycle / deliver 的 stage-start 打印，不每次重复。
   `update-ref` / `symbolic-ref` / `branch -f|-D|-m` / `tag` 作用于 `refs/heads/run/<自己的 id>` 以外的 ref；
   `worktree add|remove|move|prune`；不带 `--worktree` 的 `config`（`core.hooksPath`、`filter.*.clean` 会影响所有
   session）；`gc --prune`、`reflog expire`、`replace`、`notes`、`push .`。
+  - **`git stash`（全部子命令）在 `WT_ROOT` 下的任何 worktree 里 deny**。stash 存在 `refs/stash`，所有 worktree 共用
+    一份。实测：在 worktree 里 stash 了 run 写到一半的改动，回到 main 执行 `git stash list` 能看到这条，`stash pop`
+    之后半成品直接进了 main 的工作区。模型想临时回到 base 看一眼时用 `run-diff --mark` 留锚点。识别方式与上面相同
+    （按目标工作区所属的 git common dir，含 `git -C <wt> stash`）。main checkout 里：有 isolated run 的 session 已被
+    判定一拦下；其他 session 在 main 里 stash 照常允许——run 的 worktree 里无法再产生 stash，main 里的 stash 列表里
+    就不会混进 run 的半成品。
 - **硬链接**：worktree 下 `st_nlink > 1` 的文件拒绝 Write / Edit（`ln -f <main>/x.py <wt>/x.py` 之后，改 worktree
   路径实际写的是 main 的 inode）；同步时也拒绝带硬链接的已跟踪文件。
 - **读不拦**：Read / Grep 读 main 时附加一句 additionalContext（"你在读 main；本 run 的副本在 X"）。
@@ -194,10 +212,18 @@ goal_cycle / deliver 的 stage-start 打印，不每次重复。
 | `_diff_pack` 给 Gate-2 的文件列表 | 用 worktree 绝对路径（sub-agent 读相对路径会读到 main） |
 | `pipeline_test._repo_relative`（`--files` 建议） | 接受 worktree 绝对路径 |
 
-- **`files_touched` 由工具推导**：worktree 里 `git status` 相对 base 的改动就是本 run 的全部改动。
-  `stage-complete` 时用它更新 `files_touched`（记 worktree 绝对路径），build.md 里"手工登记 files_touched"
-  和"`git add` 你的文件"两步删掉；deliver.md 的"暂存、取消暂存别人的文件"、test.md 的"每个修复一个原子
-  commit"也删掉（在 worktree 里没意义，在 main 上会被 gate 拒绝）。
+- **本 run 的改动集 = 已跟踪文件的改动和删除 + 模型显式 `git add` 过的新文件**。已跟踪文件的修改、删除由工具
+  自动纳入（`git add -u` 的范围）；**新文件不会自动进来**：模型调试时常在 cwd 留下探针脚本、输出文件、截图
+  （main 里现在就有一个未跟踪的 `.aidlc/mockup_v4.png`），旧的 shared 模式靠模型登记的 `files_touched` 把它们挡在
+  提交之外，worktree 模式不能因为"worktree 里只有本 run 的东西"就用 `add -A` 丢掉这层过滤。SwarmAI 是公开 repo，
+  探针脚本里可能有本机路径、run id（R30#7）甚至 token，而 Gate-2 审查者盯的是代码，一个 `probe.py` 或 `out.txt`
+  很容易被放过。
+  - 新文件要进本 run，模型在 worktree 里 `git add <path>`（与解决冲突时用的是同一个动作，不增加新概念）。
+  - `stage-start` / `stage-complete` 列出 worktree 里**未 add 的新文件**作为 warning（不提交、不进 `T`、不进 Gate-2 diff），
+    模型据此决定 add 还是删掉。
+  - `files_touched` 由这个改动集推导（记 worktree 绝对路径），`stage-complete` 时更新。build.md 里"手工登记
+    files_touched"一步删掉，"`git add` 你的文件"一步改成"新文件 `git add`"；deliver.md 的"暂存、取消暂存别人的文件"、
+    test.md 的"每个修复一个原子 commit"删掉（在 worktree 里没意义，在 main 上会被 gate 拒绝）。
 - **HEAD 一直等于 base**（§7.1），所以所有"diff vs HEAD"的现有代码（`_diff_pack`、`_changed_files_scope`、
   交付总结、runner 的失败分类基线、reviewed_paths 标记）都不用改，基线自动就是 base。
 - srcgraph 缓存按 repo 路径分文件，每个 run 首次冷启动（重新解析，秒级）；释放时删掉该 worktree 的缓存。
@@ -243,14 +269,17 @@ goal_cycle / deliver 的 stage-start 打印，不每次重复。
 3. **rebase**（编辑器一律 `GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true`，否则 `rebase --continue` 会开编辑器失败或挂住）：
    - 先确认：没有 rebase 在进行（有就转到第 4 步的续跑）、`symbolic-ref HEAD == refs/heads/run/<run_id>`、
      HEAD 等于 `base`、`base` 是 `C` 的祖先。
-   - 用临时 index `add -A` 做快照 commit `S`（父为 base），记为 `pre_sync_tip`；把本 run 的分支指向 `S`
-     （工作区内容不变）；`git rebase C`。
+   - 用本 run 的改动集（§6.2：已跟踪文件的改动 + 显式 add 的新文件）做快照 commit `S`（父为 base），记为
+     `pre_sync_tip`；把本 run 的分支指向 `S`（工作区内容不变，未 add 的新文件留在工作区不动）；`git rebase C`。
+     未 add 的新文件与 main 新进来的文件同名时 rebase 会拒绝（"untracked working tree files would be overwritten"），
+     原样报给模型：add 进来或删掉。
    - 成功 → `git reset --soft C`：HEAD 回到新的 base，改动重新变成未提交状态；`base := C`。
 4. **冲突**：保持 rebase 进行中，stage-start 返回 `conflict` 和未合并文件列表（`git diff --name-only --diff-filter=U`），
    下一步："在 worktree 里解决，逐个 `git add` / `git rm`，然后重跑 stage-start"。重跑时只有未合并列表为空才
    `rebase --continue`。**不以"没有冲突标记"判断已解决**：实测二进制冲突、改/删冲突都没有冲突标记，按标记判断会
    悄悄丢掉 run 的改动或替模型做了选择。
-5. **树指纹** `T` = 临时 index `add -A` 后的 `write-tree`（不含 `.aidlc/deliverables/<run_id>/`）。若这次确实
+5. **树指纹** `T` = 本 run 改动集在临时 index 里的 `write-tree`（不含 `.aidlc/deliverables/<run_id>/`；未 add 的新文件
+   不在内）。若这次确实
    rebase 了：用 `git patch-id --stable`（同样排除 B 的路径）比较 `pre_sync_tip` 和新状态——相同 → 提示先跑
    verify；不同 → stage-start 额外给出需要重审的专家列表和基于 `git range-diff` 的 prompt 文件（与今天生成 Gate-2
    prompt 的方式相同），只审变化的部分。
@@ -292,9 +321,8 @@ SwarmAI 里的代码改动按规则本来就走 run，主工作区里的未提�
    symlink；`.gitattributes` 新增 `filter=` / `diff=` / `merge=` → 需要重审。`.git` 路径分量由 git 的 checkout 保护挡住，
    这里只再查一次大小写变体。
 2. **生成 B**（`.aidlc/deliverables/<run_id>/REPORT.md`，按最终的 main 路径），加入 index。
-3. **最终提交**：在 worktree 里 `git commit` 得到 `N`，父为 `C`（断言 `N^ == C`）。普通 commit，经过 git-defender 等
-   全部 hook，扫描的是本 run 的完整改动（包括解决冲突时写的代码）。可能很慢（AGENTS.md 说本机一次 commit 要预留
-   约 600 秒）；P2 先实测，卡片据此给 deliver 的 stage-complete 配 Bash 超时。
+3. **最终提交**：在 worktree 里把本 run 的改动集（§6.2）加 B 提交，得到 `N`，父为 `C`（断言 `N^ == C`）。普通 commit，
+   经过 git-defender 等全部 hook，扫描的是本 run 的完整改动（包括解决冲突时写的代码）。耗时见下面"提交耗时与后台落地"。
 4. 在 run 锁内重新读 status（已被取消 → 撤销）；拿该 repo 的全局集成锁（等待不超过 30 秒，否则 `busy`）。
 5. **落地**：`git -C <main checkout> merge --ff-only N`。
    - 成功 → 第 6 步。
@@ -306,6 +334,20 @@ SwarmAI 里的代码改动按规则本来就走 run，主工作区里的未提�
    换成 main 路径；`worktrees[].state = integrated`。不在任何 worktree 里的文件（SwarmWS 的 DDD 文档、未绑定的 repo）
    照旧用原来的按 pathspec 提交，同样记进 `commits[]`。
 7. 重新生成 REPORT 和 Canvas 行（§6.4），然后释放（§8）。
+
+**提交耗时与后台落地**：AGENTS.md 说本机一次 commit 要预留约 600 秒（git-defender 扫描），而 Bash 工具单次调用最长
+就是 600 秒，后台运行又被 `background_command_guard` 禁止，stage-complete 里提交之后还要 merge、改写 run.json、刷新
+REPORT。只写"实测后配超时"没有后路，所以两条路径都设计好，P2 第一步实测后选：
+
+- **前台路径**（实测 git-defender 在本 repo 上的 commit 耗时 p95 不超过约 400 秒时）：stage-complete 里同步做完第 1–7 步。
+- **后台路径**（超过约 400 秒、或测不出稳定值时；也是默认）：stage-complete 做完前置条件和第 1–2 步后，把落地请求写进
+  daemon 的队列（`~/.swarm-ai/state/integrate-queue/<run_id>.json`，run 锁内写入，带 `T`、`C`、请求者 session），worktree
+  状态记为 `integrating`，立即返回 `integrating`。daemon 的后台 worker（每个 repo 一个、串行）以 owner 的名义执行第 3–7 步
+  （§4.2 允许 daemon 代 owner 操作）：它是长寿进程，不受工具超时限制；commit 的 hook 照常运行。结果写回 run.json。
+- 模型拿到 `integrating` 后，过一会儿重跑 stage-complete（它本来就是幂等的）取结果：仍在进行 → 再次 `integrating`；
+  `integrated` → stage 前进；失败 → 按 7.7 的错误返回。worker 执行期间 run 被取消，第 4 步的状态复查会让它撤销。
+- daemon 重启时，队列里 `integrating` 的请求按第 5 步的结果判断：main 已包含 `N` → 补做第 6–7 步；否则从第 3 步重来
+  （第 3–5 步失败时都会 `reset --soft C`，重来是安全的）。
 
 **中断**：`merge --ff-only` 的原子性由 git 负责；它在更新工作区的过程中被杀的情况与人手动合并被打断相同，
 `git status` 能看到，按 git 的常规方式处理。工具这一侧没有需要恢复的中间状态。
@@ -331,6 +373,8 @@ stage-complete 的错误给出剩余 repo 的下一步；完成门槛（§8.4）
 | `changed_since_review` | stage-complete | 重跑 deliver 的 stage-start |
 | 路径校验失败 | stage-complete | 改掉被拒绝的路径（或说明后由人决定） |
 | `blocked_by_uncommitted` / `busy` / `main_checkout_busy` | stage-complete | 退避后重跑 stage-complete，累计 10 分钟后 checkpoint |
+| `integrating`（后台落地进行中） | stage-complete | 过一会儿重跑 stage-complete 取结果 |
+| `untracked_new_files`（warning，不是错误） | stage-start / stage-complete | 要进本 run 的 `git add`，其余删掉 |
 
 ## 8. 清理：和 run 的结束是同一个动作
 
@@ -458,6 +502,10 @@ run.json 和 token。
 | `WT_ROOT` 下出现未登记目录（含 symlink） | 移入 `.quarantine/`，不删 |
 | daemon 重启 | worktree 在磁盘上；启动时清扫一次 |
 | run 改了依赖文件 | warning：测试用的是 main 已安装的依赖 |
+| 模型在 worktree 里 `git stash` | deny（stash 是所有 worktree 共用的 `refs/stash`） |
+| worktree 里留了探针脚本、输出文件、截图 | 不 add 就不进改动集、不进 `T`、不提交，只列为 warning |
+| 最终 commit 很慢（git-defender） | 后台路径：daemon 执行落地，stage-complete 返回 `integrating`，重跑取结果 |
+| 在没有 hook 的 `--bare` 执行器里建 isolated run | 拒绝，run 失败并报告 |
 
 ## 14. 分期
 
@@ -466,7 +514,8 @@ run.json 和 token。
     stamper）；归属与接管（§4.2）；共用的 `own_isolated_run` 判定。
   - **P1** 建 worktree 与校验（§5）；写入 gate（§6.1）；工具定位与 `.pth` 屏蔽、`files_touched` 由工具推导、命令用 main
     绝对路径（§6.2）；`run-diff` 与 goal 卡片锚点（§6.3）；释放、快照、ledger、完成门槛、清扫（§8）。
-  - **P2** deliver stage-start 里的同步（§7.2）、树指纹绑定（§7.3）、stage-complete 里的 `merge --ff-only` 落地（§7.4）、
+  - **P2** 第一步：实测本 repo 上带 git-defender 的 commit 耗时，据此选前台或后台落地路径（§7.4，默认后台）；然后是
+    deliver stage-start 里的同步（§7.2）、树指纹绑定（§7.3）、stage-complete 里的 `merge --ff-only` 落地（§7.4）、
     多 repo（§7.5）、卡片删减（§6.2、§6.3）、Canvas 与 REPORT 刷新（§6.4）、AGENTS.md 分支规则和 Security
     Architecture 列表。
 - **P3 观测与按数据决定**：统计被挡次数、被挡文件、等待时长、冲突次数、同步引起的重测 / 重审次数；据此决定是否加
@@ -489,6 +538,11 @@ run.json 和 token。
 10. 新 session 接着跑一个旧 session 崩溃留下的 run：自动接管，gate 对新 session 生效；旧 session 还活着时接管被拒。
 11. 从未集成的 run 不能被标成 completed。
 12. `worktree_mode: off`：现有测试全部不变地通过。
+13. 在 worktree 里 `git stash` / `git -C <wt> stash pop` → deny；非 run session 在 main 里 stash 不受影响。
+14. worktree 里有一个未 add 的 `probe.py` 和一张截图：不进 Gate-2 diff、不进 `T`、不进 N，stage-complete 列出 warning；
+    显式 `git add` 的新文件进入 N。
+15. 后台落地：stage-complete 返回 `integrating`，重跑得到 `integrated`；worker 执行中 daemon 重启，恢复后结果正确且只落地一次。
+16. 没有 `SWARM_HOOKED_SESSION`（模拟 `--bare` 执行器）时 stage-start 不建 worktree、run 以 failed 结束并写明理由。
 
 ## 16. 对抗审查记录
 
@@ -538,3 +592,16 @@ run.json 和 token。
 - 写明现有 commit gate 会拦模型在 worktree 里的 commit，这符合不变量。
 - Bash 写入 gate 的边界固定，不再扩展解析器。
 - P0 + P1 + 简化后的 P2 作为第一个可交付单元，做完就能打开开关。
+
+### 16.4 r3 补充（外部审查第二轮，2026-10-18）
+
+| 发现 | 级别 | 处理 |
+|---|---|---|
+| stash 是所有 worktree 共用的 `refs/stash`：worktree 里 stash 的半成品能在 main 里 `stash pop` 出来（审查者实测，本文作者复测确认） | HIGH | 判定三加 stash，`WT_ROOT` 下所有 worktree 的全部子命令 deny；锚点用 `run-diff --mark`（§6.1） |
+| 改动集用 `add -A`，worktree 里的探针脚本、输出、截图会被提交进公开 repo | HIGH | 已跟踪文件的改动和删除自动纳入，新文件必须显式 `git add`；未 add 的列为 warning（§6.2、§7.2） |
+| 最终 commit 可能超过 Bash 工具 600 秒上限，原文只写"实测后配超时" | MED | 前台 / 后台两条路径，实测后选，默认后台：daemon 执行落地，stage-complete 返回 `integrating` 并幂等取结果（§7.4） |
+| 归属和写入 gate 默认 run 跑在带 hook 的 session 里，`--bare` 执行器上建 isolated run 等于没有 gate | 建议 | 不变量：只有带 hook 的 session 能有 isolated run，否则 run 失败并报告；为将来的 daemon 托管执行器留好接入点（§2、§4.2） |
+
+判定三的 stash 规则比建议略窄：只在 `WT_ROOT` 下的 worktree 里对所有 session deny；main checkout 里，有 isolated run 的
+session 已被判定一拦下，其他 session 照常可用。理由：run 的 worktree 里不能再产生 stash，main 的 stash 列表里就不会混进
+run 的半成品；而在 main 里禁掉所有 session 的 stash 会误伤非 pipeline 的正常使用。
