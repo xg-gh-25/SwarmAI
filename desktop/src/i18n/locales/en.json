@@ -203,6 +203,49 @@
         "manual": "manual"
       }
     },
+    "list": {
+      "loadEarlier": "↑ Load earlier messages",
+      "contextRefreshed": "Context Refreshed",
+      "sessionResumed": "Session Resumed",
+      "errorFallback": "An error occurred"
+    },
+    "escalation": {
+      "title": "Escalation",
+      "resolved": "Escalation resolved"
+    },
+    "permission": {
+      "title": "Permission Required",
+      "awaiting": "Awaiting decision",
+      "flagged": "Flagged:"
+    },
+    "queued": {
+      "label": "Queued — will send when ready",
+      "cancel": "Cancel queued message"
+    },
+    "input": {
+      "dropFiles": "Drop files here",
+      "navigateHint": "navigate",
+      "selectHint": "select",
+      "closeEsc": "Close (Esc)",
+      "stopEsc": "Stop generation (Esc)",
+      "refreshTitle": "Refresh context — restart {{name}} with the conversation summary",
+      "refreshAria": "Refresh context"
+    },
+    "tabStatus": {
+      "streaming": "Streaming",
+      "waitingInput": "Waiting for input",
+      "permissionNeeded": "Permission needed",
+      "error": "Error",
+      "newContent": "New content",
+      "unread": "Unread messages"
+    },
+    "alerts": {
+      "label": "Needs You",
+      "ariaCalm": "Alerts — nothing needs you",
+      "aria": "Alerts — {{n}} item(s) need you",
+      "titleCalm": "Nothing needs you",
+      "title": "{{n}} item(s) need you — open Need You"
+    },
     "turn": {
       "thinking": "Thinking",
       "worked": "Worked",

@@ -17,6 +17,8 @@
  *   - count  >  0  → ALERT: red-tinted + pulsing count badge.
  */
 import { dispatchUiCommand } from '../../../utils/uiCommands';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 
 interface AlertsPillProps {
   /** Total Need You items (counts.blocking + counts.review). */
@@ -24,6 +26,7 @@ interface AlertsPillProps {
 }
 
 export function AlertsPill({ count }: AlertsPillProps) {
+  const { t } = useTranslation();
   const calm = count === 0;
 
   return (
@@ -31,8 +34,12 @@ export function AlertsPill({ count }: AlertsPillProps) {
       <button
         type="button"
         onClick={() => dispatchUiCommand('show-needs-you')}
-        aria-label={calm ? 'Alerts — nothing needs you' : `Alerts — ${count} item(s) need you`}
-        title={calm ? 'Nothing needs you' : `${count} item(s) need you — open Need You`}
+        aria-label={calm
+          ? tf(t, 'chat.alerts.ariaCalm', 'Alerts — nothing needs you')
+          : tf(t, 'chat.alerts.aria', 'Alerts — {{n}} item(s) need you', { n: count })}
+        title={calm
+          ? tf(t, 'chat.alerts.titleCalm', 'Nothing needs you')
+          : tf(t, 'chat.alerts.title', '{{n}} item(s) need you — open Need You', { n: count })}
         data-testid="sidebar-alerts-slot"
         className={[
           'mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 border transition-colors',
@@ -44,7 +51,7 @@ export function AlertsPill({ count }: AlertsPillProps) {
         <span className="w-4 flex items-center justify-center">
           <span className="material-symbols-outlined text-[19px] leading-none">notifications</span>
         </span>
-        <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide whitespace-nowrap">Needs You</span>
+        <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide whitespace-nowrap">{tf(t, 'chat.alerts.label', 'Needs You')}</span>
         {!calm && (
           <span className="min-w-[16px] h-4 px-1 rounded-lg bg-red-500 text-white text-[9.5px] font-bold font-mono flex items-center justify-center animate-pulse">
             {count}

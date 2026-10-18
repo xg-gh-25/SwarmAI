@@ -578,7 +578,7 @@ function TabViewImpl({
           onClick={onLoadOlder}
           className="w-full py-1.5 text-xs text-gray-400 hover:text-gray-300 transition-colors text-center"
         >
-          ↑ Load earlier messages
+          {tf(t, 'chat.list.loadEarlier', '↑ Load earlier messages')}
         </button>
       )}
       {messages.length === 0 && isLoadingHistory ? (
@@ -609,7 +609,9 @@ function TabViewImpl({
               return <CompactNotice key={msg.id} message={msg} isStreaming={isStreaming && idx > lastUserIdx} />;
             }
             const isRefresh = msg.id.startsWith('refresh-');
-            const label = isRefresh ? 'Context Refreshed' : 'Session Resumed';
+            const label = isRefresh
+              ? tf(t, 'chat.list.contextRefreshed', 'Context Refreshed')
+              : tf(t, 'chat.list.sessionResumed', 'Session Resumed');
             return (
               <div key={msg.id} className="flex items-center gap-3 py-3 px-4 select-none">
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
@@ -626,7 +628,7 @@ function TabViewImpl({
           // Error messages get the structured error renderer
           if (msg.isError) {
             const textBlock = msg.content.find(b => b.type === 'text');
-            const errorText = textBlock && 'text' in textBlock ? textBlock.text : 'An error occurred';
+            const errorText = textBlock && 'text' in textBlock ? textBlock.text : tf(t, 'chat.list.errorFallback', 'An error occurred');
             const errorCode = (msg as unknown as Record<string, unknown>).errorCode as string | undefined;
             return (
               <ChatErrorMessage

@@ -19,6 +19,8 @@
 import React from 'react';
 import './swarm-animations.css';
 import { ASSISTANT_NAME } from '../assistantName';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 
 export interface AssistantHeaderProps {
   /** ISO timestamp string for the message */
@@ -42,6 +44,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   timestamp,
   isStreaming = false,
 }) => {
+  const { t } = useTranslation();
   const formattedTime = formatTimestamp(timestamp);
 
   return (
@@ -50,7 +53,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
         {ASSISTANT_NAME}
       </span>
       {isStreaming && (
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" aria-label="Streaming" />
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" aria-label={tf(t, 'chat.tabStatus.streaming', 'Streaming')} />
       )}
       {formattedTime && (
         <>

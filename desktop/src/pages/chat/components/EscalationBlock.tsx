@@ -14,6 +14,8 @@
  */
 
 import type { EscalationOption } from '../../../types';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 
 const SEVERITY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   critical: { bg: 'bg-red-500/15', text: 'text-red-400', label: 'CRITICAL' },
@@ -42,6 +44,7 @@ export function EscalationBlock({
   resolution,
   onSelectOption,
 }: EscalationBlockProps) {
+  const { t } = useTranslation();
   const style = SEVERITY_STYLES[severity] || SEVERITY_STYLES.medium;
 
   if (status === 'resolved') {
@@ -49,7 +52,7 @@ export function EscalationBlock({
       <div data-testid={`escalation-${id}`} className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-base text-green-400">check_circle</span>
-          <span className="text-sm text-[var(--color-text-muted)]">Escalation resolved</span>
+          <span className="text-sm text-[var(--color-text-muted)]">{tf(t, 'chat.escalation.resolved', 'Escalation resolved')}</span>
           {resolution && (
             <span className="text-sm text-[var(--color-text)]">— {resolution}</span>
           )}
@@ -68,7 +71,7 @@ export function EscalationBlock({
         <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}>
           {style.label}
         </span>
-        <span className="text-sm font-medium text-[var(--color-text)]">Escalation</span>
+        <span className="text-sm font-medium text-[var(--color-text)]">{tf(t, 'chat.escalation.title', 'Escalation')}</span>
       </div>
 
       {/* Reason */}

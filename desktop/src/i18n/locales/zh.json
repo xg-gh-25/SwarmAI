@@ -203,6 +203,49 @@
         "manual": "手动"
       }
     },
+    "list": {
+      "loadEarlier": "↑ 加载更早的消息",
+      "contextRefreshed": "上下文已刷新",
+      "sessionResumed": "会话已恢复",
+      "errorFallback": "出错了"
+    },
+    "escalation": {
+      "title": "待你确认",
+      "resolved": "已处理"
+    },
+    "permission": {
+      "title": "需要你批准",
+      "awaiting": "等待决定",
+      "flagged": "原因："
+    },
+    "queued": {
+      "label": "已排队，轮到时发送",
+      "cancel": "取消排队的消息"
+    },
+    "input": {
+      "dropFiles": "把文件拖到这里",
+      "navigateHint": "移动",
+      "selectHint": "选中",
+      "closeEsc": "关闭（Esc）",
+      "stopEsc": "停止生成（Esc）",
+      "refreshTitle": "刷新上下文：用对话摘要重启 {{name}}",
+      "refreshAria": "刷新上下文"
+    },
+    "tabStatus": {
+      "streaming": "正在运行",
+      "waitingInput": "等你回答",
+      "permissionNeeded": "等你批准",
+      "error": "出错",
+      "newContent": "有新内容",
+      "unread": "有未读消息"
+    },
+    "alerts": {
+      "label": "待你处理",
+      "ariaCalm": "提醒：没有需要你处理的",
+      "aria": "提醒：{{n}} 项需要你处理",
+      "titleCalm": "没有需要你处理的",
+      "title": "{{n}} 项需要你处理，点击打开"
+    },
     "turn": {
       "thinking": "思考中",
       "worked": "做了",

@@ -15,6 +15,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 
 /** Total timeout in milliseconds (2 hours — user may be away at lunch/meeting). */
 const TIMEOUT_MS = 7_200_000;
@@ -47,6 +49,7 @@ export function InlinePermissionRequest({
   onDecision,
   readOnly,
 }: InlinePermissionRequestProps) {
+  const { t } = useTranslation();
   const [remainingMs, setRemainingMs] = useState(TIMEOUT_MS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoDeniedRef = useRef(false);
@@ -132,7 +135,7 @@ export function InlinePermissionRequest({
         <span className="text-sm text-[var(--color-text-muted)]">
           <code className="text-xs bg-[var(--color-bg)] px-1 py-0.5 rounded">{command.length > 60 ? command.slice(0, 60) + '...' : command}</code>
         </span>
-        <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">Awaiting decision</span>
+        <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">{tf(t, 'chat.permission.awaiting', 'Awaiting decision')}</span>
       </div>
     );
   }
@@ -143,7 +146,7 @@ export function InlinePermissionRequest({
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20">
         <span className="material-symbols-outlined text-amber-500 text-base">shield</span>
-        <span className="text-sm font-medium text-[var(--color-text)]">Permission Required</span>
+        <span className="text-sm font-medium text-[var(--color-text)]">{tf(t, 'chat.permission.title', 'Permission Required')}</span>
         {showCountdown && (
           <span className="ml-auto text-xs text-amber-400 font-mono tabular-nums">
             {formatRemaining(remainingSec)}
@@ -154,7 +157,7 @@ export function InlinePermissionRequest({
       {/* Command */}
       <div className="px-3 py-2 space-y-2">
         <div className="flex items-start gap-2 text-xs text-[var(--color-text-muted)]">
-          <span className="shrink-0 mt-0.5">Flagged:</span>
+          <span className="shrink-0 mt-0.5">{tf(t, 'chat.permission.flagged', 'Flagged:')}</span>
           <span className="text-amber-400">{reason}</span>
         </div>
         <div className="bg-[var(--color-bg)] rounded p-2 font-mono text-xs">

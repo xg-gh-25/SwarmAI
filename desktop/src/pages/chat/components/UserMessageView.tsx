@@ -19,6 +19,8 @@
  */
 import { useState, useRef, useEffect, useCallback } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 import type { Message } from '../../../types';
 import MarkdownRenderer from '../../../components/common/MarkdownRenderer';
 // USER_MESSAGE_MAX_LINES (= 5) from constants defines the truncation threshold.
@@ -39,6 +41,7 @@ export interface UserMessageViewProps {
  * - Queued message badge with cancel button when isQueued is true
  */
 export function UserMessageView({ message, onCancelQueued }: UserMessageViewProps) {
+  const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isClamped, setIsClamped] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -132,12 +135,12 @@ export function UserMessageView({ message, onCancelQueued }: UserMessageViewProp
         {message.isQueued && (
           <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-muted)] justify-end">
             <span className="material-symbols-outlined text-sm">schedule_send</span>
-            <span>Queued &mdash; will send when ready</span>
+            <span>{tf(t, 'chat.queued.label', 'Queued — will send when ready')}</span>
             {onCancelQueued && (
               <button
                 onClick={onCancelQueued}
                 className="ml-2 hover:text-[var(--color-text)] transition-colors"
-                title="Cancel queued message"
+                title={tf(t, 'chat.queued.cancel', 'Cancel queued message')}
               >
                 <span className="material-symbols-outlined text-sm">close</span>
               </button>

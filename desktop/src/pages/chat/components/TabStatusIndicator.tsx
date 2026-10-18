@@ -13,6 +13,8 @@
  * @module TabStatusIndicator
  */
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 
 interface TabStatusIndicatorProps {
   status: TabStatus;
@@ -23,13 +25,14 @@ interface TabStatusIndicatorProps {
  * Returns null for 'idle' tabs — no indicator shown.
  */
 export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
+  const { t } = useTranslation();
   switch (status) {
     case 'streaming':
       return (
         <span
           className="w-2 h-2 rounded-full bg-blue-500 animate-pulse inline-block"
           role="img"
-          aria-label="Streaming"
+          aria-label={tf(t, 'chat.tabStatus.streaming', 'Streaming')}
         />
       );
     case 'waiting_input':
@@ -37,7 +40,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
         <span
           className="text-orange-500 text-xs font-bold leading-none"
           role="img"
-          aria-label="Waiting for input"
+          aria-label={tf(t, 'chat.tabStatus.waitingInput', 'Waiting for input')}
         >
           ?
         </span>
@@ -47,7 +50,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
         <span
           className="text-yellow-500 text-xs leading-none"
           role="img"
-          aria-label="Permission needed"
+          aria-label={tf(t, 'chat.tabStatus.permissionNeeded', 'Permission needed')}
         >
           ⚠
         </span>
@@ -57,7 +60,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
         <span
           className="text-red-500 text-xs font-bold leading-none"
           role="img"
-          aria-label="Error"
+          aria-label={tf(t, 'chat.tabStatus.error', 'Error')}
         >
           !
         </span>
@@ -67,7 +70,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
         <span
           className="w-2 h-2 rounded-full bg-green-500 inline-block"
           role="img"
-          aria-label="New content"
+          aria-label={tf(t, 'chat.tabStatus.newContent', 'New content')}
         />
       );
     default:

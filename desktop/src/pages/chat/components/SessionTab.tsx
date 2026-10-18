@@ -4,6 +4,8 @@ import clsx from 'clsx';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { TabStatusIndicator } from './TabStatusIndicator';
+import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
 
 interface SessionTabProps {
   tab: OpenTab;
@@ -49,6 +51,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
   },
   ref
 ) {
+  const { t } = useTranslation();
   const displayTitle = truncateTitle(tab.title, maxTitleLength);
   const isUnread = !isActive && status === 'complete_unread';
   // Show shortcut hint for first 9 tabs (Cmd/Ctrl+1 through Cmd/Ctrl+9)
@@ -108,7 +111,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
           className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse bg-[var(--color-primary)]"
           style={{ boxShadow: '0 0 5px color-mix(in srgb, var(--color-primary) 55%, transparent)' }}
           role="img"
-          aria-label="Unread messages"
+          aria-label={tf(t, 'chat.tabStatus.unread', 'Unread messages')}
         />
       )}
 

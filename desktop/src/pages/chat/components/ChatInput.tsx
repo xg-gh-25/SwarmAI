@@ -1,5 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { tf } from '../tf';
+import { ASSISTANT_NAME } from '../assistantName';
 import clsx from 'clsx';
 import type { UnifiedAttachment, SystemPromptMetadata } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, ScreenshotButton } from '../../../components/chat';
@@ -786,7 +788,7 @@ export function ChatInput({
             <div className="absolute inset-0 bg-primary/10 flex items-center justify-center rounded-xl z-10 pointer-events-none">
               <div className="flex flex-col items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-3xl">upload_file</span>
-                <span className="text-primary font-medium">Drop files here</span>
+                <span className="text-primary font-medium">{tf(t, 'chat.input.dropFiles', 'Drop files here')}</span>
               </div>
             </div>
           )}
@@ -895,14 +897,14 @@ export function ChatInput({
                 {/* F3 fix: Footer with keyboard hints + close button — always visible */}
                 <div className="px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 flex items-center justify-between shrink-0">
                   <span className="text-xs text-[var(--color-text-muted)]">
-                    <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">↑↓</kbd> navigate
+                    <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">↑↓</kbd> {tf(t, 'chat.input.navigateHint', 'navigate')}
                     <span className="mx-2">·</span>
-                    <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">Tab</kbd> select
+                    <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">Tab</kbd> {tf(t, 'chat.input.selectHint', 'select')}
                   </span>
                   <button
                     onClick={() => { setShowCommandSuggestions(false); textareaRef.current?.focus(); }}
                     className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-0.5 rounded hover:bg-[var(--color-hover)]"
-                    title="Close (Esc)"
+                    title={tf(t, 'chat.input.closeEsc', 'Close (Esc)')}
                   >
                     <span className="material-symbols-outlined text-sm">close</span>
                   </button>
@@ -984,7 +986,7 @@ export function ChatInput({
                   ? 'text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10'
                   : 'invisible'
               )}
-              title="Stop generation (Esc)"
+              title={tf(t, 'chat.input.stopEsc', 'Stop generation (Esc)')}
               tabIndex={isStreaming ? 0 : -1}
               aria-hidden={!isStreaming}
             >
@@ -1100,8 +1102,8 @@ export function ChatInput({
                   onClick={onRefreshContext}
                   disabled={isStreaming || disabled}
                   className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  title="Refresh context — restart AI with conversation summary"
-                  aria-label="Refresh context"
+                  title={tf(t, 'chat.input.refreshTitle', 'Refresh context — restart {{name}} with the conversation summary', { name: ASSISTANT_NAME })}
+                  aria-label={tf(t, 'chat.input.refreshAria', 'Refresh context')}
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     refresh
