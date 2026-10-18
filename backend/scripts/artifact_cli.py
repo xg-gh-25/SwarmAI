@@ -4341,6 +4341,82 @@ def _gate_markers_elsewhere(run_id: str, expert_id: str, since: float, until: fl
         return []
 
 
+def _gate_verdict_mismatch(run_id: str, expert_id: str, since: float, recorded: str,
+                           warnings: "list[str]") -> "str | None":
+    """An error when the recorded verdict differs from what the LATEST ``expert_id``
+    sub-agent of this run in the window answered (marker ``verdict``, captured from its
+    final answer by core/runtime_hooks.py), else None. Markers without the key (a daemon
+    that predates the capture) or with an unreadable answer → a warning, no compare."""
+    import time
+    try:
+        from config import get_app_data_dir
+        audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
+        rows = []
+        for p in audit.glob("session_*.marker"):
+            if "_adv_" in p.name or p.stat().st_mtime < since - 60:
+                continue
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (isinstance(d, dict) and d.get("run_id") == run_id and d.get("expert_id") == expert_id
+                    and isinstance(d.get("ts"), (int, float)) and since - 5 <= d["ts"] <= time.time() + 5):
+                rows.append(d)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    rows.sort(key=lambda d: d["ts"])
+    if "verdict" not in rows[-1]:
+        warnings.append(f"{expert_id} verdict not compared: the backend that recorded its spawn "
+                        "predates verdict capture; rebuild and restart it")
+        return None
+    parsed = [d for d in rows if isinstance(d.get("verdict"), str) and d["verdict"]]
+    if not parsed:
+        warnings.append(f"{expert_id} verdict not compared: no verdict line could be read from "
+                        "its final answer")
+        return None
+    if parsed[-1] is not rows[-1]:
+        # an unparsed newest round (crashed, budget-out, a trivial respawn) never erases
+        # the verdict an earlier round of the same window gave
+        warnings.append(f"{expert_id}: its latest round gave no readable verdict; compared "
+                        "with the latest round that did")
+    said = parsed[-1]["verdict"].upper()
+    mine = _verdict_token(recorded)
+    if mine is None:
+        warnings.append(f"{expert_id} verdict not compared: '{recorded}' names no "
+                        "PASS / WARN / PARTIAL / BLOCK / SUPPORTED / UNSUPPORTED / "
+                        "ALREADY-SATISFIED / WRONG-FRAME token")
+        return None
+    rank = _GATE_VERDICT_RANK
+    if rank.get(mine, 0) >= rank.get(said, 0):
+        if mine != said:
+            warnings.append(f"{expert_id}: recorded '{recorded}' is stricter than its answer "
+                            f"'{said}' (allowed)")
+        return None
+    return (f"the recorded verdict '{recorded}' is weaker than what the {expert_id} said: its "
+            f"latest round answered '{said}'. Record ITS verdict (a BLOCK the user overrides "
+            "stays BLOCK + gate1_override), or spawn it again on the changed plan.")
+
+
+# Verdict severity (mirrors core/runtime_hooks.GATE_VERDICT_RANK): a recorded verdict may
+# be stricter than the skeptic's, never weaker.
+_GATE_VERDICT_RANK = {"PASS": 0, "WARN": 1, "PARTIAL": 1, "BLOCK": 2,
+                      "SUPPORTED": 0, "UNSUPPORTED": 1, "ALREADY-SATISFIED": 1, "WRONG-FRAME": 1}
+_VERDICT_TOKEN_RE = re.compile(r"(?<![A-Z])(UNSUPPORTED|ALREADY-SATISFIED|WRONG-FRAME|SUPPORTED|"
+                               r"PASS|WARN|PARTIAL|BLOCK)(?![A-Z])")
+
+
+def _verdict_token(recorded: str) -> "str | None":
+    """The verdict a recorded string states NOW: its LAST vocabulary token, so history
+    strings ("BLOCK -> revised -> PASS", "WRONG-FRAME corrected then SUPPORTED") read as
+    their end state, decorations ("BLOCK→adopted", "PASS-with-refinements", "**WARN**",
+    "ALREADY_SATISFIED") as their token. None when it names none."""
+    s = re.sub(r"[_ ]+(?=SATISFIED|FRAME)", "-", str(recorded or "").upper())
+    found = _VERDICT_TOKEN_RE.findall(s)
+    return found[-1] if found else None
+
+
 def _gate_unbacked(gate: str, reason, detail: str, warnings: "list[str]", msg: str) -> "list[str]":
     """The error for a verdict no spawn backs — unless the record names why the spawn
     cannot be proven (``<gate>_unverified_reason``: e.g. a session without the audit
@@ -4377,7 +4453,8 @@ def _gate_verdict_spawn_errors(run_id: str, run_state: dict, stage: str, profile
             return []
         ok, detail = _gate_spawn_check(run_id, run_state, "gate0-skeptic", start, warnings)
         if ok:
-            return []
+            bad = _gate_verdict_mismatch(run_id, "gate0-skeptic", start, str(verdict), warnings)
+            return [f"Gate-0: understanding.skeptic_verdict — {bad}"] if bad else []
         return _gate_unbacked("gate0", cand_rec.get("gate0_unverified_reason"), detail, warnings,
                               f"Gate-0: understanding.skeptic_verdict is '{verdict}' but no "
                               "gate0-skeptic sub-agent completed for this run during this EVALUATE. "
@@ -4410,7 +4487,8 @@ def _gate_verdict_spawn_errors(run_id: str, run_state: dict, stage: str, profile
         timing.get("first_started_at") or timing.get("started_at")) or 0.0
     ok, detail = _gate_spawn_check(run_id, run_state, "gate1-skeptic", since, warnings)
     if ok:
-        return []
+        bad = _gate_verdict_mismatch(run_id, "gate1-skeptic", since, verdict, warnings)
+        return [f"Gate-1: gate1_verdict — {bad}"] if bad else []
     return _gate_unbacked("gate1", cand_rec.get("gate1_unverified_reason"), detail, warnings,
                           f"Gate-1: gate1_verdict is '{verdict}' but no gate1-skeptic sub-agent "
                           "completed for this run since its prompt was handed out. Spawn it "

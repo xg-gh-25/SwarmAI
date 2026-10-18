@@ -90,7 +90,9 @@ through); let the grep find the files, don't curate them.
   `skeptic_verdict` is `[GATE·cli]` (runs created from 2026-10-18T16:00Z): `stage-complete
   --stage evaluate` refuses it unless a `gate0-skeptic` sub-agent of THIS run completed
   during this EVALUATE (the emitter's prompt starts `EXPERT-ID: gate0-skeptic`; keep that
-  line FIRST, within the prompt's first 2000 chars, when you add your claims). A spawn that
+  line FIRST, within the prompt's first 2000 chars, when you add your claims), and the
+  recorded verdict may not be weaker than its latest answer's `Verdict: <TOKEN>` (record
+  SUPPORTED only after a skeptic round said SUPPORTED). A spawn that
   ran but cannot be proven (no audit hook in this session) → record
   `"gate0_unverified_reason": "<why>"` in the evaluate record. For bugfix/full/goal, after scoring a GO and BEFORE advancing to THINK, spawn ONE
   fresh-context sub-agent with ZERO of your reasoning. Its job is to REFUTE. Get the prompt

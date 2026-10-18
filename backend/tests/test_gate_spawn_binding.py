@@ -45,11 +45,12 @@ def audit(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "GATE_SPAWN_CUTOVER", "2026-10-17T00:00:00+00:00")
     n = [0]
 
-    def write(run_id, expert_id, iso, legacy=False):
+    def write(run_id, expert_id, iso, legacy=False, **verdict):
         n[0] += 1
         data = {"ts": cli._iso_epoch(iso), "event": "SubagentStop", "run_id": run_id}
         if not legacy:
             data["expert_id"] = expert_id
+        data.update(verdict)  # verdict=... only when the test's daemon captures it
         (d / f"session_s_{n[0]}.marker").write_text(json.dumps(data))
     return write
 
@@ -77,16 +78,16 @@ def test_a_gate1_verdict_needs_this_runs_gate1_spawn_after_the_handout(audit):
     audit("run_g", "gate1-skeptic", "2026-10-18T00:40:00+00:00")      # before the hand-out
     assert _errs(_state())[0]
     audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00")
-    assert _errs(_state()) == ([], [])
+    assert _errs(_state())[0] == []
 
 
 def test_full_and_bugfix_builds_must_record_a_real_verdict(audit):
     audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00")
     assert "no gate1_verdict" in _errs(_state(), rec={})[0][0]
     assert "SKIPPED is only for" in _errs(_state(), rec={"gate1_verdict": "SKIPPED"})[0][0]
-    assert _errs(_state(), profile="trivial", rec={}) == ([], [])
-    assert _errs(_state(), profile="trivial", rec={"gate1_verdict": "SKIPPED"}) == ([], [])
-    assert _errs(_state(), rec={"gate1": {"verdict": "WARN"}}) == ([], [])  # legacy shape
+    assert _errs(_state(), profile="trivial", rec={})[0] == []
+    assert _errs(_state(), profile="trivial", rec={"gate1_verdict": "SKIPPED"})[0] == []
+    assert _errs(_state(), rec={"gate1": {"verdict": "WARN"}})[0] == []  # legacy shape
 
 
 def test_a_gate0_verdict_needs_a_gate0_spawn_during_evaluate(audit):
@@ -95,8 +96,8 @@ def test_a_gate0_verdict_needs_a_gate0_spawn_during_evaluate(audit):
     e, _ = _errs(_state(), stage="evaluate", rec={}, artifact=art)
     assert e and "gate0-skeptic" in e[0]
     audit("run_g", "gate0-skeptic", "2026-10-18T00:20:00+00:00")
-    assert _errs(_state(), stage="evaluate", rec={}, artifact=art) == ([], [])
-    assert _errs(_state(), stage="evaluate", rec={}, artifact={"understanding": {}}) == ([], [])
+    assert _errs(_state(), stage="evaluate", rec={}, artifact=art)[0] == []
+    assert _errs(_state(), stage="evaluate", rec={}, artifact={"understanding": {}})[0] == []
 
 
 def test_a_run_that_spawned_nothing_is_blocked_not_waved_through(audit):
@@ -120,7 +121,7 @@ def test_a_miss_is_explained_and_unprovable_cases_pass(audit, tmp_path, monkeypa
     audit("run_g", None, "2026-10-18T01:13:00+00:00", legacy=True)    # daemon rebuilt mid-BUILD
     e, w = _errs(_state())
     assert e == [] and "predate" in w[0]
-    assert _errs(_state(created_at="2026-10-16T00:00:00+00:00")) == ([], [])  # before cutover
+    assert _errs(_state(created_at="2026-10-16T00:00:00+00:00"))[0] == []  # before cutover
     import config
     monkeypatch.setattr(config, "get_app_data_dir", lambda: tmp_path / "missing")
     e, w = _errs(_state())
@@ -168,3 +169,45 @@ def test_build_stage_complete_refuses_an_unbacked_verdict(ws, capsys, audit):
     audit(rid, "gate1-skeptic", _now())
     code, out = _complete(reg, capsys, rid, "build", _build_artifact(), rec)
     assert code == 0, out
+
+
+# ── the recorded verdict must not be weaker than the skeptic's own ──────────
+def test_a_recorded_gate1_verdict_may_not_be_weaker_than_the_skeptics(audit):
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00", verdict="BLOCK")
+    e, _ = _errs(_state(), rec={"gate1_verdict": "PASS"})
+    assert e and "weaker than what the gate1-skeptic said" in e[0] and "'BLOCK'" in e[0]
+    assert _errs(_state(), rec={"gate1_verdict": "BLOCK", "gate1_override": "user: proceed"})[0] == []
+    assert _errs(_state(), rec={"gate1_verdict": "BLOCK→adopted"})[0] == []         # decorated
+    assert _errs(_state(), rec={"gate1_verdict": "BLOCK -> revised -> PASS"})[0]    # not re-gated
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:30:00+00:00", verdict="WARN")  # re-gated plan
+    assert _errs(_state(), rec={"gate1_verdict": "WARN, two nits"})[0] == []
+    e, w = _errs(_state(), rec={"gate1_verdict": "BLOCK"})                        # stricter: fine
+    assert e == [] and "stricter" in w[0]
+    assert _errs(_state(), rec={"gate1_verdict": "PASS-with-refinements"})[0]
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:40:00+00:00", verdict=None)    # trivial respawn
+    e, w = _errs(_state(), rec={"gate1_verdict": "PASS"})
+    assert e and any("latest round gave no readable verdict" in x for x in w)    # WARN still binds
+
+
+def test_a_gate0_verdict_is_compared_and_old_markers_only_warn(audit):
+    art = {"understanding": {"skeptic_verdict": "SUPPORTED"}}
+    audit("run_g", "gate0-skeptic", "2026-10-18T00:20:00+00:00", verdict="WRONG-FRAME")
+    e, _ = _errs(_state(), stage="evaluate", rec={}, artifact=art)
+    assert e and "answered 'WRONG-FRAME'" in e[0]
+    wf = {"understanding": {"skeptic_verdict": "WRONG_FRAME"}}
+    assert _errs(_state(), stage="evaluate", rec={}, artifact=wf)[0] == []
+    hist = {"understanding": {"skeptic_verdict": "WRONG-FRAME corrected then SUPPORTED"}}
+    assert _errs(_state(), stage="evaluate", rec={}, artifact=hist)[0]           # never re-framed
+    audit("run_g", "gate0-skeptic", "2026-10-18T00:25:00+00:00", verdict="SUPPORTED")  # re-frame
+    assert _errs(_state(), stage="evaluate", rec={}, artifact=hist)[0] == []
+    audit("run_g", "gate0-skeptic", "2026-10-18T00:26:00+00:00")                # old daemon
+    e, w = _errs(_state(), stage="evaluate", rec={}, artifact=art)
+    assert e == [] and "predates verdict capture" in w[0]
+
+
+@pytest.mark.parametrize("recorded,token", [
+    ("BLOCK→adopted", "BLOCK"), ("WARN-adopted", "WARN"), ("PASS-WITH-FIXES", "PASS"),
+    ("**WARN**", "WARN"), ("BLOCK -> revised -> PASS", "PASS"), ("ALREADY_SATISFIED", "ALREADY-SATISFIED"),
+    ("SUPPORTED-WITH-CALIBRATION", "SUPPORTED"), ("UNSUPPORTED", "UNSUPPORTED"), ("WARNING", None)])
+def test_verdict_token_reads_what_orchestrators_actually_record(recorded, token):
+    assert cli._verdict_token(recorded) == token

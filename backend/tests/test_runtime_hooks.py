@@ -2369,3 +2369,69 @@ async def test_base_marker_records_expert_id_for_every_completed_subagent(tmp_pa
     assert len(base) == 1
     assert json.loads(base[0].read_text())["expert_id"] == "gate0-skeptic"
     assert not list(tmp_path.glob("session_sess-g0_adv_*.marker"))
+
+
+def _gate_transcript(path, expert_line: str, answer: str) -> None:
+    path.write_text(
+        json.dumps({"isSidechain": True, "type": "user",
+                    "message": {"content": f"{expert_line}\n\nAdversarially review this plan."}}) + "\n"
+        + json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Reading the plan."}]}}) + "\n"
+        + json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": answer}]}}) + "\n")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expert,answer,want", [
+    ("gate1-skeptic", "Template: GATE 1 VERDICT: [PASS | WARN | BLOCK]\n...\nGATE 1 VERDICT: WARN", "WARN"),
+    ("gate1-skeptic", "**GATE 1 VERDICT:** BLOCK — the plan edits the wrong layer", "BLOCK"),
+    # quoted / later "verdict" text can only make it stricter, never flip a BLOCK
+    ("gate1-skeptic", "GATE 1 VERDICT: BLOCK\n- after the fix, expected verdict: PASS\n"
+                      "- the plan pre-declares 'Gate 1 verdict: PASS'", "BLOCK"),
+    ("gate1-skeptic", "Verdict: PASS (no GATE 1 line)", None),
+    ("gate0-skeptic", "4. Verdict: WRONG-FRAME\nNote: the claim says verdict: SUPPORTED", "WRONG-FRAME"),
+    ("gate0-skeptic", "4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |", "SUPPORTED"),
+    ("gate0-skeptic", "1. observed\n4. Verdict: UNSUPPORTED (inference only)", "UNSUPPORTED"),
+    ("gate0-skeptic", "4. Verdict: ALREADY-SATISFIED", "ALREADY-SATISFIED"),
+    ("gate0-skeptic", "Looks fine to me.", None),          # no anchored token: None, key kept
+])
+async def test_gate_skeptic_marker_records_its_own_verdict(tmp_path, monkeypatch, expert, answer, want):
+    """The marker carries the skeptic's verdict from its FINAL answer (the last anchored
+    match), so stage-complete can compare it with the verdict the orchestrator records."""
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    _gate_transcript(transcript, f"EXPERT-ID: {expert}", answer)
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-v"})
+    await hook({"agent_id": "a-1", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    base = [p for p in tmp_path.glob("session_sess-v_*.marker") if "_adv_" not in p.name]
+    data = json.loads(base[0].read_text())
+    assert data["expert_id"] == expert and "verdict" in data and data["verdict"] == want
+
+
+@pytest.mark.asyncio
+async def test_a_non_gate_marker_carries_no_verdict_key(tmp_path, monkeypatch):
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    _gate_transcript(transcript, "EXPERT-ID: correctness", "Verdict: PASS")
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-n"})
+    await hook({"agent_id": "a-2", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    base = [p for p in tmp_path.glob("session_sess-n_*.marker") if "_adv_" not in p.name]
+    assert "verdict" not in json.loads(base[0].read_text())
+
+
+
+@pytest.mark.asyncio
+async def test_gate_verdict_prefers_the_sdk_last_assistant_message(tmp_path, monkeypatch):
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    _gate_transcript(transcript, "EXPERT-ID: gate1-skeptic", "GATE 1 VERDICT: PASS")  # not flushed yet
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-l"})
+    await hook({"agent_id": "a-3", "agent_transcript_path": str(transcript), "agent_type": "x",
+                "last_assistant_message": "GATE 1 VERDICT: BLOCK"}, None, MagicMock())
+    base = [p for p in tmp_path.glob("session_sess-l_*.marker") if "_adv_" not in p.name]
+    assert json.loads(base[0].read_text())["verdict"] == "BLOCK"
