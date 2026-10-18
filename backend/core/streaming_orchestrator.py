@@ -327,7 +327,10 @@ class StreamingOrchestrator:
             at = datetime.now().astimezone().isoformat()
             blocks: list[dict] = []
             # The run's alignment (its requirement and plan), once per run per
-            # session, the first time a call names a run still in progress.
+            # TURN, the first time a call names a run still in progress: a turn
+            # that continues a run (an answered question, "continue") shows what it
+            # is working on and the plan its stages follow. send() admission resets
+            # the set (SessionUnit._pipeline_runs_announced).
             announced = getattr(self._parent, "_pipeline_runs_announced", None)
             if announced is None:
                 announced = self._parent._pipeline_runs_announced = set()
@@ -861,6 +864,35 @@ class StreamingOrchestrator:
             event["durationMs"] = usage.get("duration_ms")
         return event
 
+    @staticmethod
+    def _note_subagent(last: dict, event: dict) -> None:
+        """Fold one subagent_progress event into the Agent step's latest state."""
+        parent = event.get("parentToolUseId")
+        if not parent:
+            return
+        cur = last.setdefault(parent, {})
+        for key in ("status", "toolUses", "durationMs", "summary"):
+            if event.get(key) is not None:
+                cur[key] = event[key]
+
+    @staticmethod
+    def _subagent_final(state: "dict | None", is_error: bool) -> "dict | None":
+        """The sub-agent's outcome to keep on its Agent tool_result: its last
+        status (a result that came back while it still said "running" means it
+        finished: completed, or failed on an error result), tool count, duration
+        and summary. None when the step had no sub-agent progress at all."""
+        if not state:
+            return None
+        out = {k: v for k, v in state.items() if k in ("toolUses", "durationMs")
+               and isinstance(v, (int, float))}
+        status = state.get("status")
+        if not isinstance(status, str) or status in ("running", "pending"):
+            status = "failed" if is_error else "completed"
+        out["status"] = status[:16]
+        if isinstance(state.get("summary"), str) and state["summary"].strip():
+            out["summary"] = state["summary"][:300]
+        return out
+
     # A pending permission older than this, with a live waiter, that this stream
     # never surfaced is treated as lost in transit and re-queued. The normal
     # queue hand-off takes milliseconds; the read loop wakes every 30s anyway.
@@ -1286,6 +1318,10 @@ class StreamingOrchestrator:
         _tool_parent: dict[str, str] = {}
         # SDK task_id → parent Agent tool_use id (TaskUpdatedMessage lacks one).
         _task_parent: dict[str, str] = {}
+        # Agent tool_use id → its sub-agent's latest progress (status, toolUses,
+        # durationMs, summary). Rides the Agent's tool_result as `subagent`, so the
+        # final status survives the stream (subagent_progress itself is not persisted).
+        _subagent_last: dict[str, dict] = {}
         # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
         # Its successful result re-reads run.json and yields a persisted
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
@@ -1710,6 +1746,7 @@ class StreamingOrchestrator:
                     # A sub-agent's lifecycle / progress: real work the user must see.
                     _sa_ev = self._subagent_progress_event(message, _task_parent)
                     if _sa_ev is not None:
+                        self._note_subagent(_subagent_last, _sa_ev)
                         self._parent._last_progress_time = time.time()
                         _progress.on_visible(self._parent._last_progress_time)
                         yield _sa_ev
@@ -1831,7 +1868,13 @@ class StreamingOrchestrator:
                     _tr_blocks = []
                     for _blk in _um_content:
                         if isinstance(_blk, ToolResultBlock) and _blk.tool_use_id in _tool_names:
-                            _tr = self._tool_result_block(_blk, _tool_names.pop(_blk.tool_use_id))
+                            _tr_name = _tool_names.pop(_blk.tool_use_id)
+                            _tr = self._tool_result_block(_blk, _tr_name)
+                            if _tr_name == "Agent":
+                                _sa_final = self._subagent_final(
+                                    _subagent_last.pop(_blk.tool_use_id, None), _tr["is_error"])
+                                if _sa_final:
+                                    _tr["subagent"] = _sa_final
                             _parent_id = _tool_parent.pop(_blk.tool_use_id, None)
                             if _parent_id:
                                 _tr["parent_tool_use_id"] = _parent_id

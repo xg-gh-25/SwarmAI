@@ -922,6 +922,8 @@ class SessionUnit:
         # as _turn_client_id: reset at send() admission, so a pause for a question or
         # a permission (no `result`) keeps what was produced before it.
         self._turn_files: dict = {}
+        # Pipeline runs whose alignment this turn has shown (reset per turn at send()).
+        self._pipeline_runs_announced: set = set()
         # Seqs of the most recently drained pending set, surfaced to the frontend
         # mirror by the streaming-state read API (L5/2A). Best-effort hint.
         self._last_drained_seqs: list[int] = []
@@ -2294,6 +2296,9 @@ class SessionUnit:
         # Same lifecycle: the products of a turn paused for a question / permission
         # ride the unit until that turn's `result` (router continuation loops).
         self._turn_files = {}
+        # Pipeline runs this turn has shown the alignment of (streaming_orchestrator
+        # _pipeline_stage_events): each new turn announces a running run once more.
+        self._pipeline_runs_announced = set()
 
         # ── Resume-poison guard (fail-closed) — recycle-before-reuse ────
         # If we are about to REUSE a warm IDLE subprocess that did NOT end its

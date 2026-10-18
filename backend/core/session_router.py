@@ -2108,6 +2108,14 @@ class SessionRouter:
                 compact["outcome"] = str(blk["outcome"])[:300]
             if blk.get("parent_tool_use_id"):
                 compact["parent_tool_use_id"] = blk["parent_tool_use_id"]
+            sub = blk.get("subagent")
+            if isinstance(sub, dict):
+                # An Agent step's final sub-agent outcome (status, steps, duration,
+                # summary) — the only place it survives the stream.
+                keep = {k: sub[k] for k in ("status", "toolUses", "durationMs") if k in sub}
+                if isinstance(sub.get("summary"), str):
+                    keep["summary"] = sub["summary"][:300]
+                compact["subagent"] = keep
             out.append(compact)
         return out
 

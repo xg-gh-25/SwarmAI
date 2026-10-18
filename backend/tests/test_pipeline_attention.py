@@ -8,8 +8,9 @@ What is tested:
   Gate 1 verdicts that are not a pass (PASS / SUPPORTED / SKIPPED / resolved BLOCK
   are quiet), Gate 2 open findings from the deliver artifact, push_ready False with
   its reasons; None when nothing needs the user; unreadable artifacts are skipped
-- the orchestrator: a pipeline_run block once per run per session, the attention
-  block only with the DELIVER row
+- the orchestrator: a pipeline_run block once per run per TURN (send() admission
+  resets the announced set, so a turn that continues a run shows its plan again),
+  the attention block only with the DELIVER row
 - SessionRouter._persist_stream_event: content/knowledge file_changed events become
   ONE persisted turn_deliverables block delivered just before `result`; source and
   deleted files are not products
@@ -146,9 +147,24 @@ def test_orchestrator_announces_the_run_once_and_attention_rides_deliver(monkeyp
     first = _turn(orch, monkeypatch, _ScriptedReader(_S1, _S2), "tu1")
     assert [(b["type"], b.get("stage")) for b in first] == [("pipeline_run", None), ("pipeline_stage", "think")]
     assert first[0]["requirement"] == "Do X"
+    # the same turn calling the CLI again: no second announce
     later = _turn(orch, monkeypatch, _ScriptedReader(_S3), "tu2")
     assert [(b["type"], b.get("stage")) for b in later] == [("pipeline_stage", "deliver"), ("pipeline_attention", None)]
     assert [i["kind"] for i in later[1]["items"]] == ["gate", "not_push_ready"]  # the WRONG-FRAME waited for DELIVER
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+def test_a_new_turn_announces_a_running_run_again(monkeypatch):
+    """After send() admission (which resets the unit's announced set) the next call
+    naming a still-running run carries its alignment and plan again — the turn that
+    continues a run shows what it is working on; stage rows still never repeat."""
+    from tests.test_tool_call_leak_guard import _make_orchestrator
+    orch = _make_orchestrator()
+    _turn(orch, monkeypatch, _ScriptedReader(_S1, _S2), "tu1")
+    orch._parent._pipeline_runs_announced = set()  # what send() admission does
+    again = _turn(orch, monkeypatch, _ScriptedReader(_S2), "tu2")
+    assert [(b["type"], b.get("stage")) for b in again] == [("pipeline_run", None)]
+    assert again[0]["requirement"] == "Do X"
 
 
 RUN_CREATE = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
@@ -368,10 +384,12 @@ async def test_send_admission_resets_the_turn_products():
     unit._client = MagicMock()
     unit._last_turn_clean = True
     unit._turn_files = {"/ws/old.md": {"path": "old.md"}}
+    unit._pipeline_runs_announced = {"run_old"}
     seen = {}
 
     async def _capture():
         seen["files"] = dict(unit._turn_files)
+        seen["announced"] = set(unit._pipeline_runs_announced)
         raise _StopAfterDecisionError("stop")
 
     with patch.object(unit, "_crash_to_cold_async", AsyncMock()), \
@@ -381,3 +399,4 @@ async def test_send_admission_resets_the_turn_products():
             async for _ in unit.send("hi", MagicMock(), app_session_id="app-1"):
                 pass
     assert seen["files"] == {}
+    assert seen["announced"] == set()

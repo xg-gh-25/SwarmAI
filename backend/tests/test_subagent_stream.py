@@ -175,3 +175,67 @@ async def test_results_left_at_turn_end_get_their_own_row():
     assert put.await_args.args[0]["content"] == [
         {"type": "tool_result", "tool_use_id": "z", "is_error": False, "truncated": False, "outcome": "done"}]
     assert pending == []
+
+
+# ── The sub-agent's outcome rides its Agent tool_result (persisted) ───────────
+# subagent_progress is stream-only, so after the turn (and on reload) the Agent
+# step showed only its child steps and a failed / stopped sub-agent looked done.
+
+@pytest.mark.asyncio
+async def test_agent_result_carries_the_subagents_final_status():
+    events = await _run([
+        SystemMessage(subtype="init", data={"session_id": "s"}),
+        AssistantMessage(content=[ToolUseBlock(id=AGENT_ID, name="Agent", input={
+            "description": "Review spec"})], model="m"),
+        _task(TaskStartedMessage, task_id="t1", description="Review spec", tool_use_id=AGENT_ID),
+        _task(TaskProgressMessage, task_id="t1", description="Review spec", tool_use_id=AGENT_ID,
+              usage={"total_tokens": 10, "tool_uses": 3, "duration_ms": 9100}, last_tool_name="Read"),
+        _task(TaskUpdatedMessage, task_id="t1", patch={"status": "killed"}),
+        _task(TaskNotificationMessage, task_id="t1", status="stopped", output_file="",
+              summary="Stopped after 3 steps", tool_use_id=AGENT_ID),
+        UserMessage(content=[ToolResultBlock(tool_use_id=AGENT_ID, content="partial", is_error=False)]),
+    ])
+    (res,) = [b for e in events if e["type"] == "tool_result" for b in e["content"]]
+    assert res["tool_use_id"] == AGENT_ID
+    assert res["subagent"] == {"status": "stopped", "toolUses": 3, "durationMs": 9100,
+                               "summary": "Stopped after 3 steps"}
+
+
+@pytest.mark.asyncio
+async def test_agent_result_without_progress_has_no_subagent_and_others_never_do():
+    events = await _run([
+        SystemMessage(subtype="init", data={"session_id": "s"}),
+        AssistantMessage(content=[ToolUseBlock(id=AGENT_ID, name="Agent", input={"description": "x"}),
+                                  ToolUseBlock(id="r1", name="Read", input={"file_path": "/a"})], model="m"),
+        UserMessage(content=[ToolResultBlock(tool_use_id=AGENT_ID, content="ok", is_error=False),
+                             ToolResultBlock(tool_use_id="r1", content="1\tx\n", is_error=False)]),
+    ])
+    results = [b for e in events if e["type"] == "tool_result" for b in e["content"]]
+    assert [("subagent" in b) for b in results] == [False, False]
+
+
+def test_subagent_final_resolves_a_still_running_status_from_the_result():
+    fin = StreamingOrchestrator._subagent_final
+    assert fin({"status": "running", "toolUses": 2}, False) == {"toolUses": 2, "status": "completed"}
+    assert fin({"status": "running"}, True) == {"status": "failed"}
+    assert fin({"status": "failed", "summary": "  "}, False) == {"status": "failed"}
+    assert fin(None, False) is None
+    assert fin({}, False) is None
+
+
+def test_note_subagent_keeps_the_latest_known_value_of_each_field():
+    last: dict = {}
+    note = StreamingOrchestrator._note_subagent
+    note(last, {"parentToolUseId": "a", "status": "running", "toolUses": 1, "durationMs": 10})
+    note(last, {"parentToolUseId": "a", "status": "stopped"})
+    note(last, {"status": "running"})  # no parent: ignored
+    assert last == {"a": {"status": "stopped", "toolUses": 1, "durationMs": 10}}
+
+
+def test_compact_result_keeps_only_the_subagent_outcome_fields():
+    (c,) = SessionRouter._compact_tool_results([{
+        "type": "tool_result", "tool_use_id": AGENT_ID, "content": "BIG" * 1000, "is_error": False,
+        "outcome": "done", "subagent": {"status": "failed", "toolUses": 4, "durationMs": 5,
+                                        "summary": "s" * 400, "junk": "x"}}])
+    assert c["subagent"] == {"status": "failed", "toolUses": 4, "durationMs": 5, "summary": "s" * 300}
+    assert "content" not in c
