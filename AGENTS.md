@@ -351,8 +351,10 @@ product-wide runtime hook), and the CI trailer check was removed the same day
 
 Do NOT "fix" this by changing `core.hooksPath` — it is machine/corporate policy, and the
 project rules forbid modifying git config. Any check that must actually run belongs in CI.
-(git-defender is also why `git commit` is slow: a 22 MB `commit-msg` binary plus a scanning
-daemon. Allow ~600s for a commit in automation.)
+(git-defender runs its hooks synchronously on every commit. Measured 2026-10-18 in this repo:
+0.4–0.8 s for commits of 4–162 files, 2.3 s for an amend, 1.4 s for a rebase, 0.3 s for an
+ff-only merge. The old "allow ~600 s" no longer holds; a commit that takes minutes is a symptom
+to investigate, not a budget to plan around.)
 
 ## Development Commands
 
