@@ -25,7 +25,10 @@
  * - `stage`     — a `pipeline_stage` block: a stage the BACKEND saw finish in
  *                 run.json (not model text). Stays visible, splits the process, and
  *                 names the next stage on the live row while the turn streams.
- * - `outcome`   — text AFTER the last tool call: the answer. Rendered in full.
+ * - `outcome`   — text AFTER the last tool call: the answer. Rendered in full, first
+ *                 level. While it streams, the block above it stays live (groupWork
+ *                 `holdLiveAboveAnswer`), so that block does not fold and re-open if a
+ *                 tool call follows and the text becomes a note.
  * - `interrupt` — a block that needs the user (question / permission / escalation).
  *                 Never folded; also splits the process.
  *
@@ -118,16 +121,20 @@ export interface ProcessUnit {
 
 export type TurnUnit =
   | ProcessUnit
-  /** `blocks`: it states a Gate BLOCK (the run goes back a stage). */
-  | { kind: 'landmark'; text: string; index: number; blocks?: boolean }
+  /** Text units (landmark / note / outcome) carry `textOrdinal`: their place among
+   *  the turn's text blocks. Unlike `index` it survives the stream-end reconcile
+   *  (which drops tool_result and thinking blocks), and one text block keeps it while
+   *  it turns from outcome into note or landmark — a stable key.
+   *  `blocks`: it states a Gate BLOCK (the run goes back a stage). */
+  | { kind: 'landmark'; text: string; index: number; textOrdinal: number; blocks?: boolean }
   /** Text the model wrote between tool calls — shown in the stream, in order. */
-  | { kind: 'note'; text: string; index: number }
+  | { kind: 'note'; text: string; index: number; textOrdinal: number }
   | { kind: 'stage'; block: PipelineStageContent; index: number }
   /** A thinking passage. `ordinal` = its place among the turn's thoughts (a stable
    *  key); `live` = it is still streaming; `intent` = the first thought before any
    *  tool call (the model's reading of the ask). */
   | ThoughtUnit
-  | { kind: 'outcome'; text: string; index: number }
+  | { kind: 'outcome'; text: string; index: number; textOrdinal: number }
   | { kind: 'interrupt'; block: InterruptBlock; index: number };
 
 export interface ThoughtUnit {
@@ -299,6 +306,7 @@ export function deriveTurnView(
 
   let run: PipelineRunContent | undefined;
   let thoughts = 0;
+  let texts = 0;
   let attention: PipelineAttentionContent | undefined;
   const deliverables: TurnDeliverable[] = [];
   content.forEach((block, index) => {
@@ -326,15 +334,17 @@ export function deriveTurnView(
       const text = block.text || '';
       if (!text.trim()) return;
       seg = null;
+      const textOrdinal = texts;
+      texts += 1;
       if (index > lastToolIdx) {
-        units.push({ kind: 'outcome', text, index });
+        units.push({ kind: 'outcome', text, index, textOrdinal });
       } else if (isLandmarkBlock(block, text)) {
-        const unit: TurnUnit = { kind: 'landmark', text, index };
+        const unit: TurnUnit = { kind: 'landmark', text, index, textOrdinal };
         if (isGateBlock(text)) unit.blocks = true;
         units.push(unit);
       } else {
         // What the model says between tool calls stays in the stream, in order.
-        units.push({ kind: 'note', text, index });
+        units.push({ kind: 'note', text, index, textOrdinal });
       }
       return;
     }
@@ -949,8 +959,9 @@ export const INTENT_TOOL_WINDOW = 2;
 
 export interface WorkGroup {
   kind: 'group';
-  /** `grp-<first process id>` (else `grp-th-<first thought ordinal>`): survives the
-   *  stream-end reconcile and the intent moving to a later thought. */
+  /** `grp-<first non-thought member key>` (a process `seg-<n>` or a text
+   *  `txt-<ordinal>`; else `grp-th-<first thought ordinal>`): survives the stream-end
+   *  reconcile and the intent moving to a later thought. */
   id: string;
   /** Its second-level items, in stream order. */
   members: WorkMember[];
@@ -961,6 +972,8 @@ export interface WorkGroup {
 }
 
 export type LandmarkUnit = Extract<TurnUnit, { kind: 'landmark' }>;
+/** A text member: both carry `textOrdinal`. */
+export type TextUnit = NoteUnit | LandmarkUnit;
 export type WorkMember = ThoughtUnit | ProcessUnit | NoteUnit | LandmarkUnit;
 
 export type WorkItem = WorkGroup | Exclude<TurnUnit, ProcessUnit>;
@@ -974,6 +987,12 @@ export interface GroupWorkOptions {
   /** Merge thoughts-only blocks right before `exclude` into the next block (default
    *  true). False while the turn streams. */
   mergeLead?: boolean;
+  /** While streaming, a block with tool calls right before the answer-so-far (the
+   *  last unit, an outcome) stays live — open, not folding. The answer stays first
+   *  level so the final answer never moves when the turn ends; if a tool call
+   *  follows, the text joins this still-open block as a note (XG 2026-10-18, option
+   *  B: the rare note moves, the common answer does not). */
+  holdLiveAboveAnswer?: boolean;
 }
 
 export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWorkOptions = {}): WorkItem[] {
@@ -1011,19 +1030,28 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
       out.splice(i, 1);
     }
   }
-  // A block's id is its first PROCESS member's (stable `seg-<n>`), else its first
-  // item's: it survives the stream-end reconcile and a later block joining it.
+  // A block's id is its first PROCESS member's (`seg-<n>`), else its first text's
+  // (`txt-<textOrdinal>`), else its first thought's ordinal. The process comes first
+  // because a note can join a block in front of it mid-stream (the intent note once
+  // the pipeline_run block arrives); the others keep their key across appending and
+  // the stream-end reconcile.
   for (const g of out) {
     if (g.kind !== 'group') continue;
     const p = g.members.find((m): m is ProcessUnit => m.kind === 'process');
+    const text = g.members.find((m): m is TextUnit => m.kind === 'note' || m.kind === 'landmark');
     const first = g.members[0];
-    const key = p ? p.id
-      : first.kind === 'thought' ? `th-${first.ordinal}`
-        : first.kind === 'process' ? first.id : `${first.kind}-${first.index}`;
+    const key = p ? p.id : text ? `txt-${text.textOrdinal}` : `th-${(first as ThoughtUnit).ordinal}`;
     g.id = `grp-${key}`;
   }
   const last = out[out.length - 1];
+  const beforeLast = out[out.length - 2];
   if (isStreaming && last && last.kind === 'group') last.live = true;
+  else if (isStreaming && opts.holdLiveAboveAnswer && last?.kind === 'outcome'
+    && beforeLast?.kind === 'group' && beforeLast.hasTools) {
+    // The answer-so-far streams below this block: keep the block open (and its one
+    // spinner) until the turn ends or the next tool call joins it.
+    beforeLast.live = true;
+  }
   else if (isStreaming && (!last || last.kind === 'stage')) {
     // Streaming, and nothing has started since a stage row (or nothing at all yet):
     // an empty WORKING card holds the turn's one spinner until the next item lands.

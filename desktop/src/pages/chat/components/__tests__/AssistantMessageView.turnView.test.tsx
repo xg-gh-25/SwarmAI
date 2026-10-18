@@ -89,16 +89,17 @@ describe('AssistantMessageView — work groups (AC1)', () => {
     expect(container.textContent).not.toContain('/Users/x/repo');
   });
 
-  it('history (no tool_result) → one folded WORKED line, no spinner; opening shows all 38', () => {
+  it('history (no tool_result, no text) → one WORKED block, no spinner, open on its newest 12; show all → 38', () => {
+    // A turn with no text at all has nothing else to read: its last block starts open.
     const { container } = renderView(bashRun(38), { isStreaming: false });
     expect(screen.getAllByTestId('group-row')).toHaveLength(1);
     expect(screen.getByTestId('group-row').textContent).toContain('Worked');
-    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
     expect(container.querySelector('.animate-spin')).toBeNull();
-    fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.getAllByTestId('step-row')).toHaveLength(12);
     fireEvent.click(screen.getByTestId('show-all-steps'));
     expect(screen.getAllByTestId('step-row')).toHaveLength(38);
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
   });
 
   it('the whole process of a turn is ONE WORKED line between INTENT and RESULT (AC1)', () => {
@@ -139,6 +140,96 @@ describe('AssistantMessageView — work groups (AC1)', () => {
   });
 });
 
+describe('AssistantMessageView — the answer-so-far and a turn without a result (option B)', () => {
+  it('streaming: the answer-so-far is first level and the block above stays open (no toggle, live)', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), tx('Checking the store next.')], { isStreaming: true });
+    expect(screen.getByText('Checking the store next.').closest('[data-testid="work-group"]')).toBeNull();
+    expect(screen.getByTestId('work-group').dataset.live).toBe('true');
+    expect(screen.queryByTestId('group-toggle')).toBeNull();
+  });
+
+  it('a tool call after it: the text joins the same, still-live block', () => {
+    const c = [tu('a', 'Running: ls'), tr('a'), tx('Checking the store next.')];
+    const { rerender } = render(viewOf(c, true));
+    const block = screen.getByTestId('work-group');
+    rerender(viewOf([...c, tu('b', 'Running: pwd')], true));
+    expect(screen.getByTestId('work-group')).toBe(block);
+    expect(block.dataset.live).toBe('true');
+    expect(screen.getByText('Checking the store next.').closest('[data-testid="work-group"]')).toBe(block);
+    // the accepted residual (option B): the note moves in once, never shown twice
+    expect(screen.getAllByText('Checking the store next.')).toHaveLength(1);
+  });
+
+  it('when the turn ends, the final answer is the RESULT, first level, once (it never was in a block)', () => {
+    const work = [tu('a', 'Running: ls'), tr('a')];
+    const { rerender } = render(viewOf([...work, tx('Done.')], true));
+    expect(screen.getByText('Done.').closest('[data-testid="work-group"]')).toBeNull();
+    rerender(viewOf([...work, tx('Done.')], false));
+    expect(screen.getByTestId('turn-result').textContent).toContain('Done.');
+    expect(screen.getAllByText('Done.')).toHaveLength(1);
+    expect(screen.getByText('Done.').closest('[data-testid="work-group"]')).toBeNull();
+  });
+
+  it('streaming with no tool call yet: the text stays first level', () => {
+    renderView([tx('Here is the answer.')], { isStreaming: true });
+    expect(screen.getByText('Here is the answer.').closest('[data-testid="work-group"]')).toBeNull();
+  });
+
+  it('a finished turn that ends on a tool call shows its last note under the folded line', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), tx('Fixed the cache; the reader is still open.'), tu('b', 'Running: git status'), tr('b')]);
+    expect(screen.queryByTestId('group-body')).toBeNull(); // folded
+    expect(screen.getByTestId('turn-tail').textContent).toContain('Fixed the cache; the reader is still open.');
+    expect(screen.getByTestId('group-counts').textContent).toBe('· 2 steps · 2 commands');
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.getAllByText('Fixed the cache; the reader is still open.')).toHaveLength(1);
+    expect(screen.queryByTestId('turn-tail')).toBeNull(); // in its place now
+  });
+
+  it('the kept note follows an unrecovered failure shown under the folded line', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), tx('Trying the build.'), tu('b', 'Running: make'), res('b', 'make: failed', true)]);
+    const failure = screen.getByTestId('step-error');
+    const tail = screen.getByTestId('turn-tail');
+    expect(failure.compareDocumentPosition(tail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('a finished turn with no text at all opens its last block', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b')]);
+    expect(screen.getByTestId('group-body')).toBeTruthy();
+    expect(screen.getAllByTestId('step-row')).toHaveLength(2);
+  });
+
+  it('no tail when the only text is the intent restatement (the last block opens instead)', () => {
+    renderView([tx('I read it as: fix the cache.'), tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b')]);
+    expect(screen.queryByTestId('turn-tail')).toBeNull();
+    expect(screen.getByTestId('turn-intent').textContent).toContain('fix the cache');
+    expect(screen.getByTestId('group-body')).toBeTruthy();
+  });
+
+  it('a pipeline turn stopped after a stage row: the note in the stage does not count, the last block opens', () => {
+    const stage = { type: 'pipeline_stage', runId: 'r', stage: 'build', status: 'completed', ordinal: 5, position: 4, total: 8,
+      profile: 'full', next: 'review', nextOrdinal: 6, gate: null, summary: 'ok', at: '2026-10-18T00:00:00Z' } as ContentBlock;
+    renderView([tu('a', 'Running: ls'), tr('a'), tx('inside the stage'), tu('b', 'Running: pwd'), tr('b'), stage, tu('c', 'Running: make'), tr('c')]);
+    expect(screen.queryByTestId('turn-tail')).toBeNull();
+    const open = screen.getAllByTestId('group-body');
+    expect(open).toHaveLength(1);
+    expect(open[0].textContent).toContain('make');
+  });
+
+  it('no top-level tail for a note inside a stage (the stage row is the fold)', () => {
+    const stage = { type: 'pipeline_stage', runId: 'r', stage: 'build', status: 'completed', ordinal: 5, position: 4, total: 8,
+      profile: 'full', next: 'review', nextOrdinal: 6, gate: null, summary: 'ok', at: '2026-10-18T00:00:00Z' } as ContentBlock;
+    renderView([tu('a', 'Running: ls'), tr('a'), tx('inside the stage'), tu('b', 'Running: pwd'), tr('b'), stage]);
+    expect(screen.queryByTestId('turn-tail')).toBeNull();
+  });
+
+  it('a turn with a RESULT keeps its notes inside the folded block', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), tx('a note'), tu('b', 'Running: pwd'), tr('b'), tx('All done.')]);
+    expect(screen.queryByText('a note')).toBeNull();
+    expect(screen.queryByTestId('turn-tail')).toBeNull();
+    expect(screen.getByTestId('turn-result').textContent).toContain('All done.');
+  });
+});
+
 describe('AssistantMessageView — one strip per tool call (AC3)', () => {
   it('a row is the real tool and command; a failure one line below, in red (AC4)', () => {
     renderView([tu('a', 'Running: npm test'), res('a', '12 passed in 3.1s'),
@@ -168,13 +259,12 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
 
   it('an unrecognised tool without a summary names itself once', () => {
     renderView([{ type: 'tool_use', id: 'z', name: 'Frobnicate', category: 'fallback' } as ContentBlock]);
-    fireEvent.click(screen.getByTestId('group-toggle'));
+    // no text in the turn: its block starts open
     expect(screen.getByTestId('step-row').textContent!.match(/Frobnicate/g)).toHaveLength(1);
   });
 
   it('an unrecognised tool shows its own name and summary', () => {
     renderView([{ type: 'tool_use', id: 'z', name: 'Weird', summary: 'Weird: some context', category: 'fallback' } as ContentBlock]);
-    fireEvent.click(screen.getByTestId('group-toggle'));
     const row = screen.getByTestId('step-row');
     expect(within(row).getByTestId('strip-tool').textContent).toBe('Weird');
     // the generic `<name>: ctx` form: the name once, then its context
@@ -306,7 +396,9 @@ describe('AssistantMessageView — fold timing', () => {
   it('in the 2s after it finishes, a group keeps its live layout (newest strips), then folds', () => {
     const many = Array.from({ length: 15 }, (_, i) => [tu(`s${i}`, `Running: cat f${i}.ts`), tr(`s${i}`)]).flat();
     const { rerender } = render(viewOf([...many, tu('z', 'Running: date')], true));
-    rerender(viewOf([...many, tu('z', 'Running: date'), tr('z'), tx('next note')], true));
+    // The turn ends: the block stops being live (text after work while streaming is
+    // the live block's own last item, so only the end of the turn ends it).
+    rerender(viewOf([...many, tu('z', 'Running: date'), tr('z'), tx('done')], false));
     const body = screen.getByTestId('group-body');
     expect(body.dataset.liveLayout).toBe('true');
     expect(body.textContent).toContain('f14.ts'); // the newest strips, not reshuffled to the first
@@ -366,7 +458,7 @@ describe('AssistantMessageView — a sub-agent on its strip', () => {
   it('done, while the turn streams: the live summary is its verdict', () => {
     withProgress([agent, ...subs(3), { type: 'tool_result', toolUseId: 'ag', isError: false } as ContentBlock, tx('Review passed.')],
       { ag: { parentToolUseId: 'ag', status: 'completed', toolUses: 3, summary: 'PASS — no findings\nmore detail' } });
-    fireEvent.click(screen.getByTestId('group-toggle'));
+    // still streaming: the block is the open WORKING card (its rows are shown)
     expect(screen.getByTestId('agent-verdict').textContent).toContain('PASS — no findings');
     expect(screen.getByTestId('agent-verdict').textContent).not.toContain('more detail');
   });

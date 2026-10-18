@@ -81,6 +81,58 @@ describe('groupWork — one block between first-level items', () => {
   });
 });
 
+describe('groupWork — the answer-so-far while streaming (option B)', () => {
+  it('stays first level; the block of work above it stays live (holdLiveAboveAnswer)', () => {
+    const v = deriveTurnView([tu('a', 'Running: ls'), tr('a'), tx('Checking the store next.')], true);
+    const items = groupWork(v.units, true, { holdLiveAboveAnswer: true });
+    expect(shape(items)).toEqual(['G(p1)', 'outcome']);
+    expect(groupsOf(items)[0].live).toBe(true);
+    // without the option the block above stops being live (it folds)
+    expect(groupsOf(groupWork(v.units, true))[0].live).toBe(false);
+  });
+
+  it('the next tool call: the text is a note in the same block, still live, same id', () => {
+    const before = groupWork(deriveTurnView([tu('a', 'Running: ls'), tr('a'), tx('Checking.')], true).units, true, { holdLiveAboveAnswer: true });
+    const after = groupWork(deriveTurnView([tu('a', 'Running: ls'), tr('a'), tx('Checking.'), tu('b', 'Running: pwd')], true).units, true, { holdLiveAboveAnswer: true });
+    expect(shape(after)).toEqual(['G(p1np1)']);
+    expect(groupsOf(after)[0].live).toBe(true);
+    expect(groupsOf(after)[0].id).toBe(groupsOf(before)[0].id);
+  });
+
+  it('a thoughts-only block above an answer is not held open; nor anything once the turn is over', () => {
+    const v = deriveTurnView([th('hm'), tx('Here is the answer.')], true);
+    expect(groupsOf(groupWork(v.units, true, { holdLiveAboveAnswer: true, keepIntent: false }))[0].live).toBe(false);
+    const done = deriveTurnView([tu('a', 'Running: ls'), tr('a'), tx('Done.')], false);
+    expect(groupsOf(groupWork(done.units, false, { holdLiveAboveAnswer: true }))[0].live).toBe(false);
+  });
+
+  it('text units carry a text ordinal that survives the stream-end reconcile', () => {
+    const live = deriveTurnView([tx('I read it as X.'), tu('a', 'Running: ls'), tr('a'), tx('note'), tu('b', 'Running: pwd'), tr('b'), tx('done')], false);
+    const stored = deriveTurnView([tx('I read it as X.'), tu('a', 'Running: ls'), tx('note'), tu('b', 'Running: pwd'), tx('done')], false);
+    const ords = (v: typeof live) => v.units.flatMap((u) => ('textOrdinal' in u ? [`${u.kind}:${u.textOrdinal}`] : []));
+    expect(ords(live)).toEqual(['note:0', 'note:1', 'outcome:2']);
+    expect(ords(stored)).toEqual(ords(live));
+    const ids = (v: typeof live) => groupsOf(groupWork(v.units, false)).map((g) => g.id);
+    expect(ids(stored)).toEqual(ids(live));
+  });
+
+  it('a note joining a block in front of its first call (intent once pipeline_run lands) keeps the block id', () => {
+    const blocks = [tx('I read it as X.'), tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd')];
+    const v = deriveTurnView(blocks, true);
+    const note = v.units.find((u) => u.kind === 'note')!;
+    const excluded = groupsOf(groupWork(v.units, true, { exclude: note }))[0].id;
+    const joined = groupsOf(groupWork(v.units, true))[0].id;
+    expect(joined).toBe(excluded);
+  });
+
+  it('a block that starts with a note keeps its id when a tool call joins it', () => {
+    const ask = { type: 'ask_user_question', toolUseId: 'q', questions: [] } as unknown as ContentBlock;
+    const a = deriveTurnView([tu('a', 'Running: ls'), tr('a'), ask, tx('Going with A.'), tu('b', 'Running: pwd'), tx('done')], false);
+    const b = deriveTurnView([tu('a', 'Running: ls'), tr('a'), ask, tx('Going with A.'), tu('b', 'Running: pwd'), tu('c', 'Running: id'), tx('done')], false);
+    expect(groupsOf(groupWork(a.units, false))[1].id).toBe(groupsOf(groupWork(b.units, false))[1].id);
+  });
+});
+
 describe('groupWork — live and stable ids', () => {
   it('while streaming only the last block is live', () => {
     const ask = { type: 'ask_user_question', toolUseId: 'q', questions: [] } as unknown as ContentBlock;

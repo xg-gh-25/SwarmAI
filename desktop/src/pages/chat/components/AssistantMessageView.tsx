@@ -50,7 +50,7 @@ import { FileChip } from './FileChip';
 import { AttentionCard, DeliverablesCard, RunAlignment } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { deriveTurnView, extractNextSteps, groupWork, isUnanswered, sectionUnits, turnChangedFiles } from '../turnView';
-import type { TurnUnit, WorkItem } from '../turnView';
+import type { NoteUnit, ProcessUnit, TurnUnit, WorkItem } from '../turnView';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
@@ -303,6 +303,24 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // backend emits that once per run), and its opening thought would sit in a stage.
   const keepIntent = !view.run && !isPipeline && !alignText && !isStreaming;
   const mergeLead = !isStreaming;
+  // While the answer-so-far streams, the block of work above it stays open (groupWork
+  // `holdLiveAboveAnswer`): it does not fold and re-open if a tool call follows.
+  const holdLiveAboveAnswer = !!isStreaming;
+  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage);
+  // A finished turn with no result would show nothing but folded blocks: its last
+  // note (not the intent) shows under the folded line of the block holding it; with
+  // no such note, the turn's last block starts open. Both are chosen among the units
+  // at TOP level only (outside every stage section): a note folded inside a stage row
+  // would not be visible, so it never counts as the turn's last words.
+  const noResult = !isStreaming && hasWork && lastUnit?.kind !== 'outcome';
+  const topUnits = noResult ? sections.flatMap((sec) => (sec.kind === 'unit' ? [sec.unit] : [])) : [];
+  let tailNote: NoteUnit | undefined;
+  let lastWork: ProcessUnit | undefined;
+  for (let i = topUnits.length - 1; i >= 0 && !(tailNote && lastWork); i -= 1) {
+    const u = topUnits[i];
+    if (!lastWork && u.kind === 'process' && u.steps.length > 0) lastWork = u;
+    if (!tailNote && u.kind === 'note' && u !== alignText && view.units.indexOf(u) > firstWork) tailNote = u;
+  }
   // Once there is a result, what needs the user leads it (right after the divider);
   // until then it stays where it arrived: with the DELIVER row.
   let attentionPending = !!attentionCard && !showResult;
@@ -319,6 +337,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           <div key={`g-${item.id}`} className={gap} {...ANCHOR_PROPS}>
             <WorkGroupView
               group={item}
+              tail={!inStage && tailNote && item.members.includes(tailNote) ? tailNote : undefined}
+              defaultOpen={!inStage && noResult && !tailNote && !!lastWork && item.members.includes(lastWork)}
               compact={!isStreaming}
               expanded={processChoice.get(item.id)}
               flat={inStage}
@@ -353,13 +373,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       const key = `i-${item.index}`;
       return { key, lane: false, el: <div key={key} className="mt-3" {...ANCHOR_PROPS}>{renderBlock(item.block, `ib-${item.index}`)}</div> };
     }
-    // A note and an outcome share a key prefix: while streaming, the answer-so-far
-    // turns into a note the moment the next tool call arrives — no remount.
-    const prefix = item.kind === 'landmark' ? 'lm' : 'cb';
+    // A first-level text: the intent, the answer-so-far / result, or a note / landmark
+    // between blocks. Keyed by its text ordinal, which a stored copy replacing the live
+    // message (tool_result blocks dropped) does not shift.
     const isAlignment = item === alignText;
     const isResult = showResult && item === lastUnit;
     const inLane = !isAlignment && item.kind !== 'outcome';
-    const key = `${prefix}-${item.index}`;
+    const key = `tx-${item.textOrdinal}`;
     return {
       key,
       lane: inLane,
@@ -378,7 +398,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             </div>
           )}
           {isResult && attentionCard && <div className="mb-3">{attentionCard}</div>}
-          {renderBlock({ type: 'text', text: item.text }, `${prefix}-b-${item.index}`)}
+          {renderBlock({ type: 'text', text: item.text }, `${key}-b`)}
         </div>
       ),
     };
@@ -386,13 +406,12 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const renderItems = (items: WorkItem[], inStage = false): Placed[] =>
     items.map((it, i) => renderItem(it, items[i - 1], inStage)).filter((x): x is Placed => !!x);
 
-  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage);
   const placed: Placed[] = [];
   // Top-level units between stage rows are grouped together; only the turn's final
   // run can hold the live group.
   let buffer: TurnUnit[] = [];
   const flush = (isLast: boolean) => {
-    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, { exclude: alignText, keepIntent, mergeLead })));
+    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, { exclude: alignText, keepIntent, mergeLead, holdLiveAboveAnswer })));
     buffer = [];
   };
   const stageSeen = new Map<string, number>();
@@ -415,7 +434,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // Inside a stage (a lane item) a question / permission / the answer-so-far is
     // still not process: it is reset to the answer's size and contrast.
     const body = children.length || liveSec
-      ? renderItems(groupWork(children, liveSec, { exclude: alignText, keepIntent, mergeLead }), true).map((x) => (x.lane ? x.el : (
+      ? renderItems(groupWork(children, liveSec, { exclude: alignText, keepIntent, mergeLead, holdLiveAboveAnswer }), true).map((x) => (x.lane ? x.el : (
         <div key={`full-${x.key}`} className={FULL_CLASS}>{x.el}</div>
       )))
       : null;
@@ -446,11 +465,12 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   });
   flush(true);
 
-  // The lane is a class on each item, never a wrapping parent: the streaming answer
-  // ('outcome', outside the lane) turns into a note (inside it) the moment the next
-  // tool call arrives, and a parent change would remount it under the reader. Each
-  // item keeps its key and its parent; only its class changes. `flow-root` keeps the
-  // items' own margins inside the rule, so consecutive lane items read as one line.
+  // The lane is a class on each item, never a wrapping parent: an item that changes
+  // lane (a first-level text that becomes a lane item, or the reverse) keeps its key
+  // and its parent; only its class changes. The answer-so-far stays first level, so
+  // the final answer never moves when the turn ends; a rare note between tool calls
+  // moves into the (still open) block when the next call arrives. `flow-root` keeps the items' own margins
+  // inside the rule, so consecutive lane items read as one line.
   const contentBlocks: React.ReactNode[] = placed.map((x) => (
     <div
       key={x.key}

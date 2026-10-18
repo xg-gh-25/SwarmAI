@@ -34,10 +34,10 @@ const res = (id: string, outcome: string, isError = false) =>
 function groupsOf(content: ContentBlock[], streaming = false): WorkGroup[] {
   return groupWork(deriveTurnView(content, streaming).units, streaming).filter((x): x is WorkGroup => x.kind === 'group');
 }
-function show(g: WorkGroup, opts: { expanded?: boolean; flat?: boolean } = {}) {
+function show(g: WorkGroup, opts: { expanded?: boolean; flat?: boolean; tail?: WorkGroup['members'][number]; defaultOpen?: boolean } = {}) {
   const onToggle = vi.fn();
   const r = render(
-    <WorkGroupView group={g} expanded={opts.expanded} flat={opts.flat} onToggle={onToggle} thoughtOpen={() => undefined}
+    <WorkGroupView group={g} expanded={opts.expanded} flat={opts.flat} tail={opts.tail} defaultOpen={opts.defaultOpen} onToggle={onToggle} thoughtOpen={() => undefined}
       onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} compact />,
   );
   return { onToggle, ...r };
@@ -72,7 +72,7 @@ describe('WorkGroupView', () => {
 
   it('a block of notes only has no "0 thoughts" count', () => {
     const g: WorkGroup = { kind: 'group', id: 'grp-note-3', live: false, hasTools: false, members: [
-      { kind: 'note', text: 'Got it, going with A.', index: 3 },
+      { kind: 'note', text: 'Got it, going with A.', index: 3, textOrdinal: 0 },
     ] };
     show(g);
     expect(screen.queryByTestId('group-counts')).toBeNull();
@@ -167,6 +167,28 @@ describe('WorkGroupView', () => {
     show(g, { expanded: true });
     expect(screen.getByTestId('strip-tool').textContent).toBe('MultiEdit');
     expect(screen.getByTestId('file-chip')).toBeTruthy();
+  });
+
+  it('`tail`: folded, the note shows under the line; opened, it is in its place once', () => {
+    const [g] = groupsOf([tu('a', 'Running: ls'), res('a', 'ok'), tx('last words'), tu('b', 'Running: pwd'), res('b', 'ok')]);
+    const note = g.members.find((m) => m.kind === 'note')!;
+    const { rerender } = show(g, { tail: note });
+    expect(screen.getByTestId('turn-tail').textContent).toBe('last words');
+    expect(screen.getByTestId('group-counts').textContent).toBe('· 2 steps · 2 commands');
+    rerender(<WorkGroupView group={g} expanded tail={note} onToggle={() => {}} thoughtOpen={() => undefined}
+      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} compact />);
+    expect(screen.queryByTestId('turn-tail')).toBeNull();
+    expect(screen.getAllByText('last words')).toHaveLength(1);
+  });
+
+  it('`defaultOpen`: a turn with nothing to read starts with its last block open, newest items', () => {
+    const blocks: ContentBlock[] = [];
+    for (let i = 0; i < 20; i += 1) blocks.push(tu(`s${i}`, `Running: echo ${i}`), res(`s${i}`, 'ok'));
+    const [g] = groupsOf(blocks);
+    show(g, { defaultOpen: true });
+    const rows = screen.getAllByTestId('step-row');
+    expect(rows).toHaveLength(12);
+    expect(within(rows[11]).getByTestId('strip-target').textContent).toBe('echo 19');
   });
 
   it('an unrecovered failure stays visible under the folded line', () => {

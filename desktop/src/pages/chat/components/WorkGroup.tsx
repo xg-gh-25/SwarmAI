@@ -8,6 +8,9 @@
  *   - second level, inside a block, in stream order: thoughts, notes the model wrote
  *     between tool calls, landmarks and tool calls
  * So:
+ *   - A turn with no result: `tail` (its last note) shows under the folded line, like
+ *     an unrecovered failure; opened, it is in its place in the list. `defaultOpen`
+ *     opens the turn's last block when there is no text to show at all.
  *   - LIVE (the last block of a streaming turn): an open WORKING card, no toggle. A
  *     running tool call carries the spinner and its elapsed; with nothing running (the
  *     model is thinking) the header holds the one spinner.
@@ -144,13 +147,15 @@ type Item =
   | { key: string; note: Exclude<WorkMember, ThoughtUnit | { kind: 'process' }> }
   | { key: string; row: StepRowItem };
 
-/** A block's members as one ordered list of thoughts, notes and tool rows. */
+/** A block's members as one ordered list of thoughts, notes and tool rows. Text
+ *  members key by their text ordinal, which survives the stream-end reconcile and a
+ *  note turning into a landmark. */
 function itemsOf(g: WorkGroup): Item[] {
   const out: Item[] = [];
   for (const m of g.members) {
     if (m.kind === 'thought') out.push({ key: `th-${m.ordinal}`, thought: m });
     else if (m.kind === 'process') for (const r of groupSteps(m.steps)) out.push({ key: rowKey(r), row: r });
-    else out.push({ key: `${m.kind === 'landmark' ? 'lm' : 'cb'}-${m.index}`, note: m });
+    else out.push({ key: `tx-${m.textOrdinal}`, note: m });
   }
   return out;
 }
@@ -183,15 +188,22 @@ export interface WorkGroupViewProps {
   onThoughtToggle: (key: string, open: boolean) => void;
   /** Renders a note / landmark's markdown (the message's own block renderer). */
   renderNote: (text: string, key: string) => ReactNode;
+  /** The turn has no result and this block holds its last note: shown under the
+   *  folded line (the turn's last words stay visible). */
+  tail?: WorkMember;
+  /** The turn has no result and no note to show: this, its last block, starts open. */
+  defaultOpen?: boolean;
 }
 
 const TAG = 'shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.08em]';
+/** The turn's last note under a folded line: readable, a step down from the answer. */
+const TAIL_CLASS = 'ml-[7px] pl-2 mt-0.5 text-[13.5px] [&_p]:text-[13.5px] [&_li]:text-[13.5px] text-[var(--color-text-secondary)]';
 /** A note / landmark is second level: text size of the lane, headings included (a
  *  "## ✦ ⑦ TEST" landmark is a line inside the work, not a page heading). */
 const NOTE_CLASS = 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)] '
   + '[&_h1]:text-[13px] [&_h2]:text-[13px] [&_h3]:text-[12.5px] [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_h1]:text-[var(--color-text-secondary)] [&_h2]:text-[var(--color-text-secondary)]';
 
-export function WorkGroupView({ group, compact, expanded, flat, onToggle, thoughtOpen, onThoughtToggle, renderNote }: WorkGroupViewProps) {
+export function WorkGroupView({ group, compact, expanded, flat, onToggle, thoughtOpen, onThoughtToggle, renderNote, tail, defaultOpen }: WorkGroupViewProps) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const auto = useLinger(group.live);
@@ -275,10 +287,12 @@ export function WorkGroupView({ group, compact, expanded, flat, onToggle, though
   }
 
   if (items.length === 0) return null;
-  const open = expanded ?? auto;
+  const open = expanded ?? (auto || !!defaultOpen);
   // In the FOLD_DELAY_MS after it finishes, the list keeps its live layout (the
   // newest items), then folds in one move — it does not reshuffle to its first items.
-  const lingering = expanded === undefined && auto;
+  // A block open by default (a turn with no text) shows its newest items too: that is
+  // where the turn stopped.
+  const lingering = expanded === undefined && (auto || !!defaultOpen);
   const shown = showAll ? items : lingering ? items.slice(-PAGE) : items.slice(0, PAGE);
   const hidden = items.length - shown.length;
   const failure = group.members.find((m) => m.kind === 'process' && !!m.unrecoveredFailure);
@@ -321,6 +335,11 @@ export function WorkGroupView({ group, compact, expanded, flat, onToggle, though
       {/* A failure the turn never recovered from stays visible on the folded line. */}
       {!open && failure?.kind === 'process' && failure.unrecoveredFailure && (
         <div className="ml-[7px] pl-2 border-l border-red-500/40"><ToolStrip step={failure.unrecoveredFailure} /></div>
+      )}
+      {/* A turn with no result: its last note stays readable under the folded line
+          (after the failure, if any). Opened, it is in its place in the list. */}
+      {!open && tail && (tail.kind === 'note' || tail.kind === 'landmark') && (
+        <div data-testid="turn-tail" className={TAIL_CLASS} {...ANCHOR_PROPS}>{renderNote(tail.text, 'tail-b')}</div>
       )}
     </div>
   );
