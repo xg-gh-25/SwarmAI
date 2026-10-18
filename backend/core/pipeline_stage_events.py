@@ -112,6 +112,52 @@ def parse_watched_run_id(command: object) -> Optional[str]:
     return None
 
 
+# ``run-create`` names no run in its command — artifact_cli mints the id and prints
+# it (``{"pipeline_id": "run_…", …}``). Its call is watched with this sentinel and
+# the id is read from the call's own output, so the run's alignment shows the
+# moment the run exists, not after EVALUATE's first ``--run-id`` call.
+RUN_CREATE_WATCH = "<run-create>"
+_RUN_CREATE_RE = re.compile(r"artifact_cli(?:\.py)?['\"]?\s+(?:[^;&|\n]*\s)?run-create(?=[\s'\";&|)]|$)")
+_PIPELINE_ID_RE = re.compile(r'"pipeline_id"\s*:\s*"([^"]*)"')
+
+
+def is_run_create(command: object) -> bool:
+    """True when the LAST artifact_cli invocation in ``command`` is ``run-create``."""
+    if not isinstance(command, str) or "artifact_cli" not in command:
+        return False
+    return bool(_RUN_CREATE_RE.search(command[command.rfind("artifact_cli"):]))
+
+
+def _result_text(content: object) -> str:
+    """A tool_result's content as text (a string, or a list of text blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            text = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def run_id_from_create_output(content: object) -> Optional[str]:
+    """The run id a ``run-create`` call printed, else None. The LAST ``pipeline_id``
+    wins (the CLI prints its result line last). A pre-filter only: the id still has
+    to name a real run.json before anything is shown (read_stage_state)."""
+    ids = _PIPELINE_ID_RE.findall(_result_text(content))
+    return ids[-1] if ids and _RUN_ID_RE.fullmatch(ids[-1]) else None
+
+
+def resolve_watch(watch: Optional[str], content: object) -> Optional[str]:
+    """The run id a watched call refers to: its ``--run-id``, or for ``run-create``
+    the id it printed."""
+    if watch == RUN_CREATE_WATCH:
+        return run_id_from_create_output(content)
+    return watch
+
+
 def read_stage_state(run_id: object) -> Optional[dict]:
     """Read run.json for ``run_id`` into ``{"profile": str|None, "stages": {...}}``.
 
@@ -255,7 +301,8 @@ def new_stage_blocks(
 #
 # Two more backend-written blocks, both persisted and both non-conversational
 # (context_injector _TOOL_ONLY_TYPES):
-#   pipeline_run       — once per run per session, the first time a call names it:
+#   pipeline_run       — once per run per session, the first time a call names it
+#                        (normally ``run-create`` itself, via RUN_CREATE_WATCH):
 #                        the run's requirement (the AI's restatement of the ask —
 #                        the turn's alignment) and its planned stages.
 #   pipeline_attention — with the DELIVER row: only what needs a human judgement,

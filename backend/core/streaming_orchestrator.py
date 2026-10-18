@@ -1643,10 +1643,11 @@ class StreamingOrchestrator:
                                     )
                             # ── Pipeline stage rows (successful artifact_cli call) ──
                             if _tuid in _pending_stage_watch:
-                                for _ev in await self._pipeline_stage_events(
-                                    _pending_stage_watch.pop(_tuid)
-                                ):
-                                    yield _ev
+                                _um_stage_rid = _pse.resolve_watch(
+                                    _pending_stage_watch.pop(_tuid), getattr(_blk, "content", None))
+                                if _um_stage_rid:
+                                    for _ev in await self._pipeline_stage_events(_um_stage_rid):
+                                        yield _ev
                         else:
                             # FAILED tool result: discard any pending write/delete/completion
                             # tracking so it can never surface later (symmetric with the
@@ -1916,6 +1917,10 @@ class StreamingOrchestrator:
                             if _stage_run_id:
                                 _pending_stage_watch[block.id] = _stage_run_id
                                 await self._watch_pipeline_stage_call(_stage_run_id)
+                            elif _pse.is_run_create(_cmd):
+                                # No id until the CLI mints it: resolved from the call's
+                                # output; no baseline to seed (the run does not exist yet).
+                                _pending_stage_watch[block.id] = _pse.RUN_CREATE_WATCH
                         # ── UI-action (ACT): agent drives its own UI (Run 2) ──
                         # The agent calls the ui_action tool; we observe it here,
                         # validate cmd against the fail-closed allowlist, and yield
@@ -2113,7 +2118,8 @@ class StreamingOrchestrator:
                             # ── Pipeline stage rows (successful artifact_cli call) ──
                             # Queued AFTER the content_blocks flush below, so the
                             # stage row lands after the tool_result it came from.
-                            _stage_rid = _pending_stage_watch.pop(block.tool_use_id, None)
+                            _stage_rid = _pse.resolve_watch(
+                                _pending_stage_watch.pop(block.tool_use_id, None), block.content)
                             if _stage_rid:
                                 _fc_events += await self._pipeline_stage_events(_stage_rid)
                         else:

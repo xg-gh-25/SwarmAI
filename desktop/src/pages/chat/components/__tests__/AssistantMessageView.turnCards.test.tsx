@@ -181,6 +181,26 @@ describe('turn_deliverables — what the turn produced', () => {
     expect(within(changed).getAllByTestId('file-chip').map((e) => e.getAttribute('data-path'))).toEqual(['/ws/backend/x.py']);
   });
 
+  it('read-only preview (History): products and file chips show but do not act', () => {
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.addEventListener(OPEN_FILE_EVENT, on);
+    const message: Message = { id: 'm1', role: 'assistant', timestamp: new Date().toISOString(), isError: false,
+      content: [wr('w', '/ws/backend/x.py'), tr('w'), tx('done'), deliv('out/deck.pptx')] };
+    render(<ToastProvider><AssistantMessageView message={message} readOnly /></ToastProvider>);
+    const tile = screen.getByTestId('deliverable');
+    expect(tile.querySelector('button')).toBeNull();
+    expect(screen.queryByText('Open in Canvas')).toBeNull();
+    expect(screen.queryByText('Copy path')).toBeNull();
+    fireEvent.click(tile.firstElementChild!);
+    const chips = screen.getAllByTestId('file-chip');
+    expect(chips.length).toBeGreaterThan(0);
+    chips.forEach((c) => { expect(c.tagName).toBe('SPAN'); fireEvent.click(c); });
+    document.removeEventListener(OPEN_FILE_EVENT, on);
+    expect(seen).toEqual([]);
+    expect(chips[0].getAttribute('title')).toBe('/ws/backend/x.py');
+  });
+
   it('keeps the extension when the name is shortened', () => {
     expect(middleEllipsis('short.md')).toBe('short.md');
     const s = middleEllipsis('2026-10-18-quarterly-business-review-final-v3.pptx');

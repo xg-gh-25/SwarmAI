@@ -5,12 +5,15 @@
  * desaturated so a red PDF never reads as a failure) + the file name; the full path
  * is the tooltip. Clicking opens it in Canvas; a file this turn changed opens on its
  * diff. Used by step rows, the folded work line, the "本轮改了" line and markdown
- * file references, so the same file is recognisable wherever it appears.
+ * file references, so the same file is recognisable wherever it appears. In a
+ * read-only preview (ReadOnlyContext) it is not clickable; the path stays the tooltip.
  *
  * @exports FileChip
  */
+import { useContext } from 'react';
 import type React from 'react';
 import { useTranslation } from 'react-i18next';
+import { ReadOnlyContext } from '../readOnlyContext';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
 import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
 import { tf } from '../tf';
@@ -39,6 +42,8 @@ export interface FileChipProps {
 
 export function FileChip({ path, name, change, diff }: FileChipProps) {
   const { t } = useTranslation();
+  // A read-only preview (History) shows the file but does not act on it.
+  const readOnly = useContext(ReadOnlyContext);
   const label = name ?? (path ? baseName(path) : '');
   const icon = (
     <span
@@ -63,8 +68,8 @@ export function FileChip({ path, name, change, diff }: FileChipProps) {
   );
   const cls = 'inline-flex items-center gap-1 max-w-full min-w-0 align-baseline px-1 py-px rounded-[4px] '
     + 'bg-[var(--color-hover)] font-mono text-[12px] text-[var(--color-text-secondary)]';
-  if (!path) {
-    return <span data-testid="file-chip" className={cls} title={label}>{body}</span>;
+  if (!path || readOnly) {
+    return <span data-testid="file-chip" data-path={path} className={cls} title={path ?? label}>{body}</span>;
   }
   return (
     <button

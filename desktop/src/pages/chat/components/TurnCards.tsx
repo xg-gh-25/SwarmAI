@@ -12,12 +12,12 @@
  *                      you" line, so the name appears at most once per card.
  * - DeliverablesCard — the files the turn produced (`turn_deliverables`), after
  *                      the outcome: type icon or image thumbnail, name, open in
- *                      Canvas, copy path.
+ *                      Canvas, copy path (inert in a read-only preview).
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
  * @exports RunAlignment, AttentionCard, DeliverablesCard, middleEllipsis
  */
-import { useState, type ReactNode } from 'react';
+import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PipelineAttentionContent, PipelineAttentionItem, PipelineRunContent, TurnDeliverable } from '../../../types';
 import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/MarkdownRenderer';
@@ -25,6 +25,7 @@ import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
+import { ReadOnlyContext } from '../readOnlyContext';
 
 const LABEL = 'text-[11px] tracking-wide text-[var(--color-text-muted)]';
 
@@ -150,6 +151,8 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
+  // A read-only preview (History) shows what was produced but does not act on it.
+  const readOnly = useContext(ReadOnlyContext);
   const name = baseName(file.path || file.absolutePath);
   const thumb = IMAGE_EXT.test(name) && !thumbFailed ? resolveImageSrc(file.absolutePath) : undefined;
   const open = () => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: file.absolutePath } }));
@@ -159,10 +162,12 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
       setTimeout(() => setCopied(false), 1500);
     }
   };
+  const Head = readOnly ? 'div' : 'button';
+  const headProps = readOnly ? {} : { type: 'button' as const, onClick: open };
   const action = 'text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:underline';
   return (
     <li data-testid="deliverable" data-path={file.absolutePath} className="min-w-0 rounded-md border border-[var(--color-border)] p-2">
-      <button type="button" onClick={open} title={file.absolutePath} className="w-full flex items-center gap-2 min-w-0 text-left">
+      <Head {...headProps} title={file.absolutePath} className="w-full flex items-center gap-2 min-w-0 text-left">
         {thumb ? (
           <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-10 h-10 rounded object-cover shrink-0" />
         ) : (
@@ -175,13 +180,15 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
           </span>
         )}
         <span className="min-w-0 font-mono text-[12px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
-      </button>
+      </Head>
+      {!readOnly && (
       <div className="mt-1.5 flex items-center gap-3">
         <button type="button" onClick={open} className={action}>{tf(t, 'chat.turn.deliverables.open', 'Open in Canvas')}</button>
         <button type="button" onClick={copy} className={action}>
           {copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path')}
         </button>
       </div>
+      )}
     </li>
   );
 }

@@ -49,6 +49,7 @@ import type { TurnUnit } from '../turnView';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
+import { ReadOnlyContext } from '../readOnlyContext';
 import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
@@ -403,6 +404,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const savingLabel = tf(t, 'chat.message.saving', 'Saving...');
 
   return (
+    <ReadOnlyContext.Provider value={!!readOnly}>
     <div className="group/msg min-w-0 flex gap-2.5 items-start">
       {/* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */}
       <div
@@ -547,6 +549,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
     </div>
     </div>
+    </ReadOnlyContext.Provider>
   );
 };
 

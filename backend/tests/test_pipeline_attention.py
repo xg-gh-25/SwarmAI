@@ -124,15 +124,19 @@ def _blocks(events):
             and b.get("type") in ("pipeline_run", "pipeline_stage", "pipeline_attention")]
 
 
-def _turn(orch, monkeypatch, reader, tu):
+def _turn_on(orch, monkeypatch, reader, tu, rid):
     from core.permission_manager import permission_manager
     from tests.test_tool_call_leak_guard import _make_result_message
     monkeypatch.setattr(pse, "read_stage_state", reader)
     permission_manager.remove_session_queue("sess-test")  # each turn = its own loop
-    events, raised = _drive_stream(orch, [_bash_use(tu, CLI.format(rid="run_a1")), _result(tu),
+    events, raised = _drive_stream(orch, [_bash_use(tu, CLI.format(rid=rid)), _result(tu),
                                           _make_result_message()])
     assert raised is None
     return _blocks(events)
+
+
+def _turn(orch, monkeypatch, reader, tu):
+    return _turn_on(orch, monkeypatch, reader, tu, "run_a1")
 
 
 @pytest.mark.usefixtures("_isolated_queue")
@@ -145,6 +149,94 @@ def test_orchestrator_announces_the_run_once_and_attention_rides_deliver(monkeyp
     later = _turn(orch, monkeypatch, _ScriptedReader(_S3), "tu2")
     assert [(b["type"], b.get("stage")) for b in later] == [("pipeline_stage", "deliver"), ("pipeline_attention", None)]
     assert [i["kind"] for i in later[1]["items"]] == ["gate", "not_push_ready"]  # the WRONG-FRAME waited for DELIVER
+
+
+RUN_CREATE = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
+              "backend/scripts/artifact_cli.py run-create --project SwarmAI --requirement 'Do X'")
+
+
+def _created(tu, out):
+    from claude_agent_sdk import ToolResultBlock, UserMessage
+    return UserMessage(content=[ToolResultBlock(tool_use_id=tu, content=out, is_error=False)])
+
+
+def _create_turn(orch, monkeypatch, reader, result):
+    from core.permission_manager import permission_manager
+    from tests.test_tool_call_leak_guard import _make_result_message
+    monkeypatch.setattr(pse, "read_stage_state", reader)
+    permission_manager.remove_session_queue("sess-test")
+    events, raised = _drive_stream(orch, [_bash_use("tc1", RUN_CREATE), result, _make_result_message()])
+    assert raised is None
+    return _blocks(events)
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+def test_run_create_shows_the_alignment_at_once_and_seeds_the_baseline(monkeypatch):
+    """XG 2026-10-18: the understanding card must appear when the run is created, not
+    after EVALUATE's first --run-id call."""
+    from tests.test_tool_call_leak_guard import _make_orchestrator
+    orch = _make_orchestrator()
+    reader = _ScriptedReader(_S1)
+    out = 'warning: x\n{"pipeline_id": "run_new1", "project": "SwarmAI", "file": "/p/run.json"}'
+    blocks = _create_turn(orch, monkeypatch, reader, _created("tc1", out))
+    assert [(b["type"], b["runId"]) for b in blocks] == [("pipeline_run", "run_new1")]
+    assert blocks[0]["requirement"] == "Do X"
+    assert reader.calls == ["run_new1"]  # no pre-read: the run did not exist yet
+    # The next call on that run diffs against the seeded baseline and does not re-announce.
+    later = _turn_on(orch, monkeypatch, _ScriptedReader(_S2), "tu2", "run_new1")
+    assert [(b["type"], b.get("stage")) for b in later] == [("pipeline_stage", "think")]
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+def test_run_create_text_blocks_output_and_failures(monkeypatch):
+    from claude_agent_sdk import ToolResultBlock, UserMessage
+    from tests.test_tool_call_leak_guard import _make_orchestrator
+    reader = _ScriptedReader(_S1)
+    as_blocks = _created("tc1", [{"type": "text", "text": '{"pipeline_id": "run_new2"}'}])
+    assert [b["runId"] for b in _create_turn(_make_orchestrator(), monkeypatch, reader, as_blocks)] == ["run_new2"]
+    failed = UserMessage(content=[ToolResultBlock(tool_use_id="tc1", content='{"pipeline_id": "run_x"}', is_error=True)])
+    reader = _ScriptedReader(_S1)
+    assert _create_turn(_make_orchestrator(), monkeypatch, reader, failed) == [] and reader.calls == []
+    reader = _ScriptedReader(_S1)
+    assert _create_turn(_make_orchestrator(), monkeypatch, reader, _created("tc1", "Traceback ...")) == []
+    assert reader.calls == []
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+def test_run_create_result_inside_an_assistant_message_also_announces(monkeypatch):
+    from claude_agent_sdk import AssistantMessage, ToolResultBlock
+    from tests.test_tool_call_leak_guard import _make_orchestrator
+    reader = _ScriptedReader(_S1)
+    am = AssistantMessage(content=[ToolResultBlock(tool_use_id="tc1", content='{"pipeline_id": "run_new3"}',
+                                                   is_error=False)], model="test-model")
+    assert [b["runId"] for b in _create_turn(_make_orchestrator(), monkeypatch, reader, am)] == ["run_new3"]
+    assert reader.calls == ["run_new3"]
+
+
+@pytest.mark.parametrize("command,expected", [
+    (RUN_CREATE, True),
+    ("python artifact_cli.py run-create --project P --requirement R", True),
+    ('python "backend/scripts/artifact_cli.py" run-create --project P', True),
+    ("python artifact_cli.py run-update --project P --run-id run_a --stage-json '{\"s\":\"run-create\"}'", False),
+    ("python artifact_cli.py run-create --project P && python artifact_cli.py run-update --run-id run_a", False),
+    ("echo run-create", False),
+    (None, False),
+])
+def test_is_run_create(command, expected):
+    assert pse.is_run_create(command) is expected
+
+
+@pytest.mark.parametrize("content,expected", [
+    ('{"pipeline_id": "run_ab12"}', "run_ab12"),
+    ('{"pipeline_id": "run_old"}\n{"pipeline_id": "run_new"}', "run_new"),
+    ('{"pipeline_id": "../../etc"}', None),
+    ([{"type": "text", "text": '{"pipeline_id": "run_c"}'}], "run_c"),
+    ("no json here", None),
+    (None, None),
+])
+def test_run_id_from_create_output(content, expected):
+    assert pse.run_id_from_create_output(content) == expected
+    assert pse.resolve_watch("run_literal", content) == "run_literal"
 
 
 @pytest.mark.usefixtures("_isolated_queue")
