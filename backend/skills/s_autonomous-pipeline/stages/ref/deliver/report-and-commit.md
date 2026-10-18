@@ -136,3 +136,15 @@ user said they will handle the PR.
   upstream stages.
 - Legacy path (sibling skills only): `publish --type delivery --stage deliver` then
   `advance --state reflect`. Pipeline runs use `stage-complete` instead.
+
+## Review summary (`outcome` + `attention_flags`) `[MUST]`
+The deliver artifact carries `outcome` = {`problem_before`, `result_now`, `approach[]`}: in plain
+words, what was wrong before this run, what is true now, and the few key moves. Every item still
+open (deferred finding, unrun check, needed restart, known risk) goes in `attention_flags`. The
+chat completion block and the REPORT TL;DR + §10 render both through one function
+(`core.run_delivery_summary.review_summary`), together with unresolved findings, a
+push_ready=false reason and any forced commit. A part with nothing recorded shows 未记录, so a
+skipped `outcome` is visible to the reviewer, never filled in from the requirement text.
+The forced-commit line exists only after `run-commit` records the commit, so the REPORT copy committed
+into git never shows it; the ledger REPORT (regenerated at completion) does. A push_ready=false reason
+appears in both copies.

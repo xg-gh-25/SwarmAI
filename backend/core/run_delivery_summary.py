@@ -17,6 +17,10 @@ Public symbols:
 - ``file_changes``           — per-file A/M/D/R status, +/− lines and diff base ref
   from ``git show`` of the run's commits (fallback: files_touched + worktree state,
   each file resolved against its OWN git toplevel; unresolvable → plain text).
+- ``review_summary``         — PURE: the three-part review content (what was solved,
+  how, what is left) from DELIVER's ``outcome`` plus every recorded leftover. The
+  chat block and the REPORT (TL;DR + §10) both render it, so they cannot disagree.
+- ``render_review_lines``    — the one renderer of those parts for both doors.
 - ``render_delivery_summary_md`` — PURE renderer of the §4-E chat block.
 - ``build_delivery_summary`` — wires the above for a run dir; never raises.
 """
@@ -831,16 +835,137 @@ def _quality_line(run_state: dict, deliver: dict, test_info: dict) -> Optional[s
     ec = _exit_criteria(run_state)
     if ec:
         parts.append(f"结束条件 {ec[0]}/{ec[1]} 满足")
-    pr = deliver.get("push_ready")
-    if pr is None:
-        for rec in _l(run_state.get("stages")):
-            if _d(rec).get("stage") == "deliver" and isinstance(_d(rec).get("push_ready"), bool):
-                pr = rec["push_ready"]
+    pr = _push_ready(run_state, deliver)
     if pr is True:
         parts.append("push-ready")
     elif pr is False:
         parts.append("未 push-ready")
+    if any(_d(c).get("forced_push_ready") is True for c in _l(run_state.get("commits"))):
+        parts.append("强制提交")
     return ("**质量** " + " · ".join(parts)) if parts else None
+
+
+MAX_APPROACH = 4
+MAX_LEFTOVERS = 6
+UNRECORDED = "未记录"
+NO_LEFTOVERS = "无（DELIVER 未记录任何遗留）"
+
+
+def _raw(value: Any) -> str:
+    """Raw text with surrounding whitespace removed; emptiness is judged HERE, on
+    the raw value, never on ``_txt`` output (which may turn blanks into ``⏎``)."""
+    return str(value).strip() if isinstance(value, (str, int, float)) else ""
+
+
+def _raw_list(value: Any) -> list[str]:
+    return [t for t in (_raw(v) for v in _l(value)) if t]
+
+
+_TEXT_KEYS = ("finding", "summary", "description", "title", "issue")
+_DONE_PREFIXES = ("fixed", "resolved", "accepted", "closed", "done")
+
+
+def _item_text(item: Any) -> str:
+    """Text of a leftover item: a string, or a dict's first non-blank text field.
+    Dict items are the gates' own output shape ({severity, description, ...}) —
+    dropping them is how a run with recorded risks rendered as clean."""
+    if isinstance(item, dict):
+        return next((t for t in (_raw(item.get(k)) for k in _TEXT_KEYS) if t), "")
+    return _raw(item)
+
+
+def _item_done(item: Any) -> bool:
+    """A dict item marked done: truthy ``resolved`` (every other reader's rule), or a
+    status / resolution that starts with fixed / resolved / accepted / closed / done."""
+    if not isinstance(item, dict):
+        return False
+    if item.get("resolved"):
+        return True
+    return any(_raw(item.get(k)).lower().startswith(_DONE_PREFIXES) for k in ("status", "resolution"))
+
+
+def _deliver_record(run_state: dict) -> dict:
+    for rec in _l(run_state.get("stages")):
+        if _d(rec).get("stage") == "deliver":
+            return _d(rec)
+    return {}
+
+
+def _push_ready(run_state: dict, deliver: dict) -> Optional[bool]:
+    """The push-ready verdict, one source for every line of the block: the deliver
+    STAGE RECORD (written by the gate, read by run-commit) wins over the artifact."""
+    rec = _deliver_record(_d(run_state)).get("push_ready")
+    if isinstance(rec, bool):
+        return rec
+    art = _d(deliver).get("push_ready")
+    return art if isinstance(art, bool) else None
+
+
+def review_summary(run_state: Any, deliver: Any) -> dict:
+    """PURE: ``{"solved": (before, now) | None, "approach": [str], "leftovers": [str]}``.
+
+    Sources: ``deliver.outcome`` {problem_before, result_now, approach[]}; leftovers
+    in priority order: unresolved adversarial findings, push_ready=false and its
+    reason (deliver stage record, else the artifact), commits forced past the
+    push_ready gate, ``attention_flags[]``, ``meta_review.risks[]``. Strings are RAW
+    (each caller escapes for its own medium); blanks are dropped. ``solved`` is
+    None unless BOTH halves are recorded — half a before/after is not a summary."""
+    rs, dv = _d(run_state), _d(deliver)
+    out = _d(dv.get("outcome"))
+    before, now = _raw(out.get("problem_before")), _raw(out.get("result_now"))
+    left: list[str] = []
+    for f in _l(_d(dv.get("adversarial_review")).get("findings")):
+        text = _item_text(f) if isinstance(f, dict) else ""
+        if text and not _item_done(f):
+            sev = _raw(f.get("severity")) or "?"
+            left.append(f"未修复的 {sev} 发现：{text}")
+    rec = _deliver_record(rs)
+    if _push_ready(rs, dv) is False:
+        why = _raw(rec.get("push_ready_reason")) or _raw(dv.get("push_ready_reason"))
+        left.append(f"未通过 push-ready：{why or '原因未记录'}")
+    for c in _l(rs.get("commits")):
+        c = _d(c)
+        if c.get("forced_push_ready") is True:
+            left.append(f"commit {_raw(c.get('sha'))[:8] or '?'} 是用 run-commit --force "
+                        "绕过 push-ready 检查强制提交的")
+    for flag in _l(dv.get("attention_flags")):
+        text = _item_text(flag)
+        if text and not _item_done(flag):
+            left.append(text)
+    for r in _l(_d(dv.get("meta_review")).get("risks")):
+        text = _item_text(r)
+        if text and not _item_done(r):
+            sev = _raw(r.get("severity")) if isinstance(r, dict) else ""
+            left.append(f"{sev + ' ' if sev else ''}风险：{text}")
+    return {"solved": (before, now) if before and now else None,
+            "approach": _raw_list(out.get("approach")), "leftovers": left}
+
+
+def render_review_lines(parts: dict, esc=None, caps: bool = True,
+                        leftovers_inline: bool = True) -> list[str]:
+    """Render the three parts. The ONE renderer for both doors: the chat block uses
+    the defaults (``_txt`` escaping, capped lists, leftovers listed); the REPORT
+    TL;DR passes its own one-line escaper, ``caps=False`` and
+    ``leftovers_inline=False`` (§10 lists them in full)."""
+    esc = esc or (lambda v, limit=None: _txt(v, limit))
+    solved, approach, left = parts.get("solved"), parts.get("approach") or [], parts.get("leftovers") or []
+    out = ["**解决了什么问题**"]
+    out += ([f"- 原来：{esc(solved[0], 300)}", f"- 现在：{esc(solved[1], 300)}"]
+            if solved else [f"- {UNRECORDED}"])
+    shown = approach[:MAX_APPROACH] if caps else approach
+    out += ["", "**怎么做的**"]
+    out += [f"- {esc(a, 200)}" for a in shown] or [f"- {UNRECORDED}"]
+    if len(approach) > len(shown):
+        out.append(f"- …另 {len(approach) - len(shown)} 条见报告")
+    if not left:
+        return out + ["", "**遗留问题**", f"- {NO_LEFTOVERS}"]
+    if not leftovers_inline:
+        return out + ["", f"**遗留问题**（{len(left)} 条，见 §10）"]
+    shown_l = left[:MAX_LEFTOVERS] if caps else left
+    out += ["", f"**遗留问题**（{len(left)} 条）"] + [f"- {esc(x, 240)}" for x in shown_l]
+    if len(left) > len(shown_l):
+        out.append(f"- …另 {len(left) - len(shown_l)} 条见报告 §10")
+    return out
 
 
 def _report_line(report_path: Any) -> str:
@@ -859,6 +984,7 @@ def render_delivery_summary_md(run_state, eval_artifact, deliver_artifact, test_
     intent = run_state.get("intent") or run_state.get("requirement")
     if intent:
         lines += ["**你要的**", f"> {_txt(intent, MAX_INTENT)}", ""]
+    lines += render_review_lines(review_summary(run_state, deliver)) + [""]
     req = _requirements_block(ev, deliver)
     if req:
         lines += req + [""]

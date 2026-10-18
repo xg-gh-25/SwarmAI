@@ -232,6 +232,11 @@ def _compute_untrackable_source(
 # is provenance no gate reads. An explicit value in the finalize always wins. Widen this
 # ONLY when a new earlier-set, gate-read field is proven.
 _CARRY_FORWARD_FIELDS = frozenset({"artifact_id", "adversarial_review", "lessons"})
+# The DELIVER push-ready verdict: a finalize (`outputs_surfaced`) that omits it must
+# not erase it. False is the load-bearing value here, so these carry forward on
+# "present and not None", not on truthiness. Carrying only ever keeps an existing
+# verdict; it never raises push_ready (MED-4 still caps an explicit True).
+_CARRY_FORWARD_VERDICT_FIELDS = frozenset({"push_ready", "push_ready_reason", "push_ready_capped"})
 
 # §9 "no lessons" placeholder — the string cmd_run_report emits when the reflect
 # record carries no lessons. It is RENDERER-ONLY: the B-copy gate
@@ -2093,6 +2098,42 @@ def _load_stage_artifacts(project: str, run_id: str, run_state: dict, stages=("e
     return out
 
 
+def _one_line(value) -> str:
+    """Model text for one REPORT markdown line: newlines folded, ends stripped."""
+    if not isinstance(value, (str, int, float)):
+        return ""
+    return " ".join(str(value).split())
+
+
+def _review_parts(run_state: dict, delivery: dict) -> dict:
+    """Shared three-part review content (see core.run_delivery_summary.review_summary).
+    Never raises: an import or data problem yields empty parts, which render 未记录."""
+    try:
+        from core.run_delivery_summary import review_summary
+        return review_summary(run_state, delivery)
+    except Exception as exc:  # noqa: BLE001 — the report must still render
+        print(json.dumps({"warning": f"review summary unavailable: {type(exc).__name__}"}),
+              file=sys.stderr)
+        # Fail CLOSED: an empty leftovers list would render "无遗留" / "None
+        # identified" — the exact false-clean this summary exists to prevent.
+        return {"solved": None, "approach": [],
+                "leftovers": [f"review summary could not be built ({type(exc).__name__}); "
+                              "leftovers were NOT checked — read the deliver artifact"]}
+
+
+def _review_report_lines(parts: dict) -> list:
+    """REPORT TL;DR rendering of the three parts: the shared renderer, full lists,
+    leftovers pointed at §10 (which lists every one of them)."""
+    try:
+        from core.run_delivery_summary import render_review_lines
+        return render_review_lines(parts, esc=lambda v, limit=None: _one_line(v),
+                                   caps=False, leftovers_inline=False)
+    except Exception as exc:  # noqa: BLE001 — the report must still render
+        print(json.dumps({"warning": f"review summary render failed: {type(exc).__name__}"}),
+              file=sys.stderr)
+        return ["**解决了什么问题**", "- 未记录"]
+
+
 def _delivery_summary_for(project: str, run_id: str) -> str:
     """Render the §4-E chat delivery summary for a run. Never raises."""
     try:
@@ -3136,6 +3177,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
 
     if args.stage_json:
         stage_record = json.loads(_read_json_arg(args.stage_json, "--stage-json"))
+        # Did THIS call assert push_ready? A carried-forward verdict must not be re-capped:
+        # run-commit may already have relied on it, and re-judging it against later
+        # file edits would rewrite a passed gate as failed.
+        _pr_sent = isinstance(stage_record, dict) and "push_ready" in stage_record
         # Normalize: accept both "name" and "stage" as the stage identifier
         if "name" in stage_record and "stage" not in stage_record:
             stage_record["stage"] = stage_record.pop("name")
@@ -3170,9 +3215,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             None,
         )
         if existing_idx is not None:
-            # Carry-forward safelist: run-update REPLACES the whole record, but the
+            # Carry-forward safelists: run-update REPLACES the whole record, but the
             # documented finalize workflow (INSTRUCTIONS.md:1372-1379) omits fields
-            # that a prior publish/record auto-set. Two are gate-load-bearing:
+            # that a prior publish/record auto-set. Among them:
             #   - artifact_id — the stub at cmd_publish sets it; without carry-forward
             #     finalizing wipes the artifact link → completion's artifact check
             #     silently skips (run_dc86c466 hit this 2x).
@@ -3181,21 +3226,32 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             #     auto-aggregation saw an empty adv → NO delivery artifact → the gate
             #     rejected with a MISLEADING "Stage completed without artifact_id"
             #     (run_f1fbf37d cost 4 manual re-records).
-            # Preserve ONLY fields in this safelist when the incoming finalize omits
-            # them; an explicit value always wins. Deliberately EXCLUDES `status` (it
-            # must upgrade recorded→completed) and `auto_recorded` (provenance, no
-            # gate reads it).
+            # Preserve ONLY fields in the two safelists when the incoming finalize
+            # omits them; an explicit value always wins. _CARRY_FORWARD_FIELDS carry
+            # on truthiness; _CARRY_FORWARD_VERDICT_FIELDS (push_ready + reason +
+            # capped) carry on "present and not None", because False is the value
+            # that matters there (a COMPLETE finalize used to erase push_ready=false).
+            # Deliberately EXCLUDES `status` (it must upgrade recorded→completed) and
+            # `auto_recorded` (provenance, no gate reads it).
             existing_rec = run_state["stages"][existing_idx]
             if isinstance(existing_rec, dict):
                 for _cf in _CARRY_FORWARD_FIELDS:
                     if _cf not in stage_record and existing_rec.get(_cf):
                         stage_record[_cf] = existing_rec[_cf]
+                # The verdict carries as ONE unit, and only when the finalize says
+                # nothing about push_ready: a payload that sets push_ready brings its
+                # own verdict, never a stale reason/capped flag from the old one.
+                if "push_ready" not in stage_record:
+                    for _cf in _CARRY_FORWARD_VERDICT_FIELDS:
+                        if existing_rec.get(_cf) is not None:
+                            stage_record[_cf] = existing_rec[_cf]
             run_state["stages"][existing_idx] = stage_record
         else:
             run_state["stages"].append(stage_record)
 
         # MED-4: the legacy path may LOWER push_ready, never raise it past the bound.
-        if stage_record.get("stage") == "deliver" and stage_record.get("push_ready") is True:
+        if (stage_record.get("stage") == "deliver" and stage_record.get("push_ready") is True
+                and _pr_sent):
             try:
                 _cap_legacy_push_ready(args.project, args.run_id, run_file, run_state,
                                        stage_record)
@@ -4045,6 +4101,17 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         None,
     )
     push_ready = bool(deliver_rec and deliver_rec.get("push_ready", False))
+    # A forced commit past this gate is recorded (commits[].forced_push_ready + a
+    # push_ready_force_bypass intervention) so it never reads as a qualified commit
+    # in run.json, the REPORT or the chat completion summary.
+    _forced_push_ready = (not push_ready) and bool(getattr(args, "force", False))
+    if _forced_push_ready:
+        print(json.dumps({
+            "warning": "push_ready gate FORCE-BYPASSED: deliver is not PUSH-READY ("
+                       + str((deliver_rec or {}).get("push_ready_reason") or "no reason recorded")
+                       + "). The commit is marked forced_push_ready and recorded as a "
+                         "push_ready_force_bypass intervention.",
+        }), file=sys.stderr)
     if not push_ready and not getattr(args, "force", False):
         print(json.dumps({
             "blocked": True,
@@ -4340,7 +4407,8 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         if commit.returncode == 0:
             sha = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
                                  capture_output=True, text=True, timeout=10).stdout.strip()
-            committed.append({"repo": root, "sha": sha, "files": staged.splitlines()})
+            committed.append({"repo": root, "sha": sha, "files": staged.splitlines(),
+                              **({"forced_push_ready": True} if _forced_push_ready else {})})
         else:
             warnings.append(f"[{root}] git commit failed: {commit.stderr.strip()[:200]}")
 
@@ -4398,6 +4466,13 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                     f"file(s) absent from files_touched (human edit → autonomy−)"
                 )
 
+            # The push_ready force-bypass, recorded the same way as the D7 one below.
+            if _forced_push_ready:
+                _append_intervention(
+                    fresh, stage="deliver", kind="push_ready_force_bypass", avoidable=True,
+                    note=("committed via --force while deliver was not PUSH-READY: "
+                          + str((deliver_rec or {}).get("push_ready_reason") or "no reason recorded")),
+                )
             # Gate-2 HIGH: persist the D7 force-bypass so a later audit can tell this
             # commit did NOT satisfy its declared expert coverage. Same fresh-reread
             # transaction (no stale clobber). avoidable=True — a forced skip of a
@@ -5968,7 +6043,13 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> str:
 **Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count if files_changed_count is not None else 'not recorded'} | **Tests:** {tests_phrase or 'not recorded'}""")
 
     # TL;DR
-    summary_text = delivery.get("summary", requirement[:200])
+    # The same three-part review content the chat completion summary renders
+    # (core.run_delivery_summary.review_summary): solved / how / leftovers. Never the
+    # requirement text — that is what was ASKED, not what was done.
+    _review = _review_parts(run_state, delivery)
+    summary_text = "\n".join(
+        ([_one_line(delivery.get("summary")), ""] if _one_line(delivery.get("summary")) else [])
+        + _review_report_lines(_review))
     sections.append(f"""## TL;DR
 {summary_text}""")
 
@@ -6343,6 +6424,10 @@ A stage with no published artifact cannot be timed and shows `-`."""
                           "the user decides (see the completion audit evidence)")
     if validation_blocks:
         _flags.append(f"- Validator blocked {validation_blocks} time(s) during execution")
+    # Every leftover DELIVER recorded (unresolved findings, push_ready=false, forced
+    # commits, attention_flags, meta-review risks): a run that recorded any of them
+    # must never read "None identified" here.
+    _flags += [f"- {_one_line(x)}" for x in _review.get("leftovers", [])]
     gaps_section += ("\n".join(_flags) + "\n") if _flags else "None identified.\n"
     sections.append(gaps_section)
 

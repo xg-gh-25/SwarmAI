@@ -491,3 +491,108 @@ async def test_app_session_id_injected_into_cli_env():
 async def test_no_app_session_id_no_env_key(ctx):
     opts = await _options(ctx)
     assert "SWARM_APP_SESSION_ID" not in (opts.env or {})
+
+
+# ── three-part review summary (run_39068a4a) ────────────────────────────────
+
+OUTCOME = {"problem_before": "pipeline 慢：测试和审查没有上限", "result_now": "专家每人最多 2 轮",
+           "approach": ["数完成记录", "失败项只重跑一次"]}
+LEFT_DELIVER = {
+    "outcome": OUTCOME,
+    "attention_flags": ["daemon 需要重启才生效", "  "],
+    "meta_review": {"verdict": "RISKS", "risks": ["marker 无清理"]},
+    "adversarial_review": {"findings": [
+        {"severity": "HIGH", "finding": "already fixed", "resolved": True},
+        {"severity": "MEDIUM", "finding": "deferred one", "resolved": False}]},
+}
+LEFT_RUN = {**RUN, "commits": [{"sha": "e09bd0ce", "files": ["a.py"], "forced_push_ready": True}],
+            "stages": [{"stage": "deliver", "status": "completed", "push_ready": False,
+                        "push_ready_reason": "no clean full-tree regression"}]}
+
+
+def test_review_summary_collects_every_leftover_source():
+    parts = rds.review_summary(LEFT_RUN, LEFT_DELIVER)
+    assert parts["solved"] == ("pipeline 慢：测试和审查没有上限", "专家每人最多 2 轮")
+    assert parts["approach"] == ["数完成记录", "失败项只重跑一次"]
+    left = "\n".join(parts["leftovers"])
+    assert "deferred one" in left and "already fixed" not in left
+    assert "no clean full-tree regression" in left
+    assert "e09bd0ce" in left and "--force" in left
+    assert "daemon 需要重启才生效" in left and "marker 无清理" in left
+    assert all(x.strip() for x in parts["leftovers"])  # blank flag dropped
+
+
+def test_chat_summary_renders_three_parts_and_force_mark():
+    md = _render(run_state=LEFT_RUN, deliver_artifact=LEFT_DELIVER)
+    for head in ("**解决了什么问题**", "**怎么做的**", "**遗留问题**"):
+        assert head in md
+    assert md.index("**解决了什么问题**") < md.index("**最终需求**")
+    assert "原来：pipeline 慢" in md and "现在：专家每人最多 2 轮" in md
+    assert "daemon 需要重启才生效" in md
+    assert "未 push-ready" in md and "强制提交" in md
+
+
+def test_missing_or_blank_parts_render_unrecorded():
+    blank = {"outcome": {"problem_before": "  ", "result_now": "\n", "approach": [" ", ""]}}
+    md = _render(run_state={**RUN, "commits": []}, deliver_artifact=blank)
+    seg = md.split("**解决了什么问题**", 1)[1].split("**最终需求**", 1)[0]
+    assert seg.count("未记录") >= 2
+    assert "原来：" not in seg
+    assert "DELIVER 未记录任何遗留" in seg
+
+
+def test_review_text_is_neutralized():
+    evil = {"outcome": {"problem_before": "## h [x](/etc/passwd)", "result_now": "ok",
+                        "approach": ["![i](/a.png)"]}, "attention_flags": ["<b>x</b> | y"]}
+    md = _render(deliver_artifact=evil)
+    assert not [ln for ln in md.split("\n") if HEADING_RE.match(ln)]
+    assert not LINK_OR_IMAGE_RE.search(md)
+    assert "\\<b\\>" in md and "\\| y" in md
+
+
+def test_chat_leftovers_are_capped_with_pointer_to_report():
+    many = {"attention_flags": [f"flag {i}" for i in range(12)]}
+    md = _render(deliver_artifact=many)
+    assert "flag 0" in md and "flag 11" not in md
+    assert "见报告 §10" in md
+
+
+def test_quality_line_and_leftovers_read_the_same_push_ready():
+    """Stage record says False (capped), artifact says True: both lines say not ready."""
+    rs = {**RUN, "stages": [{"stage": "deliver", "push_ready": False, "push_ready_reason": "capped"}]}
+    md = _render(run_state=rs, deliver_artifact={**DELIVER, "push_ready": True})
+    assert "未 push-ready" in md and "未通过 push-ready：capped" in md
+    assert "· push-ready" not in md
+
+
+def test_unresolved_finding_with_non_text_field_is_not_dropped():
+    dv = {"adversarial_review": {"findings": [
+        {"severity": "HIGH", "finding": {"x": 1}, "summary": "real text", "resolved": False},
+        {"severity": "LOW", "finding": "string-true", "resolved": "true"}]}}
+    left = rds.review_summary({}, dv)["leftovers"]
+    assert any("real text" in x for x in left)
+    assert not any("string-true" in x for x in left)
+
+
+def test_one_renderer_serves_both_doors():
+    parts = rds.review_summary(LEFT_RUN, LEFT_DELIVER)
+    report = rds.render_review_lines(parts, esc=lambda v, limit=None: str(v), caps=False,
+                                     leftovers_inline=False)
+    assert report[0] == "**解决了什么问题**" and any("见 §10" in x for x in report)
+    chat = rds.render_review_lines(parts)
+    assert any(x.startswith("- daemon") for x in chat)
+
+
+def test_dict_shaped_risks_and_flags_are_leftovers():
+    """meta-review: the gates' own output shape is a dict; dropping it rendered clean."""
+    dv = {"meta_review": {"verdict": "RISKS_IDENTIFIED", "risks": [
+              {"category": "format", "severity": "HIGH", "description": "dict risk text"},
+              {"severity": "LOW", "description": "already handled", "status": "FIXED in abc"}]},
+          "attention_flags": [{"description": "dict flag"}],
+          "adversarial_review": {"findings": [
+              {"severity": "MED", "title": "title-only finding", "resolved": False},
+              {"severity": "HIGH", "summary": "fixed via status", "status": "fixed"}]}}
+    left = "\n".join(rds.review_summary({}, dv)["leftovers"])
+    assert "HIGH 风险：dict risk text" in left and "dict flag" in left
+    assert "title-only finding" in left
+    assert "already handled" not in left and "fixed via status" not in left

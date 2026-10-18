@@ -326,3 +326,65 @@ def test_shared_commit_counts_only_the_runs_own_files(repo):
     # legacy record without `files` → the whole commit, as before
     whole = ac._report_commit_stats([{"repo": str(repo), "sha": sha}])
     assert whole == {"files": ["a.py", "b.py"], "added": 3, "removed": 1}
+
+
+def _review_report(tmp_path, monkeypatch, run_id, deliver, stage_extra=None, commits=None):
+    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+    stage = {"stage": "deliver", "status": "completed", "artifact_id": "art_d", **(stage_extra or {})}
+    run_data = {"id": run_id, "project": "P", "profile": "full", "requirement": "the requirement text",
+                "status": "completed", "created_at": "2026-10-17T09:00:00+00:00",
+                "updated_at": "2026-10-17T10:00:00+00:00",
+                "completed_at": "2026-10-17T10:00:00+00:00", "stages": [stage],
+                "taste_decisions": [], "commits": commits or []}
+    run_dir = _write(tmp_path, "P", run_id, run_data, {"art_d": ("delivery", deliver)})
+    reg = ac.ArtifactRegistry(ac._get_workspace())
+    ac.cmd_run_report(SimpleNamespace(project="P", run_id=run_id), reg)
+    return (run_dir / "REPORT.md").read_text(encoding="utf-8")
+
+
+def test_known_gaps_lists_deliver_leftovers_never_none(tmp_path, monkeypatch):
+    """run_1907ca1d shape: 4 attention_flags + meta-review risks + a forced commit
+    rendered 'None identified.' — the false-clean this run removes."""
+    deliver = {"title": "T", "adversarial_review": {"spawned": True, "findings": [
+                   {"severity": "MEDIUM", "finding": "left open", "resolved": False}]},
+               "attention_flags": ["daemon rebuild needed"],
+               "meta_review": {"verdict": "RISKS", "risks": ["marker history grows"]}}
+    text = _review_report(tmp_path, monkeypatch, "run_rv01", deliver,
+                          stage_extra={"push_ready": False, "push_ready_reason": "no clean regression"},
+                          commits=[{"sha": "e09bd0ce", "files": ["a"], "forced_push_ready": True}])
+    gaps = text.split("## 10. Known Gaps", 1)[1]
+    assert "None identified" not in gaps
+    for s in ("daemon rebuild needed", "marker history grows", "left open",
+              "no clean regression", "e09bd0ce"):
+        assert s in gaps, s
+
+
+def test_tldr_is_the_three_part_review_not_the_requirement(tmp_path, monkeypatch):
+    deliver = {"title": "T", "adversarial_review": {"spawned": True},
+               "outcome": {"problem_before": "summaries hid leftovers",
+                           "result_now": "leftovers are listed", "approach": ["one shared function"]}}
+    text = _review_report(tmp_path, monkeypatch, "run_rv02", deliver)
+    tldr = text.split("## TL;DR", 1)[1].split("## 1.", 1)[0]
+    assert "解决了什么问题" in tldr and "summaries hid leftovers" in tldr
+    assert "leftovers are listed" in tldr and "one shared function" in tldr
+    assert "遗留问题" in tldr
+
+
+def test_tldr_says_unrecorded_when_outcome_missing(tmp_path, monkeypatch):
+    text = _review_report(tmp_path, monkeypatch, "run_rv03",
+                          {"title": "T", "adversarial_review": {"spawned": True}})
+    tldr = text.split("## TL;DR", 1)[1].split("## 1.", 1)[0]
+    assert tldr.count("未记录") >= 2
+    assert "the requirement text" not in tldr
+
+
+def test_review_failure_is_never_rendered_as_clean(tmp_path, monkeypatch):
+    import core.run_delivery_summary as rds
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(rds, "review_summary", boom)
+    text = _review_report(tmp_path, monkeypatch, "run_rv04",
+                          {"title": "T", "adversarial_review": {"spawned": True}})
+    gaps = text.split("## 10. Known Gaps", 1)[1]
+    assert "None identified" not in gaps and "NOT checked" in gaps

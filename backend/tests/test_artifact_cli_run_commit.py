@@ -1034,3 +1034,100 @@ class TestRunCommitTrackedDeletion:
         _run_commit(workspace, "run_dirswap")
         committed = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
         assert committed == ["keep.py"], committed
+
+
+class TestForcedCommitIsRecorded:
+    """run_39068a4a AC3: --force past the push_ready gate leaves a trace, so a forced
+    commit is never indistinguishable from a qualified one."""
+
+    def _git(self, repo, *a, env=None):
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, timeout=15, env=env)
+
+    def _repo(self, tmp_path):
+        import os
+        repo = tmp_path / "frepo"
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "f.py").write_text("v1\n")
+        self._git(repo, "add", "-A")
+        env_old = {**os.environ, "GIT_AUTHOR_DATE": "2020-01-01T00:00:00",
+                   "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"}
+        self._git(repo, "commit", "-qm", "base", env=env_old)
+        (repo / "f.py").write_text("v2\n")
+        return repo
+
+    def test_forced_commit_is_marked_and_audited(self, workspace, tmp_path, capsys):
+        repo = self._repo(tmp_path)
+        rf = _write_run(workspace, "run_force1",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": False,
+                                 "push_ready_reason": "regression not clean"}],
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_force1", force=True)
+        out = capsys.readouterr()
+        assert "push_ready gate FORCE-BYPASSED" in out.err
+        data = json.loads(rf.read_text())
+        assert data["commits"][0]["forced_push_ready"] is True
+        kinds = [i.get("kind") for i in data.get("interventions", [])]
+        assert "push_ready_force_bypass" in kinds
+
+    def test_qualified_commit_carries_no_force_mark(self, workspace, tmp_path, capsys):
+        repo = self._repo(tmp_path)
+        rf = _write_run(workspace, "run_force2",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_force2", force=True)
+        capsys.readouterr()
+        data = json.loads(rf.read_text())
+        assert "forced_push_ready" not in data["commits"][0]
+        assert "push_ready_force_bypass" not in [i.get("kind") for i in data.get("interventions", [])]
+
+
+def test_finalize_stage_json_keeps_the_push_ready_verdict(workspace):
+    """The documented COMPLETE call (`run-update --stage-json {"stage":"deliver",
+    "status":"completed","outputs_surfaced":true}`) REPLACES the deliver record. It
+    used to drop push_ready=false and its reason, so every finished run lost the
+    verdict and its summary read as qualified (run_1907ca1d)."""
+    rf = _write_run(workspace, "run_keep_pr", stages=[
+        {"stage": "deliver", "status": "completed", "artifact_id": "art_d",
+         "push_ready": False, "push_ready_reason": "no clean regression"}])
+    _run_update(workspace, "run_keep_pr", stage_json=json.dumps(
+        {"stage": "deliver", "status": "completed", "outputs_surfaced": True,
+         "stage_doc_consumed": True}))
+    rec = next(s for s in json.loads(rf.read_text())["stages"] if s["stage"] == "deliver")
+    assert rec["outputs_surfaced"] is True
+    assert rec["push_ready"] is False
+    assert rec["push_ready_reason"] == "no clean regression"
+
+
+def test_carried_push_ready_is_not_recapped_after_commit(workspace, monkeypatch):
+    """Gate-2 red-team: a finalize that omits push_ready carries True forward; the
+    MED-4 cap must not re-judge it (run-commit already relied on it)."""
+    import scripts.artifact_cli as ac
+    calls = []
+    monkeypatch.setattr(ac, "_cap_legacy_push_ready", lambda *a, **k: calls.append(1))
+    rf = _write_run(workspace, "run_keep_true", stages=[
+        {"stage": "deliver", "status": "completed", "artifact_id": "art_d", "push_ready": True}])
+    _run_update(workspace, "run_keep_true", stage_json=json.dumps(
+        {"stage": "deliver", "status": "completed", "outputs_surfaced": True, "stage_doc_consumed": True}))
+    assert calls == [], "a carried verdict was re-capped"
+    rec = next(s for s in json.loads(rf.read_text())["stages"] if s["stage"] == "deliver")
+    assert rec["push_ready"] is True
+    _run_update(workspace, "run_keep_true", stage_json=json.dumps(
+        {"stage": "deliver", "status": "completed", "push_ready": True, "stage_doc_consumed": True}))
+    assert calls == [1], "an explicitly sent True must still be capped (MED-4)"
+
+
+def test_explicit_push_ready_does_not_inherit_a_stale_reason(workspace, monkeypatch):
+    import scripts.artifact_cli as ac
+    monkeypatch.setattr(ac, "_cap_legacy_push_ready", lambda *a, **k: None)
+    rf = _write_run(workspace, "run_unit", stages=[
+        {"stage": "deliver", "status": "completed", "push_ready": False,
+         "push_ready_reason": "old", "push_ready_capped": True}])
+    _run_update(workspace, "run_unit", stage_json=json.dumps(
+        {"stage": "deliver", "status": "completed", "push_ready": True, "stage_doc_consumed": True}))
+    rec = next(s for s in json.loads(rf.read_text())["stages"] if s["stage"] == "deliver")
+    assert rec["push_ready"] is True
+    assert "push_ready_reason" not in rec and "push_ready_capped" not in rec
