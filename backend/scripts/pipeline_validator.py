@@ -686,6 +686,15 @@ STAGE_TEMPLATES: dict[str, dict] = {
         # REPORT must surface) — listed so the template matches what writers write.
         "completion_audit": {"all_green": True, "requirements_met": 5, "requirements_total": 5,
                              "gaps": 0, "unfixable_gaps": 0},
+        # The review summary's "解决了什么问题 / 怎么做的" (core.run_delivery_summary.
+        # review_summary). Optional — absent renders 未记录 — but when present it must
+        # have this shape (_outcome_shape_errors). The text is an INSTRUCTION, so a
+        # template copied verbatim shows as visibly unfilled, never as a real result.
+        "outcome": {
+            "problem_before": "What was wrong before this run, in plain words",
+            "result_now": "What is true now that this run is done",
+            "approach": ["The key move, one line each"],
+        },
         # The fields below are REQUIRED for strict profiles (full/bugfix/goal) — the
         # template must carry everything the validator demands, or every run finds
         # out by rejection (pinned by test_artifact_cli_schema
@@ -2024,6 +2033,29 @@ def get_stage_schema(stage: str) -> dict:
     }
 
 
+def _outcome_shape_errors(outcome) -> list[str]:
+    """Errors for a PRESENT deliver ``outcome`` that review_summary cannot read.
+
+    review_summary reads ``{problem_before: str, result_now: str, approach: [str]}``
+    through ``_d()``, so any other shape renders 未记录 with no error — the author
+    believes it was recorded. Absence is NOT checked here (it is the documented,
+    visible 未记录 path); extra keys are allowed; blank strings are left to the
+    renderer, which already shows them as 未记录."""
+    shape = "{problem_before: str, result_now: str, approach: [str]}"
+    if not isinstance(outcome, dict):
+        return [f"outcome must be an object {shape}, got {type(outcome).__name__} — "
+                f"the completion summary cannot read it and would show 未记录"]
+    errs = []
+    for key in ("problem_before", "result_now"):
+        if not isinstance(outcome.get(key), str):
+            errs.append(f"outcome.{key} must be a string ({shape}), "
+                        f"got {type(outcome.get(key)).__name__}")
+    approach = outcome.get("approach")
+    if not isinstance(approach, list) or not all(isinstance(a, str) for a in approach):
+        errs.append(f"outcome.approach must be a list of strings ({shape})")
+    return errs
+
+
 def validate_artifact_data(
     stage: str, data: dict, profile: str = "full", repo_root: str | None = None,
 ) -> list[str]:
@@ -2134,6 +2166,8 @@ def validate_artifact_data(
 
     # Stage-specific invariants (subset of _check_depth for fast feedback)
     if stage == "deliver":
+        if "outcome" in data:
+            errors.extend(_outcome_shape_errors(data["outcome"]))
         ar = data.get("adversarial_review")
         if isinstance(ar, dict):
             tier = ar.get("profile_tier", "")

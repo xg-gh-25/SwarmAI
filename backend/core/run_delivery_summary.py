@@ -61,7 +61,11 @@ _META_PREFIXES = (
     "## Recalled Knowledge", "## Task Continuation", "[Request interrupted",
 )
 _ACKS = {"继续", "continue", "go", "go on", "yes", "ok", "okay", "好", "好的", "y", "是",
-         "对", "嗯", "行", "可以", "收到", "开始", "开始吧", "继续吧", "proceed", "next", "lgtm"}
+         "对", "嗯", "行", "可以", "收到", "开始", "开始吧", "继续吧", "proceed", "next", "lgtm",
+         # Resume-class control words: a run created right after one of these must
+         # record the EARLIER request, not the control word itself.
+         "resume", "resume please", "please continue", "continue please", "keep going",
+         "go ahead", "carry on", "继续做", "接着做", "请继续", "接着来"}
 # A clarification answer that only picks an option ("选 A", "B", "2. 第二个"): the run
 # was started by an EARLIER message. The lookahead keeps "a bug in login…" a request.
 _OPTION_PICK_RE = re.compile(

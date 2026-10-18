@@ -9,7 +9,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 5. **Meta-review:** `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate meta-review --project <P> --files <changed files>`; stdout only on exit 0; one Agent call (`ref/deliver/push-ready.md`).
 6. **User-Value Probe** (`ref/deliver/audits.md`) + **Doc Sync** (`ref/deliver/doc-sync.md`, warning only).
 7. **Convergence, max 3 iterations**, all 6 at once: L1 tests pass, L2 type/lint clean, L3 no regressions, L4 adversarial clean (fixes on disk), L5 DDD conformance, L6 decisions resolved.
-8. **Seed lessons** into the reflect record; write `outcome` + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
+8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (any other shape is rejected) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
 9. **Exit** (below), then `python backend/scripts/artifact_cli.py run-commit --project <P> --run-id <R>` (local, never pushes).
 
 **Sub-agent configuration:**

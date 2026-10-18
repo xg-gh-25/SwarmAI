@@ -144,7 +144,9 @@ open (deferred finding, unrun check, needed restart, known risk) goes in `attent
 chat completion block and the REPORT TL;DR + §10 render both through one function
 (`core.run_delivery_summary.review_summary`), together with unresolved findings, a
 push_ready=false reason and any forced commit. A part with nothing recorded shows 未记录, so a
-skipped `outcome` is visible to the reviewer, never filled in from the requirement text.
+skipped `outcome` is visible to the reviewer, never filled in from the requirement text. A
+present `outcome` of any other shape (a plain string, `approach` not a list of strings) is
+rejected at DELIVER stage-complete, because the summary could not read it.
 The forced-commit line exists only after `run-commit` records the commit, so the REPORT copy committed
 into git never shows it; the ledger REPORT (regenerated at completion) does. A push_ready=false reason
 appears in both copies.
