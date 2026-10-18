@@ -871,14 +871,19 @@ class StreamingOrchestrator:
                 return None
             event["status"] = "stopped" if status == "killed" else status
             return event
+        from core.tool_summarizer import redact_display
+
+        # Summary and description are shown on the Agent row (and the summary is
+        # kept on its tool_result by _subagent_final): same redaction as every
+        # other displayed tool string.
         if isinstance(message, TaskNotificationMessage):
             event["status"] = message.status
             if message.summary:
-                event["summary"] = message.summary[:300]
+                event["summary"] = redact_display(message.summary, 300)
         else:
             event["status"] = "running"
         if getattr(message, "description", None):
-            event["description"] = message.description[:200]
+            event["description"] = redact_display(message.description, 200)
         if getattr(message, "last_tool_name", None):
             event["lastToolName"] = message.last_tool_name
         usage = getattr(message, "usage", None) or {}

@@ -44,7 +44,6 @@
   "core/session_utils.py": 1,
   "core/skill_registry.py": 1,
   "core/summarization.py": 1,
-  "core/tool_summarizer.py": 1,
   "core/voice_transcribe.py": 1,
   "routers/chat.py": 5,
   "routers/eval.py": 2,

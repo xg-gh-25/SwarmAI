@@ -21,7 +21,8 @@ Two entry points:
   (``AKIA…`` in chunk N, the rest in chunk N+1) never leaves half-redacted.
   ``flush()`` releases the withheld tail (redacted) at stream end.
 
-Design of the patterns (pre-mortem: "redactor over-matches legit content"):
+Design of the patterns (pre-mortem: "redactor over-matches legit content"),
+which live in ``core.credential_patterns`` (shared with the chat tool rows):
 the patterns target **known credential shapes** (AWS access-key ids, PEM
 private-key headers, prefixed provider tokens ghp_/xoxb/AIza/sk-, bearer tokens,
 bare JWTs, ``key=secret`` assignments) and URLs carrying embedded credentials —
@@ -45,78 +46,20 @@ from __future__ import annotations
 import re
 from typing import Final
 
-# --- Credential shape patterns (targeted, not blanket-entropy) ---------------
-# Each pattern matches a KNOWN secret shape. Ordered longest/most-specific first
-# so a broad rule never eats a chunk a specific rule would have labeled better.
-
-_REDACTED: Final[str] = "[REDACTED]"
-
-# AWS access key id: AKIA/ASIA/AROA/AIDA + 16 uppercase-alnum.
-_AWS_ACCESS_KEY: Final[re.Pattern] = re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}\b")
-
-# PEM private-key block (multi-line).
-_PEM_BLOCK: Final[re.Pattern] = re.compile(
-    r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----",
-    re.DOTALL,
-)
-
-# GitHub / common provider tokens with distinctive prefixes.
-_PREFIXED_TOKEN: Final[re.Pattern] = re.compile(
-    r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat|xoxb|xoxp|xoxa|xoxr|sk-|pk-|AIza)[-_A-Za-z0-9]{16,}\b"
-)
-
-# Bearer / Authorization header value.
-_BEARER: Final[re.Pattern] = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{12,}")
-
-# Bare JWT (header.payload.signature) — matched even without a Bearer prefix,
-# since JWTs are routinely echoed/logged standalone. Anchored on the ``eyJ``
-# base64url header opener + two more dot-separated base64url segments.
-_JWT: Final[re.Pattern] = re.compile(r"\beyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\b")
-
-# AWS secret access key: aws_secret_access_key = <40 base64ish>. Only when the
-# assignment key names a secret — avoids matching arbitrary 40-char strings.
-_SECRET_ASSIGN: Final[re.Pattern] = re.compile(
-    r"(?i)\b(?:aws_secret_access_key|secret_access_key|secret_key|api_key|apikey|access_token|auth_token|password|passwd)\b\s*[=:]\s*['\"]?([A-Za-z0-9/+=_\-]{12,})['\"]?"
-)
-
-# URL carrying an embedded credential (user:pass@host or ?token=/?key=/?password=).
-# Written with non-overlapping char classes (no nested unbounded quantifiers) to
-# avoid catastrophic backtracking: one contiguous non-whitespace URL run, then
-# the two credential shapes are distinguished inside it.
-_URL_CREDENTIAL: Final[re.Pattern] = re.compile(
-    r"(?i)\b(?:https?|ftp)://\S*?(?:[^\s/@:]+:[^\s/@]+@|[?&](?:token|key|secret|password|access_key|api_key)=)\S+"
-)
-
-_CREDENTIAL_PATTERNS: Final[tuple[re.Pattern, ...]] = (
-    _PEM_BLOCK,
+from core.credential_patterns import (  # noqa: F401  (re-exported: tscc + tests)
     _AWS_ACCESS_KEY,
-    _PREFIXED_TOKEN,
     _BEARER,
+    _CREDENTIAL_PATTERNS,
     _JWT,
+    _PEM_BLOCK,
+    _PREFIXED_TOKEN,
+    _REDACTED,
+    _SECRET_ASSIGN,
     _URL_CREDENTIAL,
+    _USER_PASS,
+    USER_PASS_MAX_LEN,
+    redact_credentials,
 )
-
-
-def redact_credentials(text: str) -> str:
-    """Redact known credential shapes from *text*.
-
-    Targets specific secret formats (AWS keys, PEM blocks, prefixed provider
-    tokens, bearer tokens, secret assignments, credential-bearing URLs) — NOT
-    generic high-entropy strings, so legitimate base64/SHA content survives.
-    """
-    if not text:
-        return text
-    for pat in _CREDENTIAL_PATTERNS:
-        text = pat.sub(_REDACTED, text)
-
-    # Secret assignments: keep the key name, redact only the value (group 1).
-    def _mask_assign(m: re.Match) -> str:
-        whole = m.group(0)
-        val = m.group(1)
-        return whole.replace(val, _REDACTED, 1)
-
-    text = _SECRET_ASSIGN.sub(_mask_assign, text)
-    return text
 
 
 def redact_exfiltration_urls(text: str) -> str:
@@ -172,6 +115,21 @@ _INFLIGHT_CREDENTIAL: Final[re.Pattern] = re.compile(
 )
 
 
+# In-flight ``-u user:pass`` (the flag shape of core.credential_patterns): the flag,
+# then an unclosed quote, a ``user:`` followed by an opening quote, or one token.
+# Bounded, so it can only end at the buffer end when it starts within
+# USER_PASS_MAX_LEN of it — the stream redactor searches only that tail.
+_INFLIGHT_USER_PASS: Final[re.Pattern] = re.compile(
+    r"""(?<![\w-])(?:-[A-Za-z]{0,16}+(?<=[uU])|-[uU]|--(?:proxy-)?user)"""
+    # spacing mirrors core.credential_patterns._FLAG_WS, plus a lone trailing ``\``
+    # (a chunk that ends inside a ``\``-newline continuation)
+    r"""(?:[^\S\n]{1,16}+(?:\\\n?[^\S\n]{0,16}+)?|=|\\\n?[^\S\n]{0,16}+)?"""
+    r"""(?:['"][^'"\n]{0,400}+"""
+    r"""|['"]?[^\s:'"]{0,128}+['"]?:(?:'[^'\n]{0,256}+|"[^"\n]{0,256}+)"""
+    r"""|\S{0,400}+)\Z"""
+)
+
+
 class StreamRedactor:
     """Rolling-buffer redactor for the append-only native streaming path.
 
@@ -223,9 +181,15 @@ class StreamRedactor:
         # value is not yet whitespace-terminated (Bearer …, key = …, https://…,
         # AKIA…). Opener-aware: prose is emitted promptly; only the in-flight
         # credential is held. Matches at \Z, so it fires on the tail only.
-        mo = _INFLIGHT_CREDENTIAL.search(self._raw)
+        # From the emit point: an opener that starts in already-emitted text is
+        # clamped to it anyway, and scanning the whole buffer every feed is quadratic.
+        mo = _INFLIGHT_CREDENTIAL.search(self._raw, self._emitted)
         if mo and mo.start() < stable:
             stable = mo.start()
+        mu = _INFLIGHT_USER_PASS.search(
+            self._raw, max(self._emitted, len(self._raw) - USER_PASS_MAX_LEN))
+        if mu and mu.start() < stable:
+            stable = mu.start()
 
         # Don't emit into an unclosed PEM private-key block.
         last_begin = self._raw.rfind("-----BEGIN")
@@ -244,6 +208,14 @@ class StreamRedactor:
             for mt in pat.finditer(region):
                 if mt.start() < rel_stable < mt.end():
                     rel_stable = mt.start()
+        # _USER_PASS masks a group, so it is not in _CREDENTIAL_PATTERNS; it still must
+        # never be split between the flag and the password. Its match is bounded, so
+        # only a window around the emit point can straddle it (a whole-region scan per
+        # feed made a long withheld token quadratic).
+        lo = max(0, rel_stable - USER_PASS_MAX_LEN)
+        for mt in _USER_PASS.finditer(region, lo, rel_stable + USER_PASS_MAX_LEN):
+            if mt.start() < rel_stable < mt.end():
+                rel_stable = mt.start()
         stable = base + rel_stable
         return max(self._emitted, stable)
 

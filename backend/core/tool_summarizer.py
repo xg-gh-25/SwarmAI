@@ -10,11 +10,14 @@ functions only transform content for the UI replay path (SSE + SQLite).
 - ``truncate_tool_result``     — Truncates content to configurable limit, sets flag
 - ``summarize_tool_result``    — One-line outcome of a finished call (lines/matches/output)
 - ``tool_result_text``         — Plain text of a ToolResultBlock's content
-- ``_sanitize_command``        — Redacts sensitive tokens from bash command strings
+- ``redact_display``           — Credential redaction for any displayed tool text, run on a
+                                 bounded window BEFORE the cut (summary, outcome, preview)
 - ``_extract_mcp_tool_name``   — Extracts server/tool from ``mcp__Server__tool`` names
 - ``MAX_SUMMARY_LENGTH``       — 200 characters
 - ``DEFAULT_TRUNCATION_LIMIT`` — 500 characters
-- ``SENSITIVE_PATTERNS``       — Compiled regexes for token redaction
+- ``_NAMED_SECRET``            — Key-name-anchored secret values (display only); value
+                                 shapes come from ``core.credential_patterns`` (shared
+                                 with channel egress)
 - ``TRUNCATION_LIMIT``         — Effective limit (env var override or default)
 """
 
@@ -22,6 +25,8 @@ import os as _os
 import re
 import logging
 from typing import Any, Optional
+
+from core.credential_patterns import redact_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +48,61 @@ except (ValueError, TypeError):
     TRUNCATION_LIMIT: int = DEFAULT_TRUNCATION_LIMIT
 
 # ---------------------------------------------------------------------------
-# Sensitive token redaction patterns
+# Name-anchored secret redaction (display only)
 # ---------------------------------------------------------------------------
 
-SENSITIVE_PATTERNS: list[re.Pattern] = [
-    re.compile(r"(?i)(password|passwd|pwd)\s*[=:]\s*\S+"),
-    re.compile(r"(?i)(api[_-]?key|secret[_-]?key|access[_-]?key)\s*[=:]\s*\S+"),
-    re.compile(r"(?i)(token|bearer)\s*[=:]\s*\S+"),
-    re.compile(r"(?i)(aws[_-]?secret|aws[_-]?access)\s*[=:]\s*\S+"),
-]
+# ``<key> = <value>`` / ``<key>: <value>`` / ``"<key>": "<value>"`` where the key ENDS
+# in a secret name. The key may carry any ``_``/``-``/camelCase prefix
+# (``AWS_SESSION_TOKEN``, ``_authToken``, ``"SecretAccessKey"``, ``X-Api-Key``) — a
+# leading ``\b`` would miss every ``*_TOKEN`` env var. Group ``key`` stays readable.
+# The value is masked WHOLE, any length: a quoted value up to its closing quote
+# (symbols included: ``'P@ss(w0rd)'``), an unquoted one to whitespace or ``'",;``.
+# No "is this code?" guessing — every heuristic of that kind (type annotations,
+# keyword arguments, ``x = name``) unmasked a real secret shape, and a masked
+# identifier in a code preview costs nothing next to a shown password. The only
+# exemptions cannot hide a secret: a ``$VAR`` reference (unquoted or in double
+# quotes; single-quoted ``$`` is literal and masked), ``PWD`` / ``OLDPWD`` (the
+# working directory), and a value equal to the key's own name.
+_NAMED_SECRET = re.compile(
+    r"""(?i)(?<![\w$-])(?P<key>[\w-]*?(?:password|passwd|pwd|api[_-]?key|secret[_-]?key"""
+    r"""|access[_-]?key|aws[_-]?secret|token|bearer)['"]?[^\S\n]*[=:][^\S\n]*)"""
+    r"""(?:(?P<q>['"])(?P<qv>[^\s'"][^\n]*?)(?:(?P=q)|(?=\n)|$)|(?P<uv>[^\s'",;]++))"""
+)
+_KEY_NAME = re.compile(r"([\w-]+)['\"]?\s*[=:]")
+
+
+# HTTP basic auth header (what ``curl -u user:pass`` sends): the header name anchors
+# it, so prose like "Basic configuration" is untouched; the value is masked.
+_BASIC_AUTH = re.compile(r"(?i)(\bauthorization\s*:\s*basic\s+)[A-Za-z0-9+/=]{8,}")
+
+
+def _mask_named(m: re.Match) -> str:
+    key, quote = m.group("key"), m.group("q")
+    value = m.group("qv") if quote else m.group("uv")
+    tail = ""
+    if not quote:
+        # keep closers the value did not open: f(password=pw) -> password=[REDACTED])
+        pairs = {")": "(", "]": "[", "}": "{"}
+        while value and value[-1] in pairs and value.count(value[-1]) > value.count(pairs[value[-1]]):
+            tail = value[-1] + tail
+            value = value[:-1]
+    name = _KEY_NAME.search(key)
+    if name and name.group(1).upper() in ("PWD", "OLDPWD"):
+        return m.group(0)  # the shell's working directory, not a password
+    if value.startswith("$") and quote != "'":
+        return m.group(0)  # a variable reference, not its value
+    if not value or (name and value.lower() == name.group(1).lower()):
+        return m.group(0)  # password=password
+    if quote:
+        closed = m.group(0).endswith(quote) and len(m.group(0)) > len(key) + 1 + len(value)
+        return key + quote + "[REDACTED]" + (quote if closed else "")
+    return key + "[REDACTED]" + tail
+
+
+def _redact_named(text: str) -> str:
+    """Name-anchored secrets (display only — too broad for channel prose)."""
+    text = _NAMED_SECRET.sub(_mask_named, text)
+    return _BASIC_AUTH.sub(lambda m: m.group(1) + "[REDACTED]", text)
 
 # ---------------------------------------------------------------------------
 # Tool name → category mapping (case-insensitive via name.lower())
@@ -75,21 +126,51 @@ _AGENT_NAMES: set[str] = {"agent", "subagent", "dispatch_agent", "task"}
 # ---------------------------------------------------------------------------
 
 
-def _sanitize_command(command: str) -> str:
-    """Redact sensitive tokens from a bash command string.
+# Display redaction runs on the cut text plus this much look-ahead, so a secret
+# that crosses the display cut is redacted whole before the cut, while a
+# multi-megabyte result never costs more than ``limit + _REDACT_SLACK`` of regex.
+_REDACT_SLACK = 512
 
-    Iterates ``SENSITIVE_PATTERNS`` and replaces each match with
-    ``[REDACTED]``.  If a pattern fails on malformed input the original
-    command is returned unchanged (fail-open for display purposes).
+# A private-key header whose END line lies past the window (or never comes).
+_PEM_UNTERMINATED = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----.*\Z", re.DOTALL
+)
+
+# The run of token-like characters at the window edge. When the text continues past
+# the window, this run is a value cut in half: too short for a shape's minimum
+# length, so it is dropped rather than shown (redaction can shrink the text and
+# pull it inside ``limit``).
+_TRAILING_RUN = re.compile(r"[^\s\"'<>(){}\[\],;`]+\Z")
+
+
+def redact_display(text: str, limit: int) -> str:
+    """Redact credentials from tool text shown in the UI, then cut it to *limit*.
+
+    Every displayed tool string goes through here: a tool_use summary (any tool),
+    a tool_result outcome line and a tool_result content preview. Order matters:
+    redaction runs on ``text[:limit + _REDACT_SLACK]`` and the cut comes after, so a
+    token straddling the cut is masked whole instead of showing its first part.
+
+    Value shapes (Bearer, prefixed tokens, AWS key ids, JWT, URL credentials,
+    ``curl -u user:pass``, PEM blocks) come from ``core.credential_patterns``;
+    the name-anchored patterns (``password=`` / ``token:`` / ``Authorization: Basic``)
+    are added here only,
+    because they are too broad for channel prose.
+
+    Residual (stated, not hidden): a window that is ONE run of token characters
+    (a single-line base64 blob) has no boundary to cut back to and is kept; a
+    secret with no known shape or key name is not recognised.
     """
-    try:
-        sanitized = command
-        for pattern in SENSITIVE_PATTERNS:
-            sanitized = pattern.sub("[REDACTED]", sanitized)
-        return sanitized
-    except Exception:
-        # Fail-open: return original command if regex fails
-        return command
+    if not text:
+        return text
+    window = text[: limit + _REDACT_SLACK]
+    if len(text) > len(window):
+        edge = _TRAILING_RUN.search(window)
+        if edge and edge.start() > 0:
+            window = window[: edge.start()]
+    redacted = _redact_named(redact_credentials(window))
+    redacted = _PEM_UNTERMINATED.sub("[REDACTED]", redacted)
+    return redacted[:limit]
 
 
 def _extract_mcp_tool_name(name: str) -> tuple[str | None, str]:
@@ -170,8 +251,7 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
     if lower_name in _BASH_NAMES:
         category = "bash"
         cmd = data.get("command", "")
-        sanitized_cmd = _sanitize_command(cmd) if cmd else ""
-        summary = f"Running: {sanitized_cmd}" if sanitized_cmd else f"Using {name}"
+        summary = f"Running: {cmd}" if cmd else f"Using {name}"
     elif lower_name in _READ_NAMES:
         category = "read"
         path = data.get("path") or data.get("file_path", "")
@@ -245,7 +325,8 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
             summary = f"Agent: {task_desc}"
         elif prompt:
             # Show first ~120 chars of the prompt for context
-            snippet = prompt[:120].replace("\n", " ").strip()
+            # Redact BEFORE the 120-char cut (a secret across it is masked whole).
+            snippet = redact_display(prompt.replace("\n", " ").strip(), 120)
             label = f"Agent ({agent_name})" if agent_name else "Agent"
             summary = f"{label}: {snippet}"
         elif agent_name:
@@ -297,8 +378,9 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
 
     logger.debug("Summarizer: %s → category=%s", name, category)
 
-    # Truncate to MAX_SUMMARY_LENGTH and guarantee non-empty
-    summary = summary[:MAX_SUMMARY_LENGTH]
+    # Redact, THEN cut to MAX_SUMMARY_LENGTH (a secret across the cut is masked
+    # whole), and guarantee non-empty. Covers every tool, not only Bash.
+    summary = redact_display(summary, MAX_SUMMARY_LENGTH)
     if not summary:
         summary = f"Using {name}"[:MAX_SUMMARY_LENGTH]
 
@@ -357,14 +439,16 @@ def truncate_tool_result(
         content: Raw tool result content string.
         limit: Maximum character count.
 
+    The preview is credential-redacted (``redact_display``): it is shown in the
+    expanded tool row and stored for history replay. ``was_truncated`` still
+    reports whether the ORIGINAL content exceeded *limit*.
+
     Returns:
-        Tuple of (possibly truncated content, was_truncated flag).
+        Tuple of (possibly truncated, redacted content, was_truncated flag).
     """
     if not content:
         return ("", False)
-    if len(content) <= limit:
-        return (content, False)
-    return (content[:limit], True)
+    return (redact_display(content, limit), len(content) > limit)
 
 
 _OUTCOME_MAX = 120
@@ -384,16 +468,18 @@ def tool_result_text(content: Any) -> str:
 
 
 def _first_line(text: str) -> str:
+    """First non-blank line, redacted then cut to ``_OUTCOME_MAX``."""
     for line in text.splitlines():
         if line.strip():
-            return line.strip()[:_OUTCOME_MAX]
+            return redact_display(line.strip(), _OUTCOME_MAX)
     return ""
 
 
 def _last_line(text: str) -> str:
+    """Last non-blank line, redacted then cut to ``_OUTCOME_MAX``."""
     for line in reversed(text.splitlines()):
         if line.strip():
-            return line.strip()[:_OUTCOME_MAX]
+            return redact_display(line.strip(), _OUTCOME_MAX)
     return ""
 
 
@@ -407,7 +493,7 @@ def summarize_tool_result(name: str, text: str, is_error: bool) -> str:
     """
     lower = (name or "").lower()
     if is_error:
-        return _sanitize_command(_first_line(text)) or "failed"
+        return _first_line(text) or "failed"
     if lower in _READ_NAMES:
         nums = [int(m.group(1)) for m in map(_READ_LINE_RE.match, text.splitlines()) if m]
         if nums:
@@ -422,9 +508,9 @@ def summarize_tool_result(name: str, text: str, is_error: bool) -> str:
         n = sum(1 for line in text.splitlines() if line.strip())
         return f"{n} match" if n == 1 else f"{n} matches"
     if lower in _BASH_NAMES:
-        return _sanitize_command(_last_line(text)) or "no output"
+        return _last_line(text) or "no output"
     if lower in _WRITE_NAMES or lower in ("edit", "multiedit", "notebookedit"):
         return "saved"
     if lower in ("agent", "task"):
         return "done"
-    return _sanitize_command(_first_line(text))
+    return _first_line(text)
