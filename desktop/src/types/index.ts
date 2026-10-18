@@ -240,11 +240,16 @@ export interface ToolResultContent {
   outcome?: string;
   /** Set on a sub-agent tool's result (see ToolUseContent.parentToolUseId). */
   parentToolUseId?: string;
+  /** On an Agent step's result: its sub-agent's final status, step count,
+   *  duration and summary. Live AND persisted — the only copy of the outcome
+   *  after the stream (subagent_progress is never persisted). */
+  subagent?: Pick<SubAgentProgress, 'status' | 'toolUses' | 'durationMs' | 'summary'>;
 }
 
 /** Live status of a sub-agent, from the backend `subagent_progress` event
  *  (SDK Task* messages). Keyed by the Agent tool_use it runs under. Never
- *  persisted: kept on the streaming Message (`subAgentProgress`). */
+ *  persisted: kept on the streaming Message (`subAgentProgress`); the final
+ *  state rides the Agent result (`ToolResultContent.subagent`). */
 export interface SubAgentProgress {
   parentToolUseId: string;
   status: 'running' | 'completed' | 'failed' | 'stopped' | (string & {});
