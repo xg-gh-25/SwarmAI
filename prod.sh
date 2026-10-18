@@ -583,11 +583,16 @@ cmd_deploy() {
 }
 
 _build_frontend() {
-    # Build frontend via Tauri (produces new .app binary with embedded assets)
+    # Build frontend via Tauri (produces new .app binary with embedded assets).
+    # build.sh writes the .app into the Tauri bundle dir and opens the DMG
+    # installer — it never touches /Applications (installing is a manual drag).
+    # So "did the build work" is judged on the BUNDLE's binary; the installed
+    # copy only decides whether to remind the user to install it.
+    local built_path="$DESKTOP_DIR/src-tauri/target/release/bundle/macos/SwarmAI.app/Contents/MacOS/SwarmAI"
     local app_path="/Applications/SwarmAI.app/Contents/MacOS/SwarmAI"
-    local app_before=0
-    if [ -f "$app_path" ]; then
-        app_before=$(stat -f %m "$app_path" 2>/dev/null || echo 0)
+    local built_before=0
+    if [ -f "$built_path" ]; then
+        built_before=$(stat -f %m "$built_path" 2>/dev/null || echo 0)
     fi
 
     cd "$DESKTOP_DIR"
@@ -602,19 +607,26 @@ _build_frontend() {
         return 1
     fi
 
-    local app_after=0
-    if [ -f "$app_path" ]; then
-        app_after=$(stat -f %m "$app_path" 2>/dev/null || echo 0)
+    local built_after=0
+    if [ -f "$built_path" ]; then
+        built_after=$(stat -f %m "$built_path" 2>/dev/null || echo 0)
     fi
-
-    if [ "$app_after" -gt "$app_before" ]; then
-        _ok "Frontend built: .app binary updated"
-        _warn "Relaunch SwarmAI.app to load new frontend"
-    else
-        _err "Frontend build may have failed — .app timestamp unchanged"
-        _err "Check: ls -la $app_path"
+    if [ "$built_after" -le "$built_before" ]; then
+        _err "Frontend build produced no new .app — bundle binary unchanged"
+        _err "Check: ls -la $built_path"
         cd "$PROJECT_ROOT"
         return 1
+    fi
+    _ok "Frontend built: new .app in src-tauri/target/release/bundle/macos/"
+
+    local app_now=0
+    if [ -f "$app_path" ]; then
+        app_now=$(stat -f %m "$app_path" 2>/dev/null || echo 0)
+    fi
+    if [ "$app_now" -ge "$built_after" ]; then
+        _warn "Relaunch SwarmAI.app to load new frontend"
+    else
+        _warn "Not installed yet: drag SwarmAI.app from the installer window onto Applications (replace), then relaunch"
     fi
     cd "$PROJECT_ROOT"
 }
