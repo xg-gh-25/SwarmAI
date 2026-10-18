@@ -65,7 +65,8 @@ No finding is deferred to a follow-up: fix it in this stage or escalate it (Esca
 Routing Protocol). A BLOCK verdict means fix first, then re-verify; GO advances to TEST.
 
 **Re-review rule.** Fixes made inside REVIEW are re-verified for the checks they touch
-(re-run `spawn_prompt.py --patterns-for` on the files the fix changed, redo the affected
+(re-run `spawn_prompt.py --patterns-for` on the files the fix changed, `--patterns-rows` for any
+newly triggered row, redo the affected
 checks, and update the matching artifact blocks). A return to BUILD (litmus FAIL or spec
 BLOCK) re-enters REVIEW from step 1 with `stage-start` (the diff and `review_experts` are
 recomputed); `litmus_fail_count` and `spec_fail_count` persist across attempts, and both

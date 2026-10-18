@@ -293,3 +293,106 @@ def test_typical_backend_change_is_a_small_subset():
     rows = {r["id"] for r in _rows()}
     got = _selected(["backend/core/session_unit.py"])
     assert len(got) <= len(rows) // 3, (len(got), len(rows))
+
+
+# ── compact listing + full rows on demand (run_a8fe815b) ──────────────────────
+# REVIEW read every applying row in full (35-70K chars) while recording 3-14
+# verdicts. --patterns-for now lists the same rows as one compact line each; the
+# full row of any row whose trigger is present comes from --patterns-rows.
+_SETS = {  # the three change sets measured at EVALUATE
+    "cli": ["backend/scripts/artifact_cli.py", "backend/scripts/pipeline_validator.py",
+            "backend/skills/s_autonomous-pipeline/stages/plan.md",
+            "backend/tests/test_stage_complete_reentry.py"],
+    "daemon": ["backend/core/surface_marker.py", "backend/core/ui_actions.py",
+               "backend/core/streaming_orchestrator.py", "backend/scripts/pipeline_run_profile.py"],
+    "frontend": ["desktop/src/pages/chat/components/WorkGroup.tsx", "desktop/src/pages/chat/turnView.ts"],
+}
+
+
+def test_compact_listing_keeps_selection_and_drops_long_columns():
+    res = _cli("--patterns-for", _PY)
+    assert res.returncode == 0, res.stderr
+    lines = res.stdout.splitlines()
+    assert lines[0].replace(" ", "") == "|#|Pattern|Trigger|"
+    printed = [l for l in lines if l.startswith("| RP")]
+    assert {l.split("|")[1].strip() for l in printed} == _selected([_PY])
+    assert all(l.count("|") == 4 for l in printed), "compact rows have exactly 3 cells"
+    assert "What to verify" not in res.stdout and "Example bug" not in res.stdout
+    assert "`match:" not in res.stdout
+    assert "--patterns-rows" in res.stdout
+
+
+@pytest.mark.parametrize("name", sorted(_SETS))
+def test_compact_listing_is_at_most_40_percent_of_full_rows(name):
+    text = _PATTERNS.read_text(encoding="utf-8")
+    full = sp.render_patterns_for(text, _SETS[name])
+    compact = sp.render_patterns_compact(text, _SETS[name])
+    assert len(compact) <= 0.4 * len(full), (name, len(compact), len(full))
+
+
+def test_patterns_rows_prints_full_rows_in_order_case_insensitive():
+    res = _cli("--patterns-rows", "rp7", "RP2")
+    assert res.returncode == 0, res.stderr
+    lines = res.stdout.splitlines()
+    assert lines[0].startswith("| # |") and "What to verify" in lines[0]
+    ids = [l.split("|")[1].strip() for l in lines if l.startswith("| RP")]
+    assert ids == ["RP7", "RP2"]
+    full = {r["id"]: r["line"] for r in _rows()}
+    assert full["RP7"] in res.stdout and full["RP2"] in res.stdout
+
+
+@pytest.mark.parametrize("bad", ["RP999", "RPx", "7"])
+def test_patterns_rows_unknown_or_malformed_id_exits_1(bad):
+    res = _cli("--patterns-rows", "RP2", bad)
+    assert res.returncode == 1 and res.stdout == ""
+    assert bad in res.stderr
+
+
+def test_patterns_rows_reads_patterns_source(tmp_path):
+    src = tmp_path / "rp.md"
+    src.write_text(
+        "| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
+        "| RP1 | a | t `match: *` | v1 | e |\n", encoding="utf-8")
+    res = _cli("--patterns-rows", "RP1", "--patterns-source", str(src))
+    assert res.returncode == 0 and "| v1 |" in res.stdout
+
+
+def test_compact_cells_split_from_the_left_with_pipes_in_later_columns(tmp_path):
+    src = tmp_path / "rp.md"
+    src.write_text(
+        "| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
+        "| RP1 | name | trig `match: *` | a \\| b | c | d |\n", encoding="utf-8")
+    res = _cli("--patterns-for", "x.py", "--patterns-source", str(src))
+    assert res.returncode == 0, res.stderr
+    assert "| RP1 | name | trig |" in res.stdout
+
+
+@pytest.mark.parametrize("doc", [
+    "stages/review.md", "stages/ref/review/checks-core.md", "REVIEW_PATTERNS.md",
+])
+def test_review_docs_say_how_to_fetch_full_rows(doc):
+    """The rule, not just the flag: verdict every listed row, and fetch the full row
+    before judging one whose trigger is present."""
+    text = " ".join((_SKILL_ROOT / doc).read_text(encoding="utf-8").split())
+    assert "--patterns-rows" in text, doc
+    assert "trigger is present" in text, doc
+    assert "pass / N/A / fail" in text, doc
+
+
+def test_code_quality_expert_uses_the_compact_listing():
+    text = (_BACKEND / "experts" / "code" / "code-quality.md").read_text(encoding="utf-8")
+    assert "--patterns-rows" in text and "Read REVIEW_PATTERNS.md and apply" not in text
+    assert "only if that command fails" in text  # a fallback when the cwd is not the repo root
+
+
+def test_review_card_command_path_exists_from_repo_root():
+    """code-quality review: a shortened path on the card fails from the repo root and
+    sends the agent back to reading the whole file."""
+    import re as _re
+    card = (_SKILL_ROOT / "stages" / "review.md").read_text(encoding="utf-8")
+    paths = _re.findall(r"`python (\S+spawn_prompt\.py) --patterns-for", card)
+    assert paths, "step 4 must give the runnable command"
+    assert all((_BACKEND.parent / p).is_file() for p in paths), paths
+    hint = _cli("--patterns-for", _PY).stdout
+    printed = _re.findall(r"python (\S+spawn_prompt\.py) --patterns-rows", hint)
+    assert printed and all((_BACKEND.parent / p).is_file() for p in printed), hint[-300:]

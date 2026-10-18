@@ -30,7 +30,10 @@ An integration trace is ONE grep per new symbol, not an exploration.
    - Dead orphan detection: old function with 0 remaining callers
    - Control-flow preservation: moved code executes at same point
    - Duplicate detection: grep for same method name in same file
-4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP91
+4. **Runtime Pattern Checklist** — List the applying RP1-RP91 rows with
+   `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --patterns-for <changed files…>`
+   (compact: id, pattern, trigger) and print the full row of any whose trigger is present with
+   the same script's `--patterns-rows RP<n> …`; read the whole REVIEW_PATTERNS.md only if that command fails
    (incl. Agent-Safety RP65-RP80; RP82 collection-time guard when the changeset is an LLM/agent system).
    For each applicable pattern, explicitly verify. Silence = unchecked.
 5. **Depth & Seam Analysis** — For each new file:

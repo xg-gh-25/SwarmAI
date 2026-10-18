@@ -18,11 +18,17 @@ USAGE
     python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
         --knowledge-only --project <PROJECT> --files <changed files...>
 
-    # Only the REVIEW_PATTERNS.md rows that apply to a change (instead of reading
-    # the whole ~110K checklist). Paths as args, or one per line on stdin:
+    # The REVIEW_PATTERNS.md rows that apply to a change, one compact line each
+    # (id | pattern | trigger) instead of the whole checklist. Paths as args, or
+    # one per line on stdin:
     python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
         --patterns-for <changed files...> [--diff-file <unified diff>]
     git diff --name-only | python .../spawn_prompt.py --patterns-for-stdin
+
+    # The FULL rows (what to verify, example bug) of patterns whose trigger is
+    # present in the change:
+    python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py \
+        --patterns-rows RP7 RP13
 
     Use the output ONLY on exit 0.
 
@@ -196,23 +202,87 @@ def row_applies(row: dict, paths: list[str], diff_text: str = "") -> bool:
     return any(k in hay for k in row["keywords"])
 
 
-def render_patterns_for(text: str, paths: list[str], diff_text: str = "") -> str:
-    """Compact markdown: the table header, the applying rows, a count line."""
+def _select(text: str, paths: list[str], diff_text: str):
+    """(header, rows, hits) — the one selection both renderers use."""
     header, rows = parse_review_patterns(text)
-    hits = [r for r in rows if row_applies(r, paths, diff_text)]
+    return header, rows, [r for r in rows if row_applies(r, paths, diff_text)]
+
+
+def _summary(rows: list[dict], hits: list[dict], verb: str) -> list[str]:
     always = sum(1 for r in hits if r["always"])
-    out = list(header) + [r["line"] for r in hits]
-    out.append("")
-    out.append(
-        f"{len(hits)} of {len(rows)} patterns apply "
-        f"({always} always-on, {len(hits) - always} matched by path/diff) — verify "
-        f"each listed row or mark it N/A; rows not listed do not apply to these files."
-    )
+    out = ["", f"{len(hits)} of {len(rows)} patterns apply ({always} always-on, "
+               f"{len(hits) - always} matched by path/diff) — {verb}"]
     missing = [r["id"] for r in rows if r["missing"]]
     if missing:
         out.append(f"WARNING: rows with no `match:` token, shown as always-on: "
                    f"{', '.join(missing)}")
+    return out
+
+
+def render_patterns_for(text: str, paths: list[str], diff_text: str = "") -> str:
+    """The FULL applying rows (table header, rows, count line). --patterns-for now
+    prints render_patterns_compact; this stays the reference the compact form is
+    measured against."""
+    header, rows, hits = _select(text, paths, diff_text)
+    out = list(header) + [r["line"] for r in hits] + _summary(
+        rows, hits, "verify each listed row or mark it N/A; rows not listed do not "
+                    "apply to these files.")
     return "\n".join(out) + "\n"
+
+
+_COMPACT_HEADER = ["| # | Pattern | Trigger |", "|---|---------|---------|"]
+_RP_ID_RE = re.compile(r"RP\d+")
+
+
+def _compact_line(row: dict) -> str:
+    """``| RPn | name | trigger |`` with the match token removed. Cells are split
+    from the LEFT: later columns may hold a literal or escaped pipe, the first
+    three never do."""
+    cells = row["line"].split("|", 4)  # ['', id, pattern, trigger, rest]
+    trigger = _MATCH_TOKEN_RE.sub("", cells[3]).strip() if len(cells) > 3 else ""
+    return f"| {cells[1].strip()} | {cells[2].strip()} | {trigger} |"
+
+
+def render_patterns_compact(text: str, paths: list[str], diff_text: str = "") -> str:
+    """The rows render_patterns_for selects, one compact line each: id, pattern
+    name and trigger, without the long verify/example columns (a REVIEW used to
+    read every row in full and judge only a few). The
+    reviewer fetches the full row of any row whose trigger is present with
+    ``--patterns-rows``."""
+    _, rows, hits = _select(text, paths, diff_text)
+    out = list(_COMPACT_HEADER) + [_compact_line(r) for r in hits] + _summary(
+        rows, hits,
+        "give each listed row pass / N/A / fail; rows not listed do not apply to these "
+        "files. Before judging a row whose trigger is present in the change, print its "
+        "full row (what to verify + example bug): python "
+        "backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --patterns-rows "
+        "RP<n> [RP<m> ...]")
+    return "\n".join(out) + "\n"
+
+
+def render_patterns_rows(text: str, ids: list[str]) -> str:
+    """The full table header + the named rows, in the order given. Raises
+    PatternsError naming the first id that is malformed or not in the file."""
+    header, rows = parse_review_patterns(text)
+    by_id = {r["id"].upper(): r for r in rows}
+    out = list(header)
+    for raw in ids:
+        rid = raw.strip().upper()
+        if not _RP_ID_RE.fullmatch(rid) or rid not in by_id:
+            raise PatternsError(f"unknown pattern id {raw!r}")
+        out.append(by_id[rid]["line"])
+    return "\n".join(out) + "\n"
+
+
+def _emit_rows(ids: list[str], source: str | None) -> int:
+    src = Path(source) if source else REVIEW_PATTERNS_PATH
+    try:
+        rendered = render_patterns_rows(src.read_text(encoding="utf-8"), ids)
+    except (OSError, PatternsError) as exc:
+        sys.stderr.write(f"spawn_prompt: cannot print review pattern rows: {exc}\n")
+        return 1
+    sys.stdout.write(rendered)
+    return 0
 
 
 def _emit_patterns(paths: list[str], diff_file: str | None, source: str | None) -> int:
@@ -225,7 +295,7 @@ def _emit_patterns(paths: list[str], diff_file: str | None, source: str | None) 
         text = src.read_text(encoding="utf-8")
         diff_text = (Path(diff_file).read_text(encoding="utf-8", errors="replace")
                      if diff_file else "")
-        rendered = render_patterns_for(text, paths, diff_text)
+        rendered = render_patterns_compact(text, paths, diff_text)
     except (OSError, PatternsError) as exc:
         sys.stderr.write(f"spawn_prompt: cannot select review patterns: {exc}\n")
         return 1
@@ -255,6 +325,10 @@ def main(argv=None) -> int:
         help="emit only the REVIEW_PATTERNS.md rows that apply to these paths",
     )
     source.add_argument(
+        "--patterns-rows", nargs="+", metavar="RP",
+        help="print the FULL REVIEW_PATTERNS.md rows for these ids (e.g. RP7 RP13)",
+    )
+    source.add_argument(
         "--patterns-for-stdin", action="store_true",
         help="like --patterns-for, reading the paths one per line from stdin",
     )
@@ -264,7 +338,7 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--patterns-source",
-        help="with --patterns-for*: alternate patterns file (default: the skill's)",
+        help="with --patterns-for* / --patterns-rows: alternate patterns file (default: the skill's)",
     )
     parser.add_argument(
         "--project",
@@ -277,8 +351,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     selecting = bool(args.patterns_for) or args.patterns_for_stdin
+    if args.patterns_rows:
+        if args.diff_file:
+            parser.error("--diff-file only applies to --patterns-for*; --patterns-source "
+                         "to --patterns-for* / --patterns-rows")
+        return _emit_rows(args.patterns_rows, args.patterns_source)
     if (args.diff_file or args.patterns_source) and not selecting:
-        parser.error("--diff-file/--patterns-source only apply to --patterns-for*")
+        parser.error("--diff-file only applies to --patterns-for*; --patterns-source "
+                     "to --patterns-for* / --patterns-rows")
     if selecting:
         paths = args.patterns_for or sys.stdin.read().splitlines()
         return _emit_patterns(paths, args.diff_file, args.patterns_source)

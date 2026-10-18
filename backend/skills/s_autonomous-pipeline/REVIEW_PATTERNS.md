@@ -4,7 +4,10 @@ This file contains the canonical list of recurring production bug patterns that 
 
 **Selecting rows instead of reading this whole file:** every row's Trigger cell ends in a
 machine-readable `` `match: …` `` token. `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --patterns-for <changed files…> [--diff-file <diff>]`
-prints only the rows that apply. Grammar: space-separated terms; `glob:<pattern>` is an
+prints only the rows that apply, one compact line each (id, pattern, trigger). Give every
+listed row a verdict (pass / N/A / fail); before judging a row whose trigger is present in
+the change, print its full row (what to verify, example bug) with
+`spawn_prompt.py --patterns-rows RP<n> [RP<m> ...]`. Grammar: space-separated terms; `glob:<pattern>` is an
 fnmatch glob against each changed path and its basename (`*` crosses `/`); `kw:<text>` is a
 case-insensitive substring searched in the paths and the diff; `*` alone means the row
 always applies. A row applies when ANY term hits. When in doubt, a row gets `*` — a

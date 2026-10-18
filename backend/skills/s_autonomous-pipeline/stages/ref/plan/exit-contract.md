@@ -79,7 +79,9 @@ The contract only grows because of a new finding: a new counter-example adds a n
 regression-test criterion with a recorded reason. A PLAN re-completed after a later stage
 already completed may only ADD criteria: every old id must survive unchanged (same kind, ref,
 expect), and every added criterion needs a non-empty `reason`. To change a criterion, keep it
-and add a new id.
+and add a new id. Re-enter PLAN with `stage-start --stage plan` before re-completing it:
+stage-complete refuses a completed stage that was not re-entered (`E_STAGE_NOT_OPEN`), so the
+re-record is measured over its own window, not across the stages that ran since.
 
 ## `direct` profile
 
