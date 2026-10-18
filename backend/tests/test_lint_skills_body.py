@@ -236,20 +236,34 @@ def test_cli_exits_zero_on_the_clean_corpus():
     assert r.returncode == 0, f"stdout:\n{r.stdout[-3000:]}"
 
 
-def test_cli_exits_nonzero_when_an_identifier_is_reintroduced():
-    """Proves the check runs over the widened file set, not just one SKILL.md."""
-    target = _REPO_ROOT / "backend/skills/s_autonomous-pipeline/stages/reflect.md"
-    original = target.read_text(encoding="utf-8")
-    try:
-        target.write_text(original + "\n\nReintroduced: run_deadbeef.\n", encoding="utf-8")
-        r = subprocess.run(
-            [sys.executable, "scripts/lint_skills.py"],
-            cwd=_REPO_ROOT, capture_output=True, text=True, timeout=180,
-        )
-        assert r.returncode != 0
-        assert "run_deadbeef" in r.stdout
-    finally:
-        target.write_text(original, encoding="utf-8")
+def test_cli_exits_nonzero_when_an_identifier_is_reintroduced(tmp_path):
+    """Proves the check runs over the widened file set, not just one SKILL.md.
+
+    Runs the real CLI on a COPY of the skill tree in a throwaway git repo. It used to
+    append the identifier to the shipped reflect.md and restore it afterwards: under
+    xdist the parallel corpus tests read the planted line (a flaky "reflect.md:55:
+    run_deadbeef" failure), and a session committing meanwhile could ship it."""
+    import shutil
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy2(_REPO_ROOT / "scripts/lint_skills.py", repo / "scripts/lint_skills.py")
+    shutil.copytree(_REPO_ROOT / "backend/skills/s_autonomous-pipeline",
+                    repo / "backend/skills/s_autonomous-pipeline",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    target = repo / "backend/skills/s_autonomous-pipeline/stages/reflect.md"
+    target.write_text(target.read_text(encoding="utf-8") + "\n\nReintroduced: run_deadbeef.\n",
+                      encoding="utf-8")
+    git = ["git", "-C", str(repo), "-c", "core.hooksPath=/dev/null"]
+    subprocess.run(git + ["init", "-q"], check=True, timeout=60)
+    subprocess.run(git + ["add", "-A"], check=True, timeout=60)
+    env = {**os.environ, "PYTHONPATH": str(_REPO_ROOT / "backend")}  # core.* for the copy
+    r = subprocess.run(
+        [sys.executable, "scripts/lint_skills.py"],
+        cwd=repo, capture_output=True, text=True, timeout=180, env=env,
+    )
+    assert r.returncode != 0, r.stdout[-2000:] + r.stderr[-2000:]
+    assert "reflect.md" in r.stdout and "run_deadbeef" in r.stdout
+    assert "run_deadbeef" not in (_REPO_ROOT / "backend/skills/s_autonomous-pipeline/stages/reflect.md").read_text()
 
 
 # ── the gate must not read as passed when it could not run ────────────────────
