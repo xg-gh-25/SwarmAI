@@ -73,6 +73,7 @@ import ast
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -118,6 +119,11 @@ _DESKTOP_TEST_RE = re.compile(r"\.(test|spec)\.(ts|tsx|js|jsx)$")
 _SERIAL_SUITES = ("session_unit", "lifecycle", "healing", "recovery", "context_health")
 # pytest-timeout per test (thread method: a test over it ends its whole shard process).
 PER_TEST_TIMEOUT_S = 30
+# Per-nodeid duration history for cost-based shard packing (<cache>/durations.json).
+MAX_DURATION_ENTRIES = 20000
+DEFAULT_TEST_COST_S = 1.0    # a nodeid with no recorded duration
+DEFAULT_FILE_COST_S = 10.0   # a whole file with no recorded test
+DURATION_TTL_S = 30 * 86400  # an id not measured for 30 days (deleted / renamed) ages out
 # A shard ended by a per-test timeout gets its not-run tests requeued ONCE, if at least
 # this much of the phase budget is left. One round only: a module-level hang would time
 # out every test in the file, and repeated rounds would spend the deadline on it.
@@ -624,17 +630,27 @@ def _emit(rec):
 
 
 _DESELECT = set(json.loads(os.environ.get("PIPELINE_TEST_DESELECT") or "[]"))
+# Split chunks of one heavy file: a file with a keep list runs only the tests it names.
+# Scoped per file, so the other targets of the same shard are untouched.
+_KEEP = set(json.loads(os.environ.get("PIPELINE_TEST_KEEP") or "[]"))
+_KEEP_FILES = {k.split("::")[0] for k in _KEEP}
 
 
-def _deselected(nodeid):
+def _matches(nodeid, refs):
     # The ref itself, or what it contains: its parametrizations (``ref[...]``) and, for a
     # class ref, its methods (``ref::...``). NOT a bare prefix: pytest's own --deselect
     # matches by prefix, so deselecting test_parse also dropped test_parse_empty.
-    return any(nodeid == d or nodeid.startswith((d + "[", d + "::")) for d in _DESELECT)
+    return any(nodeid == d or nodeid.startswith((d + "[", d + "::")) for d in refs)
+
+
+def _deselected(nodeid):
+    if _matches(nodeid, _DESELECT):
+        return True
+    return nodeid.split("::")[0] in _KEEP_FILES and not _matches(nodeid, _KEEP)
 
 
 def pytest_collection_modifyitems(session, config, items):
-    if not _DESELECT:
+    if not _DESELECT and not _KEEP:
         return
     drop = [i for i in items if _deselected(i.nodeid)]
     if drop:
@@ -660,13 +676,16 @@ def pytest_runtest_logstart(nodeid, location):
 
 def pytest_runtest_logreport(report):
     _emit({"ev": "report", "nodeid": report.nodeid, "when": report.when,
-           "outcome": report.outcome,
+           "outcome": report.outcome, "dur": float(getattr(report, "duration", 0.0) or 0.0),
            "longrepr": str(report.longrepr)[-3000:] if report.failed else ""})
 '''
 
 
 def _plugin_dir(cache: Path) -> Path:
-    d = cache / "plugin"
+    # One directory per plugin SOURCE: runners on other commits (worktrees, an older
+    # checkout) share the cache, and a single shared file let them swap in a plugin
+    # without the keep list in the middle of a run.
+    d = cache / "plugin" / _sha(_PLUGIN_SRC.encode())[:12]
     p = d / f"{_PLUGIN_NAME}.py"
     if _read_text(p) != _PLUGIN_SRC:
         d.mkdir(parents=True, exist_ok=True)
@@ -869,7 +888,8 @@ def _backend_rel(target: str) -> str:
     return target[len("backend/"):] if target.startswith("backend/") else target
 
 
-def _shards(targets: dict, workers: int, first: dict | None = None) -> list[list[str]]:
+def _shards(targets: dict, workers: int, first: dict | None = None,
+            durations: dict | None = None) -> list[list[str]]:
     """Group targets (file → None for whole file, or a set of nodeids) into shards.
 
     Known deadlock-prone suites get a shard of their own; the rest are packed into
@@ -887,6 +907,10 @@ def _shards(targets: dict, workers: int, first: dict | None = None) -> list[list
     it. The same nodeids leave their normal position — removed from a nodeid set, or
     ``--deselect``-ed from a whole-file target — so they run once. Serial suites stay
     isolated in the lead too.
+
+    ``durations`` (``backend/`` nodeid → seconds, the main run's history) switches the
+    non-serial packing from file count to recorded cost — see ``_cost_bins``. Empty or
+    None keeps the count-based plan exactly; only the main run passes it.
     """
     def is_serial(f: str) -> bool:
         return any(k in Path(f).name for k in _SERIAL_SUITES)
@@ -908,11 +932,166 @@ def _shards(targets: dict, workers: int, first: dict | None = None) -> list[list
             if not rest:
                 continue
             args = [_backend_rel(n) for n in rest]
-        (serial if is_serial(f) else normal).append((rank, args))
+        if is_serial(f):
+            serial.append((rank, args))
+        elif durations:
+            normal.append((rank, f, sel, out_n, args))
+        else:
+            normal.append((rank, args))
+    if durations:
+        return lead + [args for _, args in sorted(serial + _cost_bins(normal, workers, durations),
+                                                    key=lambda g: g[0])]
     size = max(1, -(-len(normal) // max(1, workers * 2)))
     groups = [(normal[i][0], sum((a for _, a in normal[i:i + size]), []))
               for i in range(0, len(normal), size)]
     return lead + [args for _, args in sorted(serial + groups, key=lambda g: g[0])]
+
+
+def _family(nid: str) -> str:
+    """``file::first-segment`` without ``[params]``: two ids where one contains the other
+    (``t`` and ``t[1]``, ``C`` and ``C::m``) always share a family, so placing a family in
+    one chunk keeps a stale history id from selecting a test a sibling chunk also runs."""
+    f, _, rest = nid.partition("::")
+    return f + "::" + rest.split("::")[0].split("[")[0]
+
+
+def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, list[str]]]:
+    """Pack non-serial targets into shards of about one cost share each, in priority order.
+
+    ``share`` = total recorded cost / ``2 × workers``. A whole-file target costlier than
+    one share is split by test family (``_split_file``). The resulting units are then cut
+    into CONTIGUOUS groups in target-rank order, closing a group once it reaches a share
+    or would hold two chunks of one file. Contiguous, not LPT: ``_run_jobs`` starts shards
+    in list order and the deadline drops the tail, so the run's own files (top ranks) must
+    sit in the first shards — LPT spread them over every bin. Returns ``(lowest target
+    rank, args)`` per group.
+    """
+    by_file: dict[str, list[str]] = {}
+    for nid in durations:
+        by_file.setdefault(nid.split("::")[0], []).append(nid)
+    whole: list[dict] = []
+    for rank, f, sel, out_n, args in items:
+        if sel is not None:
+            rest = set(sel) - set(out_n)  # the AC-lead ids run in the lead, not here
+            whole.append({"rank": rank, "file": None, "args": args, "known": None,
+                          "cost": sum(durations.get(n, DEFAULT_TEST_COST_S) for n in rest)})
+            continue
+        known = [n for n in by_file.get(f, []) if not _matches_any(n, out_n)]
+        whole.append({"rank": rank, "file": f, "args": args, "known": known,
+                      "cost": sum(durations[n] for n in known) if known else DEFAULT_FILE_COST_S})
+    nbins = max(1, workers * 2)
+    share = sum(u["cost"] for u in whole) / nbins
+    units: list[dict] = []
+    for u in whole:
+        chunks = _split_file(u, share, nbins, durations) if u["known"] and u["cost"] > share else None
+        units += chunks or [{**u, "sub": 0}]
+    groups: list[dict] = []
+    cur: dict | None = None
+    for u in sorted(units, key=lambda x: (x["rank"], x["sub"])):
+        clash = cur is not None and u["file"] is not None and u["file"] in cur["files"]
+        if cur is None or clash or (cur["cost"] > 0 and cur["cost"] + u["cost"] > share * 1.1):
+            cur = {"rank": u["rank"], "cost": 0.0, "args": [], "files": set()}
+            groups.append(cur)
+        cur["cost"] += u["cost"]
+        cur["args"] += u["args"]
+        if u["file"] is not None:
+            cur["files"].add(u["file"])
+    return [(g["rank"], g["args"]) for g in groups]
+
+
+def _split_file(u: dict, share: float, nbins: int, durations: dict) -> list[dict] | None:
+    """Split one heavy whole-file unit into chunks of about one share, by test family.
+
+    Every chunk but the last carries ``--keep=`` ids (the plugin runs only those in that
+    file); the last runs the file with every other chunk's ids deselected, so a test
+    missing from history runs there and only there. Every chunk keeps ``u["args"]`` (the
+    file + its AC-lead deselects), so a stale parent id (``t`` kept, the lead holds
+    ``t[1]``) cannot rerun a lead test. None = not worth splitting.
+    """
+    fams: dict[str, float] = {}
+    fam_ids: dict[str, list[str]] = {}
+    for n in u["known"]:
+        fams[_family(n)] = fams.get(_family(n), 0.0) + durations[n]
+        fam_ids.setdefault(_family(n), []).append(n)
+    n_chunks = min(int(-(-u["cost"] // share)) if share > 0 else 1, nbins, len(fams))
+    if n_chunks < 2:
+        return None
+    chunks = [[0.0, []] for _ in range(n_chunks)]
+    for fam, c in sorted(fams.items(), key=lambda kv: (-kv[1], kv[0])):
+        # Ties on cost (e.g. tests recorded at 0.0 s) go to the chunk with the fewest
+        # families, so no chunk stays empty.
+        ch = min(chunks, key=lambda x: (x[0], len(x[1])))
+        ch[0] += c
+        ch[1].append(fam)
+    # An empty keep chunk would carry no keep list and run the WHOLE file: never emit one.
+    chunks = [ch for ch in chunks if ch[1]]
+    if len(chunks) < 2:
+        return None
+    out, others = [], []
+    for i, (c, fl) in enumerate(chunks[:-1]):
+        ids = sorted(n for fam in fl for n in fam_ids[fam])
+        others += ids
+        out.append({**u, "sub": i, "cost": c,
+                    "args": u["args"] + [f"--keep={_backend_rel(n)}" for n in ids]})
+    out.append({**u, "sub": len(chunks) - 1, "cost": chunks[-1][0],
+                "args": u["args"] + [f"--deselect={_backend_rel(n)}" for n in others]})
+    return out
+
+
+def _matches_any(nid: str, refs) -> bool:
+    return any(nid == d or nid.startswith((d + "[", d + "::")) for d in refs or ())
+
+
+def _load_durations(cache: Path) -> dict[str, float]:
+    """``backend/`` nodeid → seconds from ``<cache>/durations.json``; unreadable = empty."""
+    raw = _read_json(cache / "durations.json")
+    if not isinstance(raw, dict):
+        return {}
+    cutoff = time.time() - DURATION_TTL_S
+    return {k: float(v[0]) for k, v in raw.items() if _valid_entry(k, v) and v[1] >= cutoff}
+
+
+def _valid_entry(k, v) -> bool:
+    return (isinstance(k, str) and "::" in k and isinstance(v, list) and len(v) == 2
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+                    for x in v) and v[0] >= 0)
+
+
+def _save_durations(cache: Path, results: list[dict]) -> str | None:
+    """Merge a MAIN run's ran tests into the history (newest wins, oldest evicted).
+
+    Only leaf ids (``::``) with a measured duration that actually ran: not-run,
+    deadline-cut and runner-error results carry no real cost, and a failed / errored
+    test often stops early (a fast failure would erase a slow test's real cost).
+    Entries older than ``DURATION_TTL_S`` (deleted or renamed tests) are dropped.
+    Concurrent runners = last writer wins; the history is a packing hint, a lost update
+    only mis-balances. Returns a warning on a write error, else None.
+    """
+    path = cache / "durations.json"
+    raw = _read_json(path)
+    now = time.time()
+    hist = {k: v for k, v in raw.items() if _valid_entry(k, v) and v[1] >= now - DURATION_TTL_S} \
+        if isinstance(raw, dict) else {}
+    new = 0
+    for r in results:
+        d = r.get("duration")
+        if "::" not in str(r.get("nodeid", "")) or not isinstance(d, (int, float)) or isinstance(d, bool) \
+                or r.get("notrun") or r.get("deadline") or r.get("runner_error") \
+                or r.get("outcome") in ("failed", "error") or not math.isfinite(d):
+            continue
+        hist[r["nodeid"]] = [round(float(d), 3), now]
+        new += 1
+    if not new:
+        return None
+    if len(hist) > MAX_DURATION_ENTRIES:
+        keep = sorted(hist.items(), key=lambda kv: kv[1][1] if isinstance(kv[1][1], (int, float)) else 0,
+                      reverse=True)[:MAX_DURATION_ENTRIES]
+        hist = dict(keep)
+    try:
+        _write_json(path, hist)
+    except OSError as e:
+        return f"duration history not saved ({e}): the next run packs shards with stale costs"
+    return None
 
 
 def _child_env(backend: Path, extra_path: list[Path]) -> dict:
@@ -929,8 +1108,10 @@ def _pytest_job(ctx, name: str, args: list[str], backend: Path, isolated: bool) 
     # ``--deselect=<nodeid>`` tokens (from _shards' AC split) are not targets and not
     # pytest's --deselect (that one matches by prefix): they go to the plugin as an
     # exact-match list. Parsing and gap detection read ``meta["args"]`` = targets only.
-    targets_only = [a for a in args if not a.startswith("--deselect=")]
+    # ``--keep=<nodeid>`` (from a split heavy file) likewise goes to the plugin.
+    targets_only = [a for a in args if not a.startswith(("--deselect=", "--keep="))]
     deselect_ids = [a[len("--deselect="):] for a in args if a.startswith("--deselect=")]
+    keep_ids = [a[len("--keep="):] for a in args if a.startswith("--keep=")]
     junit = ctx.workdir / f"{name}.xml"
     events = ctx.workdir / f"{name}.events"
     argv = [ctx.python, "-X", "faulthandler", "-m", "pytest", *targets_only, "-q",
@@ -941,22 +1122,30 @@ def _pytest_job(ctx, name: str, args: list[str], backend: Path, isolated: bool) 
     env["PIPELINE_TEST_EVENTS"] = str(events)
     if deselect_ids:
         env["PIPELINE_TEST_DESELECT"] = json.dumps(deselect_ids)
+    if keep_ids:
+        env["PIPELINE_TEST_KEEP"] = json.dumps(keep_ids)
     if isolated:
         # Worktree runs (baseline, mutation): a fresh bytecode dir per run. A
         # same-size edit (``a + b`` → ``a - b``) within one second would otherwise
         # be served from a stale .pyc and a killed mutation would look survived.
         env["PYTHONPYCACHEPREFIX"] = str(ctx.workdir / f"pyc-{name}")
-    deselected = {a[len("--deselect="):].split("::")[0] for a in args if a.startswith("--deselect=")}
+    # A file with deselects or a keep list may legitimately run zero tests in this
+    # shard (all pulled to the AC lead, or a keep chunk whose ids left the file).
+    deselected = {a.split("=", 1)[1].split("::")[0] for a in args
+                  if a.startswith(("--deselect=", "--keep="))}
     return _Job(name, argv, backend, env, ctx.workdir, "pytest",
                 args=targets_only, junit=junit, events=events, deselected=deselected)
 
 
 def _pytest_jobs(ctx, targets: dict, tag: str, root: Path | None = None,
-                 first: dict | None = None) -> list[_Job]:
+                 first: dict | None = None, durations: dict | None = None) -> list[_Job]:
+    # ``durations`` only from the main run: baseline, mutant, flaky re-run and requeue
+    # plans stay count-based (a different tree, or an already-partial selection).
     backend = (root or ctx.repo) / "backend"
     ctx.seq += 1
+    shards = _shards(targets, ctx.workers, first, durations=durations)
     return [_pytest_job(ctx, f"{tag}{ctx.seq}-{i}", args, backend, root is not None)
-            for i, args in enumerate(_shards(targets, ctx.workers, first))]
+            for i, args in enumerate(shards)]
 
 
 def _results_with_requeue(ctx, jobs: list[_Job], end_at: float, tag: str,
@@ -973,7 +1162,7 @@ def _results_with_requeue(ctx, jobs: list[_Job], end_at: float, tag: str,
     ``requeued: True``. A second timeout in the requeued shard is reported as is.
     """
     per = [(j, _parse_job(j)) for j in jobs]
-    results = [r for _, rs in per for r in rs]
+    results = _dedupe_file_level([r for _, rs in per for r in rs])
     left = list(dict.fromkeys(
         r["nodeid"] for j, rs in per if j.kind == "pytest" and j.started and not j.killed
         for r in rs if r.get("notrun") and not r.get("deadline") and not r.get("runner_error")
@@ -997,6 +1186,20 @@ def _results_with_requeue(ctx, jobs: list[_Job], end_at: float, tag: str,
         else:
             merged.append(r)
     return merged + [r for n, r in later.items() if n not in seen]
+
+
+def _dedupe_file_level(results: list[dict]) -> list[dict]:
+    """One result per file-level id (no ``::``) and outcome: every chunk of a split file
+    imports the module, so a collection error / module skip came back once per chunk."""
+    seen, out = set(), []
+    for r in results:
+        key = (r["nodeid"], r["outcome"]) if "::" not in r["nodeid"] else None
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(r)
+    return out
 
 
 def run_pytest_targets(ctx, targets: dict, deadline_at: float, tag: str,
@@ -1097,16 +1300,22 @@ def _parse_pytest(job: _Job) -> list[dict]:
         rs = reps.get(nid, [])
         outcome, summary = _outcome(rs)
         notrun = False
+        extra = {}
+        durs = [r["dur"] for r in rs if isinstance(r.get("dur"), (int, float))]
+        if durs:  # an older plugin sends no "dur": no measurement, not 0 s
+            extra["duration"] = float(sum(durs))
         if outcome is None:
             if nid in started:
+                extra["duration"] = float(PER_TEST_TIMEOUT_S)  # ran to a timeout: that long
                 stack = stack if stack is not None else _stack(job)
                 why = "global deadline reached" if job.killed else f"shard exited rc={job.rc}"
                 outcome, summary = "timeout", [f"test did not finish ({why}); stack:"] + stack
             else:
                 outcome, notrun = "timeout", True
+                extra = {}
                 summary = ["not run: shard aborted before this test (deadline or per-test timeout)"]
         out.append(_res(pre + nid, outcome, summary, deadline=job.killed, notrun=notrun,
-                        call=any(r.get("when") == "call" for r in rs)))
+                        call=any(r.get("when") == "call" for r in rs), **extra))
     if not out and job.rc not in (0, 5):
         out = _parse_pytest_fallback(job)
     return out + _target_gaps(job, out)
@@ -1117,8 +1326,7 @@ def _target_hit(arg_nid: str, results: list[dict]) -> bool:
     f = arg_nid.split("::")[0]
     if "::" not in arg_nid:
         return any(r["file"] == f for r in results)
-    return any(r["nodeid"] in (arg_nid, f) or r["nodeid"].startswith((arg_nid + "[", arg_nid + "::"))
-               for r in results)
+    return any(r["nodeid"] == f or _matches_any(r["nodeid"], [arg_nid]) for r in results)
 
 
 def _target_gaps(job: _Job, out: list[dict]) -> list[dict]:
@@ -1137,7 +1345,8 @@ def _target_gaps(job: _Job, out: list[dict]) -> list[dict]:
         if _target_hit(nid, out + gaps):
             continue
         if a in (job.meta.get("deselected") or ()) and job.started and not job.killed:
-            continue  # every test it held was pulled into the AC lead shard and ran there
+            continue  # its tests ran elsewhere: pulled into the AC lead, or (a split keep
+            #           chunk whose ids left the file) in the file's last chunk
         if job.killed or not job.started:
             gaps.append(_res(nid, "timeout", ["global deadline reached before this target "
                                               "was collected"], deadline=True, notrun=True))
@@ -1720,6 +1929,7 @@ class _Ctx:
         (cache / "tmp").mkdir(parents=True, exist_ok=True)
         self.workdir = Path(tempfile.mkdtemp(prefix="run-", dir=cache / "tmp"))
         self.plugin_dir = _plugin_dir(cache)
+        self.durations = _load_durations(cache)  # main-run shard packing only
         self.head_src: dict[str, str | None] = {}
         self.seq = 0
 
@@ -2191,10 +2401,14 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             sj = _smoke_job(ctx, list(plan["smoke"]))
             sj.meta["files"] = plan["smoke"]
             jobs.append(sj)
-        jobs += _pytest_jobs(ctx, targets, "main", first=plan.get("ac_first")) if targets else []
+        jobs += _pytest_jobs(ctx, targets, "main", first=plan.get("ac_first"),
+                             durations=ctx.durations) if targets else []
         main_end = ctx.deadline_at - min(20.0, deadline * 0.25)
         _run_jobs(jobs, ctx.workers, main_end)
         results = _results_with_requeue(ctx, jobs, main_end, "main")
+        w = _save_durations(ctx.cache, results)
+        if w:
+            ctx.warnings.append(w)
         if isinstance(fhit, list):
             results += fhit
         elif fkey:

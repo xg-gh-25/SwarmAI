@@ -1204,3 +1204,30 @@ def test_recheck_after_a_recheck_still_overlays_onto_the_regression(rig, capsys,
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
     assert out.get("overlaid_onto") == "regression", out
     assert _evidence(tmp_path, "tests/latest-regression.json")["failures"] == []
+
+
+def test_heavy_file_with_history_splits_and_runs_each_test_once(rig, capsys, tmp_path, monkeypatch):
+    """run_1f81be36 AC3/AC5 end to end: recorded history makes one file the long pole,
+    so it is split across shards; every test (including one missing from history)
+    runs exactly once and the main run records the new durations."""
+    body = "".join(f"def test_t{i}():\n    assert True\n\n\n" for i in range(5)) + \
+        "def test_new():\n    assert True\n"
+    rig({"backend/tests/test_big.py": body})
+    cache = tmp_path / "cache"
+    cache.mkdir(exist_ok=True)
+    now = time.time()
+    (cache / "durations.json").write_text(json.dumps(
+        {f"backend/tests/test_big.py::test_t{i}": [100.0, now] for i in range(5)}))
+    seen: list[list[str]] = []
+    real = pt._pytest_job
+    monkeypatch.setattr(pt, "_pytest_job", lambda ctx, name, args, *a: seen.append(args) or real(ctx, name, args, *a))
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "tdd", "--files", "backend/tests/test_big.py")
+    ev = _evidence(tmp_path, "tests/latest-tdd.json")
+    ids = [r["nodeid"] for r in ev["results"]]
+    want = [f"backend/tests/test_big.py::test_t{i}" for i in range(5)] + ["backend/tests/test_big.py::test_new"]
+    assert sorted(ids) == sorted(want), ev["results"]
+    assert all(r["outcome"] == "passed" for r in ev["results"]) and code == 0, out
+    assert sum(1 for a in seen if "tests/test_big.py" in a) >= 2, seen  # split across shards
+    hist = json.loads((cache / "durations.json").read_text())
+    assert "backend/tests/test_big.py::test_new" in hist
+    assert hist["backend/tests/test_big.py::test_t0"][0] < 100.0  # newest measurement wins
