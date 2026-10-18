@@ -78,16 +78,21 @@ self-authored member list inherits the same blind spot that caused the miss.
 a single-file-scoped grep. Enumerate the sink (the last-mile write call every member is forced
 through); let the grep find the files, don't curate them.
 ## Three mechanisms <!-- R-evaluate-004 -->
-**M1+M2 `[GATE·validator]`, M3 `[MUST]` (behavioral spawn):**
+**M1+M2 `[GATE·validator]`, M3 `[MUST]` spawn + `[GATE·cli]` verdict-to-spawn binding:**
 - **M1 — Separation (the wall). `[GATE·validator]`** The `claim` must describe the PRESENT, not
   a fix. The validator BLOCKS a claim containing solution language ("I will / the fix is /
   add … / refactor …"). THINK is the first stage allowed to propose a fix.
 - **M2 — Observation-not-inference (R16b mechanized). `[GATE·validator]`** A hedge in the claim
   or evidence (`似乎 / 可能 / probably / should be / I think / likely`) BLOCKS unless the
   `evidence` is a concrete, non-hedged observation that resolves it. Validator-enforced.
-- **M3 — Refutation (the skeptic). `[MUST]`** (BEHAVIORAL: spawn the Agent tool, same pattern as
-  deliver.md's adversarial gate; not code-enforced, the validator only records the verdict
-  field). For bugfix/full/goal, after scoring a GO and BEFORE advancing to THINK, spawn ONE
+- **M3 — Refutation (the skeptic). `[MUST]`** (spawn the Agent tool, same pattern as
+  deliver.md's adversarial gate). The spawn itself is behavioral, but a recorded
+  `skeptic_verdict` is `[GATE·cli]` (runs created from 2026-10-18T16:00Z): `stage-complete
+  --stage evaluate` refuses it unless a `gate0-skeptic` sub-agent of THIS run completed
+  during this EVALUATE (the emitter's prompt starts `EXPERT-ID: gate0-skeptic`; keep that
+  line FIRST, within the prompt's first 2000 chars, when you add your claims). A spawn that
+  ran but cannot be proven (no audit hook in this session) → record
+  `"gate0_unverified_reason": "<why>"` in the evaluate record. For bugfix/full/goal, after scoring a GO and BEFORE advancing to THINK, spawn ONE
   fresh-context sub-agent with ZERO of your reasoning. Its job is to REFUTE. Get the prompt
   from the emitter (it lives in `data/gate-prompts/gate0-skeptic.md`; emit it, do not retype
   it), run from the repo root:

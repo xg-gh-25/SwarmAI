@@ -8,12 +8,19 @@ spawn, or the Gate 1 record needs handling.
 Status ACTIVE: a BLOCK verdict halts BUILD until resolved. The user can override with
 "proceed anyway"; that is logged as an override, never a silent skip.
 
-> **Enforcement level `[MUST]` (behavioral, not code-gated).** The Skeptic+SSA sub-agent
-> spawn is agent discipline: the validator records `gate1_verdict` in the run/REPORT but
-> does NOT BLOCK on it (`grep gate1_verdict pipeline_validator.py` = 0 hits; only
-> `artifact_cli.py` REPORT rendering reads it). Same class as evaluate.md's M3 skeptic.
-> A blocked spawn is recoverable at Gate 2 (which IS code-enforced), so `[MUST]` here is
-> by design; see the `gate_spawn_blocked` fail-closed rule below. <!-- R-build-004 -->
+> **Enforcement `[GATE·cli]` (runs created from 2026-10-18T16:00Z).** `stage-complete
+> --stage build` on full / bugfix refuses a build record without `gate1_verdict`, with
+> `SKIPPED`, or with a verdict that no `gate1-skeptic` sub-agent of THIS run backs: the
+> SubagentStop marker of a spawn whose first prompt line is `EXPERT-ID: gate1-skeptic`,
+> completed after stage-start handed the prompt out (`run.json gate1_handout.at`). A
+> hand-written verdict is no verdict, and a run with no marker at all is a run that
+> spawned nothing (blocked). goal_cycle: a recorded verdict needs the same spawn. Only
+> an unreadable marker store or a pre-EXPERT-ID daemon passes with a warning. A spawn that
+> ran but cannot be proven (a session without the SubagentStop audit hook, a marker
+> attributed to another run of the same session — the error names it) → record
+> `"gate1_unverified_reason": "<why>"`: it is kept in the record and warned about. Repeat
+> every `gate1_*` key in the stage-complete record (it REPLACES the build record). A
+> rejected spawn → the `gate_spawn_blocked` rule below. <!-- R-build-004 -->
 
 ## Trigger conditions
 

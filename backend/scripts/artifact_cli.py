@@ -4263,6 +4263,162 @@ def _red_team_marker_errors(run_id: str, run_state: dict, artifact: "dict | None
             "stage-complete."]
 
 
+# ── Gate-0 / Gate-1 verdicts bound to a real spawn ──────────────────────────
+# A skeptic verdict used to be whatever the orchestrator wrote into its record: nothing
+# tied it to a sub-agent that ran (2026-10-18, 18 runs: two bugfix BUILDs recorded no
+# Gate-1 and spawned none). Every completed sub-agent leaves a SubagentStop marker with
+# the EXPERT-ID of its first prompt line (core/runtime_hooks.py), so a verdict now needs
+# a gate0-skeptic / gate1-skeptic marker of THIS run inside the gate's window (or a
+# recorded `<gate>_unverified_reason`, kept and warned about). Runs
+# created before the cutover keep the old behavior (an in-flight run cannot have bound
+# its earlier spawns to a window it did not know about).
+GATE_SPAWN_CUTOVER = "2026-10-18T16:00:00+00:00"
+GATE1_PROFILES = ("full", "bugfix")  # stages/ref/build/gate1.md: BUILD always runs Gate-1
+
+
+def _gate_spawn_enforced(run_state: dict) -> bool:
+    """True for a run that started at/after the cutover. ``created_at`` first, else the
+    earliest stage start; nothing parseable at all → enforced (fail-closed)."""
+    ts = _iso_epoch(run_state.get("created_at"))
+    if ts is None:
+        t = run_state.get("stage_timing") if isinstance(run_state.get("stage_timing"), dict) else {}
+        starts = [_iso_epoch((v or {}).get("first_started_at") or (v or {}).get("started_at"))
+                  for v in t.values() if isinstance(v, dict)]
+        ts = min((s for s in starts if s is not None), default=None)
+    cut = _iso_epoch(GATE_SPAWN_CUTOVER)
+    return ts is None or cut is None or ts >= cut
+
+
+def _gate_spawn_check(run_id: str, run_state: dict, expert_id: str, since: float,
+                      warnings: "list[str]") -> "tuple[bool, str]":
+    """(ok, detail). ok when ``expert_id`` completed for this run at or after ``since``,
+    or when that cannot be decided: marker store unreadable, or this window only has
+    markers written before EXPERT-ID attribution (legacy) — then a warning says so.
+    "This run left no marker at all" is NOT a pass: it is exactly a run that spawned
+    nothing. ``detail`` explains a miss (unattributed sub-agents, the gate's marker under
+    another run id) so the orchestrator can tell a skipped spawn from a misattributed one."""
+    import time
+    now = time.time()
+    in_window = _completed_spawns(run_id, since - 5, now + 5)
+    if in_window is None:
+        warnings.append(f"{expert_id} spawn NOT verified: the sub-agent marker store is unreadable")
+        return True, ""
+    if in_window["by_expert"].get(expert_id):
+        return True, ""
+    if in_window["legacy"]:
+        warnings.append(f"{expert_id} spawn NOT verified: {in_window['legacy']} marker(s) in this "
+                        "window predate EXPERT-ID attribution; rebuild and restart the backend")
+        return True, ""
+    notes = []
+    if in_window["unattributed"]:
+        notes.append(f"{in_window['unattributed']} sub-agent(s) of this run completed without a "
+                     "readable `EXPERT-ID:` line in the first 2000 chars of their prompt")
+    others = _gate_markers_elsewhere(run_id, expert_id, since - 5, now + 5)
+    if others:
+        notes.append(f"a {expert_id} marker in this window belongs to {', '.join(others)} "
+                     "(a session shared by several runs attributes to the newest one)")
+    return False, ("; ".join(notes) + ".") if notes else ""
+
+
+def _gate_markers_elsewhere(run_id: str, expert_id: str, since: float, until: float) -> "list[str]":
+    """Other run ids whose ``expert_id`` marker falls in [since, until] (diagnosis only)."""
+    try:
+        from config import get_app_data_dir
+        audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
+        out = set()
+        for p in audit.glob("session_*.marker"):
+            if "_adv_" in p.name or p.stat().st_mtime < since - 60:
+                continue
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (isinstance(d, dict) and d.get("expert_id") == expert_id and d.get("run_id") != run_id
+                    and isinstance(d.get("ts"), (int, float)) and since <= d["ts"] <= until):
+                out.add(str(d.get("run_id")))
+        return sorted(out)[:3]
+    except Exception:
+        return []
+
+
+def _gate_unbacked(gate: str, reason, detail: str, warnings: "list[str]", msg: str) -> "list[str]":
+    """The error for a verdict no spawn backs — unless the record names why the spawn
+    cannot be proven (``<gate>_unverified_reason``: e.g. a session without the audit
+    hook). That override is kept in the record and warned about, never silent."""
+    if isinstance(reason, str) and len(reason.strip()) >= 10:
+        warnings.append(f"{gate} spawn NOT verified; accepted on the recorded "
+                        f"{gate}_unverified_reason: {reason.strip()[:200]}")
+        return []
+    return [msg + (f" ({detail})" if detail else "")
+            + f" If the spawn did run but cannot be proven (no audit hook in this session, "
+            f"misattributed marker), record `{gate}_unverified_reason` saying why."]
+
+
+def _gate_verdict_spawn_errors(run_id: str, run_state: dict, stage: str, profile: str,
+                               artifact: "dict | None", cand_rec: dict,
+                               warnings: "list[str]", prev_rec: "dict | None" = None) -> "list[str]":
+    """stage-complete: a recorded Gate-0 / Gate-1 verdict needs the gate's own spawn.
+
+    evaluate — ``understanding.skeptic_verdict`` needs a gate0-skeptic sub-agent since
+    this EVALUATE window began. build (full / bugfix) — a ``gate1_verdict`` is required,
+    may not be SKIPPED, and needs a gate1-skeptic sub-agent since the prompt was first
+    handed out (run.json ``gate1_handout.at``; else since BUILD started). goal_cycle — a
+    recorded verdict needs its spawn (Gate-1 runs on the first cycle only). ``prev_rec``
+    = this stage's record before the replace: a verdict recorded there (run-update) but
+    dropped from the new record is named, not mistaken for "never ran"."""
+    if cand_rec.get("status") == "skipped" or not _gate_spawn_enforced(run_state):
+        return []
+    timing = (run_state.get("stage_timing") or {}).get(stage) or {}
+    start = _iso_epoch(timing.get("started_at")) or 0.0
+    if stage == "evaluate":
+        und = (artifact or {}).get("understanding")
+        verdict = und.get("skeptic_verdict") if isinstance(und, dict) else None
+        if not verdict:
+            return []
+        ok, detail = _gate_spawn_check(run_id, run_state, "gate0-skeptic", start, warnings)
+        if ok:
+            return []
+        return _gate_unbacked("gate0", cand_rec.get("gate0_unverified_reason"), detail, warnings,
+                              f"Gate-0: understanding.skeptic_verdict is '{verdict}' but no "
+                              "gate0-skeptic sub-agent completed for this run during this EVALUATE. "
+                              "Spawn it with the prompt from `spawn_prompt.py --gate gate0-skeptic` "
+                              "(keep its first line `EXPERT-ID: gate0-skeptic`), record ITS verdict, "
+                              "then re-run stage-complete.")
+    if stage not in ("build", "goal_cycle"):
+        return []
+    legacy = cand_rec.get("gate1") if isinstance(cand_rec.get("gate1"), dict) else {}
+    verdict = str(cand_rec.get("gate1_verdict") or legacy.get("verdict") or "").strip()
+    if not verdict and isinstance(prev_rec, dict):
+        pl = prev_rec.get("gate1") if isinstance(prev_rec.get("gate1"), dict) else {}
+        old = prev_rec.get("gate1_verdict") or pl.get("verdict")
+        if old:
+            return [f"Gate-1: this {stage} record drops the gate1_verdict '{old}' recorded "
+                    "earlier (stage-complete REPLACES the record): repeat the gate1_* keys in "
+                    "the record (stages/ref/build/gate1.md)."]
+    if stage == "build" and profile in GATE1_PROFILES:
+        if not verdict:
+            return [f"Gate-1: profile '{profile}' runs Gate-1 before BUILD, and the build record "
+                    "has no gate1_verdict. Spawn the gate1-skeptic with stage-start's "
+                    "`gate1_prompt_path` and record its verdict (stages/ref/build/gate1.md)."]
+        if verdict.upper() == "SKIPPED":
+            return [f"Gate-1: gate1_verdict SKIPPED is only for profiles that skip Gate-1 "
+                    f"(trivial / research / docs), not '{profile}'."]
+    if not verdict or verdict.upper() == "SKIPPED":
+        return []
+    handout = run_state.get("gate1_handout") if isinstance(run_state.get("gate1_handout"), dict) else {}
+    since = _iso_epoch(handout.get("at")) or _iso_epoch(
+        timing.get("first_started_at") or timing.get("started_at")) or 0.0
+    ok, detail = _gate_spawn_check(run_id, run_state, "gate1-skeptic", since, warnings)
+    if ok:
+        return []
+    return _gate_unbacked("gate1", cand_rec.get("gate1_unverified_reason"), detail, warnings,
+                          f"Gate-1: gate1_verdict is '{verdict}' but no gate1-skeptic sub-agent "
+                          "completed for this run since its prompt was handed out. Spawn it "
+                          "(2-line prompt: `EXPERT-ID: gate1-skeptic` + `Adversarially review this "
+                          "plan: read <gate1_prompt_path> first; follow it.`), record ITS verdict, "
+                          "then re-run stage-complete.")
+
+
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
 
@@ -8678,7 +8834,7 @@ def _next_stage_of(profile: str, stage: str) -> "str | None":
 
 def _validate_stage_candidate(
     *, project: str, run_id: str, stage: str, profile: str, artifact: "dict | None",
-    record_in: dict, cand_rec: dict, cand_run: dict,
+    record_in: dict, cand_rec: dict, cand_run: dict, prev_rec: "dict | None" = None,
 ) -> "tuple[list[str], list[str]]":
     """Collect EVERY error for the candidate (artifact schema, record schema, exit
     contract, and the per-stage validate() checks on the in-memory state)."""
@@ -8712,6 +8868,9 @@ def _validate_stage_candidate(
                                             warnings=warnings)
     if stage == "deliver":
         errors += _red_team_marker_errors(run_id, cand_run, artifact, errors, warnings)
+    if stage in ("evaluate", "build", "goal_cycle"):
+        errors += _gate_verdict_spawn_errors(run_id, cand_run, stage, profile, artifact,
+                                             cand_rec, warnings, prev_rec)
     if stage == "plan":
         errors += pv.validate_exit_criteria(
             (artifact or {}).get("exit_criteria"), required=not is_relaxed_profile(profile))
@@ -8851,6 +9010,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     errors, warnings = _validate_stage_candidate(
         project=project, run_id=run_id, stage=stage, profile=profile, artifact=artifact,
         record_in=record_in, cand_rec=cand_rec, cand_run=cand_run,
+        prev_rec=_stage_record_of(run_state, stage),
     )
     if stage == "plan":
         errors += _replan_errors(project, run_state, profile, artifact, status)
@@ -9353,13 +9513,14 @@ def _recorded_gate1(run_state: dict) -> dict:
     return out
 
 
-def _gate1_skip(run_state: dict, prompt_sha: str) -> "dict | None":
+def _gate1_skip(run_state: dict, prompt_sha: str, run_id: "str | None" = None) -> "dict | None":
     """{"verdict", "override"?} when Gate-1 already judged EXACTLY this prompt, else None.
 
-    Judged = stage-start handed this prompt out (``run.json gate1_handout.sha``) and the
+    Judged = stage-start handed this prompt out (``run.json gate1_handout.sha``), the
     latest build / goal_cycle record's Gate-1 fields changed after that hand-out (a
-    verdict was recorded for it). A BLOCK without an override is never skipped: its
-    remedy, Fix Plan, re-runs Gate-1."""
+    verdict was recorded for it) and, for a run under GATE_SPAWN_CUTOVER, a gate1-skeptic
+    sub-agent of this run completed after it (a hand-written verdict is no judgment). A
+    BLOCK without an override is never skipped: its remedy, Fix Plan, re-runs Gate-1."""
     handout = run_state.get("gate1_handout") if isinstance(run_state.get("gate1_handout"), dict) else {}
     now = _recorded_gate1(run_state)
     if handout.get("sha") != prompt_sha or not now.get("verdict"):
@@ -9368,6 +9529,12 @@ def _gate1_skip(run_state: dict, prompt_sha: str) -> "dict | None":
         return None  # nothing recorded since this prompt was handed out
     if now["verdict"].upper() == "BLOCK" and not now.get("override"):
         return None
+    if run_id and _gate_spawn_enforced(run_state):
+        bt = ((run_state.get("stage_timing") or {}).get("build") or {})
+        since = _iso_epoch(handout.get("at")) or _iso_epoch(
+            bt.get("first_started_at") or bt.get("started_at")) or 0.0
+        if not _gate_spawn_check(run_id, run_state, "gate1-skeptic", since, [])[0]:
+            return None  # a verdict with no spawn behind it: hand the prompt out again
     return {k: now[k] for k in ("verdict", "override") if k in now}
 
 
@@ -9912,7 +10079,7 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             g1_sha = hashlib.sha256(Path(g1).read_bytes()).hexdigest() if g1 else None
         except OSError:
             g1_sha = None
-        skip = _gate1_skip(run_state, g1_sha) if g1_sha else None
+        skip = _gate1_skip(run_state, g1_sha, run_id) if g1_sha else None
         if skip:
             # A BUILD re-entry (rework, resume) after Gate-1 judged this exact prompt: a
             # second spawn can only repeat the verdict (measured: 4 repeat Gate-1 spawns
@@ -9933,8 +10100,13 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             except (OSError, ValueError):
                 fresh = None
             if isinstance(fresh, dict):
+                prev_h = fresh.get("gate1_handout") if isinstance(fresh.get("gate1_handout"), dict) else {}
+                # The same prompt handed out again (resume / re-read) keeps its FIRST
+                # hand-out time: a skeptic spawned between the two hand-outs judged it.
+                at = prev_h.get("at") if (prev_h.get("sha") == g1_sha and prev_h.get("at")) \
+                    else _utc_now_iso()
                 fresh["gate1_handout"] = {
-                    "sha": g1_sha, "at": _utc_now_iso(),
+                    "sha": g1_sha, "at": at,
                     "gate1_fields": json.dumps(_recorded_gate1(fresh), sort_keys=True, default=str)}
                 _write_run_atomic(run_file, fresh)
                 run_state["gate1_handout"] = fresh["gate1_handout"]
