@@ -2483,3 +2483,116 @@ async def test_gate_marker_records_the_prompt_files_the_skeptic_read(tmp_path, m
     assert hashlib.sha256((first + "\n").encode()).hexdigest() in inline  # an exact paste of a file
     files = {k for k in reads if not k.startswith("<inline")}
     assert files == {g1.as_posix(), kn.as_posix()}  # not other.md, not ls'd, not partial
+
+
+# ── run / expert attribution from the handed-out prompt file (2026-10-18) ──────
+@pytest.fixture(autouse=False)
+def appdata(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "get_app_data_dir", lambda: tmp_path)
+    return tmp_path
+
+
+def _handout(tmp_path, run_id, name, first_line, session_id="sess-a", root=None):
+    """A tool-written prompt file under SwarmWS/Projects/P/.artifacts/runs/<run_id>/
+    evidence/prompts/, with its run.json (session_id=None → an unstamped run)."""
+    rd = (root or tmp_path / "SwarmWS" / "Projects") / "P" / ".artifacts" / "runs" / run_id
+    (rd / "evidence" / "prompts").mkdir(parents=True, exist_ok=True)
+    state = {"id": run_id}
+    if session_id is not None:
+        state["session_id"] = session_id
+    (rd / "run.json").write_text(json.dumps(state))
+    p = rd / "evidence" / "prompts" / name
+    p.write_text(f"{first_line}\n\nthe task\n")
+    return p
+
+
+def _pointer_transcript(path, first_prompt, reads):
+    rows = [{"isSidechain": True, "type": "user", "message": {"content": first_prompt}}]
+    rows += [{"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": str(r)}}]}} for r in reads]
+    rows.append({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+async def _finish(rh, tmp_path, ctx, first_prompt, reads):
+    t = tmp_path / f"sub-{len(list(tmp_path.glob('sub-*')))}.jsonl"
+    _pointer_transcript(t, first_prompt, reads)
+    hook = rh.create_agent_tool_audit_hook(ctx)
+    await hook({"agent_id": "a", "agent_transcript_path": str(t), "agent_type": "general-purpose"},
+               None, MagicMock())
+    base = sorted((p for p in rh._PIPELINE_AUDIT_DIR.glob(f"session_{ctx['sdk_session_id']}_*.marker")
+                   if "_adv_" not in p.name), key=lambda p: p.stat().st_mtime_ns)
+    adv = sorted(rh._PIPELINE_AUDIT_DIR.glob(f"session_{ctx['sdk_session_id']}_adv_*.marker"),
+                 key=lambda p: p.stat().st_mtime_ns)
+    last = json.loads(base[-1].read_text())
+    this_adv = [json.loads(p.read_text()) for p in adv]
+    this_adv = [d for d in this_adv if d["ts"] == last["ts"]]  # this call's twin only
+    return last, (this_adv[0] if this_adv else None)
+
+
+@pytest.mark.asyncio
+async def test_a_pointer_prompt_is_attributed_from_the_file_it_read(tmp_path, monkeypatch, appdata):
+    """16 real spawns (2026-10-18) said only "Read …/evidence/prompts/security.md and
+    follow it": no EXPERT-ID line, so they were never counted. The file names both."""
+    import core.runtime_hooks as rh
+    audit = tmp_path / "audit"
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", audit)
+    p = _handout(tmp_path, "run_aaa1", "security.md", "EXPERT-ID: security")
+    ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_newer",
+           "_active_pipeline_run_id_ts": time.time()}
+    base, adv = await _finish(rh, tmp_path, ctx,
+                              f"Adversarially review the change: read {p} and follow it exactly.", [p])
+    assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_aaa1", "security", "prompt_file")
+    assert adv is not None and (adv["run_id"], adv["expert_id"]) == ("run_aaa1", "security")
+    assert (audit / "run_aaa1.marker").is_file() and not (audit / "run_newer.marker").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_two_runs_credits_the_run_whose_prompt_was_read(tmp_path, monkeypatch, appdata):
+    """run_376299fa / run_a87bfe3f shared a session: the older run's gate skeptics were
+    credited to the newer run."""
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
+    g1 = _handout(tmp_path, "run_old", "gate1-skeptic.md", "EXPERT-ID: gate1-skeptic")
+    other = _handout(tmp_path, "run_old", "correctness.md", "EXPERT-ID: correctness")
+    ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_new",
+           "_active_pipeline_run_id_ts": time.time()}
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\nread {g1} first", [g1])
+    assert (base["run_id"], base["expert_id"]) == ("run_old", "gate1-skeptic")
+    assert g1.as_posix() in base["prompt_reads"]
+    # its own line names gate1-skeptic but it read only another expert's file: no run from
+    # that file (a meta-review reading the experts' prompts must not move them)
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\njudge {other}", [other])
+    assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_new", "gate1-skeptic", "session")
+
+
+@pytest.mark.asyncio
+async def test_file_attribution_never_takes_a_foreign_or_ambiguous_run(tmp_path, monkeypatch, appdata):
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
+    foreign = _handout(tmp_path, "run_theirs", "security.md", "EXPERT-ID: security", session_id="sess-b")
+    a = _handout(tmp_path, "run_x1", "correctness.md", "EXPERT-ID: correctness")
+    b = _handout(tmp_path, "run_x2", "correctness.md", "EXPERT-ID: correctness")
+    know = _handout(tmp_path, "run_x1", "review-knowledge.md", "## Project knowledge")
+    ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_mine",
+           "_active_pipeline_run_id_ts": time.time()}
+    base, _ = await _finish(rh, tmp_path, ctx, f"Read {foreign}", [foreign])  # another session's run
+    assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: correctness\nread {a} and {b}", [a, b])  # two runs
+    assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_mine", "correctness", "session")
+    base, _ = await _finish(rh, tmp_path, ctx, f"Read {know}", [know])  # a file with no EXPERT-ID line
+    assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: correctness\nread {know} then {a}", [know, a])
+    assert (base["run_id"], base["attributed_by"]) == ("run_x1", "prompt_file")
+    # security review 2026-10-18: a sub-agent spawned for something else that READS an
+    # expert's prompt is not that expert; a copy outside Projects/ or an unstamped run
+    # names nothing (fail closed)
+    base, adv = await _finish(rh, tmp_path, ctx, "Explore: what do the reviewer prompts say?", [a])
+    assert (base["run_id"], base["expert_id"], adv) == ("run_mine", None, None)
+    fake = _handout(tmp_path, "run_x1", "security.md", "EXPERT-ID: security", root=tmp_path / "tmp")
+    base, _ = await _finish(rh, tmp_path, ctx, f"Read {fake}", [fake])
+    assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
+    legacy = _handout(tmp_path, "run_legacy", "gate1-skeptic.md", "EXPERT-ID: gate1-skeptic", session_id=None)
+    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: gate1-skeptic\nread {legacy}", [legacy])
+    assert (base["run_id"], base["expert_id"]) == ("run_mine", "gate1-skeptic")

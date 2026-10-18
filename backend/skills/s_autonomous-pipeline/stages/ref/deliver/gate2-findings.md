@@ -85,6 +85,11 @@ have been in it): then re-check by re-spawning the round-1 prompts. A changed fi
 text diff cannot show (binary, too large) is named on the diff's `NOT INCLUDED` line.
 `not_rechecked` lists findings it could not route (no specialist / text, no round-1
 prompt): route those by hand. This is the second and last round; a third needs a recorded reason.
+`[GATE·cli]` (runs created from 2026-10-18T18:00Z): DELIVER `stage-complete` refuses while a
+specialist with a fixed HIGH / conf ≥ 7 MED has no sub-agent of this run that read its
+`<id>-recheck.md` as gate2-recheck last wrote it (re-run gate2-recheck after a further fix →
+spawn again), or, when gate2-recheck refused (late snapshot), no second round of its round-1
+prompt. Unprovable (no audit hook) → record `gate2_recheck_unverified_reason` in the record.
 
 ## Gate outcome (print it)
 

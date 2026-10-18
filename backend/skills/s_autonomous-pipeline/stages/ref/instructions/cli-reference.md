@@ -9,7 +9,8 @@ All commands: `python backend/scripts/artifact_cli.py <command> [args]`
 # Stage boundary (preferred)
 stage-start    --project <P> --run-id <R> --stage <S>
 stage-complete --project <P> --run-id <R> --stage <S> --data @/tmp/<R>/<S>.json [--check]
-gate2-recheck  --project <P> --run-id <R> --findings @/tmp/<R>/findings.json   # DELIVER round 2: fix-only prompts
+gate2-recheck  --project <P> --run-id <R> --findings @/tmp/<R>/findings.json   # DELIVER round 2: fix-only prompts (enforced)
+gate0-prompt   --project <P> --run-id <R> --data @/tmp/<R>/gate0.json   # EVALUATE M3: skeptic prompt + `spawn` text
 schema   --stage <stage>                          # expected shape + ready template (single-line JSON)
 # Artifacts (legacy path)
 discover --project <P> --types <types> --full     # find upstream artifacts

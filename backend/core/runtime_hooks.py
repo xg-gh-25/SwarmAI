@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import time
 from collections import defaultdict
@@ -1133,9 +1134,20 @@ def create_agent_tool_audit_hook(
                 # Classify THIS sub-agent's intent: agent_type primary; the HEAD of
                 # its OWN transcript (spawn prompt) as fallback. Per-agent-correct by
                 # construction — this SubagentStop fires for exactly one sub-agent.
+                # Which run and which expert: a prompt FILE that stage-start (or
+                # gate2-recheck / gate0-prompt) wrote under runs/<run_id>/evidence/prompts/
+                # and the sub-agent read in full names both, so a session working on two
+                # runs credits the right one, and a "Read <file> and follow it" spawn with
+                # no EXPERT-ID line of its own still counts (16 such spawns 2026-10-18).
+                reads = _prompt_reads(transcript_path) if transcript_path else None
+                owner, expert_id, attributed_by = _resolve_attribution(
+                    _extract_expert_id(prompt_head) if prompt_head else None,
+                    _handout_attribution(reads, session_id, prompt_head), owner)
                 adversarial = _is_adversarial_intent(agent_type, "", "")
-                if not adversarial and prompt_head:
-                    adversarial = _is_adversarial_intent(agent_type, "", prompt_head)
+                if not adversarial and (prompt_head or expert_id):
+                    # the resolved id goes first so the registry check sees a file-derived one
+                    adversarial = _is_adversarial_intent(
+                        agent_type, "", (f"EXPERT-ID: {expert_id}\n" if expert_id else "") + prompt_head)
 
                 # Write run-specific marker if run_id available (primary path)
                 if owner:
@@ -1157,13 +1169,19 @@ def create_agent_tool_audit_hook(
                 # stage-complete count review rounds per expert from the one marker every
                 # completed sub-agent writes — the _adv_ marker below exists only for
                 # sub-agents classified adversarial, so counting from it undercounts.
-                expert_id = _extract_expert_id(prompt_head) if prompt_head else None
                 base = {
                     "ts": ts,
                     "event": "SubagentStop",
                     "session_id": session_id,
                     "run_id": owner or "unknown",
                     "expert_id": expert_id,
+                    # "prompt_file" = run / expert taken from a handed-out prompt file it
+                    # read; "session" = the session's newest run + the prompt's own line
+                    "attributed_by": attributed_by,
+                    # Key present = this daemon captures prompt reads for EVERY sub-agent
+                    # ({} = none read, None = transcript unreadable → readers warn). Gate-1,
+                    # Gate-0 and the Gate-2 re-check bind to the prompt file handed out.
+                    "prompt_reads": reads,
                 }
                 if expert_id in _GATE_VERDICT_RE:
                     # Key present = this daemon captures verdicts (None = unparsed answer).
@@ -1172,9 +1190,6 @@ def create_agent_tool_audit_hook(
                     final = last_message if isinstance(last_message, str) and last_message.strip() \
                         else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
-                    # Key present = this daemon captures prompt reads ({} = none read,
-                    # None = transcript unreadable → stage-complete warns, never blocks).
-                    base["prompt_reads"] = _prompt_reads(transcript_path) if transcript_path else None
                 session_marker.write_text(json.dumps(base))
 
                 # DISTINCT adversarial marker — consumed by the live commit gate
@@ -1204,7 +1219,8 @@ def create_agent_tool_audit_hook(
                         # coupling) and read back from this sub-agent's transcript head —
                         # NOT from the SDK agent_type (which is `general-purpose` for real
                         # spawns). Nullable: None = unattributed (no well-formed line).
-                        "expert_id": _extract_expert_id(prompt_head),
+                        # The same resolution as the base marker (prompt file first).
+                        "expert_id": expert_id,
                     }
                     # Plan A diff-relevance: bind the review to the paths it covered.
                     # KEY PRESENCE is load-bearing — reviewed_paths present (incl. [])
@@ -1330,6 +1346,7 @@ def _read_subagent_final_text(transcript_path: str) -> str:
 # path (`ls`, `test -f`, a comment) is no read (red-team 2026-10-18).
 _PROMPT_CAT_RE = re.compile(r"(?:^|[;&|(]\s*|\s)cat\s+(?:-\w+\s+)*['\"]?([^\s'\"`;|&]*/evidence/prompts/[\w.-]+\.md)")
 _TRANSCRIPT_SCAN_BYTES = 16 * 1024 * 1024  # real gate1 transcripts: p50 ~290 KB, max ~540 KB
+_PROMPT_FILE_MAX_BYTES = 2 * 1024 * 1024  # handed-out prompts are a few KB; change.diff ≤ 60 KB
 
 
 def _prompt_reads(transcript_path: str) -> Optional[dict]:
@@ -1389,12 +1406,106 @@ def _prompt_reads(transcript_path: str) -> Optional[dict]:
                         paths += _PROMPT_CAT_RE.findall(inp["command"])
         for path in dict.fromkeys(paths):
             fp = Path(os.path.expanduser(path))
-            if "/evidence/prompts/" in fp.as_posix() and fp.is_file():
-                out[fp.as_posix()] = hashlib.sha256(fp.read_bytes()).hexdigest()
+            # The REAL file must be a regular prompt-sized file under evidence/prompts/:
+            # `<run>/evidence/prompts/../../../big.img` or a FIFO is never read (this
+            # runs for every sub-agent, in the hook thread).
+            real = Path(os.path.realpath(fp))
+            if "/evidence/prompts/" not in fp.as_posix() or "/evidence/prompts/" not in real.as_posix():
+                continue
+            try:
+                st = real.stat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and st.st_size <= _PROMPT_FILE_MAX_BYTES:
+                out[fp.as_posix()] = hashlib.sha256(real.read_bytes()).hexdigest()
         return out
     except Exception:
         logger.debug("_prompt_reads: suppressed exception on a fail-safe path", exc_info=True)
         return None
+
+
+# A prompt file the pipeline tools hand out: <...>/.artifacts/runs/<run_id>/evidence/prompts/<name>.md
+_HANDOUT_PATH_RE = re.compile(r"/\.artifacts/runs/(run_[A-Za-z0-9_-]{1,64})/evidence/prompts/[\w.-]+\.md$")
+
+
+_RUN_JSON_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _projects_root() -> Optional[str]:
+    """realpath of the workspace's Projects dir (where every run lives), or None."""
+    try:
+        from config import get_app_data_dir  # local import: avoids a load-time cycle
+        return os.path.realpath(get_app_data_dir() / "SwarmWS" / "Projects")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _handout_attribution(reads: Optional[dict], session_id: str, spawn_prompt: str = "") -> list:
+    """Distinct (run_id, expert_id) pairs named by the handed-out prompt files a
+    sub-agent read in full (``_prompt_reads`` keys): the run from the file's path, the
+    expert from the file's own ``EXPERT-ID: <id>`` first line (the tools write it first).
+
+    A file counts only when ALL hold — anything unprovable names nothing (fail closed):
+    its spawn prompt names the file (a sub-agent spawned to do something else that
+    happens to read an expert's prompt is not that expert); the real path lies under the
+    workspace's Projects dir as Projects/<P>/.artifacts/runs/<run_id>/evidence/prompts/;
+    that run's run.json is a regular file whose ``session_id`` is this session (a foreign
+    or unstamped run is never credited). A file with no EXPERT-ID line names nothing.
+    Never raises."""
+    pairs: list = []
+    root = _projects_root()
+    if not (root and session_id and spawn_prompt):
+        return pairs
+    home = os.path.expanduser("~")
+    for path in (reads or {}):
+        try:
+            if path.startswith("<inline"):
+                continue
+            named = path in spawn_prompt or (path.startswith(home + "/")
+                                             and "~" + path[len(home):] in spawn_prompt)
+            if not named:
+                continue
+            real = os.path.realpath(path)
+            m = _HANDOUT_PATH_RE.search(real)
+            rel = os.path.relpath(real, root) if m else ""
+            if not m or rel.startswith("..") or rel.count("/") != 6:
+                continue  # <P>/.artifacts/runs/<run>/evidence/prompts/<name>.md
+            with open(real, "r", encoding="utf-8", errors="replace") as f:
+                first = next((ln for ln in (f.readline() for _ in range(5)) if ln.strip()), "")
+            eid = _extract_expert_id(first.rstrip("\n"))
+            if not eid:
+                continue
+            run_json = Path(real).parent.parent.parent / "run.json"
+            st = os.stat(run_json)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > _RUN_JSON_MAX_BYTES:
+                continue
+            data = json.loads(run_json.read_text(encoding="utf-8"))
+            if not (isinstance(data, dict) and data.get("session_id") == session_id):
+                continue
+            pair = (m.group(1), eid)
+            if pair not in pairs:
+                pairs.append(pair)
+        except Exception:  # noqa: BLE001 — attribution must never break the hook
+            logger.debug("_handout_attribution: suppressed exception", exc_info=True)
+    return pairs
+
+
+def _resolve_attribution(head_eid: Optional[str], pairs: list,
+                         owner: Optional[str]) -> "tuple[Optional[str], Optional[str], str]":
+    """(run_id, expert_id, attributed_by) for one completed sub-agent.
+
+    1. The prompt's own ``EXPERT-ID:`` line names the expert; a handed-out file of THAT
+       expert it read in full names the run (exactly one run, else ambiguous → session).
+    2. No such line: the handed-out file names both, if it read exactly one.
+    3. Otherwise the session's newest run (``owner``) and the line's id (maybe None)."""
+    if head_eid:
+        runs = {r for r, e in pairs if e == head_eid}
+        if len(runs) == 1:
+            return next(iter(runs)), head_eid, "prompt_file"
+        return owner, head_eid, "session"
+    if len(pairs) == 1:
+        return pairs[0][0], pairs[0][1], "prompt_file"
+    return owner, None, "session"
 
 
 def _gate_verdict(expert_id: Optional[str], final_text: str) -> Optional[str]:

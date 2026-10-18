@@ -89,18 +89,21 @@ through); let the grep find the files, don't curate them.
   deliver.md's adversarial gate). The spawn itself is behavioral, but a recorded
   `skeptic_verdict` is `[GATE·cli]` (runs created from 2026-10-18T16:00Z): `stage-complete
   --stage evaluate` refuses it unless a `gate0-skeptic` sub-agent of THIS run completed
-  during this EVALUATE (the emitter's prompt starts `EXPERT-ID: gate0-skeptic`; keep that
-  line FIRST, within the prompt's first 2000 chars, when you add your claims), and the
-  recorded verdict may not be weaker than its latest answer's `Verdict: <TOKEN>` (record
-  SUPPORTED only after a skeptic round said SUPPORTED). A spawn that
-  ran but cannot be proven (no audit hook in this session) → record
-  `"gate0_unverified_reason": "<why>"` in the evaluate record. For bugfix/full/goal, after scoring a GO and BEFORE advancing to THINK, spawn ONE
-  fresh-context sub-agent with ZERO of your reasoning. Its job is to REFUTE. Get the prompt
-  from the emitter (it lives in `data/gate-prompts/gate0-skeptic.md`; emit it, do not retype
-  it), run from the repo root:
-  `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate gate0-skeptic`
-  Use the output ONLY on exit 0. Exit 2 means the prompt states no numeric cap and stdout is
-  deliberately EMPTY, so pasting it blindly would spawn with no prompt at all.
+  during this EVALUATE, and the recorded verdict may not be weaker than its latest answer's
+  `Verdict: <TOKEN>` (record SUPPORTED only after a skeptic round said SUPPORTED). For runs
+  created from 2026-10-18T18:00Z the round must also have READ the prompt `gate0-prompt`
+  handed out, and the recorded understanding (`work_type` / `claim` / `evidence` /
+  `evidence_kind`) must still be the one in that prompt: rewrite it after a verdict → run
+  gate0-prompt again and re-spawn. A spawn that ran but cannot be proven (no audit hook in
+  this session) → record `"gate0_unverified_reason": "<why>"` in the evaluate record.
+  For bugfix/full/goal, after scoring a GO and BEFORE advancing to THINK, spawn ONE
+  fresh-context sub-agent with ZERO of your reasoning. Its job is to REFUTE. Never retype the
+  gate (it lives in `data/gate-prompts/gate0-skeptic.md`): write
+  `{"understanding": <your block>, "claims": [<=4 file:line claims to refute>]}` to a file and
+  run `python backend/scripts/artifact_cli.py gate0-prompt --project <P> --run-id <R> --data @<file>`.
+  It loads the gate through spawn_prompt.py (numeric-cap check), fences your text as DATA,
+  writes `evidence/prompts/gate0-skeptic.md` and prints `spawn`, the 2-line prompt to spawn
+  with (`EXPERT-ID: gate0-skeptic` + "read <path> first"). Use it ONLY on exit 0.
   Spawn it with `run_in_background: false`. The Agent tool defaults to background, and a
   background spawn ends this turn's visible stream: the user sees nothing running and no
   status until a notification arrives. Wait for the verdict in the same turn.

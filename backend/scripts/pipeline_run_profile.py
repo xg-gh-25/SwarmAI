@@ -471,6 +471,24 @@ def _prompt_text(rec: dict) -> str:
     return ""
 
 
+_HANDOUT_RE = re.compile(r"/\.artifacts/runs/run_[A-Za-z0-9_-]+/evidence/prompts/[\w.-]+\.md")
+
+
+def _pointer_expert_id(prompt: str) -> "str | None":
+    """A "Read <run>/evidence/prompts/<id>.md and follow it" spawn: the expert named on
+    that file's first line (the marker hook credits such spawns the same way)."""
+    ids = set()
+    for path in _HANDOUT_RE.findall(prompt or ""):
+        try:
+            with open(os.path.expanduser(path), encoding="utf-8", errors="replace") as fh:
+                m = _EXPERT_ID_LINE_RE.match(fh.readline().rstrip("\n"))
+        except OSError:
+            continue
+        if m:
+            ids.add(m.group(1))
+    return ids.pop() if len(ids) == 1 else None
+
+
 def _subagent_row(path: str, lo: float, hi: float) -> dict | None:
     """One spawn: description, expert_id, seconds, tool calls, stated cap. None when
     the spawn did not start inside the run window (another run's sub-agent)."""
@@ -484,6 +502,7 @@ def _subagent_row(path: str, lo: float, hi: float) -> dict | None:
     prompt = next((_prompt_text(r) for r in records if r.get("type") == "user" and _prompt_text(r)), "")
     first_anchor = _EXPERT_ID_PREFIX_RE.search(prompt)
     m = _EXPERT_ID_LINE_RE.match(first_anchor.group(0)) if first_anchor else None
+    expert_id = m.group(1) if m else _pointer_expert_id(prompt)
     cap = _TOOL_CAP_RE.search(prompt)
     calls = sum(1 for r in records for _b in _tool_uses(r))
     description, shape = "", None
@@ -496,7 +515,7 @@ def _subagent_row(path: str, lo: float, hi: float) -> dict | None:
         pass
     tool_cap = int(cap.group(1)) if cap else None
     return {"start": min(stamps), "description": description or os.path.basename(path),
-            "expert_id": m.group(1) if m else None,
+            "expert_id": expert_id,
             "seconds": round(max(stamps) - min(stamps), 1), "tool_calls": calls,
             "tool_cap": tool_cap, "over_cap": bool(tool_cap is not None and calls > tool_cap),
             # a background spawn ends the parent's visible stream — every pipeline spawn
