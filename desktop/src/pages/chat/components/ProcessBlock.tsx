@@ -1,5 +1,5 @@
 /**
- * ProcessBlock — one run of ADJACENT thinking + tool calls (chat display v7.1).
+ * ProcessBlock — one run of ADJACENT tool calls (chat display v7.1).
  *
  * Renders a `process` unit from `deriveTurnView` (pages/chat/turnView.ts). Weight
  * follows the user's current question, not the data volume (design-judgment
@@ -11,10 +11,15 @@
  *   - The LIVE block is the one thing that stands out: a neutral card titled by
  *     what is running now ("正在运行 pytest …") with that step's elapsed — the
  *     screen's only spinner and only timer. Below it, a fixed-height list that
- *     follows the newest step; the current thought streams there.
+ *     follows the newest step. Thoughts are not here: they are narration in the
+ *     stream (ThoughtBlock) and never fold away with the work.
  *   - Colour only for exceptions: failures red, waiting amber; done is neutral.
- *   - A finished block folds 2s after the next item arrives (`useLinger`); a thought
- *     folds 2s after something follows it; a user's open/closed choice wins.
+ *   - A finished block folds 2s after the next item arrives (`useLinger`); a user's
+ *     open/closed choice wins. `flat` (inside a pipeline stage's body) renders the
+ *     steps directly — the stage row is already the fold, so there is no second one.
+ *   - Two levels at most: the folded line (or stage row) → the steps → one step's
+ *     detail (its command, or its sub-agent's steps). A sub-agent's own steps have
+ *     no detail level of their own.
  *   - Adjacent finished reads of one file are one row; an Agent step nests its
  *     sub-agent's steps (`AgentDetail`); streamed text wraps, never one replaced line.
  *
@@ -27,7 +32,7 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
 import { useLinger } from '../../../hooks/useLinger';
-import type { ProcessUnit, StepRowItem, ThinkingStep, ToolStep, StepVerb } from '../turnView';
+import type { ProcessUnit, StepRowItem, ToolStep, StepVerb } from '../turnView';
 import { STEP_VERB_FALLBACK, changedFiles, groupSteps, stepLabel, summarizeProcess } from '../turnView';
 import { tf } from '../tf';
 import { FileChip } from './FileChip';
@@ -82,7 +87,7 @@ function StepObject({ step, wrap }: { step: ToolStep; wrap?: boolean }) {
 const INLINE_OUTCOME_CHARS = 40;
 
 /** One tool call — or, with `merged`, adjacent finished reads of one file. */
-function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) {
+function ToolStepRow({ step, merged, detail = true }: { step: ToolStep; merged?: ToolStep[]; detail?: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const label = stepLabel(step.block);
@@ -96,17 +101,24 @@ function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) 
   return (
     <div data-testid="step-row" data-status={step.status}>
       <div className="flex items-center gap-2 px-2 py-0.5 rounded-md text-[12.5px] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors min-w-0">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          title={tf(t, 'chat.turn.showCommand', 'Show command')}
-          className="flex items-center gap-2 shrink-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-        >
-          <StatusIcon status={step.status} />
-          {/* An unrecognised summary is shown verbatim — no invented verb. */}
-          {verb && <span className={isError ? 'text-red-400' : 'text-[var(--color-text-secondary)]'}>{verb}</span>}
-        </button>
+        {detail ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            title={tf(t, 'chat.turn.showCommand', 'Show command')}
+            className="flex items-center gap-2 shrink-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+          >
+            <StatusIcon status={step.status} />
+            {/* An unrecognised summary is shown verbatim — no invented verb. */}
+            {verb && <span className={isError ? 'text-red-400' : 'text-[var(--color-text-secondary)]'}>{verb}</span>}
+          </button>
+        ) : (
+          <span data-testid="step-head" className="flex items-center gap-2 shrink-0">
+            <StatusIcon status={step.status} />
+            {verb && <span className={isError ? 'text-red-400' : 'text-[var(--color-text-secondary)]'}>{verb}</span>}
+          </span>
+        )}
         <StepObject step={step} />
         {all.length > 1 && (
           <span data-testid="step-repeat" className="shrink-0 text-[12px] text-[var(--color-text-dim)] tabular-nums">
@@ -126,46 +138,10 @@ function ToolStepRow({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) 
         </div>
       )}
       {(step.children?.length || step.progress) && <AgentDetail step={step} />}
-      {open && (
+      {detail && open && (
         <pre className="mx-2 mb-1.5 ml-8 px-3 py-2 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] font-mono text-[11.5px] leading-relaxed text-[var(--color-text-muted)] whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
           {all.map((s) => `${stepLabel(s.block).raw}${s.result?.content ? `\n\n${s.result.content}` : ''}`).join('\n\n')}
         </pre>
-      )}
-    </div>
-  );
-}
-
-/**
- * A thinking passage: streams open while it is the newest item of the live block
- * (text only — the live title already says "Thinking"), folds to one line 2s after
- * anything follows it. A click is the user's choice and wins over both.
- */
-function ThinkingRow({ step, streaming }: { step: ThinkingStep; streaming: boolean }) {
-  const { t } = useTranslation();
-  const auto = useLinger(streaming);
-  const [choice, setChoice] = useState<boolean | undefined>(undefined);
-  const open = choice ?? auto;
-  const preview = step.text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-  return (
-    <div data-testid="thinking-row" data-open={open ? 'true' : 'false'} className="pl-6 pr-2 py-0.5 text-[12px] text-[var(--color-text-muted)]">
-      {!streaming && (
-        <button
-          type="button"
-          onClick={() => setChoice(!open)}
-          aria-expanded={open}
-          className="flex items-center gap-1.5 w-full min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-        >
-          <span className="text-[var(--color-text-dim)] shrink-0">{tf(t, 'chat.turn.thoughtRow', 'Thought')}</span>
-          {!open && preview && <span className="italic text-[var(--color-text-dim)] truncate min-w-0">{preview}</span>}
-        </button>
-      )}
-      {open && (
-        <div
-          data-testid="thinking-text"
-          className={`italic leading-relaxed text-[var(--color-text-dim)] whitespace-pre-wrap ${streaming ? '' : 'mt-0.5 max-h-48 overflow-y-auto'}`}
-        >
-          {step.text}
-        </div>
       )}
     </div>
   );
@@ -224,8 +200,8 @@ function AgentDetail({ step }: { step: ToolStep }) {
             </button>
           )}
           {shown.map((r) => (r.kind === 'reads'
-            ? <ToolStepRow key={`tu-${r.steps[0].block.id}`} step={r.steps[0]} merged={r.steps} />
-            : r.step.kind === 'tool' ? <ToolStepRow key={`tu-${r.step.block.id}`} step={r.step} /> : null
+            ? <ToolStepRow key={`tu-${r.steps[0].block.id}`} step={r.steps[0]} merged={r.steps} detail={false} />
+            : <ToolStepRow key={`tu-${r.step.block.id}`} step={r.step} detail={false} />
           ))}
         </div>
       )}
@@ -238,17 +214,10 @@ function AgentDetail({ step }: { step: ToolStep }) {
   );
 }
 
-/** Tool steps key by tool_use id. Thinking keys by its ordinal among the block's
- *  thoughts: block indices shift when the stream-end reconcile drops live-only
- *  tool_result blocks, and a remount would drop the user's open/closed choice. */
+/** Rows key by tool_use id: stable across the stream-end reconcile, which drops
+ *  live-only tool_result blocks and would shift any block-index key. */
 function rowKeys(rows: StepRowItem[]): string[] {
-  let thought = 0;
-  return rows.map((r) => {
-    const s = r.kind === 'reads' ? r.steps[0] : r.step;
-    if (s.kind === 'tool') return `tu-${s.block.id}`;
-    thought += 1;
-    return `th-${thought}`;
-  });
+  return rows.map((r) => `tu-${(r.kind === 'reads' ? r.steps[0] : r.step).block.id}`);
 }
 
 export interface ProcessBlockProps {
@@ -256,6 +225,8 @@ export interface ProcessBlockProps {
   /** The user's open/closed choice for this block; undefined = automatic. */
   expanded?: boolean;
   onToggle: (open: boolean) => void;
+  /** Inside a pipeline stage's body: the steps directly, no folded line of its own. */
+  flat?: boolean;
 }
 
 /** Expanded lists show this many steps first; the rest are one click away. */
@@ -277,16 +248,7 @@ function FoldedSummary({ unit }: { unit: ProcessUnit }) {
         : tf(t, 'chat.turn.failedRecovered', '{{count}} failed, recovered', { count: summary.errorCount })}
     </span>
   );
-  if (!tools.length) {
-    const first = unit.steps.find((s): s is ThinkingStep => s.kind === 'thinking');
-    const preview = first?.text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-    return (
-      <>
-        <span className="text-[var(--color-text-secondary)] shrink-0">{tf(t, 'chat.turn.thought', 'Thought')}</span>
-        {preview && <span className="italic text-[var(--color-text-dim)] truncate min-w-0">{preview}</span>}
-      </>
-    );
-  }
+  if (!tools.length) return null;
   if (tools.length === 1) {
     const s = tools[0];
     const label = stepLabel(s.block);
@@ -360,7 +322,7 @@ function LiveTitle({ pending }: { pending?: ToolStep }) {
   );
 }
 
-export function ProcessBlock({ unit, expanded, onToggle }: ProcessBlockProps) {
+export function ProcessBlock({ unit, expanded, onToggle, flat }: ProcessBlockProps) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const autoOpen = useLinger(unit.isLive);
@@ -386,9 +348,7 @@ export function ProcessBlock({ unit, expanded, onToggle }: ProcessBlockProps) {
   // Follow the newest step while live, unless the user scrolled up to read.
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
-  const tail = newest?.kind === 'thinking'
-    ? newest.text.length
-    : newest?.kind === 'tool' ? `${newest.status}:${newest.children?.length ?? 0}` : '';
+  const tail = newest ? `${newest.status}:${newest.children?.length ?? 0}` : '';
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && unit.isLive && stickRef.current) el.scrollTop = el.scrollHeight;
@@ -420,9 +380,7 @@ export function ProcessBlock({ unit, expanded, onToggle }: ProcessBlockProps) {
       {unit.isLive && showAllButton}
       {visibleRows.map(({ row, key }) => (row.kind === 'reads'
         ? <ToolStepRow key={key} step={row.steps[0]} merged={row.steps} />
-        : row.step.kind === 'tool'
-          ? <ToolStepRow key={key} step={row.step} />
-          : <ThinkingRow key={key} step={row.step} streaming={unit.isLive && row.step === newest} />
+        : <ToolStepRow key={key} step={row.step} />
       ))}
       {!unit.isLive && showAllButton}
     </div>
@@ -462,6 +420,19 @@ export function ProcessBlock({ unit, expanded, onToggle }: ProcessBlockProps) {
         </Row>
         {pending && (pending.children?.length || pending.progress) ? <AgentDetail step={pending} /> : null}
         {list}
+      </div>
+    );
+  }
+
+  if (flat) {
+    // The stage row above is the fold: its body lists the steps directly (paged).
+    return (
+      <div data-testid="process-block" data-live="false" data-flat="true" className="my-0.5">
+        {visibleRows.map(({ row, key }) => (row.kind === 'reads'
+          ? <ToolStepRow key={key} step={row.steps[0]} merged={row.steps} />
+          : <ToolStepRow key={key} step={row.step} />
+        ))}
+        {showAllButton}
       </div>
     );
   }

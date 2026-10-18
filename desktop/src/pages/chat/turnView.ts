@@ -14,8 +14,12 @@
  * Unit kinds (time order is always preserved):
  * Stream order is never changed. Only ADJACENT blocks of the same kind are
  * grouped (XG 2026-10-17: "遵守 streaming response 的顺序").
- * - `process`   — a run of ADJACENT tool calls / thinking. Rendered as one card:
- *                 folded once finished, open while it is the live (last) unit.
+ * - `process`   — a run of ADJACENT tool calls. Rendered as one card: folded once
+ *                 finished, open while it is the live (last) unit.
+ * - `thought`   — a thinking passage. Narration, like a note: it stays in the
+ *                 stream in its place and never folds away with the tool steps
+ *                 (XG 2026-10-18). The first one before any tool call is the
+ *                 turn's `intent` (how the model read the ask).
  * - `note`      — text the agent wrote BETWEEN tool calls. Rendered in the stream.
  * - `landmark`  — a pipeline landmark / gate verdict line. Stays visible in the
  *                 main stream and splits the process into segments.
@@ -85,13 +89,8 @@ export interface ToolStep {
   progress?: SubAgentProgress;
 }
 
-export interface ThinkingStep {
-  kind: 'thinking';
-  text: string;
-  index: number;
-}
-
-export type Step = ToolStep | ThinkingStep;
+/** A segment step. Thinking is not a step: it is a `thought` unit of its own. */
+export type Step = ToolStep;
 
 export type InterruptBlock = AskUserQuestionContent | CmdPermissionContent | EscalationContent;
 
@@ -102,19 +101,12 @@ export interface ProcessUnit {
    *  reconcile, which drops live-only tool_result blocks and would shift any
    *  block-index key. */
   id: string;
-  /** ADJACENT tool calls / thinking, in stream order. */
+  /** ADJACENT tool calls, in stream order. */
   steps: Step[];
   /** True only for the last unit of a streaming message — the work in progress. */
   isLive: boolean;
-  /** What the live row shows: the pending tool (if any), the newest finished
-   *  step, and — when the newest step is thinking — that thought's newest part
-   *  (`thoughtTail`, multi-line). */
-  live?: {
-    step?: ToolStep; thinking?: string; recent?: ToolStep;
-    /** The pipeline stage now running: the `next` of the latest stage row before
-     *  this segment in the same message (absent outside pipeline turns). */
-    stage?: { stage: string; ordinal: number | null };
-  };
+  /** What the live row shows: the pending tool (if any) and the newest finished step. */
+  live?: { step?: ToolStep; recent?: ToolStep };
   /** The turn's final tool failed and nothing followed it — shown outside the fold. */
   unrecoveredFailure?: ToolStep;
 }
@@ -125,11 +117,30 @@ export type TurnUnit =
   /** Text the model wrote between tool calls — shown in the stream, in order. */
   | { kind: 'note'; text: string; index: number }
   | { kind: 'stage'; block: PipelineStageContent; index: number }
+  /** A thinking passage. `ordinal` = its place among the turn's thoughts (a stable
+   *  key); `live` = it is still streaming; `intent` = the first thought before any
+   *  tool call (the model's reading of the ask). */
+  | ThoughtUnit
   | { kind: 'outcome'; text: string; index: number }
   | { kind: 'interrupt'; block: InterruptBlock; index: number };
 
+export interface ThoughtUnit {
+  kind: 'thought';
+  text: string;
+  index: number;
+  ordinal: number;
+  live: boolean;
+  intent: boolean;
+}
+
+/** The pipeline stage now running. */
+export interface LiveStage { stage: string; ordinal: number | null }
+
 export interface TurnView {
   units: TurnUnit[];
+  /** While streaming a pipeline turn: the stage now running — the `next` of the
+   *  latest stage row, or the plan's first stage before any row has arrived. */
+  liveStage?: LiveStage;
   /** The pipeline run's alignment (the first `pipeline_run` block), if any. */
   run?: PipelineRunContent;
   /** What the run needs the user to look at (the latest `pipeline_attention`). */
@@ -252,9 +263,7 @@ export function deriveTurnView(
   let seg: ProcessUnit | null = null;
   let ordinal = 0;
   // Stream order is never changed: a process segment is a run of ADJACENT
-  // tool calls / thinking; any text, stage row or interrupt closes it.
-  // Non-empty thinking is persisted with the turn, so a thinking-only segment
-  // survives the reload reconcile and ordinals stay stable.
+  // tool calls; any text, thought, stage row or interrupt closes it.
   const openSeg = (): ProcessUnit => {
     if (!seg) {
       seg = { kind: 'process', id: `seg-${ordinal}`, steps: [], isLive: false };
@@ -265,6 +274,7 @@ export function deriveTurnView(
   };
 
   let run: PipelineRunContent | undefined;
+  let thoughts = 0;
   let attention: PipelineAttentionContent | undefined;
   const deliverables: TurnDeliverable[] = [];
   content.forEach((block, index) => {
@@ -305,7 +315,9 @@ export function deriveTurnView(
     if (block.type === 'thinking') {
       const text = block.thinking || '';
       if (!text.trim()) return;
-      openSeg().steps.push({ kind: 'thinking', text, index });
+      seg = null;
+      units.push({ kind: 'thought', text, index, ordinal: thoughts, live: false, intent: false });
+      thoughts += 1;
       return;
     }
     if (block.type === 'tool_use') {
@@ -348,9 +360,19 @@ export function deriveTurnView(
     }
   }
 
+  // The intent: the first thought before any tool call.
+  for (const u of units) {
+    if (u.kind === 'process' && u.steps.length > 0) break;
+    if (u.kind === 'thought') { u.intent = true; break; }
+  }
+
+  let liveStage: LiveStage | undefined;
   if (isStreaming) {
     let last = units[units.length - 1];
-    if (!last) {
+    // A thought still streaming is itself the live item (it carries the spinner).
+    if (last?.kind === 'thought') {
+      last.live = true;
+    } else if (!last) {
       units.push({ kind: 'process', id: 'seg-live', steps: [], isLive: true, live: {} });
     } else if (last.kind === 'stage' || last.kind === 'note') {
       // A stage just finished (or the model just wrote a note) and nothing has
@@ -364,23 +386,24 @@ export function deriveTurnView(
       const pending = [...last.steps].reverse().find(
         (s): s is ToolStep => s.kind === 'tool' && s.status === 'pending',
       );
-      // The latest thought, but only while it is the newest thing in the segment.
-      const newest = last.steps[last.steps.length - 1];
-      const thinking = newest?.kind === 'thinking' ? thoughtTail(newest.text) : undefined;
       // The newest step that already finished, so the row always says what was
       // just done — not only a bare spinner between two tool calls.
       const recent = [...last.steps].reverse().find(
         (s): s is ToolStep => s.kind === 'tool' && s.status !== 'pending',
       );
-      last.live = { step: pending, thinking, recent };
-      const stageAt = units.map((u) => u.kind).lastIndexOf('stage');
-      const prevStage = stageAt >= 0 ? (units[stageAt] as Extract<TurnUnit, { kind: 'stage' }>) : undefined;
-      // A landmark after the latest stage row (e.g. "Gate 1: BLOCK" → back to plan)
-      // means that row's `next` may no longer hold — show no stage rather than a stale one.
-      const landmarkAfter = units.slice(stageAt + 1).some((u) => u.kind === 'landmark');
-      if (prevStage?.block.next && !landmarkAfter) {
-        last.live.stage = { stage: prevStage.block.next, ordinal: prevStage.block.nextOrdinal };
-      }
+      last.live = { step: pending, recent };
+    }
+    const stageAt = units.map((u) => u.kind).lastIndexOf('stage');
+    const prevStage = stageAt >= 0 ? (units[stageAt] as Extract<TurnUnit, { kind: 'stage' }>) : undefined;
+    // A landmark after the latest stage row (e.g. "Gate 1: BLOCK" → back to plan)
+    // means that row's `next` may no longer hold — show no stage rather than a stale one.
+    const landmarkAfter = units.slice(stageAt + 1).some((u) => u.kind === 'landmark');
+    if (prevStage?.block.next && !landmarkAfter) {
+      liveStage = { stage: prevStage.block.next, ordinal: prevStage.block.nextOrdinal };
+    } else if (!prevStage && run?.stages?.length && !landmarkAfter) {
+      // Before the first stage row: the plan's first stage is running, so its work
+      // sits under that stage from the start and folds in place when the row lands.
+      liveStage = { stage: run.stages[0], ordinal: null };
     }
   }
 
@@ -396,7 +419,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, deliverables };
+  return { units, nextSteps, copyText, run, attention, deliverables, liveStage };
 }
 
 /** Characters of a still-streaming thought shown on the folded live row. */
@@ -710,8 +733,6 @@ export interface ProcessSummary {
   errorCount: number;
   /** Verbs by frequency, ties in first-appearance order. */
   counts: Array<{ verb: StepVerb; count: number }>;
-  /** Thinking passages in the segment. */
-  thinkingCount: number;
 }
 
 export function summarizeProcess(unit: ProcessUnit): ProcessSummary {
@@ -719,9 +740,7 @@ export function summarizeProcess(unit: ProcessUnit): ProcessSummary {
   const tally = new Map<StepVerb, number>();
   let errorCount = 0;
   let stepCount = 0;
-  let thinkingCount = 0;
   for (const s of unit.steps) {
-    if (s.kind === 'thinking') thinkingCount += 1;
     if (s.kind !== 'tool') continue;
     stepCount += 1;
     if (s.status === 'error') errorCount += 1;
@@ -733,7 +752,7 @@ export function summarizeProcess(unit: ProcessUnit): ProcessSummary {
     .map((verb, i) => ({ verb, count: tally.get(verb) ?? 0, i }))
     .sort((a, b) => b.count - a.count || a.i - b.i)
     .map(({ verb, count }) => ({ verb, count }));
-  return { stepCount, errorCount, counts, thinkingCount };
+  return { stepCount, errorCount, counts };
 }
 
 // ── Display rows ────────────────────────────────────────────────────────────
@@ -807,14 +826,16 @@ export type TurnSection =
   | { kind: 'stage'; block: PipelineStageContent; children: TurnUnit[]; prevAt?: string }
   | {
       kind: 'liveStage';
-      stage: { stage: string; ordinal: number | null };
+      stage: LiveStage;
       /** Place in the run's plan ("5 of 8"), when the previous rows say it. */
       position?: { n: number; total: number };
       children: TurnUnit[];
     };
 
-export function sectionUnits(units: TurnUnit[], isStreaming: boolean): TurnSection[] {
-  if (!units.some((u) => u.kind === 'stage')) return units.map((unit) => ({ kind: 'unit', unit }));
+export function sectionUnits(units: TurnUnit[], isStreaming: boolean, liveStage?: LiveStage): TurnSection[] {
+  if (!units.some((u) => u.kind === 'stage') && !(isStreaming && liveStage)) {
+    return units.map((unit) => ({ kind: 'unit', unit }));
+  }
   const out: TurnSection[] = [];
   let i = 0;
   // Alignment: whatever the model wrote before it started working.
@@ -837,8 +858,7 @@ export function sectionUnits(units: TurnUnit[], isStreaming: boolean): TurnSecti
     }
   }
   if (!buffer.length) return out;
-  const liveUnit = buffer.find((u): u is ProcessUnit => u.kind === 'process' && u.isLive);
-  const stage = liveUnit?.live?.stage;
+  const stage = liveStage;
   if (isStreaming && stage) {
     const position = stage.stage !== 'gate1' && lastWithPosition && lastWithPosition.position !== null
       ? { n: lastWithPosition.position + 1, total: lastWithPosition.total }

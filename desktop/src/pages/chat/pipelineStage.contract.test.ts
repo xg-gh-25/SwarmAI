@@ -40,7 +40,6 @@ describe('deriveTurnView × real backend pipeline_stage blocks', () => {
     const withNext = blocks.find((b) => b.next);
     expect(withNext).toBeTruthy();
     const view = deriveTurnView([withNext as ContentBlock], true);
-    const live = view.units[view.units.length - 1];
-    expect(live.kind === 'process' && live.live?.stage?.stage).toBe(withNext!.next);
+    expect(view.liveStage?.stage).toBe(withNext!.next);
   });
 });

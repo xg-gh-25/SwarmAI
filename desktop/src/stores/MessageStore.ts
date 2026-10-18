@@ -812,10 +812,15 @@ export class MessageStore {
   }
 
   /** Total renderable text length of a message — basis for "more-complete
-   *  content wins" in the persist-lag guard below. */
+   *  content wins" in the persist-lag guard below. Thinking counts too: a DB row
+   *  that has the answer but not yet the thoughts must not replace a local copy
+   *  that has both (XG 2026-10-18: finished thoughts are never lost). */
   private static _textLen(m: Message): number {
     return Array.isArray(m.content)
-      ? m.content.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0)
+      ? m.content.reduce((n, b) => {
+        if (b.type === 'thinking') return n + ((b as { thinking?: string }).thinking ?? '').length;
+        return n + ('text' in b ? ((b as { text?: string }).text ?? '').length : 0);
+      }, 0)
       : 0;
   }
 

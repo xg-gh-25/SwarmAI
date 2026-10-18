@@ -14,7 +14,8 @@
  * 2. Unconfirmed text/thinking blocks are replaced by authoritative content.
  * 3. Confirmed text/thinking blocks survive across assistant events.
  * 4. Non-matching message IDs are never modified.
- * 5. Output text/thinking blocks from newContent are always marked _confirmed.
+ * 5. Text/thinking blocks from newContent are confirmed; streamed blocks the
+ *    event does not confirm are kept (at most one consumed per incoming block).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -151,27 +152,31 @@ describe('Feature: chat-experience-cleanup, Property 1: updateMessages Structura
     );
   });
 
-  it('text/thinking blocks from newContent are always marked _confirmed', () => {
+  it('text/thinking blocks from newContent are confirmed; other streamed blocks are kept', () => {
+    // XG 2026-10-18: an event confirms at most ONE provisional block per incoming
+    // block — streamed content it does not confirm is never dropped.
     fc.assert(
       fc.property(
         arbMessagesWithTarget,
         fc.array(arbTextContent as fc.Arbitrary<ContentBlock>, { minLength: 1, maxLength: 5 }),
         ({ messages, targetId }, newContent) => {
+          const before = messages.find(m => m.id === targetId)!;
+          const unconfirmedBefore = before.content.filter(b => b.type === 'text' && !(b as Record<string, unknown>)._confirmed).length;
           const result = updateMessages(messages, targetId, newContent);
           const target = result.find(m => m.id === targetId)!;
-          // All text blocks from newContent should be confirmed
-          const textBlocks = target.content.filter(b => b.type === 'text');
-          for (const block of textBlocks) {
-            // Every text block in output should be confirmed (either from
-            // prior turns or freshly confirmed by this assistant event)
-            expect((block as Record<string, unknown>)._confirmed).toBe(true);
+          const texts = target.content.filter(b => b.type === 'text') as Array<Record<string, unknown>>;
+          // every incoming text is present and confirmed
+          for (const nb of newContent) {
+            expect(texts.some(b => b._confirmed === true && b.text === (nb as Record<string, unknown>).text)).toBe(true);
           }
+          // unconfirmed blocks only go down by the blocks this event confirmed
+          const unconfirmedAfter = texts.filter(b => !b._confirmed).length;
+          expect(unconfirmedAfter).toBeGreaterThanOrEqual(Math.max(0, unconfirmedBefore - newContent.length));
         },
       ),
       { numRuns: 100 },
     );
   });
-
   it('confirmed text blocks survive unless replaced by same-turn re-emission', () => {
     fc.assert(
       fc.property(

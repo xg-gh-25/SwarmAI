@@ -40,6 +40,7 @@ import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ProcessBlock } from './ProcessBlock';
+import { ThoughtBlock } from './ThoughtBlock';
 import { PipelineStageRow } from './PipelineStageRow';
 import { FileChip } from './FileChip';
 import { AttentionCard, DeliverablesCard, RunAlignment } from './TurnCards';
@@ -278,12 +279,21 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const attentionCard = view.attention && view.attention.items.length > 0
     ? <AttentionCard block={view.attention} />
     : null;
+  // How the ask was read, said once: a pipeline requirement (RunAlignment), else the
+  // first text written before any work, else the intent thought (the first thought
+  // before any tool call). Only the chosen one carries the "Understanding" label.
+  const beforeWork = firstWork < 0 ? [] : view.units.slice(0, firstWork);
+  const alignText = !view.run && hasWork
+    ? beforeWork.find((u) => u.kind === 'note')
+    : undefined;
+  const labelIntent = !view.run && hasWork && !alignText;
   // Once there is a result, what needs the user leads it (right after the divider);
   // until then it stays where it arrived: with the DELIVER row.
   let attentionPending = !!attentionCard && !showResult;
 
-  const renderUnit = (unit: TurnUnit, prev: TurnUnit | undefined, pos: number) => {
-    const gap = !prev ? '' : (unit.kind === 'note' || unit.kind === 'landmark') && prev.kind === 'process' ? 'mt-1' : 'mt-3';
+  const renderUnit = (unit: TurnUnit, prev: TurnUnit | undefined, inStage = false) => {
+    const narration = unit.kind === 'note' || unit.kind === 'landmark' || unit.kind === 'thought';
+    const gap = !prev ? '' : narration && prev.kind === 'process' ? 'mt-1' : 'mt-3';
     if (unit.kind === 'process') {
       return (
         <div key={`p-${unit.id}`} className={gap}>
@@ -291,6 +301,20 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             unit={unit}
             expanded={processChoice.get(unit.id)}
             onToggle={(open) => chooseProcess(unit.id, open)}
+            flat={inStage}
+          />
+        </div>
+      );
+    }
+    if (unit.kind === 'thought') {
+      const key = `th-${unit.ordinal}`;
+      return (
+        <div key={key} className={gap}>
+          <ThoughtBlock
+            unit={unit}
+            label={unit.intent && labelIntent}
+            expanded={processChoice.get(key)}
+            onToggle={(open) => chooseProcess(key, open)}
           />
         </div>
       );
@@ -300,9 +324,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // A note and an outcome share a key prefix: while streaming, the answer-so-far
     // turns into a note the moment the next tool call arrives — no remount.
     const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
-    // A pipeline run's requirement IS the alignment (RunAlignment); the model's own
-    // opening text is then an ordinary note: the restatement is said once.
-    const isAlignment = !view.run && hasWork && pos === 0 && firstWork > 0 && unit.kind !== 'landmark';
+    const isAlignment = unit === alignText;
     const isResult = showResult && unit === lastUnit;
     const demoted = unit.kind === 'note' && !isAlignment;
     return (
@@ -324,17 +346,15 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     );
   };
 
-  const renderList = (units: TurnUnit[], offset = 0) =>
-    units.map((u, i) => renderUnit(u, units[i - 1], offset + i));
+  const renderList = (units: TurnUnit[], inStage = false) =>
+    units.map((u, i) => renderUnit(u, units[i - 1], inStage));
 
-  const sections = sectionUnits(view.units, !!isStreaming);
+  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage);
   const stageSeen = new Map<string, number>();
-  let unitPos = 0;
   let prevSection: TurnUnit | undefined;
   const contentBlocks = sections.map((sec, k) => {
     if (sec.kind === 'unit') {
-      const el = renderUnit(sec.unit, prevSection, unitPos);
-      unitPos += 1;
+      const el = renderUnit(sec.unit, prevSection);
       prevSection = sec.unit;
       return el;
     }
@@ -348,7 +368,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     const failed = children.some((u) => u.kind === 'process' && !!u.unrecoveredFailure);
     const mustOpen = children.some((u) => u.kind === 'interrupt' && isUnanswered(u.block));
     prevSection = undefined;
-    unitPos += children.length;
     const firstStage = sections.findIndex((s) => s.kind !== 'unit');
     const attentionHere = attentionPending && sec.kind === 'stage' && sec.block.stage === 'deliver';
     if (attentionHere) attentionPending = false;
@@ -366,7 +385,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           choice={processChoice.get(key)}
           onChoose={(open) => chooseProcess(key, open)}
         >
-          {children.length ? renderList(children, 1) : null}
+          {children.length ? renderList(children, true) : null}
         </PipelineStageRow>
         {attentionHere && <div className="mt-2">{attentionCard}</div>}
       </div>
@@ -381,6 +400,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // The model went straight to work without restating the ask: that absence is
   // itself worth knowing — alignment is the cheapest moment to correct course.
   const toolSteps = view.units.reduce((n, u) => n + (u.kind === 'process' ? u.steps.filter((s) => s.kind === 'tool').length : 0), 0);
+  // (A restatement or an intent thought always comes BEFORE the work, so
+  // `firstWork === 0` already means there is neither.)
   if (!view.run && firstWork === 0 && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
     contentBlocks.unshift(
       <div key="no-alignment" data-testid="turn-no-alignment" className="mb-1 text-[11px] tracking-wide text-[var(--color-text-dim)]">

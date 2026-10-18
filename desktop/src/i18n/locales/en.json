@@ -190,7 +190,6 @@
     "taskCreateFailed": "Failed to create task",
     "turn": {
       "thinking": "Thinking",
-      "thought": "Thought",
       "worked": "Worked",
       "readTimes": "{{count}}×",
       "subAgent": "Sub-agent",
@@ -313,7 +312,9 @@
         "copied": "Copied"
       },
       "thoughtRow": "Thought",
-      "backToLatestAction": "{{action}} · back to latest"
+      "backToLatestAction": "{{action}} · back to latest",
+      "thoughtMore": "Show all",
+      "thoughtLess": "Show less"
     },
     "nextSteps": {
       "label": "Next steps",

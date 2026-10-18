@@ -213,13 +213,10 @@ describe('AssistantMessageView — REVIEW round 2', () => {
   it('a segment the user chose to keep open stays open when streaming ends', () => {
     vi.useFakeTimers();
     try {
-      const th = { type: 'thinking', thinking: 'planning' } as ContentBlock;
-      // Chosen while ONLY thinking has arrived — the first tool must not re-key it.
-      const { rerender } = render(viewOf([th], true));
+      const { rerender } = render(viewOf([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd')], true));
       fireEvent.click(screen.getByTestId('process-row')); // fold
       fireEvent.click(screen.getByTestId('process-row')); // open again: a choice
-      rerender(viewOf([th, tu('a', 'Running: ls'), tu('b', 'Running: pwd')], true));
-      rerender(viewOf([th, tu('a', 'Running: ls'), tu('b', 'Running: pwd'), tx('done')], false));
+      rerender(viewOf([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b'), tx('done')], false));
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
       expect(screen.getAllByTestId('step-row')).toHaveLength(2);
     } finally {
@@ -234,10 +231,11 @@ describe('AssistantMessageView — REVIEW round 2', () => {
 });
 
 describe('AssistantMessageView — Gate-2 fixes', () => {
-  it('a finished thinking-only segment has a readable label, not a bare chevron', () => {
+  it('a finished thought stays in the stream as narration, not behind a chevron', () => {
     const th = { type: 'thinking', thinking: 'deliberating' } as ContentBlock;
     renderView([th, tx('the answer')]);
-    expect(screen.getByTestId('process-row').textContent).toMatch(/Thought/);
+    expect(screen.getByTestId('thought-text').textContent).toBe('deliberating');
+    expect(screen.queryByTestId('process-row')).toBeNull();
   });
 
   it('a long LIVE segment keeps the running step visible — as the card title', () => {
@@ -250,18 +248,17 @@ describe('AssistantMessageView — Gate-2 fixes', () => {
 });
 
 describe('AssistantMessageView — live card between steps', () => {
-  it('the newest thought streams OPEN in the live card; folded by hand, it still WRAPS', () => {
+  it('a streaming thought is the live item: Thinking, the one spinner, its text wraps', () => {
     const th = { type: 'thinking', thinking: 'Read the config first.\nThen compare both thresholds.' } as ContentBlock;
-    renderView([tu('a', 'Running: ls'), tr('a'), th], { isStreaming: true });
-    const row = screen.getByTestId('thinking-row');
-    expect(row.dataset.open).toBe('true');
-    const text = screen.getByTestId('thinking-text');
+    const { container } = renderView([tu('a', 'Running: ls'), tr('a'), th], { isStreaming: true });
+    const thought = screen.getByTestId('thought');
+    expect(thought.dataset.live).toBe('true');
+    expect(thought.textContent).toContain('Thinking');
+    const text = screen.getByTestId('thought-text');
     // XG 2026-10-18 "该换行就换行": both lines, wrapped — never one replaced slot.
     expect(text.textContent).toBe('Read the config first.\nThen compare both thresholds.');
     expect(text.className).toMatch(/whitespace-pre-wrap/);
-    // The card title says "Thinking" and holds the one spinner; the row has none.
-    expect(screen.getByTestId('process-row').textContent).toContain('Thinking');
-    expect(row.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelectorAll('.animate-spin')).toHaveLength(1);
   });
 
   it('a long or failed outcome wraps on its own line; a short one stays on the row', () => {
@@ -318,14 +315,11 @@ describe('AssistantMessageView — live card between steps', () => {
     expect(line.textContent).toContain('2 steps');
   });
 
-  it('history: expanding the card shows the thought folded to one line', () => {
+  it('history: a thought is readable without opening anything; the work line says the step', () => {
     const th = { type: 'thinking', thinking: 'first line of the thought\nmore' } as ContentBlock;
     renderView([th, tu('a', 'Running: ls'), tx('the answer')]);
-    fireEvent.click(screen.getByTestId('process-row'));
-    const row = screen.getByTestId('thinking-row');
-    expect(row.dataset.open).toBe('false');
-    expect(row.textContent).toContain('first line of the thought');
-    expect(screen.queryByTestId('thinking-text')).toBeNull();
+    expect(screen.getByTestId('thought-text').textContent).toBe('first line of the thought\nmore');
+    expect(screen.getByTestId('process-row').textContent).not.toContain('first line of the thought');
   });
 
   it('a finished step shows what it returned (outcome), errors in red', () => {
@@ -375,43 +369,41 @@ describe('AssistantMessageView — v6 fold timing (XG 2026-10-17 "延后2秒 再
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
   const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
-  const thoughtOpen = () => screen.getByTestId('thinking-row').dataset.open;
+  const LONG = Array.from({ length: 12 }, (_, i) => `line ${i} of a long thought`).join('\n');
 
-  it('a thought stays open while it streams, and 2s after the next step arrives', () => {
+  it('a finished thought never folds away: still there long after the next step', () => {
     const { rerender } = render(viewOf([th('step one')], true));
-    expect(thoughtOpen()).toBe('true');
-    rerender(viewOf([th('step one, then two')], true));
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
-    expect(thoughtOpen()).toBe('true'); // still the newest item: never folds mid-thought
+    expect(screen.getByTestId('thought').dataset.live).toBe('true');
     rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls')], true));
-    expect(thoughtOpen()).toBe('true');
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS - 100); });
-    expect(thoughtOpen()).toBe('true');
-    act(() => { vi.advanceTimersByTime(200); });
-    expect(thoughtOpen()).toBe('false');
-    // The card itself is still live, so it stays open.
-    expect(screen.getByTestId('process-steps')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
+    rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls'), tr('a'), tx('done')], false));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
+    expect(screen.getByTestId('thought').dataset.live).toBe('false');
+    expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two');
   });
 
-  it('a reply after the thought: the card folds 2s later (not at once)', () => {
-    const { rerender } = render(viewOf([th('plan the answer')], true));
-    rerender(viewOf([th('plan the answer'), tx('Here is the answer')], true));
-    expect(screen.getByTestId('process-steps')).toBeTruthy();
-    expect(thoughtOpen()).toBe('true');
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
-    expect(screen.queryByTestId('process-steps')).toBeNull();
-    expect(screen.getByTestId('process-row').textContent).toMatch(/Thought/);
+  it('a long thought is clamped (3 lines; the intent 6) and opens in place', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), th(LONG), tx('ok')]);
+    const text = screen.getByTestId('thought-text');
+    expect(text.style.webkitLineClamp).toBe('3');
+    fireEvent.click(screen.getByTestId('thought-toggle'));
+    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('');
+    expect(screen.getByTestId('thought-toggle').textContent).toBe('Show less');
   });
 
-  it('a thought the user opened again stays open', () => {
-    const { rerender } = render(viewOf([th('one')], true));
-    rerender(viewOf([th('one'), tu('a', 'Running: ls')], true));
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
-    expect(thoughtOpen()).toBe('false');
-    fireEvent.click(screen.getByTestId('thinking-row').querySelector('button')!);
-    rerender(viewOf([th('one'), tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd')], true));
-    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
-    expect(thoughtOpen()).toBe('true');
+  it('the intent thought gets 6 lines and the Understanding label', () => {
+    renderView([th(LONG), tu('a', 'Running: ls'), tr('a'), tx('ok')]);
+    const t = screen.getByTestId('thought');
+    expect(t.dataset.intent).toBe('true');
+    expect(t.textContent).toContain('Understanding');
+    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('6');
+  });
+
+  it('the user\'s Show all survives the stream ending', () => {
+    const { rerender } = render(viewOf([tu('a', 'Running: ls'), tr('a'), th(LONG), tu('b', 'Running: pwd')], true));
+    fireEvent.click(screen.getByTestId('thought-toggle'));
+    rerender(viewOf([tu('a', 'Running: ls'), tr('a'), th(LONG), tu('b', 'Running: pwd'), tr('b'), tx('done')], false));
+    expect(screen.getByTestId('thought-toggle').getAttribute('aria-expanded')).toBe('true');
   });
 
   it('a card the user folded while live stays folded after it finishes', () => {

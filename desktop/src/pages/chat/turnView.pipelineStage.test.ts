@@ -5,8 +5,8 @@
  * - a `pipeline_stage` content block (written by the backend from run.json,
  *   core/pipeline_stage_events.py) becomes a `stage` unit: never folded, in content
  *   order, splitting the surrounding process into two segments;
- * - while the turn streams, the live process row after a stage row carries the
- *   NEXT stage (`live.stage`), so a long BUILD reads as BUILD;
+ * - while the turn streams, the view carries the stage now running — the NEXT
+ *   stage of the latest row (`liveStage`), so a long BUILD reads as BUILD;
  * - `isLandmarkText` keeps model-written gate verdicts and circled-number progress
  *   lines visible, without catching mid-line mentions or ordinary numbered lists.
  */
@@ -56,14 +56,14 @@ describe('deriveTurnView — pipeline_stage blocks', () => {
     const view = deriveTurnView([tu('a'), stage(), tu('b')], true);
     const last = view.units[view.units.length - 1];
     expect(last.kind).toBe('process');
-    expect(last.kind === 'process' && last.live?.stage).toEqual({ stage: 'review', ordinal: 6 });
+    expect(view.liveStage).toEqual({ stage: 'review', ordinal: 6 });
   });
 
   it('streaming with nothing after the stage row yet: a live row still names it', () => {
     const view = deriveTurnView([tu('a'), stage()], true);
     const last = view.units[view.units.length - 1];
     expect(last.kind === 'process' && last.isLive).toBe(true);
-    expect(last.kind === 'process' && last.live?.stage).toEqual({ stage: 'review', ordinal: 6 });
+    expect(view.liveStage).toEqual({ stage: 'review', ordinal: 6 });
   });
 
   it('the latest stage row wins, and a final stage (no next) gives no live stage', () => {
@@ -72,27 +72,27 @@ describe('deriveTurnView — pipeline_stage blocks', () => {
       stage({ stage: 'plan', ordinal: 3, next: 'build', nextOrdinal: 5 }), tu('b'),
     ], true);
     const l1 = v1.units[v1.units.length - 1];
-    expect(l1.kind === 'process' && l1.live?.stage).toEqual({ stage: 'build', ordinal: 5 });
+    expect(v1.liveStage).toEqual({ stage: 'build', ordinal: 5 });
     const v2 = deriveTurnView([tu('a'), stage({ stage: 'reflect', ordinal: 10, next: null, nextOrdinal: null }), tu('b')], true);
     const l2 = v2.units[v2.units.length - 1];
-    expect(l2.kind === 'process' && l2.live?.stage).toBeUndefined();
+    expect(v2.liveStage).toBeUndefined();
   });
 
   it('a landmark after the stage row (e.g. a Gate BLOCK) drops the stale live stage', () => {
     const view = deriveTurnView([tu('a'), stage(), tu('b'), tx('Gate 1: **BLOCK** — back to plan'), tu('c')], true);
     const last = view.units[view.units.length - 1];
-    expect(last.kind === 'process' && last.live?.stage).toBeUndefined();
+    expect(view.liveStage).toBeUndefined();
   });
 
   it('no stage row → no live stage (ordinary turns are unchanged)', () => {
     const view = deriveTurnView([tu('a'), tu('b')], true);
     const last = view.units[view.units.length - 1];
-    expect(last.kind === 'process' && last.live?.stage).toBeUndefined();
+    expect(view.liveStage).toBeUndefined();
   });
 
   it('a finished turn carries no live stage', () => {
     const view = deriveTurnView([tu('a'), stage(), tu('b')], false);
-    expect(view.units.some((u) => u.kind === 'process' && u.live?.stage)).toBe(false);
+    expect(view.liveStage).toBeUndefined();
   });
 });
 

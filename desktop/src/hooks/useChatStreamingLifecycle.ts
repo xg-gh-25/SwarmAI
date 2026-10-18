@@ -355,21 +355,13 @@ export function blockKey(block: ContentBlock): string {
  * Reconcile authoritative content from an ``assistant`` SSE event into the
  * message's content array.
  *
- * Design principle: **replace, don't dedup.** The assistant event is the SDK's
- * authoritative truth for that turn. Streamed text/thinking blocks are
- * PROVISIONAL (user sees them in real-time for UX), and must be REPLACED by
- * the authoritative content when the assistant event arrives.
- *
- * Strategy:
- * 1. KEEP all existing blocks that are "confirmed" from prior turns
- *    (tool_use, tool_result, and text/thinking blocks that were already
- *    reconciled by a previous assistant event — marked with `_confirmed`).
- * 2. REMOVE unconfirmed text/thinking blocks (these are streaming provisional).
- * 3. APPEND all blocks from the assistant event, marking text/thinking as
- *    `_confirmed`. Tool_use/tool_result are deduped by ID (they may already
- *    exist from tool_result events that arrived during execution).
- *
- * This makes duplication impossible by construction — no string matching needed.
+ * Streamed text/thinking blocks are PROVISIONAL; the assistant event's blocks are
+ * the SDK's authoritative version. Each authoritative text/thinking block replaces
+ * exactly one block IN PLACE — a re-emitted confirmed block, or its own
+ * provisional block — or is appended when new. Nothing else is removed, so a
+ * finished response or thought can never disappear or move (XG 2026-10-18).
+ * Tool_use / tool_result are deduped by id. Returns the same message reference
+ * when nothing changed (referential stability for React memoization).
  */
 export function updateMessages(
   currentMessages: Message[],
@@ -380,163 +372,120 @@ export function updateMessages(
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
 
-    // Partition existing content into confirmed (prior turns) and unconfirmed (streaming).
-    //
-    // BUG FIX (2026-06-07): In agentic loops with many tools, the SDK emits
-    // multiple AssistantMessage events per API roundtrip. Each event for the SAME
-    // turn re-sends the same (or growing) text. The old code kept ALL _confirmed
-    // text blocks → duplicates accumulated (4x, 8x...) → content array exploded
-    // → React render hang → spinner stuck forever.
-    //
-    // Fix: When the new assistant event has text/thinking, REPLACE the LAST
-    // confirmed text/thinking block (same-turn update). Earlier confirmed
-    // text/thinking blocks (from genuinely different prior turns) are preserved.
-    //
-    // BUG FIX (2026-06-18): In agentic multi-turn flows, the SDK emits
-    // intermediate AssistantMessage events that contain only thinking + tool_use
-    // (no text block). The old code unconditionally dropped unconfirmed text
-    // blocks — wiping streamed text the user was already seeing. Fix: only drop
-    // unconfirmed text/thinking when the authoritative payload actually provides
-    // a replacement of that type. Otherwise preserve the streaming provisional.
-    const newHasText = newContent.some((b) => b.type === 'text');
-    const newHasThinking = newContent.some((b) => b.type === 'thinking');
+    // Reconcile the event's text / thinking blocks IN PLACE (XG 2026-10-18: a
+    // finished response or thought is never lost, and never moves). For each
+    // incoming text/thinking block, in order:
+    //   a. it confirms ITS provisional (streamed) block — the unconfirmed block of
+    //      that type whose text it starts with — replaced where it is;
+    //   b. else a re-emission of the LAST confirmed block of its type (the SDK
+    //      re-sends a turn's text, possibly grown — BUG FIX 2026-06-07; thinking is
+    //      only ever re-sent whole, so exact match) replaces that block where it is;
+    //   c. else it confirms the last unconfirmed block of that type (the confirmed
+    //      text may differ from what streamed, e.g. a cleaned leak);
+    //   d. else it is new and goes at the end.
+    // Matching its own provisional FIRST is what tells a later turn that happens to
+    // repeat a text apart from a re-emission: the later turn streamed it again.
+    // Exactly ONE provisional block is consumed per incoming block. Every other
+    // provisional block stays (BUG FIX 2026-06-18: an event that carries no
+    // text/thinking never wipes streamed content; 2026-10-18: one that does no
+    // longer drops OTHER provisional thoughts — an earlier thought whose own
+    // confirmation was lost stays visible). Tool_use / tool_result are deduped by id.
+    const MIN_DEDUP_LENGTH = 20;
+    const content = [...msg.content];
+    const consumed = new Set<number>();
+    const dropped = new Set<number>();
+    const appended: ContentBlock[] = [];
+    let changed = false;
 
-    const confirmed: ContentBlock[] = [];
-    const hadUnconfirmed = { text: false, thinking: false };
+    const body = (b: ContentBlock): string =>
+      b.type === 'text' ? ((b as TextContent).text ?? '') : ((b as ThinkingContent).thinking ?? '');
 
-    for (const block of msg.content) {
-      if (block.type === 'text' || block.type === 'thinking') {
-        if ((block as TextContent | ThinkingContent)._confirmed) {
-          confirmed.push(block);
-        } else {
-          // Only drop unconfirmed blocks when the authoritative payload
-          // provides a replacement. Otherwise preserve streaming provisional
-          // content so it remains visible to the user.
-          const shouldDrop =
-            (block.type === 'text' && newHasText) ||
-            (block.type === 'thinking' && newHasThinking);
-          if (shouldDrop) {
-            hadUnconfirmed[block.type] = true;
-            // Drop — will be replaced by authoritative content
-          } else {
-            // Preserve — no replacement provided in this event
-            confirmed.push(block);
-          }
-        }
-      } else {
-        // tool_use, tool_result, ask_user_question — always keep
-        confirmed.push(block);
-      }
-    }
-
-    // Build the authoritative content from the assistant event.
-    // Dedup tool_use by id, tool_result by toolUseId — separately.
     const existingToolUseIds = new Set(
-      confirmed
-        .filter((b): b is ToolUseContent => b.type === 'tool_use')
-        .map((b) => b.id)
+      content.filter((b): b is ToolUseContent => b.type === 'tool_use').map((b) => b.id),
     );
     const existingToolResultIds = new Set(
-      confirmed
-        .filter((b): b is ToolResultContent => b.type === 'tool_result')
-        .map((b) => b.toolUseId)
+      content.filter((b): b is ToolResultContent => b.type === 'tool_result').map((b) => b.toolUseId),
     );
 
-    const authoritativeBlocks: ContentBlock[] = [];
     for (const block of newContent) {
       if (block.type === 'tool_use') {
-        if (!existingToolUseIds.has(block.id)) {
-          authoritativeBlocks.push(block);
-        }
-      } else if (block.type === 'tool_result') {
-        if (!existingToolResultIds.has(block.toolUseId)) {
-          authoritativeBlocks.push(block);
-        }
-      } else if (block.type === 'text' || block.type === 'thinking') {
-        // Mark as confirmed — next assistant event won't remove these
-        authoritativeBlocks.push({ ...block, _confirmed: true });
-      } else {
-        authoritativeBlocks.push(block);
+        if (!existingToolUseIds.has(block.id)) { appended.push(block); existingToolUseIds.add(block.id); }
+        continue;
       }
-    }
+      if (block.type === 'tool_result') {
+        if (!existingToolResultIds.has(block.toolUseId)) { appended.push(block); existingToolResultIds.add(block.toolUseId); }
+        continue;
+      }
+      if (block.type !== 'text' && block.type !== 'thinking') {
+        appended.push(block);
+        continue;
+      }
+      const type = block.type;
+      const incoming = body(block);
+      const confirmedBlock = { ...block, _confirmed: true } as ContentBlock;
 
-    // ── Same-turn text dedup (BUG FIX 2026-06-07) ──────────────────────
-    // In agentic loops, the SDK re-emits the same text in multiple
-    // AssistantMessage events within one turn (e.g., text + tool_use,
-    // then same text + tool_use + tool_result + more tools). Without dedup,
-    // each re-emission adds another confirmed text block → content explodes
-    // → React render hang → spinner stuck forever.
-    //
-    // Strategy: If the new assistant event has a text block whose content
-    // MATCHES (equals or extends) the LAST confirmed text block, replace it.
-    // If the text is genuinely DIFFERENT (new turn), keep both.
-    //
-    // Guards against false positives:
-    // - Minimum 20 chars: short strings have high collision probability
-    // - Empty string skip: "".startsWith("") is always true
-    // - Only checks the LAST confirmed text block (most recent turn)
-    const MIN_DEDUP_LENGTH = 20;
-    const newTextBlocks = authoritativeBlocks.filter((b) => b.type === 'text');
-    const newThinkingBlocks = authoritativeBlocks.filter((b) => b.type === 'thinking');
+      // a. Its own provisional block: the streamed text this block confirms.
+      let provisional = -1;
+      let fallback = -1;
+      for (let i = content.length - 1; i >= 0; i -= 1) {
+        const b = content[i];
+        if (b.type !== type || (b as TextContent | ThinkingContent)._confirmed || consumed.has(i)) continue;
+        if (fallback < 0) fallback = i;
+        if (incoming.startsWith(body(b))) { provisional = i; break; }
+      }
+      let lastConfirmed = -1;
+      for (let i = content.length - 1; i >= 0; i -= 1) {
+        const b = content[i];
+        if (b.type === type && (b as TextContent | ThinkingContent)._confirmed && !consumed.has(i)) { lastConfirmed = i; break; }
+      }
+      if (provisional >= 0) {
+        if (lastConfirmed >= 0 && incoming && body(content[lastConfirmed]) === incoming) {
+          // The same text again within one message is a re-emission (P0: no content
+          // explosion): one block stays, the duplicate streamed copy goes — the
+          // two are identical, so nothing is lost.
+          dropped.add(provisional);
+          consumed.add(lastConfirmed);
+        } else {
+          content[provisional] = confirmedBlock;
+        }
+        consumed.add(provisional);
+        changed = true;
+        continue;
+      }
 
-    // Same-turn dedup: if new text equals or extends the last confirmed text,
-    // replace it. This handles SDK re-emission where the same turn emits
-    // multiple assistant events with growing text content.
-    //
-    // NOTE: Do NOT add a "hasToolAfter" guard here. In the P0 bug scenario,
-    // tools ARE between text blocks (text → tool_use → tool_result → text re-emission).
-    // The hasToolAfter check was attempted in commit 410200eb and BREAKS the fix.
-    // Cross-turn safety is handled by the `startsWith` check: genuinely different
-    // turns have different text, so startsWith returns false → no dedup.
-    if (newTextBlocks.length > 0) {
-      const newText = (newTextBlocks[0] as TextContent).text ?? '';
-      if (newText) {  // Skip empty string (guard against "".startsWith("") === true)
-        for (let i = confirmed.length - 1; i >= 0; i--) {
-          if (confirmed[i].type === 'text' && (confirmed[i] as TextContent)._confirmed) {
-            const existingText = (confirmed[i] as TextContent).text ?? '';
-            if (!existingText) break;  // Empty confirmed text — don't dedup
-            // Short text: exact match only (prevents false positive on common words)
-            // Long text: exact match OR startsWith (handles SDK text growth within turn)
-            const isMatch = existingText.length >= MIN_DEDUP_LENGTH
-              ? (newText === existingText || newText.startsWith(existingText))
-              : (newText === existingText);
-            if (isMatch) {
-              confirmed.splice(i, 1);
-            }
-            break;
-          }
+      // b. A re-emission of the last confirmed block of this type.
+      if (lastConfirmed >= 0 && incoming) {
+        const existing = body(content[lastConfirmed]);
+        const isMatch = !!existing && (type === 'thinking'
+          ? incoming === existing
+          : existing.length >= MIN_DEDUP_LENGTH
+            ? incoming === existing || incoming.startsWith(existing)
+            : incoming === existing);
+        if (isMatch) {
+          content[lastConfirmed] = confirmedBlock;
+          consumed.add(lastConfirmed);
+          changed = true;
+          continue;
         }
       }
-    }
 
-    if (newThinkingBlocks.length > 0) {
-      const newThinking = (newThinkingBlocks[0] as ThinkingContent).thinking ?? '';
-      if (newThinking) {
-        for (let i = confirmed.length - 1; i >= 0; i--) {
-          if (confirmed[i].type === 'thinking' && (confirmed[i] as ThinkingContent)._confirmed) {
-            const existingThinking = (confirmed[i] as ThinkingContent).thinking ?? '';
-            if (!existingThinking) break;
-            const isMatch = existingThinking.length >= MIN_DEDUP_LENGTH
-              ? (newThinking === existingThinking || newThinking.startsWith(existingThinking))
-              : (newThinking === existingThinking);
-            if (isMatch) {
-              confirmed.splice(i, 1);
-            }
-            break;
-          }
-        }
+      // c. Its provisional block when the confirmed text differs from what streamed
+      //    (e.g. a cleaned leak): the last unconfirmed block of that type.
+      if (fallback >= 0) {
+        content[fallback] = confirmedBlock;
+        consumed.add(fallback);
+        changed = true;
+        continue;
       }
+
+      // d. New.
+      appended.push(confirmedBlock);
     }
 
-    // If nothing changed (no unconfirmed blocks existed AND no new blocks to add),
-    // return same reference for React memoization.
-    if (!hadUnconfirmed.text && !hadUnconfirmed.thinking && authoritativeBlocks.length === 0) {
-      return msg;
-    }
-
+    if (!changed && appended.length === 0) return msg;
     return {
       ...msg,
-      content: [...confirmed, ...authoritativeBlocks],
+      content: [...content.filter((_, i) => !dropped.has(i)), ...appended],
       ...(model ? { model } : {}),
       ...(msg.isError ? { isError: false } : {}),
     };
@@ -555,12 +504,13 @@ export function appendTextDelta(
   currentMessages: Message[],
   assistantMessageId: string,
   text: string,
+  fresh = false,
 ): Message[] {
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
     const content = [...msg.content];
     const lastBlock = content[content.length - 1];
-    if (lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
+    if (!fresh && lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
       // Append to existing UNCONFIRMED text block (new reference).
       // Never append to a confirmed block — that belongs to a prior turn.
       content[content.length - 1] = {
@@ -586,12 +536,13 @@ export function appendThinkingDelta(
   currentMessages: Message[],
   assistantMessageId: string,
   thinking: string,
+  fresh = false,
 ): Message[] {
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
     const content = [...msg.content];
     const lastBlock = content[content.length - 1];
-    if (lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
+    if (!fresh && lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
       // Append to existing UNCONFIRMED thinking block (new reference).
       // Never append to a confirmed block — that belongs to a prior turn.
       content[content.length - 1] = {
@@ -615,10 +566,10 @@ export function appendThinkingDelta(
  * Append text token to a message's last unconfirmed text block.
  * If no unconfirmed text block exists, creates a new one.
  */
-export function applyTextDelta(msg: Message, text: string): Message {
+export function applyTextDelta(msg: Message, text: string, fresh = false): Message {
   const content = [...msg.content];
   const lastBlock = content[content.length - 1];
-  if (lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
+  if (!fresh && lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
     content[content.length - 1] = {
       ...lastBlock,
       text: (lastBlock.text ?? '') + text,
@@ -633,10 +584,10 @@ export function applyTextDelta(msg: Message, text: string): Message {
  * Append thinking token to a message's last unconfirmed thinking block.
  * If no unconfirmed thinking block exists, creates a new one.
  */
-export function applyThinkingDelta(msg: Message, thinking: string): Message {
+export function applyThinkingDelta(msg: Message, thinking: string, fresh = false): Message {
   const content = [...msg.content];
   const lastBlock = content[content.length - 1];
-  if (lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
+  if (!fresh && lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
     content[content.length - 1] = {
       ...lastBlock,
       thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
@@ -2419,6 +2370,11 @@ export function useChatStreamingLifecycle(
       // generation (e.g. old response arriving after user sent a new message)
       // must be discarded to prevent cross-turn bleed.
       const capturedStreamGen = streamGenRef.current;
+      // A `thinking_start` / `text_start` opens a NEW block: its first delta must not
+      // be appended to the previous provisional block of that type (two thoughts in
+      // a row would merge, and the first one's confirmation would then replace both).
+      let freshThinking = false;
+      let freshText = false;
 
       // OT01 (run_f9adee1e): stamp the tab's LIVE stream generation EAGERLY here,
       // at handler creation (send time, in every send path — the stream handler
@@ -2948,20 +2904,22 @@ export function useChatStreamingLifecycle(
           // Reset stall threshold to text-mode (60s) — thinking phase is over.
           pendingToolUseRef.current = false;
 
+          const textFresh = freshText;
+          freshText = false;
           // Write to store — subscription handles React sync + tabState cache
           const textStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (textStore) {
             textStore.updateLast(
-              (msg) => applyTextDelta(msg, event.text!),
+              (msg) => applyTextDelta(msg, event.text!, textFresh),
               (msg) => msg.id === assistantMessageId,
             );
           } else {
             // Fallback for initial tab before store exists (capturedTabId===null)
             if (tabState) {
-              tabState.messages = appendTextDelta(tabState.messages, assistantMessageId, event.text);
+              tabState.messages = appendTextDelta(tabState.messages, assistantMessageId, event.text, textFresh);
             }
             if (isActiveTab) {
-              setMessages((prev) => appendTextDelta(prev, assistantMessageId, event.text!));
+              setMessages((prev) => appendTextDelta(prev, assistantMessageId, event.text!, textFresh));
             }
           }
         } else if (event.type === 'thinking_delta' && event.thinking) {
@@ -2971,18 +2929,20 @@ export function useChatStreamingLifecycle(
             updateTabStatus(capturedTabId, 'streaming');
           }
 
+          const thinkFresh = freshThinking;
+          freshThinking = false;
           const thinkStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (thinkStore) {
             thinkStore.updateLast(
-              (msg) => applyThinkingDelta(msg, event.thinking!),
+              (msg) => applyThinkingDelta(msg, event.thinking!, thinkFresh),
               (msg) => msg.id === assistantMessageId,
             );
           } else {
             if (tabState) {
-              tabState.messages = appendThinkingDelta(tabState.messages, assistantMessageId, event.thinking);
+              tabState.messages = appendThinkingDelta(tabState.messages, assistantMessageId, event.thinking, thinkFresh);
             }
             if (isActiveTab) {
-              setMessages((prev) => appendThinkingDelta(prev, assistantMessageId, event.thinking!));
+              setMessages((prev) => appendThinkingDelta(prev, assistantMessageId, event.thinking!, thinkFresh));
             }
           }
         } else if (event.type === 'tool_result' && event.content) {
@@ -3016,7 +2976,10 @@ export function useChatStreamingLifecycle(
               (msg) => msg.id === assistantMessageId,
             );
           }
+        } else if (event.type === 'text_start') {
+          freshText = true;
         } else if (event.type === 'thinking_start') {
+          freshThinking = true;
           // Thinking block started — update tab status to streaming.
           // The actual content arrives via thinking_delta events.
           if (capturedTabId && tabState && tabState.status !== 'streaming') {

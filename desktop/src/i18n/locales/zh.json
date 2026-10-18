@@ -190,7 +190,6 @@
     "taskCreateFailed": "创建任务失败",
     "turn": {
       "thinking": "思考中",
-      "thought": "思考了",
       "worked": "做了",
       "readTimes": "{{count}} 次",
       "subAgent": "子代理",
@@ -313,7 +312,9 @@
         "copied": "已复制"
       },
       "thoughtRow": "思考",
-      "backToLatestAction": "{{action}} · 回到最新"
+      "backToLatestAction": "{{action}} · 回到最新",
+      "thoughtMore": "展开全部",
+      "thoughtLess": "收起"
     },
     "nextSteps": {
       "label": "下一步",
