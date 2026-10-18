@@ -4,7 +4,7 @@ date: 2026-10-17
 created: 2026-10-17
 updated: 2026-10-17
 project: SwarmAI
-status: DRAFT — 从 pipeline-speed-systematic-fix.md 拆出，待与 XG 单独讨论，未排期
+status: SUPERSEDED (2026-10-18) — XG 选定方案二，完整设计见 pipeline-run-worktree.md
 related: docs/design/pipeline-speed-systematic-fix.md
 author: Kiro
 ---
