@@ -20,10 +20,19 @@ NEVER raise (a startup warmup failure must be non-fatal — mirrors _prewarm_bot
 import sys
 from unittest.mock import patch
 
-import main
+import pytest
 
 
-def test_prewarm_recall_body_warms_only_the_two_cold_legs():
+@pytest.fixture
+def main():
+    # Lazy import (fixture named `main` so the test bodies read unchanged): a
+    # collection-time `import main` attaches main's file log handler to the LIVE
+    # ~/.swarm-ai before conftest's per-test SWARM_DATA_DIR sandbox exists.
+    import main as _main
+    return _main
+
+
+def test_prewarm_recall_body_warms_only_the_two_cold_legs(main):
     """The warmup calls recall_all with domains == (session, library) — the two
     legs with a measured cold-start penalty. It must NOT warm ddd (a per-project,
     ~800ms CPU-BM25 leg that isn't even on the recall_leg path and has no active
@@ -39,7 +48,7 @@ def test_prewarm_recall_body_warms_only_the_two_cold_legs():
         assert kwargs.get("allow_embed") is False
 
 
-def test_prewarm_recall_body_swallows_exceptions():
+def test_prewarm_recall_body_swallows_exceptions(main):
     """A startup warmup failure MUST be non-fatal — it can never propagate and
     abort lifespan startup (mirrors _prewarm_boto3's try/except non-critical)."""
     with patch("core.recall_multi.recall_all", side_effect=RuntimeError("boom")):

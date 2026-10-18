@@ -1,11 +1,13 @@
 """Tests for Hive cloud instance management API."""
 import pytest
 from httpx import AsyncClient, ASGITransport
-from main import app
 
 
 @pytest.fixture
 async def client():
+    # Lazy import: a collection-time `import main` attaches main's file log
+    # handler to the LIVE ~/.swarm-ai before conftest's per-test sandbox exists.
+    from main import app
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

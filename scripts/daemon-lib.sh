@@ -130,19 +130,46 @@ _deploy_daemon_binary() {
     # $DAEMON_DIR/resources and $DAEMON_DIR/.version — NOT a nested 'resources'
     # dir that legitimately ships inside the bundle (e.g. _internal/limits/resources).
     # Explicit failure checks throughout: callers may run us with errexit
-    # suspended (prod.sh `if ! cmd_build`), where a failed rsync would otherwise
-    # be ignored and the daemon restarted onto a half-synced bundle.
+    # suspended (prod.sh `if ! cmd_build`), where a failed step would otherwise
+    # be ignored and the daemon restarted anyway.
+    #
+    # STAGE, THEN SWAP — never sync into the live dir in place: a sync that
+    # fails halfway (disk full, I/O error) would leave the running daemon — and
+    # its next KeepAlive respawn — on a mix of old and new bundle files.
+    #   1. $stage = hard-link clone of the live dir (cheap; keeps resources/ and
+    #      .version). rsync replaces changed files via temp+rename, so writing
+    #      into the clone never touches a live inode.
+    #   2. the exact deploy sync below, into $stage.
+    #   3. two renames: live → .prev, stage → live. .prev is kept as a rollback
+    #      copy (and so a process whose cwd/open files are in it keeps working)
+    #      and removed at the start of the next deploy.
+    [ -n "${DAEMON_DIR:-}" ] || { _err "DAEMON_DIR is not set"; return 1; }
+    local _stage="${DAEMON_DIR}.next" _prev="${DAEMON_DIR}.prev"
+    rm -rf "$_stage" "$_prev"
+    if [ -d "$DAEMON_DIR" ]; then
+        rsync -a --link-dest="$DAEMON_DIR/" "$DAEMON_DIR/" "$_stage/" || {
+            rm -rf "$_stage"; _err "Staging a copy of $DAEMON_DIR failed — live daemon untouched"; return 1
+        }
+    else
+        mkdir -p "$_stage" || { _err "Creating $_stage failed"; return 1; }
+    fi
     local _rsync_rc=0
     rsync -a --delete --exclude='/resources' --exclude='/.version' \
-        "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/" || _rsync_rc=$?
+        "$BACKEND_BUNDLE_DIR/" "$_stage/" || _rsync_rc=$?
     if [ "$_rsync_rc" -ne 0 ]; then
-        # rsync writes in place: $DAEMON_DIR may now mix old and new files.
-        # Not restarting keeps the running process on what it already loaded;
-        # a respawn would load the mixed bundle, so redeploy before any restart.
-        _err "rsync of the backend bundle into $DAEMON_DIR FAILED (rc=$_rsync_rc) — daemon NOT restarted, but its bundle may be inconsistent: fix the cause and redeploy before restarting"
+        rm -rf "$_stage"
+        _err "rsync of the backend bundle FAILED (rc=$_rsync_rc) — staged copy discarded, live daemon bundle untouched"
         return 1
     fi
-    chmod +x "$DAEMON_BINARY" || { _err "chmod +x $DAEMON_BINARY failed"; return 1; }
+    chmod +x "$_stage/python-backend" || { rm -rf "$_stage"; _err "chmod +x on the staged binary failed"; return 1; }
+    if [ -d "$DAEMON_DIR" ]; then
+        mv "$DAEMON_DIR" "$_prev" || { rm -rf "$_stage"; _err "Swapping out $DAEMON_DIR failed — live daemon untouched"; return 1; }
+    fi
+    if ! mv "$_stage" "$DAEMON_DIR"; then
+        [ -d "$_prev" ] && mv "$_prev" "$DAEMON_DIR"
+        _err "Swapping in the staged bundle failed — previous bundle restored"
+        return 1
+    fi
     _ok "Daemon bundle deployed: $(du -sh "$DAEMON_DIR" | cut -f1)"
 
     # Write version file — format: "{semver} {git_hash} {timestamp}"

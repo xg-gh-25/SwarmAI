@@ -95,6 +95,82 @@ class TestInstallerOnedir:
                 mod.install()
         assert "launchctl" not in calls
 
+    def test_newest_source_wins(self, tmp_path):
+        import os
+        from channels import install_backend_daemon as mod
+
+        old = _bundle(tmp_path / "a", "old")
+        new = _bundle(tmp_path / "b", "new")
+        os.utime(old / "python-backend", (1_700_000_000, 1_700_000_000))
+        daemon = tmp_path / "daemon"
+        assert mod._deploy_daemon_binary(sources=[old, new], daemon_dir=daemon) is True
+        assert "new" in (daemon / "python-backend").read_text()
+
+    def test_failed_bundle_sync_leaves_live_dir_untouched(self, tmp_path):
+        import pytest
+        from unittest.mock import MagicMock, patch
+        from channels import install_backend_daemon as mod
+
+        src = _bundle(tmp_path, "v2")
+        daemon = tmp_path / "daemon"
+        (daemon / "_internal").mkdir(parents=True)
+        (daemon / "python-backend").write_text("LIVE")
+        import os
+        os.utime(daemon / "python-backend", (1_700_000_000, 1_700_000_000))  # older build
+        real_run = subprocess.run
+
+        def run(cmd, **kw):
+            if cmd[0] == "rsync" and "--delete" in cmd:
+                r = MagicMock(); r.returncode = 12; r.stderr = "disk full"
+                return r
+            return real_run(cmd, **kw)
+
+        with patch("subprocess.run", side_effect=run):
+            with pytest.raises(mod.DaemonDeployError):
+                mod._deploy_daemon_binary(sources=[src], daemon_dir=daemon)
+        assert (daemon / "python-backend").read_text() == "LIVE"
+        assert not (tmp_path / "daemon.next").exists()
+
+    def test_symlinked_prev_leftover_is_cleared(self, tmp_path):
+        """rmtree(ignore_errors) silently keeps a symlink → the live→prev rename
+        would fail; the leftover must be unlinked (the target left alone)."""
+        from channels import install_backend_daemon as mod
+
+        src = _bundle(tmp_path, "v2")
+        daemon = tmp_path / "daemon"
+        (daemon / "_internal").mkdir(parents=True)
+        (daemon / "python-backend").write_text("LIVE")
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        (target / "keep.txt").write_text("x")
+        (tmp_path / "daemon.prev").symlink_to(target)
+
+        mod._sync_bundle_staged(src, daemon)
+        assert "v2" in (daemon / "python-backend").read_text()
+        assert (tmp_path / "daemon.prev" / "python-backend").read_text() == "LIVE"
+        assert (target / "keep.txt").exists()
+
+    def test_failed_move_aside_raises_deploy_error_and_keeps_live(self, tmp_path, monkeypatch):
+        import pytest
+        from channels import install_backend_daemon as mod
+
+        src = _bundle(tmp_path, "v2")
+        daemon = tmp_path / "daemon"
+        (daemon / "_internal").mkdir(parents=True)
+        (daemon / "python-backend").write_text("LIVE")
+        real_rename = Path.rename
+
+        def rename(self, dst):
+            if Path(dst).name == "daemon.prev":
+                raise OSError("EBUSY")
+            return real_rename(self, dst)
+
+        monkeypatch.setattr(Path, "rename", rename)
+        with pytest.raises(mod.DaemonDeployError, match="moving the live bundle aside"):
+            mod._sync_bundle_staged(src, daemon)
+        assert (daemon / "python-backend").read_text() == "LIVE"
+        assert not (tmp_path / "daemon.next").exists()
+
     def test_no_source_returns_false(self, tmp_path):
         from channels import install_backend_daemon as mod
         assert mod._deploy_daemon_binary(sources=[tmp_path / "missing"],
@@ -118,9 +194,43 @@ class TestShellDeployFailures:
         bundle.mkdir(parents=True)
         (bundle / "python-backend").write_text("x")
         # `if !` suspends errexit exactly like prod.sh's `if ! cmd_build`
-        r = _bash('rsync() { return 23; }\n'
+        live = tmp_path / ".swarm-ai" / "daemon"
+        (live / "_internal").mkdir(parents=True)
+        (live / "python-backend").write_text("OLD")
+        (live / "_internal" / "lib.so").write_text("OLD")
+        # fail only the bundle sync (the one with --delete), after staging worked
+        r = _bash('rsync() { case " $* " in *" --delete "*) return 23;; esac; command rsync "$@"; }\n'
                   'if ! _deploy_daemon_binary; then echo "DEPLOY_FAILED"; fi', tmp_path)
         assert "DEPLOY_FAILED" in r.stdout and "rsync of the backend bundle" in r.stdout
+        # staged, never in place: the live bundle is exactly as it was
+        assert (live / "python-backend").read_text() == "OLD"
+        assert (live / "_internal" / "lib.so").read_text() == "OLD"
+        assert not (tmp_path / ".swarm-ai" / "daemon.next").exists()
+
+    def test_successful_deploy_swaps_and_keeps_daemon_state(self, tmp_path):
+        bundle = tmp_path / "desktop" / "src-tauri" / "binaries" / "python-backend-aarch64-apple-darwin"
+        (bundle / "_internal").mkdir(parents=True)
+        (bundle / "python-backend").write_text("NEW")
+        (bundle / "_internal" / "lib.so").write_text("NEW")
+        live = tmp_path / ".swarm-ai" / "daemon"
+        (live / "_internal").mkdir(parents=True)
+        (live / "resources").mkdir()
+        (live / "python-backend").write_text("OLD")
+        (live / "_internal" / "stale.so").write_text("x")
+        (live / "resources" / "default-agent.json").write_text("{}")
+        import os
+        for f in (live / "python-backend",):  # an older deployed build (rsync quick-check)
+            os.utime(f, (1_700_000_000, 1_700_000_000))
+        r = _bash('_deploy_daemon_binary && echo DEPLOY_OK', tmp_path)
+        assert "DEPLOY_OK" in r.stdout, r.stdout + r.stderr
+        assert (live / "python-backend").read_text() == "NEW"
+        assert (live / "_internal" / "lib.so").read_text() == "NEW"
+        assert not (live / "_internal" / "stale.so").exists()
+        assert (live / "resources" / "default-agent.json").exists()
+        assert (live / ".version").exists()
+        prev = tmp_path / ".swarm-ai" / "daemon.prev"
+        assert (prev / "python-backend").read_text() == "OLD"  # rollback copy
+        assert not (tmp_path / ".swarm-ai" / "daemon.next").exists()
 
     def test_invalid_rendered_plist_never_replaces_the_live_one(self, tmp_path):
         bundle = tmp_path / "desktop" / "src-tauri" / "binaries" / "python-backend-aarch64-apple-darwin"
@@ -135,6 +245,11 @@ class TestShellDeployFailures:
         r = _bash('if ! _deploy_daemon_binary; then echo "DEPLOY_FAILED"; fi', tmp_path)
         assert "DEPLOY_FAILED" in r.stdout and "invalid" in r.stdout
         assert live.read_text() == "LIVE"
+
+    def test_release_injects_backend_with_delete_and_checks(self):
+        src = (REPO / "prod.sh").read_text()
+        line = next(l for l in src.splitlines() if '"$backend_src/" "$backend_dst/"' in l)
+        assert "--delete" in line and "|| {" in line
 
     def test_prod_and_dev_stop_on_sync_and_deploy_failure(self):
         for script in ("prod.sh", "dev.sh"):

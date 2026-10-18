@@ -30,7 +30,6 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app
 from core.session_unit import SessionUnit
 
 
@@ -39,6 +38,11 @@ CAP = SessionUnit.MAX_CONCURRENT_STREAMS
 
 @pytest.fixture
 def client():
+    # Import main INSIDE the fixture, not at module level: a collection-time
+    # import runs main's module-level logging setup before conftest's per-test
+    # SWARM_DATA_DIR sandbox exists, attaching a file handler to the LIVE
+    # ~/.swarm-ai/logs/backend-daemon.log.
+    from main import app
     return TestClient(app)
 
 

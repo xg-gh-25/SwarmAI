@@ -302,8 +302,13 @@ cmd_release() {
     if [ -d "$app_bundle" ] && [ -d "$backend_src" ]; then
         _log "Injecting backend bundle into .app..."
         mkdir -p "$backend_dst"
-        rsync -a "$backend_src/" "$backend_dst/"
-        chmod +x "$backend_dst/python-backend"
+        # --delete: the .app's copy must equal the verified bundle. Without it,
+        # _internal files dropped from the build survive in the shipped .app and
+        # are then deployed to users' daemons by the Rust auto-install/upgrade.
+        rsync -a --delete "$backend_src/" "$backend_dst/" || {
+            _err "Injecting the backend bundle into the .app FAILED — aborting release"; return 1; }
+        chmod +x "$backend_dst/python-backend" || {
+            _err "chmod on the injected backend failed — aborting release"; return 1; }
         _ok "Backend bundle injected ($(du -sh "$backend_dst" | cut -f1))"
     else
         _warn "Skipping .app backend injection (app_bundle or backend_src missing)"

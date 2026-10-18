@@ -214,6 +214,15 @@ uv sync --extra dev
 
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
+# Isolated: `import main` runs main's module-level logging setup, and with no
+# SWARMAI_MODE it resolves to daemon mode and attaches a second rotating file
+# handler to the LIVE ~/.swarm-ai/logs/backend-daemon.log (an orphan
+# "Log file: …" line on every build). Point it at a throwaway data dir.
+IMPORT_PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/swarmai-import-probe.XXXXXX")"
+# A failing import exits the script (errexit) before the rm below — extend the
+# EXIT trap so the probe dir never leaks.
+trap 'rm -rf "$BUILD_DIR" "${IMPORT_PROBE_DIR:-}"' EXIT
+SWARMAI_MODE=subprocess SWARM_DATA_DIR="$IMPORT_PROBE_DIR" \
 DATABASE_TYPE=sqlite python -c "
 import sys
 sys.path.insert(0, '.')
@@ -226,6 +235,7 @@ import database
 import middleware
 print('All local modules verified!')
 "
+rm -rf "$IMPORT_PROBE_DIR"
 
 # Create PyInstaller spec file for better control
 cat > backend.spec << EOF
