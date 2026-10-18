@@ -27,10 +27,10 @@
  *
  * @exports useCanvasHost
  */
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
-import { useReferencedFiles, countOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
+import { useReferencedFiles, countOutputs, countStoredOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
 import type { GitStatus } from '../types';
 import type { CanvasSnapshot } from '../utils/uiContext';
 
@@ -148,9 +148,18 @@ export interface CanvasHostApi {
    *  the resident rail exists to flip. useCallback-stable (memo'd panel prop). */
   reveal: () => void;
   /** Live, synchronous snapshot of Canvas state for the send-time SENSE read
-   *  (beats the async canvas-state emit race). Null when nothing to report. */
+   *  (beats the async canvas-state emit race). STABLE identity: a copy captured
+   *  by a memoized send callback still reads the current state. Always the
+   *  ACTIVE tab; the send path uses getCanvasSnapshotFor. */
   getCanvasSnapshot: () => CanvasSnapshot | null;
+  /** The same snapshot for an explicit tab (the tab a message is sent for): that
+   *  tab's slice + its stored rail count, active or not. null / '' (unless there
+   *  is no active tab either) / a tab with nothing to report → null — never a
+   *  fall back to the active tab. Stable identity. */
+  getCanvasSnapshotFor: (tabId: string | null) => CanvasSnapshot | null;
 }
+
+const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
 
 export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvasHostArgs): CanvasHostApi {
   // Per-tab state map — the source of truth. A plain ref Map (like
@@ -175,7 +184,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const { files: referencedFiles } = useReferencedFiles(activeTabId ?? undefined);
   const outputCount = countOutputs(referencedFiles);
 
-  const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
 
   // Restore the active tab's slice whenever the active tab changes.
   useEffect(() => {
@@ -251,35 +259,63 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   }, [isOpen, outputCount, slice.lastSeenOutputCount, patch]);
 
   // ── Synchronous, send-time proprioception read (race fix, run_e45a04d3) ──────
-  // The agent's SENSE snapshot reads canvas.open at chat-SEND time. The async
-  // swarm:canvas-state emit (effect below) could lag a fast send, leaving the
-  // snapshot stale (the observed race). getCanvasSnapshot() reads the LIVE
-  // source instead — mapRef (the synchronous source of truth, written in patch()
-  // BEFORE React commits) for open/pinned/muted, plus the resident `outputCount`
-  // (from useReferencedFiles, run_9e42c066) — so a send after swarm:open-canvas
-  // reports the true state. Mirrors the CanvasSnapshot shape exactly
-  // (uiContext.ts); collapsed stays false (the dock that could set it true is gone).
-  // Returns null when there is nothing reportable (parity with the effect's null).
-  const getCanvasSnapshot = useCallback((): CanvasSnapshot | null => {
-    const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
+  // The agent's SENSE snapshot reads Canvas state at chat-SEND time. The async
+  // swarm:canvas-state emit (effect below) could lag a fast send, so the send
+  // path reads this function instead: mapRef (the synchronous source of truth,
+  // written in patch() BEFORE React commits) for open/pinned/muted, plus the
+  // output count. Mirrors the CanvasSnapshot shape exactly (uiContext.ts);
+  // collapsed stays false (the dock that could set it true is gone).
+  //
+  // STABLE IDENTITY. ChatPage's send callbacks are memoized and do not list this
+  // function in their deps, so they call whatever copy they captured. A copy that
+  // closed over activeTabId/outputCount reported ANOTHER tab's Canvas (a tab whose
+  // rail held 23 rows was reported as "2 outputs"). So this function has no
+  // changing deps: it reads the active tab id from liveRef, synced after every
+  // commit (layout effect: before any post-commit send or passive effect), the
+  // slice from mapRef and the count from the tab's stored rail.
+  //
+  // getCanvasSnapshotFor(tabId) snapshots THAT tab: its slice in mapRef and its
+  // stored rail count (sessionStorage is written in the same update that changes the
+  // rail, and is the source of truth for a tab with no live hook instance). null / '' return
+  // null — never a silent fall back to the active tab (a queued message drained for
+  // a background tab must not carry the foreground tab's Canvas). Returns null when
+  // there is nothing reportable.
+  const liveRef = useRef({ activeTabId, outputCount });
+  useLayoutEffect(() => {
+    liveRef.current = { activeTabId, outputCount };
+  });
+  const getCanvasSnapshotFor = useCallback((tabId: string | null): CanvasSnapshot | null => {
+    const live = liveRef.current;
+    const forActive = tabId === (live.activeTabId ?? null); // no tab: undefined ≡ null
+    if (!forActive && !tabId) return null;
+    const cur = mapRef.current.get(keyFor(tabId)) ?? EMPTY;
+    // Count from the tab's stored rail whenever there is a tab id — the active tab
+    // included. useReferencedFiles writes storage in the same update that changes
+    // its rows, so storage is never behind the rendered count, and right after a
+    // tab switch (before the hook reloads the new tab's rows in a passive effect)
+    // the rendered count still belongs to the PREVIOUS tab while storage does not.
+    // Only "no tab" has no storage key and uses the live count.
+    const count = tabId ? countStoredOutputs(tabId) : live.outputCount;
     const openNow = !!(cur.file || cur.manuallyOpen);
     // Report a snapshot when the panel is open OR there are pending outputs while
     // CLOSED (run_9e42c066 meta-review): the ChatHeader pill shows the user "N
     // outputs" on a closed Canvas, so the agent must be able to SENSE the same —
     // prompt_builder already renders "Canvas: closed, N outputs listed" from
-    // output_count alone. Returning null here (the old open-only contract) hid the
-    // pending outputs from the agent's SENSE payload even as the pill advertised
-    // them. Only truly-empty-and-closed reports null.
-    if (!openNow && outputCount === 0) return null;
+    // output_count alone. Only truly-empty-and-closed reports null.
+    if (!openNow && count === 0) return null;
     return {
       open: openNow,
-      // outputCount comes from the resident store (SSOT), NOT a per-slice mirror.
-      outputCount,
+      // the count comes from the rail store (SSOT), NOT a per-slice mirror.
+      outputCount: count,
       pinned: cur.pinned,
       muted: cur.muted,
       collapsed: false,
     };
-  }, [activeTabId, outputCount]);
+  }, []);
+  const getCanvasSnapshot = useCallback(
+    () => getCanvasSnapshotFor(liveRef.current.activeTabId ?? null),
+    [getCanvasSnapshotFor],
+  );
 
   // ── swarm:open-canvas (window) — manual open on the ORIGIN tab ──────────────
   // Two origin cases, mirroring handleOpenFile (run_48a29fc2):
@@ -451,5 +487,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     close,
     reveal,
     getCanvasSnapshot,
+    getCanvasSnapshotFor,
   };
 }

@@ -169,6 +169,23 @@ function loadFromStorage(tabId: string): Map<string, ReferencedFile> {
   return new Map();
 }
 
+/** Group a tab's rows the way the rail renders them: by operation, newest first. */
+export function groupReferencedFiles(files: Map<string, ReferencedFile>): GroupedReferencedFiles {
+  const g: GroupedReferencedFiles = { written: [] };
+  for (const file of files.values()) {
+    g[file.operation].push(file);
+  }
+  g.written.sort((a, b) => b.firstSeen - a.firstSeen);
+  return g;
+}
+
+/** Output count of ANY tab, read from its stored rail (sessionStorage is the
+ *  source of truth for a tab with no live hook instance — see the background
+ *  branch of the file-changed handler). Same grouping + predicate as the pill. */
+export function countStoredOutputs(tabId: string): number {
+  return countOutputs(groupReferencedFiles(loadFromStorage(tabId)));
+}
+
 function saveToStorage(tabId: string, files: Map<string, ReferencedFile>): void {
   try {
     const arr = Array.from(files.values());
@@ -376,18 +393,10 @@ export function useReferencedFiles(tabId: string | undefined) {
   // Group files by operation (memoized to avoid unnecessary re-renders).
   // Only 'written' is ever emitted (see FileOperation), so the group is a single
   // key — kept as a Record so CanvasOutputRail's `grouped.written` stays stable.
-  const { grouped, totalCount } = useMemo(() => {
-    const g: Record<FileOperation, ReferencedFile[]> = { written: [] };
-
-    for (const file of files.values()) {
-      g[file.operation].push(file);
-    }
-
-    // Newest first.
-    g.written.sort((a, b) => b.firstSeen - a.firstSeen);
-
-    return { grouped: g, totalCount: files.size };
-  }, [files]);
+  const { grouped, totalCount } = useMemo(
+    () => ({ grouped: groupReferencedFiles(files), totalCount: files.size }),
+    [files],
+  );
 
   const clear = useCallback(() => {
     if (tabId) {

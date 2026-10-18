@@ -491,15 +491,22 @@ export default function ChatPage() {
   useEffect(() => {
     mergeUiState({ activeOverlay });
   }, [activeOverlay, mergeUiState]);
-  // (d) SEND-TIME canvas refresh (race fix, run_e45a04d3). The swarm:canvas-state
-  //     subscription (b) is async — it can lag a fast send, leaving canvas stale
-  //     in the snapshot. Call this SYNCHRONOUSLY right before each send to read
-  //     the LIVE canvas state (getCanvasSnapshot reads the ref source of truth),
-  //     so ACT → SENSE closes deterministically instead of racing. Subscription
-  //     (b) stays as the passive keep-fresh path (zero-regression).
-  const refreshCanvasForSend = useCallback(() => {
-    mergeUiState({ canvas: canvas.getCanvasSnapshot() });
-  }, [canvas, mergeUiState]);
+  // (d) SEND-TIME context (race fix, run_e45a04d3). The swarm:canvas-state
+  //     subscription (b) is async — it can lag a fast send — so every send builds
+  //     its editorContext HERE, reading the Canvas of the tab being sent for
+  //     SYNCHRONOUSLY at send time; subscription (b) stays as the passive
+  //     keep-fresh path. getCanvasSnapshotFor has a STABLE identity and reads live
+  //     state, so a send callback holding an old copy of this function still
+  //     snapshots the right tab (a stale copy once reported another tab's Canvas).
+  //     The tab id is REQUIRED so a send site cannot silently snapshot the active
+  //     tab. The result is a local copy: a send never writes the shared
+  //     uiStateRef, so a background tab's Canvas cannot leak into it. Known limit:
+  //     the other fields (open file, active overlay) are global UI state and
+  //     describe the foreground view even for a drained background-tab message.
+  const getCanvasSnapshotFor = canvas.getCanvasSnapshotFor;
+  const editorContextFor = useCallback((tabId: string | null): UiContextSnapshot => (
+    { ...(uiStateRef.current ?? {}), canvas: getCanvasSnapshotFor(tabId) }
+  ), [getCanvasSnapshotFor]);
 
   // P2: attached terminal output — set once when the user clicks "Attach to
   // chat" on a terminal, consumed on the NEXT send, then cleared (one-shot, so
@@ -2446,7 +2453,7 @@ export default function ChatPage() {
       ? tabMapRef.current.get(currentActiveTabId)?.sessionId
       : undefined;
 
-    refreshCanvasForSend(); // sync-read live Canvas state before send (race fix)
+    const editorContext = editorContextFor(currentActiveTabId); // sync-read live Canvas state (race fix)
     const abort = chatService.streamChat(
       {
         agentId: selectedAgentId,
@@ -2454,7 +2461,7 @@ export default function ChatPage() {
         sessionId: resolvedSessionId,
         enableSkills,
         enableMCP,
-        ...(uiStateRef.current && { editorContext: uiStateRef.current }),
+        editorContext,
         ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         clientId,  // Correlation ID for optimistic message dedup
       },
@@ -2485,7 +2492,7 @@ export default function ChatPage() {
         // and without clientId that row is keyless, so a later reconcile-tail cut
         // landing on it duplicates the bubble (run_7263ff67, the 5th entrance).
         clientId,
-        ...(uiStateRef.current && { editorContext: uiStateRef.current }),
+        editorContext,
         ...(terminalContextRef.current ? { terminalContext: terminalContextRef.current } : {}),
       };
       const capturedTabIdForRetry = currentActiveTabId;
@@ -2520,7 +2527,7 @@ export default function ChatPage() {
         _pendingResendAttempts: 0,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t, editorContextFor]);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2652,7 +2659,8 @@ export default function ChatPage() {
       // session, Principle 4). No per-tab session yet → undefined (fresh session).
       const resolvedSessionId = tabState.sessionId;
 
-      refreshCanvasForSend(); // sync-read live Canvas state before send (race fix)
+      // The drained tab may be a background tab: snapshot ITS Canvas (see (d)).
+      const editorContext = editorContextFor(tabId);
       const abort = chatService.streamChat(
         {
           agentId: selectedAgentId!,
@@ -2661,7 +2669,7 @@ export default function ChatPage() {
           enableSkills,
           enableMCP,
           clientId,
-          ...(uiStateRef.current && { editorContext: uiStateRef.current }),
+          editorContext,
           ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         },
         createStreamHandler(assistantMessageId, tabId),
@@ -2696,7 +2704,7 @@ export default function ChatPage() {
       cleanupStreamingState();
       console.error('[queue-drain] failed, queue restored:', e);
     }
-  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, resetUserScroll, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef]);
+  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, resetUserScroll, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
 
   // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
   // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
