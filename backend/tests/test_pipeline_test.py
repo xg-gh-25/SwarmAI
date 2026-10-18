@@ -127,7 +127,10 @@ def _assert_c2(ev: dict, mode: str) -> None:
         assert k in ev, k
     assert set(ev["counts"]) == {"passed", "failed", "errors", "timeouts", "skipped"}
     for r in ev["results"]:
-        assert set(r) == {"nodeid", "outcome", "file"}
+        if r["outcome"] == "passed":  # compact: nodeid + outcome (+ duration, + file if differs)
+            assert {"nodeid", "outcome"} <= set(r) <= {"nodeid", "outcome", "duration", "file"}
+        else:
+            assert set(r) == {"nodeid", "outcome", "file"}
         assert r["outcome"] in ("passed", "failed", "error", "timeout", "skipped")
     for f in ev["failures"]:
         assert f["classification"] in ("regression", "pre-existing", "new", "flaky", "unknown")
@@ -320,7 +323,7 @@ from pathlib import Path
 
 args = sys.argv[1:]
 if args[0] == "vitest":
-    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile="))
+    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile"))
     files = [a for a in args[2:] if not a.startswith("--")]
     flag = Path.cwd() / "src" / "flag.txt"
     broken = flag.is_file() and flag.read_text().strip() == "fail"
@@ -377,8 +380,9 @@ def test_regression_ac_frontend_refs(rig, capsys, monkeypatch, tmp_path):
     assert "desktop/src/pages/A.test.tsx" in ev["selected_files"]
     assert "desktop/src/B.fails.test.ts" in ev["selected_files"]
     # desktop refs never become pytest targets
-    assert not any(r["file"].startswith("desktop/") and not r["nodeid"].startswith("desktop/")
-                   for r in ev["results"])
+    # (a compact pass omits ``file`` when it is the nodeid's own path)
+    assert not any(r.get("file", r["nodeid"].split("::")[0]).startswith("desktop/")
+                   and not r["nodeid"].startswith("desktop/") for r in ev["results"])
     warns = " ".join(out["warnings"])
     assert "ambiguous (2 files): C.test.ts" in warns
     assert "file-level (no ::name)" in warns
@@ -590,7 +594,7 @@ from pathlib import Path
 
 args = sys.argv[1:]
 if args[0] == "vitest":
-    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile="))
+    out = next(a.split("=", 1)[1] for a in args if a.startswith("--outputFile"))
     files = [a for a in args[2:] if not a.startswith("--")]
     Path(out).write_text(json.dumps({"testResults": [
         {"name": str(Path.cwd() / f), "assertionResults": [

@@ -38,16 +38,44 @@ content of every changed file. A result with a timeout, an ``unknown``
 classification or a runner error is never cached.
 
 Classification (B2, see ``classify_failures``): a failing test's whole FILE is re-run
-in its original order (catches order-dependence inside the file). The HEAD baseline
-only records tests that reached a call report; a not-run test is ``unknown`` at HEAD
-(never cached, never pre-existing). flaky = file re-run passes AND it passed at HEAD;
-still failing → pre-existing (failed at HEAD) / regression (passed at HEAD); anything
-else is ``unknown`` (exit 1). Limit: order-dependence across files packed into the
-same shard is not reproduced by the file re-run.
+in its original order (catches order-dependence inside the file). When that passes,
+its shard PREFIX (every shard arg before it, plus its own, original order) is re-run
+too, catching state leaked by another file of the same shard: a reproduced failure is
+``order_dependent`` (evidence also names a bisected ``culprit`` file when time allows)
+and is a regression / pre-existing by the same prefix at HEAD, never flaky. The HEAD
+baseline only records tests that reached a call report; a not-run test is ``unknown``
+at HEAD (never cached, never pre-existing). flaky = file AND prefix re-runs pass AND
+it passed at HEAD; still failing → pre-existing (failed at HEAD) / regression (passed
+at HEAD); anything else (incl. no time left for a re-run) is ``unknown`` (exit 1).
 
 Evidence (C2) adds ``head_sha``, ``tree_digest`` ({path: sha256} of every changed
 input and selected test file, from the current tree also on a cache hit) and
-``runner_errors``; failure entries add ``outcome`` and ``deadline``.
+``runner_errors``; failure entries add ``outcome`` and ``deadline``. Size bounds: a
+passed ``results[]`` entry is nodeid + outcome (+ duration); nodeids over NODEID_CAP
+chars are capped with a sha tag (``nodeid_truncated``). Retention: after each write,
+``tests/`` keeps every ``latest-<mode>.json`` plus the newest EVIDENCE_KEEP timestamped
+reports and log dirs per mode (``_prune_evidence``). Nodeids named by an explicit
+ac_coverage / exit_criteria nodeid ref are never capped when capping would break the match.
+
+Run index (``tests/run_index.json``): retention prunes the timestamped files, so COUNT
+test runs from this file instead. A JSON list, append-only, never pruned, rewritten
+atomically (tmp + replace) under ``tests/.run_index.lock``; one object per evidence write:
+- ``kind``: ``"run"`` (a test-mode invocation, incl. a cache hit) or ``"overlay"`` (a
+  recheck laid over verify / regression evidence: a rewrite, NOT another run)
+- ``mode``: the evidence mode written (for an overlay: the base mode)
+- ``finished_at``: the evidence's ``finished_at`` (ISO-8601 UTC, 1 s resolution)
+- ``ts``: epoch seconds (float) at write time — compare to a stage-start epoch
+- ``evidence``: the timestamped file name written (may since have been pruned)
+- ``cached``: bool, a result-cache hit
+- ``auto_recheck_of``: the mode whose identical re-run became this recheck, else null
+- ``rechecked_from``: the base evidence ``finished_at`` a recheck / overlay built on, else null
+An automatic recheck writes two entries: ``kind=run, mode=recheck, auto_recheck_of=M``
+and ``kind=overlay, mode=M``.
+
+Order-dependent rechecks: an ``order_dependent`` failure records its shard ``prefix``
+(ordered args incl. ``--deselect=`` tokens, ≤ PREFIX_KEEP_ARGS). recheck re-runs it as
+ONE ordered job (prefix, else ``[culprit, own]``) and lists it in ``od_in_context``; the
+overlay never replaces an order_dependent failure with a pass that was not run in context.
 
 Environment overrides (used by tests): SWARM_TEST_REPO_ROOT, SWARM_TEST_PYTHON,
 SWARM_TEST_CACHE_DIR, SWARM_TEST_NPX, SWARM_WORKSPACE.
@@ -1133,8 +1161,33 @@ def _pytest_job(ctx, name: str, args: list[str], backend: Path, isolated: bool) 
     # shard (all pulled to the AC lead, or a keep chunk whose ids left the file).
     deselected = {a.split("=", 1)[1].split("::")[0] for a in args
                   if a.startswith(("--deselect=", "--keep="))}
+    # ``shard_args`` = the full ordered args incl. ``--deselect=`` tokens: results are
+    # tagged with it so a prefix re-run deselects what the original shard deselected.
     return _Job(name, argv, backend, env, ctx.workdir, "pytest",
-                args=targets_only, junit=junit, events=events, deselected=deselected)
+                args=targets_only, shard_args=list(args), junit=junit, events=events,
+                deselected=deselected)
+
+
+def _drop_stale_pyc(repo: Path, changed: list[str]) -> int:
+    """Delete main-tree ``__pycache__`` entries of changed .py files that may be stale.
+
+    CPython validates a .pyc by the source's whole-second mtime + size, so a same-size
+    edit within the second of an earlier compile is served the OLD bytecode (a false
+    green). A .pyc written no later than that second may predate the edit: drop it."""
+    n = 0
+    for f in changed:
+        src = _contained(repo, f) if f.endswith(".py") else None
+        try:
+            if src is None or not src.is_file():
+                continue
+            sec = int(src.stat().st_mtime)
+            for pyc in (src.parent / "__pycache__").glob(f"{src.stem}.*.pyc"):
+                if int(pyc.stat().st_mtime) <= sec:
+                    pyc.unlink(missing_ok=True)
+                    n += 1
+        except OSError:
+            continue
+    return n
 
 
 def _pytest_jobs(ctx, targets: dict, tag: str, root: Path | None = None,
@@ -1217,6 +1270,13 @@ def run_pytest_targets(ctx, targets: dict, deadline_at: float, tag: str,
 
 
 # ── result parsing ──────────────────────────────────────────────────────────
+def _rfile(r: dict) -> str:
+    """A result's file. Compact evidence entries (passes, see ``_evidence_result``) omit
+    ``file`` when it is the nodeid's own path, so every reader falls back to that."""
+    f = r.get("file")
+    return f if isinstance(f, str) and f else str(r.get("nodeid") or "").split("::")[0]
+
+
 def _res(nodeid: str, outcome: str, summary=None, file: str | None = None, **extra) -> dict:
     r = {"nodeid": nodeid, "outcome": outcome, "file": file or nodeid.split("::")[0],
          "summary": list(summary or [])}
@@ -1264,7 +1324,11 @@ def _outcome(reps: list[dict]) -> tuple[str | None, list[str]]:
 
 def _parse_job(job: _Job) -> list[dict]:
     if job.kind == "pytest":
-        return _parse_pytest(job)
+        out = _parse_pytest(job)
+        shard = job.meta.get("shard_args") or job.meta["args"]
+        for r in out:  # the shard's ordered args: classify_failures re-runs its prefix
+            r.setdefault("shard", shard)
+        return out
     if job.kind == "smoke":
         return _parse_smoke(job)
     return _parse_frontend(job)
@@ -1325,7 +1389,7 @@ def _target_hit(arg_nid: str, results: list[dict]) -> bool:
     """Did any result come back for this shard argument (file or nodeid)?"""
     f = arg_nid.split("::")[0]
     if "::" not in arg_nid:
-        return any(r["file"] == f for r in results)
+        return any(_rfile(r) == f for r in results)
     return any(r["nodeid"] == f or _matches_any(r["nodeid"], [arg_nid]) for r in results)
 
 
@@ -1474,29 +1538,31 @@ def _frontend_jobs(ctx, desktop_files: list[str], with_tsc: bool) -> list[_Job]:
     env = dict(os.environ)
     rel = [f[len("desktop/"):] for f in desktop_files]
     out = ctx.workdir / "vitest.json"
+    # The default reporter streams one status line per finished file to stdout, so a
+    # run killed at the deadline still says which files passed and which never ended.
     jobs = [_Job("vitest", [*_npx(), "vitest", "related", *rel, "--run", "--reporter=json",
-                            f"--outputFile={out}"], desktop, env, ctx.workdir, "vitest", json=out)]
+                            "--reporter=default", f"--outputFile.json={out}"],
+                 desktop, env, ctx.workdir, "vitest", json=out, files=desktop_files)]
     if with_tsc:
-        jobs.append(_Job("tsc", [*_npx(), "tsc", "--noEmit", "-p", "."], desktop, env,
-                         ctx.workdir, "tsc"))
+        jobs.append(_Job("tsc", [*_npx(), "tsc", "--noEmit", "--pretty", "false", "-p", "."],
+                         desktop, env, ctx.workdir, "tsc"))
     return jobs
 
 
 def _parse_frontend(job: _Job) -> list[dict]:
+    if job.kind == "vitest" and job.started and job.killed:
+        return _vitest_partial(job)
     if not job.started or job.killed:
         return [_res(f"desktop::{job.kind}", "timeout", ["global deadline reached"]
-                     + (_stack(job) if job.started else []), file="desktop", layer=job.kind,
-                     deadline=True)]
+                     + (_fe_lines(_stack(job)) if job.started else []), file="desktop",
+                     layer=job.kind, deadline=True)]
     if job.kind == "tsc":
-        errs = [ln for ln in _lines(job.text()) if "error TS" in ln]
-        if job.rc == 0:
-            return [_res("desktop::tsc", "passed", file="desktop", layer="tsc")]
-        return [_res("desktop::tsc", "failed", (errs or _lines(job.text()))[:SUMMARY_LINES],
-                     file="desktop", layer="tsc")]
+        return _tsc_results(job)
     data = _read_json(job.meta["json"])
     if not isinstance(data, dict):
         return [_res("desktop::vitest", "error", [f"vitest produced no JSON (rc={job.rc})"]
-                     + _lines(job.text())[-SUMMARY_LINES:], file="desktop", layer="vitest")]
+                     + _fe_lines(_lines(job.text()))[-SUMMARY_LINES:], file="desktop",
+                     layer="vitest")]
     out = []
     desktop = str(Path(job.cwd).resolve())
     for tr in data.get("testResults") or []:
@@ -1506,13 +1572,87 @@ def _parse_frontend(job: _Job) -> list[dict]:
         for a in tr.get("assertionResults") or []:
             st = a.get("status")
             oc = "passed" if st == "passed" else "failed" if st == "failed" else "skipped"
-            msg = _lines("\n".join(a.get("failureMessages") or []))[:SUMMARY_LINES]
+            msg = _fe_lines(_lines("\n".join(a.get("failureMessages") or [])))[:SUMMARY_LINES]
+            dur = a.get("duration")
             out.append(_res(f"{f}::{a.get('fullName') or a.get('title')}", oc, msg, file=f,
-                            layer="vitest"))
+                            layer="vitest", **({"duration": round(dur / 1000, 3)}
+                                               if isinstance(dur, (int, float)) else {})))
         if not tr.get("assertionResults") and tr.get("status") == "failed":
             out.append(_res(f, "error", _lines(str(tr.get("message") or ""))[:SUMMARY_LINES],
                             file=f, layer="vitest"))
+    return out + _vitest_gaps(job, out)
+
+
+_FE_NOISE = re.compile(r"Browserslist|update-browserslist-db|browserslist/update-db|/node_modules/")
+_VITEST_FILE_LINE = re.compile(r"^\s*([✓❯×])\s+(\S+?\.(?:test|spec)\.[cm]?[jt]sx?)\s+\(")
+_TSC_LINE = re.compile(r"^(?P<f>[^\s(:][^(:]*?)(?:\((?P<l>\d+),(?P<c>\d+)\):|:(?P<l2>\d+):(?P<c2>\d+)"
+                       r"\s+-)\s*(?P<msg>error TS.*)$")  # --pretty false | pretty format
+
+
+def _fe_lines(lines: list[str]) -> list[str]:
+    """Drop toolchain noise (browserslist nags, node_modules stack frames)."""
+    kept = [ln for ln in lines if not _FE_NOISE.search(ln)]
+    return kept or lines
+
+
+def _requested_tests(job: _Job) -> list[str]:
+    return [f for f in job.meta.get("files") or []
+            if re.search(r"\.(?:test|spec)\.[cm]?[jt]sx?$", f)]
+
+
+def _vitest_gaps(job: _Job, out: list[dict]) -> list[dict]:
+    """H2 for vitest: a requested test file with no result, or a non-zero exit with no
+    failing result (an unhandled error / crashed worker), is an error — never green."""
+    tail = _fe_lines(_lines(job.text()))[-SUMMARY_LINES:]
+    gaps = [_res(f, "error", ["no vitest result for this requested test file "
+                              f"(vitest rc={job.rc})"] + tail, file=f, layer="vitest")
+            for f in _requested_tests(job) if not any(_rfile(r) == f for r in out)]
+    if job.rc != 0 and not any(r["outcome"] in _FAIL for r in out + gaps):
+        gaps.append(_res("desktop::vitest", "error", [f"vitest exited rc={job.rc} without a "
+                                                      "failing test"] + tail,
+                         file="desktop", layer="vitest"))
+    return gaps
+
+
+def _vitest_partial(job: _Job) -> list[dict]:
+    """vitest killed at the deadline (no JSON): file-level results from the default
+    reporter's per-file status lines; each requested test file that never reported is
+    a timeout. At least one timeout is always returned (a killed run is never green)."""
+    done: dict[str, str] = {}
+    for ln in _lines(_read_text(job.out)):
+        m = _VITEST_FILE_LINE.match(ln)
+        if m:
+            done["desktop/" + m.group(2)] = "passed" if m.group(1) == "✓" else "failed"
+    out = [_res(f, oc, [] if oc == "passed" else
+                ["file failed; per-test detail lost: vitest was killed at the global deadline"],
+                file=f, layer="vitest", deadline=True) for f, oc in done.items()]
+    out += [_res(f, "timeout", ["did not finish before the global deadline (vitest killed)"],
+                 file=f, layer="vitest", deadline=True)
+            for f in _requested_tests(job) if f not in done]
+    if not any(r["outcome"] == "timeout" for r in out):
+        out.append(_res("desktop::vitest", "timeout", ["global deadline reached"]
+                        + _fe_lines(_stack(job)), file="desktop", layer="vitest", deadline=True))
     return out
+
+
+def _tsc_results(job: _Job) -> list[dict]:
+    """tsc --noEmit: passed, or ONE ``error`` result whose summary lists the type errors
+    as ``desktop/<file>:<line>:<col>: error TS…`` (repo-relative), then a ``+N more`` line."""
+    if job.rc == 0:
+        return [_res("desktop::tsc", "passed", file="desktop", layer="tsc")]
+    errs = []
+    for ln in _lines(job.text()):
+        m = _TSC_LINE.match(ln.strip())
+        if m:
+            errs.append(f"desktop/{m['f'].strip()}:{m['l'] or m['l2']}:{m['c'] or m['c2']}: "
+                        f"{m['msg']}")
+        elif "error TS" in ln:
+            errs.append(ln.strip())
+    head = errs[:SUMMARY_LINES] or _fe_lines(_lines(job.text()))[-SUMMARY_LINES:]
+    if len(errs) > SUMMARY_LINES:
+        head.append(f"+{len(errs) - SUMMARY_LINES} more type error(s)")
+    return [_res("desktop::tsc", "error", [f"tsc: {len(errs)} type error(s), rc={job.rc}"] + head,
+                 file="desktop", layer="tsc")]
 
 
 def _frontend_summary(results: list[dict]) -> dict:
@@ -1551,7 +1691,7 @@ def _rerun_state(nodeid: str, results: list[dict]) -> str | None:
     exact = [r for r in results if r["nodeid"] == nodeid]
     if not exact:
         if "::" not in nodeid:  # file-level (collection) error that now collects
-            ran = [r for r in results if r["file"] == nodeid and not r.get("notrun")]
+            ran = [r for r in results if _rfile(r) == nodeid and not r.get("notrun")]
             return "passed" if ran else None
         return None
     r = exact[0]
@@ -1570,7 +1710,7 @@ def _head_outcome(nodeid: str, results: list[dict]) -> str | None:
         if any(r["nodeid"] == nodeid and r["outcome"] == "error" and not r.get("notrun")
                and not r.get("runner_error") for r in results):
             return "failed"
-        return "passed" if any(r["file"] == nodeid and r.get("call") for r in results) else None
+        return "passed" if any(_rfile(r) == nodeid and r.get("call") for r in results) else None
     exact = [r for r in results if r["nodeid"] == nodeid and r.get("call")]
     if not exact:
         return None
@@ -1694,7 +1834,13 @@ def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
     ``<cache>/baseline-<sha>-v<N>.json``; only tests that reached a call report).
 
     - re-run still fails  → pre-existing (failed at HEAD) / regression (passed at HEAD)
-    - re-run passes       → flaky (passed at HEAD) / pre-existing (failed at HEAD)
+    - re-run passes       → the shard PREFIX (every shard arg up to and including the
+      test's, original order) is re-run (``_split_order_dependent``) to catch state
+      leaked from another file of the same shard:
+      - prefix fails  → order-dependent (``_classify_order_dependent``): regression
+        when the same prefix passes at HEAD (or it passed at HEAD and the HEAD prefix
+        is unknown), pre-existing when it fails at HEAD; never flaky
+      - prefix passes → flaky (passed at HEAD) / pre-existing (failed at HEAD)
     - HEAD unknown, test not run in the re-run, runner errors, no time → unknown
     """
     cls: dict[str, str] = {}
@@ -1706,9 +1852,12 @@ def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
         if r.get("runner_error"):
             cls[n] = "unknown"  # zero collected / abnormal shard exit: never green, never cached
         elif n.startswith("import::"):
-            cls[n] = "new" if r.get("file") and _is_new(ctx, r["file"]) else "unknown"
+            cls[n] = "new" if r.get("file") and _is_new(ctx, _rfile(r)) else "unknown"
         elif not n.startswith("backend/"):
-            cls[n] = "unknown"  # frontend: no HEAD baseline
+            # frontend: no HEAD baseline; a failing test file absent at HEAD is new
+            new = n.startswith("desktop/") and r.get("layer") == "vitest" \
+                and _is_new(ctx, _rfile(r))
+            cls[n] = "new" if new else "unknown"
         elif _is_new(ctx, n):
             cls[n] = "new"
         else:
@@ -1728,14 +1877,236 @@ def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
             still.append(n)
         else:
             cls[n] = "unknown"
-    if passed_now or still:
-        head = _baseline(ctx, passed_now + still)
+    od, passed_now, lost, plans = _split_order_dependent(ctx, passed_now, results)
+    cls.update({n: "unknown" for n in lost})
+    if passed_now or still or od:
+        head = _baseline(ctx, passed_now + still + od)
         for n in still:
             cls[n] = {"failed": "pre-existing", "passed": "regression"}.get(head[n], "unknown")
         for n in passed_now:
             cls[n] = {"failed": "pre-existing", "passed": "flaky"}.get(head[n], "unknown")
+        cls.update(_classify_order_dependent(ctx, od, head, plans))
     return cls
 
+
+# ── cross-file order dependence (shard prefix re-run) ───────────────────────
+CULPRIT_MAX = 3  # order-dependent failures per call that get a culprit bisect
+
+
+# Shard-arg tokens that modify a file target instead of naming one: --deselect=
+# (pulled out to the AC lead shard) and --keep= (a split file's chunk). A prefix
+# re-run carries them so it reproduces what the original shard actually ran.
+_SHARD_MODIFIERS = ("--deselect=", "--keep=")
+
+
+def _arg_index(nodeid: str, args: list[str]) -> int | None:
+    """Index of the first shard arg (backend-relative file or nodeid) holding ``nodeid``;
+    ``--deselect=`` / ``--keep=`` tokens are not targets and never match."""
+    r = {"nodeid": nodeid, "file": nodeid.split("::")[0]}
+    for i, a in enumerate(args):
+        if a.startswith(_SHARD_MODIFIERS):
+            continue
+        b = "backend/" + a
+        if _ref_matches(r, b.split("::")[0], b if "::" in a else None):
+            return i
+    return None
+
+
+def _prefix_plans(nodeids: list[str], results: list[dict]) -> tuple[dict, list[str]]:
+    """({shard args tuple: [args, cut, [nodeids]]}, nodeids needing no prefix).
+
+    ``cut`` is the furthest arg index of the shard's nodeids, so one run of
+    ``args[:cut + 1]`` gives every one of them exactly its original predecessors.
+    A test with no arg from ANOTHER file before it (first file of its shard, or an
+    AC-lead / requeue / recheck shard led by its own file's nodeids) was already
+    covered by the file re-run; one without shard data keeps the file verdict."""
+    shard_of = {r["nodeid"]: r.get("shard") for r in results if r.get("shard")}
+    plans: dict = {}
+    direct = []
+    for n in nodeids:
+        args = list(shard_of.get(n) or [])
+        i = _arg_index(n, args)
+        own = _backend_rel(n.split("::")[0])
+        if i is None or all(a.split("::")[0] == own for a in args[:i]
+                            if not a.startswith(_SHARD_MODIFIERS)):
+            direct.append(n)
+            continue
+        p = plans.setdefault(tuple(args), [args, i, []])
+        p[1] = max(p[1], i)
+        p[2].append(n)
+    return plans, direct
+
+
+def _prefix_args(args: list[str], cut: int, backend: Path | None = None) -> list[str]:
+    """``args[:cut + 1]`` targets (only those whose file exists under ``backend``) in
+    order, then every ``--deselect=`` token of the shard (before or after the cut:
+    pytest only applies a deselect to a collected nodeid, so extra ones are inert)."""
+    sel = [a for a in args[:cut + 1] if not a.startswith(_SHARD_MODIFIERS)
+           and (backend is None or (backend / a.split("::")[0]).is_file())]
+    return sel + [a for a in args if a.startswith(_SHARD_MODIFIERS)]
+
+
+def _run_prefixes(ctx, plans: dict, deadline_at: float, tag: str,
+                  root: Path | None = None) -> dict[str, str | None]:
+    """Run each plan's ``args[:cut + 1]`` in ONE job, in order (in ``root`` — the repo
+    or the HEAD worktree, where args whose file is absent are dropped), plus the
+    shard's ``--deselect=`` tokens. Returns nodeid → ``_rerun_state`` verdict."""
+    backend = (root or ctx.repo) / "backend"
+    ctx.seq += 1
+    jobs, owners = [], []
+    for k, (args, cut, ns) in enumerate(plans.values()):
+        sel = _prefix_args(args, cut, backend)
+        if not any(not a.startswith(_SHARD_MODIFIERS) for a in sel):
+            continue
+        jobs.append(_pytest_job(ctx, f"{tag}{ctx.seq}-{k}", sel, backend, root is not None))
+        owners.append(ns)
+    _run_jobs(jobs, ctx.workers, deadline_at)
+    out: dict[str, str | None] = {}
+    for j, ns in zip(jobs, owners):
+        res = _parse_job(j)
+        out.update({n: _rerun_state(n, res) for n in ns})
+    return out
+
+
+def _split_order_dependent(ctx, nodeids: list[str], results: list[dict]):
+    """Tests that passed their file re-run → (order_dependent, prefix_passed, unknown, plans).
+
+    Their shard prefix is re-run in the current tree with half the time left; no
+    time (or no verdict) → unknown, never flaky."""
+    plans, direct = _prefix_plans(nodeids, results)
+    if not plans:
+        return [], direct, [], plans
+    pending = [n for p in plans.values() for n in p[2]]
+    if ctx.left() < 3:
+        return [], direct, pending, plans
+    st = _run_prefixes(ctx, plans, time.monotonic() + ctx.left() / 2, "prefix")
+    od = [n for n in pending if st.get(n) == "failing"]
+    ok = [n for n in pending if st.get(n) == "passed"]
+    lost = [n for n in pending if st.get(n) not in ("failing", "passed")]
+    return od, direct + ok, lost, plans
+
+
+def _classify_order_dependent(ctx, od: list[str], head: dict, plans: dict) -> dict[str, str]:
+    """Order-dependent failures → regression | pre-existing | unknown (never flaky).
+
+    Failed alone at HEAD → pre-existing. Otherwise the same prefix is re-run in the
+    HEAD worktree: passes → regression, fails → pre-existing; HEAD prefix unknown →
+    regression when the test passed at HEAD, else unknown. Records
+    ``ctx.order_dep[nodeid]`` (``order_dependent`` + optional ``culprit`` file)."""
+    if not od:
+        return {}
+    info = getattr(ctx, "order_dep", None)
+    if info is None:
+        info = {}
+        ctx.order_dep = info
+    need = {n for n in od if head.get(n) != "failed"}
+    hp: dict[str, str | None] = {}
+    sha = _head_sha(ctx.repo) if need and ctx.left() >= 3 else None
+    wt = _ensure_worktree(ctx, sha, ctx.left()) if sha else None
+    if wt is not None and ctx.left() >= 2:
+        sub = {k: v for k, v in plans.items() if need & set(v[2])}
+        hp = _run_prefixes(ctx, sub, ctx.deadline_at, "headprefix", root=wt)
+    out = {}
+    for n in od:
+        if head.get(n) == "failed" or hp.get(n) == "failing":
+            out[n] = "pre-existing"
+        elif hp.get(n) == "passed" or head.get(n) == "passed":
+            out[n] = "regression"
+        else:
+            out[n] = "unknown"
+        info[n] = {"order_dependent": True}
+        pre = _od_prefix(n, plans)
+        if pre:
+            info[n]["prefix"] = pre
+    info_c = _culprits(ctx, od, plans)
+    for n, c in info_c.items():
+        info[n]["culprit"] = c
+    return out
+
+
+PREFIX_KEEP_ARGS = 40  # an order_dependent failure records its prefix (for recheck) up to this
+
+
+def _od_prefix(nodeid: str, plans: dict) -> list[str] | None:
+    """The backend-relative shard args a recheck must re-run, in order, to reproduce
+    ``nodeid``'s context: its prefix up to its own arg + the shard's deselects. None
+    when too long to keep in evidence (recheck then uses the culprit, if any)."""
+    args = next((p[0] for p in plans.values() if nodeid in p[2]), None)
+    i = _arg_index(nodeid, args or [])
+    if i is None:
+        return None
+    pre = _prefix_args(args, i)
+    if len(pre) > PREFIX_KEEP_ARGS or any(len(a) > NODEID_CAP for a in pre):
+        return None
+    return pre
+
+
+CULPRIT_BUDGET_S = 60.0  # per shard bisect: min(this, a third of the time left)
+
+
+def _culprits(ctx, od: list[str], plans: dict) -> dict[str, str]:
+    """nodeid → culprit file, ONE bisect per shard (first CULPRIT_MAX shards with an
+    order_dependent failure), each capped at min(CULPRIT_BUDGET_S, left / 3) so it never
+    eats the deadline. The shard's first failure leads the bisect; one confirm probe
+    (culprit + the shard's OTHER failures' own args, original order) attributes it to
+    each of them it reproduces. Best effort; never affects a verdict."""
+    out: dict[str, str] = {}
+    odset = set(od)
+    shards = [p for p in plans.values() if odset & set(p[2])][:CULPRIT_MAX]
+    for args, _cut, ns in shards:
+        mine = [n for n in ns if n in odset]
+        end = time.monotonic() + min(CULPRIT_BUDGET_S, max(0.0, ctx.left()) / 3)
+        c = _culprit(ctx, mine[0], args, end)
+        if c is None:
+            continue
+        out[mine[0]] = c
+        rest = [n for n in mine[1:] if _arg_index(n, args) is not None]
+        if not rest:
+            continue
+        idx = sorted({_arg_index(n, args) for n in rest})
+        if any(args[i].split("::")[0] == _backend_rel(c) for i in idx):
+            continue  # the culprit holds a failing test itself: no clean probe
+        sel = [_backend_rel(c)] + [args[i] for i in idx] \
+            + [a for a in args if a.startswith(_SHARD_MODIFIERS)]
+        st = _probe(ctx, sel, rest, end)
+        out.update({n: c for n in rest if st.get(n) == "failing"})
+    return out
+
+
+def _probe(ctx, sel: list[str], nodeids: list[str], end: float) -> dict[str, str | None]:
+    """One ordered run of ``sel`` (incl. deselect tokens) before ``end``; {} if no time."""
+    if ctx.left() < 5 or end - time.monotonic() < 2:
+        return {}
+    cut = max(i for i, a in enumerate(sel) if not a.startswith(_SHARD_MODIFIERS))
+    return _run_prefixes(ctx, {"c": [sel, cut, nodeids]},
+                         min(end, time.monotonic() + ctx.left() / 2), "culprit")
+
+
+def _culprit(ctx, nodeid: str, args: list[str], end: float) -> str | None:
+    """Best-effort single culprit file for ``nodeid`` in shard ``args``: bisect the
+    prefix's OTHER files (each probe = a half + the test's own arg + the shard's
+    deselects, original order) and confirm the last candidate. None when the budget
+    (``end``) or the deadline runs out."""
+    i = _arg_index(nodeid, args)
+    if i is None:
+        return None
+    own = args[i].split("::")[0]
+    desel = [a for a in args if a.startswith(_SHARD_MODIFIERS)]
+    cands = [a for a in args[:i] if not a.startswith(_SHARD_MODIFIERS) and a.split("::")[0] != own]
+
+    def fails(subset: list[str]) -> bool | None:
+        st = _probe(ctx, subset + [args[i]] + desel, [nodeid], end).get(nodeid)
+        return {"failing": True, "passed": False}.get(st or "")
+
+    while len(cands) > 1:
+        half = cands[:len(cands) // 2]
+        hit = fails(half)
+        if hit is None:
+            return None
+        cands = half if hit else cands[len(half):]
+    if not cands or not fails(cands):
+        return None
+    return "backend/" + cands[0].split("::")[0]
 
 def _baseline(ctx, nodeids: list[str]) -> dict[str, str | None]:
     """nodeid → HEAD outcome ``passed`` | ``failed`` | None (unknown, never stored)."""
@@ -1766,27 +2137,35 @@ def _baseline(ctx, nodeids: list[str]) -> dict[str, str | None]:
 
 
 # ── regression L1: tests declared by the BUILD artifact's ac_coverage ───────
-def _ac_entries(project: str, run_state: dict) -> list[list[str]]:
-    """ac_coverage[].test refs per entry: ``file.py::test_fn`` / ``file.py`` (pytest),
-    a desktop vitest file (``desktop/src/...test.tsx``, file-level), or
-    ``probe:<name>`` (verified from the run's probe evidence)."""
-    stages = [s for s in run_state.get("stages") or [] if isinstance(s, dict)]
+def _stage_data(project: str, run_state: dict, stage: str, key: str = "") -> dict | None:
+    """The newest ``stage`` artifact's payload (its ``data`` object when ``key`` is not
+    at the top level), via the project manifest; None when absent or escaping."""
+    stages = [s for s in (run_state or {}).get("stages") or [] if isinstance(s, dict)]
     aid = next((s.get("artifact_id") for s in reversed(stages)
-                if s.get("stage") == "build" and isinstance(s.get("artifact_id"), str)), None)
+                if s.get("stage") == stage and isinstance(s.get("artifact_id"), str)), None)
     if not aid:
-        return []
+        return None
     arts = (_workspace() / "Projects" / project / ".artifacts").resolve()
     man = _read_json(arts / "manifest.json")
     items = man.get("artifacts") if isinstance(man, dict) else None
     entry = next((e for e in items or [] if isinstance(e, dict) and e.get("id") == aid), None)
     if not entry or not isinstance(entry.get("file"), str):
-        return []
+        return None
     path = (arts / entry["file"]).resolve()
     if arts not in path.parents:
-        return []  # manifest entry escaping .artifacts — ignore
+        return None  # manifest entry escaping .artifacts — ignore
     data = _read_json(path)
-    if isinstance(data, dict) and "ac_coverage" not in data and isinstance(data.get("data"), dict):
+    key = key or {"build": "ac_coverage", "plan": "exit_criteria"}.get(stage, "")
+    if isinstance(data, dict) and key not in data and isinstance(data.get("data"), dict):
         data = data["data"]
+    return data if isinstance(data, dict) else None
+
+
+def _ac_entries(project: str, run_state: dict) -> list[list[str]]:
+    """ac_coverage[].test refs per entry: ``file.py::test_fn`` / ``file.py`` (pytest),
+    a desktop vitest file (``desktop/src/...test.tsx``, file-level), or
+    ``probe:<name>`` (verified from the run's probe evidence)."""
+    data = _stage_data(project, run_state, "build")
     cov = data.get("ac_coverage") if isinstance(data, dict) else None
     out = []
     for e in cov if isinstance(cov, list) else []:
@@ -1811,9 +2190,11 @@ def _resolve_ref(repo: Path, ref: str) -> tuple[str, str | None] | None:
 
 
 def _ref_matches(r: dict, file: str, nodeid: str | None) -> bool:
+    """Does result / evidence entry ``r`` match a resolved ref? A whole-file ref
+    (``nodeid`` None) compares the entry's file, which a compact pass omits (``_rfile``)."""
     if nodeid is None:
-        return r["file"] == file
-    n = r["nodeid"]
+        return _rfile(r) == file
+    n = str(r.get("nodeid") or "")
     return n == nodeid or n.startswith(nodeid + "[") or n.startswith(nodeid + "::")
 
 
@@ -1910,8 +2291,8 @@ def _ac_layer(repo: Path, entries: list[list[str]], results: list[dict]) -> dict
         for ref in refs:
             rv = _ac_ref_target(repo, ref)
             hits = [r for r in results if rv and _ref_matches(r, *rv)]
-            if not hits or any(r["outcome"] in _FAIL for r in hits) \
-                    or not any(r["outcome"] == "passed" for r in hits):
+            if not hits or any(r.get("outcome") in _FAIL for r in hits) \
+                    or not any(r.get("outcome") == "passed" for r in hits):
                 good = False
         ok_n, fail_n = ok_n + good, fail_n + (not good)
     return {"run": bool(entries), "pass": ok_n, "fail": fail_n}
@@ -1931,13 +2312,16 @@ class _Ctx:
         self.plugin_dir = _plugin_dir(cache)
         self.durations = _load_durations(cache)  # main-run shard packing only
         self.head_src: dict[str, str | None] = {}
+        self.order_dep: dict[str, dict] = {}  # nodeid → {order_dependent, culprit?}
         self.seq = 0
 
     def left(self) -> float:
         return self.deadline_at - time.monotonic()
 
 
-def _write_evidence(ev_root: Path, mode: str, ev: dict) -> Path:
+def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
+                    auto_recheck_of: str | None = None,
+                    rechecked_from: str | None = None) -> Path:
     tdir = ev_root / "tests"
     stamp = _stamp()
     path, n = tdir / f"{mode}-{stamp}.json", 1
@@ -1946,7 +2330,93 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict) -> Path:
         path = tdir / f"{mode}-{stamp}-{n}.json"
     _write_json(path, ev)
     _write_json(tdir / f"latest-{mode}.json", ev)
+    try:
+        _append_run_index(tdir, {
+            "kind": kind, "mode": mode, "finished_at": ev.get("finished_at"),
+            "ts": round(time.time(), 3), "evidence": path.name,
+            "cached": bool(ev.get("cached")), "auto_recheck_of": auto_recheck_of,
+            "rechecked_from": rechecked_from})
+    except OSError:  # bookkeeping only; never fails the evidence write
+        pass
+    try:
+        _prune_evidence(tdir)
+    except OSError:  # housekeeping only; the evidence above is already written
+        pass
     return path
+
+
+RUN_INDEX = "run_index.json"
+
+
+def _append_run_index(tdir: Path, entry: dict) -> None:
+    """Append ``entry`` to ``tests/run_index.json`` (append-only, never pruned; format in
+    the module docstring) under ``.run_index.lock``, atomically. A held lock past 5 s
+    still appends (like the tdd index): a lost record would under-count the budget."""
+    fd = _try_lock(tdir / ".run_index.lock", 5)
+    try:
+        cur = _read_json(tdir / RUN_INDEX)
+        cur = [e for e in cur if isinstance(e, dict)] if isinstance(cur, list) else []
+        cur.append(entry)
+        _write_json(tdir / RUN_INDEX, cur)
+    finally:
+        _unlock(fd)
+
+
+# Evidence retention: every call writes ``<mode>-<ts>.json`` (+ ``logs-<mode>-<ts>/``
+# on failures); a busy run reached 66 entries / 126 MB. Keep every latest-*.json
+# (the only files stage-complete reads), the newest EVIDENCE_KEEP of each kind per
+# mode, and any logs dir a latest-*.json points at.
+EVIDENCE_KEEP = 3
+EVIDENCE_MIN_AGE_S = 120.0  # never prune an entry this fresh (a concurrent writer's)
+_EV_NAME = re.compile(r"(?P<mode>[a-z]+)-(?P<ts>\d{8}T\d{6})(?:-(?P<n>\d+))?\.json")
+_LOG_NAME = re.compile(r"logs-(?P<mode>[a-z]+)-(?P<ts>\d{8}T\d{6})(?:-(?P<n>\d+))?")
+
+
+def _prune_evidence(tdir: Path, keep: int = EVIDENCE_KEEP,
+                    min_age_s: float = EVIDENCE_MIN_AGE_S, now: float | None = None) -> list[str]:
+    """Delete timestamped evidence files / log dirs beyond the newest ``keep`` per
+    (kind, mode) in THIS run's ``tests/`` dir. Returns the removed names. Skipped when
+    another invocation holds the prune lock; never touches latest-*, dotfiles (atomic
+    write temps), other names, entries younger than ``min_age_s``, or a referenced logs dir."""
+    fd = _try_lock(tdir / ".prune.lock", 2)
+    if fd is None:
+        return []
+    try:
+        return _prune_locked(tdir, keep, min_age_s, time.time() if now is None else now)
+    finally:
+        _unlock(fd)
+
+
+def _prune_locked(tdir: Path, keep: int, min_age_s: float, now: float) -> list[str]:
+    referenced = set()
+    for m in TEST_MODES:
+        ev = _read_json(tdir / f"latest-{m}.json")
+        if isinstance(ev, dict) and isinstance(ev.get("logs"), str):
+            referenced.add(Path(ev["logs"]).name)
+    groups: dict[tuple[str, str], list[tuple[tuple, Path]]] = {}
+    for p in tdir.iterdir():
+        is_dir = p.is_dir() and not p.is_symlink()
+        mt = (_LOG_NAME if is_dir else _EV_NAME).fullmatch(p.name)
+        if mt is None or mt["mode"] not in TEST_MODES or (not is_dir and not p.is_file()):
+            continue
+        rank = (mt["ts"], int(mt["n"] or 1))
+        groups.setdefault(("logs" if is_dir else "ev", mt["mode"]), []).append((rank, p))
+    removed = []
+    for entries in groups.values():
+        entries.sort(key=lambda e: e[0], reverse=True)
+        for _, p in entries[keep:]:
+            try:
+                fresh = now - p.stat().st_mtime < min_age_s
+            except OSError:
+                continue
+            if fresh or p.name in referenced:
+                continue
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
+            removed.append(p.name)
+    return sorted(removed)
 
 
 # Evidence a recheck may build on: verify or regression only. Never tdd (it covers only
@@ -2104,7 +2574,11 @@ def _desktop_state(repo: Path) -> str:
     return h.hexdigest()
 
 
-def _frontend_key(ctx, mode: str, files: list[str]) -> str:
+def _frontend_key(ctx, mode: str, files: list[str], changed=()) -> str:
+    """digest(version, mode, _desktop_state — HEAD + every uncommitted desktop/
+    change, so vitest/tsc never reuse a result across changed source — the listed
+    files and package-lock.json). ``changed`` is accepted for call-site
+    compatibility; _desktop_state already covers every changed desktop file."""
     h = hashlib.sha256((RUNNER_VERSION + mode + _desktop_state(ctx.repo)).encode())
     for f in sorted(files) + ["desktop/package-lock.json"]:
         h.update(f.encode() + b"\0" + _file_digest(ctx.repo / f).encode() + b"\0")
@@ -2175,6 +2649,33 @@ def _probe_rows(ctx, ev_root: Path, refs: list[str], changed: list[str]) -> list
     return rows
 
 
+def _od_context_args(repo: Path, f: dict) -> list[str] | None:
+    """Ordered backend-relative shard args that reproduce an ``order_dependent``
+    failure ``f``'s context: its recorded ``prefix``, else ``[culprit, own arg]``.
+    None (plain re-target; the overlay then keeps the failure over a pass) when
+    neither is usable or an arg names a file outside backend/ or not on disk."""
+    n = str(f.get("nodeid") or "")
+    if not n.startswith("backend/"):
+        return None
+    backend = repo / "backend"
+    pre = f.get("prefix")
+    if not (isinstance(pre, list) and pre and all(isinstance(a, str) for a in pre)):
+        c = f.get("culprit")
+        if not (isinstance(c, str) and c.startswith("backend/")):
+            return None
+        own = n.split("::")[0] if f.get("nodeid_truncated") or "::" not in n else n
+        pre = [_backend_rel(c), _backend_rel(own)]
+    for a in pre:
+        if a.startswith(_SHARD_MODIFIERS):
+            continue
+        p = _contained(backend, a.split("::")[0])
+        if p is None or not p.is_file():
+            return None
+    if _arg_index(n, pre) is None and not f.get("nodeid_truncated"):
+        return None  # the prefix must hold the test itself
+    return list(pre)
+
+
 def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
           sgraph: dict | None = None) -> tuple[dict, str | None]:
     plan = {"targets": {}, "skipped": [], "smoke": {}, "ac_entries": [], "l2": [],
@@ -2196,8 +2697,15 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         plan["base_mode"], plan["base_finished_at"] = prev.get("mode"), prev.get("finished_at")
         for f in prev_failures:
             n = str(f.get("nodeid") or "")
-            if n.startswith("backend/") and (ctx.repo / n.split("::")[0]).is_file():
-                _add_target(plan["targets"], n.split("::")[0], n if "::" in n else None)
+            ordered = _od_context_args(ctx.repo, f) if f.get("order_dependent") else None
+            if ordered:
+                # Re-run it after its prefix / culprit, in order: alone it passes.
+                plan.setdefault("ordered", []).append(ordered)
+                plan.setdefault("od_in_context", []).append(n)
+                plan["rechecked"] += 1
+            elif n.startswith("backend/") and (ctx.repo / n.split("::")[0]).is_file():
+                whole = "::" not in n or f.get("nodeid_truncated")  # capped id: rerun its file
+                _add_target(plan["targets"], n.split("::")[0], None if whole else n)
                 plan["rechecked"] += 1
             elif n.startswith("import::") and _module_file(ctx.repo, n[len("import::"):]):
                 mod = n[len("import::"):]
@@ -2267,7 +2775,8 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
         # error) would keep that failure forever; the caller falls back to a full run.
         return plan, f"auto-recheck cannot re-target: {', '.join(lost[:5])}"
     if mode == "recheck" and prev_failures:
-        if not (plan["targets"] or plan["smoke"] or plan["desktop"] or plan.get("probe_rows")):
+        if not (plan["targets"] or plan["smoke"] or plan["desktop"]
+                or plan.get("probe_rows") or plan.get("ordered")):
             # Never green: there were failures and nothing here re-runs them.
             return plan, (f"recheck found {len(prev_failures)} previous failure(s) but could not "
                           f"re-target any of them ({', '.join(lost[:5]) or 'none matched'}); "
@@ -2310,15 +2819,28 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     """``base`` (a verify / regression evidence) with ``re_ev`` (a recheck of it) laid over
     it by nodeid: a rechecked test's new result replaces its old one, everything else
     stays. Counts, failures, runner errors and layers are recomputed from the merged
-    results; ``rechecked_from`` records which run was overlaid."""
-    new = {r["nodeid"]: r for r in re_ev.get("results") or [] if isinstance(r, dict)}
-    old = {r["nodeid"]: r for r in base.get("results") or [] if isinstance(r, dict)}
+    results; ``rechecked_from`` records which run was overlaid. An ``order_dependent``
+    base failure is replaced only by a recheck that re-ran it in its context (listed in
+    ``re_ev["od_in_context"]``) or that failed it again; otherwise it is kept and named
+    in ``rechecked_from.held_order_dependent``. Entries may be compact (no ``file``)."""
+    new = {r["nodeid"]: r for r in re_ev.get("results") or []
+           if isinstance(r, dict) and isinstance(r.get("nodeid"), str)}
+    old = {r["nodeid"]: r for r in base.get("results") or []
+           if isinstance(r, dict) and isinstance(r.get("nodeid"), str)}
+    base_fails = [f for f in base.get("failures") or [] if isinstance(f, dict)]
+    # An order_dependent failure only reproduces after its shard prefix / culprit: a
+    # pass from a recheck that did not re-run that context is no verdict on it.
+    in_ctx = set(re_ev.get("od_in_context") or [])
+    held = {f.get("nodeid") for f in base_fails if f.get("order_dependent")
+            and f.get("nodeid") not in in_ctx
+            and (new.get(f.get("nodeid")) or {}).get("outcome") not in _FAIL}
+    new = {n: r for n, r in new.items() if n not in held}
     results = [new.get(n, r) for n, r in old.items()] + [r for n, r in new.items() if n not in old]
     counts = {"passed": 0, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}
     for r in results:
         counts[_COUNT_KEY.get(r.get("outcome"), "errors")] += 1
-    failures = [f for f in base.get("failures") or [] if f.get("nodeid") not in new] \
-        + list(re_ev.get("failures") or [])
+    failures = [f for f in base_fails if f.get("nodeid") not in new] \
+        + [f for f in re_ev.get("failures") or [] if isinstance(f, dict) and f.get("nodeid") not in held]
     runner_errors = [n for n in base.get("runner_errors") or [] if n not in new] \
         + list(re_ev.get("runner_errors") or [])
     layers = {k: dict(v) for k, v in (base.get("layers") or {}).items() if isinstance(v, dict)}
@@ -2344,8 +2866,38 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     ev.update(results=results, counts=counts, failures=failures, runner_errors=runner_errors,
               layers=layers, finished_at=_now_iso(), cached=False,
               rechecked_from={"finished_at": base.get("finished_at"),
-                              "rechecked": len(new), "auto": auto})
+                              "rechecked": len(new), "auto": auto,
+                              **({"held_order_dependent": sorted(held)} if held else {})})
     return ev
+
+
+def _dedupe_results(results: list[dict]) -> list[dict]:
+    """One result per nodeid (a recheck's ordered prefix job can re-run a test another
+    shard also ran): the first FAILING one wins, else the first; first-seen order."""
+    pick: dict[str, dict] = {}
+    for r in results:
+        n = r["nodeid"]
+        if n not in pick or (r["outcome"] in _FAIL and pick[n]["outcome"] not in _FAIL):
+            pick[n] = r
+    return list(pick.values())
+
+
+def _ref_nodeids(repo: Path, project: str, run_state: dict, ac_entries: list) -> list[str]:
+    """Resolved nodeid refs (not whole-file refs) of the run's BUILD ac_coverage and
+    PLAN ``exit_criteria[kind=test].ref``: evidence never caps a nodeid one of them
+    names (``_capped_id``), or the ref could no longer match it."""
+    refs = [r for e in (ac_entries or _ac_entries(project, run_state)) for r in e]
+    plan = _stage_data(project, run_state, "plan")
+    crit = plan.get("exit_criteria") if isinstance(plan, dict) else None
+    for c in crit if isinstance(crit, list) else []:
+        if isinstance(c, dict) and c.get("kind") == "test" and isinstance(c.get("ref"), str):
+            refs.append(c["ref"])
+    out = []
+    for ref in refs:
+        rv = _resolve_ref(repo, ref)
+        if rv and rv[1]:
+            out.append(rv[1])
+    return list(dict.fromkeys(out))
 
 
 def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> tuple[dict, int]:
@@ -2363,22 +2915,31 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             ctx.warnings.append(f"tdd run #{max(repeats[f] for f in hot)} on {', '.join(hot)}: "
                                 "batch your changes before re-running")
     targets = plan["targets"]
+    ordered = plan.get("ordered") or []
+    ctx.ref_ids = _ref_nodeids(ctx.repo, ns.project, run_state, plan["ac_entries"])
+    ord_files = {"backend/" + a.split("::")[0]: None for o in ordered for a in o
+                 if not a.startswith(_SHARD_MODIFIERS)}
     head = _head_sha(ctx.repo)
     changed_in = list(dict.fromkeys(plan["changed"] + plan["desktop"]))
-    inputs = _key_inputs(ctx, targets, plan["smoke"], changed_in, sgraph)
+    inputs = _key_inputs(ctx, {**ord_files, **targets}, plan["smoke"], changed_in, sgraph)
     key = _cache_key(ctx, ns.mode, targets, plan["smoke"],
-                     plan["explicit"] + [json.dumps(plan["ac_entries"]), json.dumps(plan.get("probe_rows") or []),
-                                       json.dumps(plan["skipped"])],
+                     plan["explicit"] + [json.dumps(plan["ac_entries"]),
+                                         json.dumps(plan.get("probe_rows") or []),
+                                         json.dumps(plan["skipped"])]
+                     + ([json.dumps(ordered)] if ordered else []),
                      inputs, head)
-    tree = _tree_digest(inputs, changed_in, list(targets) + list(plan["smoke"].values()))
+    tree = _tree_digest(inputs, changed_in, list(targets) + list(ord_files)
+                        + list(plan["smoke"].values()))
     if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
         prev = _read_json(ev_root / "tests" / f"latest-{ns.mode}.json")
         if isinstance(prev, dict) and prev.get("cache_key") == key and not _cacheable(prev):
             auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev)
             if auto is not None:
                 return auto
+    idx_info = {"auto_recheck_of": getattr(ns, "auto_recheck_of", None),
+                "rechecked_from": plan.get("base_finished_at") if ns.mode == "recheck" else None}
     fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")
-    fkey = _frontend_key(ctx, fmode, plan["desktop"]) if plan["desktop"] else ""
+    fkey = _frontend_key(ctx, fmode, plan["desktop"], plan["changed"]) if plan["desktop"] else ""
     cpath = ctx.cache / "results" / f"{key}{fkey[:16]}.json"
     hit = _read_json(cpath)
     if isinstance(hit, dict) and hit.get("schema") == 1 and _cacheable(hit):
@@ -2388,7 +2949,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                   warnings=ctx.warnings + ["cached: tests and their inputs are unchanged since the last run"],
                   changed_files=_digest_map(ctx.repo, plan["changed"]),
                   head_sha=head, tree_digest=tree)
-        return _test_output(ev, _write_evidence(ev_root, ns.mode, ev)), _exit_code(ev)
+        return _test_output(ev, _write_evidence(ev_root, ns.mode, ev, **idx_info)), _exit_code(ev)
     slot = _acquire_slot(ctx.cache, ctx.warnings)
     try:
         jobs: list[_Job] = []
@@ -2401,11 +2962,20 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             sj = _smoke_job(ctx, list(plan["smoke"]))
             sj.meta["files"] = plan["smoke"]
             jobs.append(sj)
+        if targets or ordered:
+            _drop_stale_pyc(ctx.repo, plan["changed"])
+        ctx.seq += 1
+        backend = ctx.repo / "backend"
+        # recheck of order_dependent failures: their prefix runs as ONE ordered job, first
+        jobs = [_pytest_job(ctx, f"ordered{ctx.seq}-{k}", o, backend, False)
+                for k, o in enumerate(ordered)] + jobs
         jobs += _pytest_jobs(ctx, targets, "main", first=plan.get("ac_first"),
                              durations=ctx.durations) if targets else []
         main_end = ctx.deadline_at - min(20.0, deadline * 0.25)
         _run_jobs(jobs, ctx.workers, main_end)
         results = _results_with_requeue(ctx, jobs, main_end, "main")
+        if ordered:
+            results = _dedupe_results(results)
         w = _save_durations(ctx.cache, results)
         if w:
             ctx.warnings.append(w)
@@ -2426,7 +2996,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         _write_json(cpath, ev)
     if ev["failures"]:
         ev["logs"] = str(_copy_logs(ctx, ev_root, ns.mode))
-    path = _write_evidence(ev_root, ns.mode, ev)
+    path = _write_evidence(ev_root, ns.mode, ev, **idx_info)
     base_mode = plan.get("base_mode")
     if ns.mode == "recheck" and base_mode in ("verify", "regression"):
         # Lay the recheck over the evidence it re-ran, so the file the TEST stage reads
@@ -2444,9 +3014,42 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                                        auto=bool(getattr(ns, "auto_recheck_of", None)))
             merged["warnings"] = list(dict.fromkeys(list(base.get("warnings") or [])
                                                     + list(ctx.warnings)))
-            _write_evidence(ev_root, base_mode, merged)
+            # kind "overlay": a rewrite of base_mode's evidence, not another test run
+            _write_evidence(ev_root, base_mode, merged, kind="overlay", **idx_info)
             ev["overlaid_onto"] = base_mode
     return _test_output(ev, path), _exit_code(ev)
+
+
+NODEID_CAP = 400  # a parametrize id can be megabytes (one real run: 1 MB per nodeid)
+
+
+def _capped_id(nodeid: str, refs=()) -> dict:
+    """{"nodeid": ...} for evidence; an id over NODEID_CAP chars keeps its head plus a
+    sha256 tag and adds ``nodeid_truncated`` (recheck then re-runs its whole file).
+    Never capped when an explicit nodeid ref in ``refs`` (ac_coverage / exit_criteria,
+    see ``_ref_nodeids``) matches the full id but would not match the capped one."""
+    if len(nodeid) <= NODEID_CAP:
+        return {"nodeid": nodeid}
+    tag = _sha(nodeid.encode("utf-8", "replace"))[:12]
+    capped = f"{nodeid[:NODEID_CAP - 20]}…[sha:{tag}]"
+    full, cut = {"nodeid": nodeid}, {"nodeid": capped}
+    if any(_ref_matches(full, "", ref) and not _ref_matches(cut, "", ref) for ref in refs):
+        return full
+    return {"nodeid": capped, "nodeid_truncated": True}
+
+
+def _evidence_result(r: dict, refs=()) -> dict:
+    """One evidence ``results[]`` entry. Failures, errors, timeouts and skips keep
+    nodeid + outcome + file; a pass is compact: nodeid + outcome (+ duration), with
+    ``file`` only when it is not the nodeid's own path (``import::`` smoke). Readers
+    (pipeline_validator ``_evidence_matches``; here ``_rfile`` for the overlay's AC
+    layer) fall back to that path."""
+    e = {**_capped_id(r["nodeid"], refs), "outcome": r["outcome"]}
+    if r["outcome"] != "passed" or _rfile(r) != r["nodeid"].split("::")[0]:
+        e["file"] = _rfile(r)
+    if r["outcome"] == "passed" and r.get("duration") is not None:
+        e["duration"] = round(float(r["duration"]), 4)  # compact: 0.1 ms is plenty
+    return e
 
 
 def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
@@ -2456,12 +3059,14 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
         counts[_COUNT_KEY[r["outcome"]]] += 1
     # a failing probe verdict is definite ("new"); the cache key already holds the verdict
     cls = {**cls, **{r["nodeid"]: "new" for r in plan.get("probe_rows") or []}}
-    failures = [{"nodeid": r["nodeid"], "classification": cls.get(r["nodeid"], "unknown"),
+    refs = getattr(ctx, "ref_ids", None) or ()
+    failures = [{**_capped_id(r["nodeid"], refs), "classification": cls.get(r["nodeid"], "unknown"),
                  "summary": "\n".join(r["summary"][:STACK_LINES + 1]),
-                 "outcome": r["outcome"], "deadline": bool(r.get("deadline"))}
+                 "outcome": r["outcome"], "deadline": bool(r.get("deadline")),
+                 **getattr(ctx, "order_dep", {}).get(r["nodeid"], {})}
                 for r in results if r["outcome"] in _FAIL]
     l2 = set(plan["l2"])
-    dep = [r for r in results if r["file"] in l2 and not r.get("layer")]
+    dep = [r for r in results if _rfile(r) in l2 and not r.get("layer")]
     smoke = [r for r in results if r.get("layer") == "smoke"]
     layers = {
         "ac_driven": (_ac_layer(ctx.repo, plan["ac_entries"], results) if ns.mode == "regression"
@@ -2474,19 +3079,24 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
     ev = {"schema": 1, "mode": ns.mode, "run_id": ns.run_id, "started_at": started_at,
           "finished_at": _now_iso(), "duration_s": round(time.monotonic() - ctx.t0, 2),
           "cached": False,
-          "selected_files": sorted(set(plan["targets"]) | set(plan["desktop"])),
+          "selected_files": sorted(set(plan["targets"]) | set(plan["desktop"])
+                                   | {"backend/" + a.split("::")[0] for o in plan.get("ordered") or []
+                                      for a in o if not a.startswith(_SHARD_MODIFIERS)}),
           "skipped_for_budget": plan["skipped"], "counts": counts,
-          "results": [{"nodeid": r["nodeid"], "outcome": r["outcome"], "file": r["file"],
+          "results": [{**_evidence_result(r, refs),
                        **({"requeued": True} if r.get("requeued") else {})}
                       for r in results],
           "failures": failures, "layers": layers, "tdd_repeats": repeats,
           "warnings": list(ctx.warnings), "cache_key": key,
           "changed_files": _digest_map(ctx.repo, plan["changed"]),
-          "runner_errors": [r["nodeid"] for r in results if r.get("runner_error")]}
+          "runner_errors": [_capped_id(r["nodeid"], refs)["nodeid"] for r in results
+                            if r.get("runner_error")]}
     if any(r.get("layer") in ("vitest", "tsc") for r in results):
         ev["frontend"] = _frontend_summary(results)
     if ns.mode == "recheck":
         ev["rechecked_failures"] = plan["rechecked"]
+        if plan.get("od_in_context"):  # order_dependent failures re-run after their prefix
+            ev["od_in_context"] = list(plan["od_in_context"])
     return ev
 
 
@@ -2504,7 +3114,8 @@ def _exit_code(ev: dict) -> int:
     (a hang is never green, whatever its classification) and no runner error occurred."""
     if ev.get("runner_errors"):
         return 1
-    bad = [f for f in ev["failures"] if f["classification"] not in ("pre-existing", "flaky")
+    bad = [f for f in ev.get("failures") or [] if not isinstance(f, dict)
+           or f.get("classification") not in ("pre-existing", "flaky")
            or f.get("outcome") == "timeout"]
     return 1 if bad else 0
 
@@ -2527,17 +3138,22 @@ def _short(summary: str, n: int) -> list[str]:
 
 
 def _test_output(ev: dict, path: Path) -> dict:
-    out = {"mode": ev["mode"], "cached": ev["cached"], "ok": _exit_code(ev) == 0,
-           "counts": ev["counts"], "duration_s": ev["duration_s"],
-           "selected": len(ev["selected_files"]),
-           "failures": [{"nodeid": f["nodeid"], "classification": f["classification"],
-                         "summary": _short(f["summary"], SUMMARY_LINES)} for f in ev["failures"][:10]],
-           "failures_total": len(ev["failures"]),
-           "skipped_for_budget": ev["skipped_for_budget"][:10],
-           "skipped_for_budget_total": len(ev["skipped_for_budget"]),
+    # Tolerant reads: an overlay's base may be hand-written / older evidence.
+    fails = [f for f in ev.get("failures") or [] if isinstance(f, dict)]
+    skipped = list(ev.get("skipped_for_budget") or [])
+    out = {"mode": ev.get("mode"), "cached": bool(ev.get("cached")), "ok": _exit_code(ev) == 0,
+           "counts": ev.get("counts") or {}, "duration_s": ev.get("duration_s", 0),
+           "selected": len(ev.get("selected_files") or []),
+           "failures": [{"nodeid": f.get("nodeid"), "classification": f.get("classification", "unknown"),
+                         "summary": _short(str(f.get("summary") or ""), SUMMARY_LINES),
+                         **{k: f[k] for k in ("order_dependent", "culprit") if k in f}}
+                        for f in fails[:10]],
+           "failures_total": len(fails),
+           "skipped_for_budget": skipped[:10],
+           "skipped_for_budget_total": len(skipped),
            "evidence": str(path), "warnings": ev.get("warnings") or []}
-    if ev["mode"] in ("regression", "verify", "recheck"):
-        out["layers"] = ev["layers"]
+    if ev.get("mode") in ("regression", "verify", "recheck"):
+        out["layers"] = ev.get("layers") or {}
     for k in ("frontend", "tdd_repeats", "rechecked_failures", "runner_errors", "overlaid_onto",
               "rechecked_from"):
         if ev.get(k):
