@@ -1229,7 +1229,8 @@ class LifecycleManager:
             logger.debug("Channel session cleanup skipped: %s", exc)
 
     async def _cleanup_expired_messages(self) -> None:
-        """Delete messages past their 90-day TTL.
+        """Delete messages past their 90-day TTL, then the compaction summaries
+        derived from them (``cleanup_expired_compactions``).
 
         Runs every ~10 minutes (cycle % 10 block).  Non-fatal — failures
         are logged and skipped so they never block the maintenance loop.
@@ -1245,6 +1246,19 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.ttl_cleanup failed: %s", exc)
+        # Compaction summaries are derived from the messages: same TTL, and gone
+        # with their last message. Separate guard so one failure never hides the other.
+        try:
+            from database import db
+
+            dropped = await db.cleanup_expired_compactions()
+            if dropped > 0:
+                logger.info(
+                    "lifecycle_manager.ttl_cleanup deleted=%d expired compactions",
+                    dropped,
+                )
+        except Exception as exc:
+            logger.warning("lifecycle_manager.compaction_cleanup failed: %s", exc)
 
     # ── Radar ToDo sweep ─────────────────────────────────────────────
 

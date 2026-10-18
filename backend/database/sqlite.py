@@ -3741,6 +3741,26 @@ class SQLiteDatabase(BaseDatabase):
             row = await cursor.fetchone()
         return f"{int(row[0])}.{int(row[1])}" if row else "0.0"
 
+    async def cleanup_expired_compactions(self, max_age_s: Optional[int] = None) -> int:
+        """Delete compactions that outlived the conversation they summarize.
+
+        A compaction summary is DERIVED from messages, so it must not outlive
+        them (it can quote tool output, paths, secrets). Two rules, one pass:
+        older than the messages TTL (same 90 days; created_at is the messages'
+        naive-local ISO format, so the string compare is exact), or its session
+        has no message left at all (the source is gone). Returns rows deleted.
+        """
+        from datetime import timedelta
+        age = SQLiteMessagesTable.TTL_SECONDS if max_age_s is None else max_age_s
+        cutoff = (datetime.now() - timedelta(seconds=age)).isoformat()
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM compactions WHERE created_at < ? OR NOT EXISTS "
+                "(SELECT 1 FROM messages m WHERE m.session_id = compactions.session_id)",
+                (cutoff,))
+            await conn.commit()
+            return cursor.rowcount
+
     async def delete_compactions_by_session(self, session_id: str) -> int:
         async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
             cursor = await conn.execute(

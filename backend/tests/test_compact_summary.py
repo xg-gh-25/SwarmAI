@@ -470,3 +470,41 @@ async def test_manual_compact_persists_and_clears_the_fallback_flag():
     assert result["success"] is True
     assert unit._hook_session_context["_compact_notice_pending"] is False
     assert stored and stored[0][0] == "sess-cs" and stored[0][1]["summary"] == "manual S"
+
+
+# ── retention: compactions do not outlive their messages ───────────────────
+
+@pytest.mark.asyncio
+async def test_compactions_expire_with_the_messages_ttl_and_with_their_last_message(tmp_path):
+    from datetime import datetime, timedelta
+    from database.sqlite import SQLiteDatabase, SQLiteMessagesTable
+    db = SQLiteDatabase(str(tmp_path / "ttl.db"))
+    await db.initialize()
+    await db.messages.put({"session_id": "live", "role": "user", "content": [{"type": "text", "text": "q"}]})
+    old_at = (datetime.now() - timedelta(seconds=SQLiteMessagesTable.TTL_SECONDS + 3600)).isoformat()
+    recent = {**cs.build_record(None, "keep"), "created_at": datetime.now().isoformat()}
+    stale = {**cs.build_record(None, "past the TTL"), "created_at": old_at}
+    orphan = {**cs.build_record(None, "its messages are gone"), "created_at": datetime.now().isoformat()}
+    await db.insert_compaction("live", recent)
+    await db.insert_compaction("live", stale)
+    await db.insert_compaction("gone", orphan)
+    assert await db.cleanup_expired_compactions() == 2
+    assert [r["id"] for r in await db.list_compactions("live")] == [recent["id"]]
+    assert await db.list_compactions("gone") == []
+    assert await db.cleanup_expired_compactions() == 0  # idempotent
+
+
+@pytest.mark.asyncio
+async def test_maintenance_runs_compaction_cleanup_even_if_message_cleanup_fails():
+    from core.lifecycle_manager import LifecycleManager
+    mgr = LifecycleManager.__new__(LifecycleManager)
+    fake_db = MagicMock()
+    fake_db.cleanup_expired_messages = AsyncMock(side_effect=RuntimeError("locked"))
+    fake_db.cleanup_expired_compactions = AsyncMock(return_value=3)
+    with patch("database.db", fake_db):
+        await mgr._cleanup_expired_messages()  # must not raise
+    fake_db.cleanup_expired_compactions.assert_awaited_once()
+    fake_db.cleanup_expired_messages = AsyncMock(return_value=1)
+    fake_db.cleanup_expired_compactions = AsyncMock(side_effect=RuntimeError("no table"))
+    with patch("database.db", fake_db):
+        await mgr._cleanup_expired_messages()  # a compaction failure is contained too
