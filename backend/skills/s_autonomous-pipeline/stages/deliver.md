@@ -6,7 +6,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 2. **Stage first:** `git add` new files, unstage foreign ones, before any review (`ref/deliver/gate2-coverage.md`).
 3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), 2-line prompt: `EXPERT-ID: <EXPERT_ID>` (registry id) + `Adversarially review this changeset: read <prompt_path> first; follow it.` Never paste it.
 4. **Merge, Red Team, fix** (`ref/deliver/gate2-findings.md`): dedup, Shared-State Override before tiers, Red Team if source > 200 lines or any specialist HIGH (each finding's `specialist` = its EXPERT-ID; gated by the red-team marker), fix HIGH + MED conf ≥ 7, `pipeline_test.py --mode recheck`.
-5. **Meta-review:** `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate meta-review --project <P> --files <changed files>`; stdout only on exit 0; one Agent call (`ref/deliver/push-ready.md`).
+5. **Meta-review:** one Agent call: `read <meta_review_prompt_path> first; follow it.` (no path → `spawn_prompt.py --gate meta-review --project <P> --files <changed…>`, exit 0 only; `ref/deliver/push-ready.md`).
 6. **User-Value Probe** (`ref/deliver/audits.md`) + **Doc Sync** (`ref/deliver/doc-sync.md`, warning only).
 7. **Convergence, max 3 iterations**, all 6 at once: L1 tests pass, L2 type/lint clean, L3 no regressions, L4 adversarial clean (fixes on disk), L5 DDD conformance, L6 decisions resolved.
 8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (any other shape is rejected) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).

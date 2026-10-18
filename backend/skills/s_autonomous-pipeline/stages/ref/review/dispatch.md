@@ -47,8 +47,13 @@ to apply; REVIEW uses them only through the security-owner decision above.)
   changeset + relevant DDD docs + the project-knowledge block.
 - **Project knowledge for every fan-out agent (and spec-compliance)** — emit once, paste
   the same block into each prompt under a `## Project Knowledge` heading AFTER the task
-  statement (never before it — the adversarial classifier reads the prompt head). Use the
-  output ONLY on exit 0 (exit 3 = `--project` missing). Run from the repo root:
+  statement (never before it — the adversarial classifier reads the prompt head).
+  `stage-start --stage review` writes the block to `review_knowledge_path` and the change
+  to `review_diff_path` (one Read for the reviewer). That diff is a snapshot at REVIEW
+  entry: after a fix inside REVIEW, re-diff the fixed files (`git diff HEAD -- <files>`)
+  and never pass the snapshot to `--patterns-for --diff-file`. No diff path → give the
+  reviewer `git diff HEAD -- <changed files>`. Only without the knowledge path emit the
+  block by hand, using the output ONLY on exit 0 (exit 3 = `--project` missing), from the repo root:
   `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --knowledge-only --project <P> --files <changed file 1> <changed file 2> ...`
   It carries the DDD entries recalled for the changed files with doc + section
   provenance, an explicit "none recalled" or "UNAVAILABLE" state, and the command an

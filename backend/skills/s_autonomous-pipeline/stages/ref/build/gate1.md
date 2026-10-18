@@ -56,8 +56,14 @@ reports a warning instead of the path.
 
 ## Prompt
 
-The prompt lives in `data/gate-prompts/gate1-skeptic.md`; emit it, never retype it. Run
-from the repo root:
+The prompt lives in `data/gate-prompts/gate1-skeptic.md`; never retype it.
+`stage-start --stage build` writes it with its inputs (and a digest of the whole plan) to
+`gate1_prompt_path` and records the hand-out (`run.json gate1_handout`). On a BUILD
+re-entry it returns `gate1_verdict` (+ `gate1_override`) instead of a path only when the
+prompt is byte-identical to one it handed out AND the latest build record's Gate-1 fields
+changed after that hand-out (a verdict was recorded for exactly that prompt): do not
+spawn Gate-1 again. A BLOCK without an override is always handed out again. Only
+without either key, emit it by hand from the repo root:
 
 `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate gate1-skeptic`
 

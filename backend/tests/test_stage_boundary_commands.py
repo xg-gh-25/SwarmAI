@@ -1228,7 +1228,9 @@ def test_stage_start_review_returns_review_list_not_gate2(ws, capsys):
     ids = [e["id"] for e in out["review_experts"]]
     assert ids[:2] == ["spec-compliance", "code-quality"] and "security" not in ids
     assert out["spawn_mode"] == "foreground"
-    assert not (rd / "evidence" / "prompts").exists(), "REVIEW writes no Gate-2 prompt files"
+    # REVIEW writes no Gate-2 prompt files, only its own shared reviewer inputs
+    assert {p.name for p in (rd / "evidence" / "prompts").iterdir()} \
+        <= {"review-knowledge.md", "review-change.diff"}
     assert _run_state(root, rid)["dispatch_plan"]["review"] == ids
 
 
@@ -1243,7 +1245,7 @@ def test_stage_start_deliver_records_plan_and_foreground(ws, capsys):
     assert code == 0, out
     ids = [e["id"] for e in out["experts"]]
     assert "security" in ids and out["spawn_mode"] == "foreground"
-    assert _run_state(root, rid)["dispatch_plan"]["deliver"] == ids
+    assert _run_state(root, rid)["dispatch_plan"]["deliver"] == ids + ["meta-review"]
 
 
 def test_deliver_adds_security_when_no_stage_owned_it(ws, capsys):

@@ -13,10 +13,12 @@ but miss deployment-context mismatches (an O(n) no-op scan in a per-session hook
 `sys.executable` inside a daemon, a JSON spacing assumption across languages): code
 correct in dev, wrong in production.
 
-Prompt: `data/gate-prompts/meta-review.md`, emitted by
+Prompt: `data/gate-prompts/meta-review.md`. `stage-start --stage deliver` writes it,
+filled (project, requirement, changed files, recalled knowledge), to
+`meta_review_prompt_path`; the reviewer infers "where this runs" itself. No path →
 `spawn_prompt.py --gate meta-review --project <P> --files <changed files...>` (same exit
 contract as gate2: exit 0 = use it; 2 = no cap; 3 = no `--project`; stdout empty on
-non-zero). Fill `<requirement from run.json>` and the "where this runs" line. One Agent
+non-zero) and fill `<requirement from run.json>`. One Agent
 call, `run_in_background: false`, AFTER Gate-2 passes and BEFORE push-ready.
 
 - `CLEAR` → proceed.

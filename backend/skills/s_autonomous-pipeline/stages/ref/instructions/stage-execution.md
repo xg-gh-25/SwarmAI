@@ -105,16 +105,16 @@ stale within the same session).
 | evaluate | `stages/evaluate.md` | `scripts/spawn_prompt.py --gate gate0-skeptic` (Gate-0 M3 skeptic) |
 | think | `stages/think.md` | — |
 | plan | `stages/plan.md` | — |
-| build | `stages/build.md` | `scripts/spawn_prompt.py --gate gate1-skeptic` (Gate-1 Skeptic+SSA) |
-| review | `stages/review.md` (it runs `spawn_prompt.py --patterns-for <files>` for the triggered `REVIEW_PATTERNS.md` rows instead of a full read; `OPERATIONAL_PATTERNS.md` is read where `stages/ref/review/checks-system.md` says so) | `scripts/spawn_prompt.py --knowledge-only --project <P> --files <changed…>` (project-knowledge block per fan-out agent) |
+| build | `stages/build.md` | stage-start `gate1_prompt_path` (or `gate1_verdict`: already judged, do not respawn); fallback `scripts/spawn_prompt.py --gate gate1-skeptic` (Gate-1 Skeptic+SSA) |
+| review | `stages/review.md` (it runs `spawn_prompt.py --patterns-for <files>` for the triggered `REVIEW_PATTERNS.md` rows instead of a full read; `OPERATIONAL_PATTERNS.md` is read where `stages/ref/review/checks-system.md` says so) | stage-start `review_knowledge_path` + `review_diff_path`; fallback `scripts/spawn_prompt.py --knowledge-only --project <P> --files <changed…>` (project-knowledge block per fan-out agent) |
 | test | `stages/test.md` | `scripts/wtf_gate.py` (stage-complete computes it on the new path) |
-| deliver | `stages/deliver.md` | `scripts/spawn_prompt.py --gate gate2-adversarial --project <P> --files <changed…>` (Gate-2 specialists, recalled project-knowledge block) |
+| deliver | `stages/deliver.md` | stage-start expert `prompt_path`s + `meta_review_prompt_path`; fallback `scripts/spawn_prompt.py --gate gate2-adversarial` / `--gate meta-review` `--project <P> --files <changed…>` (Gate-2 specialists, Meta-review) |
 | reflect | `stages/reflect.md` | — |
 | goal_cycle | `stages/goal_cycle.md` | — |
 | complete | `stages/complete.md` (Step 6 output contract; fresh-read at the decision point) | — |
 
-`stage-start --stage review|deliver` already returns the expert list with ready prompt files; the
-`spawn_prompt.py` column is the fallback. After reading, execute the stage behavior inline in this
+`stage-start` already returns the build / review / deliver prompt files named above; the
+`spawn_prompt.py` part of each row is the fallback when a path is missing. After reading, execute the stage behavior inline in this
 session. DO NOT invoke sibling skills via slash commands — you ARE the pipeline.
 
 **⚡ Schema-first — publish once, not thrice (legacy publish path).** Before you build a stage
