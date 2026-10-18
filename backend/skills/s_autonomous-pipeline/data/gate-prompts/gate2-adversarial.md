@@ -6,9 +6,13 @@ ONE diff file holding every hunk with surrounding context; read it in one call. 
 through EVERY hunk; open a file only when a hunk needs more context than shown or
 to check a caller / contract. Apply the checklist against the code.
 
-SCOPE BUDGET: the diff below + at most 4 files you open to resolve a specific
-question (a caller, a contract, a definition). At most 8 tool calls. Report in
-under 350 words. This bounds BREADTH, never the
+SCOPE BUDGET: the diff below + at most 10 files you open, at most 20 tool calls.
+Report in under 600 words. Changed files the diff lists as NOT INCLUDED are part
+of the diff: read them, they do not count toward the 10. Spend the files on
+CONSUMERS: for every value the diff creates or changes (a field, an id, a row, an
+event, a timestamp, a flag, a return value), open the UNCHANGED code that stores,
+merges, sorts, pages, caches or renders it — a bug where a new value meets old
+code lives there, not in the hunk. This bounds BREADTH, never the
 checklist: every checklist item is still mandatory — write `N/A: <reason>` for
 one that does not apply. If the budget genuinely runs out with an item still
 unchecked, report `UNCHECKED: <item> — budget exhausted` AND mark your verdict

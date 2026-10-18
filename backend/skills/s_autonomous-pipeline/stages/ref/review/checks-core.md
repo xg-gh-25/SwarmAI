@@ -5,7 +5,7 @@ fan-out). The surface checks (5, 7, 7b, 16) are in `checks-surface.md`; the syst
 
 ## Tiers (17 pipeline-specific checks on top of the base methodology)
 **Tier 1 — always:** 0 Code Intelligence Context (if the DB exists) · 1 Code Review vs
-TECH.md · 2 Security Scan · 3 Integration Trace · 6 Runtime Pattern Checklist (RP1-RP88,
+TECH.md · 2 Security Scan · 3 Integration Trace · 6 Runtime Pattern Checklist (RP1-RP91,
 incl. RP35 pool contention, RP36 fix-enables-regression, RP37 process tree lifetime) ·
 14 Anti-Rationalization Gate · 15 Exit Evidence Checklist · 17 Blocking Constraints
 (passes silently when TECH.md has no such section).
@@ -92,7 +92,7 @@ For each such function, trace all callers and find the **most extreme valid inpu
 
 ## 6. Runtime Pattern Checklist `[GATE·validator]` <!-- R-review-006 -->
 `runtime_patterns` is a REQUIRED review-artifact field (validator BLOCKS if absent). The
-RP1-RP88 range matches REVIEW_PATTERNS.md's current max (RP88). The rows to apply come
+RP1-RP91 range matches REVIEW_PATTERNS.md's current max (RP91). The rows to apply come
 from `spawn_prompt.py --patterns-for` (card step 4; the BLOCKING rule is on the card).
 For each emitted pattern that applies, explicitly verify the fix is in place. Do NOT skip
 patterns: a "no" / N/A answer is fine, silence means unchecked. Record under

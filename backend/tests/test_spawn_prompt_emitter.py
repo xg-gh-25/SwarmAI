@@ -78,7 +78,12 @@ _PRE_MOVE_SHA256 = {
     # real expert prompts) became the <PROJECT_KNOWLEDGE> slot that spawn_prompt.py
     # fills from DDD recall. Recomputed in the same change, as this test instructs.
     # ...and again for the same re-check paragraph (H2).
-    "gate2-adversarial": "92fc9d37bd309a0a4e04369469910ae16ace7816bd5022cfb3c0a9de7e3d9ce2",  # pragma: allowlist secret
+    # ...and again 2026-10-18 (pipeline-run-budget §11): the Gate-2 caps were RAISED
+    # back (8 -> 20 tool calls, 4 -> 10 files, 350 -> 600 words) with a consumer-trace
+    # instruction, after a controlled replay showed the 8-call cap truncating the
+    # checklist (PARTIAL "budget exhausted") and the misses living in unchanged
+    # consumer code. NOT-INCLUDED changed files no longer eat the file budget.
+    "gate2-adversarial": "a0a7753e3335864dbaf23abaa5a9a41d6fc926b953b4518f6e36542e4f8a6a22",  # pragma: allowlist secret
 }
 
 

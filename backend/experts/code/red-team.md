@@ -9,7 +9,7 @@ visibility: public
 ---
 
 # Red Team Review
-<!-- version: 2026-08-23 | synced with: REVIEW_PATTERNS.md RP1-RP88 (incl. Agent-Safety RP65-RP80; RP82 collection-time guard) -->
+<!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 (incl. Agent-Safety RP65-RP80; RP82 collection-time guard; RP89-RP91 from the compaction-summary review) -->
 
 Scope: CONDITIONAL — only dispatch when EITHER:
 - Changeset > 200 lines, OR
@@ -20,7 +20,7 @@ regardless of historical hit rate (insurance policy, not stats-gated).
 
 This runs AFTER other specialists. You receive their merged findings.
 
-**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP88) that
+**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP91) that
 prior specialists missed. Your unique value: patterns that fall between domains
 (e.g., RP25 blast radius, RP35 pool contention, RP36 fix-enables-regression, RP37 process tree lifetime).
 When the changeset is an LLM/agent system, the Agent-Safety patterns (RP65-RP80 —
@@ -94,6 +94,10 @@ verdict PARTIAL rather than padding with speculation.
 - Error propagation across process boundaries (subprocess exit codes)
 - Timing assumptions (A completes before B starts)
 - Shared state modified by both sides without coordination
+- The same item on two routes — live stream vs reload from storage (RP89): refresh
+  after the event and check the view did not change, duplicate or reorder
+- Follow each NEW value into the UNCHANGED code that merges, sorts, pages or caches
+  it; the hunks are where the other specialists already looked
 
 ### 5. Find What Specialists Structurally Cannot
 - Cross-category issues (performance bug that's also a security issue)

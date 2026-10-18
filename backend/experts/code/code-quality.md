@@ -30,7 +30,7 @@ An integration trace is ONE grep per new symbol, not an exploration.
    - Dead orphan detection: old function with 0 remaining callers
    - Control-flow preservation: moved code executes at same point
    - Duplicate detection: grep for same method name in same file
-4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP88
+4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP91
    (incl. Agent-Safety RP65-RP80; RP82 collection-time guard when the changeset is an LLM/agent system).
    For each applicable pattern, explicitly verify. Silence = unchecked.
 5. **Depth & Seam Analysis** — For each new file:
@@ -45,7 +45,7 @@ An integration trace is ONE grep per new symbol, not an exploration.
 > Adopted from mattpocock/skills `code-review` (Fowler, _Refactoring_ ch.3).
 > Provenance: `Knowledge/Reports/2026-07-12-mattpocock-skills-deep-research.md` (S2).
 > This is the standards-axis vocabulary — it complements, and never restates,
-> the RP1-RP88 runtime/operational/security-boundary patterns (Scope #4). RP =
+> the RP1-RP91 runtime/operational/security-boundary patterns (Scope #4). RP =
 > *runtime/operational* traps; Fowler = *static design* smells. Disjoint by
 > construction.
 >

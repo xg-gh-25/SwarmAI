@@ -9,7 +9,10 @@ visibility: public
 ---
 
 # State Machine Specialist Review
-<!-- version: 2026-06-08 | origin: Pipeline Meta-Intelligence (GAP 8) -->
+<!-- version: 2026-10-18 | origin: Pipeline Meta-Intelligence (GAP 8); orphan-adoption + RP89 live/reload parity added from the compaction-summary review -->
+
+**Cross-reference:** RP13 (state machine completeness), RP89 (live vs reload parity),
+RP86 (stateful helper never re-baselined).
 
 Scope: Dispatched when changeset touches state enums, status fields, lifecycle
 methods, state transition logic, or any code with explicit states/phases.
@@ -88,6 +91,19 @@ External input includes: user action, API response, subprocess exit, network eve
 - WAITING_INPUT → user closes tab → no input event → stuck
   Fix: tab close handler explicitly transitions to DEAD
 
+**Orphan ADOPTED by the next cycle.** Ask the follow-up question too: if the
+completing event never arrives, does the NEXT cycle (turn, request, job run) pick
+the stale item up as its own? A lookup like "the last item in state running" that
+is not scoped to the current cycle finds the one an interrupted earlier cycle left
+behind, then updates it in place — the new cycle's result lands at the old
+position and the old one is overwritten. Verify every by-status lookup is bounded
+to the current cycle (after the last user message, this request's id, this job's
+run id), and that an abandoned item shows a terminal display ("did not finish"),
+not its live one, once a newer cycle runs.
+- Live "compacting" divider left `running` by a Stop; the next compaction's
+  "started" found it, appended nothing, and its "done" replaced the OLD divider far
+  up the history. Fix: search only after the last user message.
+
 ### 4. Parallel State Mutation
 
 **If the state can be written by multiple paths (event handler + timer + error handler):**
@@ -111,6 +127,11 @@ External input includes: user action, API response, subprocess exit, network eve
 - State stored in-memory only (lost on crash/restart)
 - State stored in localStorage without TTL (stale state from days ago applied on next visit)
 - State stored in DB but not validated against current system state on read
+- **Live vs reload disagree (REVIEW_PATTERNS RP89).** The same item reaches the view
+  live (stream / optimistic insert) and on reload (DB / API). Compare the two routes:
+  same id (or the merge keeps both), same order key in the same FORMAT (UTC `…Z` vs a
+  naive-local DB string sorts hours apart), same position, same fields. Then ask where a
+  live item with NO stored row lands after reconcile — can it become a cursor or anchor?
 
 ### 6. State Machine Diagram Verification (for complex changes)
 

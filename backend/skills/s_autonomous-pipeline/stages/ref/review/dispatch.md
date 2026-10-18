@@ -14,7 +14,7 @@ threshold below.
 | Id | Listed when | Prompt file / lens |
 |----|-------------|--------------------|
 | spec-compliance | always (separate axis, runs before fan-out) | `backend/experts/code/spec-compliance.md` — AC coverage matrix, MISSING/EXTRA/MISUNDERSTOOD |
-| code-quality | fan-out applies | `backend/experts/code/code-quality.md` — TECH.md conformance, integration trace, replace/move parity, runtime patterns RP1-RP88, depth & seam |
+| code-quality | fan-out applies | `backend/experts/code/code-quality.md` — TECH.md conformance, integration trace, replace/move parity, runtime patterns RP1-RP91, depth & seam |
 | ux-test | fan-out applies AND a non-test frontend file changed | `backend/experts/code/ux-test.md` — UX1-UX5, test coverage gaps, E2E trace |
 | security | fan-out applies AND Gate-2 will NOT dispatch security for this scope | `backend/experts/code/security.md` — confidence-gated scan, wire test, blast radius |
 

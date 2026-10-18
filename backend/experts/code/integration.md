@@ -9,7 +9,7 @@ visibility: public
 ---
 
 # Integration Specialist Review
-<!-- version: 2026-05-19 | origin: PE Finding #1 (governance gate dead code) -->
+<!-- version: 2026-10-18 | origin: PE Finding #1 (governance gate dead code); §6 consumer trace added from the compaction-summary review (RP89-RP91) -->
 
 Scope: Dispatched when changeset creates new public functions or modules.
 
@@ -96,6 +96,28 @@ For new config options, schema fields, or feature flags:
 - Is the schema field PRODUCED by any code path? (consumer without producer = always-empty)
 - Is the feature flag CHECKED in the code path it's supposed to gate?
 
+### 6. Consumer Trace — the new value meets OLD code
+
+Sections 1-5 ask whether the new code is called. This one asks what happens to the
+VALUES it produces after they leave the diff. For every new or changed value (a row,
+an id, an event field, a timestamp, a flag, a return value), name each UNCHANGED
+consumer that stores, merges, sorts, pages, caches or renders it, open it, and check
+the value survives it:
+- **merge / dedup** — matched by id, or kept twice? (a live copy and a stored copy
+  with different ids both survive a merge that keeps local-only items)
+- **sort / position** — compared with what, in which format? (REVIEW_PATTERNS RP89)
+- **paging / batching** — does every item land in exactly one slice? (RP90)
+- **caching** — does the cache key / ETag change when this value changes? (RP91)
+- **anchors** — can the new item become "the oldest", "the last", a cursor or a
+  lookup target that the old code assumed is always a real row?
+- **retention** — a new persistent store: who deletes it, and on the same schedule
+  as the data it was derived from? (a derived table that outlives its source's TTL
+  keeps that data forever)
+
+**Proven failure pattern:** every confirmed bug of one review was in unchanged code —
+the store merge, the paging query, the turn-end fallback, the "load older" cursor —
+while the hunks themselves were correct.
+
 ---
 
 ## What This Specialist Does NOT Check
@@ -105,4 +127,5 @@ For new config options, schema fields, or feature flags:
 - Performance of the call chain (→ performance specialist)
 - API contract with frontend (→ api-contract specialist)
 
-This specialist ONLY checks: "Is the code CONNECTED to the system?"
+This specialist ONLY checks: "Is the code CONNECTED to the system, and do its values
+survive the old code they flow into?"

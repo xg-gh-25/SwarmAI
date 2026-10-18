@@ -9,7 +9,7 @@ visibility: public
 ---
 
 # Correctness Specialist Review
-<!-- version: 2026-09-13 | synced with: REVIEW_PATTERNS.md RP1-RP88 -->
+<!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 -->
 
 Scope: Always dispatched when changeset > 50 lines.
 
@@ -18,8 +18,9 @@ in your domain: RP13 (state machine), RP15 (setTimeout), RP16 (concurrent async)
 RP27 (non-deterministic ordering), RP33 (multi-shape returns), RP34 (shell variable
 scope across Bash calls), RP47 (test-theater — test patches the symbol-under-change
 or re-derives a prod formula; mutation-prove RED-on-revert), RP48 (stale/false
-comment — changed behavior, unchanged docstring/comment). These are proven bug
-patterns with concrete examples.
+comment — changed behavior, unchanged docstring/comment), RP89 (live vs reload
+parity), RP90 (slice partition), RP91 (cache key misses an input). These are proven
+bug patterns with concrete examples.
 
 Output: JSON objects, one finding per line.
 
@@ -169,3 +170,10 @@ EXACT symbol the changeset modifies (tests the mock, not the code); (2) the test
 re-derives a prod formula/constant in a local helper (asserts the formula against
 its own copy). Verdict test: revert the guarded prod line → the test MUST go RED.
 Green-on-revert = theater. Apply RP47 to every test the changeset adds/modifies.
+
+**The opposite trap — a test that PINS a questionable behavior.** A test written in
+the same change asserts what the author INTENDED, not that it is right. When a test
+asserts a surprising choice (an unbounded search "must not be blocked" by later
+items; a live order that differs from what a reload will show), treat the assertion
+as a claim to attack, not as evidence: the finding is the behavior, and the test is
+where it is documented.

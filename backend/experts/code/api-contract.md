@@ -9,7 +9,7 @@ visibility: public
 ---
 
 # API Contract Specialist Review
-<!-- version: 2026-09-13 | synced with: REVIEW_PATTERNS.md RP1-RP88 -->
+<!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 -->
 
 Scope: When changeset touches router files, endpoint handlers, request/response
 models, response schemas, or API-facing interfaces.
@@ -23,7 +23,8 @@ models, response schemas, or API-facing interfaces.
 
 **Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
 RP14 (cross-service parameter mismatch), RP24 (cross-language serialization format),
-RP33 (multi-shape function returns — different consumers assume different shapes).
+RP33 (multi-shape function returns — different consumers assume different shapes),
+RP89 (live vs reload parity), RP90 (slice partition), RP91 (cache key / ETag misses an input).
 
 Output: JSON objects, one finding per line.
 
@@ -89,9 +90,24 @@ Modifiers: +3 if found actual consumer that will break, +2 if public API
 - Encoding assumptions (UTF-8 not enforced at boundary)
 - Numeric precision loss across serialization boundaries
 - Array ordering assumptions (set/dict iteration order)
+- **Two delivery routes for one item (RP89):** a value sent live (SSE event, optimistic
+  insert) and returned again on reload (history API) must agree on id, order key,
+  timestamp FORMAT and fields. "Both sides use ISO strings" is not enough: check that the
+  strings are COMPARED (sorted, merged) against each other and are the same flavour
+  (UTC `…Z` vs naive local sort hours apart).
+
+### Caching & Validators (RP91)
+- ETag / If-None-Match / cache keys built from counts miss an in-place update
+- A new data source spliced into a cached response that is not part of the key
+- A degraded response (one input failed) cached under the full key
 
 ### Pagination & Limits
 - List endpoints without pagination that will grow unbounded
 - Changed page sizes or default limits without documentation
 - Missing total count or next-page indicators
 - Cursor-based pagination without stable sort order
+- **Slice partition (RP90):** a secondary set filtered into each page must land on exactly
+  one page — bound a page by the NEXT page's first key (the cursor row), not by the page's
+  own last (possibly merged) entry; check the gap at the cut
+- A synthetic / local-only item that can become the oldest entry and be sent back as the
+  cursor (the backend finds no such row → empty page → paging stops)

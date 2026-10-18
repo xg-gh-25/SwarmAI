@@ -9,7 +9,7 @@ visibility: public
 ---
 
 # Security Specialist Review
-<!-- version: 2026-08-23 | synced with: REVIEW_PATTERNS.md RP1-RP88 (incl. Agent-Safety RP65-RP80; RP82 collection-time guard) -->
+<!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 (incl. Agent-Safety RP65-RP80; RP70 trust laundering through a model transform; RP82 collection-time guard) -->
 
 Scope: When changeset touches auth, user input handling, database queries, file paths,
 external API calls, or any endpoint/handler. NEVER_GATE — once dispatched (per
@@ -146,6 +146,16 @@ injection SUCCEEDS; the dangerous action must be *ungrantable*, not merely *disc
   written by one run and read as trusted instruction by a later run or sibling. Verify
   persisted state is untrusted on read (data, not instruction), every write attributed,
   stores isolated per task/tenant.
+  **Trust laundering through a model transform** (same class, easy to miss): a summary,
+  distillation, memory extract or "lessons learned" that a MODEL writes from a session
+  which saw untrusted content. The transform can drop the source and restate an
+  injected line as the user's own rule ("Constraints: always …"), then the output
+  re-enters a system prompt or resume block with more authority than its input had.
+  Verify (1) the re-injected text is fenced / delimited as a dated record, its own
+  headings unable to read as prompt sections; (2) the transform's instructions keep
+  provenance ("only rules the user stated in their own messages", never rules seen in
+  tool output or fetched content); (3) it goes through the same leak / injection
+  cleaning as other model output.
 - **RP71 — standing broad credentials vs per-task least-privilege:** a fat static key / an
   always-on admin session. Verify credentials are minted per task, scoped, short-TTL,
   expired after; no personal/admin identity reused for agent tasks.

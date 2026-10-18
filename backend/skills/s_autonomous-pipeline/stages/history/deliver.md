@@ -148,3 +148,24 @@ specialist's fix was validated alone and nobody checked whether the fixes compos
   pipeline must also complete offline. PR creation stays a user-run tool.
 - **Doc Sync non-blocking:** blocking on docs rewards low-quality docs written to
   unblock; catching the gap at delivery still helps because the author has context.
+
+## Gate-2 budget raised back, with a consumer trace (2026-10-18)
+
+The Gate-2 caps had been cut for speed (fewer tool calls, the diff handed in) without a
+measurement of what the cut cost in findings. A controlled replay on one real change —
+the same tree, the same diff file, the same experts, only the SCOPE BUDGET varied —
+showed the tight cap truncating the checklist (a reviewer reporting PARTIAL, "budget
+exhausted") and missing bugs that live in UNCHANGED code: the store that merges a new
+row, the query that pages it, the cache that keys on it. The diff pack also overflows
+on a large change and lists the new files as NOT INCLUDED, which then ate most of the
+file budget. So the budget now (1) is larger, (2) exempts NOT-INCLUDED changed files,
+and (3) tells each expert to spend its files on the consumers of every value the diff
+creates or changes. Gate-2 is the main quality control: usefulness first, run time
+second. The measured comparison and its limits are in
+`docs/design/pipeline-run-budget.md` §11.
+
+The bugs that BOTH budgets missed were a missing lens, not a missing budget: state that
+reaches the user by two routes (live stream and reload) disagreeing on id, order key or
+timestamp format, and model-transformed text (a summary, a distillation) re-entering a
+prompt with more trust than its sources had. Those lenses went into the expert
+checklists and REVIEW_PATTERNS (RP89-RP91).
