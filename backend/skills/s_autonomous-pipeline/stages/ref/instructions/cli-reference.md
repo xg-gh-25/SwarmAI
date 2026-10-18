@@ -9,6 +9,8 @@ All commands: `python backend/scripts/artifact_cli.py <command> [args]`
 # Stage boundary (preferred)
 stage-start    --project <P> --run-id <R> --stage <S>
 stage-complete --project <P> --run-id <R> --stage <S> --data @/tmp/<R>/<S>.json [--check]
+               # E_STAGE_NOT_OPEN: the stage already completed and was not re-entered;
+               # run stage-start for it first (a re-record is measured over its own window)
 gate2-recheck  --project <P> --run-id <R> --findings @/tmp/<R>/findings.json   # DELIVER round 2: fix-only prompts (enforced)
 gate0-prompt   --project <P> --run-id <R> --data @/tmp/<R>/gate0.json   # EVALUATE M3: skeptic prompt + `spawn` text
 schema   --stage <stage>                          # expected shape + ready template (single-line JSON)
@@ -21,6 +23,10 @@ advance  --project <P> --state <stage> --run-id <RUN>   # advance the state mach
 run-create  --project <P> --requirement "<text>" [--profile <profile>]
 run-update  --project <P> --run-id <R> [--stage-json '<json>'] [--status <S>] [--profile <P>]
             [--outputs-surfaced]   # with --status completed, only when the surface_run_outputs tool is unavailable
+run-commit  --project <P> --run-id <R> [--sha <sha>[,<sha>]] [--force]
+            # --sha: record commits already made for this run instead of staging files_touched
+            # (each reachable from HEAD, newer than the run, 'Run: <R>' in its message,
+            # touching a files_touched path). A commit made by hand must name the run id.
 run-get     --project <P> [--run-id <R>]
 run-budget  --project <P> --run-id <R>            # informational consumed/pct (NOT a checkpoint gate)
 run-checkpoint --project <P> --run-id <R> --stage <stg> --reason "<why>"

@@ -91,6 +91,13 @@ def read_snapshot(run_id: object, workspace_root: object) -> "tuple[Path, list] 
     return run_json, (commits if isinstance(commits, list) else [])
 
 
+def source_rows(events: object) -> set:
+    """Paths of the ``kind == "source-final"`` rows in a surface batch (the rows a
+    marker attests). Shared with ui_actions.surface_counts_as_emitted."""
+    return {e.get("path") for e in (events or [])
+            if isinstance(e, dict) and e.get("kind") == "source-final" and e.get("path")}
+
+
 def write_marker(run_json: object, events: object, commits: object = None) -> bool:
     """Write the marker beside ``run_json`` when ``events`` hold at least one
     ``kind == "source-final"`` row. Returns True when written. Never raises: a
@@ -99,18 +106,21 @@ def write_marker(run_json: object, events: object, commits: object = None) -> bo
     ``commits`` is the snapshot from :func:`read_snapshot`, taken before the batch was
     built; when omitted, run.json is read now (callers that built nothing first)."""
     try:
-        rows = {e.get("path") for e in (events or [])
-                if isinstance(e, dict) and e.get("kind") == "source-final" and e.get("path")}
+        rows = source_rows(events)
         if not rows:
             return False
         path = Path(str(run_json))
-        state = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(state, dict):
-            return False
+        if commits is None:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                return False
+            commits = state.get("commits")
         payload = {
-            "run_id": state.get("id"),
+            # The run directory names the run; reading run.json again here could pair
+            # this batch with a state written after the snapshot (run_1a309783).
+            "run_id": path.parent.name,
             "source_rows": len(rows),
-            "commits": sorted(_commit_shas(state.get("commits") if commits is None else commits)),
+            "commits": sorted(_commit_shas(commits)),
             "at": datetime.now(timezone.utc).isoformat(),
         }
         # mkstemp, not a pid-based name: the daemon writes from worker threads, so two

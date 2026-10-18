@@ -276,6 +276,17 @@ class StreamingOrchestrator:
             self._parent._auto_surfaced_run_ids_set = seen
         return seen
 
+    def _surface_marker_pending(self) -> set:
+        """Session-scoped run_ids whose last explicit surface batch was sent but whose
+        completion-gate marker could not be written (run_1a309783). Read only by the
+        explicit surface_run_outputs branch, which re-emits such a run on its next
+        call; the backend-auto completion paths keep their once-per-session rule."""
+        s = getattr(self._parent, "_surface_marker_pending_set", None)
+        if s is None:
+            s = set()
+            self._parent._surface_marker_pending_set = s
+        return s
+
     def _surfaced_commits(self) -> dict:
         """Session-scoped ``run_id → frozenset of commit shas`` the explicit
         surface_run_outputs branch has emitted rows for (run_a87bfe3f). A run in the
@@ -2326,8 +2337,10 @@ class StreamingOrchestrator:
                             _sf_emitted = self._surfaced_commits()
                             _sf_shas = (frozenset(_ua.snapshot_shas(_sf_snap))
                                         if _sf_snap else None)
+                            _sf_pending = self._surface_marker_pending()
                             _sf_already = (
                                 isinstance(_sf_run_id, str) and _sf_run_id in _sf_seen
+                                and _sf_run_id not in _sf_pending
                                 and (_sf_shas is None or _sf_run_id not in _sf_emitted
                                      or _sf_shas <= _sf_emitted[_sf_run_id])
                             )
@@ -2338,14 +2351,26 @@ class StreamingOrchestrator:
                                 _sf_events = await build_surface_events_async(_sf_run_id)
                                 for _sf_ev in _sf_events:
                                     yield _sf_ev
+                                _sf_marked = False
                                 if _sf_events and _sf_snap:
-                                    await asyncio.to_thread(_ua.record_surface, _sf_snap, _sf_events)
+                                    _sf_marked = await asyncio.to_thread(
+                                        _ua.record_surface, _sf_snap, _sf_events)
                                 if isinstance(_sf_run_id, str) and _sf_run_id:
+                                    # The rows reached the user: the once-per-session
+                                    # guard the completion paths share holds either way.
                                     _sf_seen.add(_sf_run_id)
-                                    # No snapshot → record an empty set, so a later
+                                    # An empty set when commits are unknown, so a later
                                     # call that can read commits is not mistaken for
                                     # the completion path's no-entry case.
                                     _sf_emitted[_sf_run_id] = _sf_shas or frozenset()
+                                    # Marker not written although source rows were sent
+                                    # (run_1a309783): only THIS branch re-emits on the
+                                    # next explicit call, commits or not; the completion
+                                    # paths, which write no marker, do not.
+                                    if _ua.surface_counts_as_emitted(_sf_marked, _sf_events):
+                                        _sf_pending.discard(_sf_run_id)
+                                    else:
+                                        _sf_pending.add(_sf_run_id)
                             # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this

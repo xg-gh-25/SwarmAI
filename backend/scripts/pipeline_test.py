@@ -664,6 +664,14 @@ def reverse_distances(repo: Path, sgraph: dict[str, list[str]], roots,
     return dist
 
 
+_DOC_LINT_SUITES = (
+    "backend/tests/test_lint_skills_body.py",
+    "backend/tests/test_lint_skills_size.py",
+    "backend/tests/test_lint_experts.py",
+    "backend/tests/test_check_rule_preservation.py",
+)
+
+
 def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
                    cap: int, recent: list[str] | tuple = (),
                    sgraph: dict[str, list[str]] | None = None,
@@ -678,6 +686,12 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     direct importer. Overflow past ``cap`` is returned as skipped, never dropped silently.
     """
     changed_tests = [f for f in changed if _is_backend_test(f) and (repo / f).is_file()]
+    # A skill card or expert file has no importers, yet the linters and the rule
+    # preservation suite read them (run_376299fa pushed plan.md past the card limit
+    # with regression green): select those suites as direct when one changed.
+    if any(f.startswith(("backend/skills/", "backend/experts/")) for f in changed):
+        changed_tests += [t for t in _DOC_LINT_SUITES
+                          if t not in changed_tests and (repo / t).is_file()]
     mfiles = _changed_module_files(repo, changed)
     mods = [(m, pkg) for _, m, pkg in mfiles]
     rank: dict[str, tuple[int, int]] = {}

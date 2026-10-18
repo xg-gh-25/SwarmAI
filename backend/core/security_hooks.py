@@ -3945,6 +3945,18 @@ def _pipeline_runner_command(project: str, run_id: str, mode: str, files: list[s
     return " ".join(parts)
 
 
+def _test_gate_hint(hits) -> str:
+    """Extra advice for a deny whose only reason is stdin code naming the runner.
+    The check stays fail-closed (any mention denies — a narrower check kept being
+    bypassable); the usual false deny is an edit script that only WRITES text naming
+    the runner, and writing the code to a file and running that file avoids it."""
+    if "python stdin pytest" not in hits:
+        return ""
+    return ("\nIf this stdin code only WRITES text that names the test runner (an edit "
+            "script), save the edit script to a file and run it. Running tests still goes "
+            "through the runner above, never through a script.")
+
+
 def create_pipeline_test_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate (design §4-B3). While THIS session has an
     active run (C6: own session_id, status running, activity within
@@ -4002,6 +4014,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                    + shlex.quote(own_run["id"]) + " --status abandoned")
         logger.warning("[BLOCKED] pipeline_test_gate (%s) in run %s: %s",
                        ", ".join(hits), own_run["id"], command[:120])
+        hint = _test_gate_hint(hits)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -4023,6 +4036,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                     "can bypass this gate, by setting SWARM_TEST_GATE_FORCE=1 in the "
                     "backend/daemon environment (a variable set in a Bash command has "
                     "no effect)."
+                    + hint
                 ),
             }
         }

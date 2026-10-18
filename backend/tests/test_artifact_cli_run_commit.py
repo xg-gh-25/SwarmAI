@@ -359,7 +359,7 @@ class TestRunCommitAlreadyCommitted:
         self._git(repo, "commit", "-qm", "base")
         # run starts at created_at (default 2026-07-04 in _write_run); commit AFTER it
         (repo / "f.py").write_text("v2 — the run's real change\n")
-        self._git(repo, "commit", "-qam", "per-cycle commit of the run's file")
+        self._git(repo, "commit", "-qam", "per-cycle commit of the run's file\n\nRun: run_ab")
         expected_sha = self._git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
 
         rf = _write_run(workspace, "run_ab",
@@ -384,7 +384,7 @@ class TestRunCommitAlreadyCommitted:
         env_old = {**__import__("os").environ,
                    "GIT_AUTHOR_DATE": "2020-01-01T00:00:00",
                    "GIT_COMMITTER_DATE": "2020-01-01T00:00:00"}
-        self._git(repo, "commit", "-qm", "ancient", env=env_old)
+        self._git(repo, "commit", "-qm", "ancient\n\nRun: run_ab2", env=env_old)
         rf = _write_run(workspace, "run_ab2",
                         stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
                         files_touched=[str(repo / "f.py")])
@@ -400,8 +400,14 @@ class TestRunCommitAlreadyCommitted:
         (repo / "f.py").write_text("x\n")
         self._git(repo, "add", "-A")
         self._git(repo, "commit", "-qm", "c")
-        assert _lookup_already_committed(str(repo), [str(repo / "f.py")], "") == []
-        assert _lookup_already_committed(str(repo), [], "2020-01-01T00:00:00+00:00") == []
+        self._git(repo, "commit", "--amend", "-qm", "c\n\nRun: run_x")
+        assert _lookup_already_committed(str(repo), [str(repo / "f.py")], "", "run_x") == []
+        assert _lookup_already_committed(str(repo), [], "2020-01-01T00:00:00+00:00",
+                                         "run_x") == []
+        # the same commit IS found once the window is given, so the [] above is the
+        # empty-since / no-files guard, not the run-id bound
+        assert _lookup_already_committed(str(repo), [str(repo / "f.py")],
+                                         "2020-01-01T00:00:00+00:00", "run_x")
 
 
 # ── PR-review surface (run_b8ea6d5c): LOCAL_PR.md REMOVED; finish batch = rail rows ──

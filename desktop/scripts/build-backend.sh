@@ -310,6 +310,11 @@ for _root, _dirs, _files in _os.walk('skills'):
         datas.append((_src, _os.path.dirname(_src)))
 # Include DDD templates for default project provisioning
 datas += [('templates', 'templates')]
+# Include the expert library (backend/experts/<domain>/<id>.md): core.expert_manager
+# reads it at runtime (registry API, and the SubagentStop hook's registry-backed
+# adversarial classification). Missing here, the packaged daemon scans an absent dir,
+# finds no experts and silently falls back to keyword classification (run_1a309783).
+datas += [('experts', 'experts')]
 # Include MCP server scripts as LOOSE FILES on disk. These are launched as
 # subprocesses BY PATH (mcp_config_loader.py: .../mcp_servers/channel_file_sender.py),
 # not imported — so being in hiddenimports/LOCAL_PACKAGES (archive-only) is not

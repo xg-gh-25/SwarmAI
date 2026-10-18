@@ -560,6 +560,15 @@ def record_surface(snapshot, events) -> bool:
         return False
 
 
+def surface_counts_as_emitted(marked: bool, events) -> bool:
+    """Whether a surface batch the orchestrator yielded counts as emitted for its
+    commits: only when its marker was written, or the batch had no source rows (so no
+    marker was due). A batch whose marker write failed stays un-emitted, so the next
+    surface_run_outputs call for the same commits builds and writes again."""
+    from . import surface_marker
+    return bool(marked) or not surface_marker.source_rows(events)
+
+
 def snapshot_shas(snapshot) -> set:
     """Commit shas in a :func:`surface_snapshot` (empty for None)."""
     from . import surface_marker

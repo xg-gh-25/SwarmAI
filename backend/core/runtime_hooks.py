@@ -810,8 +810,9 @@ def write_session_run_map(session_id: str, run_id: str, ts: float | None = None)
     """Atomically write the session->run rendezvous (tmp sibling + os.replace).
 
     The ONE writer of the .map shape ``{session_id, run_id, ts}``: the PostToolUse hook
-    below (live, parses run-create stdout) and ``artifact_cli run-create`` itself (so a
-    run whose stdout was redirected is still linked) both call it. Raises on I/O
+    below (live, parses run-create stdout), ``artifact_cli run-create`` itself (so a
+    run whose stdout was redirected is still linked) and ``artifact_cli stage-start``
+    (so a session working on an older run credits reviews to it) all call it. Raises on I/O
     error; callers decide whether that is fatal."""
     _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     dest = _session_run_map_path(session_id)
@@ -1041,14 +1042,55 @@ _ADVERSARIAL_INTENT_RE = re.compile(
 )
 
 
+_ADV_EXPERTS_CACHE: "list" = [None]  # [(signature, ids)] — one slot, one assignment
+
+
+def _registered_adversarial_experts() -> frozenset:
+    """Ids of registered experts whose frontmatter says ``spawn_as: adversarial``.
+
+    Cached on the expert files' names + mtimes, so a SubagentStop does not re-parse
+    the whole tree each time. A registry that fails to load is logged at WARNING (it
+    makes every expert fall back to keyword classification, and D7 then refuses)
+    and yields an empty set; classification falls back to the keywords."""
+    try:
+        from core.expert_manager import _EXPERTS_ROOT, scan_experts
+        # rglob: the same file set scan_experts reads, so any expert edit re-keys it
+        sig = tuple(sorted((str(p), p.stat().st_mtime_ns)
+                           for p in _EXPERTS_ROOT.rglob("*.md")))
+        cached = _ADV_EXPERTS_CACHE[0]
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        ids = frozenset(eid for eid, info in scan_experts().items()
+                        if str(getattr(info, "spawn_as", "")).strip().lower() == "adversarial")
+        if not ids:
+            # An absent or empty library (e.g. a packaged build without experts/) reads
+            # the same as "no expert is adversarial": say so instead of falling back silently.
+            logger.warning("expert registry at %s has no spawn_as: adversarial expert; "
+                           "EXPERT-ID spawns fall back to keyword classification", _EXPERTS_ROOT)
+        _ADV_EXPERTS_CACHE[0] = (sig, ids)
+        return ids
+    except Exception:  # noqa: BLE001 — a broken registry must not break the hook
+        logger.warning("expert registry unreadable: EXPERT-ID spawns fall back to keyword "
+                       "adversarial classification", exc_info=True)
+        return frozenset()
+
+
 def _is_adversarial_intent(subagent_type: str, description: str, prompt: str) -> bool:
     """True if a sub-agent was spawned for ADVERSARIAL review (vs Explore/investigate).
 
-    subagent_type is the primary signal; description + prompt are a liberal keyword
-    fallback. Empty everything → False (no evidence = not adversarial; fail-safe:
-    the gate should DENY, not silently pass, when intent is unknowable)."""
+    Three signals, any one suffices: (1) subagent_type names an adversarial role;
+    (2) the prompt's first EXPERT-ID line names a registered expert whose
+    ``spawn_as`` is ``adversarial`` — the registry is the authority, so the wording of
+    the rest of the prompt does not matter (run_a87bfe3f: two experts spawned with a
+    plain "read your instructions" second line were not counted and D7 refused);
+    (3) a liberal keyword match on description + prompt. Empty everything → False
+    (no evidence = not adversarial; fail-safe: the gate should DENY, not silently
+    pass, when intent is unknowable)."""
     st = str(subagent_type or "")
     if _ADVERSARIAL_TYPE_RE.search(st):
+        return True
+    eid = _extract_expert_id(prompt or "")
+    if eid and eid in _registered_adversarial_experts():
         return True
     blob = f"{description or ''}\n{prompt or ''}"
     return bool(_ADVERSARIAL_INTENT_RE.search(blob))

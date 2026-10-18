@@ -2256,6 +2256,12 @@ def cmd_run_summary(args, reg: ArtifactRegistry) -> None:
                      ensure_ascii=False))
 
 
+def _current_session_id() -> "str | None":
+    """The calling app session's id (SWARM_APP_SESSION_ID, validated token) or None."""
+    sid = (os.environ.get("SWARM_APP_SESSION_ID") or "").strip()
+    return sid if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", sid) else None
+
+
 def _run_origin(args, now_iso: str) -> dict:
     """session_id / intent / intent_source for a new run (contract C1).
 
@@ -2263,9 +2269,7 @@ def _run_origin(args, now_iso: str) -> dict:
     session's last substantive user message before now; else ``--intent``; else
     the requirement text. Best-effort: any lookup failure falls back silently to
     the next source (the run must always be creatable)."""
-    import os as _os
-    sid = (_os.environ.get("SWARM_APP_SESSION_ID") or "").strip()
-    sid = sid if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", sid or "") else None
+    sid = _current_session_id()
     intent, source = None, None
     if sid:
         try:
@@ -2287,7 +2291,11 @@ def _run_origin(args, now_iso: str) -> dict:
 
 
 def _link_session_to_run(session_id: "str | None", run_id: str) -> None:
-    """Write the session->run map for a new run (best-effort, never fails run-create).
+    """Write the session->run map (best-effort: never fails run-create or stage-start).
+
+    Called by run-create for the new run and by stage-start for the run whose stage
+    the calling session enters, so a session that created a newer run and then works
+    on an older one credits its reviewer markers to the run it is working on.
 
     The PostToolUse hook writes the same file by parsing run-create's stdout; when that
     stdout is redirected it sees nothing, the session stays linked to its PREVIOUS run,
@@ -2482,10 +2490,14 @@ def _profile_change_error(run_state: dict, current_profile, new_profile) -> "dic
 
 
 def _cap_legacy_push_ready(project: str, run_id: str, run_file: Path, run_state: dict,
-                           record: dict) -> None:
+                           record: dict, own_evidence: bool = True) -> None:
     """MED-4: a legacy ``run-update --stage-json`` deliver record may only LOWER
     push_ready — a True above the gate-computed bound is capped to False with the
-    reason recorded. The bound reads the record's artifact (else its inline fields)."""
+    reason recorded. The bound reads the record's artifact (else its inline fields).
+
+    ``own_evidence`` False = the incoming record brought no exit_evidence (any on
+    ``record`` was carried from an earlier attempt): exit criteria are then judged
+    without it, so an earlier attempt's evidence cannot back a new push_ready."""
     import pipeline_validator as pv
     if record.get("push_ready") is not True:
         return
@@ -2493,7 +2505,9 @@ def _cap_legacy_push_ready(project: str, run_id: str, run_file: Path, run_state:
     artifact = _load_artifact_data_by_id(project, record.get("artifact_id")) or record
     run_dir = run_file.parent
     crit = _plan_exit_criteria(project, run_state, "deliver", None)
-    exit_result = pv.judge_exit_criteria(crit, run_dir, record,
+    judged = record if own_evidence else {k: v for k, v in record.items()
+                                          if k != "exit_evidence"}
+    exit_result = pv.judge_exit_criteria(crit, run_dir, judged,
                                          files_touched=run_state.get("files_touched"),
                                          roots=_evidence_roots())
     bound, reasons, _ = _deliver_push_ready_bound(
@@ -2503,6 +2517,9 @@ def _cap_legacy_push_ready(project: str, run_id: str, run_file: Path, run_state:
         return
     record["push_ready"] = False
     record["push_ready_capped"] = True
+    if not own_evidence:
+        reasons = list(reasons) + ["this call sent push_ready without exit_evidence: "
+                                   "resend exit_evidence with push_ready"]
     record["push_ready_reason"] = "capped by run-update to the gate bound: " + "; ".join(reasons)
     print(json.dumps({"warning": "push_ready capped to false (above the gate bound)",
                       "reasons": reasons}, ensure_ascii=False), file=sys.stderr)
@@ -3340,10 +3357,17 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
 
     if args.stage_json:
         stage_record = json.loads(_read_json_arg(args.stage_json, "--stage-json"))
+        # The same list → string join stage-complete applies, so a list-shaped
+        # exit_evidence is not rejected (or judged unmet) on this path either.
+        import pipeline_validator as _pv_norm
+        stage_record = _pv_norm.normalize_exit_evidence(stage_record)
         # Did THIS call assert push_ready? A carried-forward verdict must not be re-capped:
         # run-commit may already have relied on it, and re-judging it against later
         # file edits would rewrite a passed gate as failed.
         _pr_sent = isinstance(stage_record, dict) and "push_ready" in stage_record
+        # The cap below judges THIS call's evidence only: exit_evidence carried forward
+        # from an earlier attempt must not lift a new push_ready claim.
+        _ev_sent = isinstance(stage_record, dict) and "exit_evidence" in stage_record
         # Normalize: accept both "name" and "stage" as the stage identifier
         if "name" in stage_record and "stage" not in stage_record:
             stage_record["stage"] = stage_record.pop("name")
@@ -3415,7 +3439,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 and _pr_sent):
             try:
                 _cap_legacy_push_ready(args.project, args.run_id, run_file, run_state,
-                                       stage_record)
+                                       stage_record, own_evidence=_ev_sent)
             except Exception as _cap_exc:  # noqa: BLE001 — fail closed: unverifiable
                 stage_record["push_ready"] = False
                 stage_record["push_ready_capped"] = True
@@ -3849,27 +3873,36 @@ def _path_exists_in_repo(f: str, root: str) -> bool:
 
 
 def _lookup_already_committed(
-    root: str, real_files: list[str], run_since: str
+    root: str, real_files: list[str], run_since: str, run_id: str = "",
+    require_run_id: bool = True,
 ) -> list[dict]:
     """FIX B (run_c526d393): find the REAL commits that already landed *this run's*
     files, so a per-cycle-committed run (BUILD.md:428) is credited in run.json
     commits[] instead of being mis-read as uncommitted by the completion gate.
 
-    Triple-bounded so it can NEVER credit a sibling session's commit (Gate-1 AC2):
+    Four bounds:
       1. per-file pathspec — only THIS run's ``real_files`` (already existence- +
          files_touched-filtered by the caller);
       2. reachable-from-HEAD only — ``git log HEAD`` (NOT ``--all``), so a parallel
          branch's commit is invisible;
       3. time-windowed — ``--since=<run_since>`` where run_since is run.json
          ``created_at`` passed VERBATIM (tz-aware ISO8601 — never strip the tz),
-         so a commit that touched the same file BEFORE this run started is excluded.
+         so a commit that touched the same file BEFORE this run started is excluded;
+      4. the commit message names ``run_id`` (``--grep -F``). Bounds 1-3 alone do NOT
+         exclude a sibling session's commit on a shared main that touched the same
+         files inside the window — run_a87bfe3f was credited three of them. Every
+         run-commit message carries ``run <id>``; a hand commit must say
+         ``Run: <id>``. Empty run_id → [] (fail closed, never an unbounded guess).
+         ``require_run_id=False`` drops this bound for the daemon WORKSPACE repo: its
+         commits are the auto-commit hook's ``chore: …`` sweeps, which never name a
+         run, and crediting them is how a workspace-hosted run completes.
 
     Returns a list of {repo, sha, files} where ``files`` is the repo-relative subset
     of real_files each commit actually touched (so completion_gate._tail_match stays
     run-scoped). Empty run_since → return [] (cannot bound → do NOT guess; the caller
     then reports genuinely-uncommitted and the completion gate blocks — fail-closed,
     never a HEAD guess). Any git error → [] (same fail-closed posture)."""
-    if not run_since or not real_files:
+    if not run_since or not real_files or (require_run_id and not run_id):
         return []
     import subprocess
     # Resolve each recorded file to its repo-relative form (pathspec for git log).
@@ -3894,6 +3927,7 @@ def _lookup_already_committed(
             # reachable-from-HEAD (bound 2) + --since (bound 3) + this file (bound 1)
             log = subprocess.run(
                 ["git", "-C", root, "log", "HEAD", f"--since={run_since}",
+                 *([f"--grep={run_id}", "--fixed-strings"] if require_run_id else []),
                  "--format=%h", "--", rel],
                 capture_output=True, text=True, timeout=15,
             )
@@ -3914,6 +3948,92 @@ def _lookup_already_committed(
         except (subprocess.TimeoutExpired, OSError):
             continue
     return out
+
+
+def _rel_paths_in_repo(root: str, files: list[str]) -> set[str]:
+    """Repo-relative form of each recorded file in ``root`` (git ls-files --full-name,
+    the idiom _lookup_already_committed uses; a deleted path that git no longer lists
+    falls back to its path relative to the repo root)."""
+    import subprocess
+    out: set[str] = set()
+    real_root = os.path.realpath(root)
+    for f in files:
+        try:
+            r = subprocess.run(["git", "-C", root, "ls-files", "--full-name", "--", f],
+                               capture_output=True, text=True, timeout=10)
+            listed = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        except (subprocess.TimeoutExpired, OSError):
+            listed = []
+        if listed:
+            out.update(listed)
+            continue
+        if os.path.isabs(f):
+            rp = os.path.realpath(f)
+            if rp.startswith(real_root + os.sep):
+                out.add(os.path.relpath(rp, real_root))
+        else:
+            out.add(f.replace(os.sep, "/"))
+    return out
+
+
+def _verify_run_shas(shas: list[str], by_repo: "dict[str, list[str]]",
+                     run_state: dict, run_id: str) -> "tuple[list[dict], list[str]]":
+    """``run-commit --sha``: check each commit belongs to this run before recording it.
+
+    A commit is accepted only when it resolves in one of the run's repos, is reachable
+    from that repo's HEAD, was committed at or after run.json ``created_at``, names
+    ``run_id`` in its message, and touches at least one files_touched path (both sides
+    repo-relative per repo root). Returns ``(commits, errors)``; any error refuses the
+    whole call. Used when a run's change had to be committed outside run-commit (other
+    sessions' hunks in the same files), so the whole-file ``git add`` must not run."""
+    import subprocess
+
+    def _git(root, *a):
+        return subprocess.run(["git", "-C", root, *a], capture_output=True, text=True,
+                              timeout=15, env=_LITERAL_GIT_ENV())
+
+    created = run_state.get("created_at") or ""
+    try:
+        created_ts = datetime.fromisoformat(str(created).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return [], [f"run.json has no usable created_at ({created!r}); cannot bound --sha"]
+    roots = list(by_repo)
+    commits: list[dict] = []
+    errors: list[str] = []
+    for sha in shas:
+        if not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha):
+            errors.append(f"{sha}: not a commit sha")
+            continue
+        root = full = None
+        for r in roots:
+            got = _git(r, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+            if got.returncode == 0 and got.stdout.strip():
+                root, full = r, got.stdout.strip()
+                break
+        if not full:
+            errors.append(f"{sha}: not found in this run's repos {roots}")
+            continue
+        if _git(root, "merge-base", "--is-ancestor", full, "HEAD").returncode != 0:
+            errors.append(f"{sha}: not reachable from HEAD in {root}")
+            continue
+        when = _git(root, "show", "-s", "--format=%ct", full).stdout.strip()
+        if not when.isdigit() or int(when) < int(created_ts):  # %ct is whole seconds
+            errors.append(f"{sha}: committed before this run started ({created})")
+            continue
+        if run_id not in _git(root, "show", "-s", "--format=%B", full).stdout:
+            errors.append(f"{sha}: commit message does not name {run_id} "
+                          f"(add 'Run: {run_id}' to the message)")
+            continue
+        changed = {ln.strip() for ln in _git(root, "show", "--name-only", "--format=",
+                                             "--no-renames", full).stdout.splitlines()
+                   if ln.strip()}
+        own = changed & _rel_paths_in_repo(root, by_repo.get(root, []))
+        if not own:
+            errors.append(f"{sha}: touches none of this run's files_touched")
+            continue
+        short = _git(root, "rev-parse", "--short", full).stdout.strip() or full[:9]
+        commits.append({"repo": root, "sha": short, "files": sorted(own)})
+    return commits, errors
 
 
 # Opaque, non-colliding prefix a warning carries when deliverable-B generation hit a
@@ -4222,6 +4342,29 @@ def _d7_completed_expert_ids(run_id: str) -> "set[str] | None":
         return completed  # readable store (possibly empty = genuine zero-coverage)
     except Exception:
         return None  # store-level infra error → fail-open signal, never self-lock
+
+
+def _d7_plain_marker_expert_ids(run_id: str) -> "set[str]":
+    """Expert ids with a PLAIN SubagentStop marker for this run (``session_*.marker``,
+    not ``_adv_``): the expert ran, but its spawn was not classified adversarial, so D7
+    does not count it. Lets the refusal say why instead of "did not run". Never raises."""
+    try:
+        from config import get_app_data_dir
+        audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
+        out: set[str] = set()
+        for p in audit.glob("session_*.marker"):
+            if "_adv_" in p.name:
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            eid = data.get("expert_id") if data.get("run_id") == run_id else None
+            if isinstance(eid, str) and eid.strip():
+                out.add(eid.strip().lower())
+        return out
+    except Exception:  # noqa: BLE001 — diagnostics only
+        return set()
 
 
 def _d7_missing_required_experts(required_experts, run_id: str) -> "list[str]":
@@ -4901,6 +5044,14 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                     "forced_missing_experts": _missing,
                 }), file=sys.stderr)
             else:
+                _plain = sorted(set(_missing) & _d7_plain_marker_expert_ids(args.run_id))
+                _why = ("" if not _plain else
+                        " Of these, " + ", ".join(_plain) + " DID run for this run: its "
+                        "EXPERT-ID was read, but the spawn was not classified adversarial, so "
+                        "only a plain marker was written. Likely causes: the daemon predates "
+                        "registry-backed classification (rebuild/restart it), the expert "
+                        "registry failed to load (see the daemon log), or the expert's "
+                        "frontmatter lacks `spawn_as: adversarial`. Re-spawn after fixing.")
                 print(json.dumps({
                     "blocked": True,
                     "error": (
@@ -4910,8 +5061,10 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                         "writes an EXPERT-ID marker on completion), THEN re-run run-commit. A "
                         "declared expert cannot be skipped — that is the purpose of the run's "
                         "required_experts. (Genuinely not enforceable? Re-run with --force.)"
+                        + _why
                     ),
                     "missing_experts": _missing,
+                    "ran_without_adversarial_marker": _plain,
                     "declared": sorted(_required),
                 }), file=sys.stderr)
                 sys.exit(2)
@@ -4927,6 +5080,22 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
             by_repo[root].append(f)
         else:
             unresolved.append(f)
+
+    # --sha: the run's change was committed outside run-commit (another session had
+    # uncommitted hunks in the same files, so the whole-file `git add` below would have
+    # swept them in). Record those commits after checking each one is this run's; only
+    # the review deliverable (B) is staged and committed below, never the source files.
+    sha_commits: "list[dict]" = []
+    _sha_arg = getattr(args, "sha", None)
+    if _sha_arg:
+        _shas = [x.strip() for x in str(_sha_arg).split(",") if x.strip()]
+        sha_commits, _sha_errors = _verify_run_shas(_shas, by_repo, run_state, args.run_id)
+        if _sha_errors or not sha_commits:
+            print(json.dumps({"blocked": True,
+                              "error": "run-commit --sha refused: " + "; ".join(
+                                  _sha_errors or ["no commit given"]),
+                              "run_id": args.run_id}), file=sys.stderr)
+            sys.exit(2)
 
     # ── §4.9 derivative B: check the review deliverable into the SAME commit ──
     #    B lands in the real repo that holds the MOST of this run's files (§4.9
@@ -4997,7 +5166,17 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         f"\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"
     )
 
-    committed, warnings = [], []
+    if sha_commits:
+        # Source files are already committed (verified above): stage only B.
+        _b_set = set(_b_paths)
+        by_repo = defaultdict(list, {r: [f for f in fs if f in _b_set]
+                                     for r, fs in by_repo.items()})
+        by_repo = defaultdict(list, {r: fs for r, fs in by_repo.items() if fs})
+
+    if _forced_push_ready:
+        for _c in sha_commits:
+            _c["forced_push_ready"] = True
+    committed, warnings = list(sha_commits), []
     warnings.extend(warnings_b)  # §4.9 derivative-B generation notes (set above)
     if unresolved:
         warnings.append(f"{len(unresolved)} file(s) not in any git repo, skipped: {unresolved}")
@@ -5087,17 +5266,25 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
             # Instead: find the REAL commits that already landed these files DURING
             # this run and record them, so the completion gate credits them.
             #
-            # R29 / no-mis-attribution (Gate-1 AC2): the lookup is triple-bounded —
+            # R29 / no-mis-attribution (Gate-1 AC2): the lookup is bounded —
             #   (1) per-file pathspec restricted to THIS run's real_files,
             #   (2) reachable-from-HEAD only (`git log HEAD`, never --all → a
             #       parallel branch's commit can't leak),
             #   (3) time-windowed to `--since=<run.created_at>` (verbatim tz-aware
             #       ISO8601 — NEVER strip the tz, Gate-1 attack #3), so a commit
             #       that touched the same file BEFORE this run started is excluded.
+            #   (4) the commit message names this run (run_1a309783: on a shared
+            #       main, bounds 1-3 credited sibling sessions' commits) — except in
+            #       the daemon workspace repo, whose commits are auto-commit sweeps.
             # And each recorded commit's `files` is filtered to this run's
             # files_touched, so completion_gate._tail_match stays run-scoped.
             run_since = run_state.get("created_at", "") or ""
-            already = _lookup_already_committed(root, real_files, run_since)
+            try:
+                _in_ws = _rev_parse_toplevel(str(_get_workspace())) == root
+            except Exception:  # noqa: BLE001 — unknown workspace: keep the strict bound
+                _in_ws = False
+            already = _lookup_already_committed(root, real_files, run_since, args.run_id,
+                                                require_run_id=not _in_ws)
             if already:
                 committed.extend(already)
                 warnings.append(
@@ -5106,8 +5293,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                 )
             else:
                 warnings.append(
-                    f"[{root}] no staged changes AND no run-scoped commit found for "
-                    f"tracked files — genuinely uncommitted (completion gate will block)"
+                    f"[{root}] no staged changes AND no commit since the run started whose "
+                    f"message names {args.run_id} touches these files — genuinely "
+                    f"uncommitted (completion gate will block). A commit made by hand must "
+                    f"carry 'Run: {args.run_id}' in its commit message; record it with "
+                    f"run-commit --sha <sha>."
                 )
             continue
 
@@ -8717,6 +8907,28 @@ def _read_run_evidence(run_dir: Path, rel: str, run_id: str) -> "dict | None":
     return data
 
 
+def _inferred_stage_start(run_state: dict, stage: str, end_iso) -> "str | None":
+    """Start of a stage completed without stage-start (no started_at): the latest
+    completed_at of another stage that is earlier than this stage's end — in a linear
+    pipeline the stage began when the previous one closed (run_a8fe815b: PLAN recorded
+    token_cost 0 'unavailable' for want of a start). None when nothing earlier closed."""
+    try:
+        end = datetime.fromisoformat(str(end_iso).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+    best, best_ts = None, None
+    for name, t in (run_state.get("stage_timing") or {}).items():
+        if name == stage or not isinstance(t, dict) or not t.get("completed_at"):
+            continue
+        try:
+            ts = datetime.fromisoformat(str(t["completed_at"]).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if ts < end and (best_ts is None or ts > best_ts):
+            best, best_ts = t["completed_at"], ts
+    return best
+
+
 def _measure_stage_tokens(session_id, start_iso, end_iso, transcripts=None) -> "dict | None":
     """C5: measured token usage for the stage window, or None when unavailable.
 
@@ -9105,8 +9317,17 @@ def _derive_stage_fields(
 
     # token_cost — C5 measured window, else estimate/unavailable.
     timing = (run_state.get("stage_timing") or {}).get(stage) or {}
+    start = timing.get("started_at")
+    if not start:
+        start = _inferred_stage_start(run_state, stage, timing.get("completed_at"))
+        if start:
+            # Visible in derived_sources: the window may include work the session did
+            # on something else between the previous stage and this one.
+            derived["stage_start"] = {"value": start,
+                                      "source": "inferred: latest earlier stage completed_at "
+                                                "(no stage-start)"}
     usage = _measure_stage_tokens(run_state.get("session_id"),
-                                  timing.get("started_at"), timing.get("completed_at"),
+                                  start, timing.get("completed_at"),
                                   transcripts=run_state.get("transcripts"))
     derived["token_cost"] = _apply_token_cost(cand_rec, record_in.get("token_cost"), usage)
 
@@ -10745,6 +10966,19 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         out.update(scope)
     warnings += _wt_out.pop("warnings", [])
     out.update(_wt_out)
+    # The session entering a stage is working on THIS run: point its session->run map
+    # here, so reviewer markers written from now on carry this run's id (run_1a309783:
+    # a session that created a newer run kept crediting this run's reviews to it).
+    # Last, after every refusal above, and only for a running run this session owns:
+    # a stage-start on another session's run, or on a finished one, must not move
+    # this session's later reviews onto it (Gate-2 security).
+    _sid = _current_session_id()
+    _owner = run_state.get("session_id")
+    if _sid and run_state.get("status") in (None, "running") and _owner in (None, "", _sid):
+        _link_session_to_run(_sid, run_id)
+    elif _sid:
+        warnings.append(f"session not linked to {run_id}: run status "
+                        f"{run_state.get('status')!r}, owner session {_owner!r}")
     out["warnings"] = warnings
     print(json.dumps(_fit_stage_start(out), default=str, ensure_ascii=False))
 
@@ -10863,6 +11097,11 @@ def main() -> None:
     p_run_commit.add_argument("--project", required=True)
     p_run_commit.add_argument("--run-id", required=True, help="Pipeline run ID")
     p_run_commit.add_argument("--force", action="store_true", help="Commit even if push_ready gate hasn't passed")
+    p_run_commit.add_argument("--sha", default=None,
+                              help="Record already-landed commit(s) of this run (comma-separated) "
+                                   "instead of staging files_touched; each must be reachable from "
+                                   "HEAD, newer than the run, name the run id in its message, and "
+                                   "touch a files_touched path")
 
     # run-surface-changes (read-only git sweep → content/knowledge/source/process buckets)
     p_run_surface = sub.add_parser("run-surface-changes", help="Git-based COMPLETE sweep: classify this run's changed files (SwarmWS + bound repos) into surface buckets")

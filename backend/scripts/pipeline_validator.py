@@ -906,7 +906,7 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "integration_trace": {"checked": 5, "clean": True, "details": "symbol A → caller B verified"},
         "runtime_patterns": {
             "checked": 3, "violations": 0,
-            "patterns": [{"pattern": "name", "status": "pass", "detail": ">10 chars describing what was checked"}],
+            "patterns": [{"pattern": "RP7 error message vs real cause", "status": "pass", "detail": ">10 chars describing what was checked"}],
         },
     },
     "test": {
@@ -3340,6 +3340,43 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
     return errors
 
 
+_RP_ID_RE = re.compile(r"\bRP\d+\b")
+_SOURCE_REPO = Path(__file__).resolve().parents[2]
+
+
+def _unverdicted_review_patterns(patterns, files_touched) -> "list[str]":
+    """RP ids that --patterns-for selects for ``files_touched`` (by path, as REVIEW
+    lists them) with no entry in ``patterns``. [] when anything is unreadable: this
+    is a warning, never a reason to fail validation."""
+    if not isinstance(files_touched, list) or not files_touched:
+        return []
+    try:
+        import importlib.util
+        sp_file = (_SOURCE_REPO / "backend" / "skills" / "s_autonomous-pipeline"
+                   / "scripts" / "spawn_prompt.py")
+        spec = importlib.util.spec_from_file_location("_spawn_prompt_rp", sp_file)
+        sp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sp)
+        paths = []
+        for f in files_touched:
+            p = Path(str(f))
+            try:
+                paths.append(str(p.resolve().relative_to(_SOURCE_REPO)) if p.is_absolute()
+                             else str(p))
+            except ValueError:
+                paths.append(str(p))
+        _h, _rows, hits = sp._select(sp.REVIEW_PATTERNS_PATH.read_text(encoding="utf-8"),
+                                     paths, "")
+    except Exception:  # noqa: BLE001 — advisory check
+        return []
+    seen: set[str] = set()
+    for p in patterns if isinstance(patterns, list) else []:
+        if isinstance(p, dict):
+            seen.update(_RP_ID_RE.findall(" ".join(str(p.get(k) or "")
+                                                   for k in ("pattern", "id", "rp"))))
+    return [r["id"] for r in hits if r["id"] not in seen]
+
+
 def _check_semantic_depth(
     stage: str, artifact_data: dict, run: dict, project: str, run_id: str,
 ) -> list[str]:
@@ -3403,6 +3440,13 @@ def _check_semantic_depth(
                             f"verifiable. Add what was checked (e.g., 'No subprocess in "
                             f"changeset' or 'Error constant matches line 85'). Aim for >=50%."
                         )
+                missing = _unverdicted_review_patterns(patterns, run.get("files_touched"))
+                if missing:
+                    warnings.append(
+                        "Semantic: runtime_patterns gives no verdict for "
+                        f"{len(missing)} pattern(s) that spawn_prompt.py --patterns-for "
+                        f"selects for this run's changed files: {', '.join(missing)}. "
+                        "Record each listed row as pass / fail / N/A.")
 
     # --- Check 3: Confidence penalty consistency (deliver stage) ---
     # Skip if confidence_score isn't a dict — _check_depth already BLOCKs on bare numbers (PE-5)
