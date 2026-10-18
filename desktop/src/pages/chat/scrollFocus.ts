@@ -12,7 +12,8 @@
  * so the rules are testable without a layout engine.
  *
  * @exports ANCHOR_ATTR, ANCHOR_PROPS, ScrollAnchor, pickAnchor, anchorChainFor,
- *          anchorDelta, SeenState, activationLanding, sentMessageId, isToggleClick,
+ *          anchorDelta, SeenState, activationLanding, sentMessageId, tailErrorId,
+ *          isToggleClick,
  *          REPLY_TOP_MARGIN
  */
 import type { Message } from '../../types';
@@ -101,6 +102,13 @@ export function sentMessageId(messages: Message[]): string | null {
     if (m.role === 'user' && SENT_ID.test(m.id)) return m.id;
   }
   return null;
+}
+
+/** The id of an error bubble at the tail — the turn just ended on it, so the user
+ *  should see it (an error replaces the reply; it is not something to read past). */
+export function tailErrorId(messages: Message[]): string | null {
+  const last = messages[messages.length - 1];
+  return last && last.isError ? last.id : null;
 }
 
 /**

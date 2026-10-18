@@ -39,7 +39,7 @@ import { useMessageStore } from '../../../stores/useMessageStore';
 import { STEP_VERB_FALLBACK, deriveTurnView, stepLabel } from '../turnView';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
-  REPLY_TOP_MARGIN, sentMessageId,
+  REPLY_TOP_MARGIN, sentMessageId, tailErrorId,
 } from '../scrollFocus';
 import type { ScrollAnchor, SeenState } from '../scrollFocus';
 import type { StreamingActivity, ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
@@ -189,16 +189,9 @@ export interface TabViewProps {
   /** Pagination state for the "Load earlier messages" control. */
   hasMoreMessages: boolean;
   isLoadingOlderMessages: boolean;
-  /**
-   * @deprecated Migration Step 5.1: TabView now owns its OWN scroll container +
-   * bottom-anchor refs and its OWN auto-scroll (each keep-mounted view needs its
-   * own DOM node). These ref/handler props are accepted for call-site
-   * compatibility but IGNORED.
-   */
-  messagesContainerRef?: React.RefObject<HTMLDivElement | null>;
-  messagesEndRef?: React.RefObject<HTMLDivElement | null>;
-  onMessagesScroll?: () => void;
-  onScrollToBottom?: () => void;
+  /** This tab's history is being fetched: an empty tab shows a spinner, not the
+   *  welcome screen (the list stays mounted; ChatPage no longer swaps it out). */
+  isLoadingHistory?: boolean;
   /** Load older messages for this tab (infinite scroll at top). */
   onLoadOlder: () => void;
   /** Stable callbacks threaded into MessageBubble (keep memo intact). */
@@ -229,6 +222,7 @@ function TabViewImpl({
   isActive,
   hasMoreMessages,
   isLoadingOlderMessages,
+  isLoadingHistory = false,
   onLoadOlder,
   onAnswerQuestion,
   onPermissionDecision,
@@ -453,12 +447,16 @@ function TabViewImpl({
     };
   }, [isActive, follow, read, setScrollTop]);
 
-  // A message the user just sent in this tab brings the view to the bottom.
+  // A message the user just sent in this tab, or an error that just ended its
+  // turn, brings the view to the bottom.
   const sentIdRef = useRef<string | null>(sentMessageId(messages));
+  const errorIdRef = useRef<string | null>(tailErrorId(messages));
   useLayoutEffect(() => {
     const id = sentMessageId(messages);
-    if (id && id !== sentIdRef.current && isActive) follow();
+    const err = tailErrorId(messages);
+    if (isActive && ((id && id !== sentIdRef.current) || (err && err !== errorIdRef.current))) follow();
     sentIdRef.current = id;
+    errorIdRef.current = err;
   }, [messages, isActive, follow]);
 
   useEffect(() => {
@@ -583,7 +581,11 @@ function TabViewImpl({
           ↑ Load earlier messages
         </button>
       )}
-      {messages.length === 0 ? (
+      {messages.length === 0 && isLoadingHistory ? (
+        <div data-testid="tab-loading" className="flex-1 flex items-center justify-center">
+          <Spinner size="lg" />
+        </div>
+      ) : messages.length === 0 ? (
         <WelcomeScreen onFocusClick={onFocusClick} onItemClick={onItemClick} />
       ) : (
         (() => {

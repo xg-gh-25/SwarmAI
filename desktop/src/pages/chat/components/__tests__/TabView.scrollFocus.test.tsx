@@ -9,6 +9,8 @@
  * - clicking a toggle holds the clicked row in place and shows "back to latest"
  *   while streaming; a click inside the live card keeps following
  * - the pill click follows again
+ * - an error that ends the turn brings a reading user to the bottom
+ * - while its history loads, an empty tab shows a spinner, not the welcome screen
  * - activation: a reply that finished while away and is taller than the viewport
  *   lands on its start; a short one, or an already-seen one, lands at the bottom
  */
@@ -102,6 +104,35 @@ describe('a send brings the view back', () => {
     await afterActivation(); // the store notifies React on the next frame
     expect(getByTestId('bubble-local-2-asst')).toBeTruthy(); // it did render
     expect(s.top).toBe(1000);
+  });
+});
+
+describe('an error bubble brings the view back', () => {
+  it('a reading user sees the error that ended the turn', async () => {
+    const { s } = await mounted('E1', [msg('u0', 'user'), msg('a0')]);
+    s.userScroll(1000);
+    act(() => { messageStoreRegistry.getOrCreate('E1').append({ ...msg('err-1'), isError: true } as Message); });
+    await afterActivation();
+    expect(s.top).toBe(s.bottom);
+  });
+});
+
+describe('loading history', () => {
+  it('an empty tab whose history is loading shows a spinner, then its messages', async () => {
+    const r = render(<TabView {...props('H1', true)} isLoadingHistory />);
+    expect(r.getByTestId('tab-loading')).toBeTruthy();
+    expect(r.queryByTestId('welcome')).toBeNull();
+    act(() => { messageStoreRegistry.getOrCreate('H1').replace([msg('u1', 'user'), msg('a1')]); });
+    await afterActivation();
+    r.rerender(<TabView {...props('H1', true)} isLoadingHistory={false} />);
+    expect(r.queryByTestId('tab-loading')).toBeNull();
+    expect(r.getByTestId('bubble-a1')).toBeTruthy();
+  });
+
+  it('an empty tab that is not loading shows the welcome screen', () => {
+    const r = render(<TabView {...props('H2', true)} />);
+    expect(r.getByTestId('welcome')).toBeTruthy();
+    expect(r.queryByTestId('tab-loading')).toBeNull();
   });
 });
 

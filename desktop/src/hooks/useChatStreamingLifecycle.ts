@@ -6,7 +6,8 @@
  *
  * - **State**: ``messages``, ``sessionId``, ``pendingQuestion``, ``isStreaming``,
  *   ``pendingStreamTabs`` (per-tab pending tracking)
- * - **Refs**: ``messagesEndRef``, ``sessionIdRef``, ``messagesRef``
+ * - **Refs**: ``sessionIdRef``, ``messagesRef`` (scrolling lives in each TabView,
+ *   pages/chat/scrollFocus.ts)
  * - **Factories**: ``createStreamHandler``, ``createCompleteHandler``,
  *   ``createErrorHandler`` (with SSE reconnection logic)
  * - **Pure function**: ``deriveStreamingActivity`` (exported standalone for
@@ -910,9 +911,6 @@ export interface ChatStreamingLifecycle {
   /** Elapsed seconds since streaming started with no content yet (Fix 9). */
   elapsedSeconds: number;
 
-  // Refs for external access
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
-
   // Per-tab pending state for ChatPage guard
   pendingStreamTabs: Set<string>;
   /** Remove a specific tab from pendingStreamTabs (e.g. on tab close). */
@@ -923,11 +921,6 @@ export interface ChatStreamingLifecycle {
   // Fix 1: Stream generation counter
   streamGenRef: React.MutableRefObject<number>;
   incrementStreamGen: () => void;
-
-  // Fix 2: Auto-scroll with user scroll detection
-  userScrolledUpRef: React.MutableRefObject<boolean>;
-  /** Reset user-scrolled-up flag so auto-scroll resumes (e.g. on new user message). */
-  resetUserScroll: () => void;
 
   // Factories — tab-aware (Fix 6)
   createStreamHandler: (assistantMessageId: string, tabId?: string) => (event: StreamEvent) => void;
@@ -1088,8 +1081,6 @@ export function useChatStreamingLifecycle(
   const streamGenRef = useRef<number>(0);
   const sessionIdRef = useRef<string | undefined>(sessionId);
   const messagesRef = useRef<Message[]>(messages);
-  const userScrolledUpRef = useRef<boolean>(false); // Fix 2: auto-scroll detection
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamStartTimeRef = useRef<number | null>(null); // Fix 9: elapsed time counter
 
   // --- Hang detection: track last real (non-heartbeat) SSE event ---
@@ -2350,15 +2341,6 @@ export function useChatStreamingLifecycle(
   // Tab lifecycle methods (saveTabState, restoreTabState, initTabState,
   // cleanupTabState) are now owned by the unified hook (useUnifiedTabState).
   // Stream handlers access tab state via deps.tabMapRef and deps.activeTabIdRef.
-
-  /**
-   * Reset the user-scrolled-up flag so auto-scroll resumes.
-   * Called when the user sends a new message — ensures the new
-   * conversation flow is visible from the start.
-   */
-  const resetUserScroll = useCallback(() => {
-    userScrolledUpRef.current = false;
-  }, []);
 
   // --- Stream handler factories (tab-aware — Fix 6) ---
 
@@ -3673,11 +3655,8 @@ export function useChatStreamingLifecycle(
           }
           // Tab-aware: clear only this tab's streaming state
           setIsStreaming(false, capturedTabId ?? undefined);
-          if (isActiveTab) {
-            // Fix 3: Force scroll to error — reset user-scrolled-up and scroll to bottom
-            userScrolledUpRef.current = false;
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-          }
+          // (The error bubble brings its tab's view to the bottom: TabView,
+          // scrollFocus.tailErrorId.)
           incrementStreamGen();
 
           // Fix 8: Update tab status to 'error'
@@ -4737,11 +4716,8 @@ export function useChatStreamingLifecycle(
     pendingStreamTabs,
     clearPendingStreamTab,
     bumpStreamingDerivation,
-    messagesEndRef,
     streamGenRef,
     incrementStreamGen,
-    userScrolledUpRef,
-    resetUserScroll,
     createStreamHandler,
     createCompleteHandler,
     createDisconnectHandler,

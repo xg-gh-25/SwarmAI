@@ -345,7 +345,6 @@ export default function ChatPage() {
     clearPendingStreamTab,
     bumpStreamingDerivation,
     incrementStreamGen,
-    resetUserScroll,
     createStreamHandler,
     createCompleteHandler,
     createDisconnectHandler,
@@ -2301,7 +2300,6 @@ export default function ChatPage() {
     // setMessages-only write on a fresh tab (whose store starts empty).
     setInputValue('');
     clearAttachments();
-    resetUserScroll(); // Fix 2: resume auto-scroll on new user message
     incrementStreamGen(); // Fix 1: new stream generation
 
     // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
@@ -2441,7 +2439,7 @@ export default function ChatPage() {
         _pendingResendAttempts: 0,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t, editorContextFor]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t, editorContextFor]);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2553,7 +2551,6 @@ export default function ChatPage() {
       setIsStreaming(true, tabId);
       if (tabId) updateTabStatus(tabId, 'streaming');
       incrementStreamGen();
-      resetUserScroll();
 
       // clientId was generated above (before the badge-clear) so the queued user
       // bubble could be stamped with it. The assistant placeholder shares it via
@@ -2618,7 +2615,7 @@ export default function ChatPage() {
       cleanupStreamingState();
       console.error('[queue-drain] failed, queue restored:', e);
     }
-  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, resetUserScroll, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
+  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef, editorContextFor]);
 
   // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
   // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
@@ -3330,7 +3327,10 @@ export default function ChatPage() {
                 <p className="text-[var(--color-text-muted)] mt-4">{t('chat.loadingAgent', 'Loading agent...')}</p>
               </div>
             </div>
-          ) : isLoadingHistory || !messagesReady ? (
+          ) : !messagesReady ? (
+            // First load only. A later history fetch keeps every TabView mounted
+            // (their scroll and parsed content survive); the loading tab shows
+            // its own spinner (TabView isLoadingHistory).
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <Spinner size="lg" />
@@ -3367,6 +3367,7 @@ export default function ChatPage() {
                     onCancelBusyWait={cancelBusyWait}
                     hasMoreMessages={active ? hasMoreMessages : false}
                     isLoadingOlderMessages={active ? isLoadingOlderMessages : false}
+                    isLoadingHistory={active && isLoadingHistory}
                     onLoadOlder={loadOlderMessages}
                     onAnswerQuestion={stableHandleAnswerQuestion}
                     onPermissionDecision={stableHandlePermissionDecision}

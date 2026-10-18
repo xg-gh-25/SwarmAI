@@ -12,7 +12,6 @@
  *     isStreaming, streamingActivity)
  *   - Hook returns all expected setters (setMessages, setSessionId,
  *     setPendingQuestion, setIsStreaming)
- *   - Hook returns all expected refs (messagesEndRef)
  *   - Hook returns all expected factories (createStreamHandler,
  *     createCompleteHandler, createErrorHandler)
  *   - ``deriveStreamingActivity`` standalone export works identically to
@@ -27,10 +26,8 @@
  *     tab streaming updates map but not foreground useState, per-tab abort
  *     controller isolation, per-tab isStreaming/pendingQuestion isolation,
  *     tab close cleanup removes entry and aborts controller
- *   - Fix 2: Auto-scroll detection — userScrolledUpRef defaults to false,
- *     resetUserScroll resets the flag for new user messages
  *   - Fix 3: Error handling — error event stops streaming, sets isError flag,
- *     error content visible, resets userScrolledUpRef for auto-scroll,
+ *     error content visible,
  *     increments streamGen so stale completeHandler is no-op
  *   - Fix 9: Elapsed time counter — starts after streaming begins with no
  *     content, clears on first content arrival, resets when streaming stops,
@@ -164,9 +161,6 @@ describe('useChatStreamingLifecycle', () => {
       expect(result.current.pendingStreamTabs).toBeDefined();
       expect(result.current.pendingStreamTabs.size).toBe(0);
 
-      // messagesEndRef should be a ref object
-      expect(result.current.messagesEndRef).toBeDefined();
-      expect(result.current.messagesEndRef.current).toBeNull();
     });
 
     it('returns all expected factories', () => {
@@ -2085,64 +2079,6 @@ describe('Fix 6: Per-tab state isolation', () => {
 // Fix 2: Auto-scroll with user scroll detection tests
 // ---------------------------------------------------------------------------
 
-describe('Fix 2: Auto-scroll with user scroll detection', () => {
-  describe('userScrolledUpRef', () => {
-    it('is false by default', () => {
-      const { result } = renderHook(() =>
-        useChatStreamingLifecycle(createMockDeps()),
-      );
-      expect(result.current.userScrolledUpRef.current).toBe(false);
-    });
-
-    it('can be set to true to indicate user scrolled up', () => {
-      const { result } = renderHook(() =>
-        useChatStreamingLifecycle(createMockDeps()),
-      );
-
-      act(() => {
-        result.current.userScrolledUpRef.current = true;
-      });
-
-      expect(result.current.userScrolledUpRef.current).toBe(true);
-    });
-  });
-
-  describe('resetUserScroll', () => {
-    it('resets userScrolledUpRef to false', () => {
-      const { result } = renderHook(() =>
-        useChatStreamingLifecycle(createMockDeps()),
-      );
-
-      // Simulate user scrolling up
-      act(() => {
-        result.current.userScrolledUpRef.current = true;
-      });
-      expect(result.current.userScrolledUpRef.current).toBe(true);
-
-      // Reset on new user message
-      act(() => {
-        result.current.resetUserScroll();
-      });
-
-      expect(result.current.userScrolledUpRef.current).toBe(false);
-    });
-
-    it('is a no-op when already false', () => {
-      const { result } = renderHook(() =>
-        useChatStreamingLifecycle(createMockDeps()),
-      );
-
-      expect(result.current.userScrolledUpRef.current).toBe(false);
-
-      act(() => {
-        result.current.resetUserScroll();
-      });
-
-      expect(result.current.userScrolledUpRef.current).toBe(false);
-    });
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Fix 3: Error handling — streaming stop and error visibility tests
 // ---------------------------------------------------------------------------
@@ -2322,35 +2258,6 @@ describe('Fix 3: Error handling and visibility', () => {
       });
 
       expect(result.current.messages[0].isError).toBeUndefined();
-    });
-  });
-
-  describe('error resets userScrolledUpRef for auto-scroll', () => {
-    it('resets userScrolledUpRef to false on error event', () => {
-      const msgId = 'msg-err-scroll';
-      const { result } = renderHook(() =>
-        useChatStreamingLifecycle(createMockDeps()),
-      );
-
-      act(() => {
-        initTestTab('tab-1');
-        result.current.setIsStreaming(true);
-        result.current.userScrolledUpRef.current = true;
-        result.current.setMessages([
-          makeMessage({ id: msgId, role: 'assistant', content: [] }),
-        ]);
-      });
-
-      expect(result.current.userScrolledUpRef.current).toBe(true);
-
-      const handler = result.current.createStreamHandler(msgId, 'tab-1');
-
-      act(() => {
-        handler({ type: 'error', message: 'Error occurred' });
-      });
-
-      // Error should reset scroll so user sees the error
-      expect(result.current.userScrolledUpRef.current).toBe(false);
     });
   });
 

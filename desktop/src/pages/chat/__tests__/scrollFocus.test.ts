@@ -6,6 +6,7 @@
  *   never-seen → bottom
  * - sentMessageId: a user's own optimistic bubble at the tail counts; a reply
  *   placeholder (queue drain, retry) or a persisted id does not
+ * - tailErrorId: an error bubble at the tail only
  * - isToggleClick: disclosure buttons outside the live card only
  * - pickAnchor / anchorChainFor / anchorDelta: the innermost element spanning
  *   the viewport top, the chain surviving an unmounted inner element, delta sign
@@ -13,6 +14,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   ANCHOR_ATTR, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor, sentMessageId,
+  tailErrorId,
 } from '../scrollFocus';
 import { stubRect } from '../components/__tests__/scrollTestUtils';
 import type { Message } from '../../../types';
@@ -45,6 +47,15 @@ describe('sentMessageId', () => {
     expect(sentMessageId([m('db-1', 'user'), m('db-2', 'assistant')])).toBeNull();
     expect(sentMessageId([m('local-1', 'user'), m('a', 'assistant'), m('b', 'assistant')])).toBeNull();
     expect(sentMessageId([])).toBeNull();
+  });
+});
+
+describe('tailErrorId', () => {
+  it('only an error bubble at the very end', () => {
+    const err = { ...m('e1', 'assistant'), isError: true } as Message;
+    expect(tailErrorId([m('a', 'assistant'), err])).toBe('e1');
+    expect(tailErrorId([err, m('a', 'assistant')])).toBeNull();
+    expect(tailErrorId([])).toBeNull();
   });
 });
 
