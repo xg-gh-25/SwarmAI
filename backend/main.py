@@ -75,7 +75,10 @@ _phase_timings: dict[str, float] | None = None
 
 # Configure logging
 log_level = logging.DEBUG if settings.debug else logging.INFO
-log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# [pid] right after the timestamp: during a deploy the old daemon, the new one
+# and (formerly) build probes all wrote here, and nothing told their lines apart.
+# Keep asctime FIRST — log readers anchor on the leading timestamp.
+log_format = "%(asctime)s [%(process)d] - %(name)s - %(levelname)s - %(message)s"
 
 # In daemon mode the StreamHandler's output (stderr) is redirected by launchd
 # to ``backend-stderr.log``, which has NO rotation and grows unbounded (observed
@@ -221,8 +224,11 @@ def write_backend_json(
     port: int,
     mode: str,
     path: str = _BACKEND_JSON_DEFAULT,
-) -> None:
+) -> bool:
     """Write ``backend.json`` so other processes can discover this backend.
+
+    Returns True when the file was written, False when the conflict guard
+    skipped it (another live backend owns it).
 
     Uses an exclusive file lock (``flock_exclusive`` from ``utils.file_lock``,
     which wraps ``fcntl.flock`` on Unix and ``msvcrt.locking`` on Windows) to
@@ -279,7 +285,7 @@ def write_backend_json(
                                     "— skipping write (our PID=%d, port=%d)",
                                     existing_pid, existing_port, os.getpid(), port,
                                 )
-                                return
+                                return False
                 except (ValueError, OSError):
                     pass  # corrupt file — safe to overwrite
 
@@ -291,6 +297,7 @@ def write_backend_json(
                 "started_at": datetime.now(timezone.utc).isoformat(),
             }
             p.write_text(_json.dumps(data, indent=2))
+            return True
         finally:
             flock_unlock(lock_fd)
 
@@ -1316,11 +1323,16 @@ async def lifespan(app: FastAPI):
     _backend_start_monotonic = time.monotonic()
     backend_port = _detect_backend_port()
     backend_mode = _detect_run_mode()
-    write_backend_json(port=backend_port, mode=backend_mode)
+    _bjson_written = write_backend_json(port=backend_port, mode=backend_mode)
     # Desktop CLI sessions reach the Bedrock thinking gateway on this port.
     from core.bedrock_thinking_gateway import set_listen_port as _set_gw_port
     _set_gw_port(backend_port)
-    logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
+    if _bjson_written:
+        logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
+    else:
+        # The conflict guard already logged a WARNING with the owner's pid/port.
+        logger.info("backend.json NOT written (port=%d, mode=%s) — owned by another live backend",
+                    backend_port, backend_mode)
 
     # Resolve the bundled CLI version ONCE at boot (subprocess — must never
     # run inside the per-request health handler, which is polled every 5s).

@@ -144,13 +144,17 @@ describe('TopBar', () => {
 
 // ---------- BottomBar Tests ----------
 
-function renderBottomBarWithHealth(connected: boolean) {
+function renderBottomBarWithHealth(
+  connected: boolean | 'connected' | 'disconnected' | 'degraded' | 'initializing',
+) {
   setupMocks({ sessionMeta: { agentName: 'Swarm' } });
+  const status =
+    connected === true ? 'connected' : connected === false ? 'disconnected' : connected;
   const healthValue: HealthContextValue = {
     health: {
-      status: connected ? 'connected' : 'disconnected',
+      status,
       lastCheckedAt: Date.now(),
-      consecutiveFailures: connected ? 0 : 3,
+      consecutiveFailures: status === 'connected' ? 0 : 3,
     },
     triggerHealthCheck: vi.fn(),
   };
@@ -170,6 +174,17 @@ describe('BottomBar', () => {
   it('shows "Offline" when health status is disconnected', () => {
     renderBottomBarWithHealth(false);
     expect(screen.getByText('Offline')).toBeDefined();
+  });
+
+  it('shows "Starting", not "Offline", while the backend is initializing', () => {
+    renderBottomBarWithHealth('initializing');
+    expect(screen.getByText('Starting')).toBeDefined();
+    expect(screen.queryByText('Offline')).toBeNull();
+  });
+
+  it('shows "Reconnecting" while degraded (alive but stalled)', () => {
+    renderBottomBarWithHealth('degraded');
+    expect(screen.getByText('Reconnecting')).toBeDefined();
   });
 
   it('renders agent name from session meta', () => {

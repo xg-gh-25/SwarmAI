@@ -22,6 +22,26 @@ class TestIllegalLevelFailLoud:
     pollution is visible instead of silently discarding the section's evidence.
     """
 
+    def setup_method(self):
+        # the parse-site warning is once-per-level per process
+        from core.ddd_maturity import _reset_illegal_level_warnings
+        _reset_illegal_level_warnings()
+
+    def test_repeated_illegal_level_warns_once(self, caplog):
+        # No warn-storm: the health hook re-parses every doc ~180×/day.
+        import logging
+        content = (
+            "## A\n<!-- maturity: seeded | sources: 1 | verified: true | "
+            "used: true | days: 0 | promoted: none -->\n"
+            "## B\n<!-- maturity: seeded | sources: 2 | verified: true | "
+            "used: true | days: 0 | promoted: none -->\n"
+        )
+        with caplog.at_level(logging.WARNING, logger="core.ddd_maturity"):
+            for _ in range(5):
+                parse_maturity(content)
+        warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warns) == 1 and "seeded" in warns[0].message
+
     def test_parse_illegal_level_returns_safe_default(self):
         # AC1: behavior preserved — illegal level parses to a safe default.
         content = (

@@ -171,6 +171,18 @@ def parse_maturity(content: str) -> dict[str, MaturityState]:
     return result
 
 
+# Illegal levels already warned about in this process. The context-health hook
+# re-parses every DDD doc twice per run (~90 runs/day), so one bad hand-written
+# annotation produced ~560 identical WARNINGs a day and buried real warnings.
+# Warn once per level, then DEBUG. Bounded: keyed by the illegal word only.
+_WARNED_ILLEGAL_LEVELS: set[str] = set()
+
+
+def _reset_illegal_level_warnings() -> None:
+    """Forget which illegal levels were warned about (tests)."""
+    _WARNED_ILLEGAL_LEVELS.clear()
+
+
 def _parse_annotation_match(m: re.Match) -> MaturityState:
     """Parse a regex match into MaturityState."""
     level = m.group(1).lower()
@@ -180,12 +192,17 @@ def _parse_annotation_match(m: re.Match) -> MaturityState:
         # site — we discard the parsed sources/verified/used and return a zeroed
         # default. Warn naming the illegal level so the pollution is visible
         # instead of silently zeroing the section's evidence.
-        logger.warning(
-            "DDD maturity: illegal level %r in annotation (not in %s) — "
-            "discarding this section's parsed evidence, returning default. "
-            "Fix the source doc's maturity annotation.",
-            level, LEVELS,
-        )
+        if level not in _WARNED_ILLEGAL_LEVELS:
+            _WARNED_ILLEGAL_LEVELS.add(level)
+            logger.warning(
+                "DDD maturity: illegal level %r in annotation (not in %s) — "
+                "discarding this section's parsed evidence, returning default. "
+                "Fix the source doc's maturity annotation "
+                "(grep 'maturity: %s'). Repeats are logged at DEBUG.",
+                level, LEVELS, level,
+            )
+        else:
+            logger.debug("DDD maturity: illegal level %r in annotation (repeat)", level)
         return MaturityState()
 
     source_count = int(m.group(2))

@@ -94,6 +94,9 @@ export function BottomBar() {
   // 'degraded' (run_13094a88): the daemon is ALIVE, just briefly stalled — it must
   // NOT render as "Offline" (that IS the false-offline bug this state prevents).
   const isDegraded = healthStatus === 'degraded';
+  // 'initializing' = app boot / backend still starting (e.g. right after a
+  // deploy restart). It is not a failure, so it must not read as "Offline".
+  const isStarting = healthStatus === 'initializing';
   const { activeSessionMeta } = useSessionMeta();
   const agentName = activeSessionMeta?.agentName || 'Swarm';
 
@@ -204,11 +207,19 @@ export function BottomBar() {
         <span className="flex items-center gap-1.5">
           <span
             className={`w-[5px] h-[5px] rounded-full flex-shrink-0 ${
-              isConnected ? 'bg-green-500' : isDegraded ? 'bg-amber-500' : 'bg-gray-500'
+              isConnected
+                ? 'bg-green-500'
+                : isDegraded
+                  ? 'bg-amber-500'
+                  : isStarting
+                    ? 'bg-amber-500 animate-pulse'
+                    : 'bg-gray-500'
             }`}
             aria-hidden="true"
           />
-          <span>{isConnected ? 'Connected' : isDegraded ? 'Reconnecting' : 'Offline'}</span>
+          <span>
+            {isConnected ? 'Connected' : isDegraded ? 'Reconnecting' : isStarting ? 'Starting' : 'Offline'}
+          </span>
         </span>
         <span className="flex items-center gap-1">
           <span className="material-symbols-outlined text-[12px] leading-none">smart_toy</span>
