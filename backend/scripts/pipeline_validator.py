@@ -4609,11 +4609,83 @@ def validate_stage_record(stage: str, record: dict) -> tuple[list[str], list[str
     return errors, warnings
 
 
-def validate_exit_criteria(criteria, required: bool) -> list[str]:
+def _is_mode_ref(ref: str) -> bool:
+    """True when a ``kind=test`` ref names a runner mode (``mode:<m>``).
+
+    The ONE predicate both the PLAN check (``_test_ref_shape_error``) and the judge
+    (``_judge_test_criterion``) use, on the raw ref: `` mode:x`` (leading space) is
+    a path to both, so it cannot pass PLAN as a mode and then be judged as a path."""
+    return ref.startswith("mode:")
+
+
+_TEST_REF_GLOB_CHARS = ("*", "?")  # not "[": bracketed route folders (app/[id]/) are real paths
+
+# Pseudo-files of the runner's synthetic nodeids (pipeline_test._res): ``desktop::tsc``,
+# ``desktop::vitest``, ``import::<module>``. The judge matches them by nodeid
+# equality, so ``<namespace>::<name>`` is a satisfiable ref even though the part
+# before ``::`` has no extension (and ``desktop/`` is a real directory).
+_RUNNER_NODEID_NAMESPACES = ("desktop", "import")
+
+
+def _exit_criteria_roots() -> list[str]:
+    """Default roots for the PLAN directory check — the same places
+    ``artifact_cli._evidence_roots`` resolves a relative path against: the
+    runner's repo override, this repo, the workspace."""
+    roots: list[str] = []
+    env = os.environ.get("SWARM_TEST_REPO_ROOT")
+    if env:
+        roots.append(env)
+    roots.append(str(Path(__file__).resolve().parents[2]))
+    try:
+        roots.append(str(_get_workspace()))
+    except Exception:  # noqa: BLE001 — a root we cannot resolve is just skipped
+        pass
+    return roots
+
+
+def _test_ref_shape_error(ref: str, roots) -> str | None:
+    """Why a ``kind=test`` ref can never be satisfied, or None.
+
+    The judge (``_evidence_matches``) compares a ref against ONE result file or
+    nodeid, so a directory or a glob never matches anything and the criterion
+    stays unmet until a forced commit. Only the path part (before ``::``) is
+    checked: brackets and wildcards of a parametrized nodeid are legitimate."""
+    if _is_mode_ref(ref):
+        return None
+    if ref.strip().startswith("mode:"):
+        # The judge reads this as a PATH (``_is_mode_ref`` is False), which no
+        # result file can equal — whatever the mode name looks like.
+        return f"{ref!r} has whitespace before 'mode:'; write it as {ref.strip()!r}"
+    head, sep, name = ref.partition("::")
+    path = _norm_test_path(head)
+    if sep and name.strip() and path in _RUNNER_NODEID_NAMESPACES:
+        return None
+    fix = ("name each test file (or file::test) as its own criterion, or use "
+           "mode:regression for whole-scope coverage")
+    if any(ch in path for ch in _TEST_REF_GLOB_CHARS):
+        return f"{ref!r} is a glob; a test ref must match one result file — {fix}"
+    is_dir = path.endswith("/") or not Path(path).suffix
+    if not is_dir:
+        for root in roots or ():
+            try:
+                if (Path(root) / path).is_dir():
+                    is_dir = True
+                    break
+            except OSError:
+                continue
+    if is_dir:
+        return f"{ref!r} names a directory, not a test file — {fix}"
+    return None
+
+
+def validate_exit_criteria(criteria, required: bool, *, roots=None) -> list[str]:
     """Structural check of a PLAN ``exit_criteria`` list (G1).
 
     ``required`` = strict profile at plan stage-complete. The legacy publish path
     never calls this, so in-flight runs without the field are not broken.
+    A ``kind=test`` ref that names a directory or a glob is rejected on EVERY
+    profile (it is unsatisfiable on all of them); ``roots`` are where a relative
+    ref may live for the directory check (None → ``_exit_criteria_roots()``).
     Errors start with ``Exit criteria: <path>:`` (→ E_EXIT_CRITERIA).
     """
     if criteria is None:
@@ -4650,6 +4722,12 @@ def validate_exit_criteria(criteria, required: bool) -> list[str]:
                 errors.append(f"Exit criteria: {p}.ref: still a template placeholder ({ref!r}) — name the real target")
             elif kind == "probe" and not _SAFE_REF_NAME_RE.fullmatch(ref):
                 errors.append(f"Exit criteria: {p}.ref: probe name must match {_SAFE_REF_NAME_RE.pattern}")
+            elif kind == "test":
+                if roots is None:
+                    roots = _exit_criteria_roots()
+                shape = _test_ref_shape_error(ref, roots)
+                if shape:
+                    errors.append(f"Exit criteria: {p}.ref: {shape}")
         expect = c.get("expect")
         if not isinstance(expect, str) or not expect.strip():
             errors.append(f"Exit criteria: {p}.expect: required non-empty string")
@@ -4900,7 +4978,7 @@ def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tupl
     report that predates later edits does not count."""
     def _stale(ev) -> bool:
         return bool(stale_of and stale_of(ev))
-    if ref.startswith("mode:"):
+    if _is_mode_ref(ref):
         mode = ref[len("mode:"):].strip()
         idx = next((i for i, e in enumerate(evidence) if e.get("mode") == mode), None)
         if idx is None:

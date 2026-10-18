@@ -15,7 +15,7 @@ Turn the chosen alternative into a design BUILD can execute with zero project co
 7. **Security boundaries**: only when `cross_boundary.value == true` (Gates).
 8. **Required experts**: `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --add-required-expert <id>` (repeatable) per `backend/experts/code/` domain touched (endpoint ⇒ `security`, async ⇒ `concurrency`, state machine ⇒ `state-machine`). Append-only. Never `spec-compliance`.
 9. **Impact projection**: only if the project has `code_intel.db`.
-10. **Exit contract**: `exit_criteria[]` = `[{id, kind, ref, expect}]`; kind ∈ test|probe|mutation|manual, expect ∈ pass|no_new_findings|all_killed|done. Start from `exit_criteria_default`, replace every `<…>` ref with a real target (manual may omit ref). When `stage-complete` (build/test/deliver) says they are met, stop verifying and move on.
+10. **Exit contract**: `exit_criteria[]` = `[{id, kind, ref, expect}]`; kind ∈ test|probe|mutation|manual, expect ∈ pass|no_new_findings|all_killed|done. Start from `exit_criteria_default`, replace every `<…>` ref with a real target (manual may omit ref). A `test` ref names ONE file or nodeid (or `mode:<m>`); a directory or glob can never match a result and is rejected, so list each test file, or use `mode:regression` for whole-scope coverage. When `stage-complete` (build/test/deliver) says they are met, stop verifying and move on.
 
 PLAN runs no tests; any test goes only through `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode <m>`.
 

@@ -23,6 +23,10 @@ Structural checks (`validate_exit_criteria`, error code `E_EXIT_CRITERIA`):
 - `kind` ∈ `test` | `probe` | `mutation` | `manual`.
 - `ref`: non-empty string; any `<...>` placeholder is rejected (name the real target).
   `manual` may omit `ref`. A `probe` ref must match `^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$`.
+  A `test` ref is `mode:<m>` or ONE file / nodeid (`file.py`, `file.py::test`, `x.test.tsx`).
+  A directory (trailing `/`, no file extension, or an existing directory) or a glob
+  (`*`, `?`) is rejected on every profile: the judge matches one result file, so it
+  could never be met. List each test file, or use `mode:regression` for whole-scope coverage.
 - `expect`: non-empty; use `pass` (test), `no_new_findings` (probe), `all_killed`
   (mutation), `done` (manual).
 - Missing or empty list → BLOCK on strict profiles (everything except trivial/docs/research;
