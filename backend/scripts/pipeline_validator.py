@@ -51,6 +51,9 @@ Public symbols:
 - ``evidence_freshness`` / ``evidence_regression_modes`` — is runner evidence newer
   than the run's last edits (tree_digest / changed_files digests), and which
   latest-*.json reports carry a regression-classified failure
+- ``load_test_evidence`` / ``unreadable_evidence`` — every latest-*.json report,
+  newest first; one that exists but cannot be read is an ``unreadable``
+  placeholder (never green, never "absent")
 - ``validate_exit_criteria_replan`` — a replan after a later stage completed may
   only ADD exit criteria (each with a reason), never drop or change one
 - ``structure_errors``     — legacy message strings → {code, path, message, got?, expected?}
@@ -4711,35 +4714,87 @@ def default_exit_criteria(work_type: str | None, acceptance_criteria=None) -> li
     return out
 
 
-def _read_evidence_json(path: Path) -> dict | None:
-    """Read one evidence JSON file (C2/C3 shape, schema 1). None on any problem."""
+# Evidence reports are written by our own runner (pipeline_test.py) and grow with
+# the suite: a full verify / regression report already runs to several MB. This
+# cap only bounds a pathological file, so it sits far above any real report. (The
+# 2 MB _DISK_CHECK_MAX_BYTES is sized for SOURCE files and must not be reused here:
+# it made every full-suite report unreadable.)
+_EVIDENCE_MAX_BYTES = 128 * 1024 * 1024
+
+
+def _load_evidence_json(path: Path) -> tuple[dict | None, str | None]:
+    """Read one evidence JSON file → ``(data, problem)``.
+
+    ``(dict, None)`` readable · ``(None, None)`` absent · ``(None, reason)`` the file
+    EXISTS but cannot be used (too large, unreadable, not JSON, not an object).
+    Callers must not treat the third case as "no evidence": a report that exists
+    but cannot be read is a failure to verify, never a pass by omission.
+    """
     try:
-        if not path.is_file() or path.stat().st_size > _DISK_CHECK_MAX_BYTES:
-            return None
+        if not path.exists():
+            # A dangling symlink is a report that is there but cannot be read.
+            return (None, "dangling symlink") if path.is_symlink() else (None, None)
+        if not path.is_file():
+            return None, "not a regular file"
+        size = path.stat().st_size
+        if size > _EVIDENCE_MAX_BYTES:
+            return None, f"{size} bytes exceeds the {_EVIDENCE_MAX_BYTES}-byte evidence cap"
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    except OSError as exc:
+        return None, f"unreadable: {exc.__class__.__name__}"
+    except (ValueError, RecursionError):
+        return None, "not valid JSON"
+    if not isinstance(data, dict):
+        return None, "not a JSON object"
+    return data, None
+
+
+def _read_evidence_json(path: Path) -> dict | None:
+    """Read one evidence JSON file (C2/C3 shape, schema 1). None when absent or
+    unusable — use ``_load_evidence_json`` where the two must be told apart."""
+    return _load_evidence_json(path)[0]
+
+
+def _iso_utc(ts: float) -> str:
+    """``finished_at``-compatible stamp (runner format: ``YYYY-MM-DDTHH:MM:SSZ``)."""
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def load_test_evidence(run_dir: Path) -> list[dict]:
     """All C2 ``evidence/tests/latest-<mode>.json`` reports, NEWEST first
-    (by ``finished_at``, falling back to file mtime)."""
+    (by ``finished_at``, falling back to file mtime).
+
+    A report that exists but cannot be read is NOT dropped: it is returned as a
+    placeholder ``{"mode", "unreadable": reason, "counts": {}, ...}`` stamped with the
+    file's mtime, so every consumer sees a report it cannot verify (never green,
+    never "absent") instead of silently judging an older report in its place.
+    """
     tests_dir = Path(run_dir) / "evidence" / "tests"
     found: list[tuple[str, float, dict]] = []
     if tests_dir.is_dir():
         for p in tests_dir.glob("latest-*.json"):
-            data = _read_evidence_json(p)
-            if data is None:
-                continue
-            data.setdefault("mode", p.stem[len("latest-"):])
+            mode = p.stem[len("latest-"):]
             try:
                 mtime = p.stat().st_mtime
             except OSError:
                 mtime = 0.0
+            data, problem = _load_evidence_json(p)
+            if data is None:
+                if problem is None:
+                    continue  # vanished between glob and read — genuinely absent
+                data = {"mode": mode, "unreadable": problem, "counts": {},
+                        "results": [], "failures": [], "finished_at": _iso_utc(mtime)}
+            data.setdefault("mode", mode)
             found.append((str(data.get("finished_at") or ""), mtime, data))
     found.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [d for _, _, d in found]
+
+
+def unreadable_evidence(evidence: list | None) -> list[str]:
+    """``latest-<mode>.json: reason`` for every placeholder in ``evidence``."""
+    return [f"latest-{ev.get('mode')}.json: {ev['unreadable']}" for ev in (evidence or [])
+            if isinstance(ev, dict) and ev.get("unreadable")]
 
 
 def _norm_test_path(p: str) -> str:
@@ -4801,8 +4856,12 @@ def evidence_freshness(ev, files_touched, roots=()) -> dict:
     entries in place; relative ones under the first of ``roots`` where the file
     exists). A changed digest means the tests ran BEFORE a later edit.
     status: ``stale`` (≥1 mismatch) | ``fresh`` (≥1 checked, none changed) |
-    ``unknown`` (nothing comparable) | ``undigested`` (older report format).
+    ``unknown`` (nothing comparable) | ``undigested`` (older report format) |
+    ``unreadable`` (``ev`` is a load_test_evidence placeholder for a report that
+    exists but cannot be read).
     """
+    if isinstance(ev, dict) and ev.get("unreadable"):
+        return {"status": "unreadable", "stale_files": [], "checked": 0}
     digests = evidence_digests(ev)
     if digests is None:
         return {"status": "undigested", "stale_files": [], "checked": 0}
@@ -4847,6 +4906,12 @@ def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tupl
         if idx is None:
             return False, f"no latest-{mode}.json evidence"
         ev = evidence[idx]
+        if ev.get("unreadable"):
+            return False, f"latest-{mode}.json exists but is unreadable ({ev['unreadable']})"
+        newer_bad = unreadable_evidence(evidence[:idx])
+        if newer_bad:
+            # A newer report that cannot be read may carry a regression.
+            return False, f"newer runner evidence is unreadable {newer_bad}"
         newer_reg = evidence_regression_modes(evidence[:idx])
         if newer_reg:
             return False, f"newer runner evidence ({newer_reg}) reports a regression"
@@ -4855,6 +4920,10 @@ def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tupl
         return (_evidence_green(ev),
                 f"latest-{mode}.json counts={ev.get('counts')}")
     for ev in evidence:  # newest first — the newest report that mentions ref decides
+        if ev.get("unreadable"):
+            # It may mention ref (and fail it); an older report cannot speak for it.
+            return False, (f"latest-{ev.get('mode')}.json is newer and unreadable "
+                           f"({ev['unreadable']}) — cannot judge {ref}")
         hits = [r for r in (ev.get("results") or []) if isinstance(r, dict) and _evidence_matches(ref, r)]
         if not hits:
             continue
@@ -4878,6 +4947,9 @@ def judge_exit_criteria(criteria, run_dir: Path, record: dict | None = None, *,
                a pass from a report whose digests no longer match the files'
                current content is UNMET ("test evidence predates later edits");
                a report without digests is judged as before plus a ``warnings`` entry.
+               A report that exists but cannot be read (load_test_evidence
+               placeholder) never passes: as the judged report, or as any report
+               newer than the one that would decide.
     probe    → evidence/probes/<ref>.json ``converged`` is true
     mutation → evidence/mutations/latest.json ``all_killed`` is true
     manual   → record.exit_evidence[id] is a non-empty string
@@ -4915,13 +4987,15 @@ def judge_exit_criteria(criteria, run_dir: Path, record: dict | None = None, *,
             if not _SAFE_REF_NAME_RE.fullmatch(ref):
                 ok, why = False, "unsafe probe ref"
             else:
-                pr = _read_evidence_json(run_dir / "evidence" / "probes" / f"{ref}.json")
+                pr, bad = _load_evidence_json(run_dir / "evidence" / "probes" / f"{ref}.json")
                 ok = bool(pr and pr.get("converged") is True)
-                why = "probe converged" if ok else ("probe not converged" if pr else "no probe evidence")
+                why = ("probe converged" if ok else "probe not converged" if pr
+                       else f"probe evidence unreadable ({bad})" if bad else "no probe evidence")
         elif kind == "mutation":
-            mu = _read_evidence_json(run_dir / "evidence" / "mutations" / "latest.json")
+            mu, bad = _load_evidence_json(run_dir / "evidence" / "mutations" / "latest.json")
             ok = bool(mu and mu.get("all_killed") is True and mu.get("mutations"))
-            why = "all mutations killed" if ok else ("surviving mutation(s)" if mu else "no mutation evidence")
+            why = ("all mutations killed" if ok else "surviving mutation(s)" if mu
+                   else f"mutation evidence unreadable ({bad})" if bad else "no mutation evidence")
         elif kind == "manual":
             val = manual.get(cid)
             ok = isinstance(val, str) and bool(val.strip())
@@ -4962,7 +5036,8 @@ def push_ready_upper_bound(
     not older than the last edit (``evidence_fresh`` from evidence_freshness),
     no blocking finding (_blocked_findings — the same SSOT as the publish +
     completion gates), completion_audit.all_green, zero regressions, meta_review
-    without a HIGH, and (strict profiles) every declared exit criterion met.
+    without a HIGH, no report that exists but cannot be read (load_test_evidence
+    placeholder), and (strict profiles) every declared exit criterion met.
     Returns (bound, reasons-it-is-false).
     """
     artifact = artifact if isinstance(artifact, dict) else {}
@@ -4995,6 +5070,10 @@ def push_ready_upper_bound(
         regs.append(test_artifact.get("regressions"))
     if any(isinstance(r, (int, float)) and r > 0 for r in regs):
         reasons.append(f"regressions > 0 ({[r for r in regs if r]})")
+    unreadable = unreadable_evidence(list(all_test_evidence or [])
+                                     + ([test_evidence] if isinstance(test_evidence, dict) else []))
+    if unreadable:
+        reasons.append(f"tests: runner evidence exists but is unreadable {sorted(set(unreadable))}")
     reg_modes = evidence_regression_modes(all_test_evidence)
     if reg_modes:
         reasons.append(f"regression-classified failure in runner evidence {reg_modes}")
