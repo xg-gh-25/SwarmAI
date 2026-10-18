@@ -192,9 +192,16 @@ def install():
     if result.returncode in (5, 37):
         # 5 = I/O error (service already loaded, common on macOS Ventura+)
         # 37 = Operation already in progress (already bootstrapped)
-        print(f"  Already loaded: {DAEMON_LABEL} (re-installed plist, kickstarting...)")
+        # Re-register instead of `kickstart -k`: kickstart respawns from the
+        # LOADED job definition, so the plist just written (e.g. a ProcessType
+        # change) would never take effect. launchd re-reads it only on bootstrap.
+        print(f"  Already loaded: {DAEMON_LABEL} (re-installed plist, reloading job...)")
         subprocess.run(
-            ["launchctl", "kickstart", "-k", f"gui/{_uid()}/{DAEMON_LABEL}"],
+            ["launchctl", "bootout", f"gui/{_uid()}/{DAEMON_LABEL}"],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{_uid()}", str(dest)],
             capture_output=True,
         )
     elif result.returncode != 0:

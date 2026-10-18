@@ -34,9 +34,11 @@ const DEFAULT_FAILURE_THRESHOLD = 2;
  *  while the daemon PROCESS is alive but the event loop is stalled (heartbeat
  *  fresh). If such a signal arrived within this window, a JS-poll failure is a
  *  *busy* backend, not a dead one → map to 'degraded' (inputs stay usable), not
- *  'disconnected'. 10s comfortably spans multiple 3s emits yet is short enough
- *  that a genuine death (no more degraded events) escalates promptly. */
-const DEGRADED_LIVENESS_WINDOW_MS = 10_000;
+ *  'disconnected'. 15s spans several recovery polls even when one poll takes
+ *  ~7s under load (3s sleep + 3s /health timeout + a launchctl probe), yet a
+ *  genuine death (no more degraded events) still escalates promptly — and the
+ *  Rust watchdog's own terminated event disables inputs immediately anyway. */
+const DEGRADED_LIVENESS_WINDOW_MS = 15_000;
 
 /** Toast id used for the persistent disconnected warning. */
 const HEALTH_DISCONNECTED_TOAST_ID = 'health-disconnected';
@@ -422,6 +424,14 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         // (heartbeat fresh). handleFailure reads this so the JS poll won't
         // independently flip to 'disconnected' within DEGRADED_LIVENESS_WINDOW_MS.
         lastDegradedAtRef.current = Date.now();
+
+        // The watchdog RE-EMITS this every ~3s for as long as the stall lasts
+        // (lib.rs recovery_poll_event). Only the first event of an episode is a
+        // transition: re-adding the toast / bumping health state on every repeat
+        // would re-render every HealthContext consumer each 3s on an already
+        // loaded machine and resurrect a toast the user dismissed.
+        if (currentStatusRef.current === 'degraded') return;
+
         currentStatusRef.current = 'degraded';
         recoveryKindRef.current = null;
 

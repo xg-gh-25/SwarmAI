@@ -254,10 +254,9 @@ cmd_deploy() {
     # Kill old daemon so it restarts with new binary (deploy already done)
     # Use SIGKILL (not SIGTERM): SSE streams block SIGTERM indefinitely.
     # KeepAlive is safe here because deploy already finished (no rsync race).
+    # A changed launchd job definition (plist) is reloaded instead.
     if [ "$daemon_was_running" = true ]; then
-        _log "Restarting daemon to pick up new binary..."
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 90
+        _daemon_restart_after_deploy 90
     else
         _log "Daemon was not running. Start with: ./dev.sh daemon start"
     fi
@@ -476,6 +475,7 @@ case "${1:-start}" in
         echo ""
         echo "Daemon:"
         echo "  daemon restart   Restart the backend daemon (launchd)"
+        echo "  daemon reload    Re-register the launchd job (applies plist changes)"
         echo "  daemon stop      Stop the daemon"
         echo "  daemon start     Start the daemon"
         echo "  daemon status    Show daemon health (default)"

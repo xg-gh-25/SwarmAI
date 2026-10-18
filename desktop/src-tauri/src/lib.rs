@@ -889,6 +889,19 @@ fn watchdog_down_decision(
     }
 }
 
+/// Event the runtime watchdog emits on each RECOVERY poll (daemon mode, miss
+/// streak at/over the escalation threshold, terminated not yet emitted this
+/// episode). Pure — unit-tested. Degraded MUST re-emit `backend-degraded` on every
+/// poll: useHealthMonitor.ts honours that signal as liveness proof only within
+/// DEGRADED_LIVENESS_WINDOW_MS (15s), so it has to keep arriving for as long as
+/// the stall lasts (RECOVERY_POLL_SECS = 3s cadence).
+fn recovery_poll_event(decision: WatchdogDownDecision) -> &'static str {
+    match decision {
+        WatchdogDownDecision::Degraded => "backend-degraded",
+        WatchdogDownDecision::Terminated => "backend-terminated-restarting",
+    }
+}
+
 /// Check whether the launchd-managed daemon PROCESS is currently alive, given a
 /// pre-resolved `uid` (resolve once per probe, not per attempt — the caller loops).
 ///
@@ -1313,6 +1326,17 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
 
     println!("[Tauri] Daemon binary deployed: {}", target_binary);
 
+    // Step 4b: Re-render the plist from the NEW bundle's template. We booted the
+    // job out above, so this bootstrap is the one moment launchd re-reads it — a
+    // job-definition change shipped in this release (e.g. ProcessType) would
+    // otherwise never reach an upgraded install. Non-fatal: the old file still
+    // bootstraps the new binary.
+    match write_daemon_plist_from_bundle(&bundle_base, &home) {
+        Ok(true) => println!("[Tauri] Daemon plist refreshed from bundle template"),
+        Ok(false) => println!("[Tauri] No bundled plist template — keeping existing plist"),
+        Err(e) => println!("[Tauri] Plist refresh failed (keeping existing plist): {}", e),
+    }
+
     // Step 5: Bootstrap (reload into launchd with new binary)
     let _ = std::process::Command::new("launchctl")
         .args(["bootstrap", &gui_target, &plist_path])
@@ -1429,6 +1453,52 @@ async fn sync_daemon_version_background(
             let _ = app.emit("backend-upgrade-failed", msg);
         }
     }
+}
+
+/// Substitute the launchd plist template placeholders. Pure — unit-tested.
+/// Must stay in step with the bash renderer (`scripts/daemon-lib.sh`
+/// `_deploy_daemon_binary`) and the Python one (`/api/system/upgrade`).
+#[allow(dead_code)]
+fn render_daemon_plist(template: &str, wrapper_path: &str, log_dir: &str, home: &str) -> String {
+    template
+        .replace("__WRAPPER_PATH__", wrapper_path)
+        .replace("__LOG_DIR__", log_dir)
+        .replace("__HOME__", home)
+}
+
+/// Render the bundled `daemon/com.swarmai.backend.plist.template` into
+/// `~/Library/LaunchAgents/com.swarmai.backend.plist`. Returns Ok(false) when the
+/// bundle carries no template (dev layout) so the caller keeps the existing file.
+///
+/// Every path that bootstraps the daemon from the app bundle must call this
+/// first: launchd reads the plist only at bootstrap, so a job definition change
+/// shipped in the template (e.g. ProcessType Background → Standard) only takes
+/// effect if the file on disk is rewritten before that bootstrap.
+#[allow(dead_code)]
+fn write_daemon_plist_from_bundle(bundle_base: &std::path::Path, home: &str) -> Result<bool, String> {
+    let template_path = bundle_base.join("daemon").join("com.swarmai.backend.plist.template");
+    if !template_path.exists() {
+        return Ok(false);
+    }
+    let template = std::fs::read_to_string(&template_path)
+        .map_err(|e| format!("Failed to read plist template: {}", e))?;
+    let home_path = std::path::Path::new(home);
+    let wrapper = home_path.join(".swarm-ai").join("swarmai_backend.sh");
+    let log_dir = home_path.join(".swarm-ai").join("logs");
+    let content = render_daemon_plist(
+        &template,
+        wrapper.to_str().unwrap_or(""),
+        log_dir.to_str().unwrap_or(""),
+        home,
+    );
+    let dest = home_path.join(DAEMON_PLIST_RELPATH);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
+    }
+    std::fs::write(&dest, &content)
+        .map_err(|e| format!("Failed to write plist: {}", e))?;
+    Ok(true)
 }
 
 /// Auto-install the daemon: deploy binary + wrapper + plist, then bootstrap.
@@ -1558,25 +1628,14 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
         .output();
 
     // Step 3+4: Generate plist from template and write
-    let plist_template_path = bundle_base.join("daemon").join("com.swarmai.backend.plist.template");
     let plist_dest = launch_agents.join("com.swarmai.backend.plist");
 
-    if plist_template_path.exists() {
-        let plist_content = std::fs::read_to_string(&plist_template_path)
-            .map_err(|e| format!("Failed to read plist template: {}", e))?;
-
-        let plist_content = plist_content
-            .replace("__WRAPPER_PATH__", wrapper_dest.to_str().unwrap_or(""))
-            .replace("__LOG_DIR__", log_dir.to_str().unwrap_or(""))
-            .replace("__HOME__", &home);
-
-        std::fs::write(&plist_dest, &plist_content)
-            .map_err(|e| format!("Failed to write plist: {}", e))?;
+    if write_daemon_plist_from_bundle(&bundle_base, &home)? {
         println!("[Tauri] Installed daemon plist: {:?}", plist_dest);
     } else if !plist_dest.exists() {
         return Err(format!(
             "Plist template not found ({:?}) and no existing plist",
-            plist_template_path
+            bundle_base.join("daemon").join("com.swarmai.backend.plist.template")
         ));
     }
 
@@ -2083,14 +2142,24 @@ fn spawn_daemon_health_watchdog(
                         // a stale heartbeat (dead process) or a genuinely wedged loop
                         // lets the streak escalate to a real death on the next poll.
                         let (heartbeat_fresh, loop_wedged) = read_heartbeat();
-                        if matches!(
-                            watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged),
-                            WatchdogDownDecision::Terminated
-                        ) {
-                            println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}, hb_fresh={}, wedged={}) — escalating to terminated",
-                                recovery_attempts, pid_present, heartbeat_fresh, loop_wedged);
-                            let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
-                            terminated_emitted = true;
+                        let decision = watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged);
+                        let event = recovery_poll_event(decision);
+                        match decision {
+                            WatchdogDownDecision::Terminated => {
+                                println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}, hb_fresh={}, wedged={}) — escalating to terminated",
+                                    recovery_attempts, pid_present, heartbeat_fresh, loop_wedged);
+                                let _ = app_handle.emit(event, Option::<i32>::None);
+                                terminated_emitted = true;
+                            }
+                            WatchdogDownDecision::Degraded => {
+                                // Still alive-but-busy: RE-EMIT every recovery poll.
+                                // The frontend treats a degraded signal as liveness
+                                // proof for only DEGRADED_LIVENESS_WINDOW_MS (15s); a
+                                // one-shot emit let a longer stall expire it, and the
+                                // 30s JS poll then flipped to red "Backend is
+                                // unavailable" while this watchdog still said alive.
+                                let _ = app_handle.emit(event, DAEMON_PORT);
+                            }
                         }
                     }
                     // Daemon mode: launchd will restart — wait up to MAX_DAEMON_WAIT.
@@ -2100,7 +2169,11 @@ fn spawn_daemon_health_watchdog(
                             recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32);
                     }
                     // Emit warning at soft threshold — frontend shows "taking longer" banner.
-                    if recovery_attempts == MAX_RECOVERY_ATTEMPTS {
+                    // Only for a daemon already judged dead this episode: if every
+                    // poll so far decided Degraded (fresh heartbeat, loop not wedged)
+                    // the process is alive, and `backend-terminated` would disable
+                    // inputs on a live daemon — the false offline this watchdog avoids.
+                    if recovery_attempts == MAX_RECOVERY_ATTEMPTS && terminated_emitted {
                         println!("[Tauri] Watchdog: daemon recovery taking longer than expected ({} attempts)",
                             MAX_RECOVERY_ATTEMPTS);
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
@@ -2977,6 +3050,33 @@ mod adaptive_probe_tests {
             watchdog_down_decision(true, false, 1, 2, true, true),
             WatchdogDownDecision::Terminated
         );
+    }
+
+    // Recovery-poll event contract with useHealthMonitor.ts: while the decision
+    // stays Degraded the watchdog keeps emitting `backend-degraded` (refreshing
+    // the frontend's 10s liveness window); only a real death escalates.
+    #[test]
+    fn recovery_poll_reemits_degraded_while_alive() {
+        // busy daemon far past the threshold: decision stays Degraded → degraded event
+        let d = watchdog_down_decision(true, true, 9, 2, true, false);
+        assert_eq!(d, WatchdogDownDecision::Degraded);
+        assert_eq!(recovery_poll_event(d), "backend-degraded");
+        // stale heartbeat at threshold → real death → terminated event
+        let d = watchdog_down_decision(true, true, 2, 2, false, false);
+        assert_eq!(recovery_poll_event(d), "backend-terminated-restarting");
+    }
+
+    // The bundled plist template must run the daemon at Standard priority:
+    // Background starved the loop + heartbeat thread under load (false offline).
+    #[test]
+    fn bundled_plist_template_is_standard_priority_and_renders() {
+        let tpl = include_str!("../../resources/daemon/com.swarmai.backend.plist.template");
+        let out = render_daemon_plist(tpl, "/h/.swarm-ai/swarmai_backend.sh", "/h/.swarm-ai/logs", "/h");
+        assert!(!out.contains("__WRAPPER_PATH__") && !out.contains("__LOG_DIR__") && !out.contains("__HOME__"));
+        let compact: String = out.split_whitespace().collect();
+        assert!(compact.contains("<key>ProcessType</key><string>Standard</string>"),
+            "daemon plist must use ProcessType=Standard");
+        assert!(!compact.contains("<string>Background</string>"));
     }
 
     // STALE heartbeat (missing file / old binary) is inert — the decision is

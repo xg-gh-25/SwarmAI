@@ -104,7 +104,7 @@ describe('run_4f32022a: JS poll respects recent heartbeat/degraded liveness sign
     await waitFor(() => expect(result.current.state.status).toBe('disconnected'));
   });
 
-  it('window EXPIRY: a degraded signal older than the 10s window no longer masks → poll failures reach disconnected', async () => {
+  it('window EXPIRY: a degraded signal older than the 15s window no longer masks → poll failures reach disconnected', async () => {
     vi.useFakeTimers();
     try {
       const { result } = renderHook(
@@ -117,16 +117,70 @@ describe('run_4f32022a: JS poll respects recent heartbeat/degraded liveness sign
       act(() => { cbs.degraded!(); });
       await vi.waitFor(() => expect(result.current.state.status).toBe('degraded'));
 
-      // Advance PAST the 10s liveness window with NO further degraded events
+      // Advance PAST the 15s liveness window with NO further degraded events
       // (the Rust watchdog stopped proving liveness — the real signature of a
       // backend that went from busy to gone).
-      await act(async () => { await vi.advanceTimersByTimeAsync(11_000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
 
       // Now poll failures must escalate to disconnected (window expired).
       await act(async () => { await result.current.checkNow(); });
       await act(async () => { await result.current.checkNow(); });
 
       expect(result.current.state.status).toBe('disconnected');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('SUSTAINED stall: degraded re-emitted every 3s keeps the window fresh past 10s → never disconnected', async () => {
+    // Contract with the Rust watchdog's recovery_poll_event: while the daemon is
+    // alive-but-busy it re-emits backend-degraded on EVERY 3s recovery poll (it
+    // used to emit once, so a >10s stall expired the window and the 30s JS poll
+    // flipped to red "Backend is unavailable" — 2026-10-18 false offline).
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(
+        () => useHealthMonitor({ intervalMs: 1_000_000, failureThreshold: 2 }),
+        { wrapper },
+      );
+      await vi.waitFor(() => expect(cbs.degraded).toBeTypeOf('function'));
+
+      act(() => { cbs.degraded!(); });
+      // 24s of stall, a degraded event every 3s, JS poll failing along the way.
+      for (let i = 0; i < 8; i++) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+        act(() => { cbs.degraded!(); });
+        if (i % 3 === 2) {
+          await act(async () => { await result.current.checkNow(); });
+        }
+      }
+      await act(async () => { await result.current.checkNow(); });
+      await act(async () => { await result.current.checkNow(); });
+
+      expect(result.current.state.status).toBe('degraded');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('repeated degraded events are not transitions: health state is not bumped again (no 3s re-render storm)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(
+        () => useHealthMonitor({ intervalMs: 1_000_000, failureThreshold: 2 }),
+        { wrapper },
+      );
+      await vi.waitFor(() => expect(cbs.degraded).toBeTypeOf('function'));
+      act(() => { cbs.degraded!(); });
+      await vi.waitFor(() => expect(result.current.state.status).toBe('degraded'));
+      const first = result.current.state;
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+      act(() => { cbs.degraded!(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+      act(() => { cbs.degraded!(); });
+
+      expect(result.current.state).toBe(first); // same object → no re-render
     } finally {
       vi.useRealTimers();
     }

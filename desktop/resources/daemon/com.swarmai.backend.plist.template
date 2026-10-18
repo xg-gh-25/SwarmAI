@@ -18,9 +18,13 @@
     <key>KeepAlive</key>
     <true/>
 
-    <!-- Background priority — won't interfere with user apps -->
+    <!-- Standard priority. NOT Background: Background puts the daemon and every
+         child (claude CLI, pipeline tests) at Darwin priority 4 on efficiency
+         cores with throttled I/O, so under foreground load the asyncio loop AND
+         the heartbeat thread starve for 20s+ and the app shows a false
+         "Backend offline". The guardian stays Background (it is a 30s poller). -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
 
     <!-- Graceful shutdown timeout: SIGKILL after 15s if process ignores SIGTERM -->
     <key>ExitTimeOut</key>

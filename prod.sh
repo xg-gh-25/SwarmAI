@@ -153,15 +153,14 @@ cmd_build() {
 
     # Restart daemon to pick up new binary.
     # Deploy-first pattern: rsync already completed above, so KeepAlive is SAFE
-    # (restarts the NEW binary). No need for bootout — KeepAlive IS the restart.
-    # SIGKILL (not SIGTERM): SSE streams block graceful shutdown indefinitely.
+    # (restarts the NEW binary). SIGKILL (not SIGTERM): SSE streams block graceful
+    # shutdown indefinitely. If the launchd job definition changed (plist), the
+    # shared helper reloads the job instead (bootout+bootstrap, C034-safe).
     # NOTE: If this runs from agent subprocess, script dies after SIGKILL — that's
     # fine because deploy is already done and KeepAlive handles restart.
     if [ "$daemon_was_running" = true ]; then
         echo ""
-        _log "Restarting daemon (SIGKILL → KeepAlive restarts new binary)..."
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 30 || {
+        _daemon_restart_after_deploy 30 || {
             _warn "Daemon didn't come up — try: ./prod.sh daemon start"
         }
     else
@@ -327,11 +326,10 @@ cmd_release() {
 
     _deploy_daemon_binary
 
-    # 3b. Restart daemon — deploy-first pattern (SIGKILL + KeepAlive restarts new binary)
+    # 3b. Restart daemon — deploy-first pattern (SIGKILL + KeepAlive restarts new
+    #     binary; a changed launchd job definition is reloaded instead)
     if [ "$daemon_was_running" = true ]; then
-        _log "Restarting daemon (SIGKILL → KeepAlive restarts new binary)..."
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+        _daemon_restart_after_deploy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     elif launchctl print "$GUI_TARGET" &>/dev/null; then
         _log "Service registered but not running — starting..."
         cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
@@ -973,6 +971,7 @@ case "${1:-help}" in
         echo ""
         echo "Daemon:"
         echo "  daemon restart   Restart the backend daemon (launchd)"
+        echo "  daemon reload    Re-register the launchd job (applies plist changes)"
         echo "  daemon stop      Stop the daemon"
         echo "  daemon start     Start the daemon"
         echo "  daemon status    Show daemon health (default)"

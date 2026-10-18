@@ -163,16 +163,102 @@ _deploy_daemon_binary() {
 
     local plist_template="$DESKTOP_DIR/resources/daemon/com.swarmai.backend.plist.template"
     local plist_dst="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+    _DAEMON_PLIST_CHANGED=0
     if [ -f "$plist_template" ]; then
         local log_dir="$HOME/.swarm-ai/logs"
         mkdir -p "$log_dir"
         mkdir -p "$(dirname "$plist_dst")"
+        # Render to a temp file first so we can tell whether the job definition
+        # changed: launchd only re-reads a plist on bootstrap, so a changed plist
+        # needs `daemon reload`, not SIGKILL+KeepAlive (see _daemon_restart_after_deploy).
+        local rendered
+        rendered="$(mktemp "${TMPDIR:-/tmp}/swarmai-plist.XXXXXX")"
         sed -e "s|__WRAPPER_PATH__|${wrapper_dst}|g" \
             -e "s|__LOG_DIR__|${log_dir}|g" \
             -e "s|__HOME__|${HOME}|g" \
-            "$plist_template" > "$plist_dst"
-        _ok "Plist deployed"
+            "$plist_template" > "$rendered"
+        if [ -f "$plist_dst" ] && cmp -s "$rendered" "$plist_dst"; then
+            _DAEMON_PLIST_CHANGED=0
+        else
+            _DAEMON_PLIST_CHANGED=1
+        fi
+        chmod 644 "$rendered"   # mktemp creates 0600; keep the plist's usual mode
+        mv -f "$rendered" "$plist_dst"
+        _ok "Plist deployed$([ "$_DAEMON_PLIST_CHANGED" = 1 ] && echo ' (changed — job will be reloaded)')"
     fi
+}
+
+# True (exit 0) when the LOADED launchd job no longer matches the plist on disk
+# in a way a SIGKILL+KeepAlive respawn would not fix. Today that is ProcessType:
+# a job bootstrapped while the plist said Background keeps running at Darwin
+# background priority after the file says Standard, until bootout+bootstrap.
+_daemon_loaded_job_stale() {
+    local plist_dst="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+    [ -f "$plist_dst" ] || return 1
+    local want
+    want="$(plutil -extract ProcessType raw -o - "$plist_dst" 2>/dev/null)" || return 1
+    local loaded_bg=false
+    if launchctl print "$GUI_TARGET" 2>/dev/null | grep -q "spawn type = background"; then
+        loaded_bg=true
+    fi
+    if [ "$want" = "Background" ]; then
+        [ "$loaded_bg" = false ]
+    else
+        [ "$loaded_bg" = true ]
+    fi
+}
+
+# Restart the daemon after _deploy_daemon_binary so it runs the new binary.
+# Normal case: SIGKILL → KeepAlive respawns the new binary (deploy-first pattern).
+# If the job definition itself is stale (plist content changed, or the loaded
+# job still has an old ProcessType), SIGKILL+KeepAlive would respawn from the
+# OLD in-memory definition, so go through `daemon reload` (bootout+bootstrap),
+# which also handles being called from inside the daemon's own process tree.
+_daemon_restart_after_deploy() {
+    local timeout="${1:-30}"
+    if [ "${_DAEMON_PLIST_CHANGED:-0}" = "1" ] || _daemon_loaded_job_stale; then
+        _log "launchd job definition changed — reloading (bootout + bootstrap)..."
+        local old_boot
+        old_boot="$(_daemon_health_line | awk '{print $2}')"
+        _DAEMON_OP_DETACHED=0
+        cmd_daemon reload || return $?
+        if [ "${_DAEMON_OP_DETACHED:-0}" = "1" ]; then
+            # We are inside the daemon's process tree: the reload runs in a
+            # detached copy and cmd_daemon returned at once. If we survive the
+            # daemon's death, wait for the NEW process — otherwise every caller
+            # check after this (health, smoke) would run against the OLD daemon.
+            _log "Reload delegated to a detached process — waiting for the new daemon..."
+            _daemon_wait_restarted "$old_boot" 150
+            return $?
+        fi
+        return 0
+    fi
+    _log "Restarting daemon (SIGKILL → KeepAlive restarts new binary)..."
+    launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+    _daemon_wait_healthy "$timeout"
+}
+
+# "<status> <boot_id>" from the fixed daemon port (empty fields when unreachable).
+_daemon_health_line() {
+    curl -sf --max-time 2 "${DAEMON_API}/health" 2>/dev/null | python3 -c \
+        "import sys,json; d=json.load(sys.stdin); print(d.get('status',''), d.get('boot_id',''))" \
+        2>/dev/null || true
+}
+
+# Wait until the daemon on the fixed port is healthy with a boot_id different
+# from $1 (a NEW process). $2 = timeout seconds.
+_daemon_wait_restarted() {
+    local old="$1" timeout="${2:-120}" i line
+    for i in $(seq 1 "$timeout"); do
+        line="$(_daemon_health_line)"
+        if [ "${line%% *}" = "healthy" ] && [ -n "${line#* }" ] && [ "${line#* }" != "$old" ]; then
+            _ok "Daemon restarted (boot_id ${old:-?} → ${line#* }, ${i}s)"
+            return 0
+        fi
+        sleep 1
+    done
+    _err "Daemon did not come back as a new process within ${timeout}s"
+    return 1
 }
 
 # ── Kill + Deploy + Bootstrap (for file-overwriting deploys) ───
@@ -352,6 +438,7 @@ _reexec_detached_if_descendant() {
     [ -f "$abs0" ] || abs0="$0"
     if PYTHONPATH="${PROJECT_ROOT}/backend${PYTHONPATH:+:$PYTHONPATH}" \
         "$py" -m core.daemon_guard reexec-if-descendant /bin/bash "$abs0" "$@" >/dev/null 2>&1; then
+        _DAEMON_OP_DETACHED=1  # read by _daemon_restart_after_deploy
         _warn "Lifecycle op from a daemon-descendant (C034 guard) — re-executed detached."
         _ok "This session may end if it was the daemon's child; the detached copy owns the op."
         return 0
@@ -367,7 +454,7 @@ cmd_daemon() {
     # C034 prevention: ops that kill/bootout the daemon must not run from inside
     # the daemon's process tree. Re-exec detached if we're a descendant.
     case "$sub" in
-        restart|force-restart|stop)
+        restart|force-restart|stop|reload)
             if _reexec_detached_if_descendant daemon "$@"; then
                 return 0
             fi
@@ -416,6 +503,55 @@ cmd_daemon() {
 
             _log "Waiting for launchd KeepAlive to restart daemon..."
             _daemon_wait_healthy 90
+            ;;
+        reload)
+            # Re-register the job so launchd re-reads the plist on disk
+            # (ProcessType, env, ExitTimeOut). restart/SIGKILL cannot do this:
+            # KeepAlive respawns from the loaded definition. SIGKILL first so the
+            # bootout is instant (an open SSE stream holds SIGTERM for ExitTimeOut).
+            # Non-permanent sentinel: the guardian must not race our bootstrap,
+            # and its stale-guard still recovers the daemon if this op dies midway.
+            if [ -n "${_SWARM_LIFECYCLE_DETACHED:-}" ]; then
+                # Detached copy (C034): its stdout goes nowhere — keep a trace.
+                local _lc_log="${LOG_DIR:-$HOME/.swarm-ai/logs}/daemon-lifecycle.log"
+                mkdir -p "$(dirname "$_lc_log")"
+                exec >>"$_lc_log" 2>&1
+                echo "== $(date '+%Y-%m-%d %H:%M:%S') daemon reload (detached, pid $$)"
+            fi
+            local _sentinel="$HOME/.swarm-ai/.daemon-intentional-down"
+            if [ -f "$_sentinel" ] && \
+                [ $(( $(date +%s) - $(stat -f %m "$_sentinel" 2>/dev/null || echo 0) )) -lt 300 ]; then
+                # A fresh sentinel = another lifecycle op (stop / upgrade) owns
+                # the down-window. Older than the guardian's 5-min stale window
+                # = leftover from a crashed op → safe to take over.
+                _err "Intent sentinel present ($_sentinel) — another daemon op is in flight; not reloading"
+                return 1
+            fi
+            local _gpy; _gpy="$(_guard_python)" && \
+                (cd "${PROJECT_ROOT}/backend" && "$_gpy" -m core.daemon_guard write-sentinel "plist reload" "reload" 2>/dev/null) || \
+                _warn "Could not write intent sentinel — guardian may race the reload"
+            _log "Reloading launchd job (SIGKILL → bootout → bootstrap)..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+            sleep 1
+            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+            _wait_port_free "$DAEMON_PORT" 10 || {
+                _log "Port still held — force kill..."
+                pkill -9 -f "$HOME/.swarm-ai/daemon/python-backend" 2>/dev/null || true
+                sleep 2
+            }
+            local _reload_rc=0
+            _bootstrap_daemon || _reload_rc=$?
+            if [ "$_reload_rc" -eq 0 ]; then
+                _daemon_wait_healthy 90 || _reload_rc=$?
+            fi
+            # Clear OUR sentinel on both outcomes (on failure the guardian should
+            # recover now, not after the 5-minute stale window). Never clear one
+            # another op wrote meanwhile.
+            if grep -q '"written_by": "reload"' "$_sentinel" 2>/dev/null; then
+                rm -f "$_sentinel"
+            fi
+            echo "reload finished rc=$_reload_rc"
+            return "$_reload_rc"
             ;;
         stop)
             _log "Stopping daemon..."
@@ -467,7 +603,7 @@ cmd_daemon() {
             tail -f "$LOG_DIR/backend-daemon.log" "$LOG_DIR/backend-stderr.log"
             ;;
         *)
-            echo "Usage: ./${_DAEMON_CMD} daemon [restart|stop|start|status|logs]"
+            echo "Usage: ./${_DAEMON_CMD} daemon [restart|reload|stop|start|status|logs]"
             ;;
     esac
 }
