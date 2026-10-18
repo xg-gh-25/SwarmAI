@@ -366,20 +366,3 @@ export function isInputBlocked(state: StreamingState): boolean {
   );
 }
 
-/** Get human-readable status for UI display. */
-export function getStatusLabel(state: StreamingState): string | null {
-  switch (state.mode) {
-    case 'idle': return null;
-    case 'pending': return 'Thinking...';
-    case 'streaming': return state.isStalled ? 'Seems stuck...' : null;
-    case 'reconnecting': return `Reconnecting (attempt ${state.reconnectAttempt})...`;
-    case 'resuming': return 'Resuming session...';
-    case 'self_healing': return null; // Invisible to user (grace period)
-    case 'waiting_input': return 'Waiting for your answer';
-    case 'permission_needed': return 'Permission required';
-    case 'session_busy': return 'Waiting for backend...';
-    case 'drain_pending': return null; // Invisible transition
-    case 'error': return null; // Error shown via error block
-    default: return null;
-  }
-}

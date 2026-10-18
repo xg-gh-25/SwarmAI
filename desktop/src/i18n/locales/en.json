@@ -90,7 +90,14 @@
       "search": "Search...",
       "select": "Select..."
     },
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "copy": {
+      "copy": "Copy",
+      "copied": "Copied!",
+      "path": "Copy Path",
+      "absolutePath": "Copy absolute file path",
+      "filePath": "Copy file path"
+    }
   },
   "nav": {
     "swarmcore": "SwarmCore",
@@ -275,7 +282,8 @@
         "ariaRunning": "Pipeline stage {{stage}} in progress",
         "position": "stage {{position}} of {{total}}",
         "changed_one": "changed {{count}} file",
-        "changed_other": "changed {{count}} files"
+        "changed_other": "changed {{count}} files",
+        "next": "next {{stages}}"
       },
       "changed": "changed",
       "andMore": "+{{count}}",

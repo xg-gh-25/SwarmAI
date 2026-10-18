@@ -1,18 +1,17 @@
 /**
  * Routes content blocks to type-specific renderers.
  *
- * Pairs tool_use + tool_result blocks into MergedToolBlock components
- * using a pre-built resultMap for O(1) lookup. Orphaned tool_result
- * blocks (no matching tool_use) fall back to standalone ToolResultBlock.
+ * Markdown text and the interactive interrupts (question / permission /
+ * escalation). Tool calls never come here: they render inside ProcessBlock
+ * from the turn projection (turnView), so a tool_use / tool_result block
+ * renders nothing.
  *
  * @exports ContentBlockRenderer — The routing component
  */
 
 import { useState, useRef, useEffect } from 'react';
-import type { ContentBlock, ToolResultContent, EscalationContent } from '../../../types';
+import type { ContentBlock, EscalationContent } from '../../../types';
 import { MarkdownRenderer, AskUserQuestion } from '../../../components/common';
-import { MergedToolBlock } from './MergedToolBlock';
-import { ToolResultBlock } from './ToolResultBlock';
 import { InlinePermissionRequest } from './InlinePermissionRequest';
 import { EscalationBlock } from './EscalationBlock';
 
@@ -136,10 +135,6 @@ function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boole
 
 interface ContentBlockRendererProps {
   block: ContentBlock;
-  /** Pre-built map from toolUseId → ToolResultContent for O(1) pairing. */
-  resultMap: Map<string, ToolResultContent>;
-  /** Full content array for orphaned tool_result check. */
-  allBlocks: ContentBlock[];
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   /** Callback when user approves/denies a permission request. */
   onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
@@ -149,35 +144,23 @@ interface ContentBlockRendererProps {
   /** The request ID of the currently pending permission (buttons enabled for this one). */
   pendingPermissionRequestId?: string;
   isStreaming?: boolean;
-  /** The ID of the last tool_use block without a result — only this one gets a spinner. */
-  lastPendingToolUseId?: string | null;
   /** Read-only render (History preview): interactive blocks (question /
    *  permission / escalation) must be inert regardless of historical pending
    *  status — interactivity is gated on the pending/status signals, NOT on
    *  callback presence, so omitting callbacks alone would still render
    *  live-looking controls. */
   readOnly?: boolean;
-  /** @deprecated (run_e626e121) Forwarded to MergedToolBlock but no longer used —
-   *  file-change tab-scoping moved to the backend-authoritative
-   *  `swarm:file-changed` signal (stamped with the owning tabId by the SSE bridge —
-   *  run_26aa6caa; was sessionId). Kept to avoid a caller ripple; MergedToolBlock no
-   *  longer dispatches a file event. */
-  sessionId?: string;
 }
 
 export function ContentBlockRenderer({
   block,
-  resultMap,
-  allBlocks,
   onAnswerQuestion,
   onPermissionDecision,
   onEscalationSelect,
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
-  lastPendingToolUseId,
   readOnly,
-  sessionId,
 }: ContentBlockRendererProps) {
   if (block.type === 'text') {
     // Render markdown in BOTH states so formatting (headings/lists/code/math) is
@@ -191,43 +174,6 @@ export function ContentBlockRenderer({
       return <StreamingMarkdownText text={block.text || ''} />;
     }
     return <MarkdownRenderer content={block.text || ''} />;
-  }
-
-  if (block.type === 'tool_use') {
-    // Pair with matching tool_result via resultMap (O(1))
-    const matchingResult = resultMap.get(block.id);
-
-    return (
-      <MergedToolBlock
-        name={block.name || 'Unknown'}
-        summary={block.summary || ''}
-        toolUseId={block.id}
-        category={block.category}
-        resultContent={matchingResult?.content}
-        resultTruncated={matchingResult?.truncated}
-        resultIsError={matchingResult?.isError}
-        isPending={lastPendingToolUseId != null ? block.id === lastPendingToolUseId : (!matchingResult && !!isStreaming)}
-        isStreaming={isStreaming}
-        sessionId={sessionId}
-      />
-    );
-  }
-
-  if (block.type === 'tool_result') {
-    // Skip if already consumed by a MergedToolBlock
-    const hasMatchingToolUse = allBlocks.some(
-      (b) => b.type === 'tool_use' && b.id === block.toolUseId,
-    );
-    if (hasMatchingToolUse) return null;
-
-    // Orphaned tool_result — standalone fallback
-    return (
-      <ToolResultBlock
-        content={block.content}
-        isError={block.isError}
-        truncated={block.truncated ?? false}
-      />
-    );
   }
 
   if (block.type === 'ask_user_question') {

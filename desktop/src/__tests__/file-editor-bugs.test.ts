@@ -1,7 +1,6 @@
 /**
  * Tests for file editor bug fixes:
  * 1. Copy Path → absolute (FileContextMenu)
- * 2. Expanded clickable tool categories (MergedToolBlock)
  * 3. Spaced paths accepted (MarkdownRenderer)
  */
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -48,52 +47,5 @@ describe('Bug 1: isWorkspaceFilePath accepts paths with 1-2 spaces', () => {
 
   it('still rejects URLs', () => {
     expect(isWorkspaceFilePath('https://example.com/file.txt')).toBe(false);
-  });
-});
-
-describe('Bug 2: extractFilePath handles edit/search prefixes', () => {
-  let extractFilePath: (summary: string) => { before: string; path: string } | null;
-
-  beforeAll(async () => {
-    // MergedToolBlock doesn't export extractFilePath — test via FILE_PATH_CATEGORIES behavior
-    // We test the constants indirectly through the component's rendering logic
-    // For now, test the extractFilePath function if exported
-    try {
-      const mod = await import('../pages/chat/components/MergedToolBlock');
-      extractFilePath = (mod as unknown as { extractFilePath: typeof extractFilePath }).extractFilePath;
-    } catch {
-      // If not exported, we'll test categories only
-      extractFilePath = null as unknown as typeof extractFilePath;
-    }
-  });
-
-  it('extracts path from "Editing " prefix', () => {
-    if (!extractFilePath) return; // Skip if not exported
-    const result = extractFilePath('Editing ~/file.ts');
-    expect(result).not.toBeNull();
-    expect(result!.path).toBe('~/file.ts');
-  });
-
-  it('extracts path from "Searching in " prefix', () => {
-    if (!extractFilePath) return;
-    const result = extractFilePath('Searching in ~/src/');
-    expect(result).not.toBeNull();
-    expect(result!.path).toBe('~/src/');
-  });
-
-  it('extracts path from "Writing to " prefix', () => {
-    if (!extractFilePath) return;
-    const result = extractFilePath('Writing to ~/output.json');
-    expect(result).not.toBeNull();
-    expect(result!.path).toBe('~/output.json');
-  });
-});
-
-describe('Bug 2: FILE_PATH_CATEGORIES includes edit and search', () => {
-  it('module exports are available', async () => {
-    // This test verifies the file can be imported without errors
-    // The actual category check is internal — we verify via integration
-    const mod = await import('../pages/chat/components/MergedToolBlock');
-    expect(mod).toBeDefined();
   });
 });

@@ -16,7 +16,6 @@ import {
   INITIAL_STATE,
   isActivelyStreaming,
   isInputBlocked,
-  getStatusLabel,
   type StreamingState,
   type StreamingMode,
   type StreamingEvent,
@@ -529,29 +528,6 @@ describe('streaming-machine: helper functions', () => {
     });
   });
 
-  describe('getStatusLabel', () => {
-    it('returns null for idle', () => {
-      expect(getStatusLabel(inMode('idle'))).toBeNull();
-    });
-
-    it('returns "Thinking..." for pending', () => {
-      expect(getStatusLabel(inMode('pending'))).toBe('Thinking...');
-    });
-
-    it('returns stall message when stalled', () => {
-      const stalled = stateWith({ mode: 'streaming', isStalled: true });
-      expect(getStatusLabel(stalled)).toBe('Seems stuck...');
-    });
-
-    it('returns null for streaming (not stalled)', () => {
-      expect(getStatusLabel(inMode('streaming'))).toBeNull();
-    });
-
-    it('includes attempt number for reconnecting', () => {
-      const s = stateWith({ mode: 'reconnecting', reconnectAttempt: 2 });
-      expect(getStatusLabel(s)).toContain('2');
-    });
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════

@@ -19,13 +19,12 @@ vi.mock('../../../../contexts/ToastContext', () => ({
 
 import { ContentBlockRenderer } from '../ContentBlockRenderer';
 import { MessageBubble } from '../MessageBubble';
-import type { ContentBlock, ToolResultContent, Message } from '../../../../types';
+import type { ContentBlock, Message } from '../../../../types';
 
 // jsdom lacks ResizeObserver (UserMessageView / MessageBubble path uses it).
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
-const emptyResultMap = new Map<string, ToolResultContent>();
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -60,8 +59,6 @@ describe('ContentBlockRenderer — readOnly (History preview)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onPermissionDecision={vi.fn()}
         pendingPermissionRequestId="req-1" // would be live-pending WITHOUT readOnly
         readOnly
@@ -78,8 +75,6 @@ describe('ContentBlockRenderer — readOnly (History preview)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onPermissionDecision={vi.fn()}
         pendingPermissionRequestId="req-1"
       />,
@@ -94,7 +89,7 @@ describe('ContentBlockRenderer — readOnly (History preview)', () => {
     // This guards the renderer-level contract: a plain text block is inert.
     const block = { type: 'text', text: 'hello', _confirmed: true } as ContentBlock;
     render(
-      <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} readOnly />,
+      <ContentBlockRenderer block={block} readOnly />,
     );
     expect(screen.queryByRole('button')).toBeNull();
   });
@@ -104,8 +99,6 @@ describe('ContentBlockRenderer — readOnly (History preview)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId="tu-1" // would be enabled WITHOUT readOnly
         readOnly

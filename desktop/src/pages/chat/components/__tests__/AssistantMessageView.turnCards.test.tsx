@@ -85,6 +85,24 @@ describe('pipeline_run — the alignment', () => {
     expect(container.querySelector('[data-testid]')?.getAttribute('data-testid')).toBe('turn-run');
   });
 
+  it('the running stage names the next planned stages from the run', () => {
+    const run = { ...RUN, stages: ['evaluate', 'think', 'plan', 'build', 'deliver'] } as ContentBlock;
+    const ev = { ...stage('evaluate', 1), next: 'think', nextOrdinal: 2, total: 5 } as ContentBlock;
+    renderView([tx('Go.'), tu('a', 'Bash'), tr('a'), run, ev, tu('b', 'Bash')], true);
+    const live = screen.getByTestId('pipeline-stage-live');
+    expect(within(live).getByTestId('stage-upcoming').textContent).toBe(' · next PLAN → BUILD');
+    // without the run's plan there is nothing to say
+    renderView([tx('Go.'), tu('a', 'Bash'), tr('a'), ev, tu('b', 'Bash')], true);
+    expect(screen.getAllByTestId('pipeline-stage-live')[1].querySelector('[data-testid="stage-upcoming"]')).toBeNull();
+  });
+
+  it('the last planned stage has no "next"', () => {
+    const run = { ...RUN, stages: ['evaluate', 'think'] } as ContentBlock;
+    const ev = { ...stage('evaluate', 1), next: 'think', nextOrdinal: 2, total: 2 } as ContentBlock;
+    renderView([tu('a', 'Bash'), tr('a'), run, ev, tu('b', 'Bash')], true);
+    expect(screen.queryByTestId('stage-upcoming')).toBeNull();
+  });
+
   it('a run block suppresses the no-restatement note', () => {
     renderView([tu('a', 'Bash'), tr('a'), RUN, tu('b', 'Bash'), tr('b'), tu('c', 'Bash'), tr('c'), tx('ok')]);
     expect(screen.getByTestId('turn-run')).toBeTruthy();

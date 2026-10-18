@@ -30,9 +30,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import React from 'react';
 import { ContentBlockRenderer } from '../ContentBlockRenderer';
-import type { ContentBlock, ToolResultContent } from '../../../../types';
+import type { ContentBlock } from '../../../../types';
 
-const emptyResultMap = new Map<string, ToolResultContent>();
 
 function textBlock(text: string): ContentBlock {
   return { type: 'text', text } as ContentBlock;
@@ -42,8 +41,6 @@ function renderBlock(block: ContentBlock, isStreaming: boolean) {
   return render(
     <ContentBlockRenderer
       block={block}
-      resultMap={emptyResultMap}
-      allBlocks={[block]}
       isStreaming={isStreaming}
     />,
   );
@@ -94,7 +91,7 @@ describe('ContentBlockRenderer — streaming text (throttled markdown, run_087e0
     it('throttles reparse — rapid token growth does NOT render every intermediate state immediately', () => {
       const block = textBlock('# H');
       const { container, rerender } = render(
-        <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={true} />,
+        <ContentBlockRenderer block={block} isStreaming={true} />,
       );
       // leading edge: first render shows initial content as markdown
       act(() => { vi.advanceTimersByTime(200); });
@@ -106,8 +103,6 @@ describe('ContentBlockRenderer — streaming text (throttled markdown, run_087e0
         rerender(
           <ContentBlockRenderer
             block={textBlock(`# H${'i'.repeat(i + 1)}`)}
-            resultMap={emptyResultMap}
-            allBlocks={[textBlock(`# H${'i'.repeat(i + 1)}`)]}
             isStreaming={true}
           />,
         );
@@ -125,14 +120,14 @@ describe('ContentBlockRenderer — streaming text (throttled markdown, run_087e0
     it('streaming→final transition preserves the latest content (no loss at boundary)', () => {
       const block = textBlock(MD);
       const { container, rerender } = render(
-        <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={true} />,
+        <ContentBlockRenderer block={block} isStreaming={true} />,
       );
       act(() => { vi.advanceTimersByTime(200); });
       expect(container.textContent).toContain('Heading');
 
       // flip to final — same content, markdown-formatted, nothing dropped
       rerender(
-        <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={false} />,
+        <ContentBlockRenderer block={block} isStreaming={false} />,
       );
       expect(container.querySelector('h1')).not.toBeNull();
       expect(container.textContent).toContain('Heading');

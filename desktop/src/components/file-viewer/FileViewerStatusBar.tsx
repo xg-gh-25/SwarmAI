@@ -9,7 +9,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { FileViewType } from './utils/fileViewTypes';
 import { getFileTypeInfo } from './utils/fileViewTypes';
+import { useTranslation } from 'react-i18next';
 import { copyToClipboard } from '../../utils/clipboard';
+import { tf } from '../../pages/chat/tf';
 
 export interface FileViewerStatusBarProps {
   fileName: string;
@@ -52,6 +54,7 @@ export default function FileViewerStatusBar({
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
 
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   // Hold the "Copied!" reset timer in a ref so we can cancel it on unmount —
   // otherwise the 2s callback fires after the component is gone and setState on
@@ -127,8 +130,8 @@ export default function FileViewerStatusBar({
             <button
               onClick={handleCopy}
               className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-              title={copied ? 'Copied!' : 'Copy absolute file path'}
-              aria-label="Copy file path"
+              title={copied ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.absolutePath', 'Copy absolute file path')}
+              aria-label={tf(t, 'common.copy.filePath', 'Copy file path')}
               data-testid="statusbar-copy-path"
             >
               <span className="material-symbols-outlined text-[13px] leading-none">

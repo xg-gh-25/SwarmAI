@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import hljs from 'highlight.js';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { copyToClipboard } from '../../utils/clipboard';
+import { tf } from '../../pages/chat/tf';
 
 interface CodePreviewProps {
   content: string;
@@ -113,6 +115,7 @@ export const CodePreview = memo(function CodePreview({
   className,
   showLineNumbers = true,
 }: CodePreviewProps) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
   const language = getLanguageFromExtension(filename);
@@ -158,7 +161,7 @@ export const CodePreview = memo(function CodePreview({
           <span className="material-symbols-outlined text-sm">
             {copied ? 'check' : 'content_copy'}
           </span>
-          {copied ? 'Copied!' : 'Copy'}
+          {copied ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.copy', 'Copy')}
         </button>
       </div>
 

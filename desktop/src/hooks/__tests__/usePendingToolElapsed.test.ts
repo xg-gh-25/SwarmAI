@@ -101,18 +101,3 @@ describe('usePendingToolElapsed', () => {
     expect(result.current).toBe(0); // fresh anchor, not 30
   });
 });
-
-import { formatToolElapsed } from '../../pages/chat/components/MergedToolBlock';
-
-describe('formatToolElapsed', () => {
-  it('formats sub-minute as Ns', () => {
-    expect(formatToolElapsed(0)).toBe('0s');
-    expect(formatToolElapsed(5)).toBe('5s');
-    expect(formatToolElapsed(59)).toBe('59s');
-  });
-  it('formats >=60s as Nm SSs with zero-padded seconds', () => {
-    expect(formatToolElapsed(60)).toBe('1m 00s');
-    expect(formatToolElapsed(63)).toBe('1m 03s');
-    expect(formatToolElapsed(125)).toBe('2m 05s');
-  });
-});

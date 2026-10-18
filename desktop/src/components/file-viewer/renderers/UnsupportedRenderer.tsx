@@ -16,7 +16,9 @@
 import { useState, useCallback } from 'react';
 import { getFileTypeInfo, OFFICE_EXTENSIONS } from '../utils/fileViewTypes';
 import { openInSystemApp, revealInFolder } from '../../../utils/openExternal';
+import { useTranslation } from 'react-i18next';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { tf } from '../../../pages/chat/tf';
 import { isDesktop } from '../../../services/tauri';
 
 interface RendererProps {
@@ -119,6 +121,7 @@ export default function UnsupportedRenderer({
   absolutePath,
   onAttachToChat,
 }: UnsupportedRendererProps) {
+  const { t } = useTranslation();
   const [copyFeedback, setCopyFeedback] = useState(false);
 
   const ext = getExtension(fileName);
@@ -266,12 +269,12 @@ export default function UnsupportedRenderer({
             className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg
               text-[var(--color-text-muted)] hover:text-[var(--color-text)]
               hover:bg-[var(--color-hover)] border border-[var(--color-border)] transition-colors"
-            title="Copy absolute file path"
+            title={tf(t, 'common.copy.absolutePath', 'Copy absolute file path')}
           >
             <span className="material-symbols-outlined text-base">
               {copyFeedback ? 'check' : 'content_copy'}
             </span>
-            {copyFeedback ? 'Copied!' : 'Copy Path'}
+            {copyFeedback ? tf(t, 'common.copy.copied', 'Copied!') : tf(t, 'common.copy.path', 'Copy Path')}
           </button>
         </div>
       </div>

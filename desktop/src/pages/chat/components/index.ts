@@ -6,8 +6,6 @@ export { SessionTab } from './SessionTab';
 export { SessionTabBar } from './SessionTabBar';
 export { AlertsPill } from './AlertsPill';
 export { TabStatusIndicator } from './TabStatusIndicator';
-export { ToolUseBlock } from './ToolUseBlock';
-export { ToolResultBlock } from './ToolResultBlock';
 export { UserMessageView } from './UserMessageView';
 export { AssistantMessageView } from './AssistantMessageView';
 export { AssistantHeader } from './AssistantHeader';

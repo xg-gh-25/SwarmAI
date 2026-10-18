@@ -90,7 +90,14 @@
       "search": "搜索...",
       "select": "请选择..."
     },
-    "loading": "加载中..."
+    "loading": "加载中...",
+    "copy": {
+      "copy": "复制",
+      "copied": "已复制",
+      "path": "复制路径",
+      "absolutePath": "复制文件的绝对路径",
+      "filePath": "复制文件路径"
+    }
   },
   "nav": {
     "swarmcore": "SwarmCore",
@@ -275,7 +282,8 @@
         "ariaRunning": "Pipeline 阶段 {{stage}} 进行中",
         "position": "第 {{position}}/{{total}} 阶段",
         "changed_one": "改了 {{count}} 个文件",
-        "changed_other": "改了 {{count}} 个文件"
+        "changed_other": "改了 {{count}} 个文件",
+        "next": "接下来 {{stages}}"
       },
       "changed": "改了",
       "andMore": "等 {{count}} 个",

@@ -65,6 +65,13 @@ function isSameFile(p: string, rel: string, abs: string): boolean {
   return q === abs || q === rel || abs.endsWith(`/${q}`);
 }
 
+/** The live stage's next planned stages (at most UPCOMING_SHOWN), from the run's plan. */
+const UPCOMING_SHOWN = 2;
+function upcomingStages(plan: string[] | undefined, stage: string): string[] | undefined {
+  const at = plan ? plan.indexOf(stage) : -1;
+  return at >= 0 ? plan!.slice(at + 1, at + 1 + UPCOMING_SHOWN) : undefined;
+}
+
 /** A turn that went straight to work this long gets the "no restatement" note. */
 const NO_RESTATEMENT_MIN_STEPS = 3;
 
@@ -103,9 +110,6 @@ const MEMORY_ICON_MAP: Record<MemorySaveStatus, string> = {
   empty: 'neurology',
   error: 'error',
 };
-
-/** Tool results are consumed by the projection; ContentBlockRenderer never pairs here. */
-const EMPTY_RESULTS = new Map();
 
 export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   message,
@@ -246,8 +250,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     <ContentBlockRenderer
       key={key}
       block={block}
-      resultMap={EMPTY_RESULTS}
-      allBlocks={message.content}
       onAnswerQuestion={onAnswerQuestion}
       onPermissionDecision={onPermissionDecision}
       onEscalationSelect={onEscalationSelect}
@@ -255,7 +257,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       pendingPermissionRequestId={pendingPermissionRequestId}
       isStreaming={isStreaming}
       readOnly={readOnly}
-      sessionId={sessionId}
     />
   );
 
@@ -357,6 +358,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           block={sec.kind === 'stage' ? sec.block : undefined}
           live={sec.kind === 'liveStage' ? sec.stage : undefined}
           position={sec.kind === 'liveStage' ? sec.position : undefined}
+          upcoming={sec.kind === 'liveStage' ? upcomingStages(view.run?.stages, sec.stage.stage) : undefined}
           startedAt={sec.kind === 'stage' ? (sec.prevAt ?? message.timestamp) : undefined}
           changedCount={changed}
           failed={failed}

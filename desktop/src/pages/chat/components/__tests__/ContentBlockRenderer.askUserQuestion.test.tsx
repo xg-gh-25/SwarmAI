@@ -15,9 +15,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import React from 'react';
 import { ContentBlockRenderer } from '../ContentBlockRenderer';
-import type { ContentBlock, ToolResultContent } from '../../../../types';
+import type { ContentBlock } from '../../../../types';
 
-const emptyResultMap = new Map<string, ToolResultContent>();
 
 function questionBlock(toolUseId: string, answers?: Record<string, string>): ContentBlock {
   return {
@@ -48,8 +47,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId="tu-1"   // matches → isPending → enabled
         isStreaming={false}
@@ -67,8 +64,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId={undefined}  // the bug: no id → isAnswered → disabled
         isStreaming={false}
@@ -85,8 +80,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId={undefined}  // answered, not pending
         isStreaming={false}
@@ -112,8 +105,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId="tu-1"
         isStreaming={false}
@@ -147,8 +138,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId={undefined}
         isStreaming={false}
@@ -177,8 +166,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId={undefined}
         isStreaming={false}
@@ -198,8 +185,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     render(
       <ContentBlockRenderer
         block={block}
-        resultMap={emptyResultMap}
-        allBlocks={[block]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId={undefined}
         isStreaming={true}
@@ -215,8 +200,6 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     const { container } = render(
       <ContentBlockRenderer
         block={badBlock}
-        resultMap={emptyResultMap}
-        allBlocks={[badBlock]}
         onAnswerQuestion={vi.fn()}
         pendingToolUseId="tu-bad"
         isStreaming={false}

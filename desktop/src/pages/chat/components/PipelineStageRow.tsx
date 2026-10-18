@@ -7,7 +7,8 @@
  *   - a finished stage is one line — "✓ ⑤ BUILD  TDD: 6R→GREEN  changed 5 files  4m 43s ›"
  *     — and opens to its work on click. Progress is the stage's place in the plan,
  *     the summary says its effect; step counts live one level down.
- *   - the stage now running stays open: "⑤ BUILD · in progress · stage 5 of 8".
+ *   - the stage now running stays open: "⑤ BUILD · in progress · stage 5 of 8 ·
+ *     next REVIEW → TEST" (`upcoming`, from the run's plan in its pipeline_run block).
  *     It carries no spinner — the live work card below holds the one spinner.
  *   - colour only for exceptions: a Gate verdict other than PASS (WARN amber, BLOCK
  *     red), an unrecovered failure. A normal finish is neutral.
@@ -56,6 +57,8 @@ export interface PipelineStageRowProps {
   /** The stage now running (live) — `{stage, ordinal}` from the previous row's `next`. */
   live?: { stage: string; ordinal: number | null };
   position?: { n: number; total: number };
+  /** The live stage only: the next planned stage(s), from the run's plan. */
+  upcoming?: string[];
   /** When the stage started (previous row's `at`, or the turn start). */
   startedAt?: string;
   /** Files the stage's work changed. */
@@ -71,7 +74,7 @@ export interface PipelineStageRowProps {
 }
 
 export function PipelineStageRow({
-  block, live, position, startedAt, changedCount = 0, failed, mustOpen, choice, onChoose, children,
+  block, live, position, upcoming, startedAt, changedCount = 0, failed, mustOpen, choice, onChoose, children,
 }: PipelineStageRowProps) {
   const { t } = useTranslation();
   const isLive = !block;
@@ -115,6 +118,11 @@ export function PipelineStageRow({
           <span className="shrink-0 text-[var(--color-text-secondary)]">
             {tf(t, 'chat.turn.stage.running', 'in progress')}
             {position && ` · ${tf(t, 'chat.turn.stage.position', 'stage {{position}} of {{total}}', { position: position.n, total: position.total })}`}
+            {upcoming && upcoming.length > 0 && (
+              <span data-testid="stage-upcoming" className="text-[var(--color-text-dim)]">
+                {` · ${tf(t, 'chat.turn.stage.next', 'next {{stages}}', { stages: upcoming.map(stageName).join(' → ') })}`}
+              </span>
+            )}
           </span>
         ) : skipped ? (
           <span className="shrink-0">{tf(t, 'chat.turn.stage.skipped', 'skipped')}</span>
