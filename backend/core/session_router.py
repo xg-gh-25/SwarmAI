@@ -2145,6 +2145,14 @@ class SessionRouter:
     # changed-file chips; process / bookkeeping files are machine noise.
     _DELIVERABLE_KINDS = frozenset({"content", "knowledge"})
 
+    @staticmethod
+    def _turn_files_of(unit: object) -> Optional[dict]:
+        """The unit's per-turn products dict (SessionUnit._turn_files: reset at
+        send() admission, so it spans a question / permission pause), or None for
+        a unit without one (no product tracking — never a crash)."""
+        files = getattr(unit, "_turn_files", None)
+        return files if isinstance(files, dict) else None
+
     @classmethod
     def _note_deliverable(cls, files: dict, event: dict) -> None:
         """Remember a file_changed event that is a product of this turn (latest
@@ -4017,8 +4025,6 @@ class SessionRouter:
         _coalesce_saw_terminal = False
         # Step results waiting to ride the turn's next assistant row.
         _pending_results: list[dict] = []
-        # This turn's products (content / knowledge files written), by path.
-        _turn_files: dict = {}
         try:
             async for event in unit.send(
                 query_content=query_content,
@@ -4130,7 +4136,10 @@ class SessionRouter:
                 _before = await self._persist_stream_event(
                     session_id, event, _pending_results,
                     client_id=f"{client_id}-asst" if client_id else None,
-                    files=_turn_files,
+                    # The unit's (reset by send() at admission): a pause for a
+                    # question / permission ends this loop without a `result`, and
+                    # the continuation loop finishes the same turn's products.
+                    files=self._turn_files_of(unit),
                 )
 
                 # Echo client_id in result event for frontend dedup (AC2)
@@ -4438,11 +4447,10 @@ class SessionRouter:
             return
 
         _pending_results: list[dict] = []
-        _turn_files: dict = {}
         async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
             for _extra in await self._persist_stream_event(
-                session_id, event, _pending_results, label="answer", files=_turn_files,
+                session_id, event, _pending_results, label="answer", files=self._turn_files_of(unit),
                 # Reuse the originating turn's client_id (stashed by
                 # send_message) so this continuation row carries the SAME
                 # `{client_id}-asst` key as the turn's main-path rows — keeping
@@ -4470,11 +4478,10 @@ class SessionRouter:
             return
 
         _pending_results: list[dict] = []
-        _turn_files: dict = {}
         async for event in unit.continue_with_permission(request_id, allowed):
             # Write cleaned blocks back → stream == DB bytes (bug 2d).
             for _extra in await self._persist_stream_event(
-                session_id, event, _pending_results, label="permission", files=_turn_files,
+                session_id, event, _pending_results, label="permission", files=self._turn_files_of(unit),
                 # Reuse the originating turn's client_id (stashed by
                 # send_message) — same rationale as continue_with_answer above
                 # (run_9bbf1761): keeps the continuation row keyed to the turn.

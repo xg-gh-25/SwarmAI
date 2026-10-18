@@ -306,3 +306,78 @@ def test_display_blocks_stay_out_of_the_resume_history():
     mixed = {"role": "assistant", "content": [{"type": "turn_deliverables", "files": []},
                                               {"type": "text", "text": "done"}]}
     assert _filter_tool_only_messages([*rows, mixed]) == [mixed]
+
+
+# ── products survive a question / permission pause (A1) ──────────────────────
+
+def _paused_router(unit_events):
+    """A SessionRouter whose get_unit returns a unit with a REAL _turn_files dict
+    and a continuation that yields ``unit_events``."""
+    from types import SimpleNamespace
+    router = SessionRouter.__new__(SessionRouter)
+    unit = SimpleNamespace(_turn_client_id="cid", _turn_files={})
+
+    async def _cont(*_a, **_k):
+        for ev in unit_events:
+            yield ev
+
+    unit.continue_with_answer = _cont
+    unit.continue_with_permission = _cont
+    router.get_unit = lambda _sid: unit
+    return router, unit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["answer", "permission"])
+async def test_products_before_a_pause_reach_the_turns_result(path):
+    """The first loop ended at ask_user_question / cmd_permission_request (no
+    `result`): what it produced is still on the unit, and the continuation's
+    `result` delivers ONE block with both segments' files."""
+    router, unit = _paused_router([_fc("out/after.md", "content"), {"type": "result"}])
+    put = AsyncMock()
+    with patch("database.db.messages.put", put):
+        # segment 1 (main loop), ending at the pause
+        for ev in (_fc("out/before.pptx", "content"), {"type": "ask_user_question", "toolUseId": "q"}):
+            await router._persist_stream_event("sid", ev, [], files=router._turn_files_of(unit))
+        assert set(unit._turn_files) == {"/ws/out/before.pptx"}
+        cont = (router.continue_with_answer("sid", "a", tool_use_id="q") if path == "answer"
+                else router.continue_with_cmd_permission("sid", "r", True))
+        out = [ev async for ev in cont]
+    (deliv,) = [e for e in out if e.get("type") == "assistant"]
+    assert [f["absolutePath"] for f in deliv["content"][0]["files"]] == ["/ws/out/before.pptx", "/ws/out/after.md"]
+    assert out[-1]["type"] == "result" and unit._turn_files == {}
+
+
+def test_turn_files_of_tolerates_units_without_the_dict():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    assert SessionRouter._turn_files_of(SimpleNamespace()) is None
+    assert SessionRouter._turn_files_of(MagicMock()) is None
+    d: dict = {}
+    assert SessionRouter._turn_files_of(SimpleNamespace(_turn_files=d)) is d
+
+
+@pytest.mark.asyncio
+async def test_send_admission_resets_the_turn_products():
+    """A NEW turn starts clean: send() zeroes _turn_files at admission (the same
+    slot as _turn_client_id), so a prior turn's products never leak into it."""
+    from core.session_unit import SessionState
+    from tests.test_session_unit_cleanliness import _make_unit, _StopAfterDecisionError
+    from unittest.mock import MagicMock
+    unit = _make_unit(state=SessionState.IDLE)
+    unit._client = MagicMock()
+    unit._last_turn_clean = True
+    unit._turn_files = {"/ws/old.md": {"path": "old.md"}}
+    seen = {}
+
+    async def _capture():
+        seen["files"] = dict(unit._turn_files)
+        raise _StopAfterDecisionError("stop")
+
+    with patch.object(unit, "_crash_to_cold_async", AsyncMock()), \
+         patch.object(unit, "_arm_recovery_checkpoint", AsyncMock()), \
+         patch.object(unit, "_await_streaming_slot", _capture):
+        with pytest.raises(_StopAfterDecisionError):
+            async for _ in unit.send("hi", MagicMock(), app_session_id="app-1"):
+                pass
+    assert seen["files"] == {}

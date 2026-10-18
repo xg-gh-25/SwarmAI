@@ -589,6 +589,8 @@ class SessionUnit:
         # a later turn's log. Pure observability — never read by control flow.
         self._last_turn_spawn_ms: Optional[float] = None
         self._model_name: Optional[str] = None
+        # Set at send() from options.cwd (the CLI's working directory).
+        self._cwd: Optional[str] = None
 
         # ── Recall injection (G3: post-first-message) ─────────────
         # Set True after first-message recall runs (or is skipped).
@@ -914,6 +916,12 @@ class SessionUnit:
         # prevents an intruding send during WAITING_INPUT from clobbering the open
         # turn's stash (that send RAISES SessionBusyError before the reset, upstream).
         self._turn_client_id: Optional[str] = None
+        # The turn's products (content / knowledge files written), by path — read and
+        # filled by the router's three loops (main / answer / permission) and emitted
+        # as ONE turn_deliverables block at the turn's single `result`. Same lifecycle
+        # as _turn_client_id: reset at send() admission, so a pause for a question or
+        # a permission (no `result`) keeps what was produced before it.
+        self._turn_files: dict = {}
         # Seqs of the most recently drained pending set, surfaced to the frontend
         # mirror by the streaming-state read API (L5/2A). Best-effort hint.
         self._last_drained_seqs: list[int] = []
@@ -2283,6 +2291,9 @@ class SessionUnit:
         # continue_with_answer/continue_with_permission — SEPARATE methods that never
         # re-enter send() — so this reset cannot drop a stash a continuation needs.
         self._turn_client_id = None
+        # Same lifecycle: the products of a turn paused for a question / permission
+        # ride the unit until that turn's `result` (router continuation loops).
+        self._turn_files = {}
 
         # ── Resume-poison guard (fail-closed) — recycle-before-reuse ────
         # If we are about to REUSE a warm IDLE subprocess that did NOT end its
@@ -2411,6 +2422,10 @@ class SessionUnit:
         # IDLE → STREAMING
         self._transition(SessionState.STREAMING)
         self._model_name = getattr(options, "model", None)
+        # The CLI's working directory: where a Bash script's outputs land when its
+        # command names no path (streaming_orchestrator's post-Bash product sweep).
+        _cwd = getattr(options, "cwd", None)
+        self._cwd = str(_cwd) if _cwd else None
 
         # Fix #5: Capture original query before any system injections
         # so checkpoint stores the real user request, not modified text.
