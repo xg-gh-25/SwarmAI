@@ -210,8 +210,39 @@ def _has_dot_segment(rel_path: str) -> bool:
     return any(seg.startswith(".") for seg in Path(rel_path).parts if seg not in (".", ""))
 
 
-@functools.lru_cache(maxsize=1)
+_RUN_ROOTS_TTL = 5.0
+_run_roots_cache: dict = {}
+
+
+def _run_worktree_roots(swarmws_root_str: str) -> tuple[tuple[str, str], ...]:
+    """(worktree_abs, repo) of every live pipeline-run worktree
+    (pipeline-run-worktree §6.4), cached for a few seconds — runs come and go far
+    more often than bindings, so they are not in the lru cache below."""
+    import time as _time
+    hit = _run_roots_cache.get(swarmws_root_str)
+    now = _time.monotonic()
+    if hit is not None and now - hit[0] < _RUN_ROOTS_TTL:
+        return hit[1]
+    try:
+        from core.run_worktree import active_worktree_roots, wt_root
+        roots = tuple(active_worktree_roots(swarmws_root_str)) if wt_root().is_dir() else ()
+    except Exception:  # noqa: BLE001 — fail-safe: never break classification
+        logger.debug("run worktree roots unavailable", exc_info=True)
+        roots = ()
+    _run_roots_cache.clear()
+    _run_roots_cache[swarmws_root_str] = (now, roots)
+    return roots
+
+
 def _worktree_roots(swarmws_root_str: str) -> tuple[tuple[str, str], ...]:
+    """Bound-repo worktrees (cached) + live pipeline-run worktrees, longest first."""
+    roots = list(_run_worktree_roots(swarmws_root_str)) + list(_bound_worktree_roots(swarmws_root_str))
+    roots.sort(key=lambda pr: len(pr[0]), reverse=True)
+    return tuple(roots)
+
+
+@functools.lru_cache(maxsize=1)
+def _bound_worktree_roots(swarmws_root_str: str) -> tuple[tuple[str, str], ...]:
     """Enumerate (worktree_abs, repo_name) for every bound repo with a real
     on-disk worktree, across all ``Projects/*/bindings.yaml``.
 
@@ -252,7 +283,8 @@ def _worktree_roots(swarmws_root_str: str) -> tuple[tuple[str, str], ...]:
 
 def clear_worktree_cache() -> None:
     """Drop the bindings/worktree cache (call after a bind/unbind mutation)."""
-    _worktree_roots.cache_clear()
+    _bound_worktree_roots.cache_clear()
+    _run_roots_cache.clear()
 
 
 def _owning_tree(abs_path: Path, swarmws_root: Path) -> tuple[Path, str, Optional[str]] | None:

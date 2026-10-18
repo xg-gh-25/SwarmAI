@@ -154,6 +154,21 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Pipeline-run worktree sweep (docs/design/pipeline-run-worktree.md §8.3) ---
+    # In-process (needs SessionRouter for owner liveness). Releases worktrees of ended
+    # or long-idle runs (unintegrated work → verified ledger snapshot first), quarantines
+    # unregistered dirs. No-op (no git calls) while ~/.swarm-ai/worktrees is absent.
+    Job(
+        id="worktree-sweep",
+        name="Pipeline worktree sweep",
+        type="worktree_sweep",
+        schedule="*/30 * * * *",       # interval probe (the scheduler loop runs hourly)
+        enabled=True,
+        category="system",
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        config={},
+    ),
+
     # --- Library mount freshness (keep the overlay's 🟢/🟡/🔴 dots accurate) ---
     # Light read-only sweep: re-probe each registered mount's source (exists +
     # edited-after-index) and persist health. No LLM, sub-second for a handful of

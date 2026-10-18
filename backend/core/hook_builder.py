@@ -349,6 +349,7 @@ async def build_hooks(
         "session_link_gate", matcher="Bash",
     )
 
+
     # ── PreToolUse: pipeline-test gate (Bash-scoped) ──
     # Design §4-B3. Only while THIS session has an active pipeline run (run.json
     # session_id == app session id, status running, recent activity): DENY direct
@@ -362,6 +363,21 @@ async def build_hooks(
         "PreToolUse", create_pipeline_test_gate(hook_session_context),
         "pipeline_test_gate", matcher="Bash",
     )
+
+    # ── PreToolUse: run-owner gate (Bash-scoped) — pipeline-run-worktree §4.2 ──
+    # For artifact_cli / pipeline_test commands on a run (only while worktree mode is
+    # on, or the run is isolated): take a crashed owner's run over (deny while the
+    # owner is live), and issue the one-time hook token for commands that change
+    # worktree state by rewriting them via updatedInput. Fail-open; the token proves
+    # to the CLI that THIS hook ran (an env var would be inherited by a hookless
+    # child). No other Bash hook may set updatedInput (the chain merge is last-wins).
+    # Only for a real app session: the fallback id may be an agent id.
+    if session_context is not None:
+        from core.run_owner_gate import create_run_owner_gate
+        registry.register(
+            "PreToolUse", create_run_owner_gate(session_context),
+            "run_owner_gate", matcher="Bash",
+        )
 
     # ── PreToolUse: pytest anti-pattern guard (Bash-scoped) ──
     # Deny pytest piped to tail/head (output swallowed by auto-backgrounding)
@@ -529,6 +545,14 @@ async def build_hooks(
     governance_gate = create_governance_file_gate()
     registry.register("PreToolUse", governance_gate, "governance_file_gate", matcher="Write|Edit|Bash")
     logger.debug("Governance file gate attached (advisory mode, Write|Edit|Bash-scoped)")
+
+    # ── PreToolUse: worktree write gate (pipeline-run-worktree §6.1) ──
+    # Its own matcher string → its own group: never in the 4-hour Bash chain, solo →
+    # bare-registered, so it bounds itself (_GATE_TIMEOUT) and fails open. No-op while
+    # no run worktree exists. Read/Grep only get a reminder, never a deny.
+    from core.worktree_write_gate import MATCHER as _WT_MATCHER, create_worktree_write_gate
+    registry.register("PreToolUse", create_worktree_write_gate(hook_session_context),
+                      "worktree_write_gate", matcher=_WT_MATCHER)
 
     # ── Skill access control ─────────────────────────────────
     allowed_skills = agent_config.get("allowed_skills", [])

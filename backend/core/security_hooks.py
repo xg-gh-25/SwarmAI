@@ -3074,6 +3074,14 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
             "id": str(data.get("id") or os.path.basename(run_dir)),
         }
         best_t = t
+    if best is None:
+        # pipeline-run-worktree §4.2: an isolated run with a live worktree is this
+        # session's run however long BUILD has been quiet (no 3-hour window).
+        from core.run_worktree import own_isolated_run, wt_root
+        if wt_root().is_dir():
+            own = own_isolated_run(app_session_id, _pipeline_runs_root())
+            if own is not None:
+                best = {"project": own["project"], "id": own["id"]}
     return best
 
 
@@ -4823,6 +4831,19 @@ def _stamp_one_run(path: str, app_session_id: str, since: float, now: float,
     st = os.stat(path)
     if dir_id not in named_ids and st.st_mtime < since:
         return None  # cheap pre-filter: run-create's write sets mtime >= created_at
+    from core.run_lock import RunLockTimeout, run_lock
+    try:
+        with run_lock(run_dir, timeout=1.0):  # pipeline-run-worktree §4.1: one writer at a time
+            return _stamp_one_run_locked(path, run_dir, dir_id, st, app_session_id, since, now,
+                                         named_ids)
+    except RunLockTimeout:
+        logger.info("session_link_stamper: run %s stays locked by a command — skipped "
+                    "(the next call naming it stamps it)", dir_id)
+        return None
+
+
+def _stamp_one_run_locked(path, run_dir, dir_id, st, app_session_id, since, now,
+                          named_ids) -> "str | None":
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     if not isinstance(data, dict) or data.get("status") != "running":
@@ -5750,6 +5771,8 @@ def create_file_access_permission_handler(
             'Read': 'file_path',
             'Write': 'file_path',
             'Edit': 'file_path',
+            'MultiEdit': 'file_path',
+            'NotebookEdit': 'notebook_path',
             'Glob': 'path',
             'Grep': 'path',
         }

@@ -1416,6 +1416,19 @@ async def lifespan(app: FastAPI):
     if backend_mode in ("daemon", "hive"):
         asyncio.create_task(_start_workspace_surface_watcher())
 
+    # ── Pipeline-run worktree sweep at startup (daemon/hive only, §8.3) ──
+    # After a restart nothing else would release worktrees of runs that ended while
+    # the daemon was down. Deferred + off-loop; a failure is logged, never fatal.
+    if backend_mode in ("daemon", "hive"):
+        async def _startup_worktree_sweep() -> None:
+            await asyncio.sleep(20)
+            try:
+                from jobs.handlers.worktree_sweep import run_worktree_sweep
+                await asyncio.to_thread(run_worktree_sweep)
+            except Exception:  # noqa: BLE001
+                logger.warning("startup worktree sweep failed", exc_info=True)
+        asyncio.create_task(_startup_worktree_sweep())
+
     # Readiness sampler (run_7e8a2030): samples DB + auth health OFF the /health
     # request path so liveness never blocks on a slow dependency. See
     # core/readiness_sampler.py + the health_check liveness/readiness split.

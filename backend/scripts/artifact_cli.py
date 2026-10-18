@@ -579,7 +579,7 @@ def _append_stage_to_run(
             _existing["artifact_id"] = _incoming_aid
             data["stages"] = stages
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
-            run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            _write_run_atomic(run_file, data)
         return
     stages.append(stage_record)
     data["stages"] = stages
@@ -588,7 +588,7 @@ def _append_stage_to_run(
     # cmd_run_create, etc.): indent=2, default ensure_ascii, utf-8. Avoids the
     # same file flipping between raw-UTF8 and \uXXXX escapes depending on which
     # command wrote last (noisy diffs in .artifacts/runs/*/run.json).
-    run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _write_run_atomic(run_file, data)
 
 
 def _read_json_arg(raw: str, argname: str) -> str:
@@ -1744,6 +1744,41 @@ def _abandon_verdict(data: dict, threshold) -> tuple[bool, str | None]:
     return (False, None)
 
 
+def _reap_run(run_file: Path, data: dict, threshold) -> bool:
+    """Abandon ONE run if _abandon_verdict says so — under its run lock (skipped while
+    another command holds it: a command in flight means the run is not an orphan),
+    re-read inside the lock, atomic write (pipeline-run-worktree §4.1). An isolated
+    run whose worktree was touched after *threshold* is still being worked on (BUILD
+    can go hours without writing run.json, §8.2); ending one only requests the
+    release — the owner or the daemon sweep performs it."""
+    should, _reason = _abandon_verdict(data, threshold)
+    if not should:
+        return False
+    from core.run_lock import atomic_write_json, try_run_lock
+    with try_run_lock(run_file.parent) as got:
+        if not got:
+            return False
+        try:
+            fresh = json.loads(run_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        should, reason = _abandon_verdict(fresh, threshold)
+        if not should:
+            return False
+        if fresh.get("worktree_mode") == "isolated":
+            from core.run_worktree import last_activity
+            act = last_activity(str(fresh.get("id") or run_file.parent.name), fresh)
+            if act is not None and act >= threshold.timestamp():
+                return False
+            import pipeline_worktree as _pw
+            _pw.reap_note(fresh)
+        fresh["status"] = "abandoned"
+        fresh["abandon_reason"] = reason
+        fresh["abandoned_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_write_json(run_file, fresh)
+    return True
+
+
 def _auto_abandon_stale_runs(project: str, new_run_id: str, threshold_hours: float = 2.0) -> int:
     """Mark stale same-project 'running' runs as abandoned when a new run starts.
 
@@ -1781,12 +1816,7 @@ def _auto_abandon_stale_runs(project: str, new_run_id: str, threshold_hours: flo
         # Shared verdict (single source of truth; see _abandon_verdict): handles
         # BOTH the running-orphan case (unchanged "orphaned_no_resume") and the
         # crash-zombie paused case. Intentional pauses are preserved.
-        should, reason = _abandon_verdict(data, threshold)
-        if should:
-            data["status"] = "abandoned"
-            data["abandon_reason"] = reason
-            data["abandoned_at"] = datetime.now(timezone.utc).isoformat()
-            run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        if _reap_run(run_file, data, threshold):
             abandoned_count += 1
 
     return abandoned_count
@@ -1834,12 +1864,7 @@ def cleanup_orphans(threshold_hours: float = 2.0) -> dict:
             # pauses are preserved. This is the gap fix: the old `status !=
             # running` skip meant crash zombies (which are PAUSED) accumulated
             # forever (12 found 2026-06-30).
-            should, reason = _abandon_verdict(data, threshold)
-            if should:
-                data["status"] = "abandoned"
-                data["abandon_reason"] = reason
-                data["abandoned_at"] = datetime.now(timezone.utc).isoformat()
-                run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            if _reap_run(run_file, data, threshold):
                 abandoned_count += 1
 
     return {"abandoned_count": abandoned_count, "projects_scanned": projects_scanned}
@@ -2004,6 +2029,11 @@ def purge_garbage_runs(retention_days: float = 30.0, apply: bool = False,
                 continue
 
             if not _is_garbage_run(data):
+                continue
+            # A run whose worktree is not released yet keeps its record: the sweep
+            # needs it to snapshot + release the worktree (pipeline-run-worktree §8.1).
+            if any(isinstance(e, dict) and e.get("state") in ("active", "integrated")
+                   for e in data.get("worktrees") or []):
                 continue
 
             # Age gate: only purge garbage OLDER than the retention window.
@@ -2329,10 +2359,15 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     rd = _run_dir(args.project, run_id)
     rd.mkdir(parents=True, exist_ok=True)
     run_file = rd / "run.json"
-    run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+    _write_run_atomic(run_file, run_state)
 
     # Auto-abandon stale same-project runs (lifecycle management)
     abandoned = _auto_abandon_stale_runs(args.project, run_id)
+    # Worktree sweep (pipeline-run-worktree §8.3) — only when any run worktree exists.
+    from core.run_worktree import wt_root as _wt_root
+    if _wt_root().is_dir():
+        import pipeline_worktree as _pw
+        _pw.sweep_for_cli(_get_workspace())
 
     _link_session_to_run(run_state.get("session_id"), run_id)
     result = {"pipeline_id": run_id, "project": args.project, "file": str(run_file)}
@@ -2573,6 +2608,14 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     file=_sys.stderr,
                 )
         if args.status == "completed":
+            # ── Worktree gate (pipeline-run-worktree §8.4): an unintegrated change in
+            #    the run's own worktree must land (or the run end failed/abandoned). ──
+            import pipeline_worktree as _pw
+            _wt_block = _pw.completion_block(args.run_id, run_state)
+            if _wt_block:
+                print(json.dumps({"error": _wt_block, "block_reason": "unintegrated_worktree",
+                                  "pipeline_id": args.run_id}))
+                sys.exit(1)
             # ── Completion Gate: ALL profile stages must be done or explicitly skipped ──
             # Every stage in the DDD+pipeline loop has purpose. No silent skips.
             # C3: normalize so a variant/alias ("Full"/"standard") resolves to the
@@ -3541,7 +3584,14 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     run_state["updated_at"] = now
     # Atomic (temp + os.replace): the daemon reads run.json off-loop while CLI
     # subprocesses write it, and a torn read silently drops the surface marker.
+    # Under the command's run lock (pipeline-run-worktree §4.1).
     _write_run_atomic(run_file, run_state)
+    _wt_release = None
+    if args.status in _TERMINAL_STATUSES:
+        import pipeline_worktree as _pw
+        _wt_release = _pw.after_status_write(run_id=args.run_id, run_file=run_file,
+                                             workspace=_get_workspace(),
+                                             self_repo=_BACKEND_DIR.parent)
 
     # Auto-generate METRICS.json on completion — HERE, after the --stage-json
     # merge above, so the extraction sees the final stage list (see the note at
@@ -3550,6 +3600,8 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         _try_generate_metrics(args.project, args.run_id, run_state, reg)
 
     result = {"pipeline_id": args.run_id, "updated": True}
+    if _wt_release:
+        result["worktree"] = _wt_release
     if args.status == "completed":
         result["reminder"] = (
             "⚠️ OUTPUT COMPLETION SUMMARY TO CHAT (Step 6.2 — MANDATORY). "
@@ -4571,6 +4623,16 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
 
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
+
+    # Isolated run (pipeline-run-worktree §7.1): the change landed at deliver
+    # stage-complete; run-commit only confirms it, and still commits by pathspec the
+    # files that live outside any worktree (SwarmWS docs, unbound repos).
+    import pipeline_worktree as _pw
+    _wt_handled, _wt_rest = _pw.run_commit_isolated(run_state)
+    if _wt_handled:
+        return
+    if _wt_rest is not None:
+        run_state["files_touched"] = _wt_rest
 
     # ── Gate 1: PUSH-READY must have passed ──────────────────────────────────
     deliver_rec = next(
@@ -5655,7 +5717,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
             run_state, stage=args.stage or "unknown", kind=_iv_kind,
             avoidable=(_iv_kind == "unblock"), note=args.reason or "",
         )
-    run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+    _write_run_atomic(run_file, run_state)
 
     # 2. Publish checkpoint artifact to the registry
     checkpoint_data = {
@@ -5979,7 +6041,7 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
     # this adds one field to it.)
     run_state["resume_executions"] = run_state.get("resume_executions", 0) + 1
 
-    run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+    _write_run_atomic(run_file, run_state)
 
     print(json.dumps({
         "pipeline_id": args.run_id,
@@ -7027,7 +7089,7 @@ A stage with no published artifact cannot be timed and shows `-`."""
         try:
             fresh_state = json.loads(run_file.read_text(encoding="utf-8"))
             fresh_state["report_autogenerated"] = True
-            run_file.write_text(json.dumps(fresh_state, indent=2), encoding="utf-8")
+            _write_run_atomic(run_file, fresh_state)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -7078,7 +7140,7 @@ def _record_validation_event(
             "errored": errored[:5],  # checks that could not run
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+        _write_run_atomic(run_file, run_state)
     except (OSError, json.JSONDecodeError, ValueError):
         # ValueError added run_dd8411f6 (#2 follow-through): _run_dir now raises on a
         # malformed run_id — must stay inside this "never crash pipeline" contract.
@@ -9197,6 +9259,10 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
             cand_rec["artifact_id"] = artifact_id
         fresh = json.loads(run_file.read_text(encoding="utf-8"))  # re-read: a sibling writer
         fresh.setdefault("stages", [])
+        import pipeline_worktree as _pw
+        _wt_files = _pw.derive_files_touched(run_id, fresh, _get_workspace(), _BACKEND_DIR.parent)
+        if _wt_files is not None:  # isolated run: files_touched = the change set (§6.2)
+            fresh["files_touched"] = _wt_files
         _record_transcript_id(fresh)
         _set_stage_timing(fresh, stage, "completed_at", now)
         _replace_stage_record(fresh["stages"], cand_rec)
@@ -9220,11 +9286,16 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     advanced = False
     next_card, next_action = None, None
     report_ok, report_generated = True, False
+    landing = None
     if stage == "deliver":
         report_ok, report_generated = _ensure_report_before_advance(project, run_id, run_dir, reg)
         if not report_ok:
             warnings.append("REPORT.md could not be generated — run `artifact_cli.py run-report` "
                             "before advancing or completing")
+        # Isolated run: land now (pipeline-run-worktree §7.4). A refusal exits here,
+        # so the manifest does not advance; rerunning stage-complete retries.
+        landing = _land_isolated_deliver(project, run_id, run_file, bool(cand_rec.get("push_ready")),
+                                         reg, warnings)
     if next_stage:
         from core.artifact_registry import PIPELINE_STATES
         behind = _manifest_ahead_of(reg, project, profile, next_stage)
@@ -9264,8 +9335,78 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         "next_stage": next_stage, "next_card": next_card, "next_action": next_action,
         "advanced": advanced, "derived": derived, "exit_criteria": exit_result,
         "report_generated": report_generated,
+        **({"landing": landing} if landing else {}),
         "warnings": warnings,
     }, default=str, ensure_ascii=False))
+
+
+def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready: bool,
+                           reg: ArtifactRegistry, warnings: "list[str]") -> "dict | None":
+    """Deliver landing for an isolated run (pipeline_worktree.land_deliver), with B
+    written into the worktree before the final commit and REPORT.md refreshed after."""
+    import pipeline_worktree as _pw
+    run_state = json.loads(run_file.read_text(encoding="utf-8"))
+    if not _pw.is_isolated(run_state):
+        return None
+
+    def gen_b(wt: Path, files: "list[str]") -> "list[str]":
+        from core.run_worktree import WorktreeError
+        paths, warns = _generate_review_deliverable(project, run_id, str(wt), source_files=files)
+        loud = [w for w in warns if w.startswith(_FAILLOUD_SENTINEL)]
+        if loud:
+            raise WorktreeError("deliverable_failed", "the review deliverable (B) could not be "
+                                "generated: " + "; ".join(loud)[:300])
+        warnings.extend(warns)
+        return [os.path.relpath(p, str(wt)) for p in paths]
+
+    def precheck(review_at: float) -> "list[str]":
+        """run-commit's D7 coverage gate (declared ⊆ completed experts, Red Team
+        included), plus: every Gate-2 expert of this deliver completed AFTER the reviewed
+        tree was recorded (a post-review edit needs a re-review). Marker store unreadable
+        → fail-open with a warning, the D7 contract."""
+        errs: "list[str]" = []
+        required = run_state.get("required_experts")
+        probe = {"created_at": run_state.get("created_at"), "profile": run_state.get("profile"),
+                 "required_experts": list(required) if isinstance(required, list) else None}
+        try:
+            if _require_red_team_expert(probe, _stage_artifact(project, run_state, "deliver")):
+                required = probe["required_experts"]
+        except Exception as e:  # noqa: BLE001 — an unreadable artifact must not crash landing
+            warnings.append(f"Red Team trigger check skipped: {type(e).__name__}: {e}")
+        if isinstance(required, list) and required:
+            missing = _d7_missing_required_experts(required, run_id)
+            if missing:
+                errs.append("declared expert(s) with no adversarial review this run: "
+                            + ", ".join(missing))
+        plan = run_state.get("dispatch_plan") if isinstance(run_state.get("dispatch_plan"), dict) else {}
+        ids = [i for i in (plan.get("deliver") or []) if isinstance(i, str)]
+        if ids and review_at:
+            import time as _time
+            done = _completed_spawns(run_id, review_at, _time.time() + 60)
+            if done is None:
+                warnings.append("Gate-2 re-review NOT verified: marker store unreadable")
+            else:
+                stale = [i for i in ids if not (done.get("by_expert") or {}).get(i)]
+                if stale:
+                    errs.append("Gate-2 expert(s) have not reviewed the current change "
+                                "(recorded at deliver stage-start): " + ", ".join(stale))
+        return errs
+
+    landing = _pw.land_deliver(run_id=run_id, run_file=run_file, run_state=run_state,
+                               push_ready=push_ready, workspace=_get_workspace(),
+                               self_repo=_BACKEND_DIR.parent, gen_b=gen_b,
+                               requirement=str(run_state.get("requirement") or ""),
+                               precheck=precheck)
+    if landing:
+        import contextlib
+        import io
+        from types import SimpleNamespace as _NS
+        try:  # §6.4: REPORT.md now names the landed commit and main paths
+            with contextlib.redirect_stdout(io.StringIO()):
+                cmd_run_report(_NS(project=project, run_id=run_id), reg)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 — the landing already happened
+            warnings.append(f"REPORT.md refresh after landing failed: {type(e).__name__}: {e}")
+    return landing
 
 
 def _git_lines(args_list: "list[str]", cwd: str) -> "list[str]":
@@ -10165,6 +10306,17 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             run_state["stage_timing"][stage].pop("completed_at", None)
         _write_run_atomic(run_file, run_state)
 
+    # Per-run worktree (pipeline-run-worktree §5, §7.2): created at the first
+    # plan/build/goal_cycle start; at deliver: un-added files block, then sync —
+    # BEFORE the Gate-2 prompts below, so reviewers see the synced change.
+    import pipeline_worktree as _pw
+    _wt_out = _pw.on_stage_start(project=project, run_id=run_id, stage=stage, run_file=run_file,
+                                 run_state=run_state, workspace=_get_workspace(),
+                                 self_repo=_BACKEND_DIR.parent)
+    _wt_files = _pw.derive_files_touched(run_id, run_state, _get_workspace(), _BACKEND_DIR.parent)
+    if _wt_files is not None:
+        run_state["files_touched"] = _wt_files
+
     upstream = []
     for u in _upstream_artifacts(run_state, stage)[0]:
         meta = pv._load_artifact_meta_from_manifest(project, u["id"]) or {}
@@ -10301,15 +10453,22 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
         out["spawn_mode"] = "foreground"
         scope["changed_files"] = scope["changed_files"][:60]
         out.update(scope)
+    warnings += _wt_out.pop("warnings", [])
+    out.update(_wt_out)
     out["warnings"] = warnings
     print(json.dumps(_fit_stage_start(out), default=str, ensure_ascii=False))
 
 
 def main() -> None:
+    import functools
     parser = argparse.ArgumentParser(
-        description="Artifact registry CLI for SwarmAI pipeline"
+        description="Artifact registry CLI for SwarmAI pipeline", allow_abbrev=False,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # No option abbreviations: the run-owner gate reads --run-id/--stage/--status exactly
+    # as written, so `--run-i X` must not silently mean --run-id (pipeline-run-worktree §4.2).
+    sub = parser.add_subparsers(dest="command", required=True,
+                                parser_class=functools.partial(argparse.ArgumentParser,
+                                                               allow_abbrev=False))
 
     # discover
     p_discover = sub.add_parser("discover", help="Discover artifacts by type")
@@ -10572,10 +10731,26 @@ def main() -> None:
     p_g2r.add_argument("--findings", required=True,
                        help='the merged findings: a list, {"findings": [...]} or {"adversarial_review": {"findings": [...]}} — inline JSON, @PATH or @-')
 
+    # run-diff — anchors + diffs inside a run's worktree (pipeline-run-worktree §6.3)
+    p_run_diff = sub.add_parser("run-diff", help="Isolated run: --mark NAME records an anchor; "
+                                "otherwise print the change since --since NAME (default: base)")
+    p_run_diff.add_argument("--project", required=True)
+    p_run_diff.add_argument("--run-id", required=True)
+    p_run_diff.add_argument("--mark", default=None)
+    p_run_diff.add_argument("--since", default=None)
+    p_run_diff.add_argument("--stat", action="store_true")
+    p_run_diff.add_argument("--json", action="store_true")
+
+    import pipeline_worktree as _pw
+    _pw.refuse_if_worktree_copy(__file__)
     args = parser.parse_args()
+    _pw.lock_command(args.command, getattr(args, "project", None),
+                     getattr(args, "run_id", None), _run_dir)
     reg = ArtifactRegistry(_get_workspace())
 
     handlers = {
+        "run-diff": lambda a, r: _pw.cmd_run_diff(a, _resolve_run_file(a.project, a.run_id),
+                                                  _get_workspace(), _BACKEND_DIR.parent),
         "stage-start": cmd_stage_start,
         "stage-complete": cmd_stage_complete,
         "gate2-recheck": cmd_gate2_recheck,

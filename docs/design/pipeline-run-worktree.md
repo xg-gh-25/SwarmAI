@@ -4,7 +4,7 @@ date: 2026-10-18
 created: 2026-10-18
 updated: 2026-10-18
 project: SwarmAI
-status: FINAL r4 — §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
+status: FINAL r4，P0–P2 已实现（开关默认 off，见 §16.6）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
 related: parallel-session-commit-isolation.md（本文是其中"方案二"的完整设计，取代该草稿）; pipeline-run-budget.md; pipeline-speed-systematic-fix.md
 author: Kiro
 ---
@@ -98,12 +98,16 @@ worktree 的创建、同步、落地、释放都要知道"谁在改这个 run、
     代码 repo、开关为 on → **拒绝并让 run 失败**（`failed`，理由"isolated run 需要带 hook 的 session"），不回退成
     shared、不在没有 gate 的情况下悄悄运行；同步、落地、接管、释放 → 拒绝，run 状态不变。daemon 的清扫在进程内调用释放
     函数，不经过 CLI，不需要 token。
+  - **token 防的是什么**：与 §7.3 的威胁模型相同，防误用和被注入的指令走正常命令绕过，不防有意伪造。token 文件存在
+    run 目录里，一个刻意的进程可以自己写一个哈希文件再带上对应 nonce（实现审查指出，§16.7）。要防伪造需要把签发
+    记录放进 daemon 内存、CLI 经本地端点核销；目前不做。
   - **剩余风险，写明不修**：hookless 子进程仍然可以直接改文件（worktree 里改的是本 run 自己的树，同步时进 Gate-2；
     用绝对路径改 main checkout 的，和聊天 session 的未提交改动一样被 ff-only 的重叠检查挡下）。它做不到的是建 run、
     接管、同步、落地。
-  - **P0 先验证**：`updatedInput` 今天只在 `ask_question_gate` 上用过（AskUserQuestion）。P0 要实测两点：Bash 的
-    `command` 能被改写并按改写后的执行；`hook_builder` 的 allow 结果累积在两个 hook 都给出 `updatedInput` 时结果确定
-    （签发 hook 的改写必须保留）。任一不成立 → 改用 hook 直接把 token 交给 daemon、CLI 向 daemon 核销，接口不变。
+  - **P0 实测通过（2026-10-18）**：用真实 CLI（bundled claude，Bedrock）跑一个 SwarmAI `HookRegistry`，Bash 组里
+    先挂改写 hook、后挂一个只返回 approve 的 hook：模型执行 `printenv SWARM_HOOK_TOKEN` 得到改写注入的值，即改写后的
+    命令真的被执行、链式合并保留了 `updatedInput`。合并是"后者覆盖"，所以约定：Bash 组里只有 `run_owner_gate` 设
+    `updatedInput`（AGENTS.md 已写明）。
   - 以后做 daemon 托管的 headless 执行器时，让它以带 hook 的 session 运行，自然拿得到 token，不需要另开通道。
 - **一个判定，所有 gate 共用**：`own_isolated_run(session)` = 本 session 拥有、状态不是终止、且有 git 登记的
   active worktree 的 run，没有时间窗口。写入 gate 和 `pipeline_test_gate` 都用它（今天 `pipeline_test_gate`
@@ -666,3 +670,54 @@ run 的半成品；而在 main 里禁掉所有 session 的 stash 会误伤非 pi
 
 第二条比审查建议多收紧了一处：审查说"删掉探针 `T` 不变"，这没错，但 `T` 相同不代表测试能代表 N（测试可能依赖了被删的
 文件），所以删掉测试时存在的未 add 文件后仍要重测一次。代价是留过探针的 run 多跑一次 runner。
+
+### 16.6 P0–P2 实现记录（2026-10-18）
+
+代码：`core/run_lock.py`、`core/hook_token.py`、`core/run_worktree.py`（git 机制）、`scripts/pipeline_worktree.py`
+（artifact_cli 一侧的策略）、`core/run_owner_gate.py`、`core/worktree_write_gate.py`、`jobs/handlers/worktree_sweep.py`，
+artifact_cli / pipeline_test / router / stamper / needs_human_review 只加调用点。开关默认 `off`。
+
+实现中发现并修掉的一个 git 细节：给临时 index 复制工作区 index 时必须保留 mtime（`copy2`）。git 用 index 文件本身的
+mtime 判断条目是否"racy"；复制出的新 mtime 会让同一秒内、同大小的修改被当成未修改，`T` 漏掉改动（测试稳定复现）。
+
+与设计的偏差，均为有意收窄：
+
+| 位置 | 实现 | 原因 |
+|---|---|---|
+| 判定三（§6.1） | 对所有 session：run worktree 里的 stash、改别的 run 的 `run/*` 分支、指向 `WT_ROOT` 的 worktree 命令。只在 run worktree 里执行、或本 session 拥有 isolated run 时，才禁止动其他 ref / config / gc --prune 等 | 按 common dir 对所有 session 一律禁止，会挡掉主工作区里正常的 `git tag` / `git branch -D`（发布流程就要打 tag）。防的是"从 worktree 绕过集成"，这个收窄不影响它 |
+| 接管与 token（§4.2） | 只在开关为 on、或该 run 是 isolated 时生效 | 开关关闭时行为与今天完全一致（不改写命令、不拒绝组合命令） |
+| 运行期 `release`（§8.2） | owner 的 `run-update` 到终止状态、带 token 时立即释放；否则写 `release_requested`，由 daemon 清扫 | 与设计一致；补充：owner 在终止后再调 `stage-start` 会被拒绝并当场释放 |
+| 卡片删减（§6.2、§6.3） | 未做 | 开关默认 off，shared 模式仍需要"登记 files_touched / git add 你的文件"这些步骤；worktree 模式的规则由 stage-start 输出（`worktree_rule`、`untracked_new_files`、`sync_note`）。开关转为默认 on 时再删卡片 |
+| Canvas 已有 rail 行的路径刷新（§6.4） | 未做；运行期的 run worktree 已加进 `_worktree_roots`（live 归属和路径解析可用），落地后 REPORT 重新生成 | rail 行的持久化在前端，单独做 |
+| 14 天闲置被释放后的重建（§8.3） | 不自动重建；stage-start 返回 `worktree_released` 并指向 ledger README | 自动恢复会把快照里的未 add 文件变成已 add，绕过 §6.2 的阻断 |
+| srcgraph 缓存清理（§8.1） | 未做 | 缓存按 repo 路径分文件、不影响正确性，只占磁盘 |
+
+自动化测试：`tests/test_run_worktree.py`、`test_pipeline_worktree.py`、`test_worktree_gates.py`、
+`test_pipeline_test_worktree.py`，覆盖 §15 的 1、2、5、6、7（ff-only 部分）、8、9、10、11、13、14、15、16。
+§15 的 3、4（两个 run 并发落地 / 同文件冲突）由 `test_land_*` 与 `test_sync_conflict_*` 分别覆盖单侧；
+真实 run 上的端到端验证留到打开开关之前做。
+
+### 16.7 实现的对抗审查（2026-10-18，独立 reviewer）
+
+| 发现 | 级别 | 处理 |
+|---|---|---|
+| run-create 的清扫按调用方的 `SWARM_WORKSPACE` 判断"run 记录不存在"，测试或另一个工作区会释放本机所有活 worktree | HIGH | `WT_ROOT` / ledger 改为从 app data dir 推导（测试的 `SWARM_DATA_DIR` 自然隔离）；每个 `WT_ROOT/<run_id>/` 记下所属工作区，清扫只看自己工作区的；"记录不存在"的释放只在 daemon 清扫里做 |
+| `_remove` 在 git 拒绝后 `rmtree`，路径未校验，一个被换成 symlink 的 run 目录能让它删掉 main checkout | HIGH | 动路径前要求无 symlink 且是 git 登记的 linked worktree；git 拒绝就报错，永不 `rmtree` |
+| isolated run 落地绕过了 D7 专家覆盖检查 | HIGH | 落地前跑同一个 D7 检查（含 Red Team）；另外要求 deliver 派出的每个 Gate-2 专家在"被审的树"记录之后完成过（修复后改了代码就要重审） |
+| 整条命令持有 run 锁：cancel 等 30 秒后 500；落地中途看不到 cancel | MED | cancel 等锁 5 秒，拿不到就写无锁的 `.cancel_requested` 并后台重试；下一个拿锁的命令先应用它；落地的 `still_live` 也看它 |
+| 写入 gate 在每次工具调用都进线程池 | MED | 先内联判断有没有任何 run worktree，没有直接返回 |
+| token 可伪造 | MED | 保持现状，按 §7.3 的威胁模型写明（§4.2） |
+| token 发给任何提到 artifact_cli.py 的命令；参数重复/缩写时 gate 与 argparse 解读不同 | MED | 只认 python 解释器直接运行脚本；`--run-id` 等重复或缩写一律 deny；artifact_cli 的 argparse 关闭缩写 |
+| gate fail-open 一次就让 run 永久 failed | MED | 前两次无 token 只拒绝、可重试，连续第三次才 failed |
+| 多 repo 落地后后面的 repo 状态丢失 | MED | 每次按 repo 名重新取当前 entry；加了两 repo 落地测试 |
+| 清扫在 git 出错或 worktree 被 detach 时把活 worktree 移进 quarantine | MED | 只有确定不是 worktree（没有 `.git`）或 git 成功列出且不含它时才 quarantine；git 说不清就保留并报告 |
+| 同步被打断（超时、kill、`rebase --abort`）后 HEAD 停在快照上，之后永远 `worktree_invalid` | MED | 同步开头识别"HEAD == 快照、无 rebase"并 `reset --soft base`；rebase 超时会 abort 并恢复；落地后崩溃导致的"已合并未记录"在下次 stage-complete 自动补记 |
+| 重跑 deliver stage-start 会把审查后的改动重新记成"已审" | MED | 被审的树只在变化时重写并记时间，落地要求专家在那之后完成（见 D7 一行） |
+| 其余 LOW | LOW | 证据缺 worktree 记录时拒绝落地；接管只由 owner 类命令触发；B 只写一次（记下目标 repo）；stamper 等锁 1 秒；sitecustomize 放独立目录、只在 worktree run 时加入；`WT_ROOT` 只在开关打开时加进受限模式的允许目录；gate 无结论时返回 `{}` 而不是 approve |
+
+P0 的 `updatedInput` 探针按真实拓扑重跑：Bash 链（改写 hook + approve hook）之外再挂 `Write|Edit|Bash`（返回 approve）
+和写入 gate 同样的 matcher（返回 `{}`）两组，改写后的命令仍被执行。
+
+实现中另一个发现：git 调用会继承 shell 里泄漏的 `GIT_CONFIG_COUNT/KEY_n/VALUE_n`（本 session 的审查子 agent 留下
+`core.hooksPath=/tmp/...` 和 `user.name=t`），能让最终 commit 跳过 git-defender。`run_worktree.git()` 现在丢弃所有
+`GIT_CONFIG*` 和 `GIT_DIR` 类变量。

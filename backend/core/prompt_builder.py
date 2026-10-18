@@ -2185,6 +2185,11 @@ class PromptBuilder:
             extra_dirs = agent_config.get("allowed_directories", [])
             if extra_dirs:
                 allowed_directories.extend(extra_dirs)
+            # Pipeline-run worktrees (pipeline-run-worktree §6.1): the run's code lives
+            # there; worktree_write_gate keeps a session out of other runs' trees.
+            from .run_worktree import mode_enabled, wt_root
+            if mode_enabled():
+                allowed_directories.append(str(wt_root()))
             file_access_handler = create_file_access_permission_handler(allowed_directories)
 
         # 4. Build MCP server configuration (file-based, tier-aware lazy loading)

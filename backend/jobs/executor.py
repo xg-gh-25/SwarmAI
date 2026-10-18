@@ -394,6 +394,19 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "worktree_sweep":
+            from .handlers.worktree_sweep import run_worktree_sweep
+            sw = run_worktree_sweep()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status=_monitor_result_status(sw.get("status", "unknown"), ok={"success"},
+                                              benign=set()),
+                summary=(sw.get("error") or f"released {sw.get('released', 0)}, quarantined "
+                         f"{sw.get('quarantined', 0)}, branches {sw.get('branches', 0)}"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "library_health":
             from .handlers.library_health import run_library_health
             health_result = run_library_health()

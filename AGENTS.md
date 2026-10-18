@@ -234,6 +234,14 @@ implementations in `security_hooks.py`). By category:
    companion `session_link_stamp_start`): after an artifact_cli / run-create call it writes
    this session's id into running runs with no `session_id` that the call created or names
    (`session_id_source: backend_stamp`), never overwriting an existing one.
+   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; off until
+   `config.json["pipeline"]["worktree_mode"] = "on"`): `run_owner_gate` (Bash, right after
+   `pipeline_test_gate`; takes a crashed owner's run over, denies while the owner is live,
+   and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
+   `updatedInput` — no other Bash hook may set `updatedInput`) and `worktree_write_gate`
+   (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
+   run's writes in its own worktree, denies stash / shared-ref changes from a run worktree;
+   operator-set `SWARM_WORKTREE_GATE_FORCE=1`).
 5. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 
@@ -328,7 +336,10 @@ All commits in this repo MUST end with:
 Co-Authored-By: Swarm <swarm@swarmai.dev>
 ```
 Never use Claude/Anthropic identity in commit trailers. This overrides any SDK or harness
-default. Commit directly to `main` (project convention) — never auto-branch.
+default. Commit directly to `main` (project convention) — never auto-branch. The one
+exception is tool-made: an isolated pipeline run works on a local `run/<run_id>` branch in
+`~/.swarm-ai/worktrees/<run_id>/<repo>`, never pushed; its commit lands on `main` by
+`merge --ff-only` and the branch is deleted (`docs/design/pipeline-run-worktree.md` §11).
 
 **Write it yourself — nothing enforces it for a manual commit.** Only the pipeline's
 `run-commit` (`backend/scripts/artifact_cli.py`) builds the trailer into its own message. For any commit you make

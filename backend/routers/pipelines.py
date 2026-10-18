@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -243,6 +244,32 @@ def _to_response(raw: dict) -> PipelineRunResponse:
     )
 
 
+def _apply_cancel_later(run_file: Path, tries: int = 120, every: float = 5.0) -> None:
+    """Apply a pending cancel (``.cancel_requested``) once the busy command releases the
+    run lock — unless a lock holder already applied it (the sidecar is then gone)."""
+    from core.run_lock import RunLockTimeout, update_run
+    side = run_file.parent / ".cancel_requested"
+
+    def _mut(state: dict) -> None:
+        if state.get("status") in ("running", "paused"):
+            state["status"] = "cancelled"
+            if state.get("worktree_mode") == "isolated":
+                state["release_requested"] = True
+    for _ in range(tries):
+        if not side.exists():
+            return
+        try:
+            update_run(run_file, _mut, timeout=every)
+            side.unlink(missing_ok=True)
+            return
+        except RunLockTimeout:
+            continue
+        except (OSError, ValueError) as e:
+            logger.warning("pending cancel of %s not applied: %s", run_file.parent.name, e)
+            return
+    logger.warning("pending cancel of %s still waiting after %d tries", run_file.parent.name, tries)
+
+
 @router.patch("/{run_id}/cancel")
 async def cancel_pipeline(run_id: str) -> dict:
     """Cancel a pipeline run by updating its run.json status to 'cancelled'.
@@ -250,7 +277,10 @@ async def cancel_pipeline(run_id: str) -> dict:
     Returns 200 on success, 404 if run not found. Atomic write prevents corruption.
     """
     from fastapi.responses import JSONResponse
+    from core.run_lock import RunLockTimeout, update_run
 
+    if not re.fullmatch(r"run_[A-Za-z0-9_]{1,64}", run_id or ""):
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
     projects_dir = _get_swarmws() / "Projects"
     if not projects_dir.exists():
         return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
@@ -265,18 +295,33 @@ async def cancel_pipeline(run_id: str) -> dict:
             run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
             if run_file.exists():
                 try:
-                    state = json.loads(run_file.read_text(encoding="utf-8"))
-                    state["status"] = "cancelled"
-                    # Atomic write: write to tmp then replace to prevent corruption
-                    tmp_file = run_file.with_suffix(".tmp")
-                    tmp_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-                    tmp_file.replace(run_file)
+                    # Locked read-modify-write (pipeline-run-worktree §4.1): a cancel can
+                    # no longer be undone by a run-update that read the file earlier.
+                    # An isolated run's worktree is released by its owner or the daemon
+                    # sweep, never here (§8.2).
+                    def _mut(state: dict) -> None:
+                        state["status"] = "cancelled"
+                        if state.get("worktree_mode") == "isolated":
+                            state["release_requested"] = True
+                    try:
+                        update_run(run_file, _mut, timeout=5.0)
+                    except RunLockTimeout:
+                        # A command holds the run lock: leave a lock-free request; that
+                        # command's landing checks it, and the next lock holder applies it.
+                        (run_file.parent / ".cancel_requested").write_text(
+                            datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+                        return ("requested", project_dir.name)
                     return ("cancelled", project_dir.name)
-                except (json.JSONDecodeError, OSError) as e:
+                except (json.JSONDecodeError, OSError, ValueError) as e:
                     return ("error", str(e))
         return ("not_found", None)
 
     outcome, info = await asyncio.to_thread(_cancel)
+    if outcome == "requested":
+        logger.info("Cancel of pipeline %s requested (run busy) in project %s", run_id, info)
+        asyncio.create_task(asyncio.to_thread(
+            _apply_cancel_later, projects_dir / info / ".artifacts" / "runs" / run_id / "run.json"))
+        return {"status": "cancelled", "run_id": run_id, "pending": True}
     if outcome == "cancelled":
         logger.info("Cancelled pipeline %s in project %s", run_id, info)
         return {"status": "cancelled", "run_id": run_id}
