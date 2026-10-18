@@ -67,13 +67,18 @@ _GATE_IDS = ("gate0-skeptic", "gate1-skeptic", "gate2-adversarial")
 # lines, trailing newline included). Measured pre-move; never recompute these
 # from the post-move files — that would make the check circular.
 _PRE_MOVE_SHA256 = {
-    "gate0-skeptic": "8039bcb42857ed1bcf0436b0db250af94f4782d4c18f3724bcc80a0714aacec1",  # pragma: allowlist secret
-    "gate1-skeptic": "b81db3c969fbf5e207748c589d2777b53967e76589bc25984ecd3f06e8948570",  # pragma: allowlist secret
+    "gate0-skeptic": "75141a94d276a7cbc610f37af031fd0d0e1fb0cf69ff58da88711778cf6bbc67",  # pragma: allowlist secret
+    # gate0/1/2 INTENTIONALLY edited for gate speed (pipeline-run-budget §11): caps cut to
+    # 6 / 8 / 8 tool calls with the evidence handed in (gate1 inputs, gate2 diff file).
+    # gate1 INTENTIONALLY edited: the re-check paragraph (a second round reviews the
+    # fix only; a third needs a recorded reason — docs/design/pipeline-run-budget.md H2).
+    "gate1-skeptic": "df5ddc77d651921b674b18e824ad7bd6a930669a7258cc9fda310a7794271190",  # pragma: allowlist secret
     # gate2 was INTENTIONALLY edited after the move: its hand-paste "Project-Specific
     # Traps" block (which named two TECH.md section titles and was filled for 1 of 13
     # real expert prompts) became the <PROJECT_KNOWLEDGE> slot that spawn_prompt.py
     # fills from DDD recall. Recomputed in the same change, as this test instructs.
-    "gate2-adversarial": "d53c378461e18d028ee3ed746c820dd832f81943bc11e2e868eeab619d9f2400",  # pragma: allowlist secret
+    # ...and again for the same re-check paragraph (H2).
+    "gate2-adversarial": "92fc9d37bd309a0a4e04369469910ae16ace7816bd5022cfb3c0a9de7e3d9ce2",  # pragma: allowlist secret
 }
 
 
@@ -169,13 +174,17 @@ _VERBATIM_GATE_IDS = ("gate0-skeptic", "gate1-skeptic")
 
 @pytest.mark.parametrize("gate_id", _VERBATIM_GATE_IDS)
 def test_emitter_prints_the_gate_file_verbatim(gate_id):
-    """stdout is the gate file, unmodified.
+    """stdout is the gate file, unmodified, under one prepended attribution line.
+
+    The ``EXPERT-ID: <gate>`` first line is metadata, not prompt prose: it is how a
+    completed sub-agent is attributed, so stage-complete can count review rounds per
+    gate. Everything after it must be the file byte-for-byte.
 
     The expected value is read from disk independently rather than re-derived
     from the emitter, so the assertion cannot be satisfied by the emitter simply
     agreeing with itself.
     """
-    expected = (_GATE_PROMPTS / f"{gate_id}.md").read_text()
+    expected = f"EXPERT-ID: {gate_id}\n\n" + (_GATE_PROMPTS / f"{gate_id}.md").read_text()
     rc, out, err = _run_emitter("--gate", gate_id)
     assert rc == 0, f"emitter failed for {gate_id}: rc={rc} stderr={err!r}"
     assert out == expected, (
@@ -372,3 +381,16 @@ def test_stage_doc_states_the_exit_status_contract(doc):
         f"{doc.name} does not state the exit-0 condition for using the emitter's "
         "output; empty stdout from the fail-closed path could be pasted blindly."
     )
+
+
+@pytest.mark.parametrize("gate_id", ("gate0-skeptic", "gate1-skeptic", "meta-review"))
+def test_gate_prompt_is_attributed_by_expert_id(gate_id):
+    """Every emitted gate prompt starts with the EXPERT-ID anchor the SubagentStop hook
+    reads, so a completed gate is counted per id (pipeline-run-budget H1)."""
+    from core.runtime_hooks import _extract_expert_id
+    args = ("--gate", gate_id) + (("--project", "NoSuchProject", "--files", "backend/core/a.py")
+                                  if gate_id == "meta-review" else ())
+    rc, out, err = _run_emitter(*args)
+    assert rc == 0, err
+    assert out.splitlines()[0] == f"EXPERT-ID: {gate_id}"
+    assert _extract_expert_id(out[:400]) == gate_id  # what the SubagentStop hook will record

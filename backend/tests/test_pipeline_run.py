@@ -649,6 +649,10 @@ class TestRunHistory:
         assert result["calibration"] == "defaults"
         assert result["stage_averages"] == {}
 
+    # About 21 artifact_cli subprocess calls (two full runs taken through completion) at
+    # ~0.7 s each, same at HEAD: slow, not hung. Over the runner's 30 s per-test timeout
+    # it was reported as a timeout on every regression. 90 s still catches a hang.
+    @pytest.mark.timeout(90)
     def test_history_from_completed_runs(self, workspace):
         """Create 2 completed runs, verify history aggregates token costs."""
         for req, eval_cost, think_cost in [("Run A", 8000, 35000), ("Run B", 12000, 45000)]:

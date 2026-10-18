@@ -17,6 +17,8 @@ Eval/golden_set.private.yaml.lock
 *.so
 .Python
 build/
+# Skill stage docs live in stages/ref/build/; the Python build/ rule above must not hide them.
+!backend/skills/*/stages/ref/build/
 develop-eggs/
 dist/
 downloads/

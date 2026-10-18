@@ -50,6 +50,12 @@ import pytest
 
 from scripts import pipeline_test as pt
 
+# These tests run the runner end to end: each spawns nested pytest processes (and for
+# baseline / mutation, git worktrees). Measured 3-19 s each alone and over 30 s under a
+# loaded regression, so the runner's 30 s per-test timeout killed their shard and took
+# the rest of the file down with it. 120 s still catches a real hang.
+pytestmark = pytest.mark.timeout(120)
+
 PROJECT = "P1"
 RUN_ID = "run_t1"
 
@@ -490,7 +496,10 @@ def test_b():
 '''
 
 
-def test_not_run_tests_get_no_head_baseline_and_fail(rig, capsys, tmp_path):
+def test_not_run_tests_get_no_head_baseline_and_fail(rig, capsys, tmp_path, monkeypatch):
+    """When a dead shard's remaining tests CANNOT be requeued (no budget left), they stay
+    not-run: no HEAD baseline, classification unknown, never green."""
+    monkeypatch.setattr(pt, "REQUEUE_MIN_S", 10_000.0)  # no requeue possible
     repo = rig({"backend/core/m.py": "def flag():\n    return 1\n",
                 "backend/tests/test_die.py": SHARD_DIES})
     _write(repo, {"backend/core/m.py": "def flag():\n    return 2\n"})
@@ -606,3 +615,350 @@ def test_deadline_default_fits_the_wrapper_and_large_values_warn():
     d, warn = pt._clamp_deadline(99999)
     assert d == pt.MAX_DEADLINE and len(warn) == 2
     assert pt._clamp_deadline("nan")[0] is None
+
+
+def test_shards_keep_priority_order_serial_suites_do_not_jump_ahead():
+    """_run_jobs starts shards in list order and the deadline drops the tail, so the
+    run's own tests (inserted first by the planner) must lead. Alphabetical order
+    with serial suites first once left them unstarted behind a 66 s serial suite."""
+    targets = {  # planner order: changed tests, then importers by distance
+        "backend/tests/test_stage_boundary_commands.py": None,
+        "backend/tests/test_pipeline_run_profile.py": None,
+        "backend/tests/test_alpha_importer.py": None,
+        "backend/tests/test_context_health_hook.py": None,  # serial suite, far importer
+        "backend/tests/test_beta_importer.py": {"backend/tests/test_beta_importer.py::t"},
+    }
+    shards = pt._shards(targets, workers=1)
+    flat = [a for sh in shards for a in sh]
+    assert flat[0] == "tests/test_stage_boundary_commands.py"
+    assert flat.index("tests/test_pipeline_run_profile.py") < flat.index("tests/test_context_health_hook.py")
+    assert ["tests/test_context_health_hook.py"] in shards  # still isolated
+    assert shards[0] != ["tests/test_context_health_hook.py"]
+    assert sorted(flat) == sorted(["tests/test_stage_boundary_commands.py", "tests/test_pipeline_run_profile.py",
+                                   "tests/test_alpha_importer.py", "tests/test_context_health_hook.py",
+                                   "tests/test_beta_importer.py::t"])
+
+
+def test_changed_files_scopes_to_files_touched_and_warns(rig):
+    """A run's change set is its files_touched — the set run-commit commits — not
+    every uncommitted file in a tree shared with other sessions. The others are
+    named in a warning with a command that runs as written."""
+    repo = rig()
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n",
+                  "backend/core/other_session.py": "x = 1\n"})
+    warnings: list = []
+    got = pt.changed_files(repo, {"files_touched": [str(repo / "backend/core/mod.py")]},
+                           warnings, ("P1", "run_t1"))
+    assert got == ["backend/core/mod.py"]
+    assert len(warnings) == 1
+    assert "backend/core/other_session.py" in warnings[0]
+    assert "--project P1 --run-id run_t1 --files-touched" in warnings[0]
+    assert warnings[0].startswith("1 changed file(s)")
+    # nothing outside files_touched → no warning
+    warnings.clear()
+    pt.changed_files(repo, {"files_touched": ["backend/core/mod.py", "backend/core/other_session.py"]},
+                     warnings, ("P1", "run_t1"))
+    assert warnings == []
+    # more than 8 → count is exact, list is capped with the remainder
+    _write(repo, {f"backend/core/extra_{i}.py": "y = 1\n" for i in range(9)})
+    warnings.clear()
+    pt.changed_files(repo, {"files_touched": ["backend/core/mod.py"]}, warnings, ("P1", "run_t1"))
+    assert warnings[0].startswith("10 changed file(s)") and "(+2 more)" in warnings[0]
+
+
+def test_changed_files_falls_back_without_in_repo_files_touched(rig):
+    """No files_touched, or entries that are not files of this repo (a workspace
+    path like Projects/... normalizes like a repo path but does not exist here),
+    keep the old union so the run is still tested."""
+    repo = rig()
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    for state in ({}, {"files_touched": []},
+                  {"files_touched": ["Projects/SwarmAI/2-understanding/TECH.md"]}):
+        warnings: list = []
+        got = pt.changed_files(repo, state, warnings, ("P1", "run_t1"))
+        assert "backend/core/mod.py" in got, state
+        assert warnings == [], state
+    # a deleted tracked file in files_touched is still the run's own
+    (repo / "backend/tests/test_unrelated.py").unlink()
+    got = pt.changed_files(repo, {"files_touched": ["backend/tests/test_unrelated.py"]}, [], None)
+    assert got == ["backend/tests/test_unrelated.py"]
+
+
+def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
+    d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"latest-{mode}.json").write_text(json.dumps(
+        {"schema": 1, "mode": mode, "finished_at": finished_at, "failures": failures,
+         "changed_files": {}}), encoding="utf-8")
+
+
+def test_recheck_is_never_green_when_previous_failures_cannot_be_retargeted(rig, capsys, tmp_path):
+    """A regression whose failures were only desktop:: / import:: used to recheck zero
+    tests and exit 0. Now: nothing re-targetable while failures exist → an error."""
+    rig()
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "desktop::vitest", "classification": "unknown", "outcome": "timeout"},
+        {"nodeid": "import::core.gone", "classification": "unknown", "outcome": "timeout"},
+    ], "2026-10-18T00:00:00")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code != 0, out
+    assert "could not re-target" in out.get("error", ""), out
+
+
+def test_recheck_reruns_import_smoke_failures(rig, capsys, tmp_path):
+    rig()
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "import::core.mod", "classification": "unknown", "outcome": "timeout"},
+    ], "2026-10-18T00:00:00")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-recheck.json")
+    assert any(r["nodeid"] == "import::core.mod" and r["outcome"] == "passed" for r in ev["results"]), ev
+    assert ev["rechecked_failures"] == 1
+
+
+def test_recheck_builds_on_regression_not_a_later_tdd(rig, capsys, tmp_path):
+    """A tdd run after the regression covers only its --files; building the recheck on
+    it would drop the regression's failures."""
+    rig()
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "backend/tests/test_x.py::test_add", "classification": "unknown", "outcome": "timeout"},
+    ], "2026-10-18T00:00:00")
+    _seed_evidence(tmp_path, "tdd", [], "2026-10-18T00:05:00")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-recheck.json")
+    assert ev["rechecked_failures"] == 1
+    assert any(r["nodeid"] == "backend/tests/test_x.py::test_add" and r["outcome"] == "passed"
+               for r in ev["results"]), ev
+
+
+def test_shards_put_ac_nodeids_first_and_run_them_once():
+    """AC nodeids lead as their own shard; a whole-file target deselects them and a
+    nodeid-set target drops them, so they are not run twice."""
+    targets = {
+        "backend/tests/test_slow.py": None,                       # whole file, holds an AC test
+        "backend/tests/test_mixed.py": {"backend/tests/test_mixed.py::t1",
+                                        "backend/tests/test_mixed.py::t_ac"},
+        "backend/tests/test_context_health_hook.py": None,        # serial suite with an AC test
+    }
+    first = {"backend/tests/test_slow.py": {"backend/tests/test_slow.py::test_ac"},
+             "backend/tests/test_mixed.py": {"backend/tests/test_mixed.py::t_ac"},
+             "backend/tests/test_context_health_hook.py": {"backend/tests/test_context_health_hook.py::t_ac"}}
+    shards = pt._shards(targets, workers=2, first=first)
+    assert shards[0] == ["tests/test_context_health_hook.py::t_ac"]  # serial AC isolated, leads
+    assert shards[1] == ["tests/test_slow.py::test_ac", "tests/test_mixed.py::t_ac"]  # priority order
+    flat = [a for sh in shards[2:] for a in sh]
+    assert "--deselect=tests/test_slow.py::test_ac" in flat
+    assert "--deselect=tests/test_context_health_hook.py::t_ac" in flat
+    assert "tests/test_mixed.py::t_ac" not in flat and "tests/test_mixed.py::t1" in flat
+
+
+def test_per_test_timeout_requeues_the_rest_of_the_shard_once(rig, capsys, tmp_path, monkeypatch):
+    """One test over the per-test timeout ends the shard; the tests after it used to be
+    reported not-run. Now they get one more shard and real results."""
+    monkeypatch.setattr(pt, "PER_TEST_TIMEOUT_S", 2)
+    rig({"backend/tests/test_hangmid.py": (
+        "import time\n\n\ndef test_a_hangs():\n    time.sleep(20)\n\n\n"
+        "def test_b_after():\n    assert True\n\n\ndef test_c_after():\n    assert True\n")})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "tdd",
+                     "--files", "backend/tests/test_hangmid.py")
+    ev = _evidence(tmp_path, "tests/latest-tdd.json")
+    by = {r["nodeid"].split("::")[-1]: r for r in ev["results"]}
+    assert by["test_a_hangs"]["outcome"] == "timeout"
+    for t in ("test_b_after", "test_c_after"):
+        assert by[t]["outcome"] == "passed" and by[t].get("requeued") is True, by[t]
+    assert sum(1 for r in ev["results"] if r["nodeid"].endswith("test_b_after")) == 1
+    assert code != 0  # the hang itself is never green
+
+
+def test_overlay_evidence_replaces_rechecked_results_by_nodeid(tmp_path):
+    base = {"mode": "regression", "finished_at": "t0",
+            "results": [{"nodeid": "backend/tests/test_x.py::a", "outcome": "timeout", "file": "backend/tests/test_x.py"},
+                        {"nodeid": "backend/tests/test_x.py::b", "outcome": "passed", "file": "backend/tests/test_x.py"},
+                        {"nodeid": "import::core.mod", "outcome": "timeout", "file": "backend/core/mod.py"}],
+            "failures": [{"nodeid": "backend/tests/test_x.py::a", "classification": "unknown", "outcome": "timeout"},
+                         {"nodeid": "import::core.mod", "classification": "unknown", "outcome": "timeout"}],
+            "runner_errors": [], "layers": {"dependency_scoped": {"run": True, "tests": 2, "pass": 1},
+                                             "import_smoke": {"run": True, "modules": 1, "pass": 0}}}
+    re_ev = {"results": [{"nodeid": "backend/tests/test_x.py::a", "outcome": "passed", "file": "backend/tests/test_x.py"},
+                         {"nodeid": "import::core.mod", "outcome": "passed", "file": "backend/core/mod.py"}],
+             "failures": [], "runner_errors": [], "changed_files": {"backend/core/mod.py": "d2"},
+             "head_sha": "h2", "tree_digest": "t2"}
+    base["changed_files"], base["head_sha"], base["tree_digest"] = {"backend/core/mod.py": "d1"}, "h1", "t1"
+    ev = pt._overlay_evidence(tmp_path, base, re_ev, [])
+    assert ev["counts"]["passed"] == 3 and ev["counts"]["timeouts"] == 0
+    assert ev["failures"] == [] and ev["mode"] == "regression"
+    assert ev["layers"]["dependency_scoped"]["pass"] == 2 and ev["layers"]["import_smoke"]["pass"] == 1
+    assert ev["rechecked_from"] == {"finished_at": "t0", "rechecked": 2, "auto": False}
+    # staleness checks compare against the tree the recheck saw, not the base's
+    assert (ev["changed_files"], ev["head_sha"], ev["tree_digest"]) == ({"backend/core/mod.py": "d2"}, "h2", "t2")
+
+
+def test_identical_verify_after_a_timeout_runs_a_recheck_and_overlays(rig, capsys, tmp_path, monkeypatch):
+    """The second verify on unchanged inputs re-runs only what failed and writes the
+    result back into latest-verify.json, instead of re-running everything."""
+    monkeypatch.setattr(pt, "PER_TEST_TIMEOUT_S", 2)
+    repo = rig()
+    marker = tmp_path / "hung_once"
+    _write(repo, {"backend/tests/test_once.py": (
+        "import pathlib, time\n\n\ndef test_hangs_first_time():\n"
+        f"    m = pathlib.Path({str(marker)!r})\n"
+        "    if not m.exists():\n        m.write_text('x')\n        time.sleep(20)\n\n\n"
+        "def test_fine():\n    assert True\n")})
+    _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    first = _evidence(tmp_path, "tests/latest-verify.json")
+    assert first["counts"]["timeouts"] >= 1
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    assert "rechecked_from" in ev, ev.keys()
+    assert any("ran a recheck" in w for w in ev["warnings"])
+    outcome = {r["nodeid"].split("::")[-1]: r["outcome"] for r in ev["results"]}
+    assert outcome["test_hangs_first_time"] == "passed" and outcome["test_fine"] == "passed"
+    assert code == 0, out
+
+
+def test_dead_shard_rest_is_requeued_and_gets_a_real_verdict(rig, capsys, tmp_path):
+    """With budget left, the test after the one that killed its shard runs in a requeue
+    and gets a real result: here it fails on the change. (Whether it is then classified
+    "regression" depends on the HEAD baseline finishing in time, which load can prevent,
+    so the assertion is on the result, not the classification.)"""
+    repo = rig({"backend/core/m.py": "def flag():\n    return 1\n",
+                "backend/tests/test_die.py": SHARD_DIES})
+    _write(repo, {"backend/core/m.py": "def flag():\n    return 2\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 1, out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    res = {r["nodeid"].split("::")[-1]: r for r in ev["results"]}
+    assert res["test_b"]["outcome"] == "failed" and res["test_b"].get("requeued") is True, res
+
+
+def test_manual_recheck_overlays_onto_the_regression_evidence(rig, capsys, tmp_path):
+    """The TEST stage reads latest-regression.json, so a recheck of a regression must
+    update that file, not only latest-recheck.json."""
+    rig()
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "backend/tests/test_x.py::test_add", "classification": "unknown", "outcome": "timeout"},
+    ], "2026-10-18T00:00:00")
+    d = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs" / RUN_ID / "evidence" / "tests"
+    reg = json.loads((d / "latest-regression.json").read_text())
+    reg.update(results=[{"nodeid": "backend/tests/test_x.py::test_add", "outcome": "timeout",
+                         "file": "backend/tests/test_x.py"}],
+               counts={"passed": 0, "failed": 0, "errors": 0, "timeouts": 1, "skipped": 0},
+               layers={"dependency_scoped": {"run": True, "tests": 1, "pass": 0}})
+    (d / "latest-regression.json").write_text(json.dumps(reg))
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 0 and out.get("overlaid_onto") == "regression", out
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev["counts"]["timeouts"] == 0 and ev["counts"]["passed"] == 1
+    assert ev["failures"] == [] and ev["rechecked_from"]["rechecked"] == 1
+
+
+# ── Gate-2 fixes ─────────────────────────────────────────────────────────────
+
+def test_plugin_deselects_exact_nodeids_not_prefixes(tmp_path):
+    """pytest's own --deselect matches by PREFIX: deselecting test_parse also dropped
+    test_parse_empty with no trace. The runner's plugin matches exactly."""
+    import subprocess
+    (tmp_path / "test_t.py").write_text(
+        "import pytest\n\n\ndef test_parse():\n    pass\n\n\ndef test_parse_empty():\n    pass\n\n\n"
+        "@pytest.mark.parametrize('n', [1, 2])\ndef test_p(n):\n    pass\n\n\n"
+        "class TestK:\n    def test_m(self):\n        pass\n")
+    plug = pt._plugin_dir(tmp_path / "cache")
+    env = {**os.environ, "PYTHONPATH": str(plug), "PIPELINE_TEST_DESELECT": json.dumps(["test_t.py::test_parse", "test_t.py::test_p",
+                                                                    "test_t.py::TestK"]),
+           "PIPELINE_TEST_EVENTS": str(tmp_path / "ev.jsonl")}
+    env.pop("PYTEST_ADDOPTS", None)
+    r = subprocess.run([sys.executable, "-m", "pytest", "test_t.py", "-q", "-p", pt._PLUGIN_NAME,
+                        "-p", "no:cacheprovider", "-o", "addopts="],
+                       cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    assert "1 passed, 4 deselected" in r.stdout, r.stdout + r.stderr  # parametrized + class too
+    collected = [json.loads(ln) for ln in (tmp_path / "ev.jsonl").read_text().splitlines()]
+    ids = next(e["nodeids"] for e in collected if e["ev"] == "collected")
+    assert ids == ["test_t.py::test_parse_empty"]
+
+
+def test_pytest_job_routes_deselect_tokens_to_the_plugin_not_argv(tmp_path):
+    ctx = SimpleNamespace(workdir=tmp_path, python=sys.executable, plugin_dir=tmp_path)
+    job = pt._pytest_job(ctx, "j1", ["tests/test_a.py", "--deselect=tests/test_a.py::t_ac"],
+                         tmp_path, False)
+    assert not any(a.startswith("--deselect") for a in job.argv)
+    assert json.loads(job.env["PIPELINE_TEST_DESELECT"]) == ["tests/test_a.py::t_ac"]
+    assert job.meta["args"] == ["tests/test_a.py"]
+
+
+def test_auto_recheck_falls_back_to_a_full_run_when_it_cannot_overlay(monkeypatch, tmp_path):
+    """A recheck that errors (e.g. a shard:: failure it cannot re-target) or lands on
+    another mode's evidence must not be returned as this mode's result."""
+    ctx = SimpleNamespace(warnings=[])
+    ns = SimpleNamespace(mode="regression", project="P1", run_id="r", auto_recheck_of=None)
+    monkeypatch.setattr(pt, "_run_test_mode", lambda *a, **k: ({"error": "auto-recheck cannot re-target: shard::x"}, 2))
+    assert pt._auto_recheck(ctx, ns, tmp_path, {}, 95.0, {}) is None
+    monkeypatch.setattr(pt, "_run_test_mode", lambda *a, **k: ({"overlaid_onto": "verify"}, 0))
+    assert pt._auto_recheck(ctx, ns, tmp_path, {}, 95.0, {}) is None
+    assert any("running the full regression" in w for w in ctx.warnings)
+
+
+def test_recheck_retargets_a_failed_vitest_test(rig, capsys, tmp_path, monkeypatch):
+    """A failed vitest test is reported as desktop/src/<file>::<name>; recheck reruns the
+    frontend job for it instead of dropping it."""
+    repo = rig()
+    _write(repo, {"desktop/src/a.test.ts": "test('works', () => {})\n"})
+    npx = tmp_path / "npx.py"
+    npx.write_text(FAKE_NPX)
+    monkeypatch.setenv("SWARM_TEST_NPX", str(npx))
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "desktop/src/a.test.ts::works", "classification": "unknown", "outcome": "failed"},
+    ], "2026-10-18T00:00:00")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert code == 0, out
+    assert out["rechecked_failures"] == 1 and "frontend" in out, out
+
+
+def test_recheck_that_skipped_tests_for_budget_does_not_overlay(rig, capsys, tmp_path, monkeypatch):
+    """Overlaying a recheck that could not run every selected test would keep stale
+    passes from the old tree; it must leave the regression evidence alone."""
+    monkeypatch.setattr(pt, "CAP_FILES", 0)
+    repo = rig()
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "backend/tests/test_x.py::test_add", "classification": "unknown", "outcome": "timeout"},
+    ], "2026-10-18T00:00:00")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert not out.get("overlaid_onto"), out
+    assert any("NOT laid" in w for w in out["warnings"]), out["warnings"]
+    assert "rechecked_from" not in _evidence(tmp_path, "tests/latest-regression.json")
+
+
+def test_auto_recheck_builds_on_the_mode_being_rerun(rig, capsys, tmp_path, monkeypatch):
+    """regression times out → a newer green verify → regression again on the same tree:
+    the automatic recheck must re-run the REGRESSION's failures and update its evidence,
+    not inherit the verify's green."""
+    monkeypatch.setattr(pt, "PER_TEST_TIMEOUT_S", 2)
+    repo = rig()
+    marker = tmp_path / "hung_once"
+    _write(repo, {"backend/tests/test_once.py": (
+        "import pathlib, time\n\n\ndef test_hangs_first_time():\n"
+        f"    m = pathlib.Path({str(marker)!r})\n"
+        "    if not m.exists():\n        m.write_text('x')\n        time.sleep(20)\n")})
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert _evidence(tmp_path, "tests/latest-regression.json")["counts"]["timeouts"] >= 1
+    _run(capsys, "--run-id", RUN_ID, "--mode", "verify")             # newer, green
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev.get("rechecked_from", {}).get("auto") is True, ev.keys()
+    assert {r["nodeid"].split("::")[-1]: r["outcome"] for r in ev["results"]}["test_hangs_first_time"] == "passed"
+    assert code == 0, out
+
+
+def test_recheck_after_a_recheck_still_overlays_onto_the_regression(rig, capsys, tmp_path):
+    """A second recheck must build on the (overlaid) regression, not on the first
+    recheck — otherwise its results never reach latest-regression.json."""
+    rig()
+    _seed_evidence(tmp_path, "regression", [
+        {"nodeid": "backend/tests/test_x.py::test_add", "classification": "unknown", "outcome": "timeout"},
+    ], "2026-10-18T00:00:00")
+    _seed_evidence(tmp_path, "recheck", [], "2026-10-18T00:00:00")   # same second, newer file
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "recheck")
+    assert out.get("overlaid_onto") == "regression", out
+    assert _evidence(tmp_path, "tests/latest-regression.json")["failures"] == []

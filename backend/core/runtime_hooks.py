@@ -1102,12 +1102,19 @@ def create_agent_tool_audit_hook(
                 # Always write session-level marker as fallback evidence. UNCHANGED
                 # shape — pipeline_validator Check 9b + _session_has_subagent_evidence
                 # both read this; do not rename/restructure it.
-                session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts)}.marker"
+                # Microseconds: parallel sub-agents of one session finishing in the same
+                # second used to overwrite each other's marker (an undercount of rounds).
+                session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts * 1_000_000)}.marker"
+                # ``expert_id`` is ADDITIVE (existing readers ignore unknown keys): it lets
+                # stage-complete count review rounds per expert from the one marker every
+                # completed sub-agent writes — the _adv_ marker below exists only for
+                # sub-agents classified adversarial, so counting from it undercounts.
                 session_marker.write_text(json.dumps({
                     "ts": ts,
                     "event": "SubagentStop",
                     "session_id": session_id,
                     "run_id": run_id or "unknown",
+                    "expert_id": _extract_expert_id(prompt_head) if prompt_head else None,
                 }))
 
                 # DISTINCT adversarial marker — consumed by the live commit gate
@@ -1146,7 +1153,9 @@ def create_agent_tool_audit_hook(
                     reviewed = _reviewed_paths_at_head(hook_cwd) if hook_cwd else None
                     if reviewed is not None:
                         payload["reviewed_paths"] = reviewed
-                    adv_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_adv_{int(ts)}.marker"
+                    # Microseconds, like the base marker: same-second siblings must not
+                    # overwrite each other (D7 would miss an expert that did run).
+                    adv_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_adv_{int(ts * 1_000_000)}.marker"
                     adv_marker.write_text(json.dumps(payload))
 
             await asyncio.to_thread(_classify_and_write)

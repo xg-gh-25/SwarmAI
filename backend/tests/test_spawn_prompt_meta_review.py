@@ -65,6 +65,8 @@ def test_emits_bounded_prompt_with_only_placeholders_filled():
                          "--files", "backend/core/a.py", "backend/hooks/b.py")
     assert rc == 0, err
     assert sb.has_numeric_cap(out), "emitted meta-review prompt lost its numeric cap"
+    assert out.startswith("EXPERT-ID: meta-review\n\n")  # attribution line, then the file
+    out = out[len("EXPERT-ID: meta-review\n\n"):]
     assert out.startswith(raw[: raw.index("<PROJECT>")])
     tail = raw[raw.index(sb.KNOWLEDGE_SLOT) + len(sb.KNOWLEDGE_SLOT):]
     assert out.endswith(tail), "text after the knowledge slot was altered"

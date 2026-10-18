@@ -4,7 +4,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 ## Steps
 1. **Audits** (`ref/deliver/audits.md`): Fresh User + User Path Latency if user-facing; Completion Audit + AC matrix.
 2. **Stage first:** `git add` new files, unstage foreign ones, before any review (`ref/deliver/gate2-coverage.md`).
-3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message); prompt = its `prompt_path` file (gate2 via `spawn_prompt.py`; `EXPERT-ID: <EXPERT_ID>` = lowercase registry id). Empty list → none. Never recount the diff.
+3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), 2-line prompt: `EXPERT-ID: <EXPERT_ID>` (registry id) + `Adversarially review this changeset: read <prompt_path> first; follow it.` Never paste it.
 4. **Merge, Red Team, fix** (`ref/deliver/gate2-findings.md`): dedup, Shared-State Override before tiers, Red Team if source > 200 lines or any HIGH, fix HIGH + MED conf ≥ 7, `pipeline_test.py --mode recheck`.
 5. **Meta-review:** `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --gate meta-review --project <P> --files <changed files>`; stdout only on exit 0; one Agent call (`ref/deliver/push-ready.md`).
 6. **User-Value Probe** (`ref/deliver/audits.md`) + **Doc Sync** (`ref/deliver/doc-sync.md`, warning only).

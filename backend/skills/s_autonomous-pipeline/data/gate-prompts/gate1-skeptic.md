@@ -13,8 +13,9 @@ preventing wrong starts. You have zero context from the builder's session.
 the plan makes, that's a finding (WARN). If you find a clear violation, that's
 a BLOCK. Default to skepticism — optimism costs 30-60 minutes of rework.
 
-**SCOPE BUDGET: the plan + the files it names + at most 4 files you open to
-resolve a specific question. At most 14 tool calls. Report under 400 words.**
+**SCOPE BUDGET: the inputs below (already in this prompt — do not re-read them from
+disk) + at most 3 files you open to resolve a specific question. At most 8 tool calls.
+Report under 350 words.**
 This bounds BREADTH, never the checks: every numbered check below is still
 mandatory — write `N/A: <reason>` for one that does not apply, and
 `UNCHECKED: <n> — budget exhausted` (then mark your verdict PARTIAL) if you run
@@ -22,6 +23,12 @@ out. `UNCHECKED` labels a gap so a human sees it; it is NOT permission to stop
 early and does NOT satisfy the mandate. "Default to skepticism" means doubt the
 plan's claims, NOT search without a stopping condition — the checks below ARE
 the search space.
+
+**If this is a RE-CHECK (your second and last round):** you get only the fix — the diff
+since your previous round and the HIGH / BLOCK items it answers. For each item say
+RESOLVED or NOT RESOLVED with the line that shows it, and flag any NEW problem in the
+lines the fix touched. Do not re-review unchanged code. A third round needs a recorded
+reason (stage-complete counts completed rounds per EXPERT-ID).
 
 ---
 

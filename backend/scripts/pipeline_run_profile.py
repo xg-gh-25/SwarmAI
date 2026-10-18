@@ -332,6 +332,117 @@ def _gate_denial_label(text: str) -> str:
     return re.sub(r"\s+", " ", reason)[:60]
 
 
+# ── sub-agents: one row per spawn, against its stated cap and the dispatch plan ──
+# A spawn prompt's own tool-call cap ("At most 14 tool calls", may wrap a line).
+_TOOL_CAP_RE = re.compile(
+    r"(?:at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?(?:\s+of)?|limit(?:ed)?\s+to|≤|<=)"
+    r"\s*([1-9]\d*)\s+(?:more\s+)?tool\s+calls?", re.I)
+# Same contract as runtime_hooks._extract_expert_id: the FIRST line starting EXPERT-ID.
+_EXPERT_ID_LINE_RE = re.compile(r"^EXPERT-ID:[ \t]*([a-z][a-z0-9-]{0,40})[ \t]*$", re.M)
+_EXPERT_ID_PREFIX_RE = re.compile(r"^EXPERT-ID:.*$", re.M)
+_PLANNED_STAGES = ("review", "deliver")  # stages stage-start writes a dispatch_plan for
+
+
+def find_subagent_transcripts(transcripts: list[str]) -> list[str]:
+    """Sub-agent files of the owning transcripts: ``<owner stem>/subagents/agent-*.jsonl``."""
+    out: list[str] = []
+    for owner in dict.fromkeys(transcripts):
+        if owner.endswith(".jsonl"):
+            out.extend(sorted(glob.glob(os.path.join(owner[:-len(".jsonl")], "subagents", "agent-*.jsonl"))))
+    return out
+
+
+def _prompt_text(rec: dict) -> str:
+    content = _message(rec).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text") or "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def _subagent_row(path: str, lo: float, hi: float) -> dict | None:
+    """One spawn: description, expert_id, seconds, tool calls, stated cap. None when
+    the spawn did not start inside the run window (another run's sub-agent)."""
+    try:
+        records = _load_records(path)
+    except OSError:
+        return None
+    stamps = [t for t in (_safe_ts(r) for r in records) if t is not None]
+    if not stamps or not (lo <= min(stamps) <= hi):
+        return None
+    prompt = next((_prompt_text(r) for r in records if r.get("type") == "user" and _prompt_text(r)), "")
+    first_anchor = _EXPERT_ID_PREFIX_RE.search(prompt)
+    m = _EXPERT_ID_LINE_RE.match(first_anchor.group(0)) if first_anchor else None
+    cap = _TOOL_CAP_RE.search(prompt)
+    calls = sum(1 for r in records for _b in _tool_uses(r))
+    description, shape = "", None
+    try:
+        with open(path[:-len(".jsonl")] + ".meta.json", encoding="utf-8") as fh:
+            meta = json.load(fh) or {}
+        description = str(meta.get("description") or "")
+        shape = meta.get("requestShape")
+    except (OSError, ValueError, AttributeError):
+        pass
+    tool_cap = int(cap.group(1)) if cap else None
+    return {"start": min(stamps), "description": description or os.path.basename(path),
+            "expert_id": m.group(1) if m else None,
+            "seconds": round(max(stamps) - min(stamps), 1), "tool_calls": calls,
+            "tool_cap": tool_cap, "over_cap": bool(tool_cap is not None and calls > tool_cap),
+            # a background spawn ends the parent's visible stream — every pipeline spawn
+            # is meant to be foreground (meta.json requestShape, absent on old CLIs)
+            "background": shape == "background"}
+
+
+def _stage_of(t: float, stage_timing: dict, hi: float) -> str:
+    """The stage whose stage_timing window holds ``t`` (latest start wins), else
+    'unattributed' — runs without stage_timing, restarted stages, between stages."""
+    best, best_start = "unattributed", None
+    for stage, w in (stage_timing or {}).items():
+        if not isinstance(w, dict) or not w.get("started_at"):
+            continue
+        try:
+            s = _ts(w["started_at"])
+            e = _ts(w["completed_at"]) if w.get("completed_at") else hi
+        except (ValueError, TypeError):
+            continue
+        if s <= t <= e and (best_start is None or s > best_start):
+            best, best_start = stage, s
+    return best
+
+
+def subagent_report(run_state: dict, transcripts: list[str]) -> dict:
+    """Report-only view of the run's sub-agents: per spawn stage / expert / seconds /
+    tool calls vs its stated cap; expert ids spawned more than once; review/deliver
+    spawns absent from ``dispatch_plan``. Never blocks anything. Sub-agent time is
+    kept here, apart from the parent totals (it is already inside the Agent call)."""
+    lo, hi = run_window(run_state)
+    timing = run_state.get("stage_timing") if isinstance(run_state.get("stage_timing"), dict) else {}
+    plan = run_state.get("dispatch_plan") if isinstance(run_state.get("dispatch_plan"), dict) else {}
+    rows = [r for r in (_subagent_row(p, lo, hi) for p in find_subagent_transcripts(transcripts)) if r]
+    rows.sort(key=lambda r: r["start"])
+    by_expert: dict[str, list[str]] = collections.defaultdict(list)
+    unplanned = []
+    for r in rows:
+        r["stage"] = _stage_of(r.pop("start"), timing, hi)
+        if r["expert_id"]:
+            by_expert[r["expert_id"]].append(r["stage"])
+        planned = plan.get(r["stage"]) if r["stage"] in _PLANNED_STAGES else None
+        if isinstance(planned, list) and r["expert_id"] not in planned:
+            unplanned.append({"stage": r["stage"], "expert_id": r["expert_id"],
+                              "description": r["description"]})
+    return {
+        "count": len(rows),
+        "seconds_total": round(sum(r["seconds"] for r in rows), 1),
+        "over_cap": sum(1 for r in rows if r["over_cap"]),
+        "background": sum(1 for r in rows if r["background"]),
+        "repeated_experts": {e: st for e, st in by_expert.items() if len(st) > 1},
+        "unplanned": unplanned,
+        "spawns": rows,
+    }
+
+
 def run_window(run_state: dict) -> tuple[float, float]:
     """(start, end) epoch seconds of a run: created_at → completed_at, else updated_at."""
     lo = _ts(run_state["created_at"])
@@ -437,6 +548,7 @@ def profile_run(run_state: dict, transcripts: list[str]) -> dict:
         "output_tokens": out_tokens,
         "gate_denials": {"total": sum(denials.values()), "by_reason": dict(denials.most_common(8))},
         "exact_duplicate_calls": sum(c - 1 for c in keys.values() if c > 1),
+        "subagents": subagent_report(run_state, transcripts),
     }
 
 
@@ -506,6 +618,15 @@ def _render(p: dict) -> str:
     lines.append("mechanical jobs:")
     for name, j in p["mechanical"]["jobs"].items():
         lines.append(f"  {name:24} {j['calls']:5} calls  {j['exec_min']:6} min")
+    s = p.get("subagents") or {}
+    lines.append(f"sub-agents {s.get('count', 0)} · {s.get('seconds_total', 0)} s total"
+                 f" · over cap {s.get('over_cap', 0)} · background {s.get('background', 0)} · repeated {s.get('repeated_experts') or {}}"
+                 f" · not in dispatch plan {len(s.get('unplanned') or [])}")
+    for r in s.get("spawns") or []:
+        cap = f"/{r['tool_cap']}" if r["tool_cap"] is not None else ""
+        flag = ("  OVER CAP" if r["over_cap"] else "") + ("  BACKGROUND" if r.get("background") else "")
+        lines.append(f"  {r['stage']:12} {r['expert_id'] or '-':16} {r['seconds']:6.0f}s"
+                     f" tools {r['tool_calls']}{cap}{flag}  {r['description'][:60]}")
     return "\n".join(lines)
 
 

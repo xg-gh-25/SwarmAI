@@ -266,3 +266,90 @@ class TestReviewFindings:
             prof.write_metrics(run_dir, {"x": 1})
         assert metrics.read_text(encoding="utf-8") == '{"total_tokens": 7,'
         assert not list(run_dir.glob(".METRICS.json.*.tmp"))
+
+
+# ── sub-agent section: per-spawn cost vs its stated cap, by stage, vs the plan ──
+
+def _sub(owner_path, name, start, end, prompt, tool_uses, description="d", shape="foreground"):
+    """A sub-agent transcript beside its owner (<owner stem>/subagents/agent-*.jsonl)."""
+    stem = owner_path[:-len(".jsonl")]
+    recs = [{"type": "user", "timestamp": _at(start), "uuid": f"{name}-u", "isSidechain": True,
+             "message": {"role": "user", "content": prompt}}]
+    for i in range(tool_uses):
+        recs.append(_use(f"{name}-t{i}", start + 1, f"{name}-m{i}", "Read", {"file_path": "/x"},
+                         sidechain=True))
+    recs.append({"type": "assistant", "timestamp": _at(end), "uuid": f"{name}-end", "isSidechain": True,
+                 "message": {"id": f"{name}-mz", "content": [{"type": "text", "text": "done"}]}})
+    path = os.path.join(stem, "subagents", f"agent-{name}.jsonl")
+    _write_jsonl(__import__("pathlib").Path(path), recs)
+    with open(path[:-len(".jsonl")] + ".meta.json", "w", encoding="utf-8") as fh:
+        json.dump({"description": description, "requestShape": shape}, fh)
+    return path
+
+
+GATE2 = "EXPERT-ID: {eid}\nAdversarially review this changeset.\nSCOPE BUDGET: At most 14\ntool calls."
+
+
+class TestSubagents:
+    def _state(self, run_dir):
+        state = json.loads((run_dir / "run.json").read_text())
+        state["stage_timing"] = {
+            "evaluate": {"started_at": _at(0), "completed_at": _at(300)},
+            "review": {"started_at": _at(600), "completed_at": _at(1200)},
+            "deliver": {"started_at": _at(1800), "completed_at": _at(3000)},
+        }
+        state["dispatch_plan"] = {"review": ["spec-compliance", "code-quality"],
+                                  "deliver": ["correctness", "security"]}
+        return state
+
+    def test_per_spawn_stage_cap_repeats_and_unplanned(self, ws):
+        tmp, run_dir = ws
+        owner = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", _run_records())
+        _sub(owner, "g0", 10, 40, "You are a skeptic.\nat most 8 tool calls", 3, "Gate-0 skeptic",
+             shape="background")
+        _sub(owner, "rsec", 700, 900, GATE2.format(eid="security"), 6, "REVIEW security")
+        _sub(owner, "dsec", 1900, 2100, GATE2.format(eid="security"), 18, "Gate-2 security")
+        _sub(owner, "dcor", 1900, 2000, GATE2.format(eid="correctness"), 5, "Gate-2 correctness")
+        _sub(owner, "gap", 1500, 1550, "no anchor here", 2, "between stages")
+        p = prof.profile_run(self._state(run_dir), [owner])
+        s = p["subagents"]
+        assert s["count"] == 5
+        by = {x["description"]: x for x in s["spawns"]}
+        assert by["Gate-0 skeptic"]["stage"] == "evaluate" and by["Gate-0 skeptic"]["tool_cap"] == 8
+        assert by["Gate-2 security"] == {**by["Gate-2 security"], "stage": "deliver", "expert_id": "security",
+                                         "seconds": 200.0, "tool_calls": 18, "tool_cap": 14, "over_cap": True}
+        assert by["Gate-2 correctness"]["over_cap"] is False
+        assert by["between stages"]["stage"] == "unattributed" and by["between stages"]["expert_id"] is None
+        assert s["over_cap"] == 1
+        assert s["background"] == 1 and by["Gate-0 skeptic"]["background"] is True
+        assert s["repeated_experts"] == {"security": ["review", "deliver"]}
+        # REVIEW security was not in dispatch_plan.review; gate / unattributed spawns are not flagged
+        assert [(u["stage"], u["expert_id"]) for u in s["unplanned"]] == [("review", "security")]
+        # sub-agent time is its own section — the parent totals are unchanged
+        assert p["tool_calls"] == 4
+
+    def test_no_subagents_and_no_stage_timing(self, ws):
+        tmp, run_dir = ws
+        owner = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", _run_records())
+        state = json.loads((run_dir / "run.json").read_text())
+        assert prof.profile_run(state, [owner])["subagents"]["count"] == 0
+        _sub(owner, "x", 100, 160, GATE2.format(eid="security"), 2)
+        sp = prof.profile_run(state, [owner])["subagents"]["spawns"][0]
+        assert sp["stage"] == "unattributed" and sp["seconds"] == 60.0
+
+    def test_subagent_outside_window_is_ignored(self, ws):
+        tmp, run_dir = ws
+        owner = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", _run_records())
+        stem = owner[:-len(".jsonl")]
+        late = [{"type": "user", "timestamp": "2026-10-17T12:00:00+00:00", "uuid": "l",
+                 "isSidechain": True, "message": {"role": "user", "content": "x"}}]
+        _write_jsonl(__import__("pathlib").Path(stem) / "subagents" / "agent-late.jsonl", late)
+        state = json.loads((run_dir / "run.json").read_text())
+        assert prof.profile_run(state, [owner])["subagents"]["count"] == 0
+
+    def test_render_includes_subagent_section(self, ws):
+        tmp, run_dir = ws
+        owner = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "t.jsonl", _run_records())
+        _sub(owner, "dsec", 1900, 2100, GATE2.format(eid="security"), 18, "Gate-2 security")
+        text = prof._render(prof.profile_run(self._state(run_dir), [owner]))
+        assert "sub-agents" in text and "Gate-2 security" in text and "over cap" in text

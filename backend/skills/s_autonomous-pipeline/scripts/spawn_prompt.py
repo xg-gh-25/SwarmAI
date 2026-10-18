@@ -323,6 +323,10 @@ def main(argv=None) -> int:
             return 3
         text = _fill_project(text, args.project, args.files)
 
+    # The EXPERT-ID anchor (first line) is how a completed sub-agent is attributed:
+    # stage-complete counts review rounds per id from it. Gates get one like experts do.
+    if args.gate and not text.lstrip().startswith("EXPERT-ID:"):
+        text = f"EXPERT-ID: {args.gate}\n\n{text}"
     sys.stdout.write(text)
     return 0
 

@@ -55,7 +55,9 @@ SWARM_TEST_CACHE_DIR, SWARM_TEST_NPX, SWARM_WORKSPACE.
 Public symbols:
 - ``main(argv)`` — CLI entry; prints the JSON object, returns the exit code
 - ``execute(ns)`` — one invocation, returns ``(output_dict, exit_code)``
-- ``changed_files(repo, run_state)`` — files_touched ∪ git diff HEAD ∪ untracked
+- ``changed_files(repo, run_state, warnings, run_ref)`` — the run's files_touched when it has
+  any in this repo (other changed files named in warnings); else git diff HEAD ∪ untracked
+  ∪ the normalized entries
 - ``build_source_graph(repo, cache_dir)`` — every backend .py file → imported modules (cached)
 - ``build_import_graph(repo, cache_dir)`` — test file → imported module names (cached)
 - ``import_closure(repo, sgraph, roots)`` — transitive backend-local file dependencies
@@ -109,6 +111,12 @@ OUTPUT_BUDGET = 3000
 _ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # Suites known to deadlock when sharing a process with others: one shard each.
 _SERIAL_SUITES = ("session_unit", "lifecycle", "healing", "recovery", "context_health")
+# pytest-timeout per test (thread method: a test over it ends its whole shard process).
+PER_TEST_TIMEOUT_S = 30
+# A shard ended by a per-test timeout gets its not-run tests requeued ONCE, if at least
+# this much of the phase budget is left. One round only: a module-level hang would time
+# out every test in the file, and repeated rounds would spend the deadline on it.
+REQUEUE_MIN_S = 5.0
 _FAIL = ("failed", "error", "timeout")
 _COUNT_KEY = {"passed": "passed", "failed": "failed", "error": "errors",
               "timeout": "timeouts", "skipped": "skipped"}
@@ -289,18 +297,53 @@ def _contained(base: Path, rel: str) -> Path | None:
     return p if b in p.parents else None
 
 
-def changed_files(repo: Path, run_state: dict | None) -> list[str]:
-    """run.json files_touched ∪ ``git diff --name-only HEAD`` ∪ untracked files."""
-    out: set[str] = set()
-    for f in (run_state or {}).get("files_touched") or []:
-        n = _norm_path(repo, f)
-        if n:
-            out.add(n)
+def changed_files(repo: Path, run_state: dict | None, warnings: list | None = None,
+                  run_ref: tuple[str, str] | None = None) -> list[str]:
+    """The change set a run's tests are selected for.
+
+    When run.json ``files_touched`` holds at least one file of THIS repo, the change
+    set is exactly those files: the same set ``run-commit`` commits and the
+    active-run commit gate treats as the run's own. ``git diff HEAD`` and untracked
+    files are NOT added — in a working tree shared with other sessions they are
+    other people's uncommitted work, and once pulled in a run's verify/regression
+    selected 49 test files for 12 touched ones and never reached its own tests
+    before the deadline. Changed files outside ``files_touched`` are named in
+    ``warnings`` with the command that registers them, because an edit made by a
+    shell script is not recorded automatically and its tests would otherwise be
+    skipped without a trace.
+
+    A ``files_touched`` entry counts as this repo's only if it exists here or git
+    reports it changed (a deleted file): a relative entry may name a workspace file
+    (``Projects/...``) that merely normalizes like a repo path. With no such entry
+    (missing, empty, or every entry in another repo) the change set is
+    ``git diff --name-only HEAD`` ∪ untracked ∪ the normalized entries, as before.
+    """
+    git_set: set[str] = set()
     for args in (("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard")):
         for line in (_git(repo, *args) or "").splitlines():
             if line.strip():
-                out.add(line.strip())
-    return sorted(out)
+                git_set.add(line.strip())
+    named: set[str] = set()
+    owned: set[str] = set()
+    for f in (run_state or {}).get("files_touched") or []:
+        n = _norm_path(repo, f)
+        if not n:
+            continue
+        named.add(n)
+        if n in git_set or (Path(repo) / n).exists():
+            owned.add(n)
+    if not owned:
+        return sorted(named | git_set)
+    extra = sorted(git_set - owned)
+    if extra and warnings is not None:
+        project, run_id = run_ref or ("<project>", "<run_id>")
+        shown = ", ".join(extra[:8]) + (f" (+{len(extra) - 8} more)" if len(extra) > 8 else "")
+        warnings.append(
+            f"{len(extra)} changed file(s) outside this run's files_touched were not used "
+            f"for test selection: {shown}. If this run changed any of them, register them: "
+            f"python backend/scripts/artifact_cli.py run-update --project {project} "
+            f"--run-id {run_id} --files-touched '[\"<path>\"]'")
+    return sorted(owned)
 
 
 def _digest_map(repo: Path, files: list[str], cap: int = 2000) -> dict[str, str]:
@@ -575,6 +618,25 @@ def _emit(rec):
     _FH[0].flush()
 
 
+_DESELECT = set(json.loads(os.environ.get("PIPELINE_TEST_DESELECT") or "[]"))
+
+
+def _deselected(nodeid):
+    # The ref itself, or what it contains: its parametrizations (``ref[...]``) and, for a
+    # class ref, its methods (``ref::...``). NOT a bare prefix: pytest's own --deselect
+    # matches by prefix, so deselecting test_parse also dropped test_parse_empty.
+    return any(nodeid == d or nodeid.startswith((d + "[", d + "::")) for d in _DESELECT)
+
+
+def pytest_collection_modifyitems(session, config, items):
+    if not _DESELECT:
+        return
+    drop = [i for i in items if _deselected(i.nodeid)]
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = [i for i in items if not _deselected(i.nodeid)]
+
+
 def pytest_collection_finish(session):
     _emit({"ev": "collected", "nodeids": [i.nodeid for i in session.items]})
 
@@ -802,20 +864,50 @@ def _backend_rel(target: str) -> str:
     return target[len("backend/"):] if target.startswith("backend/") else target
 
 
-def _shards(targets: dict, workers: int) -> list[list[str]]:
+def _shards(targets: dict, workers: int, first: dict | None = None) -> list[list[str]]:
     """Group targets (file → None for whole file, or a set of nodeids) into shards.
 
     Known deadlock-prone suites get a shard of their own; the rest are packed into
     about ``2 × workers`` groups so process start-up cost stays bounded.
+
+    Shards keep the PRIORITY order of ``targets`` (the planner inserts the run's
+    own tests first, then importers by distance), and ``_run_jobs`` starts them in
+    list order. Under the global deadline the late shards are the ones that never
+    start, so the order decides which files get evidence: sorting alphabetically
+    and putting the serial suites first once left a run's own test files unstarted
+    while an unrelated 66 s serial suite ran.
+
+    ``first`` (file → AC nodeids) runs ahead of everything, as its own leading
+    shard(s): an AC test inside a slow file would otherwise wait for every test above
+    it. The same nodeids leave their normal position — removed from a nodeid set, or
+    ``--deselect``-ed from a whole-file target — so they run once. Serial suites stay
+    isolated in the lead too.
     """
+    def is_serial(f: str) -> bool:
+        return any(k in Path(f).name for k in _SERIAL_SUITES)
+
+    first = first or {}
+    pulled = {f: set(first[f]) for f in targets if first.get(f)}  # in priority order
+    lead_serial, lead_normal = [], []
+    for f, nids in pulled.items():
+        (lead_serial if is_serial(f) else lead_normal).append([_backend_rel(n) for n in sorted(nids)])
+    lead = lead_serial + ([sum(lead_normal, [])] if lead_normal else [])
     serial, normal = [], []
-    for f in sorted(targets):
+    for rank, f in enumerate(targets):
         sel = targets[f]
-        args = [_backend_rel(f)] if sel is None else [_backend_rel(n) for n in sorted(sel)]
-        (serial if any(k in Path(f).name for k in _SERIAL_SUITES) else normal).append(args)
+        out_n = pulled.get(f, set())
+        if sel is None:
+            args = [_backend_rel(f)] + [f"--deselect={_backend_rel(n)}" for n in sorted(out_n)]
+        else:
+            rest = sorted(set(sel) - out_n)
+            if not rest:
+                continue
+            args = [_backend_rel(n) for n in rest]
+        (serial if is_serial(f) else normal).append((rank, args))
     size = max(1, -(-len(normal) // max(1, workers * 2)))
-    groups = [sum(normal[i:i + size], []) for i in range(0, len(normal), size)]
-    return serial + groups
+    groups = [(normal[i][0], sum((a for _, a in normal[i:i + size]), []))
+              for i in range(0, len(normal), size)]
+    return lead + [args for _, args in sorted(serial + groups, key=lambda g: g[0])]
 
 
 def _child_env(backend: Path, extra_path: list[Path]) -> dict:
@@ -829,41 +921,91 @@ def _child_env(backend: Path, extra_path: list[Path]) -> dict:
 
 
 def _pytest_job(ctx, name: str, args: list[str], backend: Path, isolated: bool) -> _Job:
+    # ``--deselect=<nodeid>`` tokens (from _shards' AC split) are not targets and not
+    # pytest's --deselect (that one matches by prefix): they go to the plugin as an
+    # exact-match list. Parsing and gap detection read ``meta["args"]`` = targets only.
+    targets_only = [a for a in args if not a.startswith("--deselect=")]
+    deselect_ids = [a[len("--deselect="):] for a in args if a.startswith("--deselect=")]
     junit = ctx.workdir / f"{name}.xml"
     events = ctx.workdir / f"{name}.events"
-    argv = [ctx.python, "-X", "faulthandler", "-m", "pytest", *args, "-q",
+    argv = [ctx.python, "-X", "faulthandler", "-m", "pytest", *targets_only, "-q",
             "-o", "addopts=", "-n", "0", "-p", "no:cacheprovider",
-            "--timeout=30", "--timeout-method=thread", "--junitxml", str(junit),
+            f"--timeout={PER_TEST_TIMEOUT_S}", "--timeout-method=thread", "--junitxml", str(junit),
             "--rootdir", str(backend), "-p", _PLUGIN_NAME]
     env = _child_env(backend, [ctx.plugin_dir])
     env["PIPELINE_TEST_EVENTS"] = str(events)
+    if deselect_ids:
+        env["PIPELINE_TEST_DESELECT"] = json.dumps(deselect_ids)
     if isolated:
         # Worktree runs (baseline, mutation): a fresh bytecode dir per run. A
         # same-size edit (``a + b`` → ``a - b``) within one second would otherwise
         # be served from a stale .pyc and a killed mutation would look survived.
         env["PYTHONPYCACHEPREFIX"] = str(ctx.workdir / f"pyc-{name}")
+    deselected = {a[len("--deselect="):].split("::")[0] for a in args if a.startswith("--deselect=")}
     return _Job(name, argv, backend, env, ctx.workdir, "pytest",
-                args=args, junit=junit, events=events)
+                args=targets_only, junit=junit, events=events, deselected=deselected)
 
 
-def _pytest_jobs(ctx, targets: dict, tag: str, root: Path | None = None) -> list[_Job]:
+def _pytest_jobs(ctx, targets: dict, tag: str, root: Path | None = None,
+                 first: dict | None = None) -> list[_Job]:
     backend = (root or ctx.repo) / "backend"
     ctx.seq += 1
     return [_pytest_job(ctx, f"{tag}{ctx.seq}-{i}", args, backend, root is not None)
-            for i, args in enumerate(_shards(targets, ctx.workers))]
+            for i, args in enumerate(_shards(targets, ctx.workers, first))]
+
+
+def _results_with_requeue(ctx, jobs: list[_Job], end_at: float, tag: str,
+                          root: Path | None = None) -> list[dict]:
+    """Parse ``jobs``; requeue, ONCE, the tests a per-test timeout left unrun.
+
+    A per-test timeout (thread method) ends the whole shard process, and every test
+    after the hung one is reported ``notrun`` — one slow test used to take a whole
+    file's evidence down with it (including AC tests). Here those not-run nodeids get
+    one more shard if ``end_at`` leaves at least ``REQUEUE_MIN_S``. Not requeued: the
+    timed-out test itself (not ``notrun``), shards cut by the global deadline
+    (``deadline``), never-started shards and runner errors. Results merge by nodeid,
+    the later result replacing the not-run one; requeued results carry
+    ``requeued: True``. A second timeout in the requeued shard is reported as is.
+    """
+    per = [(j, _parse_job(j)) for j in jobs]
+    results = [r for _, rs in per for r in rs]
+    left = list(dict.fromkeys(
+        r["nodeid"] for j, rs in per if j.kind == "pytest" and j.started and not j.killed
+        for r in rs if r.get("notrun") and not r.get("deadline") and not r.get("runner_error")
+        and "::" in r["nodeid"]))
+    if not left or end_at - time.monotonic() < REQUEUE_MIN_S:
+        return results
+    jobs2 = _pytest_jobs(ctx, _targets_from_nodeids(left), tag + "rq", root)
+    _run_jobs(jobs2, ctx.workers, end_at)
+    later: dict[str, dict] = {}
+    for j in jobs2:
+        for r in _parse_job(j):
+            r["requeued"] = True
+            later[r["nodeid"]] = r
+    merged, seen = [], set()
+    for r in results:
+        n = r["nodeid"]
+        if n in later:
+            if n not in seen:
+                merged.append(later[n])
+                seen.add(n)
+        else:
+            merged.append(r)
+    return merged + [r for n, r in later.items() if n not in seen]
 
 
 def run_pytest_targets(ctx, targets: dict, deadline_at: float, tag: str,
-                       root: Path | None = None) -> list[dict]:
+                       root: Path | None = None, requeue: bool = False) -> list[dict]:
     """Run targets (in ``root`` — the repo or a worktree) and return per-test results."""
     if not targets:
         return []
     jobs = _pytest_jobs(ctx, targets, tag, root)
     _run_jobs(jobs, ctx.workers, deadline_at)
-    out = []
-    for j in jobs:
-        out.extend(_parse_job(j))
-    return out
+    if requeue:
+        return _results_with_requeue(ctx, jobs, deadline_at, tag, root)
+    # Flaky re-runs, the HEAD baseline and mutants never requeue: a mutant that hangs a
+    # test is already killed, and requeueing under it would only spend the deadline.
+    return [r for j in jobs for r in _parse_job(j)]
 
 
 # ── result parsing ──────────────────────────────────────────────────────────
@@ -989,6 +1131,8 @@ def _target_gaps(job: _Job, out: list[dict]) -> list[dict]:
         nid = pre + a
         if _target_hit(nid, out + gaps):
             continue
+        if a in (job.meta.get("deselected") or ()) and job.started and not job.killed:
+            continue  # every test it held was pulled into the AC lead shard and ran there
         if job.killed or not job.started:
             gaps.append(_res(nid, "timeout", ["global deadline reached before this target "
                                               "was collected"], deadline=True, notrun=True))
@@ -1502,12 +1646,29 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict) -> Path:
     return path
 
 
-def _latest_evidence(ev_root: Path) -> dict | None:
-    best = None
-    for m in TEST_MODES:
-        ev = _read_json(ev_root / "tests" / f"latest-{m}.json")
-        if isinstance(ev, dict) and (best is None or str(ev.get("finished_at")) >= str(best.get("finished_at"))):
-            best = ev
+# Evidence a recheck may build on: verify or regression only. Never tdd (it covers only
+# its --files, so its failure list drops everything else the regression found) and never
+# another recheck (each recheck is laid over its base, so the base already carries it;
+# basing on a recheck would skip the overlay onto the file the TEST stage reads).
+RECHECK_BASE_MODES = ("verify", "regression")
+
+
+def _latest_evidence(ev_root: Path, modes: tuple = TEST_MODES) -> dict | None:
+    """Newest ``latest-<mode>.json`` among ``modes``, by file mtime: ``finished_at`` has
+    one-second resolution, and an overlay written in the same second as the recheck it
+    carries used to tie."""
+    best, best_t = None, None
+    for m in modes:
+        p = ev_root / "tests" / f"latest-{m}.json"
+        ev = _read_json(p)
+        if not isinstance(ev, dict):
+            continue
+        try:
+            t = p.stat().st_mtime
+        except OSError:
+            continue
+        if best is None or t >= best_t:
+            best, best_t = ev, t
     return best
 
 
@@ -1677,21 +1838,36 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
           sgraph: dict | None = None) -> tuple[dict, str | None]:
     plan = {"targets": {}, "skipped": [], "smoke": {}, "ac_entries": [], "l2": [],
             "desktop": [], "explicit": [], "rechecked": 0}
-    changed = changed_files(ctx.repo, run_state)
+    changed = changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id))
     plan["changed"] = changed
     mode = ns.mode
     if mode == "tdd":
         return plan, _plan_tdd(ctx, ns, plan)
     scope = changed
+    prev_failures: list = []
+    lost: list[str] = []
     if mode == "recheck":
-        prev = _latest_evidence(ev_root)
+        auto_of = getattr(ns, "auto_recheck_of", None)
+        prev = _latest_evidence(ev_root, (auto_of,) if auto_of else RECHECK_BASE_MODES)
         if not prev:
-            return plan, "recheck needs previous test evidence; run --mode verify first"
-        for f in prev.get("failures") or []:
-            n = str(f.get("nodeid") or "") if isinstance(f, dict) else ""
+            return plan, "recheck needs previous verify or regression evidence; run --mode verify first"
+        prev_failures = [f for f in prev.get("failures") or [] if isinstance(f, dict)]
+        plan["base_mode"], plan["base_finished_at"] = prev.get("mode"), prev.get("finished_at")
+        for f in prev_failures:
+            n = str(f.get("nodeid") or "")
             if n.startswith("backend/") and (ctx.repo / n.split("::")[0]).is_file():
                 _add_target(plan["targets"], n.split("::")[0], n if "::" in n else None)
                 plan["rechecked"] += 1
+            elif n.startswith("import::") and _module_file(ctx.repo, n[len("import::"):]):
+                mod = n[len("import::"):]
+                plan["smoke"][mod] = _module_file(ctx.repo, mod)
+                plan["rechecked"] += 1
+            elif n in ("desktop::vitest", "desktop::tsc") or n.startswith("desktop/"):
+                plan["desktop_recheck"] = True
+                plan["desktop_tsc"] = plan.get("desktop_tsc") or n == "desktop::tsc"
+                plan["rechecked"] += 1
+            else:
+                lost.append(n or "<no nodeid>")
         before = prev.get("changed_files") if isinstance(prev.get("changed_files"), dict) else {}
         scope = [f for f in changed if before.get(f) != _file_digest(ctx.repo / f)]
     recent = _recent_failure_files(ev_root) if mode != "recheck" else []
@@ -1701,22 +1877,116 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
     plan["l2"], plan["skipped"] = sel, list(skipped)
     if mode == "regression":
         plan["ac_entries"] = _ac_entries(ns.project, run_state)
+        ac_files: list[str] = []
         for refs in plan["ac_entries"]:
             for ref in refs:
                 rv = _resolve_ref(ctx.repo, ref)
                 if rv is None:
                     ctx.warnings.append(f"ac_coverage test ref not found: {ref}")
-                else:
-                    _add_target(plan["targets"], *rv)
+                    continue
+                _add_target(plan["targets"], *rv)
+                ac_files.append(rv[0])
+                if rv[1] is not None:
+                    plan.setdefault("ac_first", {}).setdefault(rv[0], set()).add(rv[1])
+        # AC targets first in priority order (a whole-file AC ref is not split out).
+        plan["targets"] = {**{f: plan["targets"][f] for f in dict.fromkeys(ac_files)},
+                           **plan["targets"]}
         mods = _smoke_modules(ctx, changed)
         names = list(mods)
         plan["smoke"] = {m: mods[m] for m in names[:SMOKE_CAP]}
         plan["skipped"] += [f"import::{m}" for m in names[SMOKE_CAP:]]
-    plan["desktop"] = [f for f in scope if f.startswith("desktop/src/") and (ctx.repo / f).is_file()]
+    # A desktop failure being rechecked reruns the run's desktop files even if none
+    # changed since: the failure is the reason to run, not a digest change.
+    plan["desktop"] = [f for f in (changed if plan.get("desktop_recheck") else scope)
+                       if f.startswith("desktop/src/") and (ctx.repo / f).is_file()]
+    if mode == "recheck" and plan.get("desktop_recheck") and not plan["desktop"]:
+        lost.append("desktop:: (no desktop/src file in this run's change set)")
+    if mode == "recheck" and lost and getattr(ns, "auto_recheck_of", None):
+        # An automatic recheck that cannot re-run every failure (e.g. a shard:: runner
+        # error) would keep that failure forever; the caller falls back to a full run.
+        return plan, f"auto-recheck cannot re-target: {', '.join(lost[:5])}"
+    if mode == "recheck" and prev_failures:
+        if not (plan["targets"] or plan["smoke"] or plan["desktop"]):
+            # Never green: there were failures and nothing here re-runs them.
+            return plan, (f"recheck found {len(prev_failures)} previous failure(s) but could not "
+                          f"re-target any of them ({', '.join(lost[:5]) or 'none matched'}); "
+                          "run --mode verify or regression instead")
+        if lost:
+            ctx.warnings.append(f"recheck could not re-target {len(lost)} previous failure(s), "
+                                f"not re-run: {', '.join(lost[:8])}")
     return plan, None
 
 
 # ── test-mode execution ─────────────────────────────────────────────────────
+def _auto_recheck(ctx, ns, ev_root: Path, run_state: dict, deadline: float,
+                  prev: dict) -> "tuple[dict, int] | None":
+    """Same inputs as the last ``ns.mode`` run (same cache key) and that result was not
+    cacheable (a timeout, an unknown classification or a runner error): re-running all
+    of it would spend the budget on tests that already passed. Run a recheck — only
+    the failed and not-run tests — and overlay it onto the ``ns.mode`` evidence, the
+    file the TEST stage reads. Returns None — run the full mode instead — when the
+    recheck cannot re-target every failure, skipped tests for budget, or did not land
+    on THIS mode's evidence."""
+    note = (f"inputs identical to the last {ns.mode}, whose result was not cacheable: "
+            "ran a recheck of its failed / not-run tests and overlaid the results")
+    ctx.warnings.append(note)  # lands in the overlaid evidence; withdrawn on fallback
+    ns2 = argparse.Namespace(**{**vars(ns), "mode": "recheck", "auto_recheck_of": ns.mode})
+    out, code = _run_test_mode(ctx, ns2, ev_root, run_state, deadline)
+    merged = _read_json(ev_root / "tests" / f"latest-{ns.mode}.json")
+    if out.get("error") or out.get("overlaid_onto") != ns.mode or not isinstance(merged, dict):
+        if note in ctx.warnings:
+            ctx.warnings.remove(note)
+        ctx.warnings.append(f"auto-recheck did not update latest-{ns.mode}.json "
+                            f"({out.get('error') or 'nothing overlaid'}); running the full {ns.mode}")
+        return None  # caller runs the full mode
+    tdir = ev_root / "tests"
+    newest = max(tdir.glob(f"{ns.mode}-*.json"), key=lambda q: q.stat().st_mtime, default=None)
+    return _test_output(merged, newest or tdir / f"latest-{ns.mode}.json"), _exit_code(merged)
+
+
+def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
+                      auto: bool = False) -> dict:
+    """``base`` (a verify / regression evidence) with ``re_ev`` (a recheck of it) laid over
+    it by nodeid: a rechecked test's new result replaces its old one, everything else
+    stays. Counts, failures, runner errors and layers are recomputed from the merged
+    results; ``rechecked_from`` records which run was overlaid."""
+    new = {r["nodeid"]: r for r in re_ev.get("results") or [] if isinstance(r, dict)}
+    old = {r["nodeid"]: r for r in base.get("results") or [] if isinstance(r, dict)}
+    results = [new.get(n, r) for n, r in old.items()] + [r for n, r in new.items() if n not in old]
+    counts = {"passed": 0, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}
+    for r in results:
+        counts[_COUNT_KEY.get(r.get("outcome"), "errors")] += 1
+    failures = [f for f in base.get("failures") or [] if f.get("nodeid") not in new] \
+        + list(re_ev.get("failures") or [])
+    runner_errors = [n for n in base.get("runner_errors") or [] if n not in new] \
+        + list(re_ev.get("runner_errors") or [])
+    layers = {k: dict(v) for k, v in (base.get("layers") or {}).items() if isinstance(v, dict)}
+
+    def gained(kind) -> int:  # nodeids that went from not-passed to passed
+        return sum(1 for n, r in new.items() if kind(n) and r.get("outcome") == "passed"
+                   and (old.get(n) or {}).get("outcome") != "passed")
+    if "dependency_scoped" in layers:
+        layers["dependency_scoped"]["pass"] = layers["dependency_scoped"].get("pass", 0) + gained(
+            lambda n: n.startswith("backend/"))
+    if "import_smoke" in layers:
+        layers["import_smoke"]["pass"] = layers["import_smoke"].get("pass", 0) + gained(
+            lambda n: n.startswith("import::"))
+    if base.get("mode") == "regression" and ac_entries:
+        layers["ac_driven"] = _ac_layer(repo, ac_entries, results)
+    ev = dict(base)
+    # The tree the merged evidence describes is the RECHECK's: it re-selected tests for
+    # every file changed since the base (an overlay with budget skips is never made), so
+    # its file digests, HEAD and tree digest are the ones staleness checks must compare.
+    for k in ("changed_files", "head_sha", "tree_digest"):
+        if re_ev.get(k) is not None:
+            ev[k] = re_ev[k]
+    ev.update(results=results, counts=counts, failures=failures, runner_errors=runner_errors,
+              layers=layers, finished_at=_now_iso(), cached=False,
+              rechecked_from={"finished_at": base.get("finished_at"),
+                              "rechecked": len(new), "auto": auto})
+    return ev
+
+
 def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> tuple[dict, int]:
     started_at = _now_iso()
     sgraph = build_source_graph(ctx.repo, ctx.cache)
@@ -1739,7 +2009,14 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                      plan["explicit"] + [json.dumps(plan["ac_entries"]), json.dumps(plan["skipped"])],
                      inputs, head)
     tree = _tree_digest(inputs, changed_in, list(targets) + list(plan["smoke"].values()))
-    fkey = _frontend_key(ctx, ns.mode, plan["desktop"]) if plan["desktop"] else ""
+    if ns.mode in ("verify", "regression") and not getattr(ns, "auto_recheck_of", None):
+        prev = _read_json(ev_root / "tests" / f"latest-{ns.mode}.json")
+        if isinstance(prev, dict) and prev.get("cache_key") == key and not _cacheable(prev):
+            auto = _auto_recheck(ctx, ns, ev_root, run_state, deadline, prev)
+            if auto is not None:
+                return auto
+    fmode = ns.mode + ("+tsc" if plan.get("desktop_tsc") else "")
+    fkey = _frontend_key(ctx, fmode, plan["desktop"]) if plan["desktop"] else ""
     cpath = ctx.cache / "results" / f"{key}{fkey[:16]}.json"
     hit = _read_json(cpath)
     if isinstance(hit, dict) and hit.get("schema") == 1 and _cacheable(hit):
@@ -1756,14 +2033,16 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
         fhit = _read_json(fpath) if fkey else None
         if fkey and not isinstance(fhit, list):
-            jobs += _frontend_jobs(ctx, plan["desktop"], ns.mode in ("verify", "regression"))
+            jobs += _frontend_jobs(ctx, plan["desktop"],
+                                   ns.mode in ("verify", "regression") or bool(plan.get("desktop_tsc")))
         if plan["smoke"]:
             sj = _smoke_job(ctx, list(plan["smoke"]))
             sj.meta["files"] = plan["smoke"]
             jobs.append(sj)
-        jobs += _pytest_jobs(ctx, targets, "main") if targets else []
-        _run_jobs(jobs, ctx.workers, ctx.deadline_at - min(20.0, deadline * 0.25))
-        results = [r for j in jobs for r in _parse_job(j)]
+        jobs += _pytest_jobs(ctx, targets, "main", first=plan.get("ac_first")) if targets else []
+        main_end = ctx.deadline_at - min(20.0, deadline * 0.25)
+        _run_jobs(jobs, ctx.workers, main_end)
+        results = _results_with_requeue(ctx, jobs, main_end, "main")
         if isinstance(fhit, list):
             results += fhit
         elif fkey:
@@ -1779,7 +2058,27 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         _write_json(cpath, ev)
     if ev["failures"]:
         ev["logs"] = str(_copy_logs(ctx, ev_root, ns.mode))
-    return _test_output(ev, _write_evidence(ev_root, ns.mode, ev)), _exit_code(ev)
+    path = _write_evidence(ev_root, ns.mode, ev)
+    base_mode = plan.get("base_mode")
+    if ns.mode == "recheck" and base_mode in ("verify", "regression"):
+        # Lay the recheck over the evidence it re-ran, so the file the TEST stage reads
+        # (latest-regression.json) reflects it. Only if that evidence is still the one
+        # the recheck was planned from.
+        base = _read_json(ev_root / "tests" / f"latest-{base_mode}.json")
+        if ev["skipped_for_budget"]:
+            ctx.warnings.append("recheck skipped tests for budget, so its results were NOT laid "
+                                f"over latest-{base_mode}.json (stale passes would hide them); "
+                                f"run --mode {base_mode}")
+            ev["warnings"] = list(ctx.warnings)
+        elif isinstance(base, dict) and base.get("finished_at") == plan.get("base_finished_at"):
+            merged = _overlay_evidence(ctx.repo, base, ev, _ac_entries(ns.project, run_state)
+                                       if base_mode == "regression" else [],
+                                       auto=bool(getattr(ns, "auto_recheck_of", None)))
+            merged["warnings"] = list(dict.fromkeys(list(base.get("warnings") or [])
+                                                    + list(ctx.warnings)))
+            _write_evidence(ev_root, base_mode, merged)
+            ev["overlaid_onto"] = base_mode
+    return _test_output(ev, path), _exit_code(ev)
 
 
 def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
@@ -1806,7 +2105,8 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
           "cached": False,
           "selected_files": sorted(set(plan["targets"]) | set(plan["desktop"])),
           "skipped_for_budget": plan["skipped"], "counts": counts,
-          "results": [{"nodeid": r["nodeid"], "outcome": r["outcome"], "file": r["file"]}
+          "results": [{"nodeid": r["nodeid"], "outcome": r["outcome"], "file": r["file"],
+                       **({"requeued": True} if r.get("requeued") else {})}
                       for r in results],
           "failures": failures, "layers": layers, "tdd_repeats": repeats,
           "warnings": list(ctx.warnings), "cache_key": key,
@@ -1867,7 +2167,8 @@ def _test_output(ev: dict, path: Path) -> dict:
            "evidence": str(path), "warnings": ev.get("warnings") or []}
     if ev["mode"] in ("regression", "verify", "recheck"):
         out["layers"] = ev["layers"]
-    for k in ("frontend", "tdd_repeats", "rechecked_failures", "runner_errors"):
+    for k in ("frontend", "tdd_repeats", "rechecked_failures", "runner_errors", "overlaid_onto",
+              "rechecked_from"):
         if ev.get(k):
             out[k] = ev[k][:10] if k == "runner_errors" else ev[k]
     return out
@@ -1928,7 +2229,8 @@ def run_probe(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
         if rel is None:
             return {"mode": "probe", "error": f"--files entry not found: {raw}"}, 2
         files.append(rel.split("::")[0])
-    target = _digest_files(ctx.repo, files or changed_files(ctx.repo, run_state))
+    target = _digest_files(ctx.repo, files or changed_files(
+        ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id)))
     probe = _probe_digest(ctx.repo, argv)
     path = ev_root / "probes" / f"{name}.json"
     fd = _try_lock(ev_root / "probes" / f".{name}.lock", 10)
@@ -2073,7 +2375,7 @@ def run_mutations(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
         return {"mode": "mutation", "error": f"cannot create worktree: {msg[:200]}"}, 2
     records, base_counts = [], {}
     try:
-        for f in changed_files(ctx.repo, run_state):
+        for f in changed_files(ctx.repo, run_state, ctx.warnings, (ns.project, ns.run_id)):
             # H5: both ends resolved and contained before any write / unlink.
             src, dst = _contained(ctx.repo, f), _contained(wt, f)
             if src is None or dst is None:

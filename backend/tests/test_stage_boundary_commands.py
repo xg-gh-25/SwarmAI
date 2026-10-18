@@ -662,7 +662,7 @@ def test_stage_start_deliver_scope_experts_and_prompts(ws, capsys):
     ("bugfix", None, 60, 0, [], {"correctness", "security"}),       # bugfix default
     ("bugfix", "refactor", 60, 0, [],
      {"correctness", "api-contract", "integration", "red-team"}),   # refactor rule
-    ("full", None, 150, 100, [], {"correctness", "red-team"}),      # > 200 lines
+    ("full", None, 150, 100, [], {"correctness", "security", "red-team"}),  # > 200 lines; strict → security
 ])
 def test_dispatch_rules(profile, work_type, ins, dels, required, expect):
     scope = {"changed_files": [{"path": "docs/x.md", "status": "M", "added": ins, "removed": dels}],
@@ -950,3 +950,417 @@ def test_deliver_report_failure_does_not_advance(ws, capsys, monkeypatch):
     assert not (rd / "REPORT.md").exists()
     assert reg.get_pipeline_state(PROJECT) == "deliver"
     assert "REPORT.md gate" in out["next_action"]
+
+
+# ── dispatch scope norms: source-only size, one security owner, review list ──
+
+def _scope(files):
+    """files = [(path, status, added, removed)] → a scope dict shaped like
+    _changed_files_scope's output (is_test + source counts derived the same way)."""
+    changed = [{"path": p, "status": s, "added": a, "removed": r,
+                "is_test": cli._is_test_path(p)} for p, s, a, r in files]
+    src = [c for c in changed if not c["is_test"]]
+    ins = sum(c["added"] for c in changed)
+    s_ins = sum(c["added"] for c in src)
+    return {"changed_files": changed, "diff_insertions": ins,
+            "diff_deletions": sum(c["removed"] for c in changed),
+            "source_insertions": s_ins, "source_deletions": sum(c["removed"] for c in src),
+            "full_tier_override": s_ins > 100}
+
+
+@pytest.mark.parametrize("path,is_test", [
+    ("backend/tests/test_x.py", True), ("backend/core/test_helpers_impl.py", True),
+    ("pkg/thing_test.py", True), ("desktop/src/a.test.ts", True), ("desktop/src/B.spec.tsx", True),
+    ("desktop/src/__tests__/c.tsx", True), ("backend/core/attest.py", False),
+    ("backend/core/contest_rules.py", False), ("backend/scripts/artifact_cli.py", False),
+])
+def test_is_test_path(path, is_test):
+    assert cli._is_test_path(path) is is_test
+
+
+def test_size_escalation_counts_source_lines_only():
+    # 60 source + 300 test lines on a bugfix: the old count (360) forced full tier + red-team.
+    scope = _scope([("backend/core/gate.py", "M", 60, 0),
+                    ("backend/tests/test_security_gate.py", "A", 300, 0)])
+    got = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
+                                                  scope=scope, required=[])}
+    assert got == {"correctness", "security"}
+    # a test path must not fire a file trigger either (test_security_gate.py matches 'security')
+    scope2 = _scope([("backend/core/x.py", "M", 120, 0),
+                     ("backend/tests/test_routers_auth.py", "A", 50, 0)])
+    got2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
+                                                   scope=scope2, required=[])}
+    assert "api-contract" not in got2 and "performance" not in got2
+
+
+def test_large_source_change_still_gets_full_tier_and_red_team():
+    scope = _scope([("backend/core/gate.py", "M", 260, 10)])
+    got = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
+                                                  scope=scope, required=[])}
+    assert {"correctness", "security", "red-team"} <= got
+
+
+def test_strict_profile_gate2_always_carries_security():
+    # docs/x.md matches no security file trigger; before, Gate-2 had no security here
+    scope = _scope([("docs/x.md", "M", 120, 0)])
+    gate2 = {e["id"] for e in cli._dispatch_experts(profile="full", work_type=None,
+                                                    scope=scope, required=[])}
+    assert "security" in gate2
+    review = {e["id"] for e in cli._review_dispatch(profile="full", scope=scope, gate2_ids=gate2)}
+    assert "security" not in review  # one owner per run
+
+
+def test_small_auth_fix_keeps_security_at_review():
+    # 20 lines: Gate-2 dispatches nothing, REVIEW fan-out fires on the auth path → REVIEW owns it
+    scope = _scope([("backend/routers/auth.py", "M", 20, 0)])
+    gate2 = {e["id"] for e in cli._dispatch_experts(profile="bugfix", work_type="bugfix",
+                                                    scope=scope, required=[])}
+    assert gate2 == set()
+    review = {e["id"] for e in cli._review_dispatch(profile="bugfix", scope=scope, gate2_ids=gate2)}
+    assert {"spec-compliance", "code-quality", "security"} <= review
+
+
+def test_review_dispatch_single_pass_when_fanout_does_not_apply():
+    scope = _scope([("backend/core/util.py", "M", 30, 0)])
+    review = cli._review_dispatch(profile="full", scope=scope, gate2_ids=set())
+    assert [e["id"] for e in review] == ["spec-compliance"]
+
+
+def test_review_dispatch_ux_only_for_frontend_source():
+    fe = _scope([("desktop/src/pages/X.tsx", "M", 120, 0)])
+    assert "ux-test" in {e["id"] for e in cli._review_dispatch(profile="full", scope=fe, gate2_ids={"security"})}
+    fe_test_only = _scope([("backend/core/a.py", "M", 120, 0), ("desktop/src/X.test.tsx", "M", 40, 0)])
+    assert "ux-test" not in {e["id"] for e in cli._review_dispatch(
+        profile="full", scope=fe_test_only, gate2_ids={"security"})}
+
+
+def test_stage_start_review_returns_review_list_not_gate2(ws, capsys):
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 120, encoding="utf-8")
+    rid = "run_rev"
+    rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build"],
+                   files_touched=[str(repo / "core" / "a.py")])
+    code, out = _start(reg, capsys, rid, "review")
+    assert code == 0, out
+    assert "experts" not in out
+    ids = [e["id"] for e in out["review_experts"]]
+    assert ids[:2] == ["spec-compliance", "code-quality"] and "security" not in ids
+    assert out["spawn_mode"] == "foreground"
+    assert not (rd / "evidence" / "prompts").exists(), "REVIEW writes no Gate-2 prompt files"
+    assert _run_state(root, rid)["dispatch_plan"]["review"] == ids
+
+
+def test_stage_start_deliver_records_plan_and_foreground(ws, capsys):
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 120, encoding="utf-8")
+    rid = "run_del"
+    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              files_touched=[str(repo / "core" / "a.py")])
+    code, out = _start(reg, capsys, rid, "deliver")
+    assert code == 0, out
+    ids = [e["id"] for e in out["experts"]]
+    assert "security" in ids and out["spawn_mode"] == "foreground"
+    assert _run_state(root, rid)["dispatch_plan"]["deliver"] == ids
+
+
+def test_deliver_adds_security_when_no_stage_owned_it(ws, capsys):
+    # REVIEW ran when Gate-2 would carry security (so REVIEW skipped it); fixes then shrank
+    # the change under 50 lines → Gate-2 alone would dispatch nothing. Nobody reviewed security.
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "routers").mkdir()
+    (repo / "routers" / "auth.py").write_text("z = 3\n" * 20, encoding="utf-8")
+    rid = "run_drift"
+    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              files_touched=[str(repo / "routers" / "auth.py")],
+              dispatch_plan={"review": ["spec-compliance", "code-quality"]})
+    code, out = _start(reg, capsys, rid, "deliver")
+    assert code == 0, out
+    assert "security" in {e["id"] for e in out["experts"]}
+
+
+def test_path_rules_match_repo_relative_not_absolute(tmp_path):
+    """Path rules read the repo-relative path. Absolute paths carry the machine's
+    directory names: a home folder called Desktop matched the frontend rule
+    ``desktop/`` (REVIEW dispatched ux-test for a markdown expert file), and a
+    checkout under a ``tests/`` folder would mark every file as a test."""
+    import subprocess
+    repo = tmp_path / "tests" / "Desktop" / "repo"
+    (repo / "backend" / "core").mkdir(parents=True)
+    src = repo / "backend" / "core" / "auth_store.py"
+    src.write_text("x = 1\n")
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
+    subprocess.run(git + ["add", "."], cwd=repo, check=True)
+    subprocess.run(git + ["commit", "-qm", "init"], cwd=repo, check=True)
+    src.write_text("x = 1\n" + "".join(f"y{i} = {i}\n" for i in range(20)))
+    doc = repo / "backend" / "experts.md"
+    doc.write_text("note\n")
+
+    scope = cli._changed_files_scope([str(src), str(doc)])
+    by_rel = {c["rel"]: c for c in scope["changed_files"]}
+    assert set(by_rel) == {"backend/core/auth_store.py", "backend/experts.md"}
+    assert not any(c["is_test"] for c in scope["changed_files"])
+    assert scope["source_insertions"] == scope["diff_insertions"] == 21
+
+    ids = [e["id"] for e in cli._review_dispatch(profile="full", scope=scope, gate2_ids=set())]
+    assert "ux-test" not in ids
+    assert "code-quality" in ids  # auth_store.py is a sensitive path → fan-out applies
+
+
+def test_pytest_named_source_outside_tests_dir_is_not_a_test(tmp_path):
+    """``*_test.py`` / ``test_*.py`` outside a tests dir count as tests only if they
+    define one: the test RUNNER backend/scripts/pipeline_test.py has none, and
+    misreading it as a test would let its lines skip the size thresholds."""
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "pipeline_test.py").write_text("def run():\n    pass\n")
+    (tmp_path / "scripts" / "eval_gate_test.py").write_text("def test_gate():\n    assert 1\n")
+    (tmp_path / "scripts" / "test_helpers_impl.py").write_text("class TestLike:\n    pass\n")
+    root = str(tmp_path)
+    assert cli._is_test_path("scripts/pipeline_test.py", root=root) is False
+    assert cli._is_test_path("scripts/eval_gate_test.py", root=root) is True
+    assert cli._is_test_path("scripts/test_helpers_impl.py", root=root) is True
+    assert cli._is_test_path("scripts/gone_test.py", root=root) is True  # unreadable → by name
+    assert cli._is_test_path("tests/simple_test.py", root=root) is True  # tests dir wins
+
+
+def test_root_level_models_dir_still_fires_api_contract():
+    """Triggers now match the repo-relative path, so a leading-slash pattern would
+    miss a repo-root ``models/`` folder that the absolute path used to hit."""
+    scope = _scope([("models/user.py", "M", 60, 0)])
+    ids = {e["id"] for e in cli._dispatch_experts(profile="full", work_type="existing-feature",
+                                                   scope=scope, required=None)}
+    assert "api-contract" in ids
+
+
+def test_stage_start_keeps_a_concurrent_run_json_write(ws, capsys, monkeypatch):
+    """stage-start's git calls take seconds; a key another writer puts into run.json
+    meanwhile must survive the dispatch_plan write, and the earlier stage's plan too."""
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "routers").mkdir()
+    (repo / "routers" / "auth.py").write_text("z = 3\n" * 20, encoding="utf-8")
+    rid = "run_race"
+    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              files_touched=[str(repo / "routers" / "auth.py")],
+              dispatch_plan={"review": ["spec-compliance", "code-quality"]})
+    real_scope = cli._changed_files_scope
+    run_file = _run_dir(root, rid) / "run.json"
+
+    def scope_with_writer(files):
+        st = json.loads(run_file.read_text(encoding="utf-8"))
+        st["written_meanwhile"] = True
+        run_file.write_text(json.dumps(st), encoding="utf-8")
+        return real_scope(files)
+
+    monkeypatch.setattr(cli, "_changed_files_scope", scope_with_writer)
+    code, out = _start(reg, capsys, rid, "deliver")
+    assert code == 0, out
+    st = json.loads(run_file.read_text(encoding="utf-8"))
+    assert st.get("written_meanwhile") is True
+    assert st["dispatch_plan"]["review"] == ["spec-compliance", "code-quality"]
+    assert "security" in st["dispatch_plan"]["deliver"]
+
+
+# ── H1 / H5: review rounds counted from completion markers, enforced at stage-complete ──
+
+def test_completed_spawns_counts_per_expert_from_markers(tmp_path, monkeypatch):
+    import config
+    audit = tmp_path / "state" / "pipeline_agent_audit"
+    audit.mkdir(parents=True)
+    monkeypatch.setattr(config, "get_app_data_dir", lambda: tmp_path)
+    rows = [("s1_100", "run_a", 100.0, "security"), ("s1_101", "run_a", 101.0, "security"),
+            ("s1_102", "run_a", 102.0, "gate1-skeptic"), ("s1_103", "run_a", 103.0, None),
+            ("s1_104", "run_b", 104.0, "security"),          # other run
+            ("s1_50", "run_a", 50.0, "security")]            # before the window
+    for name, rid, ts, eid in rows:
+        (audit / f"session_{name}.marker").write_text(json.dumps(
+            {"ts": ts, "event": "SubagentStop", "run_id": rid, "expert_id": eid}))
+    (audit / "session_s1_adv_101.marker").write_text(json.dumps(   # adversarial twin
+        {"ts": 101.0, "run_id": "run_a", "expert_id": "security"}))
+    (audit / "session_s1_105.marker").write_text("[]")  # malformed: skipped, not fatal
+    (audit / "session_s1_106.marker").write_text(json.dumps(    # old daemon: no expert_id key
+        {"ts": 106.0, "event": "SubagentStop", "run_id": "run_a"}))
+    got = cli._completed_spawns("run_a", 90.0, 200.0)
+    assert got == {"by_expert": {"gate1-skeptic": 1, "security": 2}, "unattributed": 1, "legacy": 1}
+    monkeypatch.setattr(config, "get_app_data_dir", lambda: tmp_path / "missing")
+    assert cli._completed_spawns("run_a", 90.0, 200.0) is None  # unreadable → None
+
+
+def _budget_run(root, rid):
+    _make_run(root, rid, "direct",
+              stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
+
+
+def test_stage_complete_refuses_a_third_round_without_a_reason(ws, capsys, monkeypatch):
+    root, reg = ws
+    _budget_run(root, "run_budget")
+    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
+        "by_expert": {"gate1-skeptic": 3, "security": 2}, "unattributed": 1})
+    code, out = _complete(reg, capsys, "run_budget", "plan", _plan_artifact(), {"decisions": DECISION})
+    assert code != 0
+    msgs = json.dumps(out)
+    assert "E_OVER_BUDGET" in msgs and "gate1-skeptic" in msgs and "'security'" not in msgs
+
+
+def test_stage_complete_accepts_a_third_round_with_a_reason_and_reports_budget(ws, capsys, monkeypatch):
+    root, reg = ws
+    _budget_run(root, "run_budget2")
+    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
+        "by_expert": {"gate1-skeptic": 3}, "unattributed": 1})
+    art = _plan_artifact()
+    art["over_budget_reasons"] = {"gate1-skeptic": "second BLOCK on a different constraint"}
+    code, out = _complete(reg, capsys, "run_budget2", "plan", art, {"decisions": DECISION})
+    assert code == 0, out
+    rec = cli._stage_record_of(_run_state(root, "run_budget2"), "plan")
+    b = rec["budget"]
+    assert b["allowance_per_expert"] == 2 and b["over"] == {"gate1-skeptic": 3}
+    assert b["reasons"] == {"gate1-skeptic": "second BLOCK on a different constraint"}
+    assert b["spawns"]["unattributed"] == 1
+
+
+def test_stage_budget_without_stage_start_is_reported_not_enforced(tmp_path):
+    b = cli._stage_budget("run_x", tmp_path, {}, "plan", {})
+    assert b["missing"] == [] and b["spawns"] is None and b["window"].startswith("unknown")
+
+
+def test_stage_budget_clamps_cycles_and_does_not_count_overlays(tmp_path, monkeypatch):
+    import time as _t
+    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {"by_expert": {}, "unattributed": 0})
+    tdir = tmp_path / "evidence" / "tests"
+    tdir.mkdir(parents=True)
+    (tdir / "regression-1.json").write_text(json.dumps({"mode": "regression"}))
+    (tdir / "recheck-1.json").write_text(json.dumps({"mode": "recheck"}))
+    (tdir / "regression-2.json").write_text(json.dumps(
+        {"mode": "regression", "rechecked_from": {"auto": True}}))      # an overlay write
+    (tdir / "latest-regression.json").write_text("{}")
+    first = "2026-01-01T00:00:00+00:00"
+    state = {"stage_timing": {"goal_cycle": {"first_started_at": first,
+                                             "started_at": "2099-01-01T00:00:00+00:00"}}}
+    b = cli._stage_budget("r", tmp_path, state, "goal_cycle", {"cycles_run": 1e6})
+    assert b["allowance_per_expert"] == 2 * 50
+    assert b["test_runs"] == {"recheck": 1, "regression": 1} and b["auto_rechecks"] == 1
+    # the window starts at the FIRST start: a later re-entry does not reset the allowance
+    assert b["stage_seconds"] >= _t.time() - cli._iso_epoch(first) - 5
+    b2 = cli._stage_budget("r", tmp_path, state, "goal_cycle", {"cycles_run": "inf"})
+    assert b2["allowance_per_expert"] == 2
+
+
+def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(ws, capsys):
+    """A run that predates dispatch_plan: whether REVIEW ran security is unknown, so the
+    drift guard must not add a possibly duplicate security round."""
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "routers").mkdir()
+    (repo / "routers" / "auth.py").write_text("z = 3\n" * 20, encoding="utf-8")
+    rid = "run_noplan"
+    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              files_touched=[str(repo / "routers" / "auth.py")])
+    code, out = _start(reg, capsys, rid, "deliver")
+    assert code == 0, out
+    assert "security" not in {e["id"] for e in out["experts"]}
+
+
+def test_stage_complete_names_an_old_daemon_instead_of_blaming_prompts(ws, capsys, monkeypatch):
+    root, reg = ws
+    _budget_run(root, "run_legacy")
+    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
+        "by_expert": {}, "unattributed": 0, "legacy": 3})
+    code, out = _complete(reg, capsys, "run_legacy", "plan", _plan_artifact(), {"decisions": DECISION})
+    assert code == 0, out
+    assert any("predates per-expert counting" in w for w in out.get("warnings") or []), out
+
+
+
+# ── gate speed: evidence handed to the gate, not re-read by it ──
+
+def test_diff_pack_has_context_new_files_and_names_what_does_not_fit(tmp_path, monkeypatch):
+    import subprocess
+    repo = tmp_path / "r"
+    (repo / "pkg").mkdir(parents=True)
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    (repo / "pkg" / "a.py").write_text("".join(f"x{i} = {i}\n" for i in range(40)))
+    subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
+    subprocess.run(git + ["add", "."], cwd=repo, check=True)
+    subprocess.run(git + ["commit", "-qm", "i"], cwd=repo, check=True)
+    (repo / "pkg" / "a.py").write_text("".join(f"x{i} = {i}\n" for i in range(40)).replace("x20 = 20", "x20 = 99"))
+    (repo / "pkg" / "new.py").write_text("def f():\n    return 1\n")
+    pack = cli._diff_pack([str(repo / "pkg" / "a.py"), str(repo / "pkg" / "new.py")])
+    assert "+x20 = 99" in pack and " x10 = 10" in pack          # the hunk with context
+    assert "+++ b/pkg/new.py (new file)" in pack and "+def f():" in pack
+    monkeypatch.setattr(cli, "DIFF_PACK_MAX_LINES", 5)
+    small = cli._diff_pack([str(repo / "pkg" / "a.py"), str(repo / "pkg" / "new.py")])
+    assert small.splitlines()[0].startswith("# NOT INCLUDED") and "pkg/a.py" in small.splitlines()[0]
+
+
+def test_gate1_prompt_carries_its_six_inputs(ws, capsys):
+    root, reg = ws
+    rid = "run_g1"
+    rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan"])
+    path, warns = cli._write_gate1_prompt(PROJECT, rd, _run_state(root, rid))
+    assert path and not warns, warns
+    text = open(path).read()
+    assert text.splitlines()[0] == "EXPERT-ID: gate1-skeptic"
+    for h in ("### 1. Plan", "### 2. Rejected alternatives", "### 3. TECH.md Blocking Constraints",
+              "### 4. IMPROVEMENT.md What Failed", "### 5. EVALUATE verdict", "### 6. Work type"):
+        assert h in text, h
+    assert "Work type of this task: <work_type>" not in text   # first occurrence substituted
+
+
+def test_stage_start_build_returns_the_assembled_gate1_prompt(ws, capsys):
+    root, reg = ws
+    rid = "run_g1b"
+    _make_run(root, rid, "full", stages=["evaluate", "think", "plan"])
+    code, out = _start(reg, capsys, rid, "build")
+    assert code == 0, out
+    assert out["gate1_prompt_path"].endswith("gate1-skeptic.md") and out["spawn_mode"] == "foreground"
+
+
+def test_expert_prompts_point_at_one_diff_file(ws, capsys):
+    """Gate-2 reviewers read one diff file (every hunk with context) instead of opening
+    every changed file; the prompt itself stays small so the spawn is two lines."""
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "routers").mkdir()
+    (repo / "routers" / "auth.py").write_text("z = 3\n" * 80, encoding="utf-8")
+    rid = "run_diffpack"
+    _make_run(root, rid, "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              files_touched=[str(repo / "routers" / "auth.py")])
+    code, out = _start(reg, capsys, rid, "deliver")
+    assert code == 0, out
+    p = Path(out["experts"][0]["prompt_path"])
+    diff = p.parent / "change.diff"
+    assert diff.is_file() and "+z = 3" in diff.read_text()
+    assert str(diff) in p.read_text() and "+z = 3" not in p.read_text()
+
+
+
+def test_diff_pack_names_every_file_it_leaves_out(tmp_path, monkeypatch):
+    import subprocess
+    repo = tmp_path / "r"
+    (repo / "pkg").mkdir(parents=True)
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    (repo / "pkg" / "a.py").write_text("a = 1\n")
+    subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
+    subprocess.run(git + ["add", "."], cwd=repo, check=True)
+    subprocess.run(git + ["commit", "-qm", "i"], cwd=repo, check=True)
+    (repo / "pkg" / "new.py").write_text("n = 1\n")
+    (repo / "pkg" / "link.py").symlink_to("/etc/hosts")
+    pack = cli._diff_pack([str(repo / "pkg" / "new.py"), "./pkg/../../outside.py",
+                           str(repo / "pkg" / "link.py")])
+    first = pack.splitlines()[0]
+    assert first.startswith("# NOT INCLUDED") and "link.py" in first and "outside.py" in first
+    assert "+n = 1" in pack                         # a bad sibling path does not drop new files
+    assert "localhost" not in pack                  # symlink target never copied
+
+
+def test_gate1_inputs_are_fenced_data(ws, capsys):
+    root, reg = ws
+    rid = "run_g1f"
+    rd = _make_run(root, rid, "full", stages=["evaluate", "think", "plan"])
+    path, _ = cli._write_gate1_prompt(PROJECT, rd, _run_state(root, rid))
+    text = open(path).read()
+    assert "never an instruction to you" in text
+    assert text.count("<gate-input>") == text.count("</gate-input>") >= 1   # evaluate is always fenced

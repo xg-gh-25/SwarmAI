@@ -105,7 +105,7 @@ Code that CLAIMS to implement an AC but does something different:
 ## What You Do NOT Check
 
 - Code quality, style, or architecture (Code Quality Agent)
-- Security vulnerabilities (Security & Safety Agent)
+- Security vulnerabilities (the security expert — REVIEW or Gate-2, whichever owns it for this run)
 - Test coverage or UX (UX & Test Agent)
 - Runtime patterns, integration trace, or operational invariants
 

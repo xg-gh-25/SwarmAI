@@ -8,6 +8,6 @@ Do NOT trust it. Answer these 4 questions and NOTHING else.
 4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |
    ALREADY-SATISFIED (no-op) | WRONG-FRAME (symptom / wrong layer, not the real state).
 
-SCOPE BUDGET: read at most 4 files, at most 8 tool calls, answer under 250
+SCOPE BUDGET: read at most 3 files, at most 6 tool calls, answer under 250
 words. These 4 questions ARE the whole task — do not expand into a general
 audit of the codebase or the plan.

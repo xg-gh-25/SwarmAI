@@ -2348,3 +2348,24 @@ class TestReviewedPathsCapture:
                     "agent_type": "general-purpose", "cwd": str(nongit)}, None, MagicMock())
         data = json.loads(list((tmp_path / "audit").glob("session_s_adv_*.marker"))[0].read_text())
         assert "reviewed_paths" not in data  # unbounded (back-compat)
+
+
+@pytest.mark.asyncio
+async def test_base_marker_records_expert_id_for_every_completed_subagent(tmp_path, monkeypatch):
+    """The per-sub-agent marker carries the EXPERT-ID too, not only the _adv_ marker:
+    a gate that is not classified adversarial (e.g. a Gate-0 skeptic) must still be
+    counted per id by stage-complete (pipeline-run-budget H1)."""
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    transcript = tmp_path / "sub.jsonl"
+    transcript.write_text(
+        '{"isSidechain": true, "type": "user", "message": {"content": '
+        '"EXPERT-ID: gate0-skeptic\\n\\nSummarize where the prompt is built."}}\n'
+    )
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-g0"})
+    await hook({"agent_id": "a-9", "agent_transcript_path": str(transcript), "agent_type": "Explore"},
+               None, MagicMock())
+    base = [p for p in tmp_path.glob("session_sess-g0_*.marker") if "_adv_" not in p.name]
+    assert len(base) == 1
+    assert json.loads(base[0].read_text())["expert_id"] == "gate0-skeptic"
+    assert not list(tmp_path.glob("session_sess-g0_adv_*.marker"))
