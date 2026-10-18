@@ -3959,6 +3959,94 @@ class TestDiskCheckVerification:
         }
 
 
+class TestRedTeamTrigger:
+    """Gate-2 Red Team rule, HIGH half: a specialist HIGH/CRITICAL (resolved or
+    not) on a strict profile requires adversarial_review.red_team_dispatched (or a
+    red-team-attributed finding). Checked on BOTH the publish/stage-complete gate
+    (validate_artifact_data) and the completion gate (_check_depth)."""
+
+    @staticmethod
+    def _art(findings, **ar_extra):
+        import copy
+        from scripts.pipeline_validator import STAGE_TEMPLATES
+        art = copy.deepcopy(STAGE_TEMPLATES["deliver"])
+        art["adversarial_review"]["findings"] = findings
+        art["adversarial_review"].pop("red_team_dispatched", None)
+        art["adversarial_review"].update(ar_extra)
+        return art
+
+    @staticmethod
+    def _high(sev="HIGH", who="security"):
+        return {"severity": sev, "confidence": 9, "resolved": True, "specialist": who,
+                "finding": "backend/a.py f() line 3: injection. Fixed: param query."}
+
+    @staticmethod
+    def _rt_errors(errors):
+        return [e for e in errors if "Red Team required" in e]
+
+    def test_template_passes_with_red_team_field(self):
+        from scripts.pipeline_validator import STAGE_TEMPLATES, validate_artifact_data
+        assert "red_team_dispatched" in STAGE_TEMPLATES["deliver"]["adversarial_review"]
+        assert STAGE_TEMPLATES["deliver"]["adversarial_review"]["findings"][0]["specialist"]
+        assert validate_artifact_data("deliver", STAGE_TEMPLATES["deliver"], profile="full") == []
+
+    @pytest.mark.parametrize("profile", ["full", "bugfix", "goal", "direct", "standard"])
+    def test_specialist_high_without_red_team_blocks_strict(self, profile):
+        from scripts.pipeline_validator import validate_artifact_data, _check_depth
+        art = self._art([self._high()])
+        post = "2026-10-19T00:00:00+00:00"   # created after RED_TEAM_CUTOVER → enforced
+        pub = self._rt_errors(validate_artifact_data("deliver", art, profile=profile,
+                                                     run_created_at=post))
+        assert len(pub) == 1 and "security" in pub[0] and "injection" in pub[0], pub
+        dep = self._rt_errors(_check_depth("deliver", art, profile, run_id="",
+                                           run_created_at=post))
+        assert len(dep) == 1 and dep[0].startswith("Depth: "), dep
+
+    @pytest.mark.parametrize("profile", ["trivial", "docs", "research"])
+    def test_relaxed_profiles_exempt(self, profile):
+        from scripts.pipeline_validator import _red_team_trigger_errors
+        assert _red_team_trigger_errors(self._art([self._high()])["adversarial_review"],
+                                        profile) == []
+
+    @pytest.mark.parametrize("findings,extra,blocked", [
+        ([{"severity": "CRITICAL", "confidence": 9, "resolved": False,
+           "specialist": "correctness", "finding": "x"}], {}, True),
+        ([{"severity": "critical", "resolved": True, "finding": "x"}], {}, True),
+        ([{"severity": "MED", "confidence": 9, "resolved": True,
+           "specialist": "correctness", "finding": "x"}], {}, False),
+        ([{"severity": "LOW", "resolved": True, "specialist": "security", "finding": "x"}],
+         {}, False),
+        ([], {}, False),
+        (["not a dict", {"severity": "HIGH", "resolved": True, "specialist": "red_team",
+                         "finding": "x"}], {}, False),
+        ([{"severity": "HIGH", "resolved": True, "specialist": ["red-team"],
+           "finding": "x"}], {}, False),
+        ([{"severity": "HIGH", "resolved": True, "specialist": "security",
+           "finding": "x"}], {"red_team_dispatched": "true"}, False),
+        ([{"severity": "HIGH", "resolved": True, "specialist": "security",
+           "finding": "x"}], {"red_team_dispatched": 0}, True),
+        ([{"severity": "HIGH", "resolved": True, "specialist": "security",
+           "finding": "x"}], {"red_team_dispatched": "yes please"}, True),
+    ])
+    def test_trigger_matrix(self, findings, extra, blocked):
+        from scripts.pipeline_validator import _red_team_trigger_errors
+        ar = self._art(findings, **extra)["adversarial_review"]
+        assert bool(_red_team_trigger_errors(ar, "full")) is blocked
+
+    def test_error_names_findings_and_remedy(self):
+        from scripts.pipeline_validator import _red_team_trigger_errors, structure_errors
+        highs = [self._high(who=f"security-{i}") for i in range(5)]
+        err = _red_team_trigger_errors(self._art(highs)["adversarial_review"], "full")[0]
+        assert "5 specialist HIGH/CRITICAL" in err and "(+2 more)" in err
+        assert "EXPERT-ID: red-team" in err and "red_team_dispatched: true" in err
+        assert "EXPERT-ID marker" in err
+        s = structure_errors("deliver", [err])[0]
+        assert (s["code"], s["path"]) == ("E_RED_TEAM_REQUIRED",
+                                          "adversarial_review.red_team_dispatched")
+        dep = structure_errors("deliver", ["Depth: " + err])[0]
+        assert dep["code"] == "E_RED_TEAM_REQUIRED"
+
+
 class TestSecurityBoundaries:
     """Design-time security: when EVALUATE classified cross_boundary.value==true,
     the PLAN design_doc must carry a security_boundaries block whose entries each

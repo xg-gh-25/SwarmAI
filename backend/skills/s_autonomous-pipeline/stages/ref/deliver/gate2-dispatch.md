@@ -114,7 +114,29 @@ Runs AFTER the specialists complete, because it takes their findings as input (a
 roughly 30s when triggered). Dispatch ONLY IF the source changeset is > 200 lines OR any
 specialist produced a HIGH finding; otherwise skip it and say why in the gate outcome.
 (`stage-start` already lists `red-team` when the size rule fires; the HIGH rule is
-yours to apply after the merge.)
+yours to apply after the merge, and the validator checks it.)
+
+**`[GATE·validator]` HIGH trigger is mechanical** (strict profiles; trivial/docs/research
+exempt): every finding records its producer in `specialist` — the reviewer's EXPERT-ID.
+`stage-start`'s prompt files fill the output format's `"specialist"` with it; with the
+`spawn_prompt.py` fallback, replace `<name>` with the EXPERT-ID yourself (`red-team` for
+Red Team findings; meta-review, skeptic, probe, convergence and doc-sync findings name
+their producer).
+`adversarial_review.red_team_dispatched` (`true` / `false`) claims whether the Red Team
+ran. A finding counts as a specialist HIGH when its severity (`severity`, else
+`sev`/`level`/`priority`) is HIGH, CRITICAL, BLOCK(ER), P0/P1 or a number ≥ 8, resolved or
+not, and its `specialist` names a Gate-2 registry id (`backend/experts/code/*.md` except
+red-team) or is missing (fail-closed). `findings[]`, `specialists[].findings` and
+`iterations[].findings` all count. Labels starting with "red-team" ("red-team (opus)",
+or an unattributed "Red Team: …") are the Red Team's own and never trigger it. Then
+`publish` and `stage-complete` BLOCK (`E_RED_TEAM_REQUIRED`) unless the claim is made,
+and `stage-complete` also requires the red-team EXPERT-ID marker for this run (marker
+store unreadable → allowed with a warning). The trigger also adds `red-team` to
+`required_experts`, so `run-commit` (D7) refuses without that marker on the legacy
+path too. **Cutover:** enforced for runs whose run.json `created_at` ≥
+2026-10-18T06:00:00Z; older runs, and a publish with no run, get the same text as a
+warning. Remedy: spawn the Red Team as below, merge its findings, set
+`red_team_dispatched: true`.
 
 The Red Team sub-agent receives: the checklist `backend/experts/code/red-team.md`, the
 merged specialist findings (so it knows what was already caught), and the changed-file

@@ -292,6 +292,20 @@ def _case_tier_skipped(root):
     return "run_gate3", "deliver", art, {}, "E_ADVERSARIAL_TIER", "adversarial_review.profile_tier"
 
 
+def _specialist_high(sev="HIGH", who="security", resolved=True):
+    return {"severity": sev, "confidence": 9, "resolved": resolved, "specialist": who,
+            "finding": "backend/a.py run() line 7: shell=True on input. Fixed: list argv."}
+
+
+def _case_red_team_missing(root):
+    # Gate-2 HIGH half: a specialist HIGH (even RESOLVED) without the Red Team.
+    _make_run(root, "run_gate7", "direct", stages=["plan", "build"], created_at=_RT_POST)
+    art = _tmpl("deliver")
+    art["adversarial_review"]["findings"] = [_specialist_high()]
+    return ("run_gate7", "deliver", art, {}, "E_RED_TEAM_REQUIRED",
+            "adversarial_review.red_team_dispatched")
+
+
 def _case_stage_order(root):
     _make_run(root, "run_gate4", "direct")  # plan never completed
     return "run_gate4", "build", _build_artifact(), {"decisions": DECISION}, "E_STAGE_ORDER", "stage"
@@ -313,7 +327,7 @@ def _case_exit_contract_missing(root):
 
 @pytest.mark.parametrize("case", [
     _case_missing_field, _case_invalid_litmus, _case_tier_skipped, _case_stage_order,
-    _case_bad_decision, _case_exit_contract_missing,
+    _case_bad_decision, _case_exit_contract_missing, _case_red_team_missing,
 ], ids=lambda f: f.__name__)
 def test_blocked_stage_complete_writes_nothing(ws, capsys, case):
     root, reg = ws
@@ -492,6 +506,168 @@ def test_deliver_push_ready_stored_false_when_bound_false(ws, capsys):
     assert rec["push_ready"] is False and "meta_review" in rec["push_ready_reason"]
 
 
+# ── Gate-2 Red Team trigger, HIGH half (validator-enforced) ────────────────
+_RT = "red_team_dispatched"
+_RT_POST = "2026-10-19T00:00:00+00:00"   # after RED_TEAM_CUTOVER → enforced
+_RT_PRE = "2026-10-13T01:38:37+00:00"    # before it → grandfathered (warning only)
+
+
+def _rt_markers(root, monkeypatch, run_id, expert_ids, *, readable=True):
+    """Point the marker store at <root>/data and write one SubagentStop marker per
+    expert id for run_id. readable=False → the store dir does not exist."""
+    data = root / "data"
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
+    if not readable:
+        return
+    audit = data / "state" / "pipeline_agent_audit"
+    audit.mkdir(parents=True, exist_ok=True)
+    for i, eid in enumerate(expert_ids):
+        (audit / f"session_s_adv_{i}.marker").write_text(json.dumps(
+            {"ts": i, "event": "SubagentStop", "run_id": run_id, "expert_id": eid}))
+
+
+@pytest.mark.parametrize("profile,findings,extra,blocked", [
+    ("direct", [_specialist_high()], {_RT: True}, False),           # red team ran
+    ("direct", [_specialist_high()], {}, True),                     # ran nowhere
+    ("direct", [_specialist_high()], {_RT: False}, True),
+    ("direct", [_specialist_high()], {_RT: 1}, False),               # a count
+    ("direct", [_specialist_high("CRITICAL", "correctness")], {}, True),
+    ("direct", [_specialist_high("high", "Correctness")], {}, True),  # case-normalized
+    ("direct", [{**_specialist_high(), "specialist": ""}], {}, True),  # unattributed
+    ("direct", [{"severity": "MEDIUM", "confidence": 8, "resolved": True,
+                 "specialist": "correctness", "finding": "a.py x() line 2: y. Fixed: z."}],
+     {}, False),                                                      # MED only
+    ("direct", [_specialist_high(who="red-team")], {}, False),       # own HIGH
+    ("direct", [_specialist_high(who="Red Team")], {}, False),
+    ("direct", [_specialist_high(), _specialist_high("LOW", "red-team")], {}, False),
+    ("direct", [_specialist_high(who="correctness + red-team")], {}, False),
+    ("trivial", [_specialist_high()], {}, False),                    # relaxed profile
+])
+def test_red_team_required_after_specialist_high(ws, capsys, monkeypatch, profile, findings,
+                                                 extra, blocked):
+    root, reg = ws
+    rid = "run_rt"
+    stages = PIPELINE_PROFILES[profile]
+    prior = stages[:stages.index("deliver")]
+    _make_run(root, rid, profile, stages=prior, created_at=_RT_POST)
+    _rt_markers(root, monkeypatch, rid, ["red-team"])   # the Red Team really ran
+    art = _clean_deliver()
+    art["adversarial_review"]["findings"] = findings
+    art["adversarial_review"].pop(_RT, None)
+    art["adversarial_review"].update(extra)
+    before = _snapshot(root)
+    code, out = _complete(reg, capsys, rid, "deliver", art, {})
+    hits = [e for e in out.get("errors", []) if e["code"] == "E_RED_TEAM_REQUIRED"]
+    if blocked:
+        assert code == 1 and hits, out
+        assert "red-team" in hits[0]["message"] and "red_team_dispatched" in hits[0]["message"]
+        assert _snapshot(root) == before, "a blocked stage-complete must write nothing"
+    else:
+        assert not hits, hits
+        assert code == 0, out
+
+
+def _rt_publish(reg, capsys, art, run_id):
+    args = SimpleNamespace(project=PROJECT, type="delivery", data=json.dumps(art),
+                           producer="s_autonomous-pipeline", summary="s", topic="",
+                           stage="deliver", run_id=run_id, quiet=True)
+    code = 0
+    try:
+        cli.cmd_publish(args, reg)
+    except SystemExit as e:
+        code = e.code
+    cap = capsys.readouterr()
+    return code, [json.loads(ln) for ln in cap.err.splitlines() if ln.strip().startswith("{")]
+
+
+def test_red_team_required_on_legacy_publish(ws, capsys):
+    root, reg = ws
+    art = _clean_deliver()
+    art["adversarial_review"]["findings"] = [_specialist_high()]
+    # Enforced run → the publish is refused with the structured code.
+    _make_run(root, "run_pub_new", "direct", stages=["plan", "build"], created_at=_RT_POST)
+    code, err = _rt_publish(reg, capsys, art, "run_pub_new")
+    assert code == 1 and err[-1]["validation_failed"] is True
+    assert {"code": "E_RED_TEAM_REQUIRED", "path": "adversarial_review.red_team_dispatched"} \
+        in err[-1]["structured_errors"], err
+    # A run created before the cutover → warning only, the publish goes through.
+    _make_run(root, "run_pub_old", "direct", stages=["plan", "build"], created_at=_RT_PRE)
+    code, err = _rt_publish(reg, capsys, art, "run_pub_old")
+    assert code == 0 and not any(e.get("validation_failed") for e in err)
+    assert any("Red Team required" in e.get("warning", "") for e in err), err
+    assert "required_experts" not in _run_state(root, "run_pub_old")
+    # No run at all (legacy publish) → warning only; it then fails closed on the
+    # missing --run-id (exit 3), never on the Red Team rule.
+    code, err = _rt_publish(reg, capsys, art, None)
+    assert code == 3 and not any(e.get("validation_failed") for e in err)
+    assert any("Red Team required" in e.get("warning", "") for e in err), err
+
+
+def _rt_claimed_deliver():
+    art = _clean_deliver()
+    art["adversarial_review"]["findings"] = [_specialist_high()]
+    art["adversarial_review"][_RT] = True          # the claim the marker must back
+    return art
+
+
+def test_red_team_claim_without_marker_is_refused(ws, capsys, monkeypatch):
+    root, reg = ws
+    _make_run(root, "run_rt_nomark", "direct", stages=["plan", "build"], created_at=_RT_POST)
+    _rt_markers(root, monkeypatch, "run_rt_nomark", ["correctness", "security"])
+    _rt_markers(root, monkeypatch, "run_sibling", ["red-team"])  # another run's marker
+    before = _snapshot(root)
+    code, out = _complete(reg, capsys, "run_rt_nomark", "deliver", _rt_claimed_deliver(), {})
+    hits = [e for e in out["errors"] if e["code"] == "E_RED_TEAM_REQUIRED"]
+    assert code == 1 and hits and "EXPERT-ID marker" in hits[0]["message"], out
+    assert _snapshot(root) == before, "a refused stage-complete writes nothing"
+
+
+def test_red_team_marker_passes_and_is_declared_for_run_commit(ws, capsys, monkeypatch):
+    root, reg = ws
+    _make_run(root, "run_rt_ok", "direct", stages=["plan", "build"], created_at=_RT_POST,
+              required_experts=["correctness"])
+    _rt_markers(root, monkeypatch, "run_rt_ok", ["correctness", "red-team"])
+    code, out = _complete(reg, capsys, "run_rt_ok", "deliver", _rt_claimed_deliver(), {})
+    assert code == 0, out
+    assert _run_state(root, "run_rt_ok")["required_experts"] == ["correctness", "red-team"]
+
+
+def test_red_team_marker_store_unreadable_fails_open(ws, capsys, monkeypatch):
+    root, reg = ws
+    _make_run(root, "run_rt_open", "direct", stages=["plan", "build"], created_at=_RT_POST)
+    _rt_markers(root, monkeypatch, "run_rt_open", [], readable=False)
+    code, out = _complete(reg, capsys, "run_rt_open", "deliver", _rt_claimed_deliver(), {})
+    assert code == 0, out
+    assert any("Red Team marker NOT verified" in w for w in out["warnings"]), out
+    assert "red-team" in _run_state(root, "run_rt_open")["required_experts"]
+
+
+def test_red_team_grandfathered_run_warns_and_completes(ws, capsys, monkeypatch):
+    root, reg = ws
+    _make_run(root, "run_rt_old", "direct", stages=["plan", "build"], created_at=_RT_PRE)
+    _rt_markers(root, monkeypatch, "run_rt_old", [])
+    art = _clean_deliver()
+    art["adversarial_review"]["findings"] = [_specialist_high()]   # no claim, no marker
+    art["adversarial_review"].pop(_RT, None)
+    code, out = _complete(reg, capsys, "run_rt_old", "deliver", art, {})
+    assert code == 0, out
+    assert any("Red Team required" in w and "grandfathered" in w for w in out["warnings"])
+    assert "required_experts" not in _run_state(root, "run_rt_old")
+
+
+def test_red_team_legacy_run_update_declares_red_team(ws, capsys, monkeypatch):
+    root, reg = ws
+    _make_run(root, "run_rt_leg", "direct", stages=["plan", "build"], created_at=_RT_POST)
+    aid = reg.publish(project=PROJECT, artifact_type="delivery", data=_rt_claimed_deliver(),
+                      producer="s_autonomous-pipeline", summary="s", run_id="run_rt_leg")
+    rec = {"stage": "deliver", "status": "completed", "artifact_id": aid,
+           "stage_doc_consumed": True}
+    cli.cmd_run_update(_run_update_args("run_rt_leg", stage_json=json.dumps(rec)), reg)
+    assert _run_state(root, "run_rt_leg")["required_experts"] == ["red-team"]
+    cli.cmd_run_update(_run_update_args("run_rt_leg", stage_json=json.dumps(rec)), reg)
+    assert _run_state(root, "run_rt_leg")["required_experts"] == ["red-team"]  # idempotent
+
+
 def _direct_run_with_manual_contract(root, reg, capsys, rid, **extra):
     """A direct run whose PLAN (via stage-complete) declares one manual criterion,
     with build recorded completed — deliver's bound is then judgeable (MED-5)."""
@@ -648,6 +824,8 @@ def test_stage_start_deliver_scope_experts_and_prompts(ws, capsys):
         if "prompt_path" in e:
             body = Path(e["prompt_path"]).read_text(encoding="utf-8")
             assert body.startswith(f"EXPERT-ID: {e['id']}")
+            # The output format names the real producer (deliver's Red Team gate reads it).
+            assert f'"specialist":"{e["id"]}"' in body and '"specialist":"<name>"' not in body
             assert Path(e["prompt_path"]).parent == rd / "evidence" / "prompts"
     assert all("prompt_path" in e for e in out["experts"]), out["warnings"]
     assert "You are a specialist code reviewer" not in json.dumps(out), \
@@ -1364,3 +1542,25 @@ def test_gate1_inputs_are_fenced_data(ws, capsys):
     text = open(path).read()
     assert "never an instruction to you" in text
     assert text.count("<gate-input>") == text.count("</gate-input>") >= 1   # evaluate is always fenced
+
+
+def test_stage_budget_counts_from_the_runner_run_index(tmp_path, monkeypatch):
+    """pipeline_test.py prunes timestamped evidence to 3 per mode, so the budget
+    counts from its append-only tests/run_index.json: every run in the stage window,
+    overlays as auto-rechecks, entries outside the window skipped."""
+    import time as _t
+    monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {"by_expert": {}, "unattributed": 0})
+    tdir = tmp_path / "evidence" / "tests"
+    tdir.mkdir(parents=True)
+    now = _t.time()
+    index = [{"kind": "run", "mode": "verify", "ts": now - 10 - i} for i in range(5)]
+    index += [{"kind": "run", "mode": "recheck", "ts": now - 5, "auto_recheck_of": "verify"},
+              {"kind": "overlay", "mode": "verify", "ts": now - 4},
+              {"kind": "run", "mode": "verify", "ts": now - 10 ** 6},   # before the stage
+              "garbage", {"kind": "run", "mode": "tdd"}]               # no ts: skipped
+    (tdir / "run_index.json").write_text(json.dumps(index))
+    (tdir / "verify-20260101T000000.json").write_text("{}")             # pruned remnant
+    state = {"stage_timing": {"test": {"first_started_at": "2026-01-01T00:00:00+00:00"}}}
+    monkeypatch.setattr(cli, "_iso_epoch", lambda s: now - 3600 if s else None)
+    b = cli._stage_budget("r", tmp_path, state, "test", {})
+    assert b["test_runs"] == {"recheck": 1, "verify": 5} and b["auto_rechecks"] == 1

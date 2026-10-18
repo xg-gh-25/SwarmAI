@@ -166,6 +166,260 @@ def _blocked_findings(
     return blocked
 
 
+# ── Gate-2 Red Team trigger (HIGH half) ──
+# deliver's rule: "spawn the Red Team when the source changeset > 200 lines OR any
+# specialist found a HIGH". stage-start applies the size half (it lists `red-team`
+# in `experts`); it cannot see findings, so the HIGH half used to be prose-only.
+# This enforces it on the artifact: each finding names its producer in `specialist`
+# (the field the gate2-adversarial prompt already makes every reviewer emit), and
+# `adversarial_review.red_team_dispatched` records that the Red Team ran.
+_RED_TEAM_TOKEN = "redteam"   # "red-team" / "Red Team" / "red_team" normalized
+_SPECIALIST_SPLIT_RE = re.compile(r"\s*(?:[+,;/&]|\band\b)\s*", re.IGNORECASE)
+# Grandfathering cutover. Runs CREATED before it predate the per-finding
+# `specialist` field (every old HIGH is unattributed, so all would trigger): for
+# them the rule is a WARNING (same text), never a block. Keyed on run.json
+# `created_at` (written by run-create), NEVER on whether the new fields are
+# present — omitting `specialist` must not be a way to dodge the gate.
+RED_TEAM_CUTOVER = "2026-10-18T06:00:00Z"
+_RED_TEAM_GRANDFATHER_NOTE = (f" [grandfathered: run created before {RED_TEAM_CUTOVER} "
+                              "— warning only]")
+# Producers that merge HIGHs into findings[] but are NOT Gate-2 specialists
+# (normalized-token PREFIXES): meta-review, gate0/gate1 skeptic, fresh-user and
+# user-value probes, convergence, doc-sync, completion audit.
+_NON_SPECIALIST_PREFIXES = ("metareview", "meta", "gate0", "gate1", "skeptic",
+                            "freshuser", "uservalue", "convergence", "docsync",
+                            "completionaudit")
+# Gate-2 specialist ids used if backend/experts/code/ cannot be listed. Unioned
+# with the live registry, so an unreadable registry never shrinks the set.
+_GATE2_SPECIALIST_FALLBACK = frozenset({
+    "apicontract", "codequality", "concurrency", "correctness", "integration",
+    "operational", "performance", "security", "speccompliance", "statemachine",
+    "uxtest",
+})
+_EXPERTS_CODE_DIR = Path(__file__).resolve().parent.parent / "experts" / "code"
+_gate2_specialist_cache: "frozenset[str] | None" = None
+# An unattributed finding whose text starts with a red-team label ("Red Team: …",
+# "[red-team round-1] …") is the Red Team's own.
+_RED_TEAM_TEXT_RE = re.compile(r"^\W*red[\s_-]*team\b", re.IGNORECASE)
+# Severity words that mean HIGH for this check. Gate-2 prompts and experts emit
+# HIGH|MED|LOW; artifacts also carry CRITICAL, spec-compliance's BLOCK, P0/P1.
+_HIGH_SEVERITY_WORDS = frozenset({"HIGH", "CRITICAL", "CRIT", "BLOCKER", "BLOCK",
+                                  "BLOCKING", "P0", "P1"})
+_SEVERITY_NUM_RE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(?:/\s*10)?\s*")
+_FINDING_TEXT_KEYS = ("finding", "summary", "title", "issue", "description")
+
+
+def _norm_producer(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _gate2_specialist_ids() -> "frozenset[str]":
+    """Normalized Gate-2 specialist ids: the expert registry (backend/experts/code/
+    *.md stems, i.e. the EXPERT-IDs) minus red-team, plus the shipped fallback."""
+    global _gate2_specialist_cache
+    if _gate2_specialist_cache is None:
+        ids = set(_GATE2_SPECIALIST_FALLBACK)
+        try:
+            ids.update(_norm_producer(p.stem) for p in _EXPERTS_CODE_DIR.glob("*.md"))
+        except OSError as e:
+            print(f"[pipeline_validator] expert registry unreadable ({e}); "
+                  "using the shipped specialist ids", file=sys.stderr)
+        ids.discard(_RED_TEAM_TOKEN)
+        ids.discard("")
+        _gate2_specialist_cache = frozenset(ids)
+    return _gate2_specialist_cache
+
+
+def _specialist_tokens(value: object) -> list[str]:
+    """Normalize a finding's `specialist` (str or list of str) into alnum-only
+    lowercase tokens. A merged MULTI-SPECIALIST finding ("correctness + red-team")
+    yields one token per producer. Absent/blank → [] (unattributed)."""
+    parts = value if isinstance(value, list) else [value]
+    tokens: list[str] = []
+    for p in parts:
+        if not isinstance(p, str):
+            continue
+        for piece in _SPECIALIST_SPLIT_RE.split(p):
+            tok = re.sub(r"[^a-z0-9]", "", piece.lower())
+            if tok:
+                tokens.append(tok)
+    return tokens
+
+
+def _producer_kind(token: str) -> str:
+    """Classify one normalized producer token: "redteam" (STARTS WITH redteam —
+    "red-team (opus)", "Red-Team Specialist"), "other" (a known non-specialist
+    producer, or a name that is no Gate-2 registry id), or "specialist" (names a
+    registry id: "correctness", "Security Specialist", "gate2-api-contract")."""
+    if token.startswith(_RED_TEAM_TOKEN):
+        return "redteam"
+    if token.startswith(_NON_SPECIALIST_PREFIXES):
+        return "other"
+    if any(sid in token for sid in _gate2_specialist_ids()):
+        return "specialist"
+    return "other"
+
+
+def _finding_text(f: dict) -> str:
+    return next((str(f[k]) for k in _FINDING_TEXT_KEYS if f.get(k)), "")
+
+
+def _finding_kinds(f: dict) -> "set[str]":
+    """Producer kinds of a finding. Unattributed (no/blank `specialist`) is
+    {"specialist"} — fail-closed — unless its text starts with a red-team label."""
+    tokens = _specialist_tokens(f.get("specialist"))
+    if not tokens:
+        return {"redteam" if _RED_TEAM_TEXT_RE.match(_finding_text(f)) else "specialist"}
+    return {_producer_kind(t) for t in tokens}
+
+
+def _finding_is_high(f: dict) -> bool:
+    """HIGH for this check. Reads `severity`, else `sev` / `level` / `priority`.
+    A label is HIGH when a word before any "(" is HIGH/CRITICAL/BLOCK(ER)/P0/P1
+    ("HIGH (conf 9)", "HIGH-EQUIV", "critical"); a number is HIGH at >= 8 (a
+    10-point scale, "8" or "9/10")."""
+    for key in ("severity", "sev", "level", "priority"):
+        v = f.get(key)
+        if v is None or isinstance(v, bool) or (isinstance(v, str) and not v.strip()):
+            continue
+        if isinstance(v, (int, float)):
+            return v >= 8
+        label = str(v).upper().split("(", 1)[0]
+        num = _SEVERITY_NUM_RE.fullmatch(label)
+        if num:
+            return float(num.group(1)) >= 8
+        return bool(_HIGH_SEVERITY_WORDS & set(re.findall(r"[A-Z0-9]+", label)))
+    return False
+
+
+def _all_review_findings(ar: dict) -> "list[dict]":
+    """Every finding dict in adversarial_review: `findings[]`,
+    `specialists[].findings` and `iterations[].findings`. A finding nested under a
+    specialists[] entry that has no `specialist` of its own inherits the entry's
+    name (`specialist` / `expert` / `expert_id` / `name`)."""
+    out: "list[dict]" = []
+
+    def add(fs: object, parent: "str | None" = None) -> None:
+        for f in fs if isinstance(fs, list) else []:
+            if isinstance(f, dict):
+                if parent and not _specialist_tokens(f.get("specialist")):
+                    f = {**f, "specialist": parent}
+                out.append(f)
+
+    add(ar.get("findings"))
+    for key in ("specialists", "iterations"):
+        entries = ar.get(key)
+        for e in entries if isinstance(entries, list) else []:
+            if not isinstance(e, dict):
+                continue
+            parent = None
+            if key == "specialists":
+                parent = next((e[k] for k in ("specialist", "expert", "expert_id", "name")
+                               if isinstance(e.get(k), str) and e[k].strip()), None)
+            add(e.get("findings"), parent)
+    return out
+
+
+def _red_team_dispatched(ar: dict) -> bool:
+    """True when the artifact CLAIMS the Red Team ran: `red_team_dispatched` is
+    true / a count >= 1, or some finding is the Red Team's own. A claim only —
+    stage-complete additionally requires the red-team EXPERT-ID marker."""
+    flag = ar.get("red_team_dispatched")
+    if flag is True or (isinstance(flag, str) and flag.strip().lower() == "true"):
+        return True
+    if isinstance(flag, (int, float)) and not isinstance(flag, bool) and flag >= 1:
+        return True
+    return any("redteam" in _finding_kinds(f) for f in _all_review_findings(ar))
+
+
+def _specialist_high_findings(findings: object) -> list[dict]:
+    """HIGH findings (resolved OR not — the rule is "a specialist FOUND a HIGH",
+    fixing it does not un-trigger the Red Team) produced by a Gate-2 specialist.
+    Accepts a findings list or a whole adversarial_review dict (then every
+    finding source counts). Unattributed counts (fail-closed); the Red Team's own
+    and known non-specialist producers (meta-review, skeptic, …) do not."""
+    if isinstance(findings, dict):
+        findings = _all_review_findings(findings)
+    if not isinstance(findings, list):
+        return []
+    return [f for f in findings
+            if isinstance(f, dict) and _finding_is_high(f) and "specialist" in _finding_kinds(f)]
+
+
+def _red_team_triggered(ar: object, profile: str) -> "list[dict]":
+    """The trigger alone, independent of any claim that the Red Team ran: the
+    specialist HIGHs on a strict profile ([] for relaxed profiles / no review)."""
+    if not isinstance(ar, dict) or is_relaxed_profile(normalize_profile(profile)):
+        return []
+    return _specialist_high_findings(ar)
+
+
+def _red_team_enforced(run_created_at: "str | None") -> bool:
+    """True when the Red Team HIGH rule BLOCKS for a run whose run.json
+    `created_at` is given. None = no run known (a publish without --run-id) → not
+    enforced. A present but unparseable value is enforced (fail-closed)."""
+    if run_created_at is None:
+        return False
+    from datetime import datetime, timezone
+    try:
+        ts = datetime.fromisoformat(str(run_created_at).strip().replace("Z", "+00:00"))
+        cut = datetime.fromisoformat(RED_TEAM_CUTOVER.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts >= cut
+
+
+def _red_team_gate(ar: object, profile: str, *, run_created_at: "str | None",
+                   warnings: "list[str] | None" = None, prefix: str = "") -> "list[str]":
+    """The Red Team HIGH rule as a gate: the `_red_team_trigger_errors` message is
+    an ERROR for runs created at/after RED_TEAM_CUTOVER, and a WARNING (same text
+    plus a grandfather note, appended to `warnings`) for older runs or no run."""
+    msgs = _red_team_trigger_errors(ar, profile, prefix)
+    if not msgs or _red_team_enforced(run_created_at):
+        return msgs
+    if warnings is not None:
+        warnings.extend(m + _RED_TEAM_GRANDFATHER_NOTE for m in msgs
+                        if m + _RED_TEAM_GRANDFATHER_NOTE not in warnings)
+    return []
+
+
+def _red_team_trigger_errors(ar: object, profile: str, prefix: str = "") -> list[str]:
+    """Gate-2 HIGH half of the Red Team rule, shared by the publish/stage-complete
+    gate (validate_artifact_data) and the completion gate (_check_depth).
+
+    Strict profiles only (relaxed trivial/docs/research exempt). Returns the
+    message when any specialist HIGH finding exists (`_red_team_triggered`) and
+    `_red_team_dispatched(ar)` is False. The message names the triggering
+    findings and the remedy. Whether it blocks or warns is `_red_team_gate`'s
+    call (the grandfather cutover)."""
+    highs = _red_team_triggered(ar, profile)
+    if not highs or _red_team_dispatched(ar):
+        return []
+    named = []
+    for f in highs[:3]:
+        text = _finding_text(f) or "?"
+        who = f.get("specialist") or "unattributed"
+        sev = next((f[k] for k in ("severity", "sev", "level", "priority") if f.get(k)), "?")
+        named.append(f"[{str(sev).upper()} by {who}] {text[:100]}")
+    more = f" (+{len(highs) - 3} more)" if len(highs) > 3 else ""
+    return [
+        f"{prefix}Red Team required: {len(highs)} specialist HIGH/CRITICAL finding(s) "
+        f"but adversarial_review shows no Red Team run — " + "; ".join(named) + more
+        + ". Gate-2 rule: Red Team runs when source > 200 lines OR any specialist "
+        "found HIGH. Remedy: spawn the red-team expert (EXPERT-ID: red-team) with the "
+        "merged specialist findings — prompt = evidence/prompts/red-team.md if "
+        "stage-start listed it, else `spawn_prompt.py --gate gate2-adversarial` with "
+        "<EXPERT_ID>=red-team and backend/experts/code/red-team.md "
+        "(ref/deliver/gate2-dispatch.md); merge its findings with "
+        "\"specialist\": \"red-team\" and set adversarial_review.red_team_dispatched: "
+        "true. stage-complete also requires the red-team EXPERT-ID marker for this "
+        "run. Every finding records its producer's EXPERT-ID in \"specialist\"; an "
+        "unattributed HIGH counts as a specialist's."
+    ]
+
+
 # Max bytes read when verifying a disk_check locus. A findings file is source
 # code; 2 MB is far beyond any real source file and bounds a pathological read.
 _DISK_CHECK_MAX_BYTES = 2 * 1024 * 1024
@@ -674,8 +928,17 @@ STAGE_TEMPLATES: dict[str, dict] = {
             # MEDIUM with confidence >= CONFIDENCE_GATE_THRESHOLD (7) BLOCKS; absent
             # confidence on an unresolved MEDIUM is fail-closed (also blocks). HIGH
             # blocks regardless. See _blocked_findings().
+            # `specialist` = the producer's EXPERT-ID (carried over from its JSON
+            # line; "red-team" for Red Team findings, "meta-review" etc. for
+            # non-specialists). A HIGH from a Gate-2 registry specialist (or an
+            # unattributed one) requires red_team_dispatched + the red-team marker,
+            # for runs created from RED_TEAM_CUTOVER — see _red_team_gate().
             "findings": [{"severity": "MEDIUM", "confidence": 8, "resolved": True,
+                          "specialist": "correctness",
                           "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
+            # Did the Red Team run (size rule or a specialist HIGH)? Strict profiles
+            # BLOCK a specialist HIGH/CRITICAL without it.
+            "red_team_dispatched": False,
             # Rule 23: HOW the reviewers were spawned (required when spawned=true on a
             # strict profile — blocks a self-review declared as spawned).
             "evidence": "Agent tool: N specialist sub-agents (EXPERT-ID: correctness, "
@@ -2058,6 +2321,7 @@ def _outcome_shape_errors(outcome) -> list[str]:
 
 def validate_artifact_data(
     stage: str, data: dict, profile: str = "full", repo_root: str | None = None,
+    *, run_created_at: str | None = None, warnings: list[str] | None = None,
 ) -> list[str]:
     """Public API: validate artifact data against stage schema.
 
@@ -2075,6 +2339,10 @@ def validate_artifact_data(
                  verify-against-disk reads (deliver stage). None (the default,
                  preserving all existing callers) = no confinement; disk_check
                  loci are absolute paths so no join is performed regardless.
+        run_created_at: run.json `created_at` of the run this artifact belongs to.
+                 Runs created before RED_TEAM_CUTOVER, and None (no run known),
+                 get the Red Team HIGH rule as a warning instead of an error.
+        warnings: optional list that receives those grandfathered warnings.
     """
     errors: list[str] = []
 
@@ -2229,6 +2497,12 @@ def validate_artifact_data(
                 # path, which owns a warnings list — see _check_depth below.
                 _disk_errs, _ = _verify_findings_on_disk(ar.get("findings", []), repo_root)
                 errors.extend(_disk_errs)
+            # Gate-2 Red Team trigger (HIGH half): a specialist HIGH/CRITICAL
+            # requires the Red Team to have run. Strict profiles only; shared
+            # helper with the completion-time gate in _check_depth (R27).
+            # Grandfathered (warning only) for runs before RED_TEAM_CUTOVER.
+            errors.extend(_red_team_gate(ar, profile, run_created_at=run_created_at,
+                                         warnings=warnings))
 
         # --- Three-Layer Governance: Full deliver ceremony enforcement ---
         # For full/bugfix profiles, ALL deliver sub-steps must have evidence.
@@ -2812,7 +3086,8 @@ def _extract_section(text: str, heading: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _check_depth(stage: str, artifact_data: dict, profile: str,
-                 run_id: str = "") -> list[str]:
+                 run_id: str = "", *, run_created_at: str | None = None,
+                 warnings: list[str] | None = None) -> list[str]:
     """Layer 2: validate field values, not just existence.
 
     Catches hollow artifacts where fields exist but content indicates
@@ -2901,6 +3176,13 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                 # join anyway (Gate-1 Attack-3).
                 _disk_errs, _ = _verify_findings_on_disk(ar.get("findings", []))
                 errors.extend(_disk_errs)
+
+            # Gate-2 Red Team trigger (HIGH half) at COMPLETION time — same helper
+            # as validate_artifact_data (R27), so a red_team_dispatched patched away
+            # after publish still blocks `run-update --status completed`. Runs
+            # created before RED_TEAM_CUTOVER (or no run) get a warning instead.
+            errors.extend(_red_team_gate(ar, profile, run_created_at=run_created_at,
+                                         warnings=warnings, prefix="Depth: "))
 
             # Two-field (spawned + evidence) enforcement at COMPLETION time.
             # Mirrors validate_artifact_data:423-445 (publish-time), closing the
@@ -4071,7 +4353,9 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # Only runs when artifact data is available (L0/L1 catch missing data)
     with _CheckGuard("depth", SEVERITY_HARD, errors, warnings, check_results) as _g:
         if artifact_data and stage in ("review", "deliver", "build", "test"):
-            depth_errors = _check_depth(stage, artifact_data, profile, run_id=run_id)
+            depth_errors = _check_depth(stage, artifact_data, profile, run_id=run_id,
+                                        run_created_at=run.get("created_at") or "",
+                                        warnings=warnings)
             errors.extend(depth_errors)
             if not depth_errors:
                 checks_passed += 1
@@ -5227,6 +5511,7 @@ _ERROR_SHAPES: list[tuple[str, "re.Pattern[str]", str]] = [
     ("E_ARTIFACT_MISSING", re.compile(r"^No artifact published for|could not be loaded"), "artifact"),
     ("E_ADVERSARIAL_TIER", re.compile(r"^adversarial_review\.profile_tier="), "adversarial_review.profile_tier"),
     ("E_ADVERSARIAL_SPAWN", re.compile(r"^adversarial_review\.spawned"), "adversarial_review.spawned"),
+    ("E_RED_TEAM_REQUIRED", re.compile(r"Red Team required:"), "adversarial_review.red_team_dispatched"),
     ("E_BLOCKING_FINDINGS", re.compile(r"unresolved blocking finding"), "adversarial_review.findings"),
     ("E_COMPLETION_AUDIT", re.compile(r"^completion_audit"), "completion_audit"),
     ("E_META_REVIEW", re.compile(r"^meta_review missing"), "meta_review"),

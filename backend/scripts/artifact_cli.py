@@ -743,6 +743,10 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
         # run's profile. A strict-here pass is harmless — validation re-runs at
         # completion against the true run's profile.
         _pub_profile = "full"
+        # The named run's created_at decides whether the Red Team HIGH rule blocks
+        # (RED_TEAM_CUTOVER). No run / unreadable run → None → warning only.
+        _pub_created_at = None
+        _pub_warnings: "list[str]" = []
         _explicit_run_id = getattr(args, "run_id", None)
         try:
             if _explicit_run_id:
@@ -761,6 +765,8 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                 try:
                     _own = json.loads(_own_file.read_text(encoding="utf-8"))
                     _pub_profile = _own.get("profile", "full") or "full"
+                    if isinstance(_own, dict):
+                        _pub_created_at = _own.get("created_at") or ""
                 except (FileNotFoundError, json.JSONDecodeError, OSError):
                     pass  # unknown/typo'd run id → "full" (strict, safe)
             # No explicit --run-id → default to "full" (strictest), NEVER read a
@@ -771,7 +777,11 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             # named run's real profile.
         except Exception:
             pass  # Default to "full" if can't determine profile
-        errors = validate_artifact_data(stage, data, profile=_pub_profile)
+        errors = validate_artifact_data(stage, data, profile=_pub_profile,
+                                        run_created_at=_pub_created_at,
+                                        warnings=_pub_warnings)
+        for _w in _pub_warnings:
+            print(json.dumps({"warning": _w}), file=sys.stderr)
         if errors:
             _structured = _structured_errors_safe(stage, errors, data)
             if getattr(args, "quiet", False):
@@ -906,6 +916,20 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             # the orchestrator can fall back to run-update.
             result["auto_recorded"] = False
             print(json.dumps(_core["warning"]), file=sys.stderr)
+        if stage == "deliver" and run_id:
+            # Gate-2 Red Team HIGH trigger: add `red-team` to the run's
+            # required_experts so run-commit's D7 gate demands its marker.
+            _rt_file = (Path(reg.workspace_root) / "Projects" / args.project
+                        / ".artifacts" / "runs" / run_id / "run.json")
+            try:
+                _rt_state = json.loads(_rt_file.read_text(encoding="utf-8"))
+                if _require_red_team_expert(_rt_state, data):
+                    _write_run_atomic(_rt_file, _rt_state)
+                    result["required_experts_added"] = [_RED_TEAM_EXPERT_ID]
+            except (OSError, ValueError, AttributeError) as _rt_err:
+                print(json.dumps({"warning": "Red Team required-expert update failed: "
+                                             f"{type(_rt_err).__name__}: {_rt_err}"}),
+                      file=sys.stderr)
 
         # ── EVALUATE glass-box: hand the agent the rendered "需求理解" block ──
         # The real-time inline emit (evaluate.md §4.6.4 / INSTRUCTIONS.md Phase-2)
@@ -3411,6 +3435,15 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 seen.add(eid)
         run_state["required_experts"] = existing
 
+    # Gate-2 Red Team HIGH trigger on the legacy path: a deliver record linked to
+    # an artifact whose specialist HIGH requires the Red Team adds `red-team` to
+    # required_experts, so run-commit's D7 gate demands its EXPERT-ID marker.
+    try:
+        _require_red_team_expert(run_state, _stage_artifact(args.project, run_state, "deliver"))
+    except Exception as _rt_err:  # never break run-update; say so loudly
+        print(json.dumps({"warning": "Red Team required-expert check failed: "
+                                     f"{type(_rt_err).__name__}: {_rt_err}"}), file=sys.stderr)
+
     run_state["updated_at"] = now
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
@@ -4070,6 +4103,70 @@ def _d7_missing_required_experts(required_experts, run_id: str) -> "list[str]":
     return [e for e in required if e not in completed]
 
 
+_RED_TEAM_EXPERT_ID = "red-team"
+
+
+def _red_team_required_now(run_state: dict, artifact: "dict | None") -> bool:
+    """True when the Gate-2 Red Team HIGH trigger fires on this deliver artifact
+    (a specialist HIGH on a strict profile) for a run the rule is ENFORCED on
+    (run.json created_at >= pipeline_validator.RED_TEAM_CUTOVER). Independent of
+    any `red_team_dispatched` claim — the caller proves the run by its marker."""
+    import pipeline_validator as pv
+    if not isinstance(artifact, dict) or not isinstance(run_state, dict):
+        return False
+    if not pv._red_team_enforced(run_state.get("created_at") or ""):
+        return False
+    return bool(pv._red_team_triggered(artifact.get("adversarial_review"),
+                                       run_state.get("profile") or "full"))
+
+
+def _require_red_team_expert(run_state: dict, artifact: "dict | None") -> bool:
+    """Append `red-team` to run_state["required_experts"] when the Red Team
+    trigger fires (`_red_team_required_now`), so run-commit's D7 gate refuses
+    unless the red-team EXPERT-ID marker exists for this run. This closes the
+    legacy path (publish / run-update + run-commit) that never passes through
+    stage-complete's own marker check. Append-only and idempotent, like
+    `--add-required-expert`; a malformed (non-list) value is left alone
+    (run-commit warns about it). Returns True when run_state changed."""
+    if not _red_team_required_now(run_state, artifact):
+        return False
+    req = run_state.get("required_experts")
+    if req is None:
+        req = []
+    if not isinstance(req, list):
+        return False
+    if any(isinstance(e, str) and e.strip().lower() == _RED_TEAM_EXPERT_ID for e in req):
+        return False
+    run_state["required_experts"] = [*req, _RED_TEAM_EXPERT_ID]
+    return True
+
+
+def _red_team_marker_errors(run_id: str, run_state: dict, artifact: "dict | None",
+                            errors: "list[str]", warnings: "list[str]") -> "list[str]":
+    """stage-complete --stage deliver: when the Red Team trigger fires, the
+    red-team expert must have left its EXPERT-ID marker for THIS run — the
+    artifact's own claim is not enough. Marker store unreadable → allow with a
+    warning (fail-open, same contract as D7). Returns new errors (empty when the
+    claim error is already in `errors`, so the remedy is stated once)."""
+    if (not _red_team_required_now(run_state, artifact)
+            or any("Red Team required" in e for e in errors)):
+        return []
+    done = _d7_completed_expert_ids(run_id)
+    if done is None:
+        warnings.append("Red Team marker NOT verified: the adversarial marker store is "
+                        "unreadable (fail-open). run-commit re-checks it via required_experts.")
+        return []
+    if _RED_TEAM_EXPERT_ID in done:
+        return []
+    return ["Red Team required: a specialist HIGH triggered the Red Team, but no "
+            "red-team EXPERT-ID marker exists for this run — the "
+            "adversarial_review.red_team_dispatched claim alone is not proof. Spawn the "
+            "red-team expert with a prompt whose first line is `EXPERT-ID: red-team` "
+            "(evidence/prompts/red-team.md, or spawn_prompt.py --gate gate2-adversarial; "
+            "ref/deliver/gate2-dispatch.md), merge its findings, then re-run "
+            "stage-complete."]
+
+
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
 
@@ -4151,6 +4248,18 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     # Only a run that DECLARED a non-empty required_experts AND is missing at least one
     # is refused. `--force` (operator override) bypasses, mirroring the push_ready gate.
     _required = run_state.get("required_experts")
+    # Gate-2 Red Team HIGH trigger, re-derived here from the deliver artifact so a
+    # path that never persisted it (publish without --run-id, a hand-edited
+    # run.json) still needs the red-team marker. In-memory only.
+    _rt_probe = {"created_at": run_state.get("created_at"),
+                 "profile": run_state.get("profile"),
+                 "required_experts": list(_required) if isinstance(_required, list) else None}
+    try:
+        if _require_red_team_expert(_rt_probe, _stage_artifact(args.project, run_state, "deliver")):
+            _required = _rt_probe["required_experts"]
+    except Exception as _rt_err:  # an unreadable artifact must not crash run-commit
+        print(json.dumps({"warning": "Red Team trigger check skipped: "
+                                     f"{type(_rt_err).__name__}: {_rt_err}"}), file=sys.stderr)
     # A present-but-malformed required_experts (dict/str, not a list) silently skips D7
     # under the isinstance guard below — make that LOUD (Gate-1 LOW): a MISDECLARED run
     # differs from a legacy run; never let a malformed-but-present gate field skip quietly.
@@ -8076,6 +8185,16 @@ def _completed_spawns(run_id: str, since: float, until: float) -> "dict | None":
         return None
 
 
+def _read_run_index(tdir: Path) -> "list | None":
+    """pipeline_test.py's append-only ``tests/run_index.json`` (a JSON list), or None
+    when absent / unreadable (the caller then falls back to counting evidence files)."""
+    try:
+        data = json.loads((tdir / "run_index.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, list) else None
+
+
 def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
                   artifact: "dict | None") -> dict:
     """H1 + H5: what this stage spent — sub-agent rounds per EXPERT-ID (completed,
@@ -8103,7 +8222,22 @@ def _stage_budget(run_id: str, run_dir: Path, run_state: dict, stage: str,
     tests: dict[str, int] = {}
     auto = 0
     tdir = run_dir / "evidence" / "tests"
-    for p in (tdir.glob("*-*.json") if tdir.is_dir() else []):
+    # pipeline_test.py prunes timestamped evidence (3 newest per mode), so counting
+    # files under-counts busy stages. Its append-only tests/run_index.json is the
+    # authority when present; the file glob is the fallback for older runs.
+    index = _read_run_index(tdir)
+    if index is not None:
+        for e in index:
+            if not isinstance(e, dict) or not isinstance(e.get("ts"), (int, float)):
+                continue
+            if not started <= e["ts"] <= now:
+                continue
+            if e.get("kind") == "overlay":
+                auto += 1  # an overlay write, not another test run
+                continue
+            mode = str(e.get("mode") or "?")
+            tests[mode] = tests.get(mode, 0) + 1
+    for p in (tdir.glob("*-*.json") if index is None and tdir.is_dir() else []):
         mode = p.name.split("-", 1)[0]
         if mode == "latest" or not started <= p.stat().st_mtime <= now:
             continue
@@ -8293,7 +8427,11 @@ def _validate_stage_candidate(
         errors += pv._check_skip_justification(cand_rec)
         return errors, warnings
     if artifact is not None:
-        errors += pv.validate_artifact_data(stage, artifact, profile=profile)
+        errors += pv.validate_artifact_data(stage, artifact, profile=profile,
+                                            run_created_at=cand_run.get("created_at") or "",
+                                            warnings=warnings)
+    if stage == "deliver":
+        errors += _red_team_marker_errors(run_id, cand_run, artifact, errors, warnings)
     if stage == "plan":
         errors += pv.validate_exit_criteria(
             (artifact or {}).get("exit_criteria"), required=not is_relaxed_profile(profile))
@@ -8474,6 +8612,8 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         fresh.setdefault("stages", [])
         _set_stage_timing(fresh, stage, "completed_at", now)
         _replace_stage_record(fresh["stages"], cand_rec)
+        if stage == "deliver":
+            _require_red_team_expert(fresh, artifact)  # D7: run-commit re-checks the marker
         if status == "completed":
             for counter in ("resume_attempts", "resume_executions"):
                 if fresh.get(counter, 0) > 0:
@@ -8938,7 +9078,10 @@ def _write_expert_prompts(*, project: str, run_dir: Path, experts: "list[dict]",
             checklist = checklist_file.read_text(encoding="utf-8")[:20000]
         except OSError:
             checklist = f"(no checklist file at {checklist_file} — apply your domain judgment)"
+        # `"specialist":"<name>"` in the output format is filled with the EXPERT-ID:
+        # deliver's Red Team gate reads each finding's `specialist` as its producer.
         text = (base.replace("<EXPERT_ID>", eid).replace("<DOMAIN>", ex["domain"])
+                .replace('"specialist":"<name>"', f'"specialist":"{eid}"')
                 .replace("<requirement from run.json>", (requirement or "")[:1000])
                 .replace("<paste contents of the specialist's .md file>", checklist))
         try:

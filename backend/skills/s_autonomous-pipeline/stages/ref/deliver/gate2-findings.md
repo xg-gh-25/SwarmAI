@@ -90,8 +90,13 @@ only when a convergence fix changes code the original review did not cover.
 ## What to record in the deliver artifact
 
 `adversarial_review`: `spawned`, `profile_tier` (`full` | `lite` | `skipped`), `findings[]`
-(`severity`, `confidence`, `resolved`, `finding` = "path func() line N: issue. Fixed:
-how.", optional `disk_check`), `evidence` (which EXPERT-IDs spawned in the one batch),
-plus optional counts for the report: `specialists_dispatched`, `red_team_dispatched`,
-`after_confidence_gate`, `suppressed`, `multi_confirmed`. The exact accepted shape is the
-`artifact_example` that `stage-start` returns.
+(`severity`, `confidence`, `resolved`, `specialist` = the producer's EXPERT-ID copied
+from its JSON line, e.g. `correctness` / `red-team` / `meta-review`, `finding` = "path
+func() line N: issue. Fixed: how.", optional `disk_check`), `red_team_dispatched`
+(`true` / `false`; a specialist HIGH without it BLOCKS on strict profiles for runs created
+from 2026-10-18T06:00:00Z, and the Red Team is proven by its EXPERT-ID marker, not by
+this claim — `ref/deliver/gate2-dispatch.md`),
+`evidence` (which EXPERT-IDs spawned in the one batch), plus optional counts for the
+report: `specialists_dispatched`, `after_confidence_gate`, `suppressed`,
+`multi_confirmed`. The exact accepted shape is the `artifact_example` that `stage-start`
+returns.

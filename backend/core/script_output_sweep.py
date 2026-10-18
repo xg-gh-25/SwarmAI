@@ -28,12 +28,15 @@ Key exports:
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Optional
 
 from core.canvas_noise import NOISE_SEGMENTS, is_noise_path
+
+logger = logging.getLogger(__name__)
 
 # Mirrors workspace_surface_watcher._WATCHED_EXTENSIONS (the cheap first-pass
 # filter for user-facing deliverables); needs_human_review makes the final call.
@@ -124,6 +127,7 @@ def recent_outputs(root: str, since: float) -> list[str]:
                     hits.append(entry.path)
                     if len(hits) > MAX_HITS:
                         return []
-    except Exception:  # noqa: BLE001 — a display aid must never break the turn
+    except Exception as exc:  # noqa: BLE001 — a display aid must never break the turn
+        logger.warning("script output sweep failed: %s", exc)
         return []
     return sorted(hits)
