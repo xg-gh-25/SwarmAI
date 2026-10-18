@@ -18,7 +18,10 @@ All three layers run in ONE call, `RUN --mode regression` (this replaces the old
 three hand-run commands: `pytest -k <ac tests>`, `grep -rl ... | xargs pytest`, and
 `python -c "import module"`). The runner shards per file, runs in parallel under one
 ~95 s deadline, kills on timeout with a faulthandler stack attached, and caches by
-input digest (unchanged inputs return `cached`, 0 s).
+input digest (unchanged inputs return `cached`, 0 s). An L2 file that passed in this
+run's last verify / regression on the same tree (same HEAD, no changed file edited
+since) is not re-run: its results are reused, counted in the layer, and listed in the
+evidence's `reused_from` with a warning. Editing any changed file re-runs them all.
 
 The old base methodology pointer (`backend/skills/s_qa/INSTRUCTIONS.md`: detect the
 framework, run scoped tests, fix failures with atomic commits) still describes the

@@ -6,9 +6,10 @@ Read when the regression run is red, or before scoring a fix.
 
 ## Regression definition
 
-The runner classifies every failure against a HEAD baseline (it re-runs the failing
-test's whole file, and runs only the failing nodeids in a cached HEAD worktree). You act
-on its `classification`; you no longer judge the class by hand.
+The runner classifies every failure against a HEAD baseline (it runs only the failing
+nodeids in a cached HEAD worktree; a failure that also fails there is pre-existing at
+once, any other failing test's whole file is re-run). You act on its `classification`;
+you no longer judge the class by hand.
 
 | Status (`classification`) | Meaning | Action |
 |--------|---------|--------|

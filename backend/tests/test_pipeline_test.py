@@ -33,6 +33,12 @@ Invariants covered:
 - M1: SIGTERM aborts the child process group and removes the mutation worktree;
   worktrees are added without running repo hooks; deadline clamp + warning
 - M2: evidence carries ``head_sha`` and ``tree_digest`` (current tree, also on a hit)
+- per-file reuse: verify → regression on an unchanged tree re-runs no all-pass L2 file;
+  an edit to ANY changed file (even one loaded only by computed name) re-runs it; only
+  whole, all-pass, non-AC files with the same key are reused; overlays drop rechecked keys
+- a failure that also fails at HEAD is pre-existing with no re-run; HEAD outcomes from
+  another interpreter are discarded
+- selection: a test naming a changed backend/scripts/*.py file (whole name) is selected
 """
 from __future__ import annotations
 
@@ -1246,3 +1252,192 @@ def test_heavy_file_with_history_splits_and_runs_each_test_once(rig, capsys, tmp
 def test_rig_caps_nested_runner_workers(rig):
     rig()
     assert pt._worker_count() == 1
+
+
+# ── per-file reuse between verify / regression calls of one run ─────────────
+def _logged_test(log: Path, name: str, imports: str) -> str:
+    return (f"from pathlib import Path\n{imports}\n\n\n"
+            f"def test_{name}():\n"
+            f"    with Path({str(log)!r}).open('a') as fh:\n"
+            f"        fh.write({name!r} + '\\n')\n")
+
+
+def test_regression_reuses_passing_files_until_a_changed_file_is_edited(rig, capsys, tmp_path):
+    """verify → regression on an unchanged tree re-runs no L2 file (the whole-run cache
+    misses: another mode, other targets); its evidence still counts them. An edit to
+    ANY changed file since — even one no test imports — re-runs every file."""
+    log = tmp_path / "ran.log"
+    repo = rig({
+        "backend/core/alpha_mod.py": "def one():\n    return 1\n",
+        "backend/tests/test_alpha.py": _logged_test(log, "alpha", "from core.alpha_mod import one"),
+        "backend/tests/test_beta.py": _logged_test(log, "beta", "import core.alpha_mod"),
+    })
+    _write(repo, {"backend/core/alpha_mod.py": "def one():\n    return 1  # v2\n",
+                  "docs/notes.md": "v1\n"})
+
+    def ran() -> list[str]:
+        return sorted(log.read_text().split()) if log.exists() else []
+
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 0 and ran() == ["alpha", "beta"], out
+    v = _evidence(tmp_path, "tests/latest-verify.json")
+    assert sorted(v["l2_file_keys"]) == ["backend/tests/test_alpha.py", "backend/tests/test_beta.py"]
+    assert "reused_from" not in v
+
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert code == 0 and out["cached"] is False, out
+    assert ran() == ["alpha", "beta"]  # neither re-ran
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    _assert_c2(ev, "regression")
+    assert ev["reused_from"]["files"] == ["backend/tests/test_alpha.py", "backend/tests/test_beta.py"]
+    assert ev["reused_from"]["tests"] == 2 and ev["reused_from"]["sources"][0]["mode"] == "verify"
+    assert {"backend/tests/test_alpha.py::test_alpha", "backend/tests/test_beta.py::test_beta"} \
+        <= {r["nodeid"] for r in ev["results"] if r["outcome"] == "passed"}
+    assert ev["layers"]["dependency_scoped"] == {"run": True, "tests": 2, "pass": 2}
+    assert ev["layers"]["import_smoke"]["run"] is True  # L3 always runs
+    assert {"backend/tests/test_alpha.py", "backend/tests/test_beta.py"} <= set(ev["selected_files"])
+    assert any(w.startswith("reused 2 test file") for w in ev["warnings"]), ev["warnings"]
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    hit = _evidence(tmp_path, "tests/latest-regression.json")
+    assert out["cached"] is True and "reused_from" not in hit, out  # names the writer's sources
+    assert hit["l2_file_keys"] == ev["l2_file_keys"]
+
+    _write(repo, {"docs/notes.md": "v2: no test imports it, a module may still read it\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert code == 0 and "reused_from" not in _evidence(tmp_path, "tests/latest-regression.json"), out
+    assert ran() == ["alpha", "alpha", "beta", "beta"]
+
+
+def test_file_key_covers_imports_conftests_every_changed_file_and_head(rig, tmp_path):
+    repo = rig({"backend/tests/test_y.py": "def test_y():\n    assert True\n"})
+    _write(repo, {"docs/a.md": "doc\n"})
+    ctx = SimpleNamespace(repo=repo, python=sys.executable)
+    sgraph = pt.build_source_graph(repo, tmp_path / "cache")
+    files = ["backend/tests/test_x.py", "backend/tests/test_y.py"]
+
+    def keys(changed=("docs/a.md",), head="h1"):
+        return pt._l2_file_keys(ctx, files, list(changed), sgraph, head)
+
+    k0 = keys()
+    assert keys() == k0 and k0["backend/tests/test_x.py"] != k0["backend/tests/test_y.py"]
+    _write(repo, {"docs/a.md": "doc v2\n"})  # imported by nobody: still an input of all
+    k1 = keys()
+    assert all(k1[f] != k0[f] for f in files)
+    assert keys(head="h2") != k1
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b + 0\n"})
+    k2 = keys()  # an import of test_x only (not in the changed list passed here)
+    assert k2["backend/tests/test_x.py"] != k1["backend/tests/test_x.py"]
+    assert k2["backend/tests/test_y.py"] == k1["backend/tests/test_y.py"]
+    _write(repo, {"backend/tests/conftest.py": "\n"})
+    assert all(keys()[f] != k2[f] for f in files)
+
+
+def test_reusable_takes_only_whole_all_pass_l2_files_with_the_same_key(tmp_path):
+    t = "backend/tests/test_{}.py".format
+    tdir = tmp_path / "tests"
+    tdir.mkdir()
+    (tdir / "latest-verify.json").write_text(json.dumps({
+        "schema": 1, "mode": "verify", "run_id": RUN_ID, "finished_at": "t1",
+        "l2_file_keys": {t(n): ("old" if n == "d" else "k") for n in "abcdefg"},
+        "runner_errors": [t("c") + "::x"],
+        "results": [{"nodeid": t(n) + "::x", "outcome": "passed"} for n in "acdef"]
+        + [{"nodeid": t("b") + "::x", "outcome": "passed"},
+           {"nodeid": t("b") + "::y", "outcome": "failed", "file": t("b")},
+           {"nodeid": t("a") + "::s", "outcome": "skipped", "file": t("a")}]}))
+    (tdir / "latest-regression.json").write_text(json.dumps({  # another run's evidence
+        "schema": 1, "mode": "regression", "run_id": "run_other", "finished_at": "t9",
+        "l2_file_keys": {t("g"): "k"}, "results": [{"nodeid": t("g") + "::x", "outcome": "passed"}]}))
+    plan = {"targets": {**{t(n): None for n in "abcdeg"}, t("f"): {t("f") + "::x"}},
+            "ac_files": [t("e")]}
+    reused, sources = pt._reusable(tmp_path, RUN_ID, plan, {t(n): "k" for n in "abcdefg"})
+    # b failed, c runner error, d key changed, e AC (L1), f nodeid-scoped, g no own-run result
+    assert sorted(reused) == [t("a")] and len(reused[t("a")]) == 2
+    assert sources == [{"mode": "verify", "finished_at": "t1", "files": 1}]
+
+
+def test_overlay_drops_the_file_keys_of_rechecked_files(tmp_path):
+    x, y = "backend/tests/test_x.py", "backend/tests/test_y.py"
+    base = {"mode": "verify", "finished_at": "t0", "l2_file_keys": {x: "k1", y: "k2"},
+            "results": [{"nodeid": x + "::a", "outcome": "failed", "file": x},
+                        {"nodeid": y + "::b", "outcome": "passed"}],
+            "failures": [{"nodeid": x + "::a", "classification": "new", "outcome": "failed"}],
+            "runner_errors": [], "layers": {}}
+    re_ev = {"results": [{"nodeid": x + "::a", "outcome": "passed", "file": x}],
+             "failures": [], "runner_errors": []}
+    ev = pt._overlay_evidence(tmp_path, base, re_ev, [])
+    assert ev["l2_file_keys"] == {y: "k2"}  # x now passes under a later tree: never reused
+
+
+def test_known_pre_existing_failure_skips_the_reruns(rig, capsys, tmp_path, monkeypatch):
+    """A failure that also fails at HEAD is pre-existing whatever a re-run shows, so only
+    the HEAD lookup runs (no whole-file / prefix re-run); HEAD outcomes stored with
+    another interpreter id are not trusted."""
+    repo = rig({"backend/tests/test_pre.py": (
+        "from core.mod import add\n\n\ndef test_pre():\n    assert add(1, 1) == 3\n")})
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b  # v2\n"})
+    sha = _git(repo, "rev-parse", "HEAD").strip()
+    cache = tmp_path / "cache"
+    cache.mkdir(exist_ok=True)
+    nid = "backend/tests/test_pre.py::test_pre"
+    pt._baseline_path(cache, sha).write_text(json.dumps({nid: "passed", "_python": "other-venv"}))
+    tags: list[str] = []
+    real = pt.run_pytest_targets
+    monkeypatch.setattr(pt, "run_pytest_targets",
+                        lambda ctx, t, d, tag, *a, **k: tags.append(tag) or real(ctx, t, d, tag, *a, **k))
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 0, out
+    assert {f["nodeid"]: f["classification"] for f in out["failures"]} == {nid: "pre-existing"}
+    assert tags == ["base"], tags  # the HEAD lookup only
+    stored = json.loads(pt._baseline_path(cache, sha).read_text())
+    assert stored[nid] == "failed" and stored["_python"] == pt._python_id(sys.executable)
+
+
+def test_selection_adds_tests_that_drive_a_changed_script_by_subprocess(rig, tmp_path):
+    """No import edge reaches a test that runs ``scripts/tool.py`` as a subprocess; naming
+    the script's file ranks it as a direct importer (ahead of a 2-hop importer)."""
+    repo = rig({
+        **TRANS,
+        "backend/scripts/tool.py": "from core.b import val\nprint(val())\n",
+        "backend/tests/test_tool_cli.py": (
+            "import subprocess, sys\nfrom pathlib import Path\n\n\ndef test_cli():\n"
+            "    p = Path(__file__).parents[1] / 'scripts' / 'tool.py'\n"
+            "    assert subprocess.run([sys.executable, str(p)]).returncode == 0\n"),
+        "backend/tests/test_names_mod.py": "def test_m():\n    assert 'mod.py'\n",
+        "backend/tests/test_names_mytool.py": "def test_m():\n    assert 'scripts/mytool.py'\n",
+    })
+    _write(repo, {"backend/scripts/tool.py": "from core.b import val\nprint(val(), 1)\n",
+                  "backend/core/b.py": "def val():\n    return 1  # v2\n"})
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    changed = pt.changed_files(repo, {})
+    sel, _, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph)
+    assert "backend/tests/test_tool_cli.py" in sel
+    assert sel.index("backend/tests/test_tool_cli.py") < sel.index("backend/tests/test_a.py")  # 2 hops
+    assert "backend/tests/test_names_mod.py" not in sel  # only scripts/*.py names count
+    assert "backend/tests/test_names_mytool.py" not in sel  # a whole file name, not a suffix
+    # without a script change the subprocess test is not selected
+    _write(repo, {"backend/scripts/tool.py": "from core.b import val\nprint(val())\n"})
+    sel2, _, _ = pt.select_backend(repo, pt.changed_files(repo, {}), graph, 40, (), sgraph)
+    assert "backend/tests/test_tool_cli.py" not in sel2
+
+
+def test_a_module_loaded_by_computed_name_is_never_served_stale(rig, capsys, tmp_path):
+    """red-team 2026-10-18: no import edge reaches core/plugin_a.py (importlib with a built
+    name), so a per-file key of static imports alone reused a stale pass after it broke."""
+    reg = "from core.registry import load\n\n\ndef test_load():\n    assert load() == 'ok'\n"
+    repo = rig({
+        "backend/core/registry.py": ("import importlib\n\n\ndef load():\n"
+                                     "    return importlib.import_module('core.' + 'plugin_' + 'a').VALUE\n"),
+        "backend/core/plugin_a.py": "VALUE = 'ok'\n",
+        "backend/tests/test_reg.py": reg})
+    _write(repo, {"backend/core/plugin_a.py": "VALUE = 'ok'  # v2\n",
+                  "backend/tests/test_reg.py": reg + "\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    assert code == 0, out
+    _write(repo, {"backend/core/plugin_a.py": "VALUE = 'BROKEN'\n"})
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert code == 1, out
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert "reused_from" not in ev
+    assert [f["nodeid"] for f in ev["failures"]] == ["backend/tests/test_reg.py::test_load"]

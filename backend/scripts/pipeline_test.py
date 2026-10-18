@@ -8,7 +8,8 @@ structured evidence that ``stage-complete`` reads. One call per mode; zero model
 Modes:
 - ``tdd``        only the explicit ``--files`` (max 5); repeat counter per file
 - ``verify``     changed test files + recent failures + transitive importers of changed
-                 modules (reverse import closure, depth ≤ REVERSE_DEPTH; cap 40)
+                 modules (reverse import closure, depth ≤ REVERSE_DEPTH; cap 40) + tests
+                 naming a changed backend/scripts/*.py file (subprocess-driven)
 - ``regression`` L1 ac_coverage tests + L2 dependency scope + L3 import smoke
 - ``recheck``    previous evidence failures + tests affected by files changed since
 - ``probe``      G2 heavy probe with convergence rules (``--name N -- argv...``)
@@ -37,7 +38,22 @@ path (and its closure), pytest config files, the smoke modules (and closure), an
 content of every changed file. A result with a timeout, an ``unknown``
 classification or a runner error is never cached.
 
-Classification (B2, see ``classify_failures``): a failing test's whole FILE is re-run
+Per-file reuse (verify / regression, ``_l2_file_keys`` / ``_reusable``): an L2 test file
+whose every result passed (or skipped) in this run's latest verify or regression is not
+re-run when its per-file key is unchanged; its earlier results are merged in, listed in
+``reused_from`` and named in a warning. The key covers the runner version, interpreter,
+HEAD, pytest configs, the file, its conftest chain and their transitive imports, and
+every changed file (the whole-run key's input set: a module can load a changed file
+without an import edge). So reuse serves re-runs on an unchanged tree: verify then
+regression, a call that was not cacheable, a different selection. AC (L1) files,
+nodeid-scoped targets and files with any failure are always re-run. Counts and
+``layers.dependency_scoped`` include reused results (``reused_from.tests`` says how
+many). Every verify / regression evidence records ``l2_file_keys``; an overlay drops the
+keys of the files its recheck re-ran.
+
+Classification (B2, see ``classify_failures``): a test that ran and failed and also
+fails at HEAD (HEAD outcomes cached per sha + interpreter) is pre-existing at once, with
+no re-run. Any other failing test's whole FILE is re-run
 in its original order (catches order-dependence inside the file). When that passes,
 its shard PREFIX (every shard arg before it, plus its own, original order) is re-run
 too, catching state leaked by another file of the same shard: a reproduced failure is
@@ -610,8 +626,9 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     Order: changed test files, then files that failed recently, then importers of
     changed modules sorted by import distance (direct importers first; with
     ``sgraph`` also transitive importers up to ``depth`` hops), ties broken by how
-    many changed modules a test imports directly. Overflow past ``cap`` is returned
-    as skipped, never dropped silently.
+    many changed modules a test imports directly. A test that names a changed
+    ``backend/scripts/*.py`` file by file name (a subprocess-driven CLI test) ranks as a
+    direct importer. Overflow past ``cap`` is returned as skipped, never dropped silently.
     """
     changed_tests = [f for f in changed if _is_backend_test(f) and (repo / f).is_file()]
     mfiles = _changed_module_files(repo, changed)
@@ -627,6 +644,17 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
             d = dist.get(t)
             if d is not None and d >= 1 and t not in rank:
                 rank[t] = (d, 0)  # direct importers by name already hold (1, -n)
+    # A changed CLI script is often driven by subprocess (``[python, SCRIPTS /
+    # "artifact_cli.py", ...]``): no import edge reaches that test, yet it exercises the
+    # script directly. A test naming the script's file name ranks as a direct importer.
+    scripts = [Path(f).name for f in changed if f.startswith("backend/scripts/")
+               and f.endswith(".py") and (repo / f).is_file()]
+    if scripts:
+        # a whole file name: "x_test.py" must not match inside "test_x_test.py"
+        named = re.compile(r"(?<![\w.-])(?:" + "|".join(map(re.escape, scripts)) + r")\b")
+        for t in graph:
+            if rank.get(t, (2, 0)) > (1, 0) and named.search(_read_text(repo / t)):
+                rank[t] = (1, 0)
     rec = [f for f in dict.fromkeys(recent) if f not in changed_tests and (repo / f).is_file()]
     skip = set(changed_tests) | set(rec)
     importers = [t for t in sorted(rank, key=lambda t: (rank[t], t)) if t not in skip]
@@ -1951,7 +1979,10 @@ def _ensure_worktree(ctx, sha: str, time_left: float) -> Path | None:
 def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
     """nodeid → new | flaky | pre-existing | regression | unknown, within the deadline.
 
-    new: absent at HEAD. Every other backend failure: its whole FILE is re-run in the
+    new: absent at HEAD. pre-existing without any re-run: an observed failure (it ran
+    and failed, ``_rerun_state``) whose HEAD outcome is ``failed`` (looked up first; it
+    skips the order-dependence probe, so no ``order_dependent`` info is recorded for it).
+    Every other backend failure: its whole FILE is re-run in the
     current tree in original order (H4: an order-dependent failure reproduces), and
     the nodeid's HEAD outcome is looked up in a reusable worktree (cached per sha in
     ``<cache>/baseline-<sha>-v<N>.json``; only tests that reached a call report).
@@ -1989,6 +2020,23 @@ def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
         return cls
     if ctx.left() < 3:
         return {**cls, **{n: "unknown" for n in todo}}
+    # Failed at HEAD + an observed failure now = pre-existing whatever a re-run shows
+    # (every branch below maps HEAD "failed" to pre-existing), so look HEAD up FIRST and
+    # skip the file / prefix re-runs for those. A known pre-existing failure recurs on
+    # every verify / regression of a run; its HEAD outcome is cached per sha. Unlike the
+    # old order, a re-run that would have found no time / no verdict no longer turns it
+    # "unknown": it ran and failed, and it fails at HEAD. A not-run test is no observed
+    # failure (H3): it still goes through the re-runs.
+    seen = [n for n in todo if _rerun_state(n, results) == "failing"]
+    if seen:
+        head0 = _baseline(ctx, seen, until=time.monotonic() + ctx.left() / 2)
+        pre = {n for n in seen if head0.get(n) == "failed"}
+        cls.update({n: "pre-existing" for n in pre})
+        todo = [n for n in todo if n not in pre]
+        if not todo:
+            return cls
+        if ctx.left() < 3:
+            return {**cls, **{n: "unknown" for n in todo}}
     files = {n.split("::")[0]: None for n in todo}  # whole files, original order
     rerun = run_pytest_targets(ctx, files, time.monotonic() + ctx.left() / 2, "rerun")
     passed_now, still = [], []
@@ -2231,27 +2279,37 @@ def _culprit(ctx, nodeid: str, args: list[str], end: float) -> str | None:
         return None
     return "backend/" + cands[0].split("::")[0]
 
-def _baseline(ctx, nodeids: list[str]) -> dict[str, str | None]:
-    """nodeid → HEAD outcome ``passed`` | ``failed`` | None (unknown, never stored)."""
+_BASELINE_PY = "_python"  # interpreter the stored HEAD outcomes were measured with
+
+
+def _baseline(ctx, nodeids: list[str], until: float | None = None) -> dict[str, str | None]:
+    """nodeid → HEAD outcome ``passed`` | ``failed`` | None (unknown, never stored).
+
+    Stored per sha with the interpreter id (``_BASELINE_PY``): outcomes measured with
+    another interpreter (a venv rebuilt or upgraded) are discarded, not trusted. The
+    HEAD run for uncached nodeids ends by ``until`` (default: the global deadline)."""
     sha = _head_sha(ctx.repo)
     if not sha:
         return {n: None for n in nodeids}
+    pid = _python_id(ctx.python)
     bpath = _baseline_path(ctx.cache, sha)
     base = _read_json(bpath)
-    base = base if isinstance(base, dict) else {}
+    base = base if isinstance(base, dict) and base.get(_BASELINE_PY) == pid else {}
     need = [n for n in nodeids if base.get(n) not in ("passed", "failed")]
     if need and ctx.left() >= 3:
         wt = _ensure_worktree(ctx, sha, ctx.left())
         if wt is not None and ctx.left() >= 2:
-            res = run_pytest_targets(ctx, _targets_from_nodeids(need), ctx.deadline_at,
+            res = run_pytest_targets(ctx, _targets_from_nodeids(need),
+                                     min(until or ctx.deadline_at, ctx.deadline_at),
                                      "base", root=wt)
             fresh = {n: o for n in need if (o := _head_outcome(n, res)) is not None}
             if fresh:
                 fd = _try_lock(ctx.cache / f".baseline-{sha}.lock", 5)
                 try:
                     cur = _read_json(bpath)
-                    cur = cur if isinstance(cur, dict) else {}
+                    cur = cur if isinstance(cur, dict) and cur.get(_BASELINE_PY) == pid else {}
                     cur.update(fresh)
+                    cur[_BASELINE_PY] = pid
                     _write_json(bpath, cur)
                 finally:
                     _unlock(fd)
@@ -2670,6 +2728,86 @@ def _tree_digest(inputs: dict[str, str], changed: list[str], run_files) -> dict[
     return {f: d for f, d in sorted(inputs.items()) if f in keep}
 
 
+# ── per-file reuse between verify / regression runs of one pipeline run ────
+# Measured on the recorded runs (2026-10-18): of 49,049 L2 test executions in
+# consecutive verify / regression calls of one run, 9,548 (301 files) were of an
+# all-pass file on the same HEAD with no changed file edited in between.
+REUSE_MODES = ("verify", "regression")
+_REUSABLE_OUTCOMES = ("passed", "skipped")
+
+
+def _l2_file_keys(ctx, files, changed: list[str], sgraph: dict | None,
+                  head: str | None) -> dict[str, str]:
+    """test file → digest of every input a WHOLE-file result of it depends on.
+
+    Runner version, interpreter, HEAD, pytest configs, the file, its conftest chain and
+    their transitive backend-local imports, and EVERY changed file — the same input set
+    the whole-run key (``_key_inputs``) trusts. Static imports alone are not enough: a
+    module can load a changed file by computed name (``importlib``), by bare-name
+    import of a sibling script, by path (``spec_from_file_location``, ``open``) or by
+    walking a directory, and none of those is an import edge (red-team 2026-10-18
+    proved a stale pass through ``importlib.import_module``). So any edit to a changed
+    file between two calls re-runs every file; reuse covers re-runs on an unchanged
+    tree (a mode switch, a call that was not cacheable, a different selection)."""
+    deps = _Deps(ctx.repo, sgraph)
+    digests: dict[str, str] = {}
+
+    def digest(rel: str) -> str:
+        if rel not in digests:
+            digests[rel] = _file_digest(ctx.repo / rel)
+        return digests[rel]
+
+    common = hashlib.sha256("\0".join([RUNNER_VERSION, _python_id(ctx.python),
+                                       head or "none"]).encode())
+    for p in sorted(set(changed) | set(_PYTEST_CONFIGS)):
+        common.update(p.encode() + b"\0" + digest(p).encode() + b"\0")
+    out: dict[str, str] = {}
+    for f in files:
+        roots = [f] + _conftests_for(f)
+        h = common.copy()
+        for p in sorted(deps.closure([r for r in roots if (ctx.repo / r).is_file()]) | set(roots)):
+            h.update(p.encode() + b"\0" + digest(p).encode() + b"\0")
+        out[f] = h.hexdigest()[:32]
+    return out
+
+
+def _reusable(ev_root: Path, run_id: str | None, plan: dict,
+              keys: dict[str, str]) -> tuple[dict[str, list[dict]], list[dict]]:
+    """(file → earlier results, sources) for each keyed L2 file this run's latest
+    verify / regression evidence (newest first) ran under the same key with every
+    result passed or skipped. Never an AC file, a nodeid-scoped target or a file named
+    by a runner error. Results are the evidence entries, copied."""
+    ac = set(plan.get("ac_files") or [])
+    evs = []
+    for m in REUSE_MODES:
+        ev = _read_json(ev_root / "tests" / f"latest-{m}.json")
+        if (isinstance(ev, dict) and ev.get("schema") == 1 and ev.get("run_id") == run_id
+                and isinstance(ev.get("l2_file_keys"), dict)):
+            evs.append(ev)
+    evs.sort(key=lambda e: str(e.get("finished_at") or ""), reverse=True)
+    out: dict[str, list[dict]] = {}
+    sources: list[dict] = []
+    for ev in evs:
+        by_file: dict[str, list[dict]] = {}
+        for r in ev.get("results") or []:
+            if isinstance(r, dict) and isinstance(r.get("nodeid"), str):
+                by_file.setdefault(_rfile(r), []).append(r)
+        broken = {str(n).split("::")[0] for n in ev.get("runner_errors") or []}
+        took = []
+        for f, k in keys.items():
+            if (f in out or f in ac or f in broken or f not in plan["targets"]
+                    or plan["targets"][f] is not None or ev["l2_file_keys"].get(f) != k):
+                continue
+            rs = by_file.get(f)
+            if rs and all(r.get("outcome") in _REUSABLE_OUTCOMES for r in rs):
+                out[f] = [dict(r) for r in rs]
+                took.append(f)
+        if took:
+            sources.append({"mode": ev.get("mode"), "finished_at": ev.get("finished_at"),
+                            "files": len(took)})
+    return out, sources
+
+
 def _desktop_state(repo: Path) -> str:
     """HEAD + the content of every uncommitted change under desktop/.
 
@@ -2876,6 +3014,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 ac_files.append(rv[0])
                 if rv[1] is not None:
                     plan.setdefault("ac_first", {}).setdefault(rv[0], set()).add(rv[1])
+        plan["ac_files"] = list(dict.fromkeys(ac_files))  # L1: never reused (_reusable)
         plan["ac_desktop"] = list(dict.fromkeys(ac_desktop))
         plan["probe_rows"] = _probe_rows(ctx, ev_root, probe_refs, changed)
         # AC targets first in priority order (a whole-file AC ref is not split out).
@@ -2986,6 +3125,11 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     for k in ("changed_files", "head_sha", "tree_digest"):
         if re_ev.get(k) is not None:
             ev[k] = re_ev[k]
+    if isinstance(base.get("l2_file_keys"), dict):
+        # A rechecked file's results now come from a later tree: its old key no longer
+        # describes them, so it is never reused from this evidence (_reusable).
+        redone = {_rfile(r) for r in new.values()}
+        ev["l2_file_keys"] = {f: k for f, k in base["l2_file_keys"].items() if f not in redone}
     ev.update(results=results, counts=counts, failures=failures, runner_errors=runner_errors,
               layers=layers, finished_at=_now_iso(), cached=False,
               rechecked_from={"finished_at": base.get("finished_at"),
@@ -3067,12 +3211,28 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     hit = _read_json(cpath)
     if isinstance(hit, dict) and hit.get("schema") == 1 and _cacheable(hit):
         ev = dict(hit)
+        ev.pop("reused_from", None)  # names evidence of the call that wrote the cache entry
         ev.update(cached=True, duration_s=0, run_id=ns.run_id, started_at=started_at,
                   finished_at=_now_iso(), tdd_repeats=repeats,
                   warnings=ctx.warnings + ["cached: tests and their inputs are unchanged since the last run"],
                   changed_files=_digest_map(ctx.repo, plan["changed"]),
                   head_sha=head, tree_digest=tree)
         return _test_output(ev, _write_evidence(ev_root, ns.mode, ev, **idx_info)), _exit_code(ev)
+    keys: dict[str, str] = {}
+    reused: dict[str, list[dict]] = {}
+    if ns.mode in REUSE_MODES:
+        keys = _l2_file_keys(ctx, [f for f in plan["l2"] if f in targets and targets[f] is None],
+                             plan["changed"], sgraph, head)
+        reused, sources = _reusable(ev_root, ns.run_id, plan, keys)
+        if reused:
+            n = sum(len(rs) for rs in reused.values())
+            plan["reused_from"] = {"files": sorted(reused), "tests": n, "sources": sources}
+            ctx.warnings.append(
+                f"reused {len(reused)} test file(s) ({n} tests) that passed in "
+                + ", ".join(f"{s['mode']} {s['finished_at']}" for s in sources)
+                + ": nothing they import or may read changed since; not re-run")
+    plan["l2_file_keys"] = keys
+    run_targets = {f: v for f, v in targets.items() if f not in reused}
     slot = _acquire_slot(ctx.cache, ctx.warnings)
     try:
         jobs: list[_Job] = []
@@ -3085,15 +3245,15 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
             sj = _smoke_job(ctx, list(plan["smoke"]))
             sj.meta["files"] = plan["smoke"]
             jobs.append(sj)
-        if targets or ordered:
+        if run_targets or ordered:
             _drop_stale_pyc(ctx.repo, plan["changed"])
         ctx.seq += 1
         backend = ctx.repo / "backend"
         # recheck of order_dependent failures: their prefix runs as ONE ordered job, first
         jobs = [_pytest_job(ctx, f"ordered{ctx.seq}-{k}", o, backend, False)
                 for k, o in enumerate(ordered)] + jobs
-        jobs += _pytest_jobs(ctx, targets, "main", first=plan.get("ac_first"),
-                             durations=ctx.durations) if targets else []
+        jobs += _pytest_jobs(ctx, run_targets, "main", first=plan.get("ac_first"),
+                             durations=ctx.durations) if run_targets else []
         main_end = ctx.deadline_at - min(20.0, deadline * 0.25)
         _run_jobs(jobs, ctx.workers, main_end)
         results = _results_with_requeue(ctx, jobs, main_end, "main")
@@ -3113,6 +3273,8 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         cls = classify_failures(ctx, results)
     finally:
         _unlock(slot)
+    # Reused entries are evidence entries already (compact): _assemble keeps them as is.
+    results += [{**r, "_reused": True} for f in reused for r in reused[f]]
     ev = _assemble(ctx, ns, plan, results, cls, started_at, repeats, key)
     ev.update(head_sha=head, tree_digest=tree)
     if _cacheable(ev):
@@ -3206,8 +3368,9 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                                    | {"backend/" + a.split("::")[0] for o in plan.get("ordered") or []
                                       for a in o if not a.startswith(_SHARD_MODIFIERS)}),
           "skipped_for_budget": plan["skipped"], "counts": counts,
-          "results": [{**_evidence_result(r, refs),
-                       **({"requeued": True} if r.get("requeued") else {})}
+          "results": [{k: v for k, v in r.items() if k != "_reused"} if r.get("_reused")
+                      else {**_evidence_result(r, refs),
+                            **({"requeued": True} if r.get("requeued") else {})}
                       for r in results],
           "failures": failures, "layers": layers, "tdd_repeats": repeats,
           "warnings": list(ctx.warnings), "cache_key": key,
@@ -3216,6 +3379,10 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                             if r.get("runner_error")]}
     if any(r.get("layer") in ("vitest", "tsc") for r in results):
         ev["frontend"] = _frontend_summary(results)
+    if ns.mode in REUSE_MODES:
+        ev["l2_file_keys"] = dict(plan.get("l2_file_keys") or {})
+        if plan.get("reused_from"):
+            ev["reused_from"] = plan["reused_from"]
     if ns.mode == "recheck":
         ev["rechecked_failures"] = plan["rechecked"]
         if plan.get("od_in_context"):  # order_dependent failures re-run after their prefix
