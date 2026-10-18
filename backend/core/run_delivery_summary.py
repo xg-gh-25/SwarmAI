@@ -907,6 +907,10 @@ def _quality_line(run_state: dict, deliver: dict, test_info: dict) -> Optional[s
             parts.append(f"{pre} 个既有失败")
         if flaky:
             parts.append(f"{flaky} 个 flaky")
+        reused = test_info.get("tests_reused")
+        if isinstance(reused, int) and not isinstance(reused, bool) and reused > 0:
+            # passes taken from an earlier test call of this run, inputs unchanged
+            parts.append(f"其中 {reused} 个复用（输入未变）")
     adv = _d(deliver.get("adversarial_review"))
     ft, ff = adv.get("findings_total"), adv.get("findings_fixed")
     if isinstance(ft, int):

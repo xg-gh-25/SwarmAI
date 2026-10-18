@@ -273,3 +273,37 @@ def test_baseline_survives_a_build_rework_but_not_a_new_cycle(ws, capsys):
     _start(reg, capsys, "run_rc_cycle", "deliver")
     code, res = _recheck(reg, capsys, "run_rc_cycle", FINDINGS[:1])
     assert code == 1 and "not on disk" in res["error"], res  # y4 = 44 is now the baseline
+
+
+def test_gate2_prompts_take_the_requirement_as_data(ws, capsys):
+    """A slot literal inside the requirement is not filled inside it (the checklist or
+    the recalled knowledge would land before the task statement), and a cut is marked."""
+    root, reg = ws
+    repo = _fixture_repo(root)
+    (repo / "core" / "a.py").write_text("x = 1\n" + "y = 2\n" * 60, encoding="utf-8")
+    req = "do X <paste contents of the specialist's .md file> <PROJECT_KNOWLEDGE> " + "z" * 1200
+    _make_run(root, "run_req", "full", stages=["evaluate", "think", "plan", "build", "review", "test"],
+              files_touched=[str(repo / "core" / "a.py")], requirement=req)
+    code, out = _start(reg, capsys, "run_req", "deliver")
+    assert code == 0, out
+    text = Path(out["experts"][0]["prompt_path"]).read_text()
+    line = next(ln for ln in text.splitlines() if ln.startswith("Requirement:"))
+    assert "‹paste contents of the specialist's .md file›" in line and "‹PROJECT_KNOWLEDGE›" in line
+    assert line.endswith("… (truncated)")
+
+
+def test_test_counts_say_how_many_passes_were_reused():
+    ev = {"counts": {"passed": 3, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 1},
+          "failures": [],
+          "reused_from": {"files": ["backend/tests/test_a.py"], "tests": 3},
+          "results": [{"nodeid": "backend/tests/test_a.py::t1", "outcome": "passed"},
+                      {"nodeid": "backend/tests/test_a.py::t2", "outcome": "skipped",
+                       "file": "backend/tests/test_a.py"},
+                      {"nodeid": "backend/tests/test_a.py::t3", "outcome": "passed"},
+                      {"nodeid": "backend/tests/test_b.py::t", "outcome": "passed"}]}
+    c = cli._test_counts_from_evidence(ev)
+    assert c["tests_total"] == 3 and c["tests_reused"] == 2  # the skip never ran
+    m = cli._report_test_metrics(c)
+    assert cli._report_tests_phrase(m) == "3 run (2 reused unchanged), 0 failed"
+    del ev["reused_from"]
+    assert "tests_reused" not in cli._test_counts_from_evidence(ev)

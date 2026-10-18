@@ -3130,6 +3130,16 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
         # describes them, so it is never reused from this evidence (_reusable).
         redone = {_rfile(r) for r in new.values()}
         ev["l2_file_keys"] = {f: k for f, k in base["l2_file_keys"].items() if f not in redone}
+    ru = base.get("reused_from")
+    if isinstance(ru, dict):
+        # A rechecked file's results are fresh now, not reused: report only the rest.
+        redone = {_rfile(r) for r in new.values()}
+        keep = [f for f in ru.get("files") or [] if f not in redone]
+        n = sum(1 for r in results if _rfile(r) in set(keep))
+        if keep:
+            ev["reused_from"] = {**ru, "files": keep, "tests": n}
+        else:
+            ev.pop("reused_from", None)
     ev.update(results=results, counts=counts, failures=failures, runner_errors=runner_errors,
               layers=layers, finished_at=_now_iso(), cached=False,
               rechecked_from={"finished_at": base.get("finished_at"),

@@ -1366,6 +1366,12 @@ def test_overlay_drops_the_file_keys_of_rechecked_files(tmp_path):
              "failures": [], "runner_errors": []}
     ev = pt._overlay_evidence(tmp_path, base, re_ev, [])
     assert ev["l2_file_keys"] == {y: "k2"}  # x now passes under a later tree: never reused
+    # a rechecked file's fresh results are no longer reported as reused
+    base["reused_from"] = {"files": [x, y], "tests": 2, "sources": []}
+    ev = pt._overlay_evidence(tmp_path, base, re_ev, [])
+    assert ev["reused_from"]["files"] == [y] and ev["reused_from"]["tests"] == 1
+    base["reused_from"] = {"files": [x], "tests": 1, "sources": []}
+    assert "reused_from" not in pt._overlay_evidence(tmp_path, base, re_ev, [])
 
 
 def test_known_pre_existing_failure_skips_the_reruns(rig, capsys, tmp_path, monkeypatch):

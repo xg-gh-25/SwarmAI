@@ -2188,7 +2188,8 @@ def _delivery_summary_for(project: str, run_id: str) -> str:
         if "test" in arts:
             tm = _report_test_metrics(arts["test"]) or {}
             arts["test"] = {k: tm.get(k) for k in ("tests_total", "failed",
-                                                   "pre_existing_failures", "flaky_failures")}
+                                                   "pre_existing_failures", "flaky_failures",
+                                                   "tests_reused")}
         # This repo is the git root ONLY for the SwarmAI project's own runs; any
         # other project's files resolve their repo per file (repo_root=None).
         repo_root = _BACKEND_DIR.parent if project == "SwarmAI" else None
@@ -5753,7 +5754,11 @@ def _test_counts_from_evidence(ev) -> dict | None:
     non-blocking in pipeline_test._exit_code) and ``failed`` = every other failing
     result — so ``failed`` keeps meaning "new failures", which METRICS records as
     regressions. A TIMEOUT stays in ``failed`` whatever its classification, because
-    _exit_code blocks on a hang regardless. None when the evidence has no usable counts."""
+    _exit_code blocks on a hang regardless. None when the evidence has no usable counts.
+
+    ``tests_reused`` (only when non-zero) = how many of ``tests_total`` passes the runner
+    took from an earlier verify / regression of this run on the same tree instead of
+    re-running them (evidence ``reused_from``, pipeline_test per-file reuse)."""
     if not isinstance(ev, dict) or not isinstance(ev.get("counts"), dict):
         return None
     c = ev["counts"]
@@ -5762,8 +5767,19 @@ def _test_counts_from_evidence(ev) -> dict | None:
     cls = [f.get("classification") for f in (ev.get("failures") or [])
            if isinstance(f, dict) and f.get("outcome") != "timeout"]
     pre, flaky = cls.count("pre-existing"), cls.count("flaky")
-    return {"tests_total": sum(ran), "failed": max(bad - pre - flaky, 0),
-            "pre_existing_failures": pre, "flaky_failures": flaky}
+    out = {"tests_total": sum(ran), "failed": max(bad - pre - flaky, 0),
+           "pre_existing_failures": pre, "flaky_failures": flaky}
+    ru = ev.get("reused_from") if isinstance(ev.get("reused_from"), dict) else {}
+    files = {f for f in ru.get("files") or [] if isinstance(f, str)}
+    if files:
+        # Reused files are all-pass by construction; count their passes (skips never
+        # entered tests_total). Compact entries omit ``file`` when it is the nodeid's.
+        reused = sum(1 for r in ev.get("results") or []
+                     if isinstance(r, dict) and r.get("outcome") == "passed"
+                     and (r.get("file") or str(r.get("nodeid") or "").split("::")[0]) in files)
+        if reused:
+            out["tests_reused"] = min(reused, out["tests_total"])
+    return out
 
 
 def _report_test_metrics(test_data: dict) -> dict:
@@ -5784,7 +5800,8 @@ def _report_test_metrics(test_data: dict) -> dict:
         out["tests_total"] = total
     if failed is not None:
         out["failed"] = failed
-    for k in ("tests_new", "regressions", "pre_existing_failures", "flaky_failures"):
+    for k in ("tests_new", "regressions", "pre_existing_failures", "flaky_failures",
+              "tests_reused"):
         v = _int_or_none(test_data.get(k))
         if v is not None:
             out[k] = v
@@ -5805,6 +5822,8 @@ def _report_tests_phrase(m: dict):
     if not m or "tests_total" not in m:
         return None
     phrase = f"{m['tests_total']} run"
+    if m.get("tests_reused"):
+        phrase += f" ({m['tests_reused']} reused unchanged)"
     if "failed" in m:
         phrase += f", {m['failed']} failed"
     if m.get("pre_existing_failures"):
@@ -6499,6 +6518,9 @@ A stage with no published artifact cannot be timed and shows `-`."""
     _rows = []
     if "tests_total" in test_metrics:
         _rows.append(("Tests run (TEST stage)", test_metrics["tests_total"]))
+    if test_metrics.get("tests_reused"):
+        _rows.append(("Of which reused (passed earlier this run, inputs unchanged)",
+                      test_metrics["tests_reused"]))
     if "failed" in test_metrics:
         _rows.append(("Failed", test_metrics["failed"]))
     if "suite_passed" in test_metrics:
@@ -8558,6 +8580,9 @@ def _derive_stage_fields(
             # The counts the summary and REPORT show are the runner's, not the
             # author's: a hand-written failed:0 hid pre-existing failures.
             counts = _test_counts_from_evidence(reg_ev)
+            # tests_reused appears only when non-zero: never let an author-written one
+            # survive the runner's counts
+            artifact.pop("tests_reused", None)
             if counts is not None:
                 artifact.update(counts)
                 derived["test_counts"] = {"value": counts,
@@ -9407,7 +9432,8 @@ def _write_review_inputs(project: str, run_dir: Path,
 
 
 _PROMPT_SLOTS_RE = re.compile(r"<(PROJECT_KNOWLEDGE|PROJECT|list of all changed files|"
-                              r"requirement from run\.json)>")
+                              r"requirement from run\.json|EXPERT_ID|DOMAIN|"
+                              r"paste contents of the specialist's \.md file)>")
 
 
 def _prompt_data(text: str, limit: int = 1000) -> str:
@@ -9467,7 +9493,7 @@ def _write_expert_prompts(*, project: str, run_dir: Path, experts: "list[dict]",
         # deliver's Red Team gate reads each finding's `specialist` as its producer.
         text = (base.replace("<EXPERT_ID>", eid).replace("<DOMAIN>", ex["domain"])
                 .replace('"specialist":"<name>"', f'"specialist":"{eid}"')
-                .replace("<requirement from run.json>", (requirement or "")[:1000])
+                .replace("<requirement from run.json>", _prompt_data(requirement or ""))
                 .replace("<paste contents of the specialist's .md file>", checklist))
         try:
             if sp.requires_knowledge(text):

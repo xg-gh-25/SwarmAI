@@ -114,6 +114,24 @@ def test_counts_overwritten_from_evidence(ws, capsys):
     assert out["derived"]["test_counts"]["source"] == "evidence/tests/latest-regression.json"
 
 
+def test_an_author_written_tests_reused_never_survives_the_evidence(ws, capsys):
+    root, reg = ws
+    rd = _make_run(root, "run_reuse_claim")
+    _evidence(rd, "run_reuse_claim",
+              {"passed": 4, "failed": 0, "errors": 0, "timeouts": 0, "skipped": 0}, [])
+    art = copy.deepcopy(pv.STAGE_TEMPLATES["test"])
+    art.update(tests_reused=900)                     # the author's claim; nothing was reused
+    code, out = _complete_test(reg, capsys, "run_reuse_claim", art)
+    assert code == 0, out
+    assert "tests_reused" not in _stored(root, out["artifact_id"])
+
+
+def test_quality_line_says_how_many_passes_were_reused():
+    line = rds._quality_line({}, {}, {"tests_total": 1220, "failed": 0, "tests_reused": 900})
+    assert "测试 1220/1220 通过" in line and "其中 900 个复用（输入未变）" in line
+    assert "复用" not in rds._quality_line({}, {}, {"tests_total": 5, "failed": 0, "tests_reused": None})
+
+
 def test_counts_kept_without_evidence(ws, capsys):
     root, reg = ws
     _make_run(root, "run_noev")
