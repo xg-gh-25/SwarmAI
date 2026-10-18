@@ -344,7 +344,8 @@
       "continue": "Continue",
       "continueAria": "Continue response",
       "continueTitle": "Continue — ask {{name}} to continue its response",
-      "interrupted": "Connection interrupted"
+      "interrupted": "Connection interrupted",
+      "mulling": "{{name}} is mulling it over…"
     },
     "memory": {
       "nothingNew": "Nothing new to save",

@@ -1025,6 +1025,110 @@ body {
   .canvas-bee { animation: none; }
 }
 
+/* Streaming bee (StreamingBee.tsx) — the "turn still running" indicator at the
+   end of the streaming assistant message. Variants are classes set by the
+   component (it reads prefers-reduced-motion itself, so `--still` is the single
+   reduced-motion authority):
+     --flying  flies 0↔148px along the track, mirrors at each end, bobs, flaps
+     --resting sits at the track start, wings folded, slow breathing
+     --still   reduced motion: breathing only
+   Only transform/opacity animate (no layout): flight/bob/breathe on HTML
+   wrappers composite; the wing flap on SVG <g> children repaints a 26x23px
+   area on the main thread (accepted). Fixed 26px row height so switching
+   variants never shifts the message vertically. */
+.streaming-bee {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  margin-top: 6px;
+}
+.streaming-bee-track {
+  position: relative;
+  width: 176px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.streaming-bee--resting .streaming-bee-track,
+.streaming-bee--still .streaming-bee-track {
+  width: 30px;
+}
+.streaming-bee-trail {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 50%;
+  border-top: 1px dashed rgba(212, 165, 55, 0.14);
+}
+.streaming-bee--resting .streaming-bee-trail,
+.streaming-bee--still .streaming-bee-trail {
+  display: none;
+}
+.streaming-bee-fly {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  will-change: transform;
+}
+.streaming-bee--flying .streaming-bee-fly {
+  animation: streaming-bee-fly 3.2s infinite;
+}
+.streaming-bee--flying .streaming-bee-bob {
+  animation: streaming-bee-bob 0.7s ease-in-out infinite;
+}
+.streaming-bee-wing {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.streaming-bee--flying .streaming-bee-wing {
+  animation: streaming-bee-flap 0.11s ease-in-out infinite alternate;
+}
+.streaming-bee--flying .streaming-bee-wing--back {
+  animation-delay: 0.05s;
+}
+.streaming-bee--resting .streaming-bee-wing,
+.streaming-bee--still .streaming-bee-wing {
+  transform: scaleY(0.5);
+  opacity: 0.6;
+}
+.streaming-bee--resting .streaming-bee-bob,
+.streaming-bee--still .streaming-bee-bob {
+  animation: streaming-bee-breathe 2.4s ease-in-out infinite;
+}
+.streaming-bee-note-text {
+  margin-left: 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  animation: streaming-bee-note-in 0.6s ease-out;
+}
+/* Landing: the bee leaves the flight path wherever it was, so fade it in at the
+   track start instead of teleporting there. */
+.streaming-bee--resting .streaming-bee-fly {
+  animation: streaming-bee-note-in 0.5s ease-out;
+}
+@keyframes streaming-bee-fly {
+  0%   { transform: translateX(0)     scaleX(1);  animation-timing-function: ease-in-out; }
+  48%  { transform: translateX(148px) scaleX(1);  animation-timing-function: linear; }
+  52%  { transform: translateX(148px) scaleX(-1); animation-timing-function: ease-in-out; }
+  96%  { transform: translateX(0)     scaleX(-1); animation-timing-function: linear; }
+  100% { transform: translateX(0)     scaleX(1); }
+}
+@keyframes streaming-bee-bob {
+  0%, 100% { transform: translateY(-2px); }
+  50%      { transform: translateY(2px); }
+}
+@keyframes streaming-bee-flap {
+  from { transform: scaleY(1); }
+  to   { transform: scaleY(0.35); }
+}
+@keyframes streaming-bee-breathe {
+  50% { transform: translateY(1px); opacity: 0.7; }
+}
+@keyframes streaming-bee-note-in {
+  from { opacity: 0; }
+}
+
 /* TreeNodeRow — hover and interaction styles */
 
 /* Hover background — only visible when no inline backgroundColor is set

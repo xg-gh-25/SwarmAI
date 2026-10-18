@@ -57,6 +57,7 @@ import { ASSISTANT_NAME } from '../assistantName';
 import { ReadOnlyContext } from '../readOnlyContext';
 import { ANCHOR_PROPS } from '../scrollFocus';
 import { AssistantHeader } from './AssistantHeader';
+import { StreamingBee } from './StreamingBee';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
@@ -98,6 +99,9 @@ export interface AssistantMessageViewProps {
   pendingPermissionRequestId?: string;
   /** Whether the assistant message is still streaming */
   isStreaming?: boolean;
+  /** Streaming but no new content for a while (TabView's useStreamingRest) —
+   *  the streaming bee lands and shows the "mulling it over" line. */
+  isResting?: boolean;
   /** The current session ID for the save API call */
   sessionId?: string;
   /** Whether this is the last assistant message in the session */
@@ -127,6 +131,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
+  isResting,
   sessionId,
   isLastAssistant,
   contextWarning,
@@ -534,10 +539,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       ) : (
         <div className="text-[var(--color-text-secondary)]">
           {contentBlocks}
-          {/* Streaming cursor — blinking caret at end of streaming content */}
-          {isStreaming && (
-            <span className="inline-block w-2 h-4 bg-primary/70 rounded-sm animate-pulse align-text-bottom" aria-hidden="true" />
-          )}
+          {/* Streaming indicator — the bee at the end of the streaming content
+              (flying while content arrives, resting after a quiet spell). */}
+          {isStreaming && <StreamingBee resting={!!isResting} />}
           {/* A running sub-agent shows on its Agent strip (WorkGroup ToolStrip,
               fed by subagent_progress) — no separate timer banner. */}
         </div>
