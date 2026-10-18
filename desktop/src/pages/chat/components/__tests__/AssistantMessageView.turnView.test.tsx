@@ -382,6 +382,22 @@ describe('AssistantMessageView — v6 fold timing (XG 2026-10-17 "延后2秒 再
     expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two');
   });
 
+  it('in the 2s after it finishes, a list keeps its live layout (newest steps), then folds', () => {
+    const many = Array.from({ length: 15 }, (_, i) => [tu(`s${i}`, `Running: echo ${i}`), tr(`s${i}`)]).flat();
+    const { rerender } = render(viewOf([...many, tu('z', 'Running: date')], true));
+    expect(screen.getByTestId('process-steps').dataset.liveLayout).toBe('true');
+    rerender(viewOf([...many, tu('z', 'Running: date'), tr('z'), tx('next note')], true));
+    const list = screen.getByTestId('process-steps');
+    expect(list.dataset.liveLayout).toBe('true'); // not reshuffled to its first steps
+    expect(list.textContent).toContain('echo 14');
+    expect(list.textContent).not.toContain('echo 0');
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS); });
+    expect(screen.queryByTestId('process-steps')).toBeNull(); // folded in one move
+    fireEvent.click(screen.getByTestId('process-row'));
+    expect(screen.getByTestId('process-steps').dataset.liveLayout).toBe('false'); // opened by hand: first steps
+    expect(screen.getByTestId('process-steps').textContent).toContain('echo 0');
+  });
+
   it('a long thought is clamped (1 line once the turn is over) and opens in place', () => {
     renderView([tu('a', 'Running: ls'), tr('a'), th(LONG), tx('ok')]);
     const text = screen.getByTestId('thought-text');

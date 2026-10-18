@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 import { messageStoreRegistry } from '../../../../stores/MessageStore';
+import { afterActivation } from './scrollTestUtils';
 import type { Message } from '../../../../types';
 
 vi.mock('react-i18next', () => ({
@@ -54,13 +55,14 @@ describe('TabView pill — the live action, once', () => {
   });
   afterEach(() => { cleanup(); messageStoreRegistry.clear(); });
 
-  it('names the running step, with no step count and no timer', () => {
+  it('names the running step, with no step count and no timer', async () => {
     messageStoreRegistry.getOrCreate('A').replace([turn([
       { type: 'tool_use', id: 't1', name: 'Bash', summary: 'Running: ls', category: 'bash' },
       { type: 'tool_result', toolUseId: 't1', isError: false },
       { type: 'tool_use', id: 't2', name: 'Read', summary: 'Reading /r/src/x.ts', category: 'read' },
     ])]);
     const { container, getByTestId } = render(<TabView {...props(true)} />);
+    await afterActivation();
     scrollAway(container);
     const pill = getByTestId('streaming-pill');
     expect(pill.textContent).toContain('Reading x.ts · back to latest');
@@ -68,12 +70,13 @@ describe('TabView pill — the live action, once', () => {
     expect(pill.textContent).not.toMatch(/\d+s\b/);
   });
 
-  it('between steps it says Thinking', () => {
+  it('between steps it says Thinking', async () => {
     messageStoreRegistry.getOrCreate('A').replace([turn([
       { type: 'tool_use', id: 't1', name: 'Bash', summary: 'Running: ls', category: 'bash' },
       { type: 'tool_result', toolUseId: 't1', isError: false },
     ])]);
     const { container, getByTestId } = render(<TabView {...props(true)} />);
+    await afterActivation();
     scrollAway(container);
     expect(getByTestId('streaming-pill').textContent).toContain('Thinking · back to latest');
   });

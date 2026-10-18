@@ -6,7 +6,8 @@
  * (MessageBubble / system divider / CompactNotice / ChatErrorMessage), the connection-state
  * indicators (reconnecting / resuming, the fallback spinner, the SESSION_BUSY
  * recovery spinner), the "back to latest" pill (only while streaming AND the
- * user has scrolled away), and the `messagesEndRef` scroll anchor. What the
+ * user has scrolled away). Where the viewport sits — following the bottom, or
+ * holding what the user is reading — is decided by pages/chat/scrollFocus.ts. What the
  * agent is DOING is not rendered here — it lives in each message's ProcessBlock.
  *
  * Migration Step 5.1 (this revision): TabView is now rendered ONE PER OPEN TAB
@@ -36,6 +37,11 @@ import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
 import { STEP_VERB_FALLBACK, deriveTurnView, stepLabel } from '../turnView';
+import {
+  ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
+  REPLY_TOP_MARGIN, sentMessageId,
+} from '../scrollFocus';
+import type { ScrollAnchor, SeenState } from '../scrollFocus';
 import type { StreamingActivity, ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { Spinner } from '../../../components/common';
 import { ChatErrorMessage } from '../../../components/chat';
@@ -318,27 +324,24 @@ function TabViewImpl({
   // triggers the re-pin (root cause B, run_24f98f06). Without it, streaming grew
   // scrollHeight with no observer fire and stranded the view above the newest msg.
   const contentRef = useRef<HTMLDivElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
-  // ── Single authoritative "stick to bottom" signal (root fix, replaces the old
-  //    wasAtBottomRef + userScrolledUpRef pair + the shouldPinOnActivation gate).
-  // DEFAULT = follow=true: every tab, streaming OR idle, is pinned to the bottom
-  // by default. It flips false ONLY when the user GENUINELY scrolls up (scrollTop
-  // actually moves up, past the threshold) and flips back true when they return to
-  // the bottom. Being a ref, it PERSISTS across the display:none deactivation, so a
-  // deliberate scroll-up survives a tab switch (AC2) and — critically — a tab left
-  // at the bottom keeps follow=true through background streaming (no scroll events
-  // fire while hidden, so nothing can wrongly flip it) and resumes following the
-  // live bottom the instant it is shown again (fixes the streaming-tab symptom C
-  // the 3 old scroll-event-inferred gates could not, since a hidden streaming tab
-  // emits no scroll events for them to read). `lastScrollTopRef` is the reflow
-  // discriminator (a grow with unchanged scrollTop is not a user scroll). */
+  // ── Where the viewport is: FOLLOW or READING (pages/chat/scrollFocus.ts) ──
+  // FOLLOW (followRef=true, the default) pins the bottom: the live work while
+  // streaming, the last message when idle. READING holds `anchorRef` — the element
+  // at the viewport top, or the toggle just clicked — in place while things change
+  // size around it (WebKit has no CSS scroll anchoring).
+  // Into FOLLOW: the tab becomes visible (switch, close, restart; XG 2026-08-03
+  // choice A, kept 2026-10-18), the user sends in this tab, scrolls back to the
+  // bottom, or clicks "back to latest".
+  // Into READING: a genuine scroll up (nextFollowState), or a click that opens or
+  // closes something outside the live card. A reply that finished while the tab
+  // was hidden lands on its start when it is taller than the viewport.
+  // Every programmatic move records lastScrollTopRef, so only the user's own
+  // scrolling can change the mode (reflow-grow safe, as before).
   const followRef = useRef(true);
   const lastScrollTopRef = useRef(0);
-  // Render mirror of followRef, written ONLY where followRef is written
-  // (handleScroll) so the two can never disagree. It exists because a ref
-  // change does not re-render: the "back to latest" pill must appear the moment
-  // the user scrolls away. It is NOT a second scroll authority — the pin path
-  // still reads followRef.
+  const anchorRef = useRef<ScrollAnchor[]>([]);
+  // Render mirror of "not following", for the "back to latest" pill only — the
+  // pin path reads followRef.
   const [awayFromBottom, setAwayFromBottom] = useState(false);
 
   // ── Mount-on-first-activation (Step 5.2 / F2) ──────────────────────
@@ -349,59 +352,130 @@ function TabViewImpl({
   const everActiveRef = useRef(false);
   if (isActive) everActiveRef.current = true;
 
-  // Pin to the very bottom. behavior:'auto' (instant) — the pin path fires per
-  // streaming frame / activation, so smooth-scroll would stack jank; instant is
-  // also idempotent (no-op when already at bottom) and only moves scrollTop, so it
-  // cannot feed back into the ResizeObserver as a size change (no loop).
-  const scrollToBottom = useCallback(() => {
-    endRef.current?.scrollIntoView({ behavior: 'auto' });
+  const setScrollTop = useCallback((el: HTMLElement, top: number) => {
+    el.scrollTop = top;
+    lastScrollTopRef.current = el.scrollTop;
   }, []);
+
+  const follow = useCallback(() => {
+    followRef.current = true;
+    anchorRef.current = [];
+    setAwayFromBottom(false);
+    const el = containerRef.current;
+    if (el) setScrollTop(el, el.scrollHeight);
+  }, [setScrollTop]);
+
+  const read = useCallback((chain: ScrollAnchor[]) => {
+    followRef.current = false;
+    anchorRef.current = chain;
+    setAwayFromBottom(true);
+  }, []);
+
+  // Keep the viewport where its mode says, after any content or size change.
+  const settle = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (followRef.current) {
+      setScrollTop(el, el.scrollHeight);
+      return;
+    }
+    const delta = anchorDelta(el, anchorRef.current);
+    if (delta) setScrollTop(el, el.scrollTop + delta);
+  }, [setScrollTop]);
+
+  // The first frames after activation: scroll events there are the engine
+  // re-laying out a display:none container, not the user.
+  const activatingRef = useRef(false);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    // The ONLY writer of follow intent — a genuine user scroll. Delegated to the
-    // pure, tested helper (reflow-grow safe) so the shipped rule IS the tested rule.
+    if (activatingRef.current) {
+      lastScrollTopRef.current = el.scrollTop;
+      return;
+    }
+    const moved = el.scrollTop !== lastScrollTopRef.current;
     const next = nextFollowState(
       { follow: followRef.current, lastScrollTop: lastScrollTopRef.current },
       el.scrollTop, el.clientHeight, el.scrollHeight,
     );
     followRef.current = next.follow;
     lastScrollTopRef.current = next.lastScrollTop;
+    if (moved) anchorRef.current = next.follow ? [] : pickAnchor(el);
     setAwayFromBottom(!next.follow);
     if (el.scrollTop === 0) onLoadOlder();
   }, [onLoadOlder]);
 
-  // ── The SINGLE continuous pin path (replaces auto-scroll + activation-rAF + the
-  //    RO-gated-on-wasAtBottom — three mechanisms consolidated into one signal).
-  // Fires on: new content ([messages]) and tab activation ([isActive]). If follow
-  // is on, land at the bottom. Because follow defaults true and persists, this is
-  // what makes a re-shown streaming tab resume at the live bottom. Markdown renders
-  // async (200ms-throttled + deferred hljs), so the message-effect alone can pin
-  // before content reaches final height — the ResizeObserver below is the other
-  // half: it re-pins on every subsequent content growth (streaming tokens, reflow),
-  // also gated on the SAME followRef. Together = continuous follow, one signal. */
-  useEffect(() => {
-    if (!isActive) return;
-    if (followRef.current) scrollToBottom();
-  }, [messages, isActive, scrollToBottom]);
+  // A click that opens or closes something: hold what was clicked in place.
+  const handleClickCapture = useCallback((e: React.MouseEvent) => {
+    const el = containerRef.current;
+    const btn = isToggleClick(e.target);
+    if (el && btn) read(anchorChainFor(btn, el));
+  }, [read]);
+
+  // What the user last saw here, recorded when the tab is hidden.
+  const seenRef = useRef<SeenState | null>(null);
+  const latestRef = useRef({ messages, isStreaming });
+  latestRef.current = { messages, isStreaming };
+  const prevActiveRef = useRef(false);
+
+  // Activation landing, before paint.
+  useLayoutEffect(() => {
+    const was = prevActiveRef.current;
+    prevActiveRef.current = isActive;
+    const { messages: msgs, isStreaming: streaming } = latestRef.current;
+    if (!isActive) {
+      if (was) seenRef.current = { replyId: lastAsst(msgs)?.id ?? null, streaming };
+      return undefined;
+    }
+    if (was) return undefined;
+    activatingRef.current = true;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => { activatingRef.current = false; });
+    });
+    const el = containerRef.current;
+    const landing = activationLanding(seenRef.current, lastAsst(msgs)?.id ?? null, streaming);
+    const row = landing.kind === 'reply' && el
+      ? [...el.querySelectorAll('[data-msg-id]')].find((r) => r.getAttribute('data-msg-id') === landing.replyId)
+      : undefined;
+    if (el && row && row.getBoundingClientRect().height > el.clientHeight) {
+      const top = row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      setScrollTop(el, el.scrollTop + top - REPLY_TOP_MARGIN);
+      read(anchorChainFor(row, el));
+    } else {
+      follow();
+    }
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      activatingRef.current = false;
+    };
+  }, [isActive, follow, read, setScrollTop]);
+
+  // A message the user just sent in this tab brings the view to the bottom.
+  const sentIdRef = useRef<string | null>(sentMessageId(messages));
+  useLayoutEffect(() => {
+    const id = sentMessageId(messages);
+    if (id && id !== sentIdRef.current && isActive) follow();
+    sentIdRef.current = id;
+  }, [messages, isActive, follow]);
 
   useEffect(() => {
     if (!isActive) return;
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => {
-      if (followRef.current) scrollToBottom();
-    });
+    const ro = new ResizeObserver(() => settle());
     ro.observe(el);
     if (contentRef.current) ro.observe(contentRef.current);
     return () => ro.disconnect();
-  }, [isActive, scrollToBottom]);
+  }, [isActive, settle]);
 
   // Preserve scroll position when OLDER messages are prepended (load-earlier),
   // so the viewport doesn't jump. Runs before paint; compares scrollHeight
   // across the prepend and offsets scrollTop by the added height. Only fires on
   // a genuine top-prepend (first id changed AND list grew) — not on appends.
+  // Declared before the settle effect, so a held anchor then measures no move.
   const prevFirstIdRef = useRef<string | null>(null);
   const prevLenRef = useRef(0);
   const prevScrollHeightRef = useRef(0);
@@ -414,12 +488,17 @@ function TabViewImpl({
       firstId !== prevFirstIdRef.current &&
       messages.length > prevLenRef.current;
     if (prepended && prevScrollHeightRef.current) {
-      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
+      setScrollTop(el, el.scrollTop + el.scrollHeight - prevScrollHeightRef.current);
     }
     prevFirstIdRef.current = firstId;
     prevLenRef.current = messages.length;
     prevScrollHeightRef.current = el.scrollHeight;
-  }, [messages]);
+  }, [messages, setScrollTop]);
+
+  // New content (streaming tokens, a finished turn condensing): settle before paint.
+  useLayoutEffect(() => {
+    if (isActive) settle();
+  }, [messages, isStreaming, isActive, settle]);
 
   // ── Per-tab live action (Migration Step 4.1; v7.1) ─────────────────
   // Derived from THIS tab's own messages, only while streaming. Replaces the
@@ -488,6 +567,7 @@ function TabViewImpl({
       // h-full still fills the viewport.
       <div
         ref={contentRef}
+        onClickCapture={handleClickCapture}
         className={messages.length === 0 ? 'flex-1 flex flex-col min-h-0' : 'space-y-2.5 chat-column'}
       >
       {isLoadingOlderMessages && (
@@ -600,7 +680,7 @@ function TabViewImpl({
           const isPriorSession = hasContentAfterBoundary && idx < lastResumeBoundaryIdx;
           return (
             <React.Fragment key={msg.id}>
-              <div className={isPriorSession ? 'opacity-50' : undefined}>
+              <div className={isPriorSession ? 'opacity-50' : undefined} data-msg-id={msg.id} {...ANCHOR_PROPS}>
                 <MessageBubble
                   message={msg}
                   onAnswerQuestion={onAnswerQuestion}
@@ -664,7 +744,7 @@ function TabViewImpl({
         <div data-testid="streaming-pill" className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
           <button
             type="button"
-            onClick={scrollToBottom}
+            onClick={follow}
             className="flex items-center gap-2 px-3 py-1.5 rounded-full
                           bg-[var(--color-bg-primary)]/95 backdrop-blur-sm
                           border border-[var(--color-border-subtle)]
@@ -680,7 +760,6 @@ function TabViewImpl({
           </button>
         </div>
       )}
-      <div ref={endRef} />
       </div>
       ) : null}
     </div>

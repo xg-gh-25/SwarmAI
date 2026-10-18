@@ -21,7 +21,7 @@
  *
  * @module ChatPage
  */
-import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -344,9 +344,7 @@ export default function ChatPage() {
     pendingStreamTabs,
     clearPendingStreamTab,
     bumpStreamingDerivation,
-    messagesEndRef,
     incrementStreamGen,
-    userScrolledUpRef,
     resetUserScroll,
     createStreamHandler,
     createCompleteHandler,
@@ -937,7 +935,6 @@ export default function ChatPage() {
       updateTabState(currentTabId, {
         ...(!isTabStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
         pendingQuestion: null,
-        scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
       });
     }
     const newTab = addTab(selectedAgentId);
@@ -979,7 +976,6 @@ export default function ChatPage() {
         pendingQuestion: pendingQuestion,
         pendingPermissionRequestId: pendingPermissionRequestId,
         isExpanded: isExpandedRef.current,
-        scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
       });
       inputValueMapRef.current.set(currentTabId, inputValueRef.current);
     }
@@ -1019,11 +1015,6 @@ export default function ChatPage() {
           loadSessionMessages(tabState.sessionId);
           return;
         }
-        // Guard 1: Suppress auto-scroll during tab switch — prevents the
-        // [messages] effect from calling scrollToBottom() before the
-        // useLayoutEffect scroll restore fires.
-        userScrolledUpRef.current = true;
-
         // Defensive store seed — POPULATE an empty store, never CLOBBER a
         // populated one. This was previously an UNCONDITIONAL
         // `store.replace(tabState.messages)` — the reverse-flow half of the
@@ -1071,14 +1062,6 @@ export default function ChatPage() {
         // Mark this switch as handled — prevents the sync-active-tab effect
         // from redundantly calling setMessages with the same data (extra render).
         tabSelectHandledRef.current = true;
-
-        // Guard 2: Schedule scroll restore via useLayoutEffect (fires
-        // synchronously after React commits DOM changes but BEFORE browser
-        // paint — eliminates the 2-3 frame visual flash from double-rAF).
-        pendingScrollRestoreRef.current = {
-          tabId,
-          scrollPosition: tabState.scrollPosition,
-        };
       }
       // Restore per-tab pending permission state from tabMapRef
       const targetTabState = getTabState(tabId);
@@ -1405,7 +1388,6 @@ export default function ChatPage() {
       updateTabState(currentTabId, {
         ...(!currentTab.isStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
         pendingQuestion,
-        scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
       });
     }
 
@@ -1491,64 +1473,11 @@ export default function ChatPage() {
     setDeleteConfirmSession(null);
   };
 
-  // Scroll to bottom on new messages — conditional on user scroll position (Fix 2)
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  // (chatAreaBounds/observeChatArea removed M5 2026-08-04: the fullscreen card-detail
-  // Modal that consumed the measured chat-area rect is retired — the OverlayHost bounds
-  // itself via `absolute inset:0` of the in-flow chat area, no viewport measurement.)
-  const prevScrollHeightRef = useRef(0);
-  /** Pending scroll restore from tab switch — consumed by useLayoutEffect. */
-  const pendingScrollRestoreRef = useRef<{ tabId: string; scrollPosition?: number } | null>(null);
+  // Scrolling lives in each tab's own TabView (pages/chat/scrollFocus.ts):
+  // landing on activation, following the live work, holding what the user reads.
+  // ChatPage does not scroll.
   /** Flag to skip redundant sync-active-tab effect after handleTabSelect. */
   const tabSelectHandledRef = useRef(false);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    // Only auto-scroll if user hasn't scrolled up (Fix 2)
-    if (!userScrolledUpRef.current) {
-      scrollToBottom();
-    }
-  }, [messages]);
-
-  // Scroll position preservation when prepending older messages
-  useLayoutEffect(() => {
-    if (!prevScrollHeightRef.current) return;
-    const container = messagesContainerRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight - prevScrollHeightRef.current;
-      prevScrollHeightRef.current = 0;
-    }
-  }, [messages]);
-
-  // Tab-switch scroll landing — fires synchronously after React commits the new
-  // messages to the DOM but BEFORE the browser paints (eliminates the 2-3 frame
-  // flash where messages render at scrollTop=0 then jump).
-  //
-  // UX decision (2026-08-03, user choice A): EVERY tab switch lands at the BOTTOM
-  // (latest message), NOT the previously-saved scroll position. Restoring the old
-  // position forced the user to scroll down every time they returned to chat
-  // (e.g. after a Canvas detour) — a real friction point. Landing at bottom
-  // matches the chat mental model: coming back to a conversation shows the newest
-  // message. The saved scrollPosition is intentionally ignored here (kept in
-  // tabState only for potential future "resume where you were" affordance).
-  useLayoutEffect(() => {
-    const pending = pendingScrollRestoreRef.current;
-    if (!pending) return;
-    // Only consume if this render is for the correct tab
-    if (activeTabIdRef.current !== pending.tabId) return;
-    pendingScrollRestoreRef.current = null;
-
-    const container = messagesContainerRef.current;
-    if (!container) return;
-
-    // Always land at the bottom — newest message visible, no manual scroll needed.
-    container.scrollTop = container.scrollHeight;
-    // At bottom → not scrolled up, so auto-scroll on new messages stays enabled.
-    userScrolledUpRef.current = false;
-  }, [messages]);
 
   // Time-to-interactive logging (dev only)
   useEffect(() => {
@@ -1558,24 +1487,6 @@ export default function ChatPage() {
       }
       mountTimeRef.current = 0; // Only log once
     }
-  }, [messagesReady]);
-
-  // Scroll to bottom after tab restore completes.
-  // The normal scroll effect ([messages]) may fire before the messages container
-  // is rendered (it's gated behind messagesReady). This effect ensures a
-  // reliable scroll-to-bottom once the DOM is fully laid out after restore.
-  useEffect(() => {
-    if (messagesReady && messages.length > 0) {
-      // Double-rAF: first rAF runs after React commit, second runs after
-      // the browser has painted the new DOM, guaranteeing scroll targets exist.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-        });
-      });
-    }
-    // Only fire once when messagesReady transitions to true — not on every message change
-     
   }, [messagesReady]);
 
   // Register the initial/default tab in the per-tab state map on mount.

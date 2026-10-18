@@ -53,6 +53,7 @@ import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
 import { ReadOnlyContext } from '../readOnlyContext';
+import { ANCHOR_PROPS } from '../scrollFocus';
 import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
@@ -297,7 +298,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     const gap = !prev ? '' : narration && prev.kind === 'process' ? 'mt-1' : 'mt-3';
     if (unit.kind === 'process') {
       return (
-        <div key={`p-${unit.id}`} className={gap}>
+        <div key={`p-${unit.id}`} className={gap} {...ANCHOR_PROPS}>
           <ProcessBlock
             unit={unit}
             expanded={processChoice.get(unit.id)}
@@ -311,7 +312,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     if (unit.kind === 'thought') {
       const key = `th-${unit.ordinal}`;
       return (
-        <div key={key} className={gap}>
+        <div key={key} className={gap} {...ANCHOR_PROPS}>
           <ThoughtBlock
             unit={unit}
             compact={!isStreaming}
@@ -322,7 +323,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       );
     }
     if (unit.kind === 'stage') return null; // rendered as its section's header
-    if (unit.kind === 'interrupt') return <div key={`i-${unit.index}`} className={gap}>{renderBlock(unit.block, `ib-${unit.index}`)}</div>;
+    if (unit.kind === 'interrupt') return <div key={`i-${unit.index}`} className={gap} {...ANCHOR_PROPS}>{renderBlock(unit.block, `ib-${unit.index}`)}</div>;
     // A note and an outcome share a key prefix: while streaming, the answer-so-far
     // turns into a note the moment the next tool call arrives — no remount.
     const prefix = unit.kind === 'landmark' ? 'lm' : 'cb';
@@ -332,6 +333,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     return (
       <div
         key={`${prefix}-${unit.index}`}
+        {...ANCHOR_PROPS}
         data-testid={isAlignment ? 'turn-alignment' : isResult ? 'turn-result' : undefined}
         className={`${gap} ${demoted ? 'text-[13.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
       >
@@ -389,7 +391,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     const attentionHere = attentionPending && sec.kind === 'stage' && sec.block.stage === 'deliver';
     if (attentionHere) attentionPending = false;
     return (
-      <div key={key} className={k === firstStage ? 'mt-3' : ''}>
+      <div key={key} className={k === firstStage ? 'mt-3' : ''} {...ANCHOR_PROPS}>
         <PipelineStageRow
           block={sec.kind === 'stage' ? sec.block : undefined}
           live={sec.kind === 'liveStage' ? sec.stage : undefined}

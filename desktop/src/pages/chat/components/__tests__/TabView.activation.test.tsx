@@ -12,16 +12,23 @@
  * authoritative signal — `followRef` (default true), flipped false ONLY by a
  * genuine user scroll-up (nextFollowState), consulted by a single continuous pin
  * path ([messages,isActive] effect + RO, both gated on followRef). Default-follow
- * means streaming AND idle tabs pin to the bottom by default; being a ref, the
- * signal persists across the display:none deactivation (AC2 survives a switch).
+ * means streaming AND idle tabs pin to the bottom by default.
  *
- * jsdom has no layout; we spy scrollIntoView and drive real scroll events to flip
- * follow. The pure decision (nextFollowState) is also tested DOM-free.
+ * 2026-10-18 (XG: "tab switch … 屏幕应该聚焦在 last message or working 区域"):
+ * activation now ALWAYS lands at the bottom, even after a scroll-up (AC2 is
+ * reversed — it had contradicted XG's 2026-08-03 choice A), and scroll events in
+ * the activation frames are ignored (a re-shown display:none container may report
+ * scrollTop 0). Unread-reply landing is in TabView.scrollFocus.test.tsx.
+ *
+ * jsdom has no layout; fakeScroller gives the container metrics and records
+ * scrollTop writes, and real scroll events flip the mode. The pure decision
+ * (nextFollowState) is also tested DOM-free.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, act } from '@testing-library/react';
 import { messageStoreRegistry } from '../../../../stores/MessageStore';
 import type { Message } from '../../../../types';
+import { fakeScroller } from './scrollTestUtils';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string, d?: string) => d ?? k }) }));
 vi.mock('../MessageBubble', () => ({
@@ -41,7 +48,6 @@ class MockResizeObserver { observe() {} unobserve() {} disconnect() {} }
 
 // Mock rAF: capture callbacks so the test can flush them deterministically.
 let rafCbs: FrameRequestCallback[] = [];
-let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = MockResizeObserver;
@@ -51,8 +57,6 @@ beforeEach(() => {
     return rafCbs.length;
   };
   (globalThis as unknown as { cancelAnimationFrame: unknown }).cancelAnimationFrame = () => {};
-  scrollIntoViewSpy = vi.fn();
-  (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = scrollIntoViewSpy;
 });
 afterEach(() => { cleanup(); messageStoreRegistry.clear?.(); });
 
@@ -80,69 +84,63 @@ describe('nextFollowState — activation follows the default (pure)', () => {
   it('default follow=true is preserved across a no-op (activation with no user scroll)', () => {
     expect(nextFollowState({ follow: true, lastScrollTop: 0 }, 0, 600, 1400).follow).toBe(true);
   });
-  it('a scrolled-up tab (follow=false) stays false — never yanked back on activation', () => {
+  it('a reflow with no scroll keeps a scrolled-up tab reading (no move, no mode change)', () => {
     // No genuine scroll on activation (scrollTop unchanged) → follow stays false.
     expect(nextFollowState({ follow: false, lastScrollTop: 100 }, 100, 600, 1400).follow).toBe(false);
   });
 });
 
-describe('TabView — activation re-pin (default-follow controller, root fix)', () => {
-  it('scrolls to bottom when a tab becomes active and follow is on (the default)', () => {
-    const store = messageStoreRegistry.getOrCreate('tab-a1');
-    store.replace([msg('m1', 'hello')]);
-    // Mount INACTIVE (display:none) — no activation scroll yet.
-    const { rerender } = render(<TabView {...baseProps('tab-a1', false)} />);
-    scrollIntoViewSpy.mockClear();
-    // Activate the tab (the switch). Default follow=true → the [messages,isActive]
-    // pin path fires and lands at the bottom (no rAF indirection needed anymore).
+describe('TabView — activation lands at the bottom (XG 2026-08-03 choice A, 2026-10-18)', () => {
+  // Drain every pending frame, including frames scheduled by a frame.
+  const flushRaf = () => act(() => {
+    for (let i = 0; i < 10 && rafCbs.length; i += 1) { const cbs = rafCbs; rafCbs = []; cbs.forEach((cb) => cb(0)); }
+  });
+  const scrollerOf = (c: HTMLElement) => c.querySelector('.chat-scroll-gutter') as HTMLElement;
+
+  it('pins to the bottom when a tab becomes active', () => {
+    messageStoreRegistry.getOrCreate('tab-a1').replace([msg('m1', 'hello')]);
+    const { container, rerender } = render(<TabView {...baseProps('tab-a1', false)} />);
+    const s = fakeScroller(scrollerOf(container));
     act(() => { rerender(<TabView {...baseProps('tab-a1', true)} />); });
-    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    expect(s.top).toBe(s.bottom);
   });
 
-  // AC1 (symptom C) — a STREAMING tab that grew in the background, on return,
-  // FOLLOWS the live bottom: new content while inactive + re-activation both pin.
-  it('AC1: a streaming tab that grew while inactive re-pins to the live bottom on return', () => {
-    const store = messageStoreRegistry.getOrCreate('tab-stream');
-    store.replace([msg('m1', 'hi')]);
-    // Active + streaming, at bottom (default follow=true).
+  it('AC1: a streaming tab that grew while inactive lands on the live bottom on return', () => {
+    messageStoreRegistry.getOrCreate('tab-stream').replace([msg('m1', 'hi')]);
     const streamProps = { ...baseProps('tab-stream', true), isStreaming: true };
-    const { rerender } = render(<TabView {...streamProps} />);
-    // Switch AWAY (inactive) — background streaming keeps appending to the store.
-    act(() => { rerender(<TabView {...streamProps} isActive={false} messages={[msg('m1', 'hi'), msg('m2', 'grew-1')]} />); });
-    scrollIntoViewSpy.mockClear();
-    // Switch BACK — the grown content + activation must land at the live bottom.
-    act(() => { rerender(<TabView {...streamProps} isActive messages={[msg('m1', 'hi'), msg('m2', 'grew-1'), msg('m3', 'grew-2')]} />); });
-    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    const { container, rerender } = render(<TabView {...streamProps} />);
+    const s = fakeScroller(scrollerOf(container));
+    act(() => { rerender(<TabView {...streamProps} isActive={false} />); });
+    s.setHeights(3000);
+    act(() => { rerender(<TabView {...streamProps} isActive />); });
+    expect(s.top).toBe(s.bottom);
   });
 
-  // AC2 (the one exception) — a deliberate scroll-up (follow→false) is NEVER
-  // yanked back to the bottom, and that intent SURVIVES a tab switch.
-  it('AC2: a deliberate scroll-up is not re-pinned, and survives a tab switch', () => {
-    const store = messageStoreRegistry.getOrCreate('tab-hist');
-    store.replace([msg('m1', 'a'), msg('m2', 'b')]);
+  it('AC2 (reversed): a scroll-up does not survive a switch — coming back lands at the bottom', () => {
+    messageStoreRegistry.getOrCreate('tab-hist').replace([msg('m1', 'a'), msg('m2', 'b')]);
     const { container, rerender } = render(<TabView {...baseProps('tab-hist', true)} />);
-    // The scroll container is the div carrying onScroll=handleScroll (the
-    // chat-scroll-gutter body). Simulate a GENUINE user scroll-up on it: scrollTop
-    // moved up (from the initial 0 baseline it must actually differ; start the
-    // baseline high then move up) → handleScroll → nextFollowState flips follow=false.
-    const scroller = container.querySelector('.chat-scroll-gutter') as HTMLElement;
-    expect(scroller).toBeTruthy();
-    // First a genuine scroll to establish lastScrollTop at the bottom, then up.
-    const setMetrics = (top: number) => {
-      Object.defineProperty(scroller, 'scrollTop', { value: top, configurable: true });
-      Object.defineProperty(scroller, 'clientHeight', { value: 600, configurable: true });
-      Object.defineProperty(scroller, 'scrollHeight', { value: 4000, configurable: true });
-    };
-    setMetrics(3400); // at bottom (3400+600=4000)
-    act(() => { scroller.dispatchEvent(new Event('scroll')); });
-    setMetrics(0);    // user scrolls UP to the top → genuine move → follow=false
-    act(() => { scroller.dispatchEvent(new Event('scroll')); });
-    scrollIntoViewSpy.mockClear();
-    // New content arrives + a switch away and back — follow=false must persist,
-    // so NONE of these re-pin the history-reading user.
-    act(() => { rerender(<TabView {...baseProps('tab-hist', true)} messages={[msg('m1', 'a'), msg('m2', 'b'), msg('m3', 'c')]} />); });
-    act(() => { rerender(<TabView {...baseProps('tab-hist', false)} messages={[msg('m1', 'a'), msg('m2', 'b'), msg('m3', 'c')]} />); });
-    act(() => { rerender(<TabView {...baseProps('tab-hist', true)} messages={[msg('m1', 'a'), msg('m2', 'b'), msg('m3', 'c')]} />); });
-    expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    const s = fakeScroller(scrollerOf(container), 4000, 600);
+    flushRaf();
+    s.userScroll(3400);
+    s.userScroll(0); // genuine scroll up → reading
+    act(() => { rerender(<TabView {...baseProps('tab-hist', false)} />); });
+    act(() => { rerender(<TabView {...baseProps('tab-hist', true)} />); });
+    expect(s.top).toBe(s.bottom);
+  });
+
+  it('scroll events in the activation frames neither leave the bottom nor load older messages', () => {
+    messageStoreRegistry.getOrCreate('tab-r').replace([msg('m1', 'a')]);
+    const onLoadOlder = vi.fn();
+    const { container, rerender } = render(<TabView {...baseProps('tab-r', false)} onLoadOlder={onLoadOlder} />);
+    const s = fakeScroller(scrollerOf(container));
+    act(() => { rerender(<TabView {...baseProps('tab-r', true)} onLoadOlder={onLoadOlder} />); });
+    s.userScroll(0); // the engine resetting a re-shown display:none container
+    expect(onLoadOlder).not.toHaveBeenCalled();
+    s.setHeights(2400);
+    act(() => { rerender(<TabView {...baseProps('tab-r', true)} onLoadOlder={onLoadOlder} messages={[msg('m1', 'a'), msg('m2', 'b')]} />); });
+    expect(s.top).toBe(s.bottom); // still following
+    flushRaf();
+    s.userScroll(0); // after the frames: the user's scroll counts again
+    expect(onLoadOlder).toHaveBeenCalled();
   });
 });

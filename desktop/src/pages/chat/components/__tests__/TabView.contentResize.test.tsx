@@ -13,14 +13,16 @@
  * wasAtBottomRef intent, so a user who genuinely scrolled up is not yanked back.
  *
  * jsdom has no layout + no real ResizeObserver, so we install a mock RO that
- * captures the callback and lets the test fire it, and spy scrollIntoView. The
- * assertion: the observer observes MORE THAN ONE element (container + content),
- * and firing it re-pins when at-bottom.
+ * captures the callback and lets the test fire it; fakeScroller records scrollTop
+ * writes (the pin is a scrollTop write since 2026-10-18). The assertion: the
+ * observer observes MORE THAN ONE element (container + content), and firing it
+ * re-pins when following.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, act } from '@testing-library/react';
 import { messageStoreRegistry } from '../../../../stores/MessageStore';
 import type { Message } from '../../../../types';
+import { fakeScroller } from './scrollTestUtils';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string, d?: string) => d ?? k }),
@@ -47,15 +49,10 @@ class MockResizeObserver {
   disconnect() {}
 }
 
-let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
-
 beforeEach(() => {
   roCallback = null;
   observedEls.length = 0;
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = MockResizeObserver;
-  scrollIntoViewSpy = vi.fn();
-  // jsdom lacks scrollIntoView; install a spy on the prototype.
-  (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = scrollIntoViewSpy;
 });
 afterEach(() => {
   cleanup();
@@ -97,15 +94,15 @@ describe('TabView — content-height re-pin (root cause B)', () => {
     expect(getByTestId('welcome')).toBeTruthy();
   });
 
-  it('re-pins (scrollIntoView) when the ResizeObserver fires while at bottom', () => {
+  it('re-pins when the ResizeObserver fires while following', () => {
     const store = messageStoreRegistry.getOrCreate('tab-b2');
     store.replace([msg('m1', 'hello')]);
-    render(<TabView {...baseProps('tab-b2')} />);
-    scrollIntoViewSpy.mockClear(); // ignore the mount-time auto-scroll
-    // wasAtBottomRef defaults true (fresh view at bottom). Firing the observer
-    // (content grew) must re-pin.
+    const { container } = render(<TabView {...baseProps('tab-b2')} />);
+    const s = fakeScroller(container.querySelector('.chat-scroll-gutter') as HTMLElement);
+    // Following by default. Content grew → firing the observer must re-pin.
+    s.setHeights(2600);
     expect(roCallback).toBeTruthy();
     act(() => { roCallback!([], {} as ResizeObserver); });
-    expect(scrollIntoViewSpy).toHaveBeenCalled();
+    expect(s.top).toBe(s.bottom);
   });
 });

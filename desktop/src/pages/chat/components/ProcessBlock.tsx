@@ -15,7 +15,8 @@
  *     stream (ThoughtBlock) and never fold away with the work.
  *   - Colour only for exceptions: failures red, waiting amber; done is neutral.
  *   - A finished block folds 2s after the next item arrives (`useLinger`); a user's
- *     open/closed choice wins. `flat` (inside a pipeline stage's body) renders the
+ *     open/closed choice wins. In those 2s its list keeps the live layout (newest
+ *     steps, capped height), so the work area does not reshuffle before folding. `flat` (inside a pipeline stage's body) renders the
  *     steps directly — the stage row is already the fold, so there is no second one.
  *   - `title` (finished turns): the note that introduced this work leads its folded
  *     line ("Check the store · read 3 files"); opened, the whole note is above the
@@ -40,6 +41,7 @@ import type { ProcessUnit, StepRowItem, ToolStep, StepVerb } from '../turnView';
 import { STEP_VERB_FALLBACK, changedFiles, groupSteps, stepLabel, summarizeProcess } from '../turnView';
 import { tf } from '../tf';
 import { FileChip } from './FileChip';
+import { ANCHOR_PROPS } from '../scrollFocus';
 
 const VERB_FALLBACK = STEP_VERB_FALLBACK;
 const COUNT_FALLBACK: Partial<Record<StepVerb, [string, string]>> = {
@@ -103,7 +105,7 @@ function ToolStepRow({ step, merged, detail = true }: { step: ToolStep; merged?:
   const inlineOutcome = !!outcome && !isError && outcome.length <= INLINE_OUTCOME_CHARS;
   const outcomeTone = isError ? 'text-red-400' : 'text-[var(--color-text-dim)]';
   return (
-    <div data-testid="step-row" data-status={step.status}>
+    <div data-testid="step-row" data-status={step.status} {...ANCHOR_PROPS}>
       <div className="flex items-center gap-2 px-2 py-0.5 rounded-md text-[12.5px] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors min-w-0">
         {detail ? (
           <button
@@ -197,6 +199,7 @@ function AgentDetail({ step }: { step: ToolStep }) {
           {earlier > 0 && (
             <button
               type="button"
+              data-expands=""
               onClick={() => setChoice(true)}
               className="px-2 py-0.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded"
             >
@@ -341,6 +344,10 @@ export function ProcessBlock({ unit, expanded, onToggle, flat, title }: ProcessB
   );
   const canExpand = listSteps.length > 0;
   const open = canExpand && (expanded ?? autoOpen);
+  // In the 2s after it finishes, the list keeps its live layout (newest steps,
+  // capped height, scrolled to the end), then folds in one move — it does not
+  // reshuffle to its first steps and grow first (XG 2026-10-18, "聚焦").
+  const liveList = unit.isLive || (autoOpen && expanded === undefined);
 
   const rows = useMemo(() => {
     const grouped = groupSteps(listSteps);
@@ -348,7 +355,7 @@ export function ProcessBlock({ unit, expanded, onToggle, flat, title }: ProcessB
     return grouped.map((row, i) => ({ row, key: keys[i] }));
   }, [listSteps]);
   // A LIVE block pages from the END so the newest step stays in view.
-  const visibleRows = showAll ? rows : unit.isLive ? rows.slice(-STEP_PAGE) : rows.slice(0, STEP_PAGE);
+  const visibleRows = showAll ? rows : liveList ? rows.slice(-STEP_PAGE) : rows.slice(0, STEP_PAGE);
   const hiddenCount = rows.length - visibleRows.length;
   const newest = unit.steps[unit.steps.length - 1];
 
@@ -358,8 +365,8 @@ export function ProcessBlock({ unit, expanded, onToggle, flat, title }: ProcessB
   const tail = newest ? `${newest.status}:${newest.children?.length ?? 0}` : '';
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && unit.isLive && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [unit.isLive, open, unit.steps.length, tail]);
+    if (el && liveList && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [unit.isLive, liveList, open, unit.steps.length, tail]);
   const onScroll = () => {
     const el = scrollRef.current;
     if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX;
@@ -369,6 +376,7 @@ export function ProcessBlock({ unit, expanded, onToggle, flat, title }: ProcessB
     <button
       type="button"
       data-testid="show-all-steps"
+      data-expands=""
       onClick={() => setShowAll(true)}
       className="ml-2 my-0.5 px-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
     >
@@ -380,16 +388,19 @@ export function ProcessBlock({ unit, expanded, onToggle, flat, title }: ProcessB
       ref={scrollRef}
       onScroll={onScroll}
       data-testid="process-steps"
+      data-live-layout={liveList ? 'true' : 'false'}
       className={unit.isLive
         ? 'mt-1 max-h-[300px] overflow-y-auto'
-        : 'ml-[7px] mt-0.5 mb-1 pl-2 border-l border-[var(--color-border)]'}
+        : liveList
+          ? 'ml-[7px] mt-0.5 mb-1 pl-2 border-l border-[var(--color-border)] max-h-[300px] overflow-y-auto'
+          : 'ml-[7px] mt-0.5 mb-1 pl-2 border-l border-[var(--color-border)]'}
     >
-      {unit.isLive && showAllButton}
+      {liveList && showAllButton}
       {visibleRows.map(({ row, key }) => (row.kind === 'reads'
         ? <ToolStepRow key={key} step={row.steps[0]} merged={row.steps} />
         : <ToolStepRow key={key} step={row.step} />
       ))}
-      {!unit.isLive && showAllButton}
+      {!liveList && showAllButton}
     </div>
   );
   const Row = canExpand ? 'button' : 'div';

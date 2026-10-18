@@ -145,10 +145,6 @@ export interface UnifiedTab {
   promptMetadata: SystemPromptMetadata | null;
   /** Per-tab expanded/compact mode for ChatInput (runtime-only, NOT serialized). */
   isExpanded?: boolean;
-  /** Per-tab scroll position (runtime-only, NOT serialized).
-   *  `undefined` = scroll to bottom (new tab default).
-   *  A number = saved scrollTop value to restore on tab switch. */
-  scrollPosition?: number;
   /** True while the SSE connection is being retried after a connection-phase failure. */
   isReconnecting?: boolean;
   /** True while PATH A cold-start resume is in progress (subprocess killed, re-spawning). */

@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 import { messageStoreRegistry } from '../../../../stores/MessageStore';
+import { afterActivation } from './scrollTestUtils';
 import type { Message } from '../../../../types';
 
 vi.mock('react-i18next', () => ({
@@ -72,9 +73,10 @@ describe('TabView — single current-activity surface', () => {
     expect(queryByTestId('streaming-pill')).toBeNull();
   });
 
-  it('after the user scrolls up the pill appears; scrolling back hides it', () => {
+  it('after the user scrolls up the pill appears; scrolling back hides it', async () => {
     messageStoreRegistry.getOrCreate('A').replace([toolTurn]);
     const { container, queryByTestId } = render(<TabView {...props('A', true)} />);
+    await afterActivation(); // scroll events in the activation frames are not the user's
     const el = scrollContainer(container);
     scrollTo(el, 1500); // at bottom (1500 + 500 = 2000)
     scrollTo(el, 200);  // genuine scroll up
@@ -83,9 +85,10 @@ describe('TabView — single current-activity surface', () => {
     expect(queryByTestId('streaming-pill')).toBeNull();
   });
 
-  it('no pill when not streaming even if scrolled away', () => {
+  it('no pill when not streaming even if scrolled away', async () => {
     messageStoreRegistry.getOrCreate('A').replace([toolTurn]);
     const { container, queryByTestId } = render(<TabView {...props('A', false)} />);
+    await afterActivation();
     const el = scrollContainer(container);
     scrollTo(el, 1500);
     scrollTo(el, 200);
