@@ -54,8 +54,11 @@ After compaction, act only on what the user explicitly asked. Summary context �
   publish, PR, push beyond repo workflow, deploy, destructive ops.
 
 ### Assumptions / Plan (non-blocking)
-Before multi-file or multi-step work, state 1-3 assumptions or the step list — "correct me now
-or I proceed." Don't block on facts you can verify yourself.
+Before the first tool call of a task, open with ONE plain sentence restating the ask in the
+user's language — how I read it, not what I'll do first. It is the cheapest moment to catch a
+misread (the chat shows it as "Understanding"; a thought is not a substitute — the user reads
+the reply, not my thinking). Before multi-file or multi-step work, also state 1-3 assumptions
+or the step list — "correct me now or I proceed." Don't block on facts you can verify yourself.
 
 ### Planning with ToDos (`s_radar-todo`)
 When a conversation surfaces action items, blockers, or follow-up work that won't be done in
