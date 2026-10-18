@@ -17,6 +17,7 @@ Invariants:
     (pytest, vitest, tsc, eslint, vite build, npm build/test/lint/typecheck/check,
     python -c / stdin code running pytest, coverage run, make test*, bash -o/--long
     -c wrappers, node entry points, pnpm / yarn / bun test|run|exec|dlx / bunx,
+    the `pnpm exec|dlx -c` / `yarn dlx -c` shell mode (string classified like bash -c),
     git archive, git worktree add, rsync / cp -r of the repo or backend/,
     ps/pgrep/kill/pkill on pytest, python -X faulthandler); approve pytest
     --version/--help, pytest words that are only quoted / grep patterns / commit /
@@ -242,6 +243,13 @@ DENIED_COMMANDS = [
     "bunx tsc --noEmit",
     "bun x vitest run",
     "cd ../desktop && perl -e 'alarm 90; exec @ARGV' pnpm test",
+    # shell mode: `pnpm exec|dlx -c` / `yarn dlx -c` strings are classified like bash -c
+    "pnpm dlx -c 'vitest run'",
+    "pnpm exec -c 'tsc --noEmit && echo ok'",
+    "pnpm exec --shell-mode 'eslint src'",
+    "pnpm --filter web dlx -p vitest -c 'vitest run src/a.test.ts'",
+    "yarn dlx -c 'pytest -q'",
+    "cd desktop && pnpm dlx -c 'npm run build'",
     # M1: shell -c behind -o / --long options
     "bash -o pipefail -c \"perl -e 'alarm 90; exec @ARGV' .venv/bin/python -m pytest tests/test_x.py\"",
     "bash --norc -c 'pytest tests/test_x.py'",
@@ -334,6 +342,10 @@ APPROVED_COMMANDS = [
     "bun run dev",
     "bun index.ts",
     "bunx prettier --write .",
+    # shell mode whose string runs no test / build
+    "pnpm dlx -c 'echo hi'",
+    "pnpm exec -c 'prettier --check . | cat'",
+    "yarn dlx -c 'ls -la'",
 ]
 
 RUNNER = ("perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python "
@@ -722,6 +734,8 @@ def test_build_hooks_registers_both_gates_before_the_hitl_gate(monkeypatch):
     assert names.index("pipeline_test_gate") < names.index("dangerous_command_gate")
     assert names.index("direct_commit_gate") < names.index("dangerous_command_gate")
     assert names.count("pipeline_test_gate") == names.count("direct_commit_gate") == 1
+    # session_link_gate sits right before pipeline_test_gate (test_session_link_gate.py)
+    assert names.index("session_link_gate") == names.index("pipeline_test_gate") - 1
     by_name = {n: (e, m) for e, n, m in recorded}
     assert by_name["pipeline_test_gate"] == ("PreToolUse", "Bash")
     assert by_name["direct_commit_gate"] == ("PreToolUse", "Bash")

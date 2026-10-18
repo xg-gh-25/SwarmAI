@@ -29,6 +29,8 @@ from .security_hooks import (
     pytest_command_guard,
     create_adversarial_commit_gate,
     create_active_run_commit_gate,
+    create_session_link_gate,
+    create_session_link_stamper,
     create_pipeline_test_gate,
     create_direct_commit_gate,
     bash_syntax_guard,
@@ -321,6 +323,32 @@ async def build_hooks(
         "background_command_guard", matcher="Bash",
     )
 
+    # ── PreToolUse: session-link gate (Bash-scoped) ──
+    # ALWAYS (not only during a run): DENY a command that removes or overrides
+    # SWARM_APP_SESSION_ID (unset, env -u/-i in front of python, VAR=… prefixes,
+    # export/declare, also inside bash -c / eval / pnpm dlx -c). That variable links a
+    # pipeline run to this session; without it pipeline_test_gate and
+    # direct_commit_gate silently stop applying. Reads pass. Fail-open; operator bypass
+    # SWARM_SESSION_LINK_GATE_FORCE=1 (logged). Registered right before
+    # pipeline_test_gate so both see the command before any HITL prompt.
+    # The session-link stamper (PostToolUse below) needs each Bash call's start time;
+    # its PreToolUse companion records it by tool_use_id (no IO, never denies).
+    # Registered only for a real app session (session_context given): the fallback
+    # context's id may be an agent id, which must never be stamped into a run.
+    session_link_stamper = (
+        create_session_link_stamper(session_context) if session_context is not None
+        else None
+    )
+    if session_link_stamper is not None:
+        registry.register(
+            "PreToolUse", session_link_stamper.record_start,
+            "session_link_stamp_start", matcher="Bash",
+        )
+    registry.register(
+        "PreToolUse", create_session_link_gate(hook_session_context),
+        "session_link_gate", matcher="Bash",
+    )
+
     # ── PreToolUse: pipeline-test gate (Bash-scoped) ──
     # Design §4-B3. Only while THIS session has an active pipeline run (run.json
     # session_id == app session id, status running, recent activity): DENY direct
@@ -541,6 +569,18 @@ async def build_hooks(
         logger.info(
             f"Skill access checker hook added for skills: "
             f"{allowed_skill_names} (built-in: {builtin_names})"
+        )
+
+    # ── PostToolUse: session-link stamper (Bash-scoped) ──
+    # After a Bash call that mentions artifact_cli / run-create, stamp THIS session's
+    # app id into every running run with no session_id that the call created (or that
+    # it names by run id), so a run stays linked even when SWARM_APP_SESSION_ID was
+    # stripped inside interpreter code or a script (security_hooks section comment).
+    # Never overwrites an existing session_id. Solo in its (PostToolUse, "Bash")
+    # group, so it bounds itself (_STAMP_TIMEOUT); fail-safe, returns {}.
+    if session_link_stamper is not None:
+        registry.register(
+            "PostToolUse", session_link_stamper, "session_link_stamper", matcher="Bash",
         )
 
     # ── PreCompact: flag session_context ─────────────────────

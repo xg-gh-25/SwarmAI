@@ -227,7 +227,13 @@ implementations in `security_hooks.py`). By category:
    `dangerous_command_gate`; a session with no run of its own that commits more than 20
    changed source lines in the SwarmAI source repo, docs and lockfiles excluded, is sent
    to `artifact_cli.py run-create --profile direct`; other sessions' and unowned runs
-   never exempt it; fails open on errors).
+   never exempt it; fails open on errors), `session_link_gate` (Bash, always on, registered
+   right before `pipeline_test_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
+   the run↔session link both run gates key on; operator-set `SWARM_SESSION_LINK_GATE_FORCE=1`),
+   backed by the PostToolUse (Bash) `session_link_stamper` (with its PreToolUse start-time
+   companion `session_link_stamp_start`): after an artifact_cli / run-create call it writes
+   this session's id into running runs with no `session_id` that the call created or names
+   (`session_id_source: backend_stamp`), never overwriting an existing one.
 5. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 

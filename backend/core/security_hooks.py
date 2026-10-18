@@ -12,6 +12,8 @@ Public symbols
 - ``create_dangerous_command_gate``          — single PreToolUse gate for Bash commands
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
+- ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link)
+- ``create_session_link_stamper``            — PostToolUse: stamp this session's id into unlinked runs it created
 - ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
 - ``create_direct_commit_gate``              — >20 source lines committed outside a run → run-create --profile direct
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
@@ -21,6 +23,7 @@ Public symbols
 
 import asyncio
 import fnmatch
+import functools
 import json
 import logging
 import os
@@ -2952,8 +2955,10 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 #
 # FAIL-OPEN on every infra error or timeout (adversarial_commit_gate discipline).
 # Each session is judged ONLY by runs whose session_id equals its own id: a run with
-# no session_id (pre-C1, or created with SWARM_APP_SESSION_ID unset) is nobody's run,
-# so it neither gates its creator nor exempts anyone else. Only runs active within
+# no session_id (pre-C1) is nobody's run, so it neither gates its creator nor exempts
+# anyone else. Creating a run with SWARM_APP_SESSION_ID removed or overridden from a
+# Bash command is denied by session_link_gate (section below), and a run created
+# without the id anyway is stamped with it by session_link_stamper. Only runs active within
 # _RUN_ACTIVE_WINDOW_SECONDS (3 h) count: a running run is rewritten on every stage
 # transition, so an idle "running" file is a crashed or abandoned run and must not
 # pin a gate (the deny text names `run-update --status abandoned`).
@@ -2961,9 +2966,12 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # ACCEPTED RESIDUAL (same trade as pytest_command_guard): eval, project scripts and
 # `sudo -u X` are not recognised; a cd to an unresolvable directory (`cd $X`, `cd -`,
 # popd, or any cd joined by `||` / `|` / `&`) leaves the directory unknown, so a bare
-# make after it is not a hit (explicit test*/check* targets still are); `pnpm dlx -c
-# '<cmd>'` shell mode and `yarn check` (a v1 builtin, denied as a check script) are
-# imprecise. Recognised: `bash|sh|zsh -c` (one level, skipping -o/+o/--long options),
+# make after it is not a hit (explicit test*/check* targets still are); `yarn check`
+# (a v1 builtin, denied as a check script) is imprecise. Recognised: `<shell> -c`
+# (bash, sh, zsh, dash, ksh, mksh, csh, tcsh, fish) and the package-manager shell
+# modes (`pnpm [-c|-rc|--shell-mode] exec|dlx [-c]`, `pnpx|pnx -c`, `npx -c`,
+# `npm exec -c|--call`; see _js_pm_shell_c_command), both one level deep (a shell
+# -c skips -o/+o/--long options),
 # make targets test*/check*/lint*/typecheck* (and a bare make whose default goal is
 # one, resolved in the directory a leading `cd X &&` / `cd X;` / `pushd X &&` of the
 # same chain moved to), coverage run, python -c / stdin code naming pytest or vitest,
@@ -3026,10 +3034,13 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     activity (_run_activity_time) within _RUN_ACTIVE_WINDOW_SECONDS; the most recently
     active match wins. A session is judged ONLY by its own runs: a run with another
     session_id, or with no session_id at all (unowned), is simply not this session's
-    run and changes nothing for it — no global fail-open. Residual: a run created with
-    SWARM_APP_SESSION_ID deliberately unset is unowned, so it is ungated for its
-    creator too (artifact_cli warns at run-create). A corrupt or unreadable run.json
-    is skipped. A glob failure propagates; each caller fails OPEN on it."""
+    run and changes nothing for it — no global fail-open. A Bash command that would
+    create a run with SWARM_APP_SESSION_ID removed or overridden is denied by
+    session_link_gate (create_session_link_gate), and a run that still ends up
+    without an id (the variable stripped inside interpreter code or a script) is
+    stamped with this session's id by session_link_stamper after the session's
+    artifact_cli call (artifact_cli still warns at run-create). A corrupt or
+    unreadable run.json is skipped. A glob failure propagates; each caller fails OPEN on it."""
     import glob as _glob
     import time as _time
 
@@ -3072,7 +3083,11 @@ _PY_INTERP_RE = re.compile(r"^python[\d.]*$")
 _JS_TEST_FILE_RE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
 _SHELL_KEYWORDS = frozenset({"!", "{", "}", "then", "do", "else", "elif", "if",
                              "while", "until", "exec"})
-_SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash"})
+# Shells whose `-c STRING` is classified like the outer command (csh / tcsh / fish
+# take -c too; their builtins unsetenv / setenv / `set -e` are covered by
+# session_link_gate).
+_SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh",
+                                 "csh", "tcsh", "fish"})
 _TRIAGE_PROGRAMS = frozenset({"ps", "pgrep", "pkill", "kill", "killall"})
 _XARGS_VALUE_OPTS = frozenset({"-n", "-I", "-P", "-L", "-d", "-E", "-s", "-a"})
 _PYTEST_VALUE_OPTS = frozenset({"-c", "-p", "-k", "-m", "-o", "-W", "--ignore",
@@ -3187,13 +3202,19 @@ def _unwrap_program(tokens: list[str]) -> list[str]:
     shell keywords (`do`, `then`, `{`, `!`, `exec`), `xargs [opts]`, the sanctioned
     perl-alarm cap (`perl -e '...@ARGV...' CMD`), `uv|poetry|pdm run`, and
     `npx` / `npm exec` / `bunx` / `pnpx` / `pnpm|yarn [opts] exec|dlx` /
-    `bun [opts] x` (whose package token becomes the program)."""
+    `bun [opts] x` (whose package token becomes the program), and a `function NAME`
+    prefix. A package-manager shell mode (`pnpm [opts] exec|dlx -c STRING`, `pnpx -c`,
+    `npx -c`, `npm exec -c|--call`; see _js_pm_shell_c_command) is returned unchanged
+    from the package-manager token on; _js_pm_shell_c_command extracts its STRING."""
     for _ in range(10):  # bounded: each pass strips at least one token
         tokens = _skip_leading_wrappers(tokens)
         if not tokens:
             return tokens
         if tokens[0] in _SHELL_KEYWORDS:
             tokens = tokens[1:]
+            continue
+        if tokens[0] == "function":
+            tokens = tokens[2:]  # `function NAME { body` — the body starts after NAME
             continue
         w = os.path.basename(tokens[0])
         if w == "xargs":
@@ -3215,8 +3236,10 @@ def _unwrap_program(tokens: list[str]) -> list[str]:
         if w in ("uv", "poetry", "pdm") and len(tokens) > 1 and tokens[1] == "run":
             tokens = tokens[_skip_dash_opts(tokens, 2, frozenset()):]
             continue
+        if w in _JS_PM_SHELL_PROGRAMS and _js_pm_shell_c_command(tokens) is not None:
+            return tokens  # shell mode: the caller classifies the string
         start = -1
-        if w in ("npx", "bunx", "pnpx"):
+        if w in ("npx", "bunx", "pnpx", "pnx"):
             start = 1
         elif w == "npm" and len(tokens) > 1 and tokens[1] in ("exec", "x"):
             start = 2
@@ -3494,11 +3517,20 @@ def _classify_node(args: list[str], hits: set, files: list) -> None:
 
 
 def _shell_c_command(args: list[str]) -> "str | None":
-    """The command string of `bash|sh|zsh|dash [opts] -c STRING ...`, else None.
+    """The command string of `<shell> [opts] -c STRING ...`, else None
+    (see _shell_c_parts)."""
+    parts = _shell_c_parts(args)
+    return parts[0] if parts is not None else None
+
+
+def _shell_c_parts(args: list[str]) -> "tuple[str, list[str]] | None":
+    """``(STRING, positional)`` of `<shell> [opts] -c STRING [ARG0 ARG1 ...]`, else None.
+    *positional* are the words after STRING (the shell's $0, $1, ...).
 
     Skips `-o NAME` / `+o NAME` / `-O NAME` / `+O NAME` (also inside a flag group
     such as `-eo pipefail`), `--rcfile FILE` / `--init-file FILE` and other `--long`
-    options; the string is the first operand after a flag group containing `c`."""
+    options; the string is the first operand after a flag group containing `c`.
+    fish's `--command STRING` / `--command=STRING` is the same form."""
     saw_c = False
     i = 0
     while i < len(args):
@@ -3506,6 +3538,10 @@ def _shell_c_command(args: list[str]) -> "str | None":
         if a == "--":
             i += 1
             break
+        if a == "--command" and i + 1 < len(args):
+            return args[i + 1], args[i + 2:]
+        if a.startswith("--command="):
+            return a.split("=", 1)[1], args[i + 1:]
         if a in ("--rcfile", "--init-file"):
             i += 2
             continue
@@ -3520,8 +3556,106 @@ def _shell_c_command(args: list[str]) -> "str | None":
             continue
         break
     if saw_c and i < len(args):
-        return args[i]
+        return args[i], args[i + 1:]
     return None
+
+
+# Package-manager shell modes — the string runs like `sh -c STRING`:
+#   • pnpm [opts] exec|dlx [opts] STRING... with `-c` / `--shell-mode`, which pnpm
+#     accepts before or after the subcommand and inside a short flag group (`-rc`);
+#     pnpx / pnx (= pnpm dlx) likewise. The operands are joined with spaces, as
+#     pnpm does before handing them to the shell.
+#   • npx [opts] -c|--call STRING and npm [opts] exec|x [opts] -c|--call STRING: the
+#     string is the option's VALUE.
+#   • yarn has no shell mode (`yarn dlx` takes only -p/--package and -q/--quiet), so
+#     `yarn dlx -c STRING` fails in yarn itself; it is still classified like pnpm
+#     (an inert alias that can only over-deny a command that cannot run).
+# The value maps a program to the subcommands that take the shell mode (empty = the
+# program itself is the dlx form).
+_JS_PM_SHELL_MODE_SUBCOMMANDS = {
+    "pnpm": frozenset({"exec", "dlx"}),
+    "pnpx": frozenset(),
+    "pnx": frozenset(),
+    "yarn": frozenset({"dlx"}),
+}
+_JS_PM_SHELL_PROGRAMS = frozenset(_JS_PM_SHELL_MODE_SUBCOMMANDS) | {"npx", "npm"}
+_PNPM_SHORT_VALUE_FLAGS = "CFp"  # in a short group, these take the rest as a value
+
+
+def _npm_call_command(pm: str, tokens: list[str]) -> "str | None":
+    """The `-c` / `--call` value of `npx [opts] -c STRING` or
+    `npm [opts] exec|x [opts] -c STRING` (also `--call=STRING`), else None."""
+    value_opts = _NPM_VALUE_OPTS | _JS_EXEC_VALUE_OPTS
+    need_sub = pm == "npm"
+    call = None
+    i = 1
+    while i < len(tokens):
+        a = tokens[i]
+        if a == "--":
+            break
+        if a.startswith("-") and len(a) > 1:
+            if a in ("-c", "--call"):
+                call = tokens[i + 1] if i + 1 < len(tokens) else call
+                i += 2
+            elif a.startswith("--call="):
+                call = a.split("=", 1)[1]
+                i += 1
+            else:
+                i += 2 if (a in value_opts and i + 1 < len(tokens)) else 1
+            continue
+        if not need_sub:
+            break  # npx: the first operand is the package — options end here
+        if a not in ("exec", "x"):
+            return None
+        need_sub = False
+        i += 1
+    return None if need_sub else call
+
+
+def _js_pm_shell_c_command(tokens: list[str]) -> "str | None":
+    """The shell string of a package-manager shell mode (forms in the comment above),
+    else None. *tokens* start at the package-manager word. Options that take a value
+    (`--filter X`, `-C DIR`, `-p PKG`, `--package PKG`) are skipped."""
+    if not tokens:
+        return None
+    pm = os.path.basename(tokens[0])
+    if pm in ("npx", "npm"):
+        return _npm_call_command(pm, tokens)
+    subs = _JS_PM_SHELL_MODE_SUBCOMMANDS.get(pm)
+    if subs is None:
+        return None
+    value_opts = _JS_PM_VALUE_OPTS.get(pm, _JS_PM_VALUE_OPTS["pnpm"]) | _JS_EXEC_VALUE_OPTS
+    need_sub = bool(subs)
+    shell_mode = False
+    i = 1
+    while i < len(tokens):
+        a = tokens[i]
+        if a == "--":
+            if need_sub:
+                return None
+            i += 1
+            break
+        if a.startswith("-") and len(a) > 1:
+            if a in ("-c", "--shell-mode"):
+                shell_mode = True
+            elif pm != "yarn" and not a.startswith("--"):
+                for ch in a[1:]:
+                    if ch in _PNPM_SHORT_VALUE_FLAGS:
+                        break
+                    if ch == "c":
+                        shell_mode = True
+                        break
+            i += 2 if (a in value_opts and i + 1 < len(tokens)) else 1
+            continue
+        if not need_sub:
+            break
+        if a not in subs:
+            return None
+        need_sub = False
+        i += 1
+    if need_sub or not shell_mode or i >= len(tokens):
+        return None
+    return tokens[i] if pm == "yarn" else " ".join(tokens[i:])
 
 
 def _git_subcommand_args(tokens: list[str]) -> list[str]:
@@ -3618,7 +3752,14 @@ def _classify_test_segment(
         return ""
     w = os.path.basename(t[0])
     args = t[1:]
-    if w in ("pytest", "py.test"):
+    pm_shell_cmd = _js_pm_shell_c_command(t) if w in _JS_PM_SHELL_PROGRAMS else None
+    if pm_shell_cmd is not None:
+        if depth < 1:  # `pnpm dlx -c STRING`: classified like `bash -c STRING`
+            sub_hits, sub_files = _classify_pipeline_test_command(
+                pm_shell_cmd, cwd, depth + 1, start_dir=chain_dir)
+            hits.update(sub_hits)
+            files.extend(sub_files)
+    elif w in ("pytest", "py.test"):
         _add_pytest_run(args, hits, files)
     elif _PY_INTERP_RE.match(w):
         _classify_python(args, hits, files)
@@ -3879,6 +4020,915 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         }
 
     return _gate
+
+
+# ---------------------------------------------------------------------------
+# session-link gate (PreToolUse, Bash) — keeps the run↔session link of §4-B3/§4-G1
+# ---------------------------------------------------------------------------
+# pipeline_test_gate and direct_commit_gate judge a session only by runs whose
+# run.json session_id equals its app session id. artifact_cli.py run-create reads
+# that id from SWARM_APP_SESSION_ID, which prompt_builder injects into the CLI
+# subprocess env. A Bash command that removes or overrides the variable creates an
+# unowned (or foreign) run, and then neither gate applies. session_link_gate DENIES
+# such commands ALWAYS, not only during a run:
+#   • removal: `unset VAR` / `unset VAR[0]`, `env -u VAR` / `-uVAR` / `--unset[=]VAR`
+#     (also inside `env -S STRING`), `export -n VAR`, `declare|typeset|local VAR`
+#     without -p/-f (a function-local shadow is empty for child processes), csh
+#     `unsetenv VAR`, fish `set [-e] VAR`;
+#   • a NAME built at run time as the operand of unset / unsetenv / export -n /
+#     env -u / --unset (`unset $X`, `unset "$1"`, `unset ${!SWARM_APP_*}`, a glob
+#     matching the name, `env -u "$(…)"`, a backtick, `xargs -I{} env -u {}`, an
+#     `env -u` with no name at all), and a nameref (`declare|local|typeset -n R=VAR`,
+#     ksh `nameref`) whose target is the variable or a run-time name;
+#   • override: any assignment (`VAR=x cmd`, `VAR=x`, `VAR+=x`, `env VAR=x`,
+#     `sudo VAR=x`, `export|readonly|declare VAR=x`, csh `setenv VAR`) plus
+#     `read|mapfile|readarray VAR`, `printf -v VAR`, `for|select VAR in`,
+#     `getopts OPTS VAR`;
+#   • a wholesale env reset (`env -i` / `env -` / `--ignore-environment`, `exec -c`,
+#     `sudo` without -E / --preserve-env, `su -|-l -c`) whose wrapped command is a
+#     link reader (_is_link_reader_program: the PROGRAM is python* / uv /
+#     artifact_cli* / pipeline_test* or computed at run time, or a word is a path to
+#     artifact_cli.py / pipeline_test.py). The link is consumed by Python CLIs only,
+#     so `sudo dnf install python3.11`, `env -i make run` or `env -i node a.js` pass;
+#     a reset in front of a shell is judged by the commands of that shell string;
+#   • a shell reading its script from stdin: the script — the echo / printf words
+#     piped into it, or the command's heredoc / here-string bodies — is classified
+#     like a `-c` string (`bash <<'EOF'` + `echo $VAR` passes); from any other pipe
+#     producer (`cat f | sh`) the script is unknown, and naming the variable in the
+#     command denies.
+# Every segment is checked, and the strings of `<shell> -c` (bash, sh, zsh, dash,
+# ksh, mksh, csh, tcsh, fish; with its positional arguments substituted when one
+# names the variable: `bash -c 'unset "$1"' _ VAR`), `su [user] -c`, `eval` and the
+# package-manager shell modes (`pnpm [-c] exec|dlx [-c]` incl. `-rc` / `--shell-mode`,
+# `pnpx|pnx -c`, `npx -c`, `npm exec -c|--call`) are checked recursively up to
+# _SESSION_LINK_MAX_DEPTH levels. `function NAME { … }` bodies are commands too.
+# `env`, `sudo`, `su` and the shell forms are found at any word position, so an
+# unknown wrapper in front (`caffeinate env -u VAR ...`) does not hide them. Reading
+# the variable (`echo $VAR`, `env | grep SWARM`, `printenv VAR`, `declare -p VAR`,
+# `grep VAR= file`) is allowed. The scan is linear and bounded
+# (_SESSION_LINK_MAX_WORDS, _SESSION_LINK_MAX_CHARS, _SESSION_LINK_MAX_DEPTH); past a
+# bound it fails CLOSED only when the unscanned text names the variable or holds a
+# tamper form.
+# RESIDUAL, no longer an unlink: interpreter code (`python -c "os.environ.pop(…)"`,
+# `subprocess.run(…, env={})`), a script file, `source FILE`, an escaped name a
+# program decodes (`echo -e '\x53…' | sh`) and a command shlex cannot split
+# (bash_syntax_guard denies those) all pass this gate, but a run they create ends
+# linked anyway: session_link_stamper (below) stamps this session's id into it right
+# after that call when its text mentions artifact_cli / run-create, else at the first
+# later artifact_cli call of the session that names the run id. What truly remains is
+# a run that is never named by an artifact_cli call of its session (see the stamper
+# section). Fail-open on
+# internal errors; SWARM_SESSION_LINK_GATE_FORCE=1 in the backend process env
+# (operator-only) approves, logged.
+_SESSION_LINK_VAR = "SWARM_APP_SESSION_ID"
+_SESSION_LINK_MAX_DEPTH = 3
+# Linear-time bounds (the classifier runs synchronously inside the hook, and the
+# chain's 5 s wait_for cannot cancel sync code): at most _SESSION_LINK_MAX_WORDS
+# words of one simple command are scanned for wrappers and builtins, and a command
+# longer than _SESSION_LINK_MAX_CHARS is not parsed at all. Past either limit the
+# gate fails CLOSED only when the unscanned text names the variable or holds a
+# tamper form (_SESSION_LINK_TAMPER_WORDS / _SESSION_LINK_TAMPER_HINT_RE); anything
+# else is approved.
+_SESSION_LINK_MAX_WORDS = 64
+_SESSION_LINK_MAX_CHARS = 32 * 1024
+_SHELL_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=")
+# Text test for a link reader, used where no command structure is available (a shell
+# reading a heredoc / pipe, a string past the depth limit).
+_SESSION_LINK_READER_RE = re.compile(r"artifact_cli|pipeline_test|\bpython[\d.]*\b|\buv\b")
+_SESSION_LINK_READER_SCRIPTS = ("artifact_cli.py", "pipeline_test.py")
+# Cheap pre-filter: a command naming neither the variable nor one of these words is
+# approved without parsing. Indirect forms (`unset $X`, `env -u {}`, `declare -n`,
+# `bash -c 'unset "$1"' _ VAR`) all carry one of the words.
+_SESSION_LINK_HINT_RE = re.compile(
+    r"\b(?:env|sudo|exec|su|unset|unsetenv|setenv|export|declare|typeset|local|"
+    r"readonly|nameref|eval)\b")
+# Tamper forms looked for in text that is too long / too deep to parse.
+_SESSION_LINK_TAMPER_HINT_RE = re.compile(
+    r"\b(?:unset|unsetenv|setenv|nameref|sudo|su)\b|\benv\s+-|\bexec\s+-"
+    r"|\b(?:declare|typeset|local|export)\s+[-+]")
+# Builtins whose operands are variable NAMES (an indirect operand matters for them).
+_SESSION_LINK_NAME_BUILTINS = frozenset({"unset", "unsetenv", "setenv", "export",
+                                         "declare", "typeset", "local", "nameref"})
+# Words that, past the scanned window, could still carry a tamper form.
+_SESSION_LINK_TAMPER_WORDS = (
+    frozenset({"env", "sudo", "su", "exec", "eval", "readonly", "set"})
+    | _SESSION_LINK_NAME_BUILTINS | _SHELL_INTERPRETERS | _JS_PM_SHELL_PROGRAMS)
+_NAME_SUBSCRIPT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\[")
+_POSITIONAL_REF_RE = re.compile(r"\$\{(\d+|[@*])\}|\$(\d|[@*])")
+_SU_VALUE_OPTS = frozenset({"-s", "--shell", "-g", "--group", "-G", "--supp-group",
+                            "-w", "--whitelist-environment"})
+_ENV_VALUE_SHORT_OPTS = "uCSPLU"  # GNU + BSD env short options that take a value
+_ENV_VALUE_LONG_OPTS = {"unset": "u", "chdir": "C", "split-string": "S"}
+_SUDO_VALUE_SHORT_OPTS = "CDghpRrTtUu"
+_SUDO_VALUE_LONG_OPTS = frozenset({
+    "close-from", "chdir", "group", "host", "prompt", "chroot", "role", "type",
+    "command-timeout", "other-user", "user"})
+_DECLARE_BUILTINS = frozenset({"declare", "typeset", "local"})
+
+
+def _names_session_link(word: str) -> bool:
+    """True iff *word* names the link variable (bare, `$VAR`, `${VAR}`, or with a
+    subscript `VAR[0]`, which for a scalar is the variable itself)."""
+    v = _SESSION_LINK_VAR
+    if word in (v, "$" + v, "${" + v + "}"):
+        return True
+    m = _NAME_SUBSCRIPT_RE.match(word)
+    return bool(m) and m.group(1) == v
+
+
+def _maybe_names_session_link(word: str) -> bool:
+    """True iff *word*, used as a variable-NAME operand, is the link variable or a
+    name the shell builds at run time: a glob matching it (`SWARM_APP_SESSION_I?`),
+    or a word holding an expansion (`$X`, `"$1"`, `${!SWARM_APP_*}`, `$(...)`, a
+    backtick), a brace expansion or an xargs placeholder (`{}`). A literal name with
+    a subscript (`arr[$i]`) names `arr`, so it passes."""
+    if _names_session_link(word):
+        return True
+    if len(word) <= 256 and any(c in word for c in "*?[") \
+            and fnmatch.fnmatchcase(_SESSION_LINK_VAR, word):
+        return True
+    if _NAME_SUBSCRIPT_RE.match(word):
+        return False
+    return any(c in word for c in "$`{}")
+
+
+def _assigns_session_link(word: str) -> bool:
+    """True iff *word* is a shell assignment to the link variable (`VAR=`, `VAR+=`)."""
+    m = _SHELL_ASSIGN_RE.match(word)
+    return bool(m) and m.group(1) == _SESSION_LINK_VAR
+
+
+def _env_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
+    """Parse the arguments of `env` → ``(tamper, resets, wrapped)``.
+
+    *tamper* labels a removal / override of the link (None if none); *resets* is True
+    for `-i` / `-` / `--ignore-environment`; *wrapped* is the command env runs.
+    Short flag groups (`-iu VAR`, `-uVAR`), `--unset[=]VAR` and `-S STRING`
+    (split into more arguments) are handled; NAME=VALUE operands follow the options."""
+    a_list = list(args)
+    resets = False
+    i = 0
+    while i < len(a_list):
+        a = a_list[i]
+        if a == "--":
+            i += 1
+            break
+        if a == "-":
+            resets = True
+            i += 1
+            continue
+        if not a.startswith("-") or len(a) < 2:
+            break
+        opt, val = "", None
+        if a.startswith("--"):
+            name, eq, v = a[2:].partition("=")
+            if name == "ignore-environment":
+                resets = True
+            elif name in _ENV_VALUE_LONG_OPTS:
+                opt, val = _ENV_VALUE_LONG_OPTS[name], (v if eq else None)
+        else:
+            for k, ch in enumerate(a[1:], start=1):
+                if ch == "i":
+                    resets = True
+                elif ch in _ENV_VALUE_SHORT_OPTS:
+                    opt, val = ch, (a[k + 1:] or None)
+                    break
+        if opt:
+            if val is None:
+                if i + 1 >= len(a_list):
+                    if opt == "u":  # `xargs env -u`, `` env -u `cmd` ``: name comes later
+                        return "env -u without a literal name", resets, []
+                    break
+                i += 1
+                val = a_list[i]
+            if opt == "u" and _maybe_names_session_link(val):
+                if _names_session_link(val):
+                    return "env -u " + _SESSION_LINK_VAR, resets, []
+                return "env -u of a name built at run time", resets, []
+            if opt == "S":
+                try:
+                    a_list[i + 1:i + 1] = shlex.split(val)
+                except ValueError:
+                    logger.debug("session_link_gate: unsplittable env -S %r", val[:80])
+        i += 1
+    while i < len(a_list) and _SHELL_ASSIGN_RE.match(a_list[i]):
+        if _assigns_session_link(a_list[i]):
+            return "env " + _SESSION_LINK_VAR + "=…", resets, []
+        i += 1
+    return None, resets, a_list[i:]
+
+
+def _sudo_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
+    """Parse the arguments of `sudo` → ``(tamper, resets, wrapped)`` like
+    _env_session_link. sudo resets the environment unless -E / --preserve-env (bare,
+    or a list naming the link variable) is given; `sudo VAR=x cmd` overrides it."""
+    preserve = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if not a.startswith("-") or len(a) < 2:
+            break
+        if a.startswith("--"):
+            name, eq, v = a[2:].partition("=")
+            if name == "preserve-env":
+                preserve = preserve or not eq or _SESSION_LINK_VAR in v.split(",")
+            elif name in _SUDO_VALUE_LONG_OPTS and not eq:
+                i += 1
+        else:
+            for k, ch in enumerate(a[1:], start=1):
+                if ch == "E":
+                    preserve = True
+                elif ch in _SUDO_VALUE_SHORT_OPTS:
+                    if not a[k + 1:]:
+                        i += 1
+                    break
+        i += 1
+    while i < len(args) and _SHELL_ASSIGN_RE.match(args[i]):
+        if _assigns_session_link(args[i]):
+            return "sudo " + _SESSION_LINK_VAR + "=…", not preserve, []
+        i += 1
+    return None, not preserve, args[i:]
+
+
+def _su_command(args: list[str]) -> "tuple[str | None, bool]":
+    """`su [opts] [user] [args]` → ``(the -c / --command string or None, login)``.
+    *login* is True for `-` / `-l` / `--login` (a login shell resets the environment)."""
+    cmd: "str | None" = None
+    login = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-", "-l", "--login"):
+            login = True
+        elif a in ("-c", "--command"):
+            cmd = args[i + 1] if i + 1 < len(args) else cmd
+            i += 2
+            continue
+        elif a.startswith("--command="):
+            cmd = a.split("=", 1)[1]
+        elif a in _SU_VALUE_OPTS:
+            i += 2
+            continue
+        elif len(a) > 1 and a[0] == "-" and not a.startswith("--"):
+            head, c, rest = a[1:].partition("c")
+            login = login or "l" in head
+            if c:
+                if rest:
+                    cmd = rest
+                elif i + 1 < len(args):
+                    cmd = args[i + 1]
+                    i += 2
+                    continue
+        i += 1
+    return cmd, login
+
+
+def _nameref_session_link(word: str, operands: list[str]) -> "str | None":
+    """Label if a nameref declaration (`declare|local|typeset -n R=T`, ksh
+    `nameref R=T`) targets the link variable or a name built at run time."""
+    for op in operands:
+        _name, eq, target = op.partition("=")
+        if eq and _maybe_names_session_link(target):
+            return word + " -n …=" + (_SESSION_LINK_VAR if _names_session_link(target)
+                                      else "<a name built at run time>")
+    return None
+
+
+def _builtin_session_link(word: str, args: list[str]) -> "str | None":
+    """Label if the shell builtin *word* (in command position) with *args* removes
+    or overrides the link variable, else None. See the section comment for the
+    forms; `declare|typeset -p|-f|-F VAR` only print, so they pass. For the name
+    operands of unset / unsetenv / setenv / export -n and nameref targets, a name
+    built at run time (_maybe_names_session_link) is denied too."""
+    named = any(_names_session_link(a) for a in args)
+    operands = [a for a in args if not (len(a) > 1 and a[0] in "-+")]
+    indirect = any(_maybe_names_session_link(a) for a in operands)
+    if word in ("unset", "unsetenv"):
+        if named:
+            return word + " " + _SESSION_LINK_VAR
+        return word + " of a name built at run time" if indirect else None
+    if word == "setenv":  # csh: setenv NAME [VALUE]
+        if operands and _maybe_names_session_link(operands[0]):
+            return "setenv " + _SESSION_LINK_VAR
+        return None
+    if word == "set" and named:  # fish: set [-e|-gx|-U] NAME [VALUE]
+        return "set " + _SESSION_LINK_VAR
+    if word == "nameref":  # ksh
+        return _nameref_session_link(word, operands)
+    if word in ("export", "readonly") or word in _DECLARE_BUILTINS:
+        if any(_assigns_session_link(a) for a in args):
+            return word + " " + _SESSION_LINK_VAR + "=…"
+        flags = "".join(a[1:] for a in args if len(a) > 1 and a[0] in "-+" and a != "--")
+        if word == "export" and "n" in flags and (named or indirect):
+            return "export -n " + (_SESSION_LINK_VAR if named
+                                   else "of a name built at run time")
+        if word in _DECLARE_BUILTINS and "n" in flags:
+            hit = _nameref_session_link(word, operands)
+            if hit is not None:
+                return hit
+        if named and word in _DECLARE_BUILTINS and not set(flags) & set("pfF"):
+            return word + " " + _SESSION_LINK_VAR
+        return None
+    if word in ("read", "mapfile", "readarray") and named:
+        return word + " " + _SESSION_LINK_VAR
+    if word == "printf":
+        for k, a in enumerate(args):
+            if (a == "-v" and k + 1 < len(args) and _names_session_link(args[k + 1])) \
+                    or a == "-v" + _SESSION_LINK_VAR:
+                return "printf -v " + _SESSION_LINK_VAR
+    if word in ("for", "select") and args and _names_session_link(args[0]):
+        return word + " " + _SESSION_LINK_VAR
+    if word == "getopts" and len(args) >= 2 and _names_session_link(args[1]):
+        return "getopts … " + _SESSION_LINK_VAR
+    return None
+
+
+def _shell_reads_stdin(args: list[str]) -> bool:
+    """True iff `bash|sh|zsh|dash ARGS` reads its script from stdin: no `-c`, and
+    `-s` or no script operand (options parsed as in _shell_c_command)."""
+    stdin_flag = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if a in ("--rcfile", "--init-file"):
+            i += 2
+            continue
+        if a.startswith("--"):
+            i += 1
+            continue
+        if len(a) > 1 and a[0] in "-+":
+            flags = a[1:]
+            if a[0] == "-" and "c" in flags:
+                return False
+            stdin_flag = stdin_flag or (a[0] == "-" and "s" in flags)
+            i += 1 + sum(1 for ch in flags if ch in "oO")
+            continue
+        break
+    return stdin_flag or i >= len(args)
+
+
+@functools.lru_cache(maxsize=16)
+def _reader_in_text(text: str) -> bool:
+    """_SESSION_LINK_READER_RE over *text*, memoised: every stdin-shell segment of
+    one command asks about the same text, and a per-segment scan would be quadratic."""
+    return bool(_SESSION_LINK_READER_RE.search(text))
+
+
+def _is_link_reader_program(tokens: list[str]) -> bool:
+    """True iff the simple command *tokens* runs a link reader: its PROGRAM word
+    (before and after unwrapping, _skip_leading_wrappers / _unwrap_program) is
+    python* / uv / artifact_cli* / pipeline_test* or is computed at run time (`$P`,
+    `"$(which python3)"`), or one of its words is a path ending in artifact_cli.py /
+    pipeline_test.py (`py scripts/artifact_cli.py`). A word merely containing
+    "python" (`dnf install python3.11`, `chown … ~/.swarm-ai/python`) is not one."""
+    for t in (_skip_leading_wrappers(tokens), _unwrap_program(tokens)):
+        if not t:
+            continue
+        prog = t[0]
+        base = os.path.basename(prog)
+        if "$" in prog or "`" in prog or _PY_INTERP_RE.match(base) \
+                or base in ("uv", "uvx") or base.startswith(("artifact_cli", "pipeline_test")):
+            return True
+    return any(os.path.basename(a).endswith(_SESSION_LINK_READER_SCRIPTS) for a in tokens)
+
+
+def _reset_wraps_reader(wrapped: list[str], text: str, depth: int) -> bool:
+    """True iff the command an environment reset runs (*wrapped*) is a link reader
+    (_is_link_reader_program). A wrapped `<shell> -c STRING` or package-manager shell
+    mode is judged by the commands of its STRING (_text_has_reader); a wrapped shell
+    reading stdin by the whole command *text*, which still holds the heredoc body."""
+    if not wrapped:
+        return False
+    t = _unwrap_program(wrapped)
+    if t:
+        w = os.path.basename(t[0])
+        sub = None
+        if w in _SHELL_INTERPRETERS:
+            sub = _shell_c_command(t[1:])
+            if sub is None and _shell_reads_stdin(t[1:]):
+                return _reader_in_text(text)
+        elif w in _JS_PM_SHELL_PROGRAMS:
+            sub = _js_pm_shell_c_command(t)
+        if sub is not None:
+            return _text_has_reader(sub, depth + 1)
+    return _is_link_reader_program(wrapped)
+
+
+def _text_has_reader(command: str, depth: int) -> bool:
+    """True iff some simple command of *command* is a link reader (see
+    _reset_wraps_reader). Too deep, too long or unsplittable → the text test
+    _SESSION_LINK_READER_RE (fail closed)."""
+    if depth > _SESSION_LINK_MAX_DEPTH or len(command) > _SESSION_LINK_MAX_CHARS:
+        return bool(_SESSION_LINK_READER_RE.search(command))
+    segments = _gate_shell_segments(command)
+    if segments is None:
+        return bool(_SESSION_LINK_READER_RE.search(command))
+    return any(_reset_wraps_reader(seg[:_SESSION_LINK_MAX_WORDS], command, depth)
+               for seg in segments)
+
+
+_HERESTRING_RE = re.compile(
+    r"(?<!<)<<<[ \t]*(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\"|([^\s;&|()<>]+))")
+
+
+def _stdin_bodies(text: str) -> list[str]:
+    """Here-string words (`<<< WORD`) and heredoc bodies (`<<[-]WORD` … WORD) of
+    *text*. Line-based and not quote-aware, so it may over-collect, which only makes
+    the stdin-shell check stricter. Linear in len(text)."""
+    bodies = [next((g for g in m.groups() if g is not None), "")
+              for m in _HERESTRING_RE.finditer(text)]
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        for m in _HEREDOC_OPENER_RE.finditer(line):
+            if m.start() > 0 and line[m.start() - 1] == "<":
+                continue  # the tail of a `<<<` here-string
+            delim = m.group("q1") or m.group("q2") or m.group("bs") or m.group("bare")
+            body: list[str] = []
+            while i < len(lines):
+                ln = lines[i].lstrip("\t") if m.group("dash") else lines[i]
+                i += 1
+                if ln == delim:
+                    break
+                body.append(ln)
+            bodies.append("\n".join(body))
+    return bodies
+
+
+class _LinkScan:
+    """Facts shared by the segments of ONE command string under classification:
+    the original *text*, its quote-free *flat* form, the nesting *depth*, and the
+    segments with their preceding separators (_gate_shell_segments)."""
+
+    __slots__ = ("text", "flat", "depth", "segments", "seps", "_bodies_hit")
+
+    def __init__(self, text: str, flat: str, depth: int,
+                 segments: "list[list[str]]", seps: "list[str]") -> None:
+        self.text = text
+        self.flat = flat
+        self.depth = depth
+        self.segments = segments
+        self.seps = seps
+        self._bodies_hit: "list[str | None] | None" = None  # memo: [] = no bodies
+
+    def _named(self, shell: str) -> "str | None":
+        if _SESSION_LINK_VAR in self.flat:
+            return shell + " reading a script that names " + _SESSION_LINK_VAR
+        return None
+
+    def stdin_hit(self, idx: int, shell: str) -> "str | None":
+        """Label if the *shell* of segment *idx*, reading its script from stdin, runs
+        a script that removes or overrides the link. The script is classified like a
+        `-c` string: the echo / printf words piped into it (`echo "…" | bash`), else
+        the command's heredoc / here-string bodies. Another pipe producer
+        (`cat f | sh`), a printf format with `%`, or no body at all leaves the script
+        unknown: then naming the variable anywhere in the command denies."""
+        sep = self.seps[idx] if idx < len(self.seps) else ""
+        if idx > 0 and sep.endswith("|") and not sep.endswith("||"):
+            prod = _unwrap_program(self.segments[idx - 1][:_SESSION_LINK_MAX_WORDS])
+            name = os.path.basename(prod[0]) if prod else ""
+            args = prod[1:]
+            if name == "echo":
+                while args and args[0] in ("-n", "-e", "-E", "-ne", "-en"):
+                    args = args[1:]
+            if name == "echo" or (name == "printf" and args and "%" not in args[0]):
+                body = " ".join(args).replace("\\n", "\n")
+                return _command_session_link(body, self.depth + 1)
+            return self._named(shell)
+        if self._bodies_hit is None:
+            bodies = _stdin_bodies(self.text)
+            hit = None
+            for body in bodies:
+                hit = _command_session_link(body, self.depth + 1)
+                if hit is not None:
+                    break
+            self._bodies_hit = [hit] if bodies else []
+        if self._bodies_hit:
+            return self._bodies_hit[0]
+        return self._named(shell)
+
+
+def _positional_session_link(sub: str, positional: list[str], depth: int) -> "str | None":
+    """`<shell> -c STRING ARG0 ARG1 …` with the link variable among the ARGs: STRING is
+    classified with its positional references ($0-$9, ${N}, $@, $*) replaced by those
+    ARGs, so `bash -c 'unset "$1"' _ VAR` reads as `unset "VAR"`. An expansion that
+    would exceed _SESSION_LINK_MAX_CHARS is denied without being built."""
+    if not any(_SESSION_LINK_VAR in p for p in positional):
+        return None
+    rest = " ".join(positional[1:])
+    longest = max(len(rest), max(len(p) for p in positional))
+    if len(sub) + len(_POSITIONAL_REF_RE.findall(sub)) * longest > _SESSION_LINK_MAX_CHARS:
+        return "a shell -c string whose arguments name " + _SESSION_LINK_VAR \
+            + " (too long to expand)"
+
+    def _rep(m: "re.Match[str]") -> str:
+        key = m.group(1) or m.group(2)
+        if key in ("@", "*"):
+            return rest
+        n = int(key)
+        return positional[n] if n < len(positional) else ""
+
+    return _command_session_link(_POSITIONAL_REF_RE.sub(_rep, sub), depth + 1)
+
+
+def _beyond_window_tampers(cmd_word: str, beyond: list[str]) -> bool:
+    """True iff the words of a simple command past the scanned window could still
+    remove or override the link: one names the variable, is a tamper word
+    (_SESSION_LINK_TAMPER_WORDS), or — for a name-taking builtin — is a name built
+    at run time."""
+    if any(_SESSION_LINK_VAR in t or os.path.basename(t) in _SESSION_LINK_TAMPER_WORDS
+           for t in beyond):
+        return True
+    return cmd_word in _SESSION_LINK_NAME_BUILTINS \
+        and any(_maybe_names_session_link(t) for t in beyond)
+
+
+def _segment_session_link(tokens: list[str], scan: _LinkScan, idx: int) -> "str | None":
+    """Label if ONE simple command (*tokens*, segment *idx* of *scan*) removes or
+    overrides the link, else None.
+
+    Command position (after keywords, `function NAME`, `command` / `builtin`,
+    `exec [-c]` and leading assignments): assignments to the variable, the builtins
+    of _builtin_session_link, `eval STRING` and `exec -c` in front of a link reader.
+    Any word position: `env`, `sudo`, `su [-] -c STRING`, a shell `-c` string (with
+    its positional arguments, _positional_session_link), package-manager shell modes,
+    and a shell reading stdin (_LinkScan.stdin_hit). Nested strings recurse at
+    depth + 1. Only the first _SESSION_LINK_MAX_WORDS words after the command position
+    are scanned; the rest is checked by _beyond_window_tampers (fail closed)."""
+    depth = scan.depth
+    i = 0
+    reset = ""
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "function":
+            i += 2  # `function NAME { body` — like `NAME() {`
+            continue
+        if tok == "exec":
+            i += 1
+            while i < len(tokens) and tokens[i].startswith("-") and len(tokens[i]) > 1:
+                if tokens[i] == "--":
+                    i += 1
+                    break
+                flags = tokens[i][1:]
+                reset = "exec -c" if "c" in flags else reset
+                i += 2 if flags.endswith("a") else 1
+            continue
+        if tok in _SHELL_KEYWORDS or tok in ("command", "builtin"):
+            i += 1
+            continue
+        if _SHELL_ASSIGN_RE.match(tok):
+            if _assigns_session_link(tok):
+                return _SESSION_LINK_VAR + "=… assignment"
+            i += 1
+            continue
+        break
+    if i >= len(tokens):
+        return None
+    end = min(len(tokens), i + _SESSION_LINK_MAX_WORDS)
+    win = tokens[i:end]
+    hit = _builtin_session_link(win[0], win[1:])
+    if hit is None and win[0] == "eval":
+        hit = _command_session_link(" ".join(tokens[i + 1:]), depth + 1)
+    if hit is None and reset and _reset_wraps_reader(win, scan.text, depth):
+        hit = reset
+    if hit is not None:
+        return hit
+    prog_at = len(win) - len(_unwrap_program(win))
+    for k, word in enumerate(win):
+        w = os.path.basename(word)
+        if w in ("env", "sudo"):
+            parse = _env_session_link if w == "env" else _sudo_session_link
+            tamper, resets, wrapped = parse(win[k + 1:])
+            if tamper is not None:
+                return tamper
+            if resets and _reset_wraps_reader(wrapped, scan.text, depth):
+                return "env -i" if w == "env" else "sudo (resets the environment)"
+            continue
+        if w == "su":
+            cmd, login = _su_command(win[k + 1:])
+            if cmd is not None:
+                hit = _command_session_link(cmd, depth + 1)
+                if hit is None and login and _text_has_reader(cmd, depth + 1):
+                    hit = "su - (a login shell resets the environment)"
+                if hit is not None:
+                    return hit
+            continue
+        sub = None
+        if w in _SHELL_INTERPRETERS:
+            parts = _shell_c_parts(win[k + 1:])
+            if parts is None:
+                if k in (0, prog_at) and _shell_reads_stdin(win[k + 1:]):
+                    hit = scan.stdin_hit(idx, w)
+                    if hit is not None:
+                        return hit
+                continue
+            sub = parts[0]
+            hit = _positional_session_link(sub, parts[1], depth)
+            if hit is not None:
+                return hit
+        elif w in _JS_PM_SHELL_PROGRAMS:
+            sub = _js_pm_shell_c_command(win[k:])
+        if sub is not None:
+            hit = _command_session_link(sub, depth + 1)
+            if hit is not None:
+                return hit
+    if end < len(tokens) and _beyond_window_tampers(win[0], tokens[end:]):
+        return ("a simple command of over %d words whose unscanned part names %s or "
+                "holds a tamper form" % (_SESSION_LINK_MAX_WORDS, _SESSION_LINK_VAR))
+    return None
+
+
+def _command_session_link(command: str, depth: int = 0) -> "str | None":
+    """Classify a Bash command for session_link_gate → a label of the first form
+    that removes or overrides SWARM_APP_SESSION_ID, or None (allow).
+
+    Cheap path: a command that names neither the variable nor a word of
+    _SESSION_LINK_HINT_RE (after dropping quotes and backslashes, so
+    `"SWARM_APP_"SESSION_ID` still counts) is allowed without parsing. A string
+    nested deeper than _SESSION_LINK_MAX_DEPTH, or whose shell code (heredoc bodies
+    excluded) is longer than _SESSION_LINK_MAX_CHARS, is not parsed: it is denied
+    when it names the variable
+    or matches _SESSION_LINK_TAMPER_HINT_RE, else allowed. A backtick becomes `$` +
+    separator, so `` env -u `cmd` `` / `` unset `cmd` `` leave an expansion operand
+    (a name built at run time) while the substituted command is still scanned as its
+    own segment. An unsplittable command is allowed (bash_syntax_guard denies it)."""
+    flat = re.sub(r"[\"'\\]", "", command)
+    named = _SESSION_LINK_VAR in flat
+    if not named and not _SESSION_LINK_HINT_RE.search(flat):
+        return None
+    too_deep = depth > _SESSION_LINK_MAX_DEPTH
+    # The length limit applies to the shell CODE: heredoc bodies (dropped by the
+    # quote-aware, linear _normalize_newlines_quote_aware) do not count, so writing a
+    # long document through `cat > f <<'EOF'` is still parsed normally.
+    if too_deep or (len(command) > _SESSION_LINK_MAX_CHARS and len(
+            _normalize_newlines_quote_aware(command)) > _SESSION_LINK_MAX_CHARS):
+        if named or _SESSION_LINK_TAMPER_HINT_RE.search(flat):
+            what = ("a shell string nested deeper than %d levels" % _SESSION_LINK_MAX_DEPTH
+                    if too_deep else "a command over %d characters" % _SESSION_LINK_MAX_CHARS)
+            return what + " (not parsed) that names " + _SESSION_LINK_VAR \
+                + " or holds a tamper form"
+        return None
+    seps: list[str] = []
+    segments = _gate_shell_segments(
+        command.replace("`", "$`") if "`" in command else command, seps)
+    if segments is None:
+        return None
+    scan = _LinkScan(command, flat, depth, segments, seps)
+    for idx, seg in enumerate(segments):
+        hit = _segment_session_link(seg, scan, idx)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _session_link_advice(hit: str) -> str:
+    """The how-to-proceed sentence of the deny text for the form *hit*."""
+    if hit.startswith("sudo"):
+        return ("To run a Python tool under sudo, keep the variable: `sudo -E …` or "
+                "`sudo --preserve-env=" + _SESSION_LINK_VAR + " …` (or run it without "
+                "sudo). ")
+    if hit.startswith("su "):
+        return "Use `su` without `-` / `-l` so the environment is kept. "
+    if hit.startswith(("env -i", "exec -c")):
+        return ("For a clean environment, drop other variables with `env -u NAME` "
+                "instead of `env -i` / `exec -c`. ")
+    if "built at run time" in hit or "without a literal name" in hit:
+        return ("Name variables literally: an expansion, glob, `{}` or nameref could "
+                "resolve to " + _SESSION_LINK_VAR + ". ")
+    if "not parsed" in hit or "over %d words" % _SESSION_LINK_MAX_WORDS in hit \
+            or "too long" in hit:
+        return ("Split the command into shorter ones, or write long content with the "
+                "file tool instead of the shell. ")
+    return ""
+
+
+def create_session_link_gate(session_context: dict[str, Any]):
+    """Factory: PreToolUse (Bash) gate that DENIES, always (with or without an active
+    run), any command removing or overriding SWARM_APP_SESSION_ID
+    (_command_session_link; forms in the section comment above). Without the link a
+    run is not this session's run, so pipeline_test_gate and direct_commit_gate stop
+    applying. Reads pass. SWARM_SESSION_LINK_GATE_FORCE=1 in the backend process env
+    approves (operator-only, logged). Fail-open on any internal error.
+    session_context is the mutable dict SessionUnit updates (read at call time)."""
+
+    async def _gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("tool_name") != "Bash":
+            return {"decision": "approve"}
+        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+        if not command:
+            return {"decision": "approve"}
+        try:
+            hit = _command_session_link(command)
+        except Exception:
+            logger.debug("session_link_gate: classify failed — failing open", exc_info=True)
+            return {"decision": "approve"}
+        if hit is None:
+            return {"decision": "approve"}
+        session_id = session_context.get("sdk_session_id", "") or ""
+        if os.environ.get("SWARM_SESSION_LINK_GATE_FORCE") == "1":
+            logger.warning("[session-link-gate] FORCE override in session %s (%s): %s",
+                           session_id, hit, command[:120])
+            return {"decision": "approve"}
+        logger.warning("[BLOCKED] session_link_gate (%s) in session %s: %s",
+                       hit, session_id, command[:120])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "DENY (" + hit + "): this command removes or overrides "
+                    + _SESSION_LINK_VAR + ", or may (the checker could not rule it "
+                    "out). The backend sets that variable for every command; it links "
+                    "a pipeline run to this session (artifact_cli.py run-create records "
+                    "it as the run's session_id). A run without this session's id is "
+                    "not this session's run, so the pipeline test gate and the "
+                    "direct-commit gate stop applying to it. Leave the variable as the "
+                    "backend set it; reading it is fine. " + _session_link_advice(hit)
+                    + "Only the operator can bypass this gate, by setting "
+                    "SWARM_SESSION_LINK_GATE_FORCE=1 in the backend/daemon environment "
+                    "(a variable set in a Bash command has no effect)."
+                ),
+            }
+        }
+
+    return _gate
+
+
+# ---------------------------------------------------------------------------
+# session-link stamper (PreToolUse companion + PostToolUse, Bash)
+# ---------------------------------------------------------------------------
+# session_link_gate only sees Bash text. Interpreter code (`python -c
+# 'os.environ.pop(...)'`, `subprocess.run(..., env={})`) or a script file can still
+# start artifact_cli.py without SWARM_APP_SESSION_ID, and run-create then records
+# `session_id: null`. The stamper makes the link authoritative from the backend.
+# After a Bash call whose text mentions artifact_cli or run-create, it writes THIS
+# session's app id into each RUNNING run whose session_id is missing or empty and
+#   • whose created_at falls inside that call (from the start time the PreToolUse
+#     companion recorded under the tool_use_id, minus _STAMP_SLACK_SECONDS; without
+#     one, the last _STAMP_FALLBACK_WINDOW_SECONDS), or
+#   • whose run id the call's text names (`run-update --run-id run_x`), so a run a
+#     script file created is linked the next time this session works on it.
+# It adds `session_id_source: "backend_stamp"`. A non-empty session_id is never
+# overwritten (one that differs from ours is logged; a forged one is stopped by
+# session_link_gate). The write is atomic (same-dir temp + os.replace, json.dumps
+# indent=2 like artifact_cli) and is skipped when run.json changed after it was read.
+# Fail-safe: the scan runs in a worker thread bounded by _STAMP_TIMEOUT, every error
+# is logged and swallowed, and a hook context without a valid app session id makes
+# it a no-op. RESIDUAL: a run created by a command that does not mention
+# artifact_cli / run-create, and never named by a later artifact_cli call of the
+# session, stays unlinked (artifact_cli warns at run-create); so does a run another
+# unlinked creator (a terminal, a headless job) makes during this session's
+# artifact_cli call, which is stamped with this session's id instead.
+_STAMP_TRIGGER_RE = re.compile(r"artifact_cli|run-create")
+_STAMP_RUN_ID_RE = re.compile(r"(?<![\w-])run_[0-9A-Za-z]+(?![\w-])")
+_STAMP_SLACK_SECONDS = 2.0
+_STAMP_FALLBACK_WINDOW_SECONDS = 15 * 60
+_STAMP_TIMEOUT = 5.0
+_STAMP_MAX_PENDING = 256
+_APP_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")  # artifact_cli's C1 token
+
+
+def _iso_timestamp(raw: Any) -> "float | None":
+    """POSIX time of an ISO-8601 string (naive = UTC), else None."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        from datetime import timezone as _tz
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_tz.utc)
+        return parsed.timestamp()
+    except (ValueError, OverflowError):
+        return None
+
+
+def _stamp_one_run(path: str, app_session_id: str, since: float, now: float,
+                   named_ids: "set[str]") -> "str | None":
+    """Stamp ONE run.json (see the section comment) → its run id if stamped, else
+    None. Raises on IO / JSON errors (the caller logs and skips the file)."""
+    run_dir = os.path.dirname(path)
+    dir_id = os.path.basename(run_dir)
+    st = os.stat(path)
+    if dir_id not in named_ids and st.st_mtime < since:
+        return None  # cheap pre-filter: run-create's write sets mtime >= created_at
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict) or data.get("status") != "running":
+        return None
+    run_id = str(data.get("id") or dir_id)
+    created = _iso_timestamp(data.get("created_at"))
+    in_call = created is not None and since <= created <= now + _STAMP_SLACK_SECONDS
+    if not (in_call or dir_id in named_ids or run_id in named_ids):
+        return None
+    current = data.get("session_id")
+    if current:
+        if current != app_session_id:
+            logger.warning("session_link_stamper: run %s is linked to session %s, not "
+                           "%s — left unchanged", run_id, current, app_session_id)
+        return None
+    data["session_id"] = app_session_id
+    data["session_id_source"] = "backend_stamp"
+    tmp = os.path.join(run_dir, ".run.json.stamp.%d.tmp" % os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2))
+        if os.stat(path).st_mtime_ns != st.st_mtime_ns:
+            logger.info("session_link_stamper: run %s changed while stamping — skipped",
+                        run_id)
+            return None
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return run_id
+
+
+def _stamp_unlinked_runs(app_session_id: str, since: float, command: str) -> list[str]:
+    """Scan <workspace>/Projects/*/.artifacts/runs/*/run.json (_pipeline_runs_root)
+    and stamp *app_session_id* into the unlinked running runs created at or after
+    *since* or named in *command* → the stamped run ids. A malformed or unreadable
+    run.json is logged and skipped."""
+    import glob as _glob
+    import time as _time
+
+    now = _time.time()
+    named_ids = set(_STAMP_RUN_ID_RE.findall(command))
+    pattern = os.path.join(
+        _pipeline_runs_root(), "Projects", "*", ".artifacts", "runs", "*", "run.json")
+    stamped: list[str] = []
+    for path in _glob.glob(pattern):
+        try:
+            run_id = _stamp_one_run(path, app_session_id, since, now, named_ids)
+        except Exception as exc:
+            logger.debug("session_link_stamper: skipped %s: %s", path, exc)
+            continue
+        if run_id is not None:
+            stamped.append(run_id)
+            logger.warning("[session-link-stamper] run %s had no session_id; stamped "
+                           "with session %s (backend_stamp)", run_id, app_session_id)
+    return stamped
+
+
+def create_session_link_stamper(session_context: dict[str, Any]):
+    """Factory: PostToolUse (Bash) hook that links unlinked pipeline runs to this
+    session (section comment above). The returned hook carries ``.record_start``, the
+    PreToolUse (Bash) companion that records each call's start time by tool_use_id
+    (at most _STAMP_MAX_PENDING entries, oldest dropped). Both hooks return {} and
+    never raise. session_context is the mutable dict SessionUnit updates; its
+    ``sdk_session_id`` holds the app session id (read at call time)."""
+    import time as _time
+
+    starts: dict[str, float] = {}
+
+    async def _record_start(
+        input_data: dict[str, Any], tool_use_id: str | None, context: Any,
+    ) -> dict[str, Any]:
+        try:
+            if tool_use_id and input_data.get("tool_name") == "Bash":
+                starts[tool_use_id] = _time.time()
+                while len(starts) > _STAMP_MAX_PENDING:
+                    starts.pop(next(iter(starts)))
+        except Exception as exc:
+            logger.debug("session_link_stamper: start not recorded: %s", exc)
+        return {}
+
+    async def _stamp(
+        input_data: dict[str, Any], tool_use_id: str | None, context: Any,
+    ) -> dict[str, Any]:
+        try:
+            start = starts.pop(tool_use_id, None) if tool_use_id else None
+            if input_data.get("tool_name") != "Bash":
+                return {}
+            command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+            if not isinstance(command, str) or not _STAMP_TRIGGER_RE.search(command):
+                return {}
+            sid = str(session_context.get("sdk_session_id") or "")
+            if not _APP_SESSION_ID_RE.fullmatch(sid):
+                return {}
+            since = (start - _STAMP_SLACK_SECONDS if start is not None
+                     else _time.time() - _STAMP_FALLBACK_WINDOW_SECONDS)
+            await asyncio.wait_for(
+                executors.run_in("subprocess", _stamp_unlinked_runs, sid, since, command),
+                timeout=_STAMP_TIMEOUT,
+            )
+        except Exception as exc:  # incl. asyncio.TimeoutError — never into the chat path
+            logger.warning("session_link_stamper: stamping skipped: %r", exc)
+        return {}
+
+    _stamp.record_start = _record_start  # type: ignore[attr-defined]
+    return _stamp
 
 
 _DIRECT_GATE_LOCKFILES = frozenset({"package-lock.json", "npm-shrinkwrap.json",
