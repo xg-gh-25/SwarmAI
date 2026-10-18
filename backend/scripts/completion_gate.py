@@ -69,8 +69,10 @@ def completion_surface_verdict(
         as UNKNOWN (never a hard block, to avoid breaking resumes), distinct from
         ``[]`` which means "explicitly no source work" (docs/knowledge-only).
     commits: run_state.commits (written by run-commit); each {files:[...]}.
-    deliver_surfaced: the deliver stage recorded outputs_surfaced (or legacy
-        local_pr_surfaced) == True.
+    deliver_surfaced: the caller found surface evidence: the daemon's marker
+        (core.surface_marker, written by the surface_run_outputs tool), the
+        run-level ``outputs_surfaced`` set by ``--outputs-surfaced``, or the older
+        deliver-record flag (outputs_surfaced / local_pr_surfaced).
     untrackable_source: the subset of files_touched that git CANNOT commit because
         they are gitignored (run_e0aa14f7 — a run in a gitignored project, e.g.
         CMHK_SalesIntel per STEERING #5 where only Projects/SwarmAI/ is trackable).
@@ -147,8 +149,9 @@ def completion_surface_verdict(
             block_reason="unsurfaced_source",
             message=("Cannot mark completed: this run committed source but did not "
                      "surface it to the Canvas OUTPUTS rail. Call the "
-                     "surface_run_outputs tool with this run_id, then record "
-                     'deliver.outputs_surfaced=true.'),
+                     "surface_run_outputs tool with this run_id; it records the "
+                     "evidence this gate reads. A session without that tool passes "
+                     "--outputs-surfaced on the completing run-update instead."),
             committed_source_files=sorted(committed_files),
         )
 

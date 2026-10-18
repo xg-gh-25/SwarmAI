@@ -1685,3 +1685,39 @@ def test_stage_start_reentry_from_a_new_session_keeps_concurrent_writes(ws, caps
     assert st["status"] == "cancelled"             # the concurrent cancel is not undone
     assert st["transcripts"] == [TX_SID]           # not written on re-entry
     # (stage-complete recording the new id: test_stage_commands_record_the_transcript_id)
+
+
+# ── exit_evidence lists (run_a87bfe3f) ─────────────────────────────────────────
+# stages/test.md describes fixes/unfixed per item, so agents write lists; the record
+# schema wants strings. 4+ runs were rejected on exactly this shape. The parse step
+# joins a list of strings into one string; an empty or all-blank list becomes '' so
+# a manual exit criterion it names stays unmet (never a placeholder that looks like
+# evidence).
+
+class TestExitEvidenceLists:
+    def test_list_values_are_joined(self):
+        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {
+            "wtf": "0", "fixes": [], "unfixed": ["a.py::t: pre-existing", "b.py::u: flaky"]}}}))
+        ev = rec["exit_evidence"]
+        assert ev["fixes"] == ""
+        assert ev["unfixed"] == "a.py::t: pre-existing; b.py::u: flaky"
+        assert pv.validate_stage_record("test", rec)[0] == []
+
+    def test_blank_items_are_dropped_before_joining(self):
+        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {"X6": ["", "  "]}}}))
+        assert rec["exit_evidence"]["X6"] == ""
+
+    def test_empty_list_leaves_a_manual_criterion_unmet(self, tmp_path):
+        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {"X6": []}}}))
+        out = pv.judge_exit_criteria([{"id": "X6", "kind": "manual", "expect": "done"}], tmp_path, rec)
+        assert out["met"] is False and out["unmet"] == ["X6"]
+
+    def test_non_string_items_are_still_rejected(self):
+        _, rec = cli._parse_stage_data(json.dumps({"record": {"exit_evidence": {"fixes": [1]}}}))
+        errs, _ = pv.validate_stage_record("test", rec)
+        assert any("exit_evidence" in e for e in errs)
+
+    def test_test_template_shows_string_evidence(self):
+        tmpl = pv.STAGE_RECORD_TEMPLATES["test"]["exit_evidence"]
+        assert tmpl and all(isinstance(v, str) for v in tmpl.values())
+        assert {"wtf", "fixes", "unfixed"} <= set(tmpl)

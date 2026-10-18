@@ -21,11 +21,11 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - `[MUST]` BLOCKING: spawn ALL selected specialists in a SINGLE message (parallel Agent calls). The tier is `[GATE·cli]`; the batching is discipline. <!-- R-deliver-006 -->
 - Meta-Review (BLOCKING) — `[GATE·validator]`: a full/bugfix deliver artifact without `meta_review`/`meta_review_verdict` is blocked; trivial/research/docs exempt. <!-- R-deliver-009 -->
 - Push-Ready Gate (binary) — `[GATE·cli]`: `run-commit` requires `push_ready: true`. <!-- R-deliver-003 -->
-- `[GATE·cli]` MANDATORY + gated: run-scoped source committed (commits ∩ files_touched) → `run-update --status completed` BLOCKS until the deliver record has `outputs_surfaced: true`; docs-only runs exempt. <!-- R-deliver-015 -->
+- `[GATE·cli]` MANDATORY + gated: run-scoped source committed (commits ∩ files_touched) → `run-update --status completed` BLOCKS until there is surface evidence: the `surface_run_outputs` tool's marker naming every commit, or `--outputs-surfaced` on that call (legacy: a deliver-record flag); docs-only runs exempt. <!-- R-deliver-015 -->
 - `[GATE·cli]` D7: `run-commit` refuses unless every `required_experts` entry reviewed this run.
 
 ## COMPLETE-stage Canvas review
-At COMPLETE: `run-surface-changes`, then the `surface_run_outputs` tool ONCE with this run_id, then `run-update --stage-json '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`.
+At COMPLETE: `run-surface-changes`, then the `surface_run_outputs` tool ONCE with this run_id (it records the gate's evidence itself; a session without the tool adds `--outputs-surfaced` to `run-update --status completed`). Never re-record deliver with `--stage-json` to acknowledge it.
 
 ## Read only if
 - Dispatch rules, tiering, Red Team, rejected spawn → `ref/deliver/gate2-dispatch.md`

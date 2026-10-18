@@ -23,8 +23,10 @@ completion if REFLECT is in the profile but has no stage entry — enforced in c
 A pipeline that completes silently is indistinguishable from one that crashed. The code-rendered
 delivery summary in chat is the LAST thing you output.
 - **Before step 1:** `stages/complete.md` Step 0 (surface the run's changes with
-  `surface_run_outputs`, record `outputs_surfaced:true` on the deliver stage). For a run that
-  committed run-scoped source, step 1 BLOCKS without it.
+  `surface_run_outputs`, which records the gate's evidence itself; without that tool, add
+  `--outputs-surfaced` to step 1). Never acknowledge it by re-recording the deliver stage with
+  `--stage-json`: that replaces the deliver record and drops its token_cost and decisions. For a
+  run that committed run-scoped source, step 1 BLOCKS without one of the two.
 - **Step 6.1 — complete the run; the report is regenerated for you:**
   `python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> --status completed`.
   Completion comes FIRST — do not swap it back behind `run-report`: `completed_at` is written only
@@ -49,7 +51,9 @@ delivery summary in chat is the LAST thing you output.
 - `adversarial_review` is not recorded (goal profile);
 - REFLECT has no substantive lessons (each lesson >20 chars);
 - REPORT.md is missing or <500 bytes;
-- the run committed run-scoped source but `outputs_surfaced` is not set on deliver;
+- the run committed run-scoped source but there is no surface evidence (the tool's
+  `outputs_surfaced.json` naming every commit, `--outputs-surfaced` on this call, or a legacy
+  deliver-record flag);
 - the validator finds blocking errors (full/bugfix).
 **If blocked:** fix the named issue, then retry. You CANNOT bypass it — it is code-enforced.
 

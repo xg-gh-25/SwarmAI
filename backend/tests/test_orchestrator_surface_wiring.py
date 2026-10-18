@@ -575,3 +575,145 @@ def test_layer4_frontend_gate_accepts_the_emitted_kind():
         f"the completion path emits kind=knowledge; frontend AUTO_POP_KINDS are "
         f"{accepted} — if 'knowledge' is missing, Canvas would never auto-open on "
         f"pipeline completion (the whole point of this fix)")
+
+
+# ── run_a87bfe3f Gate-2: the marker attests only rows this session EMITTED ──────
+def _marker_run(tmp_path, monkeypatch, commits):
+    import json as _json
+    d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_mk"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(_json.dumps({"id": "run_mk", "commits": commits}), encoding="utf-8")
+    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
+
+    async def _ensure(run_id):
+        return True
+    monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
+    monkeypatch.setattr("core.ui_actions.build_surface_events", lambda rid, workspace_root=None: [
+        {"type": "file_changed", "path": "b.py", "operation": "written",
+         "relevance": "deliverable", "kind": "source-final"}])
+    return d
+
+
+def test_explicit_surface_writes_marker_after_emitting(tmp_path, monkeypatch):
+    import json as _json
+    from core.surface_marker import MARKER_NAME
+    d = _marker_run(tmp_path, monkeypatch, [{"sha": "c1", "files": ["b.py"]}])
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(_drive(orch, [_surface_tool_use(run_id="run_mk"), _make_result_message()]))
+    assert raised is None
+    assert [e for e in events if e.get("type") == "file_changed"]
+    assert _json.loads((d / MARKER_NAME).read_text())["commits"] == ["c1"]
+
+
+def test_second_surface_after_new_commit_re_emits_and_updates_marker(tmp_path, monkeypatch):
+    """A commit landing during the first build is left out of that marker (snapshot
+    taken before the build), and the next explicit surface re-emits and covers it."""
+    import json as _json
+    from core.surface_marker import MARKER_NAME
+    d = _marker_run(tmp_path, monkeypatch, [{"sha": "c1", "files": ["b.py"]}])
+    calls = []
+
+    def _build(rid, workspace_root=None):
+        calls.append(rid)
+        if len(calls) == 1:  # run-commit c2 lands while batch 1 is being built
+            (d / "run.json").write_text(_json.dumps({"id": "run_mk", "commits": [
+                {"sha": "c1", "files": ["b.py"]}, {"sha": "c2", "files": ["b.py"]}]}),
+                encoding="utf-8")
+        return [{"type": "file_changed", "path": "b.py", "operation": "written",
+                 "relevance": "deliverable", "kind": "source-final"}]
+    monkeypatch.setattr("core.ui_actions.build_surface_events", _build)
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(_drive(orch, [
+        _surface_tool_use(run_id="run_mk", tool_use_id="tu-a"),
+        _surface_tool_use(run_id="run_mk", tool_use_id="tu-b"),
+        _make_result_message()]))
+    assert raised is None
+    assert calls == ["run_mk", "run_mk"], "the uncovered commit must re-emit"
+    assert _json.loads((d / MARKER_NAME).read_text())["commits"] == ["c1", "c2"]
+
+
+def test_second_surface_without_new_commit_does_not_re_emit(tmp_path, monkeypatch):
+    _marker_run(tmp_path, monkeypatch, [{"sha": "c1", "files": ["b.py"]}])
+    calls = []
+
+    def _build(rid, workspace_root=None):
+        calls.append(rid)
+        return [{"type": "file_changed", "path": "b.py", "operation": "written",
+                 "relevance": "deliverable", "kind": "source-final"}]
+    monkeypatch.setattr("core.ui_actions.build_surface_events", _build)
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(_drive(orch, [
+        _surface_tool_use(run_id="run_mk", tool_use_id="tu-a"),
+        _surface_tool_use(run_id="run_mk", tool_use_id="tu-b"),
+        _make_result_message()]))
+    assert raised is None
+    assert calls == ["run_mk"]
+
+
+def test_completion_first_then_explicit_surface_no_double_emit_with_real_run_json(tmp_path, monkeypatch):
+    """Gate-2 recheck (run_a87bfe3f): with a real run.json the explicit branch takes a
+    snapshot, but the backend-auto completion path tracks no commits — the explicit
+    call after it must still not re-emit."""
+    import json as _json
+    d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_ce2"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(_json.dumps({"id": "run_ce2", "commits": [{"sha": "c1", "files": ["b.py"]}]}),
+                                encoding="utf-8")
+    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
+    build_calls = []
+    _patch_completion_helpers(monkeypatch, status="completed", build_calls=build_calls)
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(_drive(orch, [
+        _bash_complete_tool_use(run_id="run_ce2", tool_use_id="tu-c1"),
+        _tool_result(tool_use_id="tu-c1"),
+        _surface_tool_use(run_id="run_ce2", tool_use_id="tu-s1"),
+        _make_result_message()]))
+    assert raised is None
+    assert build_calls == ["run_ce2"], build_calls
+
+
+def test_docs_only_repeated_explicit_surface_emits_once(tmp_path, monkeypatch):
+    """A batch with no source rows writes no marker; repeated explicit calls must still
+    emit once (the in-memory commit set, not the marker, decides)."""
+    import json as _json
+    d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_doc"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(_json.dumps({"id": "run_doc", "commits": []}), encoding="utf-8")
+    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
+    build_calls = []
+    _patch_completion_helpers(monkeypatch, status="running", build_calls=build_calls)
+    orch = _make_orchestrator()
+    asyncio.run(_drive(orch, [
+        _surface_tool_use(run_id="run_doc", tool_use_id="tu-a"),
+        _surface_tool_use(run_id="run_doc", tool_use_id="tu-b"),
+        _make_result_message()]))
+    assert build_calls == ["run_doc"], build_calls
+
+
+def test_surface_without_snapshot_then_with_new_commit_re_emits(tmp_path, monkeypatch):
+    """Recheck LOW: a first call that could not read run.json must not make a later
+    call (that can) look like the completion path's no-entry case."""
+    import json as _json
+    d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_ns"
+    monkeypatch.setattr("core.ui_actions.get_swarmws", lambda: str(tmp_path))
+    calls = []
+
+    def _build(rid, workspace_root=None):
+        calls.append(rid)
+        if len(calls) == 1:  # run.json appears only after the first call
+            d.mkdir(parents=True)
+            (d / "run.json").write_text(_json.dumps({"id": "run_ns", "commits": [{"sha": "c1"}]}),
+                                        encoding="utf-8")
+        return [{"type": "file_changed", "path": "b.py", "operation": "written",
+                 "relevance": "deliverable", "kind": "source-final"}]
+
+    async def _ensure(run_id):
+        return True
+    monkeypatch.setattr("core.streaming_orchestrator.ensure_report_for_run", _ensure)
+    monkeypatch.setattr("core.ui_actions.build_surface_events", _build)
+    orch = _make_orchestrator()
+    asyncio.run(_drive(orch, [
+        _surface_tool_use(run_id="run_ns", tool_use_id="tu-a"),
+        _surface_tool_use(run_id="run_ns", tool_use_id="tu-b"),
+        _make_result_message()]))
+    assert calls == ["run_ns", "run_ns"]

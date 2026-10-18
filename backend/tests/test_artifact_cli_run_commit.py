@@ -1086,10 +1086,12 @@ class TestForcedCommitIsRecorded:
 
 
 def test_finalize_stage_json_keeps_the_push_ready_verdict(workspace):
-    """The documented COMPLETE call (`run-update --stage-json {"stage":"deliver",
+    """The legacy COMPLETE call (`run-update --stage-json {"stage":"deliver",
     "status":"completed","outputs_surfaced":true}`) REPLACES the deliver record. It
     used to drop push_ready=false and its reason, so every finished run lost the
-    verdict and its summary read as qualified (run_1907ca1d)."""
+    verdict and its summary read as qualified (run_1907ca1d). The docs no longer use
+    this call (the surface tool records its own evidence, run_a87bfe3f), but runs
+    that still send it must keep the verdict."""
     rf = _write_run(workspace, "run_keep_pr", stages=[
         {"stage": "deliver", "status": "completed", "artifact_id": "art_d",
          "push_ready": False, "push_ready_reason": "no clean regression"}])

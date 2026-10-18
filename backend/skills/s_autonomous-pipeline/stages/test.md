@@ -48,9 +48,11 @@ fixing, WTF formula, regression table â†’ `ref/test/fixing.md`; cross-boundary â
 
 **Exit:** write `/tmp/<R>/test.json` from the stage-start example:
 `{"artifact": {"passed": true, "failed": 0, "fixed": K, "skipped": J, "tests_new": N, "tests_total": T, "cross_boundary_e2e": {...}}, "record": {"decisions": [...], "exit_evidence": {...}}}`.
-`exit_evidence` keys: `wtf` (score, even 0), `fixes` (each atomic commit), `unfixed`
-(each with diagnosis), `expectations` ("no test expectation modified"), `classes`
-(regression / new / pre-existing kept apart), `platforms` (cross-platform only).
+`exit_evidence` keys, each ONE string: `wtf` (score, even 0), `fixes` (each atomic
+commit), `unfixed` (each with diagnosis), `expectations` ("no test expectation modified"),
+`classes` (regression / new / pre-existing kept apart), `platforms` (cross-platform only).
+A list of strings is accepted and joined with `; `; an empty list is stored as `""`, so it
+never satisfies a manual exit criterion.
 Then `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage test --data @/tmp/<R>/test.json`
 (`--check` first validates without writing).
 

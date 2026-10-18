@@ -71,13 +71,16 @@ _GIT_RE = re.compile(r"(?:^|[\s;&|(])git\s")
 # F1 inventory: mechanical jobs the model did by hand. One command may match
 # several jobs (a pytest run that also writes /tmp JSON counts for both).
 MECHANICAL_JOBS: tuple[tuple[str, re.Pattern], ...] = tuple(
-    (name, re.compile(rx)) for name, rx in (
+    (name, re.compile(rx) if rx else None) for name, rx in (
         ("pytest", r"\bpytest\b"),
         ("frontend_test_build", r"vitest|\btsc\b|eslint|vite build|npm run build"),
-        ("stage_json_assembly", r"cat > /tmp/\S+\.(?:py|json)|json\.dump\(|stage_json|--stage-json"),
+        # stage_json_assembly + read_cli_source are matched by functions below
+        # (stage_record_writes / _reads_cli_source): a regex over the whole command
+        # also matched heredoc bodies, edit scripts and CLI invocations.
+        ("stage_json_assembly", None),
         ("publish_update_advance", r"artifact_cli\.py (?:publish|run-update|advance)"),
         ("run_state_queries", r"artifact_cli\.py (?:schema|run-get|discover|state|run-status|run-budget)"),
-        ("read_cli_source", r"(?:sed|grep|awk|cat|head)[^|;]*(?:artifact_cli|pipeline_validator)\.py"),
+        ("read_cli_source", None),
         ("read_stage_docs_bash", r"(?:sed|grep|cat|head)[^|;]*(?:stages/|INSTRUCTIONS\.md|REVIEW_PATTERNS|SKILL\.md)"),
         ("change_scope", r"git (?:-C \S+ )?(?:diff|ls-files|status)\b(?!.*commit)"),
         ("git_staging", r"git (?:add|restore --staged|update-index)"),
@@ -133,9 +136,95 @@ def classify_command(name: str, tool_input: dict) -> str:
     return "read-probe"
 
 
+# (?<!<)/(?!<) keep a here-string (<<<) from opening a fake heredoc, and the
+# delimiter must start with a letter or _, so a $((1<<2)) shift never matches;
+# either would hide the following lines as a "body".
+_HEREDOC_RE = re.compile(r"""(?<!<)<<(?!<)-?\s*(['"]?)([A-Za-z_]\w*)\1""")
+_SEGMENT_SPLIT_RE = re.compile(r"\|\||&&|[;|\n]|\$\(")
+_SEGMENT_PREFIX_RE = re.compile(r"""^(?:(?:cd\s+\S+|[A-Za-z_]\w*=\S*)\s*)+""")
+_READ_VERB_RE = re.compile(r"^(?:sed|grep|awk|cat|head|tail)\b")
+_STAGE_NAMES = r"evaluate|think|plan|build|review|test|deliver|reflect|goal_cycle"
+# /tmp/<dir>/<stage>.json — the stage-record payload files the stage commands read
+_STAGE_FILE_RE = re.compile(rf"""/tmp/[^/\s'"]+/({_STAGE_NAMES})\.json\b""")
+_STAGE_CAT_WRITE_RE = re.compile(rf"""cat\s*>\s*['"]?/tmp/[^/\s'"]+/({_STAGE_NAMES})\.json\b""")
+_PY_JSON_WRITE_RE = re.compile(r"""json\.dump\(|open\([^)]*['"]w['"]|write_text\(""")
+_STAGE_ECHO_WRITE_RE = re.compile(
+    rf"""(?:echo|printf)\b[^|;&\n]*>\s*['"]?/tmp/[^/\s'"]+/({_STAGE_NAMES})\.json\b"""
+    rf"""|\btee\s+(?:-a\s+)?['"]?/tmp/[^/\s'"]+/({_STAGE_NAMES})\.json\b""")
+_INLINE_RECORD_RE = re.compile(r"""--(?:stage-json|data)(?:=|\s+)['"](\{[^\n]{0,400})""")
+_INLINE_STAGE_RE = re.compile(rf"""\\?"stage\\?"\s*:\s*\\?"({_STAGE_NAMES})""")
+
+
+def _command_segments(command: str) -> list[str]:
+    """The simple commands of a shell command line, with heredoc BODIES removed
+    (a body is data, not a command) and leading ``cd X`` / ``VAR=v`` dropped."""
+    lines: list[str] = []
+    end_tag = None
+    for line in (command or "").split("\n"):
+        if end_tag is not None:
+            if line.strip() == end_tag:
+                end_tag = None
+            continue
+        m = _HEREDOC_RE.search(line)
+        if m:
+            end_tag = m.group(2)
+            line = line[:m.start()]
+        lines.append(line)
+    segs = []
+    for part in _SEGMENT_SPLIT_RE.split("\n".join(lines)):
+        part = _SEGMENT_PREFIX_RE.sub("", part.strip()).strip()
+        if part:
+            segs.append(part)
+    return segs
+
+
+def _reads_cli_source(command: str) -> bool:
+    """True when a read-verb segment (sed/grep/cat/head/tail…) names
+    artifact_cli.py or pipeline_validator.py — never for a heredoc body that cites
+    the file, a command that RUNS the CLI, or a git command over it."""
+    return any(_READ_VERB_RE.match(seg) and _CLI_SOURCE_RE.search(seg)
+               for seg in _command_segments(command))
+
+
+def stage_record_writes(command: str) -> set[str]:
+    """Stages whose ``/tmp/<run>/<stage>.json`` payload this command writes: a
+    ``cat > …/<stage>.json`` redirect, or an inline script that names the file and
+    writes JSON. Reading the file (``cat …/plan.json``) is not a write."""
+    found = set(_STAGE_CAT_WRITE_RE.findall(command or ""))
+    found |= {a or b for a, b in _STAGE_ECHO_WRITE_RE.findall(command or "")}
+    if _PY_JSON_WRITE_RE.search(command or ""):
+        found |= set(_STAGE_FILE_RE.findall(command or ""))
+    # A record handed inline (--stage-json '{...}' / --data '{"stage":"x"...}') is
+    # hand-assembled too; its stage comes from the payload's "stage" key.
+    # Per segment (heredoc bodies excluded), and only artifact_cli segments, so a doc
+    # or test written via a heredoc that quotes such a command is not counted.
+    for seg in _command_segments(command or ""):
+        if "artifact_cli" not in seg:
+            continue
+        for m in _INLINE_RECORD_RE.finditer(seg):
+            st = _INLINE_STAGE_RE.search(m.group(1))
+            found.add(st.group(1) if st else (_flag_stage(seg) or "unknown"))
+    return found
+
+
+def _flag_stage(command: str) -> "str | None":
+    m = re.search(rf"--stage\s+({_STAGE_NAMES})\b", command or "")
+    return m.group(1) if m else None
+
+
 def mechanical_jobs(command: str) -> list[str]:
     """F1 job labels a Bash command matches (empty = not mechanical)."""
-    return [name for name, rx in MECHANICAL_JOBS if rx.search(command or "")]
+    out = []
+    for name, rx in MECHANICAL_JOBS:
+        if name == "read_cli_source":
+            hit = _reads_cli_source(command)
+        elif name == "stage_json_assembly":
+            hit = bool(stage_record_writes(command))
+        else:
+            hit = bool(rx.search(command or ""))
+        if hit:
+            out.append(name)
+    return out
 
 
 # ── transcript loading ──────────────────────────────────────────────────────
@@ -529,6 +618,26 @@ def runner_executions(run_dir: "Path | None") -> dict:
     return out
 
 
+def _stage_record_counts(uses: dict) -> dict:
+    """Stage-record payload writes in time order: the first write per stage is the
+    designed one (one payload per stage); every later write to the same stage's
+    file is a rewrite (a rejected payload being fixed, or content updated)."""
+    by_stage: collections.Counter = collections.Counter()
+    for name, tool_input, _t, _mid in sorted(uses.values(), key=lambda u: u[2]):
+        if name == "Bash":
+            stages = stage_record_writes(str(tool_input.get("command") or ""))
+        elif name in ("Write", "Edit", "MultiEdit"):
+            m = _STAGE_FILE_RE.search(str(tool_input.get("file_path") or ""))
+            stages = {m.group(1)} if m else set()
+        else:
+            continue
+        for stage in stages:
+            by_stage[stage] += 1
+    return {"first_writes": len(by_stage),
+            "rewrites": sum(n - 1 for n in by_stage.values()),
+            "by_stage": dict(by_stage)}
+
+
 def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" = None) -> dict:
     """Speed profile of one run from its owning transcripts (see module docstring).
     ``run_dir`` adds the test-runner executions recorded in the run's evidence."""
@@ -623,6 +732,13 @@ def profile_run(run_state: dict, transcripts: list[str], run_dir: "Path | None" 
                      for j, c in jobs.most_common()},
         },
         "cli_source_reads": cli_source_reads,
+        # A run that EDITS these files reads them as part of the work, so its
+        # cli_source_reads are not the "learning the CLI contract" cost.
+        "edits_cli_source": any(
+            isinstance(f, str) and _CLI_SOURCE_RE.search(f)
+            for f in (run_state.get("files_touched") or [])
+        ),
+        "stage_records": _stage_record_counts(uses),
         "pipeline_doc_chars_read": doc_chars,
         "tests": {
             "calls": test_calls,
@@ -703,6 +819,9 @@ def _render(p: dict) -> str:
         f" · output {p['output_tokens'] // 1000}K tokens · pipeline docs read {p['pipeline_doc_chars_read'] // 1000}K chars",
         f"mechanical {p['mechanical']['total_calls']}/{p['mechanical']['bash_calls']} Bash calls"
         f" · artifact_cli/validator source reads {p['cli_source_reads']}"
+        f"{' (run edits them)' if p.get('edits_cli_source') else ''}"
+        f" · stage records {p['stage_records']['first_writes']} written,"
+        f" {p['stage_records']['rewrites']} rewritten"
         f" · gate denials {p['gate_denials']['total']} · exact duplicates {p['exact_duplicate_calls']}",
         f"tests {p['tests']['calls']} calls {p['tests']['by_kind']} {p['tests']['exec_min']} min"
         f" · most repeated {p['tests']['max_repeat']}"

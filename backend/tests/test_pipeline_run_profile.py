@@ -458,3 +458,124 @@ class TestPostRefactorRuns:
         bare = prof.profile_run(state, [path])["tests"]
         assert bare["calls"] == 1
         assert bare["sources"]["calls"] == "direct test commands + runner commands in the transcript"
+
+
+# ── mechanical-work counts mean what they say (run_a87bfe3f) ───────────────────
+# The read_cli_source pattern used to span a whole command: a stage-record heredoc
+# that cited pipeline_validator.py:4612, or a command that RAN artifact_cli.py after
+# a `cat`, both counted as reading the CLI source. Measured on 8 runs: 6 of them
+# were editing those files, the other two read them 4 and 1 times, against a
+# reported 13-30. stage_json_assembly likewise counted edit scripts and mutation
+# lists. Now a source read is a read-verb command SEGMENT outside heredoc bodies,
+# and stage records are the /tmp/<run>/<stage>.json writes, split into first
+# writes and rewrites.
+
+class TestCliSourceReads:
+    @pytest.mark.parametrize("cmd", [
+        "sed -n 1,40p backend/scripts/artifact_cli.py",
+        "cd /r/swarmai; grep -n 'def cmd_run_update' backend/scripts/artifact_cli.py",
+        "tail -n 30 backend/scripts/pipeline_validator.py",
+        "R=run_x; head -50 scripts/artifact_cli.py && echo done",
+    ])
+    def test_real_reads_count(self, cmd):
+        assert "read_cli_source" in prof.mechanical_jobs(cmd)
+
+    @pytest.mark.parametrize("cmd", [
+        "cat > /tmp/run_x/think.json <<'EOF'\n{\"key_findings\": [\"see pipeline_validator.py:4612\"]}\nEOF",
+        "cat out.txt; python backend/scripts/artifact_cli.py run-update --project P --run-id run_x",
+        "backend/.venv/bin/python backend/scripts/artifact_cli.py stage-complete --project P --run-id r --stage plan",
+        "git diff -- backend/scripts/artifact_cli.py | grep '^@@'",
+    ])
+    def test_heredocs_and_cli_runs_do_not_count(self, cmd):
+        assert "read_cli_source" not in prof.mechanical_jobs(cmd)
+
+
+class TestStageRecordWrites:
+    @pytest.mark.parametrize("cmd,stage", [
+        ("cat > /tmp/run_x/plan.json <<'EOF'\n{}\nEOF", "plan"),
+        ("python3 - <<'EOF'\nimport json\np='/tmp/run_x/test.json'; json.dump({}, open(p,'w'))\nEOF", "test"),
+    ])
+    def test_stage_record_writes_are_found(self, cmd, stage):
+        assert prof.stage_record_writes(cmd) == {stage}
+        assert "stage_json_assembly" in prof.mechanical_jobs(cmd)
+
+    @pytest.mark.parametrize("cmd", [
+        "cat > /tmp/run_x/survey.py <<'EOF'\nprint(1)\nEOF",
+        "cat > /tmp/run_x/muts.json <<'EOF'\n{}\nEOF",
+        "cat /tmp/run_x/plan.json",
+    ])
+    def test_other_files_are_not_stage_records(self, cmd):
+        assert prof.stage_record_writes(cmd) == set()
+        assert "stage_json_assembly" not in prof.mechanical_jobs(cmd)
+
+    def test_profile_counts_first_writes_and_rewrites(self, ws):
+        tmp, run_dir = ws
+        recs = [
+            _use("w1", 10, "m1", "Bash", {"command": "cat > /tmp/run_abc/plan.json <<'EOF'\n{}\nEOF"}),
+            _res("w1", 11),
+            _use("w2", 20, "m2", "Bash", {"command": "cat > /tmp/run_abc/plan.json <<'EOF'\n{}\nEOF"}),
+            _res("w2", 21),
+            _use("w3", 30, "m3", "Bash", {"command": "cat > /tmp/run_abc/build.json <<'EOF'\n{}\nEOF"}),
+            _res("w3", 31),
+        ]
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "w.jsonl", recs)
+        state = json.loads((run_dir / "run.json").read_text())
+        p = prof.profile_run(state, [path])
+        assert p["stage_records"] == {"first_writes": 2, "rewrites": 1, "by_stage": {"plan": 2, "build": 1}}
+        assert p["edits_cli_source"] is False
+
+    def test_edits_cli_source_flag(self, ws):
+        tmp, run_dir = ws
+        state = json.loads((run_dir / "run.json").read_text())
+        state["files_touched"] = ["/r/backend/scripts/artifact_cli.py"]
+        path = _write_jsonl(tmp / "claude" / "projects" / "-ws" / "e.jsonl", [])
+        assert prof.profile_run(state, [path])["edits_cli_source"] is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "cat <<< 'x'\nsed -n 1,5p backend/scripts/artifact_cli.py",
+    "echo $((1<<2))\nsed -n 1,5p backend/scripts/artifact_cli.py",
+])
+def test_here_string_and_shift_do_not_hide_later_lines(cmd):
+    """code-quality review (run_a87bfe3f): only a real heredoc opens a body; a
+    here-string or a shift must not swallow the source read on the next line."""
+    assert "read_cli_source" in prof.mechanical_jobs(cmd)
+
+
+def test_heredoc_without_space_still_opens_a_body():
+    cmd = "cat<<EOF > /tmp/x.py\nsed -n 1,5p backend/scripts/artifact_cli.py\nEOF"
+    assert "read_cli_source" not in prof.mechanical_jobs(cmd)
+
+
+@pytest.mark.parametrize("cmd,stage", [
+    ("python backend/scripts/artifact_cli.py run-update --project P --run-id R --stage-json '{\"stage\":\"deliver\",\"status\":\"completed\"}'", "deliver"),
+    ("python backend/scripts/artifact_cli.py stage-complete --project P --run-id R --stage test --data '{\"artifact\":{}}'", "test"),
+    ("echo '{\"a\":1}' > /tmp/run_x/review.json", "review"),
+    ("printf '%s' x | tee /tmp/run_x/plan.json", "plan"),
+])
+def test_inline_and_echo_records_count_as_stage_json_assembly(cmd, stage):
+    """Gate-2 (run_a87bfe3f): an inline --stage-json/--data payload and echo/printf/tee
+    writes are hand-assembled stage records too; missing them made 'after' look better."""
+    assert stage in prof.stage_record_writes(cmd)
+    assert "stage_json_assembly" in prof.mechanical_jobs(cmd)
+
+
+def test_data_from_file_is_not_an_inline_record():
+    cmd = "python backend/scripts/artifact_cli.py stage-complete --project P --run-id R --stage test --data @/tmp/run_x/test.json"
+    assert prof.stage_record_writes(cmd) == set()
+
+
+def test_curl_data_is_not_a_stage_record():
+    assert prof.stage_record_writes("curl -s --data '{\"k\":1}' https://example.invalid") == set()
+
+
+def test_stage_json_equals_form_counts():
+    cmd = "python backend/scripts/artifact_cli.py run-update --project P --run-id R --stage-json='{\"stage\":\"plan\"}'"
+    assert prof.stage_record_writes(cmd) == {"plan"}
+
+
+def test_heredoc_quoting_a_stage_json_command_is_not_counted():
+    cmd = ("cat > docs/x.md <<'EOF'\n"
+           "python backend/scripts/artifact_cli.py run-update --stage-json '{\"stage\":\"deliver\"}'\n"
+           "EOF")
+    assert "deliver" not in prof.stage_record_writes(cmd)

@@ -74,6 +74,7 @@ from core.pipeline_profiles import get_profile_stages, normalize_profile
 # Sibling module in backend/scripts/ — pure completion commit+surface gate logic.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from completion_gate import completion_surface_verdict
+from core.surface_marker import MARKER_NAME as SURFACE_MARKER_NAME, marker_covers
 
 
 def _git_repo_root(path: str) -> "str | None":
@@ -231,7 +232,26 @@ def _compute_untrackable_source(
 # `status` is excluded on purpose (finalize upgrades recorded→completed); `auto_recorded`
 # is provenance no gate reads. An explicit value in the finalize always wins. Widen this
 # ONLY when a new earlier-set, gate-read field is proven.
-_CARRY_FORWARD_FIELDS = frozenset({"artifact_id", "adversarial_review", "lessons"})
+# run_a87bfe3f widened it with token_cost / token_cost_source / decisions /
+# exit_evidence: stage-complete sets them, metrics and the exit-criteria judge read
+# them, and a finalize that omitted them wiped DELIVER's record on 30 of 43 completed
+# runs (10-16 → 10-18). Still REPLACE + safelist, never merge-by-default: `status`
+# keeps resetting on omission (test_status_not_carried_forward).
+_CARRY_FORWARD_FIELDS = frozenset({"artifact_id", "adversarial_review", "lessons",
+                                   "token_cost", "token_cost_source", "decisions",
+                                   "exit_evidence"})
+def _carry_forward(new: dict, existing: dict) -> None:
+    """Copy each _CARRY_FORWARD_FIELDS value the new record omits from the existing
+    one (an explicit value always wins). token_cost_source travels with token_cost:
+    a record that brings its own token_cost does not inherit the old source label."""
+    own_cost = "token_cost" in new  # decided before anything is copied in
+    for cf in _CARRY_FORWARD_FIELDS:
+        if cf == "token_cost_source" and own_cost:
+            continue
+        if cf not in new and existing.get(cf):
+            new[cf] = existing[cf]
+
+
 # The DELIVER push-ready verdict: a finalize (`outputs_surfaced`) that omits it must
 # not erase it. False is the load-bearing value here, so these carry forward on
 # "present and not None", not on truthiness. Carrying only ever keeps an existing
@@ -3113,14 +3133,17 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # files intersect THIS run's files_touched (run-scoped — F3, so a
             # sibling session's commits on shared main never false-block us), the
             # source changes MUST have been surfaced to the Canvas OUTPUTS rail as a
-            # PR-review batch at COMPLETE via the `surface_run_outputs` tool. We
-            # enforce the agent RECORDED that surface (deliver.outputs_surfaced=true).
+            # PR-review batch at COMPLETE via the `surface_run_outputs` tool. The
+            # evidence (run_a87bfe3f) is the marker the daemon writes beside run.json
+            # when it emitted committed source rows (core.surface_marker), or
+            # --outputs-surfaced on THIS completing call; a deliver-record
+            # outputs_surfaced flag is still read for runs that recorded it that way.
             # (Was local_pr_surfaced + a LOCAL_PR.md doc — replaced run_b8ea6d5c: the
             # aggregated doc had no review value; per-file rail rows are the deliverable.)
             #
-            # HONEST SCOPE — this is SELF-ATTESTATION, not verification: the CLI
+            # HONEST SCOPE — this is attestation, not verification: the CLI
             # subprocess cannot observe whether the frontend actually rendered the
-            # rows. The flag is agent-set. It is a defense against SILENTLY skipping
+            # rows. The marker says the daemon emitted them; the flag is agent-set. It is a defense against SILENTLY skipping
             # the surface step, not proof the rail populated. A run with NO run-scoped
             # source commits (knowledge/docs-only, OR commits that are all
             # sibling-session files) is NOT gated (no false-block).
@@ -3138,7 +3161,20 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                  and s.get("status") in ("completed", "done")),
                 None,
             )
-            _surfaced = _ack(_deliver)
+            # Evidence outside the DELIVER record (run_a87bfe3f): the daemon's
+            # surface_run_outputs handler writes a marker beside run.json when it
+            # built committed source rows, and a session without that tool passes
+            # --outputs-surfaced on this call (a run-level flag). Neither rewrites a
+            # stage record; the old deliver-record flag is still read for runs that
+            # recorded it that way.
+            # The run-level outputs_surfaced saved by an earlier --outputs-surfaced
+            # is an audit record, NOT evidence: it names no commits, so after a C1
+            # revival and a new commit it would pass on stale state (Gate-2).
+            _surfaced = (
+                _ack(_deliver)
+                or bool(getattr(args, "outputs_surfaced", False))
+                or marker_covers(run_file.parent, run_state.get("commits"))
+            )
             if not _surfaced and getattr(args, "stage_json", None):
                 try:
                     # Best-effort deliver-ack precheck: resolve the source via the
@@ -3217,12 +3253,25 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 untrackable_source=_untrackable,
             )
             if not _verdict.ok:
-                _fix = ('run-commit --project <P> --run-id ' + str(args.run_id)
-                        if _verdict.block_reason == "uncommitted_source"
-                        else 'run-update --stage-json \'{"stage":"deliver",'
-                             '"status":"completed","outputs_surfaced":true,'
-                             '"stage_doc_consumed":true}\' (after calling the '
-                             'surface_run_outputs tool)')
+                _surface_tool = ('call the surface_run_outputs tool with run_id='
+                                 + str(args.run_id) + ' (it records the evidence), then '
+                                 're-run this command')
+                if _verdict.block_reason == "uncommitted_source":
+                    _fix = 'run-commit --project <P> --run-id ' + str(args.run_id)
+                elif (run_file.parent / SURFACE_MARKER_NAME).exists():
+                    # A marker exists but misses a later commit: the tool works in
+                    # this setup, so it comes first (Gate-2). The flag stays as the
+                    # last step: a run this session surfaced through the completion
+                    # path is not re-emitted, and without it the agent would loop on
+                    # a no-op tool call (meta-review cross-fix).
+                    _fix = ('a commit was made after the last surface call; '
+                            + _surface_tool + '; only if that call surfaces nothing new, '
+                            'add --outputs-surfaced to run-update --status completed')
+                else:
+                    _fix = (_surface_tool + '; a session without that tool (or a '
+                            'daemon older than the marker) runs: run-update --project '
+                            + str(args.project) + ' --run-id ' + str(args.run_id)
+                            + ' --status completed --outputs-surfaced')
                 print(json.dumps({
                     "error": _verdict.message,
                     "block_reason": _verdict.block_reason,
@@ -3232,6 +3281,8 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 }))
                 sys.exit(1)  # D7: non-zero on completion BLOCK
 
+            if getattr(args, "outputs_surfaced", False) and not run_state.get("outputs_surfaced"):
+                run_state["outputs_surfaced"] = {"at": now, "by": "agent"}
             run_state["completed_at"] = now
             # METRICS generation is deferred to AFTER the --stage-json merge
             # below, not run here. A single
@@ -3303,9 +3354,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # `auto_recorded` (provenance, no gate reads it).
             existing_rec = run_state["stages"][existing_idx]
             if isinstance(existing_rec, dict):
-                for _cf in _CARRY_FORWARD_FIELDS:
-                    if _cf not in stage_record and existing_rec.get(_cf):
-                        stage_record[_cf] = existing_rec[_cf]
+                _carry_forward(stage_record, existing_rec)
                 # The verdict carries as ONE unit, and only when the finalize says
                 # nothing about push_ready: a payload that sets push_ready brings its
                 # own verdict, never a stale reason/capped flag from the old one.
@@ -3489,7 +3538,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                                      f"{type(_rt_err).__name__}: {_rt_err}"}), file=sys.stderr)
 
     run_state["updated_at"] = now
-    run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+    # Atomic (temp + os.replace): the daemon reads run.json off-loop while CLI
+    # subprocesses write it, and a torn read silently drops the surface marker.
+    _write_run_atomic(run_file, run_state)
 
     # Auto-generate METRICS.json on completion — HERE, after the --stage-json
     # merge above, so the extraction sees the final stage list (see the note at
@@ -8053,9 +8104,8 @@ def _replace_stage_record(stages: list, record: dict) -> None:
         stages.append(record)
         return
     existing = stages[idx]
-    for cf in _CARRY_FORWARD_FIELDS:
-        if cf not in record and isinstance(existing, dict) and existing.get(cf):
-            record[cf] = existing[cf]
+    if isinstance(existing, dict):
+        _carry_forward(record, existing)
     stages[idx] = record
 
 
@@ -8509,7 +8559,8 @@ def _parse_stage_data(raw_arg: str) -> "tuple[dict | None, dict]":
         errs.append("Input: 'record' must be an object")
     if errs:
         raise _StageBoundaryError(errs)
-    return artifact, record
+    import pipeline_validator as pv
+    return artifact, pv.normalize_exit_evidence(record)
 
 
 def _next_stage_of(profile: str, stage: str) -> "str | None":
@@ -9457,6 +9508,10 @@ def main() -> None:
     p_run_update.add_argument("--add-required-expert", default=None, action="append", metavar="EXPERT_ID",
                               help="APPEND an expert id to run.json required_experts (R1.5a, D7 key-system; append-only — repeatable, idempotent, NEVER removes). The future D7 gate verifies declared ⊆ actually-ran.")
     p_run_update.add_argument("--force-checkpoint", action="store_true", help="Override the confabulation guard when setting --status paused")
+    p_run_update.add_argument("--outputs-surfaced", action="store_true",
+                              help="With --status completed: record that this run's committed source was surfaced "
+                                   "to Canvas (run-level, never rewrites a stage record). Only needed when the "
+                                   "surface_run_outputs tool, which records it itself, is not available")
     # C1: revive a TERMINAL run (completed/failed/cancelled/abandoned) back to
     # running/paused — requires BOTH --force and --reason (auditable override).
     p_run_update.add_argument("--force", action="store_true", help="Override the C1 terminal-revival guard (requires --reason)")

@@ -97,7 +97,7 @@ def test_runcommit_field_names_match_real_literals():
     spec.loader.exec_module(mod)
     src = ARTIFACT_CLI.read_text()
     for b in mod.aggregate_deliver_blockers():
-        if b["location"] in ("stage-record-top", "run.json-top"):
+        if b["location"] in ("stage-record-top", "run.json-top", "completion-surface"):
             # the real enforcement must reference this field name as a literal
             assert f'"{b["field"]}"' in src or f"'{b['field']}'" in src, (
                 f"run-state field {b['field']!r} not found as a literal in "
@@ -313,3 +313,25 @@ def test_required_experts_lowercased_on_add(tmp_path):
     _add("correctness")
     doc2 = json.loads((run_dir / "run.json").read_text())
     assert doc2.get("required_experts", []).count("correctness") == 1, doc2.get("required_experts")
+
+
+def test_outputs_surfaced_is_not_a_deliver_record_obligation(tmp_path):
+    """run_a87bfe3f: the completion surface gate reads the daemon marker or the
+    run-level --outputs-surfaced flag, and the docs forbid re-recording DELIVER to
+    add it. Preflight runs at DELIVER, before anything is surfaced, so listing the
+    field as missing there pushed agents toward the DELIVER --stage-json rewrite that
+    wiped the record. It must be advisory (present=None, never in missing), and the
+    notes must name the completion-time path instead."""
+    stages = [
+        {"stage": "evaluate", "status": "completed"},
+        {"stage": "deliver", "status": "completed", "push_ready": True},
+    ]
+    project, run_id, _ = _write_run(tmp_path, stages, top={"files_touched": ["a.py"]})
+    rc, data = _run_preflight(tmp_path, project, run_id)
+    missing = {m["field"] for m in data.get("missing", [])}
+    assert "outputs_surfaced" not in missing, data
+    entry = [b for b in data["blockers"] if b["field"] == "outputs_surfaced"]
+    assert entry and entry[0]["present"] is None, data
+    notes_blob = " ".join(data.get("notes", []))
+    assert "surface_run_outputs" in notes_blob and "--outputs-surfaced" in notes_blob, data
+    assert "--stage-json" not in notes_blob, data

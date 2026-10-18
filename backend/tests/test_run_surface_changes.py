@@ -463,7 +463,13 @@ class TestStageDocsWiring:
         deliver, complete = self._docs()
         for doc, name in ((deliver, "deliver.md"), (complete, "complete.md")):
             assert "surface_run_outputs" in doc, f"{name} must instruct the surface_run_outputs batch tool"
-            assert "outputs_surfaced" in doc, f"{name} must record outputs_surfaced (the repurposed gate flag)"
+            # run_a87bfe3f: the evidence lives outside the deliver record (the tool's
+            # marker, or --outputs-surfaced on the completing call); the docs must
+            # never instruct the deliver --stage-json acknowledgement again, because
+            # that call REPLACES the deliver record and drops token_cost/decisions.
+            assert "--outputs-surfaced" in doc, f"{name} must name the --outputs-surfaced fallback"
+            assert '"outputs_surfaced":true' not in doc, (
+                f"{name} must not instruct a deliver --stage-json outputs_surfaced rewrite")
             # LOCAL_PR must not be an INSTRUCTION anymore (a "removed run_b8ea6d5c" note is
             # fine). The stale instruction was `open-canvas-file` pointed at a LOCAL_PR.md
             # path — assert THAT specific pattern is gone, not the mere word.
@@ -491,3 +497,177 @@ class TestStageDocsWiring:
 # failed/non-review-worthy dropped, source kind carried for frontend gating). The
 # author-agnostic pipeline-FINISH fallback (sweep_run_changes) remains covered by
 # TestSweepRunChanges above.
+
+
+class TestSurfaceAckOutsideDeliverRecord:
+    """run_a87bfe3f: the surface acknowledgement no longer lives in the deliver stage
+    record. The documented COMPLETE step used to be a `run-update --stage-json
+    {"stage":"deliver",...,"outputs_surfaced":true}` finalize, which REPLACES the
+    deliver record and erased token_cost/decisions on 30 of 43 runs. Now the gate
+    accepts the daemon's marker (written by the surface tool) or a run-level flag set
+    by `--outputs-surfaced` on the completing call; neither touches a stage record."""
+
+    COMMITS = [{"repo": "swarmai", "sha": "abc", "files": ["backend/foo.py"]}]
+    # reuse the parent class's minimal-complete run writer without re-collecting its tests
+    _write_run = TestCompletionGateSourceAck._write_run
+
+    def _complete(self, workspace, run_id, outputs_surfaced=False):
+        from scripts.artifact_cli import cmd_run_update
+        from unittest.mock import patch
+        from argparse import Namespace
+        import io, contextlib
+        args = Namespace(project="TP", run_id=run_id, status="completed",
+                         stage_json=None, taste_decision=None, profile=None,
+                         ddd_checksums=None, files_touched=None, force_checkpoint=False,
+                         outputs_surfaced=outputs_surfaced)
+        buf = io.StringIO()
+        code = None
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace), \
+             contextlib.redirect_stdout(buf):
+            try:
+                cmd_run_update(args, reg=None)
+            except SystemExit as e:
+                code = e.code
+        return code, buf.getvalue()
+
+    def _setup(self, tmp_path, run_id):
+        import json
+        (tmp_path / "Projects" / "TP" / ".artifacts" / "runs").mkdir(parents=True, exist_ok=True)
+        run_dir = self._write_run(tmp_path, run_id, commits=self.COMMITS,
+                                  files_touched=["backend/foo.py"])
+        data = json.loads((run_dir / "run.json").read_text())
+        deliver = next(s for s in data["stages"] if s["stage"] == "deliver")
+        deliver.update({"token_cost": 775751, "token_cost_source": "measured",
+                        "decisions": [{"description": "d", "classification": "taste"}]})
+        (run_dir / "run.json").write_text(json.dumps(data), encoding="utf-8")
+        return run_dir, dict(deliver)
+
+    def _state(self, run_dir):
+        import json
+        return json.loads((run_dir / "run.json").read_text())
+
+    def test_marker_completes_and_leaves_deliver_untouched(self, tmp_path):
+        from core import surface_marker as sm
+        run_dir, before = self._setup(tmp_path, "run_m")
+        assert sm.write_marker(run_dir / "run.json",
+                               [{"path": "backend/foo.py", "kind": "source-final"}])
+        code, out = self._complete(tmp_path, "run_m")
+        data = self._state(run_dir)
+        assert data["status"] == "completed", out
+        assert next(s for s in data["stages"] if s["stage"] == "deliver") == before
+
+    def test_flag_completes_records_run_level_ack_and_leaves_deliver_untouched(self, tmp_path):
+        run_dir, before = self._setup(tmp_path, "run_f")
+        code, out = self._complete(tmp_path, "run_f", outputs_surfaced=True)
+        data = self._state(run_dir)
+        assert data["status"] == "completed", out
+        assert data["outputs_surfaced"]["by"] == "agent"
+        assert next(s for s in data["stages"] if s["stage"] == "deliver") == before
+
+    def test_neither_blocks_and_hint_never_names_a_stage_json_rewrite(self, tmp_path):
+        import json
+        run_dir, _ = self._setup(tmp_path, "run_n")
+        code, out = self._complete(tmp_path, "run_n")
+        assert code == 1
+        msg = json.loads(out.strip().splitlines()[-1])
+        assert msg["block_reason"] == "unsurfaced_source"
+        assert msg["fix"].endswith("run-update --project TP --run-id run_n --status completed --outputs-surfaced")
+        assert "stage-json" not in msg["fix"] and "stage-json" not in msg["error"]
+        assert self._state(run_dir)["status"] != "completed"
+
+    def test_marker_older_than_a_later_commit_blocks(self, tmp_path):
+        import json
+        from core import surface_marker as sm
+        run_dir, _ = self._setup(tmp_path, "run_s")
+        sm.write_marker(run_dir / "run.json", [{"path": "backend/foo.py", "kind": "source-final"}])
+        data = self._state(run_dir)
+        data["commits"].append({"repo": "swarmai", "sha": "def", "files": ["backend/foo.py"]})
+        (run_dir / "run.json").write_text(json.dumps(data), encoding="utf-8")
+        code, out = self._complete(tmp_path, "run_s")
+        assert code == 1, out
+        assert self._state(run_dir)["status"] != "completed"
+
+    def test_flag_on_a_blocked_uncommitted_run_does_not_persist(self, tmp_path):
+        (tmp_path / "Projects" / "TP" / ".artifacts" / "runs").mkdir(parents=True, exist_ok=True)
+        run_dir = self._write_run(tmp_path, "run_u", commits=[], files_touched=["backend/foo.py"])
+        code, out = self._complete(tmp_path, "run_u", outputs_surfaced=True)
+        assert code == 1 and "uncommitted_source" in out
+        assert "outputs_surfaced" not in self._state(run_dir)
+
+
+class TestSurfaceGateGate2(TestSurfaceAckOutsideDeliverRecord):
+    """run_a87bfe3f Gate-2: a saved run-level flag is not evidence, a stale marker's
+    hint does not offer the self-attested flag, and a finalize that omits measured
+    fields keeps them."""
+
+    def test_saved_run_level_flag_alone_does_not_pass(self, tmp_path):
+        import json
+        run_dir, _ = self._setup(tmp_path, "run_r")
+        data = self._state(run_dir)
+        data["outputs_surfaced"] = {"at": "2026-10-18T00:00:00Z", "by": "agent"}
+        (run_dir / "run.json").write_text(json.dumps(data), encoding="utf-8")
+        code, out = self._complete(tmp_path, "run_r")
+        assert code == 1 and "unsurfaced_source" in out, out
+        assert self._state(run_dir)["status"] != "completed"
+
+    def test_stale_marker_hint_names_the_tool_not_the_flag(self, tmp_path):
+        import json
+        from core import surface_marker as sm
+        run_dir, _ = self._setup(tmp_path, "run_h")
+        sm.write_marker(run_dir / "run.json", [{"path": "backend/foo.py", "kind": "source-final"}])
+        data = self._state(run_dir)
+        data["commits"].append({"repo": "swarmai", "sha": "def", "files": ["backend/foo.py"]})
+        (run_dir / "run.json").write_text(json.dumps(data), encoding="utf-8")
+        code, out = self._complete(tmp_path, "run_h")
+        msg = json.loads(out.strip().splitlines()[-1])
+        assert code == 1 and "surface_run_outputs" in msg["fix"], msg
+        # the tool comes first; the flag is only the no-op fallback (meta-review)
+        assert msg["fix"].index("surface_run_outputs") < msg["fix"].index("--outputs-surfaced"), msg
+        assert "only if that call surfaces nothing new" in msg["fix"], msg
+
+    def test_finalize_without_measured_fields_keeps_them(self, tmp_path):
+        import json
+        from scripts.artifact_cli import cmd_run_update
+        from unittest.mock import patch
+        from argparse import Namespace
+        import io, contextlib
+        run_dir, before = self._setup(tmp_path, "run_c")
+        args = Namespace(project="TP", run_id="run_c", status=None,
+                         stage_json=json.dumps({"stage": "deliver", "status": "completed",
+                                                "stage_doc_consumed": True}),
+                         taste_decision=None, profile=None, ddd_checksums=None,
+                         files_touched=None, force_checkpoint=False, outputs_surfaced=False)
+        with patch("scripts.artifact_cli._get_workspace", return_value=tmp_path), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                cmd_run_update(args, reg=None)
+            except SystemExit:
+                pass
+        deliver = next(s for s in self._state(run_dir)["stages"] if s["stage"] == "deliver")
+        assert deliver["token_cost"] == 775751
+        assert deliver["token_cost_source"] == "measured"
+        assert deliver["decisions"] == before["decisions"]
+
+
+class TestCarryForwardSourceLabel(TestSurfaceAckOutsideDeliverRecord):
+    def test_explicit_token_cost_does_not_inherit_the_old_source(self, tmp_path):
+        import json
+        from scripts.artifact_cli import cmd_run_update
+        from unittest.mock import patch
+        from argparse import Namespace
+        import io, contextlib
+        run_dir, _ = self._setup(tmp_path, "run_t")
+        args = Namespace(project="TP", run_id="run_t", status=None,
+                         stage_json=json.dumps({"stage": "deliver", "status": "completed",
+                                                "stage_doc_consumed": True, "token_cost": 5}),
+                         taste_decision=None, profile=None, ddd_checksums=None,
+                         files_touched=None, force_checkpoint=False, outputs_surfaced=False)
+        with patch("scripts.artifact_cli._get_workspace", return_value=tmp_path), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                cmd_run_update(args, reg=None)
+            except SystemExit:
+                pass
+        deliver = next(s for s in self._state(run_dir)["stages"] if s["stage"] == "deliver")
+        assert deliver["token_cost"] == 5
+        assert deliver.get("token_cost_source") != "measured"

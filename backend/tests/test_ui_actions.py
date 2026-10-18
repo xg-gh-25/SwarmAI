@@ -939,3 +939,52 @@ class TestParseCompletionRunId:
         from core.ui_actions import parse_completion_run_id
         for junk in ("", "   ", "rm -rf /", "ls -la", None, 12345):
             assert parse_completion_run_id(junk) is None
+
+
+# ── surface_run_outputs handler does NOT write the gate marker (run_a87bfe3f) ──
+# Gate-2: the orchestrator dedups emission per session, so a handler that wrote the
+# marker on every call could attest rows it never sent. The orchestrator writes it
+# after yielding the batch (test_orchestrator_surface_wiring.py).
+class TestSurfaceHandlerMarker:
+    def _run(self, tmp_path, commits):
+        import json as _json
+        d = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_m1"
+        d.mkdir(parents=True)
+        (d / "run.json").write_text(_json.dumps({"id": "run_m1", "commits": commits}), encoding="utf-8")
+        return d
+
+    def test_handler_acks_but_writes_no_marker(self, tmp_path, monkeypatch):
+        import asyncio
+        from core import ui_actions as ua
+        from core.surface_marker import MARKER_NAME
+        d = self._run(tmp_path, [{"sha": "c1", "files": ["backend/a.py"]}])
+        monkeypatch.setattr(ua, "get_swarmws", lambda: str(tmp_path))
+        monkeypatch.setattr(ua, "build_surface_events", lambda rid, workspace_root=None: [
+            {"type": "file_changed", "path": "backend/a.py", "kind": "source-final"}])
+        out = asyncio.run(ua._surface_run_outputs_impl({"run_id": "run_m1"}))
+        assert "Surfacing 1" in out["content"][0]["text"]
+        assert not (d / MARKER_NAME).exists()
+
+    def test_record_surface_names_only_snapshot_commits(self, tmp_path, monkeypatch):
+        import json as _json
+        from core import ui_actions as ua
+        from core.surface_marker import MARKER_NAME
+        d = self._run(tmp_path, [{"sha": "c1", "files": ["backend/a.py"]}])
+        monkeypatch.setattr(ua, "get_swarmws", lambda: str(tmp_path))
+        snap = ua.surface_snapshot("run_m1")
+        # a commit lands between the snapshot and the write
+        (d / "run.json").write_text(_json.dumps({"id": "run_m1", "commits": [
+            {"sha": "c1"}, {"sha": "c2"}]}), encoding="utf-8")
+        assert ua.record_surface(snap, [{"path": "backend/a.py", "kind": "source-final"}])
+        assert _json.loads((d / MARKER_NAME).read_text())["commits"] == ["c1"]
+        assert ua.snapshot_shas(snap) == {"c1"}
+
+    def test_record_surface_survives_write_failure(self, tmp_path, monkeypatch):
+        from core import ui_actions as ua
+        self._run(tmp_path, [{"sha": "c1"}])
+        monkeypatch.setattr(ua, "get_swarmws", lambda: str(tmp_path))
+        snap = ua.surface_snapshot("run_m1")
+        def _boom(*a, **k):
+            raise OSError("disk full")
+        monkeypatch.setattr("core.surface_marker.write_marker", _boom)
+        assert ua.record_surface(snap, [{"path": "backend/a.py", "kind": "source-final"}]) is False

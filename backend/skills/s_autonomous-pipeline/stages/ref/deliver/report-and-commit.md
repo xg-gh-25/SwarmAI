@@ -109,12 +109,16 @@ them).
    rows, each openable as that file's changes (a local-PR experience). Mid-run
    `kind=source` stays suppressed. There is no aggregated PR document (removed — it had
    no review value). REPORT.md must exist before the surface call (`stages/complete.md`).
-3. **Record it** on the deliver stage: `run-update --stage-json
-   '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`. The gate
-   itself is stated on the card (Gates). Honest scope: this is self-attestation — the
-   CLI cannot observe the frontend dispatch; the flag proves the agent RAN the surface
-   step, not that Canvas rendered. A knowledge/docs-only run, or one whose commits are
-   all a sibling session's files, is not gated.
+3. **The evidence is recorded for you.** When the tool builds at least one committed
+   source row, the daemon writes `outputs_surfaced.json` beside run.json with the run's
+   commits; the completion gate accepts it if it names every commit the run has now.
+   A session without the tool passes `--outputs-surfaced` on
+   `run-update --status completed` (a run-level flag). Do not acknowledge it with a
+   deliver `--stage-json`: that REPLACES the deliver record and drops token_cost and
+   decisions. Honest scope: the marker is written by the daemon, but anything that can
+   write the run dir can forge it, and neither it nor the flag proves Canvas rendered.
+   A knowledge/docs-only run, or one whose commits are all a sibling session's files,
+   is not gated.
 
 ## PR creation — USER-initiated, outside the pipeline
 

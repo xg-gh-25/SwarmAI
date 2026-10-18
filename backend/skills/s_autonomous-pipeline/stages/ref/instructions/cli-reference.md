@@ -18,6 +18,7 @@ advance  --project <P> --state <stage> --run-id <RUN>   # advance the state mach
 # Pipeline runs
 run-create  --project <P> --requirement "<text>" [--profile <profile>]
 run-update  --project <P> --run-id <R> [--stage-json '<json>'] [--status <S>] [--profile <P>]
+            [--outputs-surfaced]   # with --status completed, only when the surface_run_outputs tool is unavailable
 run-get     --project <P> [--run-id <R>]
 run-budget  --project <P> --run-id <R>            # informational consumed/pct (NOT a checkpoint gate)
 run-checkpoint --project <P> --run-id <R> --stage <stg> --reason "<why>"

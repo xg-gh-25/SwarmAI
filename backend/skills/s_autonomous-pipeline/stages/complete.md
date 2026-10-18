@@ -24,7 +24,7 @@ INSTRUCTIONS Step 6. Why this card exists: `stages/history/complete.md`.
 so a hand-written one is left alone. `run-report --force` is only needed to refresh a
 hand-written or stale report. Ordering detail: `stages/ref/complete/report-ordering.md`.
 
-Do Step 0 BEFORE `run-update --status completed` (it is gated on `outputs_surfaced`, and
+Do Step 0 BEFORE `run-update --status completed` (it is gated on surface evidence, and
 the summary it returns links the same files). Full Canvas behavior:
 `stages/deliver.md` § "COMPLETE-stage Canvas review".
 
@@ -42,11 +42,19 @@ python backend/scripts/artifact_cli.py run-surface-changes
    The backend emits one OUTPUTS row per committed file (kind=source-final), each
    openable as that file's changes. Mid-run edits are not displayed. There is no
    LOCAL_PR.md (removed); the per-file rows are the deliverable.
-3. **Record it:** `run-update --stage-json '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`.
+3. **Nothing to record by hand.** The tool writes the evidence the completion gate
+   reads (`outputs_surfaced.json` beside run.json, listing the run's commits). In a
+   session without the tool, add `--outputs-surfaced` to the completing
+   `run-update --status completed` instead; do the same while the daemon has not been
+   rebuilt since this marker was added (an older daemon writes no marker, and the gate's
+   hint says so). Never re-record the deliver stage with
+   `--stage-json` for this: that call REPLACES the deliver record and drops its
+   token_cost and decisions.
 
-**GATED:** if this run committed run-scoped source (commits ∩ files_touched) and you
-skip step 2/3, `run-update --status completed` BLOCKS. A knowledge/docs-only run (no
-source commits) is exempt — skip steps 2-3, still do step 1.
+**GATED:** if this run committed run-scoped source (commits ∩ files_touched) and step 2
+did not run (and no `--outputs-surfaced`), `run-update --status completed` BLOCKS; a
+commit made after the surface call needs the tool called again. A knowledge/docs-only
+run (no source commits) is exempt — skip step 2, still do step 1.
 
 ---
 

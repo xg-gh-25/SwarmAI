@@ -540,6 +540,60 @@ async def build_surface_events_async(
     return await asyncio.to_thread(build_surface_events, run_id, workspace_root)
 
 
+def surface_snapshot(run_id: object):
+    """The orchestrator's pre-build snapshot for the completion-gate marker:
+    ``(run.json path, commits)`` or None. Sync — call it via asyncio.to_thread."""
+    from . import surface_marker
+    return surface_marker.read_snapshot(run_id, get_swarmws())
+
+
+def record_surface(snapshot, events) -> bool:
+    """Write the marker for a batch the orchestrator just EMITTED, naming only the
+    snapshot's commits. Never raises. Sync — call it via asyncio.to_thread."""
+    from . import surface_marker
+    if not snapshot:
+        return False
+    try:
+        return surface_marker.write_marker(snapshot[0], events, commits=snapshot[1])
+    except Exception as e:  # noqa: BLE001 — evidence only; the turn must not fail
+        logger.debug("surface marker not written for %s: %s", snapshot[0], e)
+        return False
+
+
+def snapshot_shas(snapshot) -> set:
+    """Commit shas in a :func:`surface_snapshot` (empty for None)."""
+    from . import surface_marker
+    return surface_marker.commit_shas(snapshot[1]) if snapshot else set()
+
+
+async def _surface_run_outputs_impl(args: dict) -> dict:
+    """Body of the ``surface_run_outputs`` tool (module level so it is testable).
+
+    The orchestrator observes this call, emits the batch of file_changed events
+    (build_surface_events) and, when it actually emitted committed source rows,
+    records the completion gate's evidence (core.surface_marker) — see
+    :func:`surface_snapshot`. The marker is written THERE, not here, because the
+    orchestrator dedups emission per session: a body that wrote the marker on every
+    call could attest to rows it never sent (run_a87bfe3f Gate-2). This body only
+    acks and points at the SENSE readback, like ui_action (it cannot see the
+    frontend). The build runs off the event loop.
+    """
+    run_id = args.get("run_id")
+    events = await build_surface_events_async(run_id)
+    n = len(events)
+    if n == 0:
+        return {"content": [{"type": "text", "text": (
+            f"No committed source files found for run {run_id!r} — nothing to "
+            "surface. (Did run-commit record commits for this run yet?)"
+        )}]}
+    return {"content": [{"type": "text", "text": (
+        f"Surfacing {n} committed file(s) from run {run_id!r} to the Canvas "
+        "OUTPUTS list. This is NOT synchronous — the frontend adds the rows "
+        "after this turn. On your NEXT turn, verify the 'Current UI State' Canvas "
+        "outputs count reflects them; click a row to review that file's changes."
+    )}]}
+
+
 # Minimum bytes for a REPORT.md to count as "real" (a present-but-stub report is
 # the documented failure mode — IMPROVEMENT.md: 5/6 runs once froze empty). Mirrors
 # the run-update completion gate (artifact_cli.py `report_size < 500`).
@@ -887,22 +941,7 @@ def get_ui_mcp_server():
         {"run_id": str},
     )
     async def surface_run_outputs(args: dict) -> dict:
-        run_id = args.get("run_id")
-        # The orchestrator observes this call and emits the batch of file_changed
-        # events (build_surface_events). The tool body just acks + points at the
-        # SENSE readback, mirroring ui_action (it cannot see the frontend).
-        n = len(build_surface_events(run_id))
-        if n == 0:
-            return {"content": [{"type": "text", "text": (
-                f"No committed source files found for run {run_id!r} — nothing to "
-                "surface. (Did run-commit record commits for this run yet?)"
-            )}]}
-        return {"content": [{"type": "text", "text": (
-            f"Surfacing {n} committed file(s) from run {run_id!r} to the Canvas "
-            "OUTPUTS list. This is NOT synchronous — the frontend adds the rows "
-            "after this turn. On your NEXT turn, verify the 'Current UI State' Canvas "
-            "outputs count reflects them; click a row to review that file's changes."
-        )}]}
+        return await _surface_run_outputs_impl(args)
 
     @tool(
         SENSE_ATTENTION_TOOL_NAME,

@@ -4808,6 +4808,44 @@ _DECISION_EXAMPLE = {"description": "Chose the shared helper over a copy",
 STAGE_RECORD_TEMPLATES: dict[str, dict] = {
     _st: {"decisions": [dict(_DECISION_EXAMPLE)]} for _st in _RECORD_STAGES
 }
+# TEST's exit_evidence keys (stages/test.md): every value is ONE string. A list is
+# accepted on input and joined by normalize_exit_evidence (run_a87bfe3f).
+STAGE_RECORD_TEMPLATES["test"] = {
+    "decisions": [dict(_DECISION_EXAMPLE)],
+    "exit_evidence": {
+        "wtf": "score 0 (0 fixes, 4 files)",
+        "fixes": "none",
+        "unfixed": "tests/test_x.py::test_y: fails on HEAD too, outside this change",
+        "expectations": "no test expectation modified",
+    },
+}
+
+
+def normalize_exit_evidence(record: dict) -> dict:
+    """Return ``record`` with each list-of-strings ``exit_evidence`` value joined
+    into one string (blank items dropped first, joined with ``'; '``).
+
+    stages/test.md describes ``fixes``/``unfixed`` per item, so agents write lists,
+    while the record schema is ``dict[str,str]``; 4+ runs were rejected on exactly
+    this shape (run_a87bfe3f). An empty or all-blank list becomes ``''``, never a
+    placeholder: judge_exit_criteria counts a manual criterion as met only for a
+    non-blank string, so ``{"X6": []}`` must stay unmet. Any other value (a list
+    holding a non-string, a dict, a number) is left as is for the schema to reject.
+    """
+    if not isinstance(record, dict):
+        return record
+    ev = record.get("exit_evidence")
+    if not isinstance(ev, dict):
+        return record
+    out = {}
+    for key, val in ev.items():
+        if isinstance(val, list) and all(isinstance(x, str) for x in val):
+            out[key] = "; ".join(x.strip() for x in val if x.strip())
+        else:
+            out[key] = val
+    return {**record, "exit_evidence": out}
+
+
 STAGE_RECORD_TEMPLATES["deliver"] = {
     "decisions": [dict(_DECISION_EXAMPLE)],
     "exit_evidence": {"X9": "manual check: opened the page and the badge renders"},

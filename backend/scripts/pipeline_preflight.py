@@ -24,7 +24,8 @@ THE THREE ENFORCEMENT SITES (deliver)
        importable table — those NAMES are mirrored in _ARTIFACT_HARDCODED_FIELDS and
        pinned by the drift-tripwire test. Both are reported.
     2. run-state (artifact_cli.py run-commit): push_ready (deliver stage-record
-       top), files_touched (run.json top), outputs_surfaced (deliver stage-record).
+       top), files_touched (run.json top), outputs_surfaced (completion-time
+       evidence, advisory here — see _RUNSTATE_FIELDS).
        These are hardcoded `.get()` literals in procedural code with NO importable
        table — preflight mirrors the three NAMES here and a drift-tripwire test
        (test_pipeline_preflight.py::test_runcommit_field_names_match_real_literals)
@@ -55,8 +56,15 @@ from scripts import pipeline_validator as _pv  # noqa: E402
 # drift-tripwire test — a rename in artifact_cli.py turns that test RED.
 #   push_ready        → deliver stage RECORD top-level (artifact_cli.py run-commit)
 #   files_touched     → run.json top-level            (artifact_cli.py run-commit)
-#   outputs_surfaced  → deliver stage RECORD           (artifact_cli.py run-UPDATE
-#                       completion gate — NOT run-commit; read via cmd_run_update)
+#   outputs_surfaced  → COMPLETION-time evidence      (artifact_cli.py run-UPDATE
+#                       --status completed gate — NOT run-commit, NOT the deliver
+#                       record). The gate accepts the daemon marker written by the
+#                       surface_run_outputs tool (core.surface_marker, beside
+#                       run.json), the run-level --outputs-surfaced flag, or a legacy
+#                       deliver-record flag. All of these appear AFTER run-commit, so
+#                       at DELIVER preflight it is advisory only (present=None, never
+#                       "missing"): reporting it missing here is what pushed agents to
+#                       re-record DELIVER with --stage-json, which wiped the record.
 #   required_experts  → run.json top-level            (artifact_cli.py run-commit
 #                       D7 gate _d7_missing_required_experts; a non-empty declared
 #                       set BLOCKS unless every expert reviewed — presence here means
@@ -65,7 +73,7 @@ from scripts import pipeline_validator as _pv  # noqa: E402
 _RUNSTATE_FIELDS = [
     {"field": "push_ready", "location": "stage-record-top", "stage": "deliver"},
     {"field": "files_touched", "location": "run.json-top", "stage": None},
-    {"field": "outputs_surfaced", "location": "stage-record-top", "stage": "deliver"},
+    {"field": "outputs_surfaced", "location": "completion-surface", "stage": None},
     {"field": "required_experts", "location": "run.json-top", "stage": None},
 ]
 
@@ -145,6 +153,11 @@ def _field_present(run_doc, blocker):
         # return None (not a present/missing claim) — the report NOTE carries the
         # D7 obligation. An EMPTY/absent set means D7 does not gate (nothing declared).
         return None
+    if loc == "completion-surface":
+        # Produced after run-commit (see the outputs_surfaced comment above), so it is
+        # not decidable at DELIVER: advisory, like required_experts. The note carries
+        # the path.
+        return None
     if loc == "run.json-top":
         return bool(run_doc.get(field))
     if loc == "stage-record-top":
@@ -208,6 +221,12 @@ def run_preflight(stage, project, run_id, workspace):
         f"completion gate (run-update --status completed) additionally requires ALL "
         f"'{profile}' profile stages done + cross_boundary E2E if flagged.",
     ]
+    notes.append(
+        "completion surface gate (run-update --status completed): after run-commit, "
+        "call the surface_run_outputs tool for this run (it records the evidence); "
+        "without that tool, add --outputs-surfaced to the completing run-update. "
+        "Do not re-record the deliver stage to add it."
+    )
     # D7 obligation note — surfaced whenever a non-empty required_experts is declared
     # (presence ≠ satisfied; satisfaction needs the adversarial markers, not visible here).
     _declared = run_doc.get("required_experts")
