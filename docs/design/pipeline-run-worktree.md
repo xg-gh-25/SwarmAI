@@ -335,19 +335,31 @@ SwarmAI 里的代码改动按规则本来就走 run，主工作区里的未提�
    照旧用原来的按 pathspec 提交，同样记进 `commits[]`。
 7. 重新生成 REPORT 和 Canvas 行（§6.4），然后释放（§8）。
 
-**提交耗时与后台落地**：AGENTS.md 说本机一次 commit 要预留约 600 秒（git-defender 扫描），而 Bash 工具单次调用最长
-就是 600 秒，后台运行又被 `background_command_guard` 禁止，stage-complete 里提交之后还要 merge、改写 run.json、刷新
-REPORT。只写"实测后配超时"没有后路，所以两条路径都设计好，P2 第一步实测后选：
+**提交耗时（2026-10-18 实测）与落地路径**：AGENTS.md 说本机一次 commit 要预留约 600 秒（git-defender 扫描），而 Bash
+工具单次调用最长 600 秒、后台运行被 `background_command_guard` 禁止，所以 P2 第一步先实测。做法：在本 repo 的临时 detached
+worktree 里重放真实 commit 的 diff，用真实的 git-defender hook（`/usr/local/amazon/var/git-defender/hooks`，`GIT_TRACE`
+确认 pre-commit、prepare-commit-msg、commit-msg、post-commit 都同步执行了）计时，机器 load average 13–15：
 
-- **前台路径**（实测 git-defender 在本 repo 上的 commit 耗时 p95 不超过约 400 秒时）：stage-complete 里同步做完第 1–7 步。
-- **后台路径**（超过约 400 秒、或测不出稳定值时；也是默认）：stage-complete 做完前置条件和第 1–2 步后，把落地请求写进
-  daemon 的队列（`~/.swarm-ai/state/integrate-queue/<run_id>.json`，run 锁内写入，带 `T`、`C`、请求者 session），worktree
-  状态记为 `integrating`，立即返回 `integrating`。daemon 的后台 worker（每个 repo 一个、串行）以 owner 的名义执行第 3–7 步
-  （§4.2 允许 daemon 代 owner 操作）：它是长寿进程，不受工具超时限制；commit 的 hook 照常运行。结果写回 run.json。
-- 模型拿到 `integrating` 后，过一会儿重跑 stage-complete（它本来就是幂等的）取结果：仍在进行 → 再次 `integrating`；
-  `integrated` → stage 前进；失败 → 按 7.7 的错误返回。worker 执行期间 run 被取消，第 4 步的状态复查会让它撤销。
-- daemon 重启时，队列里 `integrating` 的请求按第 5 步的结果判断：main 已包含 `N` → 补做第 6–7 步；否则从第 3 步重来
-  （第 3–5 步失败时都会 `reset --soft C`，重来是安全的）。
+| 场景 | 规模 | 耗时 |
+|---|---|---|
+| commit（重放 00ed32a5） | 4 文件，+238/−79 | 0.43 s、0.42 s |
+| commit（重放 2de1f799） | 11 文件，+1030/−24 | 0.62 s、0.80 s |
+| commit（重放 08961eea） | 6 文件，+1449/−85 | 0.46 s、0.46 s |
+| commit（HEAD~40..HEAD~10 压成一个） | 162 文件，+16424/−2145 | 0.68 s |
+| `commit --amend`（本 repo 主工作区，docs 改动） | 1 文件 | 2.31 s |
+| `rebase`（11 文件的 commit 换 base） | — | 1.44 s |
+| `merge --ff-only`（另一个 checkout 里） | 4–11 文件 | 0.27–0.35 s |
+
+最慢 2.3 秒，离 600 秒差两个数量级；AGENTS.md 的"约 600 秒"在今天的 git-defender 上不成立（可能来自早期版本或首次
+启动）。样本只有一台机器、一天、十个左右，所以按本节原定规则选**前台路径**，并加一道护栏，不建后台队列：
+
+- stage-complete 里同步做完第 1–7 步。最终 commit 带 300 秒超时；超时就终止它、worktree `reset --soft C`，返回
+  `busy: commit_slow`（模型按 §7.6 退避重跑），并把耗时记进 P3 的观测。
+- 每次落地记录 commit / merge 耗时。P3 若看到 p95 超过约 120 秒，再启用下面的后台路径。
+- **后台路径（预案，不在 P2 实现）**：stage-complete 把落地请求写进 daemon 队列（`~/.swarm-ai/state/integrate-queue/<run_id>.json`，
+  run 锁内写入，带 `T`、`C`、请求者 session），worktree 状态记为 `integrating` 并立即返回；daemon 的后台 worker（每个 repo
+  一个、串行）以 owner 的名义执行第 3–7 步，不受工具超时限制；模型重跑 stage-complete（幂等）取结果；daemon 重启时，
+  main 已包含 `N` → 补做第 6–7 步，否则从第 3 步重来（第 3–5 步失败都会 `reset --soft C`，重来是安全的）。
 
 **中断**：`merge --ff-only` 的原子性由 git 负责；它在更新工作区的过程中被杀的情况与人手动合并被打断相同，
 `git status` 能看到，按 git 的常规方式处理。工具这一侧没有需要恢复的中间状态。
@@ -373,7 +385,7 @@ stage-complete 的错误给出剩余 repo 的下一步；完成门槛（§8.4）
 | `changed_since_review` | stage-complete | 重跑 deliver 的 stage-start |
 | 路径校验失败 | stage-complete | 改掉被拒绝的路径（或说明后由人决定） |
 | `blocked_by_uncommitted` / `busy` / `main_checkout_busy` | stage-complete | 退避后重跑 stage-complete，累计 10 分钟后 checkpoint |
-| `integrating`（后台落地进行中） | stage-complete | 过一会儿重跑 stage-complete 取结果 |
+| `busy: commit_slow`（最终 commit 超过 300 秒被终止） | stage-complete | 同 `busy`，退避后重跑 |
 | `untracked_new_files`（warning，不是错误） | stage-start / stage-complete | 要进本 run 的 `git add`，其余删掉 |
 
 ## 8. 清理：和 run 的结束是同一个动作
@@ -504,7 +516,7 @@ run.json 和 token。
 | run 改了依赖文件 | warning：测试用的是 main 已安装的依赖 |
 | 模型在 worktree 里 `git stash` | deny（stash 是所有 worktree 共用的 `refs/stash`） |
 | worktree 里留了探针脚本、输出文件、截图 | 不 add 就不进改动集、不进 `T`、不提交，只列为 warning |
-| 最终 commit 很慢（git-defender） | 后台路径：daemon 执行落地，stage-complete 返回 `integrating`，重跑取结果 |
+| 最终 commit 很慢（git-defender） | 实测 0.4–2.3 秒；300 秒超时护栏 → `busy: commit_slow`；P3 数据需要时启用后台路径（§7.4） |
 | 在没有 hook 的 `--bare` 执行器里建 isolated run | 拒绝，run 失败并报告 |
 
 ## 14. 分期
@@ -514,7 +526,7 @@ run.json 和 token。
     stamper）；归属与接管（§4.2）；共用的 `own_isolated_run` 判定。
   - **P1** 建 worktree 与校验（§5）；写入 gate（§6.1）；工具定位与 `.pth` 屏蔽、`files_touched` 由工具推导、命令用 main
     绝对路径（§6.2）；`run-diff` 与 goal 卡片锚点（§6.3）；释放、快照、ledger、完成门槛、清扫（§8）。
-  - **P2** 第一步：实测本 repo 上带 git-defender 的 commit 耗时，据此选前台或后台落地路径（§7.4，默认后台）；然后是
+  - **P2**（commit 耗时已实测，选前台路径 + 300 秒护栏，§7.4）：
     deliver stage-start 里的同步（§7.2）、树指纹绑定（§7.3）、stage-complete 里的 `merge --ff-only` 落地（§7.4）、
     多 repo（§7.5）、卡片删减（§6.2、§6.3）、Canvas 与 REPORT 刷新（§6.4）、AGENTS.md 分支规则和 Security
     Architecture 列表。
@@ -541,7 +553,7 @@ run.json 和 token。
 13. 在 worktree 里 `git stash` / `git -C <wt> stash pop` → deny；非 run session 在 main 里 stash 不受影响。
 14. worktree 里有一个未 add 的 `probe.py` 和一张截图：不进 Gate-2 diff、不进 `T`、不进 N，stage-complete 列出 warning；
     显式 `git add` 的新文件进入 N。
-15. 后台落地：stage-complete 返回 `integrating`，重跑得到 `integrated`；worker 执行中 daemon 重启，恢复后结果正确且只落地一次。
+15. 最终 commit 超过超时（用一个故意 sleep 的 hook 模拟）：commit 被终止、worktree 回到 base、返回 `busy: commit_slow`，main 不动。
 16. 没有 `SWARM_HOOKED_SESSION`（模拟 `--bare` 执行器）时 stage-start 不建 worktree、run 以 failed 结束并写明理由。
 
 ## 16. 对抗审查记录
@@ -599,7 +611,7 @@ run.json 和 token。
 |---|---|---|
 | stash 是所有 worktree 共用的 `refs/stash`：worktree 里 stash 的半成品能在 main 里 `stash pop` 出来（审查者实测，本文作者复测确认） | HIGH | 判定三加 stash，`WT_ROOT` 下所有 worktree 的全部子命令 deny；锚点用 `run-diff --mark`（§6.1） |
 | 改动集用 `add -A`，worktree 里的探针脚本、输出、截图会被提交进公开 repo | HIGH | 已跟踪文件的改动和删除自动纳入，新文件必须显式 `git add`；未 add 的列为 warning（§6.2、§7.2） |
-| 最终 commit 可能超过 Bash 工具 600 秒上限，原文只写"实测后配超时" | MED | 前台 / 后台两条路径，实测后选，默认后台：daemon 执行落地，stage-complete 返回 `integrating` 并幂等取结果（§7.4） |
+| 最终 commit 可能超过 Bash 工具 600 秒上限，原文只写"实测后配超时" | MED | 实测 0.4–2.3 秒（git-defender hook 同步执行）→ 前台路径 + 300 秒护栏；后台队列写成预案，P3 有数据再启用（§7.4） |
 | 归属和写入 gate 默认 run 跑在带 hook 的 session 里，`--bare` 执行器上建 isolated run 等于没有 gate | 建议 | 不变量：只有带 hook 的 session 能有 isolated run，否则 run 失败并报告；为将来的 daemon 托管执行器留好接入点（§2、§4.2） |
 
 判定三的 stash 规则比建议略窄：只在 `WT_ROOT` 下的 worktree 里对所有 session deny；main checkout 里，有 isolated run 的
