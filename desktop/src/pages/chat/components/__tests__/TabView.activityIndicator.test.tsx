@@ -44,7 +44,7 @@ const toolTurn: Message = {
 };
 
 function scrollContainer(container: HTMLElement): HTMLElement {
-  const el = container.querySelector('.overflow-y-auto') as HTMLElement | null;
+  const el = container.querySelector('.chat-scroll-gutter') as HTMLElement | null;
   if (!el) throw new Error('scroll container not found');
   return el;
 }

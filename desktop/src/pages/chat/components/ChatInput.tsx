@@ -760,14 +760,22 @@ export function ChatInput({
   const canSend = (inputValue.trim() || hasAttachments) && selectedAgentId;
 
   return (
-    <div className="pl-2 pr-4 pb-4 pt-2 flex-shrink-0">
-        {/* Input Container with drag-and-drop */}
+    // `chat-gutter` + `chat-column` (index.css) give the composer the same width and
+    // edges as the transcript column above it.
+    <div className="chat-gutter pb-4 pt-2 flex-shrink-0">
+        {/* Input Container with drag-and-drop. The transition is limited to the
+            focus/drag colours: the column width is a computed length now, so
+            `transition-all` would animate the card's width on every Canvas
+            toggle while the transcript column above it snaps — the two would
+            visibly drift apart for the duration of the transition. */}
         <div
           className={clsx(
-            'bg-[var(--color-card)] border rounded-xl p-3 relative transition-all',
+            'chat-column border rounded-xl p-3 relative transition-[border-color,background-color,box-shadow]',
+            // The two backgrounds are exclusive: with both classes present the
+            // winner would be stylesheet rule order, not this condition.
             isDragging
               ? 'border-primary bg-primary/5'
-              : 'border-[var(--color-border)] focus-within:border-[rgba(43,108,238,0.5)] focus-within:shadow-[0_0_0_2px_rgba(43,108,238,0.1)]'
+              : 'bg-[var(--color-card)] border-[var(--color-border)] focus-within:border-[rgba(43,108,238,0.5)] focus-within:shadow-[0_0_0_2px_rgba(43,108,238,0.1)]'
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}

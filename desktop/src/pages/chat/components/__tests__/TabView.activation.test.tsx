@@ -122,10 +122,10 @@ describe('TabView — activation re-pin (default-follow controller, root fix)', 
     store.replace([msg('m1', 'a'), msg('m2', 'b')]);
     const { container, rerender } = render(<TabView {...baseProps('tab-hist', true)} />);
     // The scroll container is the div carrying onScroll=handleScroll (the
-    // overflow-y-auto body). Simulate a GENUINE user scroll-up on it: scrollTop
+    // chat-scroll-gutter body). Simulate a GENUINE user scroll-up on it: scrollTop
     // moved up (from the initial 0 baseline it must actually differ; start the
     // baseline high then move up) → handleScroll → nextFollowState flips follow=false.
-    const scroller = container.querySelector('.overflow-y-auto') as HTMLElement;
+    const scroller = container.querySelector('.chat-scroll-gutter') as HTMLElement;
     expect(scroller).toBeTruthy();
     // First a genuine scroll to establish lastScrollTop at the bottom, then up.
     const setMetrics = (top: number) => {

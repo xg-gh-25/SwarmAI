@@ -144,16 +144,55 @@ describe('Layout viewport lock — EXPECTED behavior (must happen)', () => {
 // ---------------------------------------------------------------------------
 
 describe('Layout viewport lock — MUST NOT CHANGE (preserved behaviors)', () => {
-  it('messages container must remain scrollable (overflow-y-auto)', () => {
+  it('messages container must remain scrollable (chat-scroll-gutter → overflow-y: scroll)', () => {
     // Migration Step 5.1: the scrollable messages container relocated from
     // ChatPage.tsx into the per-tab TabView (keep-mounted N-TabView render).
-    // The behavior is unchanged — the messages list is still overflow-y-auto —
-    // but the container now lives in TabView, so this guard greps there.
+    // The scroll now comes from the shared `chat-scroll-gutter` utility (it owns
+    // overflow + the side gutters so the transcript lines up with the composer),
+    // so this guard checks both halves: TabView opts in, and the utility scrolls.
     const tabViewFile = readFileSync(
       resolve(PROJECT_ROOT, 'src/pages/chat/components/TabView.tsx'), 'utf-8'
     );
-    // Messages container uses overflow-y-auto for internal scrolling
-    expect(tabViewFile).toMatch(/overflow-y-auto/);
+    expect(tabViewFile).toMatch(/chat-scroll-gutter/);
+    const utility = INDEX_CSS.match(/@utility chat-scroll-gutter\s*\{([^}]*)\}/);
+    expect(utility).not.toBeNull();
+    expect(utility![1]).toMatch(/overflow-y:\s*scroll/);
+  });
+
+  it('chat column geometry rules stay coupled (width rule, gutters, scrollbar compensation)', () => {
+    // jsdom runs no CSS, so the geometry that aligns transcript, composer and
+    // Welcome is pinned here as rule text. Each assertion names the coupling it
+    // protects; the pixel result itself is measured by the pipeline's WKWebView probe.
+    const body = (name: string) => {
+      const m = INDEX_CSS.match(new RegExp(`@utility ${name}\\s*\\{([^}]*)\\}`));
+      expect(m, `@utility ${name} missing`).not.toBeNull();
+      return m![1];
+    };
+    // cqi resolves against the chat panel, not the viewport.
+    expect(body('chat-panel')).toMatch(/container-type:\s*inline-size/);
+    // 940 floor, grows with the panel, 1200 cap, never wider than the gutter box.
+    expect(body('chat-column')).toMatch(/width:\s*min\(100%,\s*clamp\(940px,\s*70cqi,\s*1200px\)\)/);
+    expect(body('chat-column')).toMatch(/margin-inline:\s*auto/);
+    expect(body('chat-gutter')).toMatch(/padding-inline:\s*var\(--chat-gutter\)/);
+    // The scrollbar sits inside the right gutter: right = gutter - bar width.
+    const scroll = body('chat-scroll-gutter');
+    expect(scroll).toMatch(/padding-left:\s*var\(--chat-gutter\)/);
+    expect(scroll).toMatch(/padding-right:\s*calc\(var\(--chat-gutter\)\s*-\s*var\(--scrollbar-size\)\)/);
+    // The styled bar and the compensation read the same token.
+    expect(INDEX_CSS).toMatch(/::-webkit-scrollbar\s*\{[^}]*width:\s*var\(--scrollbar-size\)/);
+    // Chromium ignores ::-webkit-scrollbar once a standard scrollbar property is set.
+    expect(INDEX_CSS).not.toMatch(/scrollbar-width\s*:|scrollbar-color\s*:/);
+  });
+
+  it('the chat panel is the container the column measures against', () => {
+    const chatPage = readFileSync(resolve(PROJECT_ROOT, 'src/pages/ChatPage.tsx'), 'utf-8');
+    // without it, 70cqi and --chat-gutter resolve against the viewport, not the panel
+    expect(chatPage).toMatch(/className="chat-panel [^"]*flex-1/);
+  });
+
+  it('rate-limit row sits on the shared chat column', () => {
+    const chatPage = readFileSync(resolve(PROJECT_ROOT, 'src/pages/ChatPage.tsx'), 'utf-8');
+    expect(chatPage).toMatch(/<div className="chat-gutter py-2">\s*<div className="chat-column [^"]*text-yellow-400/);
   });
 
   it('TopBar must remain fixed height and unshrinkable', () => {

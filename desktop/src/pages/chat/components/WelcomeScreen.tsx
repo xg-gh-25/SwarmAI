@@ -165,7 +165,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
   const hasAnyBriefing = hasFocus || hasWorking || briefing?.learning;
 
   return (
-    <div className="flex flex-col items-center h-full px-4 overflow-y-auto">
+    // `chat-scroll-gutter` (index.css): the same overflow + side gutters as the
+    // transcript scroller, so this column lines up with the composer below it.
+    <div className="flex flex-col items-center h-full chat-scroll-gutter">
       {/* Top spacer */}
       <div className="flex-1 min-h-6" />
 
@@ -190,10 +192,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
         SwarmAI — Grow your Brain. Deliver Anything.
       </h1>
 
-      {/* Shared-width column (run_b4d3eeeb): BrainHome + the briefing below it live in
-          ONE max-w-3xl container so their left/right edges align vertically. w-full so
-          the outer `items-center` still centers the whole column. */}
-      <div className="w-full max-w-3xl flex flex-col">
+      {/* Shared-width column: BrainHome + the briefing below it live in ONE container
+          so their left/right edges align vertically. It is the app-wide `chat-column`
+          (index.css), the same column as the transcript and the composer, so the
+          width does not change when the first message replaces this screen. */}
+      <div className="chat-column flex flex-col">
       {/* Durable Brain Home layer (design 2026-08-04) — an INDEPENDENT read from the
           session-briefing below: an empty/failed briefing must not blank the brains,
           and an empty/failed brain read must not blank the briefing. Renders nothing

@@ -462,9 +462,12 @@ function TabViewImpl({
       onScroll={handleScroll}
       aria-hidden={!isActive}
       style={isActive ? undefined : { display: 'none' }}
+      // Non-empty: `chat-scroll-gutter` (index.css) owns the overflow and the side
+      // gutters, so the transcript lines up with the composer. Empty: the
+      // WelcomeScreen is its own scroll container with the same gutter.
       className={messages.length === 0
         ? 'flex-1 overflow-hidden flex flex-col'
-        : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 min-w-0'
+        : 'flex-1 chat-scroll-gutter py-3.5 min-w-0'
       }
     >
       {everActiveRef.current ? (
@@ -472,11 +475,12 @@ function TabViewImpl({
       // content-height growth during streaming triggers the re-pin (root cause B).
       // `space-y-2.5` moved here from the scroll container: with the list wrapped
       // in one div, container-level space-y no longer reaches the message rows, so
-      // the inter-message spacing lives on the wrapper (non-empty). Empty state
-      // gets flex-col/flex-1 so WelcomeScreen's h-full still fills the viewport.
+      // the inter-message spacing lives on the wrapper (non-empty). Its width is the
+      // shared `chat-column`. Empty state gets flex-col/flex-1 so WelcomeScreen's
+      // h-full still fills the viewport.
       <div
         ref={contentRef}
-        className={messages.length === 0 ? 'flex-1 flex flex-col min-h-0' : 'space-y-2.5 mx-auto w-full max-w-[940px]'}
+        className={messages.length === 0 ? 'flex-1 flex flex-col min-h-0' : 'space-y-2.5 chat-column'}
       >
       {isLoadingOlderMessages && (
         <div className="flex justify-center py-2">

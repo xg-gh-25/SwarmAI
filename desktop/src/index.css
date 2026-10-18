@@ -273,10 +273,22 @@ body {
   color: var(--color-text);
 }
 
-/* Scrollbar styling */
+/* Layout tokens (theme-independent).
+ * --scrollbar-size is the ONE value for the styled scrollbar below AND for the
+ * chat-scroll-gutter compensation, so the bar and the gutter maths cannot drift.
+ * --chat-gutter uses cqi, which resolves where the variable is USED — i.e.
+ * against the nearest `chat-panel` container, not against :root. */
+:root {
+  --scrollbar-size: 6px;
+  --chat-gutter: clamp(12px, 2cqi, 24px);
+}
+
+/* Scrollbar styling.
+ * A styled ::-webkit-scrollbar is a classic, space-taking bar in WebKit (measured
+ * in macOS WKWebView: offsetWidth - clientWidth = 6px), not an overlay bar. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 
 ::-webkit-scrollbar-track {
@@ -290,6 +302,54 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
+}
+
+/* ── Chat column — the single source of truth for the chat reading column ──
+ * The transcript, the composer, the Welcome screen and any row between them
+ * (rate-limit notice) take their width and side gutters ONLY from these
+ * utilities, so their left/right edges line up at every panel width, app zoom
+ * and Canvas state. Never give one of those surfaces its own max-w / px.
+ *
+ *   chat-panel          the chat panel (ChatPage), the container every cqi below
+ *                       resolves against. It already carries contain:layout;
+ *                       inline-size containment is safe because its width comes
+ *                       from flex (flex-1 min-w-0), never from its content.
+ *   chat-column         940px when the panel fits it, grows with the panel
+ *                       (70% of it) up to 1200px, and fills the space between
+ *                       the gutters when the panel is narrower (Canvas open).
+ *   chat-gutter         symmetric side gutters for non-scrolling surfaces.
+ *   chat-scroll-gutter  the same visible gutters for a scroll container: the
+ *                       scrollbar sits INSIDE the right gutter, so its content
+ *                       box is exactly as wide as a chat-gutter surface's.
+ *                       overflow-y:scroll (not auto + scrollbar-gutter:stable)
+ *                       is deliberate: WKWebView does not reserve the gutter for
+ *                       content that does not overflow, which left a short
+ *                       conversation 3-6px off the composer. With scroll the
+ *                       track is always reserved (transparent, so invisible).
+ *                       The bar scales with app zoom like everything else; the
+ *                       only residual is integer-px rounding of the bar (5px at
+ *                       zoom 0.8), measured under 1px at every probed zoom.
+ *                       Do not set scrollbar-width / scrollbar-color on these
+ *                       scrollers: Chromium (Windows WebView2) then ignores
+ *                       ::-webkit-scrollbar, the bar falls back to its native
+ *                       ~15px and the -var(--scrollbar-size) maths is wrong. */
+@utility chat-panel {
+  container-type: inline-size;
+}
+
+@utility chat-column {
+  margin-inline: auto;
+  width: min(100%, clamp(940px, 70cqi, 1200px));
+}
+
+@utility chat-gutter {
+  padding-inline: var(--chat-gutter);
+}
+
+@utility chat-scroll-gutter {
+  overflow-y: scroll;
+  padding-left: var(--chat-gutter);
+  padding-right: calc(var(--chat-gutter) - var(--scrollbar-size));
 }
 
 /* Material Icons - using @fontsource-variable/material-symbols-outlined package */

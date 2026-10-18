@@ -3390,8 +3390,9 @@ export default function ChatPage() {
             modern WebKit). The prior fix contained the Canvas side (the amplifier); this
             contains the source side (Gate-1 finding). Safe: the column is flex-1 +
             overflow-hidden, so its size is imposed by the row, not by content — plain
-            `contain:layout` (NOT size) needs no explicit dimensions. */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden [contain:layout]">
+            `contain:layout` (NOT size) needs no explicit dimensions.
+            `chat-panel`: the chat-column container (index.css explains why it is safe). */}
+        <div className="chat-panel flex-1 flex flex-col min-w-0 overflow-hidden [contain:layout]">
           <ErrorBoundary variant="tab">
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">
@@ -3467,9 +3468,11 @@ export default function ChatPage() {
 
               {/* Rate limit countdown indicator */}
               {isLimited('/chat') && chatRateLimitCountdown > 0 && (
-                <div className="px-4 py-2 text-sm text-yellow-400 flex items-center gap-2">
-                  <span className="material-symbols-outlined text-base">schedule</span>
-                  Rate limited — resuming in {chatRateLimitCountdown}s
+                <div className="chat-gutter py-2">
+                  <div className="chat-column text-sm text-yellow-400 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-base">schedule</span>
+                    Rate limited — resuming in {chatRateLimitCountdown}s
+                  </div>
                 </div>
               )}
 
