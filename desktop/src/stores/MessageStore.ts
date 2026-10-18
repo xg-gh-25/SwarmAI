@@ -234,6 +234,23 @@ export class MessageStore {
   }
 
   /**
+   * Insert a message right before the message with `anchorId` (append if the
+   * anchor is gone). Used for a divider that belongs before a still-empty
+   * streaming placeholder (a turn-start compaction), so the live order matches
+   * the DB order and reconcile does not move it.
+   */
+  insertBefore(anchorId: string, msg: Message): void {
+    if (this._destroyed) return;
+    const idx = this._messages.findIndex(m => m.id === anchorId);
+    if (idx < 0) { this.append(msg); return; }
+    this._messages = [...this._messages.slice(0, idx), msg, ...this._messages.slice(idx)];
+    if (this._resumeBoundaryIdx >= idx) this._resumeBoundaryIdx += 1;
+    this._touchVersion();
+    if (this._phase === 'streaming') this._resetWatchdog();
+    this._notify();
+  }
+
+  /**
    * Update a specific message by ID.
    */
   updateById(id: string, updater: (msg: Message) => Message): void {

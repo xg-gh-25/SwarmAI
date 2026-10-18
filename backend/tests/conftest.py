@@ -432,7 +432,7 @@ _TABLES_TO_CLEAR = [
     "workspace_mcps", "workspace_knowledgebases", "workspace_audit_log",
     "mcp_servers", "agents", "plugins", "marketplaces",
     "users", "app_settings", "workspace_config",
-    "token_usage",
+    "token_usage", "compactions",
 ]
 
 

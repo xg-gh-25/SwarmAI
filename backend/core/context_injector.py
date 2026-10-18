@@ -2,7 +2,9 @@
 
 Five-layer enriched resume: structured checkpoint (~5-10K tokens),
 uncommitted git state (~500), assistant conclusions (~5-8K),
-key tool results (~5-15K), and recent conversation (~20-60K).
+key tool results (~5-15K), and recent conversation (~20-60K). When the
+session was compacted, the latest compaction summary (core.compact_summary)
+is added as a dated "Compaction Summary" record before the newer layers.
 
 The checkpoint gives the new agent a full picture of what was happening;
 the enrichment layers provide enough substance to continue naturally.
@@ -23,6 +25,7 @@ import subprocess as _subprocess
 from datetime import datetime
 from collections import OrderedDict
 from pathlib import Path
+from typing import Any
 
 from core import executors
 from core.session_utils import strip_glitch_prefix, strip_tool_call_leak
@@ -801,7 +804,10 @@ def _trim_to_budget(
         # Trim in priority order. uncommitted is included (Gate-1 finding 2) so
         # it is governed by the budget instead of bypassing it; it trims after
         # recent_turns (more disposable than conclusions, less than raw turns).
-        trim_order = ["tool_results", "recent_turns", "uncommitted", "conclusions"]
+        # compaction_summary goes last: it is the only record of the span before
+        # a compaction, and it is small (one summary, ~3-4K tokens).
+        trim_order = ["tool_results", "recent_turns", "uncommitted", "conclusions",
+                      "compaction_summary"]
         for key in trim_order:
             if total_chars <= budget_chars:
                 break
@@ -827,6 +833,30 @@ def _trim_to_budget(
         return result
     except Exception:
         return sections  # on error, return untrimmed
+
+
+async def _latest_compaction(db: Any, app_session_id: str) -> dict | None:
+    """The session's latest stored compaction, or None. Fail-soft: a missing
+    table or a test double without the method just means no summary layer."""
+    getter = getattr(db, "get_latest_compaction", None)
+    if getter is None:
+        return None
+    try:
+        row = await getter(app_session_id)
+    except Exception:  # noqa: BLE001
+        logger.debug("latest compaction lookup failed", exc_info=True)
+        return None
+    return row if isinstance(row, dict) else None
+
+
+def _compaction_section(row: dict | None) -> str:
+    """The "Compaction Summary" layer (core.compact_summary.resume_section)."""
+    try:
+        from core.compact_summary import resume_section
+        return resume_section(row)
+    except Exception:  # noqa: BLE001
+        logger.debug("compaction section build failed", exc_info=True)
+        return ""
 
 
 # ─── Checkpoint assembly ─────────────────────────────────────────────
@@ -1233,8 +1263,13 @@ async def build_resume_context(
 
         # ── Cache check: skip DB fetch if msg_count unchanged ──
         msg_count = await db.messages.count_by_session(app_session_id)
+        # Latest compaction summary (own table, not a message row): part of the
+        # cache key so a new compaction rebuilds the block.
+        compaction = await _latest_compaction(db, app_session_id)
+        cache_key = (msg_count, (compaction or {}).get("id"),
+                     len((compaction or {}).get("summary") or ""))
         cached = _resume_cache.get(app_session_id)
-        if cached and cached[0] == msg_count:
+        if cached and cached[0] == cache_key:
             _resume_cache.move_to_end(app_session_id)  # LRU touch
             _resume_stats["cache_hit"] += 1
             logger.info("Resume context cache hit: session=%s count=%d",
@@ -1329,6 +1364,7 @@ async def build_resume_context(
                 "tool_results": tool_results_text,
                 "recent_turns": recent,
                 "uncommitted": uncommitted_section,
+                "compaction_summary": _compaction_section(compaction),
             }
 
             # Apply budget trimming
@@ -1341,6 +1377,11 @@ async def build_resume_context(
             if trimmed.get("uncommitted"):
                 parts.append("")
                 parts.append(trimmed["uncommitted"])
+            # The summary covers the span BEFORE the compaction, so it goes
+            # before the layers drawn from the newer messages.
+            if trimmed.get("compaction_summary"):
+                parts.append("")
+                parts.append(trimmed["compaction_summary"])
             if trimmed.get("conclusions"):
                 parts.append("")
                 parts.append(trimmed["conclusions"])
@@ -1365,7 +1406,7 @@ async def build_resume_context(
                     "— checkpoint+uncommitted dominate",
                     len("\n".join(parts)), token_budget * 4, token_budget,
                 )
-            _resume_cache[app_session_id] = (msg_count, result)
+            _resume_cache[app_session_id] = (cache_key, result)
             if len(_resume_cache) > _RESUME_CACHE_MAX:
                 _resume_cache.popitem(last=False)  # evict oldest
             _resume_stats["enriched_success"] += 1
@@ -1384,7 +1425,7 @@ async def build_resume_context(
                     "raw-history injection")
         result = _build_legacy_context(raw_messages, max_messages, token_budget)
         if result:
-            _resume_cache[app_session_id] = (msg_count, result)
+            _resume_cache[app_session_id] = (cache_key, result)
             if len(_resume_cache) > _RESUME_CACHE_MAX:
                 _resume_cache.popitem(last=False)  # evict oldest
             _resume_stats["legacy_success"] += 1

@@ -49,6 +49,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
+import { applyCompactionEvent } from '../pages/chat/compaction';
 import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
@@ -3827,37 +3828,13 @@ export function useChatStreamingLifecycle(
           // The ring is NOT cleared here: the backend follows this event with a
           // context_warning snapshot of the post-compaction size (or source=none
           // when the CLI reported none), applied by the context_warning branch.
-          const completed = event.type === 'context_compacted';
-          if (event.message && capturedTabId) {
-            // Append to the ORIGINATING tab's store — same for active AND background
-            // tab. A background-tab message is already in that tab's stream when the
-            // user switches back (no shared React slot, no restore-time re-emit, no
-            // last-write-wins race — the single-writer store IS the per-tab authority).
+          // Write to the ORIGINATING tab's store — same for active AND background
+          // tab (the single-writer store IS the per-tab authority). ONE divider per
+          // compaction: "compacting" is replaced in place by the stored record
+          // (pages/chat/compaction.ts applyCompactionEvent).
+          if (capturedTabId) {
             const compactStore = messageStoreRegistry.get(capturedTabId);
-            if (compactStore) {
-              // DEDUP: skip only when the last message is the SAME compact notice —
-              // a re-emitted compaction must not stack, but "started" followed by
-              // "completed" are two different notices and both must show
-              // (mirrors the resume-boundary alreadyHasBoundary guard).
-              const existing = compactStore.messages;
-              const prev = existing[existing.length - 1];
-              const prevText = prev?.content?.[0]?.type === 'text' ? prev.content[0].text : undefined;
-              const alreadyCompact =
-                prev?.role === 'system' && prev?.id?.startsWith('compact-') &&
-                prevText === event.message;
-              if (!alreadyCompact) {
-                compactStore.append({
-                  // Suffix a random token so two same-millisecond compactions can
-                  // never collide to one id (which MessageStore would de-dup by id,
-                  // silently dropping the second) — matches the evolution-message
-                  // id scheme. The 'compact-' PREFIX is the contract TabView keys on.
-                  id: `compact-${completed ? '' : 'start-'}${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                  role: 'system',
-                  content: [{ type: 'text', text: event.message }],
-                  timestamp: new Date().toISOString(),
-                } as Message);
-              }
-            }
+            if (compactStore) applyCompactionEvent(compactStore, event);
           }
         }
         // Context usage — the backend's snapshot, pushed after every main-agent

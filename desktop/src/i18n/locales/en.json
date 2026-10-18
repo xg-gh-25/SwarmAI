@@ -188,6 +188,21 @@
     "runAsTaskDescription": "Run in background - task continues even if you navigate away",
     "taskCreated": "Task created! View in Tasks page.",
     "taskCreateFailed": "Failed to create task",
+    "compact": {
+      "running": "Compacting conversation context…",
+      "runningDetail": "Context reached the compaction threshold. Earlier messages are being summarized; this turn continues automatically when it is done.",
+      "done": "Conversation above has been summarized",
+      "doneDetail": "The conversation reached the context threshold. Earlier messages have been summarized, and the summary is sent to the agent as context instead of the full text.",
+      "failed": "Context compaction failed",
+      "failedDetail": "The conversation was not summarized; the turn continues with the full context.",
+      "interrupted": "Context compaction did not finish",
+      "summary": "Conversation Summary",
+      "duration": "{{seconds}}s",
+      "trigger": {
+        "auto": "auto",
+        "manual": "manual"
+      }
+    },
     "turn": {
       "thinking": "Thinking",
       "worked": "Worked",

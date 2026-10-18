@@ -3869,9 +3869,12 @@ describe('TabStatusIndicator component', () => {
   // "不能用toast ... 针对当前session 做的" → in-stream留痕, not a 5s toast.
   // -------------------------------------------------------------------------
   const COMPACT_MSG = 'Conversation above has been summarized\nThe conversation reached the agent context limit.';
+  // The newest compaction divider, else the last message. (A divider for a
+  // turn-start compaction sits BEFORE the still-empty assistant placeholder.)
   const lastMsg = (tabId: string) => {
     const msgs = messageStoreRegistry.getOrCreate(tabId).getSnapshot();
-    return msgs[msgs.length - 1];
+    const dividers = msgs.filter((m) => m.role === 'system' && m.id.startsWith('compact-'));
+    return dividers[dividers.length - 1] ?? msgs[msgs.length - 1];
   };
 
   describe('context_compacted compaction notice (in-stream persistent system message)', () => {
@@ -4007,7 +4010,7 @@ describe('TabStatusIndicator component', () => {
       expect(compactCount).toBe(1);
     });
 
-    it('live sequence: context_compacting then context_compacted both show, in order', () => {
+    it('live sequence: context_compacting is replaced IN PLACE by context_compacted (one divider)', () => {
       const msgId = 'msg-live';
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
@@ -4023,19 +4026,57 @@ describe('TabStatusIndicator component', () => {
       act(() => {
         handler({ type: 'context_compacting', sessionId: 'sess-live', phase: 'started', message: 'Compacting conversation context' });
       });
-      // Started: notice shown, but the warning stays until compaction completes.
-      expect(lastMsg('tab-live').id.startsWith('compact-start-')).toBe(true);
+      // Started: one live divider, but the warning stays until compaction completes.
+      expect(lastMsg('tab-live').id.startsWith('compact-live-')).toBe(true);
+      expect(lastMsg('tab-live').metadata?.compactPhase).toBe('running');
       expect(result.current.contextWarning).not.toBeNull();
       act(() => {
-        handler({ type: 'context_compacted', sessionId: 'sess-live', trigger: 'auto', message: COMPACT_MSG });
+        // A repeated start does not stack a second divider.
+        handler({ type: 'context_compacting', sessionId: 'sess-live', phase: 'started', message: 'Compacting conversation context' });
+        // An assistant message streamed after the start must not block the in-place swap.
+        messageStoreRegistry.getOrCreate('tab-live').append(makeMessage({ id: 'later', role: 'assistant', content: [] }));
+        handler({
+          type: 'context_compacted', sessionId: 'sess-live', trigger: 'auto', message: COMPACT_MSG,
+          compaction: { id: 'rec1', trigger: 'auto', pre_tokens: 750000, post_tokens: 12000, duration_ms: 55000, summary: '## S', created_at: 'x' },
+        });
       });
-      const notices = messageStoreRegistry.getOrCreate('tab-live').getSnapshot()
-        .filter((m) => m.role === 'system' && m.id.startsWith('compact-'))
-        .map((m) => (m.content[0] as { text: string }).text);
-      expect(notices).toEqual(['Compacting conversation context', COMPACT_MSG]);
+      const all = messageStoreRegistry.getOrCreate('tab-live').getSnapshot();
+      const notices = all.filter((m) => m.role === 'system' && m.id.startsWith('compact-'));
+      // ONE divider, same position (before the then-empty placeholder, as in the
+      // DB order), now the stored record (id shared with history).
+      expect(notices.map((m) => m.id)).toEqual(['compact-rec1']);
+      expect(all.map((m) => m.id)).toEqual(['compact-rec1', msgId, 'later']);
+      expect((notices[0].content[0] as { text: string }).text).toBe(COMPACT_MSG);
+      expect((notices[0].metadata?.compaction as { summary: string }).summary).toBe('## S');
+      // A re-delivered record (same id) is not added again.
+      act(() => {
+        handler({ type: 'context_compacted', sessionId: 'sess-live', message: COMPACT_MSG, compaction: { id: 'rec1' } });
+      });
+      expect(messageStoreRegistry.getOrCreate('tab-live').getSnapshot()
+        .filter((m) => m.id.startsWith('compact-'))).toHaveLength(1);
       // The ring is left to the backend's post-compact snapshot (not cleared here).
       expect(result.current.contextWarning?.pct).toBe(76);
       expect(mockAddToast).not.toHaveBeenCalled();
+    });
+
+    it('a failed compaction turns the live divider into the failure notice', () => {
+      const msgId = 'msg-fail';
+      const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+      act(() => {
+        initTestTab('tab-fail');
+        result.current.setIsStreaming(true);
+        messageStoreRegistry.getOrCreate('tab-fail', { sessionId: 'sess-fail' })
+          .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+      });
+      const handler = result.current.createStreamHandler(msgId, 'tab-fail');
+      act(() => {
+        handler({ type: 'context_compacting', sessionId: 'sess-fail', phase: 'started', message: 'Compacting' });
+        handler({ type: 'context_compacting', sessionId: 'sess-fail', phase: 'failed', message: 'Context compaction failed' });
+      });
+      const notices = messageStoreRegistry.getOrCreate('tab-fail').getSnapshot().filter((m) => m.id.startsWith('compact-'));
+      expect(notices).toHaveLength(1);
+      expect(notices[0].metadata?.compactPhase).toBe('failed');
+      expect((notices[0].content[0] as { text: string }).text).toBe('Context compaction failed');
     });
 
     it('a live tool_result event merges into the assistant message (step done + outcome)', () => {

@@ -1087,7 +1087,10 @@ async def get_session_messages(
     etag: str | None = None
     if before_id is None:
         msg_count = await db.messages.count_by_session(session_id)
-        etag = f'"{session_id}:{msg_count}"'
+        # Compaction rows (and a late summary on one) are spliced into the
+        # history below, so they are part of the content the ETag stands for.
+        compaction_sig = await _compaction_signature(session_id)
+        etag = f'"{session_id}:{msg_count}:{compaction_sig}"'
         if_none_match = request.headers.get("if-none-match")
         if if_none_match and if_none_match == etag:
             return FastAPIResponse(status_code=304, headers={"ETag": etag})
@@ -1107,8 +1110,35 @@ async def get_session_messages(
     # with overlapping text content for a single response.
     data = _merge_consecutive_assistant_messages(messages)
 
+    # Context compactions as synthetic `compact-<id>` system rows (divider +
+    # summary card), placed after the merge so a mid-turn compaction never
+    # splits that turn's bubble. Display only: they are not messages rows, so
+    # cold resume, recall and counts never see them.
+    try:
+        compactions = await db.list_compactions(session_id)
+        if compactions:
+            from core.compact_summary import splice_into_history
+            # An older page is bounded by the row it was cut before, so every
+            # compaction lands on exactly one page.
+            upper = None
+            if before_id is not None:
+                cursor_row = await db.messages.get(before_id)
+                upper = (cursor_row or {}).get("created_at") or None
+            data = splice_into_history(session_id, data, compactions, upper=upper)
+    except Exception:  # noqa: BLE001 — history must load even if this fails
+        logger.warning("compaction splice failed session=%s", session_id, exc_info=True)
+        etag = None  # never cache a body that lacks rows the ETag counts
+
     headers = {"ETag": etag} if etag else {}
     return JSONResponse(content=data, headers=headers)
+
+
+async def _compaction_signature(session_id: str) -> str:
+    """Compaction part of the history ETag; "0.0" if the lookup fails."""
+    try:
+        return await db.compaction_signature(session_id)
+    except Exception:  # noqa: BLE001
+        return "0.0"
 
 
 @router.post("/stop/{session_id}")
@@ -1273,6 +1303,10 @@ async def delete_session(session_id: str):
 
     # 3. Delete messages and session from DB
     await db.messages.delete_by_session(session_id)
+    try:
+        await db.delete_compactions_by_session(session_id)
+    except Exception:  # noqa: BLE001 — leftover rows are invisible without the session
+        logger.warning("delete compactions failed session=%s", session_id, exc_info=True)
     deleted = await session_manager.delete_session(session_id)
     if not deleted:
         raise SessionNotFoundException(

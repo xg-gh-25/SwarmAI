@@ -4484,6 +4484,18 @@ class SessionUnit:
                 if _boundary_md is not None:
                     self._record_compact_boundary(_boundary_md)
                     _recorded = True
+                    # Same record as the streamed path (core/compact_summary.py):
+                    # the divider + summary appear with the next history load.
+                    # Clear the PreCompact fallback flag like the streamed
+                    # boundary does, or the next turn adds a second divider.
+                    from . import compact_summary as _cs
+                    _ctx = self._hook_session_context
+                    if isinstance(_ctx, dict):
+                        _ctx["_compact_notice_pending"] = False
+                    _rec = _cs.build_record(_boundary_md, _cs.take_summary(_ctx))
+                    if not _rec["summary"]:
+                        _cs.mark_unsummarized(_ctx, _rec["id"])
+                    await _cs.persist(self.session_id, _rec)
             finally:
                 if not _recorded and self._context_usage_sdk_id == _compact_identity:
                     self._invalidate_context_usage()

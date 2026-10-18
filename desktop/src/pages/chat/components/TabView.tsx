@@ -3,7 +3,7 @@
  *
  * Renders a single tab's scrollable message list: the "Load earlier messages"
  * control, the `WelcomeScreen` empty-state, the per-message bubble map
- * (MessageBubble / system divider / ChatErrorMessage), the connection-state
+ * (MessageBubble / system divider / CompactNotice / ChatErrorMessage), the connection-state
  * indicators (reconnecting / resuming, the fallback spinner, the SESSION_BUSY
  * recovery spinner), the "back to latest" pill (only while streaming AND the
  * user has scrolled away), and the `messagesEndRef` scroll anchor. What the
@@ -43,6 +43,7 @@ import type { PendingQuestion } from '../types';
 import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
 import { WelcomeScreen } from './WelcomeScreen';
+import { CompactNotice } from './CompactNotice';
 import { tf } from '../tf';
 
 /** Bottom-proximity threshold (px): within this of the bottom counts as "at
@@ -449,6 +450,13 @@ function TabViewImpl({
   // separators do NOT dim prior context. Excluded prefixes: 'refresh-'
   // (context refresh) and 'compact-' (autocompact notice — a current-session
   // event, not a session boundary, so prior messages stay un-dimmed).
+  // Start of the current turn: a "compacting" divider is live only inside it
+  // (one left by an interrupted earlier turn must not claim to be running).
+  const lastUserIdx = useMemo(
+    () => messages.reduce((last, m, i) => (m.role === 'user' ? i : last), -1),
+    [messages],
+  );
+
   const lastResumeBoundaryIdx = useMemo(
     () => messages.reduce((lastIdx, m, i) =>
       m.role === 'system' && !m.id.startsWith('refresh-') && !m.id.startsWith('compact-')
@@ -510,28 +518,13 @@ function TabViewImpl({
         const resolvedPendingToolUseId = resolvePendingToolUseId(pendingQuestion, activeTabPendingQuestion);
         return messages.map((msg, idx) => {
           // System messages render as divider lines. Three variants by id prefix:
-          //   'compact-' → autocompact notice: shows the full backend notice TEXT
-          //                (context was summarized) as a persistent, reviewable
-          //                in-stream marker — NOT a one-line label (XG 2026-10-14).
+          //   'compact-' → compaction divider + collapsible summary card
+          //                (CompactNotice; live and history share the id).
           //   'refresh-' → 'Context Refreshed' (same-session context refresh)
           //   else       → 'Session Resumed' (true resume boundary)
           if (msg.role === 'system') {
-            const isCompact = msg.id.startsWith('compact-');
-            if (isCompact) {
-              const textBlock = msg.content.find(b => b.type === 'text');
-              const noticeText = textBlock && 'text' in textBlock
-                ? textBlock.text
-                : 'Conversation above has been summarized';
-              return (
-                <div key={msg.id} className="flex items-start gap-3 py-3 px-4 select-none">
-                  <div className="flex-1 h-px bg-[var(--color-border)] mt-2" />
-                  <span className="text-xs text-[var(--color-text-muted)] max-w-md flex items-start gap-1.5 text-center">
-                    <span className="material-symbols-outlined" style={{ fontSize: '14px', marginTop: '1px' }}>compress</span>
-                    <span className="whitespace-pre-wrap text-left">{noticeText}</span>
-                  </span>
-                  <div className="flex-1 h-px bg-[var(--color-border)] mt-2" />
-                </div>
-              );
+            if (msg.id.startsWith('compact-')) {
+              return <CompactNotice key={msg.id} message={msg} isStreaming={isStreaming && idx > lastUserIdx} />;
             }
             const isRefresh = msg.id.startsWith('refresh-');
             const label = isRefresh ? 'Context Refreshed' : 'Session Resumed';

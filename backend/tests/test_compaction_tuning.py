@@ -97,6 +97,19 @@ class TestBuildOptionsAutocompact:
         assert "skillOverrides" in settings  # existing key preserved
 
     @pytest.mark.asyncio
+    async def test_summary_instructions_hook_reaches_the_settings(self):
+        """The PreCompact command hook (core/compact_summary.py) rides in the same
+        --settings JSON; on Windows it is intentionally absent."""
+        import json
+        import sys
+        from core.compact_summary import precompact_settings_hooks
+        settings = json.loads((await _options()).settings)
+        if sys.platform == "win32":
+            assert "hooks" not in settings
+        else:
+            assert settings["hooks"] == precompact_settings_hooks()
+
+    @pytest.mark.asyncio
     async def test_task_budget_no_longer_sent(self):
         opts = await _options()
         assert opts.task_budget is None

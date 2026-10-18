@@ -1746,7 +1746,9 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 6 — pending-message contract: messages.sent/pending_seq/claimed_at + idx (2026-06-20)
 # 7 — add recall_metrics table (2026-08-09)
 # 8 — index recall_metrics(timestamp) so the retention prune range-seeks (2026-08-10)
-CURRENT_SCHEMA_VERSION = 11
+# 9-11 — hive custom_ami_id; CJK-searchable messages (content_seg + FTS rebuild)
+# 12 — compactions table: one row per context compaction + its summary (2026-10-18)
+CURRENT_SCHEMA_VERSION = 12
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -2882,6 +2884,36 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration v9: hive_instances.custom_ami_id (moved out of v3)")
 
+        if current_version < 12:
+            # Version 12: compactions (core/compact_summary.py). NOT messages rows:
+            # a compaction describes stream state, and message rows feed the
+            # cold-resume layers and recall; the summary is re-injected as its own
+            # dated section instead. created_at uses the messages format (naive
+            # local ISO) so history rows and compactions sort together.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS compactions (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    trigger TEXT NOT NULL DEFAULT 'auto',
+                    pre_tokens INTEGER,
+                    post_tokens INTEGER,
+                    duration_ms INTEGER,
+                    summary TEXT NOT NULL DEFAULT ''
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_compactions_session_created "
+                "ON compactions(session_id, created_at)"
+            )
+            # Bump only from 11: a failed v11 (left at 10 to retry next startup)
+            # must not be skipped by the fast path. The table above is idempotent.
+            cursor = await conn.execute("PRAGMA user_version")
+            if (await cursor.fetchone())[0] >= 11:
+                await conn.execute("PRAGMA user_version = 12")
+            await conn.commit()
+            logger.info("Migration v12: compactions table")
+
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 
@@ -3649,6 +3681,73 @@ class SQLiteDatabase(BaseDatabase):
             logger.warning("Failed to record token usage", exc_info=True)
 
     # ── Recall Metrics (batch flush) ─────────────────────────────────────
+    # ── Compactions (schema v12, core/compact_summary.py) ─────────────
+    _COMPACTION_COLS = ("id", "session_id", "created_at", "trigger",
+                        "pre_tokens", "post_tokens", "duration_ms", "summary")
+
+    async def insert_compaction(self, session_id: str, record: dict) -> bool:
+        """Store one compaction record (``compact_summary.build_record``)."""
+        row = {**record, "session_id": session_id}
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute(
+                f"INSERT OR REPLACE INTO compactions ({', '.join(self._COMPACTION_COLS)}) "
+                f"VALUES ({', '.join('?' for _ in self._COMPACTION_COLS)})",
+                tuple(row.get(c) if c != "summary" else (row.get(c) or "")
+                      for c in self._COMPACTION_COLS),
+            )
+            await conn.commit()
+        return True
+
+    async def update_compaction_summary(self, compaction_id: str, summary: str) -> bool:
+        """Attach a summary that arrived after its compaction row was stored."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "UPDATE compactions SET summary = ? WHERE id = ?", (summary, compaction_id))
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    async def list_compactions(self, session_id: str) -> list[dict]:
+        """A session's compactions, oldest first."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                f"SELECT {', '.join(self._COMPACTION_COLS)} FROM compactions "
+                "WHERE session_id = ? ORDER BY created_at ASC", (session_id,))
+            rows = await cursor.fetchall()
+        return [dict(zip(self._COMPACTION_COLS, r)) for r in rows]
+
+    async def get_latest_compaction(self, session_id: str) -> Optional[dict]:
+        """The session's most recent compaction, or None."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                f"SELECT {', '.join(self._COMPACTION_COLS)} FROM compactions "
+                "WHERE session_id = ? ORDER BY created_at DESC LIMIT 1", (session_id,))
+            row = await cursor.fetchone()
+        return dict(zip(self._COMPACTION_COLS, row)) if row else None
+
+    async def count_compactions(self, session_id: str) -> int:
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM compactions WHERE session_id = ?", (session_id,))
+            row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def compaction_signature(self, session_id: str) -> str:
+        """"<count>.<total summary chars>" — changes when a row is added AND when
+        a late summary lands on an existing row (history ETag)."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(summary)), 0) FROM compactions "
+                "WHERE session_id = ?", (session_id,))
+            row = await cursor.fetchone()
+        return f"{int(row[0])}.{int(row[1])}" if row else "0.0"
+
+    async def delete_compactions_by_session(self, session_id: str) -> int:
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM compactions WHERE session_id = ?", (session_id,))
+            await conn.commit()
+            return cursor.rowcount
+
     async def bulk_insert_recall_metrics(self, samples: list[dict]) -> int:
         """Batch-insert recall samples drained from core.recall_metrics. Returns the
         count inserted. Fire-and-forget safe — never raises (observability only).

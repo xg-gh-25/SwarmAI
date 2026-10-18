@@ -35,7 +35,11 @@ vi.mock('../../../../components/chat', () => ({
   ChatErrorMessage: () => <div />,
 }));
 vi.mock('../../../../components/common', () => ({ Spinner: () => <div /> }));
+vi.mock('../../../../components/common/MarkdownRenderer', () => ({
+  default: ({ content }: { content: string }) => <div data-testid="md">{content}</div>,
+}));
 
+import { fireEvent } from '@testing-library/react';
 import { TabView } from '../TabView';
 
 const noop = () => {};
@@ -107,6 +111,56 @@ describe('TabView — compact-notice in-stream divider (AC5)', () => {
     // Walk up: the dimming wrapper is the bubble's parent div (opacity-50 when dimmed).
     const wrapper = before.parentElement;
     expect(wrapper?.className ?? '').not.toContain('opacity-50');
+  });
+
+  const record = { id: 'r1', trigger: 'auto', pre_tokens: 750361, post_tokens: 12833, duration_ms: 54523, summary: '**Overview** XG wants X.' };
+  const withMeta = (id: string, metadata: Message['metadata']): Message => ({ ...compact(id, NOTICE), metadata });
+
+  it('a stored record: one title row with sizes, explanation, and a COLLAPSED summary card', () => {
+    messageStoreRegistry.getOrCreate('A').replace([asst('a1', 'x'), withMeta('compact-r1', { compaction: record })]);
+    const { getByText, queryByTestId, getByRole, getAllByTestId } = render(<TabView {...props('A', [])} />);
+    expect(getAllByTestId('compact-notice')).toHaveLength(1);
+    expect(getByText('Conversation above has been summarized')).not.toBeNull();
+    expect(getByText(/750K → 13K · 55s · auto/)).not.toBeNull();
+    expect(getByText(/summary is sent to the agent/)).not.toBeNull();
+    // Collapsed by default: the summary text is one click away, not on the page.
+    const toggle = getByRole('button', { name: /Conversation Summary/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(queryByTestId('compact-summary')).toBeNull();
+    fireEvent.click(toggle);
+    expect(getByRole('button', { name: /Conversation Summary/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(queryByTestId('md')?.textContent).toBe('**Overview** XG wants X.');
+  });
+
+  it("a running divider from an EARLIER turn never says compacting, even while streaming", () => {
+    messageStoreRegistry.getOrCreate('A').replace([
+      asst('a1', 'x'),
+      withMeta('compact-live-old', { compactPhase: 'running' }),
+      { id: 'u2', role: 'user', content: [{ type: 'text', text: 'next' }], timestamp: new Date().toISOString() },
+    ]);
+    const view = render(<TabView {...props('A', [])} isStreaming />);
+    expect(view.queryByText('Compacting conversation context…')).toBeNull();
+    expect(view.getByText('Context compaction did not finish')).not.toBeNull();
+  });
+
+  it('no summary → no card; running says compacting only while streaming; failed is the only colored state', () => {
+    messageStoreRegistry.getOrCreate('A').replace([
+      asst('a1', 'x'),
+      withMeta('compact-r2', { compaction: { ...record, id: 'r2', summary: '' } }),
+      withMeta('compact-live-1', { compactPhase: 'running' }),
+      withMeta('compact-live-2', { compactPhase: 'failed' }),
+    ]);
+    const streaming = render(<TabView {...props('A', [])} isStreaming />);
+    expect(streaming.queryByRole('button', { name: /Conversation Summary/ })).toBeNull();
+    expect(streaming.getByText('Compacting conversation context…')).not.toBeNull();
+    const failed = streaming.getByText('Context compaction failed');
+    expect(failed.parentElement?.className).toContain('--color-warning');
+    expect(streaming.getByText('Conversation above has been summarized').parentElement?.className)
+      .not.toContain('--color-warning');
+    streaming.unmount();
+    const idle = render(<TabView {...props('A', [])} />);
+    expect(idle.queryByText('Compacting conversation context…')).toBeNull();
+    expect(idle.getByText('Context compaction did not finish')).not.toBeNull();
   });
 
   it('a TRUE resume boundary STILL dims prior messages (control — exclusion is compact-specific)', () => {

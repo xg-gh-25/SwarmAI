@@ -188,6 +188,21 @@
     "runAsTaskDescription": "在后台运行 - 即使离开页面任务也会继续执行",
     "taskCreated": "任务已创建！前往任务页面查看。",
     "taskCreateFailed": "创建任务失败",
+    "compact": {
+      "running": "正在压缩上下文…",
+      "runningDetail": "上下文已达压缩阈值，较早的消息正在被总结，完成后本轮自动继续。",
+      "done": "上方对话已压缩",
+      "doneDetail": "会话达到上下文阈值。较早的消息已被总结，之后以这份摘要代替全文作为上下文。",
+      "failed": "上下文压缩失败",
+      "failedDetail": "对话未被总结，本轮以完整上下文继续。",
+      "interrupted": "上下文压缩未完成",
+      "summary": "对话摘要",
+      "duration": "{{seconds}} 秒",
+      "trigger": {
+        "auto": "自动",
+        "manual": "手动"
+      }
+    },
     "turn": {
       "thinking": "思考中",
       "worked": "做了",

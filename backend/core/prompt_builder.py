@@ -2406,6 +2406,12 @@ class PromptBuilder:
             "skillOverrides": CLI_SKILL_OVERRIDES,
             "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
         }
+        # Compaction summary rules: a PreCompact COMMAND hook whose stdout the CLI
+        # appends to its summary prompt (core/compact_summary.py).
+        from .compact_summary import precompact_settings_hooks
+        _compact_hooks = precompact_settings_hooks()
+        if _compact_hooks:
+            cli_settings["hooks"] = _compact_hooks
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,

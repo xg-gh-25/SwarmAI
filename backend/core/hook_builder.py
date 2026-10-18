@@ -583,6 +583,20 @@ async def build_hooks(
             "PostToolUse", session_link_stamper, "session_link_stamper", matcher="Bash",
         )
 
+    # ── PostCompact: capture the compaction summary ──────────
+    # The SDK's HookEvent Literal lacks PostCompact, but the bundled CLI calls a
+    # registered callback with {"trigger", "compact_summary", ...} BEFORE it emits
+    # compact_boundary (probed 2026-10-18). The summary is cleaned and handed to
+    # the boundary handler via session_context (core/compact_summary.py).
+    if session_context is not None:
+        async def _post_compact_hook(hook_input, tool_name, hook_context):
+            from core.compact_summary import on_post_compact
+            raw = hook_input.get("compact_summary") if isinstance(hook_input, dict) else None
+            await on_post_compact(session_context, raw)
+            return {}
+
+        registry.register("PostCompact", _post_compact_hook, "post_compact_summary")
+
     # ── PreCompact: flag session_context ─────────────────────
     if session_context is not None:
         async def _pre_compact_hook(hook_input, tool_name, hook_context):

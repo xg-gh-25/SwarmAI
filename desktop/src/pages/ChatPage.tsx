@@ -850,7 +850,10 @@ export default function ChatPage() {
     // Current displayed messages — the store is authoritative for the active
     // TabView; fall back to the shared mirror only if there is no store.
     const current = store?.messages ?? messagesRef.current;
-    const oldestMessage = current[0];
+    // The cursor must be a real DB row: a local-only system divider (resume
+    // boundary, a compaction divider with no DB row) that sorted to index 0
+    // would make the backend return an empty page and stop paging for good.
+    const oldestMessage = current.find((m) => m.role !== 'system') ?? current[0];
     if (!oldestMessage) return;
 
     setIsLoadingOlderMessages(true);

@@ -692,6 +692,11 @@ export interface StreamEvent {
   phase?: 'started' | 'failed';
   preTokens?: number;
   postTokens?: number;
+  /** context_compacted: the stored compaction record (snake_case wire shape,
+   *  backend core/compact_summary.wire) — the same object the history API puts
+   *  in the synthetic `compact-<id>` message's metadata.compaction. Read it
+   *  ONLY through pages/chat/compaction.ts `toCompactionInfo`. */
+  compaction?: Record<string, unknown>;
   // Usage/caching fields (result event)
   usage?: {
     input_tokens?: number;
