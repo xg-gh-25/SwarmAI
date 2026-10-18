@@ -85,12 +85,12 @@ Then immediately hand off to user for build.
 `./prod.sh build` is a single command that does:
 1. Sync versions from VERSION file
 2. PyInstaller build → binary at `desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin/`
-3. Run `verify_build.py` (46 capability checks) — fails fast if broken
-4. `rsync -a --delete` binary bundle to `~/.swarm-ai/daemon/`
-5. Write `.version` file (semver + git hash + timestamp)
-6. Copy `desktop/resources/` to daemon
-7. `chmod +x` the daemon binary
-8. SIGKILL old daemon → KeepAlive auto-restarts with new binary
+3. Run `verify_build.py` once (capability checks, inside `build:backend`) — fails fast if broken. The probe boots the binary on a temp HOME in subprocess mode, so it never touches the live daemon's data, Slack socket or heartbeat
+4. Drain: wait up to 180s for OTHER tabs' in-flight turns (`SWARMAI_DEPLOY_DRAIN_SECS`, `0` skips), then for the next `session_state.json` write so they keep `--resume`
+5. `rsync -a --delete` binary bundle to `~/.swarm-ai/daemon/`
+6. Write `.version` file (semver + git hash + timestamp)
+7. Copy `desktop/resources/` to daemon, `chmod +x` the binary, render the launchd plist
+8. SIGKILL old daemon → KeepAlive auto-restarts with new binary. If the plist changed, `daemon reload` (bootout + bootstrap) instead — launchd only re-reads a plist on bootstrap
 
 Hand off to user:
 

@@ -100,6 +100,7 @@ launchctl() {
 plutil() { echo "${FAKE_WANT:-Standard}"; }
 cmd_daemon() { echo "cmd_daemon $*"; }
 _daemon_wait_healthy() { echo "wait $1"; }
+_daemon_other_busy_sessions() { :; }
 mkdir -p "$HOME/Library/LaunchAgents"; touch "$HOME/Library/LaunchAgents/com.swarmai.backend.plist"
 """
 
@@ -166,3 +167,122 @@ class TestReloadSubcommand:
         for script in ("prod.sh", "dev.sh"):
             src = (REPO / script).read_text()
             assert "_daemon_restart_after_deploy" in src, f"{script} must use the shared restart"
+
+
+# ── Deploy drain (#4): let OTHER tabs finish their turn before the SIGKILL ──
+
+_STATE_JSON = (
+    '{"sessions": {'
+    '"self": {"streaming": true, "post_disconnect_flushing": false},'
+    '"busy": {"streaming": true, "post_disconnect_flushing": false},'
+    '"flush": {"streaming": false, "post_disconnect_flushing": true},'
+    '"idle": {"streaming": false, "post_disconnect_flushing": false}}}'
+)
+
+
+class TestDeployDrain:
+    def test_busy_sessions_exclude_caller_and_include_flushing(self, tmp_path):
+        script = (f"curl() {{ echo '{_STATE_JSON}'; }}\n"
+                  "SWARM_APP_SESSION_ID=self _daemon_other_busy_sessions")
+        out = _run(script, tmp_path).split()
+        assert sorted(out) == ["busy", "flush"]
+
+    def test_drain_waits_until_others_idle_then_waits_for_persist(self, tmp_path):
+        script = ('C="$HOME/calls"; : > "$C"\n'
+                  '_daemon_other_busy_sessions() { echo x >> "$C"; '
+                  '[ "$(wc -l < "$C")" -lt 3 ] && echo busy; return 0; }\n'
+                  "sleep() { :; }\n"
+                  '_daemon_wait_state_persisted_after() { echo "persist_wait $2"; }\n'
+                  '_daemon_drain_before_restart; echo "RC=$? calls=$(wc -l < "$C" | tr -d " ")"')
+        out = _run(script, tmp_path)
+        assert "persist_wait 70" in out and "RC=0 calls=3" in out
+
+    def test_drain_is_bounded(self, tmp_path):
+        # bounded by WALL CLOCK ($SECONDS), not by counting sleeps
+        script = ('_daemon_other_busy_sessions() { echo busy; }\n'
+                  'sleep() { SECONDS=$((SECONDS + $1)); }\n_warn() { echo "WARN $*"; }\n'
+                  '_daemon_wait_state_persisted_after() { echo persist_wait; }\n'
+                  'SWARMAI_DEPLOY_DRAIN_SECS=6; _daemon_drain_before_restart; echo "RC=$?"')
+        out = _run(script, tmp_path)
+        assert "WARN Drain timeout (6s)" in out and "RC=0" in out
+        assert "persist_wait" not in out
+
+    def test_nothing_busy_restarts_immediately(self, tmp_path):
+        script = ('_daemon_other_busy_sessions() { :; }\n'
+                  '_daemon_wait_state_persisted_after() { echo persist_wait; }\n'
+                  '_daemon_drain_before_restart; echo "RC=$?"')
+        out = _run(script, tmp_path)
+        assert "RC=0" in out and "persist_wait" not in out
+
+    def test_drain_disabled_with_zero(self, tmp_path):
+        script = ('_daemon_other_busy_sessions() { echo CALLED; }\n'
+                  'SWARMAI_DEPLOY_DRAIN_SECS=0; _daemon_drain_before_restart; echo "RC=$?"')
+        out = _run(script, tmp_path)
+        assert "RC=0" in out and "CALLED" not in out
+
+    def test_deploy_paths_drain_before_rsync_not_between_rsync_and_kill(self):
+        # The running PyInstaller binary re-opens its own executable for lazy
+        # imports: serving turns on a swapped bundle breaks them. So the drain
+        # must precede _deploy_daemon_binary, and the restart helper (called
+        # right after the rsync) must not drain.
+        for script, fn in (("prod.sh", "cmd_build()"), ("prod.sh", "cmd_release()"),
+                           ("dev.sh", "cmd_deploy()")):
+            src = (REPO / script).read_text()
+            body = src[src.index(fn):]
+            body = body[:body.index("\n}\n")]
+            assert body.index("_daemon_drain_before_restart") < body.index("_deploy_daemon_binary"), \
+                f"{script} {fn}: drain must run before the rsync"
+        lib = DAEMON_LIB.read_text()
+        helper = lib[lib.index("_daemon_restart_after_deploy() {"):]
+        helper = helper[:helper.index("\n}\n")]
+        assert "_daemon_drain_before_restart" not in helper
+
+    def test_wait_state_persisted_reads_persisted_at(self, tmp_path):
+        state = tmp_path / ".swarm-ai" / "session_state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text('{"_persisted_at": 2000}')
+        out = _run('sleep() { :; }\n_ok() { echo "OK $*"; }\n_warn() { echo "WARN $*"; }\n'
+                   "_daemon_wait_state_persisted_after 1000 3; "
+                   "_daemon_wait_state_persisted_after 3000 3", tmp_path)
+        assert "OK Session identities persisted" in out
+        assert "WARN session_state.json not rewritten within 3s" in out
+
+
+# ── verify_build probe isolation (#3) ──
+
+class TestVerifyProbeIsolation:
+    def _env(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "verify_build_mod", REPO / "backend" / "scripts" / "verify_build.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        base = {"HOME": "/Users/real", "PATH": "/usr/bin", "SWARMAI_MODE": "daemon",
+                "SWARM_APP_SESSION_ID": "s1", "SWARMAI_OWNER_PID": "123"}
+        return mod._isolated_probe_env(base, 4242, str(tmp_path))
+
+    def test_probe_uses_temp_home_and_non_daemon_mode(self, tmp_path):
+        env = self._env(tmp_path)
+        assert env["HOME"] == str(tmp_path)
+        assert env["SWARM_DATA_DIR"] == str(tmp_path / ".swarm-ai")
+        # daemon/hive would start Slack, scheduler, watchers and the heartbeat
+        assert env["SWARMAI_MODE"] not in ("daemon", "hive")
+        assert env["PORT"] == "4242" and env["SWARMAI_VERIFY_BUILD"] == "1"
+        assert env["PATH"] == "/usr/bin"
+
+    def test_probe_drops_caller_session_identity(self, tmp_path):
+        env = self._env(tmp_path)
+        assert "SWARM_APP_SESSION_ID" not in env and "SWARMAI_OWNER_PID" not in env
+
+    def test_probe_skips_systemwide_cli_sweep(self):
+        src = (REPO / "backend" / "main.py").read_text()
+        i = src.index("session_registry.kill_all_claude_processes()")
+        assert 'SWARMAI_VERIFY_BUILD") == "1"' in src[i - 600:i]
+
+    def test_deploy_scripts_verify_once_and_abort_on_failure(self):
+        for script in ("prod.sh", "dev.sh"):
+            src = (REPO / script).read_text()
+            assert 'python scripts/verify_build.py "$BACKEND_BINARY"' not in src, \
+                f"{script}: build-backend.sh already verifies — don't boot the binary twice"
+            assert "if ! npm run build:backend; then" in src, \
+                f"{script}: a failed build/verify must abort before deploy"

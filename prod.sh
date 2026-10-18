@@ -118,22 +118,20 @@ cmd_build() {
     bash "$PROJECT_ROOT/scripts/sync-version.sh"
     echo ""
 
-    # Step 1: PyInstaller
-    _log "Step 1/3: PyInstaller backend build..."
+    # Step 1+2: PyInstaller build + post-build verification. build-backend.sh
+    # runs verify_build.py itself (CI relies on that), so it is NOT repeated
+    # here — each run boots the binary once more. Explicit `|| return`: errexit
+    # is suspended when cmd_build runs inside `if ! cmd_build` (cmd_deploy), and
+    # a failed build must never fall through to deploying a stale binary.
+    _log "Step 1/3: PyInstaller backend build + verification..."
     cd "$DESKTOP_DIR"
-    npm run build:backend
-
-    # Step 2: Verify
-    _log "Step 2/3: Post-build verification..."
-    cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$BACKEND_BINARY"; then
-        _ok "Verification passed — all capabilities present"
-    else
-        _err "Verification FAILED — do NOT release"
+    if ! npm run build:backend; then
+        _err "Backend build or verification FAILED — do NOT release"
         echo ""
         _warn "Fix issues above, then re-run: ./prod.sh build"
         return 1
     fi
+    _ok "Verification passed — all capabilities present"
 
     # Step 3: Deploy then restart
     # Order: deploy FIRST, then kill. This script may run from inside the daemon
@@ -143,6 +141,9 @@ cmd_build() {
     local daemon_was_running=false
     if _daemon_is_running; then
         daemon_was_running=true
+        # Let other tabs finish their turn BEFORE the rsync (see daemon-lib.sh
+        # "Deploy drain": rsync→kill must stay back-to-back).
+        _daemon_drain_before_restart
     fi
 
     _deploy_daemon_binary
@@ -250,21 +251,16 @@ cmd_release() {
     echo -e "${BOLD}Phase 2/4: Build${NC}"
     echo "────────────────"
 
-    # 2a. PyInstaller
-    _log "Step 1/4: PyInstaller backend build..."
+    # 2a+2b. PyInstaller + binary capability verification (build-backend.sh runs
+    # verify_build.py itself — not repeated here)
+    _log "Step 1/4: PyInstaller backend build + verification..."
     cd "$DESKTOP_DIR"
-    npm run build:backend
-
-    # 2b. Verify binary capabilities
-    _log "Step 2/4: Post-build verification..."
-    cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$BACKEND_BINARY"; then
-        _ok "All capabilities verified"
-    else
-        _err "Verification FAILED — aborting release"
+    if ! npm run build:backend; then
+        _err "Backend build or verification FAILED — aborting release"
         _err "Fix the missing modules, then re-run: ./prod.sh release"
         return 1
     fi
+    _ok "All capabilities verified"
 
     # 2c. Frontend
     _log "Step 3/4: Frontend build..."
@@ -318,10 +314,12 @@ cmd_release() {
     echo -e "${BOLD}Phase 3/4: Deploy & Verify${NC}"
     echo "──────────────────────────"
 
-    # 3a. Deploy binary (BEFORE kill — script may die when daemon is killed)
+    # 3a. Deploy binary (BEFORE kill — script may die when daemon is killed);
+    #     other tabs' turns are drained before the rsync, not after it
     local daemon_was_running=false
     if _daemon_is_running; then
         daemon_was_running=true
+        _daemon_drain_before_restart
     fi
 
     _deploy_daemon_binary

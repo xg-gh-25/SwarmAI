@@ -26,10 +26,12 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -169,14 +171,8 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
     Returns: (passed, failed_critical, failed_important)
     """
     port = find_free_port()
-    env = {
-        **os.environ,
-        "PORT": str(port),
-        "SWARMAI_MODE": "daemon",
-        "DATABASE_TYPE": "sqlite",
-        # Gates verify-import/verify-data/verify-native endpoints
-        "SWARMAI_VERIFY_BUILD": "1",
-    }
+    probe_home = tempfile.mkdtemp(prefix="swarmai-verify-")
+    env = _isolated_probe_env(os.environ, port, probe_home)
 
     print(f"\n{'='*60}")
     print(f"  SwarmAI Build Verification")
@@ -264,6 +260,45 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
     finally:
         # Cross-platform process cleanup
         _kill_process_tree(proc)
+        shutil.rmtree(probe_home, ignore_errors=True)
+
+
+# Env vars a probe must NOT inherit when verify_build runs from inside a live
+# daemon session (a chat tab's CLI running ./prod.sh build): they identify THAT
+# session / daemon and would make the probe act on its behalf.
+_PROBE_ENV_DROP = ("SWARM_APP_SESSION_ID", "SWARMAI_OWNER_PID", "SWARMAI_PORT")
+
+
+def _isolated_probe_env(base: "os._Environ | dict", port: int, probe_home: str) -> dict:
+    """Environment for the probe binary: a throwaway data dir, non-daemon mode.
+
+    The probe used to run with SWARMAI_MODE=daemon and the operator's real HOME,
+    so every build started a SECOND full daemon against ~/.swarm-ai: a competing
+    Slack Socket Mode connection, the heartbeat file the desktop watchdog reads
+    (overwritten, then unlinked on exit), the scheduler and watchers, writes to
+    the real data.db (incl. reopen_dangling_claims) and backend-daemon.log.
+    Nothing verify checks needs any of that — the /api/system/verify-* endpoints
+    only look inside the bundle — so isolate it completely:
+    - HOME + SWARM_DATA_DIR → a temp dir (covers get_app_data_dir() AND the
+      modules that call Path.home() directly);
+    - SWARMAI_MODE=subprocess → no channel gateway, scheduler, watchers or
+      heartbeat (they are daemon/hive-only);
+    - drop the caller's session/daemon identity vars.
+    """
+    env = {k: v for k, v in base.items() if k not in _PROBE_ENV_DROP}
+    env.update({
+        "HOME": probe_home,
+        "USERPROFILE": probe_home,  # what Path.home() reads on Windows
+        "SWARM_DATA_DIR": str(Path(probe_home) / ".swarm-ai"),
+        "PORT": str(port),
+        "SWARMAI_MODE": "subprocess",
+        "DATABASE_TYPE": "sqlite",
+        # Gates verify-import/verify-data/verify-native endpoints, and makes the
+        # binary skip startup work that reaches OUTSIDE its data dir (the
+        # system-wide leftover-claude-CLI sweep).
+        "SWARMAI_VERIFY_BUILD": "1",
+    })
+    return env
 
 
 def _wait_for_health(port: int, timeout: int = 30) -> bool:

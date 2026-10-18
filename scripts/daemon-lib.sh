@@ -238,6 +238,87 @@ _daemon_restart_after_deploy() {
     _daemon_wait_healthy "$timeout"
 }
 
+# ── Deploy drain ───────────────────────────────────────────────
+#
+# Max seconds a deploy waits for OTHER sessions' in-flight turns before it kills
+# the daemon anyway (0 disables). Bounded: a deploy must not hang on a 30-minute
+# pipeline turn in another tab; that tab then resumes after the restart.
+#
+# Callers run the drain BEFORE _deploy_daemon_binary, never between the rsync
+# and the kill: the running PyInstaller binary re-opens its own executable by
+# path for every lazy import, so an old process serving turns on a swapped
+# bundle reads new bytes at old offsets (zlib/ImportError). rsync→kill must stay
+# back-to-back; a drain interrupted (e.g. the caller's tool timeout) then leaves
+# nothing half-deployed.
+: "${SWARMAI_DEPLOY_DRAIN_SECS:=180}"
+: "${_DRAIN_POLL_SECS:=3}"
+
+# Print (one per line) the sessions that are mid-turn — streaming, or finishing
+# a turn after an SSE disconnect — EXCLUDING the caller's own session: a deploy
+# often runs from a chat tab's CLI (a pipeline's DELIVER step;
+# $SWARM_APP_SESSION_ID is set for every CLI the daemon spawns), and waiting on
+# our own turn would deadlock.
+_daemon_other_busy_sessions() {
+    local body
+    if ! body="$(curl -sf --max-time 5 "${DAEMON_API}/api/chat/sessions/streaming-state" 2>/dev/null)"; then
+        if nc -z 127.0.0.1 "${DAEMON_PORT}" 2>/dev/null; then
+            _warn "streaming-state unreadable while the daemon is up — cannot see other turns" >&2
+        fi
+        return 0
+    fi
+    printf '%s' "$body" | _DRAIN_SELF="${SWARM_APP_SESSION_ID:-}" python3 -c '
+import json, os, sys
+me = os.environ.get("_DRAIN_SELF", "")
+for sid, s in (json.load(sys.stdin).get("sessions") or {}).items():
+    if sid != me and (s.get("streaming") or s.get("post_disconnect_flushing")):
+        print(sid)
+' 2>/dev/null || true
+}
+
+# Wait (bounded by wall clock) until no other session is mid-turn. If any was,
+# also wait for the lifecycle loop's next session_state.json write (~60s cadence)
+# so tabs that just went IDLE keep their --resume identity across the SIGKILL.
+# (That file holds IDLE units only — the caller's own streaming tab and tabs
+# waiting on a question still cold-resume from DB history.)
+_daemon_drain_before_restart() {
+    local max="$SWARMAI_DEPLOY_DRAIN_SECS" start=$SECONDS waited=0 busy saw_busy=false
+    [ "$max" -gt 0 ] 2>/dev/null || return 0
+    while :; do
+        busy="$(_daemon_other_busy_sessions)"
+        [ -z "$busy" ] && break
+        saw_busy=true
+        waited=$(( SECONDS - start ))
+        if [ "$waited" -ge "$max" ]; then
+            _warn "Drain timeout (${max}s) — still mid-turn: $(echo $busy) — restarting anyway (they resume after restart)"
+            return 0
+        fi
+        if [ $(( waited % 15 )) -lt "$_DRAIN_POLL_SECS" ]; then
+            _log "Waiting for $(echo "$busy" | wc -l | tr -d ' ') other session(s) to finish their turn (${waited}s/${max}s; SWARMAI_DEPLOY_DRAIN_SECS=0 skips)..."
+        fi
+        sleep "$_DRAIN_POLL_SECS"
+    done
+    if [ "$saw_busy" = true ]; then
+        _ok "Other sessions idle after ${waited}s"
+        _daemon_wait_state_persisted_after "$(date +%s)" 70
+    fi
+    return 0
+}
+
+# Wait until ~/.swarm-ai/session_state.json was rewritten after epoch $1.
+_daemon_wait_state_persisted_after() {
+    local since="$1" max="${2:-70}" i f="$HOME/.swarm-ai/session_state.json"
+    for i in $(seq 1 "$max"); do
+        if python3 -c 'import json,sys; sys.exit(0 if float(json.load(open(sys.argv[1])).get("_persisted_at", 0)) > float(sys.argv[2]) else 1)' \
+            "$f" "$since" 2>/dev/null; then
+            _ok "Session identities persisted (${i}s)"
+            return 0
+        fi
+        sleep 1
+    done
+    _warn "session_state.json not rewritten within ${max}s — those tabs will cold-resume"
+    return 0
+}
+
 # "<status> <boot_id>" from the fixed daemon port (empty fields when unreachable).
 _daemon_health_line() {
     curl -sf --max-time 2 "${DAEMON_API}/health" 2>/dev/null | python3 -c \

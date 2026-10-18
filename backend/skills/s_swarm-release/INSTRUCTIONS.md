@@ -182,9 +182,10 @@ Stage 2 VERSION BUMP: PASS
 
 `./prod.sh build` does everything in one shot:
 - PyInstaller build
-- verify_build.py (46 checks) — fails fast if broken
+- verify_build.py (once, isolated temp-HOME probe) — fails fast if broken
+- drain: up to 180s for other tabs' in-flight turns (`SWARMAI_DEPLOY_DRAIN_SECS=0` skips)
 - rsync to `~/.swarm-ai/daemon/` + write `.version` + copy resources + chmod
-- SIGKILL old daemon → KeepAlive restarts with new binary
+- SIGKILL old daemon → KeepAlive restarts with new binary (a changed plist → `daemon reload` instead)
 
 Hand off to user:
 

@@ -224,26 +224,23 @@ cmd_deploy() {
     bash "$PROJECT_ROOT/scripts/sync-version.sh"
     echo ""
 
-    # Step 1: PyInstaller
-    _log "Step 1/3: PyInstaller backend build..."
+    # Step 1+2: PyInstaller + verification (build-backend.sh runs verify_build.py
+    # itself — not repeated here; explicit return so a failure never deploys)
+    _log "Step 1/3: PyInstaller backend build + verification..."
     cd "$DESKTOP_DIR"
-    npm run build:backend
-
-    # Step 2: Verify
-    _log "Step 2/3: Post-build verification..."
-    cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$BACKEND_BINARY"; then
-        _ok "Verification passed"
-    else
-        _err "Verification FAILED — binary has missing capabilities"
+    if ! npm run build:backend; then
+        _err "Backend build or verification FAILED — binary has missing capabilities"
         return 1
     fi
+    _ok "Verification passed"
 
     # Step 3: Deploy then restart (deploy first — script may die on kill)
     _log "Step 3/3: Deploy to daemon..."
     local daemon_was_running=false
     if _daemon_is_running; then
         daemon_was_running=true
+        # Drain other tabs' turns BEFORE the rsync (rsync→kill stays back-to-back)
+        _daemon_drain_before_restart
     fi
 
     _deploy_daemon_binary

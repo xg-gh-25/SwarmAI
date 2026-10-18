@@ -1301,9 +1301,15 @@ async def lifespan(app: FastAPI):
     # At startup, no claude processes should be running — any that exist are
     # zombies from a crash or unclean shutdown. These hold vnodes and can
     # cause kernel panics (COE 2026-03-15: 80 zombies -> vnode exhaustion -> panic).
-    startup_killed = session_registry.kill_all_claude_processes()
-    if startup_killed:
-        logger.warning("Killed %d leftover claude process(es) at startup", startup_killed)
+    # NOT for a verify_build probe: the sweep is system-wide (pgrep), not scoped to
+    # this data dir, so a probe started during `./prod.sh build` could kill the
+    # LIVE daemon's CLIs (an untagged process, or a `ps` hiccup reading the tag).
+    if os.environ.get("SWARMAI_VERIFY_BUILD") == "1":
+        logger.info("Verify-build probe — skipping leftover claude CLI sweep")
+    else:
+        startup_killed = session_registry.kill_all_claude_processes()
+        if startup_killed:
+            logger.warning("Killed %d leftover claude process(es) at startup", startup_killed)
 
     # Write backend.json so Tauri (or other processes) can discover us
     global _backend_start_monotonic
