@@ -8,6 +8,8 @@
  *   form one ProcessBlock card; between-tool notes, landmarks, the answer
  *   (outcome) and interrupts (question / permission / escalation) render in
  *   the main stream
+ * - Finished turns condense: a note right before a run of work becomes that
+ *   work's title line (full note on open); non-intent thoughts clamp to 1 line
  * - Pipeline stage rows (`stage` units — written by the backend from run.json)
  *   render as PipelineStageRow; while streaming, the stage now running is shown
  *   above the live process row (PipelineStageLive)
@@ -45,7 +47,7 @@ import { PipelineStageRow } from './PipelineStageRow';
 import { FileChip } from './FileChip';
 import { AttentionCard, DeliverablesCard, RunAlignment } from './TurnCards';
 import { NextSteps } from './NextSteps';
-import { deriveTurnView, extractNextSteps, isUnanswered, sectionUnits, turnChangedFiles } from '../turnView';
+import { deriveTurnView, extractNextSteps, headedProcesses, isUnanswered, noteHasMore, noteHeadline, sectionUnits, turnChangedFiles } from '../turnView';
 import type { TurnUnit } from '../turnView';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
@@ -280,13 +282,12 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     ? <AttentionCard block={view.attention} />
     : null;
   // How the ask was read, said once: a pipeline requirement (RunAlignment), else the
-  // first text written before any work, else the intent thought (the first thought
-  // before any tool call). Only the chosen one carries the "Understanding" label.
+  // first text written before any work — labelled "Understanding". The intent
+  // thought is the model's plan ("Approach"), never the restatement.
   const beforeWork = firstWork < 0 ? [] : view.units.slice(0, firstWork);
   const alignText = !view.run && hasWork
     ? beforeWork.find((u) => u.kind === 'note')
     : undefined;
-  const labelIntent = !view.run && hasWork && !alignText;
   // Once there is a result, what needs the user leads it (right after the divider);
   // until then it stays where it arrived: with the DELIVER row.
   let attentionPending = !!attentionCard && !showResult;
@@ -302,6 +303,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             expanded={processChoice.get(unit.id)}
             onToggle={(open) => chooseProcess(unit.id, open)}
             flat={inStage}
+            title={titleOf(unit)}
           />
         </div>
       );
@@ -312,7 +314,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         <div key={key} className={gap}>
           <ThoughtBlock
             unit={unit}
-            label={unit.intent && labelIntent}
+            compact={!isStreaming}
             expanded={processChoice.get(key)}
             onToggle={(open) => chooseProcess(key, open)}
           />
@@ -350,10 +352,25 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     units.map((u, i) => renderUnit(u, units[i - 1], inStage));
 
   const sections = sectionUnits(view.units, !!isStreaming, view.liveStage);
+  // Once the turn is over, a note that introduced a run of work becomes that work's
+  // title line (ProcessBlock `title`) and is not rendered on its own. Never while
+  // streaming (the note is what the user reads live), never the alignment, never
+  // inside a stage's body (the stage row is its title).
+  const headed = isStreaming ? new Map<TurnUnit, TurnUnit>() : headedProcesses(sections, alignText);
+  const headingNotes = new Set<TurnUnit>(headed.values());
+  function titleOf(unit: TurnUnit) {
+    const note = headed.get(unit);
+    if (!note || note.kind !== 'note') return undefined;
+    return {
+      line: noteHeadline(note.text),
+      full: noteHasMore(note.text) ? renderBlock({ type: 'text', text: note.text }, `cbt-${note.index}`) : undefined,
+    };
+  }
   const stageSeen = new Map<string, number>();
   let prevSection: TurnUnit | undefined;
   const contentBlocks = sections.map((sec, k) => {
     if (sec.kind === 'unit') {
+      if (headingNotes.has(sec.unit)) return null; // rendered as its work's title
       const el = renderUnit(sec.unit, prevSection);
       prevSection = sec.unit;
       return el;
@@ -400,9 +417,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // The model went straight to work without restating the ask: that absence is
   // itself worth knowing — alignment is the cheapest moment to correct course.
   const toolSteps = view.units.reduce((n, u) => n + (u.kind === 'process' ? u.steps.filter((s) => s.kind === 'tool').length : 0), 0);
-  // (A restatement or an intent thought always comes BEFORE the work, so
-  // `firstWork === 0` already means there is neither.)
-  if (!view.run && firstWork === 0 && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
+  // An intent thought is a plan, not a restatement: it does not count.
+  if (!view.run && !alignText && toolSteps >= NO_RESTATEMENT_MIN_STEPS) {
     contentBlocks.unshift(
       <div key="no-alignment" data-testid="turn-no-alignment" className="mb-1 text-[11px] tracking-wide text-[var(--color-text-dim)]">
         {tf(t, 'chat.turn.noAlignment', 'Started without restating the ask')}

@@ -8,12 +8,14 @@
  * - Once finished: dim italic text clamped to THOUGHT_LINES (the turn's intent —
  *   the first thought before any tool call — to INTENT_LINES), with "Show all" /
  *   "Show less" in place: one level, the full text is always one click away.
- * - `label`: the intent carries the "Understanding" label when nothing else
- *   (a pipeline requirement, a restatement) already says how the ask was read.
+ *   `compact` (the turn is over) clamps a non-intent thought to COMPACT_LINES.
+ * - The intent is labelled "Approach" (思路): it is how the model planned the
+ *   work, not how it read the ask — "Understanding" (理解) is only ever the
+ *   restatement or the run's requirement.
  * The open/closed choice is lifted (AssistantMessageView keys it by ordinal), so
  * it survives the stream-end reconcile.
  *
- * @exports ThoughtBlock, THOUGHT_LINES, INTENT_LINES, isLongThought
+ * @exports ThoughtBlock, THOUGHT_LINES, INTENT_LINES, COMPACT_LINES, isLongThought
  */
 import { useTranslation } from 'react-i18next';
 import type { ThoughtUnit } from '../turnView';
@@ -22,6 +24,8 @@ import { tf } from '../tf';
 
 export const THOUGHT_LINES = 3;
 export const INTENT_LINES = 6;
+/** A finished turn's non-intent thought: one line, the rest one click away. */
+export const COMPACT_LINES = 1;
 /** Characters a clamped line holds at the chat column width, for the overflow test. */
 const CHARS_PER_LINE = 90;
 
@@ -33,20 +37,20 @@ export function isLongThought(text: string, lines: number): boolean {
 
 export interface ThoughtBlockProps {
   unit: ThoughtUnit;
-  /** Show the "Understanding" label (the intent, when nothing else is the alignment). */
-  label?: boolean;
+  /** The turn is over: a non-intent thought clamps to COMPACT_LINES. */
+  compact?: boolean;
   /** The user's open choice; undefined = clamped. */
   expanded?: boolean;
   onToggle: (open: boolean) => void;
 }
 
-export function ThoughtBlock({ unit, label, expanded, onToggle }: ThoughtBlockProps) {
+export function ThoughtBlock({ unit, compact, expanded, onToggle }: ThoughtBlockProps) {
   const { t } = useTranslation();
-  const lines = unit.intent ? INTENT_LINES : THOUGHT_LINES;
+  const lines = unit.intent ? INTENT_LINES : compact ? COMPACT_LINES : THOUGHT_LINES;
   const long = !unit.live && isLongThought(unit.text, lines);
   const open = !!expanded;
-  const tag = label
-    ? tf(t, 'chat.turn.alignment', 'Understanding')
+  const tag = unit.intent
+    ? tf(t, 'chat.turn.approach', 'Approach')
     : tf(t, 'chat.turn.thoughtRow', 'Thought');
   return (
     <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} data-intent={unit.intent ? 'true' : 'false'}>

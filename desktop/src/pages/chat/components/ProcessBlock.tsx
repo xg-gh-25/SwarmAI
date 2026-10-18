@@ -17,6 +17,9 @@
  *   - A finished block folds 2s after the next item arrives (`useLinger`); a user's
  *     open/closed choice wins. `flat` (inside a pipeline stage's body) renders the
  *     steps directly — the stage row is already the fold, so there is no second one.
+ *   - `title` (finished turns): the note that introduced this work leads its folded
+ *     line ("Check the store · read 3 files"); opened, the whole note is above the
+ *     steps. The note is not rendered separately.
  *   - Two levels at most: the folded line (or stage row) → the steps → one step's
  *     detail (its command, or its sub-agent's steps). A sub-agent's own steps have
  *     no detail level of their own.
@@ -28,6 +31,7 @@
  * @exports ProcessBlock
  */
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
@@ -227,6 +231,9 @@ export interface ProcessBlockProps {
   onToggle: (open: boolean) => void;
   /** Inside a pipeline stage's body: the steps directly, no folded line of its own. */
   flat?: boolean;
+  /** A finished turn's note that introduced this work: its headline leads the
+   *  folded line; `full` (the whole note) sits above the steps once opened. */
+  title?: { line: string; full?: ReactNode };
 }
 
 /** Expanded lists show this many steps first; the rest are one click away. */
@@ -322,7 +329,7 @@ function LiveTitle({ pending }: { pending?: ToolStep }) {
   );
 }
 
-export function ProcessBlock({ unit, expanded, onToggle, flat }: ProcessBlockProps) {
+export function ProcessBlock({ unit, expanded, onToggle, flat, title }: ProcessBlockProps) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const autoOpen = useLinger(unit.isLive);
@@ -450,8 +457,21 @@ export function ProcessBlock({ unit, expanded, onToggle, flat }: ProcessBlockPro
         >
           chevron_right
         </span>
+        {title && (
+          <>
+            <span data-testid="process-title" className="truncate min-w-0 text-[var(--color-text-secondary)]" title={title.line}>
+              {title.line}
+            </span>
+            <span className="shrink-0 text-[var(--color-text-dim)]">·</span>
+          </>
+        )}
         <FoldedSummary unit={unit} />
       </Row>
+      {open && title?.full && (
+        <div data-testid="process-title-full" className="ml-[7px] mt-0.5 pl-2 border-l border-[var(--color-border)] text-[13.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]">
+          {title.full}
+        </div>
+      )}
       {/* A failure the turn never recovered from stays visible on the folded line. */}
       {!open && unit.unrecoveredFailure && (
         <div className="ml-[7px] pl-2 border-l border-red-500/40">

@@ -292,6 +292,7 @@
       "alignment": "Understanding",
       "result": "Result",
       "thisTurnChanged": "This turn changed",
+      "approach": "Approach",
       "noAlignment": "Started without restating the ask",
       "run": {
         "stages": "{{count}} stages"

@@ -14,7 +14,7 @@
  *   chips drive the existing inject-chat-input contract (AC6)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import React from 'react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
@@ -382,20 +382,30 @@ describe('AssistantMessageView — v6 fold timing (XG 2026-10-17 "延后2秒 再
     expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two');
   });
 
-  it('a long thought is clamped (3 lines; the intent 6) and opens in place', () => {
+  it('a long thought is clamped (1 line once the turn is over) and opens in place', () => {
     renderView([tu('a', 'Running: ls'), tr('a'), th(LONG), tx('ok')]);
     const text = screen.getByTestId('thought-text');
-    expect(text.style.webkitLineClamp).toBe('3');
+    expect(text.style.webkitLineClamp).toBe('1');
     fireEvent.click(screen.getByTestId('thought-toggle'));
     expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('');
     expect(screen.getByTestId('thought-toggle').textContent).toBe('Show less');
   });
 
-  it('the intent thought gets 6 lines and the Understanding label', () => {
+  it('while the turn streams a finished thought keeps 3 lines', () => {
+    render(viewOf([tu('a', 'Running: ls'), tr('a'), th(LONG), tu('b', 'Running: pwd')], true));
+    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('3');
+  });
+
+  it('a one-line thought in a finished turn has no toggle', () => {
+    renderView([tu('a', 'Running: ls'), tr('a'), th('short'), tx('ok')]);
+    expect(screen.queryByTestId('thought-toggle')).toBeNull();
+  });
+
+  it('the intent thought gets 6 lines and the Approach label, finished or not', () => {
     renderView([th(LONG), tu('a', 'Running: ls'), tr('a'), tx('ok')]);
     const t = screen.getByTestId('thought');
     expect(t.dataset.intent).toBe('true');
-    expect(t.textContent).toContain('Understanding');
+    expect(t.textContent).toContain('Approach');
     expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('6');
   });
 
@@ -506,11 +516,20 @@ describe('AssistantMessageView — v7.1 turn frame (alignment → work → resul
     expect(line.textContent).toContain('changed');
   });
 
-  it('a note right after its work sits close to it; a new run of work starts a new group', () => {
-    const { container } = renderView([tx('plan'), tu('a', 'Running: ls'), tx('found it'), tu('b', 'Running: pwd'), tx('done')]);
+  it('while streaming a note right after its work sits close to it; a new run of work starts a new group', () => {
+    const { container } = render(viewOf([tx('plan'), tu('a', 'Running: ls'), tr('a'), tx('found it'), tu('b', 'Running: pwd')], true));
     const kids = [...container.querySelectorAll('[data-testid="process-block"]')].map((el) => el.parentElement!);
     expect(kids[1].className).toContain('mt-3'); // new group
     const note = screen.getByText('found it').closest('div.mt-1');
     expect(note).not.toBeNull();
+    expect(screen.queryByTestId('process-title')).toBeNull(); // never titled while live
+  });
+
+  it('once finished, that note becomes the next work\'s title and a new group', () => {
+    const { container } = renderView([tx('plan'), tu('a', 'Running: ls'), tx('found it'), tu('b', 'Running: pwd'), tx('done')]);
+    const blocks = [...container.querySelectorAll('[data-testid="process-block"]')];
+    expect(within(blocks[1] as HTMLElement).getByTestId('process-title').textContent).toBe('found it');
+    expect(blocks[1].parentElement!.className).toContain('mt-3');
+    expect(screen.getAllByText('found it')).toHaveLength(1); // not also in the stream
   });
 });

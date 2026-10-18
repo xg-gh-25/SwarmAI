@@ -874,3 +874,50 @@ export function sectionUnits(units: TurnUnit[], isStreaming: boolean, liveStage?
 export function stageHeadline(summary: string | null | undefined): string {
   return (summary ?? '').split(/\s+·\s+|[(（]/)[0].trim().slice(0, 48);
 }
+
+// ── Segment titles (finished turns) ───────────────────────────────────────────
+// A note the model wrote right before a run of work says what that work is for
+// ("Now let me check the store…"). Once the turn is over, that note becomes the
+// work's title line — one line instead of a paragraph plus a line — and its full
+// text sits above the steps when the user opens them.
+
+export type NoteUnit = Extract<TurnUnit, { kind: 'note' }>;
+
+/** A headline length past which the folded line cannot show the whole sentence. */
+export const HEADLINE_FULL_CHARS = 80;
+
+/** A note's first line as plain text: markdown markers, emphasis, code ticks and
+ *  link targets removed ("## **Fix** the `store`" → "Fix the store"). */
+export function noteHeadline(text: string): string {
+  const first = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
+  return first
+    .replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|`)/g, '')
+    .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$|[.,:;!?])/g, '$1$2')
+    .trim();
+}
+
+/** Whether a headed note has more to say than its folded headline. */
+export function noteHasMore(text: string): boolean {
+  const lines = text.split('\n').filter((l) => l.trim().length > 0);
+  return lines.length > 1 || noteHeadline(text).length > HEADLINE_FULL_CHARS;
+}
+
+/**
+ * The finished turn's top-level work runs, each paired with the note right before
+ * it. Only adjacent TOP-LEVEL sections pair (a stage's body is already titled by
+ * its row); `exclude` (the turn's alignment note) never becomes a title.
+ */
+export function headedProcesses(sections: TurnSection[], exclude?: TurnUnit): Map<ProcessUnit, NoteUnit> {
+  const out = new Map<ProcessUnit, NoteUnit>();
+  for (let k = 1; k < sections.length; k += 1) {
+    const a = sections[k - 1];
+    const b = sections[k];
+    if (a.kind !== 'unit' || b.kind !== 'unit') continue;
+    if (a.unit.kind !== 'note' || a.unit === exclude || !noteHeadline(a.unit.text)) continue;
+    if (b.unit.kind !== 'process' || b.unit.isLive || b.unit.steps.length === 0) continue;
+    out.set(b.unit, a.unit);
+  }
+  return out;
+}

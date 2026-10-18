@@ -3,9 +3,10 @@
  *
  * What is tested (real AssistantMessageView + turnView, leaf contexts mocked):
  * - how the ask was read is said once: pipeline requirement > a restatement written
- *   before any work > the intent thought; only that one carries "Understanding"
- * - the "no restatement" note is suppressed by an intent thought, not by a thought
- *   that comes after the work
+ *   before any work; only that one carries "Understanding". The intent thought is
+ *   the plan ("Approach"), never the restatement
+ * - the "no restatement" note shows whenever nothing restated the ask — an intent
+ *   thought does not suppress it
  * - a pipeline stage's body lists its steps directly (no second fold inside it)
  * - a sub-agent's own steps have no detail level (two levels at most)
  * - before the first stage row the plan's first stage holds the work, so when the
@@ -46,17 +47,24 @@ const viewOf = (c: ContentBlock[], streaming = false) => (
 );
 
 describe('how the ask was read is said once', () => {
-  it('no restatement: the intent thought carries the label', () => {
+  it('the intent thought is labelled Approach, never Understanding', () => {
     render(viewOf([th('Read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
-    expect(screen.getByTestId('thought').textContent).toContain('Understanding');
+    expect(screen.getByTestId('thought').textContent).toContain('Approach');
+    expect(screen.getByTestId('thought').textContent).not.toContain('Understanding');
     expect(screen.queryByTestId('turn-alignment')).toBeNull();
   });
 
-  it('a restatement written before the work wins; the thought is just a thought', () => {
+  it('a restatement written before the work is the Understanding; the intent stays Approach', () => {
     render(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
     expect(screen.getByTestId('turn-alignment').textContent).toContain('I read it as');
-    expect(screen.getByTestId('thought').textContent).not.toContain('Understanding');
+    expect(screen.getAllByText('Understanding')).toHaveLength(1);
+    expect(screen.getByTestId('thought').textContent).toContain('Approach');
+  });
+
+  it('a thought after the work is just a Thought', () => {
+    render(viewOf([tx('I read it as: X.'), tu('a'), tr('a'), th('hm'), tx('done')]));
     expect(screen.getByTestId('thought').textContent).toContain('Thought');
+    expect(screen.getByTestId('thought').dataset.intent).toBe('false');
   });
 
   it('a pipeline requirement wins over both', () => {
@@ -65,11 +73,17 @@ describe('how the ask was read is said once', () => {
     expect(screen.getByTestId('turn-run')).toBeTruthy();
   });
 
-  it('a thought AFTER the work does not stand in for the restatement', () => {
-    render(viewOf([tu('a'), tr('a'), tu('b'), tr('b'), tu('c'), tr('c'), th('hm'), tx('done')]));
+  it('no thought stands in for the restatement: the note shows either way', () => {
+    const { unmount } = render(viewOf([tu('a'), tr('a'), tu('b'), tr('b'), tu('c'), tr('c'), th('hm'), tx('done')]));
     expect(screen.getByTestId('turn-no-alignment')).toBeTruthy();
+    unmount();
     render(viewOf([th('plan first'), tu('a'), tr('a'), tu('b'), tr('b'), tu('c'), tr('c'), tx('done')]));
-    expect(screen.getAllByTestId('turn-no-alignment')).toHaveLength(1);
+    expect(screen.getByTestId('turn-no-alignment')).toBeTruthy();
+  });
+
+  it('a restatement before the work removes the note', () => {
+    render(viewOf([th('plan first'), tx('I read it as: X.'), tu('a'), tr('a'), tu('b'), tr('b'), tu('c'), tr('c'), tx('done')]));
+    expect(screen.queryByTestId('turn-no-alignment')).toBeNull();
   });
 });
 

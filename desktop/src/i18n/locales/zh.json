@@ -292,6 +292,7 @@
       "alignment": "理解",
       "result": "结果",
       "thisTurnChanged": "本轮改了",
+      "approach": "思路",
       "noAlignment": "没先复述理解，直接开始了",
       "run": {
         "stages": "{{count}} 个阶段"
