@@ -65,9 +65,22 @@ describe('TabView pill — the live action, once', () => {
     await afterActivation();
     scrollAway(container);
     const pill = getByTestId('streaming-pill');
-    expect(pill.textContent).toContain('Read x.ts · back to latest');
+    expect(pill.textContent).toContain('Read /r/src/x.ts · back to latest');
     expect(pill.textContent).not.toMatch(/step \d/);
     expect(pill.textContent).not.toMatch(/\d+s\b/);
+  });
+
+  it('a long command truncates in the pill; the whole command is its tooltip', async () => {
+    const long = `npx vitest run ${'src/pages/chat/components/__tests__/x.test.tsx '.repeat(8)}`.trim();
+    messageStoreRegistry.getOrCreate('A').replace([turn([
+      { type: 'tool_use', id: 't1', name: 'Bash', summary: `Running: ${long}`, category: 'bash' },
+    ])]);
+    const { container, getByTestId } = render(<TabView {...props(true)} />);
+    await afterActivation();
+    scrollAway(container);
+    const text = getByTestId('streaming-pill-text');
+    expect(text.className).toContain('truncate');
+    expect(text.getAttribute('title')).toBe(`Bash ${long}`);
   });
 
   it('between steps it says Thinking', async () => {

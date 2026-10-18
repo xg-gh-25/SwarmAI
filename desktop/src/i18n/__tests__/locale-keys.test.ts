@@ -8,7 +8,7 @@
  * - every plural `_one` has its `_other`
  * - every static key the source passes to t() / tf() / i18n.t() exists, in every
  *   namespace (as itself or as a plural pair); every template-literal key family
- *   has keys; dynamic families (strip kinds, sub-agent status, settings tabs,
+ *   has keys; dynamic families (sub-agent status, settings tabs,
  *   knowledge source types, privileged capability types) are complete
  * - chat.turn strings never hardcode the assistant's name or say "AI": the name
  *   comes from ASSISTANT_NAME via `{{name}}`, at most once per container
@@ -19,7 +19,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import en from '../locales/en.json';
 import zh from '../locales/zh.json';
-import { STRIP_KIND_FALLBACK } from '../../pages/chat/turnView';
 
 type Tree = { [k: string]: string | Tree };
 const flat = (t: Tree, pre = ''): Record<string, string> =>
@@ -91,7 +90,7 @@ describe('locale keys', () => {
 
   it('no dead chat.turn / chat.file keys (dynamic families excepted)', () => {
     const all = sources().join('\n');
-    const dynamic = /^chat\.turn\.(kind|counts|subAgentStatus)\./;
+    const dynamic = /^chat\.turn\.(subAgentStatus)\./;
     const dead = [...new Set(Object.keys(EN).map((k) => k.replace(/_(one|other)$/, '')))]
       .filter((k) => /^chat\.(turn|file)\./.test(k) && !dynamic.test(k))
       .filter((k) => !all.includes(`'${k}'`) && !all.includes(`"${k}"`) && !all.includes(`\`${k}\``));
@@ -99,10 +98,6 @@ describe('locale keys', () => {
   });
 
   it('dynamic families are complete', () => {
-    for (const kind of Object.keys(STRIP_KIND_FALLBACK)) {
-      expect(EN).toHaveProperty([`chat.turn.kind.${kind}`]);
-      expect(ZH).toHaveProperty([`chat.turn.kind.${kind}`]);
-    }
     for (const s of ['failed', 'stopped']) expect(EN).toHaveProperty([`chat.turn.subAgentStatus.${s}`]);
   });
 

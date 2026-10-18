@@ -1,68 +1,50 @@
 /**
- * WorkGroup — a thought and the tool calls it led to, as one unit (chat display v7.11).
+ * WorkGroup — one WORKING / WORKED block of a turn (chat display v7.12).
  *
- * Renders a `group` from `groupWork` (pages/chat/turnView.ts). Weight follows the
- * user's question, not the data volume (design-judgment Surface 6):
- *   - FINISHED: folded to one line — a `WORKED` tag (or `THOUGHT` for a group with
- *     no tool call), the group's title (its ":"-ended lead-in, else its first
- *     thought's first sentence) and the files it changed or touched as FileChips.
- *     The header is a button; the chips sit BESIDE it, never inside it (no nested
- *     interactive elements). Opened, it lists its thoughts and its strips in order.
- *     A group that is a single tool call, or a single thought, is that item itself —
- *     never a header that opens to the same line again.
- *   - LIVE (the last group of a streaming turn): an open `WORKING` card, no toggle.
- *     A running strip carries the spinner and its elapsed; with nothing running
- *     (the model is thinking between steps) the header holds the one spinner.
- *   - It folds FOLD_DELAY_MS after the next group starts (`useLinger`); a user's
- *     open/closed choice wins.
+ * Renders a `group` from `groupWork` (pages/chat/turnView.ts): EVERYTHING between two
+ * first-level items of a turn (the intent, a stage row, an interrupt, the result).
+ * A turn has two levels (XG 2026-10-18):
+ *   - first level: INTENT · WORKING / WORKED · pipeline stage rows · RESULT
+ *   - second level, inside a block, in stream order: thoughts, notes the model wrote
+ *     between tool calls, landmarks and tool calls
+ * So:
+ *   - LIVE (the last block of a streaming turn): an open WORKING card, no toggle. A
+ *     running tool call carries the spinner and its elapsed; with nothing running (the
+ *     model is thinking) the header holds the one spinner.
+ *   - FINISHED: folded to one WORKED line of counts — steps · files changed · commands.
+ *     No file names, no title borrowed from a thought (it would repeat the first line of
+ *     the body). Opened, it lists its items in order. It folds FOLD_DELAY_MS after it
+ *     stops being live (`useLinger`); a user's open/closed choice wins.
+ *   - `flat` (inside a pipeline stage): the stage row is the fold, so the items render
+ *     directly, no WORKING / WORKED header of their own.
  *
- * ToolStrip — one tool call, one strip, no detail level: kind (Read / Search /
- * Write / Edit / Run / Test / Git / Pipeline / Query / Agent / Skill …) · target
- * (a FileChip when the call names a file) · a readable outcome of at most
- * INLINE_OUTCOME_CHARS · elapsed while running · status. An error is one line below.
- * A sub-agent's verdict / live progress sits on its Agent strip. The raw command is
- * never rendered (not as text, title or tooltip): it is audit material, not a row.
- * Status comes ONLY from the projection (`ToolStep.status`); colour only for
- * exceptions (failed red, waiting amber).
+ * ToolStrip — one tool call, one row: the REAL tool name (Bash / Read / Edit / Grep /
+ * Agent …) and the REAL command or arguments (`toolCall`). A Bash command loses only
+ * its leading cd / export / setup and a perl-alarm / timeout wrapper; nothing is
+ * translated. Adjacent reads of one file are one row (N×, with the ranges read). A
+ * failure is one line below; a sub-agent's progress / verdict sits on its row. The
+ * last line a command printed is never shown as a "result".
+ * Status comes ONLY from the projection (`ToolStep.status`); colour only for exceptions.
  *
- * @exports WorkGroupView, ToolStrip, stripKindWord, INLINE_OUTCOME_CHARS
+ * @exports WorkGroupView, ToolStrip, workCounts, pathTail
  */
 import { useMemo, useState } from 'react';
-import type { TFunction } from 'i18next';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
 import { useLinger } from '../../../hooks/useLinger';
-import type { ProcessUnit, StepRowItem, ThoughtUnit, ToolStep, WorkGroup } from '../turnView';
-import { STRIP_KIND_FALLBACK, changedFiles, groupSteps, groupTitle, stepLabel, stripKind, summarizeProcess } from '../turnView';
-import type { StepVerb, StripKind } from '../turnView';
+import type { StepRowItem, ThoughtUnit, ToolStep, WorkGroup, WorkMember } from '../turnView';
+import { changedFiles, groupSteps, stepLabel, toolCall } from '../turnView';
 import { tf } from '../tf';
 import { FileChip } from './FileChip';
 import { ThoughtBlock } from './ThoughtBlock';
 import { ANCHOR_PROPS } from '../scrollFocus';
 
-/** An outcome up to this long stays on its strip; a longer one is not repeated here. */
-export const INLINE_OUTCOME_CHARS = 40;
-/** A folded line names at most this many files. */
-const MAX_LINE_FILES = 3;
 /** A list (live: the newest; opened: the first) shows this many items before "show all". */
 const PAGE = 12;
 
-const COUNT_FALLBACK: Partial<Record<StepVerb, [string, string]>> = {
-  read: ['read {{count}} file', 'read {{count}} files'],
-  edit: ['changed {{count}} file', 'changed {{count}} files'],
-  search: ['{{count}} search', '{{count}} searches'],
-  run: ['ran {{count}} command', 'ran {{count}} commands'],
-  fetch: ['fetched {{count}} page', 'fetched {{count}} pages'],
-};
-
 const formatSeconds = (s: number): string =>
   s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
-
-/** The strip's leading word; an unrecognised tool shows its own name, no invented verb. */
-export function stripKindWord(t: TFunction, kind: StripKind, toolName?: string): string {
-  if (kind === 'tool') return toolName || STRIP_KIND_FALLBACK.tool;
-  return tf(t, `chat.turn.kind.${kind}`, STRIP_KIND_FALLBACK[kind]);
-}
 
 const Spinner = ({ size = 13 }: { size?: number }) => (
   <span aria-hidden="true" className="material-symbols-outlined animate-spin shrink-0 text-[var(--color-text-secondary)]" style={{ fontSize: size }}>progress_activity</span>
@@ -80,48 +62,58 @@ function StatusIcon({ status }: { status: ToolStep['status'] }) {
   return <span className={`${base} text-[var(--color-text-dim)]`}>check</span>;
 }
 
+/** A long path keeps its last segments so the file name stays visible; the chip's
+ *  tooltip and link keep the full path. */
+const TAIL_SEGMENTS = 3;
+export function pathTail(p: string): string {
+  const parts = p.split('/');
+  return parts.length > TAIL_SEGMENTS + 1 ? `…/${parts.slice(-TAIL_SEGMENTS).join('/')}` : p;
+}
+
 /** One tool call — or, with `merged`, adjacent finished reads of one file. */
 export function ToolStrip({ step, merged }: { step: ToolStep; merged?: ToolStep[] }) {
   const { t } = useTranslation();
-  const label = stepLabel(step.block);
-  const kind = stripKind(step.block, label);
+  const call = toolCall(step.block);
   const running = step.status === 'pending';
   const elapsed = usePendingToolElapsed(step.block.id, running);
   const isError = step.status === 'error';
   const all = merged ?? [step];
-  const outcomes = [...new Set(all.map((s) => s.result?.outcome).filter((o): o is string => !!o))];
-  const outcome = outcomes.join(', ');
-  // A merged read keeps every range it returned; anything else only when it is short.
-  const inline = kind !== 'agent' && !isError && !!outcome && (all.length > 1 || outcome.length <= INLINE_OUTCOME_CHARS) ? outcome : '';
+  // A merged read keeps the ranges it read — the arguments of those calls.
+  const ranges = all.length > 1
+    ? [...new Set(all.map((s) => s.result?.outcome).filter((o): o is string => !!o))].join(', ')
+    : '';
+  const errorText = isError ? step.result?.outcome ?? '' : '';
   // A sub-agent: its live progress while it runs, its verdict once it is done.
+  const verb = stepLabel(step.block).verb;
+  const isAgent = verb === 'agent';
   const p = step.progress;
   const subCount = Math.max(step.children?.length ?? 0, p?.toolUses ?? 0);
   const agentFacts: string[] = [];
-  if (kind === 'agent') {
+  if (isAgent) {
     if (subCount > 0) agentFacts.push(tf(t, 'chat.turn.steps', subCount === 1 ? '{{count}} step' : '{{count}} steps', { count: subCount }));
     if (running && p?.lastToolName) agentFacts.push(tf(t, 'chat.turn.nowUsing', 'now {{tool}}', { tool: p.lastToolName }));
   }
-  // Its verdict: the live summary while the turn streams, the persisted result after.
   const verdictText = p?.summary || step.result?.outcome || '';
-  const verdict = kind === 'agent' && !running && !isError ? verdictText.split('\n')[0].trim() : '';
+  const verdict = isAgent && !running && !isError ? verdictText.split('\n')[0].trim() : '';
   const agentFailed = p?.status === 'failed' || p?.status === 'stopped';
+  const target = call.path
+    ? <FileChip path={call.path} name={pathTail(call.text)} diff={verb === 'edit'} />
+    : call.text !== call.tool && (
+      <span data-testid="strip-target" className="truncate min-w-0 font-mono text-[12px] text-[var(--color-text-secondary)]" title={call.text}>{call.text}</span>
+    );
   return (
-    <div data-testid="step-row" data-status={step.status} data-kind={kind} {...ANCHOR_PROPS}>
+    <div data-testid="step-row" data-status={step.status} data-tool={call.tool} {...ANCHOR_PROPS}>
       <div className="flex items-center gap-2 px-1.5 py-[3px] rounded-md text-[12.5px] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] min-w-0">
-        <span data-testid="strip-kind" className={`shrink-0 w-[58px] truncate ${isError ? 'text-red-400' : 'text-[var(--color-text-secondary)]'}`}>
-          {stripKindWord(t, kind, step.block.name)}
+        <span data-testid="strip-tool" title={call.tool} className={`shrink-0 min-w-[44px] max-w-[40%] truncate ${isError ? 'text-red-400' : 'text-[var(--color-text-secondary)]'}`}>
+          {call.tool}
         </span>
-        {label.path
-          ? <FileChip path={label.path} name={label.object} diff={label.verb === 'edit'} />
-          : !(kind === 'tool' && label.object === step.block.name) && (
-            <span data-testid="strip-target" className="truncate min-w-0 text-[var(--color-text-secondary)]">{label.object}</span>
-          )}
+        {target}
         {all.length > 1 && (
           <span data-testid="step-repeat" className="shrink-0 text-[12px] text-[var(--color-text-dim)] tabular-nums">
             {tf(t, 'chat.turn.readTimes', '{{count}}×', { count: all.length })}
           </span>
         )}
-        {inline && <span data-testid="step-outcome" className="truncate min-w-0 text-[12px] text-[var(--color-text-dim)]">{inline}</span>}
+        {ranges && <span data-testid="step-ranges" className="truncate min-w-0 text-[12px] text-[var(--color-text-dim)]">{ranges}</span>}
         {agentFacts.length > 0 && (
           <span data-testid="agent-facts" className="shrink-0 text-[12px] text-[var(--color-text-dim)] tabular-nums">· {agentFacts.join(' · ')}</span>
         )}
@@ -134,8 +126,8 @@ export function ToolStrip({ step, merged }: { step: ToolStep; merged?: ToolStep[
           <StatusIcon status={step.status} />
         </span>
       </div>
-      {isError && outcome && (
-        <div data-testid="step-error" className="ml-[66px] mr-2 mb-0.5 truncate text-[12px] text-red-400" title={outcome}>{outcome}</div>
+      {errorText && (
+        <div data-testid="step-error" className="ml-[60px] mr-2 mb-0.5 truncate text-[12px] text-red-400" title={errorText}>{errorText}</div>
       )}
     </div>
   );
@@ -147,14 +139,18 @@ const stripOf = (r: StepRowItem) => (r.kind === 'reads'
   ? <ToolStrip key={rowKey(r)} step={r.steps[0]} merged={r.steps} />
   : <ToolStrip key={rowKey(r)} step={r.step} />);
 
-type Item = { key: string; thought: ThoughtUnit } | { key: string; row: StepRowItem };
+type Item =
+  | { key: string; thought: ThoughtUnit }
+  | { key: string; note: Exclude<WorkMember, ThoughtUnit | { kind: 'process' }> }
+  | { key: string; row: StepRowItem };
 
-/** A group's members as one ordered list of thoughts and strips. */
+/** A block's members as one ordered list of thoughts, notes and tool rows. */
 function itemsOf(g: WorkGroup): Item[] {
   const out: Item[] = [];
   for (const m of g.members) {
     if (m.kind === 'thought') out.push({ key: `th-${m.ordinal}`, thought: m });
-    else for (const r of groupSteps(m.steps)) out.push({ key: rowKey(r), row: r });
+    else if (m.kind === 'process') for (const r of groupSteps(m.steps)) out.push({ key: rowKey(r), row: r });
+    else out.push({ key: `${m.kind === 'landmark' ? 'lm' : 'cb'}-${m.index}`, note: m });
   }
   return out;
 }
@@ -162,57 +158,101 @@ function itemsOf(g: WorkGroup): Item[] {
 const toolSteps = (g: WorkGroup): ToolStep[] =>
   g.members.flatMap((m) => (m.kind === 'process' ? m.steps.filter((s): s is ToolStep => s.kind === 'tool') : []));
 
-/** The files a folded line names: what the group changed, else what it touched. */
-function lineFiles(g: WorkGroup): { files: string[]; changed: boolean } {
+/** The folded line's counts: tool calls, files they changed, shell commands. */
+export function workCounts(g: WorkGroup): { steps: number; files: number; commands: number; thoughts: number } {
   const steps = toolSteps(g);
-  const changed = changedFiles(steps);
-  if (changed.length) return { files: changed, changed: true };
-  const touched: string[] = [];
-  for (const s of steps) {
-    const p = stepLabel(s.block).path;
-    if (p && !touched.includes(p)) touched.push(p);
-  }
-  return { files: touched, changed: false };
+  return {
+    steps: steps.length,
+    files: changedFiles(steps).length,
+    commands: steps.filter((s) => s.block.name === 'Bash').length,
+    thoughts: g.members.filter((m) => m.kind === 'thought').length,
+  };
 }
 
 export interface WorkGroupViewProps {
   group: WorkGroup;
   /** The turn is over: thoughts clamp to one line. */
   compact?: boolean;
-  /** The user's open/closed choice for this group; undefined = automatic. */
+  /** The user's open/closed choice for this block; undefined = automatic. */
   expanded?: boolean;
-  /** Inside an opened pipeline stage: laid out open (title + content), so the stage
-   *  row is the only fold between the user and its strips. */
-  defaultOpen?: boolean;
+  /** Inside a pipeline stage: the stage row is the fold, so the items render directly. */
+  flat?: boolean;
   onToggle: (open: boolean) => void;
   /** The user's open choice for a thought (keyed `th-<ordinal>`). */
   thoughtOpen: (key: string) => boolean | undefined;
   onThoughtToggle: (key: string, open: boolean) => void;
+  /** Renders a note / landmark's markdown (the message's own block renderer). */
+  renderNote: (text: string, key: string) => ReactNode;
 }
 
-export function WorkGroupView({ group, compact, expanded, defaultOpen, onToggle, thoughtOpen, onThoughtToggle }: WorkGroupViewProps) {
+const TAG = 'shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.08em]';
+/** A note / landmark is second level: text size of the lane, headings included (a
+ *  "## ✦ ⑦ TEST" landmark is a line inside the work, not a page heading). */
+const NOTE_CLASS = 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)] '
+  + '[&_h1]:text-[13px] [&_h2]:text-[13px] [&_h3]:text-[12.5px] [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_h1]:text-[var(--color-text-secondary)] [&_h2]:text-[var(--color-text-secondary)]';
+
+export function WorkGroupView({ group, compact, expanded, flat, onToggle, thoughtOpen, onThoughtToggle, renderNote }: WorkGroupViewProps) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const auto = useLinger(group.live);
   const items = useMemo(() => itemsOf(group), [group]);
-  const steps = useMemo(() => toolSteps(group), [group]);
-  const title = groupTitle(group);
-  const thoughtView = (th: ThoughtUnit, key: string) => (
-    <ThoughtBlock
-      key={key}
-      unit={th}
-      compact={compact}
-      inGroup
-      expanded={thoughtOpen(key)}
-      onToggle={(open) => onThoughtToggle(key, open)}
-    />
+  const running = toolSteps(group).some((s) => s.status === 'pending');
+  const render = (it: Item) => {
+    if ('thought' in it) {
+      return (
+        <ThoughtBlock
+          key={it.key}
+          unit={it.thought}
+          compact={compact}
+          inGroup
+          expanded={thoughtOpen(it.key)}
+          onToggle={(open) => onThoughtToggle(it.key, open)}
+        />
+      );
+    }
+    if ('note' in it) {
+      return (
+        <div key={it.key} data-testid="group-note" className={NOTE_CLASS} {...ANCHOR_PROPS}>
+          {renderNote(it.note.text, `${it.key}-b`)}
+        </div>
+      );
+    }
+    return stripOf(it.row);
+  };
+  const showAllButton = (hidden: number) => hidden > 0 && (
+    <button
+      type="button"
+      data-testid="show-all-steps"
+      data-expands=""
+      onClick={() => setShowAll(true)}
+      className="px-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+    >
+      {tf(t, 'chat.turn.showAll', '{{count}} more · show all', { count: hidden })}
+    </button>
   );
-  const render = (it: Item) => ('thought' in it ? thoughtView(it.thought, it.key) : stripOf(it.row));
+
+  if (flat) {
+    // The stage row above is the fold; a live stage still says it is working. Same
+    // window as a block: the newest PAGE items while live, the first PAGE once done.
+    const shownFlat = showAll ? items : group.live ? items.slice(-PAGE) : items.slice(0, PAGE);
+    const hiddenFlat = items.length - shownFlat.length;
+    return (
+      <div data-testid="work-group" data-live={group.live ? 'true' : 'false'} data-flat="true" className="space-y-0.5">
+        {group.live && showAllButton(hiddenFlat)}
+        {shownFlat.map(render)}
+        {!group.live && showAllButton(hiddenFlat)}
+        {group.live && !running && (
+          <div data-testid="group-row" role="status" className="flex items-center gap-2 px-1.5 text-[12.5px] text-[var(--color-text-muted)]">
+            <Spinner />
+            <span>{tf(t, 'chat.turn.thinking', 'Thinking')}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (group.live) {
-    const running = steps.some((s) => s.status === 'pending');
     const shown = showAll ? items : items.slice(-PAGE);
-    const hidden = items.length - shown.length;
     return (
       <div
         data-testid="work-group"
@@ -221,26 +261,12 @@ export function WorkGroupView({ group, compact, expanded, defaultOpen, onToggle,
       >
         <div data-testid="group-row" role="status" className="flex items-center gap-2 min-w-0 text-[12.5px]">
           {!running && <Spinner size={14} />}
-          <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text)]">
-            {tf(t, 'chat.turn.group.working', 'Working')}
-          </span>
-          <span data-testid="group-title" className="truncate min-w-0 text-[var(--color-text-secondary)]">
-            {title || (items.length === 0 ? tf(t, 'chat.turn.thinking', 'Thinking') : '')}
-          </span>
+          <span className={`${TAG} text-[var(--color-text)]`}>{tf(t, 'chat.turn.group.working', 'Working')}</span>
+          {items.length === 0 && <span className="text-[var(--color-text-secondary)]">{tf(t, 'chat.turn.thinking', 'Thinking')}</span>}
         </div>
         {items.length > 0 && (
           <div data-testid="group-body" className="mt-1 space-y-0.5">
-            {hidden > 0 && (
-              <button
-                type="button"
-                data-testid="show-all-steps"
-                data-expands=""
-                onClick={() => setShowAll(true)}
-                className="px-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-              >
-                {tf(t, 'chat.turn.showAll', '{{count}} more · show all', { count: hidden })}
-              </button>
-            )}
+            {showAllButton(items.length - shown.length)}
             {shown.map(render)}
           </div>
         )}
@@ -248,38 +274,25 @@ export function WorkGroupView({ group, compact, expanded, defaultOpen, onToggle,
     );
   }
 
-  // A group of one is the item itself — unless a lead-in titles it: then the title
-  // is the header (it says something the item does not).
-  if (items.length === 1 && !group.title) {
-    return <div data-testid="work-group" data-live="false" data-single="true" className="my-0.5">{render(items[0])}</div>;
-  }
   if (items.length === 0) return null;
-
-  const open = expanded ?? (auto || !!defaultOpen);
+  const open = expanded ?? auto;
   // In the FOLD_DELAY_MS after it finishes, the list keeps its live layout (the
   // newest items), then folds in one move — it does not reshuffle to its first items.
-  const lingering = expanded === undefined && auto && !defaultOpen;
+  const lingering = expanded === undefined && auto;
   const shown = showAll ? items : lingering ? items.slice(-PAGE) : items.slice(0, PAGE);
   const hidden = items.length - shown.length;
-  const failure = group.members.find((m): m is ProcessUnit => m.kind === 'process' && !!m.unrecoveredFailure)?.unrecoveredFailure;
-  const { files, changed } = lineFiles(group);
-  // No title to name it by: say what it did instead ("read 3 files · ran 2 commands").
-  const facts: string[] = [];
-  if (!title) {
-    const counts = group.members.flatMap((m) => (m.kind === 'process' ? summarizeProcess(m).counts : []));
-    const merged = new Map<StepVerb, number>();
-    for (const { verb, count } of counts) merged.set(verb, (merged.get(verb) ?? 0) + count);
-    for (const [verb, count] of [...merged].sort((a, b) => b[1] - a[1]).slice(0, 2)) {
-      const fb = COUNT_FALLBACK[verb];
-      if (fb) facts.push(tf(t, `chat.turn.counts.${verb}`, count === 1 ? fb[0] : fb[1], { count }));
-    }
-    // Nothing to name it by (e.g. a run of plan / skill steps): its size, at least.
-    if (!facts.length && !files.length) facts.push(tf(t, 'chat.turn.steps', '{{count}} steps', { count: steps.length }));
-  }
-  const tag = group.hasTools ? tf(t, 'chat.turn.group.worked', 'Worked') : tf(t, 'chat.turn.group.thought', 'Thought');
+  const failure = group.members.find((m) => m.kind === 'process' && !!m.unrecoveredFailure);
+  const c = workCounts(group);
+  const counts = [
+    // A block with no tool call (thinking only) says that, not "0 steps".
+    c.steps === 0 && c.thoughts > 0 && tf(t, 'chat.turn.group.thoughts', c.thoughts === 1 ? '{{count}} thought' : '{{count}} thoughts', { count: c.thoughts }),
+    c.steps > 0 && tf(t, 'chat.turn.group.steps', c.steps === 1 ? '{{count}} step' : '{{count}} steps', { count: c.steps }),
+    c.files > 0 && tf(t, 'chat.turn.group.files', c.files === 1 ? '{{count}} file changed' : '{{count}} files changed', { count: c.files }),
+    c.commands > 0 && tf(t, 'chat.turn.group.commands', c.commands === 1 ? '{{count}} command' : '{{count}} commands', { count: c.commands }),
+  ].filter(Boolean).join(' · ');
   return (
     <div data-testid="work-group" data-live="false" className="my-0.5">
-      <div data-testid="group-row" className="group/row flex items-center gap-1.5 min-w-0 text-[12.5px] text-[var(--color-text-muted)]">
+      <div data-testid="group-row" className="group/row flex items-center min-w-0 text-[12.5px] text-[var(--color-text-muted)]">
         <button
           type="button"
           data-testid="group-toggle"
@@ -294,40 +307,21 @@ export function WorkGroupView({ group, compact, expanded, defaultOpen, onToggle,
           >
             chevron_right
           </span>
-          <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-secondary)]">{tag}</span>
-          {title && <span data-testid="group-title" className="truncate min-w-0 text-[var(--color-text-secondary)]" title={title}>{title}</span>}
-          {facts.length > 0 && <span className="truncate min-w-0">{facts.join(' · ')}</span>}
+          <span className={`${TAG} text-[var(--color-text-secondary)]`}>{tf(t, 'chat.turn.group.worked', 'Worked')}</span>
+          {counts && <span data-testid="group-counts" className="truncate min-w-0 tabular-nums">· {counts}</span>}
         </button>
-        {files.length > 0 && (
-          <span data-testid="group-files" className="flex items-center gap-1 min-w-0 overflow-hidden shrink">
-            {changed && <span className="shrink-0">· {tf(t, 'chat.turn.changed', 'changed')}</span>}
-            {!changed && <span className="shrink-0">·</span>}
-            {files.slice(0, MAX_LINE_FILES).map((p) => <FileChip key={p} path={p} diff={changed} />)}
-            {files.length > MAX_LINE_FILES && (
-              <span className="shrink-0">{tf(t, 'chat.turn.andMore', '+{{count}}', { count: files.length - MAX_LINE_FILES })}</span>
-            )}
-          </span>
-        )}
       </div>
       {open && (
         <div data-testid="group-body" data-live-layout={lingering ? 'true' : 'false'} className="ml-[7px] mt-0.5 mb-1 pl-2 border-l border-[var(--color-border)] space-y-0.5">
-          {!lingering && shown.map(render)}
-          {hidden > 0 && (
-            <button
-              type="button"
-              data-testid="show-all-steps"
-              data-expands=""
-              onClick={() => setShowAll(true)}
-              className="px-1.5 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-            >
-              {tf(t, 'chat.turn.showAll', '{{count}} more · show all', { count: hidden })}
-            </button>
-          )}
-          {lingering && shown.map(render)}
+          {lingering && showAllButton(hidden)}
+          {shown.map(render)}
+          {!lingering && showAllButton(hidden)}
         </div>
       )}
       {/* A failure the turn never recovered from stays visible on the folded line. */}
-      {!open && failure && <div className="ml-[7px] pl-2 border-l border-red-500/40"><ToolStrip step={failure} /></div>}
+      {!open && failure?.kind === 'process' && failure.unrecoveredFailure && (
+        <div className="ml-[7px] pl-2 border-l border-red-500/40"><ToolStrip step={failure.unrecoveredFailure} /></div>
+      )}
     </div>
   );
 }

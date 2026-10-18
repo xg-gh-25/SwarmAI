@@ -4,20 +4,18 @@
  * This sub-component handles the full rendering of assistant-role messages:
  * - Branded header via AssistantHeader (🐝 SwarmAI · timestamp)
  * - Content rendered from the ONE turn projection (`deriveTurnView`,
- *   pages/chat/turnView.ts), in stream order, then grouped (`groupWork`): a
- *   thought and the tool calls it led to are one WorkGroup — folded to a WORKED /
- *   THOUGHT line once done, the open WORKING card while live; each tool call is
- *   one strip. Notes to the user, landmarks, the answer (outcome) and interrupts
- *   (question / permission / escalation) stay in the stream; a ":"-ended note
- *   titles the group after it
- * - The process lane: everything that is process (the intent "Approach" thought,
- *   groups, notes, landmarks, stage rows) sits behind one left rule, a size
- *   smaller and dimmer; the answer, the alignment, interrupts and cards sit
- *   outside it at full size — position, size and contrast tell process from answer
+ *   pages/chat/turnView.ts) in two levels (chat display v7.12). FIRST level: INTENT
+ *   (one source), WORKING / WORKED blocks (`groupWork`: everything between two
+ *   first-level items), pipeline stage rows, interrupts (question / permission /
+ *   escalation) and the RESULT. SECOND level, inside a block or an opened stage, in
+ *   stream order: thoughts, notes, landmarks and tool calls (real tool + command)
+ * - The process lane: everything that is process (the intent thought, blocks, stage
+ *   rows) sits behind one left rule, a size smaller and dimmer; the answer, the
+ *   intent text, interrupts and cards sit outside it at full size
  * - Pipeline stage rows (`stage` units — written by the backend from run.json)
  *   render as PipelineStageRow; while streaming, the stage now running is shown
  *   above the live process row (PipelineStageLive)
- * - Backend cards (TurnCards): a pipeline run's requirement as the alignment at
+ * - Backend cards (TurnCards): a pipeline run's requirement as the INTENT at
  *   the top; "needs your look" right after the Result divider (with the DELIVER
  *   row while the run is going); the turn's products after the outcome
  * - Next-step chips (NextSteps) from a trailing ```next-steps block, last
@@ -271,7 +269,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   // ── Attention layers (design-judgment Surface 6; chat display v7.11) ─────────
   // Process (intent, groups, notes, landmarks, stage rows) sits in one lane behind a
-  // left rule, a size smaller and dimmer; the alignment, the result, interrupts and
+  // left rule, a size smaller and dimmer; the intent text, the result, interrupts and
   // cards sit outside it at full size. Within the lane, spacing groups, never boxes.
   const hasWork = view.units.some((u) => u.kind === 'process' && u.steps.length > 0);
   const firstWork = view.units.findIndex((u) => u.kind === 'process' && u.steps.length > 0);
@@ -287,13 +285,24 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const attentionCard = view.attention && view.attention.items.length > 0
     ? <AttentionCard block={view.attention} />
     : null;
-  // How the ask was read, said once: a pipeline requirement (RunAlignment), else the
-  // first text written before any work — labelled "Understanding". The intent
-  // thought is the model's plan ("Approach"), never the restatement.
+  // INTENT — how the ask was read — from ONE source, first found: the pipeline run's
+  // requirement (RunAlignment), else the text written before any work, else the
+  // opening thought. A turn that starts with a tool result is the tail of a compacted
+  // / resumed one: nothing in it is how the ask was read (deriveTurnView marks no
+  // intent thought there either).
+  const { midWork } = view;
   const beforeWork = firstWork < 0 ? [] : view.units.slice(0, firstWork);
-  const alignText = !view.run && hasWork
+  const alignText = !view.run && hasWork && !midWork
     ? beforeWork.find((u) => u.kind === 'note')
     : undefined;
+  // The opening thought is the intent only when nothing above outranks it; otherwise
+  // it is an ordinary thought inside the work. While the turn streams it stays in the
+  // work: which source wins is only known once tool calls arrive, and promoting it
+  // early would move it (and its label) under the reader when they do.
+  // Never in a pipeline turn: a continuation turn has stage rows but no run block (the
+  // backend emits that once per run), and its opening thought would sit in a stage.
+  const keepIntent = !view.run && !isPipeline && !alignText && !isStreaming;
+  const mergeLead = !isStreaming;
   // Once there is a result, what needs the user leads it (right after the divider);
   // until then it stays where it arrived: with the DELIVER row.
   let attentionPending = !!attentionCard && !showResult;
@@ -312,10 +321,11 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               group={item}
               compact={!isStreaming}
               expanded={processChoice.get(item.id)}
-              defaultOpen={inStage}
+              flat={inStage}
               onToggle={(open) => chooseProcess(item.id, open)}
               thoughtOpen={(k) => processChoice.get(k)}
               onThoughtToggle={chooseProcess}
+              renderNote={(text, k) => renderBlock({ type: 'text', text }, k)}
             />
           </div>
         ),
@@ -357,10 +367,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         <div
           key={key}
           {...ANCHOR_PROPS}
-          data-testid={isAlignment ? 'turn-alignment' : isResult ? 'turn-result' : undefined}
+          data-testid={isAlignment ? 'turn-intent' : isResult ? 'turn-result' : undefined}
           className={`${inLane ? gap : prev ? 'mt-3' : ''} ${inLane ? 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
         >
-          {isAlignment && <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{tf(t, 'chat.turn.alignment', 'Understanding')}</div>}
+          {isAlignment && <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{tf(t, 'chat.turn.intent', 'Intent')}</div>}
           {isResult && (
             <div className="flex items-center gap-2.5 mt-5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
               {tf(t, 'chat.turn.result', 'Result')}
@@ -382,7 +392,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // run can hold the live group.
   let buffer: TurnUnit[] = [];
   const flush = (isLast: boolean) => {
-    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, alignText)));
+    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, { exclude: alignText, keepIntent, mergeLead })));
     buffer = [];
   };
   const stageSeen = new Map<string, number>();
@@ -405,7 +415,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // Inside a stage (a lane item) a question / permission / the answer-so-far is
     // still not process: it is reset to the answer's size and contrast.
     const body = children.length || liveSec
-      ? renderItems(groupWork(children, liveSec, alignText), true).map((x) => (x.lane ? x.el : (
+      ? renderItems(groupWork(children, liveSec, { exclude: alignText, keepIntent, mergeLead }), true).map((x) => (x.lane ? x.el : (
         <div key={`full-${x.key}`} className={FULL_CLASS}>{x.el}</div>
       )))
       : null;

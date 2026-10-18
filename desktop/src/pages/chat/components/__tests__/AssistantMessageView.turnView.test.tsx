@@ -1,24 +1,19 @@
 /**
- * AssistantMessageView × turnView — the work-group render contract (chat display v7.11).
+ * AssistantMessageView × turnView — the two-level render contract (chat display v7.12).
  *
  * What is tested (real AssistantMessageView, only leaf contexts mocked):
- * - a streaming turn's last group is the open WORKING card (no toggle), paged from
- *   the end, with the running strip last; from history a group is ONE folded
- *   WORKED line that opens to its strips (AC1)
- * - a group of one tool call is that strip itself — never a header opening to the
- *   same line again (AC3)
- * - every tool call is one strip: kind · target · short outcome · status, an error
- *   one line below, never the raw command (AC3)
- * - notes to the user stay in the stream, in order; a ":"-ended note titles the
- *   next group (AC2); interrupts render outside every group
- * - thoughts: no per-item label or Show all/less, the text is the control (AC4);
- *   the intent is "Approach", 6 lines; no "Started without restating" line (AC5)
- * - the process lane holds the work; the alignment and the answer sit outside (AC6);
- *   no button is nested in another (AC7)
- * - fold timing: a finished group folds FOLD_DELAY_MS later, keeping its live layout
- *   until then; a user's open/closed choice wins
- * - a running sub-agent's progress and a finished one's verdict sit on its strip
- * - a trailing ```next-steps block renders as chips, never as raw text (AC9)
+ * - FIRST level only: INTENT (one source), WORKING / WORKED blocks, stage rows,
+ *   interrupts, RESULT. Everything between two of them is ONE block (AC1, AC2)
+ * - a folded WORKED line is counts only — no file names (AC2)
+ * - opened: thoughts, notes and tool rows in stream order (AC3)
+ * - a tool row is the real tool name and the real command (AC4)
+ * - INTENT: run requirement > text before work > opening thought (AC5)
+ * - thoughts: no per-item chrome, the text is the control; the lane holds the
+ *   process, the intent text and the answer sit outside (AC7)
+ * - fold timing: a finished block folds FOLD_DELAY_MS later, keeping its live
+ *   layout until then; a user's open/closed choice wins
+ * - a running sub-agent's progress and a finished one's verdict sit on its row
+ * - a trailing ```next-steps block renders as chips, never as raw text
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
@@ -106,48 +101,29 @@ describe('AssistantMessageView — work groups (AC1)', () => {
     expect(screen.getAllByTestId('step-row')).toHaveLength(38);
   });
 
-  it('a group of one tool call is that strip itself, with no fold', () => {
-    renderView([th('look'), tu('a', 'Running: ls'), tx('the answer')]);
-    const g = screen.getByTestId('work-group');
-    expect(g.dataset.single).toBe('true');
-    expect(screen.queryByTestId('group-toggle')).toBeNull();
-    expect(screen.getAllByTestId('step-row')).toHaveLength(1);
-    expect(screen.getByTestId('strip-kind').textContent).toBe('Read');
+  it('the whole process of a turn is ONE WORKED line between INTENT and RESULT (AC1)', () => {
+    renderView([th('look'), tu('a', 'Running: ls'), tx('found it'), th('now the store'), tu('b', 'Running: pwd'), tx('the answer')]);
+    expect(screen.getAllByTestId('work-group')).toHaveLength(1);
+    expect(screen.getByTestId('thought').dataset.intent).toBe('true');
+    expect(screen.queryByText('found it')).toBeNull(); // a note is second level: inside the fold
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.getByText('found it')).toBeTruthy();
   });
 
-  it('finished multi-step work: WORKED, then the files it changed as chips BESIDE the toggle', () => {
-    const seen: unknown[] = [];
-    const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
-    document.addEventListener('swarm:open-file', onOpen);
-    try {
-      const { container } = renderView([tu('a', 'Running: ls'), wr('b', '/r/src/TabView.tsx'), wr('c', '/r/src/x.py'), tx('done')]);
-      const row = screen.getByTestId('group-row');
-      expect(row.textContent).toContain('Worked');
-      expect(row.textContent).toContain('changed');
-      const chips = within(row).getAllByTestId('file-chip');
-      expect(chips.map((c) => c.getAttribute('data-path'))).toEqual(['/r/src/TabView.tsx', '/r/src/x.py']);
-      // AC7: no interactive element inside another.
-      expect(screen.getByTestId('group-toggle').querySelector('[data-testid="file-chip"]')).toBeNull();
-      expect(container.querySelectorAll('button button')).toHaveLength(0);
-      fireEvent.click(chips[0]);
-      expect(seen).toEqual([{ path: '/r/src/TabView.tsx', autoDiff: true }]);
-      expect(screen.queryByTestId('group-body')).toBeNull(); // the chip opens the file, not the group
-    } finally {
-      document.removeEventListener('swarm:open-file', onOpen);
-    }
+  it('the folded line is counts only: steps, files changed, commands — no file names (AC2)', () => {
+    const { container } = renderView([tu('a', 'Running: ls'), wr('b', '/r/src/TabView.tsx'), wr('c', '/r/src/x.py'), tx('done')]);
+    const row = screen.getByTestId('group-row');
+    expect(row.textContent).toContain('Worked');
+    expect(screen.getByTestId('group-counts').textContent).toBe('· 3 steps · 2 files changed · 1 command');
+    expect(row.querySelector('[data-testid="file-chip"]')).toBeNull();
+    expect(container.querySelectorAll('button button')).toHaveLength(0);
   });
 
-  it('a folded line with nothing to name falls back to its size', () => {
+  it('a folded line counts what it has', () => {
     renderView([tu('a', 'Writing 3 todos'), tu('b', 'Writing 4 todos'), tx('done')]);
-    expect(screen.getByTestId('group-row').textContent).toContain('2 steps');
+    expect(screen.getByTestId('group-counts').textContent).toBe('· 2 steps · 2 commands');
   });
 
-  it('a group is titled by the first sentence of its first thought', () => {
-    renderView([th('Intent: read the store and compare both paths before deciding anything here, at all, really, yes, of course.'),
-      tu('a', 'Running: ls'), tr('a'), th('Now the store. Then the reader.'), tu('b', 'Running: pwd'), tu('c', 'Running: make'), tx('done')]);
-    const titles = screen.getAllByTestId('group-title').map((e) => e.textContent);
-    expect(titles).toContain('Now the store.');
-  });
 
   it('an interrupt renders outside every group', () => {
     const ask = {
@@ -164,15 +140,15 @@ describe('AssistantMessageView — work groups (AC1)', () => {
 });
 
 describe('AssistantMessageView — one strip per tool call (AC3)', () => {
-  it('kind · target · short outcome on the row; a failure one line below, in red', () => {
+  it('a row is the real tool and command; a failure one line below, in red (AC4)', () => {
     renderView([tu('a', 'Running: npm test'), res('a', '12 passed in 3.1s'),
       tu('b', 'Running: make'), res('b', 'make: *** no rule to make target build, stop.', true), tu('c', 'Running: ls')], { isStreaming: true });
     const rows = screen.getAllByTestId('step-row');
-    expect(within(rows[0]).getByTestId('strip-kind').textContent).toBe('Test');
-    expect(within(rows[0]).getByTestId('step-outcome').textContent).toBe('12 passed in 3.1s');
+    expect(within(rows[0]).getByTestId('strip-tool').textContent).toBe('Bash');
+    expect(within(rows[0]).getByTestId('strip-target').textContent).toBe('npm test');
+    expect(rows[0].textContent).not.toContain('12 passed'); // a command's own output is not the row
     const err = within(rows[1]).getByTestId('step-error');
     expect(err.className).toMatch(/text-red-400/);
-    expect(err.className).toMatch(/truncate/);
     expect(err.getAttribute('title')).toBe('make: *** no rule to make target build, stop.');
   });
 
@@ -182,28 +158,28 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
     expect(screen.queryByText(long)).toBeNull();
   });
 
-  it('never shows the raw command: not as text, title or tooltip', () => {
-    const cmd = 'Running: R=run_df73d970; python3 -c "import json; print(json.load(open(\'x.json\')))"';
-    const { container } = renderView([tu('a', cmd), tu('b', 'Running: cd /a && FOO=1 node -e "x()"'), tx('done')]);
+  it('shows the real command: only the leading cd and a timeout wrapper go (AC4)', () => {
+    const cmd = 'Running: R=run_df73d970; python3 -c "import json; print(1)"';
+    renderView([tu('a', cmd), tu('b', "Running: cd /a && perl -e 'alarm 60; exec @ARGV' node -e \"x()\""), tx('done')]);
     fireEvent.click(screen.getByTestId('group-toggle'));
-    const html = container.innerHTML;
-    expect(html).not.toContain('run_df73d970');
-    expect(html).not.toContain('import json');
-    expect(html).not.toContain('FOO=1');
-    expect(screen.getAllByTestId('strip-target').map((e) => e.textContent)).toEqual(['inline script', 'inline script']);
+    expect(screen.getAllByTestId('strip-target').map((e) => e.textContent)).toEqual(['R=run_df73d970; python3 -c "import json; print(1)"', 'node -e "x()"']);
+    expect(document.body.textContent).not.toContain('inline script');
   });
 
   it('an unrecognised tool without a summary names itself once', () => {
     renderView([{ type: 'tool_use', id: 'z', name: 'Frobnicate', category: 'fallback' } as ContentBlock]);
+    fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.getByTestId('step-row').textContent!.match(/Frobnicate/g)).toHaveLength(1);
   });
 
-  it('an unrecognised tool shows its own name, no invented verb', () => {
+  it('an unrecognised tool shows its own name and summary', () => {
     renderView([{ type: 'tool_use', id: 'z', name: 'Weird', summary: 'Weird: some context', category: 'fallback' } as ContentBlock]);
+    fireEvent.click(screen.getByTestId('group-toggle'));
     const row = screen.getByTestId('step-row');
-    expect(within(row).getByTestId('strip-kind').textContent).toBe('Weird');
-    expect(row.textContent).toContain('Weird: some context');
-    expect(row.textContent).not.toContain('Ran');
+    expect(within(row).getByTestId('strip-tool').textContent).toBe('Weird');
+    // the generic `<name>: ctx` form: the name once, then its context
+    expect(within(row).getByTestId('strip-target').textContent).toBe('some context');
+    expect(row.textContent!.match(/Weird/g)).toHaveLength(1);
   });
 
   it('adjacent finished reads of one file are ONE strip with every range', () => {
@@ -237,7 +213,7 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
 });
 
 describe('AssistantMessageView — thoughts carry no chrome (AC4)', () => {
-  it('a finished non-tool reply keeps its thought readable as the Approach', () => {
+  it('a finished non-tool reply keeps its thought readable as the Intent', () => {
     renderView([th('deliberating'), tx('the answer')]);
     expect(screen.getByTestId('thought-text').textContent).toBe('deliberating');
     expect(screen.queryByTestId('group-toggle')).toBeNull();
@@ -287,11 +263,11 @@ describe('AssistantMessageView — thoughts carry no chrome (AC4)', () => {
     expect(screen.getByTestId('thought-text').getAttribute('role')).toBeNull();
   });
 
-  it('the intent thought gets 6 lines and the one Approach label', () => {
+  it('the intent thought gets 6 lines and the one Intent label', () => {
     renderView([th(LONG), tu('a', 'Running: ls'), tr('a'), tx('ok')]);
     const t = screen.getByTestId('thought');
     expect(t.dataset.intent).toBe('true');
-    expect(t.textContent).toContain('Approach');
+    expect(t.textContent).toContain('Intent');
     expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('6');
   });
 
@@ -343,12 +319,11 @@ describe('AssistantMessageView — fold timing', () => {
     expect(screen.getByTestId('group-body').textContent).toContain('f0.ts');
   });
 
-  it('a group the user opened stays open when the turn ends', () => {
-    const c = [th('intent first'), tu('a', 'Running: ls'), tr('a'), tu('a2', 'Running: pwd'), tr('a2'),
-      th('Now the next part.'), tu('b', 'Running: make')];
+  it('a block the user opened stays open when the turn ends', () => {
+    const ask = { type: 'ask_user_question', toolUseId: 'q1', questions: [] } as unknown as ContentBlock;
+    const c = [tu('a', 'Running: ls'), tr('a'), tu('a2', 'Running: pwd'), tr('a2'), ask, tu('b', 'Running: make')];
     const { rerender } = render(viewOf(c, true));
-    const toggle = screen.getAllByTestId('group-toggle')[0];
-    fireEvent.click(toggle);
+    fireEvent.click(screen.getAllByTestId('group-toggle')[0]);
     rerender(viewOf([...c, tr('b'), tx('done')], false));
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
     expect(screen.getAllByTestId('group-toggle')[0].getAttribute('aria-expanded')).toBe('true');
@@ -380,7 +355,7 @@ describe('AssistantMessageView — a sub-agent on its strip', () => {
   it('running: its step count and the tool it is on, on the Agent strip; no nested level', () => {
     withProgress([agent, ...subs(8)], { ag: { parentToolUseId: 'ag', status: 'running', toolUses: 8, lastToolName: 'Read' } });
     const row = screen.getByTestId('step-row');
-    expect(within(row).getByTestId('strip-kind').textContent).toBe('Agent');
+    expect(within(row).getByTestId('strip-tool').textContent).toBe('Agent');
     expect(row.textContent).toContain('Review spec');
     expect(within(row).getByTestId('agent-facts').textContent).toContain('8 steps');
     expect(within(row).getByTestId('agent-facts').textContent).toContain('now Read');
@@ -391,6 +366,7 @@ describe('AssistantMessageView — a sub-agent on its strip', () => {
   it('done, while the turn streams: the live summary is its verdict', () => {
     withProgress([agent, ...subs(3), { type: 'tool_result', toolUseId: 'ag', isError: false } as ContentBlock, tx('Review passed.')],
       { ag: { parentToolUseId: 'ag', status: 'completed', toolUses: 3, summary: 'PASS — no findings\nmore detail' } });
+    fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.getByTestId('agent-verdict').textContent).toContain('PASS — no findings');
     expect(screen.getByTestId('agent-verdict').textContent).not.toContain('more detail');
   });
@@ -398,26 +374,24 @@ describe('AssistantMessageView — a sub-agent on its strip', () => {
   it('from history: the persisted result is its verdict, however long', () => {
     const verdict = 'BLOCK — two findings in the commit gate; see the report for both of them';
     renderView([agent, ...subs(3), res('ag', verdict), tx('Review done.')]);
+    fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.getByTestId('agent-verdict').textContent).toBe(`· ${verdict}`);
-    expect(screen.queryByTestId('step-outcome')).toBeNull(); // said once
   });
 });
 
 describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
-  it('the restatement is the alignment and the final answer gets a Result divider, both outside the lane', () => {
+  it('the restatement is the INTENT and the final answer gets a Result divider, both outside the lane', () => {
     renderView([tx('Three steps: export, sync, push.'), tu('a', 'Running: ls'), tx('checking'), tu('b', 'Running: pwd'),
       tx('All three done.')]);
-    const align = screen.getByTestId('turn-alignment');
+    const intent = screen.getByTestId('turn-intent');
     const result = screen.getByTestId('turn-result');
-    expect(align.textContent).toContain('Understanding');
-    expect(result.textContent).toContain('Result');
+    expect(intent.textContent).toContain('Intent');
+    expect(screen.queryByText('Understanding')).toBeNull();
     expect(result.textContent).toContain('All three done.');
-    expect(align.closest('[data-lane="true"]')).toBeNull();
+    expect(intent.closest('[data-lane="true"]')).toBeNull();
     expect(result.closest('[data-lane="true"]')).toBeNull();
-    const lane = screen.getByText('checking').closest('[data-lane="true"]')!;
-    expect(lane).not.toBeNull();
+    const lane = screen.getByTestId('work-group').closest('[data-lane="true"]')!;
     expect(lane.className).toMatch(/border-l/);
-    expect(lane.className).toMatch(/text-\[12\.5px\]/);
   });
 
   it('no divider while streaming', () => {
@@ -427,7 +401,7 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
 
   it('a pure text reply has neither label nor lane', () => {
     renderView([tx('just an answer')]);
-    expect(screen.queryAllByTestId('turn-alignment')).toHaveLength(0);
+    expect(screen.queryAllByTestId('turn-intent')).toHaveLength(0);
     expect(document.querySelectorAll('[data-lane="true"]')).toHaveLength(0);
   });
 
@@ -444,24 +418,21 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
       .toEqual(['/r/a.ts', '/r/b.md']);
   });
 
-  it('notes stay in stream order (OT03); a ":"-ended note titles the next group instead', () => {
-    const { container } = renderView([tx('plan'), tu('a', 'Running: ls'), tx('found it'), tu('b', 'Running: pwd'),
+  it('notes stay in stream order inside the block (OT03); none of them is a title (AC3)', () => {
+    renderView([tx('plan'), tu('a', 'Running: ls'), tx('found it'), tu('b', 'Running: pwd'),
       tx('Now the two docs:'), wr('c', '/r/a.md'), wr('d', '/r/b.md'), tx('done')]);
-    const note = screen.getByText('found it');
-    const groups = [...container.querySelectorAll('[data-testid="work-group"]')];
-    expect(note.compareDocumentPosition(groups[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(groups[2] as HTMLElement).getByTestId('group-title').textContent).toBe('Now the two docs');
-    expect(screen.queryByText('Now the two docs:')).toBeNull();
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    const body = screen.getByTestId('group-body');
+    expect([...body.children].map((c) => c.getAttribute('data-testid'))).toEqual(['step-row', 'group-note', 'step-row', 'group-note', 'step-row', 'step-row']);
+    expect(screen.getByText('Now the two docs:')).toBeTruthy();
   });
 
-  it('the answer-so-far keeps its DOM node when the next tool call turns it into a note (no remount)', () => {
+  it('the answer-so-far moves into the block once a tool call follows it — still shown', () => {
     const c = [tx('Plan.'), tu('a', 'Running: ls'), tr('a'), tx('Found the store bug, now the fix')];
     const { rerender } = render(viewOf(c, true));
-    const node = screen.getByText('Found the store bug, now the fix').closest('[data-scroll-anchor]');
+    expect(screen.getByText('Found the store bug, now the fix').closest('[data-testid="work-group"]')).toBeNull();
     rerender(viewOf([...c, tu('b', 'Running: make')], true));
-    const after = screen.getByText('Found the store bug, now the fix').closest('[data-scroll-anchor]');
-    expect(after).toBe(node);
-    expect(after!.closest('[data-lane="true"]')).not.toBeNull(); // it moved into the lane by class
+    expect(screen.getByText('Found the store bug, now the fix').closest('[data-testid="work-group"]')).not.toBeNull();
   });
 
   it('a streaming answer ending in ":" stays the answer — never a WORKING title', () => {
@@ -481,9 +452,16 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
     expect(q.closest('.text-\\[15px\\]')).not.toBeNull();
   });
 
-  it('the alignment note is never swallowed as a title', () => {
-    renderView([tx('Plan for this:'), tu('a', 'Running: ls'), tu('b', 'Running: pwd'), tx('done')]);
-    expect(screen.getByTestId('turn-alignment').textContent).toContain('Plan for this:');
+  it('a turn that starts with a tool result (compacted tail) shows no INTENT (AC5)', () => {
+    renderView([tr('z'), th(`I'll inline a fallback expression here. ${'x'.repeat(170)}`), tu('a', 'Running: ls'), tx('done')]);
+    expect(screen.queryByTestId('turn-intent')).toBeNull();
+    expect(document.body.textContent).not.toContain('Intent');
+  });
+
+  it('with a restatement, the opening thought is inside the work, not a second intent (AC5)', () => {
+    renderView([th('plan it'), tx('I read it as: fix X.'), tu('a', 'Running: ls'), tx('done')]);
+    expect(screen.getAllByText('Intent')).toHaveLength(1);
+    expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
   });
 });
 

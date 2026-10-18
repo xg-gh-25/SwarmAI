@@ -3,7 +3,7 @@
  *
  * Each has a fixed place in the turn, set by AssistantMessageView:
  * - RunAlignment     — a pipeline run's requirement + plan (`pipeline_run`): the
- *                      turn's alignment, at the top, labelled "Understanding".
+ *                      turn's INTENT, at the top.
  * - AttentionCard    — what the run needs the user to judge (`pipeline_attention`):
  *                      right after the "Result" divider (or in place while running).
  *                      Amber, the one coloured card: colour is for exceptions. What
@@ -37,7 +37,7 @@ export function RunAlignment({ run }: { run: PipelineRunContent }) {
   ].filter(Boolean).join(' · ');
   return (
     <div data-testid="turn-run">
-      <div className={`mb-0.5 ${LABEL}`}>{tf(t, 'chat.turn.alignment', 'Understanding')}</div>
+      <div className={`mb-0.5 ${LABEL}`}>{tf(t, 'chat.turn.intent', 'Intent')}</div>
       <p className="text-[14.5px] leading-relaxed text-[var(--color-text)] whitespace-pre-wrap break-words">{run.requirement}</p>
       <div className="mt-1 text-[11.5px] text-[var(--color-text-muted)]">
         Pipeline <code className="font-mono text-[11px]">{run.runId}</code>{meta ? ` · ${meta}` : ''}

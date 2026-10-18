@@ -3,8 +3,7 @@
  *
  * What is tested (real AssistantMessageView + turnView, leaf contexts mocked):
  * - how the ask was read is said once: pipeline requirement > a restatement written
- *   before any work; only that one carries "Understanding". The intent thought is
- *   the plan ("Approach"), never the restatement
+ *   before any work, else the opening thought; exactly one carries "Intent" 
  * - there is no "no restatement" note: the intent thought is the place to check
  *   how the ask was read (chat display v7.11)
  * - a pipeline stage's body lays its groups out open: title + content, so a stage
@@ -48,18 +47,42 @@ const viewOf = (c: ContentBlock[], streaming = false) => (
 );
 
 describe('how the ask was read is said once', () => {
-  it('the intent thought is labelled Approach, never Understanding', () => {
+  it('with nothing else, the opening thought is the Intent', () => {
     render(viewOf([th('Read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
-    expect(screen.getByTestId('thought').textContent).toContain('Approach');
-    expect(screen.getByTestId('thought').textContent).not.toContain('Understanding');
-    expect(screen.queryByTestId('turn-alignment')).toBeNull();
+    expect(screen.getByTestId('thought').textContent).toContain('Intent');
+    expect(screen.queryByTestId('turn-intent')).toBeNull();
   });
 
-  it('a restatement written before the work is the Understanding; the intent stays Approach', () => {
+  it('a restatement written before the work is the Intent; the opening thought joins the work', () => {
     render(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
-    expect(screen.getByTestId('turn-alignment').textContent).toContain('I read it as');
-    expect(screen.getAllByText('Understanding')).toHaveLength(1);
-    expect(screen.getByTestId('thought').textContent).toContain('Approach');
+    expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
+    expect(screen.getAllByText('Intent')).toHaveLength(1);
+    expect(screen.queryByTestId('thought')).toBeNull(); // folded inside WORKED
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.getByTestId('thought').textContent).toBe('plan'); // no second Intent label
+    expect(screen.getAllByText('Intent')).toHaveLength(1);
+  });
+
+  it('streaming think → restate → first tool: the thought never moves or changes label', () => {
+    const { rerender } = render(viewOf([th('plan')], true));
+    rerender(viewOf([th('plan'), tx('I read it as: fix the cache.')], true));
+    const pos = () => {
+      const thought = screen.getByTestId('thought');
+      const text = screen.getByText('I read it as: fix the cache.');
+      // DOCUMENT_POSITION_FOLLOWING (4): the text comes after the thought
+      return { follows: !!(thought.compareDocumentPosition(text) & 4), intent: thought.dataset.intent };
+    };
+    expect(pos()).toEqual({ follows: true, intent: 'false' });
+    const before = screen.getByTestId('thought');
+    rerender(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a')], true));
+    expect(pos()).toEqual({ follows: true, intent: 'false' });
+    expect(screen.getByTestId('thought')).toBe(before); // same node: no remount
+    expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
+  });
+
+  it('a continuation pipeline turn (stage rows, no run block) has no thought Intent', () => {
+    render(viewOf([stage('evaluate', 'think'), th(`The ask is to wire the cache. ${'x'.repeat(170)}`), tu('a'), tr('a'), tx('done')]));
+    expect(screen.queryAllByText('Intent')).toHaveLength(0);
   });
 
   it('a thought after the work is narration in its group, with no label', () => {
@@ -71,7 +94,7 @@ describe('how the ask was read is said once', () => {
 
   it('a pipeline requirement wins over both', () => {
     render(viewOf([th('plan'), tx('Running the pipeline.'), tu('a'), tr('a'), RUN, tx('done')]));
-    expect(screen.getAllByText('Understanding')).toHaveLength(1);
+    expect(screen.getAllByText('Intent')).toHaveLength(1);
     expect(screen.getByTestId('turn-run')).toBeTruthy();
   });
 
@@ -90,12 +113,12 @@ describe('how the ask was read is said once', () => {
 });
 
 describe('two levels at most', () => {
-  it('an opened stage lays its groups out open: one click from the stage to its strips', () => {
+  it('an opened stage lists its items directly: no WORKED header inside a stage', () => {
     render(viewOf([tu('a'), tr('a'), tu('a2', 'Running: id'), tr('a2'), th('between'), tu('b', 'Running: pwd'), tu('b2', 'Running: make'),
       tr('b'), stage('evaluate', null), tx('done')]));
     fireEvent.click(screen.getByTestId('pipeline-stage-row').querySelector('button')!);
     const body = screen.getByTestId('stage-body');
-    expect(within(body).getAllByTestId('group-body')).toHaveLength(2);
+    expect(within(body).queryByTestId('group-toggle')).toBeNull();
     expect(within(body).getAllByTestId('step-row')).toHaveLength(4);
     expect(within(body).getByTestId('thought-text').textContent).toBe('between');
   });
@@ -106,7 +129,7 @@ describe('two levels at most', () => {
     render(viewOf(content));
     fireEvent.click(screen.getByTestId('group-toggle'));
     const rows = screen.getAllByTestId('step-row');
-    expect(rows.map((r) => r.dataset.kind)).toEqual(['agent', 'read']);
+    expect(rows.map((r) => r.dataset.tool)).toEqual(['Agent', 'Bash']);
     expect(rows[0].textContent).toContain('1 step');
     expect(screen.queryByTitle('Show command')).toBeNull();
   });

@@ -125,9 +125,9 @@ describe('AssistantMessageView — pipeline stage rows', () => {
     expect(row.textContent).not.toContain('GATE');
   });
 
-  it('the alignment stays outside every stage', () => {
+  it('the intent stays outside every stage', () => {
     renderView([tx('I read this as: add the registry key.'), tu('a'), stage({ gate: null })], false);
-    const align = screen.getByTestId('turn-alignment');
+    const align = screen.getByTestId('turn-intent');
     expect(align.textContent).toContain('add the registry key');
     expect(screen.getByTestId('pipeline-stage-row').contains(align)).toBe(false);
   });

@@ -256,18 +256,6 @@
       },
       "steps_one": "{{count}} step",
       "steps_other": "{{count}} steps",
-      "counts": {
-        "read_one": "read {{count}} file",
-        "read_other": "read {{count}} files",
-        "edit_one": "changed {{count}} file",
-        "edit_other": "changed {{count}} files",
-        "search_one": "{{count}} search",
-        "search_other": "{{count}} searches",
-        "run_one": "ran {{count}} command",
-        "run_other": "ran {{count}} commands",
-        "fetch_one": "fetched {{count}} page",
-        "fetch_other": "fetched {{count}} pages"
-      },
       "showAll": "{{count}} more · show all",
       "backToLatestThinking": "Thinking · back to latest",
       "stage": {
@@ -282,13 +270,9 @@
         "next": "next {{stages}}",
         "changedNames": "changed {{files}}"
       },
-      "changed": "changed",
-      "andMore": "+{{count}}",
       "failedOne": "failed",
-      "alignment": "Understanding",
       "result": "Result",
       "thisTurnChanged": "This turn changed",
-      "approach": "Approach",
       "run": {
         "stages": "{{count}} stages"
       },
@@ -308,28 +292,19 @@
         "copied": "Copied"
       },
       "backToLatestAction": "{{action}} · back to latest",
-      "kind": {
-        "read": "Read",
-        "search": "Search",
-        "write": "Write",
-        "edit": "Edit",
-        "run": "Run",
-        "test": "Test",
-        "git": "Git",
-        "pipeline": "Pipeline",
-        "query": "Query",
-        "fetch": "Fetch",
-        "agent": "Agent",
-        "skill": "Skill",
-        "tools": "Tools",
-        "plan": "Plan",
-        "tool": "Tool"
-      },
       "group": {
         "working": "Working",
         "worked": "Worked",
-        "thought": "Thought"
-      }
+        "steps_one": "{{count}} step",
+        "steps_other": "{{count}} steps",
+        "files_one": "{{count}} file changed",
+        "files_other": "{{count}} files changed",
+        "commands_one": "{{count}} command",
+        "commands_other": "{{count}} commands",
+        "thoughts_one": "{{count}} thought",
+        "thoughts_other": "{{count}} thoughts"
+      },
+      "intent": "Intent"
     },
     "nextSteps": {
       "label": "Next steps",

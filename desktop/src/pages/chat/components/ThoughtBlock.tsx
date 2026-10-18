@@ -8,9 +8,9 @@
  * - Clamp: THOUGHT_LINES while the turn streams, COMPACT_LINES once it is over,
  *   INTENT_LINES for the turn's intent. A thought short enough to fit is not a control.
  * - The intent (the turn's first substantive thought, `deriveTurnView`) is the one
- *   thought with a label: "Approach" (思路) — the place to check how the model read
- *   the ask. "Understanding" (理解) is only ever the restatement or the run's
- *   requirement, never this.
+ *   thought with a label: "Intent" — the place to check how the model read the ask.
+ *   It is the turn's INTENT only when no run requirement or restatement outranks it
+ *   (AssistantMessageView); otherwise it is an ordinary thought inside the work.
  * - While it streams, its newest part wraps in place. Outside a work group (the
  *   intent) it carries the turn's one spinner; inside a WORKING card the card owns it.
  * The open/closed choice is lifted (AssistantMessageView keys it by ordinal), so it
@@ -50,7 +50,10 @@ export interface ThoughtBlockProps {
 
 export function ThoughtBlock({ unit, compact, inGroup, expanded, onToggle }: ThoughtBlockProps) {
   const { t } = useTranslation();
-  const lines = unit.intent ? INTENT_LINES : compact ? COMPACT_LINES : THOUGHT_LINES;
+  // Inside a block a thought is never the INTENT — that label belongs to the first
+  // level only (another source outranked it; AssistantMessageView decides).
+  const isIntent = unit.intent && !inGroup;
+  const lines = isIntent ? INTENT_LINES : compact ? COMPACT_LINES : THOUGHT_LINES;
   const long = !unit.live && isLongThought(unit.text, lines);
   const open = !!expanded;
   const onClick = () => {
@@ -64,11 +67,11 @@ export function ThoughtBlock({ unit, compact, inGroup, expanded, onToggle }: Tho
   };
   const spin = unit.live && !inGroup;
   return (
-    <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} data-intent={unit.intent ? 'true' : 'false'}>
-      {(unit.intent || spin) && (
+    <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} data-intent={isIntent ? 'true' : 'false'}>
+      {(isIntent || spin) && (
         <div className="mb-0.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
           {spin && <span aria-hidden="true" className="material-symbols-outlined text-[13px] animate-spin">progress_activity</span>}
-          <span>{unit.intent ? tf(t, 'chat.turn.approach', 'Approach') : tf(t, 'chat.turn.thinking', 'Thinking')}</span>
+          <span>{isIntent ? tf(t, 'chat.turn.intent', 'Intent') : tf(t, 'chat.turn.thinking', 'Thinking')}</span>
         </div>
       )}
       <div

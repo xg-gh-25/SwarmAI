@@ -256,18 +256,6 @@
       },
       "steps_one": "{{count}} 步",
       "steps_other": "{{count}} 步",
-      "counts": {
-        "read_one": "读取 {{count}} 个文件",
-        "read_other": "读取 {{count}} 个文件",
-        "edit_one": "改了 {{count}} 个文件",
-        "edit_other": "改了 {{count}} 个文件",
-        "search_one": "搜索 {{count}} 次",
-        "search_other": "搜索 {{count}} 次",
-        "run_one": "运行 {{count}} 条命令",
-        "run_other": "运行 {{count}} 条命令",
-        "fetch_one": "获取 {{count}} 个页面",
-        "fetch_other": "获取 {{count}} 个页面"
-      },
       "showAll": "还有 {{count}} 项 · 展开全部",
       "backToLatestThinking": "思考中 · 回到最新",
       "stage": {
@@ -282,13 +270,9 @@
         "next": "接下来 {{stages}}",
         "changedNames": "改了 {{files}}"
       },
-      "changed": "改了",
-      "andMore": "等 {{count}} 个",
       "failedOne": "失败",
-      "alignment": "理解",
       "result": "结果",
       "thisTurnChanged": "本轮改了",
-      "approach": "思路",
       "run": {
         "stages": "{{count}} 个阶段"
       },
@@ -308,28 +292,19 @@
         "copied": "已复制"
       },
       "backToLatestAction": "{{action}} · 回到最新",
-      "kind": {
-        "read": "读取",
-        "search": "搜索",
-        "write": "写入",
-        "edit": "编辑",
-        "run": "运行",
-        "test": "测试",
-        "git": "Git",
-        "pipeline": "Pipeline",
-        "query": "查询",
-        "fetch": "获取",
-        "agent": "Agent",
-        "skill": "技能",
-        "tools": "工具",
-        "plan": "计划",
-        "tool": "工具"
-      },
       "group": {
         "working": "Working",
         "worked": "Worked",
-        "thought": "Thought"
-      }
+        "steps_one": "{{count}} 步",
+        "steps_other": "{{count}} 步",
+        "files_one": "改了 {{count}} 个文件",
+        "files_other": "改了 {{count}} 个文件",
+        "commands_one": "{{count}} 条命令",
+        "commands_other": "{{count}} 条命令",
+        "thoughts_one": "{{count}} 条思考",
+        "thoughts_other": "{{count}} 条思考"
+      },
+      "intent": "Intent"
     },
     "nextSteps": {
       "label": "下一步",

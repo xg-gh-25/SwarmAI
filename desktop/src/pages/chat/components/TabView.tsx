@@ -36,8 +36,7 @@ import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useSta
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
-import { deriveTurnView, stepLabel, stripKind } from '../turnView';
-import { stripKindWord } from './WorkGroup';
+import { deriveTurnView, toolCall } from '../turnView';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
   REPLY_TOP_MARGIN, sentMessageId, tailErrorId,
@@ -512,11 +511,9 @@ function TabViewImpl({
     const live = units[units.length - 1];
     const step = live?.kind === 'process' ? live.live?.step : undefined;
     if (!step) return null;
-    const label = stepLabel(step.block);
-    const kind = stripKind(step.block, label);
-    // An unknown tool's object is its summary or, without one, its own name: say it once.
-    if (kind === 'tool') return label.object;
-    return `${stripKindWord(t, kind, step.block.name)} ${label.object}`;
+    // The same real call the running tool row shows: tool + command, never translated.
+    const call = toolCall(step.block);
+    return call.text && call.text !== call.tool ? `${call.tool} ${call.text}` : call.tool;
   }, [isStreaming, messages, t]);
 
   // Last assistant message index — used for Save-to-Memory button placement
@@ -753,14 +750,14 @@ function TabViewImpl({
           <button
             type="button"
             onClick={follow}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full max-w-[min(90%,640px)] min-w-0
                           bg-[var(--color-bg-primary)]/95 backdrop-blur-sm
                           border border-[var(--color-border-subtle)]
                           shadow-sm text-[var(--color-text-muted)]
                           hover:border-[var(--color-border)] hover:text-[var(--color-text-secondary)]
                           transition-colors cursor-pointer">
             <Spinner size="sm" />
-            <span className="text-xs font-medium tabular-nums">
+            <span data-testid="streaming-pill-text" className="text-xs font-medium tabular-nums truncate min-w-0" title={liveAction ?? undefined}>
               {liveAction
                 ? tf(t, 'chat.turn.backToLatestAction', '{{action}} · back to latest', { action: liveAction })
                 : tf(t, 'chat.turn.backToLatestThinking', 'Thinking · back to latest')}

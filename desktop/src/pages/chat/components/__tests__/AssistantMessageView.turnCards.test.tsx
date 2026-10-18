@@ -4,7 +4,7 @@
  * What is tested (real AssistantMessageView + turnView, only leaf contexts mocked):
  * - pipeline_run: rendered once at the top as the alignment (requirement as plain
  *   text, run id, profile, stage count); the model's own opening text then loses
- *   the "Understanding" label and no "no restatement" note shows
+ *   the "Intent" label and no "no restatement" note shows
  * - pipeline_attention: right after the Result divider and before the answer once
  *   the turn is over; with the DELIVER row while it streams; one item per kind;
  *   a blocking verdict is red
@@ -80,8 +80,8 @@ describe('pipeline_run — the alignment', () => {
     expect(run.textContent).toContain('Add opus-5-5 to MODEL_REGISTRY');
     expect(run.textContent).toContain('run_a1');
     expect(run.textContent).toContain('full · 3 stages');
-    expect(screen.getAllByText('Understanding')).toHaveLength(1);
-    expect(screen.queryByTestId('turn-alignment')).toBeNull();
+    expect(screen.getAllByText('Intent')).toHaveLength(1);
+    expect(screen.queryByTestId('turn-intent')).toBeNull();
     expect(container.querySelector('[data-testid]')?.getAttribute('data-testid')).toBe('turn-run');
   });
 

@@ -338,12 +338,22 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   control (click / Enter opens it in place). A label that every item carries tells
   the reader nothing and taxes every line; it is the cheapest way to dilute a
   stream. A group of ONE item is that item — never a header that opens to the
-  same line again. (6) **One strip per tool call.** A tool call is one line: kind
-  (Read / Search / Write / Edit / Run / Test …) · target (the file, as a link) ·
-  time · status. Detail appears only when it carries information — a short result
-  ("155 passed"), a sub-agent's verdict, an error on one line below. No row opens
-  to a second level that restates it, and no row shows the raw command: the
-  command is audit material, its program or script name is the row.
+  same line again. (6) **One row per tool call, and it is the REAL call.** The row
+  shows the tool's own name (Bash / Read / Edit / Grep / Agent …) and its own command or
+  arguments — never a translated verb, a category word or a "program name only"
+  summary: the user audits what was actually run. The only thing a Bash row drops is
+  what never says what it does (a leading `cd <dir> &&` / `export` setup, a
+  timeout wrapper); adjacent reads of one file are one row. A command's last output
+  line is not a "result" and stays off the row; an error goes one line below.
+  (7) **Two levels, by design.** FIRST level: the intent (from ONE source — the run's
+  requirement, else the text written before any work, else the opening thought),
+  WORKING / WORKED blocks, the plan's stage rows, things that need the user, and the
+  result. SECOND level, inside a block or an opened stage, in stream order: thoughts,
+  notes written between tool calls, tool calls. A block is everything between two
+  first-level items — a thought or a note never becomes a first-level row (that
+  fragments the turn into a stack of WORKED lines), and a folded block says its size
+  in counts (steps · files changed · commands), never a title borrowed from its first
+  thought (which the body then repeats).
 - **Principles (each names the decision it serves):**
   - **One focus at a time** — Check 4 applied across time: the live segment while
     working, the result once done, and a step that needs the user above both. If every
@@ -375,8 +385,9 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   disagree; a decision the agent needs routed to an async panel instead of the
   current channel; no stop/intervene; status that lies (frontend guess vs real
   state); a label or toggle repeated on every item ("Thought" + "Show all" under
-  each thought); a single-step group whose header opens to the same step; a raw
-  shell command as a row title; a meta-comment about the model ("started without
+  each thought); a single-step group whose header opens to the same step; a tool call
+  rewritten into a category word or "inline script" (the user cannot audit it); a
+  stack of first-level WORKED rows, one per thought; a meta-comment about the model ("started without
   restating the ask") that the user cannot act on.
 - **The tell:** you are giving finished work the same border and weight as the work
   in progress, or a count ("12 steps · 7 thoughts") is the headline of a summary.
