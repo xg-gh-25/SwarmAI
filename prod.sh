@@ -496,13 +496,14 @@ cmd_deploy() {
             needs_frontend=true
         fi
 
-        # Also check uncommitted changes
+        # Also check uncommitted changes — any kind (modified, added, deleted,
+        # renamed, untracked): the build reads the working tree, so all of them ship.
         local unstaged
-        unstaged=$(git status --porcelain 2>/dev/null || true)
-        if echo "$unstaged" | grep -qE '^ ?M.*(backend|scripts)/'; then
+        unstaged=$(git status --porcelain --untracked-files=all 2>/dev/null || true)
+        if [ -n "$(_deploy_dirty_files backend scripts)" ]; then
             needs_backend=true
         fi
-        if echo "$unstaged" | grep -qE '^ ?M.*desktop/src/'; then
+        if [ -n "$(_deploy_dirty_files desktop/src desktop/index.html desktop/tailwind.config.js)" ]; then
             needs_frontend=true
         fi
 
@@ -534,6 +535,23 @@ cmd_deploy() {
         return 1
     fi
 
+    # ── What ships that is not committed ──
+    # Builds read the working tree, so another session's uncommitted work in the
+    # same tree is bundled too. Say so before building, and record it next to the
+    # daemon's .version (whose format the app also parses, so it is left alone).
+    local dirty_paths=()
+    [ "$needs_backend" = true ] && dirty_paths+=(backend scripts)
+    [ "$needs_frontend" = true ] && dirty_paths+=(desktop/src desktop/index.html desktop/tailwind.config.js)
+    local dirty
+    dirty=$(_deploy_dirty_files "${dirty_paths[@]}")
+    if [ -n "$dirty" ]; then
+        local dirty_n
+        dirty_n=$(echo "$dirty" | wc -l | tr -d ' ')
+        _warn "Bundling ${dirty_n} uncommitted file(s) — not in HEAD $(git rev-parse --short HEAD):"
+        echo "$dirty" | head -20 | sed 's/^/    /'
+        [ "$dirty_n" -gt 20 ] && echo "    ... and $((dirty_n - 20)) more"
+    fi
+
     # ── Execute builds (explicit error handling — set -e alone is not enough
     # when cmd_build is called from within conditionals in some shells) ──
     if [ "$needs_backend" = true ]; then
@@ -551,6 +569,8 @@ cmd_deploy() {
             return 1
         fi
     fi
+
+    _record_deploy_dirty "$dirty"
 
     # ── Post-deploy E2E smoke (scope-aware, retry once for model flakiness) ──
     echo ""
@@ -584,6 +604,23 @@ cmd_deploy() {
         _ok "Eval canary passed ✓"
     else
         _warn "Eval canary failed or unavailable (non-blocking): $canary_result"
+    fi
+}
+
+# Uncommitted changes under the given paths, one porcelain line each (status +
+# path): modified, added, deleted, renamed and untracked files alike.
+_deploy_dirty_files() {
+    (cd "$PROJECT_ROOT" && git status --porcelain --untracked-files=all -- "$@" 2>/dev/null) || true
+}
+
+_record_deploy_dirty() {
+    # $1 = porcelain lines (may be empty). One file per deploy: the latest wins.
+    local f="${DAEMON_DIR}/.deploy-dirty"
+    mkdir -p "$DAEMON_DIR" 2>/dev/null || return 0
+    if [ -n "$1" ]; then
+        { echo "# uncommitted files bundled by the deploy of $(git -C "$PROJECT_ROOT" rev-parse --short HEAD) at $(date '+%Y-%m-%d %H:%M:%S')"; echo "$1"; } > "$f"
+    else
+        rm -f "$f"
     fi
 }
 
@@ -737,6 +774,9 @@ print(f'  Uptime: {h}h {m}m {s}s  |  Sessions: {tabs}')
         else
             _ok "No backend changes since last build"
         fi
+    fi
+    if [ -f "${DAEMON_DIR}/.deploy-dirty" ]; then
+        _warn "Last deploy bundled $(grep -vc '^#' "${DAEMON_DIR}/.deploy-dirty" | tr -d ' ') uncommitted file(s): ${DAEMON_DIR}/.deploy-dirty"
     fi
     echo ""
 }
@@ -966,7 +1006,7 @@ case "${1:-help}" in
     release)        cmd_release ;;
     release-all)    cmd_release_all ;;
     release-hive)   cmd_release_hive ;;
-    deploy)         cmd_deploy ;;
+    deploy)         shift; cmd_deploy "$@" ;;
     verify)         shift; cmd_verify "$@" ;;
     preflight)      cmd_preflight ;;
     status)         cmd_status ;;
@@ -984,7 +1024,8 @@ case "${1:-help}" in
         echo "  verify           Run post-build capability verification"
         echo "  preflight        Check readiness (tests, dirty tree, version) without building"
         echo "  status           Show daemon health, binary versions, staleness"
-        echo "  deploy           Auto-detect scope (backend/frontend/both) + build + E2E verify"
+        echo "  deploy [--backend|--frontend|--all]"
+        echo "                   Build + E2E verify; scope auto-detected when no flag is given"
         echo ""
         echo "Daemon:"
         echo "  daemon restart   Restart the backend daemon (launchd)"
