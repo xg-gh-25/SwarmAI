@@ -1,0 +1,7 @@
+{
+  "_doc": "The context-usage wire contract (backend/core/context_usage.py <-> desktop/src/hooks/contextUsage.ts). Backend test test_context_usage_wire_contract.py asserts the REAL backend output matches these payloads (key set + values, measuredAt aside); frontend test contextUsage.wire.test.ts drives the same payloads through the REAL apply path. Change both sides together.",
+  "live_critical": {"type": "context_warning", "level": "critical", "pct": 90, "tokensEst": 900000, "window": 1000000, "message": "context is 90% full (~900K/1000K tokens). Start a new tab for best results.", "source": "live", "basis": "last_call", "measuredAt": 1000.0},
+  "post_compact": {"type": "context_warning", "level": "ok", "pct": 4, "tokensEst": 41000, "window": 1000000, "message": "Context 4% full (~41K/1000K tokens). Plenty of room.", "source": "live", "basis": "post_compact", "measuredAt": 1001.0},
+  "transcript": {"type": "context_warning", "level": "ok", "pct": 27, "tokensEst": 270000, "window": 1000000, "message": "Context 27% full (~270K/1000K tokens). Plenty of room.", "source": "transcript", "basis": "last_call", "measuredAt": 999.0},
+  "none": {"type": "context_warning", "level": "ok", "pct": null, "tokensEst": 0, "window": null, "message": "No live context — the next turn rebuilds it.", "source": "none", "basis": "none", "measuredAt": 1002.0}
+}

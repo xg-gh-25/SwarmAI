@@ -52,6 +52,7 @@ import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
+import { useContextUsageRefresh } from '../hooks/contextUsage';
 import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
@@ -354,6 +355,7 @@ export default function ChatPage() {
     contextWarning,
     setContextWarning,
     clearContextWarning: _clearContextWarning,
+    refreshContextUsage,
     promptMetadata,
     setPromptMetadata,
     isLikelyStalled,
@@ -1757,18 +1759,14 @@ export default function ChatPage() {
     }
   }, [sessionId, isStreaming, refetchSessions]);
 
-  // Fire a persistent error toast when context warning reaches critical level.
-  // Replaces the old declarative <Toast> JSX that was rendered inline.
-  useEffect(() => {
-    if (contextWarning && contextWarning.level === 'critical') {
-      addToast({
-        severity: 'error',
-        message: contextWarning.message,
-        autoDismiss: false,
-        id: 'context-warning-critical',
-      });
-    }
-  }, [contextWarning, addToast]);
+  // (The persistent critical-context toast is a projection of the ACTIVE tab's
+  //  level, owned by the stream hook — contextUsage.criticalToastAction — raised
+  //  once per critical episode, dismissed whenever the active tab is not critical.)
+
+  // Context usage is BACKEND-owned: re-read the backend snapshot when the active
+  // tab or its session changes, when its turn ends, and on window focus.
+  // Fire-and-forget — never blocks render.
+  useContextUsageRefresh(activeTabId, sessionId, isStreaming, refreshContextUsage);
 
   // (CLI-native autocompact notice is a PERSISTENT in-stream system message appended
   //  to the tab's MessageStore by the stream hook's context_compacted branch — same
@@ -3486,6 +3484,7 @@ export default function ChatPage() {
                 canAddMore={canAddMore}
                 sessionId={sessionId}
                 contextPct={contextWarning?.pct ?? null}
+                contextLevel={contextWarning?.level ?? null}
                 promptMetadata={promptMetadata}
                 disabled={health.status === 'disconnected' || isLimited('/chat') || isWaitingForBusy || isRefreshing}
                 activeTabIdRef={activeTabIdRef}

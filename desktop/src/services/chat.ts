@@ -28,6 +28,7 @@ interface RawStreamingStateEntry {
   post_disconnect_flushing?: boolean;
 }
 import api from './api';
+import { notifyContextUsageStale, type ContextUsageSnapshot } from '../hooks/contextUsage';
 import { getApiBaseUrl } from './tauri';
 
 // ---------------------------------------------------------------------------
@@ -760,16 +761,31 @@ export const chatService = {
     return response.data;
   },
 
-  // Trigger manual compaction of a session's context window
-  async compactSession(sessionId: string, instructions?: string): Promise<{ status: string; message: string }> {
-    const body = instructions ? { instructions } : undefined;
-    const response = await api.post<{ status: string; message: string }>(`/chat/compact/${sessionId}`, body);
+  // The backend's context-usage snapshot for a session (the context ring's
+  // single authority — see hooks/contextUsage.ts). Already camelCase on the wire
+  // (same shape as the context_warning SSE event), so no conversion here.
+  async getContextUsage(sessionId: string): Promise<ContextUsageSnapshot> {
+    const response = await api.get<ContextUsageSnapshot>(
+      `/chat/sessions/${encodeURIComponent(sessionId)}/context-usage`,
+    );
     return response.data;
   },
 
-  // User-triggered context refresh — kills subprocess for resume with summary
+  // Trigger manual compaction of a session's context window. A manual compact
+  // never passes through a stream, so tell subscribers to refetch the backend
+  // context usage once it succeeds.
+  async compactSession(sessionId: string, instructions?: string): Promise<{ status: string; message: string }> {
+    const body = instructions ? { instructions } : undefined;
+    const response = await api.post<{ status: string; message: string }>(`/chat/compact/${sessionId}`, body);
+    notifyContextUsageStale(sessionId);
+    return response.data;
+  },
+
+  // User-triggered context refresh — kills subprocess for resume with summary.
+  // The session's identity is dropped, so its context usage becomes "none".
   async refreshSession(sessionId: string): Promise<{ status: string; message: string }> {
     const response = await api.post<{ status: string; message: string }>(`/chat/refresh/${sessionId}`);
+    notifyContextUsageStale(sessionId);
     return response.data;
   },
 

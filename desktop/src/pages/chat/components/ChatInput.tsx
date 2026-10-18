@@ -119,6 +119,8 @@ interface ChatInputProps {
   promptMetadata?: SystemPromptMetadata | null;
   /** Context usage percentage for the ring indicator (null = no data) */
   contextPct?: number | null;
+  /** Backend level of the context-usage snapshot (drives the ring colour). */
+  contextLevel?: 'ok' | 'warn' | 'critical' | null;
   /** Whether the textarea is in expanded mode (60vh max-height) */
   isExpanded: boolean;
   /** Callback to toggle expanded/compact mode */
@@ -177,6 +179,7 @@ export function ChatInput({
   sessionId,
   promptMetadata,
   contextPct,
+  contextLevel,
   isExpanded,
   onExpandedChange,
   disabled = false,
@@ -1082,7 +1085,7 @@ export function ChatInput({
             </div>
             {/* Right: Context ring + Refresh + TSCC */}
             <div className="flex items-center gap-2">
-              <ContextUsageRing pct={contextPct ?? null} size={18} showLabel />
+              <ContextUsageRing pct={contextPct ?? null} level={contextLevel ?? null} size={18} showLabel />
               {onRefreshContext && (
                 <button
                   type="button"

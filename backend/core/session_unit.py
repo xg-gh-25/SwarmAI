@@ -683,6 +683,19 @@ class SessionUnit:
         # ResultMessage usage is summed over all requests, and dividing it by
         # num_turns under-reported (a real 904K peak never reached 85% critical).
         self._last_call_usage: Optional[dict] = None
+        # The backend's current context-usage snapshot (core.context_usage shape),
+        # the ONLY authority behind the chat-input context ring. Stamped with the
+        # sdk_session_id it was measured under: once that identity changes or is
+        # cleared (refresh, true cold resume, a new CLI session) the snapshot is
+        # simply invisible to context_usage_snapshot() — no clear-site has to
+        # remember to invalidate it.
+        self._context_usage: Optional[dict] = None
+        self._context_usage_sdk_id: Optional[str] = None
+        # True once a snapshot was recorded during the current turn (per-call or
+        # compaction): turn end then re-emits it instead of the summed-average
+        # fallback, which would overwrite a post-compaction size with a
+        # pre-compaction estimate.
+        self._context_recorded_this_turn: bool = False
 
         # ── Compaction loop guard (3-layer anti-loop) ──────────────
         from .compaction_guard import CompactionGuard
@@ -2199,6 +2212,7 @@ class SessionUnit:
         self._leak_restart_done = False  # per-message: one leak restart budget
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._last_call_usage = None  # an interrupted turn's last usage must not leak in
+        self._context_recorded_this_turn = False
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
@@ -2934,6 +2948,89 @@ class SessionUnit:
         """
         return await self._retry_manager._inject_abandon_continuation(query_content)
 
+    # ── Context-usage snapshot (the context ring's single authority) ──────
+
+    def _record_context_usage(
+        self,
+        tokens: Optional[int],
+        *,
+        basis: str,
+        force: bool = False,
+        is_resumed_first: bool = False,
+    ) -> Optional[dict]:
+        """Record the current context size; return the SSE event to emit.
+
+        Called by the orchestrator after every main-agent request and at turn
+        end. One API call can arrive as several AssistantMessages with the same
+        usage, so None is returned (nothing to emit) when the token count, basis
+        and session identity are all unchanged — unless ``force``. No I/O — safe
+        on the streaming path.
+        """
+        from .context_usage import build_snapshot
+
+        snap = build_snapshot(
+            tokens, self._model_name, source="live", basis=basis,
+            is_resumed_first=is_resumed_first,
+        )
+        if snap is None:
+            return None
+        prev = self._context_usage
+        unchanged = (
+            prev is not None
+            and prev.get("tokensEst") == snap["tokensEst"]
+            and prev.get("basis") == basis
+            and self._context_usage_sdk_id == self._sdk_session_id
+        )
+        self._context_usage = snap
+        self._context_usage_sdk_id = self._sdk_session_id
+        self._context_recorded_this_turn = True
+        if unchanged and not force:
+            return None
+        return dict(snap)
+
+    def _record_compact_boundary(self, metadata: Optional[dict]) -> dict:
+        """Record the CLI's post-compaction size; return the SSE event.
+
+        Without a reported size the pre-compaction value is no longer true: the
+        live snapshot is dropped (the read endpoint then derives the size from
+        the CLI transcript, which records the compaction) and the event clears
+        the ring until the next request measures it.
+        """
+        from .context_usage import none_snapshot
+
+        md = metadata if isinstance(metadata, dict) else {}
+        # The last request's usage predates the compaction: it must not win at
+        # turn end over the size the compaction just produced.
+        self._last_call_usage = None
+        post = md.get("post_tokens")
+        if isinstance(post, int) and post > 0:
+            evt = self._record_context_usage(post, basis="post_compact", force=True)
+            if evt is not None:
+                return evt
+        self._invalidate_context_usage()
+        self._context_recorded_this_turn = True
+        return none_snapshot()
+
+    def _invalidate_context_usage(self) -> None:
+        """Forget the live snapshot: its value may no longer be true and the
+        backend cannot say what replaced it. The read endpoint then derives the
+        size from the CLI transcript (what --resume reloads)."""
+        self._context_usage = None
+        self._context_usage_sdk_id = None
+
+    def context_usage_snapshot(self) -> Optional[dict]:
+        """The live snapshot, or None when there is none for the CURRENT identity.
+
+        A snapshot measured under another (or no) sdk_session_id describes a
+        conversation the next spawn will not carry, so it is never served.
+        """
+        snap = self._context_usage
+        if snap is None or self._context_usage_sdk_id is None:
+            return None
+        if self._context_usage_sdk_id != self._sdk_session_id:
+            return None
+        return dict(snap)
+
     def _emit_post_stream_metadata(
         self, usage: dict, *, num_turns: int = 1,
     ) -> list[dict]:
@@ -3013,10 +3110,23 @@ class SessionUnit:
                     self._lifecycle_response_count <= 1
                     and self._sdk_session_id is not None
                 )
-                warning_evt = PromptBuilder.build_context_warning(
-                    input_tokens, self._model_name,
-                    is_resumed_first=is_resumed_first,
-                )
+                # Record into the backend snapshot (the ring's single authority)
+                # and re-emit it at turn end even if the last per-call emission
+                # already carried the same value: the turn-end event is the
+                # resumed-session message's only carrier. Without a last-call
+                # usage, a snapshot recorded earlier THIS turn (e.g. a compaction
+                # with no request after it) is newer truth than the summed
+                # average, so it is re-emitted unchanged.
+                _current = self.context_usage_snapshot()
+                if _last_call_tokens <= 0 and self._context_recorded_this_turn:
+                    warning_evt = _current
+                else:
+                    warning_evt = self._record_context_usage(
+                        input_tokens,
+                        basis="last_call" if _last_call_tokens > 0 else "turn_average",
+                        force=True,
+                        is_resumed_first=is_resumed_first,
+                    )
                 logger.info(
                     "session_unit.context_warning_built session_id=%s "
                     "pct=%s level=%s",
@@ -4289,13 +4399,33 @@ class SessionUnit:
             # two cannot iterate the single SDK channel simultaneously and
             # co-starve. The foreground turn takes a short barrier on this lock
             # at send()'s IDLE-entry, so it waits for an in-flight compact here.
-            async with self._client_io:
-                await self._client.query(
-                    prompt=command,
-                    session_id=self._sdk_session_id or "default",
-                )
-                async for _msg in self._client.receive_response():
-                    pass  # Drain response
+            # A manual /compact never passes through the turn's SSE stream, so
+            # the context snapshot is updated here from the drained
+            # compact_boundary. Without a boundary — or when the drain aborts,
+            # including a CancelledError from a caller's wait_for timeout, which
+            # `except Exception` does not see — whether the CLI compacted is
+            # unknown, so the live value of THIS identity is dropped (the
+            # transcript is truth); see the finally below.
+            _boundary_md: Optional[dict] = None
+            _compact_identity = self._sdk_session_id
+            _recorded = False
+            try:
+                async with self._client_io:
+                    await self._client.query(
+                        prompt=command,
+                        session_id=self._sdk_session_id or "default",
+                    )
+                    async for _msg in self._client.receive_response():
+                        if getattr(_msg, "subtype", None) == "compact_boundary":
+                            _data = getattr(_msg, "data", None)
+                            _md = _data.get("compact_metadata") if isinstance(_data, dict) else None
+                            _boundary_md = _md if isinstance(_md, dict) else {}
+                if _boundary_md is not None:
+                    self._record_compact_boundary(_boundary_md)
+                    _recorded = True
+            finally:
+                if not _recorded and self._context_usage_sdk_id == _compact_identity:
+                    self._invalidate_context_usage()
             self.last_used = time.time()
             # Transition guard to ACTIVE — post-compaction loop detection enabled
             self._compaction_guard.activate()

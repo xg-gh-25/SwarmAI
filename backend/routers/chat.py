@@ -923,6 +923,62 @@ async def get_streaming_state_endpoint():
     return {"sessions": result}
 
 
+@router.get("/sessions/{session_id}/context-usage")
+async def get_context_usage_endpoint(session_id: str):
+    """The session's context-window usage — the backend's authoritative snapshot.
+
+    The chat input's context ring reads this when a tab becomes active (app
+    start, tab restore, tab switch) and after compact/refresh; during a turn the
+    same snapshot arrives as ``context_warning`` SSE events. Shape:
+    ``core.context_usage`` (``source`` live | transcript | none).
+
+    Resolution — what the session's NEXT request would actually carry:
+    1. a unit with a snapshot for its current sdk_session_id → that (``live``);
+    2. otherwise the CLI transcript of the session's sdk_session_id — the unit's
+       own id when a unit exists (None after refresh / a true cold resume means
+       the next spawn rebuilds context, so a persisted id must not resurrect the
+       old transcript), the persisted id only when there is no unit yet;
+    3. nothing measurable → ``source: none`` (the ring shows empty).
+
+    The transcript read runs on the dedicated "io" pool (core.executors) — never
+    on the event loop, never on the default pool that schedules /health.
+
+    Ordering: a derived/none answer is stamped with the time this request was
+    received, and a live snapshot recorded WHILE the transcript was being read
+    is returned instead — so this answer can never look newer than a live value
+    the frontend already received over SSE. If the session's identity changed
+    during the read (a give-up cleared it, a new spawn replaced it), the
+    derived answer describes another conversation and ``none`` is returned.
+    """
+    import time as _time
+
+    from core import context_usage, executors
+
+    requested_at = _time.time()
+    sr = _get_router()
+    unit = sr.get_unit(session_id)
+    if unit is not None:
+        snap = unit.context_usage_snapshot()
+        if snap is not None:
+            return snap
+        sdk_id = unit._sdk_session_id
+        model = unit._model_name
+    else:
+        sdk_id = sr.persisted_sdk_session_id(session_id)
+        model = None
+    derived = await executors.run_in(
+        "io", context_usage.snapshot_from_transcript, sdk_id, model, requested_at,
+    )
+    after = sr.get_unit(session_id)
+    if after is not None:
+        live = after.context_usage_snapshot()
+        if live is not None:
+            return live
+        if after._sdk_session_id != sdk_id:
+            return context_usage.none_snapshot(measured_at=requested_at)
+    return derived
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
 async def get_session(session_id: str):
     """Get a specific chat session by ID."""

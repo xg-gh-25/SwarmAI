@@ -2217,6 +2217,15 @@ class SessionRouter:
         """Look up a SessionUnit by session_id."""
         return self._units.get(session_id)
 
+    def persisted_sdk_session_id(self, session_id: str) -> Optional[str]:
+        """The sdk_session_id persisted for a session that has no unit yet.
+
+        Read-only (unlike ``get_or_create_unit``, which pops the entry when it
+        injects it into a new unit). Only meaningful when ``get_unit`` returns
+        None — once a unit exists, its own ``_sdk_session_id`` is the truth.
+        """
+        return self._persisted_sdk_ids.get(session_id)
+
     def get_or_create_unit(
         self, session_id: str, agent_id: str,
     ) -> SessionUnit:

@@ -725,7 +725,8 @@ class StreamingOrchestrator:
         * compact_boundary → ``context_compacted`` with sizes; clears the
           PreCompact flag so the turn-end fallback notice does not repeat it, and
           activates the CompactionGuard on the REAL signal (not only the
-          averaged-usage drop heuristic).
+          averaged-usage drop heuristic); followed by a ``context_warning``
+          snapshot of the post-compaction size (``SessionUnit._record_compact_boundary``).
         """
         from .prompt_builder import PromptBuilder
 
@@ -759,7 +760,15 @@ class StreamingOrchestrator:
                 parent.session_id, evt.get("trigger"),
                 evt.get("preTokens"), evt.get("postTokens"),
             )
-            return [evt]
+            events = [evt]
+            # The context snapshot follows the CLI's own post-compaction size, so
+            # the ring shows it immediately instead of going empty until the next
+            # request (or "none" when the CLI reported no size).
+            try:
+                events.append(parent._record_compact_boundary(md))
+            except Exception:  # noqa: BLE001 — visibility must never break the stream
+                logger.debug("context usage compact record failed", exc_info=True)
+            return events
         return []
 
     @staticmethod
@@ -1682,6 +1691,20 @@ class StreamingOrchestrator:
                 _am_usage = getattr(message, "usage", None)
                 if _am_usage and getattr(message, "parent_tool_use_id", None) is None:
                     self._parent._last_call_usage = _am_usage
+                    # Publish it now, not at turn end: the context ring follows the
+                    # backend snapshot request by request (deduped per API call).
+                    if isinstance(_am_usage, dict):
+                        try:
+                            from .prompt_builder import PromptBuilder
+                            _ctx_evt = self._parent._record_context_usage(
+                                PromptBuilder.sum_usage_input_tokens(_am_usage),
+                                basis="last_call",
+                            )
+                        except Exception:  # noqa: BLE001 — metadata must never break the stream
+                            logger.debug("context usage record failed", exc_info=True)
+                            _ctx_evt = None
+                        if _ctx_evt is not None:
+                            yield _ctx_evt
                 self._parent._last_progress_time = time.time()  # real content blocks
                 if any(isinstance(b, (TextBlock, ToolUseBlock)) for b in message.content):
                     _progress.on_visible(self._parent._last_progress_time)

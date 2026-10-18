@@ -3910,7 +3910,10 @@ describe('TabStatusIndicator component', () => {
       expect(textBlock?.text).toBe(COMPACT_MSG);
     });
 
-    it('still clears an existing contextWarning on context_compacted (post-compact pct resets)', () => {
+    // Spec change (context usage backend single authority): context_compacted no
+    // longer empties the ring — the backend follows it with a context_warning
+    // snapshot of the post-compaction size, applied through the same path.
+    it('keeps the ring on context_compacted; the backend post-compact snapshot replaces it', () => {
       const msgId = 'msg-compact2';
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
@@ -3936,10 +3939,17 @@ describe('TabStatusIndicator component', () => {
           message: COMPACT_MSG,
         });
       });
-      // Existing behavior preserved: the warning banner clears after compaction.
-      expect(result.current.contextWarning).toBeNull();
-      // New behavior: the message is in-stream, not a toast.
-      expect(mockAddToast).not.toHaveBeenCalled();
+      expect(result.current.contextWarning?.pct).toBe(95);
+      act(() => {
+        handler({
+          type: 'context_warning', level: 'ok', pct: 4, tokensEst: 41000,
+          message: 'Context 4% full', source: 'live', basis: 'post_compact', measuredAt: 1,
+        } as never);
+      });
+      expect(result.current.contextWarning?.pct).toBe(4);
+      // The compaction notice is in-stream, not a toast (the only toast allowed
+      // here is the critical-context one for the 95% the test started from).
+      expect(mockAddToast.mock.calls.filter((c) => c[0]?.id !== 'context-warning-critical')).toHaveLength(0);
       expect(lastMsg('tab-compact2').role).toBe('system');
     });
 
@@ -4023,7 +4033,8 @@ describe('TabStatusIndicator component', () => {
         .filter((m) => m.role === 'system' && m.id.startsWith('compact-'))
         .map((m) => (m.content[0] as { text: string }).text);
       expect(notices).toEqual(['Compacting conversation context', COMPACT_MSG]);
-      expect(result.current.contextWarning).toBeNull();
+      // The ring is left to the backend's post-compact snapshot (not cleared here).
+      expect(result.current.contextWarning?.pct).toBe(76);
       expect(mockAddToast).not.toHaveBeenCalled();
     });
 

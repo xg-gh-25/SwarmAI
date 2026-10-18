@@ -12,7 +12,7 @@
  *
  * Properties verified:
  * - strokeDashoffset ∈ [0, circumference] and equals circumference - (pct/100)*circumference
- * - Color thresholds: green ≤ 60%, yellow (61, 80], red > 80%
+ * - Colour follows the backend level: ok green, warn yellow, critical red
  * - Tooltip text: "{pct}% context used" for non-null, "No context data yet" for null
  *
  * **Validates: Requirements 3.3, 3.4**
@@ -35,8 +35,8 @@ const EPSILON = 1e-6;
 // ── Helpers ────────────────────────────────────────────────────────────
 
 /** Render the ring and return both SVG circle elements plus the wrapper div. */
-function renderRing(pct: number | null) {
-  const { container } = render(<ContextUsageRing pct={pct} />);
+function renderRing(pct: number | null, level: 'ok' | 'warn' | 'critical' | null = null) {
+  const { container } = render(<ContextUsageRing pct={pct} level={level} />);
   const circles = container.querySelectorAll('circle');
   const wrapper = container.querySelector('div')!;
   // First circle = background, second = foreground (fill arc)
@@ -103,14 +103,15 @@ describe('Preservation Property Tests — ContextUsageRing', () => {
   });
 
   /**
-   * For all pct in [0, 60]: strokeColor is #22c55e (green).
+   * Colour follows the BACKEND level, not a frontend pct threshold (the backend
+   * owns warn/critical — context-usage single authority). level=ok → green.
    *
    * **Validates: Requirements 3.3**
    */
-  it('strokeColor is green (#22c55e) for pct in [0, 60]', () => {
+  it('strokeColor is green (#22c55e) when the backend level is ok', () => {
     fc.assert(
       fc.property(greenPctArb, (pct) => {
-        const { fg, container } = renderRing(pct);
+        const { fg, container } = renderRing(pct, 'ok');
         const stroke = getFgStroke(fg);
 
         expect(stroke).toBe('#22c55e');
@@ -122,14 +123,14 @@ describe('Preservation Property Tests — ContextUsageRing', () => {
   });
 
   /**
-   * For all pct in [61, 80]: strokeColor is #eab308 (yellow).
+   * level=warn → yellow, whatever the pct.
    *
    * **Validates: Requirements 3.3**
    */
-  it('strokeColor is yellow (#eab308) for pct in [61, 80]', () => {
+  it('strokeColor is yellow (#eab308) when the backend level is warn', () => {
     fc.assert(
       fc.property(yellowPctArb, (pct) => {
-        const { fg, container } = renderRing(pct);
+        const { fg, container } = renderRing(pct, 'warn');
         const stroke = getFgStroke(fg);
 
         expect(stroke).toBe('#eab308');
@@ -141,14 +142,14 @@ describe('Preservation Property Tests — ContextUsageRing', () => {
   });
 
   /**
-   * For all pct in [81, 100]: strokeColor is #ef4444 (red).
+   * level=critical → red, whatever the pct.
    *
    * **Validates: Requirements 3.3**
    */
-  it('strokeColor is red (#ef4444) for pct in [81, 100]', () => {
+  it('strokeColor is red (#ef4444) when the backend level is critical', () => {
     fc.assert(
       fc.property(redPctArb, (pct) => {
-        const { fg, container } = renderRing(pct);
+        const { fg, container } = renderRing(pct, 'critical');
         const stroke = getFgStroke(fg);
 
         expect(stroke).toBe('#ef4444');

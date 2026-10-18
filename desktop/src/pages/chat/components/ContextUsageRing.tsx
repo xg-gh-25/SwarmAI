@@ -3,8 +3,9 @@
  * ContextUsageRing — shared SVG circular progress ring for context window usage.
  *
  * Rendered in ChatInput bottom row (size=18, showLabel).
- * Single source of truth for color thresholds:
- *   green (#22c55e) < 60%, yellow (#eab308) 60–80%, red (#ef4444) > 80%, gray for null.
+ * Colour follows the BACKEND's level for the snapshot (the backend owns the
+ * warn/critical thresholds — PromptBuilder._CONTEXT_WARN_PCT / _CONTEXT_CRITICAL_PCT):
+ *   green (#22c55e) ok, yellow (#eab308) warn, red (#ef4444) critical, gray for no data.
  *
  * @exports ContextUsageRing      — The ring component
  * @exports ContextUsageRingProps  — Props interface
@@ -12,30 +13,32 @@
  */
 
 
-/** Unified color thresholds for context usage — single source of truth. */
-export function getContextRingColor(pct: number | null): string {
-  if (pct === null) return 'var(--color-border)';
-  if (pct > 80) return '#ef4444';   // red — critical
-  if (pct > 60) return '#eab308';   // yellow — warning
-  return '#22c55e';                  // green — healthy
+/** Ring colour for a backend context level (null = no data yet). */
+export function getContextRingColor(level: 'ok' | 'warn' | 'critical' | null): string {
+  if (level === null) return 'var(--color-border)';
+  if (level === 'critical') return '#ef4444';   // red
+  if (level === 'warn') return '#eab308';       // yellow
+  return '#22c55e';                             // green
 }
 
 export interface ContextUsageRingProps {
   /** Context usage percentage (0–100). Null = no data yet (gray ring). */
   pct: number | null;
+  /** The backend's level for this snapshot; drives the colour. */
+  level?: 'ok' | 'warn' | 'critical' | null;
   /** Size in pixels (default: 18). */
   size?: number;
   /** Show percentage label beside the ring (default: false). */
   showLabel?: boolean;
 }
 
-export function ContextUsageRing({ pct, size = 18, showLabel = false }: ContextUsageRingProps) {
+export function ContextUsageRing({ pct, level = null, size = 18, showLabel = false }: ContextUsageRingProps) {
   const strokeWidth = 2.5;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const fillPct = Math.min(Math.max(Number.isFinite(pct) ? pct! : 0, 0), 100);
   const offset = circumference - (fillPct / 100) * circumference;
-  const strokeColor = getContextRingColor(pct);
+  const strokeColor = getContextRingColor(pct === null ? null : (level ?? 'ok'));
 
   return (
     <div

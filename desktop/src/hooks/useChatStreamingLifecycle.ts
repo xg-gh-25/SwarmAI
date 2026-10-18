@@ -59,6 +59,7 @@ import { dispatchUiCommand } from '../utils/uiCommands';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { useToast } from '../contexts/ToastContext';
+import { toContextWarning, isNewerSnapshot, criticalToastAction, snapshotFromEvent, onContextUsageStale, type ContextUsageSnapshot } from './contextUsage';
 
 // ---------------------------------------------------------------------------
 // Reconnection constants
@@ -993,6 +994,8 @@ export interface ChatStreamingLifecycle {
   setContextWarning: React.Dispatch<React.SetStateAction<ContextWarning | null>>;
   /** Dismiss the context warning banner/toast. */
   clearContextWarning: () => void;
+  /** Read the backend's context-usage snapshot for a tab (non-blocking). */
+  refreshContextUsage: (tabId: string) => Promise<void>;
 
   // System prompt metadata (delivered via SSE alongside context_warning)
   /** Non-null when the backend emits a system_prompt_metadata SSE event after a turn. */
@@ -1024,7 +1027,9 @@ export interface ChatStreamingLifecycle {
   // on tabState.streamState (accessible via tabMapRef) which is tab-safe.
 }
 
-/** Context warning payload from the backend context monitor. */
+/** Display value of the backend context-usage snapshot (``hooks/contextUsage``).
+ *  The backend is the only authority; this is what the ring / banner / compact
+ *  button render. */
 export interface ContextWarning {
   level: 'ok' | 'warn' | 'critical';
   pct: number;
@@ -1779,6 +1784,98 @@ export function useChatStreamingLifecycle(
 
   // Compaction notice is emitted directly via addToast at the event site (see the
   // context_compacted branch) — no React-state slot, so none is declared here.
+
+  // --- Context usage: ONE apply path for backend snapshots (SSE + GET) ---
+  // The backend owns the value (core/context_usage.py); the frontend only
+  // displays the newest snapshot it has seen for each tab.
+  const applyContextUsage = useCallback((tabId: string | null, raw: ContextUsageSnapshot) => {
+    const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+    // measuredAt ordering only compares snapshots of the SAME session: a tab that
+    // switches to an older session must accept that session's (older) value.
+    if (
+      tabState
+      && tabState.contextMeasuredFor === tabState.sessionId
+      && !isNewerSnapshot(tabState.contextMeasuredAt, raw)
+    ) return;
+    const next = toContextWarning(raw);
+    let unchanged = false;
+    if (tabState) {
+      const prev = tabState.contextWarning;
+      unchanged = prev !== null && next !== null && prev.level === next.level
+        && prev.pct === next.pct && prev.tokensEst === next.tokensEst
+        && prev.message === next.message;
+      if (!unchanged) tabState.contextWarning = next;
+      if (raw.measuredAt !== undefined) {
+        tabState.contextMeasuredAt = raw.measuredAt;
+        tabState.contextMeasuredFor = tabState.sessionId;
+      }
+      // A tab leaving critical ends its critical episode: the next one toasts.
+      if (next?.level !== 'critical') tabState.criticalToastShown = false;
+    }
+    // One snapshot per API call: skip the re-render when nothing visible changed.
+    if (!unchanged && (tabId === null || tabId === activeTabIdRef.current)) {
+      setContextWarning(next);
+    }
+  }, [tabMapRef, activeTabIdRef]);
+
+  // The persistent critical toast is a projection of the ACTIVE tab's level
+  // (contextUsage.criticalToastAction): raised once per critical episode of the
+  // tab the user is looking at, dismissed whenever that tab is not critical —
+  // so it follows tab switches and compactions and never sits over a green
+  // ring. Acts only when the (tab, level) pair changes, not per snapshot.
+  const lastToastKeyRef = useRef<string>('');
+  const lastToastTabRef = useRef<string | null>(null);
+  useEffect(() => {
+    const tabId = activeTabIdRef.current;
+    const level = contextWarning?.level ?? null;
+    const key = `${tabId ?? ''}:${level ?? ''}`;
+    if (key === lastToastKeyRef.current) return;
+    lastToastKeyRef.current = key;
+    // Leaving a tab ends "already shown" for it: only STAYING on a critical tab
+    // (where the user may have dismissed the toast) suppresses a re-raise.
+    if (lastToastTabRef.current && lastToastTabRef.current !== tabId) {
+      const left = tabMapRef.current.get(lastToastTabRef.current);
+      if (left) left.criticalToastShown = false;
+    }
+    lastToastTabRef.current = tabId;
+    const tab = tabId ? tabMapRef.current.get(tabId) : undefined;
+    const action = criticalToastAction(level, tab?.criticalToastShown ?? false);
+    if (action === 'raise' && contextWarning) {
+      addToast({
+        severity: 'error',
+        message: contextWarning.message,
+        autoDismiss: false,
+        id: 'context-warning-critical',
+      });
+      if (tab) tab.criticalToastShown = true;
+    } else if (action === 'dismiss') {
+      removeToast('context-warning-critical');
+    }
+  }, [contextWarning, addToast, removeToast, activeTabIdRef, tabMapRef]);
+
+  /** Read the backend snapshot for a tab's session (tab activation, app
+   *  restart, after compact/refresh). Fire-and-forget for callers: never
+   *  throws, never blocks render. A result for a session the tab no longer
+   *  holds is dropped. */
+  const refreshContextUsage = useCallback(async (tabId: string): Promise<void> => {
+    const sessionId = tabMapRef.current.get(tabId)?.sessionId;
+    if (!sessionId) return;
+    try {
+      const raw = await chatService.getContextUsage(sessionId);
+      if (tabMapRef.current.get(tabId)?.sessionId !== sessionId) return;
+      applyContextUsage(tabId, raw);
+    } catch (err) {
+      console.debug('[contextUsage] refresh failed', err);
+    }
+  }, [tabMapRef, applyContextUsage]);
+
+  // A manual compact / refresh changes the backend value outside any stream:
+  // refetch every tab holding that session.
+  useEffect(() => onContextUsageStale((sessionId) => {
+    for (const [tabId, tab] of tabMapRef.current) {
+      if (tab.sessionId === sessionId) void refreshContextUsage(tabId);
+    }
+  }), [tabMapRef, refreshContextUsage]);
 
   const clearContextWarning = useCallback(() => {
     const tabId = activeTabIdRef.current;
@@ -3744,9 +3841,10 @@ export function useChatStreamingLifecycle(
           // will handle transition. This event is purely informational.
         }
         // Context compacted — backend emits when the SDK compacts the context window
-        // (either auto or manual trigger). Two effects:
-        //   1. Clear the originating tab's stale context_warning (pct resets post-compact).
-        //   2. Append a PERSISTENT in-stream system message to the originating tab's
+        // (either auto or manual trigger). It does NOT touch the context ring: the
+        // backend follows it with a context_warning snapshot of the post-compaction
+        // size (backend/core/context_usage.py), which replaces the old value. It:
+        //   Appends a PERSISTENT in-stream system message to the originating tab's
         //      MessageStore (CLI-native autocompact — approach A). This is NOT a toast:
         //      compaction is a state change ON THE CURRENT SESSION, so it must leave a
         //      reviewable trace in the conversation (XG directive 2026-10-14: "不能用
@@ -3761,20 +3859,12 @@ export function useChatStreamingLifecycle(
         // context_compacting (2026-10-17) — emitted LIVE the moment the CLI starts
         // compacting (phase 'started') or if it fails ('failed'), so a 1-2 minute
         // pause reads as "compacting", not a hang. Same store-append path and the
-        // same 'compact-' id prefix (TabView renders it as the compact divider);
-        // the warning is only cleared once compaction actually completes.
+        // same 'compact-' id prefix (TabView renders it as the compact divider).
         else if (event.type === 'context_compacted' || event.type === 'context_compacting') {
+          // The ring is NOT cleared here: the backend follows this event with a
+          // context_warning snapshot of the post-compaction size (or source=none
+          // when the CLI reported none), applied by the context_warning branch.
           const completed = event.type === 'context_compacted';
-          const tabState = capturedTabId
-            ? tabMapRef.current.get(capturedTabId)
-            : undefined;
-          if (completed && tabState) {
-            tabState.contextWarning = null;
-          }
-          // Clear the active tab's warning banner mirror (pct resets post-compact).
-          if (completed && (capturedTabId === null || capturedTabId === activeTabIdRef.current)) {
-            setContextWarning(null);
-          }
           if (event.message && capturedTabId) {
             // Append to the ORIGINATING tab's store — same for active AND background
             // tab. A background-tab message is already in that tab's stream when the
@@ -3807,25 +3897,11 @@ export function useChatStreamingLifecycle(
             }
           }
         }
-        // Context window warning — backend emits context usage at all levels
-        // (ok, warn, critical). Write to the originating tab's UnifiedTab,
-        // mirror to React state only if this is the active tab (display mirror pattern).
-        else if (event.type === 'context_warning' && event.level && event.pct != null) {
-          const warning: ContextWarning = {
-            level: event.level as 'ok' | 'warn' | 'critical',
-            pct: event.pct,
-            tokensEst: event.tokensEst ?? 0,
-            message: event.message ?? `Context ${event.pct}% full`,
-          };
-          const tabState = capturedTabId
-            ? tabMapRef.current.get(capturedTabId)
-            : undefined;
-          if (tabState) {
-            tabState.contextWarning = warning;
-          }
-          if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
-            setContextWarning(warning);
-          }
+        // Context usage — the backend's snapshot, pushed after every main-agent
+        // request, on compaction and at turn end. Same apply path as the GET
+        // (refreshContextUsage): newest measuredAt wins, source=none clears.
+        else if (event.type === 'context_warning' && event.level) {
+          applyContextUsage(capturedTabId, snapshotFromEvent(event));
         }
         // Compaction guard — backend emits when the guard escalates
         // (soft_warn, hard_warn, kill). Same display mirror pattern as context_warning:
@@ -3904,7 +3980,7 @@ export function useChatStreamingLifecycle(
         // longer processed — TSCC fetches metadata from the endpoint instead.
       };
     },
-    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, addToast], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, addToast, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   const createErrorHandler = useCallback(
@@ -4734,6 +4810,7 @@ export function useChatStreamingLifecycle(
     contextWarning,
     setContextWarning,
     clearContextWarning,
+    refreshContextUsage,
     promptMetadata,
     setPromptMetadata,
     compactionGuard,

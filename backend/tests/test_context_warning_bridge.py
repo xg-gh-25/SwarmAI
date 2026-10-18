@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -125,7 +125,14 @@ async def _collect_events(unit):
     mock_pm = MagicMock()
     mock_pm.get_session_queue = MagicMock(return_value=asyncio.Queue())
     events = []
-    with patch("core.permission_manager.permission_manager", mock_pm):
+    # Every ResultMessage fires a fire-and-forget token-usage DB write. These
+    # tests assert on emitted events only; with Hypothesis running many examples
+    # per test, those writes open aiosqlite pools that the autouse
+    # reset_database teardown then hangs closing (flaky shard timeout). Stub the
+    # write — token accounting is not under test here.
+    import database
+    with patch("core.permission_manager.permission_manager", mock_pm), \
+         patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)):
         async for event in unit._read_formatted_response():
             events.append(event)
     return events
@@ -409,12 +416,16 @@ class TestPreservation_WarnCriticalEvents:
             f"Expected 1 context_warning event for {evt['level']}-level input "
             f"(input_tokens={input_tokens}, pct={evt['pct']}), got {len(warnings)}."
         )
-        # Verify identical content — level, pct, tokensEst, message, type
-        assert warnings[0] == evt, (
+        # Verify identical content — level, pct, tokensEst, message, type. The
+        # event is the backend context-usage snapshot (core.context_usage), a
+        # superset that also carries provenance (source/basis/window/measuredAt).
+        got = {k: warnings[0].get(k) for k in evt}
+        assert got == evt, (
             f"Bridge yielded event differs from build_context_warning output.\n"
             f"  Expected: {evt}\n"
             f"  Got:      {warnings[0]}"
         )
+        assert warnings[0]["source"] == "live"
 
     @pytest.mark.asyncio
     @given(

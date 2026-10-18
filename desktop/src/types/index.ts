@@ -669,10 +669,16 @@ export interface StreamEvent {
   pendingSeq?: number;
   /** DB id of the server-side pending message (pairs with pendingSeq). */
   pendingId?: string;
-  // Context warning fields (context_warning event)
+  // Context warning fields (context_warning event = the backend context-usage
+  // snapshot, hooks/contextUsage.ts ContextUsageSnapshot). pct is null when the
+  // backend has no context to report (source 'none').
   level?: 'ok' | 'warn' | 'critical';
-  pct?: number;
+  pct?: number | null;
   tokensEst?: number;
+  source?: 'live' | 'transcript' | 'none';
+  basis?: string;
+  window?: number | null;
+  measuredAt?: number;
   // MCP health warning fields (mcp_health_warning event)
   missing_servers?: string[];
   // Compaction guard fields (compaction_guard event)

@@ -125,8 +125,20 @@ export interface UnifiedTab {
    *  latestCompleteGen (run_6adee7d5) for the stream-event path. */
   latestStreamGen?: number;
   status: TabStatus;
-  /** Per-tab context warning from backend context monitor (null = no warning). */
+  /** Per-tab display of the backend context-usage snapshot (null = empty ring).
+   *  Backend snapshots (SSE + GET) land via the lifecycle hook's
+   *  applyContextUsage; the only other writer is the prompt-too-large error
+   *  banner, which reports a rejected request rather than a measurement. */
   contextWarning: ContextWarning | null;
+  /** measuredAt of the newest backend snapshot applied to this tab — kept even
+   *  when that snapshot cleared the ring, so an older one cannot win later. */
+  contextMeasuredAt?: number;
+  /** The sessionId contextMeasuredAt was recorded for: ordering only applies
+   *  within one session (a tab that loads an older session accepts its value). */
+  contextMeasuredFor?: string;
+  /** The critical-context toast was already raised for this tab's current
+   *  critical episode (reset when the tab leaves critical). */
+  criticalToastShown?: boolean;
   /** Per-tab compaction guard event from backend (null = no active guard event). */
   compactionGuard: CompactionGuardEvent | null;
   /** Per-tab system prompt metadata delivered via SSE (null = not yet received). */
