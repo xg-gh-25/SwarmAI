@@ -182,7 +182,7 @@ def test_a_recorded_gate1_verdict_may_not_be_weaker_than_the_skeptics(audit):
     audit("run_g", "gate1-skeptic", "2026-10-18T01:30:00+00:00", verdict="WARN")  # re-gated plan
     assert _errs(_state(), rec={"gate1_verdict": "WARN, two nits"})[0] == []
     e, w = _errs(_state(), rec={"gate1_verdict": "BLOCK"})                        # stricter: fine
-    assert e == [] and "stricter" in w[0]
+    assert e == [] and any("stricter" in x for x in w)
     assert _errs(_state(), rec={"gate1_verdict": "PASS-with-refinements"})[0]
     audit("run_g", "gate1-skeptic", "2026-10-18T01:40:00+00:00", verdict=None)    # trivial respawn
     e, w = _errs(_state(), rec={"gate1_verdict": "PASS"})
@@ -211,3 +211,45 @@ def test_a_gate0_verdict_is_compared_and_old_markers_only_warn(audit):
     ("SUPPORTED-WITH-CALIBRATION", "SUPPORTED"), ("UNSUPPORTED", "UNSUPPORTED"), ("WARNING", None)])
 def test_verdict_token_reads_what_orchestrators_actually_record(recorded, token):
     assert cli._verdict_token(recorded) == token
+
+
+# ── the skeptic must have read the prompt that was handed out ───────────────
+def test_gate1_needs_a_skeptic_that_read_the_handed_out_prompt(audit):
+    st = _state(gate1_handout={"at": HANDOUT, "sha": "a" * 64})
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00", verdict="PASS",
+          prompt_reads={})                                      # right EXPERT-ID, read nothing
+    e, _ = _errs(st)
+    assert e and "read the prompt stage-start handed out" in e[0]
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:10:00+00:00", verdict="PASS",
+          prompt_reads={"/r/evidence/prompts/gate1-skeptic.md": "b" * 64})  # edited after hand-out
+    assert _errs(st)[0]
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:20:00+00:00", verdict="PASS",
+          prompt_reads={"/r/evidence/prompts/gate1-skeptic.md": "a" * 64})
+    assert _errs(st)[0] == []
+
+
+def test_prompt_binding_only_warns_without_a_handout_sha_or_an_old_marker(audit):
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00", verdict="PASS")  # old daemon
+    e, w = _errs(_state(gate1_handout={"at": HANDOUT, "sha": "a" * 64}))
+    assert e == [] and any("predates prompt-read capture" in x for x in w)
+    e, w = _errs(_state())                                       # no sha on record
+    assert e == [] and any("no gate1_handout.sha" in x for x in w)
+
+
+def test_an_unbound_later_round_cannot_supply_the_verdict(audit):
+    """correctness 2026-10-18: a bound BLOCK round, then a trivial unbound round that
+    answers PASS, must not let a recorded PASS through."""
+    st = _state(gate1_handout={"at": HANDOUT, "sha": "a" * 64})
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00", verdict="BLOCK",
+          prompt_reads={"/r/evidence/prompts/gate1-skeptic.md": "a" * 64})
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:10:00+00:00", verdict="PASS", prompt_reads={})
+    e, _ = _errs(st, rec={"gate1_verdict": "PASS"})
+    assert e and "answered 'BLOCK'" in e[0]
+    assert _errs(st, rec={"gate1_verdict": "BLOCK", "gate1_override": "user: proceed"})[0] == []
+
+
+def test_an_unreadable_transcript_only_warns(audit):
+    st = _state(gate1_handout={"at": HANDOUT, "sha": "a" * 64})
+    audit("run_g", "gate1-skeptic", "2026-10-18T01:05:00+00:00", verdict="PASS", prompt_reads=None)
+    e, w = _errs(st)
+    assert e == [] and any("could not be read" in x for x in w)

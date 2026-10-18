@@ -4341,12 +4341,9 @@ def _gate_markers_elsewhere(run_id: str, expert_id: str, since: float, until: fl
         return []
 
 
-def _gate_verdict_mismatch(run_id: str, expert_id: str, since: float, recorded: str,
-                           warnings: "list[str]") -> "str | None":
-    """An error when the recorded verdict differs from what the LATEST ``expert_id``
-    sub-agent of this run in the window answered (marker ``verdict``, captured from its
-    final answer by core/runtime_hooks.py), else None. Markers without the key (a daemon
-    that predates the capture) or with an unreadable answer → a warning, no compare."""
+def _gate_marker_rows(run_id: str, expert_id: str, since: float) -> "list[dict]":
+    """This run's ``expert_id`` SubagentStop markers from ``since`` to now, oldest first
+    ([] when the store is unreadable — the callers then warn or skip)."""
     import time
     try:
         from config import get_app_data_dir
@@ -4362,11 +4359,63 @@ def _gate_verdict_mismatch(run_id: str, expert_id: str, since: float, recorded: 
             if (isinstance(d, dict) and d.get("run_id") == run_id and d.get("expert_id") == expert_id
                     and isinstance(d.get("ts"), (int, float)) and since - 5 <= d["ts"] <= time.time() + 5):
                 rows.append(d)
+        return sorted(rows, key=lambda d: d["ts"])
     except Exception:
-        return None
+        return []
+
+
+def _gate1_prompt_unread(run_id: str, run_state: dict, since: float,
+                         warnings: "list[str]") -> "tuple[str | None, list | None]":
+    """An error when no gate1-skeptic sub-agent of this run in the window READ the prompt
+    stage-start handed out: the marker's ``prompt_reads`` ({path: sha256 at the
+    sub-agent's stop}, captured by core/runtime_hooks.py from its Read / cat calls of
+    evidence/prompts/*.md, plus ``<inline>`` = its own prompt, for an exact paste) must
+    hold ``gate1_handout.sha``. A sub-agent that only carries
+    the right EXPERT-ID line and never loaded the gate (its six inputs, its checks) is no
+    Gate-1, and a prompt edited after the hand-out does not match. Old markers (no key),
+    no hand-out on record, an unreadable transcript (``prompt_reads: null``) → a warning.
+
+    Returns (error, bound rows): the bound rows are the rounds whose verdict counts — a
+    round that never loaded the gate cannot supply the verdict compared afterwards
+    (correctness 2026-10-18: a bound BLOCK then an unbound "PASS" round passed). None =
+    binding not checked (the caller compares against every round)."""
+    handout = run_state.get("gate1_handout") if isinstance(run_state.get("gate1_handout"), dict) else {}
+    want = handout.get("sha")
+    rows = _gate_marker_rows(run_id, "gate1-skeptic", since)
+    if not rows:
+        return None, None  # nothing to bind (store unreadable, or the escape reason was used)
+    if not want:
+        warnings.append("gate1-skeptic prompt binding not checked: no gate1_handout.sha on record "
+                        "(stage-start did not hand a prompt out)")
+        return None, None
+    if "prompt_reads" not in rows[-1]:
+        warnings.append("gate1-skeptic prompt binding not checked: the backend that recorded its "
+                        "spawn predates prompt-read capture; rebuild and restart it")
+        return None, None
+    if any(d.get("prompt_reads") is None for d in rows if "prompt_reads" in d):
+        warnings.append("gate1-skeptic prompt binding not checked for a round whose transcript "
+                        "could not be read")
+        return None, None
+    bound = [d for d in rows if isinstance(d.get("prompt_reads"), dict)
+             and want in d["prompt_reads"].values()]
+    if bound:
+        return None, bound
+    return ("no gate1-skeptic sub-agent of this run read the prompt stage-start handed out "
+            f"(sha {want[:12]}…, `gate1_prompt_path`): its first step must be to Read that file, "
+            "unchanged. Spawn it with the 2-line prompt `EXPERT-ID: gate1-skeptic` + "
+            "`Adversarially review this plan: read <gate1_prompt_path> first; follow it.`"), None
+
+
+def _gate_verdict_mismatch(run_id: str, expert_id: str, since: float, recorded: str,
+                           warnings: "list[str]", rows: "list | None" = None) -> "str | None":
+    """An error when the recorded verdict differs from what the LATEST ``expert_id``
+    sub-agent of this run in the window answered (marker ``verdict``, captured from its
+    final answer by core/runtime_hooks.py), else None. Markers without the key (a daemon
+    that predates the capture) or with an unreadable answer → a warning, no compare.
+    ``rows`` = the rounds allowed to supply the verdict (default: every round)."""
+    rows = rows if rows is not None else _gate_marker_rows(run_id, expert_id, since)
     if not rows:
         return None
-    rows.sort(key=lambda d: d["ts"])
     if "verdict" not in rows[-1]:
         warnings.append(f"{expert_id} verdict not compared: the backend that recorded its spawn "
                         "predates verdict capture; rebuild and restart it")
@@ -4487,7 +4536,10 @@ def _gate_verdict_spawn_errors(run_id: str, run_state: dict, stage: str, profile
         timing.get("first_started_at") or timing.get("started_at")) or 0.0
     ok, detail = _gate_spawn_check(run_id, run_state, "gate1-skeptic", since, warnings)
     if ok:
-        bad = _gate_verdict_mismatch(run_id, "gate1-skeptic", since, verdict, warnings)
+        unread, bound = _gate1_prompt_unread(run_id, run_state, since, warnings)
+        if unread:
+            return [f"Gate-1: {unread}"]
+        bad = _gate_verdict_mismatch(run_id, "gate1-skeptic", since, verdict, warnings, bound)
         return [f"Gate-1: gate1_verdict — {bad}"] if bad else []
     return _gate_unbacked("gate1", cand_rec.get("gate1_unverified_reason"), detail, warnings,
                           f"Gate-1: gate1_verdict is '{verdict}' but no gate1-skeptic sub-agent "

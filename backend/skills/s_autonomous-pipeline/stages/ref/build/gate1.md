@@ -17,7 +17,12 @@ Status ACTIVE: a BLOCK verdict halts BUILD until resolved. The user can override
 > spawned nothing (blocked). The recorded verdict may not be weaker than the skeptic's
 > own: the marker keeps the `GATE 1 VERDICT:` token of its final answer (latest round that
 > gave one; PASS < WARN/PARTIAL < BLOCK). Stricter is allowed; a user override keeps
-> `BLOCK` + `gate1_override`; a re-gated plan records the new round's verdict. goal_cycle: a recorded verdict needs the same spawn. Only
+> `BLOCK` + `gate1_override`; a re-gated plan records the new round's verdict. The
+> skeptic must also have loaded the prompt that was handed out: its marker records the
+> sha256 of every `evidence/prompts/*.md` it read IN FULL (a Read without offset/limit,
+> or `cat`; naming the path is no read), or of its own prompt for an exact paste. One
+> must equal `gate1_handout.sha`, and only such a round's verdict counts, so a sub-agent
+> that only carries the EXPERT-ID line, or reads an edited copy, is not Gate-1. goal_cycle: a recorded verdict needs the same spawn. Only
 > an unreadable marker store or a pre-EXPERT-ID daemon passes with a warning. A spawn that
 > ran but cannot be proven (a session without the SubagentStop audit hook, a marker
 > attributed to another run of the same session — the error names it) → record

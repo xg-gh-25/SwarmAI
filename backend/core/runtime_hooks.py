@@ -1172,6 +1172,9 @@ def create_agent_tool_audit_hook(
                     final = last_message if isinstance(last_message, str) and last_message.strip() \
                         else (_read_subagent_final_text(transcript_path) if transcript_path else "")
                     base["verdict"] = _gate_verdict(expert_id, final)
+                    # Key present = this daemon captures prompt reads ({} = none read,
+                    # None = transcript unreadable → stage-complete warns, never blocks).
+                    base["prompt_reads"] = _prompt_reads(transcript_path) if transcript_path else None
                 session_marker.write_text(json.dumps(base))
 
                 # DISTINCT adversarial marker — consumed by the live commit gate
@@ -1321,6 +1324,77 @@ def _read_subagent_final_text(transcript_path: str) -> str:
     except Exception:
         logger.debug("_read_subagent_final_text: suppressed exception on a fail-safe path", exc_info=True)
         return ""
+
+
+# A Bash READ of a prompt file: `cat <path>` (optionally with flags). Merely naming the
+# path (`ls`, `test -f`, a comment) is no read (red-team 2026-10-18).
+_PROMPT_CAT_RE = re.compile(r"(?:^|[;&|(]\s*|\s)cat\s+(?:-\w+\s+)*['\"]?([^\s'\"`;|&]*/evidence/prompts/[\w.-]+\.md)")
+_TRANSCRIPT_SCAN_BYTES = 16 * 1024 * 1024  # real gate1 transcripts: p50 ~290 KB, max ~540 KB
+
+
+def _prompt_reads(transcript_path: str) -> Optional[dict]:
+    """{path: sha256 of the file now} for every pipeline prompt file
+    (``…/evidence/prompts/*.md``) the sub-agent loaded IN FULL — a Read without
+    offset / limit, or a Bash ``cat <path>`` — plus ``<inline:N>`` hashes of its own
+    prompt (each text block and the whole message, with / without a trailing newline), so
+    an exact paste of the handed-out file binds too. Lets stage-complete check that a
+    gate skeptic read the exact prompt stage-start handed out (artifact_cli
+    ``_gate1_prompt_unread``). The file is hashed at SubagentStop: a copy edited and
+    restored while the skeptic ran is not caught (deliberate cheating, not a cut corner).
+    None when the transcript cannot be read (the checker then warns instead of blocking)."""
+    import hashlib
+    out: dict = {}
+    try:
+        p = Path(transcript_path)
+        if p.stat().st_size > _TRANSCRIPT_SCAN_BYTES:
+            return None
+        paths: list[str] = []
+        first_user = True
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if first_user and '"user"' in line:
+                    try:
+                        rec = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        rec = None
+                    if isinstance(rec, dict) and rec.get("type") == "user":
+                        first_user = False
+                        msg = rec.get("message", rec)
+                        content = msg.get("content", "") if isinstance(msg, dict) else ""
+                        blocks = ([b.get("text", "") for b in content
+                                   if isinstance(b, dict) and b.get("type") == "text"]
+                                  if isinstance(content, list) else [content])
+                        texts = [t for t in blocks + ["\n".join(blocks)] if isinstance(t, str) and t]
+                        shas = {hashlib.sha256(v.encode("utf-8")).hexdigest()
+                                for t in texts for v in (t, t.rstrip("\n"), t.rstrip("\n") + "\n")}
+                        for n, h in enumerate(sorted(shas)):
+                            out[f"<inline:{n}>"] = h
+                        continue
+                if '"tool_use"' not in line or "evidence/prompts/" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                msg = rec.get("message", rec) if isinstance(rec, dict) else {}
+                content = msg.get("content") if isinstance(msg, dict) else None
+                for b in content if isinstance(content, list) else []:
+                    if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                        continue
+                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                    if (b.get("name") == "Read" and isinstance(inp.get("file_path"), str)
+                            and inp.get("offset") in (None, 0, 1) and inp.get("limit") is None):
+                        paths.append(inp["file_path"])  # a partial Read is no read of the gate
+                    elif b.get("name") == "Bash" and isinstance(inp.get("command"), str):
+                        paths += _PROMPT_CAT_RE.findall(inp["command"])
+        for path in dict.fromkeys(paths):
+            fp = Path(os.path.expanduser(path))
+            if "/evidence/prompts/" in fp.as_posix() and fp.is_file():
+                out[fp.as_posix()] = hashlib.sha256(fp.read_bytes()).hexdigest()
+        return out
+    except Exception:
+        logger.debug("_prompt_reads: suppressed exception on a fail-safe path", exc_info=True)
+        return None
 
 
 def _gate_verdict(expert_id: Optional[str], final_text: str) -> Optional[str]:

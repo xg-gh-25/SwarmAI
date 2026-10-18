@@ -2435,3 +2435,51 @@ async def test_gate_verdict_prefers_the_sdk_last_assistant_message(tmp_path, mon
                 "last_assistant_message": "GATE 1 VERDICT: BLOCK"}, None, MagicMock())
     base = [p for p in tmp_path.glob("session_sess-l_*.marker") if "_adv_" not in p.name]
     assert json.loads(base[0].read_text())["verdict"] == "BLOCK"
+
+
+
+@pytest.mark.asyncio
+async def test_gate_marker_records_the_prompt_files_the_skeptic_read(tmp_path, monkeypatch):
+    """prompt_reads = {path: sha256} of every evidence/prompts/*.md the skeptic loaded (Read
+    or a Bash cat), plus <inline> = its own prompt, so stage-complete can check it read
+    the prompt stage-start handed out."""
+    import hashlib
+    import core.runtime_hooks as rh
+    monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
+    prompts = tmp_path / "run" / "evidence" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "meta-review.md").write_text("m\n")
+    (prompts / "fix.md").write_text("f\n")
+    g1 = prompts / "gate1-skeptic.md"
+    g1.write_text("EXPERT-ID: gate1-skeptic\n\nthe gate\n")
+    kn = prompts / "review-knowledge.md"
+    kn.write_text("knowledge\n")
+    first = "EXPERT-ID: gate1-skeptic\nAdversarially review this plan: read it first."
+    transcript = tmp_path / "sub.jsonl"
+    transcript.write_text("\n".join(json.dumps(r) for r in [
+        {"isSidechain": True, "type": "user", "message": {"content": first}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": str(g1)}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": f"cat '{kn}' | head"}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": str(tmp_path / "other.md")}}]}},
+        # naming a prompt path, or reading one line of it, is no read of the gate
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": f"ls -la {prompts / 'meta-review.md'}"}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": str(prompts / "fix.md"), "limit": 1}}]}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "GATE 1 VERDICT: PASS"}]}},
+    ]) + "\n")
+    hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "sess-p"})
+    await hook({"agent_id": "a-4", "agent_transcript_path": str(transcript), "agent_type": "x"},
+               None, MagicMock())
+    base = [p for p in tmp_path.glob("session_sess-p_*.marker") if "_adv_" not in p.name]
+    reads = json.loads(base[0].read_text())["prompt_reads"]
+    assert reads[g1.as_posix()] == hashlib.sha256(g1.read_bytes()).hexdigest()
+    assert reads[kn.as_posix()] == hashlib.sha256(kn.read_bytes()).hexdigest()
+    inline = {v for k, v in reads.items() if k.startswith("<inline:")}
+    assert hashlib.sha256(first.encode()).hexdigest() in inline
+    assert hashlib.sha256((first + "\n").encode()).hexdigest() in inline  # an exact paste of a file
+    files = {k for k in reads if not k.startswith("<inline")}
+    assert files == {g1.as_posix(), kn.as_posix()}  # not other.md, not ls'd, not partial
