@@ -3,7 +3,7 @@
  *
  * Renders a single-line header containing:
  * - 🐝 bee emoji (with pulse animation while streaming)
- * - "SwarmAI" label
+ * - the assistant's name (ASSISTANT_NAME, shared with the turn cards)
  * - `·` separator
  * - Formatted timestamp (HH:MM AM/PM)
  *
@@ -18,6 +18,7 @@
 
 import React from 'react';
 import './swarm-animations.css';
+import { ASSISTANT_NAME } from '../assistantName';
 
 export interface AssistantHeaderProps {
   /** ISO timestamp string for the message */
@@ -46,7 +47,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   return (
     <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] mb-0.5">
       <span className="text-[11.5px] font-semibold text-[var(--color-text)]" style={{ letterSpacing: '-0.02em' }}>
-        Swarm
+        {ASSISTANT_NAME}
       </span>
       {isStreaming && (
         <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" aria-label="Streaming" />

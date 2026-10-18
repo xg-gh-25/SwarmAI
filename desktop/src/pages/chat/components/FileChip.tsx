@@ -51,7 +51,7 @@ export function FileChip({ path, name, change, diff }: FileChipProps) {
   );
   const tag = change && (
     <span className="ml-1 pl-1.5 border-l border-[var(--color-border)] text-[10.5px] text-[var(--color-text-muted)] font-sans shrink-0">
-      {change === 'new' ? tf(t, 'chat.file.new', 'new') : tf(t, 'chat.file.edited', 'edited')}
+      {change === 'new' ? tf(t, 'chat.file.new', 'new') : tf(t, 'chat.file.changed', 'changed')}
     </span>
   );
   const body = (

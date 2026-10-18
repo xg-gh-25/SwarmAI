@@ -433,7 +433,7 @@ export const STEP_VERB_FALLBACK: Record<StepVerb, [string, string]> = {
   read: ['Reading', 'Read'], edit: ['Editing', 'Edited'], search: ['Searching', 'Searched'],
   run: ['Running', 'Ran'], list: ['Listing', 'Listed'], fetch: ['Fetching', 'Fetched'],
   websearch: ['Searching web', 'Searched web'], loadTools: ['Loading tools', 'Loaded tools'],
-  skill: ['Using skill', 'Used skill'], todo: ['Updating', 'Updated'], agent: ['Running agent', 'Ran agent'],
+  skill: ['Using skill', 'Used skill'], todo: ['Updating plan', 'Updated plan'], agent: ['Running sub-agent', 'Ran sub-agent'],
   mcp: ['Calling', 'Called'], tool: ['Running', 'Ran'],
 };
 

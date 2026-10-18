@@ -35,7 +35,7 @@ import { FileChip } from './FileChip';
 const VERB_FALLBACK = STEP_VERB_FALLBACK;
 const COUNT_FALLBACK: Partial<Record<StepVerb, [string, string]>> = {
   read: ['read {{count}} file', 'read {{count}} files'],
-  edit: ['edited {{count}} file', 'edited {{count}} files'],
+  edit: ['changed {{count}} file', 'changed {{count}} files'],
   search: ['{{count}} search', '{{count}} searches'],
   run: ['ran {{count}} command', 'ran {{count}} commands'],
   fetch: ['fetched {{count}} page', 'fetched {{count}} pages'],
@@ -155,7 +155,7 @@ function ThinkingRow({ step, streaming }: { step: ThinkingStep; streaming: boole
           aria-expanded={open}
           className="flex items-center gap-1.5 w-full min-w-0 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
         >
-          <span className="text-[var(--color-text-dim)] shrink-0">{tf(t, 'chat.turn.thought', 'Thought')}</span>
+          <span className="text-[var(--color-text-dim)] shrink-0">{tf(t, 'chat.turn.thoughtRow', 'Thought')}</span>
           {!open && preview && <span className="italic text-[var(--color-text-dim)] truncate min-w-0">{preview}</span>}
         </button>
       )}
@@ -321,9 +321,13 @@ function FoldedSummary({ unit }: { unit: ProcessUnit }) {
         </span>
       )}
       {facts.map((f) => <span key={f} className="shrink-0">· {f}</span>)}
-      <span className="shrink-0 text-[var(--color-text-dim)] tabular-nums">
-        · {tf(t, 'chat.turn.steps', '{{count}} steps', { count: summary.stepCount })}
-      </span>
+      {/* The effect, not the workload: the step count shows only when there is no
+          effect to name (e.g. a run of todo / skill steps). */}
+      {!files.length && !facts.length && (
+        <span className="shrink-0 text-[var(--color-text-dim)] tabular-nums">
+          · {tf(t, 'chat.turn.steps', '{{count}} steps', { count: summary.stepCount })}
+        </span>
+      )}
       {failed}
     </>
   );

@@ -301,7 +301,7 @@ describe('AssistantMessageView — live card between steps', () => {
       expect(line.textContent).toContain('changed');
       const chips = line.querySelectorAll('[data-testid="file-chip"]');
       expect([...chips].map((c) => c.getAttribute('data-path'))).toEqual(['/r/src/TabView.tsx', '/r/src/x.py']);
-      expect(line.textContent).toContain('3 steps');
+      expect(line.textContent).not.toMatch(/\d+ steps/); // the effect, not the workload
       fireEvent.click(chips[0]);
       expect(seen).toEqual([{ path: '/r/src/TabView.tsx', autoDiff: true }]);
       // the chip's click opens the file, not the line
@@ -309,6 +309,13 @@ describe('AssistantMessageView — live card between steps', () => {
     } finally {
       document.removeEventListener('swarm:open-file', onOpen);
     }
+  });
+
+  it('a folded line with no effect to name falls back to the step count', () => {
+    renderView([tu('a', 'Writing 3 todos'), tu('b', 'Writing 4 todos'), tx('done')]);
+    const line = screen.getByTestId('process-row');
+    expect(line.textContent).toContain('Worked');
+    expect(line.textContent).toContain('2 steps');
   });
 
   it('history: expanding the card shows the thought folded to one line', () => {
@@ -474,7 +481,7 @@ describe('AssistantMessageView — v7.1 turn frame (alignment → work → resul
   it('the first restatement is labelled as the alignment; the final answer gets a Result divider', () => {
     renderView([tx('Three steps: export, sync, push.'), tu('a', 'Running: ls'), tx('checking'), tu('b', 'Running: pwd'),
       tx('All three done.')]);
-    expect(screen.getByTestId('turn-alignment').textContent).toContain('How I read it');
+    expect(screen.getByTestId('turn-alignment').textContent).toContain('Understanding');
     expect(screen.getByTestId('turn-alignment').textContent).toContain('Three steps');
     const result = screen.getByTestId('turn-result');
     expect(result.textContent).toContain('Result');
@@ -504,7 +511,7 @@ describe('AssistantMessageView — v7.1 turn frame (alignment → work → resul
     const line = screen.getByTestId('turn-files');
     expect([...line.querySelectorAll('[data-testid="file-chip"]')].map((c) => c.getAttribute('data-path')))
       .toEqual(['/r/a.ts', '/r/b.md']);
-    expect(line.textContent).toContain('edited');
+    expect(line.textContent).toContain('changed');
   });
 
   it('a note right after its work sits close to it; a new run of work starts a new group', () => {

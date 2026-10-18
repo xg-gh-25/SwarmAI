@@ -16,7 +16,9 @@
     "waitingForReady": "马上就好...",
     "waitingForAgent": "等待 SwarmAgent 就绪...",
     "waitingForWorkspace": "等待 SwarmWorkspace 就绪...",
-    "initializationTimeout": "初始化超时，已等待 {{seconds}} 秒"
+    "initializationTimeout": "初始化超时，已等待 {{seconds}} 秒",
+    "agentInitFailed": "SwarmAgent 初始化失败",
+    "workspaceInitFailed": "SwarmWorkspace 初始化失败"
   },
   "common": {
     "button": {
@@ -178,18 +180,15 @@
     "taskCreated": "任务已创建！前往任务页面查看。",
     "taskCreateFailed": "创建任务失败",
     "turn": {
-      "working": "工作中",
       "thinking": "思考中",
       "thought": "思考了",
-      "worked": "已工作",
-      "thoughtCount_one": "思考 {{count}} 段",
-      "thoughtCount_other": "思考 {{count}} 段",
+      "worked": "做了",
       "readTimes": "{{count}} 次",
       "subAgent": "子代理",
       "nowUsing": "正在 {{tool}}",
       "subAgentStatus": {
         "failed": "失败",
-        "stopped": "已停止"
+        "stopped": "停了"
       },
       "steps_one": "{{count}} 步",
       "steps_other": "{{count}} 步",
@@ -198,12 +197,11 @@
       "showSteps": "展开步骤",
       "hideSteps": "收起步骤",
       "showCommand": "查看命令",
-      "backToLatest": "工作中 · 第 {{count}} 步 · 回到最新",
       "counts": {
         "read_one": "读取 {{count}} 个文件",
         "read_other": "读取 {{count}} 个文件",
-        "edit_one": "修改 {{count}} 个文件",
-        "edit_other": "修改 {{count}} 个文件",
+        "edit_one": "改了 {{count}} 个文件",
+        "edit_other": "改了 {{count}} 个文件",
         "search_one": "搜索 {{count}} 次",
         "search_other": "搜索 {{count}} 次",
         "run_one": "运行 {{count}} 条命令",
@@ -249,8 +247,8 @@
           "done": "使用技能"
         },
         "todo": {
-          "live": "更新",
-          "done": "更新"
+          "live": "更新计划",
+          "done": "更新计划"
         },
         "agent": {
           "live": "运行子代理",
@@ -268,7 +266,7 @@
       "showAll": "还有 {{count}} 项 · 展开全部",
       "backToLatestThinking": "思考中 · 回到最新",
       "stage": {
-        "skipped": "已跳过",
+        "skipped": "跳过了",
         "running": "进行中",
         "ariaDone": "Pipeline 阶段 {{stage}} 已完成",
         "ariaSkipped": "Pipeline 阶段 {{stage}} 已跳过",
@@ -282,27 +280,30 @@
       "failedRecovered_one": "{{count}} 步失败（已恢复）",
       "failedRecovered_other": "{{count}} 步失败（已恢复）",
       "failedOne": "失败",
-      "alignment": "AI 的理解",
+      "alignment": "理解",
       "result": "结果",
       "thisTurnChanged": "本轮改了",
-      "noAlignment": "AI 没有先复述它的理解就开始了",
+      "noAlignment": "没先复述理解，直接开始了",
       "run": {
         "stages": "{{count}} 个阶段"
       },
       "attention": {
-        "title": "需要你看",
-        "heading": "需要你看 · {{count}} 项",
-        "selfAnswered": "AI 自己回答了{{id}}",
-        "assumption": "AI 的假设{{id}}",
+        "title": "待你确认",
+        "heading": "待你确认 · {{count}} 项",
+        "assumption": "假设 {{id}}",
         "notPushReady": "还不能 push",
-        "more": "还有 {{count}} 项，见 run 报告"
+        "more": "其余 {{count}} 项见 run 报告",
+        "decidedFor": "{{name}} 替你定了 · {{count}}",
+        "reason": "理由：{{text}}"
       },
       "deliverables": {
-        "title": "产出 · {{count}}",
+        "title": "本轮产出 · {{count}}",
         "open": "在 Canvas 打开",
         "copyPath": "复制路径",
         "copied": "已复制"
-      }
+      },
+      "thoughtRow": "思考",
+      "backToLatestAction": "{{action}} · 回到最新"
     },
     "nextSteps": {
       "label": "下一步",
@@ -311,7 +312,7 @@
     },
     "file": {
       "new": "新建",
-      "edited": "修改"
+      "changed": "改了"
     }
   },
   "tasks": {

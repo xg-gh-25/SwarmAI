@@ -308,7 +308,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         data-testid={isAlignment ? 'turn-alignment' : isResult ? 'turn-result' : undefined}
         className={`${gap} ${demoted ? 'text-[13.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
       >
-        {isAlignment && <div className="mb-0.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">{tf(t, 'chat.turn.alignment', 'How I read it')}</div>}
+        {isAlignment && <div className="mb-0.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">{tf(t, 'chat.turn.alignment', 'Understanding')}</div>}
         {isResult && (
           <div className="flex items-center gap-2.5 mt-5 mb-1.5 text-[11px] tracking-wide text-[var(--color-text-muted)]">
             {tf(t, 'chat.turn.result', 'Result')}

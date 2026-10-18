@@ -4,7 +4,7 @@
  * What is tested (real AssistantMessageView + turnView, only leaf contexts mocked):
  * - pipeline_run: rendered once at the top as the alignment (requirement as plain
  *   text, run id, profile, stage count); the model's own opening text then loses
- *   the "How I read it" label and no "no restatement" note shows
+ *   the "Understanding" label and no "no restatement" note shows
  * - pipeline_attention: right after the Result divider and before the answer once
  *   the turn is over; with the DELIVER row while it streams; one item per kind;
  *   a blocking verdict is red
@@ -54,6 +54,7 @@ const ATTN = { type: 'pipeline_attention', runId: 'run_a1', more: 0, at: 'T', it
   { kind: 'gate', name: 'GATE 1', verdict: 'BLOCK', detail: null },
   { kind: 'not_push_ready', reasons: ['tests: 1 failed'] },
 ] } as ContentBlock;
+const ATTN_GATE = { kind: 'gate', name: 'GATE 0', verdict: 'WRONG-FRAME', detail: null };
 const deliv = (...paths: string[]): ContentBlock => ({ type: 'turn_deliverables', files: paths.map((p) => (
   { path: p, absolutePath: `/ws/${p}`, kind: 'content', operation: 'written' })) }) as ContentBlock;
 
@@ -79,7 +80,7 @@ describe('pipeline_run — the alignment', () => {
     expect(run.textContent).toContain('Add opus-5-5 to MODEL_REGISTRY');
     expect(run.textContent).toContain('run_a1');
     expect(run.textContent).toContain('full · 3 stages');
-    expect(screen.getAllByText('How I read it')).toHaveLength(1);
+    expect(screen.getAllByText('Understanding')).toHaveLength(1);
     expect(screen.queryByTestId('turn-alignment')).toBeNull();
     expect(container.querySelector('[data-testid]')?.getAttribute('data-testid')).toBe('turn-run');
   });
@@ -96,13 +97,21 @@ describe('pipeline_attention — what needs the user', () => {
     const { container } = renderView(PIPELINE);
     const result = screen.getByTestId('turn-result');
     const card = within(result).getByTestId('turn-attention');
-    expect(result.textContent!.indexOf('Result')).toBeLessThan(result.textContent!.indexOf('Needs your look'));
-    expect(result.textContent!.indexOf('Needs your look')).toBeLessThan(result.textContent!.indexOf('Shipped'));
-    expect(card.textContent).toContain('Needs your look · 4');
+    expect(result.textContent!.indexOf('Result')).toBeLessThan(result.textContent!.indexOf('For you to check'));
+    expect(result.textContent!.indexOf('For you to check')).toBeLessThan(result.textContent!.indexOf('Shipped'));
+    expect(card.textContent).toContain('For you to check · 4');
     expect(within(card).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
       .toEqual(['self_answered', 'assumption', 'gate', 'not_push_ready']);
     expect(card.textContent).toContain('→ prompt_builder');
     expect(within(card).getByText('BLOCK').className).toContain('text-red-500');
+    // What Swarm settled without asking is ONE group under ONE name line.
+    const decided = within(card).getByTestId('attention-decided');
+    expect(within(decided).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
+      .toEqual(['self_answered', 'assumption']);
+    expect(decided.textContent).toContain('Swarm decided for you · 2');
+    expect(decided.textContent).toContain('Why: covers stored configs');
+    expect(decided.textContent).toContain('Assumed FR-3');
+    expect(card.textContent!.match(/Swarm/g)).toHaveLength(1);
     expect(screen.getAllByTestId('turn-attention')).toHaveLength(1);
     expect(order(container, 'turn-attention', 'turn-deliverables')[0]).toBeLessThan(
       order(container, 'turn-attention', 'turn-deliverables')[1]);
@@ -118,6 +127,12 @@ describe('pipeline_attention — what needs the user', () => {
     expect(card.compareDocumentPosition(rows[rows.length - 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('no name line when Swarm settled nothing', () => {
+    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [ATTN_GATE] } as ContentBlock, tx('done')]);
+    expect(screen.getByTestId('turn-attention').textContent).not.toContain('Swarm');
+    expect(screen.queryByTestId('attention-decided')).toBeNull();
+  });
+
   it('an empty item list renders nothing', () => {
     renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [] } as ContentBlock, tx('done')]);
     expect(screen.queryByTestId('turn-attention')).toBeNull();
@@ -128,7 +143,7 @@ describe('turn_deliverables — what the turn produced', () => {
   it('one tile per file, after the answer, deduped across rows', () => {
     renderView([...PIPELINE, deliv('docs/report.md')]);
     const card = screen.getByTestId('turn-deliverables');
-    expect(card.textContent).toContain('Produced · 2');
+    expect(card.textContent).toContain('Produced this turn · 2');
     expect(within(card).getAllByTestId('deliverable').map((e) => e.getAttribute('data-path')))
       .toEqual(['/ws/docs/report.md', '/ws/out/deck.pptx']);
     const result = screen.getByTestId('turn-result');
