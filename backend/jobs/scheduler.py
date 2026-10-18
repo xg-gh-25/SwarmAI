@@ -424,15 +424,36 @@ def is_job_due(job: Job, state: SchedulerState) -> bool:
         return False
 
 
+_BREAKER_THRESHOLD = 3
+_BREAKER_BASE_BACKOFF = timedelta(hours=1)
+_BREAKER_MAX_COOLDOWN = timedelta(hours=24)
+
+
+def circuit_breaker_backoff(consecutive_failures: int) -> timedelta:
+    """Half-open retry delay for a tripped breaker: 1h, 2h, 4h ... capped at 24h.
+
+    Measured from ``last_run`` (the last failed attempt). At the threshold (3)
+    the delay is 1h; each further failed half-open retry doubles it.
+    """
+    exponent = max(0, consecutive_failures - _BREAKER_THRESHOLD)
+    if exponent >= 5:  # 2**5 h = 32h > cap; also avoids huge ints
+        return _BREAKER_MAX_COOLDOWN
+    return min(_BREAKER_BASE_BACKOFF * (2 ** exponent), _BREAKER_MAX_COOLDOWN)
+
+
 def check_circuit_breaker(job: Job, state: SchedulerState) -> bool:
     """Skip jobs that have failed too many times consecutively.
 
-    Auto-resets after 24h cooldown — gives transient issues (network,
-    auth, DNS) a chance to resolve without manual state.json editing.
+    Exponential half-open retry: once tripped (>= 3 failures), one retry is
+    allowed after ``circuit_breaker_backoff`` (1h, 2h, 4h ... ) since the last
+    failed run. The retry does NOT reset the streak — a success resets it in
+    _update_job_state, another failure bumps it and doubles the next wait.
+    After the 24h cap the breaker fully resets (counter + last_error) so
+    transient issues (network, auth, DNS, DB contention) recover without manual
+    state.json editing.
     """
     job_state = state.jobs.get(job.id)
-    if job_state and job_state.consecutive_failures >= 3:
-        # Auto-reset after 24h cooldown
+    if job_state and job_state.consecutive_failures >= _BREAKER_THRESHOLD:
         if job_state.last_run:
             # last_run may be naive (from datetime.now()) or aware (from
             # tests / future code).  Normalize both sides to UTC-aware.
@@ -440,7 +461,12 @@ def check_circuit_breaker(job: Job, state: SchedulerState) -> bool:
             if last.tzinfo is None:
                 last = last.replace(tzinfo=timezone.utc)
             cooldown = datetime.now(timezone.utc) - last
-            if cooldown > timedelta(hours=24):
+            # Full reset is checked FIRST: a tripped job idle past the 24h cap
+            # resets regardless of streak length. Checking half-open first would
+            # let a 3..7-failure streak retry at 25h WITHOUT clearing the counter,
+            # so one more failure would re-trip at a longer backoff instead of
+            # starting clean (and the 24h-reset contract would only hold for >=8).
+            if cooldown > _BREAKER_MAX_COOLDOWN:
                 logger.info(
                     f"Circuit breaker reset for '{job.id}' "
                     f"(24h cooldown elapsed, was {job_state.consecutive_failures} failures)"
@@ -450,6 +476,19 @@ def check_circuit_breaker(job: Job, state: SchedulerState) -> bool:
                 # everywhere (not just _update_job_state) — else a cooldown-reset
                 # job shows 0 failures but a stale error in 🔔 diagnostics.
                 job_state.last_error = None
+                return True
+            backoff = circuit_breaker_backoff(job_state.consecutive_failures)
+            if cooldown > backoff:
+                # Half-open: counter + last_error are left untouched (the streak
+                # is still live). The retry's own result goes through
+                # _update_job_state: success clears both, failure bumps the
+                # counter and stamps last_run, which re-trips the breaker with
+                # the next (doubled) backoff measured from that failure.
+                logger.info(
+                    f"Circuit breaker half-open for '{job.id}' "
+                    f"({job_state.consecutive_failures} failures, "
+                    f"{backoff} backoff elapsed) — allowing one retry"
+                )
                 return True
         logger.warning(
             f"Circuit breaker: skipping '{job.id}' "

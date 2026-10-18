@@ -183,6 +183,34 @@ class TestSelfReportDrift:
         findings = hook._check_self_report_drift(ctx)
         assert findings == []  # 5 < 5000 floor, skipped
 
+    def test_budget_constants_are_not_self_claims(self, tmp_path):
+        """KNOWLEDGE.md documents budget CONSTANTS (real lines from the live file);
+        none is a claim about the file's own size, so none may fire drift."""
+        from hooks.context_health_hook import ContextHealthHook
+        hook = ContextHealthHook()
+        body = (
+            "**Effective budget = base_budget − EPHEMERAL_HEADROOM (9,000 tokens)**\n"
+            "- For 1M model: effective = 150,000 − 9,000 = **141,000 tokens** for context files\n"
+            "| **task_budget** | 128K tokens | 800K (desktop) |\n"
+            "| Our context files | ✅ | Static load from `.context/`; measure live |\n"
+            "\n" + ("word " * 25_000)
+        )
+        ctx = self._make_ctx(tmp_path, {"KNOWLEDGE.md": body})
+        assert hook._check_self_report_drift(ctx) == []
+
+    def test_explicit_self_claim_variants_still_detected(self, tmp_path):
+        """The restricted regex must keep catching real self-size claims."""
+        from hooks.context_health_hook import ContextHealthHook
+        hook = ContextHealthHook()
+        for i, claim in enumerate(("Context files: ~10K tokens total.",
+                                   "This file is ≈ 10,000 tokens.",
+                                   "Total context: 10K tok")):
+            d = tmp_path / f"c{i}"
+            d.mkdir()
+            ctx = self._make_ctx(d, {"KNOWLEDGE.md": claim + "\n\n" + ("word " * 25_000)})
+            findings = hook._check_self_report_drift(ctx)
+            assert any("self-report-drift" in f for f in findings), claim
+
     def test_never_mutates_file(self, tmp_path):
         from hooks.context_health_hook import ContextHealthHook
         hook = ContextHealthHook()

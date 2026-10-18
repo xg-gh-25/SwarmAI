@@ -53,6 +53,30 @@ _DECISION_NOISE_PREFIXES = (
 )
 
 
+# OS-Eval canary runtime state under .context/ (written by _run_eval_canary).
+# Session tier → _CANARY_STATE_FILE (contract unchanged); daily tier →
+# _CANARY_DAILY_STATE_FILE (+ its md_lock sidecar ``<name>.lock``), kept separate
+# so a session-tier run never overwrites the daily result.
+_CANARY_STATE_FILE = ".eval-canary.json"
+_CANARY_DAILY_STATE_FILE = ".eval-canary-daily.json"
+_CANARY_STATE_PREFIX = ".eval-canary"
+# Daily tier: per-case cap = the manual-run cap in eval_runner.eval_canary_pass.
+_CANARY_DAILY_CASE_TIMEOUT = 20
+# runtime_health: eval_runner.eval_runtime_health caps at 30s with a 15s floor.
+_CANARY_RUNTIME_HEALTH_CAP = 30
+_CANARY_RUNTIME_HEALTH_FLOOR = 15
+# Budget timeouts tolerated per case per day before it is recorded as failed.
+_CANARY_DAILY_MAX_DEFERRALS = 3
+# Daily tier: don't start another case with less than this much hook budget left.
+_CANARY_DAILY_MIN_CASE_BUDGET = 3.0
+
+
+def _is_canary_state_path(path: str) -> bool:
+    """True if a (porcelain) path names canary runtime state, not a context file."""
+    name = path.strip().strip('"').rstrip("/").rsplit("/", 1)[-1]
+    return name.startswith(_CANARY_STATE_PREFIX)
+
+
 # Episodic war-story detector — the 7th MEMORY admission gate (run_117bcdf4).
 #
 # ROOT CAUSE it closes: a REFLECT lesson whose BODY narrates a single-run event
@@ -339,8 +363,8 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: doc frontmatter auto-update skipped: %s", exc)
 
-        # OS Eval canary — run programmatic golden set cases every session.
-        # Zero LLM cost, <15s, surfaces regression in session briefing.
+        # OS Eval canary — session tier every session, daily tier resumed within
+        # the remaining budget (see _run_eval_canary). Zero LLM cost.
         # Must respect cultivation deadline — canary runs LAST in _light_refresh.
         try:
             self._run_eval_canary(root, _deadline=_cultivation_deadline)
@@ -351,41 +375,30 @@ class ContextHealthHook:
         """Run programmatic golden set cases (OS Eval canary).
 
         Two tiers for performance:
-        - file_contains cases: every session (<1s total, pure string grep)
-        - canary_pass cases: daily only (~10s, spawns Python subprocesses)
+        - Session tier: pure file_contains cases, every session (<1s, string
+          grep). Result → .context/.eval-canary.json (contract unchanged).
+        - Daily tier: every other programmatic case (canary_pass /
+          runtime_health spawn subprocesses, 2-13s each). Runs at most once per
+          calendar day, RESUMABLE across sessions within the hook budget — see
+          ``_run_daily_canary``. Result → .context/.eval-canary-daily.json.
 
-        Zero LLM cost. Results persisted to .context/.eval-canary.json
-        so session briefing can surface failures as health signals.
-
-        On failure: logs warning + writes failure details.
-        On success: updates canary file with timestamp + score.
-        Never blocks session start — all errors are swallowed.
+        Zero LLM cost (programmatic_only). Never blocks session start.
 
         Args:
             _deadline: monotonic clock deadline from _light_refresh. If
-                insufficient time remains, skip the canary to avoid being
-                killed by the BackgroundHookExecutor 30s timeout.
+                insufficient time remains, skip the canary so the hook stays
+                inside its cooperative budget (the executor's per-hook
+                timeout is set in main.py: SessionLifecycleHookManager).
         """
-        # Budget check: skip if insufficient time remaining in the hook timeout.
-        # _light_refresh has a 25s cultivation budget within a 30s hard timeout.
-        # Canary runs LAST — if cultivation consumed significant time, bail.
-        #
-        # Thresholds:
-        # - Daily tier (canary_pass + file_contains): needs ~12s for N subprocess
-        #   spawns at ~1-1.5s each. 15s threshold provides headroom.
-        # - Session-only tier (file_contains only): needs <1s (pure string grep).
-        #   3s threshold is conservative.
+        # Budget check: _light_refresh has a 25s cooperative cultivation budget
+        # and the canary runs LAST. The session tier needs <1s; 3s is
+        # conservative. The daily tier budgets itself per case (_run_daily_canary).
         if _deadline > 0:
             remaining = _deadline - time.monotonic()
-            # Determine threshold BEFORE loading golden set (avoid wasted work).
-            # Daily check uses the higher threshold because canary_pass spawns
-            # subprocesses; session-only uses the lower one (pure file reads).
-            is_daily = self._last_deep_date != date.today().isoformat()
-            min_budget = 15.0 if is_daily else 3.0
-            if remaining < min_budget:
+            if remaining < 3.0:
                 logger.debug(
-                    "context_health: eval canary skipped — only %.1fs remaining (need ≥%.0fs for %s tier)",
-                    remaining, min_budget, "daily" if is_daily else "session",
+                    "context_health: eval canary skipped — only %.1fs remaining (need ≥3s)",
+                    remaining,
                 )
                 return
         import sys
@@ -406,48 +419,38 @@ class ContextHealthHook:
 
         golden_set = load_golden_set(gs_path)
 
-        # Determine which cases to run based on frequency tier:
-        # - file_contains: every session (fast, <1s)
-        # - canary_pass: daily (slow, spawns subprocesses ~10s)
         all_programmatic = [
             c for c in golden_set["cases"] if c.get("eval_method") == "programmatic"
         ]
+        # Session tier = pure file_contains (never spawns a subprocess); daily
+        # tier = everything else programmatic.
+        session_cases = [
+            c for c in all_programmatic
+            if "file_contains" in c.get("evaluators", [])
+            and not set(c.get("evaluators", [])) & self._CANARY_SPAWNING_EVALUATORS
+        ]
+        session_ids = {c["id"] for c in session_cases}
+        daily_cases = [c for c in all_programmatic if c["id"] not in session_ids]
 
-        is_daily = self._last_deep_date != date.today().isoformat()
-        if is_daily:
-            # Full programmatic sweep (daily)
-            cases_to_run = all_programmatic
-        else:
-            # Fast tier only (every session): file_contains evaluator
-            cases_to_run = [
-                c for c in all_programmatic
-                if "file_contains" in c.get("evaluators", [])
-            ]
+        if session_cases:
+            self._run_session_canary(root, golden_set, session_cases, run_eval)
+        if daily_cases:
+            self._run_daily_canary(root, daily_cases, _deadline=_deadline)
 
-        if not cases_to_run:
-            return
+    # Evaluators that spawn a subprocess (seconds each) — never in the session tier.
+    _CANARY_SPAWNING_EVALUATORS = frozenset({"canary_pass", "runtime_health"})
 
+    def _run_session_canary(self, root: Path, golden_set: dict,
+                            cases: list[dict], run_eval) -> None:
+        """Session tier: run the pure file_contains cases, write .eval-canary.json."""
         golden_set_filtered = dict(golden_set)
-        golden_set_filtered["cases"] = cases_to_run
+        golden_set_filtered["cases"] = cases
 
-        trigger = "session_canary" if not is_daily else "daily_canary"
-
-        # Cap per-subprocess timeout to remaining budget (prevents blowing past
-        # the BackgroundHookExecutor 30s deadline even if entry check passed).
-        canary_timeout = None
-        if _deadline > 0:
-            remaining_for_cases = _deadline - time.monotonic()
-            if remaining_for_cases > 0:
-                # Divide remaining time across cases, min 3s per case
-                per_case = max(3, int(remaining_for_cases / max(len(cases_to_run), 1)))
-                canary_timeout = min(20, per_case)
-
-        result = run_eval(golden_set_filtered, trigger, None, root,
-                          canary_timeout=canary_timeout,
+        result = run_eval(golden_set_filtered, "session_canary", None, root,
                           programmatic_only=True)
 
         # Persist canary result for session briefing
-        canary_file = root / ".context" / ".eval-canary.json"
+        canary_file = root / ".context" / _CANARY_STATE_FILE
         import json as _json
         cases_error = result.get("cases_error", 0)
         canary_data = {
@@ -490,8 +493,203 @@ class ContextHealthHook:
         try:
             canary_file.parent.mkdir(parents=True, exist_ok=True)
             canary_file.write_text(_json.dumps(canary_data, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug("context_health: session canary write failed: %s", exc)
+
+    # "Command timed out (7s)" / "runtime_health command timed out (7s)" — the
+    # timeout notes eval_runner's subprocess evaluators emit.
+    _CANARY_TIMEOUT_RE = re.compile(r"command timed out \((\d+)s\)", re.IGNORECASE)
+
+    @classmethod
+    def _is_budget_timeout(cls, result: dict, case_timeout: int,
+                           full_cap: int = _CANARY_DAILY_CASE_TIMEOUT) -> bool:
+        """True if a case "failed" only because the HOOK budget capped its timeout.
+
+        A timeout at the case's full manual-run cap (``full_cap``, see
+        ``_daily_case_caps``) is a real failure — the case is slow/hung exactly as
+        it would be on a manual run. A timeout under a smaller budget-derived cap
+        says nothing about the case.
+        """
+        if result.get("status") != "failed" or case_timeout >= full_cap:
+            return False
+        return bool(cls._CANARY_TIMEOUT_RE.search(result.get("notes", "")))
+
+    @staticmethod
+    def _daily_case_caps(case: dict) -> tuple[int, int]:
+        """(full manual-run cap, minimum runnable budget) for one daily case.
+
+        Mirrors eval_runner: canary_pass caps at 20s; runtime_health runs
+        ``max(15, min(30, override))`` — a 30s cap with a 15s FLOOR, so it must
+        not start with less than 15s of hook budget left (it would overrun).
+        """
+        if "runtime_health" in (case.get("evaluators") or []):
+            return _CANARY_RUNTIME_HEALTH_CAP, _CANARY_RUNTIME_HEALTH_FLOOR
+        return _CANARY_DAILY_CASE_TIMEOUT, 0
+
+    def _run_daily_canary(self, root: Path, cases: list[dict], *,
+                          _deadline: float = 0.0) -> None:
+        """Daily tier: subprocess-spawning programmatic cases, once per day, resumable.
+
+        The whole tier (~50 cases × 2-13s) can never fit in one ~25s hook budget,
+        so it is spread over the day's sessions:
+        - Today's date is claimed in .eval-canary-daily.json BEFORE any case runs
+          (on disk, not in memory), so a daemon restart or an executor-killed hook
+          thread never restarts the tier from zero — the next run RESUMES.
+        - A non-blocking md_lock means two hook runs (e.g. an orphaned thread from
+          a timed-out hook + the next session) never run the tier concurrently.
+        - Each case gets its manual-run cap (20s; runtime_health 30s with a 15s
+          floor) or whatever budget remains; a case that timed out under a
+          budget-reduced cap, or never started, is left PENDING (not failed) and
+          retried by the next session — deferred cases run last, and a case that
+          budget-times-out _CANARY_DAILY_MAX_DEFERRALS times is recorded failed.
+        - An exception from one case records it as ``error``; the tier goes on.
+        - Progress is persisted after every case.
+        """
+        try:
+            from eval_runner import evaluate_case
+        except ImportError:
+            logger.debug("context_health: eval_runner not importable, skipping daily canary")
+            return
+        from utils.file_lock import md_lock
+
+        state_path = root / ".context" / _CANARY_DAILY_STATE_FILE
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        with md_lock(state_path, blocking=False) as got:
+            if not got:
+                logger.info(
+                    "context_health: daily eval canary already running in another "
+                    "hook run — skipping",
+                )
+                return
+            today = date.today().isoformat()
+            state = self._load_daily_canary_state(state_path)
+            if state.get("date") != today:
+                # Claim today's tier BEFORE running anything.
+                state = {
+                    "date": today,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "results": {},
+                }
+                self._write_daily_canary_state(state_path, state, cases)
+            self._resume_daily_canary(root, state_path, state, cases,
+                                      evaluate_case, _deadline)
+
+    def _resume_daily_canary(self, root: Path, state_path: Path, state: dict,
+                             cases: list[dict], evaluate_case,
+                             _deadline: float) -> None:
+        """Run today's still-pending daily cases within the budget (lock held)."""
+        results = state.setdefault("results", {})
+        pending = [c for c in cases if c["id"] not in results]
+        if not pending:
+            if not state.get("complete"):
+                self._write_daily_canary_state(state_path, state, cases)
+            return
+
+        # Head-of-line fix: a case that keeps timing out under the budget would
+        # otherwise sit first in line every session and starve the rest. Run
+        # previously deferred cases LAST (stable by strike count), and after
+        # _CANARY_DAILY_MAX_DEFERRALS budget timeouts record it as failed.
+        strikes: dict = state.setdefault("deferrals", {})
+        pending.sort(key=lambda c: int(strikes.get(c["id"], 0)))
+
+        deferred: list[str] = []
+        for case in pending:
+            full_cap, floor = self._daily_case_caps(case)
+            case_timeout = full_cap
+            if _deadline > 0:
+                remaining = _deadline - time.monotonic()
+                if remaining < max(_CANARY_DAILY_MIN_CASE_BUDGET, floor):
+                    # Not enough budget for THIS case (an evaluator with a
+                    # timeout floor would overrun the hook) — a smaller case
+                    # later in line may still fit. Not a strike.
+                    deferred.append(case["id"])
+                    continue
+                case_timeout = min(case_timeout, int(remaining))
+            try:
+                r = evaluate_case(case, root, canary_timeout=case_timeout,
+                                  programmatic_only=True)
+            except Exception as exc:  # noqa: BLE001 — one broken case must not end the tier
+                r = {"status": "error", "evaluator": "",
+                     "notes": f"evaluate_case raised {type(exc).__name__}: {exc}"[:300]}
+            if self._is_budget_timeout(r, case_timeout, full_cap):
+                n = int(strikes.get(case["id"], 0)) + 1
+                strikes[case["id"]] = n
+                if n < _CANARY_DAILY_MAX_DEFERRALS:
+                    deferred.append(case["id"])  # budget artefact, not a regression
+                    self._write_daily_canary_state(state_path, state, cases)
+                    continue
+                r = {**r, "notes": (f"timed out under the hook budget {n} times "
+                                    f"(last cap {case_timeout}s): {r.get('notes', '')}")[:300]}
+            results[case["id"]] = {
+                "status": r.get("status", "skipped"),
+                "evaluator": r.get("evaluator", ""),
+                "notes": r.get("notes", ""),
+                "duration_ms": r.get("duration_ms", 0),
+            }
+            self._write_daily_canary_state(state_path, state, cases)
+
+        state["deferred"] = deferred
+        summary = self._write_daily_canary_state(state_path, state, cases)
+        if summary.get("complete") and summary.get("failed"):
+            logger.warning(
+                "context_health: daily eval canary FAILED %d/%d cases (score=%s%%)",
+                summary["failed"], summary["total"], summary.get("score"),
+            )
+        else:
+            logger.info(
+                "context_health: daily eval canary %d/%d done (%d passed, %d failed, "
+                "%d deferred to next session)",
+                summary["done"], summary["total"], summary["passed"],
+                summary["failed"], len(deferred),
+            )
+
+    @staticmethod
+    def _load_daily_canary_state(state_path: Path) -> dict:
+        """Read the daily canary state; a missing/corrupt file reads as empty."""
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            logger.warning("context_health: unreadable daily canary state (%s) — restarting tier", exc)
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _write_daily_canary_state(state_path: Path, state: dict,
+                                  cases: list[dict]) -> dict:
+        """Recompute the summary over TODAY's case list and write atomically.
+
+        Only cases in ``cases`` count (a case removed from the golden set mid-day
+        drops out). ``score`` = passed / (passed + failed) like
+        eval_runner.compute_scores; skipped/error/pending never count.
+        """
+        ids = [c["id"] for c in cases]
+        results = state.get("results", {})
+        done = [results[i] for i in ids if i in results]
+        n = {s: sum(1 for r in done if r.get("status") == s)
+             for s in ("passed", "failed", "error", "skipped")}
+        scored = n["passed"] + n["failed"]
+        state.update({
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "total": len(ids),
+            "done": len(done),
+            "pending": len(ids) - len(done),
+            "complete": len(done) == len(ids),
+            **n,
+            "score": round(n["passed"] / scored * 100, 1) if scored else None,
+            "failures": [
+                {"id": i, "notes": results[i].get("notes", "")}
+                for i in ids if results.get(i, {}).get("status") == "failed"
+            ],
+        })
+        tmp = state_path.with_name(state_path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            os.replace(tmp, state_path)
+        except OSError as exc:
+            logger.warning("context_health: daily canary state write failed: %s", exc)
+        return state
 
     def _auto_update_doc_frontmatter(self, root: Path) -> None:
         """Auto-update `updated:` field in docs/*.md that were modified this session.
@@ -2912,10 +3110,15 @@ class ContextHealthHook:
                 cwd=ws_path, capture_output=True, text=True,
                 timeout=self._GIT_TIMEOUT,
             )
-            if result.stdout.strip():
-                uncommitted = [
-                    l.strip() for l in result.stdout.strip().splitlines()
-                ]
+            # Canary state files (.eval-canary*.json + lock sidecar) are
+            # machine-written runtime state rewritten by THIS hook every session —
+            # their being dirty is expected, not a "forgot to commit" signal.
+            # Excluded in code (the workspace .gitignore is user-owned).
+            uncommitted = [
+                l.strip() for l in result.stdout.strip().splitlines()
+                if l.strip() and not _is_canary_state_path(l.split()[-1])
+            ]
+            if uncommitted:
                 findings.append(
                     f"UNCOMMITTED: {len(uncommitted)} context file(s): "
                     + ", ".join(l.split()[-1] for l in uncommitted[:5])
@@ -3037,14 +3240,24 @@ class ContextHealthHook:
         return findings
 
     def _check_cache_freshness(self, context_dir: Path, findings: list[str]) -> None:
-        """If any source .context/*.md is newer than L1 cache, invalidate."""
+        """If any L1 SOURCE file is newer than the L1 cache, invalidate it.
+
+        Scoped to ``CONTEXT_FILES`` — the exact files the loader assembles into
+        L1 and checks in its own mtime freshness leg. A dir-wide ``*.md`` glob
+        also matched non-L1 files rewritten every session (``user_suggestions.md``
+        by user_observer_hook, read directly by prompt_builder, never part of L1)
+        and so deleted a valid cache on every deep check.
+        """
+        from core.context_directory_loader import CONTEXT_FILES
+
         cache_file = context_dir / "L1_SYSTEM_PROMPTS.md"
         if not cache_file.exists():
             return
 
         cache_mtime = cache_file.stat().st_mtime
-        for source in context_dir.glob("*.md"):
-            if source.name.startswith("L") or source.name == cache_file.name:
+        for spec in CONTEXT_FILES:
+            source = context_dir / spec.filename
+            if not source.exists():
                 continue
             if source.stat().st_mtime > cache_mtime:
                 try:
@@ -3160,11 +3373,19 @@ class ContextHealthHook:
             per_file=dict(measurement.get("per_file", {})),
         )
 
-    # Matches embedded token self-claims like "~47K tokens", "~44K tokens",
-    # "≈ 30,000 tokens", "152K tok" — a NUMBER (with optional K/k suffix) near
-    # the word token(s). Used by _check_self_report_drift.
+    # Matches EXPLICIT self-size claims only: a size SUBJECT label ("Context
+    # files:", "this file", "file/context/prompt size", "self-size", "total
+    # context") followed — on the same line, with no other number in between —
+    # by "~N[K] tokens" / "≈ 30,000 tokens" / "152K tok". Used by
+    # _check_self_report_drift.
+    # A bare "N tokens" is NOT a self-claim: KNOWLEDGE.md documents budget
+    # CONSTANTS ("EPHEMERAL_HEADROOM (9,000 tokens)", "= 141,000 tokens for
+    # context files", "task_budget | 128K tokens"); the old any-number regex
+    # compared those against the file's own size and fired a false drift.
     _SELF_REPORT_TOKEN_RE = re.compile(
-        r"[~≈]?\s*([0-9][0-9,\.]*)\s*([KkMm])?\s*(?:tok\b|tokens?\b)",
+        r"(?:context\s+files?|this\s+file|(?:file|context|prompt)\s+size"
+        r"|self[- ]size|total\s+context)\b"
+        r"[^\n\d]{0,20}?[~≈]?\s*([0-9][0-9,\.]*)\s*([KkMm])?\s*(?:tok\b|tokens?\b)",
         re.IGNORECASE,
     )
 

@@ -5,6 +5,8 @@ Public API:
     load_project_graph(project_name) → GraphStore | None
     detect_project_from_path(file_path) → str | None
     get_code_intel_db_path(project_name) → Path
+    extract_and_store_routes(graph, file_path, content, language) → int
+    resolve_router_prefixes(graph, repo_root) → int  (call after any route re-store)
 """
 
 from __future__ import annotations
@@ -137,6 +139,93 @@ def extract_and_store_routes(graph: GraphStore, file_path: str, content: str, la
     except Exception as e:
         logger.debug(f"Route extraction failed for {file_path}: {e}")
     return 0
+
+
+# Entrypoint files scanned (in order) for FastAPI include_router() prefixes.
+_PREFIX_ENTRYPOINT_CANDIDATES = (
+    "backend/main.py", "main.py", "app.py", "src/main.py", "src/app.py",
+    "server.py", "backend/app.py",
+)
+
+
+def resolve_router_prefixes(graph: GraphStore, repo_root: Path) -> int:
+    """Apply FastAPI include_router prefix resolution to stored routes.
+
+    ``extract_and_store_routes`` stores routes as the decorator path only (e.g.
+    ``/sessions``); the mount prefix (``/api/chat``) lives in the entrypoint's
+    ``include_router()`` call. EVERY path that (re)stores routes — the reindex job
+    AND the FS watcher — must call this afterwards, or the stored path stays bare
+    and a route query for ``/api/chat/sessions`` resolves to the wrong handler
+    (GS_COD010 flake). Idempotent: an already-prefixed path is skipped.
+
+    Returns the number of routes updated.
+    """
+    from .route_parser import build_prefix_map, _make_route_id
+
+    entrypoint_path = None
+    entrypoint_content = None
+    for candidate in _PREFIX_ENTRYPOINT_CANDIDATES:
+        fp = repo_root / candidate
+        if fp.exists():
+            entrypoint_path = candidate
+            entrypoint_content = fp.read_text(encoding="utf-8", errors="replace")
+            break
+
+    if not entrypoint_content:
+        return 0
+
+    prefix_map = build_prefix_map(entrypoint_content, entrypoint_path)
+    if not prefix_map:
+        return 0
+
+    # Go through the store's _LockingConnection (proxy) — NOT a raw cursor — so
+    # this read-modify-write is serialized against any concurrent reader/writer on
+    # the shared connection (R1 race fix, run_071e54c8). Hold the store's RLock
+    # across the whole SELECT→UPDATE*→commit sequence so it is atomic. RLock is
+    # reentrant, so the proxy's own per-op acquires nest safely under this hold.
+    import sqlite3
+
+    updated = 0
+    with graph._conn_lock:
+        try:
+            rows = graph._conn.execute(
+                "SELECT id, method, path, file_path FROM code_routes"
+            ).fetchall()
+
+            for old_id, method, path, file_path in rows:
+                prefix = prefix_map.get(file_path, "")
+                if not prefix or path.startswith(prefix):
+                    continue  # Already resolved or no prefix applies
+                # Guard: if route path already contains the prefix as a substring,
+                # it was likely applied inline via APIRouter(prefix=...) — skip
+                if prefix.lstrip("/") in path:
+                    continue
+
+                new_path = prefix.rstrip("/") + "/" + path.lstrip("/") if path != "/" else prefix
+                new_id = _make_route_id(file_path, method, new_path)
+
+                try:
+                    graph._conn.execute(
+                        "UPDATE code_routes SET path = ?, id = ? WHERE id = ?",
+                        (new_path, new_id, old_id)
+                    )
+                except sqlite3.IntegrityError:
+                    # The prefixed row already exists (e.g. a watcher re-store
+                    # raced a reindex): this bare row is its stale duplicate.
+                    graph._conn.execute("DELETE FROM code_routes WHERE id = ?", (old_id,))
+                updated += 1
+
+            graph._conn.commit()
+        except BaseException:
+            # Never leave a half-applied transaction open on the shared connection.
+            try:
+                graph._conn.rollback()
+            except Exception:  # noqa: BLE001 — the original error is what matters
+                logger.debug("resolve_router_prefixes: rollback failed", exc_info=True)
+            raise
+    if updated:
+        logger.info(f"Prefix resolution: updated {updated} routes")
+    return updated
 
 
 # Repo-path markers found across real TECH.md files, in priority order. Order is

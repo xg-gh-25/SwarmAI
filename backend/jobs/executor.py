@@ -1067,6 +1067,10 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
     else:
         script_cwd = os.path.expandvars(raw_cwd)
 
+    script_env = _build_script_env()
+    # Let the script know its wall-clock budget so it can arm a pre-timeout
+    # stack dump (code_intel_reindex uses faulthandler.dump_traceback_later).
+    script_env["SWARM_JOB_TIMEOUT_S"] = str(timeout)
     try:
         result = subprocess.run(
             command,
@@ -1075,7 +1079,7 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
             text=True,
             timeout=timeout,
             cwd=script_cwd,
-            env=_build_script_env(),
+            env=script_env,
         )
 
         duration = (datetime.now(timezone.utc) - start).total_seconds()
@@ -1102,15 +1106,41 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
             duration_seconds=duration,
         )
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         duration = (datetime.now(timezone.utc) - start).total_seconds()
+        # Keep what the killed script printed: without it a hang leaves no trace
+        # of WHERE it was stuck (phase logs / faulthandler dump go to stderr).
+        stderr_tail = _output_tail(e.stderr, 3000)
+        stdout_tail = _output_tail(e.stdout, 1000)
+        summary = f"Script timed out after {timeout}s"
+        if stderr_tail:
+            summary += f"\n--- stderr (tail) ---\n{stderr_tail}"
+        if stdout_tail:
+            summary += f"\n--- stdout (tail) ---\n{stdout_tail}"
+        # error feeds JobState.last_error (truncated to 500) — keep a short tail.
+        # Safe vs _is_retryable_failure's exact `== "timeout"` match: that retry
+        # path only wraps _handle_agent_task, never script jobs.
+        short = _output_tail(e.stderr, 400) or _output_tail(e.stdout, 400)
         return JobResult(
             job_id=job.id, timestamp=start,
             status="failed",
-            summary=f"Script timed out after {timeout}s",
+            summary=summary,
             duration_seconds=duration,
-            error="timeout",
+            error=f"timeout: {short}" if short else "timeout",
         )
+
+
+def _output_tail(data: bytes | str | None, limit: int) -> str:
+    """Last ``limit`` chars of captured subprocess output, or "".
+
+    ``TimeoutExpired.stdout/stderr`` is None (nothing captured), or bytes even
+    when ``text=True`` was passed (CPython docs), or str — handle all three.
+    """
+    if not data:
+        return ""
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", errors="replace")
+    return data[-limit:].strip()
 
 
 # ── Maintenance Handler ──────────────────────────────────────────────
@@ -2341,7 +2371,8 @@ def _write_failure_streak_alert(
             "summary": (
                 f"Job '{job_id}' has failed {streak} consecutive times. "
                 f"Last error: {last}. "
-                f"Job is now in 24h cooldown — will auto-retry after cooldown expires."
+                f"Circuit breaker tripped — one retry after 1h, then 2h, 4h ... "
+                f"(each failed retry doubles the wait); full reset after 24h idle."
             ),
         }
 

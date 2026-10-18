@@ -5,6 +5,7 @@ Covers:
   AC1: Failed jobs appear in JSONL with correct status
   AC2: _write_job_result accepts actual status parameter
   AC3: Circuit breaker auto-resets after 24h cooldown
+  AC3b: Exponential half-open retry (1h, 2h, 4h ... <=24h), re-trip, lockstep
   AC4: signal-notify-slack disabled when config missing
   AC5-7: Briefing endpoint perf (async, cache, tail-read)
 """
@@ -15,6 +16,8 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+import pytest
 
 
 
@@ -120,14 +123,19 @@ class TestCircuitBreakerAutoReset:
     """Circuit breaker should auto-reset after 24h cooldown."""
 
     def test_circuit_breaker_blocks_within_24h(self):
-        """3+ failures within 24h should still block."""
+        """3+ failures inside the half-open backoff (1h at 3 failures) block.
+
+        (Was 2h ago under the old flat 24h cooldown; with the exponential
+        half-open retry a 3-failure streak gets one retry after 1h — see
+        TestCircuitBreakerBackoff.)
+        """
         from jobs.models import Job, SchedulerState, JobState
         from jobs.scheduler import check_circuit_breaker
 
         job = Job(id="broken", name="Broken", type="script", schedule="0 * * * *")
         state = SchedulerState(jobs={
             "broken": JobState(
-                last_run=datetime.now(timezone.utc) - timedelta(hours=2),
+                last_run=datetime.now(timezone.utc) - timedelta(minutes=30),
                 last_status="failed",
                 consecutive_failures=3,
             )
@@ -172,6 +180,128 @@ class TestCircuitBreakerAutoReset:
         })
         # Should block — no last_run means we can't determine cooldown
         assert check_circuit_breaker(job, state) is False
+
+
+# ── Circuit breaker exponential half-open retry ─────────────────────
+
+
+def _tripped_state(job_id: str, failures: int, hours_ago: float, error: str = "exit=1 boom"):
+    from jobs.models import SchedulerState, JobState
+    return SchedulerState(jobs={
+        job_id: JobState(
+            last_run=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+            last_status="failed",
+            last_error=error,
+            consecutive_failures=failures,
+        )
+    })
+
+
+class TestCircuitBreakerBackoff:
+    """Tripped breaker allows one retry after 1h, 2h, 4h ... (cap 24h).
+
+    Methodology: drive the REAL check_circuit_breaker + executor
+    _update_job_state on a SchedulerState; only the clock offset of last_run
+    and the write-alert side effect are controlled.
+    """
+
+    def test_backoff_schedule_doubles_and_caps_at_24h(self):
+        from jobs.scheduler import circuit_breaker_backoff
+        hours = [circuit_breaker_backoff(n) / timedelta(hours=1) for n in range(3, 10)]
+        assert hours == [1, 2, 4, 8, 16, 24, 24]
+        # Below threshold is still the base (never negative / fractional).
+        assert circuit_breaker_backoff(0) == timedelta(hours=1)
+        # Huge streaks don't overflow.
+        assert circuit_breaker_backoff(10_000) == timedelta(hours=24)
+
+    @pytest.mark.parametrize("failures,blocked_h,open_h", [
+        (3, 0.9, 1.1), (4, 1.9, 2.1), (5, 3.9, 4.1), (7, 15.9, 16.1),
+    ])
+    def test_half_open_only_after_backoff(self, failures, blocked_h, open_h):
+        from jobs.models import Job
+        from jobs.scheduler import check_circuit_breaker
+        job = Job(id="j", name="J", type="script", schedule="0 * * * *")
+
+        state = _tripped_state("j", failures, blocked_h)
+        assert check_circuit_breaker(job, state) is False
+
+        state = _tripped_state("j", failures, open_h)
+        assert check_circuit_breaker(job, state) is True
+        # Half-open does NOT reset: counter and last_error stay together.
+        js = state.jobs["j"]
+        assert js.consecutive_failures == failures
+        assert js.last_error == "exit=1 boom"
+
+    def test_half_open_failure_retrips_with_doubled_backoff(self):
+        from jobs.models import Job, JobResult
+        from jobs.scheduler import check_circuit_breaker
+        from jobs.executor import _update_job_state
+        job = Job(id="j", name="J", type="script", schedule="0 * * * *")
+        state = _tripped_state("j", 3, 1.5)
+        assert check_circuit_breaker(job, state) is True  # half-open
+
+        now = datetime.now(timezone.utc)
+        with patch("jobs.executor._write_failure_streak_alert"):
+            _update_job_state(state, "j", JobResult(
+                job_id="j", timestamp=now, status="failed",
+                summary="Script timed out after 120s", error="timeout: stuck",
+            ))
+        js = state.jobs["j"]
+        assert js.consecutive_failures == 4
+        assert js.last_error == "timeout: stuck"
+        # Re-tripped: blocked right after, and still blocked at 1.5h (needs 2h).
+        assert check_circuit_breaker(job, state) is False
+        js.last_run = now - timedelta(hours=1.5)
+        assert check_circuit_breaker(job, state) is False
+        js.last_run = now - timedelta(hours=2.1)
+        assert check_circuit_breaker(job, state) is True
+
+    def test_half_open_success_clears_counter_and_error_together(self):
+        from jobs.models import Job, JobResult
+        from jobs.scheduler import check_circuit_breaker
+        from jobs.executor import _update_job_state
+        job = Job(id="j", name="J", type="script", schedule="0 * * * *")
+        state = _tripped_state("j", 5, 4.5)
+        assert check_circuit_breaker(job, state) is True
+        _update_job_state(state, "j", JobResult(
+            job_id="j", timestamp=datetime.now(timezone.utc),
+            status="success", summary="ok",
+        ))
+        js = state.jobs["j"]
+        assert js.consecutive_failures == 0
+        assert js.last_error is None
+
+    @pytest.mark.parametrize("failures", [3, 5, 7, 8, 12])
+    def test_full_reset_after_24h_for_any_streak(self, failures):
+        """Reset is checked before half-open: a 3..7 streak idle 25h must reset,
+        not merely half-open with the stale counter."""
+        from jobs.models import Job
+        from jobs.scheduler import check_circuit_breaker
+        job = Job(id="j", name="J", type="script", schedule="0 * * * *")
+        state = _tripped_state("j", failures, 25)
+        assert check_circuit_breaker(job, state) is True
+        js = state.jobs["j"]
+        assert js.consecutive_failures == 0
+        assert js.last_error is None
+
+    def test_capped_streak_blocks_until_24h(self):
+        from jobs.models import Job
+        from jobs.scheduler import check_circuit_breaker
+        job = Job(id="j", name="J", type="script", schedule="0 * * * *")
+        state = _tripped_state("j", 9, 23.5)
+        assert check_circuit_breaker(job, state) is False
+        assert state.jobs["j"].consecutive_failures == 9
+        assert state.jobs["j"].last_error == "exit=1 boom"
+
+    def test_naive_last_run_is_treated_as_utc(self):
+        from jobs.models import Job, SchedulerState, JobState
+        from jobs.scheduler import check_circuit_breaker
+        job = Job(id="j", name="J", type="script", schedule="0 * * * *")
+        naive = (datetime.now(timezone.utc) - timedelta(hours=1.5)).replace(tzinfo=None)
+        state = SchedulerState(jobs={"j": JobState(
+            last_run=naive, last_status="failed", consecutive_failures=3,
+        )})
+        assert check_circuit_breaker(job, state) is True
 
 
 # ── AC4: signal-notify-slack disabled when config missing ───────────

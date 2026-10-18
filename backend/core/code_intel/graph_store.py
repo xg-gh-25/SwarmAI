@@ -244,8 +244,8 @@ class _LockingConnection:
         proxy exists to provide (R1 race, run_071e54c8). A multi-statement
         read-modify-write on a raw cursor MUST be wrapped by the caller in
         ``with graph._conn_lock:`` for the WHOLE sequence (see GraphStore.blast_radius
-        and jobs/handlers/code_intel_reindex._resolve_prefixes — the only two
-        sanctioned callers, both of which hold the lock). Prefer ``.execute()`` on
+        and core.code_intel.resolve_router_prefixes — the only two
+        sanctioned lock-holding RMW callers). Prefer ``.execute()`` on
         this proxy (locked + row-materialized) for anything that isn't a
         TEMP-TABLE/RMW sequence. Do NOT add a new raw-cursor caller without the lock.
         """

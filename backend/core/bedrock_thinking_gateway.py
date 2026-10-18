@@ -14,6 +14,10 @@ every request with the user's own AWS credentials. The route:
    credentials the daemon resolves (same credential chain; measured equal). A caller
    without the user's AWS secret key gets 403 — and one that HAS it could call
    Bedrock directly, so the route grants nothing new. No secret is minted here.
+   Key rotation: the CLI and the daemon resolve credentials independently, so
+   the previous key also verifies for up to 1h after the daemon sees a new one
+   (never past its own expiry; 15 min if that is unknown — ``_CredentialHistory``,
+   current + previous only); forwarding always uses the current key.
 2. Rewrites ``thinking.display`` to "summarized" when thinking is on (other fields
    untouched; calls without thinking pass through byte-identical).
 3. Re-signs for the fixed upstream ``bedrock-runtime.<config region>`` (the request
@@ -30,6 +34,7 @@ Key symbols:
 - ``set_listen_port`` — called at startup with the daemon's port
 - ``verify_sigv4`` — pure SigV4 verification (unit-tested)
 - ``rewrite_thinking_display`` — pure body rewrite (unit-tested)
+- ``_CredentialHistory`` — bounded current/previous credential record (rotation)
 """
 from __future__ import annotations
 
@@ -155,13 +160,13 @@ def verify_sigv4(
         return False, "missing_or_malformed_authorization"
     if m["service"] != "bedrock" or m["region"] != region:
         return False, "wrong_scope"
-    if not hmac.compare_digest(m["akid"], access_key):
+    if not _same_key(m["akid"], access_key):
         return False, "unknown_access_key"
     signed = m["signed"].split(";")
     if "host" not in signed or "x-amz-date" not in signed:
         return False, "required_headers_unsigned"
     if token and ("x-amz-security-token" not in signed
-                  or not hmac.compare_digest(headers.get("x-amz-security-token", ""), token)):
+                  or not _same_key(headers.get("x-amz-security-token", ""), token)):
         return False, "session_token_mismatch"
     amz_date = headers.get("x-amz-date", "")
     try:
@@ -200,12 +205,107 @@ _boto_session: Any = None
 _http_client: Any = None
 _REFRESH_MIN_S = 30.0
 _last_refresh = float("-inf")
+# How long a superseded key still verifies. ada STS keys rotate ~6h and each
+# CLI resolves credentials independently, so right after the daemon picks up a
+# new key a CLI can still sign with the previous (still valid) one.
+_PREVIOUS_CREDS_TTL_S = 3600.0
+# ... but never past the previous key's own expiry; when that expiry is unknown
+# (static/unrefreshable credentials) the grace window is this much shorter.
+_PREVIOUS_CREDS_TTL_UNKNOWN_EXPIRY_S = 900.0
+
+
+def _same_key(a: str, b: str) -> bool:
+    """Constant-time key compare. Bytes, because ``hmac.compare_digest`` raises
+    TypeError on non-ASCII ``str`` and the request AKID is caller-controlled."""
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+class _CredentialHistory:
+    """Current + previous frozen credentials (bounded: never more than two).
+
+    Process-global like ``_boto_session``: it caches the daemon's own AWS
+    identity, which is the same for every session — nothing per-session lives
+    here. The previous entry verifies until the EARLIER of
+    ``_PREVIOUS_CREDS_TTL_S`` after it was superseded and its own credential
+    expiry (``_PREVIOUS_CREDS_TTL_UNKNOWN_EXPIRY_S`` when the expiry is
+    unknown). Guarded by a lock: ``_resolve_credentials`` runs in worker
+    threads (``asyncio.to_thread``).
+    """
+
+    def __init__(self) -> None:
+        import threading
+
+        self._lock = threading.Lock()
+        self._current: Any = None
+        self._current_expiry: Optional[float] = None  # wall-clock epoch seconds
+        self._previous: Any = None
+        self._previous_expiry: Optional[float] = None
+        self._superseded_at = float("-inf")  # monotonic
+
+    def note(self, frozen: Any, now: Optional[float] = None,
+             expiry: Optional[float] = None) -> None:
+        """Record freshly resolved credentials; a new key demotes the old one.
+
+        ``expiry`` is the credentials' wall-clock expiry (epoch seconds) if known.
+        A resolution that returns the PREVIOUS key again is ignored: flipping
+        back would re-stamp ``_superseded_at`` and keep a superseded key alive
+        indefinitely.
+        """
+        if frozen is None:
+            return
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            prev = self._previous
+            if prev is not None and _same_key(prev.access_key, frozen.access_key):
+                return
+            cur = self._current
+            if cur is not None and not _same_key(cur.access_key, frozen.access_key):
+                self._previous, self._superseded_at = cur, now
+                self._previous_expiry = self._current_expiry
+            self._current, self._current_expiry = frozen, expiry
+
+    def _previous_valid(self, now: float, wall: float) -> bool:
+        age = now - self._superseded_at
+        if self._previous_expiry is None:
+            return age <= _PREVIOUS_CREDS_TTL_UNKNOWN_EXPIRY_S
+        return age <= _PREVIOUS_CREDS_TTL_S and wall < self._previous_expiry
+
+    def for_access_key(self, akid: str, now: Optional[float] = None,
+                       wall: Optional[float] = None) -> Any:
+        """The recorded credentials whose access key equals ``akid``, or None."""
+        now = time.monotonic() if now is None else now
+        wall = time.time() if wall is None else wall
+        with self._lock:
+            if self._previous is not None and not self._previous_valid(now, wall):
+                self._previous = self._previous_expiry = None
+            # Check both entries (no early exit) so timing doesn't reveal which matched.
+            hits = [c for c in (self._current, self._previous)
+                    if c is not None and _same_key(c.access_key, akid)]
+            return hits[0] if hits else None
+
+
+def _credential_expiry(creds: Any) -> Optional[float]:
+    """Wall-clock expiry (epoch s) of botocore credentials, or None if unknown.
+
+    RefreshableCredentials keep it in ``_expiry_time`` (an aware datetime);
+    static credentials have none. Best effort, never raises.
+    """
+    try:
+        exp = getattr(creds, "_expiry_time", None)
+        return exp.timestamp() if exp is not None else None
+    except Exception as exc:  # noqa: BLE001 — unknown expiry → the short fallback window
+        logger.debug("bedrock_gw: credential expiry unreadable: %s", type(exc).__name__)
+        return None
+
+
+_cred_history = _CredentialHistory()
 
 
 def _resolve_credentials(expected_akid: str, refresh: bool = False) -> Any:
-    """Frozen credentials from the daemon's boto3 chain (the CLI uses the same
-    chain + credential_process cache). Re-resolves once if the CLI's key differs
-    (a rotation between the two processes)."""
+    """CURRENT frozen credentials from the daemon's boto3 chain (the CLI uses the
+    same chain + credential_process cache). Re-resolves once if the CLI's key is
+    neither the current nor a still-valid previous key (a rotation between the two
+    processes). Every resolution is recorded in ``_cred_history``."""
     global _boto_session
     import boto3
 
@@ -214,14 +314,26 @@ def _resolve_credentials(expected_akid: str, refresh: bool = False) -> Any:
         _boto_session = boto3.Session()
     creds = _boto_session.get_credentials()
     frozen = creds.get_frozen_credentials() if creds else None
+    _cred_history.note(frozen, expiry=_credential_expiry(creds))
     # Re-resolve on an unknown key at most once per _REFRESH_MIN_S: the key comes
     # from the UNAUTHENTICATED request, so without the limit any local process
     # could make every request re-run the credential chain (credential_process).
-    if (frozen is not None and frozen.access_key != expected_akid and not refresh
+    # A key that matches the still-valid previous entry needs no refresh.
+    if (frozen is not None and not refresh
+            and _cred_history.for_access_key(expected_akid) is None
             and time.monotonic() - _last_refresh >= _REFRESH_MIN_S):
         _last_refresh = time.monotonic()
         return _resolve_credentials(expected_akid, refresh=True)
     return frozen
+
+
+def _verification_credentials(akid: str, current: Any) -> Any:
+    """Credentials to verify a request signed with ``akid``: the current ones, or
+    the still-valid previous ones (see _CredentialHistory). None → unknown key
+    (fail closed)."""
+    if _same_key(current.access_key, akid):
+        return current
+    return _cred_history.for_access_key(akid)
 
 
 def _config_region() -> str:
@@ -297,13 +409,21 @@ async def bedrock_gateway(model_id: str, action: str, request: Request):
         return _deny(503, "credentials unavailable")
     if creds is None:
         return _deny(503, "credentials unavailable")
-    ok, reason = verify_sigv4(
-        method=request.method, raw_path=raw_path, raw_query=raw_query, headers=headers,
-        body=body, access_key=creds.access_key, secret_key=creds.secret_key,
-        token=creds.token, region=region,
-    )
+    # Verify with whichever recorded key the CLI signed with (current, or the
+    # previous one within its TTL); always FORWARD with the current ``creds``.
+    verify_creds = _verification_credentials(akid_m["akid"], creds)
+    if verify_creds is None:
+        ok, reason = False, "unknown_access_key"
+    else:
+        ok, reason = verify_sigv4(
+            method=request.method, raw_path=raw_path, raw_query=raw_query, headers=headers,
+            body=body, access_key=verify_creds.access_key, secret_key=verify_creds.secret_key,
+            token=verify_creds.token, region=region,
+        )
     if not ok:
-        logger.warning("bedrock_gw.denied model=%s reason=%s", model_id, reason)
+        # Last 4 chars of the (public) access key id only — never the secret/token.
+        logger.warning("bedrock_gw.denied model=%s reason=%s akid=...%s",
+                       model_id, reason, akid_m["akid"][-4:])
         return _deny(403, reason)
 
     new_body, injected = rewrite_thinking_display(body)

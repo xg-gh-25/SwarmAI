@@ -2,6 +2,8 @@
 
 Verifies that script jobs resolve paths correctly regardless of whether
 the process is running from swarmai source tree or PyInstaller daemon binary.
+Also: _handle_script timeout diagnostics (stdout/stderr tails on
+TimeoutExpired, SWARM_JOB_TIMEOUT_S passed to the script env).
 """
 import os
 import time
@@ -108,3 +110,93 @@ class TestEvolutionLockStaleness:
         from core.evolution_optimizer import _break_stale_lock
         result = _break_stale_lock(lock_file, max_age_seconds=3600)
         assert result is False, "Should NOT break a fresh lock"
+
+
+def _timeout_job(timeout_s: int = 7):
+    from jobs.models import Job, JobSafety
+    return Job(
+        id="test-timeout", name="Test Timeout", type="script",
+        schedule="0 0 * * *", enabled=True, category="system",
+        config={"command": "true", "cwd": None, "output_mode": "report"},
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=timeout_s),
+    )
+
+
+class TestScriptTimeoutDiagnostics:
+    """_handle_script keeps the killed script's output and passes its budget.
+
+    subprocess.run is mocked (no real process, no real wait): the test drives
+    the TimeoutExpired branch with bytes / None output — CPython hands back
+    bytes there even with text=True.
+    """
+
+    def test_timeout_includes_stderr_and_stdout_tails(self):
+        import subprocess
+        from jobs.executor import _handle_script
+        from jobs.models import SchedulerState
+
+        exc = subprocess.TimeoutExpired(
+            "true", 7, output=b"phase stdout line\n",
+            stderr=b"[code_intel_reindex] p: parse_repo 3.0s\nThread 0x1 (most recent call first):\n",
+        )
+        with patch("jobs.executor.subprocess.run", side_effect=exc):
+            result = _handle_script(_timeout_job(), SchedulerState(jobs={}))
+        assert result.status == "failed"
+        assert result.summary.startswith("Script timed out after 7s")
+        assert "--- stderr (tail) ---" in result.summary
+        assert "most recent call first" in result.summary
+        assert "--- stdout (tail) ---" in result.summary
+        assert "phase stdout line" in result.summary
+        # error (-> JobState.last_error) carries a short stderr tail.
+        assert result.error.startswith("timeout: ")
+        assert "most recent call first" in result.error
+        assert len(result.error) <= len("timeout: ") + 400
+
+    def test_timeout_without_output_keeps_plain_error(self):
+        import subprocess
+        from jobs.executor import _handle_script
+        from jobs.models import SchedulerState
+
+        exc = subprocess.TimeoutExpired("true", 7, output=None, stderr=None)
+        with patch("jobs.executor.subprocess.run", side_effect=exc):
+            result = _handle_script(_timeout_job(), SchedulerState(jobs={}))
+        assert result.error == "timeout"
+        assert result.summary == "Script timed out after 7s"
+
+    def test_stderr_tail_is_bounded_to_last_chars(self):
+        import subprocess
+        from jobs.executor import _handle_script
+        from jobs.models import SchedulerState
+
+        big = ("x" * 10_000 + "TAIL_MARKER").encode()
+        exc = subprocess.TimeoutExpired("true", 7, output=None, stderr=big)
+        with patch("jobs.executor.subprocess.run", side_effect=exc):
+            result = _handle_script(_timeout_job(), SchedulerState(jobs={}))
+        assert result.summary.endswith("TAIL_MARKER")
+        assert len(result.summary) < 3200  # header + 3000-char tail
+
+    def test_output_tail_handles_str_bytes_none(self):
+        from jobs.executor import _output_tail
+        assert _output_tail(None, 10) == ""
+        assert _output_tail(b"", 10) == ""
+        assert _output_tail(b"abc\xff def ", 4) == "def"
+        assert _output_tail("hello world", 5) == "world"
+
+    def test_script_env_carries_timeout_budget(self):
+        from jobs.executor import _handle_script
+        from jobs.models import SchedulerState
+        import subprocess
+
+        seen = {}
+
+        def fake_run(*args, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch("jobs.executor.subprocess.run", side_effect=fake_run):
+            result = _handle_script(_timeout_job(timeout_s=42), SchedulerState(jobs={}))
+        assert result.status == "success"
+        assert seen["env"]["SWARM_JOB_TIMEOUT_S"] == "42"
+        assert seen["timeout"] == 42
+        # Must not mutate the daemon's own environment.
+        assert os.environ.get("SWARM_JOB_TIMEOUT_S") != "42"

@@ -6,15 +6,54 @@ Triggered by event-driven jobs:
 
 Runs for all projects that have an existing code_intel.db.
 Standalone script: python -m backend.jobs.handlers.code_intel_reindex [--full]
+
+Hang diagnostics: ``main`` arms ``faulthandler.dump_traceback_later`` 10s
+before the job's wall-clock budget (``SWARM_JOB_TIMEOUT_S``, set by the
+executor's ``_handle_script``) so a stuck run dumps every thread's stack to
+stderr before it is killed; the executor keeps that stderr tail in the failed
+JobResult. Per-phase timings are also printed to stderr.
+
+Key symbols: ``reindex_projects``, ``main``, ``_dump_after_seconds``.
 """
 
 from __future__ import annotations
 
+import faulthandler
 import logging
+import os
 import sys
+import time
 from pathlib import Path
 
 logger = logging.getLogger("swarm.jobs.code_intel_reindex")
+
+_DEFAULT_JOB_TIMEOUT_S = 120
+
+
+def _dump_after_seconds() -> int:
+    """Seconds after which to dump stacks: job budget minus 10s, floor 5s."""
+    raw = os.environ.get("SWARM_JOB_TIMEOUT_S", str(_DEFAULT_JOB_TIMEOUT_S))
+    try:
+        budget = int(float(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid SWARM_JOB_TIMEOUT_S=%r, assuming %ss", raw, _DEFAULT_JOB_TIMEOUT_S,
+        )
+        budget = _DEFAULT_JOB_TIMEOUT_S
+    return max(5, budget - 10)
+
+
+def _phase(project: str, phase: str, started: float) -> float:
+    """Print one phase timing line to stderr (flushed, survives a kill).
+
+    Returns a fresh ``time.monotonic()`` mark for the next phase.
+    """
+    now = time.monotonic()
+    print(
+        f"[code_intel_reindex] {project}: {phase} {now - started:.2f}s",
+        file=sys.stderr, flush=True,
+    )
+    return now
 
 
 def reindex_projects(full: bool = False) -> dict:
@@ -44,11 +83,14 @@ def reindex_projects(full: bool = False) -> dict:
             continue
 
         project_name = project_dir.name
+        mark = time.monotonic()
         graph = load_project_graph(project_name)
+        mark = _phase(project_name, "load_graph", mark)
         if not graph:
             continue
 
         freshness = check_freshness(graph)
+        mark = _phase(project_name, "check_freshness", mark)
         if not freshness.stale and not full:
             results.append({"project": project_name, "status": "fresh"})
             continue
@@ -102,12 +144,14 @@ def reindex_projects(full: bool = False) -> dict:
             from core.code_intel.parser import parse_repo_with_coverage, LANGUAGE_MAP
             from core.code_intel import extract_and_store_routes
             parse_out = parse_repo_with_coverage(repo_root)
+            mark = _phase(project_name, "parse_repo", mark)
             parse_results = parse_out.results
             coverage_holes = parse_out.coverage_holes
             parse_status = parse_out.status
             if parse_results:
                 graph.clear()
                 graph.bulk_insert(parse_results, repo_root=repo_root)
+                mark = _phase(project_name, "clear+bulk_insert", mark)
                 # bulk_insert already rebuilds FTS + resolves cross-file
                 # Persist the freshness marker ONLY after a genuine rebuild.
                 # freshness.current_head is now populated even on the
@@ -133,13 +177,16 @@ def reindex_projects(full: bool = False) -> dict:
                                 extract_and_store_routes(graph, fp, content, lang)
                             except Exception:
                                 pass
+                mark = _phase(project_name, "extract_routes", mark)
                 # Apply router prefix resolution (FastAPI include_router)
                 _resolve_prefixes(graph, repo_root)
+                mark = _phase(project_name, "resolve_prefixes", mark)
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
             # Export code-intel.json after full reindex — preserving the v3 layer
             # and carrying the coverage ledger + status stamp.
             _export_json(graph, project_name, project_dir,
                          coverage_holes=coverage_holes, parse_status=parse_status)
+            mark = _phase(project_name, "export_json", mark)
             results.append({
                 "project": project_name,
                 "status": "full_reindex",
@@ -266,6 +313,7 @@ def reindex_projects(full: bool = False) -> dict:
                     # not prove it cosmetic), so the changeset never mis-reads as SKIP.
                     grade = grading.STRUCTURAL
                 grades.append(grade if grade is not None else grading.STRUCTURAL)
+            mark = _phase(project_name, f"grade_files({len(grades)})", mark)
 
             verdict = grading.classify_changeset(
                 grades,
@@ -278,6 +326,7 @@ def reindex_projects(full: bool = False) -> dict:
                 # Structural change stored → refresh derived state.
                 _resolve_prefixes(graph, repo_root)
                 graph.rebuild_fts()
+                mark = _phase(project_name, "resolve_prefixes+rebuild_fts", mark)
             # Always advance the freshness marker (we DID process this commit range,
             # even if the verdict was SKIP — otherwise we'd re-grade forever).
             if freshness.current_head:
@@ -285,6 +334,7 @@ def reindex_projects(full: bool = False) -> dict:
             # Reclaim WAL disk space after the batch (store_file_nodes_edges +
             # rebuild_fts bypass incremental_update, so checkpoint here — Gate-2 finding E).
             graph.checkpoint_truncate()
+            mark = _phase(project_name, "checkpoint", mark)
 
             results.append({
                 "project": project_name,
@@ -300,69 +350,13 @@ def reindex_projects(full: bool = False) -> dict:
 def _resolve_prefixes(graph, repo_root: Path) -> None:
     """Apply FastAPI include_router prefix resolution to stored routes.
 
-    Scans for common entrypoint files (main.py, app.py) in the repo,
-    builds a prefix map from include_router() calls, then updates
-    routes in the DB whose paths are bare (missing the mount prefix).
+    Thin delegate to the shared ``core.code_intel.resolve_router_prefixes`` —
+    the FS watcher calls the same function after its route re-extraction, so
+    both route-storing paths produce identical (prefixed) paths.
     """
-    from core.code_intel.route_parser import build_prefix_map
+    from core.code_intel import resolve_router_prefixes
 
-    # Find entrypoint candidates
-    candidates = [
-        "backend/main.py", "main.py", "app.py", "src/main.py", "src/app.py",
-        "server.py", "backend/app.py",
-    ]
-    entrypoint_path = None
-    entrypoint_content = None
-    for candidate in candidates:
-        fp = repo_root / candidate
-        if fp.exists():
-            entrypoint_path = candidate
-            entrypoint_content = fp.read_text(encoding="utf-8", errors="replace")
-            break
-
-    if not entrypoint_content:
-        return
-
-    prefix_map = build_prefix_map(entrypoint_content, entrypoint_path)
-    if not prefix_map:
-        return
-
-    # Go through the store's _LockingConnection (proxy) — NOT a raw cursor — so
-    # this read-modify-write is serialized against any concurrent reader/writer on
-    # the shared connection (R1 race fix, run_071e54c8). Hold the store's RLock
-    # across the whole SELECT→UPDATE*→commit sequence so it is atomic (the proxy
-    # locks each op individually, but the RMW as a whole must not interleave with
-    # a concurrent write). RLock is reentrant, so the proxy's own per-op acquires
-    # nest safely under this hold.
-    from core.code_intel.route_parser import _make_route_id
-    with graph._conn_lock:
-        rows = graph._conn.execute(
-            "SELECT id, method, path, file_path FROM code_routes"
-        ).fetchall()
-
-        updated = 0
-        for old_id, method, path, file_path in rows:
-            prefix = prefix_map.get(file_path, "")
-            if not prefix or path.startswith(prefix):
-                continue  # Already resolved or no prefix applies
-            # Guard: if route path already contains the prefix as a substring,
-            # it was likely applied inline via APIRouter(prefix=...) — skip
-            if prefix.lstrip("/") in path:
-                continue
-
-            # Apply prefix
-            new_path = prefix.rstrip("/") + "/" + path.lstrip("/") if path != "/" else prefix
-            new_id = _make_route_id(file_path, method, new_path)
-
-            graph._conn.execute(
-                "UPDATE code_routes SET path = ?, id = ? WHERE id = ?",
-                (new_path, new_id, old_id)
-            )
-            updated += 1
-
-        graph._conn.commit()
-    if updated:
-        logger.info(f"Prefix resolution: updated {updated} routes")
+    resolve_router_prefixes(graph, repo_root)
 
 
 def _export_json(graph, project_name: str, project_dir: Path,
@@ -379,8 +373,32 @@ def _export_json(graph, project_name: str, project_dir: Path,
         logger.warning(f"JSON export failed for {project_name}: {e}")
 
 
+def main(argv: list[str] | None = None) -> dict:
+    """Script entrypoint: reindex under a pre-timeout stack-dump watchdog.
+
+    ``dump_traceback_later(exit=False)`` only DUMPS (all threads, to stderr) —
+    it never kills; the executor's wall clock still owns termination. The
+    dump is always cancelled in ``finally`` so a run that finishes (or raises)
+    early never emits a spurious traceback.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    full_mode = "--full" in args
+    dump_after = _dump_after_seconds()
+    faulthandler.dump_traceback_later(dump_after, exit=False)
+    print(
+        f"[code_intel_reindex] start full={full_mode} stack_dump_at={dump_after}s",
+        file=sys.stderr, flush=True,
+    )
+    started = time.monotonic()
+    try:
+        summary = reindex_projects(full=full_mode)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+        _phase("all", "total", started)
+    logger.info("Code intel reindex complete: %s", summary)
+    return summary
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    full_mode = "--full" in sys.argv
-    summary = reindex_projects(full=full_mode)
-    logger.info("Code intel reindex complete: %s", summary)
+    main()

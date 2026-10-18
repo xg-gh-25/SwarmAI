@@ -830,6 +830,9 @@ proactive_state.json
 hook_stats.json
 .swarm_privacy_migrated
 .swarm_ai_instr_untracked
+# Daily OS-Eval canary progress (context_health_hook) — rewritten every
+# session, per-machine runtime state; its .lock/.tmp siblings match above.
+.context/.eval-canary-daily.json
 
 # ── Secrets + isolated corrupt stores — never commit ──
 # secrets.json holds API keys (0o600, see AppConfigManager). A store that could
@@ -2315,7 +2318,7 @@ class SwarmWorkspaceManager:
                 for entry in (
                     ["proactive_state.json", "hook_stats.json", "*.tmp",
                      ".swarm_ai_instr_untracked", "CLAUDE.md", "AGENTS.md",
-                     "secrets.json", "*.corrupt-*"]
+                     "secrets.json", "*.corrupt-*", ".context/.eval-canary-daily.json"]
                     + _PRIVACY_GITIGNORE_RULES
                 ):
                     if entry not in existing_rules:

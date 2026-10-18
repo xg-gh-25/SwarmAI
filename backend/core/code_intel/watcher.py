@@ -190,17 +190,29 @@ class CodeIntelWatcher:
         Separated from graph update so that graph update (single FTS rebuild)
         runs once, while route extraction (memory-heavy tree-sitter) is chunked.
         """
-        from . import extract_and_store_routes
+        from . import extract_and_store_routes, resolve_router_prefixes
         from .parser import LANGUAGE_MAP
 
+        processed = 0
         for abs_path, rel_path in zip(abs_files, relative_files):
             if abs_path.suffix in LANGUAGE_MAP and abs_path.exists():
                 try:
                     content = abs_path.read_text(errors="replace")
                     language = LANGUAGE_MAP[abs_path.suffix]
                     extract_and_store_routes(self._graph, rel_path, content, language)
+                    processed += 1
                 except Exception:
                     pass  # Route extraction is best-effort
+
+        # extract_and_store_routes re-stores BARE decorator paths (`/sessions`);
+        # re-apply the include_router mount prefixes (`/api/chat/sessions`) exactly
+        # like the reindex job does, or a route query after a watcher batch resolves
+        # to the wrong handler (GS_COD010 flake). Idempotent on prefixed paths.
+        if processed:
+            try:
+                resolve_router_prefixes(self._graph, self._root)
+            except Exception as e:
+                logger.warning(f"CodeIntelWatcher: router prefix resolution failed: {e}")
 
 
 # ── Module-level watcher registry ──────────────────────────────────────

@@ -11,6 +11,10 @@ What is tested:
   the FIXED bedrock-runtime.<config region> host, re-signed, with the rewritten
   body, and the response streams back.
 - gateway_env_for_session: only desktop, SigV4-Bedrock, summarized, non-hive.
+- Key rotation (_CredentialHistory + route over the real _resolve_credentials
+  with a fake boto3 chain): the previous key verifies within its 1h TTL and is
+  rejected after; unknown keys are rejected; forwarding always uses the CURRENT
+  key; the denied log carries only the last 4 AKID chars.
 
 Methodology: botocore signs exactly like the CLI does (SigV4); the CLI-compat of
 the canonical form is covered by the real-CLI E2E run recorded in the commit.
@@ -114,6 +118,107 @@ class TestRewrite:
         assert doc["messages"][0]["content"] == "x \ud83d y"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_credential_state(monkeypatch):
+    """Module-global credential caches must not leak between tests."""
+    monkeypatch.setattr(gw, "_cred_history", gw._CredentialHistory())
+    monkeypatch.setattr(gw, "_boto_session", None)
+    monkeypatch.setattr(gw, "_last_refresh", float("-inf"))
+
+
+OLD_AK, OLD_SK, OLD_TOK = "ASIAOLDKEY000OLD", "old-secret/xyz", "old-token"
+
+
+def _frozen(ak, sk, tok):
+    return Credentials(ak, sk, tok).get_frozen_credentials()
+
+
+class TestCredentialHistory:
+    def test_previous_key_valid_within_ttl_then_expires(self):
+        h = gw._CredentialHistory()
+        far = 1e12  # previous key's own expiry: far away → the 1h TTL governs
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=0.0, expiry=far)
+        h.note(_frozen(AK, SK, TOK), now=100.0)  # rotation: OLD superseded at t=100
+        ttl = gw._PREVIOUS_CREDS_TTL_S
+        assert h.for_access_key(OLD_AK, now=100.0 + ttl - 1, wall=0.0).secret_key == OLD_SK
+        assert h.for_access_key(OLD_AK, now=100.0 + ttl + 1, wall=0.0) is None
+        # Expired entry is dropped for good, current unaffected.
+        assert h.for_access_key(OLD_AK, now=100.0, wall=0.0) is None
+        assert h.for_access_key(AK, now=1e9).secret_key == SK
+
+    def test_previous_key_never_outlives_its_own_expiry(self):
+        h = gw._CredentialHistory()
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=0.0, expiry=5_000.0)
+        h.note(_frozen(AK, SK, TOK), now=100.0)
+        assert h.for_access_key(OLD_AK, now=200.0, wall=4_999.0) is not None
+        assert h.for_access_key(OLD_AK, now=200.0, wall=5_000.0) is None  # expired
+
+    def test_unknown_expiry_uses_short_window(self):
+        h = gw._CredentialHistory()
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=0.0)  # expiry unknown
+        h.note(_frozen(AK, SK, TOK), now=100.0)
+        short = gw._PREVIOUS_CREDS_TTL_UNKNOWN_EXPIRY_S
+        assert short < gw._PREVIOUS_CREDS_TTL_S
+        assert h.for_access_key(OLD_AK, now=100.0 + short - 1) is not None
+        assert h.for_access_key(OLD_AK, now=100.0 + short + 1) is None
+
+    def test_renoted_previous_key_does_not_flip_back(self):
+        """A resolution returning the PREVIOUS key must not re-stamp it as
+        superseded-now (which would keep a superseded key alive forever)."""
+        h = gw._CredentialHistory()
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=0.0, expiry=1e12)
+        h.note(_frozen(AK, SK, TOK), now=100.0)
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=3000.0)  # stale source re-reports OLD
+        ttl = gw._PREVIOUS_CREDS_TTL_S
+        assert h.for_access_key(AK, now=3001.0).access_key == AK  # still current
+        assert h.for_access_key(OLD_AK, now=100.0 + ttl + 1, wall=0.0) is None
+
+    def test_credential_expiry_reads_refreshable_expiry(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        exp = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        assert gw._credential_expiry(SimpleNamespace(_expiry_time=exp)) == exp.timestamp()
+        assert gw._credential_expiry(Credentials(AK, SK, TOK)) is None
+        assert gw._credential_expiry(None) is None
+
+    def test_non_ascii_token_header_rejected_without_raising(self):
+        """verify_sigv4 compared the caller-controlled token header with a str
+        compare_digest → TypeError (500) on non-ASCII; now a clean mismatch."""
+        ok, reason = gw.verify_sigv4(
+            method="POST", raw_path="/model/m/invoke", raw_query="",
+            headers={"authorization": (
+                f"AWS4-HMAC-SHA256 Credential={AK}/20260101/us-east-1/bedrock/aws4_request, "
+                "SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=" + "0" * 64),
+                "x-amz-security-token": "t\u00e9", "x-amz-date": "20260101T000000Z",
+                "host": "127.0.0.1"},
+            body=b"", access_key=AK, secret_key=SK, token=TOK, region="us-east-1",
+        )
+        assert ok is False and reason == "session_token_mismatch"
+
+    def test_bounded_to_current_and_previous(self):
+        h = gw._CredentialHistory()
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=0.0)
+        h.note(_frozen(AK, SK, TOK), now=1.0)
+        h.note(_frozen("ASIATHIRDKEY0003", "s3", "t3"), now=2.0)
+        assert h.for_access_key(OLD_AK, now=3.0) is None   # two rotations ago
+        assert h.for_access_key(AK, now=3.0).access_key == AK
+        assert h.for_access_key("ASIATHIRDKEY0003", now=3.0) is not None
+
+    def test_same_key_refresh_does_not_supersede(self):
+        h = gw._CredentialHistory()
+        h.note(_frozen(OLD_AK, OLD_SK, OLD_TOK), now=0.0)
+        h.note(_frozen(AK, SK, TOK), now=1.0)
+        h.note(_frozen(AK, SK, TOK), now=2.0)  # re-resolve, no rotation
+        assert h.for_access_key(OLD_AK, now=3.0).access_key == OLD_AK
+
+    def test_unknown_and_non_ascii_keys_rejected_without_raising(self):
+        h = gw._CredentialHistory()
+        h.note(_frozen(AK, SK, TOK), now=0.0)
+        assert h.for_access_key("ASIANEVERSEEN001", now=1.0) is None
+        assert h.for_access_key("ASIA\u00e9\u00e9", now=1.0) is None
+
+
 class TestCredentialRefreshLimit:
     def test_unknown_key_refreshes_at_most_once_per_window(self, monkeypatch):
         """The key in the (unauthenticated) request must not drive the credential
@@ -200,6 +305,94 @@ class TestRoute:
         assert up.headers["authorization"] != _sign()["authorization"]  # re-signed for the new body
         # raw relay: never ask Bedrock for a compressed body
         assert up.headers["accept-encoding"] == "identity"
+
+
+@pytest.fixture
+def rotating_client(monkeypatch):
+    """Route with the REAL _resolve_credentials over a fake boto3 chain whose key
+    the test rotates (``chain["creds"]``). Daemon has seen OLD; then rotates to
+    the current AK — the 2026-10-18 403 unknown_access_key scenario."""
+    import boto3
+
+    chain = {"creds": Credentials(OLD_AK, OLD_SK, OLD_TOK), "sessions": 0}
+
+    class _Sess:
+        def __init__(self):
+            chain["sessions"] += 1
+
+        def get_credentials(self):
+            return chain["creds"]
+
+    seen: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        request.read()
+        seen.append(request)
+        return httpx.Response(200, stream=_Chunks([b"ok"]),
+                              headers={"content-type": "application/json"})
+
+    monkeypatch.setattr(boto3, "Session", _Sess)
+    monkeypatch.setattr(gw, "_http_client", httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
+    monkeypatch.setattr(gw, "_config_region", lambda: REGION)
+    gw._resolve_credentials(OLD_AK)                 # daemon resolves OLD
+    chain["creds"] = Credentials(AK, SK, TOK)       # ...then the chain rotates
+    app = FastAPI()
+    app.include_router(gw.router, prefix=gw.GATEWAY_PREFIX)
+    return TestClient(app, base_url=f"http://{HOST}"), seen, chain
+
+
+def _old_signed():
+    return _sign(ak=OLD_AK, sk=OLD_SK, tok=OLD_TOK)
+
+
+class TestKeyRotation:
+    def test_previous_key_accepted_and_forwarded_with_current(self, rotating_client):
+        client, seen, chain = rotating_client
+        r = client.post(PATH, content=BODY, headers=_old_signed())
+        assert r.status_code == 200, r.text
+        up = seen[0]
+        # Verified with OLD, but forwarded upstream with the CURRENT key + token.
+        assert up.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={AK}/")
+        assert up.headers["x-amz-security-token"] == TOK
+        # Matching the previous key must not re-run the credential chain.
+        assert chain["sessions"] == 1
+
+    def test_current_key_still_accepted(self, rotating_client):
+        client, seen, _ = rotating_client
+        assert client.post(PATH, content=BODY, headers=_sign()).status_code == 200
+        assert len(seen) == 1
+
+    def test_previous_key_rejected_after_window(self, rotating_client, caplog):
+        client, seen, _ = rotating_client
+        assert client.post(PATH, content=BODY, headers=_sign()).status_code == 200  # rotate in
+        gw._cred_history._superseded_at -= gw._PREVIOUS_CREDS_TTL_S + 1
+        with caplog.at_level("WARNING", logger=gw.logger.name):
+            r = client.post(PATH, content=BODY, headers=_old_signed())
+        assert r.status_code == 403 and "unknown_access_key" in r.text
+        assert len(seen) == 1  # the expired-key request was NOT forwarded
+        line = "\n".join(rec.getMessage() for rec in caplog.records)
+        assert f"akid=...{OLD_AK[-4:]}" in line
+        for secret in (OLD_SK, OLD_TOK, SK, TOK, OLD_AK[:-4]):
+            assert secret not in line
+
+    def test_old_key_with_wrong_secret_still_rejected(self, rotating_client):
+        client, seen, _ = rotating_client
+        h = _sign(ak=OLD_AK, sk="attacker-guess", tok=OLD_TOK)
+        r = client.post(PATH, content=BODY, headers=h)
+        assert r.status_code == 403 and "bad_signature" in r.text and seen == []
+
+    def test_old_key_with_current_token_rejected(self, rotating_client):
+        """Each recorded entry verifies with ITS OWN token, never a mix."""
+        client, seen, _ = rotating_client
+        h = _sign(ak=OLD_AK, sk=OLD_SK, tok=TOK)
+        r = client.post(PATH, content=BODY, headers=h)
+        assert r.status_code == 403 and "session_token_mismatch" in r.text and seen == []
+
+    def test_unknown_key_rejected(self, rotating_client):
+        client, seen, _ = rotating_client
+        h = _sign(ak="ASIANEVERSEEN001", sk="whatever", tok="t")
+        r = client.post(PATH, content=BODY, headers=h)
+        assert r.status_code == 403 and "unknown_access_key" in r.text and seen == []
 
 
 class _Cfg(dict):

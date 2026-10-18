@@ -287,6 +287,43 @@ class TestDddCompleteness:
         assert any("AUTO-FIXED" in f and "L1 cache" in f for f in findings)
         assert not cache.exists()
 
+    def test_cache_not_invalidated_by_non_l1_file(self, hook, workspace):
+        """user_suggestions.md is rewritten every session but is NOT an L1 source
+        (prompt_builder reads it directly) — a newer copy must not kill the cache."""
+        ctx = workspace / ".context"
+        cache = ctx / "L1_SYSTEM_PROMPTS.md"
+        cache.write_text("cached content")
+        old = datetime.now().timestamp() - 60
+        for spec_file in ctx.glob("*.md"):
+            if spec_file.name != cache.name:
+                os.utime(spec_file, (old, old))
+        (ctx / "user_suggestions.md").write_text("# Suggestions\n")  # newest
+
+        findings: list[str] = []
+        hook._check_cache_freshness(ctx, findings)
+        assert findings == []
+        assert cache.exists()
+
+    def test_git_health_ignores_canary_state_files(self, hook, workspace):
+        """Canary state is runtime state rewritten by this hook — never UNCOMMITTED."""
+        ctx = workspace / ".context"
+        (ctx / ".eval-canary.json").write_text("{}\n")
+        subprocess.run(["git", "add", "-A"], cwd=workspace, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "canary"], cwd=workspace, capture_output=True)
+        (ctx / ".eval-canary.json").write_text('{"score": 100}\n')       # tracked, dirty
+        (ctx / ".eval-canary-daily.json").write_text("{}\n")             # untracked
+        (ctx / ".eval-canary-daily.json.lock").write_text("")            # untracked
+
+        findings = hook._check_git_health(workspace, str(workspace))
+        assert not any("UNCOMMITTED" in f for f in findings), findings
+
+        # A real context-file edit is still reported — and only it is named.
+        (ctx / "MEMORY.md").write_text("# MEMORY.md\n\nedited\n")
+        findings = hook._check_git_health(workspace, str(workspace))
+        unc = [f for f in findings if "UNCOMMITTED" in f]
+        assert unc and "1 context file" in unc[0] and "MEMORY.md" in unc[0], findings
+        assert "eval-canary" not in unc[0]
+
 
 # --------------------------------------------------------------------------
 # Daily gate
@@ -1460,3 +1497,243 @@ class TestExpireStaleProposalsArchives:
             "a 60d-old terminal proposal with a reset (5d) mtime MUST be archived — "
             "age must derive from the filename/created stamp, NOT mtime"
         )
+
+
+# --------------------------------------------------------------------------
+# OS-Eval canary tiers (daily tier: budget timeouts, persistence, lock)
+# --------------------------------------------------------------------------
+
+def _eval_runner_module():
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import eval_runner
+    return eval_runner
+
+
+def _canary_case(cid, evaluator="canary_pass"):
+    return {"id": cid, "eval_method": "programmatic", "evaluators": [evaluator],
+            "dimension": "capability"}
+
+
+class _SimulatedKill(BaseException):
+    """The hook thread dying mid-tier (not catchable as a case error)."""
+
+
+class _FakeEval:
+    """Stand-in for eval_runner.evaluate_case: records calls, scripted outcomes."""
+
+    def __init__(self, outcome=None, raise_on=None):
+        self.calls: list[tuple[str, int]] = []
+        self._outcome = outcome or (lambda case, timeout: {"status": "passed", "notes": "ok"})
+        self._raise_on = raise_on
+
+    def __call__(self, case, root, *, canary_timeout=None, programmatic_only=False, **_):
+        assert programmatic_only is True  # zero-LLM guarantee on the hook path
+        if case["id"] == self._raise_on:
+            # BaseException: a killed hook thread is not an ordinary case error
+            # (those are caught and recorded as status=error).
+            raise _SimulatedKill("simulated hook kill")
+        self.calls.append((case["id"], canary_timeout))
+        r = dict(self._outcome(case, canary_timeout))
+        r.setdefault("evaluator", "canary_pass")
+        r.setdefault("duration_ms", 1)
+        return r
+
+
+def _daily_state(workspace):
+    return json.loads((workspace / ".context" / ".eval-canary-daily.json").read_text())
+
+
+class TestDailyEvalCanary:
+    def test_budget_capped_timeout_is_deferred_not_failed(self, hook, workspace):
+        """THE BUG: per-case timeout collapsed to 3s → 13 slow cases 'failed' daily.
+        A timeout under a budget-reduced cap must be deferred (pending), not failed."""
+        import time as _time
+        er = _eval_runner_module()
+        cases = [_canary_case("GS_SLOW_1"), _canary_case("GS_SLOW_2")]
+        fake = _FakeEval(lambda c, t: {"status": "failed",
+                                       "notes": f"Command timed out ({t}s)"})
+        with patch.object(er, "evaluate_case", fake):
+            hook._run_daily_canary(workspace, cases, _deadline=_time.monotonic() + 8)
+        st = _daily_state(workspace)
+        assert all(t < 20 for _, t in fake.calls), fake.calls
+        assert st["failed"] == 0 and st["failures"] == []
+        assert st["pending"] == 2 and st["complete"] is False
+        assert set(st["deferred"]) == {"GS_SLOW_1", "GS_SLOW_2"}
+
+    def test_full_cap_timeout_is_a_real_failure(self, hook, workspace):
+        """At the manual-run cap (20s) a timeout is a genuine regression."""
+        er = _eval_runner_module()
+        fake = _FakeEval(lambda c, t: {"status": "failed",
+                                       "notes": f"Command timed out ({t}s)"})
+        with patch.object(er, "evaluate_case", fake):
+            hook._run_daily_canary(workspace, [_canary_case("GS_HUNG")], _deadline=0.0)
+        st = _daily_state(workspace)
+        assert fake.calls == [("GS_HUNG", 20)]
+        assert st["failed"] == 1 and st["complete"] is True
+        assert st["failures"][0]["id"] == "GS_HUNG"
+
+    def test_no_budget_left_defers_without_running(self, hook, workspace):
+        import time as _time
+        er = _eval_runner_module()
+        fake = _FakeEval()
+        with patch.object(er, "evaluate_case", fake):
+            hook._run_daily_canary(workspace, [_canary_case("GS_A")],
+                                   _deadline=_time.monotonic() + 1)
+        st = _daily_state(workspace)
+        assert fake.calls == []
+        assert st["date"] == date.today().isoformat()  # claimed even though nothing ran
+        assert st["deferred"] == ["GS_A"] and st["failed"] == 0
+
+    def test_date_persisted_before_run_and_resumes_after_restart(self, workspace):
+        """A killed hook / daemon restart must RESUME today's tier, never rerun it."""
+        er = _eval_runner_module()
+        cases = [_canary_case(f"GS_{i}") for i in range(4)]
+        first = _FakeEval(raise_on="GS_2")  # thread dies mid-tier
+        with patch.object(er, "evaluate_case", first), pytest.raises(_SimulatedKill):
+            ContextHealthHook()._run_daily_canary(workspace, cases, _deadline=0.0)
+        st = _daily_state(workspace)
+        assert st["date"] == date.today().isoformat()
+        assert set(st["results"]) == {"GS_0", "GS_1"}  # progress persisted per case
+
+        second = _FakeEval()  # fresh instance = daemon restart (no in-memory state)
+        with patch.object(er, "evaluate_case", second):
+            ContextHealthHook()._run_daily_canary(workspace, cases, _deadline=0.0)
+        assert [c for c, _ in second.calls] == ["GS_2", "GS_3"]
+        assert _daily_state(workspace)["complete"] is True
+
+        third = _FakeEval()
+        with patch.object(er, "evaluate_case", third):
+            ContextHealthHook()._run_daily_canary(workspace, cases, _deadline=0.0)
+        assert third.calls == []  # once per day
+
+    def test_deferred_case_runs_last_and_fails_after_max_strikes(self, hook, workspace):
+        """Head-of-line: a case that always budget-times-out must not starve the
+        others, and after 3 strikes it is recorded failed (not pending forever)."""
+        import time as _time
+        er = _eval_runner_module()
+        cases = [_canary_case("GS_SLOW"), _canary_case("GS_OK")]
+
+        def outcome(c, t):
+            if c["id"] == "GS_SLOW":
+                return {"status": "failed", "notes": f"Command timed out ({t}s)"}
+            return {"status": "passed", "notes": "ok"}
+
+        orders = []
+        for _ in range(3):
+            fake = _FakeEval(outcome)
+            with patch.object(er, "evaluate_case", fake):
+                hook._run_daily_canary(workspace, cases, _deadline=_time.monotonic() + 10)
+            orders.append([c for c, _ in fake.calls])
+        assert orders[0] == ["GS_SLOW", "GS_OK"]
+        assert orders[1] == ["GS_SLOW"]  # GS_OK already done
+        st = _daily_state(workspace)
+        assert st["results"]["GS_SLOW"]["status"] == "failed"
+        assert "3 times" in st["results"]["GS_SLOW"]["notes"]
+        assert st["complete"] is True
+
+        # Ordering: with two pending, the one with strikes goes last.
+        st2 = {"date": date.today().isoformat(), "results": {},
+               "deferrals": {"GS_SLOW": 1}}
+        (workspace / ".context" / ".eval-canary-daily.json").write_text(json.dumps(st2))
+        fake = _FakeEval()
+        with patch.object(er, "evaluate_case", fake):
+            hook._run_daily_canary(workspace, cases, _deadline=0.0)
+        assert [c for c, _ in fake.calls] == ["GS_OK", "GS_SLOW"]
+
+    def test_case_exception_is_recorded_as_error_and_tier_continues(self, hook, workspace):
+        er = _eval_runner_module()
+        calls = []
+
+        def boom(case, root, **kw):
+            calls.append(case["id"])
+            if case["id"] == "GS_BAD":
+                raise ValueError("bad case")
+            return {"status": "passed", "notes": "ok", "evaluator": "canary_pass"}
+
+        with patch.object(er, "evaluate_case", boom):
+            hook._run_daily_canary(workspace, [_canary_case("GS_BAD"), _canary_case("GS_OK")],
+                                   _deadline=0.0)
+        st = _daily_state(workspace)
+        assert calls == ["GS_BAD", "GS_OK"]
+        assert st["results"]["GS_BAD"]["status"] == "error"
+        assert st["results"]["GS_OK"]["status"] == "passed"
+
+    def test_runtime_health_needs_its_floor_and_uses_its_own_cap(self, hook, workspace):
+        """runtime_health runs ≥15s (eval_runner floor) → don't start it with less;
+        its full cap is 30s, so a 20s timeout is a budget artefact, not a failure."""
+        import time as _time
+        er = _eval_runner_module()
+        cases = [_canary_case("GS_RH", "runtime_health"), _canary_case("GS_CP")]
+        fake = _FakeEval()
+        with patch.object(er, "evaluate_case", fake):
+            hook._run_daily_canary(workspace, cases, _deadline=_time.monotonic() + 10)
+        assert [c for c, _ in fake.calls] == ["GS_CP"]  # RH skipped, CP still ran
+        assert _daily_state(workspace)["deferred"] == ["GS_RH"]
+
+        assert hook._is_budget_timeout(
+            {"status": "failed", "notes": "runtime_health command timed out (20s)"},
+            20, 30) is True
+        assert hook._is_budget_timeout(
+            {"status": "failed", "notes": "runtime_health command timed out (30s)"},
+            30, 30) is False
+
+    def test_new_day_restarts_tier(self, hook, workspace):
+        er = _eval_runner_module()
+        state_path = workspace / ".context" / ".eval-canary-daily.json"
+        state_path.write_text(json.dumps({"date": "2000-01-01", "complete": True,
+                                          "results": {"GS_A": {"status": "passed"}}}))
+        fake = _FakeEval()
+        with patch.object(er, "evaluate_case", fake):
+            hook._run_daily_canary(workspace, [_canary_case("GS_A")], _deadline=0.0)
+        assert fake.calls == [("GS_A", 20)]
+        assert _daily_state(workspace)["date"] == date.today().isoformat()
+
+    def test_lock_prevents_concurrent_daily_runs(self, hook, workspace):
+        """An orphaned hook thread holding the tier → the next run skips it."""
+        from utils.file_lock import md_lock
+        er = _eval_runner_module()
+        state_path = workspace / ".context" / ".eval-canary-daily.json"
+        fake = _FakeEval()
+        with md_lock(state_path) as got, patch.object(er, "evaluate_case", fake):
+            assert got
+            hook._run_daily_canary(workspace, [_canary_case("GS_A")], _deadline=0.0)
+        assert fake.calls == []
+        assert not state_path.exists()
+
+    def test_session_tier_never_overwrites_daily_results(self, hook, workspace):
+        """Session tier → .eval-canary.json (file_contains only); daily tier →
+        .eval-canary-daily.json. A later session-tier run leaves daily intact."""
+        er = _eval_runner_module()
+        golden = {"cases": [_canary_case("GS_FC", "file_contains"),
+                            _canary_case("GS_CP"),
+                            _canary_case("GS_RH", "runtime_health")]}
+        gs_file = workspace / "golden.yaml"
+        gs_file.write_text("x")
+        run_eval_ids: list[list[str]] = []
+
+        def fake_run_eval(gs, trigger, case_filter, root, **kw):
+            run_eval_ids.append([c["id"] for c in gs["cases"]])
+            assert trigger == "session_canary" and kw.get("programmatic_only") is True
+            return {"triggered_at": "t", "total_cases": len(gs["cases"]),
+                    "cases_passed": len(gs["cases"]), "cases_failed": 0,
+                    "cases_error": 0, "overall_score": 100.0,
+                    "duration_seconds": 0.1, "cases": []}
+
+        fake = _FakeEval()
+        with patch.object(er, "_golden_set_path", lambda root: gs_file), \
+             patch.object(er, "load_golden_set", lambda p: golden), \
+             patch.object(er, "run_eval", fake_run_eval), \
+             patch.object(er, "evaluate_case", fake):
+            hook._run_eval_canary(workspace)
+            daily_after_first = _daily_state(workspace)
+            hook._run_eval_canary(workspace)  # second session, same day
+
+        assert run_eval_ids == [["GS_FC"], ["GS_FC"]]  # spawners never in session tier
+        assert sorted(c for c, _ in fake.calls) == ["GS_CP", "GS_RH"]  # daily ran once
+        session = json.loads((workspace / ".context" / ".eval-canary.json").read_text())
+        assert session["total"] == 1
+        daily = _daily_state(workspace)
+        assert daily["total"] == 2 and daily["complete"] is True
+        assert daily["results"] == daily_after_first["results"]

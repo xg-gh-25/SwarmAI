@@ -243,6 +243,98 @@ class TestWatcherBatchHandling:
             assert len(second_call_rel) == 15
 
 
+class TestWatcherRoutePrefixes:
+    """GS_COD010 root cause: the watcher re-stored routes as BARE decorator paths
+    (`/sessions`) and never re-applied include_router prefixes (only the reindex
+    job did), so after any watcher batch `chat.py`'s route lost `/api/chat`.
+    Uses a REAL GraphStore so the stored path is what a route query would see."""
+
+    _MAIN = (
+        "from routers import chat_router\n"
+        "app = FastAPI()\n"
+        'app.include_router(chat_router, prefix="/api/chat", tags=["chat"])\n'
+    )
+    _CHAT = (
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n\n"
+        '@router.get("/sessions")\n'
+        "async def list_sessions():\n"
+        "    return []\n"
+    )
+
+    def _repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / "backend" / "routers").mkdir(parents=True)
+        (repo / "backend" / "main.py").write_text(self._MAIN)
+        chat = repo / "backend" / "routers" / "chat.py"
+        chat.write_text(self._CHAT)
+        return repo, chat
+
+    def test_watcher_route_extraction_applies_router_prefix(self, tmp_path):
+        from core.code_intel.graph_store import GraphStore
+        from core.code_intel.watcher import CodeIntelWatcher
+
+        repo, chat = self._repo(tmp_path)
+        graph = GraphStore(tmp_path / "ci.db")
+        try:
+            watcher = CodeIntelWatcher("p", repo, graph)
+            watcher._extract_routes_only(["backend/routers/chat.py"], [chat])
+            paths = [r["path"] for r in graph.get_routes("backend/routers/chat.py")]
+            assert paths == ["/api/chat/sessions"], paths
+            # Idempotent: a second watcher batch must not double-prefix.
+            watcher._extract_routes_only(["backend/routers/chat.py"], [chat])
+            paths = [r["path"] for r in graph.get_routes("backend/routers/chat.py")]
+            assert paths == ["/api/chat/sessions"], paths
+        finally:
+            graph.close()
+
+    def test_reindex_wrapper_delegates_to_shared_resolver(self, tmp_path):
+        """The reindex job's _resolve_prefixes and the watcher share ONE resolver."""
+        from core.code_intel import extract_and_store_routes
+        from core.code_intel.graph_store import GraphStore
+        from jobs.handlers.code_intel_reindex import _resolve_prefixes
+
+        repo, chat = self._repo(tmp_path)
+        graph = GraphStore(tmp_path / "ci.db")
+        try:
+            extract_and_store_routes(graph, "backend/routers/chat.py", self._CHAT, "python")
+            assert [r["path"] for r in graph.get_routes()] == ["/sessions"]
+            _resolve_prefixes(graph, repo)
+            assert [r["path"] for r in graph.get_routes()] == ["/api/chat/sessions"]
+        finally:
+            graph.close()
+
+    def test_prefix_collision_drops_bare_duplicate_and_commits(self, tmp_path):
+        """A bare row whose prefixed id already exists used to raise IntegrityError
+        mid-transaction (rest of the batch unapplied, txn left open)."""
+        from core.code_intel import extract_and_store_routes, resolve_router_prefixes
+        from core.code_intel.graph_store import GraphStore
+        from core.code_intel.route_parser import _make_route_id
+
+        repo, chat = self._repo(tmp_path)
+        graph = GraphStore(tmp_path / "ci.db")
+        try:
+            fp = "backend/routers/chat.py"
+            extract_and_store_routes(graph, fp, self._CHAT, "python")
+            resolve_router_prefixes(graph, repo)
+            # Re-create the stale bare twin of the already-prefixed route.
+            graph._conn.execute(
+                "INSERT INTO code_routes (id, method, path, handler_node_id, framework, "
+                "file_path, line_number, middleware) SELECT ?, method, '/sessions', "
+                "handler_node_id, framework, file_path, line_number, middleware "
+                "FROM code_routes WHERE path = '/api/chat/sessions'",
+                (_make_route_id(fp, "GET", "/sessions"),),
+            )
+            graph._conn.commit()
+            assert sorted(r["path"] for r in graph.get_routes()) == [
+                "/api/chat/sessions", "/sessions"]
+            resolve_router_prefixes(graph, repo)  # must not raise
+            assert [r["path"] for r in graph.get_routes()] == ["/api/chat/sessions"]
+            assert not graph._conn.in_transaction
+        finally:
+            graph.close()
+
+
 # ── Registry / capacity tests ───────────────────────────────────────────────
 
 class TestWatcherRegistry:
