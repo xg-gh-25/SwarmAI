@@ -165,3 +165,239 @@ async def test_ac6_init_path_extends_too():
     with pytest.raises(_ExtendedMarker):
         await _drain(orch)
     assert parent._tool_free_extensions == 1
+
+
+# ── 2026-10-18 offline-dive follow-ups ────────────────────────────────────
+# - an OPEN tool defers the timeout to the tool-aware hang tier (no kill);
+# - the hard ceiling is measured from the last SDK event, not turn start;
+# - a pending permission that never reached this stream is re-queued+surfaced;
+# - the loser-cancel loop no longer swallows the stream task's OWN cancellation.
+
+
+async def _live_watchdog():
+    """A running stand-in for SessionUnit._pid_watchdog_task."""
+    return asyncio.create_task(asyncio.sleep(3600))
+
+
+@pytest.mark.asyncio
+async def test_open_tool_defers_timeout_instead_of_killing():
+    orch, parent = _make_orchestrator(verdict="wedged")  # would raise if probed
+    # value shape is (start_time, name) — see SessionUnit._oldest_open_tool
+    parent._open_tool_uses = {"toolu_1": (time.time() - 400, "Bash")}
+    parent._pid_watchdog_task = await _live_watchdog()
+    try:
+        with pytest.raises(_ExtendedMarker):
+            await _drain(orch)
+    finally:
+        parent._pid_watchdog_task.cancel()
+    parent._tool_free_hang_verdict.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["no_watchdog", "watchdog_done", "not_streaming", "past_ceiling"])
+async def test_open_tool_does_not_defer_when_hang_tier_cannot_act(case):
+    """H1: deferring with a dead watchdog / non-STREAMING unit / a tool past the
+    watchdog's own hard ceiling would never end the turn → probe/raise path."""
+    orch, parent = _make_orchestrator(verdict="wedged")
+    start = time.time() - 400
+    if case == "past_ceiling":
+        start = time.time() - (
+            SessionUnit.TOOL_HANG_HARD_CEILING_S + SessionUnit.TOOL_HANG_INTERRUPT_GRACE_S + 60
+        )
+    parent._open_tool_uses = {"toolu_1": (start, "Bash")}
+    wd = None
+    if case != "no_watchdog":
+        wd = await _live_watchdog()
+        if case == "watchdog_done":
+            wd.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await wd
+    parent._pid_watchdog_task = wd
+    if case == "not_streaming":
+        parent.state = SessionState.WAITING_INPUT
+    try:
+        with pytest.raises(RuntimeError, match="Streaming timeout"):
+            await _drain(orch)
+    finally:
+        if wd is not None:
+            wd.cancel()
+    parent._tool_free_hang_verdict.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_extension_does_not_reset_silence_ceiling():
+    """M1: the ceiling counts the SDK silence; an extension (which resets
+    _last_event_time for the watchdog) must not restart that clock."""
+    orch, parent = _make_orchestrator(verdict="working", timeout_s=0.2)
+    parent.TOOL_FREE_HARD_CEILING_S = 0.3  # 1st timeout (~0.2s) extends, 2nd (~0.4s) must not
+
+    class _AlwaysSilent:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.sleep(3600)
+
+    parent._client.receive_response = lambda: _AlwaysSilent()
+    with pytest.raises(RuntimeError, match="Streaming timeout"):
+        await _drain(orch)
+    # Old behaviour (ceiling from _last_event_time, reset by each extension)
+    # extended all TOOL_FREE_MAX_EXTENSIONS times.
+    assert parent._tool_free_extensions == 1
+
+
+@pytest.mark.asyncio
+async def test_ceiling_counts_silence_not_turn_age():
+    orch, parent = _make_orchestrator(verdict="working")
+    parent._streaming_start_time = time.time() - 5000  # turn far past 1800s ceiling
+    parent._last_event_time = time.time()              # but it was progressing
+    with pytest.raises(_ExtendedMarker):
+        await _drain(orch)
+    parent._tool_free_hang_verdict.assert_awaited()
+    assert parent._tool_free_extensions == 1
+
+
+@pytest.mark.asyncio
+async def test_lost_permission_is_rescued_and_surfaced():
+    from datetime import datetime, timedelta
+    from core import permission_manager as _pm_mod
+
+    orch, parent = _make_orchestrator(verdict="wedged")
+    pending = [{
+        "id": "perm_lost1", "session_id": parent.session_id, "tool_name": "Bash",
+        "tool_input": '{"command": "rm -rf /tmp/x"}', "reason": "dangerous",
+        "status": "pending",
+        "created_at": (datetime.now() - timedelta(seconds=120)).isoformat(),
+    }]
+    pm = _pm_mod.permission_manager
+    with patch.object(pm, "get_pending_for_session", return_value=pending), \
+         patch.object(pm, "has_live_waiter", return_value=True):
+        events = await _drain(orch)
+    perm = [e for e in events if e.get("type") == "cmd_permission_request"]
+    assert perm and perm[0]["requestId"] == "perm_lost1"
+    assert perm[0]["toolInput"] == {"command": "rm -rf /tmp/x"}
+    parent._transition.assert_called_with(SessionState.WAITING_INPUT)
+
+
+@pytest.mark.asyncio
+async def test_rescue_survives_a_stray_getter_on_the_queue():
+    """A stray perm_queue.get() (e.g. an abandoned reader) would swallow a
+    re-queued copy just like the original — the rescue must bypass the queue."""
+    from datetime import datetime, timedelta
+    from core import permission_manager as _pm_mod
+
+    orch, parent = _make_orchestrator(verdict="wedged")
+    pending = [{
+        "id": "perm_lost2", "session_id": parent.session_id, "tool_name": "Bash",
+        "tool_input": {"command": "git worktree add /tmp/w"}, "reason": "r",
+        "created_at": (datetime.now() - timedelta(seconds=60)).isoformat(),
+    }]
+    q = asyncio.Queue()
+    stray = asyncio.create_task(q.get())  # FIFO-first getter on the queue
+    await asyncio.sleep(0)
+    pm = _pm_mod.permission_manager
+    try:
+        with patch.object(pm, "get_session_queue", return_value=q), \
+             patch.object(pm, "get_pending_for_session", return_value=pending), \
+             patch.object(pm, "has_live_waiter", return_value=True):
+            events = [ev async for ev in orch._read_formatted_response()]
+    finally:
+        stray.cancel()
+    perm = [e for e in events if e.get("type") == "cmd_permission_request"]
+    assert perm and perm[0]["requestId"] == "perm_lost2"
+
+
+@pytest.mark.asyncio
+async def test_rescue_on_heartbeat_tick_before_any_timeout():
+    """The heartbeat-tick branch rescues too: the permission surfaces long
+    before the read timeout (which would otherwise kill the turn)."""
+    from datetime import datetime, timedelta
+    from core import permission_manager as _pm_mod
+
+    orch, parent = _make_orchestrator(verdict="wedged", timeout_s=30.0)
+    orch._HEARTBEAT_POLL_S = 0.05
+    pending = [{
+        "id": "perm_tick", "session_id": parent.session_id, "tool_name": "Bash",
+        "tool_input": {"command": "x"},
+        "created_at": (datetime.now() - timedelta(seconds=60)).isoformat(),
+    }]
+    pm = _pm_mod.permission_manager
+    with patch.object(pm, "get_pending_for_session", return_value=pending), \
+         patch.object(pm, "has_live_waiter", return_value=True):
+        events = await asyncio.wait_for(_drain(orch), timeout=5)
+    assert [e["requestId"] for e in events if e.get("type") == "cmd_permission_request"] \
+        == ["perm_tick"]
+    parent._tool_free_hang_verdict.assert_not_awaited()  # no timeout happened
+
+
+@pytest.mark.asyncio
+async def test_rescue_scans_the_gate_key_when_it_differs():
+    from datetime import datetime, timedelta
+    from core import permission_manager as _pm_mod
+
+    orch, parent = _make_orchestrator(verdict="wedged")
+    parent._hook_session_context = {"sdk_session_id": "sdk-other-key"}
+    lost = {"id": "perm_k", "session_id": "sdk-other-key", "tool_name": "Bash",
+            "tool_input": {"command": "x"},
+            "created_at": (datetime.now() - timedelta(seconds=60)).isoformat()}
+    pm = _pm_mod.permission_manager
+    with patch.object(pm, "get_pending_for_session",
+                      side_effect=lambda k: [lost] if k == "sdk-other-key" else []), \
+         patch.object(pm, "has_live_waiter", return_value=True):
+        events = await _drain(orch)
+    perm = [e for e in events if e.get("type") == "cmd_permission_request"]
+    assert perm and perm[0]["requestId"] == "perm_k"
+    assert perm[0]["sessionId"] == parent.session_id  # surfaced under the app id
+
+
+@pytest.mark.asyncio
+async def test_fresh_or_waiterless_permission_is_not_rescued():
+    from datetime import datetime
+    from core import permission_manager as _pm_mod
+
+    orch, parent = _make_orchestrator(verdict="wedged")
+    fresh = [{"id": "perm_new", "session_id": parent.session_id, "status": "pending",
+              "created_at": datetime.now().isoformat()}]
+    pm = _pm_mod.permission_manager
+    with patch.object(pm, "get_pending_for_session", return_value=fresh), \
+         patch.object(pm, "has_live_waiter", return_value=True):
+        with pytest.raises(RuntimeError, match="Streaming timeout"):
+            await _drain(orch)
+
+
+class _SlowCancelRead:
+    """First read blocks; when cancelled it takes a while to unwind (so the
+    stream task is inside the loser-cancel `await task` when IT gets cancelled)."""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.3)
+            raise
+
+
+@pytest.mark.asyncio
+async def test_own_cancellation_is_not_swallowed_by_loser_cancel():
+    from core import permission_manager as _pm_mod
+
+    orch, parent = _make_orchestrator(verdict="wedged", timeout_s=30.0)
+    parent._client.receive_response = lambda: _SlowCancelRead()
+    q = asyncio.Queue()
+
+    async def run():
+        with patch.object(_pm_mod.permission_manager, "get_session_queue", return_value=q):
+            async for _ev in orch._read_formatted_response():
+                pass
+
+    task = asyncio.create_task(run())
+    await asyncio.sleep(0.05)
+    # A permission wins the race → the loop cancels+awaits the slow sdk loser…
+    q.put_nowait({"requestId": "perm_x", "sessionId": parent.session_id})
+    await asyncio.sleep(0.1)
+    task.cancel()  # …and the stream task itself is cancelled during that await.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)

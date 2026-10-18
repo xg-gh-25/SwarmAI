@@ -64,6 +64,12 @@ async def test_f1_no_open_tool_still_force_unsticks():
     unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
     unit.force_unstick_streaming = AsyncMock()
     unit.session_id = "s-api-hang"
+    # Model production state for the tool-free CPU gate (run_dcd668a6) that runs
+    # before the kill: a MagicMock auto-attribute ceiling made `stall <= ceiling`
+    # raise TypeError, so this test failed regardless of the behavior under test.
+    unit.pid = 4242
+    unit.TOOL_FREE_HARD_CEILING_S = 1800.0
+    unit._tool_free_hang_verdict = AsyncMock(return_value="wedged")
 
     mgr = LifecycleManager.__new__(LifecycleManager)
     mgr._router = MagicMock()

@@ -772,10 +772,18 @@ class StreamingOrchestrator:
             except Exception:  # noqa: BLE001 — visibility must never break the stream
                 logger.debug("compaction_guard.activate failed", exc_info=True)
             evt = PromptBuilder.build_compact_boundary_notice(md)
+            # The compaction record (id, sizes, the PostCompact summary): the
+            # frontend's divider + summary card, persisted by the read loop.
+            from . import compact_summary as _cs
+            record = _cs.build_record(md, _cs.take_summary(ctx))
+            if not record["summary"]:
+                _cs.mark_unsummarized(ctx, record["id"])
+            evt["compaction"] = _cs.wire(record)
             logger.info(
-                "session_unit.compaction_done session_id=%s trigger=%s pre=%s post=%s",
+                "session_unit.compaction_done session_id=%s trigger=%s pre=%s post=%s "
+                "summary_chars=%d",
                 parent.session_id, evt.get("trigger"),
-                evt.get("preTokens"), evt.get("postTokens"),
+                evt.get("preTokens"), evt.get("postTokens"), len(record["summary"]),
             )
             events = [evt]
             # The context snapshot follows the CLI's own post-compaction size, so
@@ -852,6 +860,164 @@ class StreamingOrchestrator:
             event["toolUses"] = usage.get("tool_uses")
             event["durationMs"] = usage.get("duration_ms")
         return event
+
+    # A pending permission older than this, with a live waiter, that this stream
+    # never surfaced is treated as lost in transit and re-queued. The normal
+    # queue hand-off takes milliseconds; the read loop wakes every 30s anyway.
+    _PERM_RESCUE_AFTER_S = 15.0
+    # Read-loop heartbeat tick (see _read_formatted_response); class attribute
+    # so tests can drive the tick branch.
+    _HEARTBEAT_POLL_S = 30.0
+
+    def _rescue_unsurfaced_permission(
+        self, perm_queue: "asyncio.Queue", rescued: set
+    ) -> Optional[dict]:
+        """Find a pending permission request this stream never received.
+
+        7 of 43 permission requests (2026-10-13..17) were enqueued by the gate
+        but never surfaced: the CLI sat in its PreToolUse hook, the user saw no
+        dialog, and ~10 min later the streaming timeout killed the turn. The
+        exact loss path is not proven, so this closes it from the durable side:
+        PermissionManager's pending store (written BEFORE the enqueue) + a live
+        waiter = a hook is blocked on the user right now. If that request is
+        older than ``_PERM_RESCUE_AFTER_S`` and not this stream's open question,
+        return a queue-shaped item for it; the caller hands it to the normal
+        surface path as an already-completed perm_task (NOT via ``perm_queue``:
+        if a stray getter swallowed the original, it would swallow a re-queued
+        copy too). Each request is rescued at most once per stream. Never
+        raises. ``perm_queue`` is only inspected for loss-path evidence.
+        Returns the item, or None.
+        """
+        try:
+            import json as _json
+            from core.permission_manager import permission_manager as _pm
+
+            from .session_unit import SessionState
+
+            # Surfacing moves the unit to WAITING_INPUT — only legal mid-stream.
+            if getattr(self._parent, "state", None) != SessionState.STREAMING:
+                return None
+            sid = self._parent.session_id
+            open_q = getattr(self._parent, "_pending_question", None) or {}
+            now = datetime.now()
+            # The gates key the pending record by session_context["sdk_session_id"]
+            # (normally == the app id, set by SessionRouter). If they ever differ
+            # the request is under the other key — scan both, and say so.
+            _ctx = getattr(self._parent, "_hook_session_context", None) or {}
+            _gate_sid = _ctx.get("sdk_session_id") if isinstance(_ctx, dict) else None
+            keys = [sid]
+            if _gate_sid and _gate_sid != sid:
+                keys.append(_gate_sid)
+                logger.warning(
+                    "session_unit.permission_key_mismatch session_id=%s gate_key=%s "
+                    "— permission gates are not keyed by the app session id",
+                    sid, _gate_sid,
+                )
+            _reqs = [r for k in keys for r in _pm.get_pending_for_session(k)]
+            for req in _reqs:
+                if not isinstance(req, dict):
+                    continue
+                rid = req.get("id")
+                if (not rid or rid in rescued or rid == open_q.get("request_id")
+                        or not _pm.has_live_waiter(rid)):
+                    continue
+                try:
+                    age = (now - datetime.fromisoformat(req.get("created_at") or "")).total_seconds()
+                except (ValueError, TypeError):
+                    continue  # unparsable/naive-vs-aware timestamp — skip this item only
+                if age < self._PERM_RESCUE_AFTER_S:
+                    continue
+                tool_input: Any = req.get("tool_input", {})
+                if isinstance(tool_input, str):
+                    try:
+                        tool_input = _json.loads(tool_input)
+                    except ValueError:
+                        tool_input = {"command": tool_input}
+                if not isinstance(tool_input, dict):
+                    tool_input = {"value": tool_input}
+                item = {
+                    "sessionId": sid,
+                    "requestId": rid,
+                    "toolName": req.get("tool_name", "Bash"),
+                    "toolInput": tool_input,
+                    "reason": req.get("reason", ""),
+                    "options": ["approve", "deny"],
+                }
+                if req.get("kind"):
+                    item["kind"] = req["kind"]
+                # Loss-path evidence (root cause unproven): same_queue=False means
+                # the session's queue was replaced under this stream; True with
+                # qsize=0 means another getter took the item.
+                _live_q = getattr(_pm, "_session_queues", {}).get(sid)
+                _same_q = _live_q is perm_queue
+                _qsize = perm_queue.qsize()
+                rescued.add(rid)
+                logger.warning(
+                    "session_unit.permission_rescued session_id=%s request_id=%s "
+                    "age=%.0fs same_queue=%s qsize=%d — pending with a live "
+                    "waiter but never surfaced on this stream; surfacing it",
+                    sid, rid, age, _same_q, _qsize,
+                )
+                return item
+        except Exception as exc:  # noqa: BLE001 — a diagnostic rescue must never break the stream
+            logger.warning(
+                "session_unit.permission_rescue_failed session_id=%s: %s",
+                getattr(self._parent, "session_id", "?"), f"{type(exc).__name__}: {exc}",
+            )
+        return None
+
+    @staticmethod
+    def _completed_perm_task(item: dict) -> "asyncio.Future":
+        """A perm_task stand-in that has already 'received' ``item``."""
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(item)
+        return fut
+
+    def _tool_hang_tier_owns_liveness(self, current_timeout: float) -> bool:
+        """True if an open tool's liveness is really owned by the watchdog.
+
+        The read-loop timeout defers to SessionUnit's tool-aware hang tier only
+        when that tier can still end the turn: a tool is open, the unit is
+        STREAMING, ``_pid_watchdog_task`` is alive, and the oldest open tool is
+        no older than the watchdog's hard ceiling + interrupt grace + one read
+        timeout of slack. A dead/absent watchdog or a tool past that bound
+        means nothing else would ever stop the turn, so the caller falls back
+        to its own probe/raise path. Never raises (any doubt → False).
+        """
+        from .session_unit import SessionState  # local: session_unit imports this module
+
+        parent = self._parent
+        try:
+            open_tools = getattr(parent, "_open_tool_uses", None) or {}
+            if not open_tools or parent.state != SessionState.STREAMING:
+                return False
+            wd = getattr(parent, "_pid_watchdog_task", None)
+            if wd is None or wd.done():
+                logger.warning(
+                    "session_unit.tool_timeout_not_deferred session_id=%s — %d tool(s) "
+                    "open but the PID watchdog is %s; the read timeout keeps liveness",
+                    parent.session_id, len(open_tools),
+                    "absent" if wd is None else "finished",
+                )
+                return False
+            oldest_start = min(float(v[0]) for v in open_tools.values())
+            bound = (
+                float(parent.TOOL_HANG_HARD_CEILING_S)
+                + float(parent.TOOL_HANG_INTERRUPT_GRACE_S)
+                + float(current_timeout)
+            )
+            age = time.time() - oldest_start
+            if age > bound:
+                logger.warning(
+                    "session_unit.tool_timeout_not_deferred session_id=%s — oldest "
+                    "open tool is %.0fs old (> %.0fs watchdog bound)",
+                    parent.session_id, age, bound,
+                )
+                return False
+            return True
+        except Exception:  # noqa: BLE001 — fail toward the bounded probe/raise path
+            logger.debug("_tool_hang_tier_owns_liveness: check failed", exc_info=True)
+            return False
 
     def _stall_event(self, text: str) -> dict:
         """A no-progress notice as the in-tab ``still_working`` status — NOT an
@@ -1035,7 +1201,7 @@ class StreamingOrchestrator:
         # silent wait. Must be small enough to bubble a long/stuck step
         # promptly; the heartbeat itself throttles to one notice per
         # LONG_TURN_HEARTBEAT_S. Does NOT cancel the in-flight SDK read.
-        HEARTBEAT_POLL_S = 30.0
+        HEARTBEAT_POLL_S = self._HEARTBEAT_POLL_S
 
         # (is_resume computed above for the adaptive INIT_TIMEOUT floor)
         is_first_message = True
@@ -1141,6 +1307,17 @@ class StreamingOrchestrator:
         # FINISH via sweep_run_changes / surface_run_outputs (the retained author-agnostic
         # fallback), an XG-accepted tradeoff for removing the per-turn regression.
 
+        # requestIds this stream re-queued via _rescue_unsurfaced_permission
+        # (each at most once per stream).
+        _rescued_perm_ids: set[str] = set()
+        # Start of the current SDK silence: the last REAL SDK message (seeded
+        # from the unit's clock). Unlike _last_event_time, a CPU-gated
+        # extension does not move it, so TOOL_FREE_HARD_CEILING_S stays a
+        # true cap on one silence.
+        _silence_since: Optional[float] = getattr(self._parent, "_last_event_time", None)
+        # A rescued permission found at a read timeout, surfaced next iteration.
+        _forced_perm: Optional[dict] = None
+
         async def _next_or_sentinel():
             """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
 
@@ -1164,7 +1341,13 @@ class StreamingOrchestrator:
                     timeout=current_timeout,
                 )
             )
-            perm_task = asyncio.ensure_future(perm_queue.get())
+            if _forced_perm is not None:
+                # A rescued permission (see the timeout branch) wins this race
+                # immediately; the fresh sdk_task is cancelled as the loser.
+                perm_task = self._completed_perm_task(_forced_perm)
+                _forced_perm = None
+            else:
+                perm_task = asyncio.ensure_future(perm_queue.get())
 
             try:
                 # Heartbeat polling: wake every HEARTBEAT_POLL_S to surface a
@@ -1189,6 +1372,14 @@ class StreamingOrchestrator:
                         # Neither a message nor a permission arrived this tick —
                         # surface a heartbeat (throttled internally) and keep
                         # waiting on the SAME sdk_task/perm_task.
+                        # A pending permission whose queue item never arrived:
+                        # swap in a completed perm_task carrying it, so the next
+                        # wait returns it through the normal surface path.
+                        _lost = self._rescue_unsurfaced_permission(perm_queue, _rescued_perm_ids)
+                        if _lost is not None:
+                            perm_task.cancel()
+                            perm_task = self._completed_perm_task(_lost)
+                            continue
                         _note = _progress.check(
                             time.time(), tools_open=bool(self._parent._open_tool_uses)
                         )
@@ -1215,7 +1406,12 @@ class StreamingOrchestrator:
                     try:
                         await tick_task
                     except asyncio.CancelledError:
-                        pass  # expected: we just cancelled it (fires on every streamed event)
+                        # Expected: we just cancelled it (fires on every streamed
+                        # event) — unless THIS task is being cancelled (see the
+                        # loser-cancel loop below).
+                        _me = asyncio.current_task()
+                        if _me is not None and _me.cancelling():
+                            raise
                     except Exception:
                         logger.debug("_read_formatted_response: tick timer raised on cancel", exc_info=True)
                     done.discard(tick_task)
@@ -1230,12 +1426,23 @@ class StreamingOrchestrator:
                 perm_task.cancel()
                 raise
 
-            # Cancel the loser
+            # Cancel the loser(s) — all of them BEFORE awaiting any, so a re-raise
+            # of our own cancellation below can't leave one running.
             for task in pending:
                 task.cancel()
+            for task in pending:
                 try:
                     await task
-                except (asyncio.CancelledError, StopAsyncIteration, asyncio.TimeoutError):
+                except asyncio.CancelledError:
+                    # The loser's own cancellation is expected. But if THIS task
+                    # is being cancelled (consumer closed / teardown), the
+                    # CancelledError is ours: swallowing it makes the loop race
+                    # again forever and asyncio.run's _cancel_all_tasks never
+                    # returns (the 21h unkillable pytest, 2026-10-17).
+                    _me = asyncio.current_task()
+                    if _me is not None and _me.cancelling():
+                        raise
+                except (StopAsyncIteration, asyncio.TimeoutError):
                     pass
 
             # ── Permission request OR ask_user_question won the race ──
@@ -1361,9 +1568,44 @@ class StreamingOrchestrator:
                 # unmeasurable/dead process). Applies to init too — a large-
                 # context cold-resume TTFT is the most common false-timeout.
                 _parent = self._parent
+                # A permission prompt that never reached the frontend: the CLI
+                # waits in its PreToolUse hook (no SDK messages) and this timer
+                # would kill a session that is only waiting for the user.
+                # Re-surface it instead (normal perm_task path next iteration).
+                _lost = self._rescue_unsurfaced_permission(perm_queue, _rescued_perm_ids)
+                if _lost is not None:
+                    _forced_perm = _lost  # surfaced at the top of the next iteration
+                    continue
+                # A tool is open (Bash build, test run, Agent sub-agent): its
+                # liveness belongs to SessionUnit's tool-aware hang tier
+                # (_pid_watchdog — CPU-probes the tool tree and warm-interrupts
+                # only a WEDGED tool). This timer killing it is the false kill of
+                # 2026-10-17 20:12 (a CPU-busy 5-min fuzz run, force_kill_tree
+                # tree_killed=3). Mirrors the watchdog backstop's `tool_open` skip.
+                # Deferring is only safe while that tier can actually act: the
+                # unit is STREAMING, its watchdog task is alive, and the oldest
+                # tool is still inside the watchdog's own hard ceiling (+grace,
+                # +one timeout of slack). Otherwise nobody would ever end the
+                # turn — fall through to the probe/raise path below.
+                if self._tool_hang_tier_owns_liveness(current_timeout):
+                    logger.info(
+                        "session_unit.%s_timeout_deferred session_id=%s — no SDK "
+                        "message for %.0fs but %d tool(s) open — the tool-aware "
+                        "hang tier owns liveness, NOT killing",
+                        phase, _parent.session_id, current_timeout,
+                        len(_parent._open_tool_uses),
+                    )
+                    continue  # fresh sdk_task next iteration (new __anext__)
                 _pid = _parent.pid
-                _start = _parent._streaming_start_time
-                _elapsed = (time.time() - _start) if _start else 0.0
+                # Ceiling measured from the last SDK event (the SILENCE), not from
+                # turn start: a long turn that was progressing until now must get
+                # the same CPU probe as a short one (the 600s timeout at 19:05 on
+                # 2026-10-17 skipped the probe because the TURN was 31 min old).
+                # _silence_since moves only on a REAL SDK message — an extension
+                # resets _last_event_time (for the watchdog) but must not reset
+                # this clock, or the ceiling could never be reached.
+                _since = _silence_since or _parent._streaming_start_time
+                _elapsed = (time.time() - _since) if _since else 0.0
                 _ceiling = _parent.TOOL_FREE_HARD_CEILING_S
                 if (
                     _pid
@@ -1406,6 +1648,7 @@ class StreamingOrchestrator:
             # or a single long tool call could trip the 90s hang detector and
             # trigger a spurious self-heal mid-response.
             self._parent._last_event_time = time.time()
+            _silence_since = self._parent._last_event_time
             self._parent._health_sensor.record_activity()
             _progress.on_event(self._parent._last_event_time)
 
@@ -1459,6 +1702,9 @@ class StreamingOrchestrator:
                     for _cev in self._compaction_events(
                         message.subtype, getattr(message, "data", None)
                     ):
+                        if _cev.get("type") == "context_compacted" and _cev.get("compaction"):
+                            from .compact_summary import persist as _persist_compaction
+                            await _persist_compaction(self._parent.session_id, _cev["compaction"])
                         yield _cev
                 else:
                     # A sub-agent's lifecycle / progress: real work the user must see.
