@@ -21,8 +21,8 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
    log in IMPROVEMENT.md "Known Issues", do not fix or debug it here; `flaky` → fix the
    flake (passes 9/10 = FAILS); `unknown` / timeout → read the attached stack (no manual
    ps/kill/faulthandler).
-3. **Fix loop, max 20 fixes** (then stop: complete TEST with what remains, DELIVER not push-ready). Per fix:
-   one atomic commit → `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
+3. **Fix loop, max 20 fixes** (then stop: complete TEST with what remains, DELIVER not push-ready). Group the run's
+   failures by cause, ONE fixing spec, fix it in one pass (`ref/instructions/fixing-findings.md`) → `python backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py --files-touched N --fix-count M`
    (score ≥ 5 → halt: stop fixing, finish not push-ready) → `RUN --mode recheck`. Each recheck lays its results
    over `latest-regression.json`, which `stage-complete` reads: no final regression
    re-run. Formula + table: `ref/test/fixing.md`.

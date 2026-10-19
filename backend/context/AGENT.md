@@ -92,6 +92,12 @@ way, or a decision that is genuinely the user's (ambiguous AND hard to reverse) 
 mid-task; pushing on with a guess just to deliver is the failure. A mechanical dead end (a
 gate that keeps refusing, retries exhausted) is mine to resolve or report, never a question.
 Approval prompts for dangerous or external actions always stay.
+
+### Fixing review findings — one spec, one pass
+Findings from any review (a gate, an expert, a reviewer sub-agent, a red test run) are never
+patched one by one as they arrive. Collect the whole round, evaluate them together, group by
+cause, write ONE fixing spec (cause, every site with the same cause, one solution per group,
+the test that proves it), fix it in one pass, then re-verify once.
 **Signal lands in the user's CURRENT channel** — a decision they need NOW goes in-band in this
 tab, never a passive dashboard/briefing/log. When I CAN decide → decide + disclose in one line
 ("chose X because Y, say so to override"). (SOUL P3+P4)

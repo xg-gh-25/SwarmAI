@@ -16,7 +16,7 @@ Purpose: loop bounded BUILD+TEST cycles until the Definition of Done (DoD) passe
 10. **Revert check:** 2 consecutive reverted cycles → REVERT_LIMIT.
 11. **Loop** to step 1.
 Heavy checks (fuzz, replay, e2e probe): `RUN --mode probe --name <n> -- <argv>` printing `{"findings": [...]}`; a round with 0 new findings = converged, stop. Mutations: `RUN --mode mutation --mutations <spec.json>`, one batch.
-**Final Quality Gate** (`final-gate.md`): 0) re-judge the ledger on the total diff; 1) Spawn a sub-agent (`run_in_background: false` — keep the stream visible) with `git diff <start_commit>..HEAD` + DoD + requirement + the cross-path prompt; merge its findings into the ledger; 2.5) `migration_class` declared → class-completeness check; 2.6) `cross_boundary.value == true` → real-seam E2E + mutation RED; 3) issues → ≤3 fix cycles, then stop and DELIVER not push-ready.
+**Final Quality Gate** (`final-gate.md`): 0) re-judge the ledger on the total diff; 1) Spawn a sub-agent (`run_in_background: false` — keep the stream visible) with `git diff <start_commit>..HEAD` + DoD + requirement + the cross-path prompt; merge its findings into the ledger; 2.5) `migration_class` declared → class-completeness check; 2.6) `cross_boundary.value == true` → real-seam E2E + mutation RED; 3) issues → one fixing spec for all, ≤3 fix passes, then DELIVER not push-ready.
 **Stop on:** DoD met + gate clean (SUCCESS) · 3 zero-progress cycles (STOP) · 2 reverts (REVERT_LIMIT) · `max_cycles` (UNMET). Non-SUCCESS → DELIVER, `push_ready: false`. Budget is never an exit. Each exit: `gm.track_goal_complete(status=...)`. Done = you tried to break it and failed; no extra rounds after a clean gate.
 **Gates**
 - `[MUST]` DoD Quality Rules at setup (BLOCKING = agent discipline, no validator).

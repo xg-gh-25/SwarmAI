@@ -27,10 +27,15 @@ Rules that hold across all classes:
 
 ## Fix loop
 
-1. Make one fix. One atomic commit per fix; list each in `exit_evidence.fixes`.
-2. Score it with the WTF gate (below). Score ≥ 5 → halt (L2 BLOCK).
-3. `RUN --mode recheck`: the previous failures + tests affected by files changed since
-   that evidence. Repeat 1-3 per failure.
+1. Evaluate the WHOLE red run together: group the failures by cause (one broken
+   invariant or shared helper usually explains several), write one fixing spec (cause,
+   every site in scope, one solution per cluster), then fix every cluster in one pass;
+   list the clusters in `exit_evidence.fixes`. Never fix failure after failure
+   (`ref/instructions/fixing-findings.md`).
+2. Score the pass with the WTF gate (below). Score ≥ 5 → halt: stop fixing, finish not
+   push-ready.
+3. `RUN --mode recheck` once for the whole pass: the previous failures + tests affected by
+   files changed since that evidence. Still red → the next pass starts again at step 1.
 4. After the last fix: `RUN --mode regression` once more. Unchanged inputs return
    `cached`; `stage-complete` reads `latest-regression.json`, and DELIVER's push_ready
    bound rejects test evidence older than the last edit.
@@ -39,8 +44,8 @@ Rules that hold across all classes:
 
 ## Max fixes
 
-Max 20 fixes per session. After 20, checkpoint and report regardless of remaining
-failures. Quality > completion.
+Max 20 fixes per session. After 20, stop: complete TEST with what remains and DELIVER
+not push-ready. Quality > completion.
 
 ## WTF Gate `[MUST]` <!-- R-test-003 -->
 
