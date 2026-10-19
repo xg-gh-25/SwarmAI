@@ -141,6 +141,35 @@ v1 认为根因是「修复只对着触发它的那一处验证，没检查其�
   
   这一步替代 `over_budget_reasons`。
 
+#### N3 规则定稿：再一再二不再三（XG 2026-10-19 14:58）
+
+目标是**快速质量收敛**，不是把 reviewer 的意见磨到零。一次 review 找全，一次一起修；最多修两次，第三次交给人。
+
+| 轮 | 做什么 | 结束条件 |
+|---|---|---|
+| 第 1 轮 | 全量评审：所有声明的 expert 并行，一次交出全部发现 | — |
+| 修复 ① | 一次修掉第 1 轮的**全部阻断项**（`is_blocking`，N2）；非阻断项转 ToDo，不进循环 | — |
+| 第 2 轮 | 只复核修复 ① 改到的 hunk（N2 路由） | 没有新的阻断项 → **收敛** |
+| 修复 ② | 一次修掉第 2 轮的全部阻断项 | — |
+| 第 3 轮 | 复核修复 ② | 没有新的阻断项 → 收敛；**还有 → 停，交给 XG**，不存在修复 ③ |
+
+规则：
+
+1. **复核轮的范围就是修复的 hunk。** 复核轮里 reviewer 报的、落在修复之外的新发现，不触发下一轮：非阻断项转 ToDo；阻断项（含 red-team 的新攻击形状）直接列进交给 XG 的清单，由人决定是不是这次要修。这一条只限制「谁能让循环继续」，不降低任何发现的级别，也不丢弃任何发现。
+2. **交给 XG 时**附上：未解决的阻断项、每次修复引出了什么新发现、修复前后的对比。选项三个：接受剩余风险并提交（记为 intervention）、缩小范围（把未解决项拆成后续 run）、重设计（回 PLAN）。
+3. **没有逃生口。** 删掉 `over_budget_reasons`；`--force` 不能让 `gate2-recheck` 生成第 4 轮。
+4. **REVIEW 阶段用同一个计数**（spec-compliance 在 `run_d8762bc8` 复查了 4 次）：同样最多 3 轮，第 3 轮不过就交给 XG。原 N5 里的其余部分（共用 N1 基线等）留在 Run 4。
+
+验收标准（Run 2 的 exit criteria）：
+
+- AC1 `gate2-recheck`：第 3 轮复核完仍有阻断项时，不输出复核 prompt，返回 `escalate` 和上面的清单；退出码非 0 且 `--force` 无效。
+- AC2 某一轮所有派出的 reviewer 都没有新的阻断项 → `converged: true`，下一步就是 meta-review，不再派复核。
+- AC3 复核轮里落在修复 hunk 之外的发现，不计入「继续循环」的判断，但出现在 ToDo 或交给 XG 的清单里，一条不少（测试比对条目总数）。
+- AC4 deliver `stage-complete` 只在两种情况下给 `push_ready: true`：已收敛；或者 XG 的决定已记录为 intervention。
+- AC5 REVIEW 的 spec-compliance 复查同样在第 3 轮后交给 XG。
+- AC6 `over_budget_reasons` 不再被读取；旧 run.json 里有这个字段不报错。
+- 上线后验证：用 profiler 看接下来 5 个 full/bugfix run，Gate-2 轮数 100% ≤ 3，中位数 ≤ 2；交给 XG 的次数单独统计。
+
 ### N4 发现台账
 
 - **生成**：`evidence/findings-ledger.json` 由 hook 捕获的 reviewer 回答生成，挂在现有的 `GATE2_FINDINGS` 绑定上。原来是「模型写记录，工具比对」，改为「工具生成记录，模型只补充修复说明和测试 nodeid」。
@@ -169,7 +198,7 @@ spec-compliance 判定「AC 未满足」时，同样适用 N1 的基线和反向
 ## 5. 实施顺序
 
 1. **Run 1（full）：N2 + N4。** 统一阻断判定、台账生成与合并、按改动路由、非阻断项转 ToDo。（run_925edb0e）
-2. **Run 2（full）：N3。** 终止规则：一轮复核没有新的阻断发现就收敛；第 3 轮仍未收敛就交给 XG 决定，替代 `over_budget_reasons`。先于 N1，因为墙钟时间的收益主要来自轮数（§3 N4「路由」），而 N2 + N4 不减轮数；`run_d8762bc8` 的 7 轮 Gate-2 只有 N3 能截住。N3 和 Run 1 改同一段 recheck 代码（`artifact_cli.py` / `pipeline_validator.py`），所以等 Run 1 落到 main 后再开，不并行。
+2. **Run 2（full）：N3（含 REVIEW 的同一轮数上限）。** 规则和验收标准见 §3「N3 规则定稿」。终止规则：一轮复核没有新的阻断发现就收敛；第 3 轮仍未收敛就交给 XG 决定，替代 `over_budget_reasons`。先于 N1，因为墙钟时间的收益主要来自轮数（§3 N4「路由」），而 N2 + N4 不减轮数；`run_d8762bc8` 的 7 轮 Gate-2 只有 N3 能截住。N3 和 Run 1 改同一段 recheck 代码（`artifact_cli.py` / `pipeline_validator.py`），所以等 Run 1 落到 main 后再开，不并行。
 3. **N1 回放（只读，research profile）→ Run 3（full）：N1。** 基线冻结、HEAD 差分 probe、反向变异。
 4. **Run 4（full）：N5。** REVIEW 接入同一套引擎。
 
