@@ -40,9 +40,9 @@ import { STOP_TURN_EVENT, agentBatches, mergeStrips, stripView, zoneStats } from
 import type { PhaseMember, StageZone, StripItem, Zone } from '../turnZones';
 
 /** Between two zones (spec §9.3): clearly more than anything inside a zone. */
-export const ZONE_GAP = 'mt-7';
+export const ZONE_GAP = 'mt-5';
 /** Above RESULT. */
-export const RESULT_GAP = 'mt-9';
+export const RESULT_GAP = 'mt-7';
 /** Inside a zone: header → body, and between a body's thought / strips / panel. */
 const INNER_GAP = 'mt-2';
 /** Between two stage groups. */
@@ -108,7 +108,7 @@ const MARK_COL = 'w-4 shrink-0 text-center';
 
 function Chevron({ open }: { open: boolean }) {
   return (
-    <span aria-hidden="true" className={`material-symbols-outlined text-[15px] leading-none ${MARK_COL} text-[var(--color-text-dim)] transition-transform duration-150`} style={{ transform: open ? 'rotate(90deg)' : 'none' }}>
+    <span aria-hidden="true" className={`material-symbols-outlined inline-flex items-center justify-center h-4 text-[15px] leading-none ${MARK_COL} text-[var(--color-text-dim)] transition-transform duration-150`} style={{ transform: open ? 'rotate(90deg)' : 'none' }}>
       chevron_right
     </span>
   );
