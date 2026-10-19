@@ -12,7 +12,7 @@ Invariants:
   • APPROVE once an adversarial marker exists.
   • APPROVE all non-commit / non-Bash commands (fail-safe).
   • FAIL-OPEN: missing session id, unreadable dir → approve (never false-block).
-  • SWARM_ADVERSARIAL_GATE_FORCE=1 → approve (sanctioned explicit bypass).
+  • SWARM_GATE_FORCE=adversarial_commit_gate → approve (sanctioned explicit bypass).
   • Detector reuses the wrapper-strip / git-global-option / segment-split discipline.
 """
 
@@ -131,7 +131,7 @@ class TestGateFailSafe:
         assert _run(gate, "git commit -m x") == {"decision": "approve"}
 
     def test_force_override(self, audit_dir, monkeypatch):
-        monkeypatch.setenv("SWARM_ADVERSARIAL_GATE_FORCE", "1")
+        monkeypatch.setenv("SWARM_GATE_FORCE", "adversarial_commit_gate")
         gate = create_adversarial_commit_gate({"sdk_session_id": "sess-A"})
         assert _run(gate, "git commit -m x") == {"decision": "approve"}
 

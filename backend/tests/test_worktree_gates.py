@@ -409,7 +409,7 @@ def test_test_gate_deny_prints_absolute_commands_from_the_run_cli(env, monkeypat
     from core import security_hooks as sh
     (Path(cli_rec["script"]).parent / "pipeline_test.py").write_text("")
     monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(env["ws"]))
-    monkeypatch.delenv("SWARM_TEST_GATE_FORCE", raising=False)
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
     _set_run(env, cli=cli_rec)
     gate = sh.create_pipeline_test_gate({"sdk_session_id": "s1"})
     res = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": "pytest -q"},

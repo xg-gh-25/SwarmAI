@@ -324,7 +324,7 @@ def test_adversarial_gate_approves_reviewed_pathspec_commit(repo, tmp_path, monk
     audit = tmp_path / "audit"
     audit.mkdir()
     monkeypatch.setattr(security_hooks, "_AGENT_AUDIT_DIR", audit)
-    monkeypatch.delenv("SWARM_ADVERSARIAL_GATE_FORCE", raising=False)
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
     (audit / "session_sess-A_adv_1.marker").write_text(
         json.dumps({"adversarial": True, "reviewed_paths": sorted(_abs(repo, "mine.py"))}))
     gate = security_hooks.create_adversarial_commit_gate({"sdk_session_id": "sess-A"})

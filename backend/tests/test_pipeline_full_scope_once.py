@@ -59,7 +59,7 @@ def test_goal_runs_no_open_stage_and_operator_override_are_exempt(tmp_path, monk
     ev = _index(tmp_path, [])
     assert pt._full_scope_refusal(ev, "verify", _state(None)) is None
     assert pt._full_scope_refusal(ev, "verify", _state("goal_cycle", "goal")) is None
-    monkeypatch.setenv("SWARM_FULL_SCOPE_FORCE", "1")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "full_scope")
     assert pt._full_scope_refusal(ev, "verify", _state("build")) is None
 
 

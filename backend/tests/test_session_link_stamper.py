@@ -223,7 +223,8 @@ def _record_registrations(monkeypatch, session_context):
     original = hook_builder.HookRegistry.register
 
     def _spy(self, event, hook, name, matcher=None, no_timeout=False):
-        recorded.append((event, name, matcher, no_timeout))
+        for n in getattr(hook, "members", (name,)):  # a compose_gates group
+            recorded.append((event, n, matcher, no_timeout))
         return original(self, event, hook, name, matcher=matcher, no_timeout=no_timeout)
 
     monkeypatch.setattr(hook_builder.HookRegistry, "register", _spy)

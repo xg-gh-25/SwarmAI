@@ -417,6 +417,8 @@ class MemoryWatchdogPlugin:
 # ---------------------------------------------------------------------------
 
 _test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="swarmai_test_")
+# An operator's SWARM_GATE_FORCE in the shell must not open gates under test.
+os.environ.pop("SWARM_GATE_FORCE", None)
 # Gate decisions recorded by tests must not land in the user's real audit log.
 os.environ["SWARM_GATE_LOG"] = os.path.join(
     tempfile.gettempdir(), f"swarmai_test_gate_decisions_{os.getpid()}.jsonl"

@@ -22,7 +22,7 @@ Invariants:
   • reads pass (echo, env | grep, printenv, declare -p, grep VAR=, quoted text),
     and so do `env -u OTHER`, `export VAR` and clean-env runs of other tools;
   • the deny text explains the unlink and names the operator-only force env;
-    SWARM_SESSION_LINK_GATE_FORCE=1 approves; an internal error fails open;
+    it cannot be forced (gate_force.UNFORCEABLE); an internal error fails open;
   • build_hooks registers session_link_gate once, Bash-scoped, right before
     pipeline_test_gate, with every existing gate still registered.
 """
@@ -38,7 +38,7 @@ SID = "app-session-1"
 
 @pytest.fixture(autouse=True)
 def _no_force(monkeypatch):
-    monkeypatch.delenv("SWARM_SESSION_LINK_GATE_FORCE", raising=False)
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
 
 
 def _call(command, tool_name="Bash", ctx=None):
@@ -197,7 +197,7 @@ class TestDenyMatrix:
         assert reason.startswith("DENY (env -u " + V + ")")
         assert "pipeline test gate" in reason and "direct-commit gate" in reason
         assert "backend sets" in reason
-        assert "SWARM_SESSION_LINK_GATE_FORCE=1" in reason and "operator" in reason
+        assert "no bypass" in reason and "FORCE" not in reason
 
     def test_depth_limit_fails_closed_when_the_variable_is_named(self):
         deep = f"unset {V}"
@@ -211,13 +211,9 @@ class TestDenyMatrix:
 
 
 class TestForceAndFailOpen:
-    def test_force_env_approves(self, monkeypatch):
-        monkeypatch.setenv("SWARM_SESSION_LINK_GATE_FORCE", "1")
-        assert _call(f"unset {V}") == {"decision": "approve"}
-
-    @pytest.mark.parametrize("value", ["0", "true", "yes", ""])
-    def test_other_force_values_still_deny(self, monkeypatch, value):
-        monkeypatch.setenv("SWARM_SESSION_LINK_GATE_FORCE", value)
+    @pytest.mark.parametrize("value", ["session_link_gate", "session_link_gate,commit_gate"])
+    def test_cannot_be_forced(self, monkeypatch, value):
+        monkeypatch.setenv("SWARM_GATE_FORCE", value)
         assert _is_deny(_call(f"unset {V}"))
 
     def test_internal_error_fails_open(self, monkeypatch):
@@ -253,7 +249,8 @@ def test_build_hooks_registers_the_gate_once_right_before_pipeline_test_gate(mon
     original = hook_builder.HookRegistry.register
 
     def _spy(self, event, hook, name, matcher=None, no_timeout=False):
-        recorded.append((event, name, matcher))
+        for n in getattr(hook, "members", (name,)):  # a compose_gates group
+            recorded.append((event, n, matcher))
         return original(self, event, hook, name, matcher=matcher, no_timeout=no_timeout)
 
     monkeypatch.setattr(hook_builder.HookRegistry, "register", _spy)
@@ -286,5 +283,4 @@ def test_real_bash_chain_denies_before_any_approval_prompt():
         {"tool_name": "Bash", "tool_input": {"command": f"env -u {V} python a.py"},
          "cwd": "/tmp"}, None, None))
     assert _is_deny(res)
-    assert "SWARM_SESSION_LINK_GATE_FORCE" in res["hookSpecificOutput"][
-        "permissionDecisionReason"]
+    assert "no bypass" in res["hookSpecificOutput"]["permissionDecisionReason"]

@@ -287,7 +287,7 @@ def test_root_cause_without_a_verdict_ends_the_loop(env, monkeypatch, capsys):
     """The dead loop run_93773c32's experts found: a root-cause answer with no
     ROOT-CAUSE VERDICT line left the outcome at root_cause, so stage-complete asked for
     the review again, gate2-recheck handed the prompt out again, and review_round_gate
-    (one root-cause spawn per cycle) denied it. Only SWARM_REVIEW_ROUND_GATE_FORCE got out."""
+    (one root-cause spawn per cycle) denied it. Only the operator force switch got out."""
     audit, run_dir, state, t0 = env
     _capped(audit, t0)
     _marker(audit, 9, "root-cause", t0 + 400, verdict=None,

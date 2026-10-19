@@ -34,7 +34,7 @@ One call per mode, foreground, never split; no full suite (STEERING R9).
   publish: halt-at-≥5 is an agent-obeyed stop (finish not push-ready), not a validator publish gate. <!-- R-test-004 -->
 - `[MUST]` BLOCKING: a single-platform compile is never a fully-green TEST result for a
   cross-platform changeset (`ref/test/cross-platform.md`).
-- `pipeline_test_gate`: runner only. `SWARM_TEST_GATE_FORCE=1` is operator-set, never yours.
+- `pipeline_test_gate`: runner only. Its bypass is operator-set, never yours.
 
 **Read only if:** layer detail / skip records / other stacks → `ref/test/layers.md`;
 fixing, WTF formula, regression table → `ref/test/fixing.md`; cross-boundary →

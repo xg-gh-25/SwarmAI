@@ -38,7 +38,7 @@ V = "SWARM_APP_SESSION_ID"
 
 @pytest.fixture(autouse=True)
 def _no_force(monkeypatch):
-    monkeypatch.delenv("SWARM_SESSION_LINK_GATE_FORCE", raising=False)
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
 
 
 def _v(command):

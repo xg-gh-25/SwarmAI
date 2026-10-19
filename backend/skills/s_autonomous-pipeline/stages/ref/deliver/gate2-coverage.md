@@ -22,7 +22,7 @@ BEFORE spawning the review, not after.** Reproduce with
 
 A file left UNSTAGED while the review runs cannot enter the covered set; staging it for
 the commit then puts it in `pending`, `pending ⊄ covered`, and the gate DENIES. Fail-opens:
-`SWARM_ADVERSARIAL_GATE_FORCE=1` (operator-set, never yours); a `pending` git cannot
+`SWARM_GATE_FORCE=adversarial_commit_gate` (operator-set, never yours); a `pending` git cannot
 compute (including a repo with no commits, where `git diff HEAD` exits 128); a marker
 whose `reviewed_paths` KEY is absent. An EMPTY `pending` also approves — not a bypass,
 there is nothing to cover. A marker whose key is present but whose list is EMPTY bounds

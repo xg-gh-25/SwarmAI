@@ -106,9 +106,10 @@ class HookRegistry:
                 timeout exists to stop a genuinely-hung hook (bash_syntax_guard
                 et al.), and exempting one un-bounds that protection.
         """
-        if event == "PreToolUse":
+        if event == "PreToolUse" and not getattr(hook, "_decision_logged", False):
             # Every PreToolUse deny/ask lands in gate_decisions.jsonl with the full
             # tool input, so gates never need their own [BLOCKED] logging to be audited.
+            # A compose_gates group logs per member instead (its own flag).
             hook = with_decision_log(name, hook)
         self._hooks[(event, matcher)].append((name, hook, no_timeout))
 
@@ -251,6 +252,39 @@ class HookRegistry:
         return chained
 
 
+def compose_gates(members: list[tuple[str, HookCallback]]) -> HookCallback:
+    """One PreToolUse hook that runs ``members`` in order; the first deny/ask wins.
+
+    Each member keeps its own HOOK_TIMEOUT_SECONDS bound and fail-open handling (a
+    member that times out or raises is skipped, as in ``_build_chain``) and is logged
+    under its own name in gate_decisions.jsonl. Register the group with
+    ``no_timeout=True``: the members are bounded here, so the group's total can exceed
+    one 5s slot without a member being unbounded. Members must be pure allow/deny
+    gates (no updatedInput / additionalContext): non-terminal results are dropped.
+    """
+    logged = [(n, with_decision_log(n, fn)) for n, fn in members]
+
+    async def composite(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        for name, fn in logged:
+            try:
+                result = await asyncio.wait_for(
+                    fn(input_data, tool_use_id, context), timeout=HOOK_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                logger.warning("Hook '%s' timed out after %.1fs — skipping",
+                               name, HOOK_TIMEOUT_SECONDS)
+                continue
+            except Exception:
+                logger.exception("Hook '%s' raised an error — skipping", name)
+                continue
+            if result and from_sdk(result).disposition >= Disposition.HITL:
+                return result
+        return {}
+
+    composite._decision_logged = True  # type: ignore[attr-defined]
+    composite.members = tuple(n for n, _ in members)  # type: ignore[attr-defined]
+    return composite
+
+
 async def build_hooks(
     agent_config: dict,
     enable_skills: bool,
@@ -339,7 +373,7 @@ async def build_hooks(
     # write/copy verbs, interpreter code naming it, rm of an ancestor, cd into it;
     # Write/Edit/MultiEdit/NotebookEdit by resolved path). Only the SubagentStop hook
     # writes those markers; D7, Red Team, Gate-0/1 and adversarial_commit_gate trust
-    # them. Reads pass. Fail-open; operator bypass SWARM_AUDIT_GATE_FORCE=1 (logged).
+    # them. Reads pass. Fail-open; no operator bypass (gate_force.UNFORCEABLE).
     # In the Bash chain it runs right after background_command_guard and before
     # session_link_gate and every HITL gate, so a user is never asked to approve a
     # command this gate would then deny.
@@ -358,8 +392,8 @@ async def build_hooks(
     # export/declare, also inside bash -c / eval / pnpm dlx -c). That variable links a
     # pipeline run to this session; without it pipeline_test_gate and
     # direct_commit_gate silently stop applying. Reads pass. Fail-open; operator bypass
-    # SWARM_SESSION_LINK_GATE_FORCE=1 (logged). Registered right before
-    # pipeline_test_gate so both see the command before any HITL prompt.
+    # none (gate_force.UNFORCEABLE). Registered right before
+    # test_command_gate so both see the command before any HITL prompt.
     # The session-link stamper (PostToolUse below) needs each Bash call's start time;
     # its PreToolUse companion records it by tool_use_id (no IO, never denies).
     # Registered only for a real app session (session_context given): the fallback
@@ -384,24 +418,40 @@ async def build_hooks(
     # session_id == app session id, status running, recent activity): DENY direct
     # pytest/vitest/tsc/eslint/vite build/npm build|test|lint|typecheck/make test*,
     # repo-copy baselines and manual pytest hang triage, and hand back a filled-in
-    # pipeline_test.py command. No run → no effect. Fail-open; operator bypass
-    # SWARM_TEST_GATE_FORCE=1 (logged). Registered BEFORE pytest_command_guard and
-    # dangerous_command_gate: its deny names the one sanctioned runner, and a user
-    # must never be asked to approve a command this gate would then deny.
+    # pipeline_test.py command. No run → no effect. Then pytest_command_guard, in every
+    # session: pytest piped to tail/head, or without a wall-clock cap, is denied (R9,
+    # run_6af22b0d). One group so the test-command rules are judged in one place.
+    # Fail-open; operator bypass SWARM_GATE_FORCE=pipeline_test_gate (logged). Registered
+    # BEFORE dangerous_command_gate: a user must never be asked to approve a command
+    # this gate would then deny.
     registry.register(
-        "PreToolUse", create_pipeline_test_gate(hook_session_context),
-        "pipeline_test_gate", matcher="Bash",
+        "PreToolUse", compose_gates([
+            ("pipeline_test_gate", create_pipeline_test_gate(hook_session_context)),
+            ("pytest_command_guard", pytest_command_guard),
+        ]),
+        "test_command_gate", matcher="Bash", no_timeout=True,
     )
 
-    # ── PreToolUse: run-amend gate (Bash-scoped) ──
-    # Only while THIS session has an active pipeline run: DENY `git commit --amend`
-    # and point at the DELIVER title + run-commit, instead of dangerous_command_gate
-    # parking an unattended run on an approval prompt (run_c5eb0858: 2 h). No run →
-    # no effect. Fail-open. Registered BEFORE dangerous_command_gate for the same
-    # reason as pipeline_test_gate: never ask a user to approve a command we deny.
+    # ── PreToolUse: commit gate (Bash-scoped), four checks on `git commit` ──
+    # 1. run_amend_gate: in THIS session's active run, `git commit --amend` is denied and
+    #    pointed at the DELIVER title + run-commit (run_c5eb0858: an approval prompt
+    #    parked an unattended run 2 h).
+    # 2. direct_commit_gate (design §4-G1): >20 changed SOURCE lines in the SwarmAI repo
+    #    from a session with no run of its own → `run-create --profile direct`.
+    # 3. active_run_commit_gate: a file owned by an ACTIVE run (or its REPORT.md) goes
+    #    through run-commit, so code + REPORT land in one commit.
+    # 4. adversarial_commit_gate (R1): no commit without a review sub-agent this session.
+    # All fail-open. Operator bypass SWARM_GATE_FORCE=commit_gate (or one member name).
+    # Registered BEFORE dangerous_command_gate: never ask a user to approve a commit
+    # this gate would then deny.
     registry.register(
-        "PreToolUse", create_run_amend_gate(hook_session_context),
-        "run_amend_gate", matcher="Bash",
+        "PreToolUse", compose_gates([
+            ("run_amend_gate", create_run_amend_gate(hook_session_context)),
+            ("direct_commit_gate", create_direct_commit_gate(hook_session_context)),
+            ("active_run_commit_gate", create_active_run_commit_gate(hook_session_context)),
+            ("adversarial_commit_gate", create_adversarial_commit_gate(hook_session_context)),
+        ]),
+        "commit_gate", matcher="Bash", no_timeout=True,
     )
 
     # ── PreToolUse: run-owner gate (Bash-scoped) — pipeline-run-worktree §4.2 ──
@@ -427,7 +477,7 @@ async def build_hooks(
     # denied a 4th, and told to record the open items and continue. Replaces the
     # after-the-fact allowance that any over_budget_reasons entry waived (run_d8762bc8:
     # 7 Gate-2 rounds). goal_cycle exempt. Fail-open; operator bypass
-    # SWARM_REVIEW_ROUND_GATE_FORCE=1. Only for a real app session.
+    # SWARM_GATE_FORCE=review_round_gate. Only for a real app session.
     if session_context is not None:
         from core.review_round_gate import create_review_round_gate
         registry.register(
@@ -450,15 +500,6 @@ async def build_hooks(
     registry.register(
         "PreToolUse", create_expert_budget_gate(),
         "expert_budget_gate", matcher="Read|Grep|Glob|Bash",
-    )
-
-    # ── PreToolUse: pytest anti-pattern guard (Bash-scoped) ──
-    # Deny pytest piped to tail/head (output swallowed by auto-backgrounding)
-    # and pytest without a timeout (unbounded hang). R9 in prose; this is the
-    # structural backstop (run_6af22b0d). Pure deny, fail-safe (approve all else).
-    registry.register(
-        "PreToolUse", pytest_command_guard,
-        "pytest_command_guard", matcher="Bash",
     )
 
     # ── PreToolUse: bash-syntax guard (Bash-scoped) ──────────
@@ -514,19 +555,6 @@ async def build_hooks(
         "image_read_dedup_guard", matcher="Read",
     )
 
-    # ── PreToolUse: direct-commit gate (Bash-scoped) ──
-    # Design §4-G1. A `git commit` in the SwarmAI source repo of >20 changed SOURCE
-    # lines (docs/lockfiles excluded) from a session with no run of its own → DENY with
-    # a copyable `run-create --profile direct`, so a direct fix also gets an exit
-    # contract. Other sessions' / unowned runs never exempt a session. Fail-open;
-    # operator bypass SWARM_ADVERSARIAL_GATE_FORCE / SWARM_DIRECT_GATE_FORCE. Registered
-    # BEFORE dangerous_command_gate so a user is never asked to approve a commit this
-    # gate would then deny.
-    registry.register(
-        "PreToolUse", create_direct_commit_gate(hook_session_context),
-        "direct_commit_gate", matcher="Bash",
-    )
-
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────
     # session_key / hook_session_context resolved once at the top of this function.
     enable_human_approval = agent_config.get("enable_human_approval", True)
@@ -561,27 +589,6 @@ async def build_hooks(
             "PreToolUse", create_run_owner_gate(session_context, phase="approved"),
             "run_owner_gate_approved", matcher="Bash",
         )
-
-    # ── PreToolUse: adversarial-commit gate (Bash-scoped) ────
-    # R1 structural backstop: DENY `git commit` when NO sub-agent ran this session
-    # (no SubagentStop marker) → "no commit without adversarial review first." Reads
-    # the marker create_agent_tool_audit_hook already writes; fail-OPEN on its own
-    # errors; SWARM_ADVERSARIAL_GATE_FORCE=1 escapes for a docs-only/revert commit.
-    # Guardrail for the CLASS-A "test passed → commit" reflex (#12), NOT a P1 fix.
-    registry.register(
-        "PreToolUse", create_adversarial_commit_gate(hook_session_context),
-        "adversarial_commit_gate", matcher="Bash",
-    )
-
-    # ── PreToolUse: active-run commit gate (Bash-scoped) ──
-    # DENY an agent `git commit` of a file owned by an ACTIVE pipeline run — route to
-    # run-commit so code + REPORT.md land in ONE commit (the review-purpose invariant).
-    # Orthogonal to adversarial_commit_gate (that binds to review coverage; this binds
-    # to run ownership). run-commit's own commit is a subprocess → bypasses PreToolUse.
-    registry.register(
-        "PreToolUse", create_active_run_commit_gate(hook_session_context),
-        "active_run_commit_gate", matcher="Bash",
-    )
 
     # ── PreToolUse: AskUserQuestion gate (AskUserQuestion-scoped) ──
     # Intercepts AskUserQuestion before the CLI self-resolves it in headless

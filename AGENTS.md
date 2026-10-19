@@ -206,19 +206,16 @@ implementations in `security_hooks.py`). By category:
 
 1. **Observability** — `pre_tool_logger`: logs every tool invocation; never blocks.
 2. **Hang prevention (Bash)** — `background_command_guard` (default-deny backgrounding),
-   `pytest_command_guard` (denies pytest piped to tail/head or without a wall-clock cap),
-   `bash_syntax_guard` (`bash -n` parse check), `pipeline_test_gate` (registered before
-   `pytest_command_guard`; only while this session's own run is running with activity in
-   the last 3h: tests, lint, typecheck, builds, repo-copy baselines and manual pytest hang
-   triage must go through `backend/scripts/pipeline_test.py`; the deny carries the
-   filled-in runner command and the `run-update --status abandoned` escape; operator-set
-   `SWARM_TEST_GATE_FORCE=1` in the backend env bypasses, logged; separately, in every
-   session, run or not, it denies running `pipeline_test.py` inside a for/while/until loop
-   or twice in one Bash call, since each call is capped at `alarm 110` and a continuation is
-   a new call), `run_amend_gate`
-   (registered right after `pipeline_test_gate`; same active-run test: denies
-   `git commit --amend` outright with "改 deliver title 后重新跑 run-commit" instead of
-   letting `dangerous_command_gate` park the run on an approval prompt; fails open).
+   `bash_syntax_guard` (`bash -n` parse check), and the `test_command_gate` group
+   (`compose_gates`, registered before `dangerous_command_gate`), whose members run in order:
+   `pipeline_test_gate` (only while this session's own run is running with activity in the
+   last 3h: tests, lint, typecheck, builds, repo-copy baselines and manual pytest hang triage
+   must go through `backend/scripts/pipeline_test.py`; the deny carries the filled-in runner
+   command and the `run-update --status abandoned` escape; separately, in every session, it
+   denies running `pipeline_test.py` inside a for/while/until loop or twice in one Bash call,
+   since each call is capped at `alarm 110` and a continuation is a new call), then
+   `pytest_command_guard` (every session: denies pytest piped to tail/head or without a
+   wall-clock cap).
 3. **Command safety + human-in-the-loop** — `dangerous_command_gate` (Bash) and
    `external_approval_gate` (non-Bash off-machine side effects) route risky calls through
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
@@ -227,22 +224,24 @@ implementations in `security_hooks.py`). By category:
    AskUserQuestion answers.
 4. **Scope + commit discipline** — `skill_access_checker` (Skill), `governance_file_gate`
    (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
-   patches — to governed context files), `adversarial_commit_gate` (no `git commit` without
-   a sub-agent review this session), `active_run_commit_gate` (files owned by an active
-   pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, go through
-   run-commit), `review_round_gate` (Agent|Task, real app sessions only: a spawn whose
+   patches — to governed context files), the `commit_gate` group (Bash, registered before
+   `dangerous_command_gate`, members in order): `run_amend_gate` (in this session's active run,
+   denies `git commit --amend` with "改 deliver title 后重新跑 run-commit" instead of letting
+   `dangerous_command_gate` park the run on an approval prompt), `direct_commit_gate` (a session
+   with no run of its own that commits more than 20 changed source lines in the SwarmAI source
+   repo, docs and lockfiles excluded, is sent to `artifact_cli.py run-create --profile direct`;
+   other sessions' and unowned runs never exempt it), `active_run_commit_gate` (files owned by an
+   active pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, go through
+   run-commit), `adversarial_commit_gate` (no `git commit` without a sub-agent review this
+   session); all fail open. `review_round_gate` (Agent|Task, real app sessions only: a spawn whose
    prompt starts with `EXPERT-ID:` in this session's active run is denied once that
    expert has 3 completed rounds in the open stage, review + 2 re-checks, and told to
    record the open items and continue (never ask the user); it also keeps REVIEW /
    DELIVER rounds parallel: a solo spawn of a round member after a sibling finished, with
-   ≥2 left, is denied once per round naming the rest to spawn in one message; goal_cycle exempt; fails open; operator-set
-   `SWARM_REVIEW_ROUND_GATE_FORCE=1`), `direct_commit_gate` (registered before
-   `dangerous_command_gate`; a session with no run of its own that commits more than 20
-   changed source lines in the SwarmAI source repo, docs and lockfiles excluded, is sent
-   to `artifact_cli.py run-create --profile direct`; other sessions' and unowned runs
-   never exempt it; fails open on errors), `session_link_gate` (Bash, always on, registered
-   right before `pipeline_test_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
-   the run↔session link both run gates key on; operator-set `SWARM_SESSION_LINK_GATE_FORCE=1`),
+   ≥2 left, is denied once per round naming the rest to spawn in one message; goal_cycle exempt;
+   fails open), `session_link_gate` (Bash, always on, registered
+   right before `test_command_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
+   the run↔session link both run gates key on; cannot be forced),
    backed by the PostToolUse (Bash) `session_link_stamper` (with its PreToolUse start-time
    companion `session_link_stamp_start`): after an artifact_cli / run-create call it writes
    this session's id into running runs with no `session_id` that the call created or names
@@ -250,12 +249,11 @@ implementations in `security_hooks.py`). By category:
    `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit, always on,
    right after `background_command_guard`, ahead of every HITL gate): denies writing, moving or deleting anything in
    `state/pipeline_agent_audit`, the SubagentStop markers that D7, the Red Team check,
-   Gate-0/1 and `adversarial_commit_gate` trust; reads pass; operator-set
-   `SWARM_AUDIT_GATE_FORCE=1`; it reads command text (an unparseable command naming the
+   Gate-0/1 and `adversarial_commit_gate` trust; reads pass; cannot be forced; it reads command text (an unparseable command naming the
    dir fails closed), so a path built at run time or a standalone script file is not seen.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; off until
    `config.json["pipeline"]["worktree_mode"] = "on"`, a `PUT /api/settings` key): `run_owner_gate`
-   (Bash, right after `pipeline_test_gate`; applies only to isolated runs and to the stage-start
+   (Bash, right after `commit_gate`; applies only to isolated runs and to the stage-start
    that decides an undecided run's mode — a run recorded `shared` is untouched; takes a crashed
    owner's run over, denies while the owner is live,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
@@ -264,14 +262,13 @@ implementations in `security_hooks.py`). By category:
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
    the `run-repo-add` command that gives it one, denies stash / shared-ref changes from a run
-   worktree; operator-set `SWARM_WORKTREE_GATE_FORCE=1`).
+   worktree).
 5. **Review-expert scope** (`core/pipeline_expert_agent.py`) — every session defines the
    `pipeline-expert` sub-agent type (Read/Grep/Glob/Bash only, effort medium, maxTurns
    backstop). `expert_type_gate` (Agent|Task, app sessions, main thread) denies an
    `EXPERT-ID:` spawn of any other type; `expert_budget_gate` (Read|Grep|Glob|Bash,
    inside a pipeline-expert) denies every call past 24 and tells the expert to report
-   now with what it did not reach marked UNCHECKED. Both fail open; operator-set
-   `SWARM_EXPERT_GATE_FORCE=1`.
+   now with what it did not reach marked UNCHECKED. Both fail open.
 6. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
 
@@ -279,6 +276,12 @@ Every PreToolUse deny / ask is recorded by `HookRegistry.register` (not by the g
 `~/.swarm-ai/logs/gate_decisions.jsonl`, with the full tool input; `python
 backend/scripts/gate_audit.py --samples 3` counts them per gate per day. A gate is kept,
 merged or removed on that evidence.
+
+One operator switch replaces the ten per-gate `SWARM_*_FORCE=1` variables (2026-10-20,
+`core/gate_force.py`): `SWARM_GATE_FORCE=<gate or group>,...` in the backend/daemon env
+(groups `commit_gate`, `test_command_gate`, `expert_gate`; the runner's own `full_scope` and
+`circuit_breaker`). Each use is logged as `force_bypass`. `session_link_gate` and
+`audit_marker_write_gate` cannot be forced: every other gate trusts what they protect.
 
 Plus `can_use_tool` file-access control, workspace isolation, and error sanitization. These
 gates are the concrete form of "when prose fails, build a gate". When adding one, register

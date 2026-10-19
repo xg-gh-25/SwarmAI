@@ -55,7 +55,7 @@ def ws(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setenv("SWARM_WORKSPACE", str(root))
     monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(root))
-    for k in ("SWARM_TEST_GATE_FORCE", "SWARM_DIRECT_GATE_FORCE", "SWARM_ADVERSARIAL_GATE_FORCE"):
+    for k in ("SWARM_GATE_FORCE",):
         monkeypatch.delenv(k, raising=False)
     return root
 
@@ -433,7 +433,7 @@ class TestPipelineTestGateActive:
 
     def test_force_env_approves(self, ws, monkeypatch):
         _seed(ws)
-        monkeypatch.setenv("SWARM_TEST_GATE_FORCE", "1")
+        monkeypatch.setenv("SWARM_GATE_FORCE", "pipeline_test_gate")
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), "pytest tests/test_x.py")
         assert res == {"decision": "approve"}
 
@@ -524,7 +524,7 @@ class TestPipelineTestGateDenyText:
     def test_force_env_is_described_as_operator_only(self, ws):
         # L1: the model must not be told it can set the bypass itself.
         reason = self._deny(ws, "pytest -q")
-        assert "SWARM_TEST_GATE_FORCE=1 bypasses" not in reason
+        assert "SWARM_GATE_FORCE=pipeline_test_gate bypasses" not in reason
         assert "operator" in reason
         assert "backend/daemon environment" in reason
 
@@ -591,7 +591,7 @@ class TestDirectCommitGateDenies:
         (repo / "a.py").write_text("base = 0\n" + _lines(21))
         _git(repo, "add", "a.py")
         reason = _reason(_direct("git commit -m fix", repo))
-        assert "SWARM_DIRECT_GATE_FORCE=1 for that one command" not in reason
+        assert "SWARM_GATE_FORCE=direct_commit_gate for that one command" not in reason
         assert "operator" in reason and "backend/daemon environment" in reason
 
     def test_unowned_running_run_does_not_exempt(self, ws, repo):
@@ -697,10 +697,10 @@ class TestDirectCommitGateApproves:
         monkeypatch.setattr(sh, "_pending_source_line_count", _boom)
         assert _direct("git commit -m fix", repo) == {"decision": "approve"}
 
-    @pytest.mark.parametrize("env", ["SWARM_DIRECT_GATE_FORCE", "SWARM_ADVERSARIAL_GATE_FORCE"])
+    @pytest.mark.parametrize("env", ["direct_commit_gate", "commit_gate"])
     def test_force_envs_approve(self, ws, repo, monkeypatch, env):
         self._big_staged_change(repo)
-        monkeypatch.setenv(env, "1")
+        monkeypatch.setenv("SWARM_GATE_FORCE", env)
         assert _direct("git commit -m fix", repo) == {"decision": "approve"}
 
     def test_non_commit_commands_are_approved(self, ws, repo):
@@ -724,7 +724,9 @@ def test_build_hooks_registers_both_gates_before_the_hitl_gate(monkeypatch):
     original = hook_builder.HookRegistry.register
 
     def _spy(self, event, hook, name, matcher=None, no_timeout=False):
-        recorded.append((event, name, matcher))
+        # a compose_gates group stands for its members, in order
+        for n in getattr(hook, "members", (name,)):
+            recorded.append((event, n, matcher))
         return original(self, event, hook, name, matcher=matcher, no_timeout=no_timeout)
 
     monkeypatch.setattr(hook_builder.HookRegistry, "register", _spy)

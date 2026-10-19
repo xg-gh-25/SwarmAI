@@ -17,7 +17,7 @@ Counting matches artifact_cli._completed_spawns: SubagentStop markers in
 inside the stage's own time windows (a re-opened stage keeps its count). The
 expert comes from the spawn prompt's first ``EXPERT-ID:`` line
 (runtime_hooks._extract_expert_id). goal_cycle is exempt (its allowance scales
-with cycles). Operator bypass: SWARM_REVIEW_ROUND_GATE_FORCE=1 in the backend env.
+with cycles). Operator bypass: SWARM_GATE_FORCE=review_round_gate in the backend env.
 Fail-open on any error of its own.
 
 It also keeps REVIEW / DELIVER rounds parallel (XG 2026-10-19), by prevention rather
@@ -40,6 +40,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from core.gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +278,7 @@ def create_review_round_gate(session_context: dict[str, Any]):
         cap = cap_for(expert_id)
         if not info or info["stage"] in _EXEMPT_STAGES or info["used"] < cap:
             return await _wave_check(session_id, expert_id)
-        if os.environ.get("SWARM_REVIEW_ROUND_GATE_FORCE") == "1":
+        if force_enabled("review_round_gate", input_data):
             logger.warning("[review-round-gate] FORCE override: %s round %d in %s/%s",
                            expert_id, info["used"] + 1, info["run_id"], info["stage"])
             return {"decision": "approve"}
@@ -291,7 +293,7 @@ def create_review_round_gate(session_context: dict[str, Any]):
         }}
 
     async def _wave_check(session_id: str, expert_id: str) -> dict[str, Any]:
-        if os.environ.get("SWARM_REVIEW_ROUND_GATE_FORCE") == "1":
+        if force_enabled("review_round_gate"):
             return {"decision": "approve"}
         try:
             split = await asyncio.wait_for(

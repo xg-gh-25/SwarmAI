@@ -22,7 +22,7 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 - `[GATE·validator]` Check 8f BLOCKS a missing/incomplete `ac_coverage`; `files_changed`, `tdd.green_pass`, `tdd.smoke_tests` are schema-required.
 - `[GATE·validator]` `break_tests` must target every plan `I<n>` / `F<n>` (step 5).
 - `[MUST]` Gate 1, slice ban, API check, mechanism, replay, seams, import smoke, pre-greps: discipline.
-- `[GATE·hook]` `active_run_commit_gate` denies `git commit` of run files; `pipeline_test_gate` runner only (`SWARM_TEST_GATE_FORCE=1` is operator-set, never yours).
+- `[GATE·hook]` `active_run_commit_gate` denies `git commit` of run files; `pipeline_test_gate` runner only (its bypass is operator-set, never yours).
 
 **Read only if**
 - Profile runs Gate 1, or a verdict/rejected spawn/record → `stages/ref/build/gate1.md`

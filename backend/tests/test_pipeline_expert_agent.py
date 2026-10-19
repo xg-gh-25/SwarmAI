@@ -57,7 +57,7 @@ def test_type_gate_passes_everything_else(data):
 
 
 def test_type_gate_force(monkeypatch):
-    monkeypatch.setenv("SWARM_EXPERT_GATE_FORCE", "1")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "expert_gate")
     assert _run(pea.create_expert_type_gate(), _spawn("general-purpose")) == {}
 
 
@@ -104,7 +104,7 @@ def test_budget_gate_force_and_bounded_state(monkeypatch):
     assert len(counts) == pea._MAX_TRACKED
     for _ in range(pea.EXPERT_TOOL_CAP):
         _run(g, _call(agent_id="f"))
-    monkeypatch.setenv("SWARM_EXPERT_GATE_FORCE", "1")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "expert_gate")
     assert _run(g, _call(agent_id="f")) == {}
 
 

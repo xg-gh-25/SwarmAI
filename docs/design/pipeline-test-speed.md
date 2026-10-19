@@ -164,3 +164,8 @@ break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连�
 守卫：`backend/tests/test_test_selection_frozen.py` 固定上面的常量，以及决定"跑什么"的 7 个函数的
 源码摘要。它变红就说明有人改了冻结的设计：先要 XG 明确批准，再在本节记一条，同一个 commit 里更新摘要。
 不能为了让一个 run 变绿去改摘要。
+
+变更记录：
+
+- 2026-10-20 `_full_scope_refusal`：`SWARM_FULL_SCOPE_FORCE=1` 改成 `SWARM_GATE_FORCE=full_scope`（FORCE 开关合并，
+  见 AGENTS.md "Security Architecture"）。选择逻辑没变，只换了摘要。

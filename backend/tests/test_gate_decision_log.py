@@ -8,6 +8,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 
 from core import gate_decision_log as gdl
 from core.hook_builder import HookRegistry
@@ -111,3 +112,74 @@ def test_force_bypass_record(tmp_path, monkeypatch):
                             {"tool_name": "Bash", "tool_input": {"command": "pytest"}}, "op")
     (rec,) = _lines(log)
     assert rec["decision"] == "force_bypass" and rec["input"] == "pytest"
+
+
+# ── compose_gates + SWARM_GATE_FORCE ───────────────────────────────────────
+from core import gate_force  # noqa: E402
+from core.hook_builder import compose_gates  # noqa: E402
+
+
+def test_group_first_deny_wins_and_is_logged_under_member(tmp_path, monkeypatch):
+    log = tmp_path / "g.jsonl"
+    monkeypatch.setenv("SWARM_GATE_LOG", str(log))
+    seen = []
+
+    async def ok(_i, _t, _c):
+        seen.append("ok")
+        return {"decision": "approve"}
+
+    async def deny(_i, _t, _c):
+        seen.append("deny")
+        return _deny("member said no")
+
+    async def never(_i, _t, _c):
+        seen.append("never")
+        return {}
+
+    reg = HookRegistry()
+    reg.register("PreToolUse", compose_gates([("a", ok), ("b", deny), ("c", never)]),
+                 "grp", matcher="Bash", no_timeout=True)
+    out = _run(reg, data={"tool_name": "Bash", "tool_input": {"command": "git commit"}})
+    assert out == _deny("member said no") and seen == ["ok", "deny"]
+    assert [r["gate"] for r in _lines(log)] == ["b"]
+
+
+def test_group_member_error_fails_open(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_GATE_LOG", str(tmp_path / "g.jsonl"))
+
+    async def boom(_i, _t, _c):
+        raise RuntimeError("x")
+
+    reg = HookRegistry()
+    reg.register("PreToolUse", compose_gates([("boom", boom)]), "grp", matcher="Bash",
+                 no_timeout=True)
+    assert _run(reg) == {}
+
+
+def test_force_names_groups_and_unforceable(tmp_path, monkeypatch):
+    log = tmp_path / "g.jsonl"
+    monkeypatch.setenv("SWARM_GATE_LOG", str(log))
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
+    assert not gate_force.force_enabled("direct_commit_gate")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "commit_gate, review_round_gate")
+    assert gate_force.force_enabled("direct_commit_gate")
+    assert gate_force.force_enabled("review_round_gate")
+    assert not gate_force.force_enabled("pipeline_test_gate")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "session_link_gate,audit_marker_write_gate")
+    assert not gate_force.force_enabled("session_link_gate")
+    assert not gate_force.force_enabled("audit_marker_write_gate")
+    assert [r["gate"] for r in _lines(log) if r["decision"] == "force_bypass"] == \
+        ["direct_commit_gate", "review_round_gate"]
+
+
+def test_no_legacy_force_variables_left():
+    """The ten SWARM_*_FORCE variables were folded into SWARM_GATE_FORCE (2026-10-20)."""
+    import re
+    root = Path(__file__).resolve().parent.parent
+    pat = re.compile(r"SWARM_(?!GATE_FORCE)[A-Z_]+_FORCE\b")
+    hits = [f"{p.relative_to(root)}:{i}"
+            for d in ("core", "scripts", "routers", "hooks", "jobs")
+            for p in (root / d).rglob("*.py")
+            for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1)
+            if pat.search(line)]
+    assert not hits, hits

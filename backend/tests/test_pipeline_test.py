@@ -304,7 +304,7 @@ def test_circuit_breaker_allows_progress(rig, capsys, tmp_path):
 def test_circuit_breaker_force_override(rig, capsys, tmp_path, monkeypatch):
     # Operator override bypasses the breaker even past the ceiling.
     rig()
-    monkeypatch.setenv("SWARM_CIRCUIT_BREAKER_FORCE", "1")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "circuit_breaker")
     sig = ["backend/tests/test_x.py::test_add"]
     _write_run_index(tmp_path, [{"kind": "run", "mode": "verify", "blocking_sig": sig}
                                 for _ in range(pt.CIRCUIT_MAX_ROUNDS + 2)])

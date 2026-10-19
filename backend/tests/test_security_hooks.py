@@ -1071,8 +1071,8 @@ class TestAdversarialCommitGateEvidence:
 
     @pytest.mark.asyncio
     async def test_force_env_bypasses(self, tmp_path, monkeypatch):
-        """AC4: SWARM_ADVERSARIAL_GATE_FORCE=1 → approve even with no markers."""
-        monkeypatch.setenv("SWARM_ADVERSARIAL_GATE_FORCE", "1")
+        """AC4: SWARM_GATE_FORCE=adversarial_commit_gate → approve even with no markers."""
+        monkeypatch.setenv("SWARM_GATE_FORCE", "adversarial_commit_gate")
         gate = self._mk_gate(tmp_path, monkeypatch)
         out = await gate(self._bash("git commit -m x"), None, None)
         assert out.get("decision") == "approve"

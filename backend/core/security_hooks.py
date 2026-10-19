@@ -50,6 +50,8 @@ if TYPE_CHECKING:
     from .permission_manager import PermissionManager
     from .ask_question_manager import AskQuestionManager
 
+from .gate_force import force_enabled
+
 logger = logging.getLogger(__name__)
 
 
@@ -1845,7 +1847,7 @@ async def pytest_command_guard(
 #     SubagentStop. This gate only READS it. No new producer, no coupling added.
 #   • FAIL-OPEN on its own errors (missing session id, unreadable dir, any exception)
 #     — a guard that false-blocks a legit commit is worse than the skip it prevents.
-#     SWARM_ADVERSARIAL_GATE_FORCE=1 is the sanctioned explicit bypass (logged).
+#     SWARM_GATE_FORCE=adversarial_commit_gate (daemon env) is the operator bypass (logged).
 #   • Scope is `git commit` only (reusing the segment-split + wrapper-strip discipline
 #     of _is_irreversible_external_op). Non-commit git (add/status/push), non-git,
 #     and the amuse-case `git commit --amend` all count as commits (still need review).
@@ -2746,9 +2748,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
         if not command or not _command_has_git_commit(command):
             return {"decision": "approve"}
 
-        if os.environ.get("SWARM_ADVERSARIAL_GATE_FORCE") == "1":
-            logger.warning("[adversarial-gate] FORCE override — commit without subagent "
-                           "evidence: %s", command[:80])
+        if force_enabled("adversarial_commit_gate", input_data):
             return {"decision": "approve"}
 
         session_id = session_context.get("sdk_session_id", "") or ""
@@ -2846,7 +2846,7 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
                     "(Agent/Task tool) to REFUTE this diff — have it read the changed files and "
                     "hunt bugs/regressions/governance violations — fix what it finds, THEN commit. "
                     "(Deliberate exception, e.g. a docs-only or revert commit: set "
-                    "SWARM_ADVERSARIAL_GATE_FORCE=1 for that one command.)"
+                    "only the operator can make one, with SWARM_GATE_FORCE=adversarial_commit_gate in the backend/daemon environment; a variable set in a Bash command has no effect.)"
                 ),
             }
         }
@@ -3042,9 +3042,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
         if not command or not _command_has_git_commit(command):
             return {"decision": "approve"}
 
-        if os.environ.get("SWARM_ADVERSARIAL_GATE_FORCE") == "1":
-            # Reuse the sanctioned explicit-bypass env (set by the daemon, not shell-
-            # settable by the agent — C051) so a deliberate exception has ONE switch.
+        if force_enabled("active_run_commit_gate", input_data):
             return {"decision": "approve"}
 
         cwd = input_data.get("cwd", "") or ""
@@ -3102,8 +3100,9 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
                     "(.aidlc/deliverables/<run_id>/) is never committed by hand either: "
                     "on its own it is the second half of a split delivery — run-commit "
                     "adds it to the code's commit. If this is genuinely NOT a "
-                    "pipeline-run file (false match), set SWARM_ADVERSARIAL_GATE_FORCE=1 for "
-                    "that one command."
+                    "pipeline-run file (false match), tell the user: only the operator can "
+                    "bypass this gate, with SWARM_GATE_FORCE=active_run_commit_gate in the "
+                    "backend/daemon environment."
                 ),
             }
         }
@@ -4189,7 +4188,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
     (_classify_pipeline_test_command), code-copy baselines and manual pytest hang
     triage, pointing at the pipeline_test.py runner and at the run-update
     --status abandoned escape for a dead run. Inactive → approve everything.
-    SWARM_TEST_GATE_FORCE=1 in the backend process env approves (logged; the deny
+    SWARM_GATE_FORCE=pipeline_test_gate in the backend process env approves (logged; the deny
     text tells the model only the operator can set it). Fail-open on any error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
 
@@ -4250,9 +4249,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         if own_run is None:
             return {"decision": "approve"}  # not in a pipeline run → no effect
 
-        if os.environ.get("SWARM_TEST_GATE_FORCE") == "1":
-            logger.warning("[pipeline-test-gate] FORCE override in run %s (%s): %s",
-                           own_run["id"], ", ".join(hits), command[:120])
+        if force_enabled("pipeline_test_gate", input_data):
             return {"decision": "approve"}
 
         suggest = [_repo_relative(f, cwd) for f in files[:5]]
@@ -4295,7 +4292,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                     "this gate no longer applies):\n"
                     + abandon + "\n"
                     "If the runner itself is broken, tell the user. Only the operator "
-                    "can bypass this gate, by setting SWARM_TEST_GATE_FORCE=1 in the "
+                    "can bypass this gate, by setting SWARM_GATE_FORCE=pipeline_test_gate in the "
                     "backend/daemon environment (a variable set in a Bash command has "
                     "no effect)."
                     + hint
@@ -4419,8 +4416,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # later artifact_cli call of the session that names the run id. What truly remains is
 # a run that is never named by an artifact_cli call of its session (see the stamper
 # section). Fail-open on
-# internal errors; SWARM_SESSION_LINK_GATE_FORCE=1 in the backend process env
-# (operator-only) approves, logged.
+# internal errors. No operator bypass (gate_force.UNFORCEABLE).
 _SESSION_LINK_VAR = "SWARM_APP_SESSION_ID"
 _SESSION_LINK_MAX_DEPTH = 3
 # Linear-time bounds (the classifier runs synchronously inside the hook, and the
@@ -5056,8 +5052,8 @@ def create_session_link_gate(session_context: dict[str, Any]):
     run), any command removing or overriding SWARM_APP_SESSION_ID
     (_command_session_link; forms in the section comment above). Without the link a
     run is not this session's run, so pipeline_test_gate and direct_commit_gate stop
-    applying. Reads pass. SWARM_SESSION_LINK_GATE_FORCE=1 in the backend process env
-    approves (operator-only, logged). Fail-open on any internal error.
+    applying. Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open on
+    any internal error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
 
     async def _gate(
@@ -5078,10 +5074,6 @@ def create_session_link_gate(session_context: dict[str, Any]):
         if hit is None:
             return {"decision": "approve"}
         session_id = session_context.get("sdk_session_id", "") or ""
-        if os.environ.get("SWARM_SESSION_LINK_GATE_FORCE") == "1":
-            logger.warning("[session-link-gate] FORCE override in session %s (%s): %s",
-                           session_id, hit, command[:120])
-            return {"decision": "approve"}
         logger.warning("[BLOCKED] session_link_gate (%s) in session %s: %s",
                        hit, session_id, command[:120])
         return {
@@ -5097,9 +5089,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
                     "not this session's run, so the pipeline test gate and the "
                     "direct-commit gate stop applying to it. Leave the variable as the "
                     "backend set it; reading it is fine. " + _session_link_advice(hit)
-                    + "Only the operator can bypass this gate, by setting "
-                    "SWARM_SESSION_LINK_GATE_FORCE=1 in the backend/daemon environment "
-                    "(a variable set in a Bash command has no effect)."
+                    + "This gate has no bypass: if it is wrong, tell the user."
                 ),
             }
         }
@@ -5137,7 +5127,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
 # matched by substring, not component, and is denied even when it only reads, because
 # telling read from write inside a program is a regex arms race.
 # Reads by absolute path pass (cat, ls, jq, grep, cp OUT of it, git commit -m text).
-# SWARM_AUDIT_GATE_FORCE=1 in the backend env approves (operator-only, logged).
+# No operator bypass (gate_force.UNFORCEABLE).
 # Fail-open on any internal error. A command the tokenizer cannot parse fails CLOSED
 # when its text names the dir (a valid command can carry an apostrophe shlex rejects;
 # a genuinely malformed one is separately denied by bash_syntax_guard). RESIDUAL, read
@@ -5839,8 +5829,8 @@ def _audit_file_tool_hit(path: str, cwd: "str | None" = None) -> bool:
 def create_audit_marker_write_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse gate (Bash and Write|Edit|MultiEdit|NotebookEdit) that
     DENIES, always, a write, move or delete in _AGENT_AUDIT_DIR (forms in the section
-    comment above). Reads pass. SWARM_AUDIT_GATE_FORCE=1 in the backend process env
-    approves (operator-only, logged). Fail-open on any internal error.
+    comment above). Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open
+    on any internal error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
 
     async def audit_marker_write_gate(
@@ -5869,10 +5859,6 @@ def create_audit_marker_write_gate(session_context: dict[str, Any]):
         if hit is None:
             return {"decision": "approve"}
         session_id = session_context.get("sdk_session_id", "") or ""
-        if os.environ.get("SWARM_AUDIT_GATE_FORCE") == "1":
-            logger.warning("[audit-marker-gate] FORCE override in session %s (%s): %s",
-                           session_id, hit, subject[:120])
-            return {"decision": "approve"}
         logger.warning("[BLOCKED] audit_marker_write_gate (%s) in session %s: %s",
                        hit, session_id, subject[:120])
         return {
@@ -5888,9 +5874,8 @@ def create_audit_marker_write_gate(session_context: dict[str, Any]):
                     "commit gate all read them, so a hand-written or deleted marker "
                     "would defeat those checks. To produce a marker, spawn the reviewer "
                     "with the Agent tool. Reading markers is fine: cat, ls, grep or jq "
-                    "by an absolute path. Only the operator can bypass this gate, by "
-                    "setting SWARM_AUDIT_GATE_FORCE=1 in the backend/daemon environment "
-                    "(a variable set in a Bash command has no effect)."
+                    "by an absolute path. This gate has no bypass: if it is wrong, "
+                    "tell the user."
                 ),
             }
         }
@@ -6217,7 +6202,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
     a session. Commits in other repos and docs pass, and so (worktree mode off, or a
     repo no run can isolate) do changes of at most 20 lines. Fail-open on
     any error/timeout. Bypass (operator only, backend/daemon env):
-    SWARM_ADVERSARIAL_GATE_FORCE=1 or SWARM_DIRECT_GATE_FORCE=1 (logged)."""
+    SWARM_GATE_FORCE=direct_commit_gate (or commit_gate), logged."""
 
     async def _gate(
         input_data: dict[str, Any],
@@ -6230,9 +6215,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
         if not command or not _command_has_git_commit(command):
             return {"decision": "approve"}
 
-        if (os.environ.get("SWARM_ADVERSARIAL_GATE_FORCE") == "1"
-                or os.environ.get("SWARM_DIRECT_GATE_FORCE") == "1"):
-            logger.warning("[direct-commit-gate] FORCE override: %s", command[:120])
+        if force_enabled("direct_commit_gate", input_data):
             return {"decision": "approve"}
 
         session_id = session_context.get("sdk_session_id", "") or ""
@@ -6293,7 +6276,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
                     "Docs (*.md, docs/, Knowledge/, .kiro/, .context/) and lockfiles are "
                     "exempt" + (" here" if mode_on else ", and so are changes of at most "
                                 + str(limit) + " source lines") + ". Only the operator can make a deliberate "
-                    "exception, by setting SWARM_DIRECT_GATE_FORCE=1 in the backend/daemon "
+                    "exception, by setting SWARM_GATE_FORCE=direct_commit_gate in the backend/daemon "
                     "environment (a variable set in a Bash command has no effect); ask "
                     "the user if you believe one is warranted."
                 ),

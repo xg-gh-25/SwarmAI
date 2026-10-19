@@ -3,7 +3,7 @@ its own worktree (docs/design/pipeline-run-worktree.md §6.1).
 
 Matcher ``Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep``, its own hook group (not
 the 4-hour Bash chain), bounded by ``_GATE_TIMEOUT``, fail-open on its own errors,
-operator bypass ``SWARM_WORKTREE_GATE_FORCE=1`` in the daemon environment. Zero cost
+operator bypass ``SWARM_GATE_FORCE=worktree_write_gate`` in the daemon environment. Zero cost
 while worktree mode is off and no run worktree exists. Judgments:
 
 1. this session owns an isolated run → DENY writes to that run's main checkout (file
@@ -47,6 +47,8 @@ import shlex
 import threading
 import time
 from typing import Any
+
+from core.gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -706,7 +708,7 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         if v is None:
             return {}
         if v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny" \
-                and os.environ.get("SWARM_WORKTREE_GATE_FORCE") == "1":
+                and force_enabled("worktree_write_gate", input_data):
             logger.warning("[worktree-gate] FORCE override (%s): %s", sid,
                            v["hookSpecificOutput"]["permissionDecisionReason"][:200])
             return {}

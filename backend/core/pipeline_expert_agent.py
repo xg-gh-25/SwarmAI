@@ -18,7 +18,7 @@ report; a parallel batch waits for its slowest member.
   did not reach UNCHECKED. Counts are per agent_id in the factory's closure (one per
   session), bounded. Fail-open.
 
-Operator bypass for both gates: ``SWARM_EXPERT_GATE_FORCE=1`` in the backend env.
+Operator bypass: ``SWARM_GATE_FORCE=expert_gate`` (or one gate's name) in the backend env.
 
 @exports PIPELINE_EXPERT, EXPERT_TOOL_CAP, EXPERT_TOOLS, agent_definitions,
          create_expert_type_gate, create_expert_budget_gate
@@ -29,6 +29,8 @@ import logging
 import os
 from collections import OrderedDict
 from typing import Any
+
+from core.gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +68,8 @@ def agent_definitions() -> dict[str, Any]:
     )}
 
 
-def _forced() -> bool:
-    return os.environ.get("SWARM_EXPERT_GATE_FORCE") == "1"
+def _forced(gate: str = "expert_gate", input_data: Any = None) -> bool:
+    return force_enabled(gate, input_data)
 
 
 def _deny(reason: str) -> dict[str, Any]:
@@ -98,7 +100,7 @@ def create_expert_type_gate():
             expert_id = _extract_expert_id(str(ti.get("prompt") or "")[:2000])
             if not expert_id or str(ti.get("subagent_type") or "") == PIPELINE_EXPERT:
                 return {}
-            if _forced():
+            if _forced("expert_type_gate", input_data):
                 logger.warning("[expert-type-gate] FORCE: %s spawned as %r", expert_id,
                                ti.get("subagent_type"))
                 return {}
@@ -130,7 +132,7 @@ def create_expert_budget_gate():
             counts[agent_id] = n
             while len(counts) > _MAX_TRACKED:
                 counts.popitem(last=False)
-            if n <= EXPERT_TOOL_CAP or _forced():
+            if n <= EXPERT_TOOL_CAP or _forced("expert_budget_gate", input_data):
                 return {}
             if n == EXPERT_TOOL_CAP + 1:
                 logger.warning("[BLOCKED] expert_budget_gate: agent %s past %d tool calls",

@@ -147,6 +147,7 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 from utils.file_lock import flock_exclusive_nb, flock_unlock  # noqa: E402
+from core.gate_force import force_enabled  # noqa: E402
 
 RUNNER_VERSION = "2"
 TEST_MODES = ("tdd", "verify", "regression", "recheck")
@@ -154,7 +155,7 @@ TEST_MODES = ("tdd", "verify", "regression", "recheck")
 # The loop is agent/skill-driven (prose caps only), so run_340478c9 ran 42 verify
 # rounds over ~18h. Counted from the append-only run_index (per run_id). A hard ceiling
 # catches runaway re-runs; a stall detector catches "same blocking failures N rounds
-# running = not making progress". Operator override: SWARM_CIRCUIT_BREAKER_FORCE=1.
+# running = not making progress". Operator override: SWARM_GATE_FORCE=circuit_breaker.
 CIRCUIT_MAX_ROUNDS = 25    # total verify/recheck/regression runs in one run_id -> abort
 CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME blocking set -> abort
 # goal profile: the cycle loop's stop rules are code, not card prose (run_a2f2c171 ran 236
@@ -3106,8 +3107,8 @@ def _open_stage(run_state: dict) -> "str | None":
 
 def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict) -> "dict | None":
     """Refuse a NEW full-scope round outside DELIVER, or past FULL_SCOPE_MAX_ROUNDS.
-    Operator override: SWARM_FULL_SCOPE_FORCE=1."""
-    if mode not in FULL_SCOPE_MODES or os.environ.get("SWARM_FULL_SCOPE_FORCE") == "1":
+    Operator override: SWARM_GATE_FORCE=full_scope."""
+    if mode not in FULL_SCOPE_MODES or force_enabled("full_scope"):
         return None
     if str(run_state.get("profile") or "").strip().lower() == "goal":
         return None
@@ -3130,7 +3131,7 @@ def _full_scope_refusal(ev_root: Path, mode: str, run_state: dict) -> "dict | No
                 "error": (f"{len(rounds)} full-scope rounds already ran in this run (limit "
                           f"{FULL_SCOPE_MAX_ROUNDS}): stop fixing, complete DELIVER with "
                           "push_ready false and the failing tests named in attention_flags "
-                          "(REPORT §10). Operator override only: SWARM_FULL_SCOPE_FORCE=1")}
+                          "(REPORT §10). Operator override only: SWARM_GATE_FORCE=full_scope")}
     return None
 
 
@@ -3147,7 +3148,7 @@ def _breaker_result(mode: str, reason: str) -> dict:
                        "by the test evidence: while a test is red or unfinished the change "
                        "does not land; then checkpoint with the failing tests named as the "
                        "reason (the code stays in the run's worktree). "
-                       "Operator override only: SWARM_CIRCUIT_BREAKER_FORCE=1")}
+                       "Operator override only: SWARM_GATE_FORCE=circuit_breaker")}
 
 
 def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict | None:
@@ -3155,9 +3156,9 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
     (prevents run_340478c9's 42-round / ~18h spin). Reads the append-only run_index;
     returns an abort dict (caller exits 2) or None to proceed. tdd is never gated — it is
     the write-tests phase and is expected to repeat. Operator override:
-    SWARM_CIRCUIT_BREAKER_FORCE=1. A goal run's tdd calls are bounded too
+    SWARM_GATE_FORCE=circuit_breaker. A goal run's tdd calls are bounded too
     (GOAL_TDD_MAX): the goal loop's stop rule, enforced here instead of by the card."""
-    if os.environ.get("SWARM_CIRCUIT_BREAKER_FORCE") == "1":
+    if force_enabled("circuit_breaker"):
         return None
     if mode == "tdd" and profile == "goal":
         idx = _read_json(ev_root / "tests" / RUN_INDEX)

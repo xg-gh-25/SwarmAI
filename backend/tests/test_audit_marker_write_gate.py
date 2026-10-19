@@ -12,7 +12,7 @@ Invariants:
     of the path (~, $HOME, absolute, glob, variable, differently cased);
   • reads by absolute path pass, and so do unrelated commands and paths;
   • Write/Edit/MultiEdit/NotebookEdit deny by resolved path, including via symlink;
-  • SWARM_AUDIT_GATE_FORCE=1 approves; an internal error fails open;
+  • it cannot be forced (gate_force.UNFORCEABLE); an internal error fails open;
   • build_hooks registers the gate for Bash (ahead of session_link_gate and the HITL
     gate) and for the file tools.
 """
@@ -33,7 +33,7 @@ def home(tmp_path, monkeypatch):
     audit = tmp_path / ".swarm-ai" / "state" / "pipeline_agent_audit"
     audit.mkdir(parents=True)
     monkeypatch.setattr(security_hooks, "_AGENT_AUDIT_DIR", audit)
-    monkeypatch.delenv("SWARM_AUDIT_GATE_FORCE", raising=False)
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
     return tmp_path
 
 
@@ -106,7 +106,7 @@ DENY_COMMANDS = [
 def test_bash_write_forms_are_denied(home, command):
     result = _run("Bash", {"command": command})
     assert _denied(result), command
-    assert "SWARM_AUDIT_GATE_FORCE" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "no bypass" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 ALLOW_COMMANDS = [
@@ -178,9 +178,9 @@ def test_other_tools_pass(home):
     assert not _denied(_run("Read", {"file_path": f"{D}/x.marker"}))
 
 
-def test_operator_force_approves(home, monkeypatch):
-    monkeypatch.setenv("SWARM_AUDIT_GATE_FORCE", "1")
-    assert not _denied(_run("Bash", {"command": f"rm -rf {D}"}))
+def test_cannot_be_forced(home, monkeypatch):
+    monkeypatch.setenv("SWARM_GATE_FORCE", "audit_marker_write_gate")
+    assert _denied(_run("Bash", {"command": f"rm -rf {D}"}))
 
 
 def test_internal_error_fails_open(home, monkeypatch):

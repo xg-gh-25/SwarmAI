@@ -12,7 +12,7 @@ Invariants:
   window, and adversarial-twin markers do not count
 - a re-opened stage keeps its count (prior_windows); goal_cycle is exempt
 - no EXPERT-ID line, not Agent/Task, no session id, no active run → approve
-- scan failure fails open; SWARM_REVIEW_ROUND_GATE_FORCE=1 approves
+- scan failure fails open; SWARM_GATE_FORCE=review_round_gate approves
 - build_hooks registers it for Agent|Task
 """
 import asyncio
@@ -42,7 +42,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(ws))
     import config
     monkeypatch.setattr(config, "get_app_data_dir", lambda: data)
-    monkeypatch.delenv("SWARM_REVIEW_ROUND_GATE_FORCE", raising=False)
+    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
     return ws, data / "state" / "pipeline_agent_audit"
 
 
@@ -178,9 +178,9 @@ def test_scan_failure_fails_open_and_force_approves(env, monkeypatch):
     _run(ws)
     for i in range(3):
         _marker(audit, i, "correctness")
-    monkeypatch.setenv("SWARM_REVIEW_ROUND_GATE_FORCE", "1")
+    monkeypatch.setenv("SWARM_GATE_FORCE", "review_round_gate")
     assert _spawn() == {"decision": "approve"}
-    monkeypatch.delenv("SWARM_REVIEW_ROUND_GATE_FORCE")
+    monkeypatch.delenv("SWARM_GATE_FORCE")
 
     def boom(*_a):
         raise OSError("disk")
