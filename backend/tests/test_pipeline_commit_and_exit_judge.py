@@ -282,13 +282,30 @@ def test_mode_ref_unmet_otherwise(tmp_path, why, make):
 
 
 @pytest.mark.parametrize("cls", ["pre-existing", "flaky", "regression", "new", "unknown",
-                                 "order-dependent", "", None])
+                                 "order-dependent", "timeout", "", None])
 def test_judge_and_runner_agree_on_every_classification(cls):
     # one failure of this class: the judge accepts exactly what the runner accepts
     import pipeline_test
 
     ev = _verify_report([_fail(cls)])
     assert pv._evidence_green(ev) is (pipeline_test._exit_code(ev) == 0), cls
+
+
+def test_global_deadline_timeout_accepted_and_per_test_hang_blocks(tmp_path):
+    # A GLOBAL-deadline timeout (load/capacity signal) is accepted by BOTH the runner and
+    # the judge; a per-test hang (same timeout outcome, no deadline flag) blocks in both.
+    import pipeline_test
+
+    dl = _verify_report([_fail("timeout", outcome="timeout")])
+    dl["failures"][0]["deadline"] = True
+    assert pipeline_test._failure_nonblocking(dl["failures"][0]) is True
+    assert pipeline_test._exit_code(dl) == 0
+    assert pv._evidence_green(dl) is True
+    assert _judge(tmp_path, dl)["met"] is True
+
+    hang = _verify_report([_fail("unknown", outcome="timeout")])  # no deadline flag
+    assert pipeline_test._exit_code(hang) == 1
+    assert pv._evidence_green(hang) is False
 
 
 @pytest.mark.parametrize("failures", ACCEPTED)

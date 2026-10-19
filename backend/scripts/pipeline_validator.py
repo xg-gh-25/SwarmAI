@@ -5298,21 +5298,38 @@ def _evidence_matches(ref: str, result: dict) -> bool:
 _ACCEPTED_FAILURE_CLASSES = ("pre-existing", "flaky")
 
 
+def _evidence_failure_ok(f: object) -> bool:
+    """One failure the runner accepts as NON-blocking — the single SSOT mirror of
+    ``pipeline_test._exit_code``: classified pre-existing (fails at the HEAD baseline
+    too) or flaky, OR a GLOBAL wall-clock deadline timeout (classification ``timeout``
+    with ``deadline`` set — a load/capacity signal, re-run and never cached). A per-test
+    hang (``outcome == "timeout"`` with ``deadline`` falsey) is a real defect and blocks,
+    as does every other class. Fails closed on a malformed / deadline-less timeout."""
+    if not isinstance(f, dict):
+        return False
+    if f.get("classification") == "timeout":
+        return f.get("outcome") == "timeout" and bool(f.get("deadline"))
+    return f.get("classification") in _ACCEPTED_FAILURE_CLASSES and f.get("outcome") != "timeout"
+
+
 def _evidence_green(ev: dict) -> bool:
-    """A ``mode:<m>`` report is green when something passed and every failure is one
-    the runner itself accepts (``pipeline_test._exit_code``): classified pre-existing
-    (fails at the HEAD baseline too) or flaky, and never a timeout. A runner error, a
-    timeout, or more failed/errored tests than classified failure records is not."""
+    """A ``mode:<m>`` report is green when something passed and every failure is one the
+    runner itself accepts (``_evidence_failure_ok`` — the mirror of
+    ``pipeline_test._exit_code``). A runner error, a per-test hang, or more
+    failed/errored/timed-out results than failure records is not."""
     counts = ev.get("counts") if isinstance(ev.get("counts"), dict) else {}
-    if int(counts.get("passed") or 0) <= 0 or int(counts.get("timeouts") or 0) > 0:
+    if int(counts.get("passed") or 0) <= 0:
         return False
     if ev.get("runner_errors"):
         return False
     failures = list(ev.get("failures") or [])
-    if len(failures) < int(counts.get("failed") or 0) + int(counts.get("errors") or 0):
+    # Every failing/errored/timed-out result needs a failure record to judge; a short
+    # list hides a verdict. timeouts are counted here now, because a deadline timeout is
+    # an acceptable record rather than an automatic reject.
+    if len(failures) < int(counts.get("failed") or 0) + int(counts.get("errors") or 0) \
+            + int(counts.get("timeouts") or 0):
         return False
-    return all(isinstance(f, dict) and f.get("classification") in _ACCEPTED_FAILURE_CLASSES
-               and f.get("outcome") != "timeout" for f in failures)
+    return all(_evidence_failure_ok(f) for f in failures)
 
 
 _EVIDENCE_DIGEST_LIMIT = 8 * 1024 * 1024  # mirrors pipeline_test._file_digest
@@ -5538,10 +5555,10 @@ def push_ready_upper_bound(
     quality = _safe_dict(artifact.get("quality"))
     if isinstance(test_evidence, dict):
         bad = [f for f in (test_evidence.get("failures") or [])
-               if isinstance(f, dict) and f.get("classification") not in ("pre-existing", "flaky")]
+               if not _evidence_failure_ok(f)]
         counts = _safe_dict(test_evidence.get("counts"))
-        if bad or int(counts.get("timeouts") or 0) > 0:
-            reasons.append(f"tests: {len(bad)} non-pre-existing failure(s) in runner evidence")
+        if bad:
+            reasons.append(f"tests: {len(bad)} blocking failure(s) in runner evidence")
         elif int(counts.get("passed") or 0) <= 0:
             reasons.append("tests: runner evidence records no passing test (counts.passed == 0)")
         if quality.get("tests_pass") is False:

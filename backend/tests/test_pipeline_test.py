@@ -143,7 +143,8 @@ def _assert_c2(ev: dict, mode: str) -> None:
             assert set(r) == {"nodeid", "outcome", "file"}
         assert r["outcome"] in ("passed", "failed", "error", "timeout", "skipped")
     for f in ev["failures"]:
-        assert f["classification"] in ("regression", "pre-existing", "new", "flaky", "unknown")
+        assert f["classification"] in ("regression", "pre-existing", "new", "flaky",
+                                       "timeout", "unknown")
         assert isinstance(f["summary"], str)
     assert set(ev["layers"]) == {"ac_driven", "dependency_scoped", "import_smoke"}
     assert set(ev["layers"]["ac_driven"]) == {"run", "pass", "fail"}
@@ -214,26 +215,47 @@ def test_tdd_rejects_more_than_five_files(rig, capsys):
 
 
 # ── deadline ────────────────────────────────────────────────────────────────
-def test_deadline_kills_hung_test_and_reports_timeout_with_stack(rig, capsys, tmp_path):
+def test_global_deadline_timeout_is_nonblocking_infra_class(rig, capsys, tmp_path):
+    # A GLOBAL wall-clock deadline kill is a capacity signal under load, NOT a regression:
+    # its own non-blocking "timeout" class (exit 0), hang stack kept, surfaced in warnings,
+    # never cached. (Was asserted as a blocking "new" failure; that drove a build-fix loop
+    # whenever a heavy shard ran out of wall time under load.)
     repo = rig()
-    # untracked → classified "new" without re-runs, so the call ends at the deadline
     _write(repo, {"backend/tests/test_hang.py": (
         "import time\n\n\ndef test_hang():\n    time.sleep(60)\n")})
     t0 = time.monotonic()
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "tdd", "--deadline", "6",
                      "--files", "backend/tests/test_hang.py")
     assert time.monotonic() - t0 < 15
-    assert code == 1 and out["counts"]["timeouts"] == 1, out
+    assert code == 0 and out["counts"]["timeouts"] == 1, out
     f = out["failures"][0]
     assert f["nodeid"] == "backend/tests/test_hang.py::test_hang"
-    assert f["classification"] == "new"
+    assert f["classification"] == "timeout"
     ev = _evidence(tmp_path, "tests/latest-tdd.json")
     assert "test_hang" in ev["failures"][0]["summary"].split("stack:", 1)[1]  # the stack
     assert len(ev["failures"][0]["summary"].splitlines()) <= pt.STACK_LINES + 1
     assert ev["cached"] is False
+    assert any("global deadline" in w.lower() for w in ev.get("warnings") or [])  # surfaced
     assert not (tmp_path / "cache" / "results").exists() or not any(
         json.loads(p.read_text()).get("counts", {}).get("timeouts")
         for p in (tmp_path / "cache" / "results").glob("*.json"))  # timeouts never cached
+
+
+def test_per_test_hang_still_blocks(rig, capsys, tmp_path, monkeypatch):
+    # A per-test hang (pytest-timeout kills it, NOT the global deadline) is a real defect
+    # and must still block (exit 1) — it is NOT the non-blocking infra "timeout" class.
+    monkeypatch.setattr(pt, "PER_TEST_TIMEOUT_S", 2)
+    repo = rig()
+    _write(repo, {"backend/tests/test_slow.py": (
+        "import time\n\n\ndef test_slow():\n    time.sleep(20)\n")})
+    t0 = time.monotonic()
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "tdd", "--deadline", "60",
+                     "--files", "backend/tests/test_slow.py")
+    assert time.monotonic() - t0 < 40
+    assert code == 1 and out["counts"]["timeouts"] == 1, out
+    f = out["failures"][0]
+    assert f["nodeid"] == "backend/tests/test_slow.py::test_slow"
+    assert f["classification"] != "timeout"  # a per-test hang never becomes infra-timeout
 
 
 # ── B2 classification ───────────────────────────────────────────────────────

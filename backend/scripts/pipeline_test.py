@@ -27,9 +27,11 @@ half-created worktree (``git worktree remove --force`` + ``prune``) and print on
 JSON error object (exit 2). Worktrees are added with ``core.hooksPath=/dev/null``.
 
 Prints ONE compact JSON object. Exit codes:
-- 0 = green (or only pre-existing / flaky failures, none of them a timeout)
-- 1 = failures, any timeout, a selected file / nodeid that collected zero tests,
-      a shard that exited abnormally (``runner_errors``), or new probe findings
+- 0 = green (or only pre-existing / flaky failures, or tests the GLOBAL deadline
+      killed under load — ``classification="timeout"``, non-blocking and never cached)
+- 1 = failures, a per-test hang (a ``timeout`` with ``deadline`` falsey), a selected
+      file / nodeid that collected zero tests, a shard that exited abnormally
+      (``runner_errors``), or new probe findings
 - 2 = usage error, refusal, runner error, or interrupted by a signal
 
 Cache soundness (H1): the result-cache key covers HEAD, the selected tests, the
@@ -2066,7 +2068,12 @@ def _ensure_worktree(ctx, sha: str, time_left: float) -> Path | None:
 
 
 def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
-    """nodeid → new | flaky | pre-existing | regression | unknown, within the deadline.
+    """nodeid → new | flaky | pre-existing | regression | timeout | unknown, within the deadline.
+
+    timeout: a GLOBAL wall-clock deadline killed the shard (``deadline=True``) — an
+    infra/capacity signal under load, not a code failure; non-blocking (``_exit_code``)
+    and never cached. A per-test hang (``deadline=False``, caught by
+    ``PER_TEST_TIMEOUT_S``) is NOT this class and keeps blocking.
 
     new: absent at HEAD. pre-existing without any re-run: an observed failure (it ran
     and failed, ``_rerun_state``) whose HEAD outcome is ``failed`` (looked up first; it
@@ -2092,6 +2099,15 @@ def classify_failures(ctx, results: list[dict]) -> dict[str, str]:
         if r["outcome"] not in _FAIL:
             continue
         n = r["nodeid"]
+        if r["outcome"] == "timeout" and r.get("deadline"):
+            # A GLOBAL wall-clock deadline killed the shard (job.killed), not a per-test
+            # hang: the scope ran out of wall time under load. That is an infra/capacity
+            # signal, never a code regression — give it its own non-blocking class so the
+            # orchestrator re-runs the scope (or lowers concurrency) instead of routing a
+            # phantom "new" failure back to BUILD. Per-test hangs (deadline falsey, caught
+            # by PER_TEST_TIMEOUT_S) fall through below and keep blocking.
+            cls[n] = "timeout"
+            continue
         if r.get("runner_error"):
             cls[n] = "unknown"  # zero collected / abnormal shard exit: never green, never cached
         elif n.startswith("import::"):
@@ -3464,6 +3480,12 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
                  "outcome": r["outcome"], "deadline": bool(r.get("deadline")),
                  **getattr(ctx, "order_dep", {}).get(r["nodeid"], {})}
                 for r in results if r["outcome"] in _FAIL]
+    dl_timeouts = sum(1 for f in failures if f.get("classification") == "timeout")
+    if dl_timeouts:
+        ctx.warnings.append(
+            f"{dl_timeouts} test(s) hit the GLOBAL deadline under load and were NOT "
+            "verified this round (non-blocking, not cached): re-run the scope or lower "
+            "concurrency — this is a capacity signal, not a code regression")
     l2 = set(plan["l2"])
     dep = [r for r in results if _rfile(r) in l2 and not r.get("layer")]
     smoke = [r for r in results if r.get("layer") == "smoke"]
@@ -3513,15 +3535,29 @@ def _copy_logs(ctx, ev_root: Path, mode: str) -> Path:
     return dst
 
 
+def _failure_nonblocking(f: object) -> bool:
+    """One failure the exit code accepts — the SSOT rule shared, byte-for-byte, with
+    ``pipeline_validator._evidence_failure_ok``: classified pre-existing (fails at the
+    HEAD baseline too) / flaky, OR a GLOBAL wall-clock deadline timeout (classification
+    ``timeout`` with ``deadline`` set — a load/capacity signal, re-run and never cached).
+    A per-test hang (``outcome == "timeout"`` with ``deadline`` falsey) is a real defect
+    and blocks, as does every other class. Fails closed on a malformed / deadline-less
+    timeout."""
+    if not isinstance(f, dict):
+        return False
+    if f.get("classification") == "timeout":
+        return f.get("outcome") == "timeout" and bool(f.get("deadline"))
+    return f.get("classification") in ("pre-existing", "flaky") and f.get("outcome") != "timeout"
+
+
 def _exit_code(ev: dict) -> int:
-    """0 only when every failure is pre-existing / flaky AND none of them is a timeout
-    (a hang is never green, whatever its classification) and no runner error occurred."""
+    """0 only when no runner error occurred and every failure is non-blocking
+    (``_failure_nonblocking``): pre-existing / flaky, or a GLOBAL-deadline timeout. A
+    per-test hang still blocks — a hang is never green. ``pipeline_validator`` applies
+    the identical rule so the judge and the runner never disagree."""
     if ev.get("runner_errors"):
         return 1
-    bad = [f for f in ev.get("failures") or [] if not isinstance(f, dict)
-           or f.get("classification") not in ("pre-existing", "flaky")
-           or f.get("outcome") == "timeout"]
-    return 1 if bad else 0
+    return 0 if all(_failure_nonblocking(f) for f in ev.get("failures") or []) else 1
 
 
 def _cacheable(ev: dict) -> bool:

@@ -6765,8 +6765,9 @@ def _test_counts_from_evidence(ev) -> dict | None:
     ``pre_existing_failures`` (fail on the base tree), ``flaky_failures`` (both
     non-blocking in pipeline_test._exit_code) and ``failed`` = every other failing
     result — so ``failed`` keeps meaning "new failures", which METRICS records as
-    regressions. A TIMEOUT stays in ``failed`` whatever its classification, because
-    _exit_code blocks on a hang regardless. None when the evidence has no usable counts.
+    regressions. A GLOBAL-deadline timeout (classification ``timeout`` with ``deadline``
+    set) is non-blocking in _exit_code, so it is NOT counted in ``failed``; a per-test
+    hang (``deadline`` falsey) still is. None when the evidence has no usable counts.
 
     ``tests_reused`` (only when non-zero) = how many of ``tests_total`` passes the runner
     took from an earlier verify / regression of this run on the same tree instead of
@@ -6776,10 +6777,14 @@ def _test_counts_from_evidence(ev) -> dict | None:
     c = ev["counts"]
     ran = [_int_or_none(c.get(k)) or 0 for k in ("passed", "failed", "errors", "timeouts")]
     bad = sum(ran[1:])
-    cls = [f.get("classification") for f in (ev.get("failures") or [])
-           if isinstance(f, dict) and f.get("outcome") != "timeout"]
+    fails = [f for f in (ev.get("failures") or []) if isinstance(f, dict)]
+    cls = [f.get("classification") for f in fails if f.get("outcome") != "timeout"]
     pre, flaky = cls.count("pre-existing"), cls.count("flaky")
-    out = {"tests_total": sum(ran), "failed": max(bad - pre - flaky, 0),
+    # A GLOBAL-deadline timeout (classification "timeout", deadline set) is non-blocking
+    # in _exit_code, so it is a capacity signal, not a regression — drop it from failed.
+    dl_to = sum(1 for f in fails if f.get("classification") == "timeout"
+                and f.get("outcome") == "timeout" and f.get("deadline"))
+    out = {"tests_total": sum(ran), "failed": max(bad - pre - flaky - dl_to, 0),
            "pre_existing_failures": pre, "flaky_failures": flaky}
     ru = ev.get("reused_from") if isinstance(ev.get("reused_from"), dict) else {}
     files = {f for f in ru.get("files") or [] if isinstance(f, str)}
