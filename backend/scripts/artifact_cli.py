@@ -5411,9 +5411,13 @@ def _only_review_not_converged(project: str, run_id: str, run_file: Path, run_st
 
     - the Gate-2 outcome from this run's SubagentStop markers is ``sound``;
     - the push_ready upper bound recomputed from the DELIVER artifact and the test
-      evidence passes (tests, regressions, completion audit, exit contract);
-    - the model did not lower push_ready itself (``push_ready_lowered``)."""
-    if not isinstance(deliver_rec, dict) or deliver_rec.get("push_ready_lowered") is True:
+      evidence passes (tests, regressions, completion audit, exit contract), counting
+      every finding except those the SOUND verdict deferred (``deferred_by``);
+    - the record proves the model did not lower push_ready (``push_ready_lowered``
+      False; a record without it stays blocked)."""
+    # `is not False`: a record from before push_ready_lowered existed cannot prove the
+    # model did not lower push_ready, so it stays blocked (re-complete DELIVER).
+    if not isinstance(deliver_rec, dict) or deliver_rec.get("push_ready_lowered") is not False:
         return False
     run_dir = run_file.parent
     try:
@@ -5433,7 +5437,7 @@ def _only_review_not_converged(project: str, run_id: str, run_file: Path, run_st
                                          roots=_evidence_roots())
     bound, _reasons, _ = _deliver_push_ready_bound(
         project=project, run_id=run_id, run_dir=run_dir, run_state=run_state,
-        profile=profile, artifact=artifact, exit_result=exit_result)
+        profile=profile, artifact=artifact, exit_result=exit_result, honor_deferred=True)
     return bool(bound)
 
 
@@ -9628,7 +9632,7 @@ def _evidence_roots() -> "list[str]":
 
 def _deliver_push_ready_bound(
     *, project: str, run_id: str, run_dir: Path, run_state: dict, profile: str,
-    artifact: "dict | None", exit_result: "dict | None",
+    artifact: "dict | None", exit_result: "dict | None", honor_deferred: bool = False,
 ) -> "tuple[bool, list[str], list[str]]":
     """DELIVER push_ready upper bound → (bound, reasons, warnings).
 
@@ -9660,6 +9664,7 @@ def _deliver_push_ready_bound(
         artifact or {}, profile, test_evidence=newest,
         test_artifact=_stage_artifact(project, run_state, "test"),
         exit_result=eff_exit, all_test_evidence=evidence, evidence_fresh=fresh,
+        honor_deferred=honor_deferred,
     )
     return bound, reasons, warnings
 

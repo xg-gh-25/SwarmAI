@@ -5549,6 +5549,7 @@ def push_ready_upper_bound(
     artifact: dict, profile: str, *, test_evidence: dict | None = None,
     test_artifact: dict | None = None, exit_result: dict | None = None,
     all_test_evidence: list | None = None, evidence_fresh: dict | None = None,
+    honor_deferred: bool = False,
 ) -> tuple[bool, list[str]]:
     """Compute the DELIVER push_ready UPPER BOUND from gate results (F2).
 
@@ -5589,7 +5590,9 @@ def push_ready_upper_bound(
         if tests_pass is not True:
             reasons.append("tests: no evidence that tests pass (quality.tests_pass / test.passed)")
     ar = _safe_dict(artifact.get("adversarial_review"))
-    blocked = _blocked_findings(ar.get("findings", []))
+    # honor_deferred: run-commit asks whether ANYTHING BUT the root-cause-deferred Gate-2
+    # findings blocks; push_ready itself never honors the deferral.
+    blocked = _blocked_findings(ar.get("findings", []), honor_deferred=honor_deferred)
     if blocked:
         reasons.append(f"findings: {len(blocked)} unresolved HIGH / MEDIUM(conf>={CONFIDENCE_GATE_THRESHOLD})")
     if _safe_dict(artifact.get("completion_audit")).get("all_green") is not True:

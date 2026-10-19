@@ -128,6 +128,8 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 ### B. 测试：范围由工具算，归类由工具判
 
+> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、`skipped_for_budget` 溢出、约 95 / 100 秒的固定截止时间都已不再适用，以 §6 末尾「B 的修订」为准。现在 verify / regression / recheck 默认 `--deadline auto`，所有调用统一外层 `alarm 590`、Bash timeout 600000。这里的 L1/L2/L3 是 TEST 阶段内部的分层，和「第 3 层 = CI BVT」不是一回事。
+
 **实测：测试问题有两种，碎片化比范围过大更普遍**
 
 | run | 测试调用 | 测试耗时 | 重复最多的目标 |

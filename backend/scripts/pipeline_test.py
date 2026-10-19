@@ -17,11 +17,13 @@ Modes:
 - ``mutation``   mutation testing in a throwaway worktree (``--mutations spec.json``)
 
 Usage (from the repo root or backend/):
-    perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py \\
-        --project P [--run-id R] --mode MODE [--files F ...] [--deadline 95] [--json]
+    perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py \\
+        --project P [--run-id R] --mode MODE [--files F ...] [--deadline auto|SECONDS] [--json]
+    (Bash tool timeout 600000: one Bash call is capped at 600 s.)
 
-``--deadline`` defaults to 95 s so the runner reports before the documented
-``alarm 110`` wrapper. Values above 100 s are allowed up to 1800 s (clamped) but
+``--deadline`` defaults to ``auto`` for verify / regression / recheck (sized to the
+selection, at most 575 s) and to 95 s for the other modes, all under the documented
+``alarm 590`` wrapper. Values above 580 s are allowed up to 1800 s (clamped) but
 warn: the outer alarm must then be at least deadline + 10 s. SIGTERM / SIGALRM /
 SIGINT abort every running child process group, remove any private or
 half-created worktree (``git worktree remove --force`` + ``prune``) and print one
@@ -153,13 +155,13 @@ CIRCUIT_MAX_ROUNDS = 25    # total verify/recheck/regression runs in one run_id 
 CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME blocking set -> abort
 ALL_MODES = TEST_MODES + ("probe", "mutation")
 TDD_MAX_FILES = 5
-CAP_FILES = 40
+CAP_FILES = 40  # ignored by select_backend (no file cap since 2026-10-19); kept for callers
 SMOKE_CAP = 40
 TDD_REPEAT_WARN = 8
 # verify selection: every test that imports a changed module directly. Depth 2 (test → module
 # → changed module) selected 103-463 files for 21 changed ones (run_340478c9, run_7da44b0d).
 REVERSE_DEPTH = 1
-WRAPPER_ALARM_S = 110
+WRAPPER_ALARM_S = 590  # the documented perl alarm (Bash tool timeout 600000)
 DEFAULT_DEADLINE = 95.0
 SAFE_DEADLINE = WRAPPER_ALARM_S - 10.0
 MAX_DEADLINE = 1800.0
@@ -167,6 +169,7 @@ MAX_DEADLINE = 1800.0
 # set. One Bash call is capped at 600 s (Claude Code's BASH_MAX_TIMEOUT), so the wrapper
 # is alarm 590 and the deadline at most 575. Hangs stay bounded by the per-test timeout.
 AUTO_ALARM_S = 590
+AUTO_DEADLINE_MODES = ("verify", "regression", "recheck")  # --deadline default: auto
 AUTO_MAX_DEADLINE = 575.0
 # Cross-run throttle: one machine-wide pool of worker tokens (``<cache>/workers/N.lock``,
 # flock) shared by every runner of every session. A runner holds as many tokens as it
@@ -701,14 +704,17 @@ def _imports_module(mods: list[str], changed_mod: str, is_pkg: bool) -> bool:
     return any(m == changed_mod or (is_pkg and m.startswith(changed_mod + ".")) for m in mods)
 
 
-def _changed_module_files(repo: Path, changed: list[str]) -> list[tuple[str, str, bool]]:
-    """(file, module, is_package) for every changed, existing, non-test backend module."""
+def _changed_module_files(repo: Path, changed: list[str],
+                          include_deleted: bool = False) -> list[tuple[str, str, bool]]:
+    """(file, module, is_package) for every changed, existing, non-test backend module.
+    ``include_deleted``: also a deleted (or renamed-away) one: its importers must still
+    run, they are the tests the deletion breaks (red-team 2026-10-19)."""
     out = []
     for f in changed:
         if f.startswith("backend/tests/") and Path(f).name.startswith(("test_", "conftest")):
             continue
         m = module_of(f)
-        if m and (repo / f).is_file():
+        if m and ((repo / f).is_file() or (include_deleted and not (repo / f).exists())):
             out.append((f, m, f.endswith("__init__.py")))
     return out
 
@@ -816,7 +822,8 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     ``sgraph`` also transitive importers up to ``depth`` hops), ties broken by how
     many changed modules a test imports directly. A test that names a changed
     ``backend/scripts/*.py`` file by file name (a subprocess-driven CLI test) ranks as a
-    direct importer. Overflow past ``cap`` is returned as skipped, never dropped silently.
+    direct importer. Nothing is capped: ``cap`` is ignored (kept for callers) and the
+    skipped list is always empty. A deleted module's importers are selected too.
     """
     changed_tests = [f for f in changed if _is_backend_test(f) and (repo / f).is_file()]
     # A skill card or expert file has no importers, yet the linters and the rule
@@ -825,7 +832,7 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     if any(f.startswith(("backend/skills/", "backend/experts/")) for f in changed):
         changed_tests += [t for t in _DOC_LINT_SUITES
                           if t not in changed_tests and (repo / t).is_file()]
-    mfiles = _changed_module_files(repo, changed)
+    mfiles = _changed_module_files(repo, changed, include_deleted=True)
     mods = [(m, pkg) for _, m, pkg in mfiles]
     rank: dict[str, tuple[int, int]] = {}
     for t, tm in graph.items():
@@ -865,13 +872,6 @@ def transitive_unselected(repo: Path, sgraph: dict | None, graph: dict, changed:
     dist = reverse_distances(repo, sgraph, mfiles, 99)
     sel = set(selected)
     return sorted(t for t in graph if t not in sel and (dist.get(t) or 0) >= 1)
-
-
-def must_run_files(repo: Path, plan: dict) -> set[str]:
-    """Every selected target (the run's own tests, AC tests, recent real failures and
-    every direct importer of a changed module): nothing selected is cut for time."""
-    return set(plan.get("targets") or {}) | set(plan.get("ac_files") or []) \
-        | set((plan.get("ac_first") or {}).keys())
 
 
 # ── per-test event stream (survives a killed or os._exit()-ed shard) ────────
@@ -4243,7 +4243,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--files", nargs="+", default=[])
     p.add_argument("--name")
     p.add_argument("--mutations")
-    p.add_argument("--deadline", default=DEFAULT_DEADLINE,
+    p.add_argument("--deadline", default=None,
                    help="seconds, or 'auto' (verify / regression: sized to the must-run set, "
                         f"up to {AUTO_MAX_DEADLINE:g}s; wrap in alarm {AUTO_ALARM_S} and give "
                         f"the Bash call timeout {(AUTO_ALARM_S + 10) * 1000})")
@@ -4258,7 +4258,7 @@ def _clamp_deadline(raw) -> tuple[float | None, list[str]]:
 
 
 def _clamp_seconds(raw) -> tuple[float | None, list[str]]:
-    """(deadline, warnings). Default 95 s fits ``alarm 110``; above SAFE_DEADLINE warns,
+    """(deadline, warnings). Default 95 s / auto fit ``alarm 590``; above SAFE_DEADLINE warns,
     above MAX_DEADLINE clamps; a non-finite value → (None, [error])."""
     import math
     try:
@@ -4296,6 +4296,8 @@ def execute(ns) -> tuple[dict, int]:
     cache = _cache_dir()
     if not ns.run_id:
         ev_root = cache / "evidence" / ns.project
+    if ns.deadline is None:  # scope modes size their own deadline; the rest keep 95 s
+        ns.deadline = "auto" if ns.mode in AUTO_DEADLINE_MODES else DEFAULT_DEADLINE
     deadline, dl_warn = _clamp_deadline(ns.deadline)
     if deadline is None:
         return {"error": dl_warn[0]}, 2

@@ -124,7 +124,7 @@ class TestRunCommitGates:
         monkeypatch.setattr(cli, "_deliver_push_ready_bound",
                             lambda **k: (state["bound"], [] if state["bound"] else ["regression"], []))
         rec = {"stage": "deliver", "status": "completed", "push_ready": False,
-               "push_ready_reason": "x", "artifact_id": "art_1"}
+               "push_ready_reason": "x", "artifact_id": "art_1", "push_ready_lowered": False}
         _write_run(workspace, "run_s", files_touched=[], stages=[dict(rec)])
         r = _run_commit(workspace, "run_s")
         err = capsys.readouterr().err
@@ -140,6 +140,24 @@ class TestRunCommitGates:
                    stages=[{**rec, "push_ready_lowered": True}])
         r = _run_commit(workspace, "run_s3")
         assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err
+        legacy = {k: v for k, v in rec.items() if k != "push_ready_lowered"}  # pre-marker record
+        _write_run(workspace, "run_s4", files_touched=["a.py"], stages=[legacy])
+        r = _run_commit(workspace, "run_s4")
+        assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err
+
+    def test_recomputed_bound_ignores_only_root_cause_deferred_findings(self):
+        """run-commit's recompute must not count findings a SOUND verdict deferred (they
+        would keep the exception from ever firing); push_ready itself still counts them."""
+        import pipeline_validator as pv
+        art = {"quality": {"tests_pass": True, "regressions": 0},
+               "completion_audit": {"all_green": True},
+               "adversarial_review": {"findings": [
+                   {"severity": "HIGH", "confidence": 9, "description": "x",
+                    "deferred_by": pv.DEFERRED_BY_ROOT_CAUSE}]}}
+        _, reasons = pv.push_ready_upper_bound(art, "full")
+        assert any(r.startswith("findings:") for r in reasons)
+        _, reasons = pv.push_ready_upper_bound(art, "full", honor_deferred=True)
+        assert not any(r.startswith("findings:") for r in reasons)
 
     def test_refuses_when_files_touched_empty(self, workspace, capsys):
         _write_run(workspace, "run_e",

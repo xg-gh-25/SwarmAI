@@ -1,7 +1,7 @@
 # GOAL_CYCLE ref — regression protocol, stop conditions, exit outputs
 Read when a cycle's tests go red, or when the loop ends for any reason other than
 SUCCESS (SUCCESS → `ref/goal_cycle/final-gate.md`).
-`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
+`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
 ## Regression Protocol (card step 6 went red)
 Act on the runner's `failures[].classification`: `pre-existing` failures are logged in
 IMPROVEMENT.md "Known Issues" and do not trigger this protocol; `regression` / `new` do.

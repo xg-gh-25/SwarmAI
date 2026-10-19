@@ -2,7 +2,7 @@
 
 Read before writing code that calls another module or an OS mechanism, before changing a
 shared variable/function/file, after each GREEN on stateful code, and when the change
-reads persisted data. `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
+reads persisted data. `RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
 
 ## Step 1.5: API Existence Check (BLOCKING for handler/integration code) `[MUST]` <!-- R-build-005 -->
 

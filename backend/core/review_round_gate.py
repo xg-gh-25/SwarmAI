@@ -131,6 +131,16 @@ def rounds_used(session_id: str, expert_id: str) -> "dict | None":
 
 
 def _deny_reason(expert_id: str, info: dict) -> str:
+    if info.get("stage") != "deliver":
+        # REVIEW (and any non-DELIVER stage) has no root-cause machinery: record and go on.
+        return (
+            f"DENY (再一再二不再三): '{expert_id}' has already completed {info['used']} review "
+            f"rounds in the {info['stage']} stage of pipeline run {info['run_id']}. There is "
+            f"no round {MAX_ROUNDS + 1}. STOP the fix loop and do not ask the user to decide. "
+            "Record every finding still open (file:line, what is unmet, what each fix "
+            "changed) as open items in this stage's artifact and the DELIVER "
+            "attention_flags (REPORT §10, completion summary), then complete this stage and "
+            "continue the run; DELIVER commits locally with push_ready false.")
     return (
         f"DENY (再一再二不再三): '{expert_id}' has already completed {info['used']} review "
         f"rounds in the {info['stage']} stage of pipeline run {info['run_id']} (round 1 "

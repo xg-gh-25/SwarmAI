@@ -4,7 +4,7 @@ Implement the PLAN test-first (vertical RED→GREEN), break its design yourself,
 
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage build` (ACs, change spec, exit criteria, `files_touched`, valid examples).
 
-`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
+`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`, Bash timeout 600000.
 Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/`npm run build*`). Never the full suite, never `| tail`.
 
 1. **Gate 1 Skeptic+SSA** (full, bugfix, goal first cycle; skip trivial/research/docs): stage-start returns `gate1_prompt_path` (6 inputs filled), or `gate1_verdict` when this plan was already judged (do not respawn). Spawn ONE sub-agent, prompt = `gate1_spawn` exactly (neither key → `spawn_prompt.py --gate gate1-skeptic`, exit 0 only), `run_in_background: false` (background hides the stream). BLOCK → user picks Fix Plan / Proceed Anyway. Spawn rejected → retry once, then checkpoint `gate_spawn_blocked`; never self-review.
@@ -12,7 +12,7 @@ Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/ts
 3. **Vertical TDD**, Change Spec order: tracer bullet (most important AC) first, then one test → one impl. Each cycle `RUN --mode tdd --files <≤5 test files>` (RED, then GREEN). `git add` your files by name; never `git commit` (DELIVER's `run-commit` is the sole commit). Code before its test → delete it, restart at RED. Fix code, not tests. A failure-path test per success-path test. Same AC fails twice → micro-replan (1 per AC, then L2 checkpoint).
 4. **After each GREEN:** path symmetry; real-data replay if it reads persisted data.
 5. **Break it yourself** `[GATE·validator]`: per plan `I<n>` / `F<n>` a test trying to violate it (kill, concurrency, retry, stale state) → `break_tests: [{targets, test, attack}]`. Experts only confirm.
-6. **VERIFY** only w/o TEST stage (direct, goal): `--mode verify --deadline auto`, `alarm 590`, Bash timeout 600000; fix, `recheck`; max 2, then `tdd.regressions: N`.
+6. **VERIFY** only w/o TEST stage (direct, goal): `RUN --mode verify`; fix, `RUN --mode recheck`; max 2, then `tdd.regressions: N`.
 7. **Wiring:** callers, interface seams, proximity scan (±50 lines), framework patterns from source.
 8. **SMOKE** every new branch in-process (import smoke for handlers/subprocess; frontend tabs/geometry/entries), **Resource Lifecycle** (release on success + failure), user-path trace per AC, wire PROBE for new frontend endpoints.
 9. **Record written files:** `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --files-touched '["<abs path>", ...]'` (written only, absolute, dedup-append).

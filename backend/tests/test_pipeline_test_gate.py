@@ -79,9 +79,9 @@ def _seed(ws, project="SwarmAI", run_id="run_abc123", status="running",
     return f
 
 
-def _call(gate, command, cwd=REPO, tool_name="Bash"):
-    return asyncio.run(gate(
-        {"tool_name": tool_name, "tool_input": {"command": command}, "cwd": cwd}, None, None))
+def _call(gate, command, cwd=REPO, tool_name="Bash", timeout=None):
+    ti = {"command": command} if timeout is None else {"command": command, "timeout": timeout}
+    return asyncio.run(gate({"tool_name": tool_name, "tool_input": ti, "cwd": cwd}, None, None))
 
 
 def _is_deny(res):
@@ -348,7 +348,7 @@ APPROVED_COMMANDS = [
     "yarn dlx -c 'ls -la'",
 ]
 
-RUNNER = ("perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python "
+RUNNER = ("perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python "
           "backend/scripts/pipeline_test.py --project SwarmAI --run-id run_abc123")
 
 
@@ -373,14 +373,15 @@ class TestPipelineTestGateActive:
     ])
     def test_runner_command_is_approved(self, ws, command):
         _seed(ws)
-        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command)
+        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command,
+                    timeout=600000)
         assert res == {"decision": "approve"}
 
     def test_runner_plus_raw_pytest_is_denied(self, ws):
         _seed(ws)
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}),
-                    RUNNER + " --mode verify && pytest tests/test_x.py")
-        assert _is_deny(res)
+                    RUNNER + " --mode verify && pytest tests/test_x.py", timeout=600000)
+        assert _is_deny(res) and "pipeline test runner only" in _reason(res)
 
     def test_bare_make_uses_the_makefile_default_goal(self, ws):
         # backend/Makefile's first target is `test`, so a bare `make` there runs tests.
@@ -830,6 +831,42 @@ def test_runner_alarm_longer_than_the_bash_timeout_is_denied_without_io():
               "perl -e 'alarm 590; exec @ARGV' \\\n  " + base.replace(" --project", " \\\n  --project"),
               "cd /x && " + cmd, base):
         assert f(c, {}) and not f(c, {"timeout": 600000}), c
-    assert f(RUNNER + " --mode tdd", {}) is None          # alarm 110 fits 120 s
+    short = RUNNER.replace("alarm 590", "alarm 110")
+    assert f(short + " --mode tdd", {}) is None           # alarm 110 fits 120 s
+    # alarm 110 around a scope mode (default deadline auto) is killed early: denied
+    assert "shorter than its deadline" in f(short + " --mode regression", {"timeout": 600000})
+    assert f("perl -e 'alarm 590; exec @ARGV' " + base.replace(" --deadline auto", ""),
+             {"timeout": 600000}) is None
+    for c in ('printf %s "$(' + cmd + ')"', 'bash -c "' + cmd + '"'):
+        assert f(c, {}) and not f(c, {"timeout": 600000}), c
     assert f("printf '%s' \"" + cmd + "\"", {}) is None  # text, not executed
     assert f("echo alarm 590 pipeline_test.py", {}) is None
+
+
+def test_source_repo_root_survives_the_packaged_daemon(tmp_path, monkeypatch):
+    """In the packaged daemon this module's own path is inside the bundle, never the repo:
+    the root then comes from the newest run's recorded CLI, so the direct-commit gate
+    (and the runner commands) keep applying instead of failing open."""
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    from core import security_hooks as sh
+    repo = tmp_path / "swarmai"
+    (repo / "backend" / "core").mkdir(parents=True)
+    (repo / "backend" / "scripts").mkdir(parents=True)
+    (repo / "backend" / "core" / "security_hooks.py").write_text("")
+    (repo / "backend" / "scripts" / "artifact_cli.py").write_text("")
+    _sp.run(["git", "init", "-q", str(repo)], check=True)
+    ws = tmp_path / "ws"
+    rd = ws / "Projects" / "P" / ".artifacts" / "runs" / "run_aaaabbbb"
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(_json.dumps({"id": "run_aaaabbbb", "cli": {
+        "python": "/usr/bin/python3", "script": str(repo / "backend" / "scripts" / "artifact_cli.py")}}))
+    monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
+    monkeypatch.setattr(sh, "_SOURCE_REPO_ROOT", str(tmp_path / "bundle"))
+    monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
+    assert sh._source_repo_root() == _os.path.realpath(str(repo))
+    # a recorded script whose repo is not a SwarmAI source tree is not trusted
+    (repo / "backend" / "core" / "security_hooks.py").unlink()
+    monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
+    assert sh._source_repo_root() is None

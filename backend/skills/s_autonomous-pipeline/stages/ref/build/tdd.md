@@ -1,7 +1,7 @@
 # BUILD ref — the TDD loop (tracer bullet, increments, micro-replan, mocks)
 
 Read before the first RED, when a RED→GREEN cycle keeps failing, or when choosing what to
-mock. `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
+mock. `RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
 
 ## Tests BEFORE code — the iron law
 

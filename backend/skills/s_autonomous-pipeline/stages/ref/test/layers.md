@@ -3,7 +3,7 @@
 Read when the TEST card sends you here: a layer looks empty, a layer must be skipped,
 or the project's stack is not one the runner covers.
 
-`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
+`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
 
 ## Test Strategy (3 layers, executed in order) `[GATE·validator]`
 
@@ -16,8 +16,7 @@ produced by the runner: `stage-complete --stage test` copies `layers` and counts
 
 All three layers run in ONE call, `RUN --mode regression` (this replaces the old
 three hand-run commands: `pytest -k <ac tests>`, `grep -rl ... | xargs pytest`, and
-`python -c "import module"`). Call it with `--deadline auto` under `alarm 590` and Bash
-`timeout` 600000. The runner shards per file, runs in parallel under one deadline sized
+`python -c "import module"`), Bash timeout 600000. The runner shards per file, runs in parallel under one deadline sized
 to the selection (up to 575 s), kills on timeout with a faulthandler stack attached
 (each test also has its own 30 s timeout), and caches by
 input digest (unchanged inputs return `cached`, 0 s). An L2 file that passed in this
@@ -123,5 +122,6 @@ Record the skip in the artifact instead of omitting the layer:
   and `deadline`. Full logs are under `runs/<R>/evidence/tests-<mode>-<ts>/`.
 - A timed-out test carries its stack. Read it; never hand-triage with `ps`, `kill`,
   `python -X faulthandler` or `sleep` polling (the gate denies these too).
-- `--deadline` defaults to 95 s. Above 100 s the outer alarm must be at least
-  deadline + 10 s (e.g. `alarm 310` with `--deadline 300`).
+- `--deadline` defaults to `auto` for verify / regression / recheck (sized to the
+  selection, at most 575 s) and 95 s for the other modes, all under `alarm 590` with the
+  Bash timeout 600000. Above 580 s the outer alarm must be at least deadline + 10 s.

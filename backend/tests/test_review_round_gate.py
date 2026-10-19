@@ -100,6 +100,21 @@ def test_fourth_round_is_denied_with_the_handoff(env):
     assert "wait for the answer" not in reason
 
 
+def test_fourth_review_stage_round_records_and_continues(env):
+    """REVIEW has no root-cause step: the capped expert's open items are recorded and
+    the run goes on (autonomous); the user is never asked."""
+    ws, audit = env
+    _run(ws, stage="review", started=time.time() - 600)
+    for i in range(3):
+        _marker(audit, i, "spec-compliance")
+    res = _spawn("spec-compliance")
+    assert _denied(res)
+    reason = res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "review stage" in reason and "do not ask the user" in reason
+    assert "REPORT §10" in reason and "continue the run" in reason
+    assert "root-cause" not in reason
+
+
 def test_only_this_expert_run_and_stage_window_count(env):
     ws, audit = env
     started = time.time() - 3600

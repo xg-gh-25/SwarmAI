@@ -74,7 +74,7 @@ symbol has ≥2 readers.
 - LOW: note in the report only.
 
 Re-run affected tests after any fix through the runner only:
-`perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode recheck`.
+`perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode recheck`.
 Record every finding in `adversarial_review.findings[]`; `stage-complete` derives
 `findings_total` / `findings_fixed` / `findings_remaining` from that list. For a resolved
 HIGH/CRITICAL finding add a `disk_check` (`{"file": "<ABSOLUTE path>", "must_contain":

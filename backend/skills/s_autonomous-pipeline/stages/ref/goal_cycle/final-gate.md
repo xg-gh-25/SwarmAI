@@ -1,6 +1,6 @@
 # GOAL_CYCLE ref — Final Quality Gate (DoD met → before stage-complete)
 Read when every DoD criterion passes (card step 1). Run steps 0-4 in order.
-`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
+`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
 **Final Quality Gate (before exiting goal_cycle stage):** `[MUST]` + `[GATE·validator]` (findings block at DELIVER) <!-- R-goal_cycle-005 -->
 > The adversarial spawn + cross-path prompt are `[MUST]` (behavioral). The RESULTING
 > findings are `[GATE·validator]`: goal_cycle's own schema requires an `adversarial_review`

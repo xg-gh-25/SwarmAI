@@ -953,10 +953,11 @@ def test_sigterm_aborts_children_and_removes_mutation_worktree(rig, tmp_path):
 
 
 def test_deadline_default_fits_the_wrapper_and_large_values_warn():
-    assert pt.DEFAULT_DEADLINE <= 100 < pt.WRAPPER_ALARM_S
+    assert pt.DEFAULT_DEADLINE <= 100 < pt.AUTO_MAX_DEADLINE < pt.WRAPPER_ALARM_S
     assert pt._clamp_deadline(pt.DEFAULT_DEADLINE) == (pt.DEFAULT_DEADLINE, [])
-    d, warn = pt._clamp_deadline(300)
-    assert d == 300 and "alarm" in warn[0] and "310" in warn[0]
+    assert pt._clamp_deadline(300) == (300, [])  # fits alarm 590
+    d, warn = pt._clamp_deadline(700)
+    assert d == 700 and "alarm" in warn[0] and "710" in warn[0]
     d, warn = pt._clamp_deadline(99999)
     assert d == pt.MAX_DEADLINE and len(warn) == 2
     assert pt._clamp_deadline("nan")[0] is None
@@ -1067,14 +1068,11 @@ def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, c
                     "def test_t():\n    assert compute_total(1, 2) == 3\n")},
                run_state={"files_touched": ["backend/core/calc.py"]})
     _write(repo, {"backend/core/calc.py": "def compute_total(a, b):\n    return b + a\n"})
-    plan = {"changed": ["backend/core/calc.py"],
-            "targets": {"backend/tests/test_calc_uses.py": None}}
-    assert pt.must_run_files(repo, plan) == {"backend/tests/test_calc_uses.py"}
     cache = tmp_path / "cache"
     cache.mkdir(exist_ok=True)
     (cache / "durations.json").write_text(json.dumps(
         {"backend/tests/test_calc_uses.py::test_t": [500.0, time.time()]}))
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "95")
     assert code == 2 and "never cut for time" in out["error"], out
     assert "--deadline auto" in out["next_action"] and f"--run-id {RUN_ID}" in out["next_action"]
     assert f"alarm {pt.AUTO_ALARM_S};" in out["next_action"]
@@ -1641,3 +1639,14 @@ def test_files_touched_counts_only_where_git_sees_a_change(rig):
 def test_no_duration_history_still_sizes_the_deadline():
     t = {"backend/tests/a.py": None, "backend/tests/b.py": None}
     assert pt._seconds_needed(t, {}, 1) == 2 * pt.DEFAULT_FILE_COST_S / pt.BUDGET_FILL
+
+
+def test_a_deleted_modules_importers_still_run(rig, tmp_path):
+    repo = rig({"backend/core/gone.py": "def f():\n    return 1\n",
+                "backend/tests/test_gone.py": "from core.gone import f\n\n\ndef test_f():\n    assert f()\n"})
+    (repo / "backend/core/gone.py").unlink()
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, _, _ = pt.select_backend(repo, ["backend/core/gone.py"], graph, 40, (), sgraph)
+    assert "backend/tests/test_gone.py" in sel

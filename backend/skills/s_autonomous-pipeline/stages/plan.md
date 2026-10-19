@@ -18,7 +18,7 @@ Turn the chosen alternative into a design BUILD can execute with zero project co
 10. **Impact projection**: only if the project has `code_intel.db`.
 11. **Exit contract**: `exit_criteria[]` = `[{id, kind, ref, expect}]`; kind ∈ test|probe|mutation|manual, expect ∈ pass|no_new_findings|all_killed|done. Start from `exit_criteria_default`, real refs (manual may omit). A `test` ref is ONE file/nodeid or `mode:<m>`, never a directory or glob. Met per `stage-complete` → stop verifying.
 
-PLAN runs no tests; any test goes only through `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode <m>`.
+PLAN runs no tests; any test goes only through `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode <m>`.
 
 ## Gates
 
