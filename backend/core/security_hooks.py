@@ -2855,29 +2855,66 @@ def _active_run_owned_paths() -> set:
     # non-enforcement (status-quo), never breakage or false-block. Follow-up if it bites:
     # maintain a small active-runs index (append-on-start / remove-on-terminal) and read
     # that instead of globbing all history.
-    import glob as _glob
     owned: set = set()
-    pattern = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects", "*", ".artifacts", "runs", "*", "run.json")
-    try:
-        files = _glob.glob(pattern)
-    except Exception:
-        logger.debug("_active_run_owned_paths: suppressed exception on a fail-safe path", exc_info=True)
-        return owned
-    for f in files:
-        try:
-            with open(f, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except Exception:
-            logger.debug("_active_run_owned_paths: suppressed exception on a fail-safe path", exc_info=True)
-            continue  # corrupt/unreadable single run.json → skip, never raise
-        if data.get("status") not in _ACTIVE_RUN_STATUSES:
-            continue
+    for data in _active_runs():
         ft = data.get("files_touched")
         if isinstance(ft, list):
             for p in ft:
                 if isinstance(p, str) and p:
                     owned.update(_canonicalize_owned_path(p))
     return owned
+
+
+def _active_run_ownership() -> "tuple[set, set]":
+    """One scan: (canonical files_touched of active runs, their run ids)."""
+    owned: set = set()
+    ids: set = set()
+    for data in _active_runs():
+        if isinstance(data.get("id"), str):
+            ids.add(data["id"])
+        ft = data.get("files_touched")
+        if isinstance(ft, list):
+            for p in ft:
+                if isinstance(p, str) and p:
+                    owned.update(_canonicalize_owned_path(p))
+    return owned, ids
+
+
+def _active_runs() -> list:
+    """run.json dicts of every active (running|paused) run under _ACTIVE_RUN_GLOB_ROOT.
+    A corrupt/unreadable run.json is skipped; a glob failure yields []."""
+    import glob as _glob
+    out: list = []
+    pattern = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects", "*", ".artifacts", "runs", "*", "run.json")
+    try:
+        files = _glob.glob(pattern)
+    except Exception:
+        logger.debug("_active_runs: suppressed exception on a fail-safe path", exc_info=True)
+        return out
+    for f in files:
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            logger.debug("_active_runs: suppressed exception on a fail-safe path", exc_info=True)
+            continue  # corrupt/unreadable single run.json → skip, never raise
+        if isinstance(data, dict) and data.get("status") in _ACTIVE_RUN_STATUSES:
+            data.setdefault("id", os.path.basename(os.path.dirname(f)))
+            out.append(data)
+    return out
+
+
+# A run's review deliverable (B) lives at <repo>/.aidlc/deliverables/<run_id>/ in
+# whichever repo run-commit picks, so it is matched by path shape, not by root.
+_DELIVERABLE_PATH_RE = re.compile(r"[\\/]\.aidlc[\\/]deliverables[\\/]([A-Za-z0-9_-]{1,64})[\\/]")
+
+
+def _active_run_deliverables(pending: set, run_ids: set) -> list:
+    """Pending paths that are an active run's review deliverable (REPORT.md and
+    anything else under its .aidlc/deliverables/<run_id>/). Committing one by hand
+    is the REPORT-only commit that splits a delivery in two."""
+    return sorted(p for p in pending
+                  if (m := _DELIVERABLE_PATH_RE.search(p)) and m.group(1) in run_ids)
 
 
 def create_active_run_commit_gate(session_context: dict[str, Any]):
@@ -2925,15 +2962,16 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
 
         try:
-            owned = await asyncio.wait_for(
-                executors.run_in("subprocess", _active_run_owned_paths),
+            owned, run_ids = await asyncio.wait_for(
+                executors.run_in("subprocess", _active_run_ownership),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
         except Exception:
             logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}
 
-        offending = sorted(p for p in pending if p in owned)
+        reports = _active_run_deliverables(pending, run_ids)
+        offending = sorted({*(p for p in pending if p in owned), *reports})
         if not offending:
             return {"decision": "approve"}
 
@@ -2953,7 +2991,10 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
                     "run-commit generates and co-commits LATER) → two separate commits, "
                     "defeating the single-commit review purpose. FIX: do NOT `git commit` the "
                     "run's code yourself — let the pipeline's `run-commit` make the one commit "
-                    "(it bundles code + REPORT.md together). If this is genuinely NOT a "
+                    "(it bundles code + REPORT.md together). A run's own REPORT.md "
+                    "(.aidlc/deliverables/<run_id>/) is never committed by hand either: "
+                    "on its own it is the second half of a split delivery — run-commit "
+                    "adds it to the code's commit. If this is genuinely NOT a "
                     "pipeline-run file (false match), set SWARM_ADVERSARIAL_GATE_FORCE=1 for "
                     "that one command."
                 ),

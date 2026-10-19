@@ -226,7 +226,8 @@ implementations in `security_hooks.py`). By category:
    (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
    patches — to governed context files), `adversarial_commit_gate` (no `git commit` without
    a sub-agent review this session), `active_run_commit_gate` (files owned by an active
-   pipeline run go through run-commit), `direct_commit_gate` (registered before
+   pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, go through
+   run-commit), `direct_commit_gate` (registered before
    `dangerous_command_gate`; a session with no run of its own that commits more than 20
    changed source lines in the SwarmAI source repo, docs and lockfiles excluded, is sent
    to `artifact_cli.py run-create --profile direct`; other sessions' and unowned runs

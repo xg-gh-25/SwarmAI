@@ -245,3 +245,63 @@ class TestPathFormCanonicalization:
         _seed_run(runs_root, "P", "run_abs", "running", ["/tmp/x/code.py"])
         owned = _active_run_owned_paths()
         assert _os.path.realpath("/tmp/x/code.py") in owned
+
+
+# ── an active run's own REPORT.md (.aidlc/deliverables/<run_id>/) ──────────
+class TestActiveRunDeliverable:
+    """A hand-made commit of an ACTIVE run's review deliverable is the REPORT-only
+    half of a split delivery: denied, even though B is never in files_touched."""
+
+    def _git(self, repo, *args):
+        import subprocess
+        subprocess.run(["git", "-C", str(repo), *args], check=True,
+                       capture_output=True, text=True)
+
+    def _repo_with_staged_report(self, tmp_path, run_id):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for a in (("init", "-q"), ("config", "user.email", "t@t.t"),
+                  ("config", "user.name", "t")):
+            self._git(repo, *a)
+        rep = repo / ".aidlc" / "deliverables" / run_id / "REPORT.md"
+        rep.parent.mkdir(parents=True)
+        rep.write_text("# Report\n")
+        self._git(repo, "add", "-A")
+        return repo
+
+    def _commit(self, repo):
+        gate = create_active_run_commit_gate({"sdk_session_id": "s"})
+        return asyncio.run(gate(
+            {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'add report'"},
+             "cwd": str(repo)}, None, None))
+
+    def test_report_of_an_active_run_is_denied(self, tmp_path, monkeypatch):
+        repo = self._repo_with_staged_report(tmp_path, "run_live")
+        monkeypatch.setattr(security_hooks, "_ACTIVE_RUN_GLOB_ROOT", str(tmp_path / "ws"))
+        _seed_run(tmp_path / "ws" / "Projects", "P", "run_live", "running", ["/elsewhere/x.py"])
+        res = self._commit(repo)
+        assert _is_deny(res)
+        reason = res["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "REPORT.md" in reason and "run-commit" in reason and "run_live" in reason
+
+    @pytest.mark.parametrize("status,run_id", [("completed", "run_live"),
+                                               ("running", "run_other")])
+    def test_finished_or_other_runs_report_is_not_this_gates_business(
+            self, tmp_path, monkeypatch, status, run_id):
+        repo = self._repo_with_staged_report(tmp_path, "run_live")
+        monkeypatch.setattr(security_hooks, "_ACTIVE_RUN_GLOB_ROOT", str(tmp_path / "ws"))
+        _seed_run(tmp_path / "ws" / "Projects", "P", run_id, status, [])
+        assert self._commit(repo) == {"decision": "approve"}
+
+    def test_deliverable_matcher(self):
+        pending = {"/r/.aidlc/deliverables/run_a/REPORT.md", "/r/.aidlc/deliverables/run_b/x",
+                   "/r/docs/.aidlc/deliverables.md", "/r/src/run_a/REPORT.md"}
+        assert security_hooks._active_run_deliverables(pending, {"run_a"}) == \
+            ["/r/.aidlc/deliverables/run_a/REPORT.md"]
+        assert security_hooks._active_run_deliverables(pending, set()) == []
+
+    def test_run_id_falls_back_to_the_run_dir_name(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(security_hooks, "_ACTIVE_RUN_GLOB_ROOT", str(tmp_path))
+        _seed_run(tmp_path / "Projects", "P", "run_noid", "paused", ["/abs/a.py"])
+        owned, ids = security_hooks._active_run_ownership()
+        assert ids == {"run_noid"} and "/abs/a.py" in owned
