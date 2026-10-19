@@ -613,12 +613,18 @@ def _current_entry(run_state: dict, name: str) -> "dict | None":
 
 def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bool,
                  workspace, self_repo, gen_b, requirement: str,
-                 precheck=None, message: "str | None" = None) -> "dict | None":
+                 precheck=None, message: "str | None" = None,
+                 review_not_converged: bool = False) -> "dict | None":
     """Deliver stage-complete landing; None when nothing to do (not isolated / not
     push-ready / already integrated). Exits with a §7.7 error on refusal.
     *precheck(review_at)* → error strings (D7 coverage, experts that have not reviewed
-    since the reviewed tree was recorded), checked before anything is committed."""
-    if not is_isolated(run_state) or not push_ready:
+    since the reviewed tree was recorded), checked before anything is committed.
+    *review_not_converged*: the caller proved (artifact_cli._only_review_not_converged)
+    that the ONLY thing keeping DELIVER from PUSH-READY is a Gate-2 loop that did not
+    converge in 3 rounds with a SOUND root-cause verdict. The run is autonomous, so it
+    lands anyway, the same as run-commit in shared mode (f2ffe9c2); every landed commit
+    is marked review_not_converged and push_ready itself stays false (push is gated)."""
+    if not is_isolated(run_state) or not (push_ready or review_not_converged):
         return None
     _CTX.update(project=run_state.get("project"), run_id=run_id)
     run_dir = run_file.parent
@@ -708,6 +714,8 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                 stage_fail("deliver", err, nxt)
         if resyncs:
             res["resyncs"] = resyncs
+        if review_not_converged and not push_ready:
+            res["review_not_converged"] = True
         landed[name] = res
         _record_landing(run_file, run_state, run_id, name, m, res)
     return {"landed": {k: {"sha": v["sha"], "files": len(v["files"]), "commit_s": v["commit_s"],
@@ -715,7 +723,9 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                            **({"carried_uncommitted": v["carried_uncommitted"],
                                "carried_backup": v.get("carried_backup")}
                               if v.get("carried_uncommitted") else {}),
-                           **({"resyncs": v["resyncs"]} if v.get("resyncs") else {})}
+                           **({"resyncs": v["resyncs"]} if v.get("resyncs") else {}),
+                           **({"review_not_converged": True}
+                              if v.get("review_not_converged") else {})}
                        for k, v in landed.items()}}
 
 
@@ -803,6 +813,8 @@ def _record_landing(run_file: Path, run_state: dict, run_id: str, name: str, mai
                 c["carried_backup"] = res.get("carried_backup")
             if res.get("resyncs"):
                 c["resyncs"] = res["resyncs"]
+            if res.get("review_not_converged"):
+                c["review_not_converged"] = True   # the shared-mode run-commit's mark
             commits.append(c)
         d["commits"] = commits
         ft = d.get("files_touched") or []

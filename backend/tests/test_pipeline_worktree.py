@@ -493,6 +493,80 @@ def test_isolated_land_force_records_d7_bypass(flow, monkeypatch):
     assert iv["kind"] == "d7_force_bypass" and "security" in iv["note"]
 
 
+# ── SOUND, not converged: an isolated run lands anyway (autonomous, f2ffe9c2 twin) ──
+class _Every(dict):
+    def __bool__(self):
+        return True
+
+    def get(self, k, d=None):
+        return 1
+
+
+def _all_reviewed(ac, monkeypatch):
+    """Every dispatched Gate-2 expert reviewed after the recorded tree: the precheck
+    passes, so the test isolates the push_ready decision."""
+    monkeypatch.setattr(ac, "_completed_spawns", lambda *a, **k: {"by_expert": _Every()})
+
+
+def _land_via_cli(ac, rid, f, warns, deliver_rec):
+    try:
+        os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
+        return ac._land_isolated_deliver("P", rid, f, False, None, warns, deliver_rec=deliver_rec)
+    finally:
+        os.environ.pop(hook_token.TOKEN_ENV, None)
+
+
+def test_isolated_land_proceeds_when_only_review_did_not_converge(flow, monkeypatch):
+    """push_ready false only because Gate-2 did not converge in 3 rounds with a SOUND
+    root-cause verdict: the run lands (it is autonomous: never parked for a human), the
+    commit is marked review_not_converged, and the record keeps push_ready false."""
+    import artifact_cli as ac
+    rid, f, wt = _prepared(flow)
+    _evidence(f, rid, wt)
+    seen = {}
+
+    def only_review(project, run_id, run_file, run_state, deliver_rec):
+        seen["rec"] = deliver_rec
+        return True
+    monkeypatch.setattr(ac, "_only_review_not_converged", only_review)
+    monkeypatch.setattr(ac, "_generate_review_deliverable", lambda *a, **k: ([], []))
+    _all_reviewed(ac, monkeypatch)
+    rec = {"stage": "deliver", "push_ready": False}
+    warns: list = []
+    res = _land_via_cli(ac, rid, f, warns, rec)
+    assert seen["rec"] is rec                       # the record being completed is checked
+    assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
+    assert res["landed"]["swarmai"]["review_not_converged"] is True
+    st = _state(f)
+    assert st["worktrees"][0]["state"] == "integrated"
+    assert st["commits"][-1]["review_not_converged"] is True
+    assert any("review_not_converged" in w for w in warns)
+
+
+def test_isolated_land_still_waits_when_push_ready_fails_for_another_reason(flow, monkeypatch):
+    """Any other push_ready failure (tests, completion audit, a model-lowered push_ready)
+    keeps the landing off: nothing is committed and the worktree stays active."""
+    import artifact_cli as ac
+    rid, f, wt = _prepared(flow)
+    _evidence(f, rid, wt)
+    head = _g(flow["main"], "rev-parse", "HEAD")
+    monkeypatch.setattr(ac, "_only_review_not_converged", lambda *a, **k: False)
+    monkeypatch.setattr(ac, "_generate_review_deliverable", lambda *a, **k: ([], []))
+    _all_reviewed(ac, monkeypatch)
+    assert _land_via_cli(ac, rid, f, [], {"stage": "deliver", "push_ready": False}) is None
+    assert _g(flow["main"], "rev-parse", "HEAD") == head
+    assert _state(f)["worktrees"][0]["state"] == "active"
+    assert not any(c.get("review_not_converged") for c in _state(f).get("commits") or [])
+
+
+def test_push_ready_landing_is_not_marked_review_not_converged(flow):
+    rid, f, wt = _prepared(flow)
+    _evidence(f, rid, wt)
+    res = _land(flow, rid, f)
+    assert "review_not_converged" not in res["landed"]["swarmai"]
+    assert "review_not_converged" not in _state(f)["commits"][-1]
+
+
 # ── automatic landing while main keeps moving ─────────────────────────────────
 def _evidence_at_base(f, rid, wt):
     _evidence(f, rid, wt)

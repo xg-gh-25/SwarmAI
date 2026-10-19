@@ -10453,7 +10453,8 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         # so the manifest does not advance; rerunning stage-complete retries.
         landing = _land_isolated_deliver(
             project, run_id, run_file, bool(cand_rec.get("push_ready")), reg, warnings,
-            force_reason=(args.reason.strip() if getattr(args, "force", False) else None))
+            force_reason=(args.reason.strip() if getattr(args, "force", False) else None),
+            deliver_rec=cand_rec)
     if next_stage:
         from core.artifact_registry import PIPELINE_STATES
         behind = _manifest_ahead_of(reg, project, profile, next_stage)
@@ -10507,15 +10508,27 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
 
 def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready: bool,
                            reg: ArtifactRegistry, warnings: "list[str]",
-                           force_reason: "str | None" = None) -> "dict | None":
+                           force_reason: "str | None" = None,
+                           deliver_rec: "dict | None" = None) -> "dict | None":
     """Deliver landing for an isolated run (pipeline_worktree.land_deliver), with B
     written into the worktree before the final commit and REPORT.md refreshed after.
     *force_reason* (stage-complete --force --reason): land despite the review
-    precheck, recorded as a d7_force_bypass intervention — run-commit's override."""
+    precheck, recorded as a d7_force_bypass intervention — run-commit's override.
+    *deliver_rec*: the DELIVER record being completed. When push_ready is false ONLY
+    because Gate-2 did not converge in 3 rounds (root-cause review: SOUND), the run
+    lands anyway, marked review_not_converged — the isolated twin of run-commit's
+    exception (cmd_run_commit), which an isolated run never reaches: run-commit only
+    confirms an isolated landing."""
     import pipeline_worktree as _pw
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
     if not _pw.is_isolated(run_state):
         return None
+    review_open = (not push_ready) and _only_review_not_converged(
+        project, run_id, run_file, run_state, deliver_rec)
+    if review_open:
+        warnings.append("deliver is not PUSH-READY only because Gate-2 did not converge in "
+                        "3 rounds (root-cause review: SOUND). Landing locally; the commit is "
+                        "marked review_not_converged and the open items are in REPORT §10.")
 
     def gen_b(wt: Path, files: "list[str]") -> "list[str]":
         from core.run_worktree import WorktreeError
@@ -10579,7 +10592,7 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                                self_repo=_BACKEND_DIR.parent, gen_b=gen_b,
                                requirement=_requirement,
                                message=_commit_message(run_id, _requirement, _deliver_art),
-                               precheck=precheck)
+                               precheck=precheck, review_not_converged=review_open)
     if landing:
         import contextlib
         import io
