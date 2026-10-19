@@ -436,3 +436,93 @@ def test_steering_env_on_a_pipeline_command_is_denied(env, monkeypatch):
     _set_run(env, worktree_mode=None)
     c = "SWARM_WORKTREE_MODE=off " + _cmd("stage-start", extra="--stage build")
     assert _denied(og._decide("s1", c, {"command": c}))
+
+
+# ── rule 4: worktree mode on, a session with no run writes the main checkout ─────
+def _gate(sid, **ctx):
+    import asyncio
+    gate = wg.create_worktree_write_gate({"sdk_session_id": sid, **ctx})
+    return lambda call: asyncio.run(gate(call, None, None))
+
+
+@pytest.fixture
+def r4(env, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
+    (env["ws"] / "Projects" / "SwarmAI").mkdir(parents=True)   # the repo's project
+    return env
+
+
+def _run_json(env, rid, sid, **kw):
+    rd = env["ws"] / "Projects" / "P" / ".artifacts" / "runs" / rid
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(json.dumps({"id": rid, "project": "P", "session_id": sid, **kw}))
+
+
+def test_no_run_session_writing_main_is_sent_to_a_run(r4):
+    g = _gate("s5")
+    v = g(_call("Edit", file_path=str(r4["main"] / "a.py")))
+    assert _denied(v)
+    why = v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "run-create --project SwarmAI" in why and "stage-start" in why
+    assert _denied(g(_call("Bash", cwd=str(r4["main"]),
+                           command=f"sed -i '' 's/a/b/' {r4['main']}/a.py")))
+    assert _denied(g(_call("Write", file_path=str(r4["other"] / "a.py"))))   # a run's worktree
+    for ok in (_call("Write", file_path=str(r4["ws"] / "note.md")),
+               _call("Read", file_path=str(r4["main"] / "a.py")),
+               _call("Write", file_path=str(r4["main"] / ".git" / "info" / "exclude"))):
+        assert not _denied(g(ok))
+
+
+def test_no_run_rule_spares_ignored_unbound_scratch_and_shared(r4, tmp_path):
+    (r4["main"] / ".gitignore").write_text("build/\n")
+    assert not _denied(_gate("s5")(_call("Write", file_path=str(r4["main"] / "build" / "x"))))
+    # hook_builder's fallback context (a prewarm): it could never start a run
+    assert not _denied(_gate("default", _unbound=True)(_call("Edit", file_path=str(r4["main"] / "a.py"))))
+    # a scratch repo no project names
+    scratch = Path(os.path.realpath(tmp_path)) / "scratch"
+    scratch.mkdir()
+    _g(scratch, "init", "-q", "-b", "main")
+    _g(scratch, "config", "user.name", "T")
+    _g(scratch, "config", "user.email", "t@e.com")
+    (scratch / "x.py").write_text("x\n")
+    _g(scratch, "add", "-A")
+    _g(scratch, "commit", "-q", "-m", "i")
+    assert not _denied(_gate("s5")(_call("Edit", file_path=str(scratch / "x.py"))))
+    # a session whose own run is shared-mode keeps writing main as before
+    _run_json(r4, "run_5ab5ab5a", "s6", status="running", worktree_mode="shared")
+    assert not _denied(_gate("s6")(_call("Edit", file_path=str(r4["main"] / "a.py"))))
+
+
+def test_no_run_rule_names_the_sessions_own_run(r4):
+    _run_json(r4, "run_7a7a7a7a", "s7", status="running", worktree_mode=None)
+    v = _gate("s7")(_call("Edit", file_path=str(r4["main"] / "a.py")))
+    assert _denied(v) and "run_7a7a7a7a" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "run-repo-add" in v["hookSpecificOutput"]["permissionDecisionReason"]
+    _run_json(r4, "run_8b8b8b8b", "s8", status="paused", worktree_mode="isolated")
+    v = _gate("s8")(_call("Edit", file_path=str(r4["main"] / "a.py")))
+    assert _denied(v) and "run-resume" in v["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_no_run_rule_skips_relative_targets_after_a_late_cd(r4):
+    g = _gate("s5")
+    cmd = f"echo x > notes.md && cd {r4['main']} && git status"
+    assert not _denied(g(_call("Bash", cwd=str(r4["ws"]), command=cmd)))
+    assert _denied(g(_call("Bash", cwd=str(r4["ws"]), command=f"cd {r4['main']} && echo x > a.py")))
+
+
+def test_no_run_rule_reuses_one_gate_and_sees_a_new_run(r4):
+    """One gate across calls (the TTL cache): after the deny the session starts an
+    isolated run, and its next write to its worktree passes at once."""
+    g = _gate("s9")   # owns OTHER (isolated, worktree present)
+    assert not _denied(g(_call("Edit", file_path=str(r4["other"] / "a.py"))))
+    g5 = _gate("s5")
+    assert _denied(g5(_call("Edit", file_path=str(r4["main"] / "a.py"))))
+    assert _denied(g5(_call("Edit", file_path=str(r4["main"] / "a.py"))))   # cached, still denied
+
+
+def test_no_run_rule_is_off_with_the_mode_off(r4, monkeypatch):
+    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
+    for rid in (RID, OTHER):          # no worktree anywhere and mode off: the gate is free
+        rw._remove(rid, json.loads(r4["runs"][rid].read_text())["worktrees"][0], r4["main"],
+                   merged=False)
+    assert not _denied(_gate("s5")(_call("Edit", file_path=str(r4["main"] / "a.py"))))

@@ -4,7 +4,7 @@ its own worktree (docs/design/pipeline-run-worktree.md §6.1).
 Matcher ``Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep``, its own hook group (not
 the 4-hour Bash chain), bounded by ``_GATE_TIMEOUT``, fail-open on its own errors,
 operator bypass ``SWARM_WORKTREE_GATE_FORCE=1`` in the daemon environment. Zero cost
-while no run worktree exists. Judgments:
+while worktree mode is off and no run worktree exists. Judgments:
 
 1. this session owns an isolated run → DENY writes to that run's main checkout (file
    tools, Bash writes ``file_change_classifier`` can parse, git index/ref-changing
@@ -16,6 +16,16 @@ while no run worktree exists. Judgments:
    a session owning an isolated run) additionally may not touch any ref but its own
    branch, nor config (without --worktree), gc --prune, reflog expire, replace, notes,
    ``push .``.
+
+4. worktree mode on, the session is bound to a real app session, and it has no run
+   isolating the repo (no run, or one not isolated yet / already landed; an explicitly
+   shared-mode run is exempt) → DENY file writes to the main checkout of a project's
+   code repo (run_worktree.repo_for_write, and the repo is a workspace project's or the
+   SwarmAI source; never SwarmWS; gitignored and ``.git/`` paths pass) and writes into
+   any run's worktree. A direct code change goes through a run too, so it lands from its
+   own worktree instead of sharing the checkout with every other session; the deny
+   prints the commands (resume the session's own run when it has one). Git
+   subcommands and writes the Bash parsers cannot see are not covered (sync-time check).
 
 Also: a hardlinked file (st_nlink > 1) in the worktree is not writable; Read / Grep
 of the main checkout gets a reminder (allow + additionalContext). Bash parsing is
@@ -165,6 +175,139 @@ def _file_verdict(p: str, own: "_Own | None") -> "dict | None":
     return None
 
 
+_CLI_CACHE: "list" = [0.0, None]
+
+
+def _latest_cli() -> "dict | None":
+    """The newest run's recorded CLI (absolute python + artifact_cli.py), for printing a
+    runnable command to a session that has no run of its own. Newest-first by mtime,
+    parsing stops at the first record; cached 60 s."""
+    import glob
+    import json
+    now = time.monotonic()
+    if now - _CLI_CACHE[0] < 60:
+        return _CLI_CACHE[1]
+    from core.security_hooks import _pipeline_runs_root
+    files = []
+    for f in glob.glob(os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts",
+                                    "runs", "*", "run.json")):
+        try:
+            files.append((os.path.getmtime(f), f))
+        except OSError:
+            continue
+    found = None
+    for _t, f in sorted(files, reverse=True)[:50]:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                cli = json.load(fh).get("cli")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(cli, dict):
+            found = cli
+            break
+    _CLI_CACHE[:] = [now, found]
+    return found
+
+
+class _NoRun:
+    """Rule 4 state of a session: *run* = its own live run that does not isolate (id,
+    status, worktree_mode) or None."""
+
+    def __init__(self, run: "dict | None" = None):
+        self.run = run
+
+
+def _session_runs_light(sid: str) -> "list[dict]":
+    """This session's live runs (running/paused), newest first — a cheap scan (stat every
+    run.json, parse only those touched in the last 3 days)."""
+    import glob
+    import json
+    from core.security_hooks import _pipeline_runs_root
+    cutoff = time.time() - 3 * 86400
+    out = []
+    for f in glob.glob(os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts",
+                                    "runs", "*", "run.json")):
+        try:
+            t = os.path.getmtime(f)
+            if t < cutoff:
+                continue
+            with open(f, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get("session_id") == sid and d.get("status") in ("running", "paused"):
+            out.append((t, {"id": str(d.get("id") or os.path.basename(os.path.dirname(f))),
+                            "project": str(d.get("project") or ""), "status": d.get("status"),
+                            "worktree_mode": d.get("worktree_mode"), "cli": d.get("cli")}))
+    return [r for _t, r in sorted(out, key=lambda x: x[0], reverse=True)]
+
+
+def _ignored(main: str, p: str) -> bool:
+    import subprocess
+    rel = os.path.relpath(p, main)
+    if rel == ".git" or rel.startswith(".git" + os.sep):
+        return True          # git's own dir: never part of a change
+    try:
+        r = subprocess.run(["git", "-C", main, "check-ignore", "-q", "--", rel],
+                           capture_output=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def _project_repo(main: str) -> "str | None":
+    """The workspace project a code repo belongs to (Projects/<P> named like the repo, or
+    the SwarmAI source itself) — rule 4 stays off for scratch and third-party repos."""
+    from core.security_hooks import _project_for_repo, _source_repo_root
+    name = _project_for_repo(main)
+    if name != "<project>":
+        return name
+    src = _source_repo_root()
+    return _project_for_repo(src) if src and os.path.realpath(src) == main else None
+
+
+def _no_run_verdict(p: str, nr: "_NoRun") -> "dict | None":
+    """Rule 4 (module docstring) for one write target."""
+    from core.run_worktree import repo_for_write, run_for_path
+    from core.security_hooks import _pipeline_runs_root
+    hit = run_for_path(p)
+    if hit is not None:
+        return _deny(f"{p} is inside run {hit[0]}'s worktree; this session does not own that "
+                     "run. Write only in a worktree of a run of your own.")
+    m = repo_for_write(p, _pipeline_runs_root())
+    if m is None:
+        return None
+    main = os.path.realpath(str(m))
+    project = _project_repo(main)
+    if project is None or _ignored(main, p):
+        return None
+    head = (f"{p} is in the main checkout of {main}, which every session shares. With "
+            "worktree mode on, a code change — through the pipeline or direct — is made in a "
+            "run's own worktree and lands from there by itself. ")
+    r = nr.run
+    if r is not None:
+        rid = shlex.quote(r["id"])
+        nxt = ("resume it: " + cli_command(r.get("cli"), f"run-resume --project "
+                                           f"{shlex.quote(r['project'] or project)} --run-id {rid}")
+               if r.get("status") == "paused" else
+               "start its next plan/build stage (that creates the worktree), or give this repo "
+               "one: " + cli_command(r.get("cli"), f"run-repo-add --project "
+                                     f"{shlex.quote(r['project'] or project)} --run-id {rid} "
+                                     f"--path {shlex.quote(main)}"))
+        return _deny(head + f"This session's run {r['id']} ({r.get('status')}) has no worktree "
+                     f"for this repo yet: {nxt}\nThen make this change at the same relative "
+                     "path under the worktree it prints.")
+    cli = _latest_cli()
+    pq = shlex.quote(project)
+    create = cli_command(cli, f"run-create --project {pq} --profile direct --requirement "
+                              "'<what you are changing and how to tell it is done>'")
+    start = cli_command(cli, f"stage-start --project {pq} --run-id <run_id> --stage plan")
+    return _deny(head + "Start a run (each as ONE simple command; `--profile direct` for a "
+                 "small, fully specified change, otherwise leave --profile out):\n"
+                 f"Run: {create}\nThen: {start}\nand make this change at the same relative "
+                 "path under the worktree stage-start prints.")
+
+
 def _repo_add_deny(own: "_Own", repo: str, what: str) -> dict:
     return _deny(f"{what} is in the git repo {repo}, which run {own.id} has no worktree for "
                  "yet. Give it one first (one simple command, nothing chained):\n"
@@ -298,22 +441,34 @@ def _git_verdict(g: dict, own: "_Own | None") -> "dict | None":
     return None
 
 
-def _bash_targets(command: str, cwd: str) -> "list[str]":
+def _bash_targets(command: str, cwd: str, with_raw: bool = False):
     from core.file_change_classifier import (parse_bash_delete_targets,
                                              parse_bash_heredoc_write_candidates,
                                              parse_bash_write_targets)
     from core.security_hooks import _cd_segment_target, _gate_shell_segments
     base = cwd
+    late_cd = False   # a cd AFTER another command: relative targets have no single base
+    other = False
     for seg in _gate_shell_segments(command) or []:
         t = _cd_segment_target(seg, base)
+        if t is None:
+            other = True
+            continue
+        late_cd = late_cd or other
         if t:
             base = t
     raw = (parse_bash_write_targets(command) + parse_bash_heredoc_write_candidates(command)
            + parse_bash_delete_targets(command))
-    return [_real(r, base) for r in dict.fromkeys(raw)]
+    out = [_real(r, base) for r in dict.fromkeys(raw)]
+    if not with_raw:
+        return out
+    sure = [not late_cd or os.path.isabs(os.path.expanduser(r)) for r in dict.fromkeys(raw)]
+    return list(zip(out, sure))
 
-def judge(input_data: "dict[str, Any]", own: "_Own | None") -> "dict | None":
-    """The verdict for one tool call (None = allow without comment)."""
+def judge(input_data: "dict[str, Any]", own: "_Own | None",
+          no_run: "_NoRun | None" = None) -> "dict | None":
+    """The verdict for one tool call (None = allow without comment). *no_run*: rule 4
+    applies (worktree mode on, no run isolating this session's writes)."""
     tool = input_data.get("tool_name")
     ti = input_data.get("tool_input") or {}
     cwd = input_data.get("cwd") or ""
@@ -326,7 +481,10 @@ def judge(input_data: "dict[str, Any]", own: "_Own | None") -> "dict | None":
         return None
     if tool in _PATH_KEYS:
         p = ti.get(_PATH_KEYS[tool])
-        return _file_verdict(_real(p, cwd), own) if p else None
+        if not p:
+            return None
+        v = _file_verdict(_real(p, cwd), own)
+        return v if v is not None or no_run is None else _no_run_verdict(_real(p, cwd), no_run)
     if tool != "Bash":
         return None
     command = ti.get("command") or ""
@@ -337,8 +495,10 @@ def judge(input_data: "dict[str, Any]", own: "_Own | None") -> "dict | None":
             v = _git_verdict(g, own)
             if v is not None:
                 return v
-    for p in _bash_targets(command, cwd):
+    for p, sure in _bash_targets(command, cwd, with_raw=True):
         v = _file_verdict(p, own)
+        if v is None and no_run is not None and sure:
+            v = _no_run_verdict(p, no_run)
         if v is not None:
             return v
     return None
@@ -355,24 +515,41 @@ def _any_run_worktree() -> bool:
 
 def create_worktree_write_gate(session_context: "dict[str, Any]"):
     """Factory (module docstring). session_context: the mutable dict SessionUnit
-    updates; ``sdk_session_id`` holds the app session id (read at call time)."""
+    updates; ``sdk_session_id`` holds the app session id (read at call time). A context
+    marked ``_unbound`` (hook_builder's fallback when no session context was given, e.g.
+    a prewarm: its id is the agent id, no run can ever be linked to it) never gets
+    rule 4 — it could never start the run the deny asks for."""
     from core import executors
     cache: dict = {}
 
+    def _state(sid: str, mode_on: bool, any_wt: bool):
+        from core.run_worktree import own_isolated_run
+        from core.security_hooks import _pipeline_runs_root
+        r = own_isolated_run(sid, _pipeline_runs_root()) if sid and any_wt else None
+        own = _Own(r["id"], r["worktrees"], project=r.get("project"), cli=r.get("cli"),
+                   lazy=not r.get("settled") and r.get("status") == "running") if r else None
+        nr = None
+        if mode_on and sid and own is None and not session_context.get("_unbound"):
+            runs = _session_runs_light(sid)
+            if not any(x.get("worktree_mode") == "shared" for x in runs):
+                nr = _NoRun(runs[0] if runs else None)   # a shared-mode run writes main as before
+        return own, nr
+
     def _decide(sid: str, input_data: dict) -> "dict | None":
-        if not _any_run_worktree():
+        from core.run_worktree import mode_enabled
+        mode_on = mode_enabled()
+        any_wt = _any_run_worktree()
+        if not mode_on and not any_wt:
             return None
+        if not any_wt and input_data.get("tool_name") in ("Read", "Grep"):
+            return None      # rules 1–3 need a worktree; rule 4 never judges reads
         hit = cache.get(sid)
         if hit is None or time.monotonic() - hit[0] > _OWN_TTL:
-            from core.run_worktree import own_isolated_run
-            from core.security_hooks import _pipeline_runs_root
-            r = own_isolated_run(sid, _pipeline_runs_root()) if sid else None
-            own = _Own(r["id"], r["worktrees"], project=r.get("project"), cli=r.get("cli"),
-                       lazy=not r.get("settled") and r.get("status") == "running") if r else None
+            own, nr = _state(sid, mode_on, any_wt)
             cache.clear()
-            cache[sid] = (time.monotonic(), own)
-            return judge(input_data, own)
-        v = judge(input_data, hit[1])
+            cache[sid] = (time.monotonic(), own, nr)
+            return judge(input_data, own, no_run=nr)
+        v = judge(input_data, hit[1], no_run=hit[2])
         if v is not None and v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
             cache.pop(sid, None)  # e.g. run-repo-add just added a worktree: judge afresh
             return _decide(sid, input_data)
@@ -384,7 +561,8 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
         if input_data.get("tool_name") not in _PATH_KEYS and input_data.get("tool_name") != "Bash":
             return {}
         try:
-            if not _any_run_worktree():  # inline, no thread hop: the common case is free
+            from core.run_worktree import mode_enabled
+            if not _any_run_worktree() and not mode_enabled():  # inline: off is free
                 return {}
         except Exception:  # noqa: BLE001 — fail-open
             logger.debug("worktree_write_gate: WT_ROOT check failed", exc_info=True)

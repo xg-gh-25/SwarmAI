@@ -34,8 +34,13 @@ omit `--profile` and let EVALUATE pick:
   session lifecycle or cross-session state.
 direct still runs Gate 1 and Gate 2, `pipeline_test.py` and `run-commit`; it only skips
 EVALUATE, THINK, REVIEW and TEST. If BUILD finds the change is bigger or riskier than
-expected, say so in one line and checkpoint instead of stretching direct. (A change of 20
-lines or less with no run at all is also fine: `direct_commit_gate` lets it through.)
+expected, say so in one line and checkpoint instead of stretching direct. With worktree
+mode on, the worktree write gate denies a session's file writes to a project code repo's
+main checkout unless one of its runs isolates them, and prints the commands: a code change
+made outside the pipeline starts a run too (`--profile direct` when the criteria above
+hold, otherwise no `--profile`) and lands from that run's worktree. With the mode off, a
+change of 20 lines or less with no run at all is still fine: `direct_commit_gate` lets it
+through.
 
 **Briefing (emit at INIT — orient the user before any work runs).** The profile is unknown until
 EVALUATE returns, so emit the run header now and the profile/mode line the moment EVALUATE

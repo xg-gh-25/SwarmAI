@@ -3071,6 +3071,51 @@ try:
 except Exception as _exc:  # pragma: no cover - import-time path edge
     logger.warning("direct_commit_gate: cannot resolve source repo root: %s", _exc)
     _SOURCE_REPO_ROOT = None
+_SOURCE_ROOT_CACHE: "list" = [0.0, None]
+
+
+def _source_repo_root() -> "str | None":
+    """The SwarmAI source repo (a git toplevel). From this module's own path when it is
+    one (dev, tests) — in the packaged daemon ``__file__`` lies inside the bundle, so
+    that path is never the repo and every gate scoped to it silently failed open. Then
+    from the newest run's recorded CLI (run.json "cli": the absolute artifact_cli.py
+    the pipeline runs), accepted only when that script exists and its repo holds this
+    module's twin. run.json is agent-written, so this is guidance-grade scoping (the
+    gates using it fail open anyway), not a trust boundary. Cached 60 s; None when
+    neither resolves."""
+    if _SOURCE_REPO_ROOT and os.path.isdir(os.path.join(_SOURCE_REPO_ROOT, ".git")):
+        return _SOURCE_REPO_ROOT
+    import time as _time
+    now = _time.time()
+    if now - _SOURCE_ROOT_CACHE[0] < 60:
+        return _SOURCE_ROOT_CACHE[1]
+    import glob as _glob
+    files = []
+    for f in _glob.glob(os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts",
+                                     "runs", "*", "run.json")):
+        try:
+            files.append((os.path.getmtime(f), f))
+        except OSError:
+            continue
+    found = None
+    for _t, f in sorted(files, reverse=True)[:50]:   # newest first, stop at the first fit
+        try:
+            with open(f, encoding="utf-8") as fh:
+                cli = json.load(fh).get("cli")
+            sc = cli.get("script") if isinstance(cli, dict) else None
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not isinstance(sc, str) or not os.path.isabs(sc) or not os.path.isfile(sc):
+            continue
+        root = os.path.realpath(os.path.join(os.path.dirname(sc), os.pardir, os.pardir))
+        if (os.path.basename(sc) == "artifact_cli.py" and os.path.isdir(os.path.join(root, ".git"))
+                and os.path.isfile(os.path.join(root, "backend", "core", "security_hooks.py"))):
+            found = root
+            break
+    _SOURCE_ROOT_CACHE[:] = [now, found]
+    return found
+
+
 
 
 def _pipeline_runs_root() -> str:
@@ -3771,7 +3816,7 @@ def _is_repo_copy_source(src: str, cwd: str) -> bool:
         if not cwd:
             return False
         s = os.path.join(cwd, s)
-    repo = _SOURCE_REPO_ROOT
+    repo = _source_repo_root()
     if not repo:
         return False
     rp = os.path.realpath(s)
@@ -4002,7 +4047,7 @@ def _repo_relative(path: str, cwd: str) -> str:
     if not os.path.isabs(p):
         return path
     rp = os.path.realpath(p)
-    repo = _SOURCE_REPO_ROOT
+    repo = _source_repo_root()
     if repo and (rp == repo or rp.startswith(repo + os.sep)):
         return os.path.relpath(rp, repo)
     return rp
@@ -6118,12 +6163,13 @@ def _pending_source_line_count(cwd: str, command: str) -> "int | None":
     (`git commit -- backend/`) covers every numstat path under it.
 
     Scope: only a commit whose repo root (resolved from *cwd*) is the SwarmAI source
-    repo (_SOURCE_REPO_ROOT) is counted; any other repo returns 0, so the gate never
+    repo (_source_repo_root()) is counted; any other repo returns 0, so the gate never
     fires on a user's unrelated project."""
     root = _gate_repo_root_for(cwd)
     if root is None:
         return None
-    if not _SOURCE_REPO_ROOT or root != _SOURCE_REPO_ROOT:
+    src = _source_repo_root()
+    if not src or root != src:
         return 0
     pending = _pending_commit_paths(cwd, command)
     if pending is None or pending is _PENDING_CROSS_REPO:
@@ -6211,7 +6257,7 @@ def create_direct_commit_gate(session_context: dict[str, Any]):
         if lines is None or lines <= _DIRECT_COMMIT_MAX_SOURCE_LINES:
             return {"decision": "approve"}
 
-        project = shlex.quote(_project_for_repo(_SOURCE_REPO_ROOT or ""))
+        project = shlex.quote(_project_for_repo(_source_repo_root() or ""))
         logger.warning("[BLOCKED] direct_commit_gate: %d source lines outside a run "
                        "(session=%s): %s", lines, session_id, command[:120])
         return {
