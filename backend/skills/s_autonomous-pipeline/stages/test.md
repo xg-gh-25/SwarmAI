@@ -4,14 +4,14 @@ Purpose: fresh runner evidence for the post-BUILD tree; fix what this change bro
 
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage test`
 
-`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`, Bash timeout 600000.
+`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`; output `continue: true` → run the same command again.
 Tests go ONLY through `RUN`: `pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/vite build.
 One call per mode, foreground, never split; no full suite (STEERING R9).
 
 1. **L1+L2+L3 in one call:** `RUN --mode regression`. L1 = BUILD `ac_coverage` tests, L2 =
    every direct importer of a changed module (+ tests naming a changed script); all of
-   it runs (the runner sizes the deadline to it); transitive importers are listed for
-   REPORT §10, not run. L3 =
+   it runs, over as many calls as it takes (`continue: true` → same command again);
+   transitive importers are listed for REPORT §10, not run. L3 =
    import smoke; `desktop/src` changes add `vitest related` + `tsc`. Run it fresh even
    if BUILD was green (post-refactor tree). Zero L2 files, non-SwarmAI stack, skips:
    `ref/test/layers.md`.

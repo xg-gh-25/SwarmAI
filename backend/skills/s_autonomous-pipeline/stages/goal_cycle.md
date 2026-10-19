@@ -1,7 +1,7 @@
 # GOAL_CYCLE — execution card
 Purpose: loop bounded BUILD+TEST cycles until the Definition of Done (DoD) passes and a final adversarial fails to break it (goal profile; replaces BUILD+REVIEW+TEST).
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage goal_cycle` (returns the evaluation artifact, design_doc, a valid example).
-`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>` (Bash timeout 600000), ONLY way to test; one call/mode.
+`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>` (`continue: true` → again), ONLY way to test.
 **Setup (once):** load `dod_criteria`, `max_cycles`, `progress_path`, `cycle_scope`, `review_cadence`; create or resume the progress file; record `start_commit` (`git rev-parse HEAD`); create ONE `GoalMetrics`; apply the DoD Quality Rules (≥1 negative test, a non-default path, behavior over existence). All in `ref/goal_cycle/setup.md`.
 **Each cycle:**
 1. **DoD check (exit-first):** run ALL criteria. Shell: `bash -c '<check_command>' 2>&1; echo "EXIT:$?"` (`EXIT:0` = pass); a test criterion: `RUN --mode tdd --files <test>`; rubric → `PASS` / `FAIL: <reason>`. Record each. All pass → **Final Quality Gate**.

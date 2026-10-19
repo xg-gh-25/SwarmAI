@@ -18,11 +18,11 @@ result for a cross-platform changeset. Either:
 
 1. Run the cross-target check locally if the toolchain exists (`cargo check --target
    <other>`). In a run, invoke it through the runner:
-   `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode probe --name cargo-check-<target> -- <wrapper> --target <other>`
+   `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode probe --name cargo-check-<target> -- <wrapper> --target <other>`
    where `<wrapper>` runs `cargo check --target <other>` and prints
    `{"findings": [...]}` with one finding (stable id = error code + path) per compile
-   error. For a check that needs more than ~95 s, add `--deadline <s>` and raise the
-   alarm to deadline + 10. OR
+   error. For a probe that needs more than 95 s, add `--deadline <s>` (at most 575), raise the
+   alarm to deadline + 10 and set the Bash tool timeout to (alarm + 10) × 1000. OR
 2. Mark the result explicitly: `"platform_verified": ["macos"],
    "platform_pending_ci": ["windows", "linux"]` and surface it as a known gap in
    DELIVER. The CI matrix is the definitive check, not the local build.

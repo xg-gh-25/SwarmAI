@@ -177,7 +177,6 @@ def test_verify_runs_scope_reports_budget_overflow_and_writes_c2(rig, capsys, mo
     repo = rig({"backend/tests/test_y.py": (
         "import core.mod\n\n\ndef test_y():\n    assert core.mod.add(0, 0) == 0\n")})
     _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
-    monkeypatch.setattr(pt, "CAP_FILES", 1)  # no longer bounds the reached set
     out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--json")
     assert code == 0, out
     assert out["counts"]["passed"] == 2 and out["skipped_for_budget_total"] == 0
@@ -953,11 +952,12 @@ def test_sigterm_aborts_children_and_removes_mutation_worktree(rig, tmp_path):
 
 
 def test_deadline_default_fits_the_wrapper_and_large_values_warn():
-    assert pt.DEFAULT_DEADLINE <= 100 < pt.AUTO_MAX_DEADLINE < pt.WRAPPER_ALARM_S
+    assert pt.DEFAULT_DEADLINE <= 100 < pt.WRAPPER_ALARM_S <= 110
     assert pt._clamp_deadline(pt.DEFAULT_DEADLINE) == (pt.DEFAULT_DEADLINE, [])
-    assert pt._clamp_deadline(300) == (300, [])  # fits alarm 590
-    d, warn = pt._clamp_deadline(700)
-    assert d == 700 and "alarm" in warn[0] and "710" in warn[0]
+    d, warn = pt._clamp_deadline(300)
+    assert d == 300 and "alarm" in warn[0] and "310" in warn[0]
+    d, warn = pt._clamp_deadline("auto")  # retired: back to the default, warned
+    assert d == pt.DEFAULT_DEADLINE and "retired" in warn[0]
     d, warn = pt._clamp_deadline(99999)
     assert d == pt.MAX_DEADLINE and len(warn) == 2
     assert pt._clamp_deadline("nan")[0] is None
@@ -1056,33 +1056,6 @@ def test_verify_without_files_touched_refuses_in_a_tree_shared_with_a_live_run(r
     assert pt.shared_tree_scope_error(repo, {}, RUN_ID, PROJECT, runs)
     assert pt.shared_tree_scope_error(
         repo, {"files_touched": ["backend/core/mod.py"]}, RUN_ID, PROJECT, runs) is None
-
-
-def test_must_run_tests_are_never_cut_and_get_more_time_instead(rig, tmp_path, capsys):
-    """The scope is fixed by the change: an importer naming a changed function is never
-    cut for time. When the must-run set does not fit, the runner refuses with the exact
-    command carrying a larger deadline, and runs nothing."""
-    repo = rig({"backend/core/calc.py": "def compute_total(a, b):\n    return a + b\n",
-                "backend/tests/test_calc_uses.py": (
-                    "from core.calc import compute_total\n\n\n"
-                    "def test_t():\n    assert compute_total(1, 2) == 3\n")},
-               run_state={"files_touched": ["backend/core/calc.py"]})
-    _write(repo, {"backend/core/calc.py": "def compute_total(a, b):\n    return b + a\n"})
-    cache = tmp_path / "cache"
-    cache.mkdir(exist_ok=True)
-    (cache / "durations.json").write_text(json.dumps(
-        {"backend/tests/test_calc_uses.py::test_t": [500.0, time.time()]}))
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "95")
-    assert code == 2 and "never cut for time" in out["error"], out
-    assert "--deadline auto" in out["next_action"] and f"--run-id {RUN_ID}" in out["next_action"]
-    assert f"alarm {pt.AUTO_ALARM_S};" in out["next_action"]
-    # absolute interpreter + script: runnable from a run worktree (no venv there)
-    exec_part = out["next_action"].split("exec @ARGV' ", 1)[1].split()
-    assert os.path.isabs(exec_part[0]) and os.path.isabs(exec_part[1])
-    assert exec_part[1].endswith("backend/scripts/pipeline_test.py")
-    assert out["bash_timeout_ms"] == (pt.AUTO_ALARM_S + 10) * 1000
-    runs = tmp_path / "ws" / "Projects" / PROJECT / ".artifacts" / "runs"
-    assert not (runs / RUN_ID / "evidence" / "tests" / "latest-verify.json").exists()
 
 
 def _seed_evidence(tmp_path: Path, mode: str, failures: list, finished_at: str) -> None:
@@ -1620,7 +1593,7 @@ def test_every_direct_importer_runs_and_transitive_ones_are_named(rig, tmp_path,
     assert skipped == [] and "backend/tests/test_l_facade.py" not in sel
     assert pt.transitive_unselected(repo, sgraph, graph, ["backend/core/leaf.py"], sel) == [
         "backend/tests/test_l_facade.py"]
-    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "auto")
+    out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify")
     assert code == 1 and out["counts"]["failed"] + out["counts"]["errors"] >= 2, out  # rename breaks both
     assert out["transitive_unrun_total"] == 1
     ev = _evidence(tmp_path, "tests/latest-verify.json")
@@ -1636,11 +1609,6 @@ def test_files_touched_counts_only_where_git_sees_a_change(rig):
     assert pt.changed_files(repo, {"files_touched": ["backend/core/mod.py"]}) == ["backend/core/mod.py"]
 
 
-def test_no_duration_history_still_sizes_the_deadline():
-    t = {"backend/tests/a.py": None, "backend/tests/b.py": None}
-    assert pt._seconds_needed(t, {}, 1) == 2 * pt.DEFAULT_FILE_COST_S / pt.BUDGET_FILL
-
-
 def test_a_deleted_modules_importers_still_run(rig, tmp_path):
     repo = rig({"backend/core/gone.py": "def f():\n    return 1\n",
                 "backend/tests/test_gone.py": "from core.gone import f\n\n\ndef test_f():\n    assert f()\n"})
@@ -1650,3 +1618,47 @@ def test_a_deleted_modules_importers_still_run(rig, tmp_path):
     graph = pt.build_import_graph(repo, cache, sgraph)
     sel, _, _ = pt.select_backend(repo, ["backend/core/gone.py"], graph, 40, (), sgraph)
     assert "backend/tests/test_gone.py" in sel
+
+
+def test_a_scope_that_does_not_fit_one_call_continues_across_calls(rig, tmp_path, capsys):
+    """Every call stays inside alarm 110; nothing selected is cut or refused. A call cut
+    by its deadline says continue: true, and the SAME command finishes only the rest."""
+    slow = "import time\nfrom core.mod import add\n\n\ndef test_s():\n    time.sleep(1.5)\n    assert add(1, 1) == 2\n"
+    repo = rig({f"backend/tests/test_slow_{i}.py": slow for i in range(4)},
+               run_state={"files_touched": ["backend/core/mod.py"]})
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    calls, out = 0, {"continue": True}
+    while out.get("continue") and calls < 8:
+        out, code = _run(capsys, "--run-id", RUN_ID, "--mode", "verify", "--deadline", "4")
+        calls += 1
+    assert calls >= 2, out                       # one 4 s call cannot hold 4 × 1.5 s serial
+    assert "continue" not in out and code == 0, out
+    ev = _evidence(tmp_path, "tests/latest-verify.json")
+    passed = {r["nodeid"] for r in ev["results"] if r["outcome"] == "passed"}
+    assert {f"backend/tests/test_slow_{i}.py::test_s" for i in range(4)} <= passed
+    assert ev["counts"]["timeouts"] == 0
+
+
+def test_a_renamed_scripts_old_name_still_selects_its_tests(rig, tmp_path):
+    repo = rig({"backend/scripts/oldtool.py": "print(1)\n",
+                "backend/tests/test_oldtool_cli.py": "def test_c():\n    assert 'oldtool.py'\n"})
+    (repo / "backend/scripts/oldtool.py").rename(repo / "backend/scripts/newtool.py")
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    changed = ["backend/scripts/oldtool.py", "backend/scripts/newtool.py"]
+    sel, _, _ = pt.select_backend(repo, changed, graph, 40, (), sgraph)
+    assert "backend/tests/test_oldtool_cli.py" in sel
+
+
+def test_a_deleted_modules_transitive_tests_are_listed(rig, tmp_path):
+    repo = rig({"backend/core/gone2.py": "def g():\n    return 1\n",
+                "backend/core/wrap2.py": "from core.gone2 import g\n\n\ndef w():\n    return g()\n",
+                "backend/tests/test_wrap2.py": "from core.wrap2 import w\n\n\ndef test_w():\n    assert w()\n"})
+    (repo / "backend/core/gone2.py").unlink()
+    cache = tmp_path / "cache"
+    sgraph = pt.build_source_graph(repo, cache)
+    graph = pt.build_import_graph(repo, cache, sgraph)
+    sel, _, _ = pt.select_backend(repo, ["backend/core/gone2.py"], graph, 40, (), sgraph)
+    assert "backend/tests/test_wrap2.py" in pt.transitive_unselected(
+        repo, sgraph, graph, ["backend/core/gone2.py"], sel)

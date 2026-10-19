@@ -2,7 +2,7 @@
 
 Read when running VERIFY, when VERIFY is red, or before SMOKE when the changeset adds
 public symbols, cross-module interfaces, changed function bodies or framework-specific
-patterns. `RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
+patterns. `RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`.
 
 ## Step 3: VERIFY — targeted tests, zero regressions
 
@@ -20,8 +20,8 @@ the runner does not cover").
 > `ref/build/artifact.md`) + the `tdd`/`files_changed`/`ac_coverage` schema-required
 > fields. <!-- R-build-009 -->
 
-- Run **changed test files + test files that import changed modules**: `RUN --mode verify`,
-  Bash timeout 600000 (one call, deadline sized to the selection; the runner picks
+- Run **changed test files + test files that import changed modules**: `RUN --mode verify`
+  (`continue: true` in the output → run the same command again; the runner picks
   changed tests, this run's recent real failures and EVERY direct importer of the changed modules,
   uncapped and never cut for time; tests reaching a change only through another module
   are listed in `transitive_unrun` and REPORT §10, not run). This replaces the old raw

@@ -2,7 +2,7 @@
 
 Read only when the EVALUATE artifact has `cross_boundary.value == true`.
 
-`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
+`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`
 
 ## Layer 4: Cross-Boundary E2E (CONDITIONAL — fires ONLY when `cross_boundary.value == true`) `[GATE·artifact_cli]` <!-- R-test-002 -->
 

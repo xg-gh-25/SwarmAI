@@ -4,7 +4,7 @@ Implement the PLAN test-first (vertical RED→GREEN), break its design yourself,
 
 **Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage build` (ACs, change spec, exit criteria, `files_touched`, valid examples).
 
-`RUN` = `perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`, Bash timeout 600000.
+`RUN` = `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R>`; `continue: true` → same command again.
 Tests go ONLY through `RUN` (`pipeline_test_gate` denies direct pytest/vitest/tsc/eslint/`npm run build*`). Never the full suite, never `| tail`.
 
 1. **Gate 1 Skeptic+SSA** (full, bugfix, goal first cycle; skip trivial/research/docs): stage-start returns `gate1_prompt_path` (6 inputs filled), or `gate1_verdict` when this plan was already judged (do not respawn). Spawn ONE sub-agent, prompt = `gate1_spawn` exactly (neither key → `spawn_prompt.py --gate gate1-skeptic`, exit 0 only), `run_in_background: false` (background hides the stream). BLOCK → user picks Fix Plan / Proceed Anyway. Spawn rejected → retry once, then checkpoint `gate_spawn_blocked`; never self-review.

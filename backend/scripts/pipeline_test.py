@@ -17,14 +17,15 @@ Modes:
 - ``mutation``   mutation testing in a throwaway worktree (``--mutations spec.json``)
 
 Usage (from the repo root or backend/):
-    perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py \\
-        --project P [--run-id R] --mode MODE [--files F ...] [--deadline auto|SECONDS] [--json]
-    (Bash tool timeout 600000: one Bash call is capped at 600 s.)
+    perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py \\
+        --project P [--run-id R] --mode MODE [--files F ...] [--deadline 95] [--json]
 
-``--deadline`` defaults to ``auto`` for verify / regression / recheck (sized to the
-selection, at most 575 s) and to 95 s for the other modes, all under the documented
-``alarm 590`` wrapper. Values above 580 s are allowed up to 1800 s (clamped) but
-warn: the outer alarm must then be at least deadline + 10 s. SIGTERM / SIGALRM /
+``--deadline`` defaults to 95 s so the runner reports before the documented
+``alarm 110`` wrapper, inside the Bash tool's 120 s default. A selection that does not
+fit is never cut: the output says ``continue: true`` with the ``unfinished`` count, and
+the SAME command runs only those tests next (repeat until ``continue`` is gone). Values
+above 100 s are allowed up to 1800 s (clamped) but warn: the outer alarm must then be at
+least deadline + 10 s. SIGTERM / SIGALRM /
 SIGINT abort every running child process group, remove any private or
 half-created worktree (``git worktree remove --force`` + ``prune``) and print one
 JSON error object (exit 2). Worktrees are added with ``core.hooksPath=/dev/null``.
@@ -155,22 +156,19 @@ CIRCUIT_MAX_ROUNDS = 25    # total verify/recheck/regression runs in one run_id 
 CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME blocking set -> abort
 ALL_MODES = TEST_MODES + ("probe", "mutation")
 TDD_MAX_FILES = 5
-CAP_FILES = 40  # ignored by select_backend (no file cap since 2026-10-19); kept for callers
 SMOKE_CAP = 40
 TDD_REPEAT_WARN = 8
 # verify selection: every test that imports a changed module directly. Depth 2 (test → module
 # → changed module) selected 103-463 files for 21 changed ones (run_340478c9, run_7da44b0d).
 REVERSE_DEPTH = 1
-WRAPPER_ALARM_S = 590  # the documented perl alarm (Bash tool timeout 600000)
+WRAPPER_ALARM_S = 110  # the documented perl alarm: under the Bash tool's 120 s default
 DEFAULT_DEADLINE = 95.0
 SAFE_DEADLINE = WRAPPER_ALARM_S - 10.0
 MAX_DEADLINE = 1800.0
-# --deadline auto (verify / regression): the runner sizes the deadline to the must-run
-# set. One Bash call is capped at 600 s (Claude Code's BASH_MAX_TIMEOUT), so the wrapper
-# is alarm 590 and the deadline at most 575. Hangs stay bounded by the per-test timeout.
-AUTO_ALARM_S = 590
-AUTO_DEADLINE_MODES = ("verify", "regression", "recheck")  # --deadline default: auto
-AUTO_MAX_DEADLINE = 575.0
+# Every call stays inside the 120 s Bash default (alarm 110, deadline 95). A selection
+# that does not fit is not cut and not refused: the unfinished tests are reported
+# (``unfinished``, ``continue: true``) and the SAME command runs only those next time
+# (_auto_recheck), so a large scope takes several short calls, never one long one.
 # Cross-run throttle: one machine-wide pool of worker tokens (``<cache>/workers/N.lock``,
 # flock) shared by every runner of every session. A runner holds as many tokens as it
 # runs workers, so concurrent runs SPLIT the cores instead of each sizing itself as if
@@ -722,8 +720,9 @@ def _changed_module_files(repo: Path, changed: list[str],
 def _script_name_re(repo: Path, changed: list[str]) -> "re.Pattern | None":
     """Whole-file-name pattern of the changed ``backend/scripts/*.py`` files: a test that
     names one drives that script by subprocess (no import edge reaches it)."""
+    # a deleted / renamed-away script counts too: its old name is what tests still call
     scripts = [Path(f).name for f in changed if f.startswith("backend/scripts/")
-               and f.endswith(".py") and (repo / f).is_file()]
+               and f.endswith(".py")]
     if not scripts:
         return None
     # a whole file name: "x_test.py" must not match inside "test_x_test.py"
@@ -812,7 +811,7 @@ _DOC_LINT_SUITES = (
 
 
 def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
-                   cap: int, recent: list[str] | tuple = (),
+                   cap: "int | None" = None, recent: list[str] | tuple = (),
                    sgraph: dict[str, list[str]] | None = None,
                    depth: int = REVERSE_DEPTH) -> tuple[list[str], list[str], list[str]]:
     """Return ``(selected, skipped_for_budget, changed_module_names)``.
@@ -822,8 +821,8 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
     ``sgraph`` also transitive importers up to ``depth`` hops), ties broken by how
     many changed modules a test imports directly. A test that names a changed
     ``backend/scripts/*.py`` file by file name (a subprocess-driven CLI test) ranks as a
-    direct importer. Nothing is capped: ``cap`` is ignored (kept for callers) and the
-    skipped list is always empty. A deleted module's importers are selected too.
+    direct importer. Nothing is capped (``cap`` is accepted and ignored) and the skipped
+    list is always empty. A deleted module's importers are selected too.
     """
     changed_tests = [f for f in changed if _is_backend_test(f) and (repo / f).is_file()]
     # A skill card or expert file has no importers, yet the linters and the rule
@@ -866,10 +865,19 @@ def transitive_unselected(repo: Path, sgraph: dict | None, graph: dict, changed:
                           selected) -> list[str]:
     """Test files that reach a changed module only through other modules (outside the
     direct-importer scope): not run by verify / regression, named in REPORT §10."""
-    mfiles = [f for f, _, _ in _changed_module_files(repo, changed)]
-    if not sgraph or not mfiles:
+    mods = _changed_module_files(repo, changed, include_deleted=True)
+    if not sgraph or not mods:
         return []
-    dist = reverse_distances(repo, sgraph, mfiles, 99)
+    roots = [f for f, _, _ in mods if (repo / f).is_file()]
+    # a deleted module has no file to reverse-walk from: start from the sources that
+    # still import it by name (red-team 2026-10-19: its transitive tests went unlisted)
+    gone = [(m, pkg) for f, m, pkg in mods if not (repo / f).exists()]
+    if gone:
+        roots += [f for f, imp in sgraph.items() if not _is_backend_test(f)
+                  and any(_imports_module(imp, m, pkg) for m, pkg in gone)]
+    if not roots:
+        return []
+    dist = reverse_distances(repo, sgraph, roots, 99)
     sel = set(selected)
     return sorted(t for t in graph if t not in sel and (dist.get(t) or 0) >= 1)
 
@@ -1352,54 +1360,12 @@ def _family(nid: str) -> str:
 # Fraction of (seconds × workers) a selection may fill: shard start-up, collection and
 # the requeue reserve take the rest. Measured 2026-10-19: verify calls whose recorded cost
 # was over ~0.6 of the slot budget were the ones that ended with deadline timeouts.
-BUDGET_FILL = 0.6  # wall-time estimate: recorded cost / (workers × this), for --deadline auto
-
-
 def _target_cost(f: str, sel, durations: dict) -> float:
     """Recorded seconds for one target (whole file or a nodeid set)."""
     if sel is not None:
         return sum(durations.get(n, DEFAULT_TEST_COST_S) for n in sel)
     known = [v for k, v in durations.items() if k.split("::")[0] == f]
     return sum(known) if known else DEFAULT_FILE_COST_S
-
-
-def _seconds_needed(targets: dict, durations: dict, workers: int) -> float:
-    """Wall seconds ``targets`` need on ``workers`` at BUDGET_FILL."""
-    if not targets:
-        return 0.0
-    # no history at all: every file at DEFAULT_FILE_COST_S, never 0 (an empty cache
-    # must not size the deadline to nothing)
-    cost = sum(_target_cost(f, sel, durations or {}) for f, sel in targets.items())
-    return cost / (max(1, workers) * BUDGET_FILL)
-
-
-def _self_command() -> str:
-    """This runner as an absolute command (interpreter + script). The session's cwd may
-    be a run worktree, which has no venv and refuses its own tool copies, so a relative
-    `backend/.venv/bin/python backend/scripts/...` printed here could not be run as-is."""
-    import shlex
-    return (f"{shlex.quote(os.path.abspath(sys.executable))} "
-            f"{shlex.quote(os.path.realpath(__file__))}")
-
-
-def _must_run_refusal(ns, deadline_s: float, n_files: int, workers: int) -> dict:
-    """Error for a must-run set that does not fit the deadline: the scope is fixed by
-    the change, so the time grows, not the scope shrinks. Gives the exact command."""
-    d = int(min(AUTO_MAX_DEADLINE, math.ceil(deadline_s / 10.0) * 10))
-    run = f" --run-id {ns.run_id}" if ns.run_id else ""
-    cmd = (f"perl -e 'alarm {AUTO_ALARM_S}; exec @ARGV' {_self_command()} "
-           f"--project {ns.project}{run} --mode {ns.mode} --deadline auto")
-    tmo = (AUTO_ALARM_S + 10) * 1000
-    return {"mode": ns.mode, "error": (
-        f"the {n_files} must-run test file(s) of this change (its own tests, AC tests, "
-        f"tests reaching a changed symbol) need about {d}s on the {workers} worker(s) "
-        f"granted, more than this call's deadline. They are never cut for time. Run "
-        f"exactly this, with the Bash tool timeout set to {tmo}: {cmd}"),
-        "next_action": cmd, "bash_timeout_ms": tmo}
-
-
-def _is_auto(raw) -> bool:
-    return isinstance(raw, str) and raw.strip().lower() == "auto"
 
 
 def _cost_bins(items: list, workers: int, durations: dict) -> list[tuple[int, list[str]]]:
@@ -3421,7 +3387,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 r for refs in _ac_entries(ns.project, run_state) for r in refs
                 if r.startswith(PROBE_REF_PREFIX)], changed)
     recent = _recent_failure_files(ev_root) if mode != "recheck" else []
-    sel, skipped, _ = select_backend(ctx.repo, scope, graph, CAP_FILES, recent, sgraph)
+    sel, skipped, _ = select_backend(ctx.repo, scope, graph, None, recent, sgraph)
     for f in sel:
         _add_target(plan["targets"], f, None)
     plan["l2"], plan["skipped"] = sel, list(skipped)
@@ -3691,24 +3657,6 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     # concurrent runs share the cores instead of oversubscribing them.
     tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)
     ctx.workers = max(1, len(tokens))
-    if ns.mode in REUSE_MODES and run_targets:
-        reserve = min(20.0, deadline * 0.25)
-        secs = ctx.deadline_at - reserve - time.monotonic()
-        need = _seconds_needed(run_targets, ctx.durations, ctx.workers)
-        if _is_auto(ns.deadline):
-            # size the deadline to the whole selection (+ the reserve and start-up), never
-            # below the default; nothing selected is cut
-            want = max(DEFAULT_DEADLINE, (time.monotonic() - ctx.t0) + need + reserve + 15)
-            ctx.deadline_at = ctx.t0 + min(AUTO_MAX_DEADLINE, want)
-            secs = ctx.deadline_at - reserve - time.monotonic()
-            if need > secs:
-                ctx.warnings.append(
-                    f"the selected tests need about {need:.0f}s on {ctx.workers} worker(s), over "
-                    f"the {AUTO_MAX_DEADLINE:g}s a single call allows: some will be reported "
-                    f"'timeout'; re-run the same command and the runner finishes only those")
-        elif need > secs:
-            _release_workers(tokens)
-            return _must_run_refusal(ns, need + reserve + 5, len(run_targets), ctx.workers), 2
     try:
         jobs: list[_Job] = []
         fpath = ctx.cache / "results" / f"frontend-{fkey}.json"
@@ -3835,10 +3783,11 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
     dl_timeouts = sum(1 for f in failures if f.get("classification") == "timeout")
     if dl_timeouts:
         ctx.warnings.append(
-            f"{dl_timeouts} test(s) hit the GLOBAL deadline and were NOT verified "
-            "(classification 'timeout'): this is NOT a code failure — do not edit code for "
-            "it. Re-run the SAME command unchanged: it re-runs only the unfinished tests, "
-            "and the result is not green until they have run")
+            f"{dl_timeouts} test(s) not finished before this call's global deadline "
+            "(classification 'timeout'): "
+            "this is NOT a code failure, do not edit code for it. Re-run the SAME command "
+            "unchanged: it continues with only the unfinished tests; repeat until the "
+            "output no longer says continue: true")
     l2 = set(plan["l2"])
     dep = [r for r in results if _rfile(r) in l2 and not r.get("layer")]
     smoke = [r for r in results if r.get("layer") == "smoke"]
@@ -3947,6 +3896,9 @@ def _test_output(ev: dict, path: Path) -> dict:
            "skipped_for_budget_total": len(skipped),
            "transitive_unrun_total": len(ev.get("transitive_unrun") or []),
            "evidence": str(path), "warnings": ev.get("warnings") or []}
+    unfinished = sum(1 for f in fails if f.get("deadline"))
+    if unfinished:  # cut by this call's deadline: the same command continues with them
+        out.update(unfinished=unfinished, **{"continue": True})
     if ev.get("mode") in ("regression", "verify", "recheck"):
         out["layers"] = ev.get("layers") or {}
     for k in ("frontend", "tdd_repeats", "rechecked_failures", "runner_errors", "overlaid_onto",
@@ -4243,22 +4195,20 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--files", nargs="+", default=[])
     p.add_argument("--name")
     p.add_argument("--mutations")
-    p.add_argument("--deadline", default=None,
-                   help="seconds, or 'auto' (verify / regression: sized to the must-run set, "
-                        f"up to {AUTO_MAX_DEADLINE:g}s; wrap in alarm {AUTO_ALARM_S} and give "
-                        f"the Bash call timeout {(AUTO_ALARM_S + 10) * 1000})")
+    p.add_argument("--deadline", default=DEFAULT_DEADLINE)
     p.add_argument("--json", action="store_true", help="accepted for clarity; output is always JSON")
     return p
 
 
 def _clamp_deadline(raw) -> tuple[float | None, list[str]]:
-    if isinstance(raw, str) and raw.strip().lower() == "auto":
-        return AUTO_MAX_DEADLINE, []  # ceiling; _run_test_mode sizes it to the must-run set
+    if isinstance(raw, str) and raw.strip().lower() == "auto":  # retired 2026-10-19
+        return DEFAULT_DEADLINE, ["--deadline auto is retired: calls stay at "
+                                  f"{DEFAULT_DEADLINE:g}s and continue across calls"]
     return _clamp_seconds(raw)
 
 
 def _clamp_seconds(raw) -> tuple[float | None, list[str]]:
-    """(deadline, warnings). Default 95 s / auto fit ``alarm 590``; above SAFE_DEADLINE warns,
+    """(deadline, warnings). Default 95 s fits ``alarm 110``; above SAFE_DEADLINE warns,
     above MAX_DEADLINE clamps; a non-finite value → (None, [error])."""
     import math
     try:
@@ -4296,8 +4246,6 @@ def execute(ns) -> tuple[dict, int]:
     cache = _cache_dir()
     if not ns.run_id:
         ev_root = cache / "evidence" / ns.project
-    if ns.deadline is None:  # scope modes size their own deadline; the rest keep 95 s
-        ns.deadline = "auto" if ns.mode in AUTO_DEADLINE_MODES else DEFAULT_DEADLINE
     deadline, dl_warn = _clamp_deadline(ns.deadline)
     if deadline is None:
         return {"error": dl_warn[0]}, 2

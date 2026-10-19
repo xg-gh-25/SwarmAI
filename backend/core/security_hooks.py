@@ -4056,7 +4056,7 @@ def _repo_relative(path: str, cwd: str) -> str:
 def _pipeline_runner_command(project: str, run_id: str, mode: str, files: list[str]) -> str:
     """The copyable pipeline_test.py command (contract: run from the repo root)."""
     parts = [
-        "perl", "-e", "'alarm 590; exec @ARGV'", "backend/.venv/bin/python",
+        "perl", "-e", "'alarm 110; exec @ARGV'", "backend/.venv/bin/python",
         "backend/scripts/pipeline_test.py", "--project", shlex.quote(project),
         "--run-id", shlex.quote(run_id), "--mode", mode,
     ]
@@ -4075,146 +4075,6 @@ def _test_gate_hint(hits) -> str:
     return ("\nIf this stdin code only WRITES text that names the test runner (an edit "
             "script), save the edit script to a file and run it. Running tests still goes "
             "through the runner above, never through a script.")
-
-
-_BASH_DEFAULT_TIMEOUT_MS = 120_000
-_AUTO_RUNNER_ALARM_S = 590  # pipeline_test.AUTO_ALARM_S (--deadline auto)
-_AUTO_DEADLINE_MODES = ("verify", "regression", "recheck")  # pipeline_test.AUTO_DEADLINE_MODES
-_PERL_ALARM_RE = re.compile(r"\balarm\s*\(?\s*([1-9]\d*)")
-_CMD_WRAPPERS = {"env", "nice", "nohup", "time", "command"}
-
-
-def _quoted_segments(command: str) -> "list[list[str]] | None":
-    """Per-command token lists split on ``; && || | &`` and newlines OUTSIDE quotes
-    (``_shell_segments`` re-splits a quoted ``'alarm 590; exec @ARGV'``); None when it
-    does not parse."""
-    try:
-        lx = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
-        lx.whitespace = " \t\r"
-        lx.whitespace_split = True
-        toks = list(lx)
-    except ValueError:
-        return None
-    segs: list[list[str]] = [[]]
-    for t in toks:
-        if t and set(t) <= set(";&|\n"):
-            segs.append([])
-        else:
-            segs[-1].append(t)
-    return [g for g in segs if g]
-
-
-def _runner_invocation(seg: "list[str]") -> "tuple[int | None, str | None] | None":
-    """``(outer alarm seconds or None, --deadline value or None)`` when ONE shell segment
-    actually executes ``pipeline_test.py`` (directly, via python, under a perl alarm or
-    timeout wrapper); None when it does not (``printf``/``echo`` of the text, an editor)."""
-    toks = list(seg)
-    while toks and (toks[0] in _CMD_WRAPPERS or ("=" in toks[0] and not toks[0].startswith("-")
-                                                 and toks[0].split("=", 1)[0].isidentifier())):
-        toks = toks[1:]
-    alarm = None
-    if toks and os.path.basename(toks[0]) == "perl":
-        if "-e" not in toks:
-            return None
-        k = toks.index("-e")
-        script = toks[k + 1] if k + 1 < len(toks) else ""
-        if "@ARGV" not in script:
-            return None
-        m = _PERL_ALARM_RE.search(script)
-        alarm = int(m.group(1)) if m else None
-        toks = toks[k + 2:]
-    elif toks and os.path.basename(toks[0]) in ("timeout", "gtimeout") and len(toks) > 2:
-        try:
-            alarm = int(float(toks[1].rstrip("s")))
-        except ValueError:
-            return None
-        toks = toks[2:]
-    if not toks:
-        return None
-    head = os.path.basename(toks[0])
-    if head.startswith("python"):
-        args = [t for t in toks[1:] if not t.startswith("-")][:1]
-        if not (args and args[0].endswith("pipeline_test.py")):
-            return None
-    elif not head == "pipeline_test.py":
-        return None
-    deadline = mode = None
-    for n, t in enumerate(toks):
-        if t == "--deadline" and n + 1 < len(toks):
-            deadline = toks[n + 1]
-        elif t.startswith("--deadline="):
-            deadline = t.split("=", 1)[1]
-        elif t == "--mode" and n + 1 < len(toks):
-            mode = toks[n + 1]
-        elif t.startswith("--mode="):
-            mode = t.split("=", 1)[1]
-    if deadline is None and mode in _AUTO_DEADLINE_MODES:
-        deadline = "auto"  # pipeline_test's own default for these modes
-    return alarm, deadline
-
-
-def _nested_commands(command: str, depth: int = 0) -> "list[str]":
-    """*command* plus every command it runs inside ``$( )``, backticks or ``bash/sh -c``
-    (two levels): a runner started there executes just the same."""
-    out = [command]
-    if depth >= 2:
-        return out
-    for m in re.finditer(r"\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)|`([^`]*)`", command):
-        out += _nested_commands(m.group(1) or m.group(2) or "", depth + 1)
-    for seg in _quoted_segments(command) or []:
-        toks = [t for t in seg if not ("=" in t and t.split("=", 1)[0].isidentifier())]
-        if toks and os.path.basename(toks[0]) in ("bash", "sh", "zsh") and "-c" in toks:
-            k = toks.index("-c")
-            if k + 1 < len(toks):
-                out += _nested_commands(toks[k + 1], depth + 1)
-    return out
-
-
-def _runner_bash_timeout_error(command: str, tool_input: dict) -> "str | None":
-    """Deny text when an executed ``pipeline_test.py`` call would outlive the Bash tool's
-    own timeout, or would outlive its own outer alarm.
-
-    Run time = the outer alarm (perl ``alarm N`` / ``alarm(N)``, ``timeout N``), or with no
-    wrapper the ``--deadline`` (auto = 590 s). A wrapper shorter than the deadline it
-    wraps (``alarm 110`` around ``--deadline auto``, or around verify / regression / recheck
-    whose default deadline is auto) is denied too: the alarm would kill
-    the runner before it reports. Shell-parsed (line continuations joined; ``$( )``,
-    backticks and ``bash -c`` payloads included), so a command that only prints the text
-    is not denied. No IO. None = fine."""
-    raw = tool_input.get("timeout")
-    tmo = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0 \
-        else _BASH_DEFAULT_TIMEOUT_MS
-    for cmd in _nested_commands(re.sub(r"\\\r?\n", " ", command)):
-        for seg in _quoted_segments(cmd) or []:
-            inv = _runner_invocation(seg)
-            if inv is None:
-                continue
-            alarm, deadline = inv
-            need_run = None  # seconds the runner itself may take
-            if deadline is not None:
-                if deadline.strip().lower() == "auto":
-                    need_run = _AUTO_RUNNER_ALARM_S
-                else:
-                    try:
-                        need_run = int(float(deadline)) + 15
-                    except ValueError:
-                        need_run = None
-            if alarm is not None and need_run is not None and alarm < need_run:
-                return (f"DENY (test runner wrapper shorter than its deadline): `alarm {alarm}` "
-                        f"would kill pipeline_test.py before its --deadline {deadline} ends and "
-                        f"it reports. Use `perl -e 'alarm {need_run}; exec @ARGV'` and the Bash "
-                        f"tool timeout {(need_run + 10) * 1000}.")
-            run_s = alarm if alarm is not None else need_run
-            if run_s is None:
-                continue
-            need = (run_s + 10) * 1000
-            if tmo < need:
-                return (f"DENY (Bash timeout shorter than the test runner's run time): this "
-                        f"pipeline_test.py call runs up to {run_s}s, so the Bash tool `timeout` "
-                        f"parameter must be at least {need} (it is {tmo}); otherwise the Bash "
-                        f"tool kills the runner before it reports. Re-issue the same command "
-                        f"with timeout: {need}.")
-    return None
 
 
 def create_pipeline_test_gate(session_context: dict[str, Any]):
@@ -4239,15 +4099,6 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
         if not command:
             return {"decision": "approve"}
         cwd = input_data.get("cwd", "") or ""
-        try:
-            short = _runner_bash_timeout_error(command, input_data.get("tool_input") or {})
-        except Exception:
-            logger.debug("pipeline_test_gate: timeout check failed — failing open", exc_info=True)
-            short = None
-        if short:
-            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                           "permissionDecision": "deny",
-                                           "permissionDecisionReason": short}}
         try:
             hits, files = _classify_pipeline_test_command(command, cwd)
         except Exception:
@@ -4290,7 +4141,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
             if isinstance(_cli, dict):
                 abandon = cli_command(_cli, abandon_args)
                 _rest = runner.split("backend/scripts/pipeline_test.py ", 1)[1]
-                runner = ("perl -e 'alarm 590; exec @ARGV' "
+                runner = ("perl -e 'alarm 110; exec @ARGV' "
                           + cli_command(_cli, _rest, script="pipeline_test.py"))
         except Exception:  # noqa: BLE001 — the relative form is still printed
             pass
@@ -4305,8 +4156,7 @@ def create_pipeline_test_gate(session_context: dict[str, Any]):
                     "DENY (" + ", ".join(hits) + "): pipeline run " + own_run["id"]
                     + " is active in this session, so tests and builds go through the "
                     "pipeline test runner only (one entry point, scoped by mode, cached, "
-                    "hang-safe; design §4-B3). Run this from the repo root instead, with "
-                    "the Bash tool timeout 600000:\n"
+                    "hang-safe; design §4-B3). Run this from the repo root instead:\n"
                     + runner + "\n"
                     "Modes: tdd = up to 5 explicit test files (RED/GREEN), verify = end of "
                     "BUILD, regression = TEST stage, recheck = after a fix. The runner "

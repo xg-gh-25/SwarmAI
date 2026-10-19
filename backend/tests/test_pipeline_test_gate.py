@@ -348,7 +348,7 @@ APPROVED_COMMANDS = [
     "yarn dlx -c 'ls -la'",
 ]
 
-RUNNER = ("perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python "
+RUNNER = ("perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python "
           "backend/scripts/pipeline_test.py --project SwarmAI --run-id run_abc123")
 
 
@@ -373,14 +373,13 @@ class TestPipelineTestGateActive:
     ])
     def test_runner_command_is_approved(self, ws, command):
         _seed(ws)
-        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command,
-                    timeout=600000)
+        res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}), command)
         assert res == {"decision": "approve"}
 
     def test_runner_plus_raw_pytest_is_denied(self, ws):
         _seed(ws)
         res = _call(sh.create_pipeline_test_gate({"sdk_session_id": SID}),
-                    RUNNER + " --mode verify && pytest tests/test_x.py", timeout=600000)
+                    RUNNER + " --mode verify && pytest tests/test_x.py")
         assert _is_deny(res) and "pipeline test runner only" in _reason(res)
 
     def test_bare_make_uses_the_makefile_default_goal(self, ws):
@@ -807,40 +806,6 @@ class TestRunAmendGate:
         assert not sh._is_history_rewrite("git reset -q -- a.py")
         assert not sh._is_history_rewrite("git commit -m x")
         assert not sh._is_history_rewrite("")
-
-
-def test_runner_alarm_longer_than_the_bash_timeout_is_denied_without_io():
-    """--deadline auto runs under alarm 590: without the Bash `timeout` parameter the tool
-    kills it at 120 s and the model gets nothing. Shell-parsed: alarm(N), line
-    continuations and chained commands are caught; printing the text is not denied."""
-    gate = sh.create_pipeline_test_gate({"sdk_session_id": SID})
-    base = ("backend/.venv/bin/python backend/scripts/pipeline_test.py --project P "
-            "--run-id r --mode verify --deadline auto")
-    cmd = "perl -e 'alarm 590; exec @ARGV' " + base
-
-    def call(tmo):
-        ti = {"command": cmd} if tmo is None else {"command": cmd, "timeout": tmo}
-        return asyncio.run(gate({"tool_name": "Bash", "tool_input": ti, "cwd": REPO}, None, None))
-
-    res = call(None)
-    assert _is_deny(res) and "600000" in _reason(res)
-    assert _is_deny(call(300000))
-    assert not _is_deny(call(600000))
-    f = sh._runner_bash_timeout_error
-    for c in ("perl -e 'alarm(590); exec @ARGV' " + base,
-              "perl -e 'alarm 590; exec @ARGV' \\\n  " + base.replace(" --project", " \\\n  --project"),
-              "cd /x && " + cmd, base):
-        assert f(c, {}) and not f(c, {"timeout": 600000}), c
-    short = RUNNER.replace("alarm 590", "alarm 110")
-    assert f(short + " --mode tdd", {}) is None           # alarm 110 fits 120 s
-    # alarm 110 around a scope mode (default deadline auto) is killed early: denied
-    assert "shorter than its deadline" in f(short + " --mode regression", {"timeout": 600000})
-    assert f("perl -e 'alarm 590; exec @ARGV' " + base.replace(" --deadline auto", ""),
-             {"timeout": 600000}) is None
-    for c in ('printf %s "$(' + cmd + ')"', 'bash -c "' + cmd + '"'):
-        assert f(c, {}) and not f(c, {"timeout": 600000}), c
-    assert f("printf '%s' \"" + cmd + "\"", {}) is None  # text, not executed
-    assert f("echo alarm 590 pipeline_test.py", {}) is None
 
 
 def test_source_repo_root_survives_the_packaged_daemon(tmp_path, monkeypatch):

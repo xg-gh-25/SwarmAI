@@ -33,7 +33,7 @@ Purpose: research the requirement, stress-test 2-3 constraint-driven designs, re
    (shape: stage-start examples; no `--check` first).
 
 THINK runs no tests. If a probe needs code run, only via
-`perl -e 'alarm 590; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd --files <test>`.
+`perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd --files <test>`.
 
 ## Gates
 

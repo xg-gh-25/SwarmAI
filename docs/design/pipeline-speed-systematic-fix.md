@@ -128,7 +128,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 ### B. 测试：范围由工具算，归类由工具判
 
-> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、`skipped_for_budget` 溢出、约 95 / 100 秒的固定截止时间都已不再适用，以 §6 末尾「B 的修订」为准。现在 verify / regression / recheck 默认 `--deadline auto`，所有调用统一外层 `alarm 590`、Bash timeout 600000。这里的 L1/L2/L3 是 TEST 阶段内部的分层，和「第 3 层 = CI BVT」不是一回事。
+> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、按耗时截断、`skipped_for_budget` 溢出都已不再适用，以 §6 末尾「B 的修订」为准。每次调用仍是 `alarm 110` + 95 秒截止，但选中的测试一个不砍：一次跑不完，输出 `continue: true`，再跑同一条命令只补跑没跑完的。这里的 L1/L2/L3 是 TEST 阶段内部的分层，和「第 3 层 = CI BVT」不是一回事。
 
 **实测：测试问题有两种，碎片化比范围过大更普遍**
 
@@ -477,7 +477,7 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 **B 的修订（2026-10-19，XG 确认）**：上文 B 节里 L2 的「40 个文件上限、溢出进 `skipped_for_budget`」和固定约 95 秒的截止时间已经废弃，现行规则如下：
 
 - L2 选**全部直接 import 改动模块的测试**，加上提到被改 `backend/scripts/*.py` 的测试，不设上限，也不按耗时裁剪。
-- 截止时间用 `--deadline auto`，按历史耗时算，最长 575 秒（外层 `alarm 590`，Bash `timeout` 600000）。
+- 每次调用不超过 Bash 默认的 120 秒（`alarm 110`，95 秒截止）。一次跑不完就输出 `continue: true` 和没跑完的数量，再跑同一条命令只补跑那部分（`_auto_recheck`），直到不再出现 `continue`。曾短暂试过 `--deadline auto` 把单次调用拉到 590 秒，但这要靠一个解析 shell 命令的 Bash timeout 门禁兜底，三轮评审都没收敛，已经撤掉。
 - 只经过其他模块间接依赖改动的测试不跑，由 runner 列在 `transitive_unrun`，DELIVER 写进 REPORT §10。
 - 曾经试过按函数名缩小测试范围，四个 expert 评审后撤掉了：改名、import 重新绑定、多行 import、`getattr`、多跳调用、拼接出来的子命令都会漏选，造成假绿。
 - 完整的 import 闭包会覆盖 559 到 565 个测试文件（约 39 分钟），等于全量，所以不用。
@@ -489,7 +489,7 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 |---|---|
 | stage-complete 变成绕过 gate 的通道 | 内部只调用现有的 `validate_artifact_data` 和 `validate_stage_state`。现有每个 gate 的测试参数化一份，经 stage-complete 再跑一遍，必须同样拦住。 |
 | 拆文档时规则丢失 | C3 的规则 ID 保全检查不全绿就不合入。 |
-| 测试截断后漏掉回归 | 截断列表显式写进 artifact；DELIVER 的完成审计必须看到 `skipped_for_budget`；CI 的 BVT 仍是兜底。 |
+| 测试跑不完漏掉回归 | 不截断：没跑完的测试标为 `timeout`（不算通过），同一条命令续跑；只经间接依赖的测试列进 `transitive_unrun` 和 REPORT §10；CI 的 BVT 兜底。 |
 | 基线 worktree 和真实环境有差异 | 只用来判断失败测试的归属，不用来宣告通过；复用同一个 venv；缓存按 sha 作键。 |
 | test gate 拖慢 TDD 循环 | TDD 通过 runner 的 `tdd` 模式执行，不做选择也不分片，开销与直接跑 pytest 相当；gate 只在当前 session 有运行中的 run 时生效；deny 消息给出可以直接执行的 runner 命令。 |
 | 兄弟 skill 依赖旧命令 | 旧命令全部保留；`test_advance_continuation` 的兄弟 skill 契约不变。 |
