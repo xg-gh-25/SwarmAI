@@ -17,6 +17,8 @@ Public symbols:
 - ``normalize_profile`` — canonical comparison key for a raw profile value.
 - ``is_relaxed_profile`` — True iff gates run at relaxed rigor (fail-closed).
 - ``get_profile_stages`` — ordered stage list with full-profile fallback.
+- ``PROFILE_GATES`` / ``profile_gates`` — the gates (gate0 / gate1 / gate2) each
+  profile runs.
 """
 
 PIPELINE_PROFILES: dict[str, list[str]] = {
@@ -77,6 +79,33 @@ def is_relaxed_profile(profile: str | None) -> bool:
     ``profile in ("full","bugfix","")`` literals whose inconsistency let a variant
     skip adversarial enforcement. Normalizes first, so ``"DOCS"`` == ``"docs"``."""
     return normalize_profile(profile) in _RELAXED_PROFILES
+
+
+# The gates each profile runs — what the chat's run checklist lists as pending lines
+# (pipeline_stage_events.checklist), and what decides plan's next row (Gate 1).
+#   gate0 — EVALUATE's skeptic: strict profiles that run EVALUATE (the M3 rigor tier).
+#   gate1 — the plan skeptic before BUILD / the goal's first cycle: strict profiles
+#           with PLAN and BUILD / goal_cycle. artifact_cli.GATE1_PROFILES (the profiles
+#           whose BUILD refuses a missing verdict) is a subset of these.
+#   gate2 — the adversarial review inside DELIVER: every profile with DELIVER.
+# test_pipeline_run_checklist pins all three rules against the stage lists,
+# is_relaxed_profile and artifact_cli.GATE1_PROFILES.
+PROFILE_GATES: dict[str, tuple[str, ...]] = {
+    "full": ("gate0", "gate1", "gate2"),
+    "bugfix": ("gate0", "gate1", "gate2"),
+    "goal": ("gate0", "gate1", "gate2"),
+    "direct": ("gate1", "gate2"),
+    "trivial": ("gate2",),
+    "docs": ("gate2",),
+    "research": (),
+}
+
+
+def profile_gates(profile: str | None) -> tuple[str, ...]:
+    """The gates a profile runs. Normalizes first; an unknown profile gets full's
+    gates (it is strict and runs full's stages — the same fail-closed fallback as
+    is_relaxed_profile / get_profile_stages)."""
+    return PROFILE_GATES.get(normalize_profile(profile), PROFILE_GATES["full"])
 
 
 def get_profile_stages(profile: str | None) -> list[str]:

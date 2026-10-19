@@ -1,95 +1,79 @@
 /**
  * ThoughtBlock — one thinking passage, as narration in the turn's stream.
  *
- * Zero per-item chrome (design-judgment Surface 6, chat display v7.11): a thought
- * carries no label row and no "Show all / Show less" control. Dim italic text says
- * it is thinking; a clamp's ellipsis says there is more; the TEXT itself is the
- * control — click, Enter or Space opens it in place and closes it again.
- * - Clamp: THOUGHT_LINES while the turn streams, COMPACT_LINES once it is over,
- *   INTENT_LINES for the turn's intent. A thought short enough to fit is not a control.
- * - The intent (the turn's first substantive thought, `deriveTurnView`) is the one
- *   thought with a label: "Intent" — the place to check how the model read the ask.
- *   It is the turn's INTENT only when no run requirement or restatement outranks it
- *   (AssistantMessageView); otherwise it is an ordinary thought inside the work.
- * - While it streams, its newest part wraps in place. Outside a work group (the
- *   intent) it carries the turn's one spinner; inside a WORKING card the card owns it.
+ * The focus zone (chat display v8, XG 2026-10-19): what is streaming is shown in
+ * full, and a thought that has settled (finished, and a later item arrived
+ * FOLD_DELAY_MS ago — WorkGroup's useSettled) is one line:
+ * - live, or finished but not settled yet: the WHOLE text, no clamp, never replaced by
+ *   the next thought
+ * - settled (`compact`): one "Thought" line — with how long it streamed, when this
+ *   view saw it stream for 5s or more — and no text; the line is the control that
+ *   opens the text in place (like a mainstream "Thought for Ns").
+ * No thought has a label beyond that (no "Intent"); the opening restatement, when
+ * the model wrote one, is plain text above the work. Outside a work group a live
+ * thought carries the turn's one spinner; inside a WORKING card the card owns it.
  * The open/closed choice is lifted (AssistantMessageView keys it by ordinal), so it
  * survives the stream-end reconcile.
  *
- * @exports ThoughtBlock, THOUGHT_LINES, INTENT_LINES, COMPACT_LINES, isLongThought
+ * @exports ThoughtBlock, THOUGHT_MIN_SECONDS
  */
-import type React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ThoughtUnit } from '../turnView';
-import { thoughtTail } from '../turnView';
 import { tf } from '../tf';
 
-export const THOUGHT_LINES = 3;
-export const INTENT_LINES = 6;
-/** A finished turn's non-intent thought: one line, the rest one click away. */
-export const COMPACT_LINES = 1;
-/** Characters a clamped line holds at the chat column width, for the overflow test. */
-const CHARS_PER_LINE = 90;
+/** A thought's duration under this many seconds is not shown. */
+export const THOUGHT_MIN_SECONDS = 5;
 
-/** Whether a thought is longer than its clamp (decides whether the text is a control). */
-export function isLongThought(text: string, lines: number): boolean {
-  const rows = text.trim().split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / CHARS_PER_LINE)), 0);
-  return rows > lines;
-}
+const formatSeconds = (s: number): string =>
+  s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 
 export interface ThoughtBlockProps {
   unit: ThoughtUnit;
-  /** The turn is over: a non-intent thought clamps to COMPACT_LINES. */
+  /** Settled (or the turn is over): one "Thought" line, the text one click away. */
   compact?: boolean;
   /** Inside a WORKING card: the card holds the spinner. */
   inGroup?: boolean;
-  /** The user's open choice; undefined = clamped. */
+  /** The user's open choice; undefined = closed. */
   expanded?: boolean;
   onToggle: (open: boolean) => void;
+  /** How long it streamed, when this view saw it stream (WorkGroup measures it). */
+  seconds?: number;
 }
 
-export function ThoughtBlock({ unit, compact, inGroup, expanded, onToggle }: ThoughtBlockProps) {
+const TEXT_CLASS = 'text-[12.5px] italic leading-relaxed text-[var(--color-text-dim)] whitespace-pre-wrap break-words';
+
+export function ThoughtBlock({ unit, compact, inGroup, expanded, onToggle, seconds }: ThoughtBlockProps) {
   const { t } = useTranslation();
-  // Inside a block a thought is never the INTENT — that label belongs to the first
-  // level only (another source outranked it; AssistantMessageView decides).
-  const isIntent = unit.intent && !inGroup;
-  const lines = isIntent ? INTENT_LINES : compact ? COMPACT_LINES : THOUGHT_LINES;
-  const long = !unit.live && isLongThought(unit.text, lines);
   const open = !!expanded;
-  const onClick = () => {
-    // Selecting part of a thought to copy it is not a request to open or close it.
-    if (window.getSelection()?.toString()) return;
-    onToggle(!open);
-  };
-  // Through a click, so the transcript's click-capture anchoring holds the text in place.
-  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); }
-  };
   const spin = unit.live && !inGroup;
+  if (compact && !unit.live) {
+    return (
+      <div data-testid="thought" data-live="false" data-folded={open ? 'false' : 'true'}>
+        <button
+          type="button"
+          data-testid="thought-toggle"
+          aria-expanded={open}
+          onClick={() => onToggle(!open)}
+          className="flex items-center gap-1.5 px-1.5 py-[3px] -ml-1.5 rounded-md text-[12px] italic text-[var(--color-text-dim)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+        >
+          <span>{tf(t, 'chat.turn.thought', 'Thought')}</span>
+          {seconds !== undefined && seconds >= THOUGHT_MIN_SECONDS && (
+            <span data-testid="thought-seconds" className="not-italic tabular-nums">· {formatSeconds(seconds)}</span>
+          )}
+        </button>
+        {open && <div data-testid="thought-text" className={`${TEXT_CLASS} mt-0.5 mb-1`}>{unit.text}</div>}
+      </div>
+    );
+  }
   return (
-    <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} data-intent={isIntent ? 'true' : 'false'}>
-      {(isIntent || spin) && (
+    <div data-testid="thought" data-live={unit.live ? 'true' : 'false'}>
+      {spin && (
         <div className="mb-0.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-          {spin && <span aria-hidden="true" className="material-symbols-outlined text-[13px] animate-spin">progress_activity</span>}
-          <span>{isIntent ? tf(t, 'chat.turn.intent', 'Intent') : tf(t, 'chat.turn.thinking', 'Thinking')}</span>
+          <span aria-hidden="true" className="material-symbols-outlined text-[13px] animate-spin">progress_activity</span>
+          <span>{tf(t, 'chat.turn.thinking', 'Thinking')}</span>
         </div>
       )}
-      <div
-        data-testid="thought-text"
-        {...(long ? {
-          role: 'button',
-          tabIndex: 0,
-          'aria-expanded': open,
-          onClick,
-          onKeyDown,
-        } : {})}
-        className={`text-[12.5px] italic leading-relaxed text-[var(--color-text-dim)] whitespace-pre-wrap break-words ${long ? 'cursor-pointer rounded hover:text-[var(--color-text-muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
-        style={!unit.live && long && !open
-          ? { display: '-webkit-box', WebkitLineClamp: lines, WebkitBoxOrient: 'vertical', overflow: 'hidden' }
-          : undefined}
-      >
-        {unit.live ? thoughtTail(unit.text) : unit.text}
-      </div>
+      <div data-testid="thought-text" className={TEXT_CLASS}>{unit.text}</div>
     </div>
   );
 }

@@ -2,9 +2,8 @@
  * AssistantMessageView × TurnCards — the backend cards' fixed places (chat v7.1).
  *
  * What is tested (real AssistantMessageView + turnView, only leaf contexts mocked):
- * - pipeline_run: rendered once at the top as the alignment (requirement as plain
- *   text, run id, profile, stage count); the model's own opening text then loses
- *   the "Intent" label and no "no restatement" note shows
+ * - pipeline_run: never rendered as text (no requirement card, no "Intent" label,
+ *   chat display v8): it carries the run's plan for the pipeline block
  * - pipeline_attention: right after the Result divider and before the answer once
  *   the turn is over; with the DELIVER row while it streams; one item per kind;
  *   a blocking verdict is red
@@ -73,39 +72,16 @@ const PIPELINE: ContentBlock[] = [
   tx('Shipped: opus-5-5 is in the registry.'), deliv('docs/report.md', 'out/deck.pptx'),
 ];
 
-describe('pipeline_run — the alignment', () => {
-  it('renders once at the top; the opening text is not labelled again', () => {
-    const { container } = renderView(PIPELINE);
-    const run = screen.getByTestId('turn-run');
-    expect(run.textContent).toContain('Add opus-5-5 to MODEL_REGISTRY');
-    expect(run.textContent).toContain('run_a1');
-    expect(run.textContent).toContain('full · 3 stages');
-    expect(screen.getAllByText('Intent')).toHaveLength(1);
-    expect(screen.queryByTestId('turn-intent')).toBeNull();
-    expect(container.querySelector('[data-testid]')?.getAttribute('data-testid')).toBe('turn-run');
-  });
-
-  it('the running stage names the next planned stages from the run', () => {
-    const run = { ...RUN, stages: ['evaluate', 'think', 'plan', 'build', 'deliver'] } as ContentBlock;
-    const ev = { ...stage('evaluate', 1), next: 'think', nextOrdinal: 2, total: 5 } as ContentBlock;
-    renderView([tx('Go.'), tu('a', 'Bash'), tr('a'), run, ev, tu('b', 'Bash')], true);
-    const live = screen.getByTestId('pipeline-stage-live');
-    expect(within(live).getByTestId('stage-upcoming').textContent).toBe(' · next PLAN → BUILD');
-    // without the run's plan there is nothing to say
-    renderView([tx('Go.'), tu('a', 'Bash'), tr('a'), ev, tu('b', 'Bash')], true);
-    expect(screen.getAllByTestId('pipeline-stage-live')[1].querySelector('[data-testid="stage-upcoming"]')).toBeNull();
-  });
-
-  it('the last planned stage has no "next"', () => {
-    const run = { ...RUN, stages: ['evaluate', 'think'] } as ContentBlock;
-    const ev = { ...stage('evaluate', 1), next: 'think', nextOrdinal: 2, total: 2 } as ContentBlock;
-    renderView([tu('a', 'Bash'), tr('a'), run, ev, tu('b', 'Bash')], true);
-    expect(screen.queryByTestId('stage-upcoming')).toBeNull();
+describe('pipeline_run — never rendered as text (chat display v8)', () => {
+  it('no requirement card and no Intent label; the plan only drives the pipeline block', () => {
+    renderView(PIPELINE);
+    expect(screen.queryByTestId('turn-run')).toBeNull();
+    expect(screen.queryByText(/Add opus-5-5 to MODEL_REGISTRY/)).toBeNull();
+    expect(screen.queryAllByText('Intent')).toHaveLength(0);
   });
 
   it('a run block suppresses the no-restatement note', () => {
     renderView([tu('a', 'Bash'), tr('a'), RUN, tu('b', 'Bash'), tr('b'), tu('c', 'Bash'), tr('c'), tx('ok')]);
-    expect(screen.getByTestId('turn-run')).toBeTruthy();
     expect(screen.queryByTestId('turn-no-alignment')).toBeNull();
   });
 });

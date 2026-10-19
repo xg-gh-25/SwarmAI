@@ -38,7 +38,7 @@ function show(g: WorkGroup, opts: { expanded?: boolean; flat?: boolean; tail?: W
   const onToggle = vi.fn();
   const r = render(
     <WorkGroupView group={g} expanded={opts.expanded} flat={opts.flat} tail={opts.tail} defaultOpen={opts.defaultOpen} onToggle={onToggle} thoughtOpen={() => undefined}
-      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} compact />,
+      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} />,
   );
   return { onToggle, ...r };
 }
@@ -97,13 +97,14 @@ describe('WorkGroupView', () => {
     expect(screen.getAllByTestId('step-row')).toHaveLength(30);
   });
 
-  it('a long tool name truncates and keeps its name as the tooltip', () => {
+  it('an MCP row is the tool\'s own name (the full name is the tooltip), then its argument', () => {
     const name = 'mcp__plugin_AmazonBuilderCoreAIAgents-pipeline-assistant_builder-mcp__GetPipelineHealth';
     const [g] = groupsOf([tu('a', 'MCP: GetPipelineHealth — p', name), tx('x')]);
     show(g, { expanded: true });
     const tool = screen.getByTestId('strip-tool');
     expect(tool.className).toContain('truncate');
     expect(tool.getAttribute('title')).toBe(name);
+    expect(tool.textContent).toBe('GetPipelineHealth');
     expect(screen.getByTestId('strip-target').textContent).toBe('p');
   });
 
@@ -113,15 +114,18 @@ describe('WorkGroupView', () => {
     const body = screen.getByTestId('group-body');
     const order = [...body.children].map((c) => c.getAttribute('data-testid'));
     expect(order).toEqual(['step-row', 'group-note', 'thought', 'step-row']);
-    expect(screen.getAllByTestId('strip-tool').map((e) => e.textContent)).toEqual(['Bash', 'Bash']);
-    expect(screen.getAllByTestId('strip-target').map((e) => e.textContent)).toEqual(['ls', 'npm test']);
+    // Codex-style rows (chat display v8): the verb, then the call's real object.
+    expect(screen.getAllByTestId('strip-tool').map((e) => e.textContent)).toEqual(['List', 'Ran']);
+    expect(screen.getAllByTestId('strip-target').map((e) => e.textContent)).toEqual(['.', 'npm test']);
     expect(container.textContent).toContain('a note');
   });
 
-  it('a tool row shows the real command, setup and wrapper stripped', () => {
+  it('a tool row names the program and subcommand; the whole command, setup and wrapper stripped, opens under it', () => {
     const [g] = groupsOf([tu('a', "Running: cd /Users/x/repo\nperl -e 'alarm 60; exec @ARGV' git log -6 --format=%h"), tu('b', 'Running: ls')]);
     show(g, { expanded: true });
-    expect(screen.getAllByTestId('strip-target')[0].textContent).toBe('git log -6 --format=%h');
+    expect(screen.getAllByTestId('strip-target')[0].textContent).toBe('git log -6');
+    fireEvent.click(within(screen.getAllByTestId('step-row')[0]).getByTestId('row-toggle'));
+    expect(screen.getByTestId('step-command').textContent).toBe('git log -6 --format=%h');
   });
 
   it('no last-output-line on a row; an error shows one line below', () => {
@@ -172,7 +176,7 @@ describe('WorkGroupView', () => {
   it('an Edit row is a diff chip (the verb, not a tool-name list)', () => {
     const [g] = groupsOf([tu('a', 'Writing to /r/b.ts', 'MultiEdit'), tx('x')]);
     show(g, { expanded: true });
-    expect(screen.getByTestId('strip-tool').textContent).toBe('MultiEdit');
+    expect(screen.getByTestId('strip-tool').textContent).toBe('Edited');
     expect(screen.getByTestId('file-chip')).toBeTruthy();
   });
 
@@ -183,7 +187,7 @@ describe('WorkGroupView', () => {
     expect(screen.getByTestId('turn-tail').textContent).toBe('last words');
     expect(screen.getByTestId('group-counts').textContent).toBe('· 2 steps · 2 commands');
     rerender(<WorkGroupView group={g} expanded tail={note} onToggle={() => {}} thoughtOpen={() => undefined}
-      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} compact />);
+      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} />);
     expect(screen.queryByTestId('turn-tail')).toBeNull();
     expect(screen.getAllByText('last words')).toHaveLength(1);
   });

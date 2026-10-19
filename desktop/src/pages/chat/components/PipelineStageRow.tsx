@@ -1,23 +1,29 @@
 /**
- * PipelineStageRow — a pipeline stage as ONE row that folds its own work (v7.1).
+ * PipelineStageRow — one line of a pipeline turn's checklist (chat display v8).
  *
- * A `pipeline_stage` block is written by backend/core/pipeline_stage_events.py when
- * the backend sees a stage finish in run.json — never by the model. The units
- * between two stage rows are that stage's work (turnView `sectionUnits`). Every
- * stage and every gate that ran has its own row (XG 2026-10-19):
+ * A pipeline turn is ONE PipelineBlock whose header is the run's checklist: every
+ * planned stage and gate, from the backend (`pipeline_run.checklist`, by profile).
+ * Each line is a PipelineStageRow. `pipeline_stage` blocks are written by
+ * backend/core/pipeline_stage_events.py when the backend sees a stage start or finish
+ * in run.json — never by the model; the units from a stage's start to the next start
+ * are its work (turnView `sectionUnits`). A line (XG 2026-10-19):
  *   - the label is the stage name in the same tag style and left edge as the
  *     WORKED / WORKING header — no circled number.
+ *   - `pending`: a planned stage or gate that has not run — dim, nothing to open.
+ *     `earlier`: done before this turn (a resumed run) — a check, nothing to open.
  *   - a finished stage is one line of counts — "✓ BUILD · 12 steps · 3 files changed
  *     · 5 commands  4m 43s ›" — and opens to its work on click. No file names and no
- *     model summary on the row: the counts say how much, the body says what.
- *   - a gate row (GATE 0 / 1 / 2) says only its verdict. It holds no work
+ *     model summary on the row: the counts say how much, the body says what. A
+ *     duration shows only from 5s.
+ *   - a gate line (GATE 0 / 1 / 2) says only its verdict. It holds no work
  *     (sectionUnits), so it has no counts, no duration and no chevron.
- *   - a stage row opens when the stage STARTS (an `in_progress` block; older
+ *   - a stage line opens when the stage STARTS (an `in_progress` block; older
  *     sessions: the legacy live row from the previous row's `next`) and the end block
- *     updates the same row in place — same element, its work stays under it.
- *   - the stage now running stays open: "REVIEW · in progress · stage 5 of 8 ·
- *     next TEST → DELIVER" (`upcoming`, from the run's plan in its pipeline_run block).
- *     It carries no spinner — the live work card below holds the one spinner.
+ *     updates the same line in place — same element, its work stays under it.
+ *   - a stage that runs again (a gate sent it back, a goal loop) is the same line,
+ *     marked "round N" (`round`); its work is split by round.
+ *   - the stage now running stays open. It carries no spinner — the live work below
+ *     holds the one spinner.
  *   - colour only for exceptions: a Gate verdict other than PASS (WARN amber, BLOCK
  *     red), an unrecovered failure. A normal finish is neutral.
  *
@@ -67,8 +73,6 @@ export interface PipelineStageRowProps {
   /** The stage now running (live) — `{stage, ordinal}` from the previous row's `next`. */
   live?: { stage: string; ordinal: number | null };
   position?: { n: number; total: number };
-  /** The live stage only: the next planned stage(s), from the run's plan. */
-  upcoming?: string[];
   /** A started stage (`in_progress` block) is running only while its turn streams and
    *  it is the turn's last section; otherwise it did not finish in this turn. */
   running?: boolean;
@@ -87,10 +91,42 @@ export interface PipelineStageRowProps {
   choice?: boolean;
   onChoose: (open: boolean) => void;
   children?: React.ReactNode;
+  /** A planned line that has not run yet (no block): dim, nothing to open. */
+  pending?: string;
+  /** A line done in an earlier turn of the run (a resumed turn): no work here. */
+  earlier?: string;
+  /** This stage's round (a stage that ran again): shown from round 2. */
+  round?: number;
 }
 
-export function PipelineStageRow({
-  block, live, position, upcoming, running, startedAt, counts, failed, mustOpen, defaultOpen, choice, onChoose, children,
+/** A duration under this many seconds is not shown. */
+const MIN_DURATION_S = 5;
+
+/** A planned line with no row of its own in this turn: pending, or done earlier. */
+function PlanLine({ stage, earlier }: { stage: string; earlier: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div data-testid="pipeline-stage-pending" className="border-t border-[var(--color-border)] first:border-t-0">
+      <div className="w-full flex items-center gap-1.5 py-1.5 text-[12.5px] min-w-0">
+        <span aria-hidden="true" className={`material-symbols-outlined text-[14px] leading-none ${ROW_ICON_SLOT} text-[var(--color-text-dim)]`}>
+          {earlier ? 'check' : 'radio_button_unchecked'}
+        </span>
+        <span data-testid="stage-label" className={`${GROUP_TAG_CLASS} ${earlier ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-dim)]'}`}>
+          {stageName(stage)}
+        </span>
+        {earlier && <span className="shrink-0 text-[var(--color-text-dim)]">{tf(t, 'chat.turn.stage.earlier', 'done earlier')}</span>}
+      </div>
+    </div>
+  );
+}
+
+export function PipelineStageRow(props: PipelineStageRowProps) {
+  if (props.pending || props.earlier) return <PlanLine stage={(props.pending ?? props.earlier)!} earlier={!!props.earlier} />;
+  return <StageRow {...props} />;
+}
+
+function StageRow({
+  block, live, position, running, startedAt, counts, failed, mustOpen, defaultOpen, choice, onChoose, children, round,
 }: PipelineStageRowProps) {
   const { t } = useTranslation();
   // Running: the legacy live row (no block) or a started stage of the streaming turn.
@@ -108,7 +144,8 @@ export function PipelineStageRow({
   const isGate = isGateStage(name);
   const skipped = block?.status === 'skipped';
   const verdict = block?.gate?.verdict;
-  const took = block && !isGate && !isLive && !unfinished ? secondsBetween(startedAt, block.at) : null;
+  const tookRaw = block && !isGate && !isLive && !unfinished ? secondsBetween(startedAt, block.at) : null;
+  const took = tookRaw !== null && tookRaw >= MIN_DURATION_S ? tookRaw : null;
   const countText = !isLive && !isGate && !skipped && counts ? [
     counts.steps > 0 && tf(t, 'chat.turn.group.steps', counts.steps === 1 ? '{{count}} step' : '{{count}} steps', { count: counts.steps }),
     counts.files > 0 && tf(t, 'chat.turn.group.files', counts.files === 1 ? '{{count}} file changed' : '{{count}} files changed', { count: counts.files }),
@@ -140,15 +177,15 @@ export function PipelineStageRow({
         <span data-testid="stage-label" className={`${GROUP_TAG_CLASS} ${isLive ? 'text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]'}`}>
           {label}
         </span>
+        {round !== undefined && round > 1 && (
+          <span data-testid="stage-round-label" className="shrink-0 text-[var(--color-text-secondary)]">
+            {tf(t, 'chat.turn.stage.round', 'round {{n}}', { n: round })}
+          </span>
+        )}
         {isLive ? (
           <span className="shrink-0 text-[var(--color-text-secondary)]">
             {tf(t, 'chat.turn.stage.running', 'in progress')}
             {position && ` · ${tf(t, 'chat.turn.stage.position', 'stage {{position}} of {{total}}', { position: position.n, total: position.total })}`}
-            {upcoming && upcoming.length > 0 && (
-              <span data-testid="stage-upcoming" className="text-[var(--color-text-dim)]">
-                {` · ${tf(t, 'chat.turn.stage.next', 'next {{stages}}', { stages: upcoming.map(stageName).join(' → ') })}`}
-              </span>
-            )}
           </span>
         ) : skipped ? (
           <span className="shrink-0">{tf(t, 'chat.turn.stage.skipped', 'skipped')}</span>

@@ -1,15 +1,17 @@
 /**
- * AssistantMessageView × turnView — the two-level render contract (chat display v7.12).
+ * AssistantMessageView × turnView — the two-level render contract (chat display v8).
  *
  * What is tested (real AssistantMessageView, only leaf contexts mocked):
- * - FIRST level only: INTENT (one source), WORKING / WORKED blocks, stage rows,
- *   interrupts, RESULT. Everything between two of them is ONE block (AC1, AC2)
+ * - FIRST level only: the restatement (plain text, no label), WORKING / WORKED
+ *   blocks, the pipeline block, interrupts, RESULT. Everything between two of them
+ *   is ONE block (AC1, AC2)
  * - a folded WORKED line is counts only — no file names (AC2)
  * - opened: thoughts, notes and tool rows in stream order (AC3)
- * - a tool row is the real tool name and the real command (AC4)
- * - INTENT: run requirement > text before work > opening thought (AC5)
- * - thoughts: no per-item chrome, the text is the control; the lane holds the
- *   process, the intent text and the answer sit outside (AC7)
+ * - a tool row is a Codex-style verb + the call's real object; settled exploration
+ *   calls are one Explored row (AC4)
+ * - thoughts: the streaming one in full; a settled one is one "Thought" line whose
+ *   text is one click away; the lane holds the process, the restatement and the
+ *   answer sit outside (AC7)
  * - fold timing: a finished block folds FOLD_DELAY_MS later, keeping its live
  *   layout until then; a user's open/closed choice wins
  * - a running sub-agent's progress and a finished one's verdict sit on its row
@@ -32,9 +34,11 @@ vi.mock('../../../../contexts/HealthContext', () => ({
     triggerHealthCheck: vi.fn(),
   }),
 }));
-/** Open every folded run of finished calls ("Bash ×4 · Read ×2"), so each call is a row. */
+/** Open every folded run of finished calls (an Explored row, a "×N" row), so each call is a row. */
 const expandFolds = (root: HTMLElement = document.body) => {
-  for (const f of within(root).queryAllByTestId('step-fold')) fireEvent.click(within(f).getByRole('button'));
+  for (const f of [...within(root).queryAllByTestId('step-fold'), ...within(root).queryAllByTestId('step-explored')]) {
+    fireEvent.click(within(f).getAllByRole('button')[0]);
+  }
 };
 const injectSpy = vi.fn();
 vi.mock('../../injectChatInput', () => ({
@@ -82,8 +86,11 @@ describe('AssistantMessageView — work groups (AC1)', () => {
     expect(within(card).getByTestId('group-row').textContent).toContain('Working');
     // The live card is never a toggle: only finished work folds.
     expect(screen.queryByTestId('group-toggle')).toBeNull();
-    // the 37 finished calls are one folded row; the running call is its own row, last
-    expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×37');
+    // the 37 finished searches are one Explored row; the running call is its own row, last
+    const explored = screen.getByTestId('step-explored');
+    expect(explored.textContent).toContain('Search');
+    expect(explored.textContent).toContain('"needle0"');
+    expect(explored.textContent).toContain('+33'); // 4 objects named, the rest counted
     const rows = screen.getAllByTestId('step-row');
     expect(rows).toHaveLength(1);
     expect(rows[rows.length - 1].textContent).toContain('needle37');
@@ -101,17 +108,17 @@ describe('AssistantMessageView — work groups (AC1)', () => {
     expect(screen.getByTestId('group-row').textContent).toContain('Worked');
     expect(container.querySelector('.animate-spin')).toBeNull();
     // the last call never finished (the turn ended on it): it stays its own row
-    expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×37');
+    expect(screen.getByTestId('step-explored')).toBeTruthy();
     expandFolds();
     expect(screen.getAllByTestId('step-row')).toHaveLength(38);
     fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
   });
 
-  it('the whole process of a turn is ONE WORKED line between INTENT and RESULT (AC1)', () => {
+  it('the whole process of a turn is ONE WORKED line before RESULT, the opening thought included (AC1)', () => {
     renderView([th('look'), tu('a', 'Running: ls'), tx('found it'), th('now the store'), tu('b', 'Running: pwd'), tx('the answer')]);
     expect(screen.getAllByTestId('work-group')).toHaveLength(1);
-    expect(screen.getByTestId('thought').dataset.intent).toBe('true');
+    expect(screen.queryByTestId('thought')).toBeNull(); // no intent thought: it is inside the fold
     expect(screen.queryByText('found it')).toBeNull(); // a note is second level: inside the fold
     fireEvent.click(screen.getByTestId('group-toggle'));
     expect(screen.getByText('found it')).toBeTruthy();
@@ -244,7 +251,7 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
     renderView([tu('a', 'Running: npm test'), res('a', '12 passed in 3.1s'),
       tu('b', 'Running: make'), res('b', 'make: *** no rule to make target build, stop.', true), tu('c', 'Running: ls')], { isStreaming: true });
     const rows = screen.getAllByTestId('step-row');
-    expect(within(rows[0]).getByTestId('strip-tool').textContent).toBe('Bash');
+    expect(within(rows[0]).getByTestId('strip-tool').textContent).toBe('Ran');
     expect(within(rows[0]).getByTestId('strip-target').textContent).toBe('npm test');
     expect(rows[0].textContent).not.toContain('12 passed'); // a command's own output is not the row
     const err = within(rows[1]).getByTestId('step-error');
@@ -258,12 +265,14 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
     expect(screen.queryByText(long)).toBeNull();
   });
 
-  it('shows the real command: only the leading cd and a timeout wrapper go (AC4)', () => {
+  it('a row names what ran; the whole command — only the leading cd and a timeout wrapper gone — is one click away (AC4)', () => {
     const cmd = 'Running: R=run_df73d970; python3 -c "import json; print(1)"';
     renderView([tu('a', cmd), tu('b', "Running: cd /a && perl -e 'alarm 60; exec @ARGV' node -e \"x()\""), tx('done')]);
     fireEvent.click(screen.getByTestId('group-toggle'));
     expandFolds();
-    expect(screen.getAllByTestId('strip-target').map((e) => e.textContent)).toEqual(['R=run_df73d970; python3 -c "import json; print(1)"', 'node -e "x()"']);
+    expect(screen.getAllByTestId('strip-target').map((e) => e.textContent).join(' | ')).toBe('python3 -c "import json; print(1)" | node -e "x()"');
+    fireEvent.click(within(screen.getAllByTestId('step-row')[0]).getByTestId('row-toggle'));
+    expect(screen.getByTestId('step-command').textContent).toBe('R=run_df73d970; python3 -c "import json; print(1)"');
     expect(document.body.textContent).not.toContain('inline script');
   });
 
@@ -312,73 +321,80 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
   });
 });
 
-describe('AssistantMessageView — thoughts carry no chrome (AC4)', () => {
-  it('a finished non-tool reply keeps its thought readable as the Intent', () => {
+describe('AssistantMessageView — thoughts (AC4, chat display v8)', () => {
+  const SIX = [tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2')];
+
+  it('a finished non-tool reply folds its thought into one "Thought" line, the text one click away', () => {
     renderView([th('deliberating'), tx('the answer')]);
+    expect(screen.queryByTestId('thought-text')).toBeNull();
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    expect(screen.queryByTestId('thought-text')).toBeNull();
+    expect(screen.getByTestId('thought-toggle').textContent).toBe('Thought');
+    fireEvent.click(screen.getByTestId('thought-toggle'));
     expect(screen.getByTestId('thought-text').textContent).toBe('deliberating');
-    expect(screen.queryByTestId('group-toggle')).toBeNull();
   });
 
-  it('no Thought label and no Show all / Show less anywhere', () => {
-    const { container } = renderView([th(LONG), tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG), tu('b', 'Running: pwd'), tx('ok')], { isStreaming: true });
+  it('no Show all / Show less anywhere; a thought shown is shown whole, never clamped', () => {
+    const { container } = renderView([th(LONG), ...SIX, th(LONG), tu('b', 'Running: pwd'), tx('ok')], { isStreaming: true });
     expect(container.textContent).not.toMatch(/Show all|Show less|Show more/);
-    expect(screen.queryByTestId('thought-toggle')).toBeNull();
-    const labels = [...container.querySelectorAll('[data-testid="thought"]')].map((e) => e.textContent ?? '');
-    expect(labels.filter((l) => l.startsWith('Thought'))).toHaveLength(0);
-  });
-
-  it('a long thought: 1 line once the turn is over; the text opens and closes in place', () => {
-    renderView([tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG), tx('ok')]);
-    fireEvent.click(screen.getByTestId('group-toggle'));
-    const text = screen.getByTestId('thought-text');
-    expect(text.style.webkitLineClamp).toBe('1');
-    expect(text.getAttribute('role')).toBe('button');
-    fireEvent.click(text);
-    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('');
-    expect(screen.getByTestId('thought-text').getAttribute('aria-expanded')).toBe('true');
-    fireEvent.keyDown(screen.getByTestId('thought-text'), { key: 'Enter' });
-    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('1');
-  });
-
-  it('selecting text in a thought does not open or close it', () => {
-    renderView([tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG), tx('ok')]);
-    fireEvent.click(screen.getByTestId('group-toggle'));
-    const sel = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => 'line 3' } as unknown as Selection);
-    try {
-      fireEvent.click(screen.getByTestId('thought-text'));
-      expect(screen.getByTestId('thought-text').getAttribute('aria-expanded')).toBe('false');
-    } finally {
-      sel.mockRestore();
+    for (const text of screen.queryAllByTestId('thought-text')) {
+      expect(text.textContent).toBe(LONG);
+      expect(text.style.webkitLineClamp).toBe('');
     }
   });
 
-  it('while the turn streams a thought keeps 3 lines until 2s after the next item arrives, then 1', () => {
+  it('a long thought, turn over: one line; the text opens and closes in place', () => {
+    renderView([...SIX, th(LONG), tx('ok')]);
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    const toggle = screen.getByTestId('thought-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(screen.getByTestId('thought-text').textContent).toBe(LONG);
+    expect(screen.getByTestId('thought-toggle').getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByTestId('thought-toggle'));
+    expect(screen.queryByTestId('thought-text')).toBeNull();
+  });
+
+  it('the text is not the control: clicking inside it (selecting) does not close it', () => {
+    renderView([...SIX, th(LONG), tx('ok')]);
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    fireEvent.click(screen.getByTestId('thought-toggle'));
+    fireEvent.click(screen.getByTestId('thought-text'));
+    expect(screen.getByTestId('thought-text').textContent).toBe(LONG);
+  });
+
+  it('while the turn streams a thought stays whole until 2s after the next item arrives, then is one line', () => {
     vi.useFakeTimers();
     try {
-      const head = [tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG)];
+      const head = [...SIX, th(LONG)];
       const { rerender } = render(viewOf(head, true));
       rerender(viewOf([...head, tu('b', 'Running: pwd')], true));
       // the next item has arrived: nothing changed shape yet
-      expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('3');
+      expect(screen.getByTestId('thought-text').textContent).toBe(LONG);
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
-      expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('1');
+      expect(screen.queryByTestId('thought-text')).toBeNull();
+      expect(screen.getByTestId('thought-toggle').textContent).toBe('Thought');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('a one-line thought is not a control', () => {
-    renderView([tu('a', 'Running: ls'), tr('a'), th('short'), tx('ok')]);
-    fireEvent.click(screen.getByTestId('group-toggle'));
-    expect(screen.getByTestId('thought-text').getAttribute('role')).toBeNull();
-  });
-
-  it('the intent thought gets 6 lines and the one Intent label', () => {
-    renderView([th(LONG), tu('a', 'Running: ls'), tr('a'), tx('ok')]);
-    const t = screen.getByTestId('thought');
-    expect(t.dataset.intent).toBe('true');
-    expect(t.textContent).toContain('Intent');
-    expect(screen.getByTestId('thought-text').style.webkitLineClamp).toBe('6');
+  it('a thought this view saw stream for 5s or more says how long; one it never saw stream says nothing', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender, unmount } = render(viewOf([...SIX, th('weighing it')], true));
+      act(() => { vi.advanceTimersByTime(7000); });
+      rerender(viewOf([...SIX, th('weighing it, done'), tu('b', 'Running: make')], true));
+      act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
+      expect(screen.getByTestId('thought-seconds').textContent).toBe('· 7s');
+      unmount();
+      renderView([th('weighing it, done'), ...SIX, tx('ok')]);
+      fireEvent.click(screen.getByTestId('group-toggle'));
+      expect(screen.getByTestId('thought-toggle').textContent).toBe('Thought');
+      expect(screen.queryByTestId('thought-seconds')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a streaming thought in the WORKING card wraps; the card holds the one spinner', () => {
@@ -393,10 +409,11 @@ describe('AssistantMessageView — thoughts carry no chrome (AC4)', () => {
   });
 
   it('the user\'s open thought survives the stream ending', () => {
-    const { rerender } = render(viewOf([tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG), tu('b', 'Running: pwd')], true));
-    fireEvent.click(screen.getByTestId('thought-text'));
-    rerender(viewOf([tu('a', 'Running: ls'), tr('a'), tu('a1', 'Running: pwd'), tr('a1'), tu('a2', 'Running: id'), tr('a2'), th(LONG), tu('b', 'Running: pwd'), tr('b'), tx('done')], false));
-    expect(screen.getByTestId('thought-text').getAttribute('aria-expanded')).toBe('true');
+    const { rerender } = render(viewOf([...SIX, th(LONG), tu('b', 'Running: pwd')], true));
+    fireEvent.click(screen.getByTestId('thought-toggle'));
+    rerender(viewOf([...SIX, th(LONG), tu('b', 'Running: pwd'), tr('b'), tx('done')], false));
+    expect(screen.getByTestId('thought-text').textContent).toBe(LONG);
+    expect(screen.getByTestId('thought-toggle').getAttribute('aria-expanded')).toBe('true');
   });
 });
 
@@ -404,12 +421,17 @@ describe('AssistantMessageView — fold timing', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('a finished intent thought never folds away', () => {
+  it('the opening thought folds with the work, FOLD_DELAY_MS after the turn ends (no intent exception)', () => {
     const { rerender } = render(viewOf([th('step one')], true));
     expect(screen.getByTestId('thought').dataset.live).toBe('true');
+    // the first tool call arrives while streaming, then the turn ends
+    rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls')], true));
     rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls'), tr('a'), tx('done')], false));
+    expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two'); // not at once
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
-    expect(screen.getByTestId('thought').dataset.live).toBe('false');
+    expect(screen.queryByTestId('thought')).toBeNull();
+    fireEvent.click(screen.getByTestId('group-toggle'));
+    fireEvent.click(screen.getByTestId('thought-toggle'));
     expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two');
   });
 
@@ -498,12 +520,12 @@ describe('AssistantMessageView — a sub-agent on its strip', () => {
 });
 
 describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
-  it('the restatement is the INTENT and the final answer gets a Result divider, both outside the lane', () => {
+  it('the restatement is plain text (no label) and the final answer gets a Result divider, both outside the lane', () => {
     renderView([tx('Three steps: export, sync, push.'), tu('a', 'Running: ls'), tx('checking'), tu('b', 'Running: pwd'),
       tx('All three done.')]);
     const intent = screen.getByTestId('turn-intent');
     const result = screen.getByTestId('turn-result');
-    expect(intent.textContent).toContain('Intent');
+    expect(intent.textContent).not.toContain('Intent');
     expect(screen.queryByText('Understanding')).toBeNull();
     expect(result.textContent).toContain('All three done.');
     expect(intent.closest('[data-lane="true"]')).toBeNull();
@@ -541,7 +563,8 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
       tx('Now the two docs:'), wr('c', '/r/a.md'), wr('d', '/r/b.md'), tx('done')]);
     fireEvent.click(screen.getByTestId('group-toggle'));
     const body = screen.getByTestId('group-body');
-    expect([...body.children].map((c) => c.getAttribute('data-testid'))).toEqual(['step-row', 'group-note', 'step-row', 'group-note', 'step-fold']);
+    // two edits of different files are two rows: only identical calls fold
+    expect([...body.children].map((c) => c.getAttribute('data-testid'))).toEqual(['step-row', 'group-note', 'step-row', 'group-note', 'step-row', 'step-row']);
     expect(screen.getByText('Now the two docs:')).toBeTruthy();
   });
 
@@ -576,9 +599,9 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
     expect(document.body.textContent).not.toContain('Intent');
   });
 
-  it('with a restatement, the opening thought is inside the work, not a second intent (AC5)', () => {
+  it('with a restatement, the opening thought is inside the work; nothing is labelled Intent (AC5)', () => {
     renderView([th('plan it'), tx('I read it as: fix X.'), tu('a', 'Running: ls'), tx('done')]);
-    expect(screen.getAllByText('Intent')).toHaveLength(1);
+    expect(screen.queryAllByText('Intent')).toHaveLength(0);
     expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
   });
 });

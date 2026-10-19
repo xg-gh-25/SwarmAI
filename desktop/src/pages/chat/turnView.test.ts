@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '../../types';
 import {
-  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, groupSteps, thoughtTail,
+  deriveTurnView, stepLabel, extractNextSteps, isLandmarkText, isGateBlock, groupSteps,
   changedFiles, sectionUnits, toolCall,
 } from './turnView';
 import type { ToolUseContent } from '../../types';
@@ -117,7 +117,7 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     const view = deriveTurnView([th], true);
     expect(view.units.map((u) => u.kind)).toEqual(['thought']);
     const t = view.units[0];
-    expect(t.kind === 'thought' && [t.live, t.intent, t.ordinal]).toEqual([true, true, 0]);
+    expect(t.kind === 'thought' && [t.live, t.ordinal]).toEqual([true, 0]);
   });
 
   it('a thought is narration: it closes the tool segment and keeps its place', () => {
@@ -125,20 +125,10 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     const v = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th, tu('b', 'Running: pwd')], true);
     expect(v.units.map((u) => u.kind)).toEqual(['process', 'thought', 'process']);
     const t = v.units[1];
-    expect(t.kind === 'thought' && [t.text, t.live, t.intent]).toEqual([
-      'First I read the config.\n\nThen compare the two thresholds.\n', false, false]);
+    expect(t.kind === 'thought' && [t.text, t.live]).toEqual([
+      'First I read the config.\n\nThen compare the two thresholds.\n', false]);
     const live = v.units[2];
     expect(live.kind === 'process' && live.isLive && live.live?.step?.block.id).toBe('b');
-  });
-
-  it('thoughtTail keeps the newest text up to the cap, cut at a line boundary', () => {
-    const long = `${'old line\n'.repeat(80)}NEWEST thought here`;
-    const tail = thoughtTail(long, 120)!;
-    expect(tail.startsWith('…')).toBe(true);
-    expect(tail.endsWith('NEWEST thought here')).toBe(true);
-    expect(tail.length).toBeLessThanOrEqual(121);
-    expect(tail.slice(1).startsWith('old line')).toBe(true); // whole lines, no half word
-    expect(thoughtTail('  \n ')).toBeUndefined();
   });
 
   it('only the NEWEST thought is live; earlier thoughts and notes stay in the stream', () => {
@@ -146,9 +136,9 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     const v = deriveTurnView([th('old thought'), tx('checking logs'), tu('a', 'Running: ls'), tr('a'), th('new thought')], true);
     expect(v.units.map((u) => u.kind)).toEqual(['thought', 'note', 'process', 'thought']);
     const [first, , work, last] = v.units;
-    expect(first.kind === 'thought' && [first.live, first.intent]).toEqual([false, true]);
+    expect(first.kind === 'thought' && first.live).toBe(false);
     expect(work.kind === 'process' && work.isLive).toBe(false);
-    expect(last.kind === 'thought' && [last.live, last.intent, last.ordinal]).toEqual([true, false, 1]);
+    expect(last.kind === 'thought' && [last.live, last.ordinal]).toEqual([true, 1]);
   });
 
   it('live row keeps the newest FINISHED step next to the current one', () => {
@@ -165,32 +155,6 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     const v = deriveTurnView([th, tu('a', 'Running: ls'), tr('a'), tx('done')], false);
     expect(v.units.map((u) => u.kind)).toEqual(['thought', 'process', 'outcome']);
     expect(v.units.some((u) => u.kind === 'thought' && u.live)).toBe(false);
-  });
-
-  it('a short intent is the first thought before any tool call; a short later one never is', () => {
-    // v7.11 rule (INTENT_MIN_CHARS / INTENT_TOOL_WINDOW): the first substantive thought
-    // within the first two tool calls wins; with none, the first thought before any
-    // tool call. These thoughts are all short, so the fallback decides.
-    const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
-    const late = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th('after work'), tx('done')], false);
-    expect(late.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
-    const early = deriveTurnView([tx('Reading it as X.'), th('plan it'), th('second'), tu('a', 'Running: ls')], false);
-    expect(early.units.filter((u) => u.kind === 'thought').map((u) => u.kind === 'thought' && u.intent)).toEqual([true, false]);
-  });
-
-  it('a substantive thought after a first look (within two tool calls) is the intent instead', () => {
-    const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
-    const real = `The ask is to fix the reconcile race. ${'x'.repeat(160)}`;
-    const v = deriveTurnView([th('Let me look at the image first.'), tu('a', 'Reading /r/a.png', 'Read', 'read'), tr('a'), th(real), tu('b', 'Running: ls')], false);
-    expect(v.units.filter((u) => u.kind === 'thought').map((u) => u.kind === 'thought' && u.intent)).toEqual([false, true]);
-    const tooLate = deriveTurnView([tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b'), tu('c', 'Running: id'), tr('c'), th(real)], false);
-    expect(tooLate.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
-  });
-
-  it('a turn that starts with a tool result (compacted / resumed tail) has no intent', () => {
-    const th = (t: string) => ({ type: 'thinking', thinking: t }) as ContentBlock;
-    const v = deriveTurnView([tr('z'), th(`I'll inline a fallback expression here. ${'x'.repeat(170)}`), tu('a', 'Running: ls'), tx('done')], false);
-    expect(v.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
   });
 
   it('a note written between tools sits between the segments; the NEXT segment is live', () => {
@@ -505,7 +469,6 @@ describe('stepLabel — a Bash step is relabelled only when ALL of it only reads
   });
   it.each([
     'grep -l foo src | xargs rm',
-    'sed -i s/a/b/ f.ts',
     'find . -name "*.tmp" -delete',
     'sort -o out.txt in.txt',
     'cat $(ls -t logs | head -1)',
@@ -519,6 +482,9 @@ describe('stepLabel — a Bash step is relabelled only when ALL of it only reads
     ['echo hi >> notes.md', 'notes.md'],
   ])('%s writes a file: an edit of %s (counted as changed)', (cmd, object) => {
     expect(label(cmd)).toMatchObject({ verb: 'edit', object });
+  });
+  it('an in-place sed of one file is an edit of that file (turnView.codexVerbs)', () => {
+    expect(label('sed -i s/a/b/ f.ts')).toMatchObject({ verb: 'edit', object: 'f.ts' });
   });
   it('a script behind a writing pipeline keeps its short name', () => {
     expect(label('python3 scripts/x.py --run > out.log')).toMatchObject({ verb: 'run', object: 'x.py' });
@@ -762,10 +728,9 @@ describe('isGateBlock — only a gate verdict of BLOCK', () => {
 });
 
 describe('midWork — a compacted / resumed tail', () => {
-  it('is on the view; such a turn has no intent thought', () => {
+  it('is on the view', () => {
     const tail = deriveTurnView([tr('a'), { type: 'thinking', thinking: 'continuing the fix' } as ContentBlock, tu('b', 'Running: ls'), tx('done')], false);
     expect(tail.midWork).toBe(true);
-    expect(tail.units.some((u) => u.kind === 'thought' && u.intent)).toBe(false);
     expect(deriveTurnView([tu('b', 'Running: ls'), tx('done')], false).midWork).toBe(false);
   });
 });

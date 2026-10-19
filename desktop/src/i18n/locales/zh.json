@@ -251,7 +251,6 @@
     "turn": {
       "thinking": "思考中",
       "readTimes": "{{count}} 次",
-      "foldCount": "{{tool}} ×{{count}}",
       "nowUsing": "正在 {{tool}}",
       "subAgentStatus": {
         "failed": "失败",
@@ -270,14 +269,12 @@
         "ariaUnfinished": "Pipeline 阶段 {{stage}} 本轮未完成",
         "ariaRunning": "Pipeline 阶段 {{stage}} 进行中",
         "position": "第 {{position}}/{{total}} 阶段",
-        "next": "接下来 {{stages}}"
+        "round": "第 {{n}} 轮",
+        "earlier": "之前已完成"
       },
       "failedOne": "失败",
       "result": "结果",
       "thisTurnChanged": "本轮改了",
-      "run": {
-        "stages": "{{count}} 个阶段"
-      },
       "attention": {
         "title": "待你确认",
         "heading": "待你确认 · {{count}} 项",
@@ -306,7 +303,14 @@
         "thoughts_one": "{{count}} 条思考",
         "thoughts_other": "{{count}} 条思考"
       },
-      "intent": "Intent"
+      "pipeline": {
+        "label": "Pipeline",
+        "gate2": "Gate 2 {{verdict}}"
+      },
+      "explored": "浏览了",
+      "showCommand": "显示命令",
+      "thought": "思考",
+      "times": "×{{count}}"
     },
     "nextSteps": {
       "label": "下一步",

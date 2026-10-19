@@ -3,16 +3,14 @@
  *
  * What is tested: the pure `groupWork(units, isStreaming, opts)` pass over the units
  * `deriveTurnView` produces.
- * - FIRST level: the intent, WORKING / WORKED blocks, stage rows, interrupts, the
- *   result. A thought, a note or a landmark is never first level on its own.
+ * - FIRST level: the opening restatement, WORKING / WORKED blocks, stage rows,
+ *   interrupts, the result. A thought, a note or a landmark is never first level on
+ *   its own (there is no intent thought, chat display v8).
  * - A block is EVERYTHING between two first-level items: thoughts, notes, landmarks
  *   and process segments, in stream order.
- * - `exclude` (the intent restatement) and the intent thought (`keepIntent`) stay
- *   first level; with keepIntent false the intent thought is an ordinary member.
+ * - `exclude` (the opening restatement) stays first level.
  * - While streaming only the last block is live; an empty live block holds the
  *   spinner after a stage row; ids survive the stream-end reconcile.
- * - The intent rule `deriveTurnView` owns (first >=160-char thought within two tool
- *   calls, else the first thought before any) still decides which thought that is.
  *
  * Fixtures mirror the persisted shape (tool_use + text + thinking; results while live).
  */
@@ -35,10 +33,10 @@ const memberShape = (g: WorkGroup) => g.members.map((m) => (m.kind === 'process'
 const shape = (items: WorkItem[]) => items.map((i) => (i.kind === 'group' ? `G(${memberShape(i)})` : i.kind));
 
 describe('groupWork — one block between first-level items', () => {
-  it('thoughts, notes and tool calls between the intent and the answer are ONE block, in order', () => {
+  it('thoughts, notes and tool calls before the answer are ONE block, in order (the opening thought too)', () => {
     const v = deriveTurnView([th(LONG), tu('a', 'Running: ls'), tx('found the store'), th('next the reader'),
       tu('b', 'Reading /r/a.ts', 'Read', 'read'), th('so it is the reconcile'), tu('c', 'Running: make'), tx('Done.')], false);
-    expect(shape(groupWork(v.units, false))).toEqual(['thought', 'G(p1ntp1tp1)', 'outcome']);
+    expect(shape(groupWork(v.units, false))).toEqual(['G(tp1ntp1tp1)', 'outcome']);
   });
 
   it('a note or a thought never makes a first-level item of its own', () => {
@@ -66,18 +64,17 @@ describe('groupWork — one block between first-level items', () => {
     expect(shape(groupWork(v.units, false))).toEqual(['G(p1)', 'stage', 'G(p1)', 'outcome']);
   });
 
-  it('the excluded restatement stays first level; with another intent source the opening thought is a member', () => {
+  it('the excluded restatement stays first level; the opening thought is a member of the work', () => {
     const v = deriveTurnView([th('plan'), tx('I read it as: fix the cache.'), tu('a', 'Running: ls'), tx('done')], false);
     const note = v.units.find((u) => u.kind === 'note')!;
-    // the thought before the restatement joins the work it led to, after the intent
-    expect(shape(groupWork(v.units, false, { exclude: note, keepIntent: false }))).toEqual(['note', 'G(tp1)', 'outcome']);
-    expect(shape(groupWork(v.units, false, { exclude: note }))).toEqual(['thought', 'note', 'G(p1)', 'outcome']);
+    // the thought before the restatement joins the work it led to
+    expect(shape(groupWork(v.units, false, { exclude: note }))).toEqual(['note', 'G(tp1)', 'outcome']);
   });
 
   it('while streaming (mergeLead false) the thought before the restatement keeps its place above it', () => {
     const v = deriveTurnView([th('plan'), tx('I read it as: fix the cache.'), tu('a', 'Running: ls')], true);
     const note = v.units.find((u) => u.kind === 'note')!;
-    expect(shape(groupWork(v.units, true, { exclude: note, keepIntent: false, mergeLead: false }))).toEqual(['G(t)', 'note', 'G(p1)']);
+    expect(shape(groupWork(v.units, true, { exclude: note, mergeLead: false }))).toEqual(['G(t)', 'note', 'G(p1)']);
   });
 });
 
@@ -101,7 +98,7 @@ describe('groupWork — the answer-so-far while streaming (option B)', () => {
 
   it('a thoughts-only block above an answer is not held open; nor anything once the turn is over', () => {
     const v = deriveTurnView([th('hm'), tx('Here is the answer.')], true);
-    expect(groupsOf(groupWork(v.units, true, { holdLiveAboveAnswer: true, keepIntent: false }))[0].live).toBe(false);
+    expect(groupsOf(groupWork(v.units, true, { holdLiveAboveAnswer: true }))[0].live).toBe(false);
     const done = deriveTurnView([tu('a', 'Running: ls'), tr('a'), tx('Done.')], false);
     expect(groupsOf(groupWork(done.units, false, { holdLiveAboveAnswer: true }))[0].live).toBe(false);
   });
@@ -153,11 +150,19 @@ describe('groupWork — live and stable ids', () => {
     expect(ids(live, true)).toEqual(ids(done, false));
   });
 
-  it('when the intent moves to a later thought the block keeps its id', () => {
+  it('a block keeps its id as later thoughts and calls join it', () => {
     const real = `The ask is to fix the reconcile race in the store. ${'x'.repeat(160)}`;
     const live = deriveTurnView([th('Let me look at the image first.'), tu('a', 'Reading /r/a.png', 'Read', 'read'), tr('a'), th(real)], true);
     const done = deriveTurnView([th('Let me look at the image first.'), tu('a', 'Reading /r/a.png', 'Read', 'read'), tr('a'), th(real), tu('b', 'Running: ls')], true);
     expect(groupsOf(groupWork(done.units, true))[0].id).toBe(groupsOf(groupWork(live.units, true))[0].id);
+  });
+
+  it('a thinking-only block keeps its id when its first tool call lands (no remount: the thought would fold on the spot)', () => {
+    const ids = (blocks: ContentBlock[], s: boolean) => groupsOf(groupWork(deriveTurnView(blocks, s).units, s)).map((x) => x.id);
+    const thinking = ids([th('weighing the two paths')], true);
+    expect(thinking).toHaveLength(1);
+    expect(ids([th('weighing the two paths'), tu('a', 'Running: ls')], true)).toEqual(thinking);
+    expect(ids([th('weighing the two paths'), tu('a', 'Running: ls'), tr('a'), tx('done')], false)).toEqual(thinking);
   });
 
   it('a finished turn has no live block', () => {

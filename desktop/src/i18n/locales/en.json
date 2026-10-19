@@ -251,7 +251,6 @@
     "turn": {
       "thinking": "Thinking",
       "readTimes": "{{count}}×",
-      "foldCount": "{{tool}} ×{{count}}",
       "nowUsing": "now {{tool}}",
       "subAgentStatus": {
         "failed": "failed",
@@ -270,14 +269,12 @@
         "ariaUnfinished": "Pipeline stage {{stage}} not finished in this turn",
         "ariaRunning": "Pipeline stage {{stage}} in progress",
         "position": "stage {{position}} of {{total}}",
-        "next": "next {{stages}}"
+        "round": "round {{n}}",
+        "earlier": "done earlier"
       },
       "failedOne": "failed",
       "result": "Result",
       "thisTurnChanged": "This turn changed",
-      "run": {
-        "stages": "{{count}} stages"
-      },
       "attention": {
         "title": "For you to check",
         "heading": "For you to check · {{count}}",
@@ -306,7 +303,14 @@
         "thoughts_one": "{{count}} thought",
         "thoughts_other": "{{count}} thoughts"
       },
-      "intent": "Intent"
+      "pipeline": {
+        "label": "Pipeline",
+        "gate2": "Gate 2 {{verdict}}"
+      },
+      "explored": "Explored",
+      "showCommand": "Show the command",
+      "thought": "Thought",
+      "times": "×{{count}}"
     },
     "nextSteps": {
       "label": "Next steps",

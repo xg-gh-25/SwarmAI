@@ -36,7 +36,8 @@ import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useSta
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
-import { deriveTurnView, toolCall } from '../turnView';
+import { deriveTurnView, toolRow } from '../turnView';
+import { pathTail } from './WorkGroup';
 import {
   ANCHOR_PROPS, activationLanding, anchorChainFor, anchorDelta, isToggleClick, pickAnchor,
   REPLY_TOP_MARGIN, sentMessageId, tailErrorId,
@@ -521,10 +522,12 @@ function TabViewImpl({
     const live = units[units.length - 1];
     const step = live?.kind === 'process' ? live.live?.step : undefined;
     if (!step) return null;
-    // The same real call the running tool row shows: tool + command, never translated.
-    const call = toolCall(step.block);
-    return call.text && call.text !== call.tool ? `${call.tool} ${call.text}` : call.tool;
-  }, [isStreaming, messages, t]);
+    // The running tool row's own words (Codex-style verb + object, never translated);
+    // the tooltip says the whole command.
+    const row = toolRow(step.block);
+    const object = row.path ? pathTail(row.path) : row.object;
+    return { text: `${row.verb} ${object}`.trim(), title: `${row.verb} ${row.command || object}`.trim() };
+  }, [isStreaming, messages]);
 
   // Last assistant message index — used for Save-to-Memory button placement
   // and to scope streaming indicators to the final assistant bubble.
@@ -768,9 +771,9 @@ function TabViewImpl({
                           hover:border-[var(--color-border)] hover:text-[var(--color-text-secondary)]
                           transition-colors cursor-pointer">
             <Spinner size="sm" />
-            <span data-testid="streaming-pill-text" className="text-xs font-medium tabular-nums truncate min-w-0" title={liveAction ?? undefined}>
+            <span data-testid="streaming-pill-text" className="text-xs font-medium tabular-nums truncate min-w-0" title={liveAction?.title}>
               {liveAction
-                ? tf(t, 'chat.turn.backToLatestAction', '{{action}} · back to latest', { action: liveAction })
+                ? tf(t, 'chat.turn.backToLatestAction', '{{action}} · back to latest', { action: liveAction.text })
                 : tf(t, 'chat.turn.backToLatestThinking', 'Thinking · back to latest')}
             </span>
           </button>

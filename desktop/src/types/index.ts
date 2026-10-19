@@ -368,6 +368,10 @@ export interface PipelineRunContent {
   requirement: string;
   /** The stage in progress when the run was announced (a resumed run, mid-way). */
   current?: string | null;
+  /** The run's plan as the chat lists it: every stage and every gate the profile
+   *  runs, in order (backend pipeline_stage_events.checklist). Empty until EVALUATE
+   *  sets the profile; a later block of the same run then carries it. */
+  checklist?: Array<{ stage: string; gate: boolean }>;
   at: string;
 }
 

@@ -10,7 +10,7 @@
  *   chevron (it holds no work)
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
@@ -41,7 +41,11 @@ const row = (stage: string, at: string, over: Partial<PipelineStageContent> = {}
 
 function renderView(content: ContentBlock[]) {
   const message: Message = { id: 'm1', role: 'assistant', content, timestamp: '2026-10-19T09:00:00+08:00', isError: false };
-  return render(<ToastProvider><AssistantMessageView message={message} isStreaming={false} isLastAssistant /></ToastProvider>);
+  const out = render(<ToastProvider><AssistantMessageView message={message} isStreaming={false} isLastAssistant /></ToastProvider>);
+  // A finished pipeline turn's block starts folded (chat display v8): open it to see its lines.
+  const head = screen.queryByTestId('pipeline-head');
+  if (head && head.getAttribute('aria-expanded') === 'false') fireEvent.click(head);
+  return out;
 }
 
 const CIRCLED = /[①-⑳]/;
@@ -99,13 +103,12 @@ describe('PipelineStageRow — a started stage is one row from start to end (AC2
     return <ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} isLastAssistant /></ToastProvider>;
   };
 
-  it('running: "BUILD · in progress · stage 4 of 8"; ended: the same element, now with counts and its time', () => {
+  it('running: "BUILD · in progress" (its place in the plan is the block header\'s k/N); ended: the same element, now with counts and its time', () => {
     const before = [start('build', '2026-10-19T09:01:00+08:00'), bash('a'), tr('a'), bash('b')];
     const { rerender } = render(view(before, true));
     const live = screen.getByTestId('pipeline-stage-live');
     expect(live.textContent).toContain('BUILD');
     expect(live.textContent).toContain('in progress');
-    expect(live.textContent).toContain('stage 4 of 8');
     rerender(view([...before, tr('b'), row('build', '2026-10-19T09:03:00+08:00'), bash('c')], true));
     const done = screen.getByTestId('pipeline-stage-row');
     expect(done).toBe(live);

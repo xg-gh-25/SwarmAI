@@ -5,12 +5,13 @@
  * deriveTurnView → groupWork):
  * - item 3: a tool row never cuts a file name; an Agent row shows its whole task
  *   description (it wraps) and no verdict / result text
- * - item 4: tool rows are a step quieter than thoughts (tool name muted, target dim,
+ * - item 4: tool rows are a step quieter than thoughts (verb muted, target dim,
  *   12px); in a LIVE block nothing disappears when the next item arrives: 2s later an
- *   older thought is one line and finished calls fold (useSettled)
- * - item 5: two or more consecutive finished tool rows fold into one "Bash ×4 · Read ×2"
- *   row that opens to one row per call; a running, failed or Agent row never folds,
- *   and one finished row alone is not folded
+ *   older thought is one "Thought" line and finished exploration calls merge (useSettled)
+ * - item 5 (chat display v8, Codex-style): adjacent finished read / search / list calls
+ *   are one "Explored" row that opens to one row per call; identical consecutive other
+ *   calls are one "×N" row; a running, failed or Agent row never folds, and one
+ *   finished row alone is not folded
  * - item 7: an Agent row is a button opening its detail — task, result, steps — and
  *   says its duration once it finished (its elapsed while it runs)
  */
@@ -39,7 +40,7 @@ function groupsOf(content: ContentBlock[], streaming = false): WorkGroup[] {
 function show(g: WorkGroup, expanded = true) {
   return render(
     <WorkGroupView group={g} expanded={expanded} onToggle={() => {}} thoughtOpen={() => undefined}
-      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} compact />,
+      onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} />,
   );
 }
 
@@ -83,67 +84,84 @@ describe('item 4 — tool rows are quieter, live blocks show the newest thought'
     try {
       // mounted with the thought as the newest item (an item already followed at mount is settled)
       const head = [tu('z', 'Running: date'), res('z'), th('first idea\nsecond line\nthird\nfourth')];
+      const FIRST = 'first idea\nsecond line\nthird\nfourth';
       const live = (c: ContentBlock[]) => groupsOf(c, true)[0];
       const r = render(
         <WorkGroupView group={live(head)} onToggle={() => {}} thoughtOpen={() => undefined}
           onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} />,
       );
-      const next = [...head, tu('a', 'Running: ls'), res('a'), tu('b', 'Running: pwd'), res('b'), th('newest idea')];
+      const next = [...head, tu('a', 'Running: sed -n 1,9p a.ts'), res('a'), tu('b', 'Running: cat b.ts'), res('b'), th('newest idea')];
       r.rerender(
         <WorkGroupView group={live(next)} onToggle={() => {}} thoughtOpen={() => undefined}
           onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} />,
       );
       // the same render the new items arrived in: every thought and call still shown as before
       expect(screen.getAllByTestId('thought')).toHaveLength(2);
-      expect(screen.getAllByTestId('thought-text')[0].style.webkitLineClamp).toBe('3');
-      expect(screen.queryByTestId('step-fold')).toBeNull();
+      expect(screen.getAllByTestId('thought-text')[0].textContent).toBe(FIRST); // in full
+      expect(screen.queryByTestId('step-explored')).toBeNull();
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
-      expect(screen.getAllByTestId('thought')).toHaveLength(2); // collapsed, never hidden
-      expect(screen.getAllByTestId('thought-text')[0].style.webkitLineClamp).toBe('1');
-      expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×2');
+      // the older thought sat between two calls: it is inside the Explored row now
+      // (folded with it, never dropped); the newest one is still whole
+      expect(screen.getAllByTestId('thought-text').map((e) => e.textContent)).toEqual(['newest idea']);
+      const explored = screen.getByTestId('step-explored');
+      expect(explored.textContent).toContain('a.ts, b.ts');
+      fireEvent.click(within(explored).getAllByRole('button')[0]);
+      expect(within(explored).getAllByTestId('thought')).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
   });
 });
 
-describe('item 5 — adjacent finished calls fold', () => {
-  const six = [
-    tu('a', 'Running: ls'), res('a'), tu('b', 'Running: pwd'), res('b'),
-    tu('c', 'Reading /r/one.ts', 'Read'), res('c'), tu('d', 'Running: git status'), res('d'),
-    tu('e', 'Reading /r/two.ts', 'Read'), res('e'), tu('f', 'Running: make'), res('f'),
+describe('item 5 — adjacent finished calls fold (Codex-style)', () => {
+  const explore = [
+    tu('a', 'Running: ls src'), res('a'), tu('c', 'Reading /r/one.ts', 'Read'), res('c'),
+    tu('d', 'Running: grep -rn foo src'), res('d'), tu('e', 'Reading /r/two.ts', 'Read'), res('e'),
   ];
 
-  it('six finished calls are one "Bash ×4 · Read ×2" row that opens to six rows', () => {
-    const [g] = groupsOf(six);
+  it('adjacent exploration calls are one Explored row that opens to one row per call', () => {
+    const [g] = groupsOf(explore);
+    show(g);
+    const ex = screen.getByTestId('step-explored');
+    expect(ex.textContent).toContain('Explored');
+    expect(ex.textContent).toContain('one.ts, two.ts');
+    expect(ex.textContent).toContain('"foo"');
+    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
+    fireEvent.click(within(ex).getByRole('button'));
+    expect(screen.getAllByTestId('step-row')).toHaveLength(4);
+  });
+
+  it('identical consecutive other calls are one "×N" row; different ones stay rows', () => {
+    const [g] = groupsOf([
+      tu('a', 'Running: make test'), res('a'), tu('b', 'Running: make test'), res('b'), tu('c', 'Running: make test'), res('c'),
+      tu('d', 'Running: make lint'), res('d'),
+    ]);
     show(g);
     const fold = screen.getByTestId('step-fold');
-    expect(fold.textContent).toContain('Bash ×4 · Read ×2');
-    expect(screen.queryAllByTestId('step-row')).toHaveLength(0);
-    fireEvent.click(within(fold).getByRole('button'));
-    expect(screen.getAllByTestId('step-row')).toHaveLength(6);
+    expect(fold.textContent).toContain('make test');
+    expect(fold.textContent).toContain('×3');
+    expect(screen.getAllByTestId('step-row')).toHaveLength(1); // make lint
   });
 
   it('a running call stays its own row after the fold; one finished call alone is not folded', () => {
-    const [live] = groupsOf([...six, tu('g', 'Running: npm test')], true);
+    const [live] = groupsOf([...explore, tu('g', 'Running: npm test')], true);
     show(live);
-    expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×4 · Read ×2');
-    const rows = screen.getAllByTestId('step-row');
-    expect(rows.map((r) => r.dataset.status)).toEqual(['pending']);
-    const [one] = groupsOf([tu('a', 'Running: ls'), res('a')]);
+    expect(screen.getByTestId('step-explored')).toBeTruthy();
+    expect(screen.getAllByTestId('step-row').map((r) => r.dataset.status)).toEqual(['pending']);
+    const [one] = groupsOf([tu('a', 'Running: cat a.ts'), res('a')]);
     const r2 = show(one);
-    expect(within(r2.container).queryByTestId('step-fold')).toBeNull();
+    expect(within(r2.container).queryByTestId('step-explored')).toBeNull();
   });
 
   it('a failed call and an Agent call break the fold and stay rows', () => {
     const [g] = groupsOf([
-      tu('a', 'Running: ls'), res('a'), tu('b', 'Running: pwd'), res('b'),
-      tu('x', 'Running: false'), res('x', true),
+      tu('a', 'Running: cat a.ts'), res('a'), tu('b', 'Running: cat b.ts'), res('b'),
+      tu('x', 'Running: cat x.ts'), res('x', true),
       tu('ag', `Agent: ${DESC}`, 'Agent'), res('ag', false, { subagent: { status: 'completed', toolUses: 2, durationMs: 4000, summary: 'ok' } }),
-      tu('c', 'Running: ls'), res('c'),
+      tu('c', 'Running: cat c.ts'), res('c'),
     ]);
     show(g);
-    expect(screen.getAllByTestId('step-fold')).toHaveLength(1);
+    expect(screen.getAllByTestId('step-explored')).toHaveLength(1);
     expect(screen.getAllByTestId('step-row').map((r) => r.dataset.tool)).toEqual(['Bash', 'Agent', 'Bash']);
     expect(screen.getAllByTestId('step-row')[0].dataset.status).toBe('error');
   });
@@ -183,13 +201,13 @@ describe('item 5 inside item 7 — a sub-agent\'s own calls fold the same way', 
     const subRes = (id: string) =>
       ({ type: 'tool_result', toolUseId: id, content: 'x', isError: false, outcome: 'ok', parentToolUseId: 'ag' }) as ContentBlock;
     const [g] = groupsOf([
-      tu('ag', `Agent: ${DESC}`, 'Agent'), sub('s1', 'ls'), subRes('s1'), sub('s2', 'pwd'), subRes('s2'), sub('s3', 'id'), subRes('s3'),
+      tu('ag', `Agent: ${DESC}`, 'Agent'), sub('s1', 'cat a.ts'), subRes('s1'), sub('s2', 'cat b.ts'), subRes('s2'), sub('s3', 'grep -n x c.ts'), subRes('s3'),
       res('ag', false, { subagent: { status: 'completed', toolUses: 3, durationMs: 9000, summary: 'ok' } }),
     ]);
     show(g);
     fireEvent.click(screen.getByTestId('agent-toggle'));
     const detail = screen.getByTestId('agent-detail');
-    expect(within(detail).getByTestId('step-fold').textContent).toContain('Bash ×3');
+    expect(within(detail).getByTestId('step-explored').textContent).toContain('a.ts, b.ts');
   });
 });
 
@@ -214,22 +232,22 @@ describe('finding 5 — a running sub-agent shows its newest calls', () => {
 });
 
 describe('round-3 N1 — a call that finishes late does not fold the moment it finishes', () => {
-  it('parallel calls: A finishes after B started; A stays a row for 2s, then joins the fold', () => {
+  it('parallel calls: A finishes after B started; A stays a row for 2s, then joins the Explored row', () => {
     vi.useFakeTimers();
     try {
       const view = (c: ContentBlock[]) => (
         <WorkGroupView group={groupsOf(c, true)[0]} onToggle={() => {}} thoughtOpen={() => undefined}
           onThoughtToggle={() => {}} renderNote={(text, key) => <p key={key}>{text}</p>} />
       );
-      const start = [tu('x', 'Running: ls'), res('x'), tu('a', 'Running: sleep 30'), tu('b', 'Running: make')];
+      const start = [tu('x', 'Running: cat x.ts'), res('x'), tu('a', 'Running: cat a.ts'), tu('b', 'Running: make')];
       const r = render(view(start));
       act(() => { vi.advanceTimersByTime(30_000); }); // A has long been followed by B
       r.rerender(view([...start, res('a')])); // A finishes now
       const rowsNow = screen.getAllByTestId('step-row').map((n) => n.dataset.status);
       expect(rowsNow).toContain('done'); // A is still its own row
-      expect(screen.queryByTestId('step-fold')).toBeNull();
+      expect(screen.queryByTestId('step-explored')).toBeNull();
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
-      expect(screen.getByTestId('step-fold').textContent).toContain('Bash ×2');
+      expect(screen.getByTestId('step-explored').textContent).toContain('x.ts, a.ts');
     } finally {
       vi.useRealTimers();
     }

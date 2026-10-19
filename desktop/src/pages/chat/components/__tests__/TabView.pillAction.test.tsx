@@ -1,9 +1,9 @@
 /**
- * TabView "back to latest" pill — says what runs now (chat display v7.1).
+ * TabView "back to latest" pill — says what runs now (chat display v8).
  *
  * What is tested (real TabView, MessageBubble mocked): once the user has scrolled
- * away from the bottom, the pill repeats the live card's title — "Reading x.ts ·
- * back to latest" — never a step count ("step 92") or a second timer that would
+ * away from the bottom, the pill repeats the running row's words — "Read x.ts ·
+ * back to latest", its tooltip the whole command — never a step count ("step 92") or a second timer that would
  * disagree with the card's (design-judgment Surface 6: one fact, once). With no
  * step running it says "Thinking · back to latest".
  */
@@ -80,7 +80,7 @@ describe('TabView pill — the live action, once', () => {
     scrollAway(container);
     const text = getByTestId('streaming-pill-text');
     expect(text.className).toContain('truncate');
-    expect(text.getAttribute('title')).toBe(`Bash ${long}`);
+    expect(text.getAttribute('title')).toBe(`Ran ${long}`);
   });
 
   it('between steps it says Thinking', async () => {

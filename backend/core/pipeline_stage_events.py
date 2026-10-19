@@ -47,8 +47,14 @@ context_injector treats them as non-conversational, and every other content read
 selects text/tool blocks by type, so a backend-observed row never re-enters a model
 prompt as something the assistant said.
 
+The run's plan as the chat shows it (a checklist of every planned stage and gate) is
+also the backend's: ``checklist(profile)`` places the gates of
+``pipeline_profiles.PROFILE_GATES`` next to the stages they guard, ``run_block``
+carries it, and ``new_stage_blocks`` emits a refreshed ``pipeline_run`` block when the
+run's profile is first set or changes (a run is created before EVALUATE picks it).
+
 @exports parse_watched_run_id, read_stage_state, new_stage_blocks, current_stage,
-         STAGE_ORDINALS, SUMMARY_MAX, BLOCK_TYPE
+         checklist, run_block, STAGE_ORDINALS, SUMMARY_MAX, BLOCK_TYPE
 """
 from __future__ import annotations
 
@@ -58,7 +64,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from .pipeline_profiles import get_profile_stages, is_relaxed_profile
+from .pipeline_profiles import get_profile_stages, profile_gates
 from .project_registry import get_swarmws
 
 logger = logging.getLogger(__name__)
@@ -319,7 +325,7 @@ def new_stage_blocks(
     Gate 1 (④) runs between plan and build but has no stage record of its own: its
     verdict is written onto the build (or goal_cycle) record, usually before that
     stage finishes. So a newly recorded ``gate1_verdict`` becomes its own ④ row, and
-    on a strict profile plan's ``next`` is ④ — the live line says GATE 1 while the
+    on a profile that runs Gate 1 (``PROFILE_GATES``) plan's ``next`` is ④ — the live line says GATE 1 while the
     skeptic runs, then the gate row hands over to BUILD. Gate 0 and Gate 2 rows come
     with the stage that records them (see ``_gate0_row_verdict`` /
     ``_gate2_row_verdict``), so they appear exactly once, when that stage finishes."""
@@ -340,8 +346,14 @@ def new_stage_blocks(
         return next((s for s in order[i:]
                      if _status(after, s) not in ("completed", "skipped")), None)
 
-    strict = not is_relaxed_profile(profile)
+    runs_gate1 = "gate1" in profile_gates(profile)
     blocks: list[dict[str, Any]] = []
+    # The run's plan changed (EVALUATE set the profile, or a replan changed it): the
+    # turn's pipeline_run block was written without it, so write it again.
+    if after.get("profile") and before is not None and before.get("profile") != after.get("profile"):
+        rb = run_block(run_id, after, at)
+        if rb:
+            blocks.append(rb)
 
     def _gate_row(stage: str, name: str, verdict: str, nxt: Optional[str]) -> dict:
         return {"type": BLOCK_TYPE, "runId": run_id, "stage": stage,
@@ -375,7 +387,7 @@ def new_stage_blocks(
             gate2 = _gate2_row_verdict(after)
             if gate2:
                 blocks.append(_gate_row("gate2", "GATE 2", gate2, "deliver"))
-        if (name == "plan" and strict and nxt in ("build", "goal_cycle")
+        if (name == "plan" and runs_gate1 and nxt in ("build", "goal_cycle")
                 and not _gate1_recorded(after, nxt)):
             nxt = "gate1"
         blocks.append({
@@ -423,10 +435,12 @@ def new_stage_blocks(
 #
 # Two more backend-written blocks, both persisted and both non-conversational
 # (context_injector _TOOL_ONLY_TYPES):
-#   pipeline_run       — once per run per session, the first time a call names it
-#                        (normally ``run-create`` itself, via RUN_CREATE_WATCH):
-#                        the run's requirement (the AI's restatement of the ask —
-#                        the turn's alignment) and its planned stages.
+#   pipeline_run       — once per run per TURN, the first time a call names it
+#                        (normally ``run-create`` itself, via RUN_CREATE_WATCH),
+#                        and again when the run's profile is set or changes
+#                        (new_stage_blocks): the run's requirement, its planned
+#                        stages, its checklist (stages + gates) and the stage in
+#                        progress (``current``).
 #   pipeline_attention — with the DELIVER row: only what needs a human judgement,
 #                        from STRUCTURED fields (never the model's prose): questions
 #                        the pipeline answered itself, assumed requirements, gate
@@ -454,6 +468,26 @@ def _clip(value: object, limit: int = ITEM_TEXT_MAX) -> Optional[str]:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def checklist(profile: Optional[str]) -> list[dict[str, Any]]:
+    """The run's plan as the chat lists it: every stage of the profile and every gate
+    it runs, in order — gate0 after evaluate, gate1 before build / goal_cycle, gate2
+    before deliver (where their rows land, see new_stage_blocks). [] while the run has
+    no profile yet (EVALUATE has not picked it)."""
+    if not profile:
+        return []
+    gates = profile_gates(profile)
+    out: list[dict[str, Any]] = []
+    for stage in get_profile_stages(profile):
+        if stage in ("build", "goal_cycle") and "gate1" in gates:
+            out.append({"stage": "gate1", "gate": True})
+        if stage == "deliver" and "gate2" in gates:
+            out.append({"stage": "gate2", "gate": True})
+        out.append({"stage": stage, "gate": False})
+        if stage == "evaluate" and "gate0" in gates:
+            out.append({"stage": "gate0", "gate": True})
+    return out
+
+
 def run_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
     """The run's alignment block, or None when run.json says nothing to show."""
     if not state:
@@ -467,8 +501,8 @@ def run_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str,
     # announced again in a new session mid-run; without this the chat would show its
     # FIRST stage as running.
     return {"type": RUN_BLOCK_TYPE, "runId": run_id, "profile": profile,
-            "stages": stages, "requirement": requirement, "current": current_stage(state),
-            "at": at}
+            "stages": stages, "checklist": checklist(profile), "requirement": requirement,
+            "current": current_stage(state), "at": at}
 
 
 def _artifact(run_dir: Optional[str], record: Optional[dict]) -> dict:

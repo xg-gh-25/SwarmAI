@@ -2,10 +2,10 @@
  * Thoughts as narration + at most two disclosure levels (XG 2026-10-18).
  *
  * What is tested (real AssistantMessageView + turnView, leaf contexts mocked):
- * - how the ask was read is said once: pipeline requirement > a restatement written
- *   before any work, else the opening thought; exactly one carries "Intent" 
- * - there is no "no restatement" note: the intent thought is the place to check
- *   how the ask was read (chat display v7.11)
+ * - how the ask was read: the restatement written before any work, plain text at
+ *   the top (no "Intent" label, never a thought or the run's requirement — chat
+ *   display v8); with none, nothing is promoted out of the work
+ * - there is no "no restatement" note
  * - a pipeline stage's body lays its groups out open: title + content, so a stage
  *   is one click from its strips (two levels at most)
  * - a sub-agent is one strip; its own steps are not a level of their own
@@ -29,9 +29,16 @@ vi.mock('../../../../contexts/HealthContext', () => ({
   }),
 }));
 
-/** Open every folded run of finished calls ("Bash ×4 · Read ×2"), so each call is a row. */
+/** Open every folded run of finished calls (an Explored row, a "×N" row), so each call is a row. */
 const expandFolds = (root: HTMLElement = document.body) => {
-  for (const f of within(root).queryAllByTestId('step-fold')) fireEvent.click(within(f).getByRole('button'));
+  for (const f of [...within(root).queryAllByTestId('step-fold'), ...within(root).queryAllByTestId('step-explored')]) {
+    fireEvent.click(within(f).getAllByRole('button')[0]);
+  }
+};
+/** A finished thought is one "Thought" line: open it and return its text. */
+const openThought = (root: HTMLElement = document.body) => {
+  fireEvent.click(within(root).getByTestId('thought-toggle'));
+  return within(root).getByTestId('thought-text').textContent;
 };
 const tu = (id: string, summary = 'Running: ls', name = 'Bash', category = 'bash', parent?: string): ContentBlock =>
   ({ type: 'tool_use', id, name, summary, category, ...(parent ? { parentToolUseId: parent } : {}) }) as ContentBlock;
@@ -50,56 +57,57 @@ const viewOf = (c: ContentBlock[], streaming = false) => (
   <ToastProvider><AssistantMessageView message={msg(c)} isStreaming={streaming} /></ToastProvider>
 );
 
-describe('how the ask was read is said once', () => {
-  it('with nothing else, the opening thought is the Intent', () => {
+describe('how the ask was read: the restatement, plain text (chat display v8)', () => {
+  it('with no restatement, the opening thought stays in the work: no lead item, no label', () => {
     render(viewOf([th('Read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
-    expect(screen.getByTestId('thought').textContent).toContain('Intent');
+    expect(screen.queryAllByText('Intent')).toHaveLength(0);
     expect(screen.queryByTestId('turn-intent')).toBeNull();
+    expect(screen.queryByTestId('thought')).toBeNull(); // folded inside WORKED
   });
 
-  it('a restatement written before the work is the Intent; the opening thought joins the work', () => {
+  it('a restatement written before the work is plain text at the top; the opening thought joins the work', () => {
     render(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
     expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
-    expect(screen.getAllByText('Intent')).toHaveLength(1);
+    expect(screen.queryAllByText('Intent')).toHaveLength(0);
     expect(screen.queryByTestId('thought')).toBeNull(); // folded inside WORKED
     fireEvent.click(screen.getByTestId('group-toggle'));
-    expect(screen.getByTestId('thought').textContent).toBe('plan'); // no second Intent label
-    expect(screen.getAllByText('Intent')).toHaveLength(1);
+    expect(openThought()).toBe('plan');
   });
 
-  it('streaming think → restate → first tool: the thought never moves or changes label', () => {
+  it('streaming think → restate → first tool: the thought never moves', () => {
     const { rerender } = render(viewOf([th('plan')], true));
     rerender(viewOf([th('plan'), tx('I read it as: fix the cache.')], true));
-    const pos = () => {
+    const follows = () => {
       const thought = screen.getByTestId('thought');
       const text = screen.getByText('I read it as: fix the cache.');
       // DOCUMENT_POSITION_FOLLOWING (4): the text comes after the thought
-      return { follows: !!(thought.compareDocumentPosition(text) & 4), intent: thought.dataset.intent };
+      return !!(thought.compareDocumentPosition(text) & 4);
     };
-    expect(pos()).toEqual({ follows: true, intent: 'false' });
+    expect(follows()).toBe(true);
     const before = screen.getByTestId('thought');
     rerender(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a')], true));
-    expect(pos()).toEqual({ follows: true, intent: 'false' });
+    expect(follows()).toBe(true);
     expect(screen.getByTestId('thought')).toBe(before); // same node: no remount
     expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
   });
 
-  it('a continuation pipeline turn (stage rows, no run block) has no thought Intent', () => {
+  it('a continuation pipeline turn (stage rows, no run block) has no label', () => {
     render(viewOf([stage('evaluate', 'think'), th(`The ask is to wire the cache. ${'x'.repeat(170)}`), tu('a'), tr('a'), tx('done')]));
     expect(screen.queryAllByText('Intent')).toHaveLength(0);
   });
 
-  it('a thought after the work is narration in its group, with no label', () => {
+  it('a thought after the work is narration in its group', () => {
     render(viewOf([tx('I read it as: X.'), tu('a'), tr('a'), th('hm'), tx('done')]));
     fireEvent.click(screen.getByTestId('group-toggle'));
-    expect(screen.getByTestId('thought').textContent).toBe('hm');
-    expect(screen.getByTestId('thought').dataset.intent).toBe('false');
+    expect(openThought()).toBe('hm');
   });
 
-  it('a pipeline requirement wins over both', () => {
+  it('a pipeline turn shows its restatement, never the run requirement', () => {
     render(viewOf([th('plan'), tx('Running the pipeline.'), tu('a'), tr('a'), RUN, tx('done')]));
-    expect(screen.getAllByText('Intent')).toHaveLength(1);
-    expect(screen.getByTestId('turn-run')).toBeTruthy();
+    expect(screen.queryAllByText('Intent')).toHaveLength(0);
+    expect(screen.queryByText('Do X')).toBeNull();
+    expect(screen.queryByTestId('turn-run')).toBeNull();
+    expect(screen.getByTestId('turn-intent').textContent).toContain('Running the pipeline.');
   });
 
   it('there is no "started without restating" note, with or without an intent', () => {
@@ -120,13 +128,16 @@ describe('two levels at most', () => {
   it('an opened stage lists its items directly: no WORKED header inside a stage', () => {
     render(viewOf([tu('a'), tr('a'), tu('a2', 'Running: id'), tr('a2'), th('between'), tu('b', 'Running: pwd'), tu('b2', 'Running: make'),
       tr('b'), stage('evaluate', null), tx('done')]));
+    fireEvent.click(screen.getByTestId('pipeline-head')); // a finished pipeline block starts folded
     fireEvent.click(screen.getByTestId('pipeline-stage-row').querySelector('button')!);
     const body = screen.getByTestId('stage-body');
     expect(within(body).queryByTestId('group-toggle')).toBeNull();
-    expect(within(body).getAllByTestId('step-fold').length).toBeGreaterThan(0);
     expandFolds(body);
-    expect(within(body).getAllByTestId('step-row')).toHaveLength(4);
-    expect(within(body).getByTestId('thought-text').textContent).toBe('between');
+    const rows = within(body).getAllByTestId('step-row');
+    expect(rows).toHaveLength(4);
+    // the thought between two calls is inside the row of the call after it
+    fireEvent.click(within(rows[2]).getByTestId('row-toggle'));
+    expect(openThought(rows[2])).toBe('between');
   });
 
   it('a sub-agent is one strip; its own steps are not rows of their own', () => {
