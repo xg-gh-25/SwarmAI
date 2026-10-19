@@ -3019,11 +3019,12 @@ def _breaker_result(mode: str, reason: str) -> dict:
     return {"mode": mode, "ok": False, "circuit_breaker": {"tripped": True, "reason": reason},
             "error": "circuit breaker: " + reason,
             "action": ("stop re-running tests and stop fixing: the loop is not converging. "
-                       "Complete the CURRENT stage now with what remains (stage-complete; "
-                       "it completes degraded after 3 refusals), then DELIVER with push_ready "
-                       "false, the failing tests and this reason in attention_flags (REPORT "
-                       "§10); run-commit commits locally, marked. Do not checkpoint, do not "
-                       "ask the user. "
+                       "Complete the CURRENT stage now with what remains (stage-complete "
+                       "degrades a gate error at once), then DELIVER with push_ready false "
+                       "and this reason in attention_flags (REPORT §10). Landing is decided "
+                       "by the test evidence: while a test is red or unfinished the change "
+                       "does not land; then checkpoint with the failing tests named as the "
+                       "reason (the code stays in the run's worktree). "
                        "Operator override only: SWARM_CIRCUIT_BREAKER_FORCE=1")}
 
 

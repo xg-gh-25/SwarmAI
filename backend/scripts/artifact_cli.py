@@ -3222,6 +3222,19 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         for _e in _stage_errs or []:
                             validator_errors.append(f"[{_name}] {_e}")
 
+                _cw: list = []
+                validator_errors = _drop_unplanned_review_checks(validator_errors, run_state, _cw)
+                _degr = {str(r.get("stage")) for r in run_state.get("stages") or []
+                         if isinstance(r, dict) and isinstance(r.get("degraded"), dict)}
+                _soft = [e for e in validator_errors if e.startswith("[")
+                         and e[1:e.index("]")] in _degr and "ERRORED" not in e
+                         and "could not verify" not in e]
+                if _soft:   # already recorded as push_ready reasons: the run completes
+                    validator_errors = [e for e in validator_errors if e not in _soft]
+                    _cw.append(f"{len(_soft)} validator error(s) on degraded stage(s) "
+                               f"{sorted(_degr)} are push_ready reasons, not a stop")
+                for _w in _cw:
+                    print(json.dumps({"warning": _w}), file=sys.stderr)
                 if validator_errors:
                     print(json.dumps({
                         "error": "Cannot mark completed: pipeline validator found BLOCKING errors. "
@@ -4279,9 +4292,9 @@ def _verify_run_shas(shas: list[str], by_repo: "dict[str, list[str]]",
 # a legitimate warning cannot accidentally begin with it.
 _FAILLOUD_SENTINEL = "⛔FAILLOUD⛔ deliverable B:"
 # The report's §9 Lessons is still a placeholder: run-commit ran before the lessons
-# were seeded. Callers REFUSE the commit on it (nothing staged yet): committing the
-# code now and B later is what split 15 runs into a code commit + a REPORT-only
-# commit with the same subject — one delivery must be ONE commit (code + B).
+# were seeded. Shared-mode run-commit REFUSES the commit on it (nothing staged yet), so
+# code and B land in ONE commit. An isolated landing knows it before the first commit
+# (its precheck) and lands with push_ready false instead: tests alone decide landing.
 _ORDERING_SENTINEL = "⛔ORDER⛔ deliverable B:"
 
 
@@ -5123,7 +5136,9 @@ def _verdict_token(recorded: str) -> "str | None":
     return found[-1] if found else None
 
 
-_GAP_MARKERS = ("NOT verified", "_unverified_reason", "completed DEGRADED")
+# A degraded stage is NOT latched here: its record carries ``degraded`` and the bound
+# reads the CURRENT records, so re-completing the stage with the errors fixed clears it.
+_GAP_MARKERS = ("NOT verified", "_unverified_reason")
 
 
 def _verification_gaps_of(stage: str, warnings: "list[str]", cand_rec: dict) -> "list[dict]":
@@ -5134,9 +5149,6 @@ def _verification_gaps_of(stage: str, warnings: "list[str]", cand_rec: dict) -> 
     for w in warnings:
         if isinstance(w, str) and any(m in w for m in _GAP_MARKERS):
             out.append({"stage": stage, "why": w[:300]})
-    if isinstance(cand_rec.get("degraded"), dict):
-        out.append({"stage": stage, "why": f"completed degraded after "
-                    f"{cand_rec['degraded'].get('attempts')} refused attempts"})
     uniq, seen = [], set()
     for g in out:
         if g["why"] not in seen:
@@ -9828,8 +9840,7 @@ def _deliver_push_ready_bound(
     for rec in run_state.get("stages") or []:
         if isinstance(rec, dict) and isinstance(rec.get("degraded"), dict) \
                 and rec.get("stage") != "deliver":
-            gaps.append({"stage": rec.get("stage"), "why": "completed degraded after "
-                         f"{rec['degraded'].get('attempts')} refused attempts"})
+            gaps.append({"stage": rec.get("stage"), "why": _degrade_text(rec)})
     for g in _unverified_gates(run_state):
         gaps.append({"stage": g.split(":")[0], "why": f"{g} passed on a recorded reason"})
     if isinstance(newest, dict) and newest.get("context_unverified"):
@@ -10248,57 +10259,48 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
             + "; ".join(parts))
 
 
-STAGE_FAIL_LIMIT = 3  # 再一再二不再三: the 3rd refused stage-complete of a stage completes it degraded
-# fix the payload, the profile or the stage order (complete the earlier stage): no bypass
-_NEVER_DEGRADE = ("Input:", "Profile violation", "Stage order violation")
+# Errors that only the payload / the stage order can fix: the stage cannot be recorded
+# from a malformed input, so these still refuse stage-complete. Everything else is a
+# gate whose verdict is recorded, never a stop (see _degrade_gate_errors).
+_NEVER_DEGRADE = ("Input:", "Profile violation", "Stage order violation", "Record schema:",
+                  "files_changed:", "Stage not open:", "Validator ERRORED")
 
 
-def _degrade_after_repeated_failures(run_file: Path, stage: str, errors: "list[str]",
-                                     cand_rec: dict, artifact: "dict | None",
-                                     warnings: "list[str]") -> "list[str]":
-    """The run is autonomous: a stage whose gates refuse stage-complete again and again
-    must not park the run for a human (run_925edb0e, run_82253fe2 ended uncommitted).
-    Counts refused attempts per stage in run.json ``stage_complete_failures``. On the
-    STAGE_FAIL_LIMIT-th, the stage completes DEGRADED instead: the record carries
-    ``degraded`` (attempts + the open errors), DELIVER's push_ready is capped false
-    (_deliver_push_ready_bound), the errors land in ``attention_flags`` (REPORT §10)
-    and run-commit still commits locally, marked. Input/shape and profile errors never
-    degrade (the payload must be fixed). Returns the errors still to raise."""
+def _degrade_text(rec: dict) -> str:
+    """One line naming why a stage completed degraded (REPORT §10, push_ready reason)."""
+    d = rec.get("degraded") if isinstance(rec.get("degraded"), dict) else {}
+    errs = [str(e) for e in d.get("errors") or []]
+    head = "; ".join(e[:160] for e in errs[:3]) + (f" (+{len(errs) - 3})" if len(errs) > 3 else "")
+    return f"completed with {len(errs)} open gate error(s): {head}" if errs else "completed degraded"
+
+
+def _degrade_gate_errors(run_file: Path, stage: str, errors: "list[str]",
+                         cand_rec: dict, artifact: "dict | None",
+                         warnings: "list[str]") -> "list[str]":
+    """ONE landing decision (SOUL P5, the OS disposes deterministically): stage-complete
+    refuses only on errors the payload or the stage order must fix (``_NEVER_DEGRADE``).
+    Every other gate error — a Gate-0/1/2 model gate that did not run or left a finding
+    open, an expert that did not review, a document-shape rule — completes the stage
+    DEGRADED on the FIRST refusal: the record carries ``degraded`` (the open errors),
+    the errors land in ``attention_flags`` (REPORT §10) and DELIVER's push_ready is
+    capped false (_deliver_push_ready_bound). Whether the code lands locally is decided
+    by test evidence alone, at landing (pipeline_worktree.land_deliver). When a
+    structural error is present every error is returned, so the payload is fixed with
+    the whole list in view. Returns the errors still to raise."""
     if not errors or any(str(e).startswith(_NEVER_DEGRADE) for e in errors):
         return errors
-    from core.run_lock import update_run
-    box: dict = {}
-
-    def bump(d: dict) -> None:
-        f = d.setdefault("stage_complete_failures", {})
-        ent = f.get(stage) if isinstance(f.get(stage), dict) else {}
-        ent = {"count": int(ent.get("count") or 0) + 1, "at": _utc_now_iso(),
-               "last_errors": [str(e)[:300] for e in errors[:12]]}
-        f[stage] = ent
-        box["n"] = ent["count"]
-    try:
-        update_run(run_file, bump)
-    except Exception as e:  # noqa: BLE001 — bookkeeping must not hide the real errors
-        warnings.append(f"stage-complete failure count not recorded ({type(e).__name__})")
-        return errors
-    n = box.get("n", 0)
-    if n < STAGE_FAIL_LIMIT:
-        warnings.append(f"refused stage-complete {n}/{STAGE_FAIL_LIMIT} for {stage}: on the "
-                        f"{STAGE_FAIL_LIMIT}rd the stage completes degraded (push_ready false, "
-                        "these errors in REPORT §10) instead of stopping the run")
-        return errors
-    short = "; ".join(str(e)[:160] for e in errors[:6]) + (f" (+{len(errors) - 6})" if len(errors) > 6 else "")
-    cand_rec["degraded"] = {"attempts": n, "errors": [str(e)[:400] for e in errors[:20]]}
-    flag = f"[degraded] {stage} completed after {n} refused attempts with open gate errors: {short}"
+    cand_rec["degraded"] = {"errors": [str(e)[:400] for e in errors[:20]], "at": _utc_now_iso()}
+    short = _degrade_text(cand_rec)
+    flag = f"[degraded] {stage} {short}"
     if isinstance(artifact, dict):
         artifact["attention_flags"] = [f for f in artifact.get("attention_flags") or []
                                        if not (isinstance(f, str) and f.startswith(f"[degraded] {stage} "))] + [flag]
     if stage == "deliver":
         cand_rec["push_ready"] = False
-        cand_rec["push_ready_reason"] = ("DELIVER completed degraded after "
-                                         f"{n} refused attempts: {short}")[:900]
-    warnings.append(f"{stage} completed DEGRADED after {n} refused attempts (再一再二不再三): "
-                    "the open errors are recorded, push_ready is false, the run continues")
+        cand_rec["push_ready_reason"] = f"DELIVER {short}"[:900]
+    warnings.append(f"{stage} degraded: {len(errors)} gate error(s) recorded as push_ready "
+                    "reasons (REPORT §10), not a stop; landing is decided by the test "
+                    "evidence. Re-completing the stage with the errors fixed clears it")
     return []
 
 
@@ -10422,9 +10424,38 @@ def _validate_stage_candidate(
                                       _PENDING_ARTIFACT_ID if artifact is not None else None)
         errors += [e for e in res.get("errors", []) if e not in errors]
         warnings += res.get("warnings", [])
-    except Exception as e:  # fail-CLOSED: a validator that cannot run blocks
+    except Exception as e:  # fail-CLOSED: a validator that cannot run blocks (_NEVER_DEGRADE)
         errors.append(f"Validator ERRORED (could not run): {type(e).__name__}: {e}")
+    if stage == "deliver":
+        errors = _drop_unplanned_review_checks(errors, cand_run, warnings)
     return errors, warnings
+
+
+_PRESENCE_CHECKS = ("profile_tier", "spawned", "must be a dict", "has no 'findings' field",
+                    "Missing required field 'adversarial_review'", "meta_review missing")
+
+
+def _drop_unplanned_review_checks(errors: "list[str]", run_state: dict,
+                                  warnings: "list[str]") -> "list[str]":
+    """deliver stage-start recorded an EMPTY Gate-2 plan (a documentation-only change:
+    no expert, no meta-review): the checks that a review ran are not applied. A check on
+    what a review DID record (a blocking finding, the Red Team rule) and every structural
+    error stay. Shared by stage-complete and the completion gate."""
+    plan = run_state.get("dispatch_plan") if isinstance(run_state.get("dispatch_plan"), dict) else {}
+    if plan.get("deliver") != []:
+        return errors
+
+    def presence(e: str) -> bool:
+        body = e.split("] ", 1)[1] if e.startswith("[") and "] " in e else e
+        return (not body.startswith(_NEVER_DEGRADE) and "blocking finding" not in body
+                and "Red Team required" not in body
+                and ("adversarial_review" in body or "meta_review" in body)
+                and any(k in body for k in _PRESENCE_CHECKS))
+    dropped = [e for e in errors if presence(str(e))]
+    if dropped:
+        warnings.append(f"{len(dropped)} review-presence check(s) not applied: deliver "
+                        "stage-start dispatched no reviewer for this documentation-only change")
+    return [e for e in errors if e not in dropped]
 
 
 def _ensure_report_before_advance(project: str, run_id: str, run_dir: Path,
@@ -10617,8 +10648,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     warnings += [w for w in (derived.get("evidence_warnings") or {}).get("value") or []
                  if w not in warnings]
     if errors and not getattr(args, "check", False):
-        errors = _degrade_after_repeated_failures(run_file, stage, errors, cand_rec, artifact,
-                                                  warnings)
+        errors = _degrade_gate_errors(run_file, stage, errors, cand_rec, artifact, warnings)
     _new_gaps = _verification_gaps_of(stage, warnings, cand_rec)
     if stage == "deliver" and _new_gaps and cand_rec.get("push_ready"):
         cand_rec["push_ready"] = False
@@ -10675,8 +10705,6 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         _record_transcript_id(fresh)
         _set_stage_timing(fresh, stage, "completed_at", now)
         _replace_stage_record(fresh["stages"], cand_rec)
-        if isinstance(fresh.get("stage_complete_failures"), dict):
-            fresh["stage_complete_failures"].pop(stage, None)  # a new episode gets 3 tries
         if _new_gaps:  # append-only run-level latch, read by _deliver_push_ready_bound
             have = {(g.get("stage"), g.get("why")) for g in fresh.get("verification_gaps") or []
                     if isinstance(g, dict)}
@@ -10719,9 +10747,14 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
                 + "` before advancing or completing")
         # Isolated run: land now (pipeline-run-worktree §7.4). A refusal exits here,
         # so the manifest does not advance; rerunning stage-complete retries.
-        landing = _land_isolated_deliver(
-            project, run_id, run_file, bool(cand_rec.get("push_ready")), reg, warnings,
-            deliver_rec=cand_rec)
+        try:
+            landing = _land_isolated_deliver(
+                project, run_id, run_file, bool(cand_rec.get("push_ready")), reg, warnings,
+                deliver_rec=cand_rec)
+        except SystemExit as _refused:
+            if _refused.code not in (0, None):
+                _reopen_after_refused_landing(run_file)
+            raise
     if next_stage:
         from core.artifact_registry import PIPELINE_STATES
         behind = _manifest_ahead_of(reg, project, profile, next_stage)
@@ -10773,6 +10806,29 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     }, default=str, ensure_ascii=False))
 
 
+def _reopen_after_refused_landing(run_file: Path) -> None:
+    """A landing refusal (red / unfinished tests, a conflict, ...) leaves DELIVER OPEN:
+    the record becomes ``landing_refused`` (not a finished status, so nothing downstream
+    reads DELIVER as done) and stage_timing.deliver.completed_at is removed, so fixing
+    the cause and rerunning stage-complete is the whole retry — no stage-start, and
+    run-commit / stage-complete never point at each other."""
+    from core.run_lock import update_run
+
+    def reopen(d: dict) -> None:
+        t = (d.get("stage_timing") or {}).get("deliver")
+        if isinstance(t, dict):
+            t.pop("completed_at", None)
+        for r in d.get("stages") or []:
+            if isinstance(r, dict) and r.get("stage") == "deliver" and r.get("status") == "completed":
+                r["status"] = "landing_refused"
+                r["landing_refused_at"] = _utc_now_iso()
+    try:
+        update_run(run_file, reopen)
+    except Exception as e:  # noqa: BLE001 — the refusal itself was already printed
+        print(json.dumps({"warning": f"DELIVER not re-opened after the refused landing "
+                          f"({type(e).__name__}); run stage-start for deliver"}), file=sys.stderr)
+
+
 def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready: bool,
                            reg: ArtifactRegistry, warnings: "list[str]",
                            deliver_rec: "dict | None" = None) -> "dict | None":
@@ -10790,7 +10846,6 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
         project, run_id, run_file, run_state, deliver_rec)
     not_ready = "" if push_ready else (
         str((deliver_rec or {}).get("push_ready_reason") or "").strip() or "no reason recorded")
-    degraded = isinstance((deliver_rec or {}).get("degraded"), dict)
     not_ready_box = [not_ready]
     if not push_ready:
         warnings.append(f"deliver is not PUSH-READY ({not_ready[:400]}): landing locally "
@@ -10799,17 +10854,21 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                         + ", the reasons are in REPORT §10; do NOT push.")
 
     def gen_b(wt: Path, files: "list[str]") -> "list[str]":
-        from core.run_worktree import WorktreeError
         paths, warns = _generate_review_deliverable(project, run_id, str(wt), source_files=files)
+        # A review deliverable that could not be generated, or whose §9 lessons are still
+        # a placeholder, is a push_ready reason: the code lands (one landing decision,
+        # test evidence), the gap is named on the commit and in REPORT §10.
         loud = [w for w in warns if w.startswith(_FAILLOUD_SENTINEL)]
-        if loud:
-            raise WorktreeError("deliverable_failed", "the review deliverable (B) could not be "
-                                "generated: " + "; ".join(loud)[:300])
         order = [w for w in warns if w.startswith(_ORDERING_SENTINEL)]
-        if order:  # land code + B together, never code now and B later
-            raise WorktreeError("deliverable_not_ready",
-                                order[0][len(_ORDERING_SENTINEL):].strip()[:900])
-        warnings.extend(warns)
+        gaps = (["review deliverable (B) not generated: " + "; ".join(loud)[:300]] if loud else []) \
+            + (["review deliverable (B): " + order[0][len(_ORDERING_SENTINEL):].strip()[:300]]
+               if order else [])
+        if "review deliverable (B)" in (not_ready_box[0] or ""):
+            gaps = []   # the precheck already named it before the first commit
+        if gaps:
+            not_ready_box[0] = "; ".join([x for x in (not_ready_box[0],) if x] + gaps)
+        warnings.extend(w for w in warns if not w.startswith((_FAILLOUD_SENTINEL, _ORDERING_SENTINEL)))
+        warnings.extend(gaps)
         return [os.path.relpath(p, str(wt)) for p in paths]
 
     def precheck(review_at: float) -> "list[str]":
@@ -10843,12 +10902,18 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                 if stale:
                     errs.append("Gate-2 expert(s) have not reviewed the current change "
                                 "(recorded at deliver stage-start): " + ", ".join(stale))
-        if errs and degraded:
-            # DELIVER completed degraded: land, marked, with these gaps in the reason
-            not_ready_box[0] = (not_ready_box[0] or "DELIVER degraded") + "; " + "; ".join(errs)
-            warnings.append("review precheck not met on a degraded DELIVER: landing marked "
-                            "push_ready false: " + "; ".join(errs))
-            return []
+        try:   # the review deliverable needs §9 lessons; known now, not mid-landing
+            # (REPORT.md itself is generated before landing; its absence is gen_b's case)
+            _rep = run_file.parent / "REPORT.md"
+            if _rep.is_file() and _report_section9_is_degenerate(_rep.read_text(encoding="utf-8")):
+                errs.append("review deliverable (B): REPORT.md §9 Lessons is still a placeholder")
+        except OSError as e:
+            errs.append(f"review deliverable (B): REPORT.md unreadable ({type(e).__name__})")
+        if errs:
+            # A review that did not run (or predates the change) is recorded, never a stop:
+            # land_deliver marks every commit push_ready false with these gaps.
+            warnings.append("review precheck not met: landing marked push_ready false: "
+                            + "; ".join(errs))
         return errs
 
     _requirement = str(run_state.get("requirement") or "")
@@ -10860,7 +10925,23 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                                message=_commit_message(run_id, _requirement, _deliver_art,
                                                        not_ready or None),
                                precheck=precheck, review_not_converged=review_open,
-                               not_ready=not_ready_box)
+                               not_ready=not_ready_box,
+                               message_for=lambda why: _commit_message(
+                                   run_id, _requirement, _deliver_art, why))
+    if landing and push_ready and not_ready_box[0]:
+        # A precheck / deliverable gap found at landing lowers the DELIVER record too, so
+        # push_ready on the record and on the landed commits agree.
+        from core.run_lock import update_run
+
+        def lower(d: dict) -> None:
+            for r in d.get("stages") or []:
+                if isinstance(r, dict) and r.get("stage") == "deliver":
+                    r["push_ready"] = False
+                    r["push_ready_reason"] = str(not_ready_box[0])[:900]
+        try:
+            update_run(run_file, lower)
+        except Exception as e:  # noqa: BLE001 — the commits already carry the mark
+            warnings.append(f"DELIVER record not lowered to push_ready false: {type(e).__name__}")
     if landing:
         import contextlib
         import io
@@ -10924,12 +11005,14 @@ def _changed_files_scope(files_touched) -> dict:
                 continue
             st, path = parts[0][:1], parts[-1]
             a, d = num.get(path, (0, 0))
+            old = None
             if st == "R" and len(parts) == 3:
                 a, d = (num.get(path, (0, 0))[0], num.get(parts[1], (0, 0))[1])
                 seen.add(parts[1])
+                old = parts[1]
             seen.add(path)
             changed.append({"path": rels.get(path, path), "rel": path, "root": root, "status": st,
-                            "added": a, "removed": d})
+                            "added": a, "removed": d, **({"from": old} if old else {})})
         for ln in _git_lines(["ls-files", "--others", "--exclude-standard", "--", *paths], root):
             if ln and ln not in seen:
                 changed.append({"path": rels.get(ln, ln), "rel": ln, "root": root, "status": "A",
@@ -10943,8 +11026,7 @@ def _changed_files_scope(files_touched) -> dict:
     # Totals keep every file (display); the dispatch thresholds read the SOURCE
     # counts — a bugfix that adds 300 lines of tests is not a 300-line change.
     return {"changed_files": changed, "diff_insertions": ins, "diff_deletions": dels,
-            "source_insertions": src_ins, "source_deletions": sum(c["removed"] for c in src),
-            "full_tier_override": src_ins > 100}
+            "source_insertions": src_ins, "source_deletions": sum(c["removed"] for c in src)}
 
 
 def _rel(c: dict) -> str:
@@ -10985,11 +11067,24 @@ def _is_test_path(path: str, root: "str | None" = None) -> bool:
     return bool(_TEST_DEF_RE.search(text))
 
 
+def _is_docs_only(scope: dict) -> bool:
+    """True when the change has files and none of them can run
+    (pipeline_validator.docs_only_paths, the SSOT the landing gate reads too). Test files
+    are code, and a rename is judged by both of its paths."""
+    import pipeline_validator as pv
+    paths = [p for c in scope.get("changed_files", []) for p in (_rel(c), c.get("from"))
+             if isinstance(p, str) and p]
+    return pv.docs_only_paths(paths)
+
+
 def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "list[dict]":
     """deliver.md "Step 1: Scope Detection" as code: tier default ∪ file-pattern
     triggers ∪ run.json required_experts; refactor rule; bugfix default
-    correctness+security; >100 source insertions → full tier; <50 changed source
-    lines → none unless required.
+    correctness+security; <50 changed source lines → none unless required; a change
+    with no code file (``_is_docs_only``) → none unless required. The tier follows the
+    profile and the risky paths touched, never a line count alone (the former >100
+    insertions → full-tier override is gone). An expert's findings only lower
+    push_ready; landing is decided by the tests (pipeline_validator.landing_test_errors).
 
     Sizes and file triggers read NON-TEST source only (``source_insertions`` /
     ``source_deletions`` / ``is_test`` from ``_changed_files_scope``; a scope
@@ -11005,19 +11100,16 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
     changed = [c for c in scope.get("changed_files", []) if not c.get("is_test")]
     total = (scope.get("source_insertions", scope.get("diff_insertions", 0))
              + scope.get("source_deletions", scope.get("diff_deletions", 0)))
-    override = bool(scope.get("full_tier_override"))
-    if total >= 50 or override:
+    if total >= 50 and not _is_docs_only(scope):
         if (work_type or "") == "refactor":
             for e in ("correctness", "api-contract", "integration", "red-team"):
                 add(e, "work_type=refactor architecture set")
-        elif profile == "bugfix" and not override:
+        elif profile == "bugfix":
             add("correctness", "bugfix tier default")
             add("security", "bugfix tier default")
-        elif not is_relaxed_profile(profile) or override:
-            add("correctness", "always (changeset > 50 lines)"
-                + ("; diff > 100 insertions → full tier" if override else ""))
-            if not is_relaxed_profile(profile):
-                add("security", "strict profile: Gate-2 owns the security lens")
+        elif not is_relaxed_profile(profile):
+            add("correctness", "always (changeset > 50 lines)")
+            add("security", "strict profile: Gate-2 owns the security lens")
             for eid, rx in _EXPERT_FILE_TRIGGERS.items():
                 hit = next((c["path"] for c in changed if rx.search(_rel(c))), None)
                 if hit:
@@ -11026,8 +11118,8 @@ def _dispatch_experts(*, profile: str, work_type, scope: dict, required) -> "lis
                              and Path(c["path"]).suffix in (".py", ".ts", ".tsx", ".js", ".rs")), None)
             if new_code:
                 add("integration", f"new code file: {new_code}")
-            if total > 200:
-                add("red-team", f"changeset {total} lines > 200 (also: any specialist HIGH)")
+        if total > 200 and not is_relaxed_profile(profile):
+            add("red-team", f"changeset {total} lines > 200 (also: any specialist HIGH)")
     for e in required if isinstance(required, list) else []:
         if isinstance(e, str) and e.strip():
             add(e.strip(), "run.json required_experts")
@@ -13645,10 +13737,15 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
             for e in experts:
                 if e.get("prompt_path"):
                     e["spawn"] = _spawn_text(e["id"], e["prompt_path"])
-            mr, w = _write_gate_prompt(
-                "meta-review", project, run_dir,
-                [c["path"] for c in scope["changed_files"]] or files_touched,
-                {"<requirement from run.json>": _prompt_data(str(run_state.get("requirement") or ""))})
+            if _is_docs_only(scope) and not experts:
+                mr, w = None, []
+                out["review_note"] = ("documentation-only change: no Gate-2 expert and no "
+                                      "meta-review are dispatched")
+            else:
+                mr, w = _write_gate_prompt(
+                    "meta-review", project, run_dir,
+                    [c["path"] for c in scope["changed_files"]] or files_touched,
+                    {"<requirement from run.json>": _prompt_data(str(run_state.get("requirement") or ""))})
             warnings += w
             if mr:
                 out["meta_review_prompt_path"] = mr
@@ -13656,7 +13753,8 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                 ledger_warn += _ledger_add(run_id, [mr])
             # meta-review is part of DELIVER's plan (the profiler listed it as unplanned),
             # also when its prompt had to be emitted by hand
-            dispatched = experts + [{"id": "meta-review"}]
+            dispatched = experts + ([] if (_is_docs_only(scope) and not experts)
+                                    else [{"id": "meta-review"}])
             out["experts"] = experts
         # The plan the profiler compares actual spawns against (report-only).
         # Re-read run.json just before writing: the git calls above take seconds, and

@@ -1,6 +1,6 @@
 # REVIEW — execution card
 Check the BUILD diff against the spec and the project's rules (conformance; bug-hunting is DELIVER's adversarial), fix what it finds, record it.
-**Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage review` → `changed_files` (status, `is_test`), `source_insertions`/`source_deletions` (non-test only), `full_tier_override`, `review_experts` (ids + reasons), `spawn_mode: foreground`, ACs, artifact example.
+**Enter:** `python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --stage review` → `changed_files` (status, `is_test`), `source_insertions`/`source_deletions` (non-test only), `review_experts` (ids + reasons), `spawn_mode: foreground`, ACs, artifact example.
 ## Steps
 1. **Litmus** (< 2 min, no tools, no sub-agent): HF1-HF4 + soft signals, diff vs ACs → PASS / BORDERLINE / FAIL. FAIL → back to BUILD, spawn nothing.
 2. **Spec Compliance Gate (BLOCKING, in the SAME message as the fan-out) `[MUST]`**: a fresh sub-agent, `run_in_background: false`, prompt = its `review_experts` entry's `spawn` text (only the raw PLAN ACs + the diff + the knowledge block; add nothing). BLOCK → back to BUILD (the fan-out's findings go with it). WARNING → carry its EXTRA findings to step 5. No profile skips it. <!-- R-review-002 -->

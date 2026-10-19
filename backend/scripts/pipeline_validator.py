@@ -5413,6 +5413,77 @@ def evidence_regression_modes(evidence: list | None) -> list[str]:
             if isinstance(ev, dict) and (evidence_regressions(ev) or 0) > 0]
 
 
+# A path with one of these suffixes runs no code. Agent-behaviour prose (experts,
+# skills, agent definitions: their frontmatter drives classification and tool grants)
+# and dependency manifests are code for this purpose.
+_NON_CODE_SUFFIXES = frozenset({".md", ".mdx", ".txt", ".rst", ".adoc", ".png", ".jpg",
+                                ".jpeg", ".gif", ".webp", ".pdf"})
+_CODE_PROSE_RE = re.compile(r"(^|/)(experts|skills|agents|\.claude)/|(^|/)(requirements|constraints)[^/]*\.txt$")
+
+
+def docs_only_paths(paths) -> bool:
+    """True when *paths* is non-empty and none of them can run (``_NON_CODE_SUFFIXES``,
+    minus agent-behaviour prose and dependency manifests). The SSOT for "a
+    documentation-only change": Gate-2 dispatch and the landing test gate both read it."""
+    ps = [str(x).replace("\\", "/") for x in paths or [] if isinstance(x, str) and x.strip()]
+    return bool(ps) and all(Path(x).suffix.lower() in _NON_CODE_SUFFIXES
+                            and not _CODE_PROSE_RE.search(x) for x in ps)
+
+
+def landing_test_errors(run_dir: Path, run_id: str, *,
+                        needs_report: bool = True) -> "tuple[list[str], list[str]]":
+    """The ONLY gate on landing a run's change locally (SOUL P5: the OS disposes
+    deterministically). It reads the runner's own reports, never an agent field or a
+    model's verdict. Returns ``(refuse, soft)``.
+
+    refuse — the change may not land:
+      - no runner report for this run, when *needs_report* (the change has code in a
+        repo the runner tests; the caller decides from the actual diff, not the profile);
+      - any latest-<mode> report that cannot be read;
+      - in ANY latest-<mode> report, a failure that is not pre-existing / flaky (a newer
+        report of another mode never hides it: rerun that mode to clear it);
+      - a test that did not finish (rerunning the same mode continues it).
+    An ``unknown`` failure refuses too: the runner uses it for a broken tsc build, a
+    module that no longer imports, a crashed shard and a failure it had no time to
+    classify, all red to the runner itself.
+    soft — push_ready false only: a newest report in which no test passed."""
+    ev = [e for e in load_test_evidence(run_dir)
+          if isinstance(e, dict) and e.get("run_id") in (None, run_id)]
+    if not ev:
+        return ((["tests: no runner report for this run: run backend/scripts/pipeline_test.py "
+                  "(--mode verify) on the change"] if needs_report else []), [])
+
+    def ids(fs):
+        names = [str(f.get("nodeid") or f.get("id") or "?") for f in fs]
+        return ", ".join(names[:8]) + (f" (+{len(names) - 8})" if len(names) > 8 else "")
+    refuse: list[str] = []
+    soft: list[str] = []
+    for rep in ev:
+        name = f"latest-{rep.get('mode')}.json"
+        if rep.get("unreadable"):
+            refuse.append(f"tests: {name} cannot be read ({rep['unreadable']}): rerun that mode")
+            continue
+        bad = [f for f in rep.get("failures") or [] if isinstance(f, dict)
+               and not _evidence_failure_ok(f)]
+        unfinished = [f for f in bad if f.get("classification") == "timeout"
+                      or f.get("outcome") == "timeout"]
+        red = [f for f in bad if f not in unfinished]
+        if red:
+            refuse.append(f"tests: {len(red)} failing test(s) in {name} that are not red on "
+                          f"HEAD: {ids(red)}")
+        if unfinished:
+            refuse.append(f"tests: {len(unfinished)} test(s) in {name} did not finish: "
+                          f"{ids(unfinished)}; rerun the same mode, it continues them")
+        elif not bad and int(_safe_dict(rep.get("counts")).get("timeouts") or 0) > 0:
+            refuse.append(f"tests: {name} counts timed-out test(s) with no failure entry: "
+                          "rerun the same mode")
+    if needs_report and int(_safe_dict(ev[0].get("counts")).get("passed") or 0) <= 0 \
+            and not ev[0].get("unreadable"):
+        soft.append(f"tests: no test passed in latest-{ev[0].get('mode')}.json (the runner "
+                    "selected nothing for this change)")
+    return refuse, soft
+
+
 def _judge_test_criterion(ref: str, evidence: list[dict], stale_of=None) -> tuple[bool, str]:
     """``stale_of(ev) -> bool``: optional freshness probe; a pass judged on a
     report that predates later edits does not count."""

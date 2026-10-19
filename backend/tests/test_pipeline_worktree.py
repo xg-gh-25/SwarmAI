@@ -200,7 +200,7 @@ def _evidence(f, rid, wt, untracked=()):
     d.mkdir(parents=True, exist_ok=True)
     (d / "latest-verify.json").write_text(json.dumps({
         "schema": 1, "mode": "verify", "run_id": rid, "finished_at": "2099-01-01T00:00:00+00:00",
-        "counts": {}, "results": [], "failures": [],
+        "counts": {"passed": 1}, "results": [], "failures": [],
         "worktree": {"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": list(untracked)}}}))
 
 
@@ -247,12 +247,47 @@ def test_land_refuses_evidence_with_untracked_files(flow):
     assert _state(f)["worktrees"][0]["state"] == "active"
 
 
-def test_land_refuses_change_after_review(flow):
+def test_a_change_after_review_lands_marked_not_push_ready(flow):
+    """One landing decision: tests on the landed tree decide; a change the Gate-2 prompts
+    did not see only marks the commit push_ready false."""
     rid, f, wt = _prepared(flow)
     (wt / "a.py").write_text("a = 'after review'\n")
     _evidence(f, rid, wt)
+    res = _land(flow, rid, f)
+    assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
+    c = _state(f)["commits"][-1]
+    assert c["push_ready"] is False and "not all reviewed" in c["push_ready_reason"]
+
+
+def test_an_old_verify_is_not_rebound_by_a_newer_tdd_run(flow):
+    """verify ran on the old tree; after an edit only a narrow tdd ran on the new tree:
+    the binding report is still the verify, so landing is refused (rerun verify)."""
+    rid, f, wt = _prepared(flow)
+    _evidence(f, rid, wt)                          # latest-verify.json on tree T1
+    (wt / "a.py").write_text("a = 'edited after verify'\n")
+    d = f.parent / "evidence" / "tests"
+    tdd = json.loads((d / "latest-verify.json").read_text())
+    tdd.update(mode="tdd", finished_at="2099-01-02T00:00:00+00:00",
+               worktree={"swarmai": {"tree": rw.change_tree(wt, rid), "untracked": []}})
+    (d / "latest-tdd.json").write_text(json.dumps(tdd))
     with pytest.raises(SystemExit):
         _land(flow, rid, f)
+    assert _state(f)["worktrees"][0]["state"] == "active"
+
+
+def test_land_refuses_without_runner_evidence_and_on_red_tests(flow):
+    rid, f, wt = _prepared(flow)
+    with pytest.raises(SystemExit):           # no runner report for this run
+        _land(flow, rid, f)
+    assert _state(f)["worktrees"][0]["state"] == "active"
+    _evidence(f, rid, wt)
+    p = f.parent / "evidence" / "tests" / "latest-verify.json"
+    ev = json.loads(p.read_text())
+    ev["failures"] = [{"nodeid": "t::x", "classification": "regression", "outcome": "failed"}]
+    p.write_text(json.dumps(ev))
+    with pytest.raises(SystemExit):           # a test the change broke
+        _land(flow, rid, f)
+    assert _state(f)["worktrees"][0]["state"] == "active"
     assert _g(flow["main"], "log", "--oneline").count("\n") == 0
 
 
@@ -312,20 +347,21 @@ def test_two_repo_landing_records_both(flow):
     assert len([c for c in st["commits"] if c.get("landed")]) == 2
 
 
-def test_land_refuses_when_precheck_reports_missing_review(flow):
+def test_a_missing_review_lands_marked_not_push_ready(flow):
     import pipeline_worktree as pw
     rid, f, wt = _prepared(flow)
     _evidence(f, rid, wt)
     os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
     try:
-        with pytest.raises(SystemExit):
-            pw.land_deliver(run_id=rid, run_file=f, run_state=_state(f), push_ready=True,
-                            workspace=flow["ws"], self_repo=flow["main"],
-                            gen_b=lambda wt, files: [], requirement="x",
-                            precheck=lambda at: ["security has not reviewed"])
+        res = pw.land_deliver(run_id=rid, run_file=f, run_state=_state(f), push_ready=True,
+                              workspace=flow["ws"], self_repo=flow["main"],
+                              gen_b=lambda wt, files: [], requirement="x",
+                              precheck=lambda at: ["security has not reviewed"])
     finally:
         os.environ.pop(hook_token.TOKEN_ENV, None)
-    assert _state(f)["worktrees"][0]["state"] == "active"
+    assert res["landed"]["swarmai"]["sha"]
+    c = _state(f)["commits"][-1]
+    assert c["push_ready"] is False and "security has not reviewed" in c["push_ready_reason"]
 
 
 # ── known-issue fixes (design §16.8) ─────────────────────────────────────────
@@ -480,9 +516,13 @@ def test_isolated_land_has_no_force_past_d7(flow, monkeypatch):
     warns: list = []
     try:
         os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
-        with pytest.raises(SystemExit):
-            ac._land_isolated_deliver("P", rid, f, True, None, warns)
-        assert _state(f)["worktrees"][0]["state"] == "active"
+        res = ac._land_isolated_deliver("P", rid, f, True, None, warns)
+        assert res["landed"]   # a missing expert lowers push_ready, it never stops landing
+        c = _state(f)["commits"][-1]
+        assert c["push_ready"] is False and "security" in c["push_ready_reason"]
+        body = _g(flow["main"], "log", "-1", "--format=%B")
+        assert "NOT PUSH-READY" in body and "security" in body   # the gap is in git log too
+        assert any("security" in g["why"] for g in _state(f)["verification_gaps"])  # latched
         with pytest.raises(TypeError):  # the force_reason override is gone
             ac._land_isolated_deliver("P", rid, f, True, None, warns, force_reason="x")
     finally:

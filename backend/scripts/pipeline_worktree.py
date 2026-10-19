@@ -541,8 +541,9 @@ def _deliver_sync(run_id: str, run_file: Path, run_state: dict, wts, run_dir: Pa
         else:
             atomic_write_json(rt, {"run_id": run_id, "trees": trees, "bases": bases,
                                    "at": _time.time()})
-            out["review_note"] = ("the change differs from the last reviewed tree: every "
-                                  "Gate-2 expert must review it (again) before stage-complete")
+            out["review_note"] = ("the change differs from the last reviewed tree: landing "
+                                  "is not blocked (tests decide it), but push_ready stays "
+                                  "false until the Gate-2 experts have reviewed it")
     elif rec.get("bases") != bases:
         atomic_write_json(rt, {**rec, "bases": bases})
     if rebased_any and not changed_any and _tests_carry(run_id, run_dir, wts):
@@ -553,8 +554,9 @@ def _deliver_sync(run_id: str, run_file: Path, run_state: dict, wts, run_dir: Pa
         out["sync_note"] = ("the integration branch moved and the change was rebased onto it: "
                             "rerun the pipeline test runner (verify) before stage-complete")
     if changed_any:
-        out["sync_note"] += ("; the rebase changed the run's own hunks — the experts that "
-                             "already reviewed must re-review the parts in " + ", ".join(rd_files))
+        out["sync_note"] += ("; the rebase changed the run's own hunks in " + ", ".join(rd_files)
+                             + ": rerun the tests; push_ready stays false until they are "
+                             "re-reviewed (landing is not blocked)")
     return out
 
 
@@ -593,14 +595,26 @@ def _review_record(run_dir: Path) -> dict:
         return {}
 
 
-def _evidence_worktree(run_dir: Path, run_id: str) -> "tuple[bool, dict | None]":
-    """(any evidence, its worktree block) of the NEWEST runner report of this run."""
+_SCOPE_MODES = ("verify", "regression")   # the dependency-scoped runs: they bind the tree
+
+
+def _binding_report(run_dir: Path, run_id: str) -> "dict | None":
+    """The runner report that must have run on the tree to land: the NEWEST verify /
+    regression report (the change's dependency scope), else the newest report of any
+    mode. A later narrow tdd run never stands in for a verify that predates an edit."""
     import pipeline_validator as pv
     ev = [e for e in pv.load_test_evidence(run_dir)
           if isinstance(e, dict) and e.get("run_id") in (None, run_id)]
-    if not ev:
+    scoped = [e for e in ev if e.get("mode") in _SCOPE_MODES]
+    return (scoped or ev or [None])[0]
+
+
+def _evidence_worktree(run_dir: Path, run_id: str) -> "tuple[bool, dict | None]":
+    """(any evidence, the worktree block of the binding report, _binding_report)."""
+    rep = _binding_report(run_dir, run_id)
+    if rep is None:
         return False, None
-    return True, (ev[0].get("worktree") if isinstance(ev[0].get("worktree"), dict) else None)
+    return True, (rep.get("worktree") if isinstance(rep.get("worktree"), dict) else None)
 
 
 def _review_carries(run_id: str, rec: dict, wts, trees: dict) -> bool:
@@ -630,27 +644,47 @@ def _tests_carry(run_id: str, run_dir: Path, wts) -> bool:
     return True
 
 
-def _check_bound_trees(run_id: str, run_dir: Path, wts) -> None:
-    """§7.3: the tree to land == the reviewed tree == the tested tree — or carries the
-    same change onto a moved base (rw.carries_over) — and the tests ran with no
-    un-added file in the worktree."""
+def _is_self_repo(main, self_repo) -> bool:
+    """The repo the test runner tests (this source repo): its change must be tested."""
+    try:
+        return Path(str(main)).resolve() == Path(str(self_repo)).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _check_bound_trees(run_id: str, run_dir: Path, wts, self_repo=None,
+                       untested_ok: bool = False) -> "list[str]":
+    """§7.3: in the repo the runner tests (*self_repo*), the tree to land == the tested
+    tree — or carries the same change onto a moved base (rw.carries_over) — and the tests
+    ran with no un-added file. Raises on a test-binding failure: the test result does not
+    apply to what would land. Returned as push_ready reasons, never a refusal: a tree that
+    differs from the one recorded when the Gate-2 prompts were written (a review is a
+    finder, not a judge), and a repo the runner does not test (it has no way to)."""
+    soft: "list[str]" = []
     rec = _review_record(run_dir)
     reviewed, rbases = rec.get("trees") or {}, rec.get("bases") or {}
     have_ev, ev = _evidence_worktree(run_dir, run_id)
-    if have_ev and ev is None:
-        raise rw.WorktreeError("changed_since_review", "the latest test evidence records no "
-                               "worktree tree (unreadable or produced outside the worktree) "
-                               "— rerun the test runner")
-    for e, w, _m in wts:
+    _rep = _binding_report(run_dir, run_id) or {}
+    if have_ev and _rep.get("mode") not in _SCOPE_MODES:
+        soft.append(f"tests: only {_rep.get('mode')} evidence; no verify / regression run "
+                    "covered the change's dependency scope")
+    for e, w, m in wts:
         name = e["repo_name"]
         now = rw.change_tree(w, run_id)
         if reviewed.get(name) != now and not rw.carries_over(
                 w, run_id, rbases.get(name), reviewed.get(name), e.get("base"), now):
-            raise rw.WorktreeError("changed_since_review", f"{name}: the change differs from "
-                                   "the tree recorded when Gate-2 prompts were written")
+            soft.append(f"{name}: the change differs from the tree recorded when the Gate-2 "
+                        "prompts were written (the landed code was not all reviewed)")
         tested = (ev or {}).get(name) if isinstance((ev or {}).get(name), dict) else None
         if tested is None:
-            continue  # not the runner's target repo (multi-repo): the review binds it
+            if not _is_self_repo(m, self_repo):
+                soft.append(f"{name}: not tested (the test runner tests only this source repo)")
+                continue
+            if untested_ok or not rw.changed_paths(w, e.get("base"), now):
+                continue   # documentation-only, or nothing changed here
+            raise rw.WorktreeError("changed_since_review", f"{name}: the latest test evidence "
+                                   "records no tree for this worktree (unreadable, or produced "
+                                   "outside it): rerun the test runner")
         if tested.get("tree") != now and not rw.carries_over(
                 w, run_id, tested.get("base"), tested.get("tree"), e.get("base"), now):
             raise rw.WorktreeError("changed_since_review", f"{name}: the latest test evidence "
@@ -658,6 +692,7 @@ def _check_bound_trees(run_id: str, run_dir: Path, wts) -> None:
         if tested.get("untracked"):
             raise rw.WorktreeError("changed_since_review", f"{name}: the latest tests ran with "
                                    "un-added files present: " + ", ".join(tested["untracked"][:8]))
+    return soft
 
 
 def _current_entry(run_state: dict, name: str) -> "dict | None":
@@ -668,11 +703,17 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                  workspace, self_repo, gen_b, requirement: str,
                  precheck=None, message: "str | None" = None,
                  review_not_converged: bool = False,
-                 not_ready: "list | str | None" = None) -> "dict | None":
+                 not_ready: "list | str | None" = None,
+                 message_for=None) -> "dict | None":
     """Deliver stage-complete landing; None when nothing to do (not isolated / not
     push-ready / already integrated). Exits with a §7.7 error on refusal.
-    *precheck(review_at)* → error strings (D7 coverage, experts that have not reviewed
-    since the reviewed tree was recorded), checked before anything is committed.
+    The ONE landing gate is the test evidence (pipeline_validator.landing_test_errors +
+    the tested-tree binding of _check_bound_trees); a refusal exits before anything is
+    committed. *precheck(review_at)* → push_ready gaps (D7 coverage, experts that have not
+    reviewed since the reviewed tree was recorded, a review deliverable that cannot be
+    built), computed before the first commit with the review-tree and untested-repo gaps;
+    they are latched into run.json ``verification_gaps`` (so a retry after a partial
+    landing still knows them) and *message_for(reason)* rebuilds the commit message.
     *review_not_converged*: the caller proved (artifact_cli._only_review_not_converged)
     that the ONLY thing keeping DELIVER from PUSH-READY is a Gate-2 loop that did not
     converge in 3 rounds with a SOUND root-cause verdict. The run is autonomous, so it
@@ -717,12 +758,33 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
             left = rw.untracked_new_files(w, run_id)
             if left:
                 raise rw.WorktreeError("untracked_new_files", "un-added new files", files=left)
-        _check_bound_trees(run_id, run_dir, wts)
-        errs = precheck(float(_review_record(run_dir).get("at") or 0)) if precheck else []
-        if errs:
-            raise rw.WorktreeError("review_incomplete", "; ".join(errs)[:600])
+        import pipeline_validator as _pv
+        _all = [p for e, w, _m in wts for p in rw.changed_paths(w, e["base"], rw.change_tree(w, run_id))]
+        _docs = _pv.docs_only_paths(_all)
+        _tested_repo = any(_is_self_repo(m, self_repo) for _e, _w, m in wts)
+        red, soft = _pv.landing_test_errors(run_dir, run_id,
+                                            needs_report=_tested_repo and not _docs)
+        if red:   # the ONE landing gate: the runner's evidence
+            raise rw.WorktreeError("tests_not_green", "; ".join(red)[:900])
+        soft += _check_bound_trees(run_id, run_dir, wts, self_repo, untested_ok=_docs)
+        soft += precheck(float(_review_record(run_dir).get("at") or 0)) if precheck else []
     except rw.WorktreeError as err:
         stage_fail("deliver", err, _NEXT.get(err.code, "rerun deliver stage-start"))
+    if soft:  # review / test-coverage gaps lower push_ready, they never stop the landing
+        if not isinstance(not_ready, list):
+            not_ready = [not_ready or ""]
+        not_ready[0] = "; ".join([x for x in (not_ready[0],) if x] + soft)
+
+        def latch(d: dict) -> None:   # survives a retry after a partial landing
+            have = {(g.get("stage"), g.get("why")) for g in d.get("verification_gaps") or []
+                    if isinstance(g, dict)}
+            d["verification_gaps"] = list(d.get("verification_gaps") or []) + [
+                {"stage": "deliver", "why": r[:300], "at": rw._now_iso()} for r in soft
+                if ("deliver", r[:300]) not in have]
+        _save(run_file, latch)
+
+    def _why_not_ready() -> str:
+        return str((not_ready[0] if isinstance(not_ready, list) and not_ready else not_ready) or "")
     b_repo = run_state.get("deliverable_repo")
     if b_repo is None:  # chosen once, so a retry after a partial landing never writes B twice
         sizes = {e["repo_name"]: len(rw.changed_paths(w, e["base"], rw.change_tree(w, run_id)))
@@ -732,6 +794,8 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
         run_state["deliverable_repo"] = b_repo
     # One builder for both commit paths: artifact_cli passes the DELIVER-title message;
     # a caller without one gets the same builder's requirement fallback.
+    if callable(message_for):   # the landing-time gaps belong in the message too
+        message = message_for(_why_not_ready() or None) or message
     if not message:
         import commit_message
         message = commit_message.build(run_id, requirement, None)
@@ -785,12 +849,12 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
                 stage_fail("deliver", err, nxt)
         if resyncs:
             res["resyncs"] = resyncs
-        if review_not_converged and not push_ready:
+        ready = push_ready and not _why_not_ready()   # a gap found at landing lowers it
+        if review_not_converged and not ready:
             res["review_not_converged"] = True
-        if not push_ready:
+        if not ready:
             res["push_ready"] = False
-            _why = not_ready[0] if isinstance(not_ready, list) and not_ready else not_ready
-            res["push_ready_reason"] = str(_why or "no reason recorded")[:500]
+            res["push_ready_reason"] = (_why_not_ready() or "no reason recorded")[:500]
         landed[name] = res
         _record_landing(run_file, run_state, run_id, name, m, res)
     return {"landed": {k: {"sha": v["sha"], "files": len(v["files"]), "commit_s": v["commit_s"],
@@ -830,7 +894,8 @@ def _resync_for_landing(run_id: str, run_file: Path, run_state: dict, run_dir: P
         return new_tree
     if not rw.carries_over(w, run_id, old_base, checked_tree, e.get("base"), new_tree):
         raise rw.WorktreeError("changed_since_review", "the integration branch moved onto "
-                               "this run's files: the review and tests must be redone")
+                               "this run's files and the change was rebased: rerun the test "
+                               "runner on it (no new review round), then stage-complete")
     rec = _review_record(run_dir)
     rec.setdefault("trees", {})[e["repo_name"]] = new_tree
     rec.setdefault("bases", {})[e["repo_name"]] = e.get("base")
@@ -850,7 +915,8 @@ def _still_live(run_file: Path) -> bool:
 
 _NEXT = {
     "needs_resync": "rerun deliver stage-start (it syncs and says whether to retest or re-review)",
-    "changed_since_review": "rerun deliver stage-start",
+    "changed_since_review": "rerun the test runner on the current change, then deliver "
+                            "stage-complete (DELIVER is re-opened)",
     "untracked_new_files": "for each file: `git add` it in the worktree or delete it; rerun "
                            "deliver stage-start",
     "blocked_by_uncommitted": "back off and rerun stage-complete; after 10 minutes in total, "
@@ -861,10 +927,9 @@ _NEXT = {
     "commit_slow": "back off and rerun stage-complete (10 minutes in total, then checkpoint)",
     "path_rejected": "change the refused paths, or explain them and let the user decide",
     "conflict": "rerun deliver stage-start and resolve the conflicts",
-    "review_incomplete": "spawn the listed experts on the current change (deliver "
-                         "stage-start wrote their prompts), then rerun stage-complete. "
-                         "Genuinely not enforceable? rerun with `--force --reason '<why>'` "
-                         "(recorded as a d7_force_bypass intervention)",
+    "tests_not_green": "fix the failing tests (or rerun the same test mode to finish the "
+                       "unfinished ones), then rerun deliver stage-complete: DELIVER is "
+                       "re-opened, no stage-start is needed",
     "run_not_live": "the run was cancelled; stop",
     "worktree_released": "rerun deliver stage-start (it rebuilds the worktree from the ledger "
                          "and syncs it), then the test runner, then stage-complete",

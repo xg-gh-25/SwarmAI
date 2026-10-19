@@ -22,7 +22,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - Meta-Review (BLOCKING) — `[GATE·validator]`: a full/bugfix deliver artifact without `meta_review`/`meta_review_verdict` is blocked; trivial/research/docs exempt. <!-- R-deliver-009 -->
 - Push-Ready (binary) — `[GATE·cli]`: false → `run-commit` still commits, marked; never push. <!-- R-deliver-003 -->
 - `[GATE·cli]` Run source committed → `run-update --status completed` BLOCKS until surface evidence: the `surface_run_outputs` marker naming every commit, or `--outputs-surfaced` on that call; docs-only exempt; never re-record deliver for it (`complete.md` Step 0). <!-- R-deliver-015 -->
-- `[GATE·cli]` D7: `run-commit` refuses unless every `required_experts` entry reviewed this run.
+- `[GATE·cli]` D7: a `required_experts` entry that did not review this run sets push_ready false; it never blocks the local landing (only the test evidence does).
 
 ## Read only if
 - Dispatch rules, tiering, Red Team, rejected spawn → `ref/deliver/gate2-dispatch.md`

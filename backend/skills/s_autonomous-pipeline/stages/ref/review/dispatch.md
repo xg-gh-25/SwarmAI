@@ -6,7 +6,7 @@ reports, or writing findings. Card steps 3 and 5 carry the commands.
 `artifact_cli.py stage-start --stage review` returns `review_experts` (each `{id, domain,
 reason}`), `changed_files` (each with `status` A/M/D/R, `added`, `removed`, `is_test`),
 `diff_insertions`/`diff_deletions` (all files, display only), `source_insertions`/
-`source_deletions` (NON-TEST source only), `full_tier_override` (source insertions > 100)
+`source_deletions` (NON-TEST source only)
 and `spawn_mode: "foreground"`. It also records `dispatch_plan.review` in run.json for
 the profiler. Spawn exactly the ids listed, no more. Test files never count toward any
 threshold below.
@@ -33,7 +33,7 @@ final diff below both bars (under 50 source lines and no fan-out trigger) gets n
 security sub-agent; the inline Security Scan covers it. The inline Security Scan
 (check 2) runs every time regardless.
 (Gate-2's size tiers read the same non-test source counts: < 50 lines → no specialist
-unless required, > 100 insertions → full tier, > 200 lines → red-team. They are DELIVER's
+unless required, a documentation-only change → none, > 200 lines → red-team. They are DELIVER's
 to apply; REVIEW uses them only through the security-owner decision above.)
 
 ## Spawning (Phase A — one message, several foreground Agent calls)

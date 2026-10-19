@@ -48,8 +48,8 @@ How:
 | Situation | Disposition |
 |---|---|
 | **Taste** decision, or an ambiguity with a clearly safer reading | Take it, record it, ONE `[assumption]` / `[decision]` line in DELIVER `attention_flags` (REPORT §10). |
-| **Retries exhausted, replan fails, meta-review HIGH unresolved, test circuit breaker** | Stop fixing. Complete the current stage (it degrades after 3 refusals) and DELIVER with `push_ready: false`, the blocker in `push_ready_reason` + `attention_flags`. `run-commit` commits locally, marked. |
-| **A gate refuses `stage-complete` again and again** | Fix what it names. The 3rd refusal of the same stage completes it **degraded** (push_ready capped false, the errors in REPORT §10). Input/shape, profile and stage-order errors never degrade: fix them. |
+| **Retries exhausted, replan fails, meta-review HIGH unresolved, test circuit breaker** | Stop fixing. Complete the current stage (a gate error degrades it at once) and DELIVER with `push_ready: false`, the blocker in `push_ready_reason` + `attention_flags`. Green tests → the change lands locally, marked. Red or unfinished tests → landing is refused: checkpoint with the failing tests named (the code stays in the worktree). |
+| **A gate error at `stage-complete`** | The stage completes **degraded** on the first try (push_ready capped false, the errors in REPORT §10); fix what it names if you can, it never stops the run. Input, record-schema, profile and stage-order errors still refuse: fix them. Landing is refused only by the test evidence (red, unfinished or missing); the refusal re-opens DELIVER, so fix and rerun stage-complete. |
 | **A sub-agent spawn is refused** | Retry once; still refused → record `<gate>_unverified_reason` and go on; push_ready is capped. Never self-review. |
 | **Unexpected tool error** | Retry once with the printed fix; still failing → as stuck (row 2). |
 

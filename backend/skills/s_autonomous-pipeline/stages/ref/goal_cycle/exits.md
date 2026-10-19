@@ -39,7 +39,7 @@ Attempt 2:
   limits; goal_cycle stage-complete refuses a claimed Final Quality Gate that no completed
   sub-agent backs (`E_FINAL_GATE_UNBACKED`).
 Every non-SUCCESS exit continues to DELIVER (stage-complete goal_cycle with `dod_met: false`;
-it completes degraded after 3 refusals) and DELIVER records `push_ready: false` with the exit
+a gate error completes it degraded at once) and DELIVER records `push_ready: false` with the exit
 and what is left: a marked local commit, never a checkpoint or a hand-off.
 **Budget is NEVER a loop exit** (STEERING #2 + XG directive "budget 从来不应该是 block run
 的重要因素"). `remaining_tokens = session_budget - tokens_consumed` is report-only: surface

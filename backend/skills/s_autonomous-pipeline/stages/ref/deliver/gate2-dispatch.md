@@ -29,8 +29,8 @@ unconditionally, so a patch-shaped or wrong-layer delivery is attacked head-on).
 ## Dispatch rules (computed by `stage-start --stage deliver`)
 
 `stage-start --stage deliver` computes the whole dispatch list — read its `experts`
-(and `source_insertions` / `full_tier_override`); do not recount by hand. Every size
-threshold here (50 / 100 / 200) counts NON-TEST source lines only: a bugfix that adds
+(and `source_insertions`); do not recount by hand. Every size
+threshold here (50 / 200) counts NON-TEST source lines only: a bugfix that adds
 300 lines of tests is not a 300-line change, and a test path such as
 `test_security_*.py` does not fire a file trigger. The totals including tests are still
 returned (`diff_insertions`) for the report.
@@ -48,16 +48,15 @@ returned (`diff_insertions`) for the report.
 **Always the UNION with the PLAN's declared `required_experts`:**
 `actual_dispatch_set = union(profile_tier_default_set, run.json["required_experts"])`.
 `required_experts` is append-only (BUILD may have added one), so the union is taken
-against what is present NOW; `stage-start` does this. The D7 commit gate
-(`_d7_missing_required_experts`) BLOCKS `run-commit` unless EVERY declared expert
-actually reviewed, so dispatching exactly the set the gate verifies, in ONE batch,
-avoids a wasteful second serial batch. Never constrain `required_experts` down to the
-tier instead: that reopens the D7 skip channel.
+against what is present NOW; `stage-start` does this. A declared expert that did not
+review sets push_ready false (`_d7_missing_required_experts`); it never blocks the local
+landing, which only the test evidence decides. Dispatch exactly that set, in ONE batch.
+Never constrain `required_experts` down to the tier instead: that hides the gap.
 
-**Mechanical override: source diff > 100 lines = full tier, regardless of profile**
-(`full_tier_override`). Dispatch ALL applicable specialists, not the profile's subset:
-a large "bugfix" that migrates code across modules carries concurrency, import-order
-and dead-code risks that only full coverage catches.
+**Risk, not size, picks the tier.** There is no line-count override to the full tier.
+A change with no code file (`pipeline_validator.docs_only_paths`: prose, images; not
+expert / skill / agent definitions, not dependency manifests) gets no specialist and no
+meta-review, and its DELIVER needs no `adversarial_review` record.
 
 If the source change is < 50 lines, skip all specialists (unless `required_experts` or
 the security-owner rule adds one). Print the dispatch summary:
