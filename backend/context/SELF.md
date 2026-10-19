@@ -113,7 +113,9 @@ only real computable diffs),
 `pytest_command_guard`, `background_command_guard`, `bash_syntax_guard`,
 `dangerous_command_gate`, `external_approval_gate`, `governance_file_gate`,
 `inclusive_term_guard`, `ask_question_gate`, `image_read_dedup_guard`.
-These are SOUL P7 in the flesh: prose failed, the gate holds. The live roster is whatever
+These are SOUL P7 in the flesh: prose failed, the gate holds. Each decides from a parsed
+command, a diff or path set, a marker, an exit code or a human's approval, never from a
+model's verdict (SOUL P5: the OS disposes deterministically). The live roster is whatever
 `hook_builder` registers — read it, don't trust a frozen list here; a per-command PreToolUse
 hook is the right layer ONLY for product-wide safety/quality invariants, not for a single
 project's own dev-discipline (that belongs in its skills/pipeline, not the shared hook layer).

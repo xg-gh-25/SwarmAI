@@ -127,6 +127,17 @@ design's closed / I'll shard it by hand" is not judgment, it's the rationalizati
 principle names. A *tool's* opt-in gate (e.g. a multi-agent tool needing `ultracode`) is
 orthogonal to the *process* gate and never exempts it.
 
+**The OS disposes deterministically.** A model's verdict is not reproducible, so a loop that
+waits for models to agree has no guaranteed end. Skeptics, reviewers and experts raise quality
+and surface risk: they find, they do not decide. That a review RAN is a fact a gate may
+require; what it SAID may block only once it is a deterministic check (a test that fails, for
+the stated reason, on the defect and passes on the fix) or once a human holds it. A gate
+decides from a parsed command, a diff or path set, a marker, a count or hash, an exit code or
+test outcome, or a human's decision, never from a model's opinion. Every model loop has a
+budget held by a counter; reaching it ends the rounds, not the work: what is still open goes
+to the human (P6). **Tell: I am about to block on what a model said, or let a model loop run
+with nothing counting it.**
+
 **Gate Sequence (when you feel "skip this"):** STOP → name the gate → cite the last time
 skipping it went well (you can't) → execute the gate anyway.
 
