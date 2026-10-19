@@ -1870,21 +1870,27 @@ def test_gaps_come_from_the_gates_own_warnings():
         "completed degraded")
 
 
-def test_round_one_experts_must_start_together(monkeypatch):
-    """REVIEW / DELIVER experts run in parallel: first spawns >30 s apart refuse."""
+def test_every_round_of_experts_must_start_together(monkeypatch):
+    """REVIEW / DELIVER experts run in parallel in EVERY round: round 1, and each
+    gate2-recheck wave whatever its size. Spawns >30 s apart refuse."""
+    t = 1_700_000_000.0  # in the past: the stage window ends now
+    iso = __import__("datetime").datetime.fromtimestamp(t, __import__("datetime").timezone.utc).isoformat()
     run = {"dispatch_plan": {"deliver": ["correctness", "security", "red-team", "meta-review"],
                              "review": ["spec-compliance", "code-quality"]},
-           "stage_timing": {"deliver": {"started_at": "2026-01-01T00:00:00+00:00"},
-                            "review": {"started_at": "2026-01-01T00:00:00+00:00"}}}
-    starts = {"correctness": [100.0, 400.0], "security": [104.0], "red-team": [500.0],
-              "meta-review": [900.0], "spec-compliance": [100.0], "code-quality": [300.0]}
+           "stage_timing": {"deliver": {"started_at": iso}, "review": {"started_at": iso}},
+           "gate2_waves": [{"at": t + 300, "experts": ["correctness", "security"]},
+                           {"at": t + 600, "experts": ["correctness"]}]}
+    starts = {"correctness": [t + 10, t + 310, t + 610], "security": [t + 12, t + 312],
+              "red-team": [t + 11], "meta-review": [t + 900],
+              "spec-compliance": [t + 10], "code-quality": [t + 200]}
     monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: starts)
     w: list = []
-    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []  # red-team joins round 2
+    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
     errs = cli._parallel_dispatch_errors("r", run, "review", w)
     assert errs and errs[0].startswith("E_SERIAL_DISPATCH") and "code-quality" in errs[0]
-    starts["security"] = [200.0]
-    assert cli._parallel_dispatch_errors("r", run, "deliver", w)[0].startswith("E_SERIAL_DISPATCH")
+    starts["security"] = [t + 12, t + 400]  # round 2 re-checks spawned one after another
+    errs = cli._parallel_dispatch_errors("r", run, "deliver", w)
+    assert len(errs) == 1 and "re-check wave 1" in errs[0] and "security" in errs[0]
     monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: None)
     assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []  # unreadable: warn only
     assert any("NOT verified" in x for x in w)

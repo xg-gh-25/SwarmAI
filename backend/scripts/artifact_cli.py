@@ -5194,42 +5194,60 @@ def _spawn_starts(run_id: str, windows: "list[tuple[float, float]]") -> "dict | 
 
 def _parallel_dispatch_errors(run_id: str, cand_run: dict, stage: str,
                               warnings: "list[str]") -> "list[str]":
-    """REVIEW and DELIVER experts must run in parallel (XG 2026-10-19): the FIRST spawn of
-    every dispatched expert of the stage (REVIEW: spec-compliance included; DELIVER: the
-    Gate-2 round 1, red-team excepted when it joins round 2) starts within
-    PARALLEL_WINDOW_S of the others: ONE message with every Agent call. A later round
-    re-checks only the experts with open items, so only round 1 is a full wave."""
+    """REVIEW and DELIVER experts run in parallel, EVERY round (XG 2026-10-19): each wave's
+    experts start within PARALLEL_WINDOW_S of each other (ONE message, one Agent call
+    each). Waves: REVIEW = its ``review_experts``; DELIVER round 1 = the dispatched Gate-2
+    experts (stage-start), then one wave per gate2-recheck call (``gate2_waves``: the
+    experts it handed a prompt, however many). A wave member's spawn is its first one at
+    or after the wave's hand-out and before the next wave; one with no spawn there is
+    not this check's business (the round / findings gates own it)."""
     import time as _time
     plan = cand_run.get("dispatch_plan") if isinstance(cand_run.get("dispatch_plan"), dict) else {}
-    ids = [e for e in plan.get(stage) or [] if isinstance(e, str) and e not in _NOT_IN_WAVE]
-    if len(ids) < 2:
-        return []
     timing = (cand_run.get("stage_timing") or {}).get(stage) or {}
     windows = _stage_windows(timing, _time.time() + 60)[-1:]  # this entry of the stage
-    starts = _spawn_starts(run_id, windows) if windows else None
+    if not windows:
+        return []
+    lo, hi = windows[0]
+    waves = [{"at": lo, "experts": [e for e in plan.get(stage) or []
+                                    if isinstance(e, str) and e not in _NOT_IN_WAVE]}]
+    if stage == "deliver":
+        waves += sorted((w for w in cand_run.get("gate2_waves") or []
+                         if isinstance(w, dict) and isinstance(w.get("at"), (int, float))
+                         and lo <= w["at"] <= hi), key=lambda w: w["at"])
+    if not any(len(w.get("experts") or []) >= 2 for w in waves):
+        return []
+    starts = _spawn_starts(run_id, windows)
     if starts is None:
         warnings.append(f"{stage} parallel dispatch NOT verified: marker store unreadable")
         return []
-    firsts = {e: starts[e][0] for e in ids if starts.get(e)}
-    if any(e in starts and not starts[e] for e in ids):
-        warnings.append(f"{stage} parallel dispatch not checked: a marker predates started_at "
-                        "(rebuild and restart the backend)")
-        return []
-    if stage == "deliver" and "red-team" in firsts and len(firsts) > 2:
-        others = sorted(v for k, v in firsts.items() if k != "red-team")
-        if firsts["red-team"] - others[-1] > PARALLEL_WINDOW_S:
-            firsts.pop("red-team")  # added to round 2's batch by gate2-recheck: allowed
-    if len(firsts) < 2:
-        return []
-    t0 = min(firsts.values())
-    late = sorted(e for e, t in firsts.items() if t - t0 > PARALLEL_WINDOW_S)
-    if not late:
-        return []
-    spread = max(firsts.values()) - t0
-    return [f"E_SERIAL_DISPATCH: the {stage} experts did not start together (first spawns "
-            f"{spread:.0f}s apart; late: {', '.join(late)}). Spawn every `"
-            f"{'review_experts' if stage == 'review' else 'experts'}` entry in ONE message "
-            "(one Agent call each, all in the same reply), then stage-complete again."]
+    errs = []
+    for n, w in enumerate(waves):
+        ids = [e for e in w.get("experts") or [] if isinstance(e, str) and e not in _NOT_IN_WAVE]
+        if len(ids) < 2:
+            continue
+        t_from = float(w["at"]) - 5
+        t_to = float(waves[n + 1]["at"]) if n + 1 < len(waves) else float("inf")
+        if any(e in starts and not starts[e] for e in ids):
+            warnings.append(f"{stage} parallel dispatch not checked: a marker predates "
+                            "started_at (rebuild and restart the backend)")
+            return []
+        firsts = {}
+        for e in ids:
+            hit = [t for t in starts.get(e) or [] if t_from <= t < t_to]
+            if hit:
+                firsts[e] = hit[0]
+        if len(firsts) < 2:
+            continue
+        t0 = min(firsts.values())
+        late = sorted(e for e, t in firsts.items() if t - t0 > PARALLEL_WINDOW_S)
+        if late:
+            label = "review_experts" if stage == "review" else (
+                "round 1 (`experts`)" if n == 0 else f"re-check wave {n} (`recheck`)")
+            errs.append(f"E_SERIAL_DISPATCH: {stage} {label} did not start together (first "
+                        f"spawns {max(firsts.values()) - t0:.0f}s apart; late: {', '.join(late)}). "
+                        "Spawn every expert of a round in ONE message (one Agent call each, "
+                        "all in the same reply), then stage-complete again.")
+    return errs
 
 
 def _final_gate_spawn_errors(run_id: str, cand_run: dict, artifact: "dict | None",
@@ -12017,6 +12035,14 @@ def cmd_gate2_recheck(args, reg: ArtifactRegistry) -> None:
         warnings.append("a specialist HIGH requires the Red Team: it runs IN this batch (its "
                         "first round, on the whole change), in parallel with the re-checks")
     warnings += rt.get("warnings") or []
+    if recheck:  # this round's wave: DELIVER stage-complete checks it started together
+        import time as _t
+        from core.run_lock import update_run
+        try:
+            update_run(run_file, lambda d: d.setdefault("gate2_waves", []).append(
+                {"at": round(_t.time(), 3), "experts": [e["id"] for e in recheck]}))
+        except Exception as e:  # noqa: BLE001 — bookkeeping: the check then only warns
+            warnings.append(f"Gate-2 wave not recorded ({type(e).__name__})")
     print(json.dumps({"ok": True, "fix_diff": str(fix_path) if diff else None,
                       "changed_since_round1": fixed, "new_to_change_set": new,
                       "recheck": recheck, "not_rechecked": skipped,

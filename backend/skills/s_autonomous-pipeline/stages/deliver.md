@@ -18,7 +18,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - `[GATE·cli]` Adversarial review is NON-NEGOTIABLE: no "tests pass / simple code" exemption. <!-- R-deliver-001 -->
 - `[GATE·cli]` Check 9 depth validation needs `adversarial_review.profile_tier == "full"` for full/bugfix; `run-update --status completed` BLOCKS on `skipped`/`lite`. <!-- R-deliver-002 R-deliver-005 -->
 - Adversarial Review Gate (BLOCKING) — multi-specialist — `[GATE·cli]`: before the report and any commit. <!-- R-deliver-004 -->
-- `[GATE·cli]` BLOCKING: spawn ALL selected specialists in ONE message (parallel Agent calls; `E_SERIAL_DISPATCH`). <!-- R-deliver-006 -->
+- `[GATE·cli]` BLOCKING: every round (round 1 and each `gate2-recheck` batch) in ONE message (`E_SERIAL_DISPATCH`). <!-- R-deliver-006 -->
 - Meta-Review (BLOCKING) — `[GATE·validator]`: a full/bugfix deliver artifact without `meta_review`/`meta_review_verdict` is blocked; trivial/research/docs exempt. <!-- R-deliver-009 -->
 - Push-Ready (binary) — `[GATE·cli]`: false → `run-commit` still commits, marked; never push. <!-- R-deliver-003 -->
 - `[GATE·cli]` Run source committed → `run-update --status completed` BLOCKS until surface evidence: the `surface_run_outputs` marker naming every commit, or `--outputs-surfaced` on that call; docs-only exempt; never re-record deliver for it (`complete.md` Step 0). <!-- R-deliver-015 -->
