@@ -30,6 +30,15 @@ def _g(cwd, *a):
     return p.stdout.strip()
 
 
+@pytest.fixture(autouse=True)
+def _hook_token_oracle():
+    """The daemon's token service (in-process, as in the daemon)."""
+    hook_token.stop_oracle()
+    assert hook_token.start_oracle(50000 + os.getpid() % 10000) or not hook_token.oracle_supported()
+    yield
+    hook_token.stop_oracle()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     tmp = Path(os.path.realpath(tmp_path))
@@ -157,6 +166,13 @@ def test_token_issued_by_rewriting_single_command(env):
     _cmd("stage-start", extra="--stage build") + " | tail -1",
 ])
 def test_compound_token_command_denied(env, c):
+    assert _denied(og._decide("s1", c, {"command": c}))
+
+
+@pytest.mark.skipif(not hook_token.oracle_supported(), reason="file mode (no AF_UNIX)")
+def test_token_command_denied_when_token_service_down(env):
+    hook_token.stop_oracle()
+    c = _cmd("stage-start", extra="--stage deliver")
     assert _denied(og._decide("s1", c, {"command": c}))
 
 

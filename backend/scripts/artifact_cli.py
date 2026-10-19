@@ -9554,6 +9554,10 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     if stage not in pv.STAGE_RECORD_SCHEMAS:
         _stage_boundary_fail(stage, [f"Input: unknown stage '{stage}' "
                                      f"(known: {list(pv.STAGE_RECORD_SCHEMAS)})"])
+    if getattr(args, "force", False) and (stage != "deliver" or not (args.reason or "").strip()):
+        _stage_boundary_fail(stage, ["Input: --force applies only to `--stage deliver` of an "
+                                     "isolated run and needs --reason (it is recorded as a "
+                                     "d7_force_bypass intervention)"])
     run_dir = run_file.parent
     profile = normalize_profile(run_state.get("profile"))
     now = _utc_now_iso()
@@ -9687,8 +9691,9 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
                             "before advancing or completing")
         # Isolated run: land now (pipeline-run-worktree §7.4). A refusal exits here,
         # so the manifest does not advance; rerunning stage-complete retries.
-        landing = _land_isolated_deliver(project, run_id, run_file, bool(cand_rec.get("push_ready")),
-                                         reg, warnings)
+        landing = _land_isolated_deliver(
+            project, run_id, run_file, bool(cand_rec.get("push_ready")), reg, warnings,
+            force_reason=(args.reason.strip() if getattr(args, "force", False) else None))
     if next_stage:
         from core.artifact_registry import PIPELINE_STATES
         behind = _manifest_ahead_of(reg, project, profile, next_stage)
@@ -9734,9 +9739,12 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
 
 
 def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready: bool,
-                           reg: ArtifactRegistry, warnings: "list[str]") -> "dict | None":
+                           reg: ArtifactRegistry, warnings: "list[str]",
+                           force_reason: "str | None" = None) -> "dict | None":
     """Deliver landing for an isolated run (pipeline_worktree.land_deliver), with B
-    written into the worktree before the final commit and REPORT.md refreshed after."""
+    written into the worktree before the final commit and REPORT.md refreshed after.
+    *force_reason* (stage-complete --force --reason): land despite the review
+    precheck, recorded as a d7_force_bypass intervention — run-commit's override."""
     import pipeline_worktree as _pw
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
     if not _pw.is_isolated(run_state):
@@ -9783,6 +9791,14 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                 if stale:
                     errs.append("Gate-2 expert(s) have not reviewed the current change "
                                 "(recorded at deliver stage-start): " + ", ".join(stale))
+        if errs and force_reason:
+            from core.run_lock import update_run
+            note = f"landed via --force ({force_reason}): " + "; ".join(errs)
+            update_run(run_file, lambda d: _append_intervention(
+                d, stage="deliver", kind="d7_force_bypass", avoidable=True, note=note))
+            warnings.append("review precheck FORCE-BYPASSED and recorded as a d7_force_bypass "
+                            "intervention: " + "; ".join(errs))
+            return []
         return errs
 
     landing = _pw.land_deliver(run_id=run_id, run_file=run_file, run_state=run_state,
@@ -11334,6 +11350,12 @@ def main() -> None:
                                   help='{"artifact": {...}, "record": {...}} — inline JSON, @PATH or @-')
     p_stage_complete.add_argument("--check", action="store_true",
                                   help="Validate only; write nothing")
+    p_stage_complete.add_argument("--force", action="store_true",
+                                  help="deliver of an isolated run only: land despite the "
+                                       "expert-review precheck (D7); needs --reason; recorded "
+                                       "as a d7_force_bypass intervention")
+    p_stage_complete.add_argument("--reason", default=None,
+                                  help="why --force is needed (recorded)")
     p_g0 = sub.add_parser("gate0-prompt", help="Gate-0: write the EVALUATE skeptic prompt for this understanding, record the hand-out (single-line JSON)")
     p_g0.add_argument("--project", required=True)
     p_g0.add_argument("--run-id", required=True)

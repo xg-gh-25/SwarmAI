@@ -327,10 +327,11 @@ def _exclude_node_modules(common_dir: str) -> None:
 
 
 def create(run_id: str, repo_name: str, main: "str | Path",
-           workspace: "str | Path | None" = None) -> dict:
+           workspace: "str | Path | None" = None, at: "str | None" = None) -> dict:
     """Create ``WT_ROOT/<run_id>/<repo_name>`` on a new ``run/<run_id>`` branch at the
-    main checkout's HEAD (other sessions' uncommitted edits stay out). Returns the
-    run.json ``worktrees[]`` entry. Raises WorktreeError (caller falls back to shared)."""
+    main checkout's HEAD (other sessions' uncommitted edits stay out), or at commit
+    *at* (a ledger restore). Returns the run.json ``worktrees[]`` entry. Raises
+    WorktreeError (caller falls back to shared)."""
     main = Path(os.path.realpath(str(main)))
     head_ref = _symbolic_head(main)
     if not head_ref or not head_ref.startswith("refs/heads/"):
@@ -343,7 +344,7 @@ def create(run_id: str, repo_name: str, main: "str | Path",
         raise WorktreeError("worktree_invalid", f"{path} already exists")
     if not _no_symlinks(path.parent.parent):
         raise WorktreeError("worktree_invalid", f"a component of {path.parent.parent} is a symlink")
-    head = _rev(main, "HEAD")
+    head = _rev(main, "HEAD" if at is None else at)
     path.parent.mkdir(parents=True, exist_ok=True)
     if workspace is not None:
         stamp_workspace(run_id, workspace)
@@ -750,6 +751,12 @@ def snapshot_to_ledger(run_id: str, entry: dict, main: "str | Path", reason: str
         _out(wt, "read-tree", head, env=env)
         _out(wt, "add", "-A", "--", ".", ":(exclude)desktop/node_modules", env=env, timeout=300)
         tree = _out(wt, "write-tree", env=env).strip()
+        change, unadded = None, None   # None: restore by hand (README)
+        if busy_state(wt) is None and head == entry.get("base"):
+            try:  # what was IN the change set vs merely on disk (a restore keeps the split)
+                change, unadded = change_tree(wt, run_id), untracked_new_files(wt, run_id)
+            except WorktreeError:
+                change, unadded = None, None
         snap = _snapshot(wt, head, tree, f"swarm: ledger snapshot of {run_id} ({reason})")
         base = entry.get("base") or head
         prereq = _out(wt, "merge-base", base, snap).strip() or base
@@ -761,7 +768,9 @@ def snapshot_to_ledger(run_id: str, entry: dict, main: "str | Path", reason: str
         _verify_bundle(main, bundle, ref, tree)
         meta = {"run_id": run_id, "repo_name": repo_name, "base": prereq, "snapshot": snap,
                 "tree": tree, "reason": reason, "at": _now_iso(),
-                "integration_branch": entry.get("integration_branch")}
+                "integration_branch": entry.get("integration_branch"),
+                "change_tree": change, "unadded": unadded,
+                "git_common_dir": entry.get("git_common_dir")}
         (dest / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         (dest / "README.md").write_text(_LEDGER_README.format(**meta), encoding="utf-8")
         return dest
@@ -864,6 +873,7 @@ def _remove(run_id: str, entry: dict, main: Path, merged: bool) -> None:
     if admin is not None:
         shutil.rmtree(admin, ignore_errors=True)
     git(main, "branch", "-q", "-d" if merged else "-D", branch_name(run_id))
+    drop_srcgraph_cache(path)
     refs = git(main, "for-each-ref", "--format=%(refname)", f"refs/run/{run_id}/").stdout
     for r in refs.split():
         git(main, "update-ref", "-d", r)
@@ -1043,6 +1053,13 @@ def _quarantine(d: Path, report: dict) -> None:
         report["errors"].append(f"quarantine {d}: {exc}")
 
 
+def _iso_ts(v) -> float:
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _deliver_done(data: dict) -> bool:
     return any(isinstance(s, dict) and s.get("stage") == "deliver"
                and s.get("status") in ("completed", "done") for s in data.get("stages") or [])
@@ -1112,8 +1129,11 @@ def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeo
         reason = f"run {data.get('status')}"
     else:
         act = last_activity(rid, data) or 0.0
+        # Deliver is recorded completed BEFORE its landing; a landing that is backing off
+        # (busy, blocked by uncommitted main edits) stamps landing_attempt_at.
+        tried = _iso_ts(data.get("landing_attempt_at"))
         if _deliver_done(data) and any(e.get("state") == "active" for e in entries) \
-                and now - act > 86400:
+                and now - max(act, tried) > 86400:
             reason = "deliver finished but never integrated"
         elif now - max(act, f.stat().st_mtime) > STALE_DAYS * 86400:
             reason = f"no activity for {STALE_DAYS} days"
@@ -1188,3 +1208,103 @@ def _purge_ledgers(now: float, report: dict) -> None:
                 report["ledgers_purged"] += 1
         except OSError:
             continue
+
+
+# ── after release (§6.4, §8.1, §8.3) ─────────────────────────────────────────
+def drop_srcgraph_cache(path: "str | Path") -> None:
+    """Delete the test runner's source-graph cache of a removed worktree. Same file
+    name as ``pipeline_test.build_source_graph`` (sha256 of the repo path)."""
+    import hashlib
+    env = os.environ.get("SWARM_TEST_CACHE_DIR")
+    d = Path(env) if env else Path.home() / ".swarm-ai" / "cache" / "pipeline_test"
+    for p in {str(path), os.path.realpath(str(path))}:
+        try:
+            (d / f"srcgraph-{hashlib.sha256(p.encode()).hexdigest()[:16]}.json").unlink()
+        except OSError:
+            pass
+
+
+def landed_path(path: "str | Path", workspace: "str | Path") -> "Path | None":
+    """A file path inside a run worktree that no longer exists → the same file in the
+    main checkout, once that run's change landed there. Canvas rows recorded during
+    the run keep resolving after the worktree is released (§6.4). None otherwise."""
+    import glob
+    if os.path.exists(str(path)):
+        return None
+    hit = run_for_path(path)
+    if hit is None:
+        return None
+    rid, repo = hit
+    try:
+        rel = Path(os.path.realpath(str(path))).relative_to(os.path.realpath(str(wt_path(rid, repo))))
+    except ValueError:
+        return None
+    if not rel.parts or ".." in rel.parts:
+        return None
+    for f in glob.glob(os.path.join(str(workspace), "Projects", "*", ".artifacts", "runs",
+                                    rid, "run.json")):
+        try:
+            data = json.loads(Path(f).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for e in data.get("worktrees") or [] if isinstance(data, dict) else []:
+            if not isinstance(e, dict) or e.get("repo_name") != repo \
+                    or not (e.get("integrated") or {}).get("sha"):
+                continue
+            common = str(e.get("git_common_dir") or "")
+            if os.path.basename(common) != ".git":
+                continue
+            main = os.path.realpath(os.path.dirname(common))
+            cand = os.path.realpath(os.path.join(main, str(rel)))
+            if cand.startswith(main + os.sep) and os.path.isfile(cand):
+                return Path(cand)
+    return None
+
+
+def restore_from_ledger(run_id: str, entry: dict, main: "str | Path",
+                        workspace: "str | Path | None" = None) -> dict:
+    """Rebuild a worktree released after a long idle period from its verified ledger
+    snapshot (§8.3). Files = the snapshot; index = the change set as it was, so a file
+    that was never ``git add``-ed comes back un-added and §6.2 still applies. Returns
+    the new ``worktrees[]`` entry; raises WorktreeError('restore_failed')."""
+    name = str(entry.get("repo_name"))
+    _check_ids(run_id, name)
+    main = Path(os.path.realpath(str(main)))
+    dest = ledger_root() / run_id / name
+    fail = lambda why: WorktreeError("restore_failed", why, ledger=str(dest))  # noqa: E731
+    try:
+        meta = json.loads((dest / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise fail("no readable ledger snapshot for this worktree") from None
+    if not isinstance(meta, dict) or not meta.get("change_tree") or meta.get("unadded") is None:
+        raise fail("the snapshot was taken mid-rebase or by an older version: restore it by "
+                   "hand (ledger README)")
+    if meta.get("git_common_dir") not in (None, _common_dir(main)):
+        raise fail("the ledger belongs to another clone of this repo")
+    if meta.get("integration_branch") != _symbolic_head(main):
+        raise fail(f"the main checkout is not on {meta.get('integration_branch')}")
+    ref = f"refs/swarm-ledger/{run_id}/{name}"
+    try:
+        _out(main, "fetch", "-q", str(dest / "worktree.bundle"), f"{ref}:{ref}", timeout=300)
+        snap = _rev(main, ref)
+        if snap != meta.get("snapshot"):
+            raise fail("the bundle holds a different snapshot than meta.json")
+        new = create(run_id, name, main, workspace=workspace, at=str(meta.get("base")))
+        wt = wt_path(run_id, name)
+        try:
+            _out(wt, "read-tree", "--reset", "-u", snap, timeout=300)   # files
+            _out(wt, "read-tree", str(meta["change_tree"]))              # index
+            if change_tree(wt, run_id) != meta["change_tree"] \
+                    or untracked_new_files(wt, run_id) != sorted(meta["unadded"]):
+                raise fail("the rebuilt worktree differs from the snapshot")
+        except WorktreeError:
+            _remove(run_id, new, main, merged=False)
+            raise
+    except WorktreeError as exc:
+        if exc.code == "restore_failed":
+            raise
+        raise fail(exc.message) from exc
+    finally:
+        git(main, "update-ref", "-d", ref)
+    new["restored_from"] = str(dest)
+    return new

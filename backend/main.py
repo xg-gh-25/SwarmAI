@@ -1331,6 +1331,14 @@ async def lifespan(app: FastAPI):
     # Desktop CLI sessions reach the Bedrock thinking gateway on this port.
     from core.bedrock_thinking_gateway import set_listen_port as _set_gw_port
     _set_gw_port(backend_port)
+    # Pipeline-run worktree hook tokens (§4.2): issuance records live only in this
+    # process; CLI subprocesses burn them over an owner-only Unix socket.
+    try:
+        from core import hook_token as _hook_token
+        if not _hook_token.start_oracle(backend_port) and _hook_token.oracle_supported():
+            logger.warning("hook-token oracle not started: isolated pipeline runs will refuse")
+    except Exception:  # noqa: BLE001 — never block startup
+        logger.warning("hook-token oracle failed to start", exc_info=True)
     if _bjson_written:
         logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
     else:
@@ -1458,6 +1466,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
+    try:
+        from core import hook_token as _hook_token
+        _hook_token.stop_oracle()
+    except Exception:  # noqa: BLE001
+        logger.debug("hook-token oracle stop failed", exc_info=True)
     if _readiness_task and not _readiness_task.done():
         _readiness_task.cancel()
         try:

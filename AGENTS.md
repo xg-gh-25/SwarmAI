@@ -244,7 +244,8 @@ implementations in `security_hooks.py`). By category:
    `config.json["pipeline"]["worktree_mode"] = "on"`): `run_owner_gate` (Bash, right after
    `pipeline_test_gate`; takes a crashed owner's run over, denies while the owner is live,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting a single artifact_cli command via
-   `updatedInput` — no other Bash hook may set `updatedInput`) and `worktree_write_gate`
+   `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
+   in daemon memory, the CLI burns it over the owner-only socket started in `main.py`) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktree, denies stash / shared-ref changes from a run worktree;
    operator-set `SWARM_WORKTREE_GATE_FORCE=1`).

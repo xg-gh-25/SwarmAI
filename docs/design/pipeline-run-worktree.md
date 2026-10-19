@@ -86,21 +86,23 @@ worktree 的创建、同步、落地、释放都要知道"谁在改这个 run、
   写入 gate 根本不存在。"有 hook"不能用环境变量证明：模型在带 hook 的 session 里起一个 `claude --print --bare`
   子进程，子进程会继承所有环境变量。证明必须来自 hook **这一次真的执行了**，所以用一次性 token：
   - **签发**：session-link 的 PreToolUse 部分（今天已经在 artifact_cli 调用前记录开始时间）识别出会改 worktree 状态的
-    命令：建 worktree 的 `stage-start`、接管（`run-resume` / 自动接管）、deliver 的 `stage-start`（同步）和
-    `stage-complete`（落地）、owner 发起的释放。识别到后，它生成随机 nonce，把
-    `{sha256(nonce), session_id, run_id, 子命令, issued_at}` 写进 `runs/<id>/.hook-tokens/<sha256>.json`（只存哈希，
-    读到文件也拿不到 nonce），再用 `updatedInput` 把命令改写成 `SWARM_HOOK_TOKEN=<nonce> <原命令>`。
+    命令：每个 `stage-start`（建 worktree、从 ledger 重建、deliver 的同步都在这里发生）、接管（`run-resume` /
+    自动接管）、deliver 的 `stage-complete`（落地）、owner 发起的释放。识别到后，它生成随机 nonce，把
+    `{sha256(nonce), session_id, run_id, 子命令, issued_at}` **只记在 daemon 进程的内存里**，再用 `updatedInput` 把命令
+    改写成 `SWARM_HOOK_TOKEN=<端口>.<nonce> <原命令>`。daemon 的 token 服务没起来时不签发，命令被 deny。
   - **只签单条命令**：命令必须是一条单独调用 artifact_cli 的简单命令（复用 session_link_gate 已有的分词），带管道、
     `;`、`&&`、子 shell 的一律 deny，提示"单独运行这条命令"。这样 nonce 只进那一个进程，不会被同一次调用里的别的
     命令（包括一个 `--bare` 子进程）拿到。模型自己写的 `SWARM_HOOK_TOKEN=` 前缀被 hook 的改写覆盖。
-  - **核销**：CLI 在 run 锁内按 `sha256(nonce)` 找文件，校验 session_id 等于 `run.session_id`、run_id 和子命令一致、
-    未超过 120 秒（CLI 开始任何耗时操作前就核销），然后删掉文件，单次有效。核销失败的处理：建 worktree 那一步且项目绑定了
+  - **核销**：CLI 是另一个进程，经 daemon 的 Unix socket `<app data>/run/hook-token-<端口>.sock`（文件 0600、目录
+    0700、属主必须是本用户；不是网络监听，hive 的 HTTP 鉴权不受影响）把 `sha256(nonce)` 交给 daemon；daemon 取出并
+    删掉记录（单次有效），校验 session_id 等于 `run.session_id`、run_id 和子命令一致、未超过 120 秒。daemon 不在 → 视为
+    没有 token（fail closed），CLI 不回退到文件。没有 AF_UNIX 的平台（Windows）仍用旧的哈希文件方式。核销失败的处理：建 worktree 那一步且项目绑定了
     代码 repo、开关为 on → **拒绝并让 run 失败**（`failed`，理由"isolated run 需要带 hook 的 session"），不回退成
     shared、不在没有 gate 的情况下悄悄运行；同步、落地、接管、释放 → 拒绝，run 状态不变。daemon 的清扫在进程内调用释放
     函数，不经过 CLI，不需要 token。
-  - **token 防的是什么**：与 §7.3 的威胁模型相同，防误用和被注入的指令走正常命令绕过，不防有意伪造。token 文件存在
-    run 目录里，一个刻意的进程可以自己写一个哈希文件再带上对应 nonce（实现审查指出，§16.7）。要防伪造需要把签发
-    记录放进 daemon 内存、CLI 经本地端点核销；目前不做。
+  - **token 防的是什么**：签发记录只在 daemon 内存里，写文件造不出 token（实现审查 §16.7 指出的伪造路径已关，
+    §16.8）。剩下的是同用户进程顶替 daemon 的 socket 自己当核销方，这需要有意写一个服务，超出 §7.3 的威胁模型
+    （防误用和被注入的指令走正常命令绕过）。Windows 的文件方式仍可伪造，写明。
   - **剩余风险，写明不修**：hookless 子进程仍然可以直接改文件（worktree 里改的是本 run 自己的树，同步时进 Gate-2；
     用绝对路径改 main checkout 的，和聊天 session 的未提交改动一样被 ff-only 的重叠检查挡下）。它做不到的是建 run、
     接管、同步、落地。
@@ -547,7 +549,8 @@ run.json 和 token。
 | 最终 commit 很慢（git-defender） | 实测 0.4–2.3 秒；300 秒超时护栏 → `busy: commit_slow`，退避重跑（§7.4） |
 | 在没有 hook 的 `--bare` 执行器里建 isolated run | 拿不到 token，拒绝，run 失败并报告 |
 | 带 hook 的 session 起的 `--bare` 子进程（继承了全部环境变量）去同步、落地或接管 | 拿不到 token，拒绝，run 不变；它直接改的文件见 §4.2 的剩余风险 |
-| hook 签发后命令没跑（被别的 gate deny、超时） | token 120 秒后过期，下次调用重新签发；过期文件由清扫删除 |
+| hook 签发后命令没跑（被别的 gate deny、超时） | token 120 秒后过期，下次调用重新签发；内存记录在下次签发时清掉（Windows 的文件由清扫删除） |
+| daemon 重启（内存里的签发记录丢失） | 已签未用的 token 核销失败，命令被拒、可重试，下次签发走新进程 |
 
 ## 14. 分期
 
@@ -687,15 +690,14 @@ mtime 判断条目是否"racy"；复制出的新 mtime 会让同一秒内、同�
 | 判定三（§6.1） | 对所有 session：run worktree 里的 stash、改别的 run 的 `run/*` 分支、指向 `WT_ROOT` 的 worktree 命令。只在 run worktree 里执行、或本 session 拥有 isolated run 时，才禁止动其他 ref / config / gc --prune 等 | 按 common dir 对所有 session 一律禁止，会挡掉主工作区里正常的 `git tag` / `git branch -D`（发布流程就要打 tag）。防的是"从 worktree 绕过集成"，这个收窄不影响它 |
 | 接管与 token（§4.2） | 只在开关为 on、或该 run 是 isolated 时生效 | 开关关闭时行为与今天完全一致（不改写命令、不拒绝组合命令） |
 | 运行期 `release`（§8.2） | owner 的 `run-update` 到终止状态、带 token 时立即释放；否则写 `release_requested`，由 daemon 清扫 | 与设计一致；补充：owner 在终止后再调 `stage-start` 会被拒绝并当场释放 |
-| 卡片删减（§6.2、§6.3） | 未做 | 开关默认 off，shared 模式仍需要"登记 files_touched / git add 你的文件"这些步骤；worktree 模式的规则由 stage-start 输出（`worktree_rule`、`untracked_new_files`、`sync_note`）。开关转为默认 on 时再删卡片 |
-| Canvas 已有 rail 行的路径刷新（§6.4） | 未做；运行期的 run worktree 已加进 `_worktree_roots`（live 归属和路径解析可用），落地后 REPORT 重新生成 | rail 行的持久化在前端，单独做 |
-| 14 天闲置被释放后的重建（§8.3） | 不自动重建；stage-start 返回 `worktree_released` 并指向 ledger README | 自动恢复会把快照里的未 add 文件变成已 add，绕过 §6.2 的阻断 |
-| srcgraph 缓存清理（§8.1） | 未做 | 缓存按 repo 路径分文件、不影响正确性，只占磁盘 |
+| 卡片删减（§6.2、§6.3） | 卡片不改；isolated run 的 stage-start 输出 `card_override`，逐阶段覆盖卡片里不适用的步骤（§16.8） | 开关默认 off，shared 模式仍需要卡片里的这些步骤。开关转为默认 on 时再删卡片 |
+| Canvas 已有 rail 行的路径刷新（§6.4） | 不改前端存的行；读文件时把已释放 worktree 下的路径映射到 main（§16.8） | rail 行的持久化在前端，一处后端映射覆盖所有旧行 |
+| 14 天闲置被释放后的重建（§8.3） | 下一次 stage-start 自动从 ledger 重建（§16.8） | 快照另记改动集的树和未 add 文件，重建后未 add 的仍是未 add |
+| srcgraph 缓存清理（§8.1） | 释放时删除（§16.8） | |
 
 自动化测试：`tests/test_run_worktree.py`、`test_pipeline_worktree.py`、`test_worktree_gates.py`、
 `test_pipeline_test_worktree.py`，覆盖 §15 的 1、2、5、6、7（ff-only 部分）、8、9、10、11、13、14、15、16。
-§15 的 3、4（两个 run 并发落地 / 同文件冲突）由 `test_land_*` 与 `test_sync_conflict_*` 分别覆盖单侧；
-真实 run 上的端到端验证留到打开开关之前做。
+§15 的 3、4（两个 run 并发落地 / 同文件冲突）的端到端测试见 §16.8；真实 run 上的验证留到打开开关之前做。
 
 ### 16.7 实现的对抗审查（2026-10-18，独立 reviewer）
 
@@ -721,3 +723,15 @@ P0 的 `updatedInput` 探针按真实拓扑重跑：Bash 链（改写 hook + app
 实现中另一个发现：git 调用会继承 shell 里泄漏的 `GIT_CONFIG_COUNT/KEY_n/VALUE_n`（本 session 的审查子 agent 留下
 `core.hooksPath=/tmp/...` 和 `user.name=t`），能让最终 commit 跳过 git-defender。`run_worktree.git()` 现在丢弃所有
 `GIT_CONFIG*` 和 `GIT_DIR` 类变量。
+
+### 16.8 已知问题修复（2026-10-18，开关仍为 off）
+| 问题 | 修法 | 测试 |
+|---|---|---|
+| token 可伪造（§16.7 MED） | 签发记录只放 daemon 内存（`core/hook_token.py`）；CLI 经 owner-only 的 Unix socket（按端口区分，dev 与 daemon 可并存）核销；daemon 不在即拒绝；`main.py` 启停服务；服务没起来时 `run_owner_gate` 不签发并 deny。没有 AF_UNIX 的平台保留文件方式 | 手写的旧格式 token 文件不被接受；签发方停掉后核销失败、不再签发；socket 0600、目录 0700；gate 在服务停掉时 deny |
+| isolated run 的 D7 预检没有覆盖开关 | deliver 的 `stage-complete --force --reason '<为什么>'`：预检（声明的专家、改动后未重审的 Gate-2 专家）放行，记一条 `d7_force_bypass` intervention；树绑定（审查 = 测试 = 落地）不能 force | 无 `--force` 拒绝、带 `--force` 落地并留下 intervention |
+| 卡片的步骤在 isolated run 里不适用（§6.2、§6.3） | stage-start 输出 `card_override`（build：files_touched 自动推导；test：不做逐个修复的 commit；goal_cycle：用 `run-diff`；deliver：跳过暂存与 run-commit），卡片不动 | build / deliver 的输出 |
+| 释放后 rail 行 404（§6.4） | `run_worktree.landed_path`：已不存在、位于某个 run worktree 下、且该 run 已落地的路径 → main 里的同一文件；只用于 `GET /workspace/file`（读），home 检查照旧 | 释放前不映射、释放后映射、不存在的文件和 `..` 不映射 |
+| 闲置释放后不能自动重建（§8.3） | 快照另记改动集的树 `T` 和未 add 文件列表；下一次 owner 的 stage-start（每个 stage-start 都签 token）从 bundle 取回快照，在原 base 建 worktree，文件 = 快照、index = `T`，校验 `T` 和未 add 列表都一致才算成功，否则删掉重建的 worktree 并报告。重建前 deliver 的 `stage-complete` 拒绝落地（`worktree_released`），`completed` 也被挡（改动只在 ledger 里）——此前这两处会把只在 ledger 里的改动当成已交付放过去 | sweep 释放 → 完成和落地被拒 → stage-start 重建，`T` 相同、探针仍未 add |
+| srcgraph 缓存不清（§8.1） | `_remove` 删掉该 worktree 路径的 `srcgraph-*.json` | 释放后缓存文件消失 |
+| deliver 先记 completed 再落地，退避中的 run 会被 24 小时规则释放（§16.7 LOW） | 每次落地尝试记 `landing_attempt_at`，24 小时规则取活动时间和它的较大者 | 有近期尝试时不释放，没有时释放 |
+| §15 的 3、4 只有单侧测试 | 两个线程同时落地：恰好一个成功，另一个 `needs_resync`、worktree 回到 base，同步后叠在上面落地；同文件冲突经 CLI 全程：冲突 → 在 worktree 里解决并 `git add` → 重跑 stage-start 同步 → 重测 → 落地 | 两个新测试 |

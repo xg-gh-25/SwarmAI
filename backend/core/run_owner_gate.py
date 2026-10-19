@@ -7,12 +7,13 @@ For an ``artifact_cli`` / ``pipeline_test`` command that writes run state with
 - **takeover**: R's owner (``run.session_id``) is another session → if that session
   is not STREAMING / WAITING_INPUT, this session takes the run over (old owner to
   ``session_history[]``, session→run map rewritten); if it is, DENY.
-- **token**: for the commands that change worktree state (stage-start of
-  plan/build/goal_cycle/deliver, stage-complete of deliver, run-update to a terminal
-  status) the command must be ONE simple command; the gate issues a token and
-  rewrites the command to ``SWARM_HOOK_TOKEN=<nonce> <command>`` via ``updatedInput``.
-  The CLI consumes it under the run lock — proof the hook really ran (an
-  environment variable is inherited by a hookless ``claude --print --bare`` child).
+- **token**: for the commands that may change worktree state (every stage-start: it
+  creates, rebuilds from the ledger or syncs the worktree; stage-complete of deliver;
+  run-update to a terminal status) the command must be ONE simple command; the gate
+  issues a token (recorded only in the daemon, ``core.hook_token``) and rewrites the
+  command to ``SWARM_HOOK_TOKEN=<token> <command>`` via ``updatedInput``. The CLI burns
+  it through the daemon's socket — proof the hook really ran (an environment variable
+  is inherited by a hookless ``claude --print --bare`` child).
 
 Fail-open on its own errors (never blocks a command because the gate broke).
 Public: ``create_run_owner_gate``, ``parse_cli_calls``, ``TOKEN_SUBCOMMANDS``.
@@ -59,7 +60,6 @@ _WRITING = frozenset({
     "stage-start", "stage-complete", "publish", "run-observe", "run-diff",
     "run-surface-changes",
 })
-_TOKEN_STAGES = frozenset({"plan", "build", "goal_cycle", "deliver"})
 _TERMINAL = frozenset({"completed", "complete", "abandoned", "failed", "cancelled"})
 TOKEN_SUBCOMMANDS = ("stage-start", "stage-complete", "run-update")
 _DECIDE_TIMEOUT = 4.0
@@ -136,7 +136,7 @@ def _needs_token(call: dict) -> "str | None":
     if call["tool"] != "artifact_cli":
         return None
     sub = call["sub"]
-    if sub == "stage-start" and call.get("stage") in _TOKEN_STAGES:
+    if sub == "stage-start":
         return "stage-start"
     if sub == "stage-complete" and call.get("stage") == "deliver":
         return "stage-complete"
@@ -239,6 +239,11 @@ def _decide(sid: str, command: str, tool_input: dict) -> "dict | None":
                          "as ONE command (no `;`, `&&`, `|`, subshells or `$(...)`), so the "
                          "hook can issue its one-time token")
         nonce = hook_token.issue(run_file.parent, sid, rid, sub)
+        if nonce is None:  # the daemon's token service is down: never run unproven
+            logger.warning("run_owner_gate: hook-token service not running; %s %s denied",
+                           rid, sub)
+            return _deny("the SwarmAI backend's hook-token service is not running, so this "
+                         "worktree command cannot be proven; tell the user (restart SwarmAI)")
         rewrite = f"{hook_token.TOKEN_ENV}={shlex.quote(nonce)} {command}"
     if rewrite is None:
         return None

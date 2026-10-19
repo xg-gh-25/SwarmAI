@@ -760,7 +760,8 @@ def _is_path_under(child: Path, parent: Path) -> bool:
 
 
 def _resolve_file_path(
-    path: str, workspace_root: Path, *, allowed_external: "set[str] | None" = None
+    path: str, workspace_root: Path, *, allowed_external: "set[str] | None" = None,
+    map_landed: bool = False,
 ) -> tuple[Path, bool]:
     """Resolve a file path to an absolute target with external flag.
 
@@ -778,6 +779,10 @@ def _resolve_file_path(
             PUT write path — the Gate-0 arbitrary-write hole stays closed). Membership
             is compared on the RESOLVED string form (``str(target)``), matching what
             the emit gate records (``str(Path(abs).resolve())``).
+        map_landed: READ callers only (GET /workspace/file): a missing file inside a
+            released pipeline-run worktree resolves to the same file in the main
+            checkout once that run landed (``run_worktree.landed_path``). The home
+            guard still applies to the mapped path.
 
     Returns:
         ``(target, is_external)`` — *target* is the resolved absolute path,
@@ -807,6 +812,18 @@ def _resolve_file_path(
         # allowlist is per-session + read-only-caller-only, so it cannot be used to
         # read/write an arbitrary path the session never surfaced (Gate-0 hole).
         surfaced_ok = allowed_external is not None and str(target) in allowed_external
+        if map_landed and not target.exists():
+            # READ caller only: a rail row recorded inside a pipeline-run worktree that
+            # was released after its change landed → the landed file in the main
+            # checkout (pipeline-run-worktree §6.4). The home guard below still applies.
+            try:
+                from core.run_worktree import landed_path
+                moved = landed_path(target, workspace_root)
+            except Exception as exc:  # noqa: BLE001 — a failed lookup is a plain 404
+                logger.debug("landed_path lookup failed for %s: %s", target, exc)
+                moved = None
+            if moved is not None:
+                target = moved
         if not _is_path_under(target, home) and not surfaced_ok:
             raise HTTPException(
                 status_code=400,
@@ -941,7 +958,8 @@ async def get_workspace_file(
         except Exception:  # noqa: BLE001 — fail-safe: no allowlist → home-only guard
             logger.debug("get_workspace_file: suppressed exception on a fail-safe path", exc_info=True)
             _allowed_external = None
-    target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external)
+    target, is_external = _resolve_file_path(path, workspace_root, allowed_external=_allowed_external,
+                                             map_landed=True)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")

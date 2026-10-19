@@ -435,9 +435,21 @@ def test_update_run_is_atomic_read_modify_write(tmp_path):
 
 
 # ── hook token ────────────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _hook_token_oracle():
+    """The daemon's token service, in this process (the CLI side connects to it)."""
+    hook_token.stop_oracle()
+    assert hook_token.start_oracle(50000 + os.getpid() % 10000) or not hook_token.oracle_supported()
+    yield
+    hook_token.stop_oracle()
+
+
 def test_token_single_use_and_bound(tmp_path):
     n = hook_token.issue(tmp_path, "s1", RUN, "stage-start")
-    assert not list((tmp_path / hook_token.TOKEN_DIR).glob("*.json"))[0].read_text().count(n)
+    if hook_token.oracle_supported():  # the record lives only in the daemon's memory
+        assert not (tmp_path / hook_token.TOKEN_DIR).exists()
+    else:
+        assert not list((tmp_path / hook_token.TOKEN_DIR).glob("*.json"))[0].read_text().count(n)
     assert hook_token.consume(tmp_path, n, "s1", RUN, "stage-start") == (True, "")
     assert hook_token.consume(tmp_path, n, "s1", RUN, "stage-start")[0] is False   # replay
 
@@ -455,3 +467,34 @@ def test_token_mismatch_or_expiry_refused(tmp_path, sid, rid, sub, dt):
 def test_token_forged_or_missing_refused(tmp_path):
     assert hook_token.consume(tmp_path, None, "s1", RUN, "x")[0] is False
     assert hook_token.consume(tmp_path, "0" * 64, "s1", RUN, "x")[0] is False
+
+
+@pytest.mark.skipif(not hook_token.oracle_supported(), reason="file mode (no AF_UNIX)")
+def test_token_file_cannot_be_forged_in_oracle_mode(tmp_path):
+    """A hand-written token file (the pre-oracle record format) proves nothing."""
+    import hashlib
+    nonce = "ab" * 32
+    d = tmp_path / hook_token.TOKEN_DIR
+    d.mkdir()
+    (d / f"{hashlib.sha256(nonce.encode()).hexdigest()}.json").write_text(json.dumps({
+        "session_id": "s1", "run_id": RUN, "subcommand": "stage-start",
+        "issued_at": time.time()}))
+    for tok in (nonce, f"{hook_token._server_port}.{nonce}"):
+        assert hook_token.consume(tmp_path, tok, "s1", RUN, "stage-start")[0] is False
+
+
+@pytest.mark.skipif(not hook_token.oracle_supported(), reason="file mode (no AF_UNIX)")
+def test_token_refused_when_issuer_is_down(tmp_path):
+    n = hook_token.issue(tmp_path, "s1", RUN, "stage-start")
+    hook_token.stop_oracle()
+    ok, why = hook_token.consume(tmp_path, n, "s1", RUN, "stage-start")
+    assert not ok and "unreachable" in why
+    assert hook_token.issue(tmp_path, "s1", RUN, "stage-start") is None  # no service, no token
+
+
+@pytest.mark.skipif(not hook_token.oracle_supported(), reason="file mode (no AF_UNIX)")
+def test_token_socket_is_owner_only():
+    import stat as _st
+    p = hook_token.socket_path(hook_token._server_port)
+    assert _st.S_IMODE(os.lstat(p).st_mode) == 0o600
+    assert not os.lstat(p.parent).st_mode & 0o077

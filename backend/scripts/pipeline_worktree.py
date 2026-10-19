@@ -38,6 +38,17 @@ TERMINAL = ("completed", "complete", "abandoned", "failed", "cancelled")
 RULE = ("This run's code lives in its own worktree: edit files under {paths} (NOT the main "
         "checkout). New files need `git add <path>` in the worktree; do not commit there. "
         "Run the pipeline tools with the main checkout's absolute paths.")
+# The stage cards are written for the shared checkout and have no room left (§6.3), so
+# the steps that differ for an isolated run are overridden here, in the tool output.
+CARD_OVERRIDES = {
+    "build": "files_touched is derived from the worktree's change set: skip registering it "
+             "by hand; `git add` only NEW files.",
+    "test": "fixes stay uncommitted in the worktree: no per-fix commits.",
+    "goal_cycle": "use `artifact_cli.py run-diff --mark/--since` for anchors and diffs, not "
+                  "`git rev-parse HEAD` / `<commit>..HEAD` in the main checkout.",
+    "deliver": "skip the card's staging / unstaging and run-commit steps: stage-complete "
+               "lands the change when push_ready (run-commit afterwards only confirms).",
+}
 
 
 def _emit_fail(payload: dict, code: int = 2) -> None:
@@ -109,9 +120,20 @@ def is_isolated(run_state: dict) -> bool:
     return run_state.get("worktree_mode") == "isolated"
 
 
+_TOKEN_VERDICTS: "dict[tuple, tuple[bool, str]]" = {}
+
+
 def _token(run_dir: Path, run_state: dict, run_id: str, sub: str) -> "tuple[bool, str]":
-    return hook_token.consume(run_dir, os.environ.get(hook_token.TOKEN_ENV),
-                              run_state.get("session_id"), run_id, sub)
+    """The command's token, burned at most ONCE per process: one command may pass
+    several worktree steps (a rebuild from the ledger, then the deliver sync)."""
+    tok = os.environ.get(hook_token.TOKEN_ENV)
+    key = (str(run_dir), tok, run_id, sub, run_state.get("session_id"))
+    if tok and key in _TOKEN_VERDICTS:
+        return _TOKEN_VERDICTS[key]
+    verdict = hook_token.consume(run_dir, tok, run_state.get("session_id"), run_id, sub)
+    if tok:
+        _TOKEN_VERDICTS[key] = verdict
+    return verdict
 
 
 def _save(run_file: Path, mutate) -> dict:
@@ -229,18 +251,18 @@ def on_stage_start(*, project: str, run_id: str, stage: str, run_file: Path,
     if mode != "isolated":
         return extra
     if run_state.get("worktree_released_stale"):
-        stage_fail(stage, rw.WorktreeError(
-            "worktree_released", "this run's worktree was released after a long idle period "
-            "and saved to the ledger", ledger=[e.get("ledger") for e in _entries(run_state)]),
-            "tell the user: restore it from the ledger README, or abandon this run")
+        extra.update(_restore_released(run_id, stage, run_file, run_state, workspace, self_repo))
     try:
         wts = _validated(run_id, run_state, mains_for(run_state, workspace, self_repo))
     except rw.WorktreeError as err:
         stage_fail(stage, err, "the worktree no longer matches its git registration; tell the user")
     paths = [str(w) for _e, w, _m in wts]
-    if stage in ("build", "goal_cycle", "deliver"):
+    if stage in ("build", "test", "review", "goal_cycle", "deliver"):
         extra["worktrees"] = paths
         extra["worktree_rule"] = RULE.format(paths=", ".join(paths))
+        if stage in CARD_OVERRIDES:
+            extra["card_override"] = ("This overrides the stage card: "
+                                      + CARD_OVERRIDES[stage])
     if stage in ("build", "test", "goal_cycle", "review"):
         left = {e["repo_name"]: rw.untracked_new_files(w, run_id) for e, w, _m in wts}
         left = {k: v for k, v in left.items() if v}
@@ -251,6 +273,41 @@ def on_stage_start(*, project: str, run_id: str, stage: str, run_file: Path,
     if stage == "deliver":
         extra.update(_deliver_sync(run_id, run_file, run_state, wts, run_dir))
     return extra
+
+
+def _restore_released(run_id: str, stage: str, run_file: Path, run_state: dict,
+                      workspace, self_repo) -> dict:
+    """The sweep released this LIVE run's worktree after a long idle period (§8.3):
+    the owner's next stage-start rebuilds it from the verified ledger snapshot."""
+    ok, why = _token(run_file.parent, run_state, run_id, "stage-start")
+    if not ok:
+        stage_fail(stage, rw.WorktreeError("hookless_session", why),
+                   "rerun this stage-start as ONE command from the session that owns the run")
+    mains = mains_for(run_state, workspace, self_repo)
+    restored = []
+    for e in _entries(run_state):
+        if e.get("state") != "released" or not e.get("ledger"):
+            continue  # integrated before the release: nothing to rebuild
+        name = e.get("repo_name")
+        try:
+            if name not in mains:
+                raise rw.WorktreeError("restore_failed", f"repo {name!r} is no longer a "
+                                       "code-repo binding of this project", ledger=e["ledger"])
+            new = rw.restore_from_ledger(run_id, e, mains[name], workspace=workspace)
+        except rw.WorktreeError as err:
+            _persist(run_file, run_state)
+            stage_fail(stage, err, "tell the user: restore it by hand from the ledger README "
+                                   f"({e.get('ledger')}), or abandon this run")
+        run_state["worktrees"][run_state["worktrees"].index(e)] = new
+        restored.append(name)
+        _persist(run_file, run_state)
+    run_state.pop("worktree_released_stale", None)
+    _save(run_file, lambda d: d.pop("worktree_released_stale", None))
+    return {"worktree_restored": restored,
+            "restore_note": "this run's worktree was released after a long idle period and "
+                            "has been rebuilt from its ledger snapshot (un-added files are "
+                            "still un-added); rerun the test runner before deliver"} \
+        if restored else {}
 
 
 def _main_overlap(run_id: str, entry: dict, wt: Path, main: Path, since: str) -> "list[str]":
@@ -431,6 +488,11 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
     if not is_isolated(run_state) or not push_ready:
         return None
     run_dir = run_file.parent
+    if run_state.get("worktree_released_stale"):
+        stage_fail("deliver", rw.WorktreeError(
+            "worktree_released", "the worktree was released to the ledger after a long idle "
+            "period; nothing can land until it is rebuilt"), _NEXT["worktree_released"])
+    _save(run_file, lambda d: d.update(landing_attempt_at=rw._now_iso()))
     mains = mains_for(run_state, workspace, self_repo)
     for e in _entries(run_state):   # a crash after merge, before the record: finish it
         m = mains.get(e.get("repo_name"))
@@ -522,8 +584,12 @@ _NEXT = {
     "path_rejected": "change the refused paths, or explain them and let the user decide",
     "conflict": "rerun deliver stage-start and resolve the conflicts",
     "review_incomplete": "spawn the listed experts on the current change (deliver "
-                         "stage-start wrote their prompts), then rerun stage-complete",
+                         "stage-start wrote their prompts), then rerun stage-complete. "
+                         "Genuinely not enforceable? rerun with `--force --reason '<why>'` "
+                         "(recorded as a d7_force_bypass intervention)",
     "run_not_live": "the run was cancelled; stop",
+    "worktree_released": "rerun deliver stage-start (it rebuilds the worktree from the ledger "
+                         "and syncs it), then the test runner, then stage-complete",
 }
 
 
@@ -580,10 +646,15 @@ def run_commit_isolated(run_state: dict) -> "tuple[bool, list[str] | None]":
 
 # ── completion and release (§8.2, §8.4) ──────────────────────────────────────
 def completion_block(run_id: str, run_state: dict) -> "str | None":
-    """Why ``--status completed`` is refused (an active worktree with a change)."""
+    """Why ``--status completed`` is refused: an active worktree with a change, or a
+    change released to the ledger after a long idle period and never integrated."""
     if not is_isolated(run_state):
         return None
     for e in _entries(run_state):
+        if e.get("state") == "released" and e.get("ledger") and not e.get("integrated"):
+            return (f"the change of {e.get('repo_name')} was saved to the ledger "
+                    f"({e.get('ledger')}) and never integrated: rerun deliver stage-start (it "
+                    "rebuilds the worktree), or end the run as failed/abandoned with a reason")
         if e.get("state") != "active":
             continue
         wt = rw.wt_path(run_id, e["repo_name"])

@@ -32,6 +32,16 @@ def _g(cwd, *args):
     return p.stdout.strip()
 
 
+@pytest.fixture(autouse=True)
+def _hook_token_oracle():
+    """The daemon's token service runs in this test process; the CLI subprocesses burn
+    their tokens through its socket, exactly as in production."""
+    hook_token.stop_oracle()
+    assert hook_token.start_oracle(50000 + os.getpid() % 10000) or not hook_token.oracle_supported()
+    yield
+    hook_token.stop_oracle()
+
+
 @pytest.fixture
 def flow(tmp_path, monkeypatch):
     tmp = Path(os.path.realpath(tmp_path))
@@ -316,3 +326,168 @@ def test_land_refuses_when_precheck_reports_missing_review(flow):
     finally:
         os.environ.pop(hook_token.TOKEN_ENV, None)
     assert _state(f)["worktrees"][0]["state"] == "active"
+
+
+# ── known-issue fixes (design §16.8) ─────────────────────────────────────────
+def test_stage_start_overrides_the_card_steps(flow):
+    rid, f = _create(flow)
+    assert _start(flow, rid, "plan")[0] == 0
+    for stage, word in (("build", "files_touched"), ("deliver", "run-commit")):
+        rc, out = _start(flow, rid, stage)
+        assert rc == 0 and word in out["card_override"], out
+
+
+def test_concurrent_landings_one_wins_and_the_other_resyncs(flow):
+    """§15 item 3: two runs land at once — ff-only lets exactly one through, the other
+    gets needs_resync with main untouched, then syncs and lands on top."""
+    import threading
+    runs = []
+    for fname in ("a.py", "c.py"):
+        rid, f = _create(flow)
+        assert _start(flow, rid, "plan")[0] == 0
+        wt = rw.wt_path(rid, "swarmai")
+        (wt / fname).write_text("v = 2\n")
+        if fname == "c.py":
+            _g(wt, "add", "c.py")
+        runs.append((rid, f, wt, _state(f)["worktrees"][0]))
+    out = {}
+
+    def go(rid, f, wt, e):
+        try:
+            out[rid] = rw.land(rid, e, flow["main"], "m\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>",
+                               rw.change_tree(wt, rid), still_live=lambda: True)["sha"]
+        except rw.WorktreeError as err:
+            out[rid] = err.code
+    ts = [threading.Thread(target=go, args=r) for r in runs]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(120)
+    shas = [v for v in out.values() if len(v) == 40]
+    loser = [v for v in out.values() if len(v) != 40]
+    assert len(shas) == 1 and loser[0] in ("busy", "needs_resync"), out
+    assert _g(flow["main"], "rev-parse", "HEAD") == shas[0]
+    rid, f, wt, e = next(r for r in runs if len(out[r[0]]) != 40)
+    assert _g(wt, "rev-parse", "HEAD") == e["base"]          # back to the invariant
+    assert rw.sync(rid, e, flow["main"])["status"] == "rebased"
+    sha2 = rw.land(rid, e, flow["main"], "m2", rw.change_tree(wt, rid))["sha"]
+    assert _g(flow["main"], "rev-parse", "HEAD") == sha2
+    assert (flow["main"] / "a.py").read_text() == "v = 2\n" and (flow["main"] / "c.py").exists()
+    assert len(_g(flow["main"], "log", "--format=%H").splitlines()) == 3
+
+
+def test_same_file_conflict_resolved_in_worktree_then_lands(flow):
+    """§15 item 4, end to end through the CLI: B conflicts with A's landed change,
+    resolves in its worktree, re-syncs, retests and lands."""
+    rid_a, f_a, wt_a = _prepared(flow)
+    rid_b, f_b = _create(flow)
+    assert _start(flow, rid_b, "plan")[0] == 0
+    wt_b = rw.wt_path(rid_b, "swarmai")
+    (wt_b / "a.py").write_text("a = 3\n")
+    _evidence(f_a, rid_a, wt_a)
+    assert _land(flow, rid_a, f_a)["landed"]["swarmai"]["sha"]
+    rc, out = _start(flow, rid_b, "deliver")
+    assert rc == 1 and out["code"] == "conflict" and out["unmerged"] == ["a.py"], out
+    (wt_b / "a.py").write_text("a = 23\n")
+    _g(wt_b, "add", "a.py")
+    rc, out = _start(flow, rid_b, "deliver")
+    assert rc == 0 and out["sync"] == {"swarmai": "rebased"}, out
+    _evidence(f_b, rid_b, wt_b)
+    assert _land(flow, rid_b, f_b)["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
+    assert (flow["main"] / "a.py").read_text() == "a = 23\n"
+    assert len(_g(flow["main"], "log", "--format=%H").splitlines()) == 3
+
+
+def _stale_release(flow, f):
+    import time as _t
+    rep = rw.sweep(flow["ws"], owner_active=lambda sid: False, now=_t.time() + 15 * 86400)
+    assert rep["released"] and not rep["errors"], rep
+    assert _state(f)["worktree_released_stale"]
+
+
+def test_stale_released_worktree_is_rebuilt_exactly_on_next_start(flow):
+    rid, f = _create(flow)
+    assert _start(flow, rid, "plan")[0] == 0
+    wt = rw.wt_path(rid, "swarmai")
+    (wt / "a.py").write_text("a = 5\n")
+    (wt / "new.py").write_text("n = 1\n")
+    _g(wt, "add", "new.py")
+    (wt / "probe.txt").write_text("p\n")
+    tree = rw.change_tree(wt, rid)
+    _stale_release(flow, f)
+    assert not wt.exists()
+    import pipeline_worktree as pw
+    assert "ledger" in pw.completion_block(rid, _state(f))     # never completable unlanded
+    with pytest.raises(SystemExit):
+        _land(flow, rid, f)
+    rc, out = _start(flow, rid, "build")
+    assert rc == 0 and out["worktree_restored"] == ["swarmai"], out
+    assert rw.change_tree(wt, rid) == tree                     # the change set, as it was
+    assert rw.untracked_new_files(wt, rid) == ["probe.txt"]    # still un-added (§6.2)
+    st = _state(f)
+    assert st["worktrees"][0]["state"] == "active" and "worktree_released_stale" not in st
+    assert pw.completion_block(rid, st)
+
+
+def test_landing_attempt_keeps_a_backing_off_run_from_the_24h_release(flow):
+    import time as _t
+    from datetime import datetime, timezone
+    rid, f = _create(flow)
+    assert _start(flow, rid, "plan")[0] == 0
+    (rw.wt_path(rid, "swarmai") / "a.py").write_text("a = 2\n")
+    later = _t.time() + 2 * 86400
+    st = _state(f)
+    st.setdefault("stages", []).append({"stage": "deliver", "status": "completed"})
+    st["landing_attempt_at"] = datetime.fromtimestamp(later - 3600, timezone.utc).isoformat()
+    f.write_text(json.dumps(st))
+    rep = rw.sweep(flow["ws"], owner_active=lambda sid: False, now=later)
+    assert not rep["released"], rep
+    st.pop("landing_attempt_at")
+    f.write_text(json.dumps(st))
+    rep = rw.sweep(flow["ws"], owner_active=lambda sid: False, now=later)
+    assert rep["released"] and "never integrated" in rep["released"][0]["reason"]
+
+
+def test_released_worktree_paths_resolve_to_main_and_cache_dropped(flow, monkeypatch, tmp_path):
+    import hashlib
+    cache = tmp_path / "rcache"
+    cache.mkdir()
+    monkeypatch.setenv("SWARM_TEST_CACHE_DIR", str(cache))
+    rid, f, wt = _prepared(flow)
+    sg = cache / f"srcgraph-{hashlib.sha256(str(wt).encode()).hexdigest()[:16]}.json"
+    sg.write_text("{}")
+    _evidence(f, rid, wt)
+    _land(flow, rid, f)
+    assert rw.landed_path(wt / "a.py", flow["ws"]) is None     # worktree still there
+    st = _state(f)
+    assert rw.release(rid, st, {"swarmai": flow["main"]}, "done")[0]["ok"]
+    f.write_text(json.dumps(st))
+    assert not wt.exists() and not sg.exists()
+    assert rw.landed_path(wt / "a.py", flow["ws"]) == flow["main"] / "a.py"
+    assert rw.landed_path(wt / "nope.py", flow["ws"]) is None
+    assert rw.landed_path(wt / ".." / ".." / "x", flow["ws"]) is None
+
+
+def test_isolated_land_force_records_d7_bypass(flow, monkeypatch):
+    import artifact_cli as ac
+    rid, f, wt = _prepared(flow)
+    _evidence(f, rid, wt)
+    st = _state(f)
+    st["required_experts"] = ["security"]
+    f.write_text(json.dumps(st))
+    monkeypatch.setattr(ac, "_d7_missing_required_experts", lambda req, run_id: ["security"])
+    monkeypatch.setattr(ac, "_generate_review_deliverable", lambda *a, **k: ([], []))
+    warns: list = []
+    try:
+        os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
+        with pytest.raises(SystemExit):
+            ac._land_isolated_deliver("P", rid, f, True, None, warns)
+        assert _state(f)["worktrees"][0]["state"] == "active"
+        os.environ[hook_token.TOKEN_ENV] = hook_token.issue(f.parent, "s1", rid, "stage-complete")
+        res = ac._land_isolated_deliver("P", rid, f, True, None, warns,
+                                        force_reason="security reviewer unavailable")
+    finally:
+        os.environ.pop(hook_token.TOKEN_ENV, None)
+    assert res["landed"]["swarmai"]["sha"] == _g(flow["main"], "rev-parse", "HEAD")
+    iv = _state(f)["interventions"][-1]
+    assert iv["kind"] == "d7_force_bypass" and "security" in iv["note"]
