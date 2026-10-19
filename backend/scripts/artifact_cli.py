@@ -11673,6 +11673,77 @@ def _write_expert_prompts(*, project: str, run_dir: Path, experts: "list[dict]",
 # before that point (the worktree sync hit a rebase conflict: stage-start exits before
 # any prompt is written) is not late: nothing was reviewed, so nothing was fixed.
 GATE2_ROUND1_DIR = "round1"
+SMALL_REENTRY_DELTA_LINES = 20
+
+
+def _reentry_delta(run_id: str, run_dir: Path, run_state: dict, scope: dict,
+                   experts: "list[dict]") -> "dict | None":
+    """DELIVER entered again after its Gate-2 experts reviewed this change: each of them
+    re-reviews only the diff since the round-1 snapshot, not the whole change.
+
+    Applies to experts with a completed answer since the snapshot was taken (an expert
+    new to the list keeps its full prompt). No change since → no spawn. A small change
+    (<= SMALL_REENTRY_DELTA_LINES changed lines, no file new to the change) → no spawn,
+    recorded. Otherwise each gets ``<id>-delta.md``: its round-1 prompt with the change
+    replaced by that diff. The prompt's ``spawn`` is what stage-start returns, so an
+    entry with no ``spawn`` is not spawned. None = not a re-entry case (no usable
+    snapshot, a late one, or nobody reviewed yet): every expert gets its full prompt."""
+    import time as _time
+    if not experts:
+        return None
+    man, _why = _round1_manifest(run_id, run_dir, run_state)
+    if man is None or man.get("late"):
+        return None
+    since = _iso_epoch(man.get("taken_at"))
+    done = _completed_spawns(run_id, since, _time.time() + 60) if since else None
+    if not done:
+        return None
+    reviewed = [e for e in experts if (done.get("by_expert") or {}).get(e["id"])]
+    if not reviewed:
+        return None
+    try:
+        diff, changed, new = _gate2_fix_diff(run_dir, scope)
+    except (OSError, ValueError, KeyError):
+        return None   # cannot diff: full prompts (a re-review costs time, never a miss)
+    lines = sum(1 for ln in diff.splitlines()
+                if ln[:1] in "+-" and not ln.startswith(("+++", "---")))
+    ids = [e["id"] for e in reviewed]
+    if not diff.strip() or (lines <= SMALL_REENTRY_DELTA_LINES and not new
+                            and not diff.startswith("# NOT INCLUDED")):
+        for e in reviewed:
+            e.pop("prompt_path", None)
+            e["reentry"] = "reviewed; no re-review" + (f" ({lines} changed line(s))" if lines else "")
+        return {"experts": ids, "delta_lines": lines, "respawn": [],
+                "note": (("no change since" if not lines else f"{lines} line(s) changed since")
+                         + " the Gate-2 review of this change: these experts are NOT "
+                         "re-spawned (their entries carry no `spawn`)")}
+    prompts = run_dir / "evidence" / "prompts"
+    dpath = prompts / "reentry.diff"
+    dpath.write_text(diff, encoding="utf-8")
+    import hashlib
+    dsha = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+    paths = [dpath]
+    for e in reviewed:
+        base_p = Path(e.get("prompt_path") or prompts / f"{e['id']}.md")
+        if not base_p.is_file():
+            continue
+        base = base_p.read_text(encoding="utf-8")
+        cut = base.rfind("\n## The change\n")
+        base = base[:cut] if cut != -1 else base
+        out_p = prompts / f"{e['id']}-delta.md"
+        out_p.write_text(
+            f"{base.rstrip()}\n\n## The change: DELTA since your last review (re-entry)\n"
+            f"You already reviewed this change. Read `{dpath}` (sha256 {dsha}) in ONE Read "
+            "call: everything that changed since that review. Review ONLY that delta (and in "
+            "full any file it names as NEW to the change); do not re-review the rest. Report "
+            "findings in the format above.\n", encoding="utf-8")
+        e["prompt_path"] = str(out_p)
+        e["reentry"] = f"delta review ({lines} changed line(s))"
+        paths.append(out_p)
+    return {"experts": ids, "delta_lines": lines, "respawn": ids, "new_files": new,
+            "paths": paths,
+            "note": (f"{lines} line(s) changed since the Gate-2 review: the experts that "
+                     "reviewed it get a delta prompt (`<id>-delta.md`), not a full round")}
 
 
 def _gate2_reviewed_in_window(run_id: str, run_state: dict, expert_ids, since: float) -> bool:
@@ -13828,6 +13899,12 @@ def cmd_stage_start(args, reg: ArtifactRegistry) -> None:
                 project=project, run_dir=run_dir, experts=experts,
                 files=[c["path"] for c in scope["changed_files"]] or files_touched,
                 requirement=str(run_state.get("requirement") or ""))
+            # Before the round-1 snapshot may be retaken: experts that already reviewed this
+            # change re-review only what changed since (XG 2026-10-20).
+            _rd = _reentry_delta(run_id, run_dir, run_state, scope, experts)
+            if _rd:
+                out["gate2_reentry"] = _rd
+                ledger_warn += _ledger_add(run_id, _rd.pop("paths", []))
             _man_before = _sha256_file(_gate2_round1_dir(run_dir) / "manifest.json")
             # a re-entry may come after round 1 and its fixes: no first snapshot then —
             # unless this window never got as far as Gate-2 (a sync conflict exited first)

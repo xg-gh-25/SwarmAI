@@ -4,7 +4,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 ## Steps
 1. **Audits** (`ref/deliver/audits.md`): Fresh User + User Path Latency if user-facing; Completion Audit, AC matrix.
 2. **Stage first:** `git add` new files, unstage foreign ones, before review (`ref/deliver/gate2-coverage.md`).
-3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), prompt = the entry's `spawn` text exactly (a steered round does not count); never paste the file.
+3. **Gate-2:** spawn EVERY `experts` entry that has a `spawn` (Agent tool, ONE message), prompt = the `spawn` text, exactly. Re-entry: a reviewer gets a delta prompt or none.
 4. **Ledger, spec, fix** (`ref/deliver/gate2-findings.md`): `gate2-ledger` builds findings from the experts' answers (`findings_from: "ledger"` + a `disposition` per id, never by hand); Shared-State Override first; Red Team: never its own wave; before ANY fix, `gate2-fixspec` groups the open items by cause and its skeptic must PASS `[GATE·cli]`; fix as the spec says (by class `[GATE·validator]`), run the tests it affects (`--mode tdd --files` / `prove`), then `gate2-recheck` (spawn its `recheck`).
 4b. **The ONE full-scope run** after the last fix: `pipeline_test.py --mode regression` (`continue: true` → same command). Red → one fix spec (`ref/test/fixing.md`), fix, tdd, one last regression. Landing reads only it.
 5. **Meta-review:** one Agent call, prompt = `meta_review_spawn` exactly (no path → `spawn_prompt.py --gate meta-review --project <P> --files <changed…>`, exit 0 only; `ref/deliver/push-ready.md`).
@@ -13,7 +13,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 8. **Seed lessons** into the reflect record; write `outcome` = {`problem_before`, `result_now`, `approach[]`} (validated) + open items in `attention_flags`; REPORT.md is projected (`ref/deliver/report-and-commit.md`).
 9. **Exit** (below), then `python backend/scripts/artifact_cli.py run-commit --project <P> --run-id <R>` (local, never pushes).
 
-**Sub-agents:** foreground, never pin a model; a failed spawn → go on (all rejected → `ref/deliver/gate2-dispatch.md`).
+**Sub-agent configuration:** `run_in_background: false`, never pin a model; failed spawn → go on (all rejected → `ref/deliver/gate2-dispatch.md`).
 
 ## Gates
 - `[GATE·cli]` Adversarial review is NON-NEGOTIABLE: no "tests pass / simple" exemption. <!-- R-deliver-001 -->

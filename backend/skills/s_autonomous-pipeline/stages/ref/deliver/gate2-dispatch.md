@@ -58,8 +58,11 @@ auth / data / infra / config, the REVIEW fan-out pattern):** no Gate-2 specialis
 meta-review, no re-check, declared `required_experts` included (`_small_change`, XG
 2026-10-20). Changed again after a review by ≤ 20 lines with no added file: the review
 holds, no re-review (`pipeline_worktree._small_review_delta`; the delta is recorded in
-`review-tree.json`). A larger change after review: re-check only that delta
-(`gate2-recheck`), never a fresh round 1.
+`review-tree.json`). A larger change after review: re-check only that delta, never a fresh round 1 —
+`gate2-recheck` within DELIVER; on a DELIVER re-entry (or a new cycle after BUILD
+rework) stage-start itself hands each expert that already reviewed the change a
+`<id>-delta.md` prompt with the diff since its review, or no spawn when that diff is
+≤ 20 lines with no new file (`_reentry_delta`, reported as `gate2_reentry`).
 
 **Risk, not size, picks the tier.** There is no line-count override to the full tier.
 A change with no code file (`pipeline_validator.docs_only_paths`: prose, images; not
