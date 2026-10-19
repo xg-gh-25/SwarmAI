@@ -31,6 +31,7 @@ from .security_hooks import (
     create_active_run_commit_gate,
     create_session_link_gate,
     create_session_link_stamper,
+    create_audit_marker_write_gate,
     create_pipeline_test_gate,
     create_direct_commit_gate,
     bash_syntax_guard,
@@ -321,6 +322,24 @@ async def build_hooks(
     registry.register(
         "PreToolUse", background_command_guard,
         "background_command_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: audit-marker write gate (Bash + file tools) ──
+    # ALWAYS: DENY a write, move or delete in state/pipeline_agent_audit (redirects,
+    # write/copy verbs, interpreter code naming it, rm of an ancestor, cd into it;
+    # Write/Edit/MultiEdit/NotebookEdit by resolved path). Only the SubagentStop hook
+    # writes those markers; D7, Red Team, Gate-0/1 and adversarial_commit_gate trust
+    # them. Reads pass. Fail-open; operator bypass SWARM_AUDIT_GATE_FORCE=1 (logged).
+    # In the Bash chain it runs right after background_command_guard and before
+    # session_link_gate and every HITL gate, so a user is never asked to approve a
+    # command this gate would then deny.
+    audit_marker_gate = create_audit_marker_write_gate(hook_session_context)
+    registry.register(
+        "PreToolUse", audit_marker_gate, "audit_marker_write_gate", matcher="Bash",
+    )
+    registry.register(
+        "PreToolUse", audit_marker_gate, "audit_marker_write_gate",
+        matcher="Write|Edit|MultiEdit|NotebookEdit",
     )
 
     # ── PreToolUse: session-link gate (Bash-scoped) ──

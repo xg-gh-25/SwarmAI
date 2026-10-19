@@ -14,6 +14,7 @@ Public symbols
 - ``create_skill_access_checker``            — skill allow-list enforcement
 - ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link)
 - ``create_session_link_stamper``            — PostToolUse: stamp this session's id into unlinked runs it created
+- ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (forged review markers)
 - ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
 - ``create_direct_commit_gate``              — >20 source lines committed outside a run → run-create --profile direct
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
@@ -4786,6 +4787,797 @@ def create_session_link_gate(session_context: dict[str, Any]):
         }
 
     return _gate
+
+
+# ---------------------------------------------------------------------------
+# audit_marker_write_gate (PreToolUse: Bash and Write|Edit|MultiEdit|NotebookEdit)
+# ---------------------------------------------------------------------------
+# The backend's SubagentStop hook (runtime_hooks.create_agent_tool_audit_hook) is the
+# only legitimate writer of _AGENT_AUDIT_DIR. Its markers are the evidence behind the
+# D7 expert check, the Red Team marker check, the Gate-0/1 spawn binding,
+# adversarial_commit_gate and pipeline_validator Check 9b. A marker the agent writes
+# by hand forges all of them, and deleting the directory sends the readers down their
+# "unreadable" fail-open path. This gate DENIES:
+#   • Write/Edit/MultiEdit/NotebookEdit whose path (~ expanded, realpath) is the
+#     directory or anything under it;
+#   • Bash that writes into it: a redirect whose target names it; a verb in
+#     _AUDIT_WRITE_VERBS with an argument that names it (copy verbs: the
+#     destination); `sed -i`, `find -delete/-exec`, `tar -x` on it; interpreter code
+#     (python -c, a heredoc fed to node, bash -c, eval, …) that names it at all;
+#     a removal of the directory or of an ancestor (`rm -rf ~/.swarm-ai/state`);
+#     a `cd`/`pushd` into it (the Bash tool keeps its cwd between calls, so a later
+#     relative `> m.marker` would be invisible); via `xargs` or a `read` loop, a
+#     write verb in a command that names it anywhere; any of these inside $(…),
+#     backticks or <(…). Relative words resolve against the cwd the hook input
+#     reports, then against each `cd` in the command.
+# "Names it" (for a PATH word): a whole path component equals the dir name, the word
+# expands a variable assigned from such a word (`D=…/pipeline_agent_audit; echo x >
+# $D/m`) or a `for` list over it, or an absolute/cwd-resolved path matches it
+# component-wise, globs included (`~/.swarm-ai/state/*`). So ~, $HOME and absolute
+# spellings all match, but `pipeline_agent_audit_reader.py` and a same-named dir under
+# a DIFFERENT root (`/tmp/x/pipeline_agent_audit`) do NOT. Inline interpreter code is
+# matched by substring, not component, and is denied even when it only reads, because
+# telling read from write inside a program is a regex arms race.
+# Reads by absolute path pass (cat, ls, jq, grep, cp OUT of it, git commit -m text).
+# SWARM_AUDIT_GATE_FORCE=1 in the backend env approves (operator-only, logged).
+# Fail-open on any internal error. A command the tokenizer cannot parse fails CLOSED
+# when its text names the dir (a valid command can carry an apostrophe shlex rejects;
+# a genuinely malformed one is separately denied by bash_syntax_guard). RESIDUAL, read
+# as command text: a path assembled at run time ("pipeline_agent" + "_audit"), a
+# standalone script FILE that writes there, brace expansion (`pipeline_agent_{audit,x}`),
+# a sed `w`-command, or a relative path whose cwd the command never shows. It closes
+# the natural forgery forms; it is not a sandbox.
+_AUDIT_WRITE_VERBS = frozenset({
+    "rm", "rmdir", "unlink", "mv", "ln", "link", "touch", "tee", "truncate", "shred",
+    "srm", "chmod", "chown", "chgrp", "chflags", "mkdir", "mkfifo", "patch", "dd",
+    "sort", "mktemp", "sponge",
+})
+_AUDIT_COPY_VERBS = frozenset({"cp", "rsync", "install", "scp", "gcp", "ditto"})
+_AUDIT_EXTRACT_VERBS = frozenset({"tar", "bsdtar", "gtar", "unzip", "unar"})
+# Verbs whose argument may remove the directory by naming an ANCESTOR of it.
+_AUDIT_REMOVE_VERBS = frozenset({"rm", "rmdir", "unlink", "mv", "shred", "srm"})
+_AUDIT_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+_AUDIT_INTERPRETERS = frozenset({
+    "python", "node", "nodejs", "ruby", "perl", "php", "deno", "bun", "osascript",
+    "awk", "gawk", "mawk", "nawk", "lua", "Rscript", "swift", "tclsh", "jshell",
+})
+# Options that carry an interpreter's inline program as their next word.
+_AUDIT_CODE_FLAGS_DEFAULT = frozenset({"-c", "-e", "--eval", "--command"})
+_AUDIT_CODE_FLAGS: dict[str, frozenset[str]] = {
+    "python": frozenset({"-c"}),
+    "perl": frozenset({"-e", "-E"}),
+    "node": frozenset({"-e", "-p", "--eval", "--print"}),
+    "nodejs": frozenset({"-e", "-p", "--eval", "--print"}),
+    "bun": frozenset({"-e", "-p", "--eval", "--print"}),
+    "php": frozenset({"-r"}),
+}
+# Interpreter -> options that take a VALUE word (so the value is not misread as the
+# script file). Attached forms (perl -Mstrict, python -Xutf8) are handled too.
+_AUDIT_INTERP_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "python": frozenset({"-X", "-W"}),
+    "perl": frozenset({"-I", "-M", "-m", "-C", "-F"}),
+    "ruby": frozenset({"-I", "-r", "-C", "-E", "-F"}),
+    "node": frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"}),
+    "nodejs": frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"}),
+    "bun": frozenset({"-r", "--require", "--preload"}),
+}
+# Wrapper -> its options whose next word is their value, not the wrapped command.
+_AUDIT_WRAPPERS: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D"}),
+    "doas": frozenset({"-u", "-C"}),
+    "env": frozenset({"-u", "--unset", "-C", "--chdir", "-P"}),
+    "command": frozenset(), "builtin": frozenset(), "exec": frozenset({"-a"}),
+    "nohup": frozenset(), "time": frozenset({"-f", "-o"}), "chronic": frozenset(),
+    "nice": frozenset({"-n"}), "ionice": frozenset({"-c", "-n", "-p"}),
+    "caffeinate": frozenset({"-t", "-w"}), "arch": frozenset(),
+    "timeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
+    "gtimeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+    "xargs": frozenset({"-I", "-n", "-P", "-L", "-d", "-s", "-E", "-a", "-J", "-R"}),
+    # package/venv runners: `uv run python -c …`, `poetry run …`, `npx node -e …`
+    "uv": frozenset(), "poetry": frozenset(), "pipenv": frozenset(),
+    "pdm": frozenset(), "rye": frozenset(), "hatch": frozenset(),
+    "npx": frozenset({"-p", "--package", "-c", "--call"}), "bunx": frozenset(),
+}
+# Wrappers whose first positional word is a value, not the command: a duration
+# (timeout), or a `run`/`exec` subcommand (the venv runners).
+_AUDIT_WRAPPER_POSITIONAL = frozenset({
+    "timeout", "gtimeout", "uv", "poetry", "pipenv", "pdm", "rye", "hatch",
+})
+_AUDIT_KEYWORDS = frozenset({
+    "do", "done", "then", "else", "elif", "fi", "if", "while", "until", "!", "{", "}",
+    "esac", "in", "local", "declare", "typeset", "readonly", "export",
+})
+_AUDIT_FIND_ACTIONS = frozenset({
+    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
+    "-fls",
+})
+_AUDIT_REDIRECT_OPS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&", "&>|"})
+_AUDIT_DISCARD = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "-"})
+_AUDIT_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=")
+_AUDIT_GREP_VERBS = frozenset({"grep", "egrep", "fgrep", "zgrep", "rg", "ag", "ack"})
+# Above this many characters a command is judged by name only (bounded work). The
+# event loop must never block on classification; a real command is far shorter.
+_AUDIT_MAX_COMMAND_CHARS = 100_000
+_AUDIT_OP_RE = re.compile(
+    r"&>>?\|?|<<<|<<|<>|>>|>\||>&|<&|>|<|\|&|\|\||&&|;;|[;|&\n]"
+)
+_AUDIT_MAX_DEPTH = 3
+# Bash call sites ignore case on macOS/Windows file systems, so names are compared
+# lower-cased everywhere (a differently-cased twin directory on Linux over-matches).
+
+
+def _audit_dir_parts() -> list[tuple[str, ...]]:
+    """Lower-cased path components of the audit directory, as configured and resolved."""
+    out: list[tuple[str, ...]] = []
+    for raw in (str(_AGENT_AUDIT_DIR), os.path.realpath(str(_AGENT_AUDIT_DIR))):
+        parts = tuple(c.lower() for c in Path(os.path.normpath(raw)).parts)
+        if parts not in out:
+            out.append(parts)
+    return out
+
+
+def _audit_expand_home(word: str) -> str:
+    """*word* with a leading ~, $HOME or ${HOME} replaced by the home directory."""
+    home = os.path.expanduser("~")
+    for pre in ("${HOME}", "$HOME"):
+        if word == pre or word.startswith(pre + "/"):
+            return home + word[len(pre):]
+    return os.path.expanduser(word) if word.startswith("~") else word
+
+
+_AUDIT_VARREF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _audit_refs_tainted(word: str, tainted: set[str]) -> bool:
+    """True when *word* expands one of the *tainted* shell variables. One pass over
+    the word (no per-name regex compile — that was quadratic in names × words and
+    could stall the event loop, correctness-review finding 3)."""
+    if not tainted or "$" not in word:
+        return False
+    return any(m.group(1) in tainted for m in _AUDIT_VARREF_RE.finditer(word))
+
+
+def _audit_path_hit(word: str, tainted: set[str], cwd: "str | None" = None) -> "str | None":
+    """'in' when *word* names the audit directory or something under it, 'ancestor'
+    when it is a path (or glob) of a directory containing it, else None. A relative
+    word is resolved against *cwd* when that is known. Path words match by whole
+    component, not substring: `pipeline_agent_audit_reader.py` and
+    `/tmp/x/pipeline_agent_audit` (a different dir) do NOT hit (review finding 9)."""
+    if not word:
+        return None
+    if _audit_refs_tainted(word, tainted):
+        return "in"
+    name = _AGENT_AUDIT_DIR.name.lower()
+    path = _audit_expand_home(word)
+    if os.path.isabs(path):
+        # Absolute: precise component-prefix match only (so a same-named dir under a
+        # different root does NOT hit).
+        return _audit_prefix_hit(path)
+    if cwd and not path.startswith("$"):
+        hit = _audit_prefix_hit(os.path.join(cwd, path))
+        if hit:
+            return hit
+    # Fallback for a relative or embedded word (dd `of=~/…`, a quoted `rm -rf ~/…`
+    # string, an unknown cwd): a whole component is literally the dir name.
+    comps = [c.lower() for c in re.split(r"[/\\]", path) if c not in ("", ".", "..")]
+    return "in" if name in comps else None
+
+
+def _audit_prefix_hit(path: str) -> "str | None":
+    """'in'/'ancestor'/None by matching the audit dir against *path* component-wise
+    (globs honoured). *path* is treated as absolute (normalized)."""
+    pat = tuple(c.lower() for c in Path(os.path.normpath(path)).parts)
+    for d in _audit_dir_parts():
+        n = min(len(pat), len(d))
+        if all(fnmatch.fnmatchcase(d[i], pat[i]) for i in range(n)):
+            return "in" if len(pat) >= len(d) else "ancestor"
+    return None
+
+
+def _audit_text_names_dir(text: str, tainted: set[str]) -> bool:
+    """True when *text* mentions the audit directory at all: its name as a substring,
+    a tainted variable, or a path-like word resolving into it. Used for the
+    fail-CLOSED unparseable backstop, where any mention should block."""
+    if not text:
+        return False
+    if _AGENT_AUDIT_DIR.name.lower() in text.lower() or _audit_refs_tainted(text, tainted):
+        return True
+    return any(
+        _audit_path_hit(w, tainted) == "in"
+        for w in re.findall(r"[~/$][^\s'\"`;,()\[\]{}]+", text)
+    )
+
+
+def _audit_code_names_dir(text: str, tainted: set[str]) -> bool:
+    """True when interpreter code *text* writes using a PATH that resolves into the
+    audit directory (or a tainted variable). Unlike _audit_text_names_dir this does
+    NOT match the bare name as a substring: `s/pipeline_agent_audit/x/` in a perl/sed
+    refactor, or a string that merely mentions the name, is not a write (review
+    finding 6). A path assembled from pieces is the documented residual."""
+    if not text:
+        return False
+    if _audit_refs_tainted(text, tainted):
+        return True
+    return any(
+        _audit_path_hit(w, tainted) == "in"
+        for w in re.findall(r"[~/$][^\s'\"`;,()\[\]{}]+", text)
+    )
+
+
+def _audit_strip_comments(command: str) -> str:
+    """Remove ``#`` comments quote-aware, length-preserving per line. Without this an
+    apostrophe in a comment (`# don't …`) looks like an unbalanced quote to the
+    tokenizer and the whole command would fail open (correctness-review HIGH). A
+    ``#`` only starts a comment at the start of a word (preceded by whitespace or at
+    line start) and outside quotes."""
+    out = []
+    for line in command.split("\n"):
+        quote = None
+        esc = False
+        res = []
+        for ch in line:
+            if esc:
+                res.append(ch)
+                esc = False
+            elif quote:
+                res.append(ch)
+                if quote == '"' and ch == "\\":
+                    esc = True
+                elif ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+                res.append(ch)
+            elif ch == "\\":
+                res.append(ch)
+                esc = True
+            elif ch == "#" and (not res or res[-1] in " \t"):
+                break  # comment runs to end of line
+            else:
+                res.append(ch)
+        out.append("".join(res))
+    return "\n".join(out)
+
+
+def _audit_segments(command: str) -> "list[list[str]] | None":
+    """Simple commands of *command* as word lists (redirect operators kept as their
+    own words). Splits on ; & | && || and newlines; parentheses are dropped, so a
+    `$(…)` stays inside the command that uses it. None on unbalanced quotes."""
+    lex = shlex.shlex(command.replace("\\\n", " "), posix=True,
+                      punctuation_chars="();<>|&\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    lex.commenters = ""
+    try:
+        tokens = list(lex)
+    except ValueError:
+        return None
+    segments: list[list[str]] = []
+    seg: list[str] = []
+    for tok in tokens:
+        if tok and all(ch in "();<>|&\n" for ch in tok):
+            for op in _AUDIT_OP_RE.findall(tok.replace("(", "").replace(")", "")):
+                if "<" in op or ">" in op:
+                    seg.append(op)
+                elif seg:
+                    segments.append(seg)
+                    seg = []
+            continue
+        seg.append(tok)
+    if seg:
+        segments.append(seg)
+    return segments
+
+
+def _audit_cmd_names_path(segments: list[list[str]], tainted: set[str],
+                          cwd: "str | None") -> bool:
+    """True when some word in *segments* is a real PATH into the audit dir (or an
+    ancestor). A grep/rg PATTERN operand is skipped, so `grep -rl pipeline_agent_audit
+    backend | xargs sed -i …` (a refactor) is not read as touching the dir — only an
+    actual path like `ls …/pipeline_agent_audit` is (red-team finding 6)."""
+    for seg in segments:
+        words = [w for w in seg if w not in _AUDIT_REDIRECT_OPS
+                 and w not in ("<", "<&", "<<", "<<<")]
+        verb_idx = next((i for i, w in enumerate(words)
+                         if not _AUDIT_ASSIGN_RE.match(w) and not w.startswith("-")), None)
+        skip = -1
+        if verb_idx is not None and os.path.basename(words[verb_idx]) in _AUDIT_GREP_VERBS:
+            skip = next((j for j in range(verb_idx + 1, len(words))
+                         if not words[j].startswith("-")), -1)
+        for j, w in enumerate(words):
+            if j == skip:
+                continue
+            if _audit_path_hit(w, tainted, cwd) in ("in", "ancestor"):
+                return True
+    return False
+
+
+def _audit_strip_wrappers(rest: list[str]) -> "tuple[int, bool]":
+    """(index of the real verb in *rest*, whether xargs feeds it from stdin)."""
+    k, from_stdin = 0, False
+    while k < len(rest):
+        name = os.path.basename(rest[k])
+        if name not in _AUDIT_WRAPPERS:
+            break
+        from_stdin = from_stdin or name == "xargs"
+        argflags = _AUDIT_WRAPPERS[name]
+        positional_done = name not in _AUDIT_WRAPPER_POSITIONAL
+        k += 1
+        while k < len(rest):
+            w = rest[k]
+            if w == "--":
+                k += 1
+                break
+            if w.startswith("-") and len(w) > 1:
+                k += 2 if w in argflags else 1
+            elif name in ("env", "sudo") and _AUDIT_ASSIGN_RE.match(w):
+                k += 1
+            elif not positional_done:
+                positional_done = True
+                k += 1
+            else:
+                break
+    return k, from_stdin
+
+
+def _audit_bash_hit(command: str, depth: int = 0, tainted: "set[str] | None" = None,
+                    cwd: "str | None" = None) -> "str | None":
+    """Why *command* may write into the audit directory, or None (block comment above).
+
+    *tainted* holds shell variables known to name it; *cwd* is the working directory
+    the command starts in, when known (the hook input's cwd, or an enclosing `cd`).
+    Nested shell code (bash -c, eval, a heredoc fed to a shell) is walked recursively
+    up to _AUDIT_MAX_DEPTH, then judged by name."""
+    from core.file_change_classifier import _blank_heredocs
+
+    if not command:
+        return None
+    names_dir = _AGENT_AUDIT_DIR.name.lower() in command.lower()
+    if depth > _AUDIT_MAX_DEPTH or len(command) > _AUDIT_MAX_COMMAND_CHARS:
+        return "nested shell code that names the audit directory" if names_dir else None
+    blanked = _audit_strip_comments(_blank_heredocs(command))
+    bodies = "\n".join(o for o, b in zip(command.split("\n"), blanked.split("\n")) if o != b)
+    segments = _audit_segments(blanked)
+    if segments is None:
+        # Unbalanced quotes the stripper could not resolve (ANSI-C `$'…'`, nested).
+        # bash_syntax_guard denies a GENUINELY malformed command, but a valid one can
+        # land here, so fail CLOSED when the text names the dir or carries a path into
+        # it — never silently approve a forgery (correctness-review HIGH).
+        probe = set(tainted or ())
+        if names_dir or _audit_text_names_dir(command, probe) or any(
+            _audit_path_hit(w, probe, cwd) in ("in", "ancestor")
+            for w in re.findall(r"[~/$][^\s'\"`;,()\[\]{}]+", command)
+        ):
+            return "unparseable command that names the audit directory"
+        return None
+    state: dict[str, Any] = {
+        "tainted": set(tainted or ()), "names_dir": names_dir, "bodies": bodies,
+        "depth": depth,
+    }
+    _audit_set_cwd(state, cwd)
+    state["path_names_dir"] = _audit_cmd_names_path(segments, state["tainted"], state["cwd"])
+    for seg in segments:
+        hit = _audit_segment_hit(seg, state)
+        if hit:
+            return hit
+    # $(…), `…`, <(…) and >(…) run as commands of their own; walked last so every
+    # variable the outer command taints is known.
+    for inner in _audit_substitutions(blanked):
+        hit = _audit_bash_hit(inner, depth + 1, state["tainted"], state["cwd"] or cwd)
+        if hit:
+            return "command substitution: " + hit
+    return None
+
+
+def _audit_set_cwd(state: dict, cwd: "str | None") -> None:
+    """Record the walk's working directory (None = unknown) and whether it is in the
+    audit directory."""
+    state["cwd"] = os.path.normpath(cwd) if cwd else None
+    state["cwd_in"] = bool(cwd) and _audit_path_hit(cwd, set()) == "in"
+
+
+def _audit_substitutions(text: str) -> list[str]:
+    """Bodies of $(…), <(…), >(…) and `…` in *text* (outermost only; quotes are not
+    tracked, so a quoted one is also returned, which can only over-match)."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "`":
+            end = text.find("`", i + 1)
+            if end < 0:
+                break
+            out.append(text[i + 1:end])
+            i = end + 1
+            continue
+        if text[i] in "$<>" and text.startswith("(", i + 1) and not text.startswith("((", i + 1):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            out.append(text[i + 2:j - 1] if depth == 0 else text[i + 2:])
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _audit_split_redirects(seg: list[str], state: dict) -> "tuple[str | None, list[str], list[str], bool]":
+    """(hit, words, herestrings, has_heredoc) of one simple command. *hit* is set when
+    an output redirect targets the audit directory (or a relative path after a cd
+    into it); the other redirect operators and their targets are removed from words."""
+    words: list[str] = []
+    herestrings: list[str] = []
+    has_heredoc = False
+    i = 0
+    while i < len(seg):
+        tok = seg[i]
+        target = seg[i + 1] if i + 1 < len(seg) else ""
+        if tok in _AUDIT_REDIRECT_OPS:
+            i += 2
+            if not target or target in _AUDIT_DISCARD or (tok == ">&" and target.isdigit()):
+                continue
+            if _audit_path_hit(target, state["tainted"], state["cwd"]) == "in":
+                return "redirect into the audit directory", words, herestrings, has_heredoc
+            continue
+        if tok in ("<", "<&"):
+            i += 2
+        elif tok == "<<":
+            has_heredoc = True
+            i += 2
+        elif tok == "<<<":
+            herestrings.append(target)
+            i += 2
+        else:
+            words.append(tok)
+            i += 1
+    return None, words, herestrings, has_heredoc
+
+
+def _audit_leading(words: list[str], state: dict) -> list[str]:
+    """*words* past leading keywords and assignments; taints assigned names (and a
+    `for` variable) when the command words name the audit directory."""
+    tainted = state["tainted"]
+    j, assigned, declaring = 0, [], False
+    while j < len(words):
+        w = words[j]
+        m = _AUDIT_ASSIGN_RE.match(w)
+        if w in _AUDIT_KEYWORDS:
+            declaring = declaring or w in ("export", "local", "declare", "typeset", "readonly")
+        elif m:
+            assigned.append(m.group(1))
+        elif not (declaring and w.startswith("-")):
+            break
+        j += 1
+    if assigned:
+        # Resolve the RHS of each `VAR=…`, not the whole `VAR=…` token, so
+        # `D=~/…/pipeline_agent_audit` taints D (its ~ must expand).
+        probe = []
+        for w in words:
+            am = _AUDIT_ASSIGN_RE.match(w)
+            probe.append(w[am.end():] if am else w)
+        if any(_audit_path_hit(w, tainted, state["cwd"]) == "in" for w in probe):
+            tainted.update(assigned)
+    rest = words[j:]
+    if rest and rest[0] == "for" and len(rest) >= 2:
+        if any(_audit_path_hit(w, tainted, state["cwd"]) == "in" for w in rest[2:]):
+            tainted.add(rest[1])
+        return []
+    return rest
+
+
+def _audit_inline_code(verb: str, args: list[str]) -> "tuple[list[str], bool, bool, list[str]]":
+    """(inline programs, reads its program from stdin, in-place flag, file operands) of
+    a shell or interpreter call. A script FILE argument ends option parsing: it and the
+    words after it are operands (data files); the file's contents are not visible here.
+    The `-e`/`-c` program text is NOT an operand, so a `s/name/x/` script is never
+    mistaken for a path (review finding 6)."""
+    codes: list[str] = []
+    inplace = False
+    shell, awk = verb in _AUDIT_SHELLS, verb.endswith("awk")
+    code_flags = _AUDIT_CODE_FLAGS.get(verb, _AUDIT_CODE_FLAGS_DEFAULT)
+    value_flags = _AUDIT_INTERP_VALUE_FLAGS.get(verb, frozenset())
+    idx, n = 0, len(args)
+    while idx < n:
+        a = args[idx]
+        nxt = args[idx + 1] if idx + 1 < n else ""
+        short = a.startswith("-") and not a.startswith("--") and len(a) > 1
+        if a == "-":
+            return codes, not codes, inplace, list(args[idx + 1:])
+        if shell and a in ("-o", "+o", "-O", "+O"):
+            idx += 2
+            continue
+        if a in code_flags:                       # explicit code flag: next word is code
+            codes.append(nxt)
+            idx += 2
+            continue
+        if a in value_flags:                      # separate value flag: python -X utf8
+            idx += 2
+            continue
+        if short and any(a.startswith(vf) and len(a) > len(vf) for vf in value_flags):
+            idx += 1                              # attached value flag: perl -Mstrict
+            continue
+        if short:
+            cluster = a[1:]
+            if (shell and "c" in cluster) or (verb == "python" and "c" in cluster) \
+                    or (verb in ("perl", "ruby") and "e" in cluster):
+                if verb in ("perl", "ruby") and "i" in cluster:
+                    inplace = True
+                codes.append(nxt)
+                idx += 2
+                continue
+            if verb in ("perl", "ruby") and "i" in cluster:
+                inplace = True
+            idx += 1
+            continue
+        if awk and a in ("-f", "-v", "-F"):
+            if a == "-f":
+                return codes, False, inplace, list(args[idx + 2:])
+            idx += 2
+            continue
+        if verb == "python" and a == "-m":
+            return codes, False, inplace, list(args[idx + 2:])
+        if a.startswith("-") or a.startswith("+"):
+            idx += 1
+            continue
+        if awk and not codes:
+            codes.append(a)
+            idx += 1
+            continue
+        return codes, False, inplace, list(args[idx:])  # a script file + its operands
+    return codes, not codes, inplace, []
+
+
+def _audit_code_hit(verb: str, args: list[str], any_in: bool, herestrings: list[str],
+                    has_heredoc: bool, state: dict) -> "str | None":
+    """Hit for a shell / eval / interpreter call (see the block comment)."""
+    tainted, cwd_in = state["tainted"], state["cwd_in"]
+    if verb == "eval":
+        codes, from_stdin, inplace, operands = [" ".join(args)], False, False, []
+    else:
+        codes, from_stdin, inplace, operands = _audit_inline_code(verb, args)
+    op_in = any(_audit_path_hit(o, tainted, state["cwd"]) == "in" for o in operands)
+    if has_heredoc:
+        codes.append(state["bodies"])
+    codes.extend(herestrings)
+    if from_stdin and not has_heredoc and not herestrings and state["names_dir"]:
+        # `echo '…dir…' | bash` / `… | python` — the piped text IS the program, so a
+        # mention of the dir name in the command is treated as naming it (substring).
+        return f"{verb} reading code from a pipe in a command that names the audit directory"
+    if inplace and (op_in or (cwd_in and not operands)):
+        return f"{verb} -i on the audit directory"
+    if verb in _AUDIT_SHELLS or verb == "eval":
+        for code in codes:
+            hit = _audit_bash_hit(code, state["depth"] + 1, tainted, state["cwd"])
+            if hit:
+                return f"{verb} code: {hit}"
+        return None
+    code = "\n".join(c for c in codes if c)
+    if code.strip() and (_audit_code_names_dir(code, tainted) or cwd_in or op_in):
+        return f"{verb} code that writes into the audit directory"
+    return None
+
+
+def _audit_segment_hit(seg: list[str], state: dict) -> "str | None":
+    """Hit for one simple command; updates *state* (tainted variables, cwd)."""
+    hit, words, herestrings, has_heredoc = _audit_split_redirects(seg, state)
+    if hit:
+        return hit
+    tainted, cwd_in = state["tainted"], state["cwd_in"]
+    rest = _audit_leading(words, state)
+    k, from_stdin = _audit_strip_wrappers(rest)
+    if k >= len(rest):
+        return None
+    verb = re.sub(r"^(python|ruby|perl|node|php|lua)[\d.]*$", r"\1", os.path.basename(rest[k]))
+    args = rest[k + 1:]
+    if verb == "read":
+        if state["names_dir"]:
+            skip = {"-p", "-d", "-t", "-n", "-N", "-u"}
+            tainted.update(a for i, a in enumerate(args)
+                           if not a.startswith("-") and (i == 0 or args[i - 1] not in skip))
+        return None
+    if verb in ("cd", "pushd", "popd"):
+        # A cd INTO the directory is denied: the Bash tool keeps its cwd between
+        # calls, so a later call's relative `> m.marker` would be invisible here.
+        target = next((a for a in args if not a.startswith("-")), "")
+        if verb != "popd" and target and _audit_path_hit(target, tainted, state["cwd"]) == "in":
+            return f"{verb} into the audit directory"
+        if verb == "popd" or target.startswith("$") or (verb == "cd" and args[:1] == ["-"]):
+            _audit_set_cwd(state, None)
+        elif not target:
+            _audit_set_cwd(state, os.path.expanduser("~"))
+        else:
+            path = _audit_expand_home(target)
+            if not path.startswith("/"):
+                path = os.path.join(state["cwd"], path) if state["cwd"] else ""
+            _audit_set_cwd(state, path or None)
+        return None
+    hits = [_audit_path_hit(a, tainted, state["cwd"]) for a in args]
+    any_in = "in" in hits
+    via_stdin = from_stdin and state["path_names_dir"]
+    if verb in _AUDIT_SHELLS or verb in _AUDIT_INTERPRETERS or verb == "eval":
+        if via_stdin:
+            return f"xargs {verb} fed a path in the audit directory"
+        return _audit_code_hit(verb, args, any_in, herestrings, has_heredoc, state)
+    return _audit_tool_hit(verb, args, hits, cwd_in or via_stdin, tainted, state["cwd"])
+
+
+def _audit_tool_hit(verb: str, args: list[str], hits: list, implicit: bool,
+                    tainted: set[str], cwd: "str | None") -> "str | None":
+    """Hit for a file-tool verb. *implicit*: its paths may be in the audit directory
+    without naming it (after a cd into it, or fed by xargs in a command naming it)."""
+    any_in = "in" in hits
+    touched = any_in or implicit
+    short_flag = lambda a, ch: a.startswith("-") and not a.startswith("--") and ch in a[1:]  # noqa: E731
+    positional = [a for a in args if not a.startswith("-")]
+
+    if verb == "sed":
+        # Only `sed -i` that EDITS a file operand in the dir is a write. Matching or
+        # printing the dir NAME in a script is a read; the dir name in the s/// is a
+        # refactor of this repo's own source (review finding 6). The `w`-command
+        # writing into the dir is a documented residual.
+        inplace = any(a == "--in-place" or a.startswith("--in-place=") or short_flag(a, "i")
+                      for a in args)
+        val_opts = {"-e", "--expression", "-f", "--file", "-l", "--line-length", "-I"}
+        has_script_opt = any(a in ("-e", "--expression", "-f", "--file") for a in args)
+        operands, skip, script_consumed, prev = [], False, has_script_opt, ""
+        for a in args:
+            if skip:
+                skip = False
+            elif a == "" and short_flag(prev, "i"):
+                pass  # macOS `sed -i ''` backup-suffix argument, not the script
+            elif a in val_opts:
+                skip = True
+            elif a.startswith("-"):
+                pass
+            elif not script_consumed:
+                script_consumed = True
+            else:
+                operands.append(a)
+            prev = a
+        op_hits = [_audit_path_hit(o, tainted, cwd) for o in operands]
+        if inplace and ("in" in op_hits or (implicit and not operands)):
+            return "sed -i on the audit directory"
+        return None
+    if verb == "find":
+        writers = (_AUDIT_WRITE_VERBS | _AUDIT_COPY_VERBS | _AUDIT_SHELLS
+                   | _AUDIT_EXTRACT_VERBS | {"sed", "dd", "tee", "truncate", "patch"})
+        acting = False
+        for i, a in enumerate(args):
+            if a in ("-delete", "-fprint", "-fprint0", "-fprintf", "-fls"):
+                acting = True
+            elif a in ("-exec", "-execdir", "-ok", "-okdir") and i + 1 < len(args):
+                # A read action (-exec cat/jq/python -m json.tool) is not a write.
+                acting = acting or os.path.basename(args[i + 1]) in writers
+        if acting and (touched or "ancestor" in hits):
+            return "find with a write action on the audit directory"
+        return None
+    if verb in _AUDIT_EXTRACT_VERBS:
+        if verb in ("tar", "bsdtar", "gtar"):
+            first = args[0] if args else ""
+            extracting = any(a in ("-x", "--extract", "--get") or short_flag(a, "x") for a in args) \
+                or (bool(first) and not first.startswith("-") and "x" in first)
+        else:
+            extracting = True  # unzip / unar always extract
+        dest = None
+        for i, a in enumerate(args):
+            if a in ("-C", "--directory", "-d") and i + 1 < len(args):
+                dest = args[i + 1]
+            elif a.startswith("--directory="):
+                dest = a.split("=", 1)[1]
+        # Only the extract DESTINATION matters; reading an archive FROM the dir is a read.
+        dh = _audit_path_hit(dest, tainted, cwd) if dest is not None else ("in" if implicit else None)
+        return f"{verb} extract into the audit directory" if extracting and dh in ("in", "ancestor") else None
+    if verb in _AUDIT_WRITE_VERBS:
+        if touched:
+            return f"{verb} on the audit directory"
+        recursive_mode = verb in ("chmod", "chown", "chgrp", "chflags") and any(
+            short_flag(a, "R") or a == "--recursive" for a in args)
+        if "ancestor" in hits and (verb in _AUDIT_REMOVE_VERBS or recursive_mode):
+            return f"{verb} on a directory that contains the audit directory"
+        return None
+    if verb in _AUDIT_COPY_VERBS:
+        dests = positional[-1:] + [args[i + 1] for i, a in enumerate(args[:-1])
+                                   if a in ("-t", "--target-directory")]
+        dests += [a.split("=", 1)[1] for a in args if a.startswith("--target-directory=")]
+        dest_hits = [_audit_path_hit(d, tainted, cwd) for d in dests]
+        if implicit or "in" in dest_hits:
+            return f"{verb} into the audit directory"
+        # A recursive copy / rsync / ditto whose destination CONTAINS the dir can merge
+        # a forged marker into it (the two-step Write-then-copy forgery, both reviews).
+        recursive = verb in ("rsync", "ditto") or any(
+            short_flag(a, "r") or short_flag(a, "R") or short_flag(a, "a")
+            or a in ("--recursive", "--archive") for a in args)
+        if "ancestor" in dest_hits and recursive:
+            return f"{verb} into a directory that contains the audit directory"
+        if any_in and "--remove-source-files" in args:
+            return f"{verb} --remove-source-files out of the audit directory"
+    return None
+
+
+_AUDIT_FILE_TOOLS = {
+    "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+
+
+def _audit_file_tool_hit(path: str, cwd: "str | None" = None) -> bool:
+    """True when a file tool's *path* (~ expanded, relative to *cwd*, symlinks
+    resolved) is the audit directory or inside it."""
+    if not path:
+        return False
+    path = os.path.expanduser(path)
+    if cwd and not os.path.isabs(path):
+        path = os.path.join(cwd, path)
+    # Compare by path components (os.sep-agnostic) so a Windows backslash path and the
+    # root's trailing-slash handling can't disagree (review finding 6).
+    resolved = tuple(c.lower() for c in Path(os.path.realpath(path)).parts)
+    for d in _audit_dir_parts():
+        if resolved[:len(d)] == d:
+            return True
+    return False
+
+
+def create_audit_marker_write_gate(session_context: dict[str, Any]):
+    """Factory: PreToolUse gate (Bash and Write|Edit|MultiEdit|NotebookEdit) that
+    DENIES, always, a write, move or delete in _AGENT_AUDIT_DIR (forms in the section
+    comment above). Reads pass. SWARM_AUDIT_GATE_FORCE=1 in the backend process env
+    approves (operator-only, logged). Fail-open on any internal error.
+    session_context is the mutable dict SessionUnit updates (read at call time)."""
+
+    async def audit_marker_write_gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        tool = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {}) or {}
+        cwd = input_data.get("cwd")
+        cwd = cwd if isinstance(cwd, str) and cwd.startswith("/") else None
+        try:
+            if tool == "Bash":
+                subject = str(tool_input.get("command") or "")
+                hit = _audit_bash_hit(subject, cwd=cwd)
+            elif tool in _AUDIT_FILE_TOOLS:
+                subject = str(tool_input.get(_AUDIT_FILE_TOOLS[tool]) or "")
+                hit = (f"{tool} into the audit directory"
+                       if _audit_file_tool_hit(subject, cwd) else None)
+            else:
+                return {"decision": "approve"}
+        except Exception:  # noqa: BLE001
+            logger.warning("audit_marker_write_gate: classify failed — failing open",
+                           exc_info=True)
+            return {"decision": "approve"}
+        if hit is None:
+            return {"decision": "approve"}
+        session_id = session_context.get("sdk_session_id", "") or ""
+        if os.environ.get("SWARM_AUDIT_GATE_FORCE") == "1":
+            logger.warning("[audit-marker-gate] FORCE override in session %s (%s): %s",
+                           session_id, hit, subject[:120])
+            return {"decision": "approve"}
+        logger.warning("[BLOCKED] audit_marker_write_gate (%s) in session %s: %s",
+                       hit, session_id, subject[:120])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "DENY (" + hit + "): this writes, moves or deletes files in "
+                    + str(_AGENT_AUDIT_DIR) + ", or may (the checker could not rule "
+                    "it out). Only the backend's SubagentStop hook writes there. Its "
+                    "markers are the proof that review sub-agents really ran: the D7 "
+                    "experts, the Red Team, the Gate-0/1 skeptics and the adversarial "
+                    "commit gate all read them, so a hand-written or deleted marker "
+                    "would defeat those checks. To produce a marker, spawn the reviewer "
+                    "with the Agent tool. Reading markers is fine: cat, ls, grep or jq "
+                    "by an absolute path. Only the operator can bypass this gate, by "
+                    "setting SWARM_AUDIT_GATE_FORCE=1 in the backend/daemon environment "
+                    "(a variable set in a Bash command has no effect)."
+                ),
+            }
+        }
+
+    return audit_marker_write_gate
 
 
 # ---------------------------------------------------------------------------

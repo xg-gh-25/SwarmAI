@@ -234,6 +234,12 @@ implementations in `security_hooks.py`). By category:
    companion `session_link_stamp_start`): after an artifact_cli / run-create call it writes
    this session's id into running runs with no `session_id` that the call created or names
    (`session_id_source: backend_stamp`), never overwriting an existing one.
+   `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit, always on,
+   right after `background_command_guard`, ahead of every HITL gate): denies writing, moving or deleting anything in
+   `state/pipeline_agent_audit`, the SubagentStop markers that D7, the Red Team check,
+   Gate-0/1 and `adversarial_commit_gate` trust; reads pass; operator-set
+   `SWARM_AUDIT_GATE_FORCE=1`; it reads command text (an unparseable command naming the
+   dir fails closed), so a path built at run time or a standalone script file is not seen.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; off until
    `config.json["pipeline"]["worktree_mode"] = "on"`): `run_owner_gate` (Bash, right after
    `pipeline_test_gate`; takes a crashed owner's run over, denies while the owner is live,
