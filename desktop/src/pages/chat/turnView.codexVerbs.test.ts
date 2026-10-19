@@ -66,6 +66,8 @@ describe('toolRow — shell commands', () => {
     expect(bash("sed -i 'y/abc/xyz/' Makefile")).toMatchObject({ verb: 'Edited', object: 'Makefile' });
     expect(bash("sed -i -e 's/a/b/' src/f.ts")).toMatchObject({ verb: 'Edited', object: 'f.ts' });
     expect(bash("sed -i 's/a/b/' src/a.ts src/b.ts").verb).toBe('Ran');
+    // -M / -I are module and include switches, not -i / -p: printing to stdout
+    expect(bash("perl -Mstrict -ne 'print' src/f.txt").verb).not.toBe('Edited');
   });
 
   it('a command that may write is never an exploration row (fail closed)', () => {

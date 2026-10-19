@@ -45,7 +45,7 @@ class TestProfileGates:
         assert pp.PROFILE_GATES["full"] == ("gate0", "gate1", "gate2")
         assert pp.PROFILE_GATES["bugfix"] == ("gate0", "gate1", "gate2")
         assert pp.PROFILE_GATES["goal"] == ("gate0", "gate1", "gate2")
-        assert pp.PROFILE_GATES["direct"] == ("gate1", "gate2")
+        assert pp.PROFILE_GATES["direct"] == ("gate2",)
         assert pp.PROFILE_GATES["trivial"] == ("gate2",)
         assert pp.PROFILE_GATES["docs"] == ("gate2",)
         assert pp.PROFILE_GATES["research"] == ()
@@ -94,7 +94,7 @@ class TestChecklist:
 
     def test_direct(self):
         assert _items(pse.checklist("direct")) == [
-            ("plan", False), ("gate1", True), ("build", False), ("gate2", True), ("deliver", False)]
+            ("plan", False), ("build", False), ("gate2", True), ("deliver", False)]
 
     def test_research_has_no_gates(self):
         assert _items(pse.checklist("research")) == [
@@ -140,7 +140,7 @@ class TestRefreshedRunBlock:
 
 
 class TestPlanNextGate1:
-    @pytest.mark.parametrize("profile,nxt", [("full", "gate1"), ("goal", "gate1"), ("direct", "gate1"), ("docs", "deliver")])
+    @pytest.mark.parametrize("profile,nxt", [("full", "gate1"), ("goal", "gate1"), ("direct", "build"), ("docs", "deliver")])
     def test_plan_next_names_gate1_when_the_profile_lists_it(self, profile, nxt):
         before = _state(profile, plan={"stage": "plan", "status": "in_progress"})
         after = _state(profile, plan={"stage": "plan", "status": "completed"})

@@ -50,6 +50,42 @@ const msgView = (content: ContentBlock[], isStreaming: boolean) => {
   return <ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} isLastAssistant /></ToastProvider>;
 };
 
+describe('DELIVER expert regressions', () => {
+  it('a merged thought never goes into an Agent row (it is itself a button)', () => {
+    const agent = { type: 'tool_use', id: 'ag', name: 'Agent', summary: 'Agent: review', category: 'agent' } as ContentBlock;
+    const agentDone = { type: 'tool_result', toolUseId: 'ag', content: 'x', isError: false, outcome: 'ok',
+      subagent: { status: 'completed', toolUses: 1, durationMs: 1000, summary: 'ok' } } as unknown as ContentBlock;
+    render(view(groupOf([sh('a', 'make'), ok('a'), th('now review'), agent, agentDone, tx('done')], false), true));
+    expect(screen.getAllByTestId('thought')).toHaveLength(1);
+    expect(screen.getByTestId('agent-toggle').querySelector('button')).toBeNull();
+  });
+
+  it('the pipeline block stays live through narration after a stage ends mid-run', () => {
+    vi.useFakeTimers();
+    const head = [tx('I read it as: X.'), runBlock(), row('evaluate', 'in_progress'), sh('a', 'make'), ok('a'), row('evaluate', 'completed')];
+    const { rerender } = render(msgView([...head, tx('Evaluate done, moving on.')], true));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 3); });
+    expect(screen.getAllByTestId('checklist-line').length).toBeGreaterThan(0);
+    rerender(msgView([...head, tx('Evaluate done, moving on.'), row('think', 'in_progress')], true));
+    expect(screen.getAllByTestId('checklist-line').length).toBeGreaterThan(0);
+  });
+
+  it('a continuation turn whose run block has no current marks the lines before its first work done', () => {
+    render(msgView([tx('Continuing.'), runBlock({ current: null }), row('build', 'in_progress'), sh('a', 'make')], true));
+    const st = Object.fromEntries(screen.getAllByTestId('checklist-line').map((l) => [l.dataset.stage, l.dataset.status]));
+    expect(st.evaluate).toBe('done');
+    expect(st.plan).toBe('done');
+    expect(st.build).toBe('running');
+    expect(st.review).toBe('pending');
+  });
+
+  it('an older turn with no checklist lays its rows onto the run block\'s stage list', () => {
+    render(msgView([tx('Go.'), runBlock({ checklist: undefined }), row('evaluate', 'in_progress'), sh('a', 'make')], true));
+    expect(screen.getAllByTestId('checklist-line').map((l) => l.dataset.stage))
+      .toEqual(['evaluate', 'think', 'plan', 'build', 'review', 'test', 'deliver', 'reflect']);
+  });
+});
+
 describe('Final Quality Gate regressions', () => {
   it('a thought duration survives the stream-end reconcile that renames the message (client id → DB id)', () => {
     vi.useFakeTimers();
@@ -58,6 +94,7 @@ describe('Final Quality Gate regressions', () => {
     const live: Message = { id: 'local-c1-asst', role: 'assistant', content: content(false), timestamp: '2026-10-19T10:00:00+08:00', isError: false };
     const { rerender } = render(<ToastProvider><AssistantMessageView message={live} isStreaming isLastAssistant /></ToastProvider>);
     act(() => { vi.advanceTimersByTime(7000); });
+    rerender(<ToastProvider><AssistantMessageView message={{ ...live, content: [...content(false).slice(0, -1), th('weighing it more')] }} isStreaming isLastAssistant /></ToastProvider>);
     const stored = { ...live, id: 'db-uuid-1', metadata: { client_id: 'local-c1-asst' }, content: content(true) } as Message;
     rerender(<ToastProvider><AssistantMessageView key="db-uuid-1" message={stored} isStreaming={false} isLastAssistant /></ToastProvider>);
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
@@ -125,5 +162,17 @@ describe('Final Quality Gate regressions', () => {
     expect(group).not.toBeNull();
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
     expect(line().querySelector('[data-testid="work-group"]')).toBe(group);
+  });
+});
+
+describe('durations never count a hidden tab', () => {
+  it('a block that ended while nothing rendered for longer than the render gap shows no duration', () => {
+    vi.useFakeTimers();
+    const live = [sh('a', 'make'), ok('a'), sh('b', 'make test')];
+    const { rerender } = render(view(groupOf(live, true)));
+    act(() => { vi.advanceTimersByTime(5 * 60_000); }); // the tab was in the background
+    rerender(view(groupOf([...live, ok('b'), tx('done')], false)));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    expect(screen.getByTestId('group-counts').textContent).not.toMatch(/\d+m\b|\d+s\b/);
   });
 });

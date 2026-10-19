@@ -489,7 +489,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           position={last.kind === 'liveStage' ? last.position : undefined}
           running={live}
           round={line.rounds.length > 1 && !line.gate ? line.rounds.length : undefined}
-          startedAt={first.kind === 'stage' ? (first.startedAt ?? first.prevAt ?? message.timestamp) : undefined}
+          // A line that ran several rounds says its LATEST round's time (its label says
+          // "round N"); spanning first start → last end would count the stages between.
+          startedAt={last.kind === 'stage' ? (last.startedAt ?? last.prevAt ?? message.timestamp) : undefined}
           counts={stageCounts(children)}
           failed={children.some((u) => u.kind === 'process' && !!u.unrecoveredFailure)}
           mustOpen={children.some((u) => u.kind === 'interrupt' && isUnanswered(u.block))}
@@ -501,11 +503,19 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         </PipelineStageRow>,
       );
     });
-    // The block is live until the answer starts (it then folds FOLD_DELAY_MS later).
+    // The block is live until the answer starts AND the plan is through (it then folds
+    // FOLD_DELAY_MS later): text after a stage's end row mid-run is narration the next
+    // call will turn into a note — it must not fold the checklist and re-open it.
     const answerStarted = sections.slice(lastRow + 1).some((s) => s.kind === 'unit' && s.unit.kind === 'outcome');
-    const firstRound = lines.find((l) => l.rounds.length)?.rounds[0];
-    const startedAt = firstRound?.kind === 'stage' ? (firstRound.startedAt ?? firstRound.prevAt ?? message.timestamp) : message.timestamp;
-    const ends = lines.flatMap((l) => l.rounds).filter((r): r is Extract<RowSec, { kind: 'stage' }> => r.kind === 'stage' && r.block.status !== 'in_progress');
+    const planDone = lines.every((l) => l.status === 'done' || l.status === 'skipped');
+    // The block's time: earliest start to latest end over every round, by time — a
+    // re-entered stage can end after a later line in the plan.
+    const rounds = lines.flatMap((l) => l.rounds).filter((r): r is Extract<RowSec, { kind: 'stage' }> => r.kind === 'stage');
+    const ms = (iso?: string) => (iso ? Date.parse(iso) : NaN);
+    const starts = rounds.map((r) => ms(r.startedAt ?? r.prevAt ?? message.timestamp)).filter(Number.isFinite);
+    const endMs = rounds.filter((r) => r.block.status !== 'in_progress').map((r) => ms(r.block.at)).filter(Number.isFinite);
+    const startedAt = starts.length ? new Date(Math.min(...starts)).toISOString() : message.timestamp;
+    const endedAt = endMs.length ? new Date(Math.max(...endMs)).toISOString() : undefined;
     // One pipeline block per turn, keyed without the run id: a run block that arrives
     // after the first stage row must not remount the block.
     const blockKey = 'pipeline';
@@ -516,10 +526,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         <div key={blockKey} {...ANCHOR_PROPS}>
           <PipelineBlock
             lines={lines}
-            live={!!isStreaming && !answerStarted}
+            live={!!isStreaming && !(answerStarted && planDone)}
             stoppedHere={noResult}
             startedAt={startedAt}
-            endedAt={ends.length ? ends[ends.length - 1].block.at : undefined}
+            endedAt={endedAt}
             files={stageCounts(allWork).files}
             choice={processChoice.get(blockKey)}
             onChoose={(open) => chooseProcess(blockKey, open)}

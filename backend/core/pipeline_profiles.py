@@ -94,7 +94,7 @@ PROFILE_GATES: dict[str, tuple[str, ...]] = {
     "full": ("gate0", "gate1", "gate2"),
     "bugfix": ("gate0", "gate1", "gate2"),
     "goal": ("gate0", "gate1", "gate2"),
-    "direct": ("gate1", "gate2"),
+    "direct": ("gate2",),  # gate1.md's trigger table does not run Gate 1 for direct
     "trivial": ("gate2",),
     "docs": ("gate2",),
     "research": (),

@@ -20,7 +20,7 @@
  * @exports PipelineBlock, PipelineBlockProps, BLOCK_MIN_DURATION_S
  */
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLinger } from '../../../hooks/useLinger';
 import type { ChecklistLine } from '../turnView';
@@ -60,6 +60,13 @@ export function PipelineBlock({ lines, live, stoppedHere, startedAt, endedAt, fi
   const { t } = useTranslation();
   const auto = useLinger(live);
   const [hover, setHover] = useState(false);
+  // The live header's clock ticks on its own: a long call streams nothing for minutes.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!live) return undefined;
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [live]);
   const open = !!mustOpen || (choice ?? (auto || stoppedHere));
   const done = lines.filter((l) => l.status === 'done' || l.status === 'skipped').length;
   const running = lines.find((l) => l.status === 'running' && !l.gate);

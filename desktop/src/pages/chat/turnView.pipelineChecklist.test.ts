@@ -98,12 +98,14 @@ describe('pipelineChecklist', () => {
     expect(ls2.map((l) => l.stage)).toEqual(['evaluate', 'build', 'gate2', 'deliver']);
   });
 
-  it('no checklist (older runs): the lines are the sections that ran, in order', () => {
+  it('no checklist (older runs): the run block\'s stage list is the plan — never "3/3" for a run part-way', () => {
     const ls = lines([
       runBlock({ checklist: undefined }),
       row('evaluate', 'completed'), row('gate0', 'completed'), tu('a'), row('think', 'completed'),
     ]);
-    expect(ls.map((l) => l.stage)).toEqual(['evaluate', 'gate0', 'think']);
+    expect(ls.map((l) => l.stage)).toEqual(['evaluate', 'think', 'plan', 'build', 'review', 'test', 'deliver', 'reflect']);
+    expect(ls.find((l) => l.stage === 'evaluate')!.extraGates).toHaveLength(1); // gate0 sits with the stage it guards
+    expect(ls.filter((l) => l.status === 'done').map((l) => l.stage)).toEqual(['evaluate', 'think']);
   });
 
   it('a later pipeline_run of the same run updates the plan; the first requirement stays', () => {

@@ -693,7 +693,7 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path' | 'c
     // An in-place edit (`sed -i … f`, `perl -pi -e … f`) of ONE file, in a command of
     // one segment: that file changed. Anything else that may write stays a run.
     const inPlace = (head === 'sed' && args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place')))
-      || (head === 'perl' && args.some((a) => /^-[a-zA-Z]*i/.test(a)) && args.some((a) => /^-[a-zA-Z]*p/.test(a)));
+      || (head === 'perl' && args.some((a) => /^-(?![MI])[a-zA-Z]*i/.test(a)) && args.some((a) => /^-(?![MI])[a-zA-Z]*p/.test(a)));
     if (inPlace && segments.length === 1) {
       // The files are the arguments after the script: sed's script is the first
       // non-flag argument unless it came with -e / -f; perl's comes with -e. Exactly
@@ -1409,7 +1409,8 @@ const GATE_HOSTS: Record<string, string[]> = { gate0: ['evaluate'], gate1: ['bui
 const sectionStage = (s: RowSection): string => (s.kind === 'stage' ? s.block.stage : s.stage.stage);
 
 export function pipelineChecklist(sections: TurnSection[], run?: PipelineRunContent): ChecklistLine[] {
-  const plan = run?.checklist?.length ? run.checklist : [];
+  // An older turn's run block has no checklist: its stage list is the plan.
+  const plan = run?.checklist?.length ? run.checklist : (run?.stages ?? []).map((stage) => ({ stage, gate: false }));
   const lines: ChecklistLine[] = plan.map((c) => ({
     stage: c.stage, gate: !!c.gate, status: 'pending', rounds: [], extraGates: [], earlier: false,
   }));
@@ -1424,12 +1425,16 @@ export function pipelineChecklist(sections: TurnSection[], run?: PipelineRunCont
     if (host && sec.kind === 'stage') { host.extraGates.push(sec); continue; }
     lines.push({ stage: name, gate, status: 'pending', rounds: [sec], extraGates: [], earlier: false });
   }
-  const currentAt = run?.current ? lines.findIndex((l) => l.stage === run.current) : -1;
+  // The lines before the run's current one ran in an earlier turn. With no `current`
+  // (the turn's first CLI call fell between two stages), the lines before the first
+  // line this turn shows work for did — the plan runs in order.
+  const named = run?.current ? lines.findIndex((l) => l.stage === run.current) : -1;
+  const currentAt = named >= 0 ? named : lines.findIndex((l) => l.rounds.length > 0);
   lines.forEach((l, k) => {
     const last = l.rounds[l.rounds.length - 1];
     if (!last) {
       if (currentAt >= 0 && k < currentAt) { l.status = 'done'; l.earlier = true; }
-      else if (k === currentAt) l.status = 'running';
+      else if (k === currentAt && named >= 0) l.status = 'running';
       return;
     }
     if (last.kind === 'liveStage' || last.block.status === 'in_progress') l.status = 'running';

@@ -385,6 +385,7 @@ describe('AssistantMessageView — thoughts (AC4, chat display v8)', () => {
     try {
       const { rerender, unmount } = render(viewOf([...SIX, th('weighing it')], true));
       act(() => { vi.advanceTimersByTime(7000); });
+      rerender(viewOf([...SIX, th('weighing it, still')], true)); // a delta at 7s
       rerender(viewOf([...SIX, th('weighing it, done'), tu('b', 'Running: make')], true));
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
       expect(screen.getByTestId('thought-seconds').textContent).toBe('· 7s');

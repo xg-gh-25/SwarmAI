@@ -459,7 +459,9 @@ function foldItems(items: Item[], settled: Set<string> | null = null, keep: (key
     const it = out[i];
     const next = out[i + 1];
     if (!('thought' in it) || !isSettled(it.key) || !isCall(out[i - 1])) continue;
-    if ('row' in next && !next.before && isSettled(next.key) && !keep(it.key)) {
+    // Never into an Agent row: it is itself a button with its own detail and time.
+    const intoAgent = 'row' in next && next.row.kind !== 'reads' && stepLabel(next.row.step.block).verb === 'agent';
+    if ('row' in next && !next.before && !intoAgent && isSettled(next.key) && !keep(it.key)) {
       out[i + 1] = { ...next, before: it };
       out.splice(i, 1);
       i -= 1;
@@ -494,7 +496,15 @@ export function workCounts(g: WorkGroup): { steps: number; files: number; comman
  *  which thoughts merged into a call — kept per message (`scope`) for the app's
  *  lifetime, so a remount (a tab switch, a block re-keyed at the settle) shows the same
  *  durations and structure as before it. Bounded: the oldest messages are dropped. */
-interface ViewMemory { times: Map<string, { start: number; end?: number }>; merged: Set<string> }
+// `last`: the last render that saw it live. The end is the first render that sees it
+// done — unless that render came more than RENDER_GAP_MS after `last` (a background tab
+// does not render): then when it ended is unknown, and no duration is shown (`end` = -1)
+// rather than one that counts the time the tab was hidden.
+interface ViewMemory { times: Map<string, { start: number; last: number; end?: number }>; merged: Set<string> }
+const RENDER_GAP_MS = 10_000;
+const endOf = (seen: { last: number }, now: number) => (now - seen.last <= RENDER_GAP_MS ? now : -1);
+const secondsBetween = (seen?: { start: number; end?: number }) =>
+  seen?.end === undefined || seen.end < 0 ? undefined : Math.round((seen.end - seen.start) / 1000);
 const VIEW_MEMORY_MAX = 200;
 const viewMemory = new Map<string, ViewMemory>();
 const newMemory = (): ViewMemory => ({ times: new Map(), merged: new Set() });
@@ -577,20 +587,19 @@ export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtO
   for (const it of raw) {
     if (!('thought' in it)) continue;
     const seen = thoughtTimes.get(it.key);
-    if (it.thought.live) { if (!seen) thoughtTimes.set(it.key, { start: now }); }
-    else if (seen && seen.end === undefined) seen.end = now;
+    if (it.thought.live) { if (!seen) thoughtTimes.set(it.key, { start: now, last: now }); else seen.last = now; }
+    else if (seen && seen.end === undefined) seen.end = endOf(seen, now);
   }
   // How long the block itself was live, as this view saw it (none from history —
   // persisted blocks carry no timing): the WORKED line says it from 5s.
   const spanKey = `grp:${group.id}`;
   const span = mem.times.get(spanKey);
-  if (group.live && !span) mem.times.set(spanKey, { start: now });
-  else if (!group.live && span && span.end === undefined) span.end = now;
+  if (group.live) { if (!span) mem.times.set(spanKey, { start: now, last: now }); else span.last = now; }
+  else if (span && span.end === undefined) span.end = endOf(span, now);
   const liveSpan = mem.times.get(spanKey);
-  const workedSeconds = liveSpan?.end === undefined ? undefined : Math.round((liveSpan.end - liveSpan.start) / 1000);
+  const workedSeconds = secondsBetween(liveSpan);
   const secondsOf = (key: string): number | undefined => {
-    const seen = thoughtTimes.get(key);
-    return seen?.end === undefined ? undefined : Math.round((seen.end - seen.start) / 1000);
+    return secondsBetween(thoughtTimes.get(key));
   };
   const render = (it: Item): ReactNode => {
     if ('thought' in it) {
