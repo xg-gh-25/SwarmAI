@@ -28,7 +28,10 @@ per reported finding, verbatim, with a stable `id`, `specialist`, `severity`, `c
 answers); an entry with no disposition is recorded `unaddressed`, unresolved, never dropped.
 `refuted` is recorded as `finding` = "Not a bug: <evidence>" (the expert's words kept in
 `reported_finding`). A BLOCKING entry left `known-issue` or `unaddressed` stays unresolved and
-blocks DELIVER like any open finding — only a SOUND root-cause verdict after round 3 defers it.
+blocks DELIVER like any open finding — only a root-cause verdict that ends the loop defers it
+(after round 3, or once a round leaves as many open items as the round before: the fixes are
+not converging, so `gate2-recheck` hands out the root-cause review instead of another round,
+and its verdict, any, lands the change locally with the rest in REPORT §10).
 Fix-by-class fields (`invariant`, `root_cause`, `class_fix`, `break_test`) go in the disposition.
 Findings no expert produced (meta-review risks) still go in `findings[]` next to it.
 `gate2-recheck --findings` accepts the same ledger-shaped `adversarial_review`.

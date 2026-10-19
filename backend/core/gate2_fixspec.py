@@ -45,7 +45,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from core.gate2_convergence import NOT_REVIEWERS, open_entries
+from core.gate2_convergence import NOT_REVIEWERS, is_reask, open_entries
 from core.gate2_findings import entry_id
 
 FIXSPEC_SKEPTIC_ID = "fixspec-skeptic"
@@ -77,7 +77,7 @@ def _rounds(rows: "dict[str, list[dict]]") -> "list[tuple[int, str, int]]":
     out: list[tuple[int, str, int]] = []
     rnd, members, wave = 1, set(), None
     for w, _ts, e, i in seq:
-        reask = i > 0 and _d(rows[e][i - 1]).get("reported_state") == "unparsed"
+        reask = is_reask([_d(r) for r in rows[e]], i)
         if wave is not None and w > wave:
             rnd, members = rnd + 1, set()   # a new gate2-recheck batch: a new round
         elif e in members and not reask:

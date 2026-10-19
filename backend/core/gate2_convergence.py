@@ -11,19 +11,31 @@ own record of the findings.
 - ``none``       no Gate-2 expert has answered in this cycle yet
 - ``converged``  every expert's latest round has nothing open
 - ``recheck``    something is open, rounds are left, and either no root-cause review is
-                 due or it answered SOUND before the cap (fix as the spec says)
+                 due or it answered SOUND before the cap while the loop still shrinks
+                 (fix as the spec says)
 - ``root_cause`` no verdict yet and either an expert with open items used all
-                 MAX_ROUNDS or ``gate2-fixspec`` recorded an early trigger (``early_ts``:
-                 the class reopened, core.gate2_fixspec.next_step): hand out ONE
-                 fresh-context root-cause review — one per cycle
+                 MAX_ROUNDS, ``gate2-fixspec`` recorded an early trigger (``early_ts``:
+                 the class reopened, core.gate2_fixspec.next_step), or the loop is not
+                 shrinking (``stalled``: see below): hand out ONE fresh-context
+                 root-cause review — one per cycle
 - ``sound``      the root-cause review has answered and the loop must stop: at the cap,
-                 WRONG-APPROACH with no redesign budget, or a trigger recorded after the
-                 verdict, or an answer with no verdict line (``UNPARSED``: one root-cause
+                 WRONG-APPROACH with no redesign budget, the loop not shrinking, or a
+                 trigger recorded after the verdict, or an answer with no verdict line (``UNPARSED``: one root-cause
                  spawn per cycle, so it is never asked again); the verdict, its reasons
                  and every open item go to REPORT §10;
                  the code commits locally with push_ready false (再一再二不再三)
 - ``redesign``   only while ``MAX_REDESIGNS`` > 0 (it is 0 since 2026-10-19: a redesign
                  restarted the three rounds, so a run could review six times)
+
+Not shrinking (``stalled``): a reviewer's latest review round is compared with its round
+before that, rounds as ``is_reask`` defines them (the same rule as
+core.gate2_fixspec._rounds: a re-ask after an unparsed answer is the same round). When
+those reviewers'
+latest rounds leave at least as many open items as their previous rounds did (and some
+are open), the fixes are not
+converging: another round on the same approach is spent re-reviewing new problems, so
+the root-cause review is due now, not after round 3, and its verdict (any) ends the
+loop. The change lands locally with the open items in REPORT §10 for a follow-up run.
 
 An expert's latest round is "open" when it answered ``NOT RESOLVED`` to a re-check
 item, reported a blocking finding (``core.gate2_findings.is_blocking``), or its answer
@@ -32,7 +44,7 @@ bounds the cost). A row from a daemon that does not record answers (no
 ``reported_state`` key) is not judged.
 
 Public symbols: ``MAX_ROUNDS``, ``ROOT_CAUSE_ID``, ``NOT_REVIEWERS``, ``is_blocking``,
-``open_entries``, ``open_items``, ``outcome``.
+``open_entries``, ``open_items``, ``is_reask``, ``round_finals``, ``stalled``, ``outcome``.
 """
 from __future__ import annotations
 
@@ -104,14 +116,56 @@ def open_items(row: dict) -> "Optional[list[str]]":
             else "answer not parsed (no findings JSON, no NO FINDINGS line)" for kind, n, f in ents]
 
 
+def is_reask(rs: "list[dict]", i: int) -> bool:
+    """Row ``i`` re-asks the previous row's round (that answer was unparsed), so it is the
+    same review round, not a new one. The one definition of a reviewer's round; also used
+    by core.gate2_fixspec._rounds. The round CAP counts rows, re-asks included, on purpose:
+    it bounds the cost of a reviewer that never answers in a parseable way."""
+    return i > 0 and isinstance(rs[i - 1], dict) and rs[i - 1].get("reported_state") == "unparsed"
+
+
+def round_finals(rs: "list[dict]") -> "list[dict]":
+    """The final row of each of one reviewer's review rounds, oldest first (``is_reask``)."""
+    out: list[dict] = []
+    for i, r in enumerate(rs):
+        if is_reask(rs, i) and out:
+            out[-1] = r
+        else:
+            out.append(r)
+    return out
+
+
+def stalled(rows_by_expert: "dict[str, list[dict]]") -> "Optional[dict]":
+    """``{"experts", "previous", "latest"}`` when the loop is not shrinking (module
+    docstring), else None. Only reviewers with two or more rounds (``round_finals``) count."""
+    prev = latest = 0
+    compared: list[str] = []
+    for e, rs in rows_by_expert.items():
+        fin = round_finals(rs or []) if e not in NOT_REVIEWERS else []
+        # a round still waiting for its re-ask (latest answer unparsed) is not a result yet
+        if len(fin) < 2 or fin[-1].get("reported_state") == "unparsed":
+            continue
+        a, b = open_entries(fin[-2]), open_entries(fin[-1])
+        if a is None or b is None:
+            continue
+        prev += len(a)
+        latest += len(b)
+        compared.append(e)
+    if compared and latest > 0 and latest >= prev:
+        return {"experts": sorted(compared), "previous": prev, "latest": latest}
+    return None
+
+
 def outcome(rows_by_expert: "dict[str, list[dict]]", root_rows: "list[dict]",
             redesigns_used: int, max_rounds: int = MAX_ROUNDS,
             early_ts: "float | None" = None) -> dict:
     """The loop's state for one DELIVER review cycle (see module docstring).
     ``rows_by_expert``: reviewer id → its marker rows in this cycle, oldest first.
+    The loop not shrinking (``stalled``) acts like an early trigger whose verdict, any,
+    stops the loop.
     ``early_ts``: when ``gate2-fixspec`` recorded an early root-cause trigger in this
     cycle (a class reopened, core.gate2_fixspec.next_step). The verdict is consumed
-    BEFORE the cap: SOUND before the cap → keep fixing (recheck); at the cap, a
+    BEFORE the cap: SOUND before the cap while shrinking → keep fixing (recheck); at the cap, a
     WRONG-APPROACH with no redesign budget, or a trigger recorded after the verdict →
     ``sound`` (one root-cause review per cycle). No verdict: the cap or an early trigger
     → ``root_cause``."""
@@ -139,6 +193,7 @@ def outcome(rows_by_expert: "dict[str, list[dict]]", root_rows: "list[dict]",
     if verdict == UNPARSED:
         verdict_ts = float(roots[-1].get("ts") or 0.0)
     capped = sorted(e for e in open_ if rounds[e] >= max_rounds)
+    stall = stalled(rows_by_expert) if open_ else None
     if not rounds:
         action = "none"
     elif not open_:
@@ -146,15 +201,15 @@ def outcome(rows_by_expert: "dict[str, list[dict]]", root_rows: "list[dict]",
     elif verdict is not None:
         if verdict == WRONG and redesigns_used < MAX_REDESIGNS:
             action = "redesign"
-        elif capped or verdict in (WRONG, UNPARSED) or (early_ts is not None and early_ts > verdict_ts):
-            action = "sound"     # at the cap, no redesign budget, unparsed, or a reopen after it
+        elif capped or verdict in (WRONG, UNPARSED) or stall or (early_ts is not None and early_ts > verdict_ts):
+            action = "sound"     # at the cap, no redesign budget, unparsed, not shrinking, or a reopen after it
         else:
             action = "recheck"   # SOUND before the cap: fix as the spec says
-    elif capped or early_ts is not None:
+    elif capped or early_ts is not None or stall:
         action = "root_cause"
     else:
         action = "recheck"
     return {"action": action, "converged": action == "converged", "rounds": rounds,
-            "open": open_, "capped": capped, "unjudged": sorted(unjudged),
+            "open": open_, "capped": capped, "stalled": stall, "unjudged": sorted(unjudged),
             "root_cause": verdict, "root_cause_text": verdict_text[:1500],
             "redesigns_used": redesigns_used}

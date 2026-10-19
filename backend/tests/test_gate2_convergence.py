@@ -301,3 +301,104 @@ def test_root_cause_without_a_verdict_ends_the_loop(env, monkeypatch, capsys):
     rec = _recheck(run_dir, state, monkeypatch, capsys)
     assert rec["root_cause_verdict"] == "UNPARSED" and rec["next"].startswith("stage-complete")
     assert rec["recheck"] == []
+
+
+# ── the loop not shrinking ends it early; exits never wait on the snapshot ─────
+R1 = {"1": "RESOLVED"}
+NR = {"1": "NOT RESOLVED"}
+
+
+@pytest.mark.parametrize("rows,root,action", [
+    ({"correctness": [_row(reported=[HIGH]), _row(answers=NR)]}, [], "root_cause"),
+    ({"correctness": [_row(reported=[HIGH]), _row(answers=R1, reported=[dict(HIGH, line=8)])]},
+     [], "root_cause"),                                                       # fixed one, found one
+    ({"correctness": [_row(reported=[HIGH, dict(HIGH, line=4)]), _row(answers=NR)]}, [], "recheck"),
+    ({"correctness": [_row(reported=[HIGH]), _row(answers=NR)]}, [{"verdict": "SOUND"}], "sound"),
+    ({"correctness": [_row(reported=[HIGH])]}, [], "recheck"),               # one round: nothing to compare
+    # a re-ask after an unparsed answer is not a new round
+    ({"correctness": [_row(state="unparsed"), _row(reported=[HIGH])]}, [], "recheck"),
+    # an unparsed row between round 1 and the re-check is skipped, not the base
+    ({"correctness": [_row(reported=[HIGH]), _row(state="unparsed"), _row(answers=NR)]}, [], "root_cause"),
+])
+def test_not_shrinking_hands_out_root_cause_before_the_cap(rows, root, action):
+    assert g2c.outcome(rows, root, 0)["action"] == action
+
+
+def test_stalled_sums_reviewers_with_a_recheck_round_only():
+    st = g2c.stalled({"correctness": [_row(reported=[HIGH]), _row(answers=NR)],
+                      "security": [_row(reported=[HIGH, dict(HIGH, line=9)])],     # one round
+                      "meta-review": [_row(reported=[HIGH]), _row(answers=NR)]})
+    assert st == {"experts": ["correctness"], "previous": 1, "latest": 1}
+    assert g2c.stalled({"correctness": [_row(reported=[HIGH]), _row(answers=R1, state="no_findings")]}) is None
+
+
+def test_late_snapshot_does_not_block_the_root_cause_exit(env, monkeypatch, capsys):
+    audit, run_dir, state, t0 = env
+    _capped(audit, t0)
+    monkeypatch.setattr(cli, "_round1_manifest", lambda rid, rd, rs: ({"late": True}, None))
+    out = _recheck(run_dir, state, monkeypatch, capsys)
+    assert out["root_cause"] is True and (run_dir / "evidence" / "prompts" / "root-cause.md").is_file()
+    assert "not converging" not in out["warnings"][0] and "3 rounds" in out["warnings"][0]
+
+
+def test_late_snapshot_still_refuses_a_recheck(env, monkeypatch, capsys):
+    audit, run_dir, state, t0 = env
+    _marker(audit, 1, "correctness", t0 + 60, **_row(reported=[HIGH]))
+    monkeypatch.setattr(cli, "_round1_manifest", lambda rid, rd, rs: ({"late": True}, None))
+    with pytest.raises(SystemExit):
+        _recheck(run_dir, state, monkeypatch, capsys)
+
+
+def test_stalled_reason_is_named(env, monkeypatch, capsys):
+    audit, run_dir, state, t0 = env
+    _marker(audit, 1, "correctness", t0 + 60, **_row(reported=[HIGH]))
+    _marker(audit, 2, "correctness", t0 + 120, **_row(answers={"1": "NOT RESOLVED"}))
+    out = _recheck(run_dir, state, monkeypatch, capsys)
+    assert out["root_cause"] is True and "not converging" in out["warnings"][0]
+    assert "not converging" in (run_dir / "evidence" / "prompts" / "root-cause.md").read_text()
+
+
+def test_reentry_is_late_only_after_this_window_reached_gate2(env, monkeypatch):
+    audit, run_dir, state, t0 = env
+    monkeypatch.setattr(cli, "HANDOUT_CUTOVER", "2000-01-01T00:00:00+00:00")
+    led = {"files": {}}
+    monkeypatch.setattr(cli, "_ledger_read", lambda rid: led)
+    # the first attempt exited on a sync conflict: nothing handed out, nothing ran
+    assert cli._gate2_reviewed_in_window(RID, state, ["correctness"], t0) is False
+    # a hand-out from an EARLIER window does not count
+    led["files"]["/x/evidence/prompts/correctness.md"] = [["sha0", _iso(t0 - 900)]]
+    assert cli._gate2_reviewed_in_window(RID, state, ["correctness"], t0) is False
+    led["files"]["/x/evidence/prompts/correctness.md"].append(["sha1", _iso(t0 + 30)])
+    assert cli._gate2_reviewed_in_window(RID, state, ["correctness"], t0) is True
+    led["files"].clear()
+    _marker(audit, 1, "correctness", t0 + 60, **_row(reported=[HIGH]))      # a round ran
+    assert cli._gate2_reviewed_in_window(RID, state, ["correctness"], t0) is True
+    # unknowable → late (costs a re-review, never a missed fix)
+    monkeypatch.setattr(cli, "_ledger_read", lambda rid: None)
+    assert cli._gate2_reviewed_in_window(RID, state, ["security"], t0) is True
+
+
+def test_failed_first_attempt_of_a_new_cycle_still_retakes_the_snapshot():
+    closed = {"started_at": "b", "prior_windows": [{"started_at": "a", "completed_at": "a2"}]}
+    assert cli._cycle_completed_at(closed, None, True, False) == "a2"     # failed attempt, retake
+    assert cli._cycle_completed_at(closed, None, True, True) is None      # Gate-2 ran: keep it
+    assert cli._cycle_completed_at({"started_at": "a"}, None, True, False) is None   # first window
+    assert cli._cycle_completed_at(closed, "c2", False, False) == "c2"    # a normal new cycle
+
+
+def test_one_round_definition_for_stall_and_fixspec():
+    from core import gate2_fixspec as fs
+    rows = {"correctness": [_row(reported=[HIGH]), _row(state="unparsed"), _row(answers=NR)]}
+    for i, r in enumerate(rows["correctness"]):
+        r["ts"] = 10.0 + i
+    assert [r for r, _e, _i in fs._rounds(rows)] == [1, 2, 2]
+    assert len(g2c.round_finals(rows["correctness"])) == 2
+    respawn = {"correctness": [_row(reported=[HIGH], ts=1.0), _row(reported=[HIGH], ts=2.0)]}
+    assert max(r for r, _e, _i in fs._rounds(respawn)) == len(g2c.round_finals(respawn["correctness"])) == 2
+    # a re-asked round 2 (unparsed, then parsed) is one round 2, compared with round 1 (the
+    # cap still counts the re-ask: it bounds the cost of a reviewer that never parses)
+    shrinking = [_row(reported=[HIGH, dict(HIGH, line=4)]), _row(state="unparsed"), _row(answers=NR)]
+    assert g2c.stalled({"correctness": shrinking}) is None
+    # round 2 came back unparsed: wait for its re-ask, do not call the loop stalled
+    assert g2c.stalled({"correctness": [_row(reported=[HIGH]), _row(state="unparsed")]}) is None
+    assert g2c.outcome({"correctness": shrinking}, [], 0)["capped"] == ["correctness"]

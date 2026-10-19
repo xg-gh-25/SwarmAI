@@ -319,7 +319,10 @@ def test_outcome_early_trigger_hands_out_root_cause_before_the_cap():
 def test_outcome_consumes_the_verdict_before_the_cap():
     sound = [{"verdict": "SOUND", "ts": 20.0}]
     wrong = [{"verdict": "WRONG-APPROACH", "ts": 20.0}]
-    assert gc.outcome(_open(2), sound, 0, early_ts=10.0)["action"] == "recheck"   # SOUND: keep fixing
+    shrinking = {"correctness": [_row([HIGH_A, dict(HIGH_A, line=99)]), _row([HIGH_A])]}
+    assert gc.outcome(shrinking, sound, 0, early_ts=10.0)["action"] == "recheck"  # SOUND: keep fixing
+    stuck = {"correctness": [_row([HIGH_A]), _row(answers={"1": "NOT RESOLVED"})]}
+    assert gc.outcome(stuck, sound, 0, early_ts=10.0)["action"] == "sound"        # not shrinking
     assert gc.outcome(_open(3), sound, 0, early_ts=10.0)["action"] == "sound"     # at the cap
     assert gc.outcome(_open(1), wrong, 0, early_ts=10.0)["action"] == "sound"     # no redesign budget
     # a reopen after the verdict ends the loop: one root-cause review per cycle
