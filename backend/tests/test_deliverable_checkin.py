@@ -194,7 +194,8 @@ class TestContentContractCopyReport:
         a_body = a_report.read_text(encoding="utf-8")
         assert "## TL;DR" in b_body
         assert "需求溯源审计" in b_body, "B must keep the provenance section (whitelist, prefix-match)"
-        assert "## 9. Lessons" in b_body and "learned X" in b_body
+        # §9 Lessons stays in A: REFLECT writes it after the landing, so B never waits on it.
+        assert "## 9. Lessons" not in b_body and "learned X" not in b_body
         # A (ledger) is untouched — still carries its full self.
         assert "需求溯源审计" in a_body and "## 9. Lessons" in a_body
 
@@ -270,13 +271,10 @@ class TestContentContractCopyReport:
         assert warnings and any(w.startswith(_FAILLOUD_SENTINEL) for w in warnings), \
             f"auto-gen failure must carry the fail-loud sentinel (caller blocks); got {warnings}"
 
-    def test_autogen_with_degenerate_section9_still_skips_B_no_faillloud(self, workspace, tmp_path):
-        """FR-3 / Gate-1 caveat b: auto-gen only fills the FILE-ABSENCE hole — it does NOT
-        bypass the §9 content gate. If REPORT.md is absent AND lessons were never seeded
-        (no reflect stage), auto-gen produces a report whose §9 is DEGENERATE; the unchanged
-        _report_section9_is_degenerate check must still SKIP B with the ordering-violation
-        warning — and crucially NOT the fail-loud sentinel (this is a legitimate ordering
-        skip, not an anomaly that should BLOCK the commit)."""
+    def test_autogen_without_lessons_still_produces_B(self, workspace, tmp_path):
+        """REPORT.md absent AND no reflect lessons yet (the normal state at landing: REFLECT
+        runs after DELIVER): auto-gen writes A's report and B is produced from it, without
+        §9 and without any warning that would block or lower anything."""
         from scripts.artifact_cli import _generate_review_deliverable, _FAILLOUD_SENTINEL
         from unittest.mock import patch
         repo = _src_repo(tmp_path, "autogendegenrepo")
@@ -285,13 +283,11 @@ class TestContentContractCopyReport:
             workspace, "run_autogendegen", [str(repo / "f.py")], write_report=False)
         with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
             created, warnings = _generate_review_deliverable("TestProject", "run_autogendegen", str(repo))
-        # Auto-gen DID run (file now exists) ...
         assert (run_dir / "REPORT.md").is_file(), "auto-gen should still create the file"
-        # ... but B is skipped by the §9 gate, and it is NOT a fail-loud anomaly.
-        assert created == [], f"degenerate §9 → B skipped; got {created}"
-        assert warnings, "degenerate §9 skip must warn (visible ordering violation)"
-        assert not any(w.startswith(_FAILLOUD_SENTINEL) for w in warnings), \
-            f"a legitimate §9-ordering skip must NOT carry the fail-loud sentinel; got {warnings}"
+        b_report = next((c for c in created if Path(c).name == "REPORT.md"), None)
+        assert b_report, f"no lessons yet → B is still produced; got {created}, {warnings}"
+        assert "## 9. Lessons" not in Path(b_report).read_text(encoding="utf-8")
+        assert not any(w.startswith(_FAILLOUD_SENTINEL) for w in warnings), warnings
 
 
 class TestReportIsLedgerProjectionNotPlaceholder:
@@ -303,9 +299,9 @@ class TestReportIsLedgerProjectionNotPlaceholder:
     frozen before the lessons are seeded into the reflect record. It is the executable
     form of NFR-1 (completeness-as-contract: §9 shows truth, never a lying placeholder)."""
 
-    def test_B_report_carries_real_lessons_not_placeholder(self, workspace, tmp_path):
-        """A's terminal REPORT.md (projected with real §9 lessons present) → B copies it
-        verbatim, so B's §9 carries the real lessons and NOT the removed placeholder."""
+    def test_B_report_carries_no_lessons_section_at_all(self, workspace, tmp_path):
+        """§9 Lessons lives only in ledger A (REFLECT writes it after the landing): B carries
+        neither the real lessons nor any placeholder, so it can never freeze a stale §9."""
         from scripts.artifact_cli import _generate_review_deliverable
         from unittest.mock import patch
         repo = _src_repo(tmp_path, "lessonsrepo")
@@ -323,12 +319,9 @@ class TestReportIsLedgerProjectionNotPlaceholder:
         b_report = next((c for c in created if Path(c).name == "REPORT.md"), None)
         assert b_report, f"B REPORT.md must exist, got {created}"
         body = Path(b_report).read_text(encoding="utf-8")
-        # The real lessons are present …
-        assert "a one-shot event modeled as shared state" in body, \
-            "B's §9 must carry the run's REAL reflect lessons (projected from the ledger)"
-        # … and the removed hand-written-template placeholder is NOT.
-        assert "_(populated in REFLECT)_" not in body, \
-            "B must NEVER carry the §9 placeholder — that was the two-renderer drift this fix removes"
+        assert "## 9. Lessons" not in body and "a one-shot event modeled" not in body
+        assert "_(populated in REFLECT)_" not in body
+        assert "FR-1" in body   # the reviewer-facing sections are still there
 
     def test_gitignored_dest_skips_B_and_does_not_edit_gitignore(self, workspace, tmp_path, capsys):
         repo = _src_repo(tmp_path, "ignrepo", gitignore=".aidlc/\n")
@@ -347,113 +340,6 @@ class TestReportIsLedgerProjectionNotPlaceholder:
         # The code commit still happened (B skip never blocks the code).
         head = _git(repo, "show", "--name-only", "--format=", "HEAD").stdout
         assert "f.py" in head, "code commit must still proceed when B is skipped"
-
-
-class TestSection9DegenerateGate:
-    """run_7c30c517 — the structural gate that turns the DELIVER ordering invariant
-    (seed-lessons → run-report → run-commit) from agent-discipline PROSE into CODE.
-
-    The gap: B is copied from A/REPORT.md verbatim at run-commit. If a run calls
-    run-commit BEFORE seeding lessons, A's §9 is DEGENERATE (no real lesson bullets)
-    and B freezes it; the completion gate inspects only ledger A, never B → permanent
-    A/B drift undetected. §9 has TWO degenerate forms, both must be caught:
-      • 5178: '(REFLECT stage did not record lessons for this run)' — reflect empty
-      • 5176: '**⏭ Skipped** — …'                                  — reflect ABSENT (the
-        DEFAULT at a pre-REFLECT run-commit — Gate-1 caught v1 missing this one)
-    The check is §9-SLICE-scoped (not a whole-doc literal match), so §3/§8 '⏭ Skipped'
-    cannot false-positive, and a real lesson bullet in §9 passes."""
-
-    _DEGEN_5178 = (
-        "# Report\n## 需求溯源审计\nFR-1\n"
-        "## 9. Lessons\n(REFLECT stage did not record lessons for this run)\n"
-        "## 10. Known Gaps & Attention Flags\nNone identified.\n"
-    )
-    _DEGEN_5176 = (
-        "# Report\n## 需求溯源审计\nFR-1\n"
-        "## 9. Lessons\n**⏭ Skipped** — Not executed — pipeline completed before REFLECT\n"
-        "## 10. Known Gaps & Attention Flags\nNone identified.\n"
-    )
-    # Real §9 lessons, BUT §3/§8 legitimately carry '⏭ Skipped' — the whole-doc-match
-    # false-positive trap. §9-slice-scoping must let this through.
-    _REAL_WITH_SKIPPED_SIBLINGS = (
-        "# Report\n"
-        "## 3. Methodology\n**⏭ Skipped** — profile 'bugfix' uses direct fix path\n"
-        "## 8. Files Changed\n**⏭ Skipped** — profile omits build\n"
-        "## 9. Lessons\n- [pitfall] a real durable lesson that earns its place in §9\n"
-        "## 10. Known Gaps & Attention Flags\nNone identified.\n"
-    )
-
-    def test_degenerate_5178_no_lessons_skips_B_and_warns(self, workspace, tmp_path):
-        """§9 = the empty-reflect placeholder (5178) → B is NOT written + a LOUD
-        ordering warning is returned (the exact A/B drift this gate prevents)."""
-        from scripts.artifact_cli import _generate_review_deliverable
-        from unittest.mock import patch
-        repo = _src_repo(tmp_path, "degen5178")
-        _write_run_with_report(workspace, "run_d78", [str(repo / "f.py")],
-                               report=self._DEGEN_5178)
-        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
-            created, warnings = _generate_review_deliverable("TestProject", "run_d78", str(repo))
-        assert created == [], f"degenerate §9 → no B; got {created}"
-        assert not (repo / ".aidlc" / "deliverables" / "run_d78" / "REPORT.md").exists(), \
-            "a §9-placeholder REPORT.md must NEVER be written into git-committed B"
-        assert warnings and any("§9" in w or "lessons" in w.lower() for w in warnings), \
-            f"degenerate §9 must WARN loudly (ordering violation), got {warnings}"
-
-    def test_degenerate_5176_skipped_reflect_skips_B_and_warns(self, workspace, tmp_path):
-        """§9 = the reflect-SKIPPED form (5176) — the DEFAULT at a pre-REFLECT
-        run-commit, which v1 missed. Must ALSO skip B + warn."""
-        from scripts.artifact_cli import _generate_review_deliverable
-        from unittest.mock import patch
-        repo = _src_repo(tmp_path, "degen5176")
-        _write_run_with_report(workspace, "run_d76", [str(repo / "f.py")],
-                               report=self._DEGEN_5176)
-        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
-            created, warnings = _generate_review_deliverable("TestProject", "run_d76", str(repo))
-        assert created == [], f"skipped-reflect §9 → no B; got {created}"
-        assert warnings and any("§9" in w or "lessons" in w.lower() for w in warnings), \
-            f"skipped-reflect §9 must WARN loudly, got {warnings}"
-
-    def test_real_lessons_with_skipped_siblings_generates_B_no_false_positive(self, workspace, tmp_path):
-        """§9 carries a REAL lesson bullet while §3/§8 legitimately show '⏭ Skipped'
-        → B generates normally, NO ordering warning. Proves the check is §9-slice-
-        scoped, not a whole-document '⏭ Skipped' match (the false-positive trap)."""
-        from scripts.artifact_cli import _generate_review_deliverable
-        from unittest.mock import patch
-        repo = _src_repo(tmp_path, "realskip")
-        _write_run_with_report(workspace, "run_rsk", [str(repo / "f.py")],
-                               report=self._REAL_WITH_SKIPPED_SIBLINGS)
-        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
-            created, warnings = _generate_review_deliverable("TestProject", "run_rsk", str(repo))
-        assert created, f"real §9 lessons → B must generate even with §3/§8 skipped; got {warnings}"
-        body = Path(next(c for c in created if Path(c).name == "REPORT.md")).read_text()
-        assert "a real durable lesson" in body, "B must carry the real §9 lessons"
-        assert not any("§9" in w or "lesson" in w.lower() for w in warnings), \
-            f"a §9 WITH real lessons must NOT trigger the ordering warning, got {warnings}"
-
-    def test_predicate_calls_both_degenerate_forms_degenerate(self):
-        """AC3: the predicate catches BOTH degenerate §9 forms (empty-reflect 5178 +
-        reflect-skipped 5176) and passes a real-lessons §9 — regardless of §3/§8 skips."""
-        from scripts.artifact_cli import _report_section9_is_degenerate
-        assert _report_section9_is_degenerate(self._DEGEN_5178) is True
-        assert _report_section9_is_degenerate(self._DEGEN_5176) is True
-        assert _report_section9_is_degenerate(self._REAL_WITH_SKIPPED_SIBLINGS) is False
-
-    def test_degenerate_fixture_uses_renderer_constant_not_a_hardcoded_copy(self):
-        """AC3 anti-drift: the empty-§9 degenerate case is built from the renderer's OWN
-        constant `_NO_LESSONS_PLACEHOLDER` (not a hardcoded second copy of the string),
-        and the predicate STILL calls it degenerate. This is the honest form of the
-        'single source' claim: the renderer owns the string (one constant); the gate is
-        STRUCTURAL ('- '-bullet convention) so it catches degeneracy even if that string
-        drifts. If someone changes the renderer's placeholder, this test's fixture changes
-        with it and the structural predicate still fires — no silent drift (Gate-2 MED)."""
-        from scripts.artifact_cli import _report_section9_is_degenerate, _NO_LESSONS_PLACEHOLDER
-        report = f"# Report\n## 9. Lessons\n{_NO_LESSONS_PLACEHOLDER}\n## 10. Known Gaps\nNone.\n"
-        assert _report_section9_is_degenerate(report) is True, \
-            "a §9 carrying ONLY the renderer's no-lessons placeholder must be degenerate"
-        # And the renderer's placeholder is NOT itself a '- ' bullet (else the structural
-        # gate would false-pass it) — the convention the gate relies on.
-        assert not _NO_LESSONS_PLACEHOLDER.startswith("- "), \
-            "the no-lessons placeholder must not look like a real lesson bullet"
 
 
 class TestBoundary2NonGit:
@@ -585,7 +471,7 @@ class TestContentSafetyScan:
 
 class TestReviewProjection:
     """run_d8321b43: B is a WHITELIST PROJECTION of ledger A, not a verbatim copy.
-    Keeps reviewer-facing sections (TL;DR / §1 / 需求溯源审计 / §2 / §3 / §6 / §7 / §8 / §9 / §10);
+    Keeps reviewer-facing sections (TL;DR / §1 / 需求溯源审计 / §2 / §3 / §6 / §7 / §8 / §10);
     drops pure process (§4 Pipeline Execution / §5 TDD Results). §7 Quality Gates is
     KEPT but STRIPPED to its reviewer-facing sub-verdicts (§7.5 Adversarial Review +
     §7.6 Completion Audit) — the leading Gate stat table (REVIEW findings count / TEST
@@ -626,9 +512,10 @@ class TestReviewProjection:
         out = self._project(["a.py"])
         for title in ("## TL;DR", "## 1. Requirement", "## Requirements", "需求溯源审计",
                       "## 2. Evaluation", "## 3. Design & Approach", "## 6. Decision Log",
-                      "## 7. Quality Gates", "## 8. Files Changed", "## 9. Lessons",
+                      "## 7. Quality Gates", "## 8. Files Changed",
                       "## 10. Known Gaps & Attention Flags"):
             assert title in out, f"whitelist section must survive: {title!r}\n{out}"
+        assert "## 9. Lessons" not in out   # written at REFLECT, after the landing: A only
         # The intent→requirement table + clarifications (the North-Star-critical content).
         assert "FR-1 | confirmed" in out and "澄清问答" in out
         # Prefix-match must NOT conflate the two distinct requirement sections.

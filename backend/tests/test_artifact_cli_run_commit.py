@@ -120,6 +120,9 @@ class TestRunCommitGates:
         assert e.value.code == 2 and "unrecognized arguments: --force" in capsys.readouterr().err
 
     def test_a_non_converged_review_does_not_block_the_commit(self, workspace, capsys, monkeypatch):
+        # hermetic: the review deliverable would otherwise be written into this source repo
+        monkeypatch.setattr("scripts.artifact_cli._generate_review_deliverable",
+                            lambda *a, **k: ([], []))
         """Gate-2 did not converge and the root-cause review said SOUND: autonomous, so
         run-commit goes on (here it stops at the next gate, the empty files_touched).
         Recomputed from evidence, never from run.json: a forged gate2_outcome, a real
@@ -140,17 +143,20 @@ class TestRunCommitGates:
             state.update({"g2": {"action": "sound"}, "bound": True}, **change)
             _write_run(workspace, "run_s2", files_touched=["a.py"],
                        stages=[{**rec, "gate2_outcome": {"action": "sound"}}])  # forged field
-            r = _run_commit(workspace, "run_s2")
-            assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err, change
+            _run_commit(workspace, "run_s2")
+            err = capsys.readouterr().err   # commits marked not push-ready, no exception
+            assert "PUSH-READY" in err and "review_not_converged" not in err, change
         state.update(g2={"action": "sound"}, bound=True)
         _write_run(workspace, "run_s3", files_touched=["a.py"],
                    stages=[{**rec, "push_ready_lowered": True}])
-        r = _run_commit(workspace, "run_s3")
-        assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err
+        _run_commit(workspace, "run_s3")
+        err = capsys.readouterr().err
+        assert "PUSH-READY" in err and "review_not_converged" not in err
         legacy = {k: v for k, v in rec.items() if k != "push_ready_lowered"}  # pre-marker record
         _write_run(workspace, "run_s4", files_touched=["a.py"], stages=[legacy])
-        r = _run_commit(workspace, "run_s4")
-        assert r.get("exit") == 2 and "PUSH-READY" in capsys.readouterr().err
+        _run_commit(workspace, "run_s4")
+        err = capsys.readouterr().err
+        assert "PUSH-READY" in err and "review_not_converged" not in err
 
     def test_recomputed_bound_ignores_only_root_cause_deferred_findings(self):
         """run-commit's recompute must not count findings a SOUND verdict deferred (they
@@ -1238,18 +1244,21 @@ class TestOneDeliveryOneCommit:
         return repo
 
     @pytest.mark.parametrize("ready", [True, False])
-    def test_no_lessons_refuses_and_commits_nothing(self, workspace, tmp_path, capsys, ready):
+    def test_no_lessons_still_commits_code_and_report_together(self, workspace, tmp_path,
+                                                               capsys, ready):
+        """REFLECT writes the lessons after landing, so a run with none yet commits its
+        code and B (which carries no §9) in one commit."""
         repo = self._repo(tmp_path)
         _write_run(workspace, "run_nolessons",
                    stages=[{"stage": "deliver", "status": "completed", "push_ready": ready}],
                    files_touched=[str(repo / "f.py")])
         r = _run_commit(workspace, "run_nolessons")
-        err = capsys.readouterr().err
-        assert r.get("exit") == 2
-        assert "ONE commit" in err and "run-update" in err and "run-report" in err
-        assert self._git(repo, "rev-list", "--count", "HEAD").stdout.strip() == "1"
-        assert self._git(repo, "diff", "--cached", "--name-only").stdout == ""
-        assert not (repo / ".aidlc" / "deliverables" / "run_nolessons" / "REPORT.md").exists()
+        capsys.readouterr()
+        assert r.get("exit") in (None, 0), r
+        files = self._git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+        assert files == [".aidlc/deliverables/run_nolessons/REPORT.md", "f.py"]
+        b = (repo / ".aidlc" / "deliverables" / "run_nolessons" / "REPORT.md").read_text()
+        assert "## 9. Lessons" not in b
 
     def test_code_and_report_share_one_sha_and_repeat_adds_none(self, workspace, tmp_path, capsys):
         repo = self._repo(tmp_path)

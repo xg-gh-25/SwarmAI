@@ -267,65 +267,16 @@ def _carry_forward(new: dict, existing: dict) -> None:
 _CARRY_FORWARD_VERDICT_FIELDS = frozenset({"push_ready", "push_ready_reason", "push_ready_capped"})
 
 # §9 "no lessons" placeholder — the string cmd_run_report emits when the reflect
-# record carries no lessons. It is RENDERER-ONLY: the B-copy gate
-# (_report_section9_is_degenerate) does NOT match this literal — it decides
-# degeneracy STRUCTURALLY (no "- " lesson bullet in the §9 slice), which is robust
-# even if this string drifts and also covers the other degenerate form
-# (**⏭ Skipped**). So this constant is a single home for the renderer's text, not a
-# shared predicate↔renderer contract. The real coupling that keeps the gate correct
-# is the "- "-bullet convention: the renderer emits every real lesson as "- {item}"
-# and ONLY real lessons as bullets — asserted by the renderer-agreement test. (run_7c30c517)
+# record carries no lessons. Renderer-only: §9 lives in ledger A and is not part of
+# the committed review deliverable B (_B_REVIEW_SECTION_WHITELIST), because REFLECT
+# writes the lessons after DELIVER has landed the change.
 _NO_LESSONS_PLACEHOLDER = "(REFLECT stage did not record lessons for this run)"
-
-
-def _report_section9_is_degenerate(report_md: str) -> bool:
-    """Is the §9 Lessons section of a projected REPORT.md DEGENERATE (carries no real
-    REFLECT lessons)?  This is the STRUCTURAL gate that turns the DELIVER ordering
-    invariant (seed-lessons → run-report → run-commit) from agent-discipline PROSE
-    into CODE: if a run calls run-commit BEFORE lessons are seeded, A/REPORT.md's §9
-    is degenerate and would be frozen verbatim into the git-committed deliverable B —
-    permanent A/B drift the completion gate (which inspects only ledger A) never sees.
-
-    §9 is produced by cmd_run_report with exactly one SUBSTANTIVE shape — one or more
-    ``- <lesson>`` bullet lines — and two DEGENERATE shapes:
-      • ``_NO_LESSONS_PLACEHOLDER``          (reflect record present but empty)
-      • ``**⏭ Skipped** — <reason>``         (reflect record ABSENT — the DEFAULT at a
-                                              pre-REFLECT run-commit)
-    Rather than match those two brittle literals (a third future form would slip, and
-    ``**⏭ Skipped**`` ALSO renders in §3/§8 so a whole-document match false-positives),
-    the test is structural: SLICE the §9 section (from the ``## 9. Lessons`` line to the
-    next ``## `` header) and return True iff that slice contains NO line beginning with
-    ``- `` (a lesson bullet). This covers both known degenerate forms (and any future
-    one) and is immune to ``⏭ Skipped`` in sibling sections because it inspects only §9.
-
-    Reads the RENDERED text, which is truthiness-consistent with cmd_run_report's
-    ``lessons_items`` by construction, so predicate and renderer cannot drift.
-    Returns True (degenerate) also when §9 is entirely absent — a report with no §9 is
-    not a report whose lessons we can trust. (run_7c30c517)
-    """
-    lines = report_md.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        if line.strip() == "## 9. Lessons":
-            start = i
-            break
-    if start is None:
-        return True  # no §9 at all → cannot trust its lessons → degenerate
-    # Slice §9 body: from the line after the header to the next '## ' header (or EOF).
-    body = []
-    for line in lines[start + 1:]:
-        if line.startswith("## "):
-            break
-        body.append(line)
-    # SUBSTANTIVE iff at least one real lesson bullet ('- ' prefix) is present.
-    has_lesson_bullet = any(ln.startswith("- ") for ln in body)
-    return not has_lesson_bullet
 
 
 # Top-level ``## `` section titles that the committed review deliverable B KEEPS.
 # B is a reviewer-facing PROJECTION of ledger A — it carries only what a reviewer
-# should review (intent→requirement, evaluation, design, decisions, files, lessons,
-# known gaps), NOT A's full process/stats record (§4 Pipeline Execution, §5 TDD
+# should review (intent→requirement, evaluation, design, decisions, files, known
+# gaps; NOT §9 Lessons: REFLECT writes them after the landing, so they stay in A), NOT A's full process/stats record (§4 Pipeline Execution, §5 TDD
 # Results, §7 Quality Gates — those are the pipeline's internal audit, kept in A).
 # Matching is PREFIX, not exact-equal: the provenance section's rendered title is
 # ``## 需求溯源审计 (Requirement Provenance Audit)`` (an English suffix the exact-match
@@ -346,7 +297,6 @@ _B_REVIEW_SECTION_WHITELIST = (
     # §7.5 adversarial verdict + §7.6 completion audit survive — see _strip_quality_gate_stats).
     "## 7. Quality Gates",
     "## 8. Files Changed",
-    "## 9. Lessons",
     "## 10. Known Gaps & Attention Flags",
 )
 
@@ -4297,16 +4247,11 @@ def _verify_run_shas(shas: list[str], by_repo: "dict[str, list[str]]",
 
 # Opaque, non-colliding prefix a warning carries when deliverable-B generation hit a
 # TRUE anomaly (REPORT.md absent AND auto-generation failed) — distinct from a LEGITIMATE
-# no-B skip (§9-degenerate / gitignored / daemon-workspace), which warns WITHOUT this
+# no-B skip (gitignored / daemon-workspace), which warns WITHOUT this
 # prefix. The caller (cmd_run_commit) matches it with .startswith() and BLOCKS the commit
 # (fail-loud) rather than silently committing without the audit projection. Kept opaque so
 # a legitimate warning cannot accidentally begin with it.
 _FAILLOUD_SENTINEL = "⛔FAILLOUD⛔ deliverable B:"
-# The report's §9 Lessons is still a placeholder: run-commit ran before the lessons
-# were seeded. Shared-mode run-commit REFUSES the commit on it (nothing staged yet), so
-# code and B land in ONE commit. An isolated landing knows it before the first commit
-# (its precheck) and lands with push_ready false instead: tests alone decide landing.
-_ORDERING_SENTINEL = "⛔ORDER⛔ deliverable B:"
 
 
 def _generate_review_deliverable(
@@ -4380,13 +4325,9 @@ def _generate_review_deliverable(
     # report exists when this function is called. (run_44a06138 is the known-good
     # proof: its B is a verbatim copy of A's terminal REPORT.md, incl. §9 Lessons.)
     # No REPORT.md → nothing to copy → generate NOTHING, but WARN LOUDLY (not a
-    # silent no-op). This is the FILE-EXISTENCE half of the ordering gate; the §9-
-    # SUBSTANTIVE half is enforced programmatically below (_report_section9_is_degenerate,
-    # run_7c30c517) — together they make the deliver.md ordering (seed lessons →
-    # run-report → run-commit) code-enforced, not agent-discipline prose. If a future
-    # run commits before the report exists, this warns; if it commits before §9 is
-    # seeded, the degenerate-§9 check below warns — either ordering violation is VISIBLE
-    # in run-commit's WARN channel instead of invisible. The §4.6 需求溯源审计 section a
+    # silent no-op). A run that commits before the report exists is VISIBLE in
+    # run-commit's WARN channel instead of invisible. (§9 Lessons is not projected into
+    # B, so B never waits for REFLECT.) The §4.6 需求溯源审计 section a
     # reviewer needs is ALREADY baked INTO that terminal REPORT.md by cmd_run_report —
     # so copying the report carries the provenance in a SINGLE file (no separate
     # REQUIREMENTS.md).
@@ -4491,31 +4432,6 @@ def _generate_review_deliverable(
     #     resolve it — a published identifier the reader cannot follow (R30#7).
     try:
         report_content = report_src.read_text(encoding="utf-8")
-        # STRUCTURAL ORDERING GATE (run_7c30c517): refuse to freeze a DEGENERATE §9
-        # (no real REFLECT lessons) into the git-committed deliverable B. This turns
-        # the DELIVER ordering invariant (seed-lessons → run-report → run-commit) from
-        # agent-discipline PROSE into CODE — the completion gate inspects only ledger A
-        # (unconditionally re-rendered + reflect-lessons-substantive-checked), so A ends
-        # correct, but if run-commit ran BEFORE lessons were seeded, B would freeze A's
-        # placeholder §9 forever, undetected (permanent A/B drift). warn-skip, NOT a hard
-        # BLOCK: B is best-effort (ledger A is the durable truth), and run-commit commits
-        # SOURCE CODE + B together — a hard block would connect-block a legitimate code
-        # commit (O030: 容灾 escalated to a hard gate). So: skip B + WARN loudly (same
-        # channel as the no-REPORT guard above); fix the ordering + re-run run-commit.
-        if _report_section9_is_degenerate(report_content):
-            return [], [
-                f"{_ORDERING_SENTINEL} ledger A's REPORT.md §9 Lessons is still a "
-                f"placeholder (no reflect lessons seeded), so the review deliverable "
-                f"cannot be built and the code would land without it. Seed the lessons, "
-                f"refresh the report, then run run-commit again (one commit, code + B):\n"
-                f"  python backend/scripts/artifact_cli.py run-update --project {project} "
-                f"--run-id {run_id} --stage-json '{{\"stage\":\"reflect\",\"status\":"
-                f"\"recorded\",\"lessons\":[\"[pitfall] ...\"]}}'\n"
-                f"  python backend/scripts/artifact_cli.py run-report --project {project} "
-                f"--run-id {run_id} --force\n"
-                f"No cross-transferable lesson → one honest '[note] no cross-transferable "
-                f"lesson — <why>' (≥ 20 chars)."
-            ]
         # B is a reviewer-facing PROJECTION of ledger A — NOT a verbatim copy.
         # Keep only the whitelist sections; re-render §8 from the LIVE staging set
         # (source_files) so committed B reflects git truth, not A's self-reported
@@ -5871,19 +5787,6 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
                     "fail_loud": [w for w in warnings_b if w.startswith(_FAILLOUD_SENTINEL)],
                     "run_id": args.run_id,
                 }), file=sys.stderr)
-                sys.exit(2)
-            # Lessons not seeded yet: refuse now (nothing staged), so code and B land
-            # together on the retry instead of code now and a REPORT-only commit later.
-            # --force does not bypass it: the fix is one run-update, never a skip.
-            if any(w.startswith(_ORDERING_SENTINEL) for w in warnings_b):
-                print(json.dumps({
-                    "blocked": True,
-                    "error": "COMMIT REFUSED — the review deliverable (REPORT.md) is not "
-                             "ready, and a run's code and its report go in ONE commit.",
-                    "next_action": [w[len(_ORDERING_SENTINEL):].strip() for w in warnings_b
-                                    if w.startswith(_ORDERING_SENTINEL)][0],
-                    "run_id": args.run_id,
-                }, ensure_ascii=False), file=sys.stderr)
                 sys.exit(2)
             if _b_paths:
                 # Append B's files to the target repo's staging list so the EXISTING
@@ -10891,19 +10794,14 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
 
     def gen_b(wt: Path, files: "list[str]") -> "list[str]":
         paths, warns = _generate_review_deliverable(project, run_id, str(wt), source_files=files)
-        # A review deliverable that could not be generated, or whose §9 lessons are still
-        # a placeholder, is a push_ready reason: the code lands (one landing decision,
-        # test evidence), the gap is named on the commit and in REPORT §10.
+        # A review deliverable that could not be generated is a push_ready reason: the
+        # code lands (one landing decision, test evidence), the gap is named on the
+        # commit and in REPORT §10.
         loud = [w for w in warns if w.startswith(_FAILLOUD_SENTINEL)]
-        order = [w for w in warns if w.startswith(_ORDERING_SENTINEL)]
-        gaps = (["review deliverable (B) not generated: " + "; ".join(loud)[:300]] if loud else []) \
-            + (["review deliverable (B): " + order[0][len(_ORDERING_SENTINEL):].strip()[:300]]
-               if order else [])
-        if "review deliverable (B)" in (not_ready_box[0] or ""):
-            gaps = []   # the precheck already named it before the first commit
+        gaps = ["review deliverable (B) not generated: " + "; ".join(loud)[:300]] if loud else []
         if gaps:
             not_ready_box[0] = "; ".join([x for x in (not_ready_box[0],) if x] + gaps)
-        warnings.extend(w for w in warns if not w.startswith((_FAILLOUD_SENTINEL, _ORDERING_SENTINEL)))
+        warnings.extend(w for w in warns if not w.startswith(_FAILLOUD_SENTINEL))
         warnings.extend(gaps)
         return [os.path.relpath(p, str(wt)) for p in paths]
 
@@ -10940,13 +10838,6 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
                 if stale:
                     errs.append("Gate-2 expert(s) have not reviewed the current change "
                                 "(recorded at deliver stage-start): " + ", ".join(stale))
-        try:   # the review deliverable needs §9 lessons; known now, not mid-landing
-            # (REPORT.md itself is generated before landing; its absence is gen_b's case)
-            _rep = run_file.parent / "REPORT.md"
-            if _rep.is_file() and _report_section9_is_degenerate(_rep.read_text(encoding="utf-8")):
-                errs.append("review deliverable (B): REPORT.md §9 Lessons is still a placeholder")
-        except OSError as e:
-            errs.append(f"review deliverable (B): REPORT.md unreadable ({type(e).__name__})")
         if errs:
             # A review that did not run (or predates the change) is recorded, never a stop:
             # land_deliver marks every commit push_ready false with these gaps.
