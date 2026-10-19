@@ -95,7 +95,7 @@ def test_fourth_round_is_denied_with_the_handoff(env):
     reason = res["hookSpecificOutput"]["permissionDecisionReason"]
     assert "再一再二不再三" in reason and RID in reason and "deliver" in reason
     for word in ("EXPERT-ID: root-cause", "ROOT-CAUSE VERDICT: SOUND", "WRONG-APPROACH",
-                 "REPORT §10", "push_ready false", "back to", "do not ask the user"):
+                 "REPORT §10", "push_ready false", "no redesign", "do not ask the user"):
         assert word in reason
     assert "wait for the answer" not in reason
 
@@ -229,3 +229,46 @@ def test_a_redesign_starts_a_fresh_allowance(env):
     st["redesigns"] = [{"ts": now - 1000}]
     d.write_text(json.dumps(st))
     assert _spawn() == {"decision": "approve"}
+
+
+def _plan_run(ws, waves=None, started=None):
+    started = started or time.time() - 3600
+    _run(ws, started=started)
+    rf = ws / "Projects" / "SwarmAI" / ".artifacts" / "runs" / RID / "run.json"
+    st = json.loads(rf.read_text())
+    st["dispatch_plan"] = {"deliver": ["correctness", "security", "concurrency", "meta-review"]}
+    if waves is not None:
+        st["gate2_waves"] = waves
+    rf.write_text(json.dumps(st))
+    return started
+
+
+def test_a_solo_spawn_after_a_sibling_finished_is_denied_once(env):
+    """Parallel by prevention: once a wave member finished, spawning another alone while
+    ≥2 are left is denied ONCE, naming the rest; the batch sent next is allowed."""
+    ws, audit = env
+    rrg._WAVE_DENIED.clear()
+    _plan_run(ws)
+    assert not _denied(_spawn("security"))           # nothing finished: a batch in flight
+    _marker(audit, 1, "correctness")                 # one member done, two left
+    res = _spawn("security")
+    assert _denied(res)
+    why = res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "concurrency" in why and "security" in why and "ONE message" in why
+    assert not _denied(_spawn("security"))           # asked once per wave
+    assert not _denied(_spawn("concurrency"))
+
+
+def test_a_recheck_wave_is_kept_parallel_too(env):
+    ws, audit = env
+    rrg._WAVE_DENIED.clear()
+    started = time.time() - 3600
+    _plan_run(ws, waves=[{"at": started + 600, "experts": ["correctness", "security",
+                                                          "concurrency"]}], started=started)
+    _marker(audit, 1, "correctness", ts=started + 900)
+    assert _denied(_spawn("security"))
+    rrg._WAVE_DENIED.clear()
+    # a two-expert wave, or the last one left: nothing to batch, never denied
+    _plan_run(ws, waves=[{"at": started + 600, "experts": ["correctness", "security"]}],
+              started=started)
+    assert not _denied(_spawn("security"))

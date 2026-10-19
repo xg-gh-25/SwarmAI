@@ -4,7 +4,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 ## Steps
 1. **Audits** (`ref/deliver/audits.md`): Fresh User + User Path Latency if user-facing; Completion Audit + AC matrix.
 2. **Stage first:** `git add` new files, unstage foreign ones, before any review (`ref/deliver/gate2-coverage.md`).
-3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message; `E_SERIAL_DISPATCH` past 30 s), prompt = the entry's `spawn` text, exactly (a steered round does not count); never paste the prompt file.
+3. **Gate-2:** spawn EVERY `experts` entry (Agent tool, ONE message), prompt = the entry's `spawn` text, exactly (a steered round does not count); never paste the prompt file.
 4. **Ledger, fix** (`ref/deliver/gate2-findings.md`): `gate2-ledger` builds the findings from the experts' answers — record `findings_from: "ledger"` + a `disposition` per id, never copy answers by hand; Shared-State Override before tiers; Red Team never a wave of its own (size → round 1 via `experts`; a round-1 HIGH → `gate2-recheck` adds it to round 2's batch; red-team marker gate), fix HIGH + MED conf ≥ 7 **by class** `[GATE·validator]` (`invariant`, `root_cause`, `class_fix`, `break_test`; missed → `design_updates`), `pipeline_test.py --mode recheck`, then round 2 = `gate2-recheck` (fix-only prompts; spawn its `recheck` list; `[GATE·cli]`).
 5. **Meta-review:** one Agent call, prompt = `meta_review_spawn` exactly (no path → `spawn_prompt.py --gate meta-review --project <P> --files <changed…>`, exit 0 only; `ref/deliver/push-ready.md`).
 6. **User-Value Probe** (`ref/deliver/audits.md`) + **Doc Sync** (`ref/deliver/doc-sync.md`, warning only).
@@ -18,7 +18,7 @@ Prove the change push-ready (audits, Gate-2, meta-review, convergence), then com
 - `[GATE·cli]` Adversarial review is NON-NEGOTIABLE: no "tests pass / simple code" exemption. <!-- R-deliver-001 -->
 - `[GATE·cli]` Check 9 depth validation needs `adversarial_review.profile_tier == "full"` for full/bugfix; `run-update --status completed` BLOCKS on `skipped`/`lite`. <!-- R-deliver-002 R-deliver-005 -->
 - Adversarial Review Gate (BLOCKING) — multi-specialist — `[GATE·cli]`: before the report and any commit. <!-- R-deliver-004 -->
-- `[GATE·cli]` BLOCKING: every round (round 1 and each `gate2-recheck` batch) in ONE message (`E_SERIAL_DISPATCH`). <!-- R-deliver-006 -->
+- `[GATE·hook]` every round (round 1, each `gate2-recheck` batch) in ONE message: a solo spawn after a sibling finished is denied once. <!-- R-deliver-006 -->
 - Meta-Review (BLOCKING) — `[GATE·validator]`: a full/bugfix deliver artifact without `meta_review`/`meta_review_verdict` is blocked; trivial/research/docs exempt. <!-- R-deliver-009 -->
 - Push-Ready (binary) — `[GATE·cli]`: false → `run-commit` still commits, marked; never push. <!-- R-deliver-003 -->
 - `[GATE·cli]` Run source committed → `run-update --status completed` BLOCKS until surface evidence: the `surface_run_outputs` marker naming every commit, or `--outputs-surfaced` on that call; docs-only exempt; never re-record deliver for it (`complete.md` Step 0). <!-- R-deliver-015 -->

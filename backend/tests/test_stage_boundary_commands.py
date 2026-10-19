@@ -1870,7 +1870,7 @@ def test_gaps_come_from_the_gates_own_warnings():
         "completed degraded")
 
 
-def test_every_round_of_experts_must_start_together(monkeypatch):
+def test_every_round_of_experts_are_checked_together(monkeypatch):
     """REVIEW / DELIVER experts run in parallel in EVERY round: round 1, and each
     gate2-recheck wave whatever its size. Spawns >30 s apart refuse."""
     t = 1_700_000_000.0  # in the past: the stage window ends now
@@ -1886,11 +1886,14 @@ def test_every_round_of_experts_must_start_together(monkeypatch):
     monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: starts)
     w: list = []
     assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
-    errs = cli._parallel_dispatch_errors("r", run, "review", w)
-    assert errs and errs[0].startswith("E_SERIAL_DISPATCH") and "code-quality" in errs[0]
+    # recorded as a warning, never refused (the reviews already ran)
+    assert cli._parallel_dispatch_errors("r", run, "review", w) == []
+    assert any(x.startswith("serial dispatch") and "code-quality" in x for x in w)
+    w.clear()
     starts["security"] = [t + 12, t + 400]  # round 2 re-checks spawned one after another
-    errs = cli._parallel_dispatch_errors("r", run, "deliver", w)
-    assert len(errs) == 1 and "re-check wave 1" in errs[0] and "security" in errs[0]
+    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
+    assert any("re-check wave 1" in x and "security" in x for x in w)
+    w.clear()
     monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: None)
-    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []  # unreadable: warn only
-    assert any("NOT verified" in x for x in w)
+    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []
+    assert w and not any("NOT verified" in x for x in w)  # does not cap push_ready

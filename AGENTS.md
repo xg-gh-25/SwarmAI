@@ -230,7 +230,9 @@ implementations in `security_hooks.py`). By category:
    run-commit), `review_round_gate` (Agent|Task, real app sessions only: a spawn whose
    prompt starts with `EXPERT-ID:` in this session's active run is denied once that
    expert has 3 completed rounds in the open stage, review + 2 re-checks, and told to
-   record the open items and continue (never ask the user); goal_cycle exempt; fails open; operator-set
+   record the open items and continue (never ask the user); it also keeps REVIEW /
+   DELIVER rounds parallel: a solo spawn of a round member after a sibling finished, with
+   ≥2 left, is denied once per round naming the rest to spawn in one message; goal_cycle exempt; fails open; operator-set
    `SWARM_REVIEW_ROUND_GATE_FORCE=1`), `direct_commit_gate` (registered before
    `dangerous_command_gate`; a session with no run of its own that commits more than 20
    changed source lines in the SwarmAI source repo, docs and lockfiles excluded, is sent

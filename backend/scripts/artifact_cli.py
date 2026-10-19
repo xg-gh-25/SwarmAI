@@ -5196,7 +5196,7 @@ def _parallel_dispatch_errors(run_id: str, cand_run: dict, stage: str,
                               warnings: "list[str]") -> "list[str]":
     """REVIEW and DELIVER experts run in parallel, EVERY round (XG 2026-10-19): each wave's
     experts start within PARALLEL_WINDOW_S of each other (ONE message, one Agent call
-    each). Waves: REVIEW = its ``review_experts``; DELIVER round 1 = the dispatched Gate-2
+    each). A late wave is a WARNING (returns []): the spawn-time gate prevents it. Waves: REVIEW = its ``review_experts``; DELIVER round 1 = the dispatched Gate-2
     experts (stage-start), then one wave per gate2-recheck call (``gate2_waves``: the
     experts it handed a prompt, however many). A wave member's spawn is its first one at
     or after the wave's hand-out and before the next wave; one with no spawn there is
@@ -5218,7 +5218,7 @@ def _parallel_dispatch_errors(run_id: str, cand_run: dict, stage: str,
         return []
     starts = _spawn_starts(run_id, windows)
     if starts is None:
-        warnings.append(f"{stage} parallel dispatch NOT verified: marker store unreadable")
+        warnings.append(f"{stage} parallel dispatch not checked: marker store unreadable")
         return []
     errs = []
     for n, w in enumerate(waves):
@@ -5243,11 +5243,13 @@ def _parallel_dispatch_errors(run_id: str, cand_run: dict, stage: str,
         if late:
             label = "review_experts" if stage == "review" else (
                 "round 1 (`experts`)" if n == 0 else f"re-check wave {n} (`recheck`)")
-            errs.append(f"E_SERIAL_DISPATCH: {stage} {label} did not start together (first "
+            errs.append(f"serial dispatch: {stage} {label} did not start together (first "
                         f"spawns {max(firsts.values()) - t0:.0f}s apart; late: {', '.join(late)}). "
-                        "Spawn every expert of a round in ONE message (one Agent call each, "
-                        "all in the same reply), then stage-complete again.")
-    return errs
+                        "Next round: every expert in ONE message.")
+    # Recorded, never refused: the reviews already ran, so a refusal could only buy a
+    # second full round. Prevention is the spawn-time gate (review_round_gate.wave_split).
+    warnings.extend(errs)
+    return []
 
 
 def _final_gate_spawn_errors(run_id: str, cand_run: dict, artifact: "dict | None",

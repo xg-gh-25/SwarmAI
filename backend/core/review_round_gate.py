@@ -20,7 +20,15 @@ expert comes from the spawn prompt's first ``EXPERT-ID:`` line
 with cycles). Operator bypass: SWARM_REVIEW_ROUND_GATE_FORCE=1 in the backend env.
 Fail-open on any error of its own.
 
-Public: ``create_review_round_gate``, ``rounds_used``, ``MAX_ROUNDS``.
+It also keeps REVIEW / DELIVER rounds parallel (XG 2026-10-19), by prevention rather
+than after the fact: when a member of the current wave (REVIEW's ``review_experts``,
+DELIVER round 1, or a ``gate2-recheck`` wave in run.json ``gate2_waves``) has already
+COMPLETED and another member is now spawned on its own while ≥2 members are still to
+run, the spawn is denied ONCE per wave with the list of the remaining members to spawn
+together in one message. Calls of one message reach this hook before any of them
+completes, so a parallel batch is never denied; at worst a wave runs in two batches.
+
+Public: ``create_review_round_gate``, ``rounds_used``, ``wave_split``, ``MAX_ROUNDS``.
 """
 from __future__ import annotations
 
@@ -130,6 +138,67 @@ def rounds_used(session_id: str, expert_id: str) -> "dict | None":
     return {"run_id": own["id"], "project": own["project"], "stage": stage, "used": used}
 
 
+_NOT_IN_WAVE = frozenset({"meta-review", ROOT_CAUSE_ID})
+_WAVE_DENIED: "dict[tuple[str, float], float]" = {}  # (run_id, wave at) → when; bounded below
+
+
+def wave_split(session_id: str, expert_id: str) -> "dict | None":
+    """``{"run_id", "stage", "remaining", "wave_at"}`` when spawning *expert_id* now would
+    split the current REVIEW / DELIVER wave (another member already completed, ≥2 still
+    to run, not yet denied for this wave), else None."""
+    from core.security_hooks import _pipeline_runs_root, _session_run_state
+    own = _session_run_state(session_id)
+    if not own:
+        return None
+    rf = (Path(_pipeline_runs_root()) / "Projects" / own["project"] / ".artifacts" / "runs"
+          / own["id"] / "run.json")
+    try:
+        state = json.loads(rf.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    opened = _open_stage(state.get("stage_timing") if isinstance(state, dict) else None)
+    if not opened or opened[0] not in ("review", "deliver") or not opened[1]:
+        return None
+    stage, windows = opened
+    lo, now = windows[-1]
+    plan = state.get("dispatch_plan") if isinstance(state.get("dispatch_plan"), dict) else {}
+    waves = [{"at": lo, "experts": plan.get(stage) or []}]
+    if stage == "deliver":
+        waves += sorted((w for w in state.get("gate2_waves") or [] if isinstance(w, dict)
+                         and isinstance(w.get("at"), (int, float)) and lo <= w["at"] <= now),
+                        key=lambda w: w["at"])
+    wave = waves[-1]
+    members = {e for e in wave.get("experts") or [] if isinstance(e, str)} - _NOT_IN_WAVE
+    if expert_id not in members or len(members) < 3:
+        return None
+    key = (own["id"], float(wave["at"]))
+    if key in _WAVE_DENIED:
+        return None
+    audit = _audit_dir()
+    if not audit.is_dir():
+        return None
+    done: set = set()
+    t_from = float(wave["at"]) - 5
+    for p in audit.glob("session_*.marker"):
+        if "_adv_" in p.name:
+            continue
+        try:
+            if p.stat().st_mtime < t_from:
+                continue
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(d, dict) and d.get("run_id") == own["id"] \
+                and isinstance(d.get("ts"), (int, float)) and d["ts"] >= t_from:
+            done.add(d.get("expert_id"))
+    if expert_id in done or not (members & done):
+        return None
+    remaining = sorted(members - done)
+    if len(remaining) < 2:
+        return None
+    return {"run_id": own["id"], "stage": stage, "remaining": remaining, "wave_at": key[1]}
+
+
 def _deny_reason(expert_id: str, info: dict) -> str:
     if info.get("stage") != "deliver":
         # REVIEW (and any non-DELIVER stage) has no root-cause machinery: record and go on.
@@ -151,11 +220,9 @@ def _deny_reason(expert_id: str, info: dict) -> str:
         "round's findings and what each fix introduced, and have it answer on its first line "
         "`ROOT-CAUSE VERDICT: SOUND` (the approach is right; what is left is edge cases) or "
         "`ROOT-CAUSE VERDICT: WRONG-APPROACH` (fixing on top of this approach will not "
-        "converge), with its reasons. SOUND: stop fixing, write every open finding with "
-        "file:line and the verdict's reasons into REPORT §10, complete DELIVER with "
-        "push_ready false and let run-commit commit locally. WRONG-APPROACH: go back to "
-        "PLAN once with the verdict, redesign around what it says to avoid, and review the "
-        "new change from round 1; a second miss is handled as SOUND."
+        "converge), with its reasons. Either way: stop fixing, write every open finding with "
+        "file:line and the verdict with its reasons into REPORT §10, complete DELIVER with "
+        "push_ready false and let run-commit commit locally (no redesign, no round 4)."
     )
 
 
@@ -185,7 +252,7 @@ def create_review_round_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         cap = 1 if expert_id == ROOT_CAUSE_ID else MAX_ROUNDS
         if not info or info["stage"] in _EXEMPT_STAGES or info["used"] < cap:
-            return {"decision": "approve"}
+            return await _wave_check(session_id, expert_id)
         if os.environ.get("SWARM_REVIEW_ROUND_GATE_FORCE") == "1":
             logger.warning("[review-round-gate] FORCE override: %s round %d in %s/%s",
                            expert_id, info["used"] + 1, info["run_id"], info["stage"])
@@ -198,6 +265,34 @@ def create_review_round_gate(session_context: dict[str, Any]):
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
+        }}
+
+    async def _wave_check(session_id: str, expert_id: str) -> dict[str, Any]:
+        if os.environ.get("SWARM_REVIEW_ROUND_GATE_FORCE") == "1":
+            return {"decision": "approve"}
+        try:
+            split = await asyncio.wait_for(
+                executors.run_in("subprocess", wave_split, session_id, expert_id),
+                timeout=_SCAN_TIMEOUT)
+        except Exception:  # noqa: BLE001 — never blocks on itself
+            logger.warning("review_round_gate: wave scan failed — failing open", exc_info=True)
+            return {"decision": "approve"}
+        if not split:
+            return {"decision": "approve"}
+        _WAVE_DENIED[(split["run_id"], split["wave_at"])] = time.time()
+        while len(_WAVE_DENIED) > 256:
+            _WAVE_DENIED.pop(next(iter(_WAVE_DENIED)))
+        logger.warning("[BLOCKED] review_round_gate: serial spawn of %s in %s/%s",
+                       expert_id, split["run_id"], split["stage"])
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"DENY (parallel review): '{expert_id}' is being spawned on its own after "
+                f"another expert of this {split['stage']} round already finished. A round runs "
+                "in parallel: spawn ALL of these remaining experts NOW in ONE message (one "
+                "Agent call each, same reply): " + ", ".join(split["remaining"])
+                + ". This is asked once per round; the batch you send next is allowed."),
         }}
 
     return _gate
