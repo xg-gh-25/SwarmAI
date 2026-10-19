@@ -531,6 +531,89 @@ def _snapshot(wt, parent: str, tree: str, msg: str) -> str:
     return _out(wt, "commit-tree", tree, "-p", parent, "-m", msg).strip()
 
 
+# ── review snapshots and test overlays (deterministic convergence §4) ────────
+SNAPSHOT_REF_PREFIX = "refs/swarm/snapshots/"
+_LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+# Overlay commits are content-addressed: a fixed identity and date make the same base
+# plus the same file bytes give the same commit, so a checkout of it is reusable.
+_FIXED_ID = {"GIT_AUTHOR_NAME": "swarm-overlay", "GIT_AUTHOR_EMAIL": "overlay@swarm.local",
+             "GIT_COMMITTER_NAME": "swarm-overlay", "GIT_COMMITTER_EMAIL": "overlay@swarm.local",
+             "GIT_AUTHOR_DATE": "1970-01-01T00:00:00+0000",
+             "GIT_COMMITTER_DATE": "1970-01-01T00:00:00+0000"}
+
+
+def snapshot_ref(run_id: str, label: str) -> str:
+    _check_ids(run_id)
+    if not isinstance(label, str) or not _LABEL_RE.fullmatch(label):
+        raise WorktreeError("bad_label", f"snapshot label {label!r} is not [A-Za-z0-9_-]{{1,32}}")
+    return f"{SNAPSHOT_REF_PREFIX}{run_id}/{label}"
+
+
+def snapshot_commit(wt: "str | Path", run_id: str, label: str) -> dict:
+    """Freeze the run's change set ``T`` into a commit whose parent is the worktree's
+    HEAD, and point ``refs/swarm/snapshots/<run_id>/<label>`` at it. Read-only for the
+    worktree: ``change_tree`` works on a private index copy, so the worktree's index,
+    files and branch are untouched. Untracked files are not part of ``T`` (§6.2).
+    Returns ``{"sha", "tree", "base", "ref"}``."""
+    ref = snapshot_ref(run_id, label)
+    head = _rev(wt, "HEAD")
+    tree = change_tree(wt, run_id)
+    sha = _out(wt, "commit-tree", tree, "-p", head, "-m",
+               f"swarm snapshot {run_id} {label}").strip()
+    _out(wt, "update-ref", ref, sha)
+    return {"sha": sha, "tree": tree, "base": head, "ref": ref}
+
+
+def drop_snapshots(cwd: "str | Path", run_id: str) -> "list[str]":
+    """Delete every ``refs/swarm/snapshots/<run_id>/*`` ref; returns the deleted refs."""
+    _check_ids(run_id)
+    refs = [r for r in _out(cwd, "for-each-ref", "--format=%(refname)",
+                            f"{SNAPSHOT_REF_PREFIX}{run_id}/").split("\n") if r]
+    for r in refs:
+        git(cwd, "update-ref", "-d", r)
+    return refs
+
+
+def overlay_commit(wt: "str | Path", base_sha: str, paths: "Iterable[str]") -> dict:
+    """A commit of *base_sha*'s tree with each of *paths* replaced by the worktree's
+    current file (a path missing from the worktree is removed). Built on a private
+    index, so the worktree is never touched. Content-addressed (``_FIXED_ID``): the
+    same base and the same bytes give the same sha. When nothing differs from the base
+    the base itself is returned. Returns ``{"sha", "tree", "blobs": {path: blob|None}}``."""
+    root = os.path.realpath(str(wt))
+    fd, tmp = tempfile.mkstemp(prefix="swarm-ovl-")
+    os.close(fd)
+    os.unlink(tmp)  # read-tree writes a fresh index here
+    env = {"GIT_INDEX_FILE": tmp}
+    try:
+        _out(wt, "read-tree", base_sha, env=env)
+        blobs: dict = {}
+        for rel in sorted(set(paths)):
+            if not isinstance(rel, str) or not rel or os.path.isabs(rel) \
+                    or ".." in Path(rel).parts:
+                raise WorktreeError("bad_path", f"overlay path {rel!r} is not repo-relative")
+            p = os.path.join(root, rel)
+            if not os.path.realpath(p).startswith(root + os.sep):
+                raise WorktreeError("bad_path", f"overlay path {rel!r} leaves the worktree")
+            if os.path.isfile(p) and not os.path.islink(p):
+                blob = _out(wt, "hash-object", "-w", "--", rel).strip()
+                mode = "100755" if os.access(p, os.X_OK) else "100644"
+                _out(wt, "update-index", "--add", "--cacheinfo", f"{mode},{blob},{rel}", env=env)
+                blobs[rel] = blob
+            else:
+                _out(wt, "update-index", "--force-remove", "--", rel, env=env)
+                blobs[rel] = None
+        tree = _out(wt, "write-tree", env=env).strip()
+        if tree == _out(wt, "rev-parse", base_sha + "^{tree}").strip():
+            return {"sha": base_sha, "tree": tree, "blobs": blobs}
+        sha = _out(wt, "commit-tree", tree, "-p", base_sha, "-m", "swarm overlay",
+                   env={**env, **_FIXED_ID}).strip()
+        return {"sha": sha, "tree": tree, "blobs": blobs}
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def _patch_id(wt, a: str, b: str, run_id: str) -> str:
     diff = _out(wt, "diff", "--binary", "--no-renames", a, b, "--", ".",
                 f":(exclude){deliverable_prefix(run_id).rstrip('/')}", timeout=120)

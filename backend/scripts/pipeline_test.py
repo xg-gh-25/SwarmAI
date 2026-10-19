@@ -159,7 +159,8 @@ CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME block
 # goal profile: the cycle loop's stop rules are code, not card prose (run_a2f2c171 ran 236
 # tdd calls / 232 min). tdd is the per-cycle RED/GREEN step, so its count bounds the loop.
 GOAL_TDD_MAX = 80
-ALL_MODES = TEST_MODES + ("probe", "mutation")
+ALL_MODES = TEST_MODES + ("probe", "mutation", "snapshot", "prove")
+PROOF_MODES = ("snapshot", "prove")
 TDD_MAX_FILES = 5
 SMOKE_CAP = 40
 TDD_REPEAT_WARN = 8
@@ -943,6 +944,8 @@ known even when the shard is killed at the deadline or pytest-timeout exits.
 import json
 import os
 
+import pytest
+
 _PATH = os.environ.get("PIPELINE_TEST_EVENTS")
 _FH = []
 
@@ -1001,10 +1004,34 @@ def pytest_runtest_logstart(nodeid, location):
     _emit({"ev": "start", "nodeid": nodeid})
 
 
+def _exc_kind(et):
+    # "assert": an AssertionError (or subclass); "fail": pytest.fail / pytest.raises'
+    # DID NOT RAISE (both raise pytest's Failed); "error": anything else.
+    if issubclass(et, AssertionError):
+        return "assert"
+    failed = getattr(pytest.fail, "Exception", None)
+    if isinstance(failed, type) and issubclass(et, failed):
+        return "fail"
+    return "error"
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    if call.excinfo is not None and rep.failed:
+        et = call.excinfo.type
+        rep._pt_exc = (getattr(et, "__module__", "?") + "." + getattr(et, "__qualname__", "?"))[:200]
+        rep._pt_kind = _exc_kind(et)
+
+
 def pytest_runtest_logreport(report):
-    _emit({"ev": "report", "nodeid": report.nodeid, "when": report.when,
+    rec = {"ev": "report", "nodeid": report.nodeid, "when": report.when,
            "outcome": report.outcome, "dur": float(getattr(report, "duration", 0.0) or 0.0),
-           "longrepr": str(report.longrepr)[-3000:] if report.failed else ""})
+           "longrepr": str(report.longrepr)[-3000:] if report.failed else ""}
+    if report.failed and getattr(report, "_pt_kind", None):
+        rec["exc"], rec["exc_kind"] = report._pt_exc, report._pt_kind
+    _emit(rec)
 '''
 
 
@@ -1902,6 +1929,9 @@ def _parse_pytest(job: _Job) -> list[dict]:
                 outcome, notrun = "timeout", True
                 extra = {}
                 summary = ["not run: shard aborted before this test (deadline or per-test timeout)"]
+        callf = [r for r in rs if r.get("when") == "call" and r.get("outcome") == "failed"]
+        if callf and callf[0].get("exc_kind"):  # what the call phase raised (prove mode)
+            extra["exc_kind"], extra["exc"] = callf[0]["exc_kind"], callf[0].get("exc")
         out.append(_res(pre + nid, outcome, summary, deadline=job.killed, notrun=notrun,
                         call=any(r.get("when") == "call" for r in rs), **extra))
     if not out and job.rc not in (0, 5):
@@ -4413,6 +4443,244 @@ def run_mutations(ctx, ns, ev_root: Path, run_state: dict) -> tuple[dict, int]:
     return out, 0 if ev["all_killed"] else 1
 
 
+# ── break-test proofs: --mode snapshot / --mode prove (deterministic convergence §4) ──
+# A Gate-2 finding is closed by a test, not by a model: its break test must FAIL by an
+# assertion on the snapshot of the round that reported it (twice: one flaky run is not
+# a proof) and PASS on the current code. The snapshot is a commit of the run's change
+# set taken when the round's review starts; the break test is overlaid onto it as a
+# content-addressed commit, so the same snapshot + the same test bytes always check out
+# the same tree and its results are cached by that tree (a rebase never re-runs them).
+PROVE_MAX_IDS = 20
+
+
+def _proofs_dir(ev_root: Path) -> Path:
+    return ev_root / "proofs"
+
+
+def _isolated(ctx) -> bool:
+    return _WORKTREE.get("repo") == ctx.repo
+
+
+def run_snapshot(ctx, ns, ev_root: Path) -> tuple[dict, int]:
+    """Freeze the run worktree's change set as round ``ns.round``'s snapshot. Taken once
+    per round: a second call returns the recorded snapshot unchanged (a snapshot that
+    moved would silently re-base every proof of that round)."""
+    from core import run_worktree as rw
+    out = {"mode": "snapshot", "round": ns.round}
+    pdir = _proofs_dir(ev_root)
+    pdir.mkdir(parents=True, exist_ok=True)
+    fd = _try_lock(pdir / ".lock", 10)
+    if fd is None:
+        return {**out, "error": "proofs lock busy (another snapshot/prove call); retry"}, 2
+    try:
+        snaps = _read_json(pdir / "snapshots.json")
+        snaps = snaps if isinstance(snaps, dict) else {}
+        if isinstance(snaps.get(ns.round), dict):
+            return {**out, **snaps[ns.round], "already": True}, 0
+        try:
+            rec = rw.snapshot_commit(ctx.repo, ns.run_id, ns.round)
+        except rw.WorktreeError as exc:
+            return {**out, "error": f"snapshot failed: {exc.message}"}, 2
+        rec["at"] = _now_iso()
+        rec["untracked"] = rw.untracked_new_files(ctx.repo, ns.run_id)
+        snaps[ns.round] = rec
+        _write_json(pdir / "snapshots.json", snaps)
+    finally:
+        _unlock(fd)
+    if rec["untracked"]:
+        ctx.warnings.append(f"{len(rec['untracked'])} un-added file(s) are not in the snapshot "
+                            "(git add them before the review starts): "
+                            + ", ".join(rec["untracked"][:5]))
+    return {**out, **rec, "warnings": ctx.warnings}, 0
+
+
+def proof_outcome(r: "dict | None") -> tuple[str | None, str]:
+    """A runner result → (label, detail); label None = unfinished (no verdict yet).
+
+    Labels are finding_ledger.OLD_LABELS. ``assert_fail`` only for a call-phase
+    AssertionError (or subclass) or pytest.fail / DID NOT RAISE; any other exception
+    in the body, a collection / setup error, a missing nodeid → ``error``; a skip →
+    ``skip``; a per-test timeout → ``timeout``. A deadline cut or a not-run test is
+    unfinished, never a verdict."""
+    if r is None:
+        return None, "no result"
+    o = r.get("outcome")
+    last = (r.get("summary") or [""])[-1] if r.get("summary") else ""
+    if r.get("notrun") and not r.get("runner_error"):
+        return None, "not run (deadline or aborted shard)"
+    if o == "timeout":
+        return (None, "global deadline") if r.get("deadline") else ("timeout", last[:200])
+    if o == "passed":
+        return "pass", ""
+    if o == "skipped":
+        return "skip", last[:200]
+    if o == "failed":
+        kind = r.get("exc_kind")
+        if kind in ("assert", "fail"):
+            return "assert_fail", (r.get("exc") or kind)[:200]
+        return "error", f"{r.get('exc') or 'exception'} in the test body: {last}"[:300]
+    return "error", (last or str(o))[:300]
+
+
+def _result_for(nodeid: str, results: list[dict]) -> "dict | None":
+    """The result for ``nodeid``, else its file's collection error (a module that
+    cannot be imported reports at file level, not per test)."""
+    exact = [r for r in results if r.get("nodeid") == nodeid]
+    if exact:
+        return exact[0]
+    f = nodeid.split("::")[0]
+    return next((r for r in results if r.get("nodeid") == f and r.get("outcome") == "error"),
+                None)
+
+
+def _prove_ids(ctx, raw: list[str]) -> tuple[list[str], str | None]:
+    """Repo-relative backend test nodeids (``backend/tests/test_x.py::name``). A whole
+    file is refused: a break test is one test, and a file-level pass proves nothing."""
+    ids = []
+    for x in raw:
+        if not isinstance(x, str) or "::" not in x:
+            return [], f"prove takes test nodeids (file::test), not a whole file: {x}"
+        f, rest = x.strip().split("::", 1)
+        f = _norm_path(ctx.repo, f)
+        if not f or not rest or not _is_backend_test(f) or _contained(ctx.repo, f) is None:
+            return [], f"not a backend test nodeid (backend/tests/test_*.py::name): {x}"
+        ids.append(f"{f}::{rest}")
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return [], "prove needs --files <nodeid ...> (the break tests)"
+    if len(ids) > PROVE_MAX_IDS:
+        return [], f"prove takes at most {PROVE_MAX_IDS} nodeids, got {len(ids)}"
+    return ids, None
+
+
+def _overlay_paths(ctx, snap_sha: str, ids: list[str]) -> list[str]:
+    """The break tests' files plus every test-only file (under backend/tests/) the run
+    changed since the snapshot: fixtures and helpers the break tests use. Code under
+    test is never overlaid — that would test the fix, not the snapshot."""
+    from core import run_worktree as rw
+    paths = {n.split("::")[0] for n in ids}
+    try:
+        cur = rw.change_tree(ctx.repo, _WORKTREE["run_id"])
+        for p in rw.changed_paths(ctx.repo, snap_sha, cur):
+            if p.startswith("backend/tests/"):
+                paths.add(p)
+    except rw.WorktreeError as exc:
+        ctx.warnings.append(f"changed test files not resolved: {exc.message}")
+    # new test files not yet git-added (a break test written after the snapshot)
+    untracked = _git(ctx.repo, "ls-files", "--others", "--exclude-standard", "-z",
+                     "--", "backend/tests") or ""
+    # bytecode is never test content: a new-side run writes __pycache__ into the
+    # worktree, and overlaying it would change the overlay tree (a cache miss each call)
+    paths.update(p for p in untracked.split("\0")
+                 if p and "__pycache__" not in Path(p).parts and not p.endswith(".pyc"))
+    return sorted(paths)
+
+
+def _old_cache_key(tree: str, pyid: str, nodeid: str) -> str:
+    return f"{tree}|{pyid}|{nodeid}"
+
+
+def run_prove(ctx, ns, ev_root: Path) -> tuple[dict, int]:
+    """For each break test: up to two runs on round ``ns.round``'s snapshot (with the
+    test overlaid) and one on the current worktree; verdict per finding_ledger.
+
+    Old-side outcomes are cached by (overlay tree, interpreter, nodeid) after every
+    batch, so a deadline between the two runs loses nothing and a later call (or a
+    call after a rebase) re-runs only the new side. ``continue: true`` when some
+    verdict is still pending; the next call of the same command finishes it."""
+    from core import finding_ledger as fl
+    from core import run_worktree as rw
+    out: dict = {"mode": "prove", "round": ns.round}
+    ids, err = _prove_ids(ctx, ns.files)
+    if err:
+        return {**out, "error": err}, 2
+    pdir = _proofs_dir(ev_root)
+    snaps = _read_json(pdir / "snapshots.json")
+    snap = snaps.get(ns.round) if isinstance(snaps, dict) else None
+    if not isinstance(snap, dict) or not snap.get("sha"):
+        return {**out, "error": f"no snapshot for round {ns.round}: run --mode snapshot "
+                                f"--round {ns.round} when that round's review starts"}, 2
+    if _git(ctx.repo, "cat-file", "-e", snap["sha"] + "^{commit}") is None:
+        return {**out, "error": f"snapshot {snap['sha'][:12]} is not in the repo"}, 2
+    try:
+        ovl = rw.overlay_commit(ctx.repo, snap["sha"], _overlay_paths(ctx, snap["sha"], ids))
+    except rw.WorktreeError as exc:
+        return {**out, "error": f"overlay failed: {exc.message}"}, 2
+    pyid = _python_id(ctx.python)
+    cpath = pdir / "old-side.json"
+    cache = _read_json(cpath)
+    cache = cache if isinstance(cache, dict) else {}
+    old: dict[str, list] = {n: list(cache.get(_old_cache_key(ovl["tree"], pyid, n)) or [])
+                            for n in ids}
+    tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)
+    ctx.workers = max(1, len(tokens))
+    new: dict[str, tuple] = {}
+    try:
+        for _ in range(2):  # at most two old-side batches: run 1, then run 2
+            need = [n for n in ids if fl.old_runs_needed([x["o"] for x in old[n]]) > 0]
+            if not need or ctx.left() < 5:
+                break
+            wt = _ensure_worktree(ctx, ovl["sha"], ctx.left())
+            if wt is None:
+                break
+            res = run_pytest_targets(ctx, _targets_from_nodeids(
+                [n[len("backend/"):] for n in need]), ctx.deadline_at, "old", root=wt)
+            got = {}
+            for n in need:
+                lab, det = proof_outcome(_result_for(n, res))
+                if lab is not None:
+                    old[n].append({"o": lab, "d": det})
+                    got[n] = old[n]
+            if got:  # persist after every batch (F2)
+                fd = _try_lock(pdir / ".lock", 10)
+                try:
+                    cur = _read_json(cpath)
+                    cur = cur if isinstance(cur, dict) else {}
+                    for n, v in got.items():
+                        cur[_old_cache_key(ovl["tree"], pyid, n)] = v
+                    _write_json(cpath, cur)
+                finally:
+                    _unlock(fd)
+            if len(got) < len(need):
+                break  # something unfinished: the deadline decides the rest
+        ready = [n for n in ids if fl.old_runs_needed([x["o"] for x in old[n]]) == 0
+                 and fl.proof_verdict([x["o"] for x in old[n]], "pass")[0] != "invalid"]
+        if ready and ctx.left() >= 3:
+            res = run_pytest_targets(ctx, _targets_from_nodeids(
+                [n[len("backend/"):] for n in ready]), ctx.deadline_at, "new")
+            for n in ready:
+                new[n] = proof_outcome(_result_for(n, res))
+    finally:
+        _release_workers(tokens)
+    rows, pending = [], []
+    for n in ids:
+        labels = [x["o"] for x in old[n]]
+        nl, nd = new.get(n, (None, ""))
+        verdict, code = fl.proof_verdict(labels, nl)
+        reason = fl.PROOF_CODES[code][1]
+        detail = next((x["d"] for x in old[n] if x["o"] != "assert_fail" and x["d"]), "") \
+            if code.startswith("old_") else nd if code == "new_not_pass" else ""
+        row = {"nodeid": n, "old": labels, "new": nl, "verdict": verdict, "code": code,
+               "reason": reason + (f" ({detail})" if detail else "")}
+        rows.append(row)
+        if verdict == "pending":
+            pending.append(n)
+    ev = {"schema": 1, "run_id": ns.run_id, "round": ns.round, "at": _now_iso(),
+          "snapshot": snap["sha"], "overlay": ovl["sha"], "overlay_tree": ovl["tree"],
+          "overlaid": ovl["blobs"], "python": pyid, "proofs": rows,
+          "warnings": list(ctx.warnings)}
+    path = pdir / f"prove-{ns.round}-{_stamp()}.json"
+    _write_json(path, ev)
+    _write_json(pdir / f"latest-prove-{ns.round}.json", ev)
+    out.update(proofs=rows, evidence=str(path), warnings=ctx.warnings,
+               valid=sum(r["verdict"] == "valid" for r in rows),
+               invalid=sum(r["verdict"] == "invalid" for r in rows))
+    if pending:
+        out.update(unfinished=pending, **{"continue": True})
+        return out, 1
+    return out, 0 if all(r["verdict"] == "valid" for r in rows) else 1
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _size(obj) -> int:
     return len(json.dumps(obj, separators=(",", ":")))
@@ -4454,6 +4722,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--files", nargs="+", default=[])
     p.add_argument("--name")
     p.add_argument("--mutations")
+    p.add_argument("--round", help="snapshot / prove: the review round label (R1, R2)")
     p.add_argument("--deadline", default=DEFAULT_DEADLINE)
     p.add_argument("--json", action="store_true", help="accepted for clarity; output is always JSON")
     return p
@@ -4508,7 +4777,12 @@ def execute(ns) -> tuple[dict, int]:
     deadline, dl_warn = _clamp_deadline(ns.deadline)
     if deadline is None:
         return {"error": dl_warn[0]}, 2
-    if ns.mode in TEST_MODES and deadline > SAFE_DEADLINE:
+    if ns.mode in PROOF_MODES:
+        if not ns.run_id:
+            return {"error": f"--mode {ns.mode} needs --run-id"}, 2
+        if not isinstance(ns.round, str) or not re.fullmatch(r"R[0-9]{1,2}", ns.round):
+            return {"error": f"--mode {ns.mode} needs --round R1|R2 (got {ns.round!r})"}, 2
+    if ns.mode in TEST_MODES + ("prove",) and deadline > SAFE_DEADLINE:
         # it would outlive the documented alarm 110 and die before writing evidence;
         # a scope that needs longer continues across calls instead
         return {"error": f"--deadline {deadline:g}s is over {SAFE_DEADLINE:g}s, the most a "
@@ -4522,7 +4796,16 @@ def execute(ns) -> tuple[dict, int]:
     ctx.warnings.extend(dl_warn)
     for w in dl_warn:
         print(f"pipeline_test.py: warning: {w}", file=sys.stderr)
+    if ns.mode in PROOF_MODES and not _isolated(ctx):
+        shutil.rmtree(ctx.workdir, ignore_errors=True)
+        return {"mode": ns.mode, "error": f"--mode {ns.mode} needs an isolated run worktree "
+                                          "(worktree_mode isolated): a snapshot of the shared "
+                                          "checkout would include other sessions' edits"}, 2
     try:
+        if ns.mode == "snapshot":
+            return run_snapshot(ctx, ns, ev_root)
+        if ns.mode == "prove":
+            return run_prove(ctx, ns, ev_root)
         if ns.mode == "probe":
             return run_probe(ctx, ns, ev_root, run_state)
         if ns.mode == "mutation":
