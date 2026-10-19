@@ -47,7 +47,6 @@ import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { WorkGroupView } from './WorkGroup';
-import { ThoughtBlock } from './ThoughtBlock';
 import { PipelineStageRow } from './PipelineStageRow';
 import { PipelineBlock } from './PipelineBlock';
 import { FileChip } from './FileChip';
@@ -304,6 +303,18 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // ended AND settled (FOLD_DELAY_MS), so they move in the same moment the work folds,
   // never under the reader while it is still open.
   const mergeLead = !isStreaming && !settling;
+  // The thoughts before the restatement: once they move into the first stage (a
+  // pipeline turn, after the settle) they do not change the id of the block they join
+  // (groupWork `joined`, stage bodies only — the top level keeps ids by assigning them
+  // before its own lead merge).
+  // Exactly the ones sectionUnits / mergeLead move: thoughts before the first call or
+  // stage row (not a thought inside a stage that has no call yet).
+  const leadEnd = view.units.findIndex((u) => u.kind === 'process' || u.kind === 'stage');
+  // The view memory's key must survive the stream-end reconcile, which swaps the live
+  // bubble's client id for the DB row's id; the row carries the client id in its
+  // metadata, so the client id is the key on both sides.
+  const memoryScope = message.metadata?.client_id ?? message.id;
+  const leadThoughts = new Set((leadEnd < 0 ? [] : view.units.slice(0, leadEnd)).filter((u) => u.kind === 'thought'));
   // While the answer-so-far streams, the block of work above it stays open (groupWork
   // `holdLiveAboveAnswer`): it does not fold and re-open if a tool call follows.
   const holdLiveAboveAnswer = !!isStreaming;
@@ -335,7 +346,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   type Placed = { key: string; el: React.ReactNode; lane: boolean };
   const renderItem = (item: WorkItem, prev: WorkItem | undefined, inStage: boolean): Placed | null => {
-    const narration = item.kind === 'note' || item.kind === 'landmark' || item.kind === 'thought';
+    const narration = item.kind === 'note' || item.kind === 'landmark';
     const gap = !prev ? '' : narration && prev.kind === 'group' ? 'mt-1' : 'mt-2';
     if (item.kind === 'group') {
       return {
@@ -344,6 +355,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         el: (
           <div key={`g-${item.id}`} className={gap} {...ANCHOR_PROPS}>
             <WorkGroupView
+              scope={memoryScope}
               group={item}
               tail={!inStage && tailNote && item.members.includes(tailNote) ? tailNote : undefined}
               defaultOpen={!inStage && noResult && !tailNote && !!lastWork && item.members.includes(lastWork)}
@@ -353,22 +365,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               thoughtOpen={(k) => processChoice.get(k)}
               onThoughtToggle={chooseProcess}
               renderNote={(text, k) => renderBlock({ type: 'text', text }, k)}
-            />
-          </div>
-        ),
-      };
-    }
-    if (item.kind === 'thought') {
-      const key = `th-${item.ordinal}`;
-      return {
-        key,
-        lane: true,
-        el: (
-          <div key={key} className={gap} {...ANCHOR_PROPS}>
-            <ThoughtBlock
-              unit={item}
-              expanded={processChoice.get(key)}
-              onToggle={(open) => chooseProcess(key, open)}
             />
           </div>
         ),
@@ -393,7 +389,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         <div
           key={key}
           {...ANCHOR_PROPS}
-          data-testid={isAlignment ? 'turn-intent' : isResult ? 'turn-result' : undefined}
+          data-testid={isAlignment ? 'turn-restatement' : isResult ? 'turn-result' : undefined}
           className={`${inLane ? gap : prev ? 'mt-3' : ''} ${inLane ? 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)]' : ''}`}
         >
           {isResult && (
@@ -445,7 +441,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // Inside a stage (a lane item) a question / permission / the answer-so-far is
     // still not process: it is reset to the answer's size and contrast.
     return children.length || liveSec
-      ? renderItems(groupWork(children, liveSec, { exclude: alignText, mergeLead, holdLiveAboveAnswer }), true).map((x) => (x.lane ? x.el : (
+      ? renderItems(groupWork(children, liveSec, { exclude: alignText, mergeLead, holdLiveAboveAnswer, joined: leadThoughts }), true).map((x) => (x.lane ? x.el : (
         <div key={`full-${x.key}`} className={FULL_CLASS}>{x.el}</div>
       )))
       : [];
@@ -510,7 +506,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     const firstRound = lines.find((l) => l.rounds.length)?.rounds[0];
     const startedAt = firstRound?.kind === 'stage' ? (firstRound.startedAt ?? firstRound.prevAt ?? message.timestamp) : message.timestamp;
     const ends = lines.flatMap((l) => l.rounds).filter((r): r is Extract<RowSec, { kind: 'stage' }> => r.kind === 'stage' && r.block.status !== 'in_progress');
-    const blockKey = `pipeline-${view.run?.runId ?? 'run'}`;
+    // One pipeline block per turn, keyed without the run id: a run block that arrives
+    // after the first stage row must not remount the block.
+    const blockKey = 'pipeline';
     placed.push({
       key: blockKey,
       lane: true,
@@ -525,6 +523,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             files={stageCounts(allWork).files}
             choice={processChoice.get(blockKey)}
             onChoose={(open) => chooseProcess(blockKey, open)}
+            mustOpen={allWork.some((u) => u.kind === 'interrupt' && isUnanswered(u.block))}
           >
             {lineEls}
           </PipelineBlock>

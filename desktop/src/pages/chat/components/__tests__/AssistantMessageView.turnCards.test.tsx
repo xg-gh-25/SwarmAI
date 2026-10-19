@@ -75,7 +75,6 @@ const PIPELINE: ContentBlock[] = [
 describe('pipeline_run — never rendered as text (chat display v8)', () => {
   it('no requirement card and no Intent label; the plan only drives the pipeline block', () => {
     renderView(PIPELINE);
-    expect(screen.queryByTestId('turn-run')).toBeNull();
     expect(screen.queryByText(/Add opus-5-5 to MODEL_REGISTRY/)).toBeNull();
     expect(screen.queryAllByText('Intent')).toHaveLength(0);
   });

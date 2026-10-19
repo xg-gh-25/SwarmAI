@@ -42,7 +42,6 @@ describe('no Intent label', () => {
     expect(block.contains(lead)).toBe(false);
     // the restatement comes before the block
     expect(lead.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryAllByTestId('turn-run')).toHaveLength(0);
   });
 
   it('pipeline turn: a restatement written before the pipeline_run block is not a lone WORKED block', () => {
@@ -62,6 +61,6 @@ describe('no Intent label', () => {
     renderView([th('an opening thought that is long enough to have been picked as the intent before this change'), tu('a'), tr('a'), tx('the answer')]);
     noIntentLabel();
     expect(screen.queryAllByTestId('thought').every((t) => t.dataset.intent !== 'true')).toBe(true);
-    expect(screen.queryByTestId('turn-intent')).toBeNull();
+    expect(screen.queryByTestId('turn-restatement')).toBeNull();
   });
 });

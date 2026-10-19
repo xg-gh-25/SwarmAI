@@ -61,13 +61,13 @@ describe('how the ask was read: the restatement, plain text (chat display v8)', 
   it('with no restatement, the opening thought stays in the work: no lead item, no label', () => {
     render(viewOf([th('Read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
     expect(screen.queryAllByText('Intent')).toHaveLength(0);
-    expect(screen.queryByTestId('turn-intent')).toBeNull();
+    expect(screen.queryByTestId('turn-restatement')).toBeNull();
     expect(screen.queryByTestId('thought')).toBeNull(); // folded inside WORKED
   });
 
   it('a restatement written before the work is plain text at the top; the opening thought joins the work', () => {
     render(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a'), tr('a'), tx('done')]));
-    expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
+    expect(screen.getByTestId('turn-restatement').textContent).toContain('I read it as');
     expect(screen.queryAllByText('Intent')).toHaveLength(0);
     expect(screen.queryByTestId('thought')).toBeNull(); // folded inside WORKED
     fireEvent.click(screen.getByTestId('group-toggle'));
@@ -88,7 +88,7 @@ describe('how the ask was read: the restatement, plain text (chat display v8)', 
     rerender(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a')], true));
     expect(follows()).toBe(true);
     expect(screen.getByTestId('thought')).toBe(before); // same node: no remount
-    expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
+    expect(screen.getByTestId('turn-restatement').textContent).toContain('I read it as');
   });
 
   it('a continuation pipeline turn (stage rows, no run block) has no label', () => {
@@ -106,8 +106,7 @@ describe('how the ask was read: the restatement, plain text (chat display v8)', 
     render(viewOf([th('plan'), tx('Running the pipeline.'), tu('a'), tr('a'), RUN, tx('done')]));
     expect(screen.queryAllByText('Intent')).toHaveLength(0);
     expect(screen.queryByText('Do X')).toBeNull();
-    expect(screen.queryByTestId('turn-run')).toBeNull();
-    expect(screen.getByTestId('turn-intent').textContent).toContain('Running the pipeline.');
+    expect(screen.getByTestId('turn-restatement').textContent).toContain('Running the pipeline.');
   });
 
   it('there is no "started without restating" note, with or without an intent', () => {

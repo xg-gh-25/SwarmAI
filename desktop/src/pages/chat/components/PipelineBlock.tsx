@@ -50,15 +50,17 @@ export interface PipelineBlockProps {
   /** The user's open/closed choice; undefined = automatic. */
   choice?: boolean;
   onChoose: (open: boolean) => void;
+  /** Something in it needs the user (an unanswered question / permission): open. */
+  mustOpen?: boolean;
   /** One element per line, in `lines` order (PipelineStageRow or its pending form). */
   children: React.ReactNode[];
 }
 
-export function PipelineBlock({ lines, live, stoppedHere, startedAt, endedAt, files, choice, onChoose, children }: PipelineBlockProps) {
+export function PipelineBlock({ lines, live, stoppedHere, startedAt, endedAt, files, choice, onChoose, mustOpen, children }: PipelineBlockProps) {
   const { t } = useTranslation();
   const auto = useLinger(live);
   const [hover, setHover] = useState(false);
-  const open = choice ?? (auto || stoppedHere);
+  const open = !!mustOpen || (choice ?? (auto || stoppedHere));
   const done = lines.filter((l) => l.status === 'done' || l.status === 'skipped').length;
   const running = lines.find((l) => l.status === 'running' && !l.gate);
   const a = startedAt ? Date.parse(startedAt) : NaN;

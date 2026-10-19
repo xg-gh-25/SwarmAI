@@ -1062,11 +1062,17 @@ export type LandmarkUnit = Extract<TurnUnit, { kind: 'landmark' }>;
 export type TextUnit = NoteUnit | LandmarkUnit;
 export type WorkMember = ThoughtUnit | ProcessUnit | NoteUnit | LandmarkUnit;
 
-export type WorkItem = WorkGroup | Exclude<TurnUnit, ProcessUnit>;
+/** groupWork's output: blocks and the first-level units between them (a thought is
+ *  always inside a block). */
+export type WorkItem = WorkGroup | Exclude<TurnUnit, ProcessUnit | ThoughtUnit>;
 
 export interface GroupWorkOptions {
   /** A note that stays first level: the turn's opening restatement. */
   exclude?: TurnUnit;
+  /** Units that joined a block from elsewhere (the thoughts before the restatement,
+   *  moved into the first stage once the turn settles): they do not count for the
+   *  block's id, so the block keeps the id it streamed with. */
+  joined?: ReadonlySet<TurnUnit>;
   /** Merge thoughts-only blocks right before `exclude` into the next block (default
    *  true). False while the turn streams. */
   mergeLead?: boolean;
@@ -1097,7 +1103,7 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
       continue;
     }
     cur = null;
-    out.push(u as Exclude<TurnUnit, ProcessUnit>);
+    out.push(u as Exclude<TurnUnit, ProcessUnit | ThoughtUnit>);
   }
   // A block's id is fixed by its START, so it never changes while the block grows: a
   // block that starts with a thought is `th-<ordinal>` (a thinking-only block keeps
@@ -1108,9 +1114,11 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
   // absorbs the thoughts above the restatement keeps the id it streamed with.
   for (const g of out) {
     if (g.kind !== 'group') continue;
-    const first = g.members[0];
-    const p = g.members.find((m): m is ProcessUnit => m.kind === 'process');
-    const text = g.members.find((m): m is TextUnit => m.kind === 'note' || m.kind === 'landmark');
+    const own = g.members.filter((m) => !opts.joined?.has(m));
+    const ms = own.length ? own : g.members;
+    const first = ms[0];
+    const p = ms.find((m): m is ProcessUnit => m.kind === 'process');
+    const text = ms.find((m): m is TextUnit => m.kind === 'note' || m.kind === 'landmark');
     const key = first.kind === 'thought' ? `th-${first.ordinal}` : p ? p.id : `txt-${(text as TextUnit).textOrdinal}`;
     g.id = `grp-${key}`;
   }
@@ -1377,6 +1385,11 @@ export function sectionUnits(
 // stages before `current` ran in an earlier turn: done, with no work here. A gate
 // row the plan did not list sits inside the line of the stage it guards; with no
 // such line, it (like any unplanned stage) is appended at the end.
+// Two known limits, by design: when the run's PLAN changes mid-run (a profile upgrade
+// the CLI allows), the backend re-sends the checklist and the new lines appear where
+// the new plan puts them — the plan really changed, so the list says so. And lines
+// match sections by stage name, so a second run started in the same turn lays its
+// stages onto the first run's lines (as another round).
 
 type RowSection = Exclude<TurnSection, { kind: 'unit' }>;
 

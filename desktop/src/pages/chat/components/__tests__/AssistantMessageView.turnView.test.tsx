@@ -22,6 +22,7 @@ import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import React from 'react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
+import { resetViewMemory } from '../WorkGroup';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import type { Message, ContentBlock } from '../../../../types';
 
@@ -215,7 +216,7 @@ describe('AssistantMessageView — the answer-so-far and a turn without a result
   it('no tail when the only text is the intent restatement (the last block opens instead)', () => {
     renderView([tx('I read it as: fix the cache.'), tu('a', 'Running: ls'), tr('a'), tu('b', 'Running: pwd'), tr('b')]);
     expect(screen.queryByTestId('turn-tail')).toBeNull();
-    expect(screen.getByTestId('turn-intent').textContent).toContain('fix the cache');
+    expect(screen.getByTestId('turn-restatement').textContent).toContain('fix the cache');
     expect(screen.getByTestId('group-body')).toBeTruthy();
   });
 
@@ -379,7 +380,7 @@ describe('AssistantMessageView — thoughts (AC4, chat display v8)', () => {
     }
   });
 
-  it('a thought this view saw stream for 5s or more says how long; one it never saw stream says nothing', () => {
+  it('a thought this view saw stream for 5s or more says how long — also after a remount (tab switch); one it never saw stream says nothing', () => {
     vi.useFakeTimers();
     try {
       const { rerender, unmount } = render(viewOf([...SIX, th('weighing it')], true));
@@ -388,6 +389,14 @@ describe('AssistantMessageView — thoughts (AC4, chat display v8)', () => {
       act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 5); });
       expect(screen.getByTestId('thought-seconds').textContent).toBe('· 7s');
       unmount();
+      // a tab switch: the same message mounts again, the duration stays
+      const back = render(viewOf([...SIX, th('weighing it, done'), tu('b', 'Running: make'), tr('b'), tx('ok')], false));
+      fireEvent.click(screen.getByTestId('group-toggle'));
+      fireEvent.click(within(screen.getAllByTestId('step-row')[3]).getByTestId('row-toggle'));
+      expect(screen.getByTestId('thought-seconds').textContent).toBe('· 7s');
+      back.unmount();
+      // a turn this view never saw stream (history after a reload): no duration
+      resetViewMemory();
       renderView([th('weighing it, done'), ...SIX, tx('ok')]);
       fireEvent.click(screen.getByTestId('group-toggle'));
       expect(screen.getByTestId('thought-toggle').textContent).toBe('Thought');
@@ -523,7 +532,7 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
   it('the restatement is plain text (no label) and the final answer gets a Result divider, both outside the lane', () => {
     renderView([tx('Three steps: export, sync, push.'), tu('a', 'Running: ls'), tx('checking'), tu('b', 'Running: pwd'),
       tx('All three done.')]);
-    const intent = screen.getByTestId('turn-intent');
+    const intent = screen.getByTestId('turn-restatement');
     const result = screen.getByTestId('turn-result');
     expect(intent.textContent).not.toContain('Intent');
     expect(screen.queryByText('Understanding')).toBeNull();
@@ -541,7 +550,7 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
 
   it('a pure text reply has neither label nor lane', () => {
     renderView([tx('just an answer')]);
-    expect(screen.queryAllByTestId('turn-intent')).toHaveLength(0);
+    expect(screen.queryAllByTestId('turn-restatement')).toHaveLength(0);
     expect(document.querySelectorAll('[data-lane="true"]')).toHaveLength(0);
   });
 
@@ -595,14 +604,14 @@ describe('AssistantMessageView — turn frame and lane (AC5, AC6)', () => {
 
   it('a turn that starts with a tool result (compacted tail) shows no INTENT (AC5)', () => {
     renderView([tr('z'), th(`I'll inline a fallback expression here. ${'x'.repeat(170)}`), tu('a', 'Running: ls'), tx('done')]);
-    expect(screen.queryByTestId('turn-intent')).toBeNull();
+    expect(screen.queryByTestId('turn-restatement')).toBeNull();
     expect(document.body.textContent).not.toContain('Intent');
   });
 
   it('with a restatement, the opening thought is inside the work; nothing is labelled Intent (AC5)', () => {
     renderView([th('plan it'), tx('I read it as: fix X.'), tu('a', 'Running: ls'), tx('done')]);
     expect(screen.queryAllByText('Intent')).toHaveLength(0);
-    expect(screen.getByTestId('turn-intent').textContent).toContain('I read it as');
+    expect(screen.getByTestId('turn-restatement').textContent).toContain('I read it as');
   });
 });
 

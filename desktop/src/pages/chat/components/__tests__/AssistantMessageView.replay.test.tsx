@@ -41,7 +41,7 @@ const view = (content: ContentBlock[], isStreaming: boolean) => {
 };
 const MARK = /tok[A-Z]+\d*/g;
 const marks = (el: Element) => new Set(el.textContent?.match(MARK) ?? []);
-const TRACKED = ['pipeline-block', 'checklist-line', 'work-group', 'thought', 'step-row', 'group-note', 'turn-intent']
+const TRACKED = ['pipeline-block', 'checklist-line', 'work-group', 'thought', 'step-row', 'group-note', 'turn-restatement']
   .map((id) => `[data-testid="${id}"]`).join(',');
 
 interface Replay { violations: string[]; lineOrders: string[][]; final: Set<string>; container: HTMLElement; rerender: (ui: React.ReactElement) => void }
@@ -131,7 +131,7 @@ describe('turn replay — a plain turn', () => {
  *  and older turns have none — the harshest case is no tool_result blocks at all. */
 const stored = (blocks: ContentBlock[]) => blocks.filter((b) => b.type !== 'tool_result');
 /** The first level of a rendered turn, in order. */
-const firstLevel = (root: HTMLElement) => [...root.querySelectorAll('[data-testid="pipeline-block"],[data-testid="turn-intent"],[data-testid="turn-result"],[data-testid="work-group"]:not([data-flat])')]
+const firstLevel = (root: HTMLElement) => [...root.querySelectorAll('[data-testid="pipeline-block"],[data-testid="turn-restatement"],[data-testid="turn-result"],[data-testid="work-group"]:not([data-flat])')]
   .filter((el) => !el.parentElement?.closest('[data-testid="pipeline-block"],[data-testid="work-group"]'))
   .map((el) => el.getAttribute('data-testid'));
 

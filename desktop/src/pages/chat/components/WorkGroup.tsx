@@ -51,7 +51,7 @@
  * duration is how long this view saw it stream (none for one it never saw live).
  * Status comes ONLY from the projection (`ToolStep.status`); colour only for exceptions.
  *
- * @exports WorkGroupView, ToolStrip, workCounts, pathTail
+ * @exports WorkGroupView, ToolStrip, workCounts, pathTail, resetViewMemory
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -112,7 +112,6 @@ export function ToolStrip({ step, merged, thought, thoughtSeconds }: {
 }) {
   const { t } = useTranslation();
   const [agentOpen, setAgentOpen] = useState(false);
-  const [allCalls, setAllCalls] = useState(false);
   const call = toolCall(step.block);
   const row = toolRow(step.block);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -229,31 +228,39 @@ export function ToolStrip({ step, merged, thought, thoughtSeconds }: {
               {agentResult.length > AGENT_RESULT_MAX ? `${agentResult.slice(0, AGENT_RESULT_MAX - 1)}…` : agentResult}
             </div>
           )}
-          {(step.children?.length ?? 0) > 0 && (() => {
-            // While it runs, its newest calls (what it is doing now); once done, its first.
-            const all = step.children!;
-            const shown = allCalls ? all : running ? all.slice(-AGENT_DETAIL_CALLS) : all.slice(0, AGENT_DETAIL_CALLS);
-            const hidden = all.length - shown.length;
-            const more = hidden > 0 && (
-              <button
-                type="button"
-                data-testid="agent-calls-all"
-                onClick={() => setAllCalls(true)}
-                className="px-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-              >
-                {tf(t, 'chat.turn.showAll', '{{count}} more · show all', { count: hidden })}
-              </button>
-            );
-            return (
-              <div className="space-y-0.5">
-                {running && more}
-                {foldRuns(groupSteps(shown)).map((it) => ('fold' in it ? <FoldStrip key={it.key} rows={it.fold} explore={it.explore} /> : stripOf(it.row)))}
-                {!running && more}
-              </div>
-            );
-          })()}
+          {(step.children?.length ?? 0) > 0 && <AgentCalls calls={step.children!} running={running} />}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A sub-agent's own calls in its detail: its newest while it runs (what it is doing
+ *  now), its first once done; folded like the main stream, with the same 2s settle —
+ *  a call that just finished stays a row until it settles. */
+function AgentCalls({ calls, running }: { calls: ToolStep[]; running: boolean }) {
+  const { t } = useTranslation();
+  const [allCalls, setAllCalls] = useState(false);
+  const lingering = useLinger(running);
+  const shown = allCalls ? calls : running ? calls.slice(-AGENT_DETAIL_CALLS) : calls.slice(0, AGENT_DETAIL_CALLS);
+  const hidden = calls.length - shown.length;
+  const items: Item[] = groupSteps(shown).map((r) => ({ key: rowKey(r), row: r }));
+  const settled = useSettled(items.map((it) => ({ key: it.key, done: itemDone(it) })), running || lingering);
+  const more = hidden > 0 && (
+    <button
+      type="button"
+      data-testid="agent-calls-all"
+      onClick={() => setAllCalls(true)}
+      className="px-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+    >
+      {tf(t, 'chat.turn.showAll', '{{count}} more · show all', { count: hidden })}
+    </button>
+  );
+  return (
+    <div className="space-y-0.5">
+      {running ? more : null}
+      {foldItems(items, settled).map((it) => ('fold' in it ? <FoldStrip key={it.key} rows={it.fold} explore={it.explore} /> : 'row' in it ? stripOf(it.row) : null))}
+      {!running ? more : null}
     </div>
   );
 }
@@ -429,7 +436,7 @@ function foldItems(items: Item[], settled: Set<string> | null = null, keep: (key
       else run = { rows: [row], members: [it] };
       continue;
     }
-    if (run && 'thought' in it && isSettled(it.key)) { held.push(it); continue; }
+    if (run && 'thought' in it && isSettled(it.key) && !keep(it.key)) { held.push(it); continue; }
     flushRun();
     const prev = out[out.length - 1];
     if (row && prev) {
@@ -456,8 +463,11 @@ function foldItems(items: Item[], settled: Set<string> | null = null, keep: (key
       out[i + 1] = { ...next, before: it };
       out.splice(i, 1);
       i -= 1;
-    } else if ('fold' in next && next.explore && next.members && !keep(it.key)) {
-      out[i + 1] = { ...next, members: [it, ...next.members] };
+    } else if ('fold' in next && isSettled(rowKey(next.fold[0])) && !keep(it.key)) {
+      // Into a fold (Explored or ×N): it opens to the thought, then its calls — so a
+      // thought merged into a call stays merged when that call joins a ×N fold.
+      const members = next.members ?? next.fold.map((r): Item => ({ key: rowKey(r), row: r }));
+      out[i + 1] = { ...next, members: [it, ...members] };
       out.splice(i, 1);
       i -= 1;
     }
@@ -465,9 +475,6 @@ function foldItems(items: Item[], settled: Set<string> | null = null, keep: (key
   return out;
 }
 
-/** Tool rows only (a sub-agent's own calls), folded the same way. */
-const foldRuns = (rows: StepRowItem[]) =>
-  foldItems(rows.map((r) => ({ key: rowKey(r), row: r }))) as Array<Extract<Item, { row: StepRowItem } | { fold: StepRowItem[] }>>;
 
 const toolSteps = (g: WorkGroup): ToolStep[] =>
   g.members.flatMap((m) => (m.kind === 'process' ? m.steps.filter((s): s is ToolStep => s.kind === 'tool') : []));
@@ -483,7 +490,29 @@ export function workCounts(g: WorkGroup): { steps: number; files: number; comman
   };
 }
 
+/** What a view saw while the turn streamed — how long a thought or a block was live,
+ *  which thoughts merged into a call — kept per message (`scope`) for the app's
+ *  lifetime, so a remount (a tab switch, a block re-keyed at the settle) shows the same
+ *  durations and structure as before it. Bounded: the oldest messages are dropped. */
+interface ViewMemory { times: Map<string, { start: number; end?: number }>; merged: Set<string> }
+const VIEW_MEMORY_MAX = 200;
+const viewMemory = new Map<string, ViewMemory>();
+const newMemory = (): ViewMemory => ({ times: new Map(), merged: new Set() });
+/** Forget every message's view memory (tests: message ids repeat across cases). */
+export function resetViewMemory(): void { viewMemory.clear(); }
+function memoryOf(scope: string): ViewMemory {
+  // Least-recently-USED out: a hit moves the entry to the end, so a turn on screen
+  // (read every render) is never the one dropped.
+  const mem = viewMemory.get(scope) ?? newMemory();
+  viewMemory.delete(scope);
+  viewMemory.set(scope, mem);
+  if (viewMemory.size > VIEW_MEMORY_MAX) viewMemory.delete(viewMemory.keys().next().value as string);
+  return mem;
+}
+
 export interface WorkGroupViewProps {
+  /** The message this block belongs to: keys the view memory (durations, merges). */
+  scope?: string;
   group: WorkGroup;
   /** The user's open/closed choice for this block; undefined = automatic. */
   expanded?: boolean;
@@ -515,7 +544,10 @@ const TAIL_CLASS = 'ml-[7px] pl-2 mt-0.5 text-[13.5px] [&_p]:text-[13.5px] [&_li
 const NOTE_CLASS = 'text-[12.5px] [&_p]:text-[12.5px] [&_li]:text-[12.5px] [&_p]:text-[var(--color-text-secondary)] [&_li]:text-[var(--color-text-secondary)] '
   + '[&_h1]:text-[13px] [&_h2]:text-[13px] [&_h3]:text-[12.5px] [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_h1]:text-[var(--color-text-secondary)] [&_h2]:text-[var(--color-text-secondary)]';
 
-export function WorkGroupView({ group, expanded, flat, onToggle, thoughtOpen, onThoughtToggle, renderNote, tail, defaultOpen }: WorkGroupViewProps) {
+export function WorkGroupView({ scope, group, expanded, flat, onToggle, thoughtOpen, onThoughtToggle, renderNote, tail, defaultOpen }: WorkGroupViewProps) {
+  const local = useRef<ViewMemory | null>(null);
+  if (!scope && !local.current) local.current = newMemory();
+  const mem = scope ? memoryOf(scope) : local.current!;
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const auto = useLinger(group.live);
@@ -528,9 +560,11 @@ export function WorkGroupView({ group, expanded, flat, onToggle, thoughtOpen, on
   // A thought the user opened as a line stays a line (merging would hide what they
   // opened); once merged into a call row it stays merged — opening it there must not
   // move it back out.
-  const merged = useRef(new Set<string>());
-  const items = foldItems(raw, settled, (k) => thoughtOpen(k) === true && !merged.current.has(k));
-  for (const it of items) if ('row' in it && it.before) merged.current.add(it.before.key);
+  const items = foldItems(raw, settled, (k) => thoughtOpen(k) === true && !mem.merged.has(k));
+  for (const it of items) {
+    if ('row' in it && it.before) mem.merged.add(it.before.key);
+    if ('fold' in it) for (const m of it.members ?? []) if ('thought' in m) mem.merged.add(m.key);
+  }
   // A settled thought is one line; so is every thought of a block no longer live and
   // no longer lingering (a turn that just ended keeps its thoughts whole FOLD_DELAY_MS).
   const collapsed = (key: string) => settled === null || settled.has(key);
@@ -538,22 +572,24 @@ export function WorkGroupView({ group, expanded, flat, onToggle, thoughtOpen, on
   // How long each thought streamed, as this view saw it: from the first render it was
   // live to the first render it was not. A thought that was never live here (history,
   // a remount after it finished) has no duration — persisted blocks carry no timing.
-  const thoughtTimes = useRef(new Map<string, { start: number; end?: number }>());
+  const thoughtTimes = mem.times;
   const now = Date.now();
   for (const it of raw) {
     if (!('thought' in it)) continue;
-    const seen = thoughtTimes.current.get(it.key);
-    if (it.thought.live) { if (!seen) thoughtTimes.current.set(it.key, { start: now }); }
+    const seen = thoughtTimes.get(it.key);
+    if (it.thought.live) { if (!seen) thoughtTimes.set(it.key, { start: now }); }
     else if (seen && seen.end === undefined) seen.end = now;
   }
   // How long the block itself was live, as this view saw it (none from history —
   // persisted blocks carry no timing): the WORKED line says it from 5s.
-  const liveSpan = useRef<{ start: number; end?: number } | null>(null);
-  if (group.live && !liveSpan.current) liveSpan.current = { start: now };
-  else if (!group.live && liveSpan.current && liveSpan.current.end === undefined) liveSpan.current.end = now;
-  const workedSeconds = liveSpan.current?.end === undefined ? undefined : Math.round((liveSpan.current.end - liveSpan.current.start) / 1000);
+  const spanKey = `grp:${group.id}`;
+  const span = mem.times.get(spanKey);
+  if (group.live && !span) mem.times.set(spanKey, { start: now });
+  else if (!group.live && span && span.end === undefined) span.end = now;
+  const liveSpan = mem.times.get(spanKey);
+  const workedSeconds = liveSpan?.end === undefined ? undefined : Math.round((liveSpan.end - liveSpan.start) / 1000);
   const secondsOf = (key: string): number | undefined => {
-    const seen = thoughtTimes.current.get(key);
+    const seen = thoughtTimes.get(key);
     return seen?.end === undefined ? undefined : Math.round((seen.end - seen.start) / 1000);
   };
   const render = (it: Item): ReactNode => {
