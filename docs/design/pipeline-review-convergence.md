@@ -162,6 +162,8 @@ v1 认为根因是「修复只对着触发它的那一处验证，没检查其�
 
 验收标准（Run 2 的 exit criteria）：
 
+> **已先落地（2026-10-19，不等 Run 1）：轮数上限本身。** `core/review_round_gate.py`（PreToolUse，Agent|Task）在派 sub-agent 之前数这个 expert 在当前 stage 已完成的轮数，第 4 轮直接拒绝，拒绝文本就是上面的交给 XG 的要求；REVIEW 和 DELIVER 同样适用（AC5 的上限部分）。`ROUNDS_PER_EXPERT` 从 2 改为 3，reviewer prompt 改成「第 3 轮是最后一轮」。它不碰 Run 1 在改的 recheck 代码。下面 AC1–AC4、AC6 仍由 Run 2 实现。
+
 - AC1 `gate2-recheck`：第 3 轮复核完仍有阻断项时，不输出复核 prompt，返回 `escalate` 和上面的清单；退出码非 0 且 `--force` 无效。
 - AC2 某一轮所有派出的 reviewer 都没有新的阻断项 → `converged: true`，下一步就是 meta-review，不再派复核。
 - AC3 复核轮里落在修复 hunk 之外的发现，不计入「继续循环」的判断，但出现在 REPORT §10 / 完成总结或交给 XG 的清单里，一条不少（测试比对条目总数）。

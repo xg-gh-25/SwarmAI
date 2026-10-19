@@ -410,6 +410,20 @@ async def build_hooks(
             "run_owner_gate", matcher="Bash",
         )
 
+    # ── PreToolUse: review-round gate (Agent|Task) — 再一再二不再三 ──
+    # Only for a spawn whose prompt starts with EXPERT-ID, in THIS session's active run:
+    # an expert with 3 completed rounds in the open stage (review + 2 re-checks) is
+    # denied a 4th, and told to stop and hand the decision to the user. Replaces the
+    # after-the-fact allowance that any over_budget_reasons entry waived (run_d8762bc8:
+    # 7 Gate-2 rounds). goal_cycle exempt. Fail-open; operator bypass
+    # SWARM_REVIEW_ROUND_GATE_FORCE=1. Only for a real app session.
+    if session_context is not None:
+        from core.review_round_gate import create_review_round_gate
+        registry.register(
+            "PreToolUse", create_review_round_gate(session_context),
+            "review_round_gate", matcher="Agent|Task",
+        )
+
     # ── PreToolUse: pytest anti-pattern guard (Bash-scoped) ──
     # Deny pytest piped to tail/head (output swallowed by auto-backgrounding)
     # and pytest without a timeout (unbounded hang). R9 in prose; this is the

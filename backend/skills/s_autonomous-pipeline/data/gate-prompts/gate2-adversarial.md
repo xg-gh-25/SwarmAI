@@ -20,11 +20,11 @@ PARTIAL. `UNCHECKED` labels a gap so a human sees it; it does NOT satisfy the
 checklist and is NOT permission to stop early — a review with any UNCHECKED
 item is incomplete, not done.
 
-**If this is a RE-CHECK (your second and last round):** you get only the fix — the diff
-since your previous round and the HIGH / BLOCK items it answers. For each item say
-RESOLVED or NOT RESOLVED with the line that shows it, and flag any NEW problem in the
-lines the fix touched. Do not re-review unchanged code. A third round needs a recorded
-reason (stage-complete counts completed rounds per EXPERT-ID).
+**If this is a RE-CHECK (round 2 or 3; round 3 is the last):** you get only the fix —
+the diff since your previous round and the HIGH / BLOCK items it answers. For each item
+say RESOLVED or NOT RESOLVED with the line that shows it, and flag any NEW problem in the
+lines the fix touched. Do not re-review unchanged code. There is no round 4: anything
+still open after round 3 goes to the user, so say plainly what remains.
 
 ## Context
 Project: <PROJECT>

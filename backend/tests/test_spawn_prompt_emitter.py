@@ -72,7 +72,7 @@ _PRE_MOVE_SHA256 = {
     # 6 / 8 / 8 tool calls with the evidence handed in (gate1 inputs, gate2 diff file).
     # gate1 INTENTIONALLY edited: the re-check paragraph (a second round reviews the
     # fix only; a third needs a recorded reason — docs/design/pipeline-run-budget.md H2).
-    "gate1-skeptic": "df5ddc77d651921b674b18e824ad7bd6a930669a7258cc9fda310a7794271190",  # pragma: allowlist secret
+    "gate1-skeptic": "521927afe4779e301cf8218686f9c2df8b73f3059d03233b726b23b5b38b17a5",  # pragma: allowlist secret
     # gate2 was INTENTIONALLY edited after the move: its hand-paste "Project-Specific
     # Traps" block (which named two TECH.md section titles and was filled for 1 of 13
     # real expert prompts) became the <PROJECT_KNOWLEDGE> slot that spawn_prompt.py
@@ -83,7 +83,7 @@ _PRE_MOVE_SHA256 = {
     # instruction, after a controlled replay showed the 8-call cap truncating the
     # checklist (PARTIAL "budget exhausted") and the misses living in unchanged
     # consumer code. NOT-INCLUDED changed files no longer eat the file budget.
-    "gate2-adversarial": "a0a7753e3335864dbaf23abaa5a9a41d6fc926b953b4518f6e36542e4f8a6a22",  # pragma: allowlist secret
+    "gate2-adversarial": "8c2d10450c7b693d3a5a04a83843f556cdfa73ab27d4e7f5c25c07725c623407",  # pragma: allowlist secret
 }
 
 

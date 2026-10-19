@@ -9548,9 +9548,11 @@ def _deliver_push_ready_bound(
     return bound, reasons, warnings
 
 
-# H1 (docs/design/pipeline-run-budget.md): one initial review + one fix re-check per
-# expert per stage. A goal_cycle stage gets this per cycle it ran.
-ROUNDS_PER_EXPERT = 2
+# 再一再二不再三 (docs/design/pipeline-review-convergence.md §3 N3): one initial review
+# + two fix re-checks per expert per stage. A goal_cycle stage gets this per cycle it
+# ran. core/review_round_gate denies the spawn of a 4th round up front; this count at
+# stage-complete is the backstop when that hook did not run.
+ROUNDS_PER_EXPERT = 3
 
 
 def _iso_epoch(v) -> "float | None":
@@ -10112,7 +10114,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     for eid in _b.get("missing") or []:
         errors.append(
             f"E_OVER_BUDGET: '{eid}' completed {_b['over'][eid]} times in {stage} (allowance "
-            f"{_b['allowance_per_expert']}: one review + one fix re-check). Add "
+            f"{_b['allowance_per_expert']}: one review + two fix re-checks). Add "
             f"artifact.over_budget_reasons.{eid} saying why the extra round was needed.")
     if isinstance(exit_result, dict):
         warnings += [w for w in exit_result.get("warnings") or [] if w not in warnings]

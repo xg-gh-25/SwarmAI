@@ -1379,29 +1379,29 @@ def _budget_run(root, rid):
               stage_timing={"plan": {"started_at": "2026-01-01T00:00:00+00:00"}})
 
 
-def test_stage_complete_refuses_a_third_round_without_a_reason(ws, capsys, monkeypatch):
+def test_stage_complete_refuses_a_fourth_round_without_a_reason(ws, capsys, monkeypatch):
     root, reg = ws
     _budget_run(root, "run_budget")
     monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
-        "by_expert": {"gate1-skeptic": 3, "security": 2}, "unattributed": 1})
+        "by_expert": {"gate1-skeptic": 4, "security": 3}, "unattributed": 1})
     code, out = _complete(reg, capsys, "run_budget", "plan", _plan_artifact(), {"decisions": DECISION})
     assert code != 0
     msgs = json.dumps(out)
     assert "E_OVER_BUDGET" in msgs and "gate1-skeptic" in msgs and "'security'" not in msgs
 
 
-def test_stage_complete_accepts_a_third_round_with_a_reason_and_reports_budget(ws, capsys, monkeypatch):
+def test_stage_complete_accepts_a_fourth_round_with_a_reason_and_reports_budget(ws, capsys, monkeypatch):
     root, reg = ws
     _budget_run(root, "run_budget2")
     monkeypatch.setattr(cli, "_completed_spawns", lambda rid, a, b: {
-        "by_expert": {"gate1-skeptic": 3}, "unattributed": 1})
+        "by_expert": {"gate1-skeptic": 4}, "unattributed": 1})
     art = _plan_artifact()
     art["over_budget_reasons"] = {"gate1-skeptic": "second BLOCK on a different constraint"}
     code, out = _complete(reg, capsys, "run_budget2", "plan", art, {"decisions": DECISION})
     assert code == 0, out
     rec = cli._stage_record_of(_run_state(root, "run_budget2"), "plan")
     b = rec["budget"]
-    assert b["allowance_per_expert"] == 2 and b["over"] == {"gate1-skeptic": 3}
+    assert b["allowance_per_expert"] == 3 and b["over"] == {"gate1-skeptic": 4}
     assert b["reasons"] == {"gate1-skeptic": "second BLOCK on a different constraint"}
     assert b["spawns"]["unattributed"] == 1
 
@@ -1425,12 +1425,12 @@ def test_stage_budget_clamps_cycles_and_does_not_count_overlays(tmp_path, monkey
     state = {"stage_timing": {"goal_cycle": {"first_started_at": first,
                                              "started_at": "2099-01-01T00:00:00+00:00"}}}
     b = cli._stage_budget("r", tmp_path, state, "goal_cycle", {"cycles_run": 1e6})
-    assert b["allowance_per_expert"] == 2 * 50
+    assert b["allowance_per_expert"] == 3 * 50
     assert b["test_runs"] == {"recheck": 1, "regression": 1} and b["auto_rechecks"] == 1
     # the window starts at the FIRST start: a later re-entry does not reset the allowance
     assert b["stage_seconds"] >= _t.time() - cli._iso_epoch(first) - 5
     b2 = cli._stage_budget("r", tmp_path, state, "goal_cycle", {"cycles_run": "inf"})
-    assert b2["allowance_per_expert"] == 2
+    assert b2["allowance_per_expert"] == 3
 
 
 def test_deliver_does_not_add_security_for_a_run_without_a_recorded_review_plan(ws, capsys):

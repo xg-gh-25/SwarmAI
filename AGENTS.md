@@ -227,7 +227,11 @@ implementations in `security_hooks.py`). By category:
    patches — to governed context files), `adversarial_commit_gate` (no `git commit` without
    a sub-agent review this session), `active_run_commit_gate` (files owned by an active
    pipeline run, and that run's own `.aidlc/deliverables/<run_id>/` REPORT.md, go through
-   run-commit), `direct_commit_gate` (registered before
+   run-commit), `review_round_gate` (Agent|Task, real app sessions only: a spawn whose
+   prompt starts with `EXPERT-ID:` in this session's active run is denied once that
+   expert has 3 completed rounds in the open stage, review + 2 re-checks, and told to
+   hand the decision to the user; goal_cycle exempt; fails open; operator-set
+   `SWARM_REVIEW_ROUND_GATE_FORCE=1`), `direct_commit_gate` (registered before
    `dangerous_command_gate`; a session with no run of its own that commits more than 20
    changed source lines in the SwarmAI source repo, docs and lockfiles excluded, is sent
    to `artifact_cli.py run-create --profile direct`; other sessions' and unowned runs
