@@ -462,6 +462,52 @@ def _git_changed_set(repo: Path) -> set[str]:
     return out
 
 
+def _repo_state(repo: Path) -> dict[str, str]:
+    """{path: digest} of every file git reports changed or untracked right now; a file
+    not listed is identical to HEAD. Taken before and after the test jobs of one call."""
+    return {p: _file_digest(repo / p) for p in sorted(_git_changed_set(repo))}
+
+
+def _check_repo_mutation(ctx, before: dict[str, str]) -> dict | None:
+    """Did the tests of this call write into the repo under test? A test that rewrites a
+    tracked file changes the change set, so the next call gets a new cache key and starts
+    every file again instead of continuing (run_bd60daff 2026-10-19: refresh_ai_docs
+    rewrote docs/CODEBASE_METRICS.md mid-verify; unfinished went 388 -> 156 -> 771).
+
+    In a run's own isolated worktree only this runner writes while it runs, so a file
+    that was identical to HEAD before and differs now is restored from HEAD. Anything
+    else is reported, never touched: a file that was already changed (its pre-call
+    content is not kept), a new untracked file, or any change in a shared checkout
+    (another session may be editing it). Returns None when nothing moved."""
+    after = _repo_state(ctx.repo)
+    moved = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
+    if not moved:
+        return None
+    isolated = _WORKTREE.get("repo") == ctx.repo
+    restored: list[str] = []
+    left: list[str] = []
+    for p in moved:
+        tracked_clean_before = p not in before and _git(ctx.repo, "cat-file", "-e", f"HEAD:{p}") is not None
+        if isolated and tracked_clean_before and _git(
+                ctx.repo, "restore", "--source=HEAD", "--worktree", "--", p) is not None:
+            restored.append(p)
+        else:
+            left.append(p)
+    show = lambda xs: ", ".join(xs[:8]) + (f" (+{len(xs) - 8} more)" if len(xs) > 8 else "")
+    if restored:
+        ctx.warnings.append(
+            f"a test in this call wrote {len(restored)} tracked file(s) of the repo: "
+            f"{show(restored)}. Restored from HEAD (this run's own worktree), so the next "
+            "call still continues. Fix that test: tests must not write the repo they test.")
+    if left:
+        ctx.warnings.append(
+            f"{len(left)} file(s) of the repo changed while this call's tests ran: "
+            f"{show(left)}. Not restored ({'already changed before the call or new' if isolated else 'shared checkout'}); "
+            "if a test wrote them, the next call sees a different change set and starts over. "
+            "Find the test that writes them and fix it, then restore the files.")
+    return {"restored": restored, "left": left}
+
+
 def _owned_files(repo: Path, run_state: dict | None,
                  git_set: set[str]) -> tuple[set[str], set[str]]:
     """(every normalized files_touched entry, the ones that are this repo's)."""
@@ -3845,6 +3891,7 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                 "same file + import closure (cross-run cache); CI re-runs them on push")
             plan["bvt_reused"] = sorted(bvt_hit)
     run_targets = {f: v for f, v in targets.items() if f not in reused}
+    repo_before = _repo_state(ctx.repo)  # a test writing the repo breaks continuation
     # Machine-wide worker tokens: this call runs only as many workers as it holds, so
     # concurrent runs share the cores instead of oversubscribing them.
     tokens = _acquire_workers(ctx.cache, ctx.workers, ctx.warnings)
@@ -3894,15 +3941,18 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
         cls = classify_failures(ctx, results)
     finally:
         _release_workers(tokens)
+    mutated = _check_repo_mutation(ctx, repo_before)
     # Reused entries are evidence entries already (compact): _assemble keeps them as is.
     results += [{**r, "_reused": True} for f in reused for r in reused[f]]
     ev = _assemble(ctx, ns, plan, results, cls, started_at, repeats, key)
     ev.update(head_sha=head, tree_digest=tree)
+    if mutated:
+        ev["repo_mutations"] = mutated
     if bvt_keys:
         _bvt_cache_store(ctx, ev, bvt_keys, reused)
         if plan.get("bvt_reused"):
             ev["bvt_reused"] = plan["bvt_reused"]
-    if _cacheable(ev):
+    if _cacheable(ev) and not (mutated and mutated["left"]):  # tests ran on a moving tree
         _write_json(cpath, ev)
     wtev = _worktree_evidence(ctx)  # after the cache write: it describes THIS worktree
     if wtev:
@@ -4111,7 +4161,7 @@ def _test_output(ev: dict, path: Path) -> dict:
     if ev.get("mode") in ("regression", "verify", "recheck"):
         out["layers"] = ev.get("layers") or {}
     for k in ("frontend", "tdd_repeats", "rechecked_failures", "runner_errors", "overlaid_onto",
-              "rechecked_from"):
+              "rechecked_from", "repo_mutations"):
         if ev.get(k):
             out[k] = ev[k][:10] if k == "runner_errors" else ev[k]
     return out

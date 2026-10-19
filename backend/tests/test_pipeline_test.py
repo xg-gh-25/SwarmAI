@@ -1778,3 +1778,72 @@ def test_a_long_prefix_continuation_is_listed_context_unverified():
     pt._replay_file_context(C(), plan, prev, fails)
     assert plan["context_unverified"] == ["backend/tests/test_l.py::test_b"]
     assert not plan.get("ordered")
+
+
+# ── a test that writes the repo under test (run_bd60daff 2026-10-19) ─────────
+
+def _mut_ctx(repo: Path):
+    return SimpleNamespace(repo=repo, warnings=[])
+
+
+class TestRepoMutationCheck:
+    """_check_repo_mutation: restore only what is provably the call's own side effect."""
+
+    def _repo(self, rig):
+        return rig({"docs/METRICS.md": "v1\n", "backend/core/dirty.py": "x = 1\n"})
+
+    def test_nothing_moved_is_none(self, rig):
+        repo = self._repo(rig)
+        before = pt._repo_state(repo)
+        ctx = _mut_ctx(repo)
+        assert pt._check_repo_mutation(ctx, before) is None and ctx.warnings == []
+
+    def test_isolated_restores_a_clean_tracked_file(self, rig, monkeypatch):
+        repo = self._repo(rig)
+        monkeypatch.setitem(pt._WORKTREE, "repo", repo)
+        before = pt._repo_state(repo)
+        (repo / "docs/METRICS.md").write_text("rewritten by a test\n")
+        ctx = _mut_ctx(repo)
+        out = pt._check_repo_mutation(ctx, before)
+        assert out == {"restored": ["docs/METRICS.md"], "left": []}
+        assert (repo / "docs/METRICS.md").read_text() == "v1\n"
+        assert "Restored from HEAD" in ctx.warnings[0]
+
+    def test_isolated_keeps_already_changed_and_new_files(self, rig, monkeypatch):
+        repo = self._repo(rig)
+        monkeypatch.setitem(pt._WORKTREE, "repo", repo)
+        (repo / "backend/core/dirty.py").write_text("x = 2  # the run's own edit\n")
+        before = pt._repo_state(repo)
+        (repo / "backend/core/dirty.py").write_text("x = 3  # then a test wrote it\n")
+        (repo / "stray.txt").write_text("artifact\n")
+        ctx = _mut_ctx(repo)
+        out = pt._check_repo_mutation(ctx, before)
+        assert out == {"restored": [], "left": ["backend/core/dirty.py", "stray.txt"]}
+        assert "x = 3" in (repo / "backend/core/dirty.py").read_text()
+        assert (repo / "stray.txt").exists()
+
+    def test_shared_checkout_reports_but_never_restores(self, rig, monkeypatch):
+        repo = self._repo(rig)
+        monkeypatch.setitem(pt._WORKTREE, "repo", None)
+        before = pt._repo_state(repo)
+        (repo / "docs/METRICS.md").write_text("another session's edit\n")
+        ctx = _mut_ctx(repo)
+        out = pt._check_repo_mutation(ctx, before)
+        assert out == {"restored": [], "left": ["docs/METRICS.md"]}
+        assert (repo / "docs/METRICS.md").read_text() == "another session's edit\n"
+        assert "shared checkout" in ctx.warnings[0]
+
+
+def test_runner_reports_a_test_that_writes_the_repo(rig, capsys, tmp_path):
+    """End to end: the call's own output names the file a test wrote."""
+    repo = rig({
+        "docs/METRICS.md": "v1\n",
+        "backend/tests/test_writer.py": (
+            "from pathlib import Path\n\n\ndef test_writes():\n"
+            "    p = Path(__file__).resolve().parents[2] / 'docs' / 'METRICS.md'\n"
+            "    p.write_text('rewritten\\n')\n"),
+    })
+    out, _code = _run(capsys, "--run-id", RUN_ID, "--mode", "tdd",
+                      "--files", "backend/tests/test_writer.py")
+    assert out["repo_mutations"]["left"] == ["docs/METRICS.md"]
+    assert any("docs/METRICS.md" in w and "changed while" in w for w in out["warnings"])
