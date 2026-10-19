@@ -1359,6 +1359,9 @@ _GATE_VERDICT_RE = {
         r"(?!\s*\|)", re.I | re.M),
     "gate1-skeptic": re.compile(
         r"^\W*GATE\s*1\s*VERDICT\W{0,6}(PASS|WARN|PARTIAL|BLOCK)\b(?!\s*\|)", re.I | re.M),
+    # Gate-2 fixing-spec skeptic (core/gate2_fixspec): judges the spec, not the code.
+    "fixspec-skeptic": re.compile(
+        r"^\W*FIXSPEC\s*VERDICT\W{0,6}(PASS|BLOCK)\b(?!\s*\|)", re.I | re.M),
     # Gate-2 root-cause review after a capped, unconverged loop (core/gate2_convergence).
     "root-cause": re.compile(
         r"^\W*ROOT[-\s]?CAUSE\s*VERDICT\W{0,6}(SOUND|WRONG-APPROACH)\b(?!\s*\|)", re.I | re.M),

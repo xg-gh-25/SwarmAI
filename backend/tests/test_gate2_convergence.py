@@ -102,6 +102,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "get_app_data_dir", lambda: data)
     monkeypatch.setattr(cli, "_round1_manifest", lambda rid, rd, rs: ({"taken_at": None, "late": False}, None))
     monkeypatch.setattr(cli, "GATE2_CONVERGENCE_CUTOVER", "2000-01-01T00:00:00+00:00")
+    monkeypatch.setattr(cli, "FIXSPEC_CUTOVER", "2999-01-01T00:00:00+00:00")  # FIXING_SPEC: test_gate2_fixspec_cli
     run_dir = tmp_path / "runs" / RID
     (run_dir / "evidence" / "prompts").mkdir(parents=True)
     t0 = time.time() - 3600
@@ -247,6 +248,7 @@ def test_sound_verdict_completes_deliver_with_open_items_in_report(tmp_path, mon
     import config
     monkeypatch.setattr(config, "get_app_data_dir", lambda: data)
     monkeypatch.setattr(cli, "GATE2_CONVERGENCE_CUTOVER", "2000-01-01T00:00:00+00:00")
+    monkeypatch.setattr(cli, "FIXSPEC_CUTOVER", "2999-01-01T00:00:00+00:00")  # FIXING_SPEC: test_gate2_fixspec_cli
 
     rid = "run_sound_e2e"
     rd = sb._make_run(tmp_path, rid, "direct", files_touched=["backend/a.py", "backend/tests/test_x.py"])

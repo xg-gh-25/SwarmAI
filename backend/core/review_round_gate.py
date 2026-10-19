@@ -201,6 +201,14 @@ def wave_split(session_id: str, expert_id: str) -> "dict | None":
 
 
 def _deny_reason(expert_id: str, info: dict) -> str:
+    from core.gate2_fixspec import FIXSPEC_SKEPTIC_ID
+    if expert_id == FIXSPEC_SKEPTIC_ID:
+        return (
+            f"DENY (再一再二不再三): the fixing-spec skeptic has already run {info['used']} times "
+            f"in the {info['stage']} stage of pipeline run {info['run_id']}, every spec "
+            "submission this cycle allows. Do not ask the user and do not hand-craft a spawn: "
+            "run `gate2-fixspec` with the round's spec — it returns next=root_cause, and "
+            "gate2-recheck then hands out the ONE root-cause review.")
     if info.get("stage") != "deliver":
         # REVIEW (and any non-DELIVER stage) has no root-cause machinery: record and go on.
         return (
@@ -227,6 +235,20 @@ def _deny_reason(expert_id: str, info: dict) -> str:
     )
 
 
+def cap_for(expert_id: str) -> int:
+    """Completed spawns *expert_id* may have per review cycle of a stage: the root-cause
+    review once; the fixing-spec skeptic up to core.gate2_fixspec.MAX_SUBMISSIONS per
+    Gate-2 round over MAX_ROUNDS + 1 global rounds (a reviewer that joins in round 2, the
+    Red Team, can take its MAX_ROUNDS to global round MAX_ROUNDS + 1); every reviewer
+    MAX_ROUNDS."""
+    from core.gate2_fixspec import FIXSPEC_SKEPTIC_ID, MAX_SUBMISSIONS
+    if expert_id == ROOT_CAUSE_ID:
+        return 1
+    if expert_id == FIXSPEC_SKEPTIC_ID:
+        return MAX_SUBMISSIONS * (MAX_ROUNDS + 1)
+    return MAX_ROUNDS
+
+
 def create_review_round_gate(session_context: dict[str, Any]):
     """Factory: the PreToolUse (Agent|Task) round gate. session_context is the
     mutable dict SessionUnit updates (``sdk_session_id`` read at call time)."""
@@ -251,7 +273,7 @@ def create_review_round_gate(session_context: dict[str, Any]):
         except Exception:  # noqa: BLE001 — incl. TimeoutError: the gate never blocks on itself
             logger.warning("review_round_gate: scan failed — failing open", exc_info=True)
             return {"decision": "approve"}
-        cap = 1 if expert_id == ROOT_CAUSE_ID else MAX_ROUNDS
+        cap = cap_for(expert_id)
         if not info or info["stage"] in _EXEMPT_STAGES or info["used"] < cap:
             return await _wave_check(session_id, expert_id)
         if os.environ.get("SWARM_REVIEW_ROUND_GATE_FORCE") == "1":

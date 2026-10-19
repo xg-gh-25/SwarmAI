@@ -17,6 +17,10 @@ DESIGN_SPEC.md     plan        THINK's alternatives + solution class, the design
 REVIEW.md          deliver     every gate (0 / 1 / 2, Red Team, meta-review) and every
                                expert with its findings and how each was settled
 REPORT.md          completion  the full report (``artifact_cli run-report``; not here)
+FIXING_SPEC.md     gate2-      only when Gate-2 had open blocking findings: each round's
+                   fixspec     fixing spec (clusters by cause, sites, solution, reuse,
+                               anti-patch, break test) — required at completion iff a
+                               spec exists (``write_fixing_spec``)
 =================  ==========  ======================================================
 
 The documents are PROJECTIONS: code renders them from the artifacts, the model writes
@@ -29,6 +33,7 @@ the wrong type renders as absent), and the writers return None instead of raisin
 
 Public: ``DOCS``, ``DOC_FOR_STAGE``, ``doc_for_stage``, ``required_docs``,
 ``doc_status``, ``completion_check``, ``render_requirements``, ``render_design_spec``, ``render_review``,
+``render_fixing_spec``, ``write_fixing_spec``,
 ``load_stage_artifacts``, ``write_stage_doc``, ``write_all``.
 """
 from __future__ import annotations
@@ -583,6 +588,85 @@ def write_stage_doc(run_dir: Any, run_state: dict, stage: str,
         return None
 
 
+# ── FIXING_SPEC.md ────────────────────────────────────────────────────────────
+FIXING_SPEC_DOC = "FIXING_SPEC.md"
+
+
+def _fixing_specs(run_dir: Any) -> "list[tuple[int, dict]]":
+    out: list[tuple[int, dict]] = []
+    ev = Path(str(run_dir)) / "evidence" if run_dir else None
+    for p in sorted(ev.glob("fixing-spec-r*.json")) if ev is not None and ev.is_dir() else []:
+        m = re.fullmatch(r"fixing-spec-r(\d+)\.json", p.name)
+        if not m:
+            continue
+        try:
+            spec = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(spec, dict):
+            out.append((int(m.group(1)), spec))
+    return sorted(out, key=lambda t: t[0])
+
+
+def _fixing_status(run_dir: Any) -> dict:
+    """{"<round>": acceptance text} the CLI wrote to evidence/fixing-spec-status.json."""
+    try:
+        d = json.loads((Path(str(run_dir)) / "evidence" / "fixing-spec-status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def render_fixing_spec(run_state: dict, specs: "list[tuple[int, dict]]",
+                       status: "dict | None" = None) -> str:
+    """Each Gate-2 round's fixing spec: its acceptance state, then its clusters (cause →
+    sites → solution). A spec the skeptic BLOCKed or that raised root-cause says so."""
+    lines = _header("FIXING_SPEC — Gate-2 fixes grouped by cause", run_state)
+    for rnd, spec in specs:
+        st = _d(status).get(str(rnd))
+        lines += [f"## Round {rnd}", ""] + ([f"**Status:** {_t(st, 300)}", ""] if st else [])
+        for c in _l(spec.get("clusters")):
+            c = _d(c)
+            cause, scope, reuse = _d(c.get("cause")), _d(c.get("scope")), _d(c.get("reuse"))
+            lines += [f"### {_t(c.get('id'), 20)}"
+                      + (f" (revises {_t(c.get('revises'), 20)})" if c.get("revises") else ""), "",
+                      f"- **Findings:** {', '.join(_t(x, 60) for x in _l(c.get('findings')))}",
+                      f"- **Cause:** {_t(cause.get('invariant'), 20)} — {_t(cause.get('why'))}",
+                      f"- **Sites:** {', '.join(_t(x, 120) for x in _l(scope.get('sites')))}",
+                      f"- **Found by:** {_t(scope.get('evidence'))}",
+                      f"- **Solution:** {_t(c.get('solution'))}",
+                      f"- **Reuse:** {_t(reuse.get('decision'), 40)} {_t(reuse.get('mechanism'), 120)}",
+                      f"- **Not a patch because:** {_t(c.get('anti_patch'))}",
+                      f"- **Design impact:** {_t(c.get('design_impact'), 20)}",
+                      f"- **Break test:** `{_t(c.get('break_test'), 200)}`", ""]
+        for u in _l(spec.get("design_updates")):
+            u = _d(u)
+            lines.append(f"- **Design update {_t(u.get('id'), 10)}:** {_t(u.get('statement'))}")
+        for r in _l(spec.get("refuted")):
+            r = _d(r)
+            lines.append(f"- **Not a bug {_t(r.get('id'), 60)}:** {_t(r.get('evidence'))}")
+        for d in _l(spec.get("deferred")):
+            d = _d(d)
+            lines.append(f"- **Deferred {_t(d.get('id'), 60)}:** {_t(d.get('reason'))}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_fixing_spec(run_dir: Any, run_state: dict) -> Optional[str]:
+    """Write FIXING_SPEC.md from evidence/fixing-spec-r*.json (None when there is no spec
+    or the write failed). Never raises."""
+    try:
+        specs = _fixing_specs(run_dir)
+        if not specs:
+            return None
+        path = Path(str(run_dir)) / FIXING_SPEC_DOC
+        _atomic_write(path, render_fixing_spec(run_state, specs, _fixing_status(run_dir)))
+        return str(path)
+    except Exception as e:  # noqa: BLE001 — a document must never fail a command
+        logger.warning("run_docs: %s for %r not written: %s", FIXING_SPEC_DOC, _d(run_state).get("id"), e)
+        return None
+
+
 def completion_check(run_dir: Any, run_state: dict,
                      experts: Optional[list] = None) -> "tuple[list[str], list[str], list[dict]]":
     """(errors, warnings, status) at run completion: rewrite every stage document from
@@ -610,6 +694,15 @@ def completion_check(run_dir: Any, run_state: dict,
         else:
             warnings.append(f"{d['name']}: the {stage} artifact could not be read, so its "
                             "document is missing")
+    if _fixing_specs(run_dir):
+        p = write_fixing_spec(run_dir, run_state)
+        exists = bool(p) or (Path(str(run_dir)) / FIXING_SPEC_DOC).is_file()
+        status.append({"name": FIXING_SPEC_DOC, "purpose": "修复规格 · 按根因分组",
+                       "path": str(Path(str(run_dir)) / FIXING_SPEC_DOC), "exists": exists,
+                       "required": True, "reason": None if exists else "missing"})
+        if not exists:
+            errors.append(f"{FIXING_SPEC_DOC} could not be written although a fixing spec exists "
+                          "(core/run_docs.py)")
     return errors, warnings, status
 
 

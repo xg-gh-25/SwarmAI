@@ -74,6 +74,8 @@ GATES = {
     "gate0-skeptic": GATE_PROMPT_DIR / "gate0-skeptic.md",
     "gate1-skeptic": GATE_PROMPT_DIR / "gate1-skeptic.md",
     "gate2-adversarial": GATE_PROMPT_DIR / "gate2-adversarial.md",
+    # Gate-2 FIXING_SPEC: artifact_cli gate2-fixspec writes it per round
+    "fixspec-skeptic": GATE_PROMPT_DIR / "fixspec-skeptic.md",
 }
 
 

@@ -47,7 +47,19 @@ and a ``skipped`` adversarial tier carry nothing to fix by class.
 
 Public: ``CUTOVER``, ``ROOT_CUTOVER``, ``ROOT_TEMPLATE``, ``SOLUTION_TEMPLATE``,
 ``root_cause_errors``, ``solution_errors``, ``PLAN_TEMPLATE``, ``BUILD_TEMPLATE``, ``FINDING_TEMPLATE``,
-``plan_errors``, ``build_errors``, ``finding_errors``, ``stage_errors``.
+``plan_errors``, ``build_errors``, ``finding_errors``, ``stage_errors``,
+``FIXSPEC_TEMPLATE``, ``fixing_spec_errors``.
+
+4. FIXING_SPEC (docs/design/pipeline-anti-whack-a-mole.md §7.3): between a Gate-2 round
+   with blocking findings and any fix, ONE spec groups the round's open items by cause —
+   ``fixing_spec_errors``: every open item in exactly one cluster (a NOT RESOLVED
+   re-check item through a cluster that ``revises`` the one it re-checked), each cluster
+   bound to a design invariant (or a new one in ``design_updates``) with its sites and the
+   search that found them, one solution, its reuse decision, why it is no patch, and a
+   break test; N single-finding clusters (N > 2), or > 2 on one file, must say why they
+   share no cause (``unrelated``); only a non-blocking finding may be ``deferred``; a
+   blocking finding shown not to be a bug goes in ``refuted`` with its evidence (the
+   skeptic checks it) instead of a cluster.
 """
 from __future__ import annotations
 
@@ -514,3 +526,152 @@ def stage_errors(stage: str, artifact: dict, *, profile: str, plan: "dict | None
         else:
             out += found
     return out
+
+
+# ── 4. FIXING_SPEC (Gate-2, between the parallel review and any fix) ─────────────
+FIXSPEC_TEMPLATE = {
+    "round": 1,
+    "clusters": [{
+        "id": "K1", "findings": ["<ledger id>", "<expert>-R<n> (with revises)"],
+        "cause": {"invariant": "I2", "why": "two writers build the args; nothing makes one own them"},
+        "scope": {"sites": ["backend/cli.py::build", "backend/retry.py::rebuild"],
+                  "evidence": "grep -rn 'build_args\\|rebuild' backend -> 2 sites, both listed"},
+        "solution": "retry.py calls cli.build; retry.rebuild is deleted",
+        "reuse": {"mechanism": "backend/cli.py::build", "decision": "reuse"},
+        "anti_patch": "no new guard: the second writer is removed, not checked",
+        "design_impact": "none",
+        "break_test": "backend/tests/test_args.py::test_one_writer_for_every_caller"}],
+    "unrelated": [], "deferred": [], "design_updates": [],
+    "refuted": [{"id": "<ledger id>", "evidence": "a.py:3 never receives a token: the caller masks it first"}]}
+_K_ID = re.compile(r"^K\d+$")
+_REUSE = ("reuse", "extend", "refactor", "replace", "none-exists")
+_IMPACT = ("none", "amend", "redesign")
+
+
+def _added_invariants(design_updates) -> set:
+    return {str(u.get("id")) for u in _list(design_updates) if isinstance(u, dict)
+            and _INV_ID.match(str(u.get("id") or "")) and _text(u.get("statement"))
+            and _text(u.get("why_missed"), 10)}
+
+
+def fixing_spec_errors(spec, items, plan: "dict | None", prior_clusters,
+                       known_ids=frozenset()) -> "list[str]":
+    """FIXING_SPEC rules (module docstring, 4). ``items``: the round's open items
+    (core.gate2_fixspec.round_items); ``prior_clusters``: the clusters of this cycle's
+    earlier accepted specs; ``known_ids``: every ledger id (non-blocking entries may be
+    listed in a cluster too)."""
+    if not isinstance(spec, dict):
+        return ["Fixing spec: the spec must be a JSON object (template: design_spec.FIXSPEC_TEMPLATE)"]
+    d = (plan or {}).get("design") if isinstance((plan or {}).get("design"), dict) else {}
+    known_inv = set(_ids(d.get("invariants"), _INV_ID)) | _added_invariants(spec.get("design_updates"))
+    open_ids = {str(i.get("id")) for i in items or [] if isinstance(i, dict)}
+    by_id = {str(i.get("id")): i for i in items or [] if isinstance(i, dict)}
+    prior_ids = {str(c.get("id")) for c in _list(prior_clusters) if isinstance(c, dict)}
+    clusters = [c for c in _list(spec.get("clusters")) if isinstance(c, dict)]
+    errs: list[str] = []
+    where: dict[str, list[str]] = {}
+    seen_k: set[str] = set()
+    for c in clusters:
+        cid = str(c.get("id") or "")
+        tag = f"cluster {cid or '?'}"
+        if not _K_ID.match(cid) or cid in seen_k:
+            errs.append(f"Fixing spec: {tag} needs a unique id K<n>")
+        elif cid in prior_ids:
+            errs.append(f"Fixing spec: {tag} is already the id of an accepted cluster of this "
+                        "cycle: give a new cluster a new id (a revision names the old one in "
+                        "revises)")
+        seen_k.add(cid)
+        fids = [str(x) for x in _list(c.get("findings"))]
+        if not fids:
+            errs.append(f"Fixing spec: {tag} lists no findings")
+        for fid in fids:
+            where.setdefault(fid, []).append(cid)
+            if fid not in open_ids and fid not in set(known_ids):
+                errs.append(f"Fixing spec: {tag} names {fid}, which is not an open item of this "
+                            "round nor a ledger entry — use the ids gate2-fixspec printed")
+            it = by_id.get(fid)
+            if it and it.get("kind") == "recheck":
+                rv = str(c.get("revises") or "")
+                want = "" if it.get("cluster") == "refuted" else str(it.get("cluster") or "")
+                if not rv or rv not in prior_ids or (want and rv != want):
+                    errs.append(f"Fixing spec: {tag} holds the NOT RESOLVED re-check {fid}, so it must "
+                                f"revise the cluster it re-checked ({want or 'an earlier accepted K<n>'}): "
+                                "set revises, a revised solution and a re-grepped scope")
+        cause = c.get("cause") if isinstance(c.get("cause"), dict) else {}
+        if str(cause.get("invariant") or "") not in known_inv:
+            errs.append(f"Fixing spec: {tag} cause.invariant {cause.get('invariant')!r} is no design "
+                        "invariant — name the I<n> it violates, or add it to design_updates "
+                        "[{id, statement, why_missed}]")
+        if not _text(cause.get("why"), 20):
+            errs.append(f"Fixing spec: {tag} cause.why (>= 20 chars): why the design let it happen")
+        scope = c.get("scope") if isinstance(c.get("scope"), dict) else {}
+        if not [x for x in _list(scope.get("sites")) if str(x).strip()]:
+            errs.append(f"Fixing spec: {tag} scope.sites lists no site — every place the cause lives")
+        if not _text(scope.get("evidence"), 20):
+            errs.append(f"Fixing spec: {tag} scope.evidence (>= 20 chars): the grep / trace you RAN to find "
+                        "every site")
+        if not _text(c.get("solution"), 20):
+            errs.append(f"Fixing spec: {tag} solution (>= 20 chars): one solution for the whole cluster")
+        reuse = c.get("reuse") if isinstance(c.get("reuse"), dict) else {}
+        dec = str(reuse.get("decision") or "")
+        if dec not in _REUSE:
+            errs.append(f"Fixing spec: {tag} reuse.decision must be one of {', '.join(_REUSE)}")
+        elif dec == "none-exists" and not _text(reuse.get("why"), 30):
+            errs.append(f"Fixing spec: {tag} reuse none-exists needs why (>= 30 chars): what you searched")
+        if not _text(c.get("anti_patch"), 20):
+            errs.append(f"Fixing spec: {tag} anti_patch (>= 20 chars): why this is not a patch on the symptom")
+        if str(c.get("design_impact") or "") not in _IMPACT:
+            errs.append(f"Fixing spec: {tag} design_impact must be none, amend or redesign")
+        elif c.get("design_impact") == "amend" and not _added_invariants(spec.get("design_updates")):
+            errs.append(f"Fixing spec: {tag} design_impact amend needs design_updates "
+                        "[{id, statement, why_missed}]")
+        if not _TEST_REF.match(str(c.get("break_test") or "")):
+            errs.append(f"Fixing spec: {tag} break_test 'path::test' proving the class is closed")
+    for x in _list(spec.get("refuted")):
+        fid = str(x.get("id") if isinstance(x, dict) else x)
+        it = by_id.get(fid, {})
+        if not (it.get("kind") == "finding" or (it.get("kind") == "recheck"
+                                                 and it.get("cluster") == "refuted")):
+            errs.append(f"Fixing spec: refuted {fid} is not a blocking finding of this round (a NOT "
+                        "RESOLVED re-check of a cluster is answered by a cluster that revises it; "
+                        "only the re-check of a refuted finding may be refuted again)")
+        elif not _text(x.get("evidence") if isinstance(x, dict) else "", 20):
+            errs.append(f"Fixing spec: refuted {fid} needs evidence (>= 20 chars): the line that "
+                        "shows it is not a bug")
+        where.setdefault(fid, []).append("refuted")
+    for oid in sorted(open_ids):
+        if oid not in where:
+            errs.append(f"Fixing spec: open item {oid} is not in any cluster — every blocking finding "
+                        "and NOT RESOLVED re-check of the round is in exactly one")
+    for fid, cs in sorted(where.items()):
+        if len(cs) > 1:
+            errs.append(f"Fixing spec: {fid} is in more than one cluster ({', '.join(cs)})")
+    for x in _list(spec.get("deferred")):
+        fid = str(x.get("id") if isinstance(x, dict) else x)
+        if fid in open_ids:
+            errs.append(f"Fixing spec: {fid} is blocking and cannot be deferred here (only the SOUND "
+                        "root-cause path leaves blocking findings open)")
+    # degenerate split: more than 2 single-finding clusters, or > 2 on one file
+    singles = [c for c in clusters if len(_list(c.get("findings"))) == 1]
+    files: dict[str, list[str]] = {}
+    for c in singles:
+        sites = _list((c.get("scope") or {}).get("sites")) if isinstance(c.get("scope"), dict) else []
+        f = str(sites[0]).split("::", 1)[0].split(":", 1)[0] if sites else ""
+        files.setdefault(f, []).append(str(c.get("id")))
+    suspect: set[str] = set()
+    if len(singles) > 2:
+        suspect |= {str(c.get("id")) for c in singles}
+    for f, ks in files.items():
+        if f and len(ks) > 2:
+            suspect |= set(ks)
+    if suspect:
+        said = set()
+        for u in _list(spec.get("unrelated")):
+            if isinstance(u, dict) and _text(u.get("why"), 20):
+                said |= {str(u.get("a")), str(u.get("b"))}
+        missing = sorted(suspect - said)
+        if missing:
+            errs.append("Fixing spec: single-finding clusters " + ", ".join(missing) + " look like one "
+                        "cause split up — merge them, or say in unrelated [{a, b, why}] why each pair "
+                        "shares no cause")
+    return errs

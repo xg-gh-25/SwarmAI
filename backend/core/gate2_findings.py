@@ -21,7 +21,12 @@ The rules keep each gate's strictness as it was, and close two holes:
 - LOW and anything else: neither;
 - confidence = the first number in the value ("8/10" -> 8.0), None when there is none.
 
+The identity of a reported finding (``finding_key``, ``entry_id``) lives here too: the
+findings ledger, the fixing spec and every check that maps one to the other compute
+it with these two functions, never their own copy.
+
 Public symbols: ``severity_of``, ``severity_rank``, ``confidence_of``, ``is_blocking``,
+``finding_key``, ``entry_id``,
 ``must_record``.
 """
 from __future__ import annotations
@@ -90,3 +95,19 @@ def must_record(f: dict) -> bool:
     if sev == "med":
         return conf is None or conf >= MED_THRESHOLD
     return False
+
+
+def finding_key(r: dict) -> tuple:
+    """A reported finding's identity: path, line, category, and (only when the expert
+    gave no path) the start of its summary."""
+    path = r.get("path") or r.get("file")
+    return ((path or ""), r.get("line"), (r.get("category") or "").lower(),
+            (r.get("summary") or "")[:60] if not path else "")
+
+
+def entry_id(expert_id: str, r: dict) -> str:
+    """The ledger id of finding *r* reported by *expert_id*: stable across rounds and
+    severity changes (``<expert>-<6 hex>``)."""
+    import hashlib
+    key = (expert_id, *finding_key(r))
+    return f"{expert_id}-{hashlib.sha1(repr(key).encode('utf-8')).hexdigest()[:6]}"
