@@ -480,7 +480,7 @@ def _current_entry(run_state: dict, name: str) -> "dict | None":
 
 def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bool,
                  workspace, self_repo, gen_b, requirement: str,
-                 precheck=None) -> "dict | None":
+                 precheck=None, message: "str | None" = None) -> "dict | None":
     """Deliver stage-complete landing; None when nothing to do (not isolated / not
     push-ready / already integrated). Exits with a §7.7 error on refusal.
     *precheck(review_at)* → error strings (D7 coverage, experts that have not reviewed
@@ -531,8 +531,12 @@ def land_deliver(*, run_id: str, run_file: Path, run_state: dict, push_ready: bo
         b_repo = max(sizes, key=lambda k: (sizes[k], k)) if sizes else None
         _save(run_file, lambda d: d.update(deliverable_repo=b_repo))
         run_state["deliverable_repo"] = b_repo
-    msg = (f"{(requirement or 'pipeline changes')[:72]}\n\n(auto local-commit, run {run_id}; "
-           f"not pushed)\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    # One builder for both commit paths: artifact_cli passes the DELIVER-title message;
+    # a caller without one gets the same builder's requirement fallback.
+    if not message:
+        import commit_message
+        message = commit_message.build(run_id, requirement, None)
+    msg = message
     landed = {}
     for name in sorted(e["repo_name"] for e, _w, _m in wts):
         e = _current_entry(run_state, name)   # run_state is reloaded after every landing

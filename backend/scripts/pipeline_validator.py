@@ -5295,10 +5295,24 @@ def _evidence_matches(ref: str, result: dict) -> bool:
     return _path_eq(ref, rfile)
 
 
+_ACCEPTED_FAILURE_CLASSES = ("pre-existing", "flaky")
+
+
 def _evidence_green(ev: dict) -> bool:
+    """A ``mode:<m>`` report is green when something passed and every failure is one
+    the runner itself accepts (``pipeline_test._exit_code``): classified pre-existing
+    (fails at the HEAD baseline too) or flaky, and never a timeout. A runner error, a
+    timeout, or more failed/errored tests than classified failure records is not."""
     counts = ev.get("counts") if isinstance(ev.get("counts"), dict) else {}
-    bad = sum(int(counts.get(k) or 0) for k in ("failed", "errors", "timeouts"))
-    return bad == 0 and int(counts.get("passed") or 0) > 0
+    if int(counts.get("passed") or 0) <= 0 or int(counts.get("timeouts") or 0) > 0:
+        return False
+    if ev.get("runner_errors"):
+        return False
+    failures = list(ev.get("failures") or [])
+    if len(failures) < int(counts.get("failed") or 0) + int(counts.get("errors") or 0):
+        return False
+    return all(isinstance(f, dict) and f.get("classification") in _ACCEPTED_FAILURE_CLASSES
+               and f.get("outcome") != "timeout" for f in failures)
 
 
 _EVIDENCE_DIGEST_LIMIT = 8 * 1024 * 1024  # mirrors pipeline_test._file_digest
@@ -5420,7 +5434,8 @@ def judge_exit_criteria(criteria, run_dir: Path, record: dict | None = None, *,
     """Judge each G1 exit criterion against runner evidence under ``run_dir``.
 
     test     → newest C2 report mentioning the nodeid/file: ≥1 passed, none failed
-               (``mode:<m>`` refs: latest-<m>.json fully green AND no newer report
+               (``mode:<m>`` refs: latest-<m>.json green by the runner's own exit
+               rule, every failure pre-existing/flaky, AND no newer report
                carries a regression-classified failure). With ``files_touched``,
                a pass from a report whose digests no longer match the files'
                current content is UNMET ("test evidence predates later edits");

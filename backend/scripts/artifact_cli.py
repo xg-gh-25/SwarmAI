@@ -81,10 +81,18 @@ def _git_repo_root(path: str) -> "str | None":
     """The git top-level dir owning `path` (the file's parent for an absolute path,
     else cwd), or None if not in a repo / git errors. Module-level so both the
     completion-gate untrackable check AND cmd_run_commit share ONE resolution
-    (extracted from the run-commit closure, run_e0aa14f7)."""
+    (extracted from the run-commit closure, run_e0aa14f7).
+
+    A deleted file's directory may be gone too (`git rm -r pkg/`); git cannot run in
+    a missing directory, so the nearest ancestor that exists is used, as
+    _repo_root_for_file does. Otherwise the DELIVER scope and the Gate-2 diff would
+    skip a deletion that run-commit still commits."""
     import subprocess
     p = Path(path)
-    cwd = str(p.parent if p.is_absolute() else Path.cwd())
+    anchor = p.parent if p.is_absolute() else Path.cwd()
+    while not anchor.exists() and anchor != anchor.parent:
+        anchor = anchor.parent
+    cwd = str(anchor)
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -2874,7 +2882,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     if (_adv and _adv.get("findings")) or _audit or _ac:
                         # Build delivery artifact data
                         auto_delivery = {
-                            "title": _requirement[:80] or "Pipeline Delivery",
+                            # word-boundary title (a [:80] slice cut words in half and
+                            # became the truncated commit subject)
+                            "title": _commit_title(_requirement) or "Pipeline Delivery",
                             "summary": deliver_stage_rec.get("summary", _requirement[:200]),
                             "adversarial_review": _adv if _adv else {"spawned": False, "findings": []},
                             "completion_audit": _audit if _audit else {},
@@ -3763,13 +3773,102 @@ def _rev_parse_toplevel(cwd: str) -> str | None:
         return None
 
 
+def _touched_bases() -> "list[str]":
+    """Directories a RELATIVE files_touched entry is resolved under: cwd (the launch
+    repo), then this source repo (so a stage-complete run from backend/ resolves
+    'backend/x.py' the same), then the SwarmWS workspace. One list for
+    _repo_root_for_file and the BUILD union, so the two can never disagree."""
+    candidates = [str(Path.cwd())]
+    _src = str(Path(__file__).resolve().parent.parent.parent)
+    if _src not in candidates:
+        candidates.append(_src)
+    try:
+        from config import get_app_data_dir
+        candidates.append(str(get_app_data_dir() / "SwarmWS"))
+    except Exception:
+        pass
+    return candidates
+
+
+def _touched_candidates(path: str) -> "list[Path]":
+    """Where a files_touched entry can live: itself (absolute) or under each base."""
+    p = Path(path)
+    return [p] if p.is_absolute() else [Path(b) / p for b in _touched_bases()]
+
+
+def _touched_key(path: str) -> str:
+    """Dedup key of a files_touched entry: the resolved path of its first existing
+    candidate (else of its first candidate), so 'backend/a.py' and its absolute
+    spelling are one file."""
+    cands = _touched_candidates(path)
+    hit = next((c for c in cands if c.exists()), cands[0])
+    return os.path.realpath(str(hit))
+
+
+def _declared_file(f: str) -> "str | None":
+    """The absolute path a declared files_changed entry names, or None.
+
+    Accepted: an existing regular FILE (first match over _touched_candidates), or a
+    path git tracks exactly (a deleted tracked file is a real change). Whether git
+    shows it changed is NOT checked: the workspace auto-commit sweeps a script-written
+    file within minutes, and an unchanged file adds nothing to commit. A directory is
+    refused: run-commit would drop it, but the DELIVER diff and the Gate-2 snapshot
+    run ``git diff -- <dir>`` and would pull in every change beneath it, a parallel
+    session's included. Returned ABSOLUTE (realpath) so every consumer resolves it the
+    same way:
+    the DELIVER scope anchors relative entries to the source repo only, run-commit to
+    _touched_bases, and a path that only exists under the workspace would otherwise be
+    committed without ever reaching the review diff."""
+    hit = next((c for c in _touched_candidates(f) if c.is_file()), None)
+    if hit is not None:
+        path = str(hit.absolute())
+    elif any(c.is_dir() for c in _touched_candidates(f)):
+        return None
+    else:
+        root = _repo_root_for_file(f)  # a tracked deletion
+        if not (root and _path_is_tracked(f, root)):
+            return None
+        path = f if Path(f).is_absolute() else str(Path(root) / f)
+    # Stored by realpath, the spelling git reports roots in: the DELIVER scope takes
+    # relpath(entry, root) unresolved, and a symlinked spelling (macOS /var) would
+    # come out as '../..' and drop the file from the review diff.
+    return os.path.realpath(path)
+
+
+def _union_touched(recorded: "list[str]", declared) -> "list[str]":
+    """``recorded`` (kept, never filtered; a path spelled twice collapses) + each
+    declared path that is new by resolved path and names one file (_declared_file:
+    an existing regular file, or a tracked deleted one; a template, typo'd path or
+    directory would reach run-commit's staging or the review diff). Declared entries
+    are stored absolute. Order kept, strings only."""
+    out, seen = [], set()
+    for f in recorded:  # recorded entries are kept, only spelled-twice ones collapse
+        key = _touched_key(f)
+        if key not in seen:
+            seen.add(key)
+            out.append(f)
+    for f in declared if isinstance(declared, list) else []:
+        if not isinstance(f, str) or not f.strip():
+            continue
+        path = _declared_file(f.strip())
+        if path is None:
+            continue
+        key = _touched_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
 def _repo_root_for_file(path: str) -> str | None:
     """Resolve a files_touched entry to its owning git repo root.
 
     ABSOLUTE path: resolve from the file's own parent (unchanged, back-compat).
     RELATIVE path (run_a5999658): a files_touched entry recorded relative to a
     workspace-resident project won't resolve against the process cwd (= the swarmai
-    launch repo). Try cwd first (back-compat), then the SwarmWS workspace, returning
+    launch repo). Try the bases of _touched_bases() in order (cwd first for
+    back-compat, then this source repo, then the SwarmWS workspace), returning
     the repo where the file ACTUALLY exists — so run-commit binds it to the owning
     repo instead of dropping it as a ghost. get_app_data_dir() honors SWARM_DATA_DIR
     (test/sandbox parity) — never a hardcoded home path.
@@ -3782,12 +3881,7 @@ def _repo_root_for_file(path: str) -> str | None:
         while not anchor.exists() and anchor != anchor.parent:
             anchor = anchor.parent
         return _rev_parse_toplevel(str(anchor))
-    candidates = [str(Path.cwd())]
-    try:
-        from config import get_app_data_dir
-        candidates.append(str(get_app_data_dir() / "SwarmWS"))
-    except Exception:
-        pass
+    candidates = _touched_bases()
     for base in candidates:
         if (Path(base) / path).exists():
             root = _rev_parse_toplevel(str((Path(base) / path).parent))
@@ -3888,11 +3982,15 @@ def _lookup_already_committed(
       3. time-windowed — ``--since=<run_since>`` where run_since is run.json
          ``created_at`` passed VERBATIM (tz-aware ISO8601 — never strip the tz),
          so a commit that touched the same file BEFORE this run started is excluded;
-      4. the commit message names ``run_id`` (``--grep -F``). Bounds 1-3 alone do NOT
-         exclude a sibling session's commit on a shared main that touched the same
-         files inside the window — run_a87bfe3f was credited three of them. Every
-         run-commit message carries ``run <id>``; a hand commit must say
-         ``Run: <id>``. Empty run_id → [] (fail closed, never an unbounded guess).
+      4. the commit message carries this run's note: ``(auto local-commit, run <id>;``
+         (every run-commit and worktree-landing message) or ``Run: <id>`` (a hand
+         commit), matched
+         ``--grep -F``. Bounds 1-3 alone do NOT exclude a sibling session's commit on
+         a shared main that touched the same files inside the window — run_a87bfe3f
+         was credited three of them. A bare mention does not count: a follow-up
+         run's message ("follow-up to <id>") names the earlier run without being its
+         commit. A hand commit without the note is recorded with ``run-commit --sha``.
+         Empty run_id → [] (fail closed, never an unbounded guess).
          ``require_run_id=False`` drops this bound for the daemon WORKSPACE repo: its
          commits are the auto-commit hook's ``chore: …`` sweeps, which never name a
          run, and crediting them is how a workspace-hosted run completes.
@@ -3927,7 +4025,8 @@ def _lookup_already_committed(
             # reachable-from-HEAD (bound 2) + --since (bound 3) + this file (bound 1)
             log = subprocess.run(
                 ["git", "-C", root, "log", "HEAD", f"--since={run_since}",
-                 *([f"--grep={run_id}", "--fixed-strings"] if require_run_id else []),
+                 *([f"--grep=local-commit, run {run_id};", f"--grep=Run: {run_id}",
+                    "--fixed-strings"] if require_run_id else []),
                  "--format=%h", "--", rel],
                 capture_output=True, text=True, timeout=15,
             )
@@ -4911,6 +5010,20 @@ def cmd_gate0_prompt(args, reg: ArtifactRegistry) -> None:
         ensure_ascii=False))
 
 
+def _commit_title(requirement: str) -> str:
+    """A delivery title from the requirement for a writer without one
+    (``commit_message.title_from_requirement``)."""
+    import commit_message
+    return commit_message.title_from_requirement(requirement)
+
+
+def _commit_message(run_id: str, requirement: str, deliver: "dict | None") -> str:
+    """This run's commit message: ``commit_message.build`` — the one builder shared
+    with the worktree landing (pipeline_worktree.land_deliver)."""
+    import commit_message
+    return commit_message.build(run_id, requirement, deliver)
+
+
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
 
@@ -5152,7 +5265,6 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     else:
         warnings_b = []
 
-    requirement = run_state.get("requirement", "")[:72] or "pipeline changes"
     # Project identity trailer (AGENTS.md: EVERY commit must end with it). It has to
     # be appended HERE because there is NO other automatic enforcer for a commit this
     # module makes: .git/hooks/prepare-commit-msg never runs (core.hooksPath points at
@@ -5161,10 +5273,11 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     # hook was removed run_d613bb27 (a SwarmAI-self-dev concern, wrong layer for a
     # product-wide hook). So if the trailer is not built into the message here, it
     # never appears at all — this path is now the sole guarantor for its own commits.
-    commit_msg = (
-        f"{requirement}\n\n(auto local-commit, run {args.run_id}; not pushed)"
-        f"\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"
-    )
+    # _commit_message appends it last, after a subject taken from the DELIVER title.
+    _deliver_art = _load_stage_artifacts(args.project, args.run_id, run_state,
+                                         ("deliver",)).get("deliver")
+    commit_msg = _commit_message(args.run_id, str(run_state.get("requirement") or ""),
+                                 _deliver_art)
 
     if sha_commits:
         # Source files are already committed (verified above): stage only B.
@@ -9279,10 +9392,36 @@ def _derive_stage_fields(
     reg_ev = _read_run_evidence(run_dir, "tests/latest-regression.json", run_id)
     if isinstance(artifact, dict) and not skipped:
         ft = run_state.get("files_touched")
-        if stage == "build" and isinstance(ft, list) and ft:
-            artifact["files_changed"] = [f for f in ft if isinstance(f, str)]
-            derived["files_changed"] = {"value": len(artifact["files_changed"]),
-                                        "source": "run.json files_touched"}
+        if stage == "build":
+            import pipeline_worktree as _pw_b
+            recorded = [f for f in ft if isinstance(f, str)] if isinstance(ft, list) else []
+            declared = artifact.get("files_changed")
+            isolated = _pw_b.is_isolated(run_state)
+            union = recorded if isolated else _union_touched(recorded, declared)
+            if union:
+                artifact["files_changed"] = union
+                added = [f for f in union if f not in recorded]
+                derived["files_changed"] = {
+                    "value": len(union),
+                    "source": "run.json files_touched" if not added
+                    else "run.json files_touched + declared files_changed"}
+                if added:
+                    # Shown so the agent sees what it put into run-commit's staging
+                    # set: a parallel session's file listed here would be committed.
+                    derived["files_changed"]["added_from_declared"] = added[:50]
+                dropped = [f for f in (declared if isinstance(declared, list) else [])
+                           if isinstance(f, str) and f.strip()
+                           and _declared_file(f.strip()) is None]
+                if dropped:
+                    # not a file on disk, not a tracked deletion, or a directory
+                    derived["files_changed"]["dropped_from_declared"] = dropped[:50]
+            elif not isolated and isinstance(declared, list) and declared:
+                # Nothing recorded and no declared path exists or is tracked: BUILD
+                # fails (cmd_stage_complete) instead of publishing paths that would
+                # reach run-commit's staging.
+                derived["files_changed_unresolved"] = {
+                    "value": [str(f) for f in declared][:20],
+                    "source": "declared files_changed, none is a file on disk or a tracked deletion"}
         ar = artifact.get("adversarial_review")
         if stage in ("deliver", "goal_cycle") and isinstance(ar, dict) \
                 and isinstance(ar.get("findings"), list):
@@ -9604,6 +9743,11 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     )
     if stage == "plan":
         errors += _replan_errors(project, run_state, profile, artifact, status)
+    _unresolved = (derived.get("files_changed_unresolved") or {}).get("value")
+    if stage == "build" and _unresolved:
+        errors.append("files_changed: none of the declared paths is a file on disk or a "
+                      f"tracked deleted file ({', '.join(_unresolved)[:300]}); list the files this "
+                      "build changed (or record them with run-update --files-touched)")
     _b = (derived.get("budget") or {}).get("value") or {}
     _sp = _b.get("spawns") or {}
     if (_sp.get("legacy") or 0) > 0:
@@ -9661,6 +9805,16 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         _wt_files = _pw.derive_files_touched(run_id, fresh, _get_workspace(), _BACKEND_DIR.parent)
         if _wt_files is not None:  # isolated run: files_touched = the change set (§6.2)
             fresh["files_touched"] = _wt_files
+        elif stage == "build" and isinstance(artifact, dict):
+            # Main checkout: the BUILD artifact's declared files_changed (already the
+            # union, see _derive_stage_fields) is recorded so DELIVER stage-start can
+            # compute the diff and the Gate-2 round-1 snapshot. Never derived from git:
+            # this checkout is shared with parallel sessions (R29).
+            _prev = fresh.get("files_touched")
+            _rec = [f for f in _prev if isinstance(f, str)] if isinstance(_prev, list) else []
+            _union = _union_touched(_rec, artifact.get("files_changed"))
+            if _union != _rec:
+                fresh["files_touched"] = _union
         _record_transcript_id(fresh)
         _set_stage_timing(fresh, stage, "completed_at", now)
         _replace_stage_record(fresh["stages"], cand_rec)
@@ -9802,10 +9956,13 @@ def _land_isolated_deliver(project: str, run_id: str, run_file: Path, push_ready
             return []
         return errs
 
+    _requirement = str(run_state.get("requirement") or "")
+    _deliver_art = _load_stage_artifacts(project, run_id, run_state, ("deliver",)).get("deliver")
     landing = _pw.land_deliver(run_id=run_id, run_file=run_file, run_state=run_state,
                                push_ready=push_ready, workspace=_get_workspace(),
                                self_repo=_BACKEND_DIR.parent, gen_b=gen_b,
-                               requirement=str(run_state.get("requirement") or ""),
+                               requirement=_requirement,
+                               message=_commit_message(run_id, _requirement, _deliver_art),
                                precheck=precheck)
     if landing:
         import contextlib
@@ -10070,7 +10227,8 @@ def _diff_pack(files: "list[str]") -> str:
     for root, rels in by_root.items():
         for rel in sorted(dict.fromkeys(rels), key=_is_test_path):  # source before tests
             fp = Path(root) / rel
-            if _git_lines(["ls-files", "--", rel], root):            # tracked: a real diff
+            # tracked in the index or in HEAD (a `git rm` deletion is gone from the index)
+            if _git_lines(["ls-files", "--with-tree=HEAD", "--", rel], root):  # a real diff
                 chunk = _git_lines(["diff", f"-U{DIFF_PACK_CONTEXT}", "--no-renames", "HEAD", "--", rel], root)
                 if not chunk:
                     continue                                       # unchanged: nothing to show

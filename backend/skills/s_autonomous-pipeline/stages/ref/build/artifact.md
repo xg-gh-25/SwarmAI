@@ -46,7 +46,7 @@ Recommended: `commits`, `diff_summary`.
 
 ```json
 {"artifact": {
-   "files_changed": ["derived from files_touched"],
+   "files_changed": ["backend/core/foo.py", "backend/tests/test_foo.py"],
    "diff_summary": "...",
    "commits": [],
    "tdd": {"acceptance_criteria_count": 3, "tests_generated": 5, "red_count": 5,
@@ -60,8 +60,17 @@ Recommended: `commits`, `diff_summary`.
             "exit_evidence": {"verify": "VERIFY attempt 1/2 green"}}}
 ```
 
-- `files_changed` is filled by `stage-complete` from run.json `files_touched` whenever
-  that is non-empty; record the files (`run-update --files-touched`) rather than hand-list.
+- `files_changed`: list every file this run changed, including files written by a Bash
+  command or script (the edit hook records only Edit/Write tool edits). `stage-complete`
+  unions the list with run.json `files_touched`, keeps each entry that is a file on disk
+  or a tracked deleted file (not a directory), and writes the result back to
+  `files_touched`, which is what the DELIVER diff, the Gate-2 snapshot and `run-commit`
+  use. List only files you edited. Never paste `git status` output: in a shared
+  checkout it holds other sessions' files, and `run-commit` would commit them. The
+  stage-complete output shows the entries it added under
+  `derived.files_changed.added_from_declared` and the ones it refused under
+  `dropped_from_declared`. A file a script writes after BUILD (a
+  REVIEW, TEST or Gate-2 fix) is recorded with `run-update --files-touched <path>`.
 - `commits` stays empty: BUILD stages, `run-commit` at DELIVER is the sole commit point.
 - `regressions` = failures left after the 2 VERIFY re-runs (`ref/build/verify.md`).
 - Check 8 (semantic depth) WARNs when `smoke_tests` is 0 with more than one file changed.
