@@ -4,7 +4,7 @@ date: 2026-10-20
 created: 2026-10-20
 updated: 2026-10-20
 project: SwarmAI
-status: IMPLEMENTED — T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查、§10 熔断待定
+status: IMPLEMENTED — T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查；§10 熔断误判已修
 related: pipeline-speed-systematic-fix.md, Knowledge/Designs/2026-10-19-pipeline-deterministic-convergence.md
 author: Kiro（回放 10 个 run 的 verify 证据 + pipeline_test.py 调研）
 ---
@@ -129,12 +129,16 @@ runner 里记录的耗时是单独串行跑的 2 到 3 倍（`test_artifact_cli_
 起的 artifact_cli 子进程和 git 也不在令牌里，但它们是串行等待的，大约各占一个核。要进一步降低，方向是让
 令牌池按当前空闲核数发放（现在只按固定池大小），这需要先在负载高的时候实测，确认减少 worker 不会反而更慢。
 
-## 10. 待定：熔断把"一直在进展的大范围"也当成卡住
+## 10. 熔断把"一直在进展的大范围"也当成卡住 — 已修
 
 回放（30 个各 1 秒的测试文件、1 个 worker、deadline 4 秒）：每次续跑的未完成数是 29 -> 27 -> 25 -> 23，
-每次都在稳定前进，但相对减少都不到 10%。按 §8 的 T5 规则，第 2 次判为卡住、按文件拆开（从最便宜的开始、
-不重放）——这对等长文件没有帮助；连续 4 次就熔断、按未达标收尾，而这个范围其实再跑十几次就会跑完。
+每次都在稳定前进，但相对减少都不到 10%。原规则第 2 次判为卡住、按文件拆开，连续 4 次就熔断、按未达标收尾，
+而这个范围其实再跑十几次就会跑完。
 
-真实 run 的全范围一般 3 次调用左右就跑完，所以只在"要十次以上调用"的超大范围才会撞上。可选的改法：进展
-判断改成"本次调用至少跑完了一个文件、且没有重新变多"，而不是相对比例；或者熔断只在拆分之后仍然没有文件
-跑完时才触发。
+修法（`_stalled_calls`）：一次调用算有进展，只要满足其一：未完成的测试数减少至少 10%；或者至少多跑完一个
+文件、同时未完成数在减少。run index 每行新记 `unfinished_files`（未完成的文件数），`_continuation_file_series`
+和测试数对齐读出；旧记录没有这个字段，就退回只按比例判断。真正卡住的情况不受影响：同一批文件每次只多跑几个
+测试、一个文件也没跑完，照样拆分、照样熔断。
+
+break test（`tests/test_pipeline_stall_progress.py`）：30 个等长文件连续 5 次调用，不拆分、不熔断、还在继续；
+把"跑完一个文件"这条撤掉，这个测试就变红。

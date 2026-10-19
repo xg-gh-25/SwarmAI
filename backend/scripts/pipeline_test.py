@@ -2976,7 +2976,9 @@ def _write_evidence(ev_root: Path, mode: str, ev: dict, kind: str = "run",
             "ts": round(time.time(), 3), "evidence": path.name,
             "cached": bool(ev.get("cached")), "auto_recheck_of": auto_recheck_of,
             "rechecked_from": rechecked_from, "blocking_sig": _blocking_sig(ev),
-            "unfinished": len(_unfinished_failures(ev))})
+            "unfinished": len(_unfinished_failures(ev)),
+            "unfinished_files": len({str(f.get("nodeid") or "").split("::")[0]
+                                     for f in _unfinished_failures(ev)})})
     except OSError:  # bookkeeping only; never fails the evidence write
         pass
     try:
@@ -3035,15 +3037,17 @@ def _unfinished_failures(ev: dict) -> list:
 
 
 # T5: a continuation makes progress when the count of tests the deadline left unrun
-# shrinks; counting passes hid a stall (+3 passes per call, the rest never started).
+# shrinks by STALL_SHRINK, or at least one more file finished (_stalled_calls); counting
+# passes hid a stall (+3 passes per call, the rest never started).
 STALL_SHRINK = 0.10    # a call must cut the unfinished count by at least this share
 STALL_SPLIT_AFTER = 2  # this many stalled calls in a row -> split per file
 STALL_TRIP_AFTER = 4   # this many -> stop (the breaker)
 
 
-def _continuation_series(ev_root: Path, mode: str) -> "list[int]":
-    """Unfinished counts of the current round of ``mode``: its first run, then each
-    continuation's merged result (kind=overlay), oldest first."""
+def _continuation_rows(ev_root: Path, mode: str) -> "list[dict]":
+    """Run-index rows of the current round of ``mode``: its first run, then each
+    continuation's merged result (kind=overlay), oldest first; only rows with an int
+    ``unfinished``."""
     idx = _read_json(ev_root / "tests" / RUN_INDEX)
     if not isinstance(idx, list):
         return []
@@ -3052,17 +3056,37 @@ def _continuation_series(ev_root: Path, mode: str) -> "list[int]":
                  and e.get("mode") == mode and not e.get("auto_recheck_of")), default=None)
     if start is None:
         return []
-    out = [rows[start].get("unfinished")]
-    out += [e.get("unfinished") for e in rows[start + 1:]
-            if e.get("kind") == "overlay" and e.get("mode") == mode]
-    return [n for n in out if isinstance(n, int)]
+    out = [rows[start]] + [e for e in rows[start + 1:]
+                           if e.get("kind") == "overlay" and e.get("mode") == mode]
+    return [e for e in out if isinstance(e.get("unfinished"), int)]
 
 
-def _stalled_calls(series: "list[int]") -> int:
-    """Trailing calls in a row that cut the unfinished count by less than STALL_SHRINK."""
+def _continuation_series(ev_root: Path, mode: str) -> "list[int]":
+    """Unfinished test counts of the current round of ``mode`` (see _continuation_rows)."""
+    return [e["unfinished"] for e in _continuation_rows(ev_root, mode)]
+
+
+def _continuation_file_series(ev_root: Path, mode: str) -> "list[int | None]":
+    """Unfinished FILE counts, aligned with _continuation_series (None for a row written
+    before the run index recorded them)."""
+    return [e.get("unfinished_files") if isinstance(e.get("unfinished_files"), int) else None
+            for e in _continuation_rows(ev_root, mode)]
+
+
+def _stalled_calls(series: "list[int]", files: "list[int | None] | None" = None) -> int:
+    """Trailing calls in a row that made no progress. A call made progress when it cut the
+    unfinished test count by at least STALL_SHRINK, OR (with ``files``, aligned) finished
+    at least one more file while the test count fell. The second clause matters for a very
+    large scope: 30 equal files, two finished per call, is 29 -> 27 -> 25 unfinished,
+    under 10% each time but steady; judged by share alone it split, then tripped the
+    breaker on a scope that a dozen more calls would finish (design §10)."""
+    files = files if files is not None and len(files) == len(series) else [None] * len(series)
     n = 0
-    for a, b in zip(reversed(series[:-1]), reversed(series[1:])):
-        if a > 0 and b > a * (1 - STALL_SHRINK):
+    pairs = list(zip(series[:-1], series[1:], files[:-1], files[1:]))
+    for a, b, fa, fb in reversed(pairs):
+        shrank = a > 0 and b <= a * (1 - STALL_SHRINK)
+        finished_a_file = fa is not None and fb is not None and fb < fa and b < a
+        if a > 0 and not (shrank or finished_a_file):
             n += 1
         else:
             break
@@ -3160,11 +3184,13 @@ def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict 
             mode, f"{len(rounds)} verify/recheck/regression rounds in this run (hard limit "
             f"{CIRCUIT_MAX_ROUNDS}) — the build<->verify loop is not converging")
     if mode in ("verify", "regression"):
-        stalled = _stalled_calls(_continuation_series(ev_root, mode))
+        stalled = _stalled_calls(_continuation_series(ev_root, mode),
+                                 _continuation_file_series(ev_root, mode))
         if stalled >= STALL_TRIP_AFTER:
             return _breaker_result(
                 mode, f"{stalled} continuation calls in a row cut the count of unfinished "
-                f"tests by less than {STALL_SHRINK:.0%} (even split per file) — the scope "
+                f"tests by less than {STALL_SHRINK:.0%} and finished no file (even split per "
+                "file) — the scope "
                 "does not finish")
     vr = runs  # regression too: a continuation that stops shrinking is a stall
     sigs = [tuple(e.get("blocking_sig") or []) for e in vr[-CIRCUIT_STALL_ROUNDS:]]
@@ -3745,7 +3771,8 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
                 plan["rechecked"] += 1
             else:
                 lost.append(n or "<no nodeid>")
-        stalled = _stalled_calls(_continuation_series(ev_root, auto_of)) if auto_of else 0
+        stalled = (_stalled_calls(_continuation_series(ev_root, auto_of),
+                                  _continuation_file_series(ev_root, auto_of)) if auto_of else 0)
         split = bool(auto_of) and stalled >= STALL_SPLIT_AFTER
         _replay_file_context(ctx, plan, prev, prev_failures, no_replay=split)
         if split:
@@ -3757,7 +3784,7 @@ def _plan(ctx, ns, ev_root: Path, run_state: dict, graph: dict,
             plan["targets"] = dict(sorted(plan["targets"].items(), key=lambda kv: cost(kv[0])))
             plan["per_file_split"] = True
             ctx.warnings.append(f"continuation stalled {stalled} calls in a row (unfinished "
-                                f"count cut by < {STALL_SHRINK:.0%}): split per file, cheapest "
+                                f"count cut by < {STALL_SHRINK:.0%}, no file finished): split per file, cheapest "
                                 "first, no replay of earlier tests")
         if auto_of and not plan.get("per_file_split"):
             started = {_rfile(r) for r in prev.get("results") or []
