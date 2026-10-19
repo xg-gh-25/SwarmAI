@@ -1224,6 +1224,9 @@ def create_agent_tool_audit_hook(
                     # ({} = none read, None = transcript unreadable → readers warn). Gate-1,
                     # Gate-0 and the Gate-2 re-check bind to the prompt file handed out.
                     "prompt_reads": reads,
+                    # when it was spawned (its transcript's first record): REVIEW / DELIVER
+                    # stage-complete require one round's experts to start together
+                    "started_at": _subagent_started_at(transcript_path) if transcript_path else None,
                 }
                 if expert_id in _GATE_VERDICT_RE:
                     # Key present = this daemon captures verdicts (None = unparsed answer).
@@ -1365,6 +1368,28 @@ GATE_VERDICT_RANK = {"PASS": 0, "WARN": 1, "PARTIAL": 1, "BLOCK": 2,
                      "SUPPORTED": 0, "UNSUPPORTED": 1, "ALREADY-SATISFIED": 1, "WRONG-FRAME": 1,
                      "SOUND": 0, "WRONG-APPROACH": 1}
 _GATE_ANSWER_TAIL_BYTES = 256 * 1024  # fallback transcript read; the SDK input carries the text
+
+
+def _subagent_started_at(transcript_path: str) -> Optional[float]:
+    """Epoch seconds of the sub-agent's first transcript record (its spawn), or None.
+    stage-complete compares these to tell one parallel wave from serial spawns."""
+    try:
+        import datetime as _dt
+        with open(Path(transcript_path), "r", encoding="utf-8", errors="replace") as f:
+            for _ in range(12):
+                line = f.readline()
+                if not line:
+                    break
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = rec.get("timestamp") if isinstance(rec, dict) else None
+                if isinstance(t, str) and t:
+                    return _dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def _read_subagent_final_text(transcript_path: str) -> str:

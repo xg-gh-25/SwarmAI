@@ -1868,3 +1868,23 @@ def test_gaps_come_from_the_gates_own_warnings():
     assert [g["why"][:5] for g in gaps] == ["gate1"]
     assert cli._verification_gaps_of("test", [], {"degraded": {"attempts": 3}})[0]["why"].startswith(
         "completed degraded")
+
+
+def test_round_one_experts_must_start_together(monkeypatch):
+    """REVIEW / DELIVER experts run in parallel: first spawns >30 s apart refuse."""
+    run = {"dispatch_plan": {"deliver": ["correctness", "security", "red-team", "meta-review"],
+                             "review": ["spec-compliance", "code-quality"]},
+           "stage_timing": {"deliver": {"started_at": "2026-01-01T00:00:00+00:00"},
+                            "review": {"started_at": "2026-01-01T00:00:00+00:00"}}}
+    starts = {"correctness": [100.0, 400.0], "security": [104.0], "red-team": [500.0],
+              "meta-review": [900.0], "spec-compliance": [100.0], "code-quality": [300.0]}
+    monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: starts)
+    w: list = []
+    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []  # red-team joins round 2
+    errs = cli._parallel_dispatch_errors("r", run, "review", w)
+    assert errs and errs[0].startswith("E_SERIAL_DISPATCH") and "code-quality" in errs[0]
+    starts["security"] = [200.0]
+    assert cli._parallel_dispatch_errors("r", run, "deliver", w)[0].startswith("E_SERIAL_DISPATCH")
+    monkeypatch.setattr(cli, "_spawn_starts", lambda rid, w: None)
+    assert cli._parallel_dispatch_errors("r", run, "deliver", w) == []  # unreadable: warn only
+    assert any("NOT verified" in x for x in w)

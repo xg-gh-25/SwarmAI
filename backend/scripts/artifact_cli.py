@@ -5155,6 +5155,83 @@ def _unverified_gates(run_state: dict, record_in: "dict | None" = None) -> "list
     return out
 
 
+PARALLEL_WINDOW_S = 30.0  # one round's experts start within this of each other (one message)
+_NOT_IN_WAVE = frozenset({"meta-review", "root-cause"})  # run after the round, by design
+
+
+def _spawn_starts(run_id: str, windows: "list[tuple[float, float]]") -> "dict | None":
+    """expert_id → sorted spawn start times (marker ``started_at``) of this run's completed
+    sub-agents in ``windows``. None = marker store unreadable."""
+    try:
+        from config import get_app_data_dir
+        audit = get_app_data_dir() / "state" / "pipeline_agent_audit"
+        if not audit.is_dir():
+            return None
+        lo = min((w[0] for w in windows), default=0.0)
+        out: "dict[str, list[float]]" = {}
+        for p in audit.glob("session_*.marker"):
+            if "_adv_" in p.name:
+                continue
+            try:
+                if p.stat().st_mtime < lo - 60:
+                    continue
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(d, dict) or d.get("run_id") != run_id:
+                continue
+            ts, st, eid = d.get("ts"), d.get("started_at"), d.get("expert_id")
+            if not (isinstance(ts, (int, float)) and _in_windows(ts, windows)
+                    and isinstance(eid, str) and eid):
+                continue
+            out.setdefault(eid, [])
+            if isinstance(st, (int, float)):
+                out[eid].append(float(st))
+        return {k: sorted(v) for k, v in out.items()}
+    except Exception:  # noqa: BLE001 — unprovable, never a crash
+        return None
+
+
+def _parallel_dispatch_errors(run_id: str, cand_run: dict, stage: str,
+                              warnings: "list[str]") -> "list[str]":
+    """REVIEW and DELIVER experts must run in parallel (XG 2026-10-19): the FIRST spawn of
+    every dispatched expert of the stage (REVIEW: spec-compliance included; DELIVER: the
+    Gate-2 round 1, red-team excepted when it joins round 2) starts within
+    PARALLEL_WINDOW_S of the others: ONE message with every Agent call. A later round
+    re-checks only the experts with open items, so only round 1 is a full wave."""
+    import time as _time
+    plan = cand_run.get("dispatch_plan") if isinstance(cand_run.get("dispatch_plan"), dict) else {}
+    ids = [e for e in plan.get(stage) or [] if isinstance(e, str) and e not in _NOT_IN_WAVE]
+    if len(ids) < 2:
+        return []
+    timing = (cand_run.get("stage_timing") or {}).get(stage) or {}
+    windows = _stage_windows(timing, _time.time() + 60)[-1:]  # this entry of the stage
+    starts = _spawn_starts(run_id, windows) if windows else None
+    if starts is None:
+        warnings.append(f"{stage} parallel dispatch NOT verified: marker store unreadable")
+        return []
+    firsts = {e: starts[e][0] for e in ids if starts.get(e)}
+    if any(e in starts and not starts[e] for e in ids):
+        warnings.append(f"{stage} parallel dispatch not checked: a marker predates started_at "
+                        "(rebuild and restart the backend)")
+        return []
+    if stage == "deliver" and "red-team" in firsts and len(firsts) > 2:
+        others = sorted(v for k, v in firsts.items() if k != "red-team")
+        if firsts["red-team"] - others[-1] > PARALLEL_WINDOW_S:
+            firsts.pop("red-team")  # added to round 2's batch by gate2-recheck: allowed
+    if len(firsts) < 2:
+        return []
+    t0 = min(firsts.values())
+    late = sorted(e for e, t in firsts.items() if t - t0 > PARALLEL_WINDOW_S)
+    if not late:
+        return []
+    spread = max(firsts.values()) - t0
+    return [f"E_SERIAL_DISPATCH: the {stage} experts did not start together (first spawns "
+            f"{spread:.0f}s apart; late: {', '.join(late)}). Spawn every `"
+            f"{'review_experts' if stage == 'review' else 'experts'}` entry in ONE message "
+            "(one Agent call each, all in the same reply), then stage-complete again."]
+
+
 def _final_gate_spawn_errors(run_id: str, cand_run: dict, artifact: "dict | None",
                              cand_rec: dict, warnings: "list[str]") -> "list[str]":
     """A goal_cycle that reports its Final Quality Gate ran (``adversarial_review`` in
@@ -10304,6 +10381,8 @@ def _validate_stage_candidate(
                                              cand_rec, warnings, prev_rec)
     if stage == "goal_cycle":
         errors += _final_gate_spawn_errors(run_id, cand_run, artifact, cand_rec, warnings)
+    if stage in ("review", "deliver") and cand_rec.get("status") != "skipped":
+        errors += _parallel_dispatch_errors(run_id, cand_run, stage, warnings)
     if stage == "plan":
         errors += pv.validate_exit_criteria(
             (artifact or {}).get("exit_criteria"), required=not is_relaxed_profile(profile))
