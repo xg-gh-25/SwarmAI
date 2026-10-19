@@ -20,6 +20,7 @@
 
 import type { Message, ContentBlock, ChatMessage } from '../types';
 import { decideStallAction, type StallLiveness } from '../services/stallPolicy';
+import { collapseAdjacentDuplicateBlocks } from '../utils/duplicateBlocks';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -861,6 +862,10 @@ export class MessageStore {
     // completed turn only adds/keeps content (>= chars → DB still wins); a
     // content-SHORTENING edit is vanishingly rare and far less harmful than the
     // constant truncation race this kills at the source.
+    // A double-written local copy (the same thought/paragraph twice) is longer than
+    // the DB row without being more complete: collapse it first, so the DB's single
+    // copy can win, and the repeat never survives a reconcile.
+    localMsg = { ...localMsg, content: collapseAdjacentDuplicateBlocks(localMsg.content, 'store-merge') };
     if (MessageStore._textLen(localMsg) > MessageStore._textLen(dbMsg)) {
       // local already carries its own interactive blocks, so no further merge.
       return { ...dbMsg, content: localMsg.content };

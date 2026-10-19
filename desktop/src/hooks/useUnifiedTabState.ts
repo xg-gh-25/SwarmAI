@@ -124,6 +124,11 @@ export interface UnifiedTab {
    *  → turn-end refresh lost → UI frozen until next send (run_f9adee1e). Sibling of
    *  latestCompleteGen (run_6adee7d5) for the stream-event path. */
   latestStreamGen?: number;
+  /** Token of the newest stream handler created for this tab. A reconnect/resend
+   *  builds a new handler with the SAME stream generation, so the gen guard cannot
+   *  tell it from the handler it replaces; this token can. Only the newest handler
+   *  may write message content (deltas, assistant, tool_result). */
+  latestStreamHandler?: number;
   status: TabStatus;
   /** Per-tab display of the backend context-usage snapshot (null = empty ring).
    *  Backend snapshots (SSE + GET) land via the lifecycle hook's

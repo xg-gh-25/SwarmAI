@@ -80,4 +80,24 @@ describe('stream handler: block boundaries keep every thought', () => {
     send(assistant({ type: 'text', text: 'Keyed by app id.' } as ContentBlock));
     expect(shape()).toEqual([`th:${TH1}`, 'tool_use', 'tool_result', `th:${TH2}`, 'tx:Keyed by app id.']);
   });
+
+  it('a superseded handler (reconnect/resend, same generation) writes nothing', () => {
+    // 2026-10-20: the same thought rendered twice. A reconnect/resend builds a new
+    // handler for the same message and generation; the old stream kept delivering.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { send, shape, handler2 } = setupTwo();
+    send({ type: 'thinking_start', index: 0 } as StreamEvent, ...deltas('thinking_delta', TH1));
+    handler2({ type: 'thinking_start', index: 0 } as StreamEvent, ...deltas('thinking_delta', TH1));
+    expect(shape()).toEqual([`th:${TH1}`]);
+  });
 });
+
+function setupTwo() {
+  const s = setup();
+  const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+  const h2 = result.current.createStreamHandler(MSG, TAB);
+  const handler2 = (...events: StreamEvent[]) => act(() => { events.forEach((e) => h2(e)); });
+  // `send` drives the older handler, `handler2` the newer one for the same message.
+  return { ...s, handler2 };
+}
+

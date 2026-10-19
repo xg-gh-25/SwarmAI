@@ -56,6 +56,8 @@ import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { promptMetadataToCamelCase } from '../services/tscc';
 import { messageStoreRegistry } from '../stores/MessageStore';
+import { collapseAdjacentDuplicateBlocks } from '../utils/duplicateBlocks';
+
 import { isOt01DiagEnabled } from '../utils/diagFlags';
 import { dispatchUiCommand } from '../utils/uiCommands';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -487,12 +489,17 @@ export function updateMessages(
     if (!changed && appended.length === 0) return msg;
     return {
       ...msg,
-      content: [...content.filter((_, i) => !dropped.has(i)), ...appended],
+      content: collapseAdjacentDuplicateBlocks(
+        [...content.filter((_, i) => !dropped.has(i)), ...appended], 'updateMessages',
+      ),
       ...(model ? { model } : {}),
       ...(msg.isError ? { isError: false } : {}),
     };
   });
 }
+
+/** Monotonic id for stream handlers (see UnifiedTab.latestStreamHandler). */
+let streamHandlerSeq = 0;
 
 /**
  * Append a text delta (streaming token) to the last text block in an assistant message.
@@ -2354,6 +2361,7 @@ export function useChatStreamingLifecycle(
       // generation (e.g. old response arriving after user sent a new message)
       // must be discarded to prevent cross-turn bleed.
       const capturedStreamGen = streamGenRef.current;
+      const handlerToken = ++streamHandlerSeq;
       // A `thinking_start` / `text_start` opens a NEW block: its first delta must not
       // be appended to the previous provisional block of that type (two thoughts in
       // a row would merge, and the first one's confirmation would then replace both).
@@ -2380,7 +2388,10 @@ export function useChatStreamingLifecycle(
       // handlers. The half-migration (R27) this note tracked is closed.
       if (capturedTabId) {
         const stampTab = tabMapRef.current.get(capturedTabId);
-        if (stampTab) stampTab.latestStreamGen = capturedStreamGen;
+        if (stampTab) {
+          stampTab.latestStreamGen = capturedStreamGen;
+          stampTab.latestStreamHandler = handlerToken;
+        }
       }
 
       // ── Activate store phase gate ──
@@ -2561,6 +2572,27 @@ export function useChatStreamingLifecycle(
             globalStreamGen: streamGenRef.current, capturedStreamGen,
           });
           return; // stale event — discard silently
+        }
+
+        // Superseded-handler guard: a reconnect/resend creates a NEW handler for
+        // the same message with the SAME generation, so the guard above passes
+        // both. If the old stream is still delivering, every delta lands twice
+        // (the duplicated thought/paragraph). Only the newest handler of the tab
+        // writes message content; control events still go through.
+        if (capturedTabId && (
+          event.type === 'text_delta' || event.type === 'thinking_delta'
+          || event.type === 'text_start' || event.type === 'thinking_start'
+          || event.type === 'assistant' || event.type === 'tool_result'
+        )) {
+          const latest = tabMapRef.current.get(capturedTabId)?.latestStreamHandler;
+          if (latest !== undefined && latest !== handlerToken) {
+            if (event.type !== 'text_delta' && event.type !== 'thinking_delta') {
+              console.warn('[stream-dup] dropped content from a superseded stream handler', {
+                eventType: event.type, capturedTabId, handlerToken, latest,
+              });
+            }
+            return;
+          }
         }
 
         // Guard: if tab was closed while stream was running, no-op
