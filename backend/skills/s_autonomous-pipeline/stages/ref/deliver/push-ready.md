@@ -93,5 +93,5 @@ LOWER it: send `"push_ready": false` with a `push_ready_reason` in the record. S
 
 `stage-complete` derives `findings_total/fixed/remaining`, `token_cost`,
 `consumed_artifacts`, `exit_criteria_met` and `push_ready`; it auto-generates REPORT.md
-when missing. Preflight with `--check`. When it reports `exit_criteria_met: true`, stop
+when missing. No `--check` preflight (a failing call writes nothing). When it reports `exit_criteria_met: true`, stop
 adding verification and move on.

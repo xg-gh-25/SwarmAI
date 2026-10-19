@@ -42,9 +42,13 @@ to apply; REVIEW uses them only through the security-owner decision above.)
   so the user sees nothing running.
 - First prompt line `EXPERT-ID: <id>` (the same anchor Gate-2 prompts carry; the run
   profiler reads it to show which lens ran in which stage).
-- REVIEW prompts are composed here (stage-start writes prompt FILES only for DELIVER's
-  Gate-2): task statement + the expert's `backend/experts/code/<id>.md` checklist + the
-  changeset + relevant DDD docs + the project-knowledge block.
+- stage-start writes one prompt FILE per REVIEW sub-agent, `evidence/prompts/review-<id>.md`
+  (each `review_experts[]` entry's `prompt_path`): `EXPERT-ID: <id>`, the task statement,
+  the expert's `backend/experts/code/<id>.md` checklist, the PLAN acceptance criteria as
+  fenced DATA, the diff to read, then the project-knowledge block. Spawn each with the
+  2-line prompt `EXPERT-ID: <id>` + `read <prompt_path> first; follow it.`, adding nothing
+  (a prompt naming its file is how the SubagentStop marker credits the right run). Only
+  when an entry has no `prompt_path` compose it by hand from the same parts, as below.
 - **Project knowledge for every fan-out agent (and spec-compliance)** — emit once, paste
   the same block into each prompt under a `## Project Knowledge` heading AFTER the task
   statement (never before it — the adversarial classifier reads the prompt head).

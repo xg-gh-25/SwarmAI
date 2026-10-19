@@ -54,7 +54,7 @@ commit), `unfixed` (each with diagnosis), `expectations` ("no test expectation m
 A list of strings is accepted and joined with `; `; an empty list is stored as `""`, so it
 never satisfies a manual exit criterion.
 Then `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage test --data @/tmp/<R>/test.json`
-(`--check` first validates without writing).
+(it validates before writing: no `--check` first).
 
 > **⏭️ Continuation — advance is not the end of your turn.** `stage-complete` records and
 > advances; read `next_card` and run that stage in this same turn. Legal hand-backs only:

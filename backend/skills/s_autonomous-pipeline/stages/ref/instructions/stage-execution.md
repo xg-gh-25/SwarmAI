@@ -125,7 +125,7 @@ must carry (deliver's `adversarial_review.{profile_tier,findings}`, review's dic
 `litmus_gate`/`integration_trace`/`runtime_patterns`, build's `tdd.{green_pass,smoke_tests}`,
 goal_cycle's `adversarial_review.{findings}`) and a ready `template`. Do NOT hand-assemble a
 payload from memory and let the validator reject it — that is a send→reject→refix round-trip per
-stage. On the new path `stage-start` returns valid examples and `stage-complete --check` preflights.
+stage. On the new path `stage-start` returns valid examples and `stage-complete` validates before writing (no `--check` preflight).
 
 ## 3f. Handle Result
 After verification:

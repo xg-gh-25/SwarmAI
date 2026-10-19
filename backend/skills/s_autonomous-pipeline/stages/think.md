@@ -28,7 +28,7 @@ Purpose: research the requirement, stress-test 2-3 constraint-driven designs, re
 6. **Depth telemetry:**
    `python backend/scripts/artifact_cli.py run-observe --project <P> --run-id <R> --event think_depth --alternatives <N> --probes <N> --resolved <N> --escalated <N>`
 7. **Write** `/tmp/<R>/think.json` = `{"artifact": {...}, "record": {"decisions": [...]}}`
-   (output shape: see stage-start examples). Optional preflight: the exit command + `--check`.
+   (output shape: see stage-start examples). It validates before writing: no `--check` first.
 
 THINK runs no tests. If a probe needs code run, only via
 `perl -e 'alarm 110; exec @ARGV' backend/.venv/bin/python backend/scripts/pipeline_test.py --project <P> --run-id <R> --mode tdd --files <test>`.

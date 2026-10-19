@@ -114,7 +114,7 @@ alone to reject an unresolved finding.
 Also put a truthy `adversarial_review` on the stage RECORD: the goal-profile completion
 gate (`run-update --status completed`) reads the goal_cycle stage record, not the
 artifact, and BLOCKS "goal profile requires Final Adversarial Review" without it.
-Shape (stage-start prints a validator-passing example; `--check` preflights):
+Shape (stage-start prints a validator-passing example; no `--check` first — a failing call writes nothing):
 ```json
 {"artifact": {"dod_met": true, "cycles_run": 4, "progress_path": "...", "review_cadence": "every 2 cycles",
   "adversarial_review": {"spawned": true, "profile_tier": "full",

@@ -38,6 +38,6 @@ PLAN runs no tests; any test goes only through `perl -e 'alarm 110; exec @ARGV' 
 
 ## Exit
 
-`python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage plan --data @/tmp/<R>/plan.json` with `{"artifact": {<design_doc>}, "record": {"decisions": [...]}}` (shape: see stage-start examples; `--check` preflights without writing).
+`python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage plan --data @/tmp/<R>/plan.json` with `{"artifact": {<design_doc>}, "record": {"decisions": [...]}}` (shape: see stage-start examples; no `--check` first).
 
 > **⏭️ Continuation contract — advance is not the end of your turn.** stage-complete advances to the profile's next stage (build; goal → goal_cycle). Read `next_card` and execute it **in this same turn**. Only legal hand-backs: a stage-boundary **L2 Judgment** via the Escalation Routing Protocol, a **true checkpoint trigger** (`should_checkpoint=true`, retries exhausted, or a mid-stage L2), a pending user question, or an abandon verdict. `next_action` is AUTHORITATIVE when it withholds the continue instruction.

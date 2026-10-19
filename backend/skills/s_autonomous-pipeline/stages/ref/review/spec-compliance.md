@@ -32,9 +32,12 @@ commentary or "I think this is correct" in the prompt — only raw diff + raw AC
    lookup only; the spec gate MUST use artifact_cli for freshness.
 2. **Prepare diff context** — the same diff used for Litmus.
 3. **Spawn** with the Agent tool, foreground (`run_in_background: false`), first prompt
-   line `EXPERT-ID: spec-compliance`. Prompt template
-   `backend/experts/code/spec-compliance.md`; context = ACs + code diff + commit
-   messages + the `## Project Knowledge` block (`dispatch.md`). Returns JSON: verdict +
+   line `EXPERT-ID: spec-compliance`. stage-start already wrote its prompt
+   (`review_experts[]` `prompt_path` = `evidence/prompts/review-spec-compliance.md`:
+   `backend/experts/code/spec-compliance.md` + the PLAN ACs read from the artifact at
+   REVIEW entry, which satisfies step 1 + the diff + the `## Project Knowledge` block):
+   spawn `EXPERT-ID: spec-compliance` + `read <prompt_path> first; follow it.`. If the
+   PLAN changed inside REVIEW, run stage-start again first. Returns JSON: verdict +
    coverage matrix.
 4. This REVIEW spawn does NOT count toward the run's `required_experts` (D7 credits only
    adversarial Gate-2 spawns — PLAN ref `required-experts.md`). If `spec-compliance` is

@@ -86,12 +86,25 @@ _DATA_TAG = re.compile(r"</?\s*recalled-ddd\s*>", re.I)
 
 
 def _strip_fence(text: str) -> str:
-    """Remove every fence tag, repeatedly: one pass over ``</recalled</recalled-ddd>-ddd>``
-    would rebuild a closing tag out of the pieces around the removed one."""
+    """Recalled text made safe to sit inside the fence: compatibility forms folded
+    (NFKC: a full-width ``＜/recalled-ddd＞``) and invisible format characters dropped
+    (a ZWSP inside a tag), then every fence tag removed, repeatedly (one pass over
+    ``</recalled</recalled-ddd>-ddd>`` would rebuild a closing tag), and a line that
+    could pose as a prompt heading or an ``EXPERT-ID:`` anchor backslash-escaped
+    (red-team 2026-10-18: REVIEW prompt files now carry this block verbatim)."""
+    import unicodedata
+    text = "".join(ch for ch in unicodedata.normalize("NFKC", text)
+                   if unicodedata.category(ch) != "Cf")
     prev = None
     while prev != text:
         prev, text = text, _DATA_TAG.sub("", text)
-    return text
+    out = []
+    for ln in text.split("\n"):
+        t = ln.strip()
+        if t.startswith("#") or t.upper().startswith("EXPERT-ID") or (t and set(t) <= set("=-")):
+            ln = "\\" + ln
+        out.append(ln)
+    return "\n".join(out)
 
 
 def _default_recall(query: str, project: str, top_n: int) -> list[dict]:

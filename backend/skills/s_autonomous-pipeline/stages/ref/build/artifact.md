@@ -73,7 +73,7 @@ Recommended: `commits`, `diff_summary`.
 - Derived by the tool, never written by you: `token_cost`, `consumed_artifacts`,
   `stage_doc_consumed`, `artifact_id`, `exit_criteria_met`.
 
-Preflight: `python backend/scripts/artifact_cli.py stage-complete --project <P> --run-id <R> --stage build --data @/tmp/<R>/build.json --check`.
+No preflight: stage-complete validates everything before it writes anything, so run it directly and fix from its error. `--check` (same command + `--check`) only asks mid-stage whether the exit criteria are met.
 Errors name the field path and the expected value; fix from the error, don't read
 `artifact_cli.py` source. When the result says `exit_criteria_met: true`, stop adding
 verification and complete the stage.

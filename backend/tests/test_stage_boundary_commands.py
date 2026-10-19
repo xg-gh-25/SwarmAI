@@ -1228,9 +1228,11 @@ def test_stage_start_review_returns_review_list_not_gate2(ws, capsys):
     ids = [e["id"] for e in out["review_experts"]]
     assert ids[:2] == ["spec-compliance", "code-quality"] and "security" not in ids
     assert out["spawn_mode"] == "foreground"
-    # REVIEW writes no Gate-2 prompt files, only its own shared reviewer inputs
+    # REVIEW writes no Gate-2 prompt files, only its own reviewer inputs + one
+    # review-<id>.md prompt per REVIEW sub-agent
     assert {p.name for p in (rd / "evidence" / "prompts").iterdir()} \
-        <= {"review-knowledge.md", "review-change.diff"}
+        <= {"review-knowledge.md", "review-change.diff"} | {f"review-{i}.md" for i in ids}
+    assert all(e["prompt_path"].endswith(f"review-{e['id']}.md") for e in out["review_experts"])
     assert _run_state(root, rid)["dispatch_plan"]["review"] == ids
 
 
