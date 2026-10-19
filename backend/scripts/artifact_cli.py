@@ -2649,6 +2649,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         args.files_touched = _normalize_files_touched_arg(args.files_touched)
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
+    run_docs_status, run_docs_warnings = None, []   # set by the completion gate
 
     # Set when this call completes the run; consumed AFTER the --stage-json merge
     # so METRICS extraction sees the final stage list (explicit flag rather than
@@ -3277,6 +3278,26 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     }))
                     sys.exit(1)  # D7: non-zero on completion BLOCK
 
+            # ── Run documents Gate (BLOCKING on a failed write only) ──
+            # REQUIREMENTS / DESIGN_SPEC / REVIEW are rewritten from the final artifacts
+            # (core/run_docs.py) and every one the profile requires must exist. A stage
+            # whose artifact cannot be read only warns: never a self-lock on infra.
+            try:
+                from core import run_docs as _rdocs
+                _doc_errs, _doc_warns, _doc_status = _rdocs.completion_check(
+                    run_file.parent, run_state, _run_doc_experts(args.run_id))
+            except Exception as _e:  # noqa: BLE001 — a crash here is a write failure
+                _doc_errs, _doc_warns, _doc_status = (
+                    [f"run documents could not be checked: {type(_e).__name__}: {_e}"], [], [])
+            if _doc_errs:
+                print(json.dumps({
+                    "error": "Cannot mark completed: " + "; ".join(_doc_errs),
+                    "pipeline_id": args.run_id,
+                    "run_documents": _doc_status,
+                }, ensure_ascii=False))
+                sys.exit(1)  # D7: non-zero on completion BLOCK
+            run_docs_status, run_docs_warnings = _doc_status, _doc_warns
+
             # ── REPORT.md Gate (BLOCKING) ──
             # Every completed pipeline MUST have a REPORT.md that documents
             # the execution process (stages, decisions, findings, methodology).
@@ -3743,6 +3764,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     result = {"pipeline_id": args.run_id, "updated": True}
     if _wt_release:
         result["worktree"] = _wt_release
+    if run_docs_status is not None:
+        result["run_documents"] = run_docs_status
+        if run_docs_warnings:
+            result["run_documents_warnings"] = run_docs_warnings
     if args.status == "completed":
         result["reminder"] = (
             "⚠️ OUTPUT COMPLETION SUMMARY TO CHAT (Step 6.2 — MANDATORY). "
@@ -4266,7 +4291,10 @@ def _generate_review_deliverable(
 
     DUAL-STORE, ONE-WAY (A→B): the master ledger "A" (the daemon workspace
     ``.artifacts/runs/<run_id>/``) is NEVER touched here — B is a frozen,
-    DELIVER-time PROJECTION of A, never a second writer. B = EXACTLY ONE file:
+    DELIVER-time PROJECTION of A, never a second writer. B = the projected REPORT.md
+    plus the run documents A holds (``REQUIREMENTS.md`` / ``DESIGN_SPEC.md`` /
+    ``REVIEW.md``, core/run_docs.py — code-rendered from the same artifacts, copied
+    verbatim, content-safety scanned with the rest of B):
 
       - ``REPORT.md``        — a VERBATIM COPY of A's terminal REPORT.md. A is itself a
                                deterministic projection of the ledger (run.json + stage
@@ -4282,7 +4310,7 @@ def _generate_review_deliverable(
     were REMOVED: the SRS had zero code consumers and its content is already human-readable
     inside REPORT.md §4.6; run-ref's ``ledger:`` path pointed into the daemon workspace (not
     in git), so a cross-machine reviewer could never resolve it (R30#7 — a published
-    identifier the reader cannot follow). One projected REPORT.md, nothing else.
+    identifier the reader cannot follow). No other sidecar: no per-stage JSON snapshot.
 
     GATE (TWO conditions — run_7c30c517): B generates iff A has a terminal ``REPORT.md``
     on disk AND that report's §9 Lessons is SUBSTANTIVE (not a degenerate placeholder).
@@ -4416,7 +4444,11 @@ def _generate_review_deliverable(
 
     created: list[str] = []
 
-    # B carries EXACTLY ONE file: a VERBATIM COPY of ledger A's terminal REPORT.md.
+    # B carries the projected REPORT.md, plus the run documents (REQUIREMENTS /
+    # DESIGN_SPEC / REVIEW, core/run_docs.py) that ledger A holds — each itself a
+    # code-rendered projection of the same artifacts, so B adds no second truth. The
+    # history below is why there are no OTHER sidecars.
+    # Formerly: B carried EXACTLY ONE file, a VERBATIM COPY of ledger A's terminal REPORT.md.
     # A is itself a deterministic PROJECTION of the ledger (run.json + stage artifacts)
     # rendered by cmd_run_report — the §4.6 需求溯源审计 (Intent→Requirement) provenance
     # AND the §9 REFLECT lessons live INSIDE that single report. So a reviewer resolves
@@ -4463,6 +4495,19 @@ def _generate_review_deliverable(
         projected = _project_report_for_review(report_content, source_files or [], target_repo_root)
         (dest / "REPORT.md").write_text(projected, encoding="utf-8")
         created.append(str(dest / "REPORT.md"))
+        # The run documents travel with the code: a reviewer of the commit sees the
+        # requirement, the design and the review that produced it.
+        # B may land in a public repo: the owner's home directory never travels
+        # (model-written evidence quotes absolute paths); the scan below still runs.
+        from core import run_docs as _rdocs
+        _home = str(Path.home())
+        for _name, _stage, _ in _rdocs.DOCS:
+            if _stage and (run_dir / _name).is_file():
+                _text = (run_dir / _name).read_text(encoding="utf-8")
+                if len(_home) > 1:
+                    _text = _text.replace(_home, "~")
+                (dest / _name).write_text(_text, encoding="utf-8")
+                created.append(str(dest / _name))
     except (OSError, UnicodeDecodeError) as e:
         # B is best-effort (ledger A is the durable truth) — a read/write/decode
         # failure on the terminal report warns + skips, never crashes run-commit.
@@ -10162,6 +10207,34 @@ def _replan_errors(project: str, run_state: dict, profile: str,
                                             (artifact or {}).get("exit_criteria"), later[0])
 
 
+def _run_doc_experts(run_id: str) -> "list[str] | None":
+    """The experts that reviewed this run (adversarial markers), for REVIEW.md."""
+    try:
+        done = _d7_completed_expert_ids(run_id)
+    except Exception:  # noqa: BLE001 — the findings still name their experts
+        return None
+    return sorted(done) if done else None
+
+
+def _write_stage_doc(run_id: str, run_dir: Path, run_state: dict, stage: str,
+                     warnings: "list[str]") -> "str | None":
+    """Write the run document whose source is ``stage`` (None when it has none)."""
+    try:
+        from core import run_docs
+        name = run_docs.doc_for_stage(stage)
+        if not name:
+            return None
+        path = run_docs.write_stage_doc(run_dir, run_state, stage,
+                                        _run_doc_experts(run_id) if stage == "deliver" else None)
+        if not path:
+            warnings.append(f"{name} was not written (its artifact is missing or unreadable); "
+                            "run-update --status completed regenerates it")
+        return path
+    except Exception as e:  # noqa: BLE001 — a document never fails a stage
+        warnings.append(f"run document for '{stage}' not written: {type(e).__name__}: {e}")
+        return None
+
+
 def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
     """The ONE exit of a stage: validate everything, then publish + record + advance.
 
@@ -10326,6 +10399,11 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
                          default=str, ensure_ascii=False))
         sys.exit(1)
 
+    # ── The stage's run document (core/run_docs.py): REQUIREMENTS / DESIGN_SPEC /
+    # REVIEW, projected from the artifacts by code. Written before DELIVER lands and
+    # run-commit copies the deliverables; never fails the stage (completion re-checks).
+    stage_doc = _write_stage_doc(run_id, run_dir, fresh, stage, warnings)
+
     # ── ADVANCE to the profile's next stage (computed; never backwards) ──
     advanced = False
     next_card, next_action = None, None
@@ -10388,6 +10466,7 @@ def cmd_stage_complete(args, reg: ArtifactRegistry) -> None:
         "advanced": advanced, "derived": derived, "exit_criteria": exit_result,
         "report_generated": report_generated,
         **({"landing": landing} if landing else {}),
+        **({"doc": stage_doc} if stage_doc else {}),
         "warnings": warnings,
     }, default=str, ensure_ascii=False))
 

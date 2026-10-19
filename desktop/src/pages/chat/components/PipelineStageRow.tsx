@@ -26,19 +26,24 @@
  *     holds the one spinner.
  *   - colour only for exceptions: a Gate verdict other than PASS (WARN amber, BLOCK
  *     red), an unrecovered failure. A normal finish is neutral.
+ *   - a finished stage that wrote a run document (EVALUATE → REQUIREMENTS.md, PLAN →
+ *     DESIGN_SPEC.md, DELIVER → REVIEW.md; `block.doc`) ends with the document's name:
+ *     a link that opens it in the Canvas, beside — never inside — the row's toggle.
  *
  * Verdicts are model-written text from run.json: rendered as plain text.
  *
  * @exports PipelineStageRow
  */
 import type React from 'react';
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PipelineStageContent } from '../../../types';
 import { useLinger } from '../../../hooks/useLinger';
 import { isGateStage } from '../turnView';
 import { tf } from '../tf';
 import { GROUP_TAG_CLASS, ROW_ICON_SLOT } from './WorkGroup';
+import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
+import { ReadOnlyContext } from '../readOnlyContext';
 
 /** "gate1" → "GATE 1", "goal_cycle" → "GOAL CYCLE". */
 const stageName = (stage: string) => stage.replace(/_/g, ' ').replace(/^gate(\d)$/i, 'gate $1').toUpperCase();
@@ -153,12 +158,14 @@ function StageRow({
   ].filter(Boolean).join(' · ') : '';
 
   const Head = hasBody ? 'button' : 'div';
+  const doc = block?.status === 'completed' ? block.doc : null;
   return (
     <div
       data-testid={isLive ? 'pipeline-stage-live' : 'pipeline-stage-row'}
       data-open={open ? 'true' : 'false'}
       className="border-t border-[var(--color-border)] first:border-t-0"
     >
+      <div className="flex items-center gap-2 min-w-0">
       <Head
         {...(hasBody ? { type: 'button' as const, onClick: () => onChoose(!open), 'aria-expanded': open } : {})}
         {...(isLive ? { role: 'status' } : {})}
@@ -169,7 +176,7 @@ function StageRow({
           { stage: label })}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        className={`w-full flex items-center gap-1.5 py-1.5 text-left text-[12.5px] text-[var(--color-text-muted)] min-w-0 rounded ${hasBody ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
+        className={`flex-1 flex items-center gap-1.5 py-1.5 text-left text-[12.5px] text-[var(--color-text-muted)] min-w-0 rounded ${hasBody ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
       >
         <span aria-hidden="true" className={`material-symbols-outlined text-[14px] leading-none ${ROW_ICON_SLOT} text-[var(--color-text-dim)]`}>
           {isLive ? 'radio_button_checked' : skipped ? 'remove' : unfinished ? 'more_horiz' : 'check'}
@@ -222,7 +229,34 @@ function StageRow({
           </span>
         )}
       </Head>
+      {doc && <StageDocLink doc={doc} />}
+      </div>
       {open && <div data-testid="stage-body" className="pl-[22px] pb-2">{children}</div>}
     </div>
+  );
+}
+
+/** The run document a finished stage wrote: its name, opening it in the Canvas. */
+function StageDocLink({ doc }: { doc: NonNullable<PipelineStageContent['doc']> }) {
+  const { t } = useTranslation();
+  const readOnly = useContext(ReadOnlyContext);
+  const cls = 'shrink-0 inline-flex items-center gap-1 font-mono text-[11.5px] text-[var(--color-text-muted)]';
+  const body = (
+    <>
+      <span aria-hidden="true" className="material-symbols-outlined text-[13px] leading-none">description</span>
+      {doc.name}
+    </>
+  );
+  if (readOnly) return <span data-testid="stage-doc" className={cls}>{body}</span>;
+  return (
+    <button
+      type="button"
+      data-testid="stage-doc"
+      title={tf(t, 'chat.turn.stage.openDoc', 'Open {{name}} in Canvas', { name: doc.name })}
+      onClick={() => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: doc.absolutePath } }))}
+      className={`${cls} hover:text-[var(--color-text)] hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 rounded`}
+    >
+      {body}
+    </button>
   );
 }

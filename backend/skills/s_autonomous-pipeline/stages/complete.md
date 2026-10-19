@@ -63,7 +63,11 @@ run (no source commits) is exempt — skip step 2, still do step 1.
 
 The summary is RENDERED BY CODE from recorded data (intent in the user's words, final
 requirements, real token cost, runtime, added/modified files as Canvas links, quality,
-REPORT.md link). Design: `docs/design/pipeline-speed-systematic-fix.md` §4-E.
+and the **pipeline execution products** as Canvas links: REQUIREMENTS.md, DESIGN_SPEC.md,
+REVIEW.md, REPORT.md). Design: `docs/design/pipeline-speed-systematic-fix.md` §4-E.
+Those four documents are written by code too (`backend/core/run_docs.py`: each when its
+stage completes, all again at completion — never hand-write one); completion BLOCKS if a
+required one cannot be written, and the chat shows the same set as a summary card.
 
 1. `python backend/scripts/artifact_cli.py run-update --project <P> --run-id <R> --status completed`
    returns it as `_display_block`. Lost it? Re-render:

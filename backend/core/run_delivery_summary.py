@@ -25,7 +25,9 @@ Public symbols:
   how, what is left) from DELIVER's ``outcome`` plus every recorded leftover. The
   chat block and the REPORT (TL;DR + §10) both render it, so they cannot disagree.
 - ``render_review_lines``    — the one renderer of those parts for both doors.
-- ``render_delivery_summary_md`` — PURE renderer of the §4-E chat block.
+- ``render_delivery_summary_md`` — PURE renderer of the §4-E chat block, which ends
+  with the pipeline's execution products (REQUIREMENTS / DESIGN_SPEC / REVIEW /
+  REPORT, core/run_docs.py) as Canvas links.
 - ``build_delivery_summary`` — wires the above for a run dir; never raises.
 """
 
@@ -1068,9 +1070,38 @@ def _report_line(report_path: Any) -> str:
     return f"📄 **{_link('REPORT.md', str(report_path or ''))}**：完整报告，点击在 Canvas 打开"
 
 
+_DOC_ICONS = {"REQUIREMENTS.md": "📋", "DESIGN_SPEC.md": "📐", "REVIEW.md": "🛡️"}
+
+
+def _docs_block(docs: Any, deliver: dict) -> list[str]:
+    """The pipeline's execution products (core/run_docs.doc_status entries), REPORT.md
+    excluded (``_report_line`` closes the block). A document the profile does not
+    produce says so instead of disappearing."""
+    rows = [d for d in _l(docs) if isinstance(d, dict) and d.get("name") in _DOC_ICONS]
+    if not rows:
+        return []
+    out = ["**📂 Pipeline 执行产物**"]
+    ar = _d(deliver.get("adversarial_review"))
+    findings = [f for f in _l(ar.get("findings")) if isinstance(f, dict)]
+    for d in rows:
+        icon, name = _DOC_ICONS[d["name"]], d["name"]
+        purpose = _txt(d.get("purpose") or "", 60)
+        if d.get("exists"):
+            line = f"{icon} **{_link(name, str(d.get('path') or ''))}**：{purpose}"
+            if name == "REVIEW.md" and findings:
+                experts = {str(f.get("specialist") or "").strip().lower() for f in findings
+                           if str(f.get("specialist") or "").strip()}
+                fixed = sum(1 for f in findings if f.get("resolved"))
+                line += f"（{len(experts)} 位专家 · {len(findings)} 条发现 · {fixed} 已处置）"
+        else:
+            line = f"{icon} {_txt(name)} — {_txt(d.get('reason') or 'missing', 120)}"
+        out.append(line)
+    return out
+
+
 def render_delivery_summary_md(run_state, eval_artifact, deliver_artifact, test_info, usage,
                                file_changes, report_path, stage_gaps=None,
-                               estimate_tokens=None) -> str:
+                               estimate_tokens=None, docs=None) -> str:
     """PURE: render the §4-E chat block. Exactly two ``━`` lines (first + last), no
     code fences; every user/model string goes through ``_txt`` (``_md_cell``)."""
     run_state, ev = _d(run_state), _d(eval_artifact)
@@ -1093,6 +1124,7 @@ def render_delivery_summary_md(run_state, eval_artifact, deliver_artifact, test_
     q = _quality_line(run_state, deliver, tests)
     if q:
         lines += [q, ""]
+    lines += _docs_block(docs, deliver)
     lines += [_report_line(report_path), RULE_LINE]
     return "\n".join(lines)
 
@@ -1132,6 +1164,15 @@ def _minimal_summary(run_state: Any, report_path: Any) -> str:
                       _report_line(report_path), RULE_LINE])
 
 
+def _run_docs(run_dir: Path, run_state: dict) -> list:
+    try:
+        from .run_docs import doc_status
+        return doc_status(run_dir, run_state.get("profile"), run_state)
+    except Exception as exc:  # noqa: BLE001 — the summary must never break completion
+        logger.warning("delivery summary: run documents unavailable: %s", exc)
+        return []
+
+
 def build_delivery_summary(run_state, artifacts: dict, run_dir: Path, repo_root: Optional[Path] = None,
                            db_path=None, turn_end_iso=None) -> str:
     """Wire E1 data sources into the renderer for one run. Never raises: any internal
@@ -1158,6 +1199,7 @@ def build_delivery_summary(run_state, artifacts: dict, run_dir: Path, repo_root:
             _unwrap(arts.get("test")), usage, changes, report_path,
             stage_gaps=_stage_gaps(run_dir),
             estimate_tokens=None if usage else _estimate_tokens(rs),
+            docs=_run_docs(run_dir, rs),
         )
     except Exception as exc:  # the summary must never break run completion
         logger.warning("build_delivery_summary failed: %s", exc)

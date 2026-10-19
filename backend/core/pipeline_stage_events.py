@@ -54,6 +54,7 @@ carries it, and ``new_stage_blocks`` emits a refreshed ``pipeline_run`` block wh
 run's profile is first set or changes (a run is created before EVALUATE picks it).
 
 @exports parse_watched_run_id, read_stage_state, new_stage_blocks, current_stage,
+         attach_stage_docs, summary_block, SUMMARY_BLOCK_TYPE,
          checklist, run_block, STAGE_ORDINALS, SUMMARY_MAX, BLOCK_TYPE
 """
 from __future__ import annotations
@@ -594,3 +595,83 @@ def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dic
         return None
     return {"type": ATTENTION_BLOCK_TYPE, "runId": run_id,
             "items": items[:MAX_ATTENTION_ITEMS], "more": max(0, len(items) - MAX_ATTENTION_ITEMS), "at": at}
+
+
+# ── Run documents (core/run_docs.py): per-stage products + the completion summary ──
+
+SUMMARY_BLOCK_TYPE = "pipeline_summary"
+
+
+def _doc_ref(run_dir: Optional[str], name: str) -> Optional[dict[str, str]]:
+    """``{name, path, absolutePath}`` for a run document on disk (``path`` is
+    workspace-relative, the way the Canvas lists it); None when absent."""
+    if not run_dir:
+        return None
+    try:
+        p = Path(run_dir) / name
+        if not p.is_file():
+            return None
+        ws = Path(str(get_swarmws())).resolve()
+        try:
+            rel = str(p.resolve().relative_to(ws))
+        except ValueError:
+            rel = str(p)
+        return {"name": name, "path": rel, "absolutePath": str(p.resolve())}
+    except Exception:  # noqa: BLE001 — a display aid must never break the stream
+        return None
+
+
+def attach_stage_docs(blocks: list[dict], state: Optional[dict]) -> list[dict[str, str]]:
+    """Give each COMPLETED stage row whose stage writes a run document (REQUIREMENTS /
+    DESIGN_SPEC / REVIEW) a ``doc`` ref, and return those refs: the orchestrator
+    surfaces each as a knowledge file (Canvas). Mutates ``blocks`` in place."""
+    from .run_docs import doc_for_stage
+    out: list[dict[str, str]] = []
+    run_dir = (state or {}).get("run_dir")
+    for b in blocks:
+        if b.get("type") != BLOCK_TYPE or b.get("status") != "completed":
+            continue
+        name = doc_for_stage(str(b.get("stage") or ""))
+        ref = _doc_ref(run_dir, name) if name else None
+        if ref:
+            b["doc"] = ref
+            out.append(ref)
+    return out
+
+
+def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
+    """The run's execution summary for the chat, written once when run.json turns
+    ``completed``: whether it is ready to push, and its four documents (each with a
+    ref to open, or why the profile does not produce it). Structured fields only."""
+    if not state or state.get("status") != "completed":
+        return None
+    from .run_docs import doc_status
+    run_dir = state.get("run_dir")
+    stages: dict = state.get("stages") or {}
+    run_state = {"profile": state.get("profile"),
+                 "stages": [dict(rec) for rec in stages.values() if isinstance(rec, dict)]}
+    deliver = stages.get("deliver") or {}
+    deliver_art = _artifact(run_dir, deliver)
+    adv = deliver_art.get("adversarial_review") if isinstance(deliver_art.get("adversarial_review"), dict) else {}
+    findings = [f for f in adv.get("findings") or [] if isinstance(f, dict)]
+    experts = sorted({str(f.get("specialist")).strip().lower() for f in findings
+                      if isinstance(f.get("specialist"), str) and f["specialist"].strip()})
+    docs: list[dict[str, Any]] = []
+    for d in doc_status(run_dir, state.get("profile"), run_state):
+        ref = _doc_ref(run_dir, d["name"]) if d.get("exists") else None
+        entry: dict[str, Any] = {"name": d["name"], "purpose": d.get("purpose"),
+                                 "path": ref["path"] if ref else None,
+                                 "absolutePath": ref["absolutePath"] if ref else None,
+                                 "required": bool(d.get("required")),
+                                 "reason": _clip(d.get("reason"), 120)}
+        if d["name"] == "REVIEW.md" and findings:
+            entry["stat"] = {"experts": len(experts), "findings": len(findings),
+                             "settled": sum(1 for f in findings if f.get("resolved"))}
+        docs.append(entry)
+    push = deliver.get("push_ready")
+    return {"type": SUMMARY_BLOCK_TYPE, "runId": run_id, "profile": state.get("profile"),
+            "pushReady": push if isinstance(push, bool) else None,
+            "pushReason": _clip(deliver.get("push_ready_reason"), 200),
+            "stagesDone": sum(1 for r in stages.values() if isinstance(r, dict)
+                              and _TERMINAL.get(str(r.get("status") or "")) == "completed"),
+            "docs": docs, "at": at}

@@ -270,7 +270,8 @@
         "ariaRunning": "Pipeline 阶段 {{stage}} 进行中",
         "position": "第 {{position}}/{{total}} 阶段",
         "round": "第 {{n}} 轮",
-        "earlier": "之前已完成"
+        "earlier": "之前已完成",
+        "openDoc": "在 Canvas 打开 {{name}}"
       },
       "failedOne": "失败",
       "result": "结果",
@@ -310,7 +311,21 @@
       "explored": "浏览了",
       "showCommand": "显示命令",
       "thought": "思考",
-      "times": "×{{count}}"
+      "times": "×{{count}}",
+      "summary": {
+        "title": "Pipeline 执行总结",
+        "ready": "已完成 · 可以 push",
+        "notReady": "已完成 · 还不能 push",
+        "done": "已完成",
+        "missing": "未生成",
+        "reviewStat": "{{experts}} 位专家 · {{findings}} 条发现 · {{settled}} 已处置",
+        "doc": {
+          "requirements": "需求 · 根因 · 澄清",
+          "design": "方案 · 架构与流程 · 不变量",
+          "review": "Gates · 专家审查 · 每条发现的处置",
+          "report": "完整运行报告"
+        }
+      }
     },
     "nextSteps": {
       "label": "下一步",

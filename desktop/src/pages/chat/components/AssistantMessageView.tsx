@@ -50,7 +50,7 @@ import { WorkGroupView } from './WorkGroup';
 import { PipelineStageRow } from './PipelineStageRow';
 import { PipelineBlock } from './PipelineBlock';
 import { FileChip } from './FileChip';
-import { AttentionCard, DeliverablesCard } from './TurnCards';
+import { AttentionCard, DeliverablesCard, PipelineSummaryCard } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { deriveTurnView, extractNextSteps, groupWork, isGateStage, isUnanswered, pipelineChecklist, sectionUnits, stageCounts, turnChangedFiles } from '../turnView';
 import type { NoteUnit, ProcessUnit, TurnUnit, WorkItem } from '../turnView';
@@ -576,8 +576,17 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   if (attentionPending) {
     contentBlocks.push(<div key="attention" className="mt-3">{attentionCard}</div>);
   }
-  if (view.deliverables.length) {
-    contentBlocks.push(<div key="deliverables" className="mt-4"><DeliverablesCard files={view.deliverables} /></div>);
+  // A finished run's summary: its verdict and four documents, after the outcome.
+  // A document it lists is not listed again in the Produced card.
+  const summaryDocs = view.summary && !isStreaming ? view.summary.docs : [];
+  const deliverables = summaryDocs.length
+    ? view.deliverables.filter((d) => !summaryDocs.some((x) => x.absolutePath === d.absolutePath))
+    : view.deliverables;
+  if (view.summary && !isStreaming) {
+    contentBlocks.push(<div key="pipeline-summary" className="mt-4"><PipelineSummaryCard block={view.summary} /></div>);
+  }
+  if (deliverables.length) {
+    contentBlocks.push(<div key="deliverables" className="mt-4"><DeliverablesCard files={deliverables} /></div>);
   }
   if (turnFiles.length) {
     contentBlocks.push(

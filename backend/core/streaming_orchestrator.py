@@ -335,7 +335,9 @@ class StreamingOrchestrator:
         """After a SUCCESSFUL artifact_cli call: re-read run.json (the authority — the
         command string proves nothing), diff its stages against the session snapshot,
         advance the snapshot, and return one ``assistant`` event carrying a
-        ``pipeline_stage`` block per newly finished stage ([] when nothing changed).
+        ``pipeline_stage`` block per newly finished stage ([] when nothing changed),
+        plus one ``file_changed`` (kind=knowledge) per run document a finished stage
+        wrote, and a ``pipeline_summary`` block when the run turned completed.
 
         The event goes through the normal assistant path, so session_router persists
         it as its own row and the chat shows it in place after a reload. Fail-safe:
@@ -375,13 +377,26 @@ class StreamingOrchestrator:
                 ab = await executors.run_in("io", _pse.attention_block, run_id, after, at)
                 if ab:
                     blocks.append(ab)
+            # The stage's run document (REQUIREMENTS / DESIGN_SPEC / REVIEW) rides on its
+            # row and opens in the Canvas as a knowledge file (core/run_docs.py).
+            docs = await executors.run_in("io", _pse.attach_stage_docs, blocks, after)
+            # The run's execution summary, once, when run.json turns completed.
+            if (before is not None and before.get("status") != "completed"
+                    and after.get("status") == "completed"):
+                sb = await executors.run_in("io", _pse.summary_block, run_id, after, at)
+                if sb:
+                    blocks.append(sb)
         except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
             logger.warning("pipeline stage emit failed for %r: %s", run_id, e)
             return []
         if not blocks:
             return []
         # Not model output: _content_emitted (zombie/empty-turn detection) is left alone.
-        return [{"type": "assistant", "content": blocks, "model": None}]
+        events: list[dict] = [{"type": "assistant", "content": blocks, "model": None}]
+        events += [{"type": "file_changed", "path": d["path"], "absolutePath": d["absolutePath"],
+                    "operation": "written", "relevance": "deliverable", "kind": "knowledge"}
+                   for d in docs]
+        return events
 
     def _clear_completed_sub_agents(self, message: Any) -> None:
         """Remove tracking entries for sub-agents (Agent tool) that completed.

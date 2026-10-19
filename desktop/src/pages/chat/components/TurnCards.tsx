@@ -11,13 +11,21 @@
  * - DeliverablesCard — the files the turn produced (`turn_deliverables`), after
  *                      the outcome: type icon or image thumbnail, name, open in
  *                      Canvas, copy path (inert in a read-only preview).
+ * - PipelineSummaryCard — a finished run (`pipeline_summary`): ONE verdict line (ready
+ *                      to push, or why not — the only thing that may stand out), then
+ *                      the run's four documents as rows that open in the Canvas:
+ *                      requirements, design spec, review (with its expert / finding
+ *                      counts), report. A document the profile does not produce is a
+ *                      dim row saying why. No per-row boxes: spacing groups.
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
- * @exports AttentionCard, DeliverablesCard, middleEllipsis
+ * @exports AttentionCard, DeliverablesCard, PipelineSummaryCard, middleEllipsis
  */
 import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PipelineAttentionContent, PipelineAttentionItem, TurnDeliverable } from '../../../types';
+import type {
+  PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable,
+} from '../../../types';
 import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/MarkdownRenderer';
 import { fileIcon, fileIconColor } from '../../../utils/fileUtils';
 import { copyToClipboard } from '../../../utils/clipboard';
@@ -181,6 +189,66 @@ export function DeliverablesCard({ files }: { files: TurnDeliverable[] }) {
       <div className={`mb-1.5 ${LABEL}`}>{tf(t, 'chat.turn.deliverables.title', 'Produced this turn · {{count}}', { count: files.length })}</div>
       <ul className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(190px,1fr))]">
         {files.map((f) => <DeliverableTile key={f.absolutePath} file={f} />)}
+      </ul>
+    </section>
+  );
+}
+
+/** Icon + what each run document holds (the backend sends the name; the words are ours). */
+const DOC_META: Record<string, { icon: string; key: string; purpose: string }> = {
+  'REQUIREMENTS.md': { icon: 'checklist', key: 'chat.turn.summary.doc.requirements', purpose: 'Requirements · root cause · clarifications' },
+  'DESIGN_SPEC.md': { icon: 'architecture', key: 'chat.turn.summary.doc.design', purpose: 'Approach · architecture & flow · invariants' },
+  'REVIEW.md': { icon: 'verified_user', key: 'chat.turn.summary.doc.review', purpose: 'Gates · expert reviews · how each finding was settled' },
+  'REPORT.md': { icon: 'summarize', key: 'chat.turn.summary.doc.report', purpose: 'Full run report' },
+};
+
+function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
+  const { t } = useTranslation();
+  const readOnly = useContext(ReadOnlyContext);
+  const meta = DOC_META[doc.name] ?? { icon: 'description', key: '', purpose: doc.purpose ?? '' };
+  const purpose = meta.key ? tf(t, meta.key, meta.purpose) : meta.purpose;
+  const there = !!doc.absolutePath;
+  const stat = doc.stat
+    ? tf(t, 'chat.turn.summary.reviewStat', '{{experts}} experts · {{findings}} findings · {{settled}} settled', doc.stat)
+    : null;
+  const open = () => there && document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: doc.absolutePath } }));
+  const Row = there && !readOnly ? 'button' : 'div';
+  return (
+    <li data-testid="summary-doc" data-name={doc.name} data-present={there ? 'true' : 'false'}>
+      <Row
+        {...(Row === 'button' ? { type: 'button' as const, onClick: open, title: doc.absolutePath ?? undefined } : {})}
+        className={`w-full flex items-baseline gap-2 py-1 text-left min-w-0 ${Row === 'button' ? 'rounded hover:bg-[var(--color-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
+      >
+        <span aria-hidden="true" className={`material-symbols-outlined text-[16px] leading-none self-center shrink-0 ${there ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}>
+          {meta.icon}
+        </span>
+        <span className={`shrink-0 font-mono text-[12.5px] ${there ? 'text-[var(--color-text)]' : 'text-[var(--color-text-dim)]'}`}>{doc.name}</span>
+        <span className={`min-w-0 truncate text-[12.5px] ${there ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}>
+          {there ? purpose : (doc.reason ?? tf(t, 'chat.turn.summary.missing', 'not produced'))}
+        </span>
+        {there && stat && <span data-testid="summary-review-stat" className="ml-auto pl-2 shrink-0 text-[12px] text-[var(--color-text-muted)] tabular-nums">{stat}</span>}
+      </Row>
+    </li>
+  );
+}
+
+export function PipelineSummaryCard({ block }: { block: PipelineSummaryContent }) {
+  const { t } = useTranslation();
+  const ready = block.pushReady;
+  const verdict = ready === true
+    ? tf(t, 'chat.turn.summary.ready', 'Done · ready to push')
+    : ready === false
+      ? tf(t, 'chat.turn.summary.notReady', 'Done · not ready to push')
+      : tf(t, 'chat.turn.summary.done', 'Done');
+  return (
+    <section data-testid="pipeline-summary" aria-label={tf(t, 'chat.turn.summary.title', 'Pipeline execution summary')}>
+      <div className={`mb-1 ${LABEL}`}>{tf(t, 'chat.turn.summary.title', 'Pipeline execution summary')}</div>
+      <div data-testid="summary-verdict" className={`text-[14px] font-medium ${ready === false ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--color-text)]'}`}>
+        {verdict}
+        {ready === false && block.pushReason && <span className={`ml-1.5 font-normal ${DIM}`}>{block.pushReason}</span>}
+      </div>
+      <ul className="mt-1.5">
+        {block.docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}
       </ul>
     </section>
   );

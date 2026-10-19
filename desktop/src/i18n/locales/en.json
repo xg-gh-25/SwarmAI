@@ -270,7 +270,8 @@
         "ariaRunning": "Pipeline stage {{stage}} in progress",
         "position": "stage {{position}} of {{total}}",
         "round": "round {{n}}",
-        "earlier": "done earlier"
+        "earlier": "done earlier",
+        "openDoc": "Open {{name}} in Canvas"
       },
       "failedOne": "failed",
       "result": "Result",
@@ -310,7 +311,21 @@
       "explored": "Explored",
       "showCommand": "Show the command",
       "thought": "Thought",
-      "times": "×{{count}}"
+      "times": "×{{count}}",
+      "summary": {
+        "title": "Pipeline execution summary",
+        "ready": "Done · ready to push",
+        "notReady": "Done · not ready to push",
+        "done": "Done",
+        "missing": "not produced",
+        "reviewStat": "{{experts}} experts · {{findings}} findings · {{settled}} settled",
+        "doc": {
+          "requirements": "Requirements · root cause · clarifications",
+          "design": "Approach · architecture & flow · invariants",
+          "review": "Gates · expert reviews · how each finding was settled",
+          "report": "Full run report"
+        }
+      }
     },
     "nextSteps": {
       "label": "Next steps",

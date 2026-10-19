@@ -353,6 +353,43 @@ export interface PipelineStageContent {
   summary: string | null;
   /** ISO time of the transition (an `in_progress` block: when the stage started). */
   at: string;
+  /** The run document this stage wrote (REQUIREMENTS / DESIGN_SPEC / REVIEW,
+   *  backend/core/run_docs.py) — on a completed row only. */
+  doc?: PipelineDocRef | null;
+}
+
+/** A run document on disk: `path` workspace-relative, `absolutePath` to open it. */
+export interface PipelineDocRef {
+  name: string;
+  path: string;
+  absolutePath: string;
+}
+
+/** One of a finished run's four documents (pipeline_stage_events.summary_block). */
+export interface PipelineSummaryDoc {
+  name: string;
+  purpose: string | null;
+  path: string | null;
+  absolutePath: string | null;
+  /** The run's profile produces it (research has no design spec). */
+  required: boolean;
+  /** Why it is not there: skipped by the profile / stage, or missing. */
+  reason: string | null;
+  /** REVIEW.md only: experts, findings, findings settled. */
+  stat?: { experts: number; findings: number; settled: number };
+}
+
+/** A pipeline run's execution summary — written by the BACKEND once, when run.json
+ *  turns completed: push-readiness and the run's four documents. */
+export interface PipelineSummaryContent {
+  type: 'pipeline_summary';
+  runId: string;
+  profile: string | null;
+  pushReady: boolean | null;
+  pushReason: string | null;
+  stagesDone: number;
+  docs: PipelineSummaryDoc[];
+  at: string;
 }
 
 /**
@@ -409,7 +446,7 @@ export interface TurnDeliverablesContent {
 }
 
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
-  | PipelineRunContent | PipelineAttentionContent | TurnDeliverablesContent;
+  | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent;
 
 export interface Message {
   id: string;
