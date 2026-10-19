@@ -1732,3 +1732,49 @@ def test_a_heavy_continuation_file_spreads_over_workers():
     assert len(bins) >= 4
     got = [a for _, args in bins for a in args]
     assert sorted(got) == sorted(pt._backend_rel(n) for n in ids)  # each test exactly once
+
+
+def test_goal_runs_stop_at_the_tdd_ceiling(tmp_path):
+    tdir = tmp_path / "tests"
+    tdir.mkdir()
+    rows = [{"kind": "run", "mode": "tdd"}] * pt.GOAL_TDD_MAX
+    (tdir / pt.RUN_INDEX).write_text(json.dumps(rows))
+    tripped = pt._circuit_breaker_check(tmp_path, "tdd", "goal")
+    assert tripped and "dod_met" in tripped["error"] + tripped["action"]
+    assert pt._circuit_breaker_check(tmp_path, "tdd", "full") is None  # only goal runs
+    (tdir / pt.RUN_INDEX).write_text(json.dumps(rows[:-1]))
+    assert pt._circuit_breaker_check(tmp_path, "tdd", "goal") is None
+
+
+def test_bvt_files_are_reused_across_runs_until_their_closure_changes(rig, tmp_path, capsys):
+    repo = rig({"backend/tests/test_bvt_two.py": "def test_ok():\n    assert True\n",
+                "backend/tests/bvt_manifest.txt": "test_bvt_two.py\n"},
+               run_state={"files_touched": ["backend/core/mod.py"]})
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"})
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert not ev.get("bvt_reused"), ev.get("warnings")
+    assert list((tmp_path / "cache" / "bvt").glob("*.json"))
+    # a different change (new inputs, new whole-run key): the BVT file is reused
+    _write(repo, {"backend/core/mod.py": "def add(a, b):\n    return a + b\n"})
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    ev = _evidence(tmp_path, "tests/latest-regression.json")
+    assert ev.get("bvt_reused") == ["backend/tests/test_bvt_two.py"], ev.get("warnings")
+    assert "backend/tests/test_bvt_two.py::test_ok" in {r["nodeid"] for r in ev["results"]}
+    # the BVT file itself changes: it runs again
+    _write(repo, {"backend/tests/test_bvt_two.py": "def test_ok():\n    assert 1\n"})
+    _run(capsys, "--run-id", RUN_ID, "--mode", "regression")
+    assert not _evidence(tmp_path, "tests/latest-regression.json").get("bvt_reused")
+
+
+def test_a_long_prefix_continuation_is_listed_context_unverified():
+    class C:  # minimal ctx
+        durations = {"backend/tests/test_l.py::test_a": 100.0}
+        warnings: list = []
+    plan = {"targets": {"backend/tests/test_l.py": {"backend/tests/test_l.py::test_b"}}}
+    prev = {"results": [{"nodeid": "backend/tests/test_l.py::test_a", "outcome": "passed"},
+                        {"nodeid": "backend/tests/test_l.py::test_b", "outcome": "timeout"}]}
+    fails = [{"nodeid": "backend/tests/test_l.py::test_b", "deadline": True}]
+    pt._replay_file_context(C(), plan, prev, fails)
+    assert plan["context_unverified"] == ["backend/tests/test_l.py::test_b"]
+    assert not plan.get("ordered")

@@ -78,7 +78,11 @@ commands — `pipeline_test_gate` denies them.
 
 - `regression` runs the CI BVT files (`backend/tests/bvt_manifest.txt`, the list CI's
   backend job reads) in the same call: the run stops at a local commit and never sees CI,
-  so the BVT runs here. Lowest priority, never cut; `continue: true` covers it too.
+  so the BVT runs here. Lowest priority, never cut; `continue: true` covers it too. A BVT
+  file that passed in an earlier run with the same file + import closure is reused across
+  runs (`bvt_reused` in the evidence); CI re-runs it on push.
+- A continued test whose earlier same-file tests record over 45 s runs alone: its pass is
+  listed in `context_unverified` (REPORT §10), never presented as in-context.
 - The runner imports every changed, non-test backend module (zero-infrastructure E2E
   proxy). For desktop changes, `tsc --noEmit` is the load check.
 - Why: catches wiring bugs (circular imports, missing dependencies, wrong relative

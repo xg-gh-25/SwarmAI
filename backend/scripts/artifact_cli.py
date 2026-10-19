@@ -5133,6 +5133,34 @@ def _unverified_gates(run_state: dict, record_in: "dict | None" = None) -> "list
     return out
 
 
+def _final_gate_spawn_errors(run_id: str, cand_run: dict, artifact: "dict | None",
+                             cand_rec: dict, warnings: "list[str]") -> "list[str]":
+    """A goal_cycle that reports its Final Quality Gate ran (``adversarial_review`` in
+    the artifact or the record) needs a completed sub-agent in the goal_cycle stage's
+    own time window — it used to be a boolean the model set (quality audit 2026-10-19).
+    Marker store unreadable → warning (the D7 fail-open contract). Escape: a recorded
+    ``final_gate_unverified_reason`` (accepted, push_ready capped)."""
+    claims = bool((artifact or {}).get("adversarial_review") or cand_rec.get("adversarial_review"))
+    if not claims:
+        return []
+    import time as _time
+    timing = (cand_run.get("stage_timing") or {}).get("goal_cycle") or {}
+    windows = _stage_windows(timing, _time.time() + 60)
+    if not windows:
+        return []
+    done = _spawns_in_windows(run_id, windows)
+    if done is None:
+        warnings.append("goal Final Quality Gate NOT verified: marker store unreadable")
+        return []
+    if done.get("by_expert") or done.get("unattributed"):
+        return []
+    return _gate_unbacked(
+        "final_gate", cand_rec.get("final_gate_unverified_reason"), "", warnings,
+        "E_FINAL_GATE_UNBACKED: goal_cycle reports a Final Quality Gate (adversarial_review) "
+        "but no sub-agent completed in this goal_cycle stage. Spawn the Final Quality Gate "
+        "(final-gate.md) on `git diff <start_commit>..HEAD`, then stage-complete again.")
+
+
 def _gate_unbacked(gate: str, reason, detail: str, warnings: "list[str]", msg: str) -> "list[str]":
     """The error for a verdict no spawn backs — unless the record names why the spawn
     cannot be proven (``<gate>_unverified_reason``: e.g. a session without the audit
@@ -10038,7 +10066,8 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
     skipped = [f for f in ev.get("skipped_for_budget") or [] if isinstance(f, str)]
     smoke = [f for f in skipped if f.startswith("import::")]
     other = [f for f in skipped if not f.startswith("import::")]
-    if not (trans or smoke or other):
+    ctxu = [f for f in ev.get("context_unverified") or [] if isinstance(f, str)]
+    if not (trans or smoke or other or ctxu):
         return None
 
     def names(xs):  # every path, repo-relative: REPORT §10 must show all that did not run
@@ -10049,6 +10078,10 @@ def _untested_for_budget_flag(run_dir: "Path | None", run_id: str) -> "str | Non
                      f"modules and were not run: {names(trans)}")
     if other:
         parts.append(f"{len(other)} selected test file(s) were not run: {names(other)}")
+    if ctxu:
+        parts.append(f"{len(ctxu)} test(s) passed when continued alone, without the earlier "
+                     f"tests of their file (an order dependence on those would not show): "
+                     f"{names(ctxu)}")
     if smoke:
         parts.append(f"{len(smoke)} changed module(s) past the import-smoke cap were not "
                      f"import-checked: {', '.join(m[len('import::'):] for m in smoke)}")
@@ -10217,6 +10250,8 @@ def _validate_stage_candidate(
     if stage in ("evaluate", "build", "goal_cycle"):
         errors += _gate_verdict_spawn_errors(run_id, cand_run, stage, profile, artifact,
                                              cand_rec, warnings, prev_rec)
+    if stage == "goal_cycle":
+        errors += _final_gate_spawn_errors(run_id, cand_run, artifact, cand_rec, warnings)
     if stage == "plan":
         errors += pv.validate_exit_criteria(
             (artifact or {}).get("exit_criteria"), required=not is_relaxed_profile(profile))

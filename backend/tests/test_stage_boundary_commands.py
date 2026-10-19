@@ -1805,3 +1805,18 @@ def test_an_unverified_gate_caps_push_ready():
                                               "gate1_unverified_reason": "short"}]}) == []
     assert cli._unverified_gates({"stages": []}, {"gate2_findings_unverified_reason":
                                                   "no audit hook here"}) == ["deliver:gate2_findings"]
+
+
+def test_a_goal_final_gate_needs_a_completed_sub_agent(monkeypatch):
+    monkeypatch.setattr(cli, "_spawns_in_windows",
+                        lambda rid, w: {"by_expert": {}, "unattributed": 0})
+    run = {"stage_timing": {"goal_cycle": {"started_at": "2026-01-01T00:00:00+00:00"}}}
+    w: list = []
+    errs = cli._final_gate_spawn_errors("r", run, {"adversarial_review": {"findings": []}}, {}, w)
+    assert errs and errs[0].startswith("E_FINAL_GATE_UNBACKED")
+    assert cli._final_gate_spawn_errors("r", run, {"dod_met": True}, {}, w) == []  # no claim
+    monkeypatch.setattr(cli, "_spawns_in_windows",
+                        lambda rid, w: {"by_expert": {"final-gate": 1}})
+    assert cli._final_gate_spawn_errors("r", run, {"adversarial_review": True}, {}, w) == []
+    monkeypatch.setattr(cli, "_spawns_in_windows", lambda rid, w: None)  # store unreadable
+    assert cli._final_gate_spawn_errors("r", run, {"adversarial_review": True}, {}, w) == []

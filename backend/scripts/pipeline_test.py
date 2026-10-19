@@ -156,6 +156,9 @@ TEST_MODES = ("tdd", "verify", "regression", "recheck")
 # running = not making progress". Operator override: SWARM_CIRCUIT_BREAKER_FORCE=1.
 CIRCUIT_MAX_ROUNDS = 25    # total verify/recheck/regression runs in one run_id -> abort
 CIRCUIT_STALL_ROUNDS = 4   # consecutive verify/recheck runs with the SAME blocking set -> abort
+# goal profile: the cycle loop's stop rules are code, not card prose (run_a2f2c171 ran 236
+# tdd calls / 232 min). tdd is the per-cycle RED/GREEN step, so its count bounds the loop.
+GOAL_TDD_MAX = 80
 ALL_MODES = TEST_MODES + ("probe", "mutation")
 TDD_MAX_FILES = 5
 SMOKE_CAP = 40
@@ -2946,15 +2949,26 @@ def _breaker_result(mode: str, reason: str) -> dict:
                        "Operator override only: SWARM_CIRCUIT_BREAKER_FORCE=1")}
 
 
-def _circuit_breaker_check(ev_root: Path, mode: str) -> dict | None:
+def _circuit_breaker_check(ev_root: Path, mode: str, profile: str = "") -> dict | None:
     """Refuse another verify/recheck/regression when this run is in a non-converging loop
     (prevents run_340478c9's 42-round / ~18h spin). Reads the append-only run_index;
     returns an abort dict (caller exits 2) or None to proceed. tdd is never gated — it is
     the write-tests phase and is expected to repeat. Operator override:
-    SWARM_CIRCUIT_BREAKER_FORCE=1."""
-    if mode not in ("verify", "recheck", "regression"):
-        return None
+    SWARM_CIRCUIT_BREAKER_FORCE=1. A goal run's tdd calls are bounded too
+    (GOAL_TDD_MAX): the goal loop's stop rule, enforced here instead of by the card."""
     if os.environ.get("SWARM_CIRCUIT_BREAKER_FORCE") == "1":
+        return None
+    if mode == "tdd" and profile == "goal":
+        idx = _read_json(ev_root / "tests" / RUN_INDEX)
+        n = sum(1 for e in idx if isinstance(e, dict) and e.get("mode") == "tdd") \
+            if isinstance(idx, list) else 0
+        if n >= GOAL_TDD_MAX:
+            return _breaker_result(
+                mode, f"{n} tdd calls in this goal run (limit {GOAL_TDD_MAX}): the cycle loop "
+                "is not converging — exit UNMET (stage-complete goal_cycle with dod_met "
+                "false and what is left), then DELIVER")
+        return None
+    if mode not in ("verify", "recheck", "regression"):
         return None
     idx = _read_json(ev_root / "tests" / RUN_INDEX)
     if not isinstance(idx, list):
@@ -3177,8 +3191,51 @@ REUSE_MODES = ("verify", "regression")
 _REUSABLE_OUTCOMES = ("passed", "skipped")
 
 
+def _bvt_keys(ctx, files: list[str], sgraph: dict | None) -> dict[str, str]:
+    """BVT file → cross-run key: runner version, interpreter, pytest configs, the file, its
+    conftest chain and their transitive backend-local imports — NOT HEAD and not the run's
+    changed set, so a pass carries over to the next run while none of those inputs moved.
+    Only for the CI BVT manifest (pure OS-layer logic tests, CI re-runs them on push);
+    an edit to anything in a file's closure changes its key and it runs again."""
+    return _l2_file_keys(ctx, files, [], sgraph, None, cross_run=True)
+
+
+def _bvt_cache_reuse(ctx, plan: dict, sgraph: dict | None) -> "tuple[dict, dict]":
+    """(file → cached evidence results, file → key) for this regression's BVT files."""
+    files = [f for f in plan.get("bvt") or [] if plan["targets"].get(f, 0) is None]
+    if not files:
+        return {}, {}
+    keys = _bvt_keys(ctx, files, sgraph)
+    out = {}
+    for f, k in keys.items():
+        hit = _read_json(ctx.cache / "bvt" / f"{k}.json")
+        if isinstance(hit, list) and any(isinstance(r, dict) and r.get("outcome") == "passed"
+                                         for r in hit) and all(
+                isinstance(r, dict) and r.get("outcome") in _REUSABLE_OUTCOMES for r in hit):
+            out[f] = [dict(r) for r in hit]
+    return out, keys
+
+
+def _bvt_cache_store(ctx, ev: dict, keys: dict, reused: dict) -> None:
+    """Cache each BVT file whose every result in ``ev`` passed / skipped (run here)."""
+    by_file: dict[str, list[dict]] = {}
+    for r in ev.get("results") or []:
+        if isinstance(r, dict) and isinstance(r.get("nodeid"), str):
+            by_file.setdefault(_rfile(r), []).append(r)
+    for f, k in keys.items():
+        rs = by_file.get(f)
+        if f in reused or not rs or not any(r.get("outcome") == "passed" for r in rs) \
+                or not all(r.get("outcome") in _REUSABLE_OUTCOMES for r in rs):
+            continue
+        try:
+            (ctx.cache / "bvt").mkdir(parents=True, exist_ok=True)
+            _write_json(ctx.cache / "bvt" / f"{k}.json", rs)
+        except OSError:
+            pass
+
+
 def _l2_file_keys(ctx, files, changed: list[str], sgraph: dict | None,
-                  head: str | None) -> dict[str, str]:
+                  head: str | None, cross_run: bool = False) -> dict[str, str]:
     """test file → digest of every input a WHOLE-file result of it depends on.
 
     Runner version, interpreter, HEAD, pytest configs, the file, its conftest chain and
@@ -3199,7 +3256,7 @@ def _l2_file_keys(ctx, files, changed: list[str], sgraph: dict | None,
         return digests[rel]
 
     common = hashlib.sha256("\0".join([RUNNER_VERSION, _python_id(ctx.python),
-                                       head or "none"]).encode())
+                                       "bvt-cross-run" if cross_run else (head or "none")]).encode())
     for p in sorted(set(changed) | set(_PYTEST_CONFIGS)):
         common.update(p.encode() + b"\0" + digest(p).encode() + b"\0")
     out: dict[str, str] = {}
@@ -3357,7 +3414,7 @@ def _probe_rows(ctx, ev_root: Path, refs: list[str], changed: list[str]) -> list
     return rows
 
 
-CONTEXT_REPLAY_MAX_S = 20.0  # recorded seconds of earlier same-file tests a continuation replays
+CONTEXT_REPLAY_MAX_S = 45.0  # recorded seconds of earlier same-file tests a continuation replays
 
 
 def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> None:
@@ -3366,8 +3423,8 @@ def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> No
     test's leftovers would pass here (red-team 2026-10-19). So, per file, replay the
     tests that already passed earlier in it, then the unfinished ones, as ONE ordered
     job, when that prefix costs at most CONTEXT_REPLAY_MAX_S recorded seconds. A
-    longer prefix is not replayed (it would eat the call and never finish) and the
-    tests run alone, named in a warning so the evidence says so."""
+    longer prefix is not replayed (it would eat the call and never finish): the tests
+    run alone and are listed in the evidence's ``context_unverified`` (REPORT §10)."""
     unfinished: dict[str, list[str]] = {}
     for f in prev_failures:
         n = str(f.get("nodeid") or "")
@@ -3389,6 +3446,8 @@ def _replay_file_context(ctx, plan: dict, prev: dict, prev_failures: list) -> No
         cost = sum(ctx.durations.get(n, DEFAULT_TEST_COST_S) for n in pre)
         if cost > CONTEXT_REPLAY_MAX_S or len(pre) + len(ids) > PREFIX_KEEP_ARGS:
             alone += len(ids)
+            # their pass is real but not in-file-context: listed (REPORT §10), never hidden
+            plan.setdefault("context_unverified", []).extend(ids)
             continue
         sel = plan["targets"].get(file)
         if isinstance(sel, (set, list)):
@@ -3639,6 +3698,9 @@ def _overlay_evidence(repo: Path, base: dict, re_ev: dict, ac_entries: list,
     if base.get("mode") == "regression" and ac_entries:
         layers["ac_driven"] = _ac_layer(repo, ac_entries, results)
     ev = dict(base)
+    cu = sorted(set(base.get("context_unverified") or []) | set(re_ev.get("context_unverified") or []))
+    if cu:
+        ev["context_unverified"] = cu
     # The tree the merged evidence describes is the RECHECK's: it re-selected tests for
     # every file changed since the base (an overlay with budget skips is never made), so
     # its file digests, HEAD and tree digest are the ones staleness checks must compare.
@@ -3700,7 +3762,8 @@ def _ref_nodeids(repo: Path, project: str, run_state: dict, ac_entries: list) ->
 def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> tuple[dict, int]:
     started_at = _now_iso()
     if ns.run_id:
-        tripped = _circuit_breaker_check(ev_root, ns.mode)
+        tripped = _circuit_breaker_check(ev_root, ns.mode,
+                                         str(run_state.get("profile") or "").strip().lower())
         if tripped is not None:
             return tripped, 2
     sgraph = build_source_graph(ctx.repo, ctx.cache)
@@ -3770,6 +3833,15 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
                 + ", ".join(f"{s['mode']} {s['finished_at']}" for s in sources)
                 + ": nothing they import or may read changed since; not re-run")
     plan["l2_file_keys"] = keys
+    bvt_keys: dict = {}
+    if ns.mode == "regression" and plan.get("bvt"):
+        bvt_hit, bvt_keys = _bvt_cache_reuse(ctx, plan, sgraph)
+        if bvt_hit:
+            reused.update(bvt_hit)
+            ctx.warnings.append(
+                f"reused {len(bvt_hit)} CI BVT file(s) that passed in an earlier run with the "
+                "same file + import closure (cross-run cache); CI re-runs them on push")
+            plan["bvt_reused"] = sorted(bvt_hit)
     run_targets = {f: v for f, v in targets.items() if f not in reused}
     # Machine-wide worker tokens: this call runs only as many workers as it holds, so
     # concurrent runs share the cores instead of oversubscribing them.
@@ -3824,6 +3896,10 @@ def _run_test_mode(ctx, ns, ev_root: Path, run_state: dict, deadline: float) -> 
     results += [{**r, "_reused": True} for f in reused for r in reused[f]]
     ev = _assemble(ctx, ns, plan, results, cls, started_at, repeats, key)
     ev.update(head_sha=head, tree_digest=tree)
+    if bvt_keys:
+        _bvt_cache_store(ctx, ev, bvt_keys, reused)
+        if plan.get("bvt_reused"):
+            ev["bvt_reused"] = plan["bvt_reused"]
     if _cacheable(ev):
         _write_json(cpath, ev)
     wtev = _worktree_evidence(ctx)  # after the cache write: it describes THIS worktree
@@ -3936,6 +4012,8 @@ def _assemble(ctx, ns, plan, results, cls, started_at, repeats, key) -> dict:
           "skipped_for_budget": plan["skipped"], "counts": counts,
           "transitive_unrun": list(plan.get("transitive_unrun") or []),
           **({"bvt_files": list(plan["bvt"])} if plan.get("bvt") else {}),
+          **({"context_unverified": sorted(set(plan["context_unverified"]))}
+             if plan.get("context_unverified") else {}),
           "results": [{k: v for k, v in r.items() if k != "_reused"} if r.get("_reused")
                       else {**_evidence_result(r, refs),
                             **({"requeued": True} if r.get("requeued") else {})}

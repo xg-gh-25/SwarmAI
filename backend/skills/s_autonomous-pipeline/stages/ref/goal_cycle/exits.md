@@ -34,7 +34,10 @@ Attempt 2:
 - **Revert Check**: 2 consecutive cycles ended in revert → REVERT_LIMIT (conflicting
   constraints).
 - **max_cycles** reached without DoD met → UNMET.
-- Retries exhausted / circuit breaker → UNMET.
+- Retries exhausted / circuit breaker → UNMET. Code-enforced: the runner refuses a goal
+  run's tdd call past `GOAL_TDD_MAX` (80) and any verify/recheck past the round and stall
+  limits; goal_cycle stage-complete refuses a claimed Final Quality Gate that no completed
+  sub-agent backs (`E_FINAL_GATE_UNBACKED`).
 Every non-SUCCESS exit continues to DELIVER (stage-complete goal_cycle with `dod_met: false`;
 it completes degraded after 3 refusals) and DELIVER records `push_ready: false` with the exit
 and what is left: a marked local commit, never a checkpoint or a hand-off.
