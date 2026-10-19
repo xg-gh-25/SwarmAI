@@ -104,11 +104,8 @@ describe('deriveTurnView — landmarks, interrupts, live states, failures', () =
     expect(view.units.map((u) => u.kind)).toEqual(['process', 'interrupt', 'process', 'interrupt']);
   });
 
-  it('empty content while streaming yields ONE live process row (pre-content indicator, AC10)', () => {
-    const view = deriveTurnView([], true);
-    expect(view.units).toHaveLength(1);
-    const p = view.units[0];
-    expect(p.kind === 'process' && p.isLive && p.steps.length).toBe(0);
+  it('empty content while streaming yields no unit: the streaming bee is the pre-content indicator', () => {
+    expect(deriveTurnView([], true).units).toHaveLength(0);
     expect(deriveTurnView([], false).units).toHaveLength(0);
   });
 

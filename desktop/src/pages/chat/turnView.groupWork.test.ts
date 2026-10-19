@@ -71,10 +71,43 @@ describe('groupWork — one block between first-level items', () => {
     expect(shape(groupWork(v.units, false, { exclude: note }))).toEqual(['note', 'G(tp1)', 'outcome']);
   });
 
-  it('while streaming (mergeLead false) the thought before the restatement keeps its place above it', () => {
+  it('while streaming the thought before the restatement joins the work after it too: never a block above it', () => {
     const v = deriveTurnView([th('plan'), tx('I read it as: fix the cache.'), tu('a', 'Running: ls')], true);
     const note = v.units.find((u) => u.kind === 'note')!;
-    expect(shape(groupWork(v.units, true, { exclude: note, mergeLead: false }))).toEqual(['G(t)', 'note', 'G(p1)']);
+    expect(shape(groupWork(v.units, true, { exclude: note, top: true, hideLead: true }))).toEqual(['note', 'G(tp1)']);
+  });
+
+  it('think → restate → ask → work: the thought joins the work after the question, live and settled alike', () => {
+    const ask = { type: 'ask_user_question', toolUseId: 'q1', questions: [{ question: 'Q?', header: 'h', options: [], multiSelect: false }] } as ContentBlock;
+    const blocks = [th('plan'), tx('I read it as: fix the cache.'), ask, tu('a', 'Running: ls')];
+    for (const streaming of [true, false]) {
+      const v = deriveTurnView(streaming ? blocks : [...blocks, tr('a'), tx('done')], streaming);
+      const note = v.units.find((u) => u.kind === 'note')!;
+      const items = groupWork(v.units, streaming, { exclude: note, top: true, hideLead: streaming });
+      expect(shape(items).slice(0, 3)).toEqual(['note', 'interrupt', 'G(tp1)']);
+    }
+    // no restatement: think → ask → work, the same
+    const v = deriveTurnView([th('plan'), ask, tu('a', 'Running: ls')], true);
+    expect(shape(groupWork(v.units, true, { top: true, hideLead: true }))).toEqual(['interrupt', 'G(tp1)']);
+  });
+
+  it('a stage body keeps a thought before a question where it is (top is off)', () => {
+    const ask = { type: 'ask_user_question', toolUseId: 'q1', questions: [{ question: 'Q?', header: 'h', options: [], multiSelect: false }] } as ContentBlock;
+    const v = deriveTurnView([th('plan'), ask, tu('a', 'Running: ls')], true);
+    expect(shape(groupWork(v.units, true))).toEqual(['G(t)', 'interrupt', 'G(p1)']);
+  });
+
+  it('while streaming, a leading block of thoughts with no work to join yet is not shown (hideLead)', () => {
+    const thinking = deriveTurnView([th('plan')], true);
+    expect(groupWork(thinking.units, true, { top: true, hideLead: true })).toEqual([]);
+    const restating = deriveTurnView([th('plan'), tx('I read it as: fix the cache.')], true);
+    expect(shape(groupWork(restating.units, true, { top: true, hideLead: true }))).toEqual(['outcome']);
+    // settled: a turn that only thought, then answered, shows its thought block
+    const answered = deriveTurnView([th('plan'), tx('the answer')], false);
+    expect(shape(groupWork(answered.units, false))).toEqual(['G(t)', 'outcome']);
+    // a thought after the work is not a lead block: it stays
+    const later = deriveTurnView([tu('a', 'Running: ls'), tr('a'), th('hm')], true);
+    expect(shape(groupWork(later.units, true, { top: true, hideLead: true }))).toEqual(['G(p1t)']);
   });
 });
 
@@ -176,6 +209,7 @@ describe('groupWork — live and stable ids', () => {
     const items = groupWork(deriveTurnView([tu('a', 'Running: ls'), tr('a'), stage], true).units, true);
     const last = items[items.length - 1];
     expect(last.kind === 'group' && last.live && !last.hasTools).toBe(true);
-    expect(groupWork([], true)).toHaveLength(1);
+    // nothing at all yet: no card — the streaming bee is the turn's one spinner
+    expect(groupWork([], true)).toHaveLength(0);
   });
 });

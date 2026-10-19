@@ -314,8 +314,21 @@ export function deriveTurnView(
   };
 
   let run: PipelineRunContent | undefined;
+  // A direct run (profile `direct`: a code change made outside the pipeline, in its own
+  // worktree) is not a pipeline: its stage and run blocks do not make this a pipeline
+  // turn, so it shows as a chat turn (XG 2026-10-19). The run's latest profile decides:
+  // a run moved up to a pipeline profile shows as one from then on.
+  const runProfile = new Map<string, string>();
+  for (const b of content) {
+    if ((b.type === 'pipeline_stage' || b.type === 'pipeline_run') && typeof b.profile === 'string') {
+      runProfile.set(b.runId, b.profile.toLowerCase());
+    }
+  }
+  const isRunBlock = (b: ContentBlock): b is PipelineStageContent | PipelineRunContent =>
+    b.type === 'pipeline_stage' || b.type === 'pipeline_run';
+  const isPipelineBlock = (b: ContentBlock) => isRunBlock(b) && runProfile.get(b.runId) !== 'direct';
   // A pipeline turn: its stage headings are said by the backend rows (stripStageHeading).
-  const pipelineTurn = content.some((b) => b.type === 'pipeline_stage' || b.type === 'pipeline_run');
+  const pipelineTurn = content.some(isPipelineBlock);
   let thoughts = 0;
   let texts = 0;
   let attention: PipelineAttentionContent | undefined;
@@ -325,6 +338,7 @@ export function deriveTurnView(
   content.forEach((block, index) => {
     if (block.type === 'tool_result') return; // consumed by its tool_use
     if (isSubAgentBlock(block)) return; // nested under its Agent step below
+    if (isRunBlock(block) && !isPipelineBlock(block)) return; // a direct run (above)
     if (block.type === 'pipeline_run') {
       // …unless the turn itself starts that stage (the block is written from the state
       // AFTER the call that announced it, so `current` may be a stage this very call
@@ -467,11 +481,11 @@ export function deriveTurnView(
   if (isStreaming) {
     let last = units[units.length - 1];
     // A thought still streaming is itself the live item (it carries the spinner).
+    // Nothing yet: no live row — the streaming bee is the turn's one spinner, and the
+    // first thing on screen is what the agent says, never an empty "Working" card.
     if (last?.kind === 'thought') {
       last.live = true;
-    } else if (!last) {
-      units.push({ kind: 'process', id: 'seg-live', steps: [], isLive: true, live: {} });
-    } else if (last.kind === 'stage' || last.kind === 'note') {
+    } else if (last && (last.kind === 'stage' || last.kind === 'note')) {
       // A stage just finished (or the model just wrote a note) and nothing has
       // run yet: still show a live row, so the user sees work continuing and the
       // stage now running is named immediately.
@@ -1088,9 +1102,13 @@ export interface GroupWorkOptions {
    *  moved into the first stage once the turn settles): they do not count for the
    *  block's id, so the block keeps the id it streamed with. */
   joined?: ReadonlySet<TurnUnit>;
-  /** Merge thoughts-only blocks right before `exclude` into the next block (default
-   *  true). False while the turn streams. */
-  mergeLead?: boolean;
+  /** The turn's top level: the leading thoughts-only blocks join the turn's first
+   *  block of work, across the restatement and questions (never across a stage row
+   *  or the answer). Not for a stage body, where a thought keeps its place. */
+  top?: boolean;
+  /** With `top`, until the turn has settled: leading thoughts-only blocks with no
+   *  work to join yet are not shown (the first level opens with what the agent says). */
+  hideLead?: boolean;
   /** While streaming, a block with tool calls right before the answer-so-far (the
    *  last unit, an outcome) stays live — open, not folding. The answer stays first
    *  level so the final answer never moves when the turn ends; if a tool call
@@ -1138,16 +1156,45 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
     g.id = `grp-${key}`;
   }
   // Thoughts the model had before writing its restatement belong with the work they
-  // led to, not in a block of their own above it. Only once the turn
-  // is over (`mergeLead`): while it streams, the restatement is the answer-so-far until
-  // a tool call arrives, so moving the thought then would move it under the reader.
-  for (let i = 0; opts.mergeLead !== false && i + 2 < out.length; i += 1) {
+  // led to, never in a block of their own above it: the restatement leads the turn
+  // (design-judgment Surface 6 #7). They join the first block after it, live and
+  // settled alike — while the turn streams they are not shown until that block exists
+  // (`hideLead`, below), so they never stand above the restatement and then move.
+  for (let i = 0; i + 2 < out.length; i += 1) {
     const g = out[i];
     const next = out[i + 2];
     if (g.kind === 'group' && out[i + 1] === opts.exclude && next.kind === 'group'
       && g.members.every((m) => m.kind === 'thought')) {
       next.members.unshift(...g.members);
       out.splice(i, 1);
+    }
+  }
+  // The turn's top level: thoughts-only blocks at its start join the first block of
+  // work, wherever it comes — after the restatement, after a question the agent asked
+  // first — so a thought block never stands above the restatement or a question,
+  // live or settled (the same rule both ways: nothing moves at the settle). The scan
+  // stops at anything else (a stage row, the answer): no work to join. Then, until
+  // the turn has settled (`hideLead`), those blocks are not shown: the streaming bee
+  // says the turn is running, and the first thing on screen is what the agent says,
+  // never a "Working · Thinking" card. Once settled they show — only in a turn with
+  // no work (it thought, then answered), as one folded "Thought" line above the
+  // answer: the first text cannot be told apart from a restatement until a tool call
+  // comes, and keeping the restatement still is the case that matters (the common one).
+  if (opts.top) {
+    const leads: WorkGroup[] = [];
+    let target: WorkGroup | undefined;
+    for (const it of out) {
+      if (it.kind === 'group') {
+        if (it.members.every((m) => m.kind === 'thought')) { leads.push(it); continue; }
+        target = it;
+        break;
+      }
+      if (it === opts.exclude || it.kind === 'interrupt') continue;
+      break;
+    }
+    if (leads.length && (target || opts.hideLead)) {
+      if (target) target.members.unshift(...leads.flatMap((g) => g.members));
+      for (const g of leads) out.splice(out.indexOf(g), 1);
     }
   }
   const last = out[out.length - 1];
@@ -1159,9 +1206,10 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
     // spinner) until the turn ends or the next tool call joins it.
     beforeLast.live = true;
   }
-  else if (isStreaming && (!last || last.kind === 'stage')) {
-    // Streaming, and nothing has started since a stage row (or nothing at all yet):
-    // an empty WORKING card holds the turn's one spinner until the next item lands.
+  else if (isStreaming && last?.kind === 'stage') {
+    // Streaming, and nothing has started since a stage row: an empty WORKING card
+    // holds the stage's spinner until the next item lands. (Nothing at all yet: no
+    // card — the streaming bee is the turn's one spinner.)
     const id = `lead-${last ? last.index : 0}`;
     const placeholder: ProcessUnit = { kind: 'process', id, steps: [], isLive: true, live: {} };
     out.push({ kind: 'group', id: `grp-${id}`, members: [placeholder], live: true, hasTools: false });
@@ -1187,7 +1235,8 @@ export function groupWork(units: TurnUnit[], isStreaming: boolean, opts: GroupWo
 // the stage / gate rows laid onto the run's checklist), RESULT. So notes before the
 // first stage go into the first stage — the leading text stays at the top: it is the
 // restatement — and so do thoughts before the work, once the turn has settled
-// (`keepLeadThoughts` holds them where they streamed until then). Once the turn is
+// (`keepLeadThoughts` holds them at the top until then, where groupWork's `hideLead`
+// does not show them: never a block above the restatement). Once the turn is
 // over the work after the last row stays under it; only the trailing answer (the
 // result) stays at the top.
 //
@@ -1296,8 +1345,8 @@ export function sectionUnits(
   let buffer: TurnUnit[] = [];
   let i = 0;
   // Before any work: the restatement stays at the top; thoughts go to the first stage
-  // — except while the turn streams and settles (`keepLeadThoughts`): they stay where
-  // they streamed, above the restatement, and join the work when it folds.
+  // — except while the turn streams and settles (`keepLeadThoughts`): they stay at the
+  // top (not shown there, groupWork `hideLead`) and join the first stage at the settle.
   while (i < units.length && units[i].kind !== 'process' && units[i].kind !== 'stage') {
     const u = units[i];
     if (u.kind === 'thought' ? !opts.keepLeadThoughts : !keepLeadText) buffer.push(u);

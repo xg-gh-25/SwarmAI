@@ -109,7 +109,9 @@ describe('turn replay — a plain turn', () => {
   it('streaming: nothing vanishes and nothing remounts', () => {
     const r = replay(plain());
     expect(r.violations.join(' ; ')).toBe('');
-    for (const m of ['tokRESTATE', 'tokT0', 'tokT1', 'tokR1', 'tokS1', 'tokM1', 'tokN1', 'tokT2', 'tokANS']) expect(r.final.has(m)).toBe(true);
+    // tokT0 (the thought before the restatement) is not first level: it is the work
+    // block's first item, a settled one-line "Thought" by the time that block exists
+    for (const m of ['tokRESTATE', 'tokT1', 'tokR1', 'tokS1', 'tokM1', 'tokN1', 'tokT2', 'tokANS']) expect(r.final.has(m)).toBe(true);
   });
 
   it('the reconcile keeps everything for FOLD_DELAY_MS, then the work folds and the answer stays', () => {
@@ -170,7 +172,7 @@ describe('turn replay — the stored copy, a tab switch, a reconnect', () => {
       const half = Math.floor(blocks.length / 2);
       const r = replay(blocks.slice(0, half));
       const before = marks(r.container);
-      expect(before.size).toBeGreaterThan(2);
+      expect(before.size).toBeGreaterThan(1);
       r.rerender(view(stored(blocks.slice(0, half)), true));
       expect([...before].filter((m) => !marks(r.container).has(m))).toEqual([]);
     });

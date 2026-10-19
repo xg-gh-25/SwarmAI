@@ -74,21 +74,40 @@ describe('how the ask was read: the restatement, plain text (chat display v8)', 
     expect(openThought()).toBe('plan');
   });
 
-  it('streaming think → restate → first tool: the thought never moves', () => {
+  it('streaming think → restate → first tool: the restatement leads, the thought is in the work below it', () => {
     const { rerender } = render(viewOf([th('plan')], true));
+    // nothing but the bee: no "Working · Thinking" card at the top of the turn
+    expect(screen.queryByTestId('work-group')).toBeNull();
     rerender(viewOf([th('plan'), tx('I read it as: fix the cache.')], true));
-    const follows = () => {
-      const thought = screen.getByTestId('thought');
-      const text = screen.getByText('I read it as: fix the cache.');
-      // DOCUMENT_POSITION_FOLLOWING (4): the text comes after the thought
-      return !!(thought.compareDocumentPosition(text) & 4);
-    };
-    expect(follows()).toBe(true);
-    const before = screen.getByTestId('thought');
+    expect(screen.queryByTestId('work-group')).toBeNull();
+    const text = screen.getByText('I read it as: fix the cache.');
     rerender(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a')], true));
-    expect(follows()).toBe(true);
-    expect(screen.getByTestId('thought')).toBe(before); // same node: no remount
+    expect(screen.getByText('I read it as: fix the cache.')).toBe(text); // the text never moved
     expect(screen.getByTestId('turn-restatement').textContent).toContain('I read it as');
+    const group = screen.getByTestId('work-group');
+    const thought = within(group).getByTestId('thought');
+    // DOCUMENT_POSITION_FOLLOWING (4): the thought comes after the restatement
+    expect(!!(screen.getByTestId('turn-restatement').compareDocumentPosition(thought) & 4)).toBe(true);
+    rerender(viewOf([th('plan'), tx('I read it as: fix the cache.'), tu('a'), tr('a'), tu('b', 'Running: make x')], true));
+    expect(screen.getByTestId('work-group')).toBe(group); // same block: no remount
+  });
+
+  it('a direct run is not a pipeline: no pipeline block, the turn reads as a chat turn (XG 2026-10-19)', () => {
+    const direct = { ...RUN, profile: 'direct' } as ContentBlock;
+    const row = { ...(stage('plan', null) as object), profile: 'direct', status: 'in_progress' } as ContentBlock;
+    render(viewOf([tx('I read it as: fix the cache.'), tu('a'), tr('a'), direct, row, tu('b'), tr('b'), tx('done')]));
+    expect(screen.queryByTestId('pipeline-block')).toBeNull();
+    expect(screen.queryAllByTestId('checklist-line')).toHaveLength(0);
+    expect(screen.getByTestId('turn-restatement').textContent).toContain('I read it as');
+    expect(screen.getByTestId('turn-result').textContent).toContain('done');
+    expect(screen.getAllByTestId('work-group')).toHaveLength(1); // one WORKED block
+  });
+
+  it('a direct run moved up to a pipeline profile shows as a pipeline from then on', () => {
+    const direct = { ...RUN, profile: 'direct' } as ContentBlock;
+    const full = { ...(stage('evaluate', 'think') as object), profile: 'full' } as ContentBlock;
+    render(viewOf([tx('I read it as: fix the cache.'), tu('a'), tr('a'), direct, full, tu('b'), tr('b'), tx('done')]));
+    expect(screen.getByTestId('pipeline-block')).toBeTruthy();
   });
 
   it('a continuation pipeline turn (stage rows, no run block) has no label', () => {

@@ -17,8 +17,12 @@
  *   (`pipelineChecklist` over `sectionUnits`, the stage rows the backend writes from
  *   run.json), each a PipelineStageRow; a stage that ran again is the same line,
  *   its work split by round. The run's stored requirement is never shown
- * - Thoughts written before the restatement stay where they streamed until the turn
- *   has ended and settled (`settling`, FOLD_DELAY_MS), then join the work as it folds
+ * - The first level opens with what the agent says: before any work there is no
+ *   WORKING card (the streaming bee is the one spinner), and thoughts written before
+ *   the restatement never form a block above it (or above a question) — they join the
+ *   turn's first block of work (the first stage, in a pipeline turn, once settled),
+ *   shown once that block exists
+ * - A direct run (profile `direct`) is not a pipeline: the turn shows as a chat turn
  * - Backend cards (TurnCards): "needs your look" right after the Result divider (with
  *   the DELIVER line while the run is going); the turn's products after the outcome
  * - Next-step chips (NextSteps) from a trailing ```next-steps block, last
@@ -314,16 +318,18 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const alignText = hasWork && !midWork
     ? beforeWork.find((u) => u.kind === 'note')
     : undefined;
-  // The thoughts before the restatement join the work they led to — once the turn has
-  // ended AND settled (FOLD_DELAY_MS), so they move in the same moment the work folds,
-  // never under the reader while it is still open.
-  const mergeLead = !isStreaming && !settling;
+  // The thoughts before the restatement join the work they led to: the first block
+  // after it (groupWork). Until the turn has ended AND settled (FOLD_DELAY_MS) a
+  // leading block of thoughts with nothing to join yet is not shown (`hideLead`), so
+  // the restatement leads. In a pipeline turn they stay at the top, unshown, until the
+  // settle, then join the first stage (`keepLeadThoughts`): moving them into a stage
+  // mid-stream would remount them when the run's first row replaces its live row.
+  const hideLead = !!isStreaming || settling;
   // The thoughts before the restatement: once they move into the first stage (a
-  // pipeline turn, after the settle) they do not change the id of the block they join
-  // (groupWork `joined`, stage bodies only — the top level keeps ids by assigning them
-  // before its own lead merge).
-  // Exactly the ones sectionUnits / mergeLead move: thoughts before the first call or
-  // stage row (not a thought inside a stage that has no call yet).
+  // pipeline turn) they do not change the id of the block they join (groupWork
+  // `joined`, stage bodies only — the top level keeps ids by assigning them before its
+  // own lead merge). Exactly the ones sectionUnits moves: thoughts before the first
+  // call or stage row (not a thought inside a stage that has no call yet).
   const leadEnd = view.units.findIndex((u) => u.kind === 'process' || u.kind === 'stage');
   // The view memory's key must survive the stream-end reconcile, which swaps the live
   // bubble's client id for the DB row's id; the row carries the client id in its
@@ -337,7 +343,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const holdLiveAboveAnswer = !!isStreaming;
   // A pipeline turn: the leading restatement stays at the top; everything else is in
   // the ONE pipeline block (thoughts before the first stage go into it).
-  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage, { keepLeadText: true, keepLeadThoughts: !mergeLead });
+  const sections = sectionUnits(view.units, !!isStreaming, view.liveStage, { keepLeadText: true, keepLeadThoughts: hideLead });
   // The live / where-it-stopped section is the last STAGE section: a gate row holds no
   // work (GATE 0 sits after EVALUATE, whose section is still collecting work).
   const isGateSec = (s: (typeof sections)[number]) => s.kind === 'stage' && isGateStage(s.block.stage);
@@ -427,7 +433,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const placed: Placed[] = [];
   let buffer: TurnUnit[] = [];
   const flush = (isLast: boolean) => {
-    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, { exclude: alignText, mergeLead, holdLiveAboveAnswer })));
+    if (buffer.length) placed.push(...renderItems(groupWork(buffer, !!isStreaming && isLast, { exclude: alignText, top: true, hideLead, holdLiveAboveAnswer })));
     buffer = [];
   };
   // A pipeline turn: everything between the leading text and the trailing answer is
@@ -458,7 +464,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     // Inside a stage (a lane item) a question / permission / the answer-so-far is
     // still not process: it is reset to the answer's size and contrast.
     return children.length || liveSec
-      ? renderItems(groupWork(children, liveSec, { exclude: alignText, mergeLead, holdLiveAboveAnswer, joined: leadThoughts }), true).map((x) => (x.lane ? x.el : (
+      ? renderItems(groupWork(children, liveSec, { exclude: alignText, holdLiveAboveAnswer, joined: leadThoughts }), true).map((x) => (x.lane ? x.el : (
         <div key={`full-${x.key}`} className={FULL_CLASS}>{x.el}</div>
       )))
       : [];

@@ -379,7 +379,14 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   first-level items — a thought or a note never becomes a first-level row (that
   fragments the turn into a stack of WORKED lines), and a folded block says its size
   in counts (steps · files changed · commands), never a title borrowed from its first
-  thought (which the body then repeats). **A pipeline turn is ONE special WORKED
+  thought (which the body then repeats). **The first level opens with what the agent
+  says:** before any work there is no WORKING card — the streaming indicator is the
+  turn's one spinner — and thoughts written before the restatement never form a block
+  above it or above a question: they are the first items of the turn's first block of
+  work, shown once that block exists, the same live and settled. A turn with no work
+  (it thought, then answered) shows its one folded "Thought" line above the answer once
+  settled — the one shift accepted, because the first text cannot be told apart from a
+  restatement until a tool call comes, and the restatement must not move. **A pipeline turn is ONE special WORKED
   block whose header is the run's checklist:** every planned stage and gate, in plan
   order, from the first frame the run appears — the list comes from the backend for
   the run's profile (the frontend keeps no gate table), so a line is never inserted;
@@ -392,9 +399,10 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   gate sends it back, a goal loop re-enters) is the SAME line, marked "round N", its
   work split by round — never a second line. A line folds its work and says it in
   counts plus its duration — no file names, no model-written summary; a pending line
-  has nothing to open. Work before the first stage belongs to it — once the turn has
-  settled; while it streams, thoughts written before the restatement stay where they
-  streamed. Work after the last line stays under it, and a resumed turn marks the
+  has nothing to open. Work before the first stage belongs to it; thoughts written
+  before the restatement join it once the turn has settled (unshown until then). A
+  direct run (a code change outside the pipeline, in its own worktree) is not a
+  pipeline: its turn has no pipeline block. Work after the last line stays under it, and a resumed turn marks the
   stages before the run's current one done. A gate line says only its verdict, holds
   no work and sits next to the stage it guards (GATE 1 before BUILD): the run records
   a gate's start but not its end, so a gate that owned "start to next start" would
@@ -439,7 +447,8 @@ Each pattern: **convergence** (who landed on it) · **why** (the human need) ·
   a stage's work shown under the gate row next to it; a checklist line inserted
   mid-run, or a second line for a stage that ran again; a thought, row or command line
   that folds or vanishes the instant the next item arrives; a block whose items remount
-  when it stops being live; a label ("Intent") on the restatement, or the run's stored
+  when it stops being live; a "Working · Thinking" card above the restatement, or a
+  pipeline block for a run that is not a pipeline; a label ("Intent") on the restatement, or the run's stored
   requirement shown as if the agent had said it; a meta-comment about the model
   ("started without restating the ask") that the user cannot act on.
 - **The tell:** you are giving finished work the same border and weight as the work

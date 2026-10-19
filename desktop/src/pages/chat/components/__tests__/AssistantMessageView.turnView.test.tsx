@@ -313,12 +313,11 @@ describe('AssistantMessageView — one strip per tool call (AC3)', () => {
     expect(container.querySelector('.text-status-online, .text-green-400, .text-green-500')).toBeNull();
   });
 
-  it('before any content: one "Thinking" line with a spinner, nothing to open', () => {
+  it('before any content: no Working card — the streaming bee is the one indicator', () => {
     renderView([], { isStreaming: true });
-    const row = screen.getByTestId('group-row');
-    expect(row.tagName).toBe('DIV');
-    expect(row.textContent).toContain('Thinking');
-    expect(row.querySelector('.animate-spin')).not.toBeNull();
+    expect(screen.queryByTestId('work-group')).toBeNull();
+    expect(screen.queryByTestId('group-row')).toBeNull();
+    expect(screen.getByTestId('streaming-bee')).toBeTruthy();
   });
 });
 
@@ -433,11 +432,15 @@ describe('AssistantMessageView — fold timing', () => {
 
   it('the opening thought folds with the work, FOLD_DELAY_MS after the turn ends (no intent exception)', () => {
     const { rerender } = render(viewOf([th('step one')], true));
-    expect(screen.getByTestId('thought').dataset.live).toBe('true');
-    // the first tool call arrives while streaming, then the turn ends
+    // thinking before any work is not a first-level block: only the bee shows
+    expect(screen.queryByTestId('work-group')).toBeNull();
+    expect(screen.queryByTestId('thought')).toBeNull();
+    // the first tool call arrives while streaming: the thought is in the work block
     rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls')], true));
+    const group = screen.getByTestId('work-group');
+    expect(within(group).getByTestId('thought')).toBeTruthy();
     rerender(viewOf([th('step one, then two'), tu('a', 'Running: ls'), tr('a'), tx('done')], false));
-    expect(screen.getByTestId('thought-text').textContent).toBe('step one, then two'); // not at once
+    expect(screen.getByTestId('work-group')).toBe(group); // the turn end does not remount it
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS * 5); });
     expect(screen.queryByTestId('thought')).toBeNull();
     fireEvent.click(screen.getByTestId('group-toggle'));
